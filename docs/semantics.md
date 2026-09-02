@@ -5,14 +5,54 @@ covered by a test in `test/`.
 
 ## Statuses and guards
 
-`backlog → todo → in_progress → in_review → done`, plus `blocked` and
-`cancelled`.
+A workspace starts with `backlog → todo → in_progress → in_review → done`, plus
+`blocked` and `cancelled` — but that list is a **seed, not the law**. Statuses
+live in `workspace_statuses` and can be added, renamed, reordered and removed
+(`staple statuses`, MCP `list_statuses`/`update_statuses`).
 
 These are enforced as **guards, not a transition table**: `in_progress`
 requires an assignee **and** zero unresolved blockers; a transition that
 violates a guard is refused with a `validation` error naming what is missing.
 Timestamps (`startedAt`, `completedAt`, the blocked-cycle stamp) are written
 automatically as a side effect of the transition, never by a caller.
+
+## Categories — why a configurable status set is still safe
+
+Every status carries a **category** from a fixed, non-configurable set:
+
+`unstarted` · `ready` · `active` · `review` · `gated` · `blocked` · `done` · `cancelled`
+
+**All behaviour keys off the category, never off the status id.** Checkout
+claims from `ready`/`unstarted`/`blocked`; a claim only ever sits in `active`;
+`done` and `cancelled` are what "resolved" means; the derived parent ladder
+reads its children's categories; `release` returns work to `ready`. A custom
+status therefore inherits a behaviour that already has tests, instead of
+arriving as a string nothing knows what to do with — and the guards above stay
+exactly as strict in a workspace that renamed all seven built-ins.
+
+The categories themselves are deliberately **not** data. Making them editable
+would mean making the guards editable, which is a rules engine rather than a
+tracker.
+
+Two orders are derived from the configuration, and configured order only ever
+breaks ties **within** a category tier — so reordering statuses reorders the
+tree and the board, but can never lift `done` above `in_progress`:
+
+- list/board rank: `active, review, gated, blocked, ready, unstarted, done, cancelled`
+- inbox pickup: `active, review, ready, unstarted`
+
+**Removal is guarded twice.** A status that issues still carry needs
+`--migrate-to <status>`, and every such row moves in the same transaction (as a
+vocabulary rename, not as N status transitions — the event log is history and
+is never rewritten). A status that is the last member of a category staple
+writes into — `unstarted`, `ready`, `active`, `blocked`, `done`, `cancelled` —
+is refused outright, however unused it is: emptying one leaves a workspace that
+cannot complete a task. `review` and `gated` may be emptied, because nothing can
+enter a category with no members.
+
+Issue **kinds** (`epic`, `task`, `bug`, `chore`, `spike`) are the same kind of
+list without the categories: they label what a ticket *is* and carry no
+behaviour.
 
 ## Atomic checkout and release
 

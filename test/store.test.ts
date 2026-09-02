@@ -324,6 +324,12 @@ describe("schema migration against a live database", () => {
       // anything. The genuine pre-estimate evidence lives in
       // test/fixtures/schema/workspace-v{1,2}.sqlite, which are real artefacts.
       legacyDb.exec("ALTER TABLE issues DROP COLUMN estimated_seconds");
+      // STA-140 added migration 004, which creates TABLES rather than columns —
+      // same rule, one level up: a synthetic v1 built out of a current database
+      // has to lose them too, or 004 fails on "table already exists" instead of
+      // testing the walk.
+      legacyDb.exec("DROP TABLE IF EXISTS workspace_statuses");
+      legacyDb.exec("DROP TABLE IF EXISTS workspace_kinds");
       legacyDb.prepare("UPDATE meta SET value = '1' WHERE key = 'schema_version'").run();
       legacyDb.close();
 
