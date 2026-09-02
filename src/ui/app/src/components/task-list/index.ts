@@ -30,13 +30,22 @@ export {
 } from "./config";
 export {
   flatRow,
+  forEachAncestor,
   guideX,
   indentPx,
   INDENT_STEP,
   MAX_INDENT_DEPTH,
+  parentRollups,
+  ROLLUP_SEGMENTS,
+  rollupSegmentOf,
   ROW_PAD_LEFT,
   STATUS_LABEL,
   type Breadcrumb,
+  type ParentRollup,
+  type RollupInput,
+  type RollupLive,
+  type RollupOptions,
+  type RollupSegment,
   type TaskRow,
   type TaskSource,
 } from "./model";

@@ -23,7 +23,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { ReactElement } from "react";
 import type { PullRequestRef } from "@/lib/types";
 import { STALE_CLAIM_SECONDS } from "@/lib/claim";
-import { buildGroups } from "@/views/tree/tree-model";
+import { buildGroups, flattenFlat } from "@/views/tree/tree-model";
 import { PrioritySignal } from "./PrioritySignal";
 import { StatusIcon } from "./StatusIcon";
 import { TaskRowLine } from "./TaskRowLine";
@@ -583,5 +583,176 @@ describe("dependency badges", () => {
     // A palette row is read in under a second on the way to pressing enter, and its status
     // icon already says `blocked`. See the note on `columns.deps` in config.ts.
     expect(renderDeps(deps, "popup")).not.toContain("staple-dep-badge");
+  });
+});
+
+/**
+ * ── THE COLLAPSED-PARENT ROLLUP — O3b (STA-127) ──────────────────────────────────────
+ *
+ * The arithmetic is pinned in row-bits.test.ts. What is pinned HERE is the row: which
+ * elements exist in which fold state, and the one confusion this element must never create.
+ *
+ * `flattenFlat` rather than `buildGroups`, because a folded parent needs its children in the
+ * SAME bucket to have any — under status grouping a done child of an in-progress epic is
+ * filed in a different group by design (§11.3), which is a different ticket's subject.
+ */
+describe("parent rollup", () => {
+  /**
+   * A five-child epic through the REAL model, with `rollupSource` doing the job it exists
+   * for: the list on screen is the default filter's (no done rows), the counts are the
+   * whole payload's.
+   */
+  function renderEpic(
+    over: {
+      expanded?: boolean;
+      showResolved?: boolean;
+      childClaim?: ClaimActivity | null;
+      parentClaim?: ClaimActivity | null;
+      statuses?: string[];
+    } = {},
+  ): string {
+    const {
+      expanded = false,
+      showResolved = false,
+      childClaim = null,
+      parentClaim = null,
+      statuses = ["done", "done", "done", "todo", "in_progress"],
+    } = over;
+
+    const all = [
+      row({ identifier: "STA-1", status: "in_progress" }, parentClaim),
+      ...statuses.map((status, index) =>
+        row(
+          { identifier: `STA-${index + 2}`, parentId: "id-1", status: status as Issue["status"] },
+          // The claim, when there is one, goes on the LAST child.
+          index === statuses.length - 1 ? childClaim : null,
+        ),
+      ),
+    ];
+
+    const built = flattenFlat(all, {
+      isExpanded: () => expanded,
+      showResolved,
+      rollupSource: all,
+    })[0]!;
+
+    return renderToStaticMarkup(
+      <TaskRowLine
+        row={built}
+        config={resolveTaskListConfig("tree", { labelMax: 2 })}
+        semantics="grid"
+        isExpanded={expanded}
+        now={NOW}
+      />,
+    );
+  }
+
+  it("shows resolved/total and the segmented bar when folded", () => {
+    const markup = renderEpic();
+
+    expect(markup).toContain('data-testid="parent-rollup"');
+    expect(markup).toContain('data-testid="parent-rollup-bar"');
+    expect(markup).toContain("3/5");
+    // Three segments present, not four: an empty segment is ABSENT rather than a
+    // zero-width box, which still paints a hairline at some zoom levels.
+    expect(markup).toContain('data-segment="done"');
+    expect(markup).toContain('data-segment="in_progress"');
+    expect(markup).toContain('data-segment="open"');
+    expect(markup).not.toContain('data-segment="blocked"');
+    // The bar is silent; the count carries the reading, spelled out rather than "3/5",
+    // which a screen reader says as "three slash five".
+    expect(markup).toContain('aria-label="3 of 5 done"');
+  });
+
+  it("counts the UNFILTERED list — 3 of 5 done while the filter hides the done ones", () => {
+    const markup = renderEpic({ showResolved: false });
+
+    // The acceptance criterion, and the reason `rollupSource` is threaded down from
+    // TreeView at all. Built from what is on screen this would read 0/2.
+    expect(markup).toContain("3/5");
+    // And `+N` still means what it always meant: DIRECT children the fold removed, which
+    // the filter has already cut to two. The two numbers are allowed to differ.
+    expect(markup).toContain("+2");
+  });
+
+  it("keeps the count and drops the bar when the parent is expanded", () => {
+    const markup = renderEpic({ expanded: true });
+
+    // The bar restates rows that are now on the screen underneath. The count does not: the
+    // filter may still be hiding some of the descendants it counts.
+    expect(markup).toContain('data-testid="parent-rollup"');
+    expect(markup).toContain("3/5");
+    expect(markup).not.toContain('data-testid="parent-rollup-bar"');
+    // `+N` stays collapsed-only — "+2" printed above two visible children would be a lie.
+    expect(markup).not.toContain("staple-row-childcount");
+  });
+
+  it("puts NOTHING in the DOM for a leaf", () => {
+    const markup = renderRow();
+
+    expect(markup).not.toContain('data-testid="parent-rollup"');
+    expect(markup).not.toContain("staple-rollup");
+  });
+
+  it("pulses with the holder's initials for a LIVE descendant claim", () => {
+    const markup = renderEpic({ childClaim: claim({ heldBy: "opus-x", idleSeconds: 30 }) });
+
+    expect(markup).toContain('data-testid="rollup-child-live"');
+    expect(markup).toContain("staple-rollup-live-dot");
+    expect(markup).toContain("OX");
+    // The name says CHILD and names the ticket, so it can never be read as the parent's
+    // own claim — which is the single confusion this element must not create.
+    expect(markup).toContain('aria-label="child STA-6: opus-x is working"');
+  });
+
+  it("never animates for a STALE descendant claim — it renders nothing at all", () => {
+    const markup = renderEpic({ childClaim: claim({ idleSeconds: STALE_CLAIM_SECONDS }) });
+
+    // Not a static variant and not a dimmed one. An agent that died four hours ago is not
+    // inside this subtree, and the child's own row says so honestly when you unfold.
+    expect(markup).not.toContain('data-testid="rollup-child-live"');
+    expect(markup).not.toContain("staple-rollup-live-dot");
+    // The count and the bar are unaffected — liveness and progress are different facts.
+    expect(markup).toContain("3/5");
+    expect(markup).toContain('data-testid="parent-rollup-bar"');
+  });
+
+  it("is NOT the claim slot: it never appears there and never claims the parent is held", () => {
+    const markup = renderEpic({ childClaim: claim({ heldBy: "opus-x", idleSeconds: 30 }) });
+    const titleCell = markup.indexOf("staple-row-title-cell");
+    const live = markup.indexOf('data-testid="rollup-child-live"');
+    const meta = markup.indexOf("staple-row-meta");
+
+    // In the TITLE cell, at the opposite end of the row from the meta cluster where
+    // `RowClaimSlot` lives. Different position, and no working pill on this row at all:
+    // the parent is unheld and the rollup must not invent a holder for it.
+    expect(live).toBeGreaterThan(titleCell);
+    expect(live).toBeLessThan(meta);
+    expect(markup).not.toContain('data-testid="working-pill"');
+    expect(markup).not.toContain("Working…");
+  });
+
+  it("coexists with the parent's OWN claim — two agents, two tickets, two elements", () => {
+    const markup = renderEpic({
+      parentClaim: claim({ heldBy: "opus-p", idleSeconds: 10 }),
+      childClaim: claim({ heldBy: "opus-x", idleSeconds: 30 }),
+    });
+
+    // `RowClaimSlot` stays the single place the row's own liveness is written down, and the
+    // rollup says something else entirely. Both are true at once and both are drawn.
+    expect(markup).toContain('data-testid="working-pill"');
+    expect(markup).toContain("opus-p is working");
+    expect(markup).toContain('data-testid="rollup-child-live"');
+    expect(markup).toContain('aria-label="child STA-6: opus-x is working"');
+    // Two dots, two silhouettes — the capsule's and the bare one beside the count.
+    expect(markup).toContain("staple-working-dot");
+    expect(markup).toContain("staple-rollup-live-dot");
+  });
+
+  it("renders no bar when every descendant is cancelled — 0/0 is furniture", () => {
+    const markup = renderEpic({ statuses: ["cancelled", "cancelled"], showResolved: true });
+
+    expect(markup).not.toContain('data-testid="parent-rollup"');
+    expect(markup).not.toContain("0/0");
   });
 });

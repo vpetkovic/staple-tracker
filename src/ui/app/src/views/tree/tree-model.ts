@@ -28,7 +28,12 @@
  * this epic shaped". The graph view and the detail drawer's children list own the whole-tree
  * question properly.
  */
-import type { TaskRow } from "@/components/task-list";
+import {
+  forEachAncestor,
+  parentRollups,
+  type ParentRollup,
+  type TaskRow,
+} from "@/components/task-list";
 import { isStaleClaim } from "@/lib/claim";
 import type { Selection } from "@/lib/session";
 import type { GroupBy } from "@/lib/view-prefs";
@@ -135,6 +140,28 @@ export interface BuildOptions {
    * and the tree keeps ordering exactly as it does today until somebody reorders a status.
    */
   statusOrder?: readonly IssueStatus[];
+  /**
+   * THE UNFILTERED LIST, for the collapsed-parent rollup — O3b (STA-127).
+   *
+   * `rows` reaching this module has already been through `lib/filters.ts`, and `done` is
+   * hidden by the default filter. A rollup computed from it would tell an epic with three
+   * finished children and two open ones that it is `0/2` — which is not a partial answer,
+   * it is the wrong one, and it is precisely the arithmetic the reader opened the tracker
+   * to avoid doing. So the count comes from the whole `/api/issues` payload, which
+   * `views/TreeView.tsx` already holds and which is unpaged (server.ts:427-446).
+   *
+   * NO NEW FETCH. This is a reference to an array that is already in memory.
+   *
+   * Deliberately the OPPOSITE of what O3a's sort does with its activity tiers, which are
+   * computed over the VISIBLE rows on purpose. They answer different questions: an ORDER
+   * the reader cannot account for from what is in front of them is worse than a plain one,
+   * whereas a COUNT that only counts what is in front of them is not a count at all.
+   *
+   * Optional, and DEFAULTED TO `rows` — so every existing caller, fixture and test compiles
+   * and behaves exactly as before, and a surface that has no wider list still gets a rollup
+   * over what it does have.
+   */
+  rollupSource?: readonly IssueRow[];
 }
 
 /**
@@ -256,6 +283,9 @@ function compareRows(a: IssueRow, b: IssueRow, tierOf: (row: IssueRow) => number
  */
 const NO_ACTIVITY_TIER = (): number => 0;
 
+/** O3b (STA-127). What `flatten` sees when nobody asked for a rollup. */
+const EMPTY_ROLLUPS: ReadonlyMap<string, ParentRollup> = new Map();
+
 /**
  * Flatten one bucket of rows into rendered lines, depth-first.
  *
@@ -289,32 +319,16 @@ function subtreesHoldingActiveWork(rows: readonly IssueRow[]): Set<string> {
 }
 
 /**
- * THE SUBTREE WALK, ONCE — every row paired with each of its ancestors, upwards.
+ * THE SUBTREE WALK — now `components/task-list/model.ts`'s, and imported at the top of this
+ * file rather than written here.
  *
- * Extracted by O3a (STA-126) and not duplicated: the expansion default above and the
- * activity rollup in `subtreeActivityTiers` ask different questions of the same traversal,
- * and two hand-written copies of "walk up the parent chain" is exactly the kind of pair
- * that drifts once and is then wrong in only one view.
- *
- * `seen` guards against a cycle the store should never produce and which would otherwise
- * hang the render rather than draw a wrong row.
+ * O3a (STA-126) extracted it precisely so the expansion default above and
+ * `subtreeActivityTiers` could not drift; O3b (STA-127) added a THIRD caller — the parent
+ * rollup — which is pure, is wanted by surfaces that are not the tree, and therefore cannot
+ * live in a module about the tree's bucketing rules. Moving the walk to the pure module and
+ * importing it back keeps O3a's promise instead of making the copy it warned about. Nothing
+ * about the traversal, the `seen` cycle guard, or either caller's behaviour changed.
  */
-function forEachAncestor(
-  rows: readonly IssueRow[],
-  visit: (row: IssueRow, ancestorId: string) => void,
-): void {
-  const parentOf = new Map(rows.map((r) => [r.issue.id, r.issue.parentId]));
-
-  for (const r of rows) {
-    const seen = new Set<string>();
-    let parentId = parentOf.get(r.issue.id) ?? null;
-    while (parentId && parentOf.has(parentId) && !seen.has(parentId)) {
-      seen.add(parentId);
-      visit(r, parentId);
-      parentId = parentOf.get(parentId) ?? null;
-    }
-  }
-}
 
 function flatten(
   bucket: IssueRow[],
@@ -322,6 +336,12 @@ function flatten(
   options: BuildOptions,
   defaultExpanded: (issue: Issue) => boolean,
   tierOf: (row: IssueRow) => number = NO_ACTIVITY_TIER,
+  /**
+   * O3b (STA-127). Built ONCE per list from the unfiltered source and handed down, rather
+   * than recomputed per bucket: `buildGroups` calls this up to seven times and every one of
+   * those calls would otherwise walk the same ancestor chains again to produce the same map.
+   */
+  rollups: ReadonlyMap<string, ParentRollup> = EMPTY_ROLLUPS,
 ): TaskRow[] {
   const { isExpanded: explicit, hiddenParents } = options;
   const isExpanded = (issue: Issue): boolean => explicit(issue) ?? defaultExpanded(issue);
@@ -376,6 +396,15 @@ function flatten(
         hasChildren: kids.length > 0,
         isExpanded: expanded,
         childCount: kids.length,
+        /*
+         * O3b (STA-127). Beside `childCount` because they are the same kind of fact about
+         * the same row, and NOT the same number: `childCount` is DIRECT children that
+         * survived into this bucket — what `+N` declares it is hiding — while the rollup
+         * counts every DESCENDANT in the unfiltered list, which is what "3 of 5 done"
+         * means. A leaf gets `null` rather than a zeroed rollup, so the row renders nothing
+         * rather than a bar claiming an epic has no children.
+         */
+        rollup: rollups.get(r.issue.id) ?? null,
         guides: depth === 0 ? [] : [...ancestorGuides, !isLast],
         isLast,
         // A nested child is placed by lineage and the elbow already says so; only a row
@@ -407,6 +436,11 @@ export function buildGroups(rows: IssueRow[], options: BuildOptions): StatusGrou
 
   const visible = showResolved ? rows : rows.filter((r) => !isResolvedStatus(r.issue.status));
   const presentAnywhere = new Map(rows.map((r) => [r.issue.id, r.issue]));
+  /*
+   * O3b (STA-127). From the UNFILTERED source, never from `visible` — see `rollupSource`.
+   * Built once here and shared by every bucket below.
+   */
+  const rollups = parentRollups(options.rollupSource ?? rows);
 
   const buckets = new Map<IssueStatus, IssueRow[]>();
   for (const r of visible) {
@@ -425,8 +459,13 @@ export function buildGroups(rows: IssueRow[], options: BuildOptions): StatusGrou
     out.push({
       status,
       // Grouped: the row's own status, which is also the group it is rendered in.
-      rows: flatten(bucket, presentAnywhere, options, (issue) =>
-        DEFAULT_EXPANDED_GROUPS.has(issue.status),
+      rows: flatten(
+        bucket,
+        presentAnywhere,
+        options,
+        (issue) => DEFAULT_EXPANDED_GROUPS.has(issue.status),
+        NO_ACTIVITY_TIER,
+        rollups,
       ),
       count: bucket.length,
     });
@@ -466,6 +505,9 @@ export function flattenFlat(rows: IssueRow[], options: BuildOptions): TaskRow[] 
     // backlog is still not a wall.
     (issue) => DEFAULT_EXPANDED_GROUPS.has(issue.status) || holders.has(issue.id),
     (row) => activityRank(row, subtree, statusOrder),
+    // O3b (STA-127). The unfiltered source, NOT `visible` — the one line where the rollup
+    // and the tier above deliberately disagree about which set they read.
+    parentRollups(options.rollupSource ?? rows),
   );
 }
 

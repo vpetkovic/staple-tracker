@@ -46,6 +46,7 @@ import type { CSSProperties, KeyboardEvent, ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { DependencyBadges } from "./DependencyBadges";
 import { LabelPills } from "./LabelPills";
+import { ParentRollupBar } from "./ParentRollup";
 import { PrBadge } from "./PrBadge";
 import { PrioritySignal } from "./PrioritySignal";
 import { StatusIcon } from "./StatusIcon";
@@ -204,7 +205,7 @@ export function TaskRowLine({
   onKeyDown,
   registerRef,
 }: TaskRowLineProps) {
-  const { issue, claim, depth, hasChildren, childCount, guides, breadcrumb } = row;
+  const { issue, claim, depth, hasChildren, childCount, guides, breadcrumb, rollup } = row;
   const { columns, labelMax } = config;
   const collapsedParent = columns.disclosure && hasChildren && !isExpanded;
   const bare = semantics === "bare";
@@ -313,8 +314,27 @@ export function TaskRowLine({
         <span className="staple-row-title" title={issue.title}>
           {issue.title || <span className="staple-row-untitled">(untitled)</span>}
         </span>
-        {/* A collapsed parent still declares what it is hiding. */}
+        {/* A collapsed parent still declares what it is hiding. `+N` is DIRECT children in
+            this bucket — literally the rows the fold removed — and it stays collapsed-only,
+            because "+3" printed above three visible children would be a lie. */}
         {collapsedParent ? <span className="staple-row-childcount">+{childCount}</span> : null}
+        {/*
+          O3b (STA-127). Immediately after `+N` and inside the title cell, which is the slot
+          the ticket names and the only one that can take it: the meta cluster is fixed
+          content by contract, and below 720px §14 moves that cluster to line 2, which would
+          strand a parent's progress away from the parent.
+
+          BOTH STATES RENDER, and the component decides which. Collapsed gets the count, the
+          bar and the child-live dot; expanded gets only the count — the bar restates rows
+          that are on the screen, but the count cannot be recovered by looking, because the
+          filter may be hiding some of the descendants it counts.
+
+          A leaf has no `rollup` at all and this is absent from the DOM, per the column rule
+          at the top of this file.
+        */}
+        {columns.disclosure && hasChildren && rollup ? (
+          <ParentRollupBar rollup={rollup} collapsed={collapsedParent} />
+        ) : null}
         {/* Last in the cell, so it reads as an aside on the title and never as part of it —
             and so it is the element the flexbox squeezes first when the title is long. */}
         {caption ? (

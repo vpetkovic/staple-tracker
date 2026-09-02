@@ -18,7 +18,12 @@
  *      a group makes its own count say zero — deleting the only reason the count exists.
  */
 import { describe, expect, it } from "vitest";
-import { OPEN_STATUS_ORDER, RESOLVED_STATUSES } from "@/lib/types";
+import {
+  OPEN_STATUS_ORDER,
+  RESOLVED_STATUSES,
+  type ClaimActivity,
+  type IssueStatus,
+} from "@/lib/types";
 import { STALE_CLAIM_SECONDS } from "@/lib/claim";
 import { guideX, indentPx, MAX_INDENT_DEPTH } from "@/components/task-list";
 import { claim, issue, row } from "@/components/task-list/fixtures";
@@ -740,5 +745,106 @@ describe("activity rank", () => {
 
       expect(backlog.rows.map((r) => r.issue.id)).toEqual(["crit", "epic"]);
     });
+  });
+});
+
+/**
+ * THE ROLLUP, WHERE THE PLACEMENT PASS PUTS IT — O3b (STA-127).
+ *
+ * The arithmetic itself belongs to `parentRollups` and is pinned in
+ * `components/task-list/row-bits.test.ts`. What is pinned here is the SEAM: that `flatten()`
+ * attaches it beside `hasChildren`/`childCount`, that a leaf gets null rather than an empty
+ * rollup, and — the reason the whole ticket needed an amendment — that the counts come from
+ * the UNFILTERED list while the sort's tiers deliberately do not.
+ */
+describe("the collapsed-parent rollup", () => {
+  const live = () => claim({ idleSeconds: 30 });
+  const epic = () => row({ id: "epic", identifier: "STA-1", status: "in_progress" });
+  const kid = (
+    n: number,
+    status: IssueStatus,
+    parentId = "epic",
+    activity: ClaimActivity | null = null,
+  ) => row({ id: `k${n}`, identifier: `STA-${n}`, status, parentId }, activity);
+
+  const FIVE = [
+    epic(),
+    kid(2, "done"),
+    kid(3, "done"),
+    kid(4, "done"),
+    kid(5, "todo"),
+    kid(6, "in_progress"),
+  ];
+
+  it("is populated on a parent and null on a leaf", () => {
+    const flat = flattenFlat([epic(), kid(2, "todo")], { isExpanded: () => false });
+
+    expect(flat[0]!.rollup).toMatchObject({ total: 1, resolved: 0 });
+    // A leaf renders nothing. `null` rather than a zeroed rollup, so the row cannot draw a
+    // bar claiming an epic has no children — see the note in `flatRow`.
+    expect(flattenFlat([epic(), kid(2, "todo")], { isExpanded: () => true })[1]!.rollup).toBeNull();
+  });
+
+  it("counts the UNFILTERED source, so 3 of 5 done survives the done filter", () => {
+    // What the view actually does: `rows` is post-`applyFilters`, `rollupSource` is `all`.
+    const onScreen = FIVE.filter((r) => r.issue.status !== "done");
+    const flat = flattenFlat(onScreen, { isExpanded: () => false, rollupSource: FIVE });
+
+    expect(flat[0]!.rollup).toMatchObject({ resolved: 3, total: 5 });
+    // And `childCount` is untouched by the rollup: it still means the DIRECT children the
+    // fold removed, which the filter has already cut to two. The two numbers differ on
+    // purpose and the row prints both.
+    expect(flat[0]!.childCount).toBe(2);
+  });
+
+  it("defaults the source to the rows it was given, so every existing caller is unchanged", () => {
+    const onScreen = FIVE.filter((r) => r.issue.status !== "done");
+    const flat = flattenFlat(onScreen, { isExpanded: () => false });
+
+    // No `rollupSource`: the rollup is over what was passed, which is what a surface with
+    // no wider list should get. The seam is opt-in, exactly like O3a's `statusOrder`.
+    expect(flat[0]!.rollup).toMatchObject({ resolved: 0, total: 2 });
+  });
+
+  it("reaches a grandchild, which `childCount` never does", () => {
+    const rows = [epic(), kid(2, "in_progress"), kid(3, "done", "k2"), kid(4, "done", "k3")];
+    const flat = flattenFlat(rows, { isExpanded: () => false });
+
+    expect(flat[0]!.childCount).toBe(1);
+    expect(flat[0]!.rollup).toMatchObject({ total: 3, resolved: 2 });
+  });
+
+  it("carries a LIVE descendant claim and refuses a stale one", () => {
+    const withLive = [epic(), kid(2, "in_progress", "epic", live())];
+    const withStale = [
+      epic(),
+      kid(2, "in_progress", "epic", claim({ idleSeconds: STALE_CLAIM_SECONDS })),
+    ];
+
+    expect(flattenFlat(withLive, { isExpanded: () => false })[0]!.rollup?.live).toMatchObject({
+      identifier: "STA-2",
+    });
+    expect(flattenFlat(withStale, { isExpanded: () => false })[0]!.rollup?.live).toBeNull();
+  });
+
+  it("is populated under group-by-status too, from the same unfiltered source", () => {
+    // The parent is alone in its bucket here — its done children are filed in the Done
+    // group by §11.3 — and the rollup still knows about them, because it never asked the
+    // bucket. That is the difference between a rollup and a count of rendered rows.
+    const groups = buildGroups(FIVE, { isExpanded: () => false, showResolved: false });
+    const inProgress = groups.find((g) => g.status === "in_progress")!;
+    const parent = inProgress.rows.find((r) => r.issue.id === "epic")!;
+
+    expect(parent.rollup).toMatchObject({ resolved: 3, total: 5 });
+  });
+
+  it("leaves the sort O3a landed exactly where it was", () => {
+    // The rollup is populated on the same pass that ranks the rows, and the two must not
+    // have become entangled: `subtreeActivityTiers` still reads the VISIBLE rows while the
+    // rollup reads `rollupSource`, and this is the pair that would break if they merged.
+    const onScreen = FIVE.filter((r) => r.issue.status !== "done");
+    const flat = flattenFlat(onScreen, { isExpanded: () => true, rollupSource: FIVE });
+
+    expect(flat.map((r) => r.issue.id)).toEqual(["epic", "k6", "k5"]);
   });
 });

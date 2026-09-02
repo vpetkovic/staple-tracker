@@ -183,6 +183,7 @@ function GroupHeader({
 
 export function TreeGrid({
   rows,
+  allRows,
   mode,
   groupBy,
   pickup = EMPTY_PICKUP_INDEX,
@@ -194,6 +195,20 @@ export function TreeGrid({
   onVisibleOrder,
 }: {
   rows: IssueRow[];
+  /**
+   * THE SAME LIST BEFORE `applyFilters` — O3b (STA-127), and read for exactly one purpose:
+   * the collapsed-parent rollup's counts.
+   *
+   * `rows` above has already been filtered, and `done` is hidden by default, so a rollup
+   * built from it would tell an epic with three finished children and two open ones that it
+   * is `0/2`. The unfiltered array is already in `TreeView` and already in memory — this is
+   * a reference, not a fetch. Membership, ordering, grouping, the keyboard sequence and the
+   * published visible order all still come from `rows` and nothing else.
+   *
+   * Optional, and the model defaults it to `rows`, so a caller that has no wider list still
+   * renders a coherent rollup over what it does have.
+   */
+  allRows?: IssueRow[];
   /**
    * Only reaches `data-mode` on the container. Hub mode does not split the list by
    * workspace — status is the primary axis when there is one at all — and the workspace
@@ -241,8 +256,8 @@ export function TreeGrid({
    * one it is building. See tree-model.ts `subtreesHoldingActiveWork`.
    */
   const build = useMemo(
-    () => ({ isExpanded: expansion.explicit, showResolved, hiddenParents }),
-    [expansion.explicit, showResolved, hiddenParents],
+    () => ({ isExpanded: expansion.explicit, showResolved, hiddenParents, rollupSource: allRows }),
+    [expansion.explicit, showResolved, hiddenParents, allRows],
   );
 
   /**
