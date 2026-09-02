@@ -70,9 +70,12 @@ describe("the epic header", () => {
 
     expect(epic).toContain(">STA-1<");
     expect(epic).toContain(">Tree ordering<");
-    // The glyph is O1b's (STA-125) to replace; `data-kind` is the seam that should survive
-    // the swap, and it is the only thing this test knows about it.
-    expect(epic).toContain('data-kind="epic"');
+    // O1c (STA-130) made the swap O1b's glyph was waiting for, and the seam moved with it:
+    // the shared `KindGlyph` spells it `data-issue-kind`, because the ROW already carries
+    // `data-kind` on its avatars where it means human-or-agent. One spelling app-wide is
+    // the point of the rename, so this header wears the shared one rather than a private
+    // alias. Still the only thing this test knows about the glyph.
+    expect(epic).toContain('data-issue-kind="epic"');
   });
 
   it("shows resolved/total from the rollup INSTEAD of the row count", () => {
@@ -95,7 +98,7 @@ describe("the epic header", () => {
     const orphans = header(markup, NO_PARENT_GROUP_KEY);
 
     expect(orphans).toContain(">No epic<");
-    expect(orphans).toContain('data-kind="none"');
+    expect(orphans).toContain('data-issue-kind="none"');
     expect(orphans).not.toContain(">STA-4<");
     // No rollup, so the trailing slot falls back to the count it was always meant to show.
     expect(orphans).toContain('staple-group-count">1<');
@@ -124,7 +127,7 @@ describe("the status header, unchanged by the widening", () => {
 
     expect(backlog).toContain('staple-group-count">1<');
     expect(backlog).not.toContain(">STA-1<");
-    expect(backlog).not.toContain("data-kind=");
+    expect(backlog).not.toContain("data-issue-kind=");
   });
 
   it("keeps the plain accessible name it has always had", () => {

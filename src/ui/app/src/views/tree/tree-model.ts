@@ -57,8 +57,16 @@ import {
   type PickupGroup,
   type PickupIndex,
 } from "./pickup-model";
-import { configuredGroupOrder, isResolvedStatus as isResolvedInWorkspace } from "@/lib/settings";
 import {
+  configuredGroupOrder,
+  configuredKindOrder,
+  isResolvedStatus as isResolvedInWorkspace,
+  kindLabel,
+} from "@/lib/settings";
+import {
+  DEFAULT_ISSUE_KIND,
+  ISSUE_KINDS,
+  KIND_RANK,
   OPEN_STATUS_ORDER,
   RESOLVED_STATUSES,
   type Issue,
@@ -133,11 +141,13 @@ const PRIORITY_RANK: Record<IssuePriority, number> = {
  * MODEL is where it is produced, because the model is the only thing holding the unfiltered
  * source the name has to be read out of.
  *
- * THIS IS THE SEAM O1C (STA-130) USES. TreeGrid branches on the PRESENCE of a heading, not
- * on `groupBy`, so group-by-kind is a model-only change: one `GROUP_BY_OPTIONS` entry, one
- * builder that buckets on `issue.kind` and orders by `KIND_RANK`, and a heading per bucket
- * with `issue: null`, `label: kindLabel(id)`, `identifier: null`, `kind: id`, `rollup: null`.
- * No edit to TreeGrid, GroupHeader, expansion.ts or the keyboard sequence.
+ * THIS WAS THE SEAM O1C (STA-130) USED, AND IT HELD. TreeGrid branches on the PRESENCE of a
+ * heading, not on `groupBy`, so group-by-kind was a model-only change: one
+ * `GROUP_BY_OPTIONS` entry, one `buildKindGroups`, one `buildList` case, and a heading per
+ * bucket with `issue: null`, `label: kindLabel(id)`, `identifier: null`, `kind: id`,
+ * `rollup: null`. No edit to TreeGrid's render path, GroupHeader, expansion.ts, the keyboard
+ * sequence or `visibleOrder` — the one TreeGrid change was swapping O3d's placeholder glyph
+ * for the shared one, which is a different ticket's debt being paid in passing.
  */
 export interface GroupHeading {
   /**
@@ -942,6 +952,158 @@ export function buildParentGroups(rows: IssueRow[], options: BuildOptions): Stat
 }
 
 /**
+ * THE KIND AN ISSUE COUNTS AS FOR BUCKETING — O1c (STA-130).
+ *
+ * `issues.kind` is NOT NULL with a default (O1a, STA-124), so an empty one should be
+ * unreachable. It is normalised anyway, and NOT defensively: `IssueRow` can be built from a
+ * payload an older server sent, which is a case lib/types.ts already spells out for the
+ * graph node's optional `kind` and answers the same way. The consequence is what makes it
+ * worth a line — an unbucketed row is not a row with a wrong header, it is a row that is
+ * NOT ON THE PAGE, and a list that silently drops a ticket is the one failure this view
+ * cannot have. `||` rather than `??`, so `""` and `undefined` land in the same place.
+ *
+ * The filter dimension in lib/filters.ts deliberately does NOT do this; see `matchKind`.
+ */
+function kindOf(issue: Pick<Issue, "kind">): string {
+  return issue.kind || DEFAULT_ISSUE_KIND;
+}
+
+/**
+ * BUCKET BY DECLARED KIND — group-by-kind, O1c (STA-130).
+ *
+ * The fourth axis, and structurally the simplest: the key is a field on the row, so unlike
+ * `buildParentGroups` there is no ancestry to walk, no header to promote out of its own
+ * bucket, and no catch-all — every row has a kind, which is exactly what O1a made true.
+ *
+ * ── THE ORDER IS THE WORKSPACE'S, WITH `KIND_RANK` AS THE FALLBACK ────────────────────
+ *
+ * `configuredKindOrder()` first, which on a default workspace is the seeded
+ * `epic, task, bug, chore, spike` — the acceptance criterion verbatim — and after an
+ * operator drags the settings list, theirs. This is the same substitution O7b made for the
+ * status axis and it is made here for the same reason: the vocabulary is DATA, and a
+ * module constant evaluated at import cannot follow a per-workspace order that changes
+ * while the page is open.
+ *
+ * `KIND_RANK` therefore ranks only the LEFTOVERS — a kind on a row that the configured
+ * order has not got, which happens for the second between another tab adding a kind and
+ * /api/settings catching up. lib/types.ts says what to do with those and this does it:
+ * `KIND_RANK[k] ?? ISSUE_KINDS.length`, so the built-in five keep their seed order among
+ * themselves and anything genuinely unknown sorts last. The id breaks the remaining ties,
+ * because a group order that is not total is a page that reshuffles on the 1.5s poll.
+ *
+ * Empty buckets are not drawn, per `buildGroups`: a "Spike 0" header on a workspace that
+ * has never filed one is furniture, and furniture stops being read within a day.
+ *
+ * ── THE TWO KNOBS ARE ANSWERED LIKE `parent`, NOT LIKE `status` ───────────────────────
+ *
+ * Both turn on ONE question: if a fold hides a child, does that child have anywhere else
+ * to appear? Status grouping is the only axis where the answer is yes — the child is a root
+ * of its own status group — and that is the whole reason its rules are what they are.
+ *
+ *   1. THE FLAT EXPANSION DEFAULT. A task's task-children share its bucket and nest inside
+ *      it, so folding a backlog parent by its own status would hide in-progress children
+ *      that have nowhere else to be. That is the trap R1 fell into in flat mode and had to
+ *      climb back out of, and `buildParentGroups` documents it one axis over. Same trap,
+ *      same answer: `holdsActiveWork` re-opens anything with live work beneath it.
+ *   2. THE ACTIVITY TIER IS ON. `buildGroups` ranks every row 0 only because STA-126
+ *      promised grouped output unchanged; this axis is new and carries no such promise.
+ *
+ * ── GHOSTS STAY ON, AND THERE IS NO `headOfGroup` SUPPRESSION ─────────────────────────
+ *
+ * O3d had to suppress a ghost because the epic heading a group is absent from its own
+ * bucket. Nothing is promoted here, so that case cannot arise, and passing an id to
+ * suppress would be borrowing a fix for a problem this axis does not have. The ghosts this
+ * axis DOES draw are the point of the feature working: an epic sits in the Epic group, so
+ * its tasks are orphans in the Task group, and the dimmed bracket plus the breadcrumb is
+ * what says where they came from. Without it "every bug on the board" is a flat list of
+ * bugs with no indication of whose they are.
+ *
+ * ── ONE KNOWN COST, RECORDED WHERE THE NEXT AXIS WILL READ IT ─────────────────────────
+ *
+ * A FOURTH VOCABULARY NOW SHARES THE COLLAPSED-GROUPS SET in expansion.ts, and it is the
+ * first one that can genuinely collide. Statuses, pickup sections and issue ids are
+ * pairwise disjoint by construction; kind ids and status ids are BOTH operator-configurable
+ * strings matching the same `VOCABULARY_ID_PATTERN`, so a workspace with a `bug` status and
+ * a `bug` kind would fold one under the other. Not prefixed today — it changes nothing on
+ * any workspace that exists, and unprefixed keys keep `data-status="epic"` on the header
+ * addressable from a test and from the browser exactly as the other three axes are — but
+ * `GroupKey`'s note says "prefix it at its own builder rather than discovering it here",
+ * and THIS is the builder that will have to.
+ */
+export function buildKindGroups(rows: IssueRow[], options: BuildOptions): StatusGroup[] {
+  const { showResolved = false, ghostParents = true, statusOrder = configuredGroupOrder() } = options;
+
+  const visible = showResolved ? rows : rows.filter((r) => !isResolvedStatus(r.issue.status));
+  const presentAnywhere = new Map(rows.map((r) => [r.issue.id, r.issue]));
+  // O3b (STA-127). From the UNFILTERED source, never from `visible` — see `rollupSource`.
+  const rollups = parentRollups(options.rollupSource ?? rows);
+
+  const buckets = new Map<string, IssueRow[]>();
+  for (const r of visible) {
+    const key = kindOf(r.issue);
+    const bucket = buckets.get(key);
+    if (bucket) bucket.push(r);
+    else buckets.set(key, [r]);
+  }
+
+  const configured = configuredKindOrder();
+  const configuredSet = new Set(configured);
+  const leftovers = [...buckets.keys()]
+    .filter((id) => !configuredSet.has(id))
+    .sort(
+      (a, b) =>
+        (KIND_RANK[a] ?? ISSUE_KINDS.length) - (KIND_RANK[b] ?? ISSUE_KINDS.length) ||
+        a.localeCompare(b),
+    );
+
+  const subtree = subtreeActivityTiers(visible, statusOrder);
+  const tierOf = (row: IssueRow): number => activityRank(row, subtree, statusOrder);
+  // One walk over the same rows, shared by every bucket below.
+  const holdsActiveWork = subtreesHoldingActiveWork(visible);
+
+  const out: StatusGroup[] = [];
+
+  for (const kind of [...configured, ...leftovers]) {
+    const bucket = buckets.get(kind);
+    if (!bucket || bucket.length === 0) continue;
+    out.push({
+      status: kind,
+      rows: flatten(
+        bucket,
+        presentAnywhere,
+        options,
+        (issue) => DEFAULT_EXPANDED_GROUPS.has(issue.status) || holdsActiveWork.has(issue.id),
+        tierOf,
+        rollups,
+        ghostParents,
+      ),
+      // `bucket.length`, per O3c: the real rows, counted before any ghost exists.
+      count: bucket.length,
+      heading: {
+        /*
+         * NO ISSUE, so no identifier and no rollup — the shape O3d built for the "No epic"
+         * catch-all, and for the same reason. This bucket names a VOCABULARY ENTRY rather
+         * than a ticket; there is nothing to identify and nothing to roll up, and the
+         * trailing slot correctly falls back to the plain count.
+         */
+        issue: null,
+        // `kindLabel`, not the raw id: the workspace that renamed `spike` to
+        // "Investigation" must be heard saying so, and O7b's accessor is the only thing
+        // that knows. It title-cases an id it has never met, which is the right failure.
+        label: kindLabel(kind),
+        identifier: null,
+        // What `KindGlyph` draws from in TreeGrid. The one field this axis fills that the
+        // catch-all leaves null — a kind bucket always knows its own kind.
+        kind,
+        rollup: null,
+      },
+    });
+  }
+
+  return out;
+}
+
+/**
  * The SAME list with the bucketing step skipped — R1 (STA-100)'s default view.
  *
  * One bucket, so a parent and child of different statuses nest normally and no breadcrumb
@@ -1006,11 +1168,18 @@ export type ListShape =
 /**
  * A group's KEY — what the fold is remembered under and what the keyboard addresses it by.
  *
- * THREE disjoint vocabularies now, and the disjointness is still load-bearing: no status is
- * spelled `up_next`, no section is spelled `in_progress`, and no issue id is spelled either
- * — so one collapsed-groups set in expansion.ts holds all of them without a prefix and
- * without any axis disturbing another's folds. If a future key ever collides, prefix it at
- * its own builder rather than discovering it here.
+ * FOUR vocabularies now, and the disjointness is still load-bearing: no status is spelled
+ * `up_next`, no section is spelled `in_progress`, and no issue id is spelled either — so one
+ * collapsed-groups set in expansion.ts holds all of them without a prefix and without any
+ * axis disturbing another's folds. If a future key ever collides, prefix it at its own
+ * builder rather than discovering it here.
+ *
+ * THE FOURTH — kind ids, O1c (STA-130) — IS THE FIRST THAT CAN GENUINELY COLLIDE, and the
+ * note above is now a live instruction rather than a precaution. The first three are
+ * disjoint by construction; kind ids and status ids are both operator-configurable strings
+ * matching one `VOCABULARY_ID_PATTERN`, so a workspace with a `bug` status AND a `bug` kind
+ * folds one under the other. Left unprefixed deliberately — see `buildKindGroups`, which is
+ * the builder that will have to do it.
  *
  * ── WHY IT IS `string` AND NO LONGER A UNION — O3d (STA-129) ──────────────────────────
  *
@@ -1069,6 +1238,15 @@ export function buildList(
      */
     case "parent":
       return { kind: "grouped", groups: buildParentGroups(rows, options) };
+    /*
+     * O1c (STA-130). The same `"grouped"` shape again, and the third entry that takes it is
+     * the evidence O3d's reasoning was right rather than a guess: the fold, the keyboard
+     * sequence, `visibleOrder`, the `inert` body and the animation are identical on all
+     * three, and what differs is only what a header NAMES — carried on the group as
+     * `heading`, which is why this case is one line and TreeGrid needed no branch.
+     */
+    case "kind":
+      return { kind: "grouped", groups: buildKindGroups(rows, options) };
     case "pickup":
       return {
         kind: "pickup",

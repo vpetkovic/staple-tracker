@@ -17,7 +17,12 @@
  *   4. A count that follows what is RENDERED rather than what is in the group, so collapsing
  *      a group makes its own count say zero — deleting the only reason the count exists.
  */
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  publishWorkspaceSettings,
+  resetWorkspaceSettings,
+  SEED_SETTINGS,
+} from "@/lib/settings";
 import {
   OPEN_STATUS_ORDER,
   RESOLVED_STATUSES,
@@ -31,6 +36,7 @@ import { claim, issue, row } from "@/components/task-list/fixtures";
 import {
   activityRank,
   buildGroups,
+  buildKindGroups,
   buildList,
   buildParentGroups,
   flattenFlat,
@@ -1413,6 +1419,240 @@ describe("group by epic", () => {
  * still look right on a two-deep tree, which is the depth every fixture in this file used
  * before this ticket.
  */
+/**
+ * GROUP BY KIND — O1c (STA-130).
+ *
+ * The fourth axis, and the one whose tests are mostly about ORDER, because the bucketing
+ * itself is a field read. Three things could plausibly go wrong and each has a test:
+ *
+ *   1. The order silently becomes alphabetical, or the hand-kept `KIND_RANK` mirror
+ *      becomes the primary rather than the fallback — either of which makes this the one
+ *      surface that ignores the workspace's configured vocabulary.
+ *   2. A row is LOST. A kind the vocabulary has not got, or an empty one from an older
+ *      server, must land in a bucket rather than in none. An unbucketed row is not a row
+ *      with a wrong header — it is a row that is not on the page.
+ *   3. The two knobs get answered like `status` rather than like `parent`, which folds a
+ *      backlog parent over live children that have nowhere else to appear.
+ */
+describe("group by kind", () => {
+  afterEach(() => resetWorkspaceSettings());
+
+  const opts = (rows: IssueRow[], over: Partial<BuildOptions> = {}): BuildOptions => ({
+    isExpanded: () => true,
+    showResolved: true,
+    rollupSource: rows,
+    ...over,
+  });
+
+  const byKind = (rows: IssueRow[], over: Partial<BuildOptions> = {}) =>
+    buildKindGroups(rows, opts(rows, over));
+
+  /** The seed vocabulary, reordered and relabelled — what an operator's drag produces. */
+  function vocabulary(kinds: readonly [string, string][]) {
+    publishWorkspaceSettings({
+      ...SEED_SETTINGS,
+      kinds: kinds.map(([id, label], sortOrder) => ({ id, label, sortOrder, isBuiltin: true })),
+    });
+  }
+
+  it("orders the groups epic, task, bug, chore, spike", () => {
+    // The acceptance criterion verbatim. Alphabetical would be bug, chore, epic, spike,
+    // task — a different answer at every position, which is what lets this test fail.
+    const rows = ["spike", "chore", "bug", "task", "epic"].map((kind, i) =>
+      row({ identifier: `STA-${i + 1}`, kind }),
+    );
+
+    expect(byKind(rows).map((g) => g.status)).toEqual(["epic", "task", "bug", "chore", "spike"]);
+  });
+
+  it("draws no header for a kind nobody has filed", () => {
+    // `buildGroups`'s rule, kept: a "Spike 0" header is permanent furniture announcing a
+    // non-event, and furniture stops being read within a day.
+    const groups = byKind([row({ identifier: "STA-1", kind: "bug" })]);
+
+    expect(groups.map((g) => g.status)).toEqual(["bug"]);
+  });
+
+  it("names the bucket after the KIND and identifies no issue", () => {
+    // O3d's heading shape, with the catch-all's answers to the three issue-shaped fields.
+    // A kind bucket is a vocabulary entry, not a ticket: nothing to identify, nothing to
+    // roll up, so the header's trailing slot correctly falls back to the plain count.
+    const groups = byKind([row({ identifier: "STA-1", kind: "bug" })]);
+
+    expect(groups[0]!.heading).toEqual({
+      issue: null,
+      label: "Bug",
+      identifier: null,
+      kind: "bug",
+      rollup: null,
+    });
+  });
+
+  it("follows the workspace's order and labels, not the built-in seed", () => {
+    // The O7b substitution, on this axis. The seed says epic-then-bug; this workspace has
+    // dragged bug above epic and renamed both, and the headers must say so.
+    vocabulary([
+      ["bug", "Defect"],
+      ["epic", "Initiative"],
+    ]);
+    const groups = byKind([
+      row({ identifier: "STA-1", kind: "epic" }),
+      row({ identifier: "STA-2", kind: "bug" }),
+    ]);
+
+    expect(groups.map((g) => g.status)).toEqual(["bug", "epic"]);
+    expect(groups.map((g) => g.heading?.label)).toEqual(["Defect", "Initiative"]);
+  });
+
+  it("puts a kind the vocabulary has not got LAST, rather than dropping its rows", () => {
+    // The second between another tab adding a kind and /api/settings catching up. Losing
+    // the row would be the worst available failure; `KIND_RANK`'s note says sort it last.
+    const groups = byKind([
+      row({ identifier: "STA-1", kind: "zeta" }),
+      row({ identifier: "STA-2", kind: "task" }),
+      row({ identifier: "STA-3", kind: "epic" }),
+    ]);
+
+    expect(groups.map((g) => g.status)).toEqual(["epic", "task", "zeta"]);
+    expect(groups[2]!.rows.map((r) => r.issue.identifier)).toEqual(["STA-1"]);
+    // Unlabelled by the vocabulary, so the accessor title-cases the id. Never `undefined`.
+    expect(groups[2]!.heading?.label).toBe("Zeta");
+  });
+
+  it("orders several unknown kinds by KIND_RANK and then by id, so the order is TOTAL", () => {
+    // `spike` is a built-in that this workspace has removed from its vocabulary, so it is
+    // a leftover WITH a rank; the other two have none and fall back to the id. A partial
+    // order here is a page that reshuffles under the reader on the 1.5s poll.
+    vocabulary([["task", "Task"]]);
+    const groups = byKind([
+      row({ identifier: "STA-1", kind: "zeta" }),
+      row({ identifier: "STA-2", kind: "alpha" }),
+      row({ identifier: "STA-3", kind: "spike" }),
+      row({ identifier: "STA-4", kind: "task" }),
+    ]);
+
+    expect(groups.map((g) => g.status)).toEqual(["task", "spike", "alpha", "zeta"]);
+  });
+
+  it("files a row whose kind is EMPTY or ABSENT under the default kind", () => {
+    // `issues.kind` is NOT NULL with a default, so neither should be reachable — but an
+    // `IssueRow` can be built from a payload an older server sent, and the consequence of
+    // getting this wrong is a ticket that is simply not on the page.
+    const empty = row({ identifier: "STA-1", kind: "" });
+    const absent = row({ identifier: "STA-2" });
+    delete (absent.issue as { kind?: string }).kind;
+
+    const groups = byKind([empty, absent]);
+
+    expect(groups.map((g) => g.status)).toEqual(["task"]);
+    expect(groups[0]!.rows.map((r) => r.issue.identifier)).toEqual(["STA-1", "STA-2"]);
+    expect(groups[0]!.heading?.label).toBe("Task");
+  });
+
+  it("counts the REAL rows, with a cross-kind parent drawn as a ghost beside them", () => {
+    // The epic heads the Epic group, so its task is an orphan in the Task group and O3c's
+    // bracket is drawn around it — which is the feature working, not a defect: without it
+    // "every bug on the board" is a flat list with no indication of whose they are.
+    const epic = row({ identifier: "STA-1", kind: "epic", title: "The epic" });
+    const task = row({ identifier: "STA-2", kind: "task", parentId: "id-1" });
+
+    const groups = byKind([epic, task]);
+    const tasks = groups.find((g) => g.status === "task")!;
+
+    expect(tasks.rows.map((r) => [r.issue.identifier, r.ghost === true])).toEqual([
+      ["STA-1", true],
+      ["STA-2", false],
+    ]);
+    // `bucket.length`, per O3c: ghosts cannot reach the count by construction.
+    expect(tasks.count).toBe(1);
+    expect(real(tasks.rows).map((r) => r.issue.identifier)).toEqual(["STA-2"]);
+  });
+
+  it("turns the activity tier ON inside a bucket, unlike status grouping", () => {
+    // Inside one kind, the row somebody is holding right now belongs at the top. With the
+    // tier off these two would sort by identifier and come back in the other order, which
+    // is exactly what this asserts is no longer true.
+    const quiet = row({ identifier: "STA-1", kind: "task" });
+    const held = row({ identifier: "STA-2", kind: "task" }, claim());
+
+    const groups = byKind([quiet, held]);
+
+    expect(groups[0]!.rows.map((r) => r.issue.identifier)).toEqual(["STA-2", "STA-1"]);
+    expect(activityRank(held, subtreeActivityTiers([quiet, held], GROUP_ORDER), GROUP_ORDER)).toBe(
+      LIVE_CLAIM_TIER,
+    );
+  });
+
+  it("uses the FLAT expansion default, so a fold cannot hide live work", () => {
+    // The knob that separates this axis from status grouping. Both rows are tasks, so they
+    // share a bucket and the child NESTS — folding the backlog parent by its own status
+    // would take the in-progress child off the page entirely. R1's trap, one axis over.
+    const parent = row({ id: "p", identifier: "STA-1", kind: "task", status: "backlog" });
+    const child = row({
+      id: "c",
+      identifier: "STA-2",
+      kind: "task",
+      status: "in_progress",
+      parentId: "p",
+    });
+
+    const groups = buildKindGroups([parent, child], {
+      isExpanded: () => undefined,
+      showResolved: true,
+    });
+
+    expect(groups[0]!.rows[0]!.isExpanded).toBe(true);
+    expect(groups[0]!.rows.map((r) => r.issue.identifier)).toEqual(["STA-1", "STA-2"]);
+  });
+
+  it("still folds a backlog parent with nothing live under it", () => {
+    // The other half of the flat rule. Without it, this axis would mean "expand
+    // everything" and a large backlog becomes the wall V5 folded it to avoid.
+    const parent = row({ id: "p", identifier: "STA-1", kind: "task", status: "backlog" });
+    const child = row({
+      id: "c",
+      identifier: "STA-2",
+      kind: "task",
+      status: "backlog",
+      parentId: "p",
+    });
+
+    const groups = buildKindGroups([parent, child], {
+      isExpanded: () => undefined,
+      showResolved: true,
+    });
+
+    expect(groups[0]!.rows.map((r) => r.issue.identifier)).toEqual(["STA-1"]);
+    expect(groups[0]!.rows[0]!.isExpanded).toBe(false);
+  });
+
+  it("hides resolved rows unless asked, like every other axis", () => {
+    const rows = [
+      row({ identifier: "STA-1", kind: "bug", status: "done" }),
+      row({ identifier: "STA-2", kind: "task" }),
+    ];
+
+    expect(buildKindGroups(rows, { isExpanded: () => true }).map((g) => g.status)).toEqual(["task"]);
+    expect(byKind(rows).map((g) => g.status)).toEqual(["task", "bug"]);
+  });
+
+  it("produces the SAME grouped shape, so the fold and the keyboard follow for free", () => {
+    // O3d's argument for reusing `"grouped"` rather than adding a fourth `ListShape`, now
+    // load-bearing for a third axis: `sectionsOf` and `visibleOrder` were not edited.
+    const rows = [
+      row({ identifier: "STA-1", kind: "epic" }),
+      row({ identifier: "STA-2", kind: "bug" }),
+    ];
+    const shape = buildList(rows, "kind", { isExpanded: () => true, showResolved: true });
+
+    expect(shape.kind).toBe("grouped");
+    expect(sectionsOf(shape).map((s) => s.key)).toEqual(["epic", "bug"]);
+    expect(visibleOrder(shape, () => false).map((s) => s.ref)).toEqual(["STA-1", "STA-2"]);
+    // A collapsed group's rows leave the sequence, exactly as on the other three axes.
+    expect(visibleOrder(shape, (key) => key === "epic").map((s) => s.ref)).toEqual(["STA-2"]);
+  });
+});
+
 describe("topLevelAncestors", () => {
   it("answers the ROOT, not the parent, at every depth", () => {
     const rows = [
