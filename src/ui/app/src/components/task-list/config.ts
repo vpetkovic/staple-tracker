@@ -81,6 +81,37 @@ export interface TaskListColumns {
    */
   workspace: boolean;
   labels: boolean;
+  /**
+   * The two dependency badges — O6 (STA-138): "blocked by N" and "blocks N".
+   *
+   * ── WHERE IT SITS IN §14'S DROP ORDER, AND WHY THAT IS HONEST ───────────────────────
+   *
+   * §14 drops least-diagnostic-first: date -> label NAMES -> PR number -> working-pill TEXT.
+   * This goes LAST — after all four — and no viewport media query drops it at all; at ≤719px
+   * it reflows to line 2 with the rest of the meta cluster.
+   *
+   * That is not special pleading. Two badges are ~26px each, which makes them the cheapest
+   * elements in the cluster, and they answer "why has this not moved", which is the single
+   * question the Waiting section exists to ask. They also REPLACE text that used to survive
+   * at every width (the `blocked by STA-67, STA-68, …` caption), so dropping them narrow
+   * would delete a fact rather than abbreviate one.
+   *
+   * It is still genuinely droppable, and `popup` drops it — see below. What it is not is
+   * NEVER_DROPPED: that list is the five elements the brief names, and adding a sixth to it
+   * on our own authority is how a spec stops meaning anything.
+   *
+   * ── ON IN `panel`, AND INERT THERE TODAY ────────────────────────────────────────────
+   *
+   * The switch is on and nothing renders, because the badge draws from `TaskRow.deps` and
+   * the detail panel builds its children rows out of `/api/issue`'s `children: Issue[]`,
+   * which does not carry the field. That is the correct state rather than an oversight:
+   * the column expresses "this container wants the badges", `detail/*` is where the rows
+   * are built and is not this ticket's to edit, and an absent `deps` renders nothing at all
+   * — so the day that payload grows the field, the panel gets the badges with no change
+   * here. The panel is also the one surface that already answers the question another way,
+   * in its own BLOCKED BY / BLOCKS chip rows.
+   */
+  deps: boolean;
   /** The live "Working…" pill / stale badge / held pill cluster. */
   claim: boolean;
   assignee: boolean;
@@ -119,6 +150,7 @@ const TREE_COLUMNS: TaskListColumns = {
   status: true,
   workspace: false,
   labels: true,
+  deps: true,
   claim: true,
   assignee: true,
   date: true,
@@ -174,6 +206,14 @@ export const TASK_LIST_PRESETS: Record<TaskListPreset, PresetShape> = {
       disclosure: false,
       workspace: true,
       labels: false,
+      /*
+       * O6 (STA-138). The one preset that turns the dependency badges off, and it is a
+       * CONTAINER decision rather than a width one: a palette row is read in under a second
+       * on the way to pressing enter, the status icon already says `blocked` there, and two
+       * more glyphs on a 512px line is two more things to skip past. The dialog they open is
+       * a modal, which a modal (cmdk) cannot host anyway.
+       */
+      deps: false,
       date: false,
       pr: false,
       actions: false,

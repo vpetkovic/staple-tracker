@@ -229,6 +229,7 @@ function flatten(
         claim: r.claim,
         workspace: r.workspace,
         pullRequests: r.pullRequests,
+        deps: r.deps,
         depth,
         hasChildren: kids.length > 0,
         isExpanded: expanded,

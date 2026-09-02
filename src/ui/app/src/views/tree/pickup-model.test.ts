@@ -116,7 +116,9 @@ describe("the index borrows the store's answer rather than deriving one", () => 
 
     expect(index.waitingOn("own")).toBe("waiting on VP: decide the schema");
     expect(index.waitingOn("derived")).toBe("waiting on VP: sign off");
-    expect(index.waitingOn("dep")).toBe("blocked by STA-4, STA-5");
+    // O6 (STA-138): a bare dependency edge no longer produces a caption. The row's
+    // warning-triangle badge is that fact now, and it links; the sentence did not.
+    expect(index.waitingOn("dep")).toBeNull();
   });
 });
 
@@ -250,14 +252,40 @@ describe("the sections themselves", () => {
     const index = buildPickupIndex(
       inbox(
         [entry({ id: "a" })],
-        [entry({ id: "c", status: "blocked", unresolvedBlockers: ["STA-4"] })],
+        [
+          entry({
+            id: "c",
+            status: "blocked",
+            unblockOwner: "VP",
+            unblockAction: "sign the contract",
+            unresolvedBlockers: ["STA-4"],
+          }),
+        ],
       ),
     );
 
     const groups = buildPickupGroups(rows, index);
 
-    expect(section(groups, "waiting")!.waitingOn.get("c")).toBe("blocked by STA-4");
+    // PROSE, not identifiers — since O6 the identifiers ride on the badge instead.
+    expect(section(groups, "waiting")!.waitingOn.get("c")).toBe("waiting on VP: sign the contract");
     expect(section(groups, "up_next")!.waitingOn.size).toBe(0);
+  });
+
+  it("gives a purely dependency-blocked row NO caption at all — O6 (STA-138)", () => {
+    /**
+     * The measured shape of the real board: 33 of 36 Waiting captions were the
+     * `blocked by STA-…` sentence, one of them eleven identifiers long. All of them are now
+     * badges, so the Waiting section is captioned only where a human actually wrote a reason.
+     */
+    const rows = [row({ id: "c", status: "blocked" })];
+    const index = buildPickupIndex(
+      inbox([], [entry({ id: "c", status: "blocked", unresolvedBlockers: ["STA-4", "STA-5"] })]),
+    );
+
+    const waiting = section(buildPickupGroups(rows, index), "waiting")!;
+    // The row is still IN Waiting — placement is unchanged, only the wording is gone.
+    expect(waiting.rows).toHaveLength(1);
+    expect(waiting.waitingOn.size).toBe(0);
   });
 });
 

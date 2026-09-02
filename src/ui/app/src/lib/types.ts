@@ -294,11 +294,45 @@ export interface PullRequestRef {
 }
 
 /** GET /api/issues */
+/**
+ * What this row is waiting on, and what is waiting on it — O6 (STA-138).
+ *
+ * IDENTIFIERS, NOT COUNTS. They cost the same query server-side and they are what lets a
+ * badge's tooltip name what it is counting without a second fetch. A count is `.length`.
+ *
+ * Both lists are already FILTERED to what still matters: `blockedBy` holds blockers that are
+ * not resolved, `blocks` holds dependents that are still open. That filtering happens in SQL,
+ * once for the page, because the alternative is every surface re-deriving "does done count"
+ * and one of them eventually getting it wrong.
+ *
+ * Titles and statuses are deliberately absent. The badge does not need them; the Dependencies
+ * dialog does, and it fetches `/api/issue` on open — which is the endpoint that already has
+ * them. Putting them here would multiply the list payload to serve a dialog most rows never
+ * open.
+ */
+export interface IssueDeps {
+  /** Unresolved blockers. `[]` means nothing is in the way. */
+  blockedBy: string[];
+  /** Open issues this one blocks. `[]` means nothing is waiting on it. */
+  blocks: string[];
+}
+
 export interface IssueRow {
   workspace: string;
   issue: Issue;
   /** Liveness of the holder, or null when the issue is not held. One batched query per workspace. */
   claim: ClaimActivity | null;
+  /**
+   * Dependency edges, as a SIBLING of `issue` for the same reason `claim` is one: these are
+   * relations, not fields, and freezing them onto the entity would be a copy that goes stale
+   * the moment an edge moves.
+   *
+   * Optional on the TYPE and always present on the WIRE. Optional because three other places
+   * construct an `IssueRow` (fixtures, the palette's synthesised rows, tests) and none of
+   * them has an opinion about dependencies; a required field there would be six `deps: {
+   * blockedBy: [], blocks: [] }` literals saying nothing.
+   */
+  deps?: IssueDeps;
   /**
    * Linked pull requests, newest-first. OPTIONAL and absent today — see `PullRequestRef`.
    *

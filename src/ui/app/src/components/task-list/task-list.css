@@ -21,7 +21,19 @@
   /* ── Row geometry. V1 ceded row density to STA-97. ──────────────────────────────── */
   --row-height: 36px;
   --row-indent-step: 20px;
-  /* 60px holds STA-999. Hub mode widens it for the workspace prefix chip. */
+  /*
+   * 60px holds STA-999. Hub mode widens it for the workspace prefix chip.
+   *
+   * O5 (STA-137) shipped this at 76px — a reserved 12px connector slot on every row, so
+   * child and top-level identifiers kept one left edge. VP rejected it on review: the
+   * reserve reads as an empty gap in front of every top-level identifier, and paying 16px of
+   * title track on every row to align a glyph most rows do not have is the wrong trade.
+   *
+   * So the width is back to 60 and the glyph is INLINE: it appears only on a child row and
+   * pushes that row's identifier one glyph right. The misalignment is accepted and is
+   * temporary — O1b (STA-125) gives every row a real per-row kind column, which restores a
+   * single left edge for free rather than by reserving space for an absence.
+   */
   --row-id-width: 60px;
 
   /*
@@ -384,6 +396,34 @@
   white-space: nowrap;
 }
 
+/*
+ * The subtask connector glyph — O5 (STA-137), as revised on VP's review.
+ *
+ * INLINE, on child rows only. It is deliberately NOT a reserved slot: a fixed box on every
+ * row would keep the identifiers on one left edge, but it renders as an empty gap in front
+ * of every top-level identifier, and it costs 16px of title track on every row of every
+ * preset to align a glyph most rows do not carry. VP looked at that and said no.
+ *
+ * What we accept in exchange is that a child's identifier sits ~16px right of a top-level
+ * one. That is temporary: O1b (STA-125) puts a real kind glyph on EVERY row, which restores
+ * a single left edge by putting something in the space rather than by reserving it empty.
+ *
+ * `.staple-row-id` keeps `overflow: visible`, so the pushed identifier extends into the 8px
+ * column gap rather than being clipped — the gap is what absorbs this until O1b lands.
+ *
+ * No colour of its own: it inherits `--text-tertiary` from `.staple-row-id`, so the glyph
+ * sits in the same register as the identifier it belongs to and cannot be mistaken for a
+ * status. NO transition and no hover rule — this row shifts on hover for nothing.
+ */
+.staple-row-kin {
+  display: inline-flex;
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+}
+
 .staple-row-status {
   justify-self: center;
   flex-shrink: 0;
@@ -485,6 +525,96 @@
 .staple-row-meta > .staple-label-cluster {
   min-width: 0;
   flex-shrink: 1;
+}
+
+/*
+ * ── Dependency badges — O6 (STA-138) ──────────────────────────────────────────────────
+ *
+ * TWO ALIASES, NO NEW HUE. `--priority-high` is the house amber: it exists, it is tuned for
+ * both themes, and it is unused, because `PrioritySignal` deliberately declined it (see the
+ * note at the top of that file). `--status-task-icon-blocked` is the exact red the blocked
+ * status glyph already wears. Naming them here gives the MEANING a name without a colour
+ * being invented, which is the same move `--motion-working-pulse` makes for a duration.
+ *
+ * The pair does not depend on colour: an outlined TRIANGLE against an outlined OCTAGON is
+ * two silhouettes, so it survives greyscale — WCAG 1.4.1, the same rule the seven status
+ * glyphs are held to.
+ */
+:root {
+  --dep-blocked-by: var(--priority-high);
+  --dep-blocks: var(--status-task-icon-blocked);
+}
+
+.staple-dep-badges {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.staple-dep-badge {
+  display: inline-flex;
+  height: 20px;
+  align-items: center;
+  gap: 3px;
+  padding: 0 5px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  /* Outline, like every other static badge on this row; the capsule fill is reserved for
+     the one live element (the working pill). */
+  background: transparent;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  cursor: pointer;
+  /*
+   * Background and border only. NOT a transform, NOT padding, NOT a border WIDTH — at 36px
+   * with a hairline separator, a 1px shift when the pointer arrives reads as the whole list
+   * twitching, and that rule is the row's, not this element's, to break.
+   */
+  transition:
+    background-color var(--motion-duration-instant) var(--motion-ease-standard),
+    border-color var(--motion-duration-instant) var(--motion-ease-standard);
+}
+
+.staple-dep-badge:hover {
+  background: var(--surface-hover);
+  border-color: var(--border-strong);
+}
+
+.staple-dep-badge:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+
+/*
+ * lucide draws in a 24-unit viewBox and defaults to `width="24"`. Sized here rather than per
+ * call site, for exactly the reason `--group-icon-size` exists: two icon families on this row
+ * do not agree on their own size, and the agreement belongs to the class both wear.
+ */
+.staple-dep-badge svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+.staple-dep-badge[data-kind="blocked-by"] svg {
+  color: var(--dep-blocked-by);
+}
+
+.staple-dep-badge[data-kind="blocks"] svg {
+  color: var(--dep-blocks);
+}
+
+/* The COUNT stays in the row's text colour. Two coloured glyphs on a 36px line is already
+   the budget; two coloured numbers beside them is a traffic light. */
+.staple-dep-count {
+  color: var(--muted-foreground);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .staple-dep-badge {
+    transition: none;
+  }
 }
 
 .staple-label-cluster {
@@ -961,4 +1091,152 @@
 [data-preset="popup"] .staple-working-pill,
 [data-preset="popup"] .staple-held-pill {
   padding-right: 4px;
+}
+
+/* ══ O6 (STA-138) — the Dependencies dialog ══════════════════════════════════════════ */
+
+/*
+ * IT LIVES IN THIS SHEET ON PURPOSE, and the reason is ownership rather than tidiness: the
+ * dialog is mounted by `DependencyBadges`, which is a row element, so this stylesheet is
+ * guaranteed loaded exactly where the dialog can exist and nowhere it cannot. A second file
+ * for one modal is a second file to keep in sync with the tokens above it — including the
+ * two `--dep-*` aliases, which the section headings share with the badges by design.
+ *
+ * Geometry only. Every colour is a token role, as everywhere else in this file.
+ */
+
+.staple-dep-dialog {
+  max-width: 34rem;
+}
+
+/* Which task this is about. A badge can be clicked from any row in a list of sixty, and a
+   dialog that does not name its subject makes the reader remember which one they hit. */
+.staple-dep-subject {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 8px;
+  margin: -4px 0 0;
+}
+
+.staple-dep-subject-id {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.staple-dep-subject-title {
+  overflow: hidden;
+  color: var(--foreground);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.staple-dep-sections {
+  display: grid;
+  gap: 18px;
+}
+
+.staple-dep-section-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 6px;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: var(--tracking-label);
+}
+
+.staple-dep-section-head svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+/* The heading takes the direction's colour — the same two aliases the badges use, so the
+   glyph you clicked and the heading you land on are visibly the same thing. */
+.staple-dep-section[data-kind="blocked-by"] .staple-dep-section-head {
+  color: var(--dep-blocked-by);
+}
+
+.staple-dep-section[data-kind="blocks"] .staple-dep-section-head {
+  color: var(--dep-blocks);
+}
+
+/*
+ * The rail, from VP's reference. It is load-bearing rather than decorative: it is what makes
+ * a list of two and a list of three read as two GROUPS at a glance instead of five lines.
+ * Indented to sit under the centre of the heading glyph.
+ */
+.staple-dep-list {
+  margin: 0;
+  padding: 0 0 0 12px;
+  border-left: 1px solid var(--border);
+  list-style: none;
+}
+
+.staple-dep-entry {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 6px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--motion-duration-instant) var(--motion-ease-standard);
+}
+
+.staple-dep-entry:hover {
+  background: var(--surface-hover);
+}
+
+.staple-dep-entry:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+
+/* Resolved blockers. They stay CLICKABLE — "what was this waiting on" is a real question
+   after the fact — they simply stop competing with the ones still in the way. */
+.staple-dep-entry[data-muted] {
+  opacity: 0.55;
+}
+
+.staple-dep-entry-status {
+  flex-shrink: 0;
+}
+
+.staple-dep-entry-id {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.staple-dep-entry-title {
+  overflow: hidden;
+  color: var(--foreground);
+  font-size: 13px;
+  /* One line and an ellipsis, with the full text in `title` — the same bargain the task row
+     makes, so a long epic title cannot make this dialog taller than the viewport. */
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.staple-dep-empty {
+  margin: 0;
+  padding-left: 12px;
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .staple-dep-entry {
+    transition: none;
+  }
 }

@@ -85,6 +85,21 @@ function writeSession(value: string): void {
  * Referer of any external link a rendered document happens to contain.
  */
 let token: string = (() => {
+  /**
+   * NO BROWSER, NO TOKEN — O6 (STA-138).
+   *
+   * This IIFE reads `location` at module scope, which is correct in the app and fatal
+   * anywhere else: the task-list suites render the row with `react-dom/server` in a Node
+   * environment, and since the row can now open the Dependencies dialog, this module is in
+   * the row's import graph. Without the guard, importing a ROW throws `location is not
+   * defined` before a single assertion runs.
+   *
+   * Returning "" is the honest answer rather than a workaround. There is no URL to read a
+   * token out of and no session to fall back on, so the module is left in exactly the state
+   * `forgetToken()` leaves it in — `hasToken()` false — and every caller already handles
+   * that. Nothing that is supposed to work in a browser behaves differently.
+   */
+  if (typeof location === "undefined") return "";
   const params = new URLSearchParams(location.search);
   const fromUrl = params.get("token");
   if (!fromUrl) return readSession();

@@ -99,21 +99,39 @@ describe("waitingLine", () => {
     );
   });
 
-  it("falls back to the bare blocker identifiers, the only thing a dependency edge has", () => {
-    // The most common blocked row there is: `todo`, no prose anywhere, one unresolved
-    // dependency. "blocked by STA-4" is still a fact the reader can act on.
+  it("says NOTHING for a bare dependency edge — the badge carries that now (O6)", () => {
+    /**
+     * This assertion is the inverse of the one it replaces, and the inversion is the whole
+     * of STA-138's caption half.
+     *
+     * `waitingLine` used to end with `blocked by ${blockers.join(", ")}`. On the real board
+     * that produced, among others, `blocked by STA-67, STA-68, STA-69, STA-70, STA-71,
+     * STA-72, STA-73, STA-74, STA-75, STA-76, STA-77` — a sentence sharing the title's
+     * track, ellipsized to `blocked by STA-67, STA-6…` at any real width, at which point it
+     * says strictly less than the number `11` does.
+     *
+     * The row now renders a warning-triangle badge with that count, whose tooltip names the
+     * identifiers and whose click opens the Dependencies dialog with their titles and
+     * statuses. Keeping the sentence as well would be the same fact twice, and the worse
+     * copy would be the one taking the space.
+     */
     expect(
       waitingLine(
         { status: "todo", unblockOwner: null, unblockAction: null },
         { unresolvedBlockers: ["STA-4", "STA-5"] },
       ),
-    ).toBe("blocked by STA-4, STA-5");
+    ).toBeNull();
   });
 
-  it("prefers a borrowed descriptor over bare identifiers, because prose beats a list", () => {
+  it("still prefers PROSE, which no badge can carry", () => {
+    // The two sources above the removed one are untouched, and this is why: a count cannot
+    // say "waiting on VP: decide the schema". That is exactly the line O6 keeps.
     expect(
       waitingLine(blocked, { derivedBlockers: [child()], unresolvedBlockers: ["STA-4"] }),
     ).toBe("waiting on VP: decide the schema");
+    expect(waitingLine({ ...blocked, unblockOwner: "VP" }, { unresolvedBlockers: ["STA-4"] })).toBe(
+      "waiting on VP",
+    );
   });
 
   it("is null when there is genuinely nothing to say", () => {
