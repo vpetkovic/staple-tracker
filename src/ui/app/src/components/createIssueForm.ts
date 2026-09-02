@@ -124,36 +124,62 @@ export function buildCreatePayload(state: CreateFormState): Extract<ActionPayloa
 
 // ------------------------------------------------------------------ options
 
+/** One row -> one option. The pill is its OWN workspace, never the target's. */
+function toOption(row: IssueRow): SelectOption {
+  return {
+    value: row.issue.identifier,
+    label: row.issue.identifier,
+    hint: row.issue.title,
+    pill: row.workspace,
+    status: row.issue.status,
+  };
+}
+
 /**
- * The options for parent / blocked-by / blocking — RESTRICTED TO ONE WORKSPACE, and
- * that restriction is the finding rather than a shortcut.
+ * Options for PARENT — restricted to the target workspace, and this one stays restricted.
  *
- * `relations` is a per-workspace SQLite table keyed on local `issues.id` values, and
- * every ref the store is handed goes through `Store.requireRow`, which refuses with
- * `No issue matches "<ref>" in workspace <slug>`. A workspace database has no way to
- * name a row in another one, so a cross-workspace parent or blocker is not something
- * the store can hold. Cross-workspace blocking does exist — but as a separate concept
- * in the hub registry (`Hub.addCrossLink`, identifier to identifier, surfaced read-only
- * on /api/issue as `crossBlockers`), with no HTTP write route and no create-time input.
+ * R8 (STA-110) lifted the restriction on the blocking relations and deliberately left it
+ * here, because a cross-workspace parent is not a policy we declined to allow — it is a
+ * thing with nowhere to live:
  *
- * So the list offers what can actually be stored. Offering the rest and letting the
- * store refuse would be a dropdown whose options are a guess.
+ *   - `issues.parent_id` holds a LOCAL row id. `createIssue` sets it from
+ *     `this.requireRow(input.parent).id`, which resolves inside one workspace file;
+ *   - `depth` is derived as `parent.depth + 1` and checked against MAX_TREE_DEPTH in the
+ *     same transaction, so the parent's depth must be readable there too;
+ *   - the hub's `cross_links` table has exactly one `type`, `'blocks'`. There is no
+ *     parent edge in the hub schema, and `Hub.graph()` rebuilds parents from
+ *     `issue.parentId` strictly within a workspace.
  *
- * The pill rides every option anyway. The workspace is selectable in the same dialog,
- * which makes "which project is this ref in" a live question even when every answer on
- * screen is the same — and a pill that appears only on the exceptional row is a pill
- * nobody learns to read.
+ * Offering a foreign parent would mean a dangling id or a hub concept invented on the
+ * way past. The field says so instead.
  */
-export function issueOptions(rows: readonly IssueRow[], workspace: string): SelectOption[] {
+export function parentOptions(rows: readonly IssueRow[], workspace: string): SelectOption[] {
   if (!workspace) return [];
-  return rows
-    .filter((row) => row.workspace === workspace)
-    .map((row) => ({
-      value: row.issue.identifier,
-      label: row.issue.identifier,
-      hint: row.issue.title,
-      pill: row.workspace,
-    }));
+  return rows.filter((row) => row.workspace === workspace).map(toOption);
+}
+
+/**
+ * Options for BLOCKED BY and BLOCKING — every workspace in scope.
+ *
+ * This is the R8 correction, and R7 had it wrong. Cross-referencing across workspaces is
+ * what a hub is FOR: a task in `staple` waiting on a task in `workshop` is the normal
+ * case, not an edge case. The edge has always been storable — `Hub.addCrossLink` resolves
+ * both identifiers through the registry, checks each side exists, and guards its own
+ * cycles — it simply had no HTTP route until now, which R7 mistook for "unsupported".
+ *
+ * The two kinds of edge stay distinct all the way down, and the hub insists on it:
+ * `addCrossLink` REFUSES a same-workspace pair with "use the workspace-local blocked-by
+ * instead". So the server routes same-workspace picks to local relations and foreign
+ * picks to hub links; this function's only job is to stop hiding the foreign ones.
+ *
+ * Target workspace first. Same-workspace remains the common case and stays one glance
+ * away, and grouping by workspace is what makes the pill scannable rather than a badge
+ * sprinkled through a list in arbitrary order.
+ */
+export function relationOptions(rows: readonly IssueRow[], workspace: string): SelectOption[] {
+  const here = rows.filter((row) => row.workspace === workspace);
+  const elsewhere = rows.filter((row) => row.workspace !== workspace);
+  return [...here, ...elsewhere].map(toOption);
 }
 
 /**

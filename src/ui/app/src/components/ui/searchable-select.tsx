@@ -43,7 +43,12 @@ import {
   CommandList,
 } from "@/components/ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+// Through the barrel, never from the file inside it — components/task-list/index.ts says
+// what another domain may depend on, and the glyphs are r-rows' to own. A second set of
+// status shapes in a dropdown is a second set to keep in step with the list.
+import { StatusIcon } from "@/components/task-list";
 import { cn } from "@/lib/utils";
+import type { IssueStatus } from "@/lib/types";
 
 export interface SelectOption {
   /** What ends up in the payload — an identifier, or a label. */
@@ -56,6 +61,14 @@ export interface SelectOption {
   pill?: string;
   /** How many issues carry this value. Shown when present; never searched. */
   count?: number;
+  /**
+   * The issue's status, for the icon — R8 (STA-110).
+   *
+   * Absent on options that are not issues (a label has no status). Never searched: the
+   * icon answers "is this thing done" at a glance, which is the question you have while
+   * picking a blocker, but nobody types "in_progress" to filter a dropdown.
+   */
+  status?: IssueStatus;
 }
 
 /** Everything a query is matched against. Value first: it is what people paste. */
@@ -126,6 +139,32 @@ export function resolvePaste(
   return expand(text)
     .filter((value) => known.has(value.toLowerCase()))
     .map((value) => byLower.get(value.toLowerCase())!);
+}
+
+/**
+ * Split matches into one run per workspace, in the order they arrive.
+ *
+ * Exists because ordering the target workspace first — which is right, it keeps the
+ * common case one glance away — pushed every FOREIGN option below the fold of a list
+ * fifteen items long. That quietly undid the point of R8: cross-workspace picks were
+ * allowed but invisible. A heading per workspace makes the structure legible before you
+ * scroll, and tells you the other workspace is down there at all.
+ *
+ * `null` for options with no pill (labels), which is why the pill is the key rather than
+ * a required field. A single group comes back unheaded — see the render.
+ */
+export function groupByPill(options: readonly SelectOption[]): Array<{
+  pill: string | null;
+  options: SelectOption[];
+}> {
+  const groups: Array<{ pill: string | null; options: SelectOption[] }> = [];
+  for (const option of options) {
+    const pill = option.pill ?? null;
+    const last = groups[groups.length - 1];
+    if (last && last.pill === pill) last.options.push(option);
+    else groups.push({ pill, options: [option] });
+  }
+  return groups;
 }
 
 export interface SearchableSelectProps {
@@ -207,6 +246,11 @@ export function SearchableSelect({
   }, [open]);
 
   const matches = filterOptions(options, query);
+  /**
+   * Do the options span more than one workspace? Only then is a heading worth its line —
+   * and only then does the per-row pill become noise the heading already carries.
+   */
+  const grouped = new Set(options.map((o) => o.pill).filter(Boolean)).size > 1;
   const offerCreate = onCreate !== undefined && shouldOfferCreate(query, options, selected);
 
   const add = (values: string[]) => {
@@ -220,7 +264,7 @@ export function SearchableSelect({
 
   const remove = (value: string) => onChange(selected.filter((entry) => entry !== value));
 
-  const pillFor = (value: string) => options.find((option) => option.value === value)?.pill;
+  const optionFor = (value: string) => options.find((option) => option.value === value);
 
   return (
     <div className="grid gap-1.5">
@@ -257,7 +301,7 @@ export function SearchableSelect({
         <PopoverContent
           align="start"
           sideOffset={4}
-          className="w-(--radix-popover-trigger-width) min-w-64 p-0"
+          className="w-(--radix-popover-trigger-width) min-w-96 p-0"
           data-select-list={name}
         >
           <Command shouldFilter={false}>
@@ -287,9 +331,17 @@ export function SearchableSelect({
               {/* Only when there is genuinely nothing to show. With an offer pending the
                   list is not empty, and cmdk's empty slot would sit above it. */}
               {matches.length === 0 && !offerCreate ? <CommandEmpty>{emptyText}</CommandEmpty> : null}
-              {matches.length > 0 ? (
-                <CommandGroup>
-                  {matches.map((option) => {
+              {/* One group per workspace, headed — unless everything is in one group, in
+                  which case a heading would only repeat what the field already says. */}
+              {groupByPill(matches).map((group, index) => {
+                const headed = grouped && group.pill !== null;
+                return (
+                <CommandGroup
+                  key={group.pill ?? `g${index}`}
+                  heading={headed ? group.pill : undefined}
+                  data-select-group={group.pill ?? undefined}
+                >
+                  {group.options.map((option) => {
                     const checked = selected.includes(option.value);
                     return (
                       <CommandItem
@@ -311,6 +363,12 @@ export function SearchableSelect({
                         >
                           {checked ? <Check className="size-2.5" strokeWidth={3} /> : null}
                         </span>
+                        {/* The same component the main list uses, so "done" looks like
+                            done everywhere. Its own <title>/aria-label rides along, which
+                            is also what the evidence asserts on. */}
+                        {option.status ? (
+                          <StatusIcon status={option.status} className="size-3.5 shrink-0" />
+                        ) : null}
                         <span className={cn("shrink-0 text-[12px]", mono && "font-mono")}>
                           {option.label}
                         </span>
@@ -324,16 +382,19 @@ export function SearchableSelect({
                             {option.count}
                           </span>
                         ) : null}
-                        {/* The pill rides every option, not only the foreign ones. Which
-                            project a ref belongs to is a question worth answering before
-                            it is a problem, and a pill that appears only sometimes is a
-                            pill nobody learns to read. */}
-                        {option.pill ? <WorkspacePill>{option.pill}</WorkspacePill> : null}
+                        {/* The pill rides every option when the list is single-workspace,
+                            because which project a ref belongs to is worth answering
+                            before it is a problem. When the list IS grouped by workspace
+                            the heading already says it, and repeating it on all fifteen
+                            rows is noise. `data-option-workspace` is on the row either
+                            way — the data does not depend on how it is drawn. */}
+                        {option.pill && !grouped ? <WorkspacePill>{option.pill}</WorkspacePill> : null}
                       </CommandItem>
                     );
                   })}
                 </CommandGroup>
-              ) : null}
+                );
+              })}
               {offerCreate ? (
                 <CommandGroup>
                   <CommandItem
@@ -359,7 +420,8 @@ export function SearchableSelect({
       {selected.length > 0 ? (
         <div className="flex flex-wrap gap-1" data-select-chips={name}>
           {selected.map((value) => {
-            const pill = pillFor(value);
+            const option = optionFor(value);
+            const pill = option?.pill;
             return (
               <span
                 key={value}
@@ -368,6 +430,11 @@ export function SearchableSelect({
                 className="border-input bg-surface-hover flex items-center gap-1 rounded-md border py-0.5 pr-0.5 pl-1.5 text-[12px]"
               >
                 {pill ? <WorkspacePill>{pill}</WorkspacePill> : null}
+                {/* Status rides onto the chip for the same reason the pill does: the
+                    answer to "is this blocker finished" must survive the list closing. */}
+                {option?.status ? (
+                  <StatusIcon status={option.status} className="size-3.5 shrink-0" />
+                ) : null}
                 <span className={mono ? "font-mono" : undefined}>{value}</span>
                 <button
                   type="button"

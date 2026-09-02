@@ -20,8 +20,9 @@ import { describe, expect, it } from "vitest";
 import {
   EMPTY_CREATE_FORM,
   buildCreatePayload,
-  issueOptions,
   labelOptions,
+  parentOptions,
+  relationOptions,
   splitLabels,
   withoutValues,
   splitRefs,
@@ -183,44 +184,107 @@ const ROWS: IssueRow[] = [
   row("pinecone", { id: "c", identifier: "PC-1", title: "Import", labels: ["ui", "import"] }),
 ];
 
-describe("issueOptions", () => {
+describe("parentOptions", () => {
   /**
-   * THE cross-workspace finding, pinned as a test so it cannot regress into a lie.
-   *
-   * `relations` is a per-workspace table keyed on local row ids, and every ref goes
-   * through `Store.requireRow`, which refuses with "No issue matches … in workspace X".
-   * A parent or blocker in another workspace is therefore not a thing the store can
-   * store, so it must not be a thing this list can offer.
+   * R8 (STA-110) narrowed this claim rather than dropping it, and the narrowing is the
+   * finding. BLOCKERS can cross a workspace — the hub has an edge for that, and
+   * relationOptions below now offers them. A PARENT cannot, and there is nowhere to put
+   * one: `issues.parent_id` is a local row id set from `requireRow(input.parent).id`,
+   * `depth` is derived as `parent.depth + 1` in the same transaction, and the hub's
+   * `cross_links` table has exactly one type, `blocks`. So this list stays restricted,
+   * and stays restricted for a reason that is about storage rather than about policy.
    */
-  it("offers only the target workspace, because the store cannot resolve a foreign ref", () => {
-    expect(issueOptions(ROWS, "staple").map((o) => o.value)).toEqual(["STA-1", "STA-2"]);
-    expect(issueOptions(ROWS, "pinecone").map((o) => o.value)).toEqual(["PC-1"]);
+  it("offers only the target workspace, because a parent cannot live in another one", () => {
+    expect(parentOptions(ROWS, "staple").map((o) => o.value)).toEqual(["STA-1", "STA-2"]);
+    expect(parentOptions(ROWS, "pinecone").map((o) => o.value)).toEqual(["PC-1"]);
   });
 
   it("carries the workspace as a pill even though every option shares it", () => {
-    expect(issueOptions(ROWS, "staple").every((o) => o.pill === "staple")).toBe(true);
+    expect(parentOptions(ROWS, "staple").every((o) => o.pill === "staple")).toBe(true);
   });
 
   it("carries the title as the hint, which is what makes it searchable by words", () => {
-    expect(issueOptions(ROWS, "staple")[0]).toMatchObject({
+    expect(parentOptions(ROWS, "staple")[0]).toMatchObject({
       value: "STA-1",
       label: "STA-1",
       hint: "Ship it",
     });
   });
 
+  it("carries the status, so the option can show the icon the main list shows", () => {
+    expect(parentOptions(ROWS, "staple").map((o) => o.status)).toEqual(["backlog", "done"]);
+  });
+
   it("is empty for a workspace with nothing in it, rather than falling back to everything", () => {
-    expect(issueOptions(ROWS, "nowhere")).toEqual([]);
+    expect(parentOptions(ROWS, "nowhere")).toEqual([]);
   });
 
   /** Nothing to point at yet is not the same as "point at anything". */
   it("is empty when no target workspace is known", () => {
-    expect(issueOptions(ROWS, "")).toEqual([]);
+    expect(parentOptions(ROWS, "")).toEqual([]);
+  });
+});
+
+describe("relationOptions", () => {
+  /**
+   * The R8 correction, pinned. Cross-referencing across workspaces is what a hub is FOR,
+   * and `Hub.addCrossLink` has always been able to hold the edge — HTTP just never
+   * exposed it. R7 restricted these lists to one workspace; that was the wrong call and
+   * this test is what stops it coming back.
+   */
+  it("offers every workspace, not just the target one", () => {
+    expect(relationOptions(ROWS, "staple").map((o) => o.value)).toEqual([
+      "STA-1",
+      "STA-2",
+      "PC-1",
+    ]);
+  });
+
+  /**
+   * Target workspace first. Same-workspace is the common case and stays one glance away;
+   * ordering by workspace also keeps the foreign items grouped rather than interleaved,
+   * which is what makes the pill scannable instead of decorative.
+   */
+  it("puts the target workspace first and keeps the rest after it", () => {
+    expect(relationOptions(ROWS, "pinecone").map((o) => o.value)).toEqual([
+      "PC-1",
+      "STA-1",
+      "STA-2",
+    ]);
+  });
+
+  it("still offers everything when the target workspace is unknown", () => {
+    expect(relationOptions(ROWS, "").map((o) => o.value)).toEqual(["STA-1", "STA-2", "PC-1"]);
+  });
+
+  it("pills each option with its OWN workspace, which is now load-bearing", () => {
+    expect(relationOptions(ROWS, "staple").map((o) => o.pill)).toEqual([
+      "staple",
+      "staple",
+      "pinecone",
+    ]);
+  });
+
+  it("carries the status for the icon", () => {
+    expect(relationOptions(ROWS, "staple").map((o) => o.status)).toEqual([
+      "backlog",
+      "done",
+      "backlog",
+    ]);
+  });
+
+  it("is stable under reordering of the input rows", () => {
+    const shuffled: IssueRow[] = [ROWS[2]!, ROWS[0]!, ROWS[1]!];
+    expect(relationOptions(shuffled, "staple").map((o) => o.value)).toEqual([
+      "STA-1",
+      "STA-2",
+      "PC-1",
+    ]);
   });
 });
 
 describe("withoutValues", () => {
-  const options = issueOptions(ROWS, "staple");
+  const options = parentOptions(ROWS, "staple");
 
   it("is everything when nothing is taken", () => {
     expect(withoutValues(options, [])).toHaveLength(2);

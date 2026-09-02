@@ -21,15 +21,16 @@ import { renderToStaticMarkup } from "react-dom/server";
 import {
   SearchableSelect,
   filterOptions,
+  groupByPill,
   resolvePaste,
   shouldOfferCreate,
   type SelectOption,
 } from "./searchable-select";
 
 const OPTIONS: SelectOption[] = [
-  { value: "STA-13", label: "STA-13", hint: "Ship the create dialog", pill: "staple" },
-  { value: "STA-9", label: "STA-9", hint: "Row list extraction", pill: "staple" },
-  { value: "PC-4", label: "PC-4", hint: "Ship the pinecone importer", pill: "pinecone" },
+  { value: "STA-13", label: "STA-13", hint: "Ship the create dialog", pill: "staple", status: "in_progress" },
+  { value: "STA-9", label: "STA-9", hint: "Row list extraction", pill: "staple", status: "done" },
+  { value: "PC-4", label: "PC-4", hint: "Ship the pinecone importer", pill: "pinecone", status: "backlog" },
 ];
 
 describe("filterOptions", () => {
@@ -111,6 +112,37 @@ describe("shouldOfferCreate", () => {
   });
 });
 
+describe("groupByPill", () => {
+  it("runs the options into one group per workspace, in arrival order", () => {
+    expect(groupByPill(OPTIONS).map((g) => [g.pill, g.options.length])).toEqual([
+      ["staple", 2],
+      ["pinecone", 1],
+    ]);
+  });
+
+  /**
+   * It groups RUNS, not values — the caller already ordered the list (target workspace
+   * first) and re-sorting here would silently overrule that. If a workspace appears in
+   * two runs, that is the caller's ordering showing through, not something to tidy away.
+   */
+  it("does not merge two runs of the same workspace", () => {
+    const interleaved = [OPTIONS[0]!, OPTIONS[2]!, OPTIONS[1]!];
+    expect(groupByPill(interleaved).map((g) => g.pill)).toEqual(["staple", "pinecone", "staple"]);
+  });
+
+  it("gives one unnamed group for options with no workspace, like labels", () => {
+    const labels = [
+      { value: "ui", label: "ui" },
+      { value: "api", label: "api" },
+    ];
+    expect(groupByPill(labels)).toEqual([{ pill: null, options: labels }]);
+  });
+
+  it("is empty for no options", () => {
+    expect(groupByPill([])).toEqual([]);
+  });
+});
+
 describe("resolvePaste", () => {
   const expand = (text: string) => text.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
 
@@ -151,6 +183,10 @@ describe("SearchableSelect rendering", () => {
       />,
     );
 
+  // NOTE: the group headings are NOT asserted here. They live inside the popover, which
+  // is closed in a server-rendered string — `groupByPill` above is the testable half, and
+  // the headings themselves are a browser assert in __scratch-rform-evidence/shoot.mjs.
+
   it("renders a trigger the browser evidence can find", () => {
     expect(html([])).toContain('data-searchable-select="blocked-by"');
   });
@@ -182,6 +218,35 @@ describe("SearchableSelect rendering", () => {
     expect(out).toContain('data-select-chip="PC-4"');
     expect(out).toContain('data-chip-workspace="pinecone"');
     expect(out).toContain("pinecone");
+  });
+
+  /**
+   * R8 (STA-110). The status icon is the main list's own `StatusIcon`, not a fork, so
+   * the assertion is on the accessible name that component emits — if someone swaps in
+   * a local glyph to "keep the dropdown light", this fails.
+   *
+   * On the CHIP as well as the option, for the same reason the workspace pill is: the
+   * answer to "is this blocker finished" has to survive the list closing.
+   */
+  it("carries the main list's status icon onto the chip", () => {
+    const out = html(["STA-9"]);
+    expect(out).toContain('aria-label="Status: Done"');
+  });
+
+  it("has no status icon for an option that is not an issue", () => {
+    const out = renderToStaticMarkup(
+      <SearchableSelect
+        name="labels"
+        options={[{ value: "ui", label: "ui" }]}
+        selected={["ui"]}
+        onChange={() => {}}
+        multiple
+        placeholder="No labels"
+        actionLabel="Add another label"
+      />,
+    );
+    expect(out).toContain('data-select-chip="ui"');
+    expect(out).not.toContain("Status:");
   });
 
   it("renders one chip per selection", () => {

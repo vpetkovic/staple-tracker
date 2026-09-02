@@ -51,8 +51,9 @@ import { ISSUE_PRIORITIES, type Issue, type IssuePriority, type IssueRow } from 
 import {
   EMPTY_CREATE_FORM,
   buildCreatePayload,
-  issueOptions,
   labelOptions,
+  parentOptions,
+  relationOptions,
   withoutValues,
   splitLabels,
   splitRefs,
@@ -60,10 +61,16 @@ import {
 } from "./createIssueForm";
 
 /**
- * Shown inside each relation dropdown, where the restriction is actually relevant —
- * see `note` on SearchableSelect for why it is not three lines under three fields.
+ * Parent only. A parent is a local row id with a derived depth, so it genuinely cannot
+ * point at another workspace — see parentOptions() for why that is storage and not policy.
  */
-const SAME_WORKSPACE_NOTE = "Refs resolve inside one workspace.";
+const PARENT_NOTE = "A parent lives in the same workspace.";
+
+/**
+ * Blocked by / Blocking. Says what a foreign pick DOES rather than warning about it:
+ * cross-workspace is the normal case in a hub, it just lands in a different table.
+ */
+const CROSS_WORKSPACE_NOTE = "Picks from another workspace become hub links.";
 
 export function CreateIssueDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const session = useSession();
@@ -131,13 +138,14 @@ export function CreateIssueDialog({ open, onOpenChange }: { open: boolean; onOpe
     }
   };
 
-  const issues = issueOptions(rows, ws);
+  const parents = parentOptions(rows, ws);
+  const relations = relationOptions(rows, ws);
   const labels = labelOptions(rows);
   // Neither relation may offer what the other already holds: the same ref on both
   // sides is a two-node cycle, and the store can only refuse it once the task exists.
   // See withoutValues() — the deeper cycles are still the store's to catch.
-  const blockedByOptions = withoutValues(issues, form.blocking);
-  const blockingOptions = withoutValues(issues, form.blockedBy);
+  const blockedByOptions = withoutValues(relations, form.blocking);
+  const blockingOptions = withoutValues(relations, form.blockedBy);
 
   return (
     <Dialog open={open} onOpenChange={(next) => (next ? onOpenChange(true) : close())}>
@@ -207,7 +215,7 @@ export function CreateIssueDialog({ open, onOpenChange }: { open: boolean; onOpe
               <SearchableSelect
                 id="create-parent"
                 name="parent"
-                options={issues}
+                options={parents}
                 selected={form.parent ? [form.parent] : []}
                 onChange={(next) => set("parent", next[0] ?? "")}
                 placeholder="No parent"
@@ -215,7 +223,7 @@ export function CreateIssueDialog({ open, onOpenChange }: { open: boolean; onOpe
                 searchPlaceholder="Search tasks…"
                 emptyText="no task matches"
                 mono
-                note={SAME_WORKSPACE_NOTE}
+                note={PARENT_NOTE}
               />
             </div>
           </div>
@@ -256,7 +264,7 @@ export function CreateIssueDialog({ open, onOpenChange }: { open: boolean; onOpe
                 emptyText="no task matches"
                 expandPaste={splitRefs}
                 mono
-                note={SAME_WORKSPACE_NOTE}
+                note={CROSS_WORKSPACE_NOTE}
               />
             </div>
 
@@ -278,7 +286,7 @@ export function CreateIssueDialog({ open, onOpenChange }: { open: boolean; onOpe
                 emptyText="no task matches"
                 expandPaste={splitRefs}
                 mono
-                note={SAME_WORKSPACE_NOTE}
+                note={CROSS_WORKSPACE_NOTE}
               />
             </div>
           </div>
@@ -290,11 +298,13 @@ export function CreateIssueDialog({ open, onOpenChange }: { open: boolean; onOpe
                 value={ws}
                 onValueChange={(next) => {
                   setWs(next);
-                  // Every ref in the form named a task in the OLD workspace, and none
-                  // of them can resolve in the new one. Dropping them is the honest
-                  // move: carrying them over would send refs the store will refuse,
-                  // and greying them out would leave a chip that means nothing.
-                  setForm((current) => ({ ...current, parent: "", blockedBy: [], blocking: [] }));
+                  // ONLY the parent goes. R7 cleared the relations too, which was right
+                  // while they were workspace-locked and is wrong now: a blocker chosen
+                  // before the switch is still a real task, and after the switch it is
+                  // simply a cross-workspace one — the server routes it to a hub link
+                  // instead of a local edge. The parent still cannot survive, because a
+                  // parent in the old workspace has nowhere to be stored in the new one.
+                  setForm((current) => ({ ...current, parent: "" }));
                 }}
               >
                 <SelectTrigger id="create-workspace" className="w-full">
