@@ -33,6 +33,7 @@ import {
   MiniMap,
   ReactFlow,
   ReactFlowProvider,
+  useReactFlow,
   type Edge,
   type NodeChange,
   type NodeMouseHandler,
@@ -48,6 +49,7 @@ import { useResource } from "@/lib/useStaple";
 import {
   absorption,
   boundaryEdges,
+  clusterId,
   collapseGraph,
   containerize,
   dimContainers,
@@ -78,10 +80,18 @@ import {
   fitContainers,
   graphSignature,
   mergePositions,
+  relayout,
   type CompoundNode,
   type Size,
   type XY,
 } from "./graph/graph-layout";
+import {
+  FOLD_FIT_MS,
+  FOLD_FIT_PADDING,
+  foldFitZoom,
+  foldOf,
+  selectionTarget,
+} from "./graph/graph-folding";
 import { clearPositions, loadPositions, positionsKey, savePositions } from "./graph/graph-positions";
 import {
   buildSvg,
@@ -431,25 +441,101 @@ function GraphCanvas({
    * summarises. So "the signature changed" and "the ref holds something new" are the
    * same event by construction.
    */
-  const latest = useRef({ nodes: compound, edges: pairs });
-  latest.current = { nodes: compound, edges: pairs };
+  /*
+   * O4d added `collapsed`, `positions` and `sizes` to the same ref, for the same reason
+   * the ref exists at all: the effect below has to read WHERE THINGS ARE NOW in order to
+   * leave them there, and listing live coordinates as dependencies would re-seed the
+   * layout on every frame of a drag.
+   */
+  const latest = useRef({ nodes: compound, edges: pairs, collapsed, positions, sizes });
+  latest.current = { nodes: compound, edges: pairs, collapsed, positions, sizes };
+
+  /**
+   * The arrangement the effect last produced, as a SHAPE — O4d (STA-136).
+   *
+   * Only the node list, because the coordinates come from `latest` (they may have been
+   * dragged since). Paired, the two are `relayout`'s `previous`: the shape as it was laid
+   * out, and where its nodes actually sit today. `null` until the first seed, which is
+   * how "the first arrangement is the whole arrangement" stays true without a flag.
+   */
+  const seeded = useRef<readonly CompoundNode[] | null>(null);
+  /** The collapse set as of the last seed — the other half of `foldOf` below. */
+  const folded = useRef<ReadonlySet<string>>(collapsed);
+
+  const flow = useReactFlow();
 
   useEffect(() => {
-    const { nodes: current, edges } = latest.current;
-    const canonical = compoundLayout(current, edges);
-    const merged = mergePositions(canonical.positions, loadPositions(window.localStorage, storageKey));
-    setPositions(merged);
+    const { nodes: current, edges, collapsed: folds, positions: at, sizes: boxes } = latest.current;
+
+    /**
+     * PARTIAL, NOT WHOLE — this is STA-136. `relayout` re-runs only the levels whose
+     * children changed, so opening an epic lays out that epic's members and leaves every
+     * other coordinate byte-identical. See the write-up on `relayout`.
+     */
+    const previous = seeded.current ? { nodes: seeded.current, positions: at, sizes: boxes } : null;
+    const arranged = relayout(current, edges, previous);
+    const merged = mergePositions(arranged.positions, loadPositions(window.localStorage, storageKey));
     // Grow-only, against the MERGED positions: a stored arrangement can sit outside the
     // box today's membership measures, and a member drawn outside its container is the
     // one failure this feature cannot survive. See fitContainers.
-    setSizes(fitContainers(current, merged, canonical.sizes));
-  }, [signature, storageKey]);
+    const fitted = fitContainers(current, merged, arranged.sizes);
+    seeded.current = current;
+    setPositions(merged);
+    setSizes(fitted);
 
-  /** Auto-arrange: back to canonical, and forget the manual arrangement for good. */
+    /**
+     * The viewport follows the fold — O4d (STA-136).
+     *
+     * `foldOf` reads the gesture out of the two collapse sets rather than being told by a
+     * call site, so all four affordances go through one rule and the two board-wide ones
+     * (Expand all, Collapse all) go through none of it. See graph-folding.ts.
+     */
+    const fold = foldOf(folded.current, folds);
+    folded.current = folds;
+    if (!fold) return;
+    const id = clusterId(fold.epic);
+    /*
+     * An epic with no work on this canvas folds without changing anything on screen, and
+     * so has nothing to fly to. Guarding on "is it drawn" is also what disposes of the one
+     * way a request could go stale: that fold produces no signature change, so this effect
+     * never runs for it, and when it eventually does run the id is still not on the canvas.
+     */
+    if (!current.some((node) => node.id === id)) return;
+
+    /*
+     * A FRAME LATER, AND IT HAS TO BE. The `setPositions`/`setSizes` above are what give
+     * React Flow the container's new box, and they have not rendered yet while this effect
+     * body is running — fitting here would frame the arrangement that is being replaced.
+     * `requestAnimationFrame` runs after React has committed that render, so the store
+     * holds the box we just measured. Cancelled on cleanup so a second fold in the same
+     * frame does not leave two animations fighting over the viewport.
+     */
+    const frame = requestAnimationFrame(() => {
+      void flow.fitView({
+        nodes: [{ id }],
+        padding: FOLD_FIT_PADDING,
+        maxZoom: foldFitZoom(fold.opened, flow.getZoom()),
+        duration: FOLD_FIT_MS,
+      });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [signature, storageKey, flow]);
+
+  /**
+   * Auto-arrange: back to canonical, and forget the manual arrangement for good.
+   *
+   * THE ONE GESTURE THAT MOVES EVERYTHING, and after O4d it is the only one — `relayout`
+   * above touches a level at a time, a drag touches a node, and a fold touches the epic it
+   * folded. This calls `compoundLayout`, not `relayout`, and the difference is the whole
+   * point of the button: it is asking for the canonical arrangement rather than for the
+   * smallest change that stays correct. `seeded` is updated too, so the next fold measures
+   * "untouched" against the board as it now stands rather than against the one it replaced.
+   */
   const autoArrange = useCallback(() => {
     const { nodes: current, edges } = latest.current;
     clearPositions(window.localStorage, storageKey);
     const canonical = compoundLayout(current, edges);
+    seeded.current = current;
     setPositions(canonical.positions);
     setSizes(canonical.sizes);
   }, [storageKey]);
@@ -545,15 +631,17 @@ function GraphCanvas({
   const absorbed = useMemo(() => absorption(epics, collapsed), [epics, collapsed]);
   const selected = session.selection?.ref ?? null;
   /**
-   * O4c added the second half of the same question. An epic that is EXPANDED is drawn as
-   * its container and its own ticket is gone from the canvas, so selecting that epic in
-   * the detail panel has to land on the box — `containment.headers` is what says so. The
-   * two maps agree by construction: a container and a cluster share an id, so an epic
-   * resolves to the same string whichever state it is in.
+   * O4c added the second half of the same question; O4d moved both into `selectionTarget`
+   * so that the answer has a signature.
+   *
+   * THE EXTRACTION IS THE ACCEPTANCE CRITERION, not tidiness. "Selecting a task outside
+   * the graph never changes collapse state or the epic filter" is guaranteed here by the
+   * fact that a selection goes into a function that returns AN ID TO LIGHT — no collapse
+   * set among its arguments, no fold among its results. A selection arriving from a tree
+   * row, the command palette or prev/next in the detail panel reaches the canvas through
+   * this line and nowhere else, and this line cannot fold anything.
    */
-  const target = selected
-    ? (absorbed.get(selected) ?? containment.headers.get(selected) ?? selected)
-    : null;
+  const target = selectionTarget(selected, absorbed, containment.headers);
 
   /** Path-to-target has nothing to answer about a target that is not on the canvas. */
   const hasTarget = target !== null && nodes.some((node) => node.id === target);
@@ -1041,8 +1129,13 @@ function GraphCanvas({
             onCollapseAll={collapseAll}
             onExpandAll={expandAll}
           />
+          {/*
+            O4a's hand-off (STA-133): the label was lowercase because that file deliberately
+            left this button alone. Sentence case matches every other word in this row —
+            View, Copy link, Export — and the picker's Collapse all / Expand all.
+          */}
           <Button type="button" variant="outline" size="sm" onClick={autoArrange}>
-            auto-arrange
+            Auto-arrange
           </Button>
         </div>
       </div>

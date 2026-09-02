@@ -25,6 +25,9 @@ import {
   positionsKey,
   savePositions,
 } from "./graph-positions";
+// O4d: the fold block at the foot of this file runs the layout and the storage together,
+// because the bug it guards against lives in the join between them and in neither half.
+import { compoundLayout, mergePositions, relayout } from "./graph-layout";
 
 /** A Storage good enough for these tests; `throws` turns it into a hostile one. */
 class FakeStorage implements Storage {
@@ -224,5 +227,125 @@ describe("nothing here throws", () => {
     const storage = new FakeStorage();
     storage.setItem(key, JSON.stringify({ A: { x: 1, y: 2 } }).replace("1", "1e999"));
     expect(loadPositions(storage, key)).toBeNull();
+  });
+});
+
+/**
+ * ── Folding, end to end through storage — O4d (STA-136) ──────────────────────────────
+ *
+ * `relayout` is tested in isolation next door, and `savePositions` is tested in isolation
+ * above. What is NOT covered by either is the seam GraphView actually runs on every fold:
+ *
+ *     relayout(new shape, edges, {old shape, live positions}) -> mergePositions(_, stored)
+ *
+ * That `mergePositions` at the end is the step that could quietly undo the whole ticket.
+ * It layers the STORED arrangement over whatever `relayout` produced, so if the two ever
+ * disagreed about a node nobody touched, the fold would move it — and it would move it
+ * only for users who had dragged something at some point, which is the population least
+ * likely to file a clear bug report and most likely to be annoyed by it.
+ *
+ * These run against a real (fake) Storage rather than a stubbed record, because "what was
+ * written" and "what comes back" are the two halves that have to agree, and `savePositions`
+ * rounds on the way out.
+ */
+describe("an arrangement survives a fold", () => {
+  const key = positionsKey("hub", "");
+  const leaf = (id: string, parent: string | null = null) => ({ id, parent, container: false });
+  const boxed = (id: string, parent: string | null = null) => ({ id, parent, container: true });
+
+  /** The canvas either side of one epic opening — the same shape GraphView derives. */
+  const CLOSED = [leaf("W"), leaf("epic:E"), leaf("Z")];
+  const OPEN = [leaf("W"), boxed("epic:E"), leaf("A", "epic:E"), leaf("Z")];
+  const edges = [
+    { from: "W", to: "epic:E" },
+    { from: "epic:E", to: "Z" },
+  ];
+
+  it("keeps a DRAGGED node exactly where it was dropped when an epic opens", () => {
+    // The whole chain: arrange, drag, persist, fold, re-arrange, merge. `W` must come
+    // back at (410, 90) and not at wherever dagre would like it.
+    const storage = new FakeStorage();
+    const before = compoundLayout(CLOSED, edges);
+    const dragged = { ...before.positions, W: { x: 410, y: 90 } };
+    savePositions(storage, key, dragged);
+
+    const after = relayout(OPEN, edges, {
+      nodes: CLOSED,
+      positions: dragged,
+      sizes: before.sizes,
+    });
+    const merged = mergePositions(after.positions, loadPositions(storage, key));
+
+    expect(merged["W"]).toEqual({ x: 410, y: 90 });
+  });
+
+  it("keeps an UNDRAGGED node too, which storage cannot do on its own", () => {
+    // The case storage has no opinion about: `Z` was never dragged, so there is nothing in
+    // localStorage for `mergePositions` to restore. Everything holding it still is
+    // `relayout` declining to re-run the level — which is exactly the property that would
+    // silently regress if somebody swapped `relayout` back for `compoundLayout`.
+    const storage = new FakeStorage();
+    const before = compoundLayout(CLOSED, edges);
+    savePositions(storage, key, { W: { x: 410, y: 90 } });
+
+    const after = relayout(OPEN, edges, {
+      nodes: CLOSED,
+      positions: { ...before.positions, W: { x: 410, y: 90 } },
+      sizes: before.sizes,
+    });
+    const merged = mergePositions(after.positions, loadPositions(storage, key));
+
+    expect(merged["Z"]).toEqual(before.positions["Z"]);
+    expect(merged["epic:E"]).toEqual(before.positions["epic:E"]);
+  });
+
+  it("brings a member's own arrangement back when its epic is opened again", () => {
+    // A member's coordinate is dropped from `positions` while its epic is collapsed —
+    // it is not on the canvas to have one. Storage is what remembers it, and because the
+    // key is versioned to v2 the value it remembers is already container-RELATIVE, so it
+    // can be handed straight back without a translation nobody would maintain.
+    const storage = new FakeStorage();
+    const open = compoundLayout(OPEN, edges);
+    savePositions(storage, key, { ...open.positions, A: { x: 30, y: 70 } });
+
+    const collapsed = relayout(CLOSED, edges, {
+      nodes: OPEN,
+      positions: open.positions,
+      sizes: open.sizes,
+    });
+    expect(collapsed.positions["A"]).toBeUndefined();
+
+    const reopened = relayout(OPEN, edges, {
+      nodes: CLOSED,
+      positions: collapsed.positions,
+      sizes: collapsed.sizes,
+    });
+    const merged = mergePositions(reopened.positions, loadPositions(storage, key));
+    expect(merged["A"]).toEqual({ x: 30, y: 70 });
+  });
+
+  it("does not resurrect a node that is no longer drawn", () => {
+    // `mergePositions` only honours ids that still exist, and a collapsed epic's members
+    // do not. Without that, folding would leave `A` in the record as a node React Flow
+    // knows nothing about — harmless until something joins against `positions` by key,
+    // which the export does.
+    const storage = new FakeStorage();
+    const open = compoundLayout(OPEN, edges);
+    savePositions(storage, key, open.positions);
+
+    const collapsed = relayout(CLOSED, edges, {
+      nodes: OPEN,
+      positions: open.positions,
+      sizes: open.sizes,
+    });
+    const merged = mergePositions(collapsed.positions, loadPositions(storage, key));
+    expect(Object.keys(merged).sort()).toEqual(["W", "Z", "epic:E"]);
+  });
+
+  it("stores the SAME key across the fold — folding is not a schema change", () => {
+    // O4c bumped v1 -> v2 because member coordinates became relative. O4d changes when the
+    // layout runs, not what is written, so a fold must not cost anybody their arrangement.
+    expect(POSITIONS_VERSION).toBe("v2");
+    expect(positionsKey("hub", "")).toBe(key);
   });
 });

@@ -259,10 +259,98 @@ function containersDeepestFirst(nodes: readonly CompoundNode[]): string[] {
  * a container's top inset is NOT its side inset: the header owns the top. The flat case
  * normalizes to the same 24/24 dagre used to add, so `dagreLayout` is unchanged output
  * through a new code path.
+ *
+ * O4d (STA-136) made the body `arrange`, of which this is the "every level is stale" case.
+ * `relayout` below is the same function told what is already on screen; the two share one
+ * implementation so that the partial arrangement cannot drift from the full one.
  */
 export function compoundLayout(
   nodes: readonly CompoundNode[],
   edges: readonly LayoutEdge[],
+): CompoundLayout {
+  return arrange(nodes, edges, null);
+}
+
+/**
+ * The arrangement as it currently stands — O4d (STA-136). The argument `relayout` needs
+ * in order to leave things alone.
+ *
+ * THE TWO HALVES COME FROM DIFFERENT MOMENTS, ON PURPOSE. `nodes` is the shape as it was
+ * last LAID OUT; `positions`/`sizes` are where things are NOW, drags included. Pairing
+ * them is what makes a node the user dragged count as settled AT THE PLACE THEY PUT IT
+ * rather than at the place dagre last put it — which is the difference between "nothing
+ * moved" and "nothing moved except the four you had tidied".
+ */
+export interface LayoutSnapshot {
+  /** The compound node list this arrangement was computed for. */
+  nodes: readonly CompoundNode[];
+  /** Current coordinates, container-relative for anything inside a box. */
+  positions: Record<string, XY>;
+  /** Current container boxes. */
+  sizes: Record<string, Size>;
+}
+
+/**
+ * The compound arrangement, RE-RUN ONLY WHERE THE SHAPE MOVED — O4d (STA-136).
+ *
+ * ── The observation this is built on ─────────────────────────────────────────────────
+ *
+ * A fold does not change any level's child SET. `collapseGraph` replaces a collapsed
+ * epic's members with the cluster `epic:E`; `containerize` turns that same id into a box
+ * and puts the members inside it. O4c made the container REUSE the cluster id, so `epic:E`
+ * is present either way, at the same level, under the same string. What a fold changes is
+ * therefore only: the members of E's own level, which appear or vanish.
+ *
+ * So "lay out only the container that was toggled" needs no argument saying which one was
+ * toggled. It falls out of a rule about the data:
+ *
+ *   A LEVEL IS RE-LAID OUT IFF ONE OF ITS DIRECT CHILDREN IS NOT SETTLED, where a node is
+ *   settled when it was on the canvas before, IN THE SAME BOX, with a position.
+ *
+ * Expanding E: E's members are new, so E's level is stale and dagre runs for E alone. The
+ * top level's children are all settled, so it is not touched and every coordinate out
+ * there is the same OBJECT it was — not merely equal, identical. Collapsing E: its members
+ * are gone and nothing is new anywhere, so NO level is stale and nothing moves at all.
+ *
+ * Deriving it from the data rather than from the call site is what makes it also cover the
+ * cases nobody would remember to pass in: a fold arriving from a shared link, an epic
+ * revealed by an epic-filter change, and a nested epic that was ALREADY expanded when its
+ * parent opened — its box needs laying out too, it is deeper, and `containersDeepestFirst`
+ * already runs it first.
+ *
+ * ── What still moves, and why that is the ticket rather than a defect ─────────────────
+ *
+ * An expanded box is bigger than the cluster it replaced and nothing moves out of its way,
+ * so it can overlap its neighbours. "Every other node keeps its coordinates" and
+ * "auto-arrange is the only thing that moves everything" together say exactly that. The
+ * viewport fit is the answer — you are looking INSIDE the epic, not at the board — and
+ * auto-arrange is the gesture that tidies the board. Written down so that nobody later
+ * reads the overlap as a bug and repairs it by re-seeding.
+ *
+ * A level that IS stale re-lays out all of its children, settled ones included. That is
+ * deliberate and it is the pre-O4d behaviour for the one case that reaches it — a genuinely
+ * new ticket arriving on the top level. Keeping some coordinates and taking dagre's for the
+ * rest would place the newcomer relative to an arrangement that no longer exists, i.e. on
+ * top of something. `mergePositions` still layers the stored arrangement back over the
+ * result, so anything the user had dragged returns to where they dragged it.
+ */
+export function relayout(
+  nodes: readonly CompoundNode[],
+  edges: readonly LayoutEdge[],
+  previous: LayoutSnapshot | null,
+): CompoundLayout {
+  return arrange(nodes, edges, previous);
+}
+
+/**
+ * The one implementation both entry points use. `previous === null` is the full arrangement
+ * — every level stale — so `compoundLayout` is not a second code path that could drift from
+ * this one, in the same way `dagreLayout` is not a second code path from `compoundLayout`.
+ */
+function arrange(
+  nodes: readonly CompoundNode[],
+  edges: readonly LayoutEdge[],
+  previous: LayoutSnapshot | null,
 ): CompoundLayout {
   const positions: Record<string, XY> = {};
   const sizes: Record<string, Size> = {};
@@ -270,6 +358,27 @@ export function compoundLayout(
 
   const parentOf = new Map(nodes.map((node) => [node.id, node.parent ?? null]));
   const levels = levelsOf(nodes);
+
+  /**
+   * Nodes entitled to the coordinate they already have.
+   *
+   * THE PARENT COMPARISON IS THE HALF THAT IS EASY TO LEAVE OUT AND EXPENSIVE TO OMIT.
+   * Positions inside a box are RELATIVE to it (O4c), so the same `{x: 20, y: 56}` means
+   * two completely different places depending on which box it is read against. A node that
+   * changed box has a position that is no longer about anywhere, and keeping it would park
+   * it near its new box's header instead of laying it out.
+   */
+  const settled = new Set<string>();
+  if (previous) {
+    const was = new Map(previous.nodes.map((node) => [node.id, node.parent ?? ""]));
+    for (const node of nodes) {
+      const before = was.get(node.id);
+      if (before === undefined) continue; // new to the canvas
+      if (before !== (node.parent ?? "")) continue; // changed box
+      if (!previous.positions[node.id]) continue; // never had a coordinate
+      settled.add(node.id);
+    }
+  }
 
   /**
    * Which of `level`'s direct children the node `id` lives in — `id` itself when it is
@@ -349,8 +458,62 @@ export function compoundLayout(
     }
   };
 
-  for (const container of containersDeepestFirst(nodes)) layoutLevel(container);
-  layoutLevel("");
+  /**
+   * A level nothing happened to: its children keep the coordinate OBJECTS they already
+   * had, so "untouched" is assertable by identity rather than by comparing numbers.
+   *
+   * The container's own box is kept, GROWN ONLY — `fitContainers`' rule, applied here so
+   * that `relayout`'s output is coherent on its own rather than only after a later pass.
+   * The growth is not hypothetical: a settled box whose nested epic just opened now holds
+   * something bigger than it did, and a box that did not grow would draw its own contents
+   * hanging out of it.
+   */
+  const keepLevel = (level: string, snapshot: LayoutSnapshot): void => {
+    const kids = levels.get(level) ?? [];
+    for (const kid of kids) {
+      const at = snapshot.positions[kid.id];
+      if (at) positions[kid.id] = at;
+    }
+    if (level === "") return;
+    const held = snapshot.sizes[level] ?? { width: MIN_CONTAINER_W, height: MIN_CONTAINER_H };
+    const needed = boxFor(
+      kids.map((kid) => kid.id),
+      positions,
+      sizes,
+    );
+    sizes[level] = {
+      width: Math.max(held.width, needed.width),
+      height: Math.max(held.height, needed.height),
+    };
+  };
+
+  /**
+   * Deepest first, for the reason every pass in this file is: a box has to know how big it
+   * is before the level above can pack it, and it does not know that until its own contents
+   * are settled — whether they settled by being laid out or by being left alone.
+   *
+   * `sizes` is rebuilt from the CURRENT container list rather than carried over, which is
+   * how a collapsed epic's box measurement is dropped. That is load-bearing: `sizeOf` reads
+   * `sizes[id]`, and a leftover 600x400 for an id now drawn as a 208x62 cluster would open
+   * a hole in the outer layout the size of the epic that just closed.
+   */
+  const run = (level: string): void => {
+    if (previous === null) {
+      layoutLevel(level);
+      return;
+    }
+    const kids = levels.get(level) ?? [];
+    // An empty level is laid out rather than kept, so that a container which lost every
+    // member still gets `layoutLevel`'s minimum box instead of no measurement at all.
+    if (kids.length === 0 || kids.some((kid) => !settled.has(kid.id))) {
+      layoutLevel(level);
+      return;
+    }
+    keepLevel(level, previous);
+  };
+
+  for (const container of containersDeepestFirst(nodes)) run(container);
+  run("");
   return { positions, sizes };
 }
 

@@ -34,6 +34,7 @@ import {
   fitContainers,
   graphSignature,
   mergePositions,
+  relayout,
   type CompoundLayout,
   type XY,
 } from "./graph-layout";
@@ -489,5 +490,208 @@ describe("graphSignature and containment", () => {
     // The flat case must produce the string it always produced, or every saved
     // arrangement re-seeds once for no reason on the first load after this ships.
     expect(graphSignature([{ id: "A" }, { id: "B" }], [{ from: "A", to: "B" }])).toBe("A,B|A>B");
+  });
+});
+
+/**
+ * ── relayout — O4d (STA-136) ──────────────────────────────────────────────────────────
+ *
+ * The risk this block exists for is not "the arrangement looks wrong". It is that the
+ * arrangement looks FINE and is a different one — a whole-graph re-seed produces a
+ * perfectly good layout, and the only way to notice is that everything you had tidied
+ * moved while you were looking at it. That is invisible in a screenshot, and it is
+ * invisible in a test that compares numbers loosely, so the assertions below compare by
+ * IDENTITY: `toBe`, not `toEqual`. An untouched node must come back holding the same
+ * object it went in with.
+ *
+ * The fixtures are the two states of one canvas, and they are the states GraphView really
+ * produces. Collapsed: the epic is a plain node — O4c made the container reuse the cluster
+ * id, so it is `epic:E` either way — and its members are not drawn at all. Expanded: the
+ * same id is a container and the members are inside it. That the id survives the fold is
+ * what makes the top level's child SET identical across one, which is the observation the
+ * whole feature rests on.
+ */
+const CLOSED = [leaf("W"), leaf("epic:E"), leaf("Z")];
+const OPEN = [leaf("W"), box("epic:E"), leaf("A", "epic:E"), leaf("B", "epic:E"), leaf("Z")];
+const WIRING = [
+  { from: "W", to: "epic:E" },
+  { from: "epic:E", to: "Z" },
+  { from: "A", to: "B" },
+];
+
+/** The snapshot GraphView hands `relayout`: a shape, and where its nodes sit now. */
+const snapshotOf = (
+  nodes: readonly { id: string; parent: string | null; container: boolean }[],
+  layout: CompoundLayout,
+) => ({ nodes, positions: layout.positions, sizes: layout.sizes });
+
+describe("relayout has nothing to leave alone on the first arrangement", () => {
+  it("is exactly compoundLayout when there is no previous", () => {
+    // Not an aspiration: the first seed of every canvas goes through here, and a partial
+    // arrangement that differed from the canonical one would mean the graph you open is
+    // not the graph auto-arrange puts you back to.
+    expect(relayout(OPEN, WIRING, null)).toEqual(compoundLayout(OPEN, WIRING));
+  });
+});
+
+describe("relayout, expanding one epic", () => {
+  const before = compoundLayout(CLOSED, WIRING);
+  const after = relayout(OPEN, WIRING, snapshotOf(CLOSED, before));
+
+  it("leaves every other node's coordinate BYTE-IDENTICAL", () => {
+    // THE LOAD-BEARING ASSERTION OF THE TICKET. `toBe` on purpose — a re-seed that
+    // happened to land on the same numbers would still be a re-seed, and the next change
+    // to the node set or to dagre's version would expose it as one.
+    for (const id of ["W", "Z"]) {
+      expect(after.positions[id]).toBe(before.positions[id]);
+    }
+  });
+
+  it("leaves the epic itself where it was, so the box opens in the cluster's slot", () => {
+    // O4c's "collapsing swaps the box for the cluster IN THE SAME PLACE", read backwards.
+    expect(after.positions["epic:E"]).toBe(before.positions["epic:E"]);
+  });
+
+  it("lays out the newly revealed members inside the box", () => {
+    expect(at(after, "A").x).toBe(CONTAINER_PAD);
+    expect(at(after, "A").y).toBe(CONTAINER_HEADER_H);
+    expect(at(after, "A").x).toBeLessThan(at(after, "B").x);
+  });
+
+  it("measures the box around what it now holds", () => {
+    const size = after.sizes["epic:E"]!;
+    for (const id of ["A", "B"]) {
+      expect(at(after, id).x + NODE_W).toBeLessThanOrEqual(size.width);
+      expect(at(after, id).y + NODE_H).toBeLessThanOrEqual(size.height);
+    }
+    // And it really is bigger than the card it replaced, which is why "nothing else
+    // moves" is a decision rather than a coincidence: the box CAN overlap its neighbours,
+    // and the viewport fit plus auto-arrange are the two answers to that.
+    expect(size.width).toBeGreaterThan(NODE_W);
+  });
+
+  it("settles a dragged node where the user put it, not where dagre last put it", () => {
+    // The snapshot's positions are where things are NOW. This is the difference between
+    // "nothing moved" and "nothing moved except the four you had tidied".
+    const dragged = {
+      nodes: CLOSED,
+      positions: { ...before.positions, W: { x: 999, y: -40 } },
+      sizes: before.sizes,
+    };
+    const out = relayout(OPEN, WIRING, dragged);
+    expect(out.positions["W"]).toBe(dragged.positions["W"]);
+  });
+});
+
+describe("relayout, collapsing one epic", () => {
+  const before = compoundLayout(OPEN, WIRING);
+  const after = relayout(CLOSED, WIRING, snapshotOf(OPEN, before));
+
+  it("moves NOTHING — no level gained a child, so no level is re-laid out", () => {
+    for (const id of ["W", "Z", "epic:E"]) {
+      expect(after.positions[id]).toBe(before.positions[id]);
+    }
+  });
+
+  it("forgets the box's measurement, so the cluster is not laid out as if it were huge", () => {
+    // Load-bearing rather than tidy. `sizeOf` reads `sizes[id]`, so a leftover box size
+    // for an id now drawn as a 208x62 card would open a hole in the outer layout the
+    // size of the epic that just closed.
+    expect(after.sizes["epic:E"]).toBeUndefined();
+  });
+
+  it("drops the members entirely rather than keeping stale coordinates for them", () => {
+    expect(after.positions["A"]).toBeUndefined();
+    expect(after.positions["B"]).toBeUndefined();
+  });
+});
+
+describe("relayout, a nested epic opening", () => {
+  const OUTER_CLOSED = [
+    box("epic:OUTER"),
+    leaf("epic:INNER", "epic:OUTER"),
+    leaf("M", "epic:OUTER"),
+    leaf("Z"),
+  ];
+  const OUTER_OPEN = [
+    box("epic:OUTER"),
+    box("epic:INNER", "epic:OUTER"),
+    leaf("N", "epic:INNER"),
+    leaf("M", "epic:OUTER"),
+    leaf("Z"),
+  ];
+  const edges = [{ from: "epic:OUTER", to: "Z" }];
+
+  const before = compoundLayout(OUTER_CLOSED, edges);
+  const after = relayout(OUTER_OPEN, edges, snapshotOf(OUTER_CLOSED, before));
+
+  it("re-lays only the level that gained a child", () => {
+    // `epic:INNER` gained `N`, so INNER's level runs. OUTER's own children — INNER and M
+    // — are all settled, so OUTER's level does not, and neither does the top.
+    expect(after.positions["M"]).toBe(before.positions["M"]);
+    expect(after.positions["epic:INNER"]).toBe(before.positions["epic:INNER"]);
+    expect(after.positions["Z"]).toBe(before.positions["Z"]);
+    expect(after.positions["epic:OUTER"]).toBe(before.positions["epic:OUTER"]);
+  });
+
+  it("grows the settled box that now holds a bigger one", () => {
+    // A kept level keeps its size GROW-ONLY. Without that, OUTER would still be measured
+    // for a 208x62 INNER and would draw its own contents hanging out of it.
+    const outer = after.sizes["epic:OUTER"]!;
+    const inner = after.sizes["epic:INNER"]!;
+    expect(at(after, "epic:INNER").x + inner.width).toBeLessThanOrEqual(outer.width);
+    expect(at(after, "epic:INNER").y + inner.height).toBeLessThanOrEqual(outer.height);
+    expect(outer.width).toBeGreaterThanOrEqual(before.sizes["epic:OUTER"]!.width);
+  });
+});
+
+describe("relayout, when a node changes box", () => {
+  it("does NOT let it keep a coordinate measured against a different corner", () => {
+    // Positions inside a box are relative to it, so the same {x, y} means two different
+    // places depending on which box reads it. A node that moved box holds a coordinate
+    // that is no longer about anywhere; keeping it would park it near the new header.
+    const from = [box("epic:P"), box("epic:Q"), leaf("A", "epic:P")];
+    const to = [box("epic:P"), box("epic:Q"), leaf("A", "epic:Q")];
+    const before = compoundLayout(from, []);
+    const after = relayout(to, [], snapshotOf(from, before));
+    expect(after.positions["A"]).not.toBe(before.positions["A"]);
+    expect(at(after, "A").y).toBeGreaterThanOrEqual(CONTAINER_HEADER_H);
+    expect(after.sizes["epic:Q"]!.height).toBeGreaterThanOrEqual(at(after, "A").y + NODE_H);
+  });
+});
+
+describe("relayout, when a genuinely new ticket arrives", () => {
+  it("re-lays the level it landed on, because a newcomer has nowhere else to be", () => {
+    // The pre-O4d behaviour, preserved deliberately. Keeping the settled coordinates and
+    // taking dagre's for the newcomer alone would place it relative to an arrangement
+    // that no longer exists — i.e. on top of something.
+    const before = compoundLayout([leaf("A"), leaf("B")], [{ from: "A", to: "B" }]);
+    const after = relayout(
+      [leaf("A"), leaf("B"), leaf("C")],
+      [
+        { from: "A", to: "B" },
+        { from: "B", to: "C" },
+      ],
+      snapshotOf([leaf("A"), leaf("B")], before),
+    );
+    expect(after.positions["C"]).toBeDefined();
+    expect(at(after, "B").x).toBeLessThan(at(after, "C").x);
+  });
+
+  it("does not disturb a DIFFERENT level than the one it landed on", () => {
+    // The narrowing is per level, not per graph: a ticket appearing at the top must not
+    // rearrange the inside of an epic nobody touched.
+    const from = [box("epic:E"), leaf("A", "epic:E"), leaf("B", "epic:E"), leaf("Z")];
+    const to = [...from, leaf("NEW")];
+    const edges = [
+      { from: "A", to: "B" },
+      { from: "epic:E", to: "Z" },
+      { from: "Z", to: "NEW" },
+    ];
+    const before = compoundLayout(from, edges);
+    const after = relayout(to, edges, snapshotOf(from, before));
+    expect(after.positions["A"]).toBe(before.positions["A"]);
+    expect(after.positions["B"]).toBe(before.positions["B"]);
+    expect(after.positions["NEW"]).toBeDefined();
   });
 });
