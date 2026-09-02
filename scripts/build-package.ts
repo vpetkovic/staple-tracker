@@ -177,6 +177,19 @@ function writeArtifactManifest(bundledPackages: string[]): void {
     "",
     ...bundledPackages.map((name) => `- ${name}`),
     "",
+    // The fonts are not bundled INTO staple.mjs — they are separate assets served
+    // by the UI — so they are not in `bundledPackages` and would otherwise ship
+    // with no attribution at all. The OFL requires the notice to travel with the
+    // font, and the tarball is where it travels.
+    "## Fonts",
+    "",
+    "The web UI ships Geist Sans and Geist Mono as `assets/assets/Geist*-Variable-*.woff2`.",
+    "",
+    "> Geist — Copyright (c) 2023 Vercel, in collaboration with basement.studio.",
+    "> Licensed under the SIL Open Font License, Version 1.1.",
+    "> The full license text is in the source tree at",
+    "> `src/ui/app/src/assets/fonts/GEIST-OFL-LICENSE.txt`.",
+    "",
   ].join("\n");
   writeFileSync(join(outDir, "THIRD-PARTY-NOTICES.md"), notices);
 

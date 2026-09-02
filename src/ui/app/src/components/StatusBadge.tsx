@@ -20,8 +20,15 @@ export function StatusBadge({
     <span
       data-status={status}
       className={cn(
-        "status-chip inline-flex shrink-0 items-center rounded-full border px-2 py-px",
-        "font-mono text-[10px] font-semibold tracking-[0.04em] whitespace-nowrap",
+        // `rounded-md`, not `rounded-full`. A pill is a Jira-era shape; Geist
+        // and Linear both use a small rounded rectangle for a status badge, and it
+        // matters more than it sounds: a pill in a row of rounded-rectangle
+        // controls is the one object that does not belong to the corner language.
+        "status-chip inline-flex shrink-0 items-center rounded-md border px-1.5 py-px",
+        // Medium, not semibold, and tracking at the label step rather than a
+        // hand-rolled 0.04em. Mono caps at 10px are already dense enough to read
+        // as emphatic; bolding them on top is what turns a badge into a shout.
+        "font-mono text-[10px] font-medium tracking-[var(--tracking-label)] whitespace-nowrap",
         className,
       )}
     >

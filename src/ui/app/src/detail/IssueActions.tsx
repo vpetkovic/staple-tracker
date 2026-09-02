@@ -11,13 +11,13 @@
  * the Activity tab.
  */
 import { useState } from "react";
+import { GuardRefusal } from "@/components/GuardRefusal";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { action } from "@/lib/api";
 import { STALE_CLAIM_SECONDS, isStaleClaim, staleClaimSummary } from "@/lib/claim";
+import { describeRefusal, type Refusal } from "@/lib/refusal";
 import { ISSUE_STATUSES, type ClaimActivity, type Issue, type IssueStatus } from "@/lib/types";
-import { GuardRefusal } from "@/views/board/GuardRefusal";
-import { describeRefusal, type Refusal } from "@/views/board/refusal";
 
 /**
  * Who is doing this? Asked, remembered, and asked again with the remembered answer

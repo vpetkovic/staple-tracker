@@ -1,20 +1,28 @@
 /**
- * MOUNT POINT — owned by U5 (create dialog).
+ * MOUNT POINT — the create dialog.
  *
  * Already rendered once in App.tsx, above the shell and outside every view, which is
- * what lets the dialog sit over the board and the detail panel without either owning it.
+ * what lets the dialog sit over any view and over the detail drawer without either
+ * owning it.
  *
- * This file owns exactly two things — the triggers and the open flag. The form lives in
+ * This file owns exactly two things — the ways in, and the open flag. The form lives in
  * CreateIssueDialog and is only mounted while open, so its state resets between opens
  * and a half-typed task never comes back from a previous session.
  *
  * Two ways in, deliberately:
  *   - `c`, the convention every issue tracker shares;
- *   - a visible button, because a keyboard-only affordance is undiscoverable and this
- *     is the one action the page previously could not do at all.
+ *   - a visible control, because a keyboard-only affordance is undiscoverable.
+ *
+ * V2 (STA-87) MOVED THE VISIBLE CONTROL. It used to be a floating pill pinned to the
+ * bottom-right corner of the viewport. A FAB is an Android pattern; no tool in the
+ * language this app now speaks has one, and it had two concrete costs beyond taste — it
+ * hovered over the last rows of the list, and it put the app's primary action as far from
+ * the app's other actions as the screen allows. The button now lives in the header next
+ * to search and theme, and reaches this state through `lib/shell-events`, so the open
+ * flag stays here rather than being lifted into a component that does not care about it.
  */
-import { Plus } from "lucide-react";
 import { useEffect, useState } from "react";
+import { onOpenCreateIssue } from "@/lib/shell-events";
 import { CreateIssueDialog } from "./CreateIssueDialog";
 
 /**
@@ -34,6 +42,8 @@ function isTyping(target: EventTarget | null): boolean {
 export function CreateIssueMount() {
   const [open, setOpen] = useState(false);
 
+  useEffect(() => onOpenCreateIssue(() => setOpen(true)), []);
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "c" && event.key !== "C") return;
@@ -50,21 +60,7 @@ export function CreateIssueMount() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
-  return (
-    <>
-      <button
-        type="button"
-        data-create-open
-        onClick={() => setOpen(true)}
-        title="New task (c)"
-        className="fixed right-5 bottom-5 z-40 inline-flex items-center gap-1.5 rounded-full border bg-primary px-4 py-2.5 text-[13px] font-medium text-primary-foreground shadow-lg transition-opacity hover:opacity-90 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-      >
-        <Plus className="size-4" aria-hidden />
-        New task
-      </button>
-
-      {/* Mounted only while open: the form's state resets with it, by construction. */}
-      {open ? <CreateIssueDialog open onOpenChange={setOpen} /> : null}
-    </>
-  );
+  // Mounted only while open: the form's state resets with it, by construction.
+  if (!open) return null;
+  return <CreateIssueDialog open onOpenChange={setOpen} />;
 }

@@ -1,5 +1,11 @@
 /**
- * U6 (STA-18) — a refused board drag has to show the store's own words.
+ * A refused write has to show the store's own words.
+ *
+ * Written for U6 (STA-18) against the board's drag-and-drop. V2 (STA-87) deleted the
+ * board and KEPT THIS, because the property it pins was never about dragging — it is
+ * about the chain, and the chain now ends at the command palette and V3's drawer instead
+ * of at a card. Renamed from ui-board-refusal.test.ts; the fixtures and assertions below
+ * are unchanged.
  *
  * staple has no transition table. The reason a transition is illegal exists in exactly
  * one place: the sentence `updateIssue`/`checkoutIssue` throws. So the property under
@@ -7,13 +13,13 @@
  * produced survives the whole chain unaltered:
  *
  *     store guard  →  StapleError  →  errorEnvelope  →  409 JSON  →  ApiError
- *                  →  describeRefusal()  →  what the card renders
+ *                  →  describeRefusal()  →  what the UI renders
  *
  * That is why this suite drives the actual UI server over HTTP instead of hand-writing
  * envelopes. A hand-written fixture would keep passing after someone reworded a guard,
- * which is the exact regression that would make the board lie.
+ * which is the exact regression that would make the UI lie.
  *
- * It lives in test/ (Node side) rather than beside the board, because provoking a real
+ * It lives in test/ (Node side) rather than beside the UI, because provoking a real
  * guard needs a real SQLite workspace. `refusal.ts` is importable from here precisely
  * because it is pure — no DOM, no `@/` alias, no lib/api import.
  */
@@ -25,7 +31,7 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { initWorkspace } from "../src/core/workspace.js";
 import { startUiServer, type UiHandle } from "../src/ui/server.js";
-import { describeRefusal, type Refusal } from "../src/ui/app/src/views/board/refusal.js";
+import { describeRefusal, type Refusal } from "../src/ui/app/src/lib/refusal.js";
 
 let home: string;
 let ui: UiHandle;
@@ -81,12 +87,12 @@ afterAll(() => {
   rmSync(home, { recursive: true, force: true });
 });
 
-describe("dragging a card into a column the store refuses", () => {
+describe("a status write the store refuses", () => {
   it("shows the assignee guard in the store's own words, not a paraphrase", async () => {
     const { ok, http, refusal } = await dropOnto(refs.unassigned!, "in_progress");
     expect(ok).toBe(false);
     expect(http).toBe(409);
-    // Verbatim. If someone "improves" this to "needs an assignee", the board is
+    // Verbatim. If someone "improves" this to "needs an assignee", the UI is
     // inventing a guard the store never stated.
     expect(refusal.message).toBe("in_progress requires an assignee");
     expect(refusal.code).toBe("validation");
@@ -125,7 +131,7 @@ describe("dragging a card into a column the store refuses", () => {
     expect(refusal.fromServer).toBe(true);
   });
 
-  it("lets a legal drag through, so the board is not just a refusal machine", async () => {
+  it("lets a legal write through, so this is not just a refusal machine", async () => {
     const { ok, http } = await dropOnto(refs.assigned!, "in_progress");
     expect(ok).toBe(true);
     expect(http).toBe(200);

@@ -1,14 +1,43 @@
 /**
  * The page's own state — what is on screen, filtered how, with what selected.
  *
- * Kept as one context rather than scattered useState so U6's board and U7's palette can
- * both drive navigation ("open STA-13", "switch to board") without either one owning it.
+ * Kept as one context rather than scattered useState so every surface (the palette, a
+ * tree row, a graph node, the header) can drive navigation without any one of them
+ * owning it.
  */
 import { createContext, useContext } from "react";
-import type { UiMode, WorkspaceRef } from "./types";
+import type { FilterState } from "./filters";
+import type { IssueRow, UiMode, WorkspaceRef } from "./types";
+import type { GroupBy } from "./view-prefs";
+import type { Resource } from "./useStaple";
 
-export const VIEWS = ["inbox", "board", "tree", "graph"] as const;
+/**
+ * The views, in the order the header shows them. FIRST IS THE DEFAULT.
+ *
+ * V2 (STA-87) cut this from four to two. `inbox` and `board` were removed on VP's
+ * decision, and this constant is the mechanism: the header tabs, the palette's "Go to …"
+ * commands and the switch in App.tsx are all derived from it, so shrinking the tuple
+ * removed all three without any of them being edited to know about it. That is what the
+ * tuple was for, and it is worth keeping true — a fifth view should be one line here plus
+ * one line in App.tsx's map, and nothing else.
+ *
+ * What went with them, so nobody goes looking in git for it:
+ *   - `views/board/refusal.ts`   -> `lib/refusal.ts`        (salvaged, unchanged)
+ *   - `views/board/GuardRefusal` -> `components/GuardRefusal` (salvaged, now shared)
+ *   - `views/board/guards.ts`    -> deleted. It only ever answered "how should this
+ *     COLUMN look while a card is in the air", which is a question no surviving surface
+ *     asks. Its useful half (`transitionWarnings`) is nine lines and is recoverable from
+ *     history if a status control ever wants pre-write hints.
+ */
+export const VIEWS = ["tree", "graph"] as const;
 export type ViewName = (typeof VIEWS)[number];
+
+/**
+ * Where the app lands. Tree is the product now — the list is what you look at, and the
+ * graph is where you go to answer a question about shape. Declared rather than written
+ * as a literal in App.tsx so "what is the default view" has one answer.
+ */
+export const DEFAULT_VIEW: ViewName = VIEWS[0];
 
 export interface Selection {
   workspace: string;
@@ -26,11 +55,68 @@ export interface StapleSession {
   ws: string;
   setWs: (ws: string) => void;
 
+  /**
+   * Every issue in scope, UNFILTERED, fetched once for the whole page — V4 (STA-89).
+   *
+   * It lives here rather than inside each view because three surfaces need the same
+   * list and they must agree about it: the tree renders it, the graph uses it to decide
+   * which nodes survive the filter, and the filter menu derives its assignee and label
+   * options from it. Three independent fetches on a 1.5s poll would be three chances for
+   * the menu to offer a filter the list has never heard of.
+   *
+   * The FILTERED list is nowhere on the session on purpose. It is `applyFilters(rows,
+   * filters)` — one pure call at one wiring point per view — and caching it here would
+   * be a second source of truth for something that is already cheap to derive.
+   */
+  issues: Resource<IssueRow[]>;
+
+  /**
+   * What the page is filtered by, everywhere. Autosaved to localStorage by App.tsx on
+   * every change; see lib/filters.ts for the shape and why `showDone` is on it.
+   */
+  filters: FilterState;
+  setFilters: (next: FilterState) => void;
+
+  /**
+   * The assignee filter as a single string — a DERIVED view over `filters.dims.assignee`,
+   * kept because the command palette speaks in these terms ("Filter by assignee…", "Clear
+   * the assignee filter") and there is no reason for it to learn about dimensions. Reading
+   * gives the first selected assignee or ""; writing replaces the whole dimension.
+   */
   assignee: string;
   setAssignee: (assignee: string) => void;
 
+  /**
+   * How the list is ARRANGED — R1 (STA-100). Flat is the default; see lib/view-prefs.ts for
+   * why this is not a field on the filter envelope.
+   *
+   * It sits on the session rather than inside the tree because the palette will want to
+   * offer "Group by status" as a command, and because App owns the autosave for every
+   * persisted preference in one place.
+   */
+  groupBy: GroupBy;
+  setGroupBy: (next: GroupBy) => void;
+
+  /**
+   * THE VISIBLE ORDERED LIST — the contract R6 (STA-106) navigates by.
+   *
+   * Every task the user can currently see, in the order they see it: post-filter,
+   * post-group, flattened. Group HEADERS are not in it (they are not tasks). Rows inside a
+   * collapsed group or under a collapsed parent are not in it either — they are not
+   * visible, and a "next" that lands on a row you cannot see is the bug the arrows exist to
+   * avoid. `[]` when the active view has no list, so a consumer disables rather than guesses.
+   *
+   * PUBLISHED BY THE VIEW, HELD HERE. The alternative — deriving it in App — would need the
+   * tree's collapse and expansion state, which lives in views/tree/expansion.ts; hoisting a
+   * view's private UI state into the page's global state to serve a consumer in the drawer
+   * is the wrong trade. App holds it behind an identity guard, so an unchanged order on the
+   * 1.5s poll does not re-render everything that reads it.
+   */
+  visibleOrder: readonly Selection[];
+  publishVisibleOrder: (order: readonly Selection[]) => void;
+
   selection: Selection | null;
-  /** The single navigation primitive: open an issue in the detail panel. */
+  /** The single navigation primitive: open an issue in the detail drawer. */
   open: (workspace: string, ref: string) => void;
   close: () => void;
 

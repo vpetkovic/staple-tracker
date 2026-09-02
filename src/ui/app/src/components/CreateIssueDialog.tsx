@@ -1,5 +1,5 @@
 /**
- * The create form — owned by U5.
+ * The create form — owned by U5, upgraded by R7 (STA-103).
  *
  * Two decisions worth stating, because both look like omissions:
  *
@@ -7,15 +7,29 @@
  *     so `store.createIssue` gets to throw "Title is required" and the user reads the
  *     store's sentence. A disabled button would hide a rule that lives in the store
  *     behind a rule that lives in this file, and the two could drift.
- *  2. It is a plain Dialog with plain inputs. cmdk is not involved, so the vendored
- *     command.tsx's missing `shouldFilter` forwarding is not in the way, and nothing
- *     under components/ui/ had to be touched.
+ *  2. The relational fields are SearchableSelects over tasks that exist, so a ref
+ *     cannot be a typo. Before R7 they were text boxes you typed `STA-12` into from
+ *     memory, which failed late and silently: the store's `not_found` arrived after
+ *     the rest of the form was already filled in.
  *
- * Refusals render through describeRefusal() + GuardRefusal from views/board/ — the
- * same pair the board uses for a refused drag. Imported, never copied: a second
- * refusal renderer is a second chance to paraphrase a guard.
+ * WHERE THE OPTIONS COME FROM. One `getIssues({})` when the dialog opens, not
+ * `session.issues`. The session's list is scoped to the workspace the PAGE is filtered
+ * to, and this dialog has its own workspace select — so if you are looking at `staple`
+ * and create into `pinecone`, the session list is the wrong list and would leave the
+ * relation fields silently empty. The fetch is per-open, not per-keystroke; the list is
+ * narrowed in memory by `filterOptions`.
+ *
+ * CROSS-WORKSPACE, HONESTLY. Every option and every chip carries a workspace pill, but
+ * the issue options are restricted to the target workspace, because the store cannot
+ * hold a cross-workspace parent or blocker — see the long note on `issueOptions`. The
+ * fields say so rather than offering a choice the store will refuse.
+ *
+ * Refusals render through describeRefusal() + GuardRefusal, which live in lib/ and
+ * components/ since V2 (STA-87) retired the board they used to sit behind. Imported,
+ * never copied: a second refusal renderer is a second chance to paraphrase a guard.
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { GuardRefusal } from "@/components/GuardRefusal";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -27,14 +41,36 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { SearchableSelect } from "@/components/ui/searchable-select";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { action } from "@/lib/api";
+import { action, getIssues } from "@/lib/api";
+import { describeRefusal, type Refusal } from "@/lib/refusal";
 import { useSession } from "@/lib/session";
-import { ISSUE_PRIORITIES, type Issue, type IssuePriority } from "@/lib/types";
-import { GuardRefusal } from "@/views/board/GuardRefusal";
-import { describeRefusal, type Refusal } from "@/views/board/refusal";
-import { EMPTY_CREATE_FORM, buildCreatePayload, type CreateFormState } from "./createIssueForm";
+import { ISSUE_PRIORITIES, type Issue, type IssuePriority, type IssueRow } from "@/lib/types";
+import {
+  EMPTY_CREATE_FORM,
+  buildCreatePayload,
+  labelOptions,
+  parentOptions,
+  relationOptions,
+  withoutValues,
+  splitLabels,
+  splitRefs,
+  type CreateFormState,
+} from "./createIssueForm";
+
+/**
+ * Parent only. A parent is a local row id with a derived depth, so it genuinely cannot
+ * point at another workspace — see parentOptions() for why that is storage and not policy.
+ */
+const PARENT_NOTE = "A parent lives in the same workspace.";
+
+/**
+ * Blocked by / Blocking. Says what a foreign pick DOES rather than warning about it:
+ * cross-workspace is the normal case in a hub, it just lands in a different table.
+ */
+const CROSS_WORKSPACE_NOTE = "Picks from another workspace become hub links.";
 
 export function CreateIssueDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const session = useSession();
@@ -45,6 +81,34 @@ export function CreateIssueDialog({ open, onOpenChange }: { open: boolean; onOpe
   // In hub mode "" means "every workspace", which is not a thing you can create into.
   // Fall back to the first one so the select always has a real target.
   const [ws, setWs] = useState(session.ws || session.workspaces[0]?.slug || "");
+
+  /**
+   * Every issue the server will show us, for the relation dropdowns.
+   *
+   * Empty until it lands, and NOT a blocker for anything: an empty option list makes
+   * the relation fields say "nothing matches" for a moment, while the title and
+   * description — the only required field and the one people start with — are already
+   * usable. A spinner over the whole form would be slower for the common case, which
+   * is creating a task with no relations at all.
+   */
+  const [rows, setRows] = useState<IssueRow[]>([]);
+  useEffect(() => {
+    if (!open) return;
+    let live = true;
+    // No ws filter: in hub mode this returns every workspace, which is what the LABEL
+    // list wants. The relation lists narrow it themselves, per issueOptions.
+    getIssues({})
+      .then((next) => {
+        if (live) setRows(next);
+      })
+      // Deliberately silent. A failed option fetch degrades the dropdowns to empty; it
+      // is not a refusal of anything the user asked for, and putting it in the refusal
+      // panel would put a fetch error where store guards are supposed to speak.
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [open, session.version]);
 
   const set = <K extends keyof CreateFormState>(key: K, value: CreateFormState[K]) =>
     setForm((current) => ({ ...current, [key]: value }));
@@ -73,6 +137,15 @@ export function CreateIssueDialog({ open, onOpenChange }: { open: boolean; onOpe
       setBusy(false);
     }
   };
+
+  const parents = parentOptions(rows, ws);
+  const relations = relationOptions(rows, ws);
+  const labels = labelOptions(rows);
+  // Neither relation may offer what the other already holds: the same ref on both
+  // sides is a two-node cycle, and the store can only refuse it once the task exists.
+  // See withoutValues() — the deeper cycles are still the store's to catch.
+  const blockedByOptions = withoutValues(relations, form.blocking);
+  const blockingOptions = withoutValues(relations, form.blockedBy);
 
   return (
     <Dialog open={open} onOpenChange={(next) => (next ? onOpenChange(true) : close())}>
@@ -115,7 +188,7 @@ export function CreateIssueDialog({ open, onOpenChange }: { open: boolean; onOpe
             />
           </div>
 
-          <div className="grid gap-3 sm:grid-cols-2">
+          <div className="grid items-start gap-3 sm:grid-cols-2">
             <div className="grid gap-1.5">
               <Label htmlFor="create-priority">Priority</Label>
               <Select value={form.priority} onValueChange={(value) => set("priority", value as IssuePriority)}>
@@ -137,50 +210,103 @@ export function CreateIssueDialog({ open, onOpenChange }: { open: boolean; onOpe
 
             <div className="grid gap-1.5">
               <Label htmlFor="create-parent">Parent</Label>
-              <Input
+              {/* Single-select: a task has one parent, and the store enforces a depth
+                  cap on it. Selecting replaces rather than appends. */}
+              <SearchableSelect
                 id="create-parent"
-                data-create-parent
-                value={form.parent}
-                placeholder="STA-12"
-                className="font-mono"
-                onChange={(event) => set("parent", event.target.value)}
+                name="parent"
+                options={parents}
+                selected={form.parent ? [form.parent] : []}
+                onChange={(next) => set("parent", next[0] ?? "")}
+                placeholder="No parent"
+                actionLabel="Change parent"
+                searchPlaceholder="Search tasks…"
+                emptyText="no task matches"
+                mono
+                note={PARENT_NOTE}
               />
             </div>
           </div>
 
-          <div className="grid gap-3 sm:grid-cols-2">
+          <div className="grid gap-1.5">
+            <Label htmlFor="create-labels">Labels</Label>
+            {/* The only field that can invent a value. Existing labels come from every
+                workspace in scope — a label is a plain string, so reusing one another
+                project already uses costs nothing and is usually the intent. */}
+            <SearchableSelect
+              id="create-labels"
+              name="labels"
+              options={labels}
+              selected={form.labels}
+              onChange={(next) => set("labels", next)}
+              multiple
+              placeholder="No labels"
+              actionLabel="Add another label"
+              searchPlaceholder="Search or create a label…"
+              emptyText="no label matches"
+              onCreate={splitLabels}
+            />
+          </div>
+
+          <div className="grid items-start gap-3 sm:grid-cols-2">
             <div className="grid gap-1.5">
-              <Label htmlFor="create-labels">Labels</Label>
-              <Input
-                id="create-labels"
-                data-create-labels
-                value={form.labels}
-                placeholder="ui, needs review"
-                onChange={(event) => set("labels", event.target.value)}
+              <Label htmlFor="create-blocked-by">Blocked by</Label>
+              <SearchableSelect
+                id="create-blocked-by"
+                name="blocked-by"
+                options={blockedByOptions}
+                selected={form.blockedBy}
+                onChange={(next) => set("blockedBy", next)}
+                multiple
+                placeholder="Nothing blocking this"
+                actionLabel="Add another blocker"
+                searchPlaceholder="Search tasks…"
+                emptyText="no task matches"
+                expandPaste={splitRefs}
+                mono
+                note={CROSS_WORKSPACE_NOTE}
               />
-              {/* Commas only, because a label may contain spaces. Said out loud so
-                  nobody has to discover it by losing half a label. */}
-              <p className="text-[11px] text-muted-foreground">Separated by commas.</p>
             </div>
 
             <div className="grid gap-1.5">
-              <Label htmlFor="create-blocked-by">Blocked by</Label>
-              <Input
-                id="create-blocked-by"
-                data-create-blocked-by
-                value={form.blockedBy}
-                placeholder="STA-13, STA-9"
-                className="font-mono"
-                onChange={(event) => set("blockedBy", event.target.value)}
+              <Label htmlFor="create-blocking">Blocking</Label>
+              {/* The inverse relation. The store has no create-time input for it — the
+                  server applies it after the insert by rewriting each target's
+                  blocked-by set. See the `create` branch in src/ui/server.ts. */}
+              <SearchableSelect
+                id="create-blocking"
+                name="blocking"
+                options={blockingOptions}
+                selected={form.blocking}
+                onChange={(next) => set("blocking", next)}
+                multiple
+                placeholder="Blocking nothing"
+                actionLabel="Add another"
+                searchPlaceholder="Search tasks…"
+                emptyText="no task matches"
+                expandPaste={splitRefs}
+                mono
+                note={CROSS_WORKSPACE_NOTE}
               />
-              <p className="text-[11px] text-muted-foreground">Refs, separated by commas or spaces.</p>
             </div>
           </div>
 
           {session.mode === "hub" && session.workspaces.length > 1 ? (
             <div className="grid gap-1.5">
               <Label htmlFor="create-workspace">Workspace</Label>
-              <Select value={ws} onValueChange={setWs}>
+              <Select
+                value={ws}
+                onValueChange={(next) => {
+                  setWs(next);
+                  // ONLY the parent goes. R7 cleared the relations too, which was right
+                  // while they were workspace-locked and is wrong now: a blocker chosen
+                  // before the switch is still a real task, and after the switch it is
+                  // simply a cross-workspace one — the server routes it to a hub link
+                  // instead of a local edge. The parent still cannot survive, because a
+                  // parent in the old workspace has nowhere to be stored in the new one.
+                  setForm((current) => ({ ...current, parent: "" }));
+                }}
+              >
                 <SelectTrigger id="create-workspace" className="w-full">
                   <SelectValue />
                 </SelectTrigger>

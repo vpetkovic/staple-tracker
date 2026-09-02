@@ -1,0 +1,909 @@
+/*
+ * The task row — V5 (STA-97) geometry, generalised by R4 (STA-102).
+ *
+ * Was `views/tree/tree-row.css`. It moved here with the row itself, unchanged rule for rule
+ * and class for class, plus two additions at the bottom: the column toggles that let a
+ * narrow container drop a column without forking the sheet, and the compact density.
+ *
+ * Imported by the components that use it (TaskList, TreeGrid) rather than added to app.css,
+ * so it costs no other ticket a merge. Everything below references a token role and never a
+ * hex — the only literal VALUES in this file are two of the eight label hues, which V1
+ * explicitly declined to provide.
+ *
+ * ── DENSITY IS A NUMBER SWAP, NOT A SECOND STYLESHEET ────────────────────────────────
+ *
+ * `[data-density="compact"]` re-points the geometry custom properties and nothing else.
+ * There is exactly one set of rules and two sets of numbers, so a change to the row cannot
+ * land in one density and quietly miss the other.
+ */
+
+:root {
+  /* ── Row geometry. V1 ceded row density to STA-97. ──────────────────────────────── */
+  --row-height: 36px;
+  --row-indent-step: 20px;
+  /* 60px holds STA-999. Hub mode widens it for the workspace prefix chip. */
+  --row-id-width: 60px;
+
+  /*
+   * Unfilled priority bars and the no-priority dashes. Points at --border because that is
+   * exactly the register wanted: present, structural, and not competing with the filled
+   * bars beside it.
+   */
+  --priority-track: var(--border);
+
+  /*
+   * The breathing dot. An alias rather than a new number — 1.6s is already the house
+   * "something is alive" tempo, roughly resting respiration. Faster reads as urgency,
+   * slower reads as broken.
+   */
+  --motion-working-pulse: var(--motion-approval-pulse);
+
+  /*
+   * ── Label hues. V5 OWNS THESE; V1 confirmed it is not providing them. ─────────────
+   *
+   * Eight low-chroma seeds with fixed index meanings, so `label-hue.ts`'s override map can
+   * name one by intent. They are consumed through the existing `--sc` + `.status-fill`
+   * recipe, exactly as the status chips are, which means label dots and status chips track
+   * a light/dark change together and neither can drift into its own colour system.
+   *
+   * Six of the eight point at Geist ramp steps that already exist. Cyan and pink have no
+   * entry in the ramp and are the only literal values in this file; both are picked at the
+   * same lightness as their neighbours so the palette reads as one set.
+   */
+  --label-hue-1: var(--ds-red-800); /* red    — bug, regression, security */
+  --label-hue-2: var(--ds-amber-800); /* amber */
+  --label-hue-3: var(--ds-green-800); /* green  — performance */
+  --label-hue-4: #0b7285; /* cyan   — infra */
+  --label-hue-5: var(--ds-blue-800); /* blue   — feature */
+  --label-hue-6: var(--ds-purple-700); /* violet — design */
+  --label-hue-7: #c2255c; /* pink */
+  --label-hue-8: var(--ds-gray-800); /* slate  — docs, chore */
+}
+
+.dark {
+  --label-hue-1: var(--ds-red-700);
+  --label-hue-2: var(--ds-amber-700);
+  --label-hue-3: var(--ds-green-700);
+  --label-hue-4: #3bc9db;
+  --label-hue-5: var(--ds-blue-700);
+  --label-hue-6: var(--ds-purple-700);
+  --label-hue-7: #f783ac;
+  --label-hue-8: var(--ds-gray-800);
+}
+
+/* Touch: the ROW supplies the 44px target, per the existing coarse-pointer rule's own
+   reasoning — the checkbox and chevron keep their design size and grow their hit area. */
+@media (pointer: coarse) {
+  :root {
+    --row-height: 44px;
+  }
+}
+
+/* ── The grid ──────────────────────────────────────────────────────────────────────── */
+
+.staple-tree {
+  background: var(--card);
+  /* The list is one continuous surface, so the last row's hairline is the list's edge. */
+  border-bottom: 1px solid var(--border);
+}
+
+.staple-group-header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: grid;
+  height: 32px;
+  align-items: center;
+  padding: 0 12px 0 8px;
+  /*
+   * OPAQUE. `--surface-hover` and friends are alpha tokens, and a translucent sticky header
+   * over 36px rows shimmers as rows slide under it — the rows read straight through.
+   */
+  background: var(--card);
+  border-bottom: 1px solid var(--border);
+  cursor: default;
+  user-select: none;
+}
+
+.staple-group-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.staple-group-triangle {
+  display: inline-flex;
+  width: 8px;
+  color: var(--text-tertiary);
+  transition: transform var(--motion-duration-fast) var(--motion-ease-standard);
+}
+
+.staple-group-triangle[data-collapsed="true"] {
+  transform: rotate(-90deg);
+}
+
+.staple-group-icon {
+  flex-shrink: 0;
+}
+
+.staple-group-name {
+  color: var(--foreground);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: var(--tracking-label);
+}
+
+.staple-group-count {
+  /* Tabular so a count going 9 -> 10 does not nudge anything sideways. */
+  margin-left: 0;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.staple-group-body {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition:
+    grid-template-rows var(--motion-duration-fast) var(--motion-ease-standard),
+    opacity var(--motion-duration-fast) var(--motion-ease-standard);
+}
+
+.staple-group-body[data-collapsed="true"] {
+  grid-template-rows: 0fr;
+  opacity: 0;
+}
+
+.staple-group-rows {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.staple-row {
+  position: relative;
+  display: grid;
+  /*
+   * MIRRORED IN tree-model.ts (`ROW_PAD_LEFT`, `COL_SELECT`, `COL_DISCLOSURE`, `COL_GAP`),
+   * which the connector rails are positioned from. Change one, change the other.
+   *
+   * `minmax(0, 1fr)` on the title is REQUIRED. A bare `1fr` keeps an auto min-content floor
+   * and the title silently refuses to ellipsize — the single most common way this row gets
+   * built wrong.
+   */
+  /*
+   * The two structural columns are named through custom properties so a preset can empty
+   * one (`--col-select: ;` below) without this template being restated anywhere. Restating
+   * it is the trap: an inline style or a higher-specificity override would then outrank the
+   * §14 media queries at the bottom of this file, and the narrow layouts would stop working
+   * for exactly the containers that need them most.
+   */
+  --col-select: [select] 24px;
+  --col-disclosure: [disclosure] 16px;
+  grid-template-columns:
+    var(--col-select)
+    var(--col-disclosure)
+    [priority] 16px
+    [identifier] var(--row-id-width)
+    [status] 20px
+    [title] minmax(0, 1fr)
+    [meta] auto;
+  column-gap: 8px;
+  align-items: center;
+  height: var(--row-height);
+  padding-right: 12px;
+  /*
+   * Flush and hairline-separated, not floating cards. Gaps between rows at this density
+   * make a stripe pattern that fights the connector elbows, and rounded corners need those
+   * gaps to be visible at all. Linear's list rows are square and flush for the same reason.
+   * The radius token still governs every pill and badge ON the row.
+   */
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  /*
+   * The exact composite of the row's own background, for the ring that cuts the avatar
+   * overlap. Two box-shadows at the same spread layer the alpha tint over the opaque card
+   * in the right order, which is the only way to get the true blend out of an alpha token.
+   */
+  --staple-ring-tint: transparent;
+  /* Background and opacity only. NEVER a transform or a layout property: at 36px with a
+     hairline separator a 1px shift on hover reads as the whole list twitching. */
+  transition: background-color var(--motion-duration-instant) var(--motion-ease-standard);
+  /*
+   * Where `scrollIntoView({ block: "nearest" })` is allowed to park this row — R1 (STA-100),
+   * for R6's prev/next arrows.
+   *
+   * The start value is NOT cosmetic. Group headers are `position: sticky; top: 0; height:
+   * 32px`, so a row scrolled flush to the top of the scroller lands UNDERNEATH the header
+   * that is pinned there and is simply not visible — which is the exact failure the
+   * scroll-into-view exists to prevent, reintroduced one row higher. 40px clears the header
+   * and leaves 8px of air.
+   *
+   * The end value is the cosmetic half: 8px so a row paged into view from below is not flush
+   * against the bottom edge of the window.
+   */
+  scroll-margin-block-start: 40px;
+  scroll-margin-block-end: 8px;
+}
+
+.staple-row-cell {
+  /* Keeps the single ARIA gridcell out of the grid's way so the row's own columns apply. */
+  display: contents;
+}
+
+.staple-row:hover,
+.staple-row:focus-within {
+  background: var(--surface-hover);
+  --staple-ring-tint: var(--surface-hover);
+}
+
+.staple-row[aria-selected="true"] {
+  background: var(--surface-selected);
+  --staple-ring-tint: var(--surface-selected);
+}
+
+/*
+ * "I am looking at this" vs "I am about to act on these" are different facts and must stay
+ * separable when both are true at once — so the open row adds an accent edge rather than a
+ * second neutral tint.
+ */
+.staple-row[aria-current="true"] {
+  background: var(--surface-selected);
+  box-shadow: inset 2px 0 0 var(--ring);
+  --staple-ring-tint: var(--surface-selected);
+}
+
+/*
+ * INSET, and deliberately not the house `outline-offset: 1px`. These rows are flush and
+ * share a hairline, so a +1px outset ring is overlapped by the neighbouring row and clipped
+ * by the sticky header. Same token, same width, one sign flipped.
+ */
+.staple-row:focus-visible,
+.staple-group-header:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+
+/* ── Connectors ────────────────────────────────────────────────────────────────────── */
+
+.staple-row-guides {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.staple-guide-rail {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 0;
+  /* --border-strong, not --border: a hairline that disappears against the row separator is
+     worse than no connector at all. */
+  border-left: 1px solid var(--border-strong);
+}
+
+.staple-guide-rail-lower {
+  top: 50%;
+}
+
+.staple-guide-elbow {
+  position: absolute;
+  top: 0;
+  height: 50%;
+  width: 12px;
+  border-left: 1px solid var(--border-strong);
+  border-bottom: 1px solid var(--border-strong);
+  border-bottom-left-radius: 6px;
+}
+
+/* ── Left of the title ─────────────────────────────────────────────────────────────── */
+
+.staple-row-check {
+  width: 14px;
+  height: 14px;
+  justify-self: center;
+  accent-color: var(--ring);
+  /* Space held permanently; only the paint fades. Nothing shifts on hover. */
+  opacity: 0;
+  cursor: pointer;
+  transition: opacity var(--motion-duration-instant) var(--motion-ease-standard);
+}
+
+.staple-row:hover .staple-row-check,
+.staple-row:focus-within .staple-row-check,
+.staple-row-selecting .staple-row-check,
+.staple-row-check:checked {
+  opacity: 1;
+}
+
+.staple-row-chevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  /* Always visible for parents. A disclosure you cannot see is a feature nobody finds. */
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition:
+    color var(--motion-duration-instant) var(--motion-ease-standard),
+    transform var(--motion-duration-instant) var(--motion-ease-standard);
+  transform: rotate(0deg);
+}
+
+.staple-row-chevron[data-expanded="true"] {
+  transform: rotate(90deg);
+}
+
+.staple-row:hover .staple-row-chevron {
+  color: var(--muted-foreground);
+}
+
+.staple-row-chevron-spacer {
+  width: 16px;
+}
+
+.staple-row-priority {
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  align-items: center;
+  justify-content: center;
+}
+
+.staple-row-id {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow: visible;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.staple-row-status {
+  justify-self: center;
+  flex-shrink: 0;
+}
+
+/* ── Title ─────────────────────────────────────────────────────────────────────────── */
+
+.staple-row-title-cell {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+}
+
+.staple-row-title {
+  overflow: hidden;
+  color: var(--foreground);
+  font-size: 13px;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  /* One line, always. `wrap-anywhere` is the CARD treatment and it breaks a fixed row. */
+  white-space: nowrap;
+}
+
+.staple-row-untitled {
+  color: var(--text-tertiary);
+  font-style: italic;
+}
+
+.staple-row-breadcrumb {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.staple-row-breadcrumb:hover {
+  color: var(--muted-foreground);
+}
+
+.staple-row-childcount {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Right of the title ────────────────────────────────────────────────────────────── */
+
+.staple-row-meta {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.staple-row-meta > * {
+  flex-shrink: 0;
+}
+
+/* The one member allowed to shrink and drop pills — everything else is fixed content. */
+.staple-row-meta > .staple-label-cluster {
+  min-width: 0;
+  flex-shrink: 1;
+}
+
+.staple-label-cluster {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+}
+
+.staple-label-pill {
+  display: inline-flex;
+  height: 20px;
+  min-width: 0;
+  align-items: center;
+  gap: 2px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  /* Outline for static metadata, fill for the live thing. See LabelPills.tsx. */
+  background: transparent;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.staple-label-name {
+  overflow: hidden;
+  max-width: 14ch;
+  text-overflow: ellipsis;
+}
+
+.staple-label-overflow {
+  color: var(--text-tertiary);
+}
+
+.staple-label-more {
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+.staple-label-dot {
+  width: 6px;
+  height: 6px;
+  flex-shrink: 0;
+  border-radius: 999px;
+}
+
+.staple-pr-badge {
+  display: inline-flex;
+  height: 20px;
+  align-items: center;
+  gap: 2px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.staple-pr-more {
+  color: var(--text-tertiary);
+}
+
+/* ── Avatars ───────────────────────────────────────────────────────────────────────── */
+
+.staple-avatar {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  background: var(--surface-hover);
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: var(--tracking-label);
+  /* Mono initials sit ~0.5px low in a circle at this size — nudged with line-height, which
+     does not move the box, rather than with `top`, which would. */
+  line-height: 1.05;
+}
+
+/* Shape, not colour: rounded square is a machine, circle is a person. Survives greyscale,
+   survives 18px, costs nothing from the palette. */
+.staple-avatar[data-kind="agent"] {
+  border-radius: var(--radius-sm);
+}
+
+.staple-avatar[data-kind="human"] {
+  border-radius: 999px;
+}
+
+.staple-avatar-stack {
+  display: inline-flex;
+  align-items: center;
+}
+
+.staple-avatar-stacked {
+  margin-left: -6px;
+  /* Alpha tint painted OVER the opaque card, in that order — the true composite of the
+     row's current background, so the seam does not reappear on hover. */
+  box-shadow:
+    0 0 0 2px var(--staple-ring-tint),
+    0 0 0 2px var(--card);
+}
+
+/* ── The working pill ──────────────────────────────────────────────────────────────── */
+
+.staple-working-pill {
+  display: inline-flex;
+  height: 22px;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px 0 2px;
+  /* A full capsule, while every static badge is squared. The live thing is identifiable by
+     silhouette alone from across the list. */
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-hover);
+}
+
+.staple-working-dot {
+  width: 6px;
+  height: 6px;
+  flex-shrink: 0;
+  border-radius: 999px;
+  background: var(--status-task-in_progress);
+  animation: staple-breathe var(--motion-working-pulse) var(--motion-ease-standard) infinite;
+}
+
+.staple-working-label {
+  color: var(--muted-foreground);
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.staple-held-pill {
+  display: inline-flex;
+  height: 22px;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px 0 2px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+}
+
+.staple-held-label {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+/*
+ * The badge WRAPS in a board column, which a fixed-height row cannot allow — so here it is
+ * one line. What it must not do is truncate: the first draft clamped it to 22ch and the row
+ * rendered `held by claude · 3…`, eating "silent 3h", which is the entire diagnosis. The
+ * component's own file argues exactly this and it was right. A stale claim is rare and it
+ * is the loudest thing on the row on purpose; it may take the width it needs, and the
+ * title — which has `minmax(0, 1fr)` — is what gives way.
+ */
+.staple-row-stale {
+  white-space: nowrap;
+}
+
+/*
+ * ONE moving element per row, and it is 6px across. Opacity and transform only — both
+ * composited, so twenty live rows never touch layout or paint. No stagger: all live dots
+ * share one clock and synchronise, which reads as a single system heartbeat rather than
+ * as noise. It says "live", never "progress".
+ */
+@keyframes staple-breathe {
+  0%,
+  100% {
+    opacity: 0.4;
+    transform: scale(0.88);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* ── Assignee and date ─────────────────────────────────────────────────────────────── */
+
+.staple-row-assignee {
+  /* Absent when unassigned — no dashed placeholder. An unassigned row should look calm,
+     not broken. (The absence is handled in the component; this is only the size.) */
+  width: 20px;
+  height: 20px;
+}
+
+.staple-row-date {
+  width: 56px;
+  text-align: right;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  /* So a column of dates is a column and not a ragged edge. */
+  font-variant-numeric: tabular-nums;
+}
+
+.staple-row-actions {
+  display: inline-flex;
+  width: 20px;
+  height: 20px;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-tertiary);
+  opacity: 0;
+  cursor: pointer;
+  transition: opacity var(--motion-duration-instant) var(--motion-ease-standard);
+}
+
+.staple-row:hover .staple-row-actions,
+.staple-row:focus-within .staple-row-actions {
+  opacity: 1;
+}
+
+/* ── Skeleton ──────────────────────────────────────────────────────────────────────── */
+
+.staple-row-skeleton {
+  cursor: default;
+}
+
+.staple-skeleton-block {
+  height: 10px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-selected);
+}
+
+.staple-skeleton-round {
+  height: 16px;
+  border-radius: 999px;
+}
+
+/*
+ * ── Responsive degradation (§14) ───────────────────────────────────────────────────
+ *
+ * Right-side elements drop LEAST DIAGNOSTIC FIRST. Left of the title nothing ever drops.
+ * The date goes before the assignee because attribution was an explicit requirement and a
+ * timestamp is recoverable from the drawer. Label names go before label colours because a
+ * colour still carries a category at a glance while a truncated word carries nothing.
+ *
+ * Never dropped at any width: priority glyph, identifier, status icon, title, assignee
+ * avatar, and the working pill's dot. Those are the brief.
+ *
+ * The label-pill count is NOT here — it lives in TreeGrid's `useLabelCapacity`, because
+ * the `+N` changes with the cap and CSS cannot recount.
+ */
+@media (max-width: 1023px) {
+  .staple-pr-number {
+    display: none;
+  }
+}
+
+@media (max-width: 879px) {
+  .staple-row-date {
+    display: none;
+  }
+  .staple-working-label,
+  .staple-held-label {
+    display: none;
+  }
+  .staple-working-pill,
+  .staple-held-pill {
+    padding-right: 4px;
+  }
+}
+
+@media (max-width: 719px) {
+  .staple-row {
+    height: 56px;
+    grid-template-columns:
+      var(--col-disclosure)
+      [priority] 16px
+      [identifier] var(--row-id-width)
+      [status] 20px
+      [title] minmax(0, 1fr);
+    grid-template-rows: 28px 28px;
+  }
+  .staple-row-check {
+    display: none;
+  }
+  .staple-row-meta {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    justify-content: flex-start;
+    /* Indented to the title column, so line 2 reads as belonging to line 1. */
+    padding-left: 24px;
+  }
+  .staple-row-date {
+    display: inline;
+    width: auto;
+  }
+}
+
+/*
+ * ── Reduced motion ────────────────────────────────────────────────────────────────
+ *
+ * The dot stays fully opaque and the pill still says "Working…", so NO INFORMATION IS
+ * LOST — only the movement. That is the correct degradation: the animation was always
+ * reinforcement and never the message.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .staple-working-dot {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+  .staple-row,
+  .staple-row-check,
+  .staple-row-actions,
+  .staple-row-chevron,
+  .staple-group-triangle,
+  .staple-group-body {
+    transition: none;
+  }
+}
+
+/* ══ R4 (STA-102) — column toggles, density, and the flat list container ═════════════ */
+
+/*
+ * A column that is OFF contributes nothing: no track, no gap, no reserved width.
+ *
+ * The empty custom-property value is deliberate and is the only way to do this without
+ * restating the whole template — see the note in `.staple-row`. `--col-select: ;` is a
+ * valid declaration whose value is empty, and `var()` substitutes nothing for it.
+ */
+.staple-row[data-select="off"] {
+  --col-select: ;
+}
+
+.staple-row[data-disclosure="off"] {
+  --col-disclosure: ;
+}
+
+/*
+ * Compact: 28px rows and a narrower identifier, for the detail panel and the palette.
+ *
+ * The FONT SIZES DO NOT CHANGE. Shrinking the title to 12px would have been the easy way to
+ * find the 8px, and it would have made every constrained list slightly harder to read than
+ * the main one — which is backwards, because a drawer is where you are reading closely. The
+ * 8px comes out of vertical padding, which nobody reads.
+ */
+[data-density="compact"] {
+  --row-height: 28px;
+  --row-id-width: 52px;
+}
+
+@media (pointer: coarse) {
+  /* Touch still gets a real target; compact only closes the gap to the 44px minimum. */
+  [data-density="compact"] {
+    --row-height: 36px;
+  }
+}
+
+/*
+ * The flat list container — the listbox equivalent of `.staple-tree`.
+ *
+ * No card background of its own: a children list inside a drawer is part of the drawer's
+ * surface, and a second panel inside a panel is the "boxes inside boxes" look this design
+ * language spends most of its rules avoiding. It gets a hairline at the top and bottom and
+ * lets the rows do the rest.
+ */
+.staple-task-list {
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.staple-task-list .staple-row {
+  padding-right: 8px;
+}
+
+/* The last row's hairline IS the list's bottom edge — no double line. */
+.staple-task-list .staple-row:last-child {
+  border-bottom: none;
+}
+
+/*
+ * The workspace pill.
+ *
+ * Carries the workspace SLUG, not the identifier's three-letter prefix — see config.ts for
+ * why that distinction is the whole justification for this element existing at all after
+ * STA-97 dropped §6.3's prefix chip. Squared and outlined, like every other static badge on
+ * the row; the capsule silhouette is reserved for the one live element.
+ */
+.staple-row-workspace {
+  flex-shrink: 0;
+  max-width: 12ch;
+  overflow: hidden;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/*
+ * `semantics="bare"`: the host owns the role, the tab stop and the selection paint. cmdk
+ * highlights its own `[data-selected]` item, so the row must not also paint a hover — two
+ * highlight systems on one line renders as a row that is lit twice and aligned once.
+ */
+.staple-row-bare {
+  cursor: inherit;
+}
+
+.staple-row-bare:hover,
+.staple-row-bare:focus-within {
+  background: transparent;
+}
+
+/* ══ R5 (STA-105) — the row inside cmdk's popup ══════════════════════════════════════ */
+
+/*
+ * `CommandItem` is a flex container and our row is a grid. Without this the row sizes to its
+ * content and the meta cluster floats in the middle of the item instead of sitting on its
+ * right edge — which looks like a bug in the row and is actually a missing `flex: 1`.
+ */
+[data-slot="command-item"] > .staple-row-bare {
+  flex: 1;
+  min-width: 0;
+}
+
+/*
+ * NO HAIRLINE between results.
+ *
+ * In the list the separator is what makes twenty rows read as one continuous surface. In a
+ * popup of six results with a rounded, highlighted selection travelling through them, the
+ * same separator turns the thing into a small table and fights the highlight for the eye.
+ * The row keeps every other property; it loses the one that only made sense at length.
+ */
+[data-preset="popup"] .staple-row {
+  height: var(--row-height);
+  padding-right: 4px;
+  border-bottom: none;
+}
+
+/*
+ * cmdk paints the selected item, so the row must not paint anything itself — including the
+ * `aria-current` accent edge, which in a search popup would claim "you are looking at this"
+ * about a row you have not opened.
+ */
+[data-preset="popup"] .staple-row[aria-current="true"] {
+  background: transparent;
+  box-shadow: none;
+}
+
+/*
+ * §14's claim degradation, applied by CONTAINER rather than by viewport width.
+ *
+ * The spec drops the working pill's prose at ≤879px and keeps the avatar and the breathing
+ * dot, on the grounds that "someone is on this" survives losing the word "Working…". A
+ * 512px popup is that same constraint arriving a different way, so the popup gets the same
+ * treatment at any window size. The dot and the initials — the never-drop half — stay.
+ *
+ * The STALE badge deliberately does NOT degrade. V5 tried clamping it and it rendered
+ * `held by claude · 3…`, eating "silent 3h", which is the entire diagnosis. It is rare, it is
+ * the loudest thing on the row on purpose, and it may take the width it needs — the title has
+ * `minmax(0, 1fr)` and is what gives way. That trade is as right in a popup as in the list:
+ * a result whose holder died four hours ago is worth a truncated title.
+ */
+[data-preset="popup"] .staple-working-label,
+[data-preset="popup"] .staple-held-label {
+  display: none;
+}
+
+[data-preset="popup"] .staple-working-pill,
+[data-preset="popup"] .staple-held-pill {
+  padding-right: 4px;
+}

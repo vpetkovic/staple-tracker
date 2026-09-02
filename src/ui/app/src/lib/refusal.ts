@@ -1,5 +1,15 @@
 /**
- * What the store said when it refused — owned by U6 (views/board/).
+ * What the store said when it refused.
+ *
+ * SALVAGED BY V2 (STA-87) from `views/board/refusal.ts` when the board was deleted.
+ * The logic below is byte-identical to the board's copy; only this header changed.
+ *
+ * It moved to lib/ because it is what it always actually was — the app's single
+ * translation from "a write was rejected" into "something renderable". The tell was
+ * that the command palette already reached across a view boundary to import it, with a
+ * comment apologising for doing so. There is no board to own it now, and there never
+ * should have been: every surface that writes needs this, and there must be exactly one
+ * of it, or one copy starts paraphrasing.
  *
  * staple has no transition table. `updateIssue` runs guards at the moment of the write
  * and the *reason* only exists as the sentence in the error it throws:
@@ -9,15 +19,15 @@
  *   "Checkout refused: status is \"done\" (held by kim), expected one of todo, backlog…"
  *   "Status version mismatch: expected 3, current 5. Re-read the issue first."
  *
- * A board that snaps the card back and says nothing throws all of that away. This module
- * is the one place a refusal is turned into something renderable, and its single rule is
- * that `message` is passed through UNCHANGED. No mapping table, no friendlier copy, no
- * "needs an assignee" where the store said "in_progress requires an assignee" — if the
- * board ever shows a sentence the store did not say, the board is lying about a guard.
+ * A surface that rejects a write and says nothing throws all of that away. Its single
+ * rule is that `message` is passed through UNCHANGED. No mapping table, no friendlier
+ * copy, no "needs an assignee" where the store said "in_progress requires an assignee" —
+ * if the UI ever shows a sentence the store did not say, the UI is lying about a guard.
  *
  * It duck-types instead of using `instanceof ApiError` on purpose: the shape (message,
  * code, detail, retryable) is the wire envelope every staple surface speaks, so reading
- * the shape keeps this a pure function that can be tested without lib/api or a DOM.
+ * the shape keeps this a pure function that can be tested without lib/api or a DOM. Two
+ * Node-side suites import it directly for exactly that reason.
  */
 
 /** A refusal, ready to render. Every field comes off the wire; nothing is invented. */

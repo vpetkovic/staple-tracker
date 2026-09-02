@@ -272,12 +272,41 @@ export interface Poll {
   fingerprint: string;
 }
 
+/**
+ * A pull/merge request linked to an issue. Populated by a future git integration (V5 §9).
+ *
+ * There is no git integration, no column, and no endpoint that produces one of these today.
+ * The type exists so the row's PR slot has a contract to be built against, and so turning
+ * the badge on later is a SERVER-only change: the row renders nothing at all when the array
+ * is absent or empty, which is exactly what it does now.
+ */
+export interface PullRequestRef {
+  provider: "github" | "gitlab" | "bitbucket";
+  /** Display number, e.g. 1423 for #1423. */
+  number: number;
+  /** Absolute URL to the PR. Opened in a new tab; never fetched by the UI. */
+  url: string;
+  state: "draft" | "open" | "merged" | "closed";
+  /** Optional; tooltip only. */
+  title?: string | null;
+  /** ISO-8601. Optional; tooltip only. */
+  updatedAt?: string | null;
+}
+
 /** GET /api/issues */
 export interface IssueRow {
   workspace: string;
   issue: Issue;
   /** Liveness of the holder, or null when the issue is not held. One batched query per workspace. */
   claim: ClaimActivity | null;
+  /**
+   * Linked pull requests, newest-first. OPTIONAL and absent today — see `PullRequestRef`.
+   *
+   * A SIBLING of `issue` rather than a field on it, for the same reason `claim` is one:
+   * this is externally sourced and refreshed on a different clock than the issue, and
+   * freezing it into the entity would be a lie waiting to happen.
+   */
+  pullRequests?: PullRequestRef[];
 }
 
 /** GET /api/inbox */
@@ -431,6 +460,21 @@ export type ActionPayload =
       parent?: string;
       labels?: string[];
       blockedBy?: string[];
+      /**
+       * Refs the NEW task should block — the inverse of `blockedBy`, added by R7
+       * (STA-103) for the create form's Blocking field.
+       *
+       * There is no store input for this and there never was: `CreateIssueInput` has no
+       * `blocking`, and neither does the CLI's `new` nor MCP's `create_task`. The
+       * inverse relation is only expressible as "rewrite the OTHER issue's blocked-by
+       * set", which `store.setBlockedBy` does with REPLACE semantics — so it has to be
+       * read-modify-written, and the server's `create` branch does that inside the same
+       * request rather than letting the UI straddle a round trip with it.
+       *
+       * Absent is exactly the old behaviour, which is why this is a key on `create`
+       * rather than a second action type.
+       */
+      blocking?: string[];
     }
   /**
    * Inline property editing (U5). A partial patch: a key that is absent is left

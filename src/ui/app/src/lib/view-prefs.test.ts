@@ -1,0 +1,96 @@
+/**
+ * R1 (STA-100) — the grouping preference, and the two things about it that are easy to get
+ * wrong in a way nobody notices until a user loses their layout.
+ */
+import { describe, expect, it } from "vitest";
+import {
+  decodeViewPrefs,
+  DEFAULT_GROUP_BY,
+  encodeViewPrefs,
+  GROUP_BY_OPTIONS,
+  groupByLabel,
+  loadViewPrefs,
+  saveViewPrefs,
+  VIEW_PREFS_STORAGE_KEY,
+} from "./view-prefs";
+
+/** The smallest thing that behaves like `localStorage`, including the ways it fails. */
+function memoryStorage(over: Partial<Storage> = {}): Storage {
+  const map = new Map<string, string>();
+  return {
+    get length() {
+      return map.size;
+    },
+    clear: () => map.clear(),
+    key: (i) => [...map.keys()][i] ?? null,
+    getItem: (k) => map.get(k) ?? null,
+    setItem: (k, v) => void map.set(k, v),
+    removeItem: (k) => void map.delete(k),
+    ...over,
+  } as Storage;
+}
+
+describe("the default", () => {
+  it("is FLAT — this is the whole ticket", () => {
+    expect(DEFAULT_GROUP_BY).toBe("none");
+    expect(decodeViewPrefs(null).groupBy).toBe("none");
+    expect(loadViewPrefs(memoryStorage()).groupBy).toBe("none");
+  });
+
+  it("offers every dimension in the registry, flat first", () => {
+    expect(GROUP_BY_OPTIONS.map((o) => o.id)).toEqual(["none", "status"]);
+    // Each one explains itself. A menu of bare nouns makes the user click to find out.
+    expect(GROUP_BY_OPTIONS.every((o) => o.label.length > 0 && o.hint.length > 0)).toBe(true);
+  });
+});
+
+describe("persistence", () => {
+  it("round-trips through its OWN key, not the filter envelope", () => {
+    const storage = memoryStorage();
+    saveViewPrefs(storage, { groupBy: "status" });
+
+    expect(storage.getItem(VIEW_PREFS_STORAGE_KEY)).toContain('"groupBy":"status"');
+    // The filter envelope must be untouched — the two are separate concerns and the day
+    // saved filter sets ship, switching sets must not re-arrange the list.
+    expect(storage.getItem("staple:filters:v1")).toBeNull();
+    expect(loadViewPrefs(storage).groupBy).toBe("status");
+  });
+
+  it("stamps a version inside, so a small change can migrate in place", () => {
+    expect(JSON.parse(encodeViewPrefs({ groupBy: "status" }))).toEqual({
+      version: 1,
+      groupBy: "status",
+    });
+  });
+
+  it("falls back to flat for corruption, junk and unknown dimensions", () => {
+    expect(decodeViewPrefs("not json").groupBy).toBe("none");
+    expect(decodeViewPrefs("[1,2,3]").groupBy).toBe("none");
+    expect(decodeViewPrefs('{"groupBy":true}').groupBy).toBe("none");
+    // An unknown grouping is NOT kept the way an unknown filter dimension is: a filter from
+    // a newer build round-trips harmlessly, but a grouping this build cannot render would
+    // have to be handed to a `buildGroups` that has never heard of it.
+    expect(decodeViewPrefs('{"groupBy":"assignee"}').groupBy).toBe("none");
+  });
+
+  it("survives a storage that throws, because Safari private mode does", () => {
+    const throwing = memoryStorage({
+      getItem: () => {
+        throw new Error("SecurityError");
+      },
+      setItem: () => {
+        throw new Error("QuotaExceededError");
+      },
+    });
+
+    expect(loadViewPrefs(throwing).groupBy).toBe("none");
+    expect(() => saveViewPrefs(throwing, { groupBy: "status" })).not.toThrow();
+  });
+});
+
+describe("the trigger label", () => {
+  it("names the active dimension", () => {
+    expect(groupByLabel("none")).toBe("No grouping");
+    expect(groupByLabel("status")).toBe("Status");
+  });
+});

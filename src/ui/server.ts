@@ -242,6 +242,23 @@ export function startUiServer(options: UiOptions): UiHandle {
     return handle;
   }
 
+  /**
+   * The hub, or null when there isn't one this process can use.
+   *
+   * The read routes already open the hub inside a try/catch and degrade to an empty
+   * `crossBlockers` on failure; the create branch needs the same tolerance for the same
+   * reason. A hub that cannot be opened means every ref is local, which is precisely the
+   * behaviour this surface had before R8 — so a broken or absent hub costs the
+   * cross-workspace feature and nothing else.
+   */
+  function openHubSafe(): Hub | null {
+    try {
+      return Hub.open();
+    } catch {
+      return null;
+    }
+  }
+
   function allHandles(): StoreHandle[] {
     if (!options.hub) return [handleFor()];
     handleFor(); // populate cache
@@ -729,16 +746,142 @@ export function startUiServer(options: UiOptions): UiHandle {
            * `actor` is the same `body.actor || "ui"` every other branch uses, so a
            * task created from the page is attributed rather than anonymous.
            */
-          result = handle.store.createIssue({
-            title: body.title as string,
-            description: (body.description as string) || null,
-            priority: (body.priority as IssuePriority) || undefined,
-            parent: (body.parent as string) || null,
-            labels: stringList(body.labels),
-            blockedBy: stringList(body.blockedBy),
-            estimatedSeconds: optionalEstimate(body.estimateSeconds),
-            createdBy: actor,
-          });
+          /**
+           * R8 (STA-110): refs are routed by the workspace that OWNS them.
+           *
+           * A blocking relation between two workspaces is a real, supported thing — the
+           * hub has held that edge since M1 (`Hub.addCrossLink`, `hub link`, MCP
+           * `cross_link`). It simply had no HTTP route, which R7 mistook for
+           * "unsupported" and turned into a same-workspace restriction. That is
+           * backwards: cross-referencing across workspaces is what a hub is FOR.
+           *
+           * The two kinds of edge are genuinely different tables, and the hub insists on
+           * the distinction rather than papering over it — `addCrossLink` REFUSES a
+           * same-workspace pair with "use the workspace-local blocked-by instead". So we
+           * partition first and never hand either side the other's refs.
+           *
+           * A ref the hub cannot place — unparseable, or a prefix the registry does not
+           * know — is treated as LOCAL. That is not a fallback so much as the old
+           * behaviour preserved exactly: the store's own `requireRow` still refuses it,
+           * in its own words, and non-hub mode never touches this code at all.
+           */
+          const hub = options.hub ? openHubSafe() : null;
+          try {
+            const owner = (ref: string): string | null => {
+              if (!hub) return null;
+              try {
+                return hub.resolveIdentifier(ref).entry.slug;
+              } catch {
+                return null; // not an identifier, or a prefix this hub does not know
+              }
+            };
+            const partition = (refs: string[]) => {
+              const local: string[] = [];
+              const foreign: string[] = [];
+              for (const ref of refs) {
+                const slug = owner(ref);
+                (slug === null || slug === handle.slug ? local : foreign).push(ref);
+              }
+              return { local, foreign };
+            };
+
+            const blockedBy = partition(stringList(body.blockedBy) ?? []);
+            const blocking = partition(stringList(body.blocking) ?? []);
+
+            /**
+             * Everything createIssue() could refuse over — an empty title, the tree
+             * depth cap, a repeated open title under the same parent — is already a
+             * guard inside it, so this branch validates nothing itself and re-words
+             * nothing: it shapes the body into a CreateIssueInput and lets the store
+             * speak. Only the LOCAL blockers go in; `createIssue` resolves them with
+             * `requireRow`, which cannot see another workspace's file.
+             *
+             * `actor` is the same `body.actor || "ui"` every other branch uses, so a
+             * task created from the page is attributed rather than anonymous.
+             */
+            const created = handle.store.createIssue({
+              title: body.title as string,
+              description: (body.description as string) || null,
+              priority: (body.priority as IssuePriority) || undefined,
+              parent: (body.parent as string) || null,
+              labels: stringList(body.labels),
+              blockedBy: blockedBy.local,
+              estimatedSeconds: optionalEstimate(body.estimateSeconds),
+              createdBy: actor,
+            });
+
+            /**
+             * Everything after the insert, in one try so one refusal reports one truth.
+             *
+             * NOT TRANSACTIONAL WITH THE CREATE, and deliberately not pretended to be.
+             * `tx()` opens `BEGIN IMMEDIATE` and is not re-entrant, so `createIssue`,
+             * each `setBlockedBy` and each `addCrossLink` (a different database
+             * entirely) are separate transactions that no third one can enclose. A
+             * refusal partway leaves the task created and some edges written; the catch
+             * below says so rather than letting the store's sentence imply nothing
+             * happened, because the user's next move would otherwise be a retry that
+             * trips the duplicate-title guard.
+             */
+            let phase = "Blocking links";
+            try {
+              /**
+               * LOCAL blocking — the inverse relation, from R7.
+               *
+               * The store has no create-time input for it and no method with these
+               * semantics: `setBlockedBy` REPLACES an issue's whole blocker set
+               * (`DELETE … WHERE blocked_id = ?` then re-insert), so "also let this new
+               * task block T" means writing T's entire next list. This composes two
+               * public store methods to get there, exactly as `doc_restore` above
+               * composes `getDocument` + `putDocument`.
+               *
+               * It happens HERE and not in the client because a UI doing
+               * read-union-write across two round trips would silently delete any
+               * blocker another agent added to T in between — and several agents
+               * writing at once is this tracker's normal operating condition.
+               */
+              for (const targetRef of blocking.local) {
+                const target = handle.store.getIssue(targetRef);
+                const current = handle.store.blockersOf(target.id).map((row) => row.identifier);
+                // INSERT OR IGNORE dedupes the edge, but the identifier list is what
+                // gets re-inserted, so a repeat would be a wasted write, not a duplicate.
+                if (current.includes(created.identifier)) continue;
+                handle.store.setBlockedBy(targetRef, [...current, created.identifier], actor);
+              }
+
+              /**
+               * CROSS-WORKSPACE, both directions. `addCrossLink(blocker, blocked)` is
+               * directional, which is exactly what lets Blocking work across workspaces
+               * as well as Blocked by — the new task is the blocked side in one case and
+               * the blocker in the other. The hub validates that both identifiers
+               * resolve, that each issue exists in its own file, and that the edge does
+               * not close a cross-file cycle.
+               */
+              if (hub) {
+                phase = "cross-workspace links";
+                for (const blockerRef of blockedBy.foreign) {
+                  hub.addCrossLink(blockerRef, created.identifier);
+                }
+                for (const blockedRef of blocking.foreign) {
+                  hub.addCrossLink(created.identifier, blockedRef);
+                }
+              }
+            } catch (error) {
+              const because = error instanceof Error ? error.message : String(error);
+              throw new StapleError(
+                error instanceof StapleError ? error.code : "conflict",
+                `${created.identifier} was created, but its ${phase} were not applied: ${because}`,
+                {
+                  identifier: created.identifier,
+                  blockedBy: blockedBy.foreign,
+                  blocking: [...blocking.local, ...blocking.foreign],
+                },
+              );
+            }
+
+            result = created;
+          } finally {
+            hub?.close();
+          }
         } else if (type === "update") {
           /**
            * Inline property editing: title, priority, labels.

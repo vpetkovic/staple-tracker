@@ -40,6 +40,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { getGraph } from "@/lib/api";
 import type { AuthError } from "@/lib/api";
+import { applyFilters } from "@/lib/filters";
 import { buildLineageIndex, edgeKey, lineageFrom, type Lineage } from "@/lib/graph-lineage";
 import { useSession } from "@/lib/session";
 import type { Graph, IssueStatus } from "@/lib/types";
@@ -88,10 +89,17 @@ import {
 } from "./graph/graph-share";
 import { EpicControls, GraphToolbar } from "./graph/GraphToolbar";
 import { nodeTypes, type GraphFlowNode } from "./graph/node-types";
-import { EmptyState, ViewState } from "./ViewChrome";
+import { EmptyState, NoMatchesState, ViewState } from "./ViewChrome";
 
 /** Height is explicit because React Flow measures its container and the shell scrolls. */
-const CANVAS_CLASS = "h-[calc(100vh-13rem)] min-h-[26rem] w-full rounded-lg border bg-card";
+/*
+ * V2 (STA-87): was `h-[calc(100vh-13rem)] min-h-[26rem]`. That 13rem was a hard-coded
+ * guess at the height of the app header plus this view's own toolbar, and it was wrong
+ * the moment the header changed — which is exactly what STA-87 did. The canvas now takes
+ * the space that is left, because the shell hands this view a real box to fill instead of
+ * a scrolling page to measure against the viewport.
+ */
+const CANVAS_CLASS = "min-h-0 w-full flex-1 rounded-lg border bg-card";
 
 function Legend() {
   return (
@@ -124,7 +132,17 @@ const MINIMAP_COLORS: Record<IssueStatus, string> = {
   cancelled: "var(--status-task-cancelled)",
 };
 
-function GraphCanvas({ graph }: { graph: Graph }) {
+function GraphCanvas({
+  graph,
+  hiddenByFilter,
+}: {
+  graph: Graph;
+  /**
+   * Ticket ids the global filter (V4/STA-89) excluded, EXCLUDING resolved work — that is
+   * handled by `doneMode` below, which also bridges the edges it hides.
+   */
+  hiddenByFilter: ReadonlySet<string>;
+}) {
   const session = useSession();
   const [hovered, setHovered] = useState<string | null>(null);
   const [positions, setPositions] = useState<Record<string, XY>>({});
@@ -181,7 +199,33 @@ function GraphCanvas({ graph }: { graph: Graph }) {
    * `fade` is tempting as a default and is still a lie by omission on first paint.
    */
   const [mode, setMode] = useState<PlanningMode>(shared?.mode ?? "off");
-  const [doneMode, setDoneMode] = useState<DoneMode>(shared?.doneMode ?? "show");
+
+  /**
+   * V4 (STA-89) TOOK THE DEFAULT AWAY FROM THIS CONTROL.
+   *
+   * `doneMode` used to default to "show", on the reasoning that a canvas which opened
+   * already filtered makes the first question in any meeting "why is half of it missing".
+   * That reasoning was right about the graph in isolation and wrong about the app: the
+   * tree now hides resolved work by default, and a graph that showed it would mean the
+   * two views disagreed about what "the current plan" is. The global toggle decides;
+   * a shared link still wins over both, because that is somebody's prepared arrangement.
+   *
+   * The three-way control stays. `fade` is a genuinely useful canvas-only state with no
+   * equivalent in a list — "this is done, and here is where it sits in the chain" — so
+   * the toolbar remains a local REFINEMENT of the global answer rather than a duplicate
+   * of it. Flipping the global toggle resets this to match, which is the effect below.
+   */
+  const [doneMode, setDoneMode] = useState<DoneMode>(
+    shared?.doneMode ?? (session.filters.showDone ? "show" : "hide"),
+  );
+  const globalShowDone = session.filters.showDone;
+  const lastGlobal = useRef(globalShowDone);
+  useEffect(() => {
+    if (lastGlobal.current === globalShowDone) return;
+    lastGlobal.current = globalShowDone;
+    setDoneMode(globalShowDone ? "show" : "hide");
+  }, [globalShowDone]);
+
   const activeFilter = useMemo(
     // A filter naming an epic that has since vanished must fall back to the whole graph
     // rather than render an empty canvas nobody can explain.
@@ -226,10 +270,25 @@ function GraphCanvas({ graph }: { graph: Graph }) {
     () => new Set(planning.filter((node) => isResolved(node.status)).map((node) => node.id)),
     [planning],
   );
-  const hidden = useMemo(
-    () => (doneMode === "hide" ? resolvedIds : new Set<string>()),
-    [doneMode, resolvedIds],
-  );
+  /**
+   * Everything off the canvas, from both causes, in one set — V4 (STA-89).
+   *
+   * The global filter's exclusions ride the SAME mechanism as hidden done work, and that
+   * is the whole reason this is one set rather than a second filter applied later:
+   * `bridgeResolved` below is what keeps the plan connected when nodes disappear. Dropping
+   * filtered nodes without bridging would split the graph into islands and quietly claim
+   * two dependent tickets are unrelated — which is a worse lie than showing them.
+   *
+   * One known limit, stated rather than papered over: `hiddenByFilter` holds TICKET ids,
+   * so a filtered-out ticket inside a COLLAPSED epic does not remove anything — the
+   * cluster stands for the epic as a whole and keeps its aggregate. Expanding the epic
+   * applies the filter to its members as normal.
+   */
+  const hidden = useMemo(() => {
+    const out = new Set<string>(hiddenByFilter);
+    if (doneMode === "hide") for (const id of resolvedIds) out.add(id);
+    return out;
+  }, [doneMode, resolvedIds, hiddenByFilter]);
 
   const nodes = useMemo(
     () => canvas.nodes.filter((node) => !hidden.has(node.id)),
@@ -653,12 +712,18 @@ function GraphCanvas({ graph }: { graph: Graph }) {
   const onNodeMouseLeave = useCallback(() => setHovered(null), []);
 
   if (nodes.length === 0) {
-    return <EmptyState>no dependencies yet — add some with blocked-by or a cross-workspace link</EmptyState>;
+    // Same distinction the tree makes: a graph with nothing in it and a graph the filter
+    // emptied are different facts, and only one of them is fixed by clearing filters.
+    return hidden.size > 0 ? (
+      <NoMatchesState noun="dependencies" />
+    ) : (
+      <EmptyState>no dependencies yet — add some with blocked-by or a cross-workspace link</EmptyState>
+    );
   }
 
   return (
     <>
-      <div className="flex flex-wrap items-center justify-between gap-2">
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-2">
         <Legend />
         <div className="flex flex-wrap items-center gap-1.5">
           <GraphToolbar
@@ -733,15 +798,54 @@ export function GraphView({ onAuthError }: { onAuthError: (error: AuthError) => 
   const load = useCallback(() => getGraph(), []);
   const resource = useResource(load, [session.version], onAuthError);
 
+  /**
+   * The global filter, translated into graph terms — V4 (STA-89).
+   *
+   * `/api/graph` carries id, workspace, title, status and parent. It does not carry
+   * assignee, priority or labels, so the filter cannot be evaluated against a node. It
+   * CAN be evaluated against the issue the node stands for, and the node id IS the
+   * identifier, so the join is exact: run the same `applyFilters` the tree runs, and
+   * hide the nodes whose issue did not survive.
+   *
+   * TWO DELIBERATE CHOICES IN HERE:
+   *
+   *   `showDone: true` — resolved work is excluded from THIS set and left to `doneMode`,
+   *     which hides it *and bridges the edges through it*. Hiding a finished ticket that
+   *     three others hang off would otherwise strand them.
+   *
+   *   A node with no matching issue is KEPT. In hub mode the graph reaches across
+   *     workspace files that this fetch may not have loaded, and "I have no record of
+   *     this ticket" is not evidence that it fails the filter. Showing something the
+   *     filter might have excluded is a recoverable error; hiding work on a guess is not.
+   */
+  const hiddenByFilter = useMemo(() => {
+    const rows = session.issues.data;
+    const graph = resource.data;
+    if (!rows || !graph || rows.length === 0) return new Set<string>();
+    const known = new Set(rows.map((row) => row.issue.identifier));
+    const survives = new Set(
+      applyFilters(rows, { ...session.filters, showDone: true }).map((row) => row.issue.identifier),
+    );
+    return new Set(
+      graph.nodes
+        .filter((node) => known.has(node.id) && !survives.has(node.id))
+        .map((node) => node.id),
+    );
+  }, [session.issues.data, session.filters, resource.data]);
+
   return (
-    <div className="mx-auto max-w-full">
+    // A column that fills the shell's content box: toolbar at its natural height, canvas
+    // taking the rest. Unlike the tree, this view is INSET rather than full-bleed — a
+    // canvas is a single object you look at, not a list that runs to the edge of the
+    // window, and the border is what says where the coordinate space stops.
+    <div className="flex h-full flex-col gap-2 px-4 py-3">
       <ViewState resource={resource} empty="no dependencies yet">
         {(graph) => (
           // Keyed by scope: switching hub/workspace or the ws filter is a different
           // picture with a different saved arrangement, and remounting is the honest way
           // to reset the viewport and the position state together.
           <ReactFlowProvider key={`${session.mode}:${session.ws}`}>
-            <GraphCanvas graph={graph} />
+            <GraphCanvas graph={graph} hiddenByFilter={hiddenByFilter} />
           </ReactFlowProvider>
         )}
       </ViewState>

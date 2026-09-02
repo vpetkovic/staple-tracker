@@ -156,7 +156,19 @@ describe("the packed artifact", () => {
       "staple.mjs",
     ]);
     expect(hashed.length).toBeGreaterThan(0);
-    for (const entry of hashed) expect(entry).toMatch(/^assets\/assets\/index-[\w-]+\.(js|css)$/);
+    // Two shapes, and only two. The bundle pair (index-<hash>.js/css), and the
+    // two Geist variable fonts vendored by the design layer (STA-86) — which are
+    // emitted by Vite as content-hashed assets exactly like the bundle is.
+    // Anything else appearing under assets/ is a payload regression, which is the
+    // whole point of matching by shape instead of counting files.
+    for (const entry of hashed) {
+      expect(entry).toMatch(
+        /^assets\/assets\/(index-[\w-]+\.(js|css)|Geist(Mono)?-Variable-[\w-]+\.woff2)$/,
+      );
+    }
+    // Named explicitly so a font silently failing to bundle — which degrades the
+    // whole app to a fallback typeface without breaking anything — fails here.
+    expect(hashed.filter((entry) => entry.endsWith(".woff2"))).toHaveLength(2);
   });
 
   it("carries no TypeScript, no tsx and no node_modules", () => {

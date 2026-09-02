@@ -1,0 +1,201 @@
+/*
+ * ─────────────────────────────────────────────────────────────────────────────
+ * staple · detail overlay motion (V3 / STA-88)
+ * ─────────────────────────────────────────────────────────────────────────────
+ *
+ * WHY THIS FILE EXISTS AT ALL, given that V1's whole thesis is "values live in the
+ * token sheets": because the app has no motion layer, and the one it appears to
+ * have is a mirage. `components/ui/dialog.tsx` is covered in `animate-in`,
+ * `fade-in-0`, `zoom-in-[0.97]` and `slide-in-from-top-[1%]` — the tailwindcss-
+ * animate vocabulary — and `tw-animate-css` is imported nowhere. Grep the built
+ * stylesheet for `animate-in` and you get zero hits. Every one of those classes is
+ * dead, and the create-issue dialog has been appearing instantaneously since it was
+ * written while looking, in source, like it fades.
+ *
+ * A drawer cannot get away with that. A panel that is 46rem wide and simply EXISTS
+ * on the next frame, over content it did not previously cover, reads as a glitch —
+ * you lose the thing every overlay has to establish, which is where it came from
+ * and therefore where it will go back to. So this sheet defines the four keyframes
+ * the overlay needs, in plain CSS, and nothing else. It is not a general motion
+ * layer and should not become one; if this app ever wants animation as a system,
+ * that is a token-sheet decision, not a detail-panel decision.
+ *
+ * IT IS IMPORTED FROM IssueDetailMount.tsx, not from styles/app.css. app.css is
+ * shared ground and V2/V4/V5 are editing around it right now; a component-scoped
+ * sheet imported by the one component that uses it cannot collide with any of them.
+ * Every selector below is namespaced under `.staple-detail-*` for the same reason.
+ *
+ * THE CURVE. `cubic-bezier(0.32, 0.72, 0, 1)` — fast out of the gate, long settle.
+ * It is the curve iOS sheets and Vaul use, and it is the right one here for a
+ * physical reason rather than a fashionable one: a drawer travelling its own full
+ * width needs most of the distance covered early, or the eye reads it as slow no
+ * matter what the duration says.
+ */
+
+/* The scrim, and the one mode that does not draw it.
+ *
+ *   drawer — you are still working in the list; the drawer is a side channel and the
+ *            rows behind it must stay readable. Light wash, no blur. Black-alpha
+ *            rather than a token, matching dialog.tsx: a scrim is not a surface, it
+ *            is an absence of one, and it has to work over both themes unchanged.
+ *
+ *   full   — nothing. R3 (STA-104) made expanded edge-to-edge, and a scrim under an
+ *            opaque panel that covers the viewport has no pixels to occupy. It is
+ *            zeroed EXPLICITLY rather than left to be covered, because of the 160ms
+ *            where that is not yet true: the panel fades in from 0, and a scrim
+ *            darkening underneath it would show through as a grey wash that resolves
+ *            into the page. One frame of that and the whole thing reads as a modal
+ *            opening, which is the exact impression this ticket exists to remove.
+ *
+ * The element stays MOUNTED in full mode. Radix hangs the scroll lock, the pointer
+ * blocking and the open/closed animation contract off the overlay's presence, not
+ * off its paint, so deleting it to remove a colour would cost three behaviours to
+ * save one declaration. Transparent is the cheap, boring, correct version. */
+.staple-detail-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background-color: rgb(0 0 0 / 0.28);
+}
+
+.staple-detail-scrim[data-mode="full"] {
+  background-color: transparent;
+  backdrop-filter: none;
+}
+
+@keyframes staple-detail-scrim-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes staple-detail-scrim-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+.staple-detail-scrim[data-state="open"] {
+  animation: staple-detail-scrim-in 180ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+.staple-detail-scrim[data-state="closed"] {
+  animation: staple-detail-scrim-out 140ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+/*
+ * The panel. Position and size are Tailwind utilities applied to the element from
+ * `drawer.ts`'s `panelClass` (they differ per mode, and the argument for each mode's
+ * geometry belongs beside the mode itself); only motion is here.
+ *
+ * The `[data-mode]` selectors are doing something slightly clever that is worth
+ * naming, because it looks accidental: they are also how EXPANDING is animated.
+ * Toggling drawer→full changes `animation-name`, and a changed animation-name
+ * restarts the animation — so the panel re-enters in its new geometry without any
+ * JS, any key change, or any remount. That last part is the point: remounting to
+ * replay an animation would throw away which tab you were on and how far you had
+ * scrolled, which is a real cost for a decorative gain.
+ */
+@keyframes staple-detail-drawer-in {
+  from {
+    transform: translate3d(100%, 0, 0);
+  }
+  to {
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes staple-detail-drawer-out {
+  from {
+    transform: translate3d(0, 0, 0);
+  }
+  to {
+    transform: translate3d(100%, 0, 0);
+  }
+}
+
+/*
+ * Full mode is opacity ONLY, and the missing `scale(0.985)` is the point rather than
+ * an omission. A 1.5% scale on a panel inset from the edges is a modal settling into
+ * place and looks right. The same 1.5% on an edge-to-edge panel pulls all four of
+ * its edges INSIDE the viewport and reveals the list behind them — so the animation
+ * would spend its first frames drawing precisely the inset card R3 removed, and the
+ * expand would read as "a modal appears, then grows to fit". The geometry changed,
+ * so the motion that flattered the old geometry had to go with it.
+ *
+ * The keyframe NAMES are load-bearing and must stay distinct from the drawer's; see
+ * the note above about animation-name being what restarts the animation on expand.
+ */
+@keyframes staple-detail-full-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes staple-detail-full-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+.staple-detail-panel[data-mode="drawer"][data-state="open"] {
+  animation: staple-detail-drawer-in 240ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+.staple-detail-panel[data-mode="drawer"][data-state="closed"] {
+  animation: staple-detail-drawer-out 180ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+.staple-detail-panel[data-mode="full"][data-state="open"] {
+  animation: staple-detail-full-in 160ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+.staple-detail-panel[data-mode="full"][data-state="closed"] {
+  animation: staple-detail-full-out 130ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+/*
+ * Reduced motion removes the TRAVEL, not the transition. Setting `animation: none`
+ * would be worse than nothing: Radix keeps a closing dialog mounted until its
+ * animation ends, so with no animation the panel would vanish on the same frame
+ * the scrim did, and the one group this setting exists to protect would get the
+ * hardest cut in the app. A 1ms opacity fade keeps Radix's contract and removes
+ * every pixel of movement.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .staple-detail-scrim[data-state],
+  .staple-detail-panel[data-mode][data-state] {
+    animation-name: staple-detail-scrim-in;
+    animation-duration: 1ms;
+  }
+
+  .staple-detail-scrim[data-state="closed"],
+  .staple-detail-panel[data-mode][data-state="closed"] {
+    animation-name: staple-detail-scrim-out;
+  }
+}
+
+/*
+ * The tab strip sits on a hairline that runs the full width of the panel while the
+ * strip itself is only as wide as its tabs. `variant="line"` draws the active
+ * underline 5px below the trigger box (`--sz-neg-5px` in the vendored component),
+ * so the strip needs that much room beneath it or the underline lands on top of
+ * the rule instead of sitting in it. This is the one geometric fact the vendored
+ * primitive does not carry itself, and it is here rather than as a magic number in
+ * the panel so the two cannot drift apart.
+ */
+.staple-detail-tabstrip {
+  padding-bottom: 5px;
+}
