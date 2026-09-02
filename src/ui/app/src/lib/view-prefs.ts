@@ -50,7 +50,20 @@
  * rows are `task` or `initiative`, an id spelled `epic` would be a stored preference that
  * lies. The label can say "Epic" because a label is allowed to name the common case.
  */
-export type GroupBy = "none" | "status" | "pickup" | "parent";
+/**
+ * ── WHY `kind` IS AN AXIS AT ALL, AND WHY IT IS NOT `parent` WEARING A HAT — O1c ──────
+ *
+ * STA-130. The two look alike from a distance — both bucket a flat list by something the
+ * issue declares — and they answer opposite questions. `parent` asks WHICH PROJECT this
+ * belongs to, so an epic and its tasks land in one group. `kind` asks WHAT SORT OF WORK
+ * this is, so that same epic and its tasks land in different ones. Nobody scanning "every
+ * bug on the board" wants them scattered across nine epics, and nobody reading an epic
+ * wants its tasks split from its bugs. Two readings, two entries.
+ *
+ * Unlike `parent`, the id and the label agree here: the axis reads `issue.kind` and the
+ * header says "Kind". There was no common case to name it after and no lie available.
+ */
+export type GroupBy = "none" | "status" | "pickup" | "parent" | "kind";
 
 /**
  * The dimensions offered, in menu order. A registry rather than a switch, so a third entry
@@ -58,10 +71,15 @@ export type GroupBy = "none" | "status" | "pickup" | "parent";
  * any of them — the same trick `FILTER_DIMENSIONS` plays in lib/filters.ts.
  *
  * A NEW DIMENSION APPENDS. O3d (STA-129) added `parent` at the end rather than beside
- * `status` where it arguably belongs by kinship, and O1c (STA-130) will append `kind` after
- * it. Registry order IS menu order, so inserting moves every entry below the insertion
- * point — and the three that exist today are a year of muscle memory for anyone who has
- * used the control. Kinship is not worth a menu that reshuffles under the pointer.
+ * `status` where it arguably belongs by kinship, and O1c (STA-130) appended `kind` after
+ * it — as instructed, and for the same reason. Registry order IS menu order, so inserting
+ * moves every entry below the insertion point — and the four that exist today are a year of
+ * muscle memory for anyone who has used the control. Kinship is not worth a menu that
+ * reshuffles under the pointer.
+ *
+ * (`FILTER_DIMENSIONS` in lib/filters.ts took the OTHER decision on the same day and it is
+ * not an inconsistency: that registry states no append rule, argues its order semantically
+ * per entry, and its menu has a search box over it. This one has neither.)
  */
 export const GROUP_BY_OPTIONS: readonly { id: GroupBy; label: string; hint: string }[] = [
   {
@@ -87,6 +105,14 @@ export const GROUP_BY_OPTIONS: readonly { id: GroupBy; label: string; hint: stri
     // O3d (STA-129). The trigger reads "Group: Epic".
     label: "Epic",
     hint: "the parent heads the group; every task sits under its top-level ancestor",
+  },
+  {
+    id: "kind",
+    // O1c (STA-130). The trigger reads "Group: Kind".
+    label: "Kind",
+    // Names the vocabulary rather than listing it: the five built-ins are only the seed,
+    // and a workspace that added `milestone` would be reading a hint that omits it.
+    hint: "epics, tasks, bugs and the rest, each in their own section",
   },
 ];
 

@@ -33,8 +33,13 @@
  * Imports are relative, not "@/…": there is no vitest config at the repo root, so the
  * app's `@` alias (src/ui/app/vite.config.ts) does not exist at test time.
  */
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { STALE_CLAIM_SECONDS } from "./claim.ts";
+import {
+  publishWorkspaceSettings,
+  resetWorkspaceSettings,
+  SEED_SETTINGS,
+} from "./settings.ts";
 import { WORKLOG_STALE_MARGIN_SECONDS } from "./worklog.ts";
 import {
   DEFAULT_FILTER_SET,
@@ -217,6 +222,127 @@ describe("status", () => {
       row({ identifier: "C", status: "backlog" }),
     ];
     expect(ids(applyFilters(rows, state({ dims: { status: ["todo", "blocked"] } })))).toEqual(["A", "B"]);
+  });
+});
+
+/**
+ * KIND — O1c (STA-130). The dimension that is shaped like `assignee` and reads like
+ * `status`, which is the thing to keep straight about it.
+ *
+ * It is an OPEN set (only the kinds on the page are offered, so a workspace with a dozen
+ * configured kinds does not get ten zero-count menu rows), and it is ORDERED and LABELLED
+ * by the workspace vocabulary rather than alphabetically or by the raw wire id. Every test
+ * below is one half of that sentence.
+ */
+describe("kind", () => {
+  afterEach(() => resetWorkspaceSettings());
+
+  /** The seed vocabulary with a different order and one renamed label. */
+  function vocabulary(ids: readonly [string, string][]) {
+    publishWorkspaceSettings({
+      ...SEED_SETTINGS,
+      kinds: ids.map(([id, label], sortOrder) => ({ id, label, sortOrder, isBuiltin: true })),
+    });
+  }
+
+  it("offers one option per kind PRESENT, and none for a kind nobody uses", () => {
+    // The acceptance criterion, and the deliberate contrast with `status`/`priority` two
+    // describes down, which list every member whether or not a row uses one. Kinds became
+    // workspace DATA in O7a; a closed list of a dozen would be mostly zeroes.
+    const rows = [row({ kind: "epic" }), row({ kind: "bug" }), row({ kind: "bug" })];
+    const options = dimensionOptions("kind", rows);
+
+    expect(options.map((o) => o.value)).toEqual(["epic", "bug"]);
+    expect(options.map((o) => o.count)).toEqual([1, 2]);
+    // `task` is a seeded kind and it is NOT offered, because no row on this page is one.
+    expect(options.map((o) => o.value)).not.toContain("task");
+  });
+
+  it("orders the options by the CONFIGURED order, not alphabetically", () => {
+    // Alphabetical would be bug, chore, epic, spike, task; the seed order is
+    // epic, task, bug, chore, spike. They disagree on every position, which is what makes
+    // this assertion able to fail.
+    const rows = ["spike", "bug", "task", "epic", "chore"].map((kind) => row({ kind }));
+
+    expect(dimensionOptions("kind", rows).map((o) => o.value)).toEqual([
+      "epic",
+      "task",
+      "bug",
+      "chore",
+      "spike",
+    ]);
+  });
+
+  it("follows the workspace when the workspace reorders or renames a kind", () => {
+    // The menu must not be the one surface still painting the seed. Both halves move:
+    // the ORDER comes from `configuredKindOrder()` and the LABEL from `kindLabel()`.
+    vocabulary([
+      ["bug", "Defect"],
+      ["epic", "Initiative"],
+    ]);
+    const rows = [row({ kind: "epic" }), row({ kind: "bug" })];
+    const options = dimensionOptions("kind", rows);
+
+    expect(options.map((o) => o.value)).toEqual(["bug", "epic"]);
+    expect(options.map((o) => o.label)).toEqual(["Defect", "Initiative"]);
+  });
+
+  it("offers a kind the vocabulary has not got LAST, rather than dropping it", () => {
+    // The second between another tab adding a kind and /api/settings catching up. A row
+    // carrying it is on the page, so the value has to be selectable — a menu that cannot
+    // name a row it is showing is worse than one whose order is briefly odd.
+    const rows = [row({ kind: "task" }), row({ kind: "zeta" }), row({ kind: "milestone" })];
+    const options = dimensionOptions("kind", rows).map((o) => o.value);
+
+    expect(options[0]).toBe("task");
+    // Both are unranked by `KIND_RANK`, so the id breaks the tie — a total order, because
+    // a group order that is not total reshuffles on the 1.5s poll.
+    expect(options.slice(1)).toEqual(["milestone", "zeta"]);
+  });
+
+  it("labels an unknown kind by title-casing it rather than showing the wire value", () => {
+    expect(dimensionOptions("kind", [row({ kind: "tech_debt" })])[0]!.label).toBe("Tech Debt");
+  });
+
+  it("matches exactly, and ORs the values within the dimension", () => {
+    const rows = [row({ kind: "epic" }), row({ kind: "bug" }), row({ kind: "task" })];
+    const kept = applyFilters(rows, state({ dims: { kind: ["epic", "bug"] } }));
+
+    expect(kept.map((r) => r.issue.kind)).toEqual(["epic", "bug"]);
+    // A kind id is a controlled vocabulary value, not a name a human typed, so unlike
+    // `assignee` there is no casing to be generous about.
+    expect(applyFilters(rows, state({ dims: { kind: ["Epic"] } }))).toEqual([]);
+  });
+
+  it("ANDs with the other dimensions like every other constraint", () => {
+    const rows = [
+      row({ kind: "bug", priority: "high" }),
+      row({ kind: "bug", priority: "low" }),
+      row({ kind: "task", priority: "high" }),
+    ];
+    const kept = applyFilters(rows, state({ dims: { kind: ["bug"], priority: ["high"] } }));
+
+    expect(kept).toHaveLength(1);
+    expect(kept[0]!.issue.priority).toBe("high");
+  });
+
+  it("prints a chip that reads 'Kind: Epic' — the label, never the wire id", () => {
+    // STA-130's chip criterion. The DIMENSION prefix is what stops "epic" being read as a
+    // label called `epic` (FilterChips.tsx's stated reason for the prefix), and the value
+    // is `kindLabel`'s answer because this file's rule is that the wire value is never
+    // shown to a human — the same reason `critical` prints as "Urgent".
+    const chips = activeChips(state({ dims: { kind: ["epic"] } }));
+
+    expect(chips).toHaveLength(1);
+    expect(chips[0]!.dimensionLabel).toBe("Kind");
+    expect(chips[0]!.label).toBe("Epic");
+  });
+
+  it("prints a RENAMED kind's chip with the new name", () => {
+    // The reason the chip formats through `kindLabel` and not a frozen map: a workspace
+    // that renamed `spike` to "Investigation" must be heard saying so here too.
+    vocabulary([["spike", "Investigation"]]);
+    expect(activeChips(state({ dims: { kind: ["spike"] } }))[0]!.label).toBe("Investigation");
   });
 });
 
@@ -530,11 +656,18 @@ describe("the hidden-parent invariant (STA-97)", () => {
 // ---------- the registry ----------
 
 describe("the dimension registry", () => {
-  it("carries the six menu dimensions (text has its own box)", () => {
+  it("carries the seven menu dimensions (text has its own box)", () => {
     // Order is the menu order AND the chip order. `handoff` sits directly after `claim`
     // because that is the pair it means something in — see the note on the entry.
+    //
+    // O1c (STA-130) INSERTED `kind` after `status` rather than appending it: they are the
+    // two per-workspace vocabularies and the two facts an issue declares about itself, and
+    // appending would have made `handoff`'s "Last, and directly after Claim" false. This is
+    // the opposite of `GROUP_BY_OPTIONS`'s append-only rule, and deliberately so — that
+    // registry states the rule, this one argues its order entry by entry.
     expect(FILTER_DIMENSIONS.map((d) => d.id)).toEqual([
       "status",
+      "kind",
       "assignee",
       "priority",
       "label",
@@ -696,6 +829,22 @@ describe("persistence", () => {
     // Shipping dimension seven must not wipe it for anyone still on an older tab.
     const future = state({ dims: { status: ["todo"], sprint: ["s-12"] } });
     expect(decodeFilters(encodeFilters(future)).dims.sprint).toEqual(["s-12"]);
+  });
+
+  it("round-trips the kind dimension through the envelope, like every other", () => {
+    // O1c (STA-130). Nothing in the persistence path was edited for this — `dims` is an
+    // open record and `sanitize` keeps every well-formed key — so what this really pins is
+    // that adding an entry did not disturb that. It would fail the day somebody
+    // "tightens" `sanitize` into a whitelist of known dimension ids.
+    const storage = memoryStorage();
+    saveFilters(storage, state({ dims: { kind: ["epic", "bug"], status: ["todo"] } }));
+
+    const back = loadFilters(storage);
+    expect(back.dims.kind).toEqual(["epic", "bug"]);
+    expect(back.dims.status).toEqual(["todo"]);
+    // And it still applies after the reload, which is the criterion as a user would state it.
+    const rows = [row({ kind: "epic" }), row({ kind: "task", status: "todo" })];
+    expect(applyFilters(rows, back).map((r) => r.issue.kind)).toEqual(["epic"]);
   });
 
   it("falls back to the default when there is nothing stored", () => {

@@ -30,6 +30,7 @@
  */
 import { useEffect, useState } from "react";
 import { GuardRefusal } from "@/components/GuardRefusal";
+import { KindGlyph } from "@/components/task-list";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -47,10 +48,12 @@ import { Textarea } from "@/components/ui/textarea";
 import { action, getIssues } from "@/lib/api";
 import { describeRefusal, type Refusal } from "@/lib/refusal";
 import { useSession } from "@/lib/session";
-import { ISSUE_PRIORITIES, type Issue, type IssuePriority, type IssueRow } from "@/lib/types";
+import { configuredKindOrder, kindLabel } from "@/lib/settings";
+import { ISSUE_PRIORITIES, type Issue, type IssueKind, type IssuePriority, type IssueRow } from "@/lib/types";
 import {
   EMPTY_CREATE_FORM,
   buildCreatePayload,
+  createFormDefaultKind,
   labelOptions,
   parentOptions,
   relationOptions,
@@ -74,7 +77,18 @@ const CROSS_WORKSPACE_NOTE = "Picks from another workspace become hub links.";
 
 export function CreateIssueDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const session = useSession();
-  const [form, setForm] = useState<CreateFormState>(EMPTY_CREATE_FORM);
+  /**
+   * The workspace's kind vocabulary, read at render — O1b (STA-125). A plain accessor
+   * and not a hook: `App.tsx` holds the single `/api/settings` subscription and
+   * re-renders this tree when it changes, exactly as `StatusIcon` and the settings
+   * dialog already rely on. A second subscriber here would be a second fetch.
+   */
+  const kinds = configuredKindOrder();
+  const freshForm = (): CreateFormState => ({
+    ...EMPTY_CREATE_FORM,
+    kind: createFormDefaultKind(configuredKindOrder()),
+  });
+  const [form, setForm] = useState<CreateFormState>(freshForm);
   const [refusal, setRefusal] = useState<Refusal | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -113,8 +127,27 @@ export function CreateIssueDialog({ open, onOpenChange }: { open: boolean; onOpe
   const set = <K extends keyof CreateFormState>(key: K, value: CreateFormState[K]) =>
     setForm((current) => ({ ...current, [key]: value }));
 
+  /**
+   * The late-settings correction — O1b (STA-125), and the bug O7b's browser pass found
+   * the general form of: this dialog can mount before `/api/settings` resolves, and the
+   * seed it opens on is `task`. On a workspace that removed `task` from its vocabulary
+   * that leaves a select whose value is not one of its options, which the store would
+   * refuse at submit on a form that never offered anything else.
+   *
+   * It only ever fires when the held value is genuinely NOT ON OFFER, so it cannot
+   * overwrite a deliberate choice — and an empty list (nothing fetched yet) is left
+   * alone, because "we have not been told" is not "it is not there".
+   */
+  const offered = kinds.join(",");
+  useEffect(() => {
+    if (!open || kinds.length === 0) return;
+    setForm((current) => (kinds.includes(current.kind) ? current : { ...current, kind: createFormDefaultKind(kinds) }));
+    // `offered` rather than `kinds`: the accessor returns a fresh array every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, offered]);
+
   const close = () => {
-    setForm(EMPTY_CREATE_FORM);
+    setForm(freshForm());
     setRefusal(null);
     onOpenChange(false);
   };
@@ -190,6 +223,37 @@ export function CreateIssueDialog({ open, onOpenChange }: { open: boolean; onOpe
 
           <div className="grid items-start gap-3 sm:grid-cols-2">
             <div className="grid gap-1.5">
+              <Label htmlFor="create-kind">Kind</Label>
+              {/*
+                O1b (STA-125). Paired with Priority rather than given a row of its own,
+                because the two are the same thing to fill in — a short pick from a closed
+                list — and they are the two questions you answer about a ticket before you
+                have decided anything about its place in the tree.
+
+                THE OPTIONS ARE THE SERVED VOCABULARY, never `ISSUE_KINDS`. O7a made kinds
+                workspace data, so a select over the five built-in constants would omit
+                `staple kinds add milestone` and offer anything the operator removed —
+                which the store would then refuse, at submit time, on a form that had
+                offered it.
+              */}
+              <Select value={form.kind} onValueChange={(value) => set("kind", value as IssueKind)}>
+                <SelectTrigger id="create-kind" data-create-kind className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent position="popper" align="start">
+                  {kinds.map((kind) => (
+                    <SelectItem key={kind} value={kind}>
+                      <span className="flex items-center gap-1.5">
+                        <KindGlyph kind={kind} size={16} labelled={false} />
+                        {kindLabel(kind)}
+                      </span>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="grid gap-1.5">
               <Label htmlFor="create-priority">Priority</Label>
               <Select value={form.priority} onValueChange={(value) => set("priority", value as IssuePriority)}>
                 <SelectTrigger id="create-priority" data-create-priority className="w-full">
@@ -208,6 +272,21 @@ export function CreateIssueDialog({ open, onOpenChange }: { open: boolean; onOpe
               </Select>
             </div>
 
+          </div>
+
+          {/*
+            Parent moved out of the Kind/Priority row and onto a line of its own — O1b
+            (STA-125). It is not a third short pick: it is a search over every task in the
+            workspace, with a note under it, and half of 576px was already the tightest
+            field in the dialog. Kind takes the slot it vacated.
+
+            IT DOES NOT TOUCH THE KIND, and that is the point of putting them next to each
+            other rather than deriving one from the other. STA-120's premise is that a kind
+            is DECLARED and never derived: filing a ticket under an epic does not make it a
+            sub-anything, and a task that later grows children stays a task until somebody
+            says otherwise. The only field this control writes is `parent`.
+          */}
+          <div className="grid gap-3">
             <div className="grid gap-1.5">
               <Label htmlFor="create-parent">Parent</Label>
               {/* Single-select: a task has one parent, and the store enforces a depth

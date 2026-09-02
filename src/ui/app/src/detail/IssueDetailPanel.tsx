@@ -55,7 +55,7 @@ import { ErrorState, LoadingState } from "@/views/ViewChrome";
 import type { DetailMode } from "./drawer";
 import type { NavState, NavTarget } from "./navigation";
 import { IssueActions } from "./IssueActions";
-import { InlineLabels, InlinePriority, InlineTitle } from "./InlineProperties";
+import { InlineKind, InlineLabels, InlinePriority, InlineTitle } from "./InlineProperties";
 import { FactRow, PropertyGrid, type PropertyLayout } from "./PropertyGrid";
 import { detailFacts } from "./properties";
 import { onOpenDetailTab, visibleTabs } from "./tabs/registry";
@@ -424,7 +424,7 @@ function Section({
 }
 
 /**
- * The fact grid plus the one editable property that reads as a fact.
+ * The fact grid plus the editable properties that read as facts.
  *
  * Priority is a value you look up in a table of values — ClickUp puts it in the
  * property block and so does this — but unlike everything else in the grid it is
@@ -432,6 +432,12 @@ function Section({
  * it is not inline editing (U5's rule). So it leads the block as a `FactRow` sharing
  * the grid's own tracks, rather than being passed through properties.ts, which
  * models facts and cannot model a control the store is allowed to refuse.
+ *
+ * O1b (STA-125) adds KIND on exactly that argument, and puts it FIRST. Kind is the
+ * answer to "what IS this ticket", which is the question this whole block exists to
+ * answer in one glance, so it leads; priority is how urgent the thing is, which you can
+ * only ask once you know what the thing is. It is declared and never derived (STA-120),
+ * so it must be writable here or it is not declared by anyone.
  */
 function PropertiesBlock({
   detail,
@@ -457,6 +463,9 @@ function PropertiesBlock({
         </FactRow>
       }
     >
+      <FactRow label="Kind" layout={layout}>
+        <InlineKind issue={detail.issue} workspace={detail.workspace} refresh={refresh} />
+      </FactRow>
       <FactRow label="Priority" layout={layout}>
         <InlinePriority issue={detail.issue} workspace={detail.workspace} refresh={refresh} />
       </FactRow>

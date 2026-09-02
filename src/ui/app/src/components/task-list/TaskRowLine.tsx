@@ -45,6 +45,7 @@
 import type { CSSProperties, KeyboardEvent, ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { DependencyBadges } from "./DependencyBadges";
+import { KindGlyph } from "./KindGlyph";
 import { LabelPills } from "./LabelPills";
 import { ParentRollupBar } from "./ParentRollup";
 import { PrBadge } from "./PrBadge";
@@ -314,6 +315,25 @@ export function TaskRowLine({
       */}
       {columns.identifier ? (
         <span className="staple-row-id">
+          {/*
+            THE KIND GLYPH — O1b (STA-125). First child, so it is left of everything.
+
+            It is here and not in a grid track of its own for the reason the connector
+            glyph is: a new track changes the column template for all three presets and
+            every §14 breakpoint at once. It is on EVERY row rather than on epics only,
+            which is what finally pays O5's bill above — the space in front of the
+            identifier is now filled rather than reserved, so `--row-id-width` could go
+            back to the 76px O5 measured (see task-list.css) and every identifier in the
+            list has one left edge again.
+
+            NO `ghost` GUARD, deliberately. A dimmed epic that does not look like an epic
+            defeats the point of the context row, and `.staple-row-ghost` is a single
+            `opacity` rule on the row, so this dims with everything else for free. It is
+            also gated on `columns.identifier` rather than on a switch of its own: every
+            preset that draws an identifier wants the type of the thing it identifies,
+            and the palette (R5) gets it through this component with no code of its own.
+          */}
+          <KindGlyph kind={issue.kind} />
           {isSubtask(row) ? (
             <>
               <span className="staple-row-kin" data-testid="subtask-glyph" aria-hidden="true">

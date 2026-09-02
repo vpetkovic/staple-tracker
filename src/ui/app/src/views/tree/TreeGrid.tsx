@@ -39,19 +39,14 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
+import { CircleDashed, Hourglass, Minus, PlayCircle, CheckCircle2 } from "lucide-react";
 import {
-  Bug,
-  CircleDashed,
-  FlaskConical,
-  Hourglass,
-  Layers,
-  Minus,
-  PlayCircle,
-  CheckCircle2,
-  Square,
-  Wrench,
-} from "lucide-react";
-import { resolveTaskListConfig, StatusIcon, TaskRowLine, type TaskRow } from "@/components/task-list";
+  KindGlyph,
+  resolveTaskListConfig,
+  StatusIcon,
+  TaskRowLine,
+  type TaskRow,
+} from "@/components/task-list";
 import { clampIndex, useRovingFocus } from "@/components/task-list/roving";
 import "@/components/task-list/task-list.css";
 import type { Selection } from "@/lib/session";
@@ -116,41 +111,48 @@ const PICKUP_ICONS: Record<PickupSectionId, ReactNode> = {
 };
 
 /**
- * THE KIND GLYPH ON AN EPIC HEADER — A PLACEHOLDER, AND MARKED AS ONE. O3d (STA-129).
+ * THE KIND GLYPH ON A GROUP HEADER — the shared mark, since O1c (STA-130).
  *
- * O1b (STA-125) owns the shared kind glyph and it has not landed on this branch. STA-129's
- * acceptance criterion says the header shows one, so this draws one: the same lucide family
- * and the same optical stroke as the pickup glyphs above, sized by `staple-group-icon` like
- * every other header glyph.
+ * O3d (STA-129) drew a marked PLACEHOLDER here: a local lucide map, because O1b's shared
+ * glyph lived on another branch and the acceptance criterion still needed a mark. Both
+ * branches have landed, so this is the swap that placeholder existed to receive — one
+ * component, one import, and the five lucide icons it alone used are gone from the file.
+ * Two glyph sets for one vocabulary is how the header and the row start disagreeing about
+ * what an epic looks like.
  *
- * WHAT O1B REPLACES: this whole component and its map, with the shared glyph, in one edit.
- * The `data-kind` attribute is the seam a test or a stylesheet keys off, so it should
- * survive the swap. Nothing else in this file knows a kind exists.
+ * `size={16}` is the header's box (`--group-icon-size`), not the row's 12; `KindGlyph`
+ * draws from a 16-unit viewBox at a stroke chosen to render correctly at both, which is why
+ * one set of paths serves both call sites. It needs no `strokeWidth` for the same reason
+ * the pickup glyphs above need one: it is already in `StatusIcon`'s coordinate system.
  *
- * An UNKNOWN kind — one an operator configured, which O7a made possible — draws the neutral
- * square rather than nothing. A missing glyph would shift the label 20px left of every
- * other header, which is a worse answer than a generic one.
+ * `labelled={false}` because THIS header already names the kind in text — the label beside
+ * the glyph IS `kindLabel(kind)`, and the `aria-label` reads "Epic, 12 tasks". The prop
+ * exists for exactly this caller; two readings of one fact is worse than none.
+ *
+ * ── THE SEAM IS NOW SPELLED `data-issue-kind` ─────────────────────────────────────────
+ *
+ * O3d asked for `data-kind` to survive the swap, and it could not have known why it cannot:
+ * the shared glyph had already chosen `data-issue-kind` on the other branch, because the
+ * ROW carries `data-kind` on its avatars, where it means human-or-agent. Wrapping this in a
+ * span whose only job is to carry a second spelling would recreate exactly the collision
+ * that rename exists to prevent, on the one surface that had escaped it. The seam survives;
+ * it is spelled the way the shared component spells it everywhere else.
  */
-const KIND_GLYPHS: Record<string, typeof Layers> = {
-  epic: Layers,
-  task: Square,
-  bug: Bug,
-  chore: Wrench,
-  spike: FlaskConical,
-};
-
 function GroupKindGlyph({ kind }: { kind: string | null }) {
   // `null` is the "No epic" bucket: it names no issue, so there is no kind to draw and the
-  // glyph says exactly that rather than borrowing one.
-  const Glyph = kind === null ? Minus : (KIND_GLYPHS[kind] ?? Square);
-  return (
-    <Glyph
-      className="staple-group-icon"
-      strokeWidth={PICKUP_ICON_STROKE}
-      data-kind={kind ?? "none"}
-      aria-hidden
-    />
-  );
+  // glyph says exactly that rather than borrowing one. Every KIND bucket is non-null by
+  // construction — see `buildKindGroups` — so this branch belongs to the epic axis alone.
+  if (kind === null) {
+    return (
+      <Minus
+        className="staple-group-icon"
+        strokeWidth={PICKUP_ICON_STROKE}
+        data-issue-kind="none"
+        aria-hidden
+      />
+    );
+  }
+  return <KindGlyph kind={kind} size={16} className="staple-group-icon" labelled={false} />;
 }
 
 /** One entry in the linear keyboard sequence: a group header or a row. */
