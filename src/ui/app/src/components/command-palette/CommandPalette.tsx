@@ -46,6 +46,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { action, getIssues } from "@/lib/api";
+import { withDimension } from "@/lib/filters";
 import { useSession } from "@/lib/session";
 import type { IssueStatus } from "@/lib/types";
 import { useResource } from "@/lib/useStaple";
@@ -108,11 +109,15 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
           assignee: session.assignee,
           workspaces: session.workspaces,
           hub: session.mode === "hub",
+          // W5 (STA-117): the filter commands count what they would select, so the
+          // palette says "3 issues" before you commit to a board you cannot see yet.
+          // The same rows the jump list already ranks — no second fetch.
+          rows,
         }),
         recents,
         selected !== null,
       ),
-    [selected, selectedStatus, session.view, session.ws, session.assignee, session.workspaces, session.mode],
+    [rows, selected, selectedStatus, session.view, session.ws, session.assignee, session.workspaces, session.mode],
   );
 
   const visibleCommands = useMemo(() => filterCommands(commands, query), [commands, query]);
@@ -211,6 +216,13 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
           return;
         case "assignee":
           session.setAssignee(next.assignee);
+          close();
+          return;
+        case "dimension":
+          // W5 (STA-117). One line, because the action was shaped to be `withDimension`'s
+          // arguments — lib/filters.ts stays the sole authority on what is visible and
+          // this file learns nothing about what a "handoff" is.
+          session.setFilters(withDimension(session.filters, next.dimension, next.values));
           close();
           return;
         case "page":

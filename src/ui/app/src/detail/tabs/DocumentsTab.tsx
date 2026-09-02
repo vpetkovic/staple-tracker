@@ -25,7 +25,7 @@ import { cn } from "@/lib/utils";
 import { EmptyState, ErrorState, LoadingState } from "@/views/ViewChrome";
 import { diffBodies } from "../diff";
 import { DocumentDiff } from "../DocumentDiff";
-import type { TabProps } from "./registry";
+import { takePendingDocumentKey, type TabProps } from "./registry";
 
 const stamp = (iso: string) => iso.slice(0, 16).replace("T", " ");
 
@@ -102,8 +102,15 @@ function RevisionRow({
 
 export function DocumentsTab({ detail, workspace, onAuthError, refresh }: TabProps) {
   const ref = detail.issue.identifier;
-  const [key, setKey] = useState<string | undefined>(() =>
-    defaultKey(detail.documents.map((doc) => doc.key)),
+  /**
+   * `takePendingDocumentKey` first — W3 (STA-115). Arriving here from Overview's
+   * "Show all" means the reader has already named the document they want, and
+   * `defaultKey` would otherwise open `plan` on top of them. It only ever returns
+   * non-null on the render that immediately follows an `openDetailTab(…, key)`, so
+   * every other visit to this tab still gets `PREFERRED_KEYS`.
+   */
+  const [key, setKey] = useState<string | undefined>(
+    () => takePendingDocumentKey() ?? defaultKey(detail.documents.map((doc) => doc.key)),
   );
   const [mode, setMode] = useState<"read" | "history">("read");
   /** null = "whatever is current". A number pins the view to one revision. */

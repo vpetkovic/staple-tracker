@@ -14,6 +14,12 @@
  * actor rather than an author field, so its actor fills the gap when the revision row
  * has none.
  *
+ * One document key is promoted and only one: a revision of `worklog` becomes a
+ * `checkpoint` entry, because it answers a question no other row on this issue answers —
+ * "could somebody else pick this up right now". Promoting a second key would be the
+ * beginning of promoting all of them, at which point the timeline is a document log with
+ * some comments lost in it.
+ *
  * Everything else about an event is rendered from `describeEvent`, which fails soft: an
  * event kind this file has never heard of still gets a row, because a timeline that
  * silently drops what it does not recognise is worse than one that says
@@ -51,7 +57,19 @@ export interface TimelineRevision {
   createdAt: string;
 }
 
-export type TimelineKind = "comment" | "status" | "blocker" | "revision" | "lifecycle";
+export type TimelineKind = "comment" | "status" | "blocker" | "revision" | "checkpoint" | "lifecycle";
+
+/**
+ * The one document key that reads as a handoff rather than as an edit.
+ *
+ * Canonical definition lives in `src/core/types.ts` and is mirrored into
+ * `src/ui/app/src/lib/{types,worklog}.ts`; this module cannot import any of them,
+ * because it compiles under the Node tsconfig for `test/` where the `@/*` alias does
+ * not exist. Hence a local literal — and hence `buildTimeline`'s optional `worklogKey`,
+ * so a caller that CAN see the canonical constant passes it in and the duplication
+ * stops mattering.
+ */
+const WORKLOG_KEY = "worklog";
 
 export interface TimelineEntry {
   /** Stable across refetches, so React keys do not thrash. */
@@ -166,7 +184,10 @@ export function buildTimeline(input: {
   comments: readonly TimelineComment[];
   events: readonly TimelineEvent[];
   revisions: readonly TimelineRevision[];
+  /** Override for the worklog key; defaults to the local mirror of the canonical one. */
+  worklogKey?: string;
 }): TimelineEntry[] {
+  const worklogKey = input.worklogKey ?? WORKLOG_KEY;
   // doc_updated is dropped from the thread but is the only place a revision's *actor*
   // is recorded, so keep it as a lookup for revisions whose author column is null.
   const revisionActors = new Map<string, string>();
@@ -206,15 +227,31 @@ export function buildTimeline(input: {
     });
   }
 
+  /**
+   * A worklog revision is not a louder document edit, it is a different event: the
+   * moment an agent left something the next reader could resume from. It gets its own
+   * kind so the rail, the `data-timeline-kind` hook and these tests all key off one
+   * fact, and its own phrasing so a milestone checkpoint is not mistakable for a typo
+   * fix. When the store has no change summary the words degrade to exactly what this
+   * row said before — never to an empty line, which would be a worse row than the
+   * generic one it replaced.
+   *
+   * Every other key keeps the kind, the words, the chip and the ordering it has today.
+   * An issue with three documents must not bury its own comments under promoted rows.
+   */
   for (const revision of input.revisions) {
     const id = `${revision.key}@${revision.revision}`;
+    const isCheckpoint = revision.key === worklogKey;
+    const written = revision.changeSummary ?? `wrote ${revision.key}`;
     entries.push({
       id: `revision:${id}`,
-      kind: "revision",
+      kind: isCheckpoint ? "checkpoint" : "revision",
       at: revision.createdAt,
       actor: revision.author ?? revisionActors.get(id) ?? null,
-      summary: revision.changeSummary ?? `wrote ${revision.key}`,
+      summary: isCheckpoint ? `checkpoint · ${written}` : written,
       chips: [`${revision.key} r${revision.revision}`],
+      // Same slot as any revision: promotion changes how a row reads, not when it
+      // happened, so a checkpoint and the status change beside it keep their order.
       order: 3,
       seq: revision.revision,
     });

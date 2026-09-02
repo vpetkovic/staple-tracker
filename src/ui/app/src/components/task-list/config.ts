@@ -82,6 +82,19 @@ export interface TaskListColumns {
   workspace: boolean;
   labels: boolean;
   /**
+   * The worklog freshness cue — W4 (STA-116), STA-108 spec §3 option C.
+   *
+   * The only element on the row that answers "can someone else pick this up". It is NOT
+   * a second reading of liveness: `claim` below owns the four claim states, and this sits
+   * beside it carrying the orthogonal fact of whether a handoff was ever written down.
+   *
+   * ON in `tree`, OFF in `popup` and OFF BY DEFAULT in `panel`, and each of those three
+   * has its own reason rather than being a taste call — see the preset table below. It
+   * deliberately does NOT join `NEVER_DROPPED`: §14 gives it a drop position between the
+   * PR number and the working-pill text, which is where task-list.css drops it.
+   */
+  worklog: boolean;
+  /**
    * The two dependency badges — O6 (STA-138): "blocked by N" and "blocks N".
    *
    * ── WHERE IT SITS IN §14'S DROP ORDER, AND WHY THAT IS HONEST ───────────────────────
@@ -150,6 +163,7 @@ const TREE_COLUMNS: TaskListColumns = {
   status: true,
   workspace: false,
   labels: true,
+  worklog: true,
   deps: true,
   claim: true,
   assignee: true,
@@ -167,15 +181,21 @@ const TREE_COLUMNS: TaskListColumns = {
  *           element added to the row shows up here first and is then explicitly kept or
  *           dropped in the narrow presets instead of being silently absent from both.
  *   panel — the detail view's children list. ~420px of drawer. §14 order says the date
- *           goes first, then the PR number; the working pill stays because "is an agent on
- *           this child right now" is the single most useful thing an epic's children list
- *           can tell you, and labels degrade to dots rather than disappearing.
+ *           goes first, then the PR number, then the worklog cue; the working pill stays
+ *           because "is an agent on this child right now" is the single most useful thing
+ *           an epic's children list can tell you, and labels degrade to dots rather than
+ *           disappearing. The cue is off BY DEFAULT rather than forbidden: an epic reader
+ *           is asking about status, not about handoff, and 420px has no room to answer a
+ *           question nobody asked — but a caller who does want it can override it on.
  *   popup — command palette results. Narrower still and, crucially, MIXED WORKSPACE, so
  *           the workspace pill comes ON as the optional right-hand metadata goes off. It
  *           drops §14's order one step further than `panel` — the labels go entirely
  *           rather than degrading to dots — because a palette row is read in under a
  *           second on the way to pressing enter, and a colour with no name to anchor it is
- *           not readable in that second. What it does NOT drop is the never-drop set: the
+ *           not readable in that second. The worklog cue goes for the same reason, and for
+ *           one more: the handoff filter that will eventually feed this list (§3F) selects
+ *           FOR stale worklogs, so every result would carry an identical glyph and the
+ *           column would be a column of noise. What it does NOT drop is the never-drop set: the
  *           assignee avatar and the working pill stay, because "someone already has this"
  *           is the single most valuable thing a search result can tell you before you
  *           open it.
@@ -194,6 +214,7 @@ export const TASK_LIST_PRESETS: Record<TaskListPreset, PresetShape> = {
       disclosure: false,
       date: false,
       pr: false,
+      worklog: false,
       actions: false,
     },
     labelMax: 0,
@@ -216,6 +237,7 @@ export const TASK_LIST_PRESETS: Record<TaskListPreset, PresetShape> = {
       deps: false,
       date: false,
       pr: false,
+      worklog: false,
       actions: false,
     },
     labelMax: 0,

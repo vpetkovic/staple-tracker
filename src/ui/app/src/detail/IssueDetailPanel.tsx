@@ -39,7 +39,7 @@
  * worth having. A second layout would be a second thing to keep correct.
  */
 import { ChevronDown, ChevronRight, ChevronUp, Maximize2, Minimize2, X } from "lucide-react";
-import { useCallback, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { StaleClaimBadge } from "@/components/StaleClaimBadge";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
@@ -58,7 +58,7 @@ import { IssueActions } from "./IssueActions";
 import { InlineLabels, InlinePriority, InlineTitle } from "./InlineProperties";
 import { FactRow, PropertyGrid, type PropertyLayout } from "./PropertyGrid";
 import { detailFacts } from "./properties";
-import { visibleTabs } from "./tabs/registry";
+import { onOpenDetailTab, visibleTabs } from "./tabs/registry";
 
 export function IssueDetailPanel({
   selection,
@@ -80,6 +80,14 @@ export function IssueDetailPanel({
   const session = useSession();
   const [tab, setTab] = useState("overview");
   const expanded = mode === "full";
+
+  /**
+   * A tab asking to hand the reader to another tab — W3 (STA-115). Overview's worklog
+   * panel has a "Show all" that belongs on Documents, and this file still knows nothing
+   * about either: it subscribes to a verb and sets its own state. See the comment on
+   * `onOpenDetailTab` in tabs/registry.ts for why this is an event and not a prop.
+   */
+  useEffect(() => onOpenDetailTab(setTab), []);
 
   const load = useCallback(
     () => getIssue({ ws: selection.workspace, ref: selection.ref }),

@@ -40,12 +40,19 @@
  * app has, the takeover buttons send that same number, and the `claim` dimension calls
  * `isStaleClaim` rather than comparing seconds itself. One judgement, one place.
  *
+ * It does not decide what a stale WORKLOG is either, and that is a second, separate
+ * threshold owned by a second, separate file. `lib/worklog.ts` argues its own margin and
+ * pointedly does not import `STALE_CLAIM_SECONDS`; the `handoff` dimension calls
+ * `worklogStaleness` for exactly the same reason the `claim` dimension calls
+ * `isStaleClaim`. Two judgements, two places, neither of them here.
+ *
  * It does not walk the tree. Filtering a done PARENT out must not take its live children
  * off the page — that is the STA-97 invariant — and the reason it holds is that this
  * returns a FLAT list and `TreeView.flatten()` already re-roots subtrees whose parent is
  * missing. `hiddenParents` exists so a row can say WHICH parent it lost.
  */
 import { isStaleClaim } from "./claim";
+import { worklogStaleness } from "./worklog";
 import {
   ISSUE_PRIORITIES,
   OPEN_STATUS_ORDER,
@@ -176,6 +183,69 @@ export function claimStateOf(row: IssueRow): ClaimState {
   return row.issue.checkoutAgent ? "held" : "free";
 }
 
+/**
+ * The two shapes of handoff risk — W5 (STA-117), STA-108 spec §3 option F.
+ *
+ * A "handoff risk" is a held ticket somebody else could NOT pick up right now, and there
+ * are exactly two reasons for that: the handoff is behind the work, or there is no
+ * handoff. They are listed worst-last on purpose — `none` is §4's "worst cell in the
+ * table" (hours of work, nothing written down) and it reads as the escalation of `stale`
+ * rather than as a peer of it.
+ */
+export const HANDOFF_RISKS = ["stale", "none"] as const;
+export type HandoffRisk = (typeof HANDOFF_RISKS)[number];
+
+const HANDOFF_LABELS: Record<HandoffRisk, string> = {
+  stale: "Stale worklog",
+  none: "No worklog",
+};
+
+/**
+ * Which handoff risk this row is, or `null` for no risk at all — the §1c orchestrator's
+ * question, asked of one row.
+ *
+ * ── IT DOES NOT DECIDE WHAT STALE MEANS ───────────────────────────────────────────────
+ *
+ * `worklogStaleness` in lib/worklog.ts owns that, argues its own one-hour margin, and
+ * deliberately does not borrow `STALE_CLAIM_SECONDS`. There is no duration, no comparison
+ * and no threshold in this function, and there must never be one: §5a asks for a single
+ * definition, and the moment the filter and W4's row cue each have their own, a board that
+ * shows you three torn-page glyphs will hand you four rows when you filter for them.
+ *
+ * ── WHY "HELD" IS THE GATE, AND WHY IT IS `claim || checkoutAgent` ────────────────────
+ *
+ * An unheld ticket with no worklog is not a finding, it is what most of a backlog looks
+ * like. The two fields are both consulted because they answer the same question from two
+ * endpoints: `claim` is the batched liveness reading, and a bare `checkoutAgent` says a
+ * claim EXISTS on a payload that carried no reading (see lib/claim.ts). Somebody has it
+ * either way. Whether they are awake is `claimStateOf`'s question, not this one — §4 rule
+ * 1, and the reason the two dimensions sit side by side instead of one subsuming the other.
+ *
+ * ── THE THREE CASES OF §4's TABLE ─────────────────────────────────────────────────────
+ *
+ *   live claim, worklog 4h behind    "stale"   busy and no longer checkpointing — the
+ *                                              risk the claim badge structurally cannot see
+ *   stale claim, worklog written at  null      the agent died and left a good handoff.
+ *   the same moment it went quiet              NOT a risk; it is the safest kind of
+ *                                              abandoned ticket, and flagging it would be
+ *                                              the stale badge overstating the problem twice
+ *   held, no worklog at all          "none"    hours of work, nothing written down
+ *
+ * `worklog` undefined and `worklog` null are the same answer — §5c made the field optional
+ * so that a caller with no summary is obliged to check rather than assume, and a fixture
+ * that omits it must read as "no worklog", never as "a worklog I failed to look at".
+ */
+export function handoffRiskOf(row: IssueRow): HandoffRisk | null {
+  if (!row.claim && !row.issue.checkoutAgent) return null;
+  if (!row.worklog) return "none";
+  return worklogStaleness({
+    worklogUpdatedAt: row.worklog.updatedAt,
+    claimLastActivityAt: row.claim?.lastActivityAt,
+  }) === "stale"
+    ? "stale"
+    : null;
+}
+
 /** Count matches for a fixed value list, in one pass over the rows. */
 function tally(
   rows: readonly IssueRow[],
@@ -205,6 +275,7 @@ function closedOptions(
 const matchStatus = (row: IssueRow, value: string) => row.issue.status === value;
 const matchPriority = (row: IssueRow, value: string) => row.issue.priority === value;
 const matchClaim = (row: IssueRow, value: string) => claimStateOf(row) === value;
+const matchHandoff = (row: IssueRow, value: string) => handoffRiskOf(row) === value;
 
 const matchAssignee = (row: IssueRow, value: string) => {
   const who = row.issue.assignee;
@@ -313,6 +384,26 @@ export const FILTER_DIMENSIONS: readonly FilterDimension[] = [
       closedOptions(rows, CLAIM_STATES, (value) => CLAIM_LABELS[value as ClaimState] ?? value, matchClaim),
     matches: matchClaim,
     format: (value) => CLAIM_LABELS[value as ClaimState] ?? value,
+  },
+  /**
+   * Last, and directly after Claim, because that is the pair it means something in.
+   * "Working now" and "Stale worklog" are the two orthogonal facts about a held ticket —
+   * is anyone there, and could anyone else take over — and a chip strip that reads
+   * `Claim: Working now · Handoff: Stale worklog` says the thing the epic exists to say.
+   * Separated by anything else it would read as an unrelated constraint.
+   *
+   * A CLOSED enum with only two members, both of them findings. Unlike Claim it does not
+   * partition the rows: most rows are neither, and there is deliberately no "healthy"
+   * option to select. "Show me the tickets that are fine" is not a question anyone asks a
+   * tracker, and offering it would put a 900-count row in a two-row menu.
+   */
+  {
+    id: "handoff",
+    label: "Handoff",
+    options: (rows) =>
+      closedOptions(rows, HANDOFF_RISKS, (value) => HANDOFF_LABELS[value as HandoffRisk] ?? value, matchHandoff),
+    matches: matchHandoff,
+    format: (value) => HANDOFF_LABELS[value as HandoffRisk] ?? value,
   },
 ];
 

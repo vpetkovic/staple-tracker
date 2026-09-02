@@ -368,6 +368,46 @@ export interface IssueDocumentMeta {
   updatedAt: string;
 }
 
+/**
+ * The document key an agent checkpoints under, per the worklog protocol in
+ * `.tasks/AGENTS.md` ("checkpoint as you go") — and the ONLY place that string is
+ * written down on the server side.
+ *
+ * It is a constant rather than a literal because document keys are genuinely
+ * free-form (`/^[a-z0-9._-]{1,64}$/`, store.putDocument) and nothing in the schema
+ * privileges this one: STA-97 keeps its own spec under `row-spec`. Centralising it
+ * is what makes "let the workspace configure its worklog key" a one-line change
+ * instead of a grep across the store, the server and four UI surfaces.
+ *
+ * MIRRORED, deliberately not imported, in `src/ui/app/src/lib/types.ts` — the browser
+ * app builds under a DOM tsconfig and cannot pull in Node-only `src/core`. If you
+ * change this value, change it there too; `WorklogSummary.key` is a field precisely so
+ * that no rendering code has to hardcode the answer.
+ */
+export const WORKLOG_KEY = "worklog";
+
+/**
+ * The one server-side definition of "latest worklog" (STA-113), and a SIBLING of the
+ * issue for the same reason `ClaimActivity` is one: it is a different clock. A worklog's
+ * `updatedAt` answers a strictly narrower question than a claim's `lastActivityAt` —
+ * "when did the holder last leave a handoff", not "is the holder alive" — and the two
+ * come apart in exactly the case that matters, an agent who is busy and has stopped
+ * checkpointing. Callers must never treat one as evidence of the other.
+ *
+ * Produced only by `store.worklogSummaryFor`, so the row cue, the Overview panel and the
+ * handoff filter cannot disagree about which revision is current or how old it is.
+ */
+export interface WorklogSummary {
+  /** `WORKLOG_KEY` today. A field, not an assumption, so this can generalise. */
+  key: string;
+  /** `documents.current_revision` — how many checkpoints, not just whether there is one. */
+  revisions: number;
+  /** `documents.updated_at`, ISO-8601. The ONE freshness reading; never recomputed client-side. */
+  updatedAt: string;
+  /** Author of the CURRENT revision, null when the writer did not sign it. */
+  author: string | null;
+}
+
 export interface StapleEvent {
   seq: number;
   kind: string;

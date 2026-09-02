@@ -21,20 +21,30 @@
  *      it — otherwise shipping dimension seven silently wipes it for anyone who opens
  *      an older tab.
  *   5. **Claim-state inventing its own idea of stale.** There is exactly one threshold
- *      in this app (`STALE_CLAIM_SECONDS`) and the filter must be downstream of it.
+ *      in this app for LIVENESS (`STALE_CLAIM_SECONDS`) and the filter must be downstream
+ *      of it.
+ *   6. **Handoff risk collapsing back into liveness.** W5 (STA-117) adds a second, wholly
+ *      separate judgement — is the WORKLOG behind the work — owned by `lib/worklog.ts` and
+ *      its own margin. §4 of the STA-108 spec exists because the two come apart, so the
+ *      three cells of its table are pinned individually below. If a future edit makes
+ *      `handoff` agree with `claim` on all three, the feature has been deleted while
+ *      still compiling.
  *
  * Imports are relative, not "@/…": there is no vitest config at the repo root, so the
  * app's `@` alias (src/ui/app/vite.config.ts) does not exist at test time.
  */
 import { describe, expect, it } from "vitest";
 import { STALE_CLAIM_SECONDS } from "./claim.ts";
+import { WORKLOG_STALE_MARGIN_SECONDS } from "./worklog.ts";
 import {
   DEFAULT_FILTER_SET,
   FILTERS_STORAGE_KEY,
   FILTER_DIMENSIONS,
+  HANDOFF_RISKS,
   UNASSIGNED,
   activeChips,
   applyFilters,
+  claimStateOf,
   countActive,
   decodeFilters,
   dimensionOptions,
@@ -44,11 +54,19 @@ import {
   isFiltering,
   loadFilters,
   saveFilters,
+  handoffRiskOf,
   toggleValue,
   withDimension,
 } from "./filters.ts";
 import type { FilterState } from "./filters.ts";
-import type { ClaimActivity, Issue, IssuePriority, IssueRow, IssueStatus } from "./types.ts";
+import type {
+  ClaimActivity,
+  Issue,
+  IssuePriority,
+  IssueRow,
+  IssueStatus,
+  WorklogSummary,
+} from "./types.ts";
 
 // ---------- fixtures ----------
 
@@ -90,18 +108,37 @@ function issue(over: Partial<Issue> = {}): Issue {
   };
 }
 
-function claim(idleSeconds: number, heldBy = "opus-x"): ClaimActivity {
+function claim(
+  idleSeconds: number,
+  heldBy = "opus-x",
+  // W5 needs this to vary: `worklogStaleness` compares the worklog's timestamp against
+  // THIS one, so a fixture that pins it can only ever exercise one side of the comparison.
+  lastActivityAt = "2026-09-01T00:00:00Z",
+): ClaimActivity {
   return {
     heldBy,
     checkoutAt: "2026-09-01T00:00:00Z",
-    lastActivityAt: "2026-09-01T00:00:00Z",
+    lastActivityAt,
     heldSeconds: idleSeconds + 60,
     idleSeconds,
   };
 }
 
-function row(over: Partial<Issue> = {}, activity: ClaimActivity | null = null): IssueRow {
-  return { workspace: "staple", issue: issue(over), claim: activity };
+/** A worklog summary as the server sends it. Only `updatedAt` is load-bearing here. */
+function checkpoint(updatedAt: string, revisions = 3): WorklogSummary {
+  return { key: "worklog", revisions, updatedAt, author: "opus-x" };
+}
+
+function row(
+  over: Partial<Issue> = {},
+  activity: ClaimActivity | null = null,
+  // OMITTED by default rather than null — `worklog` is optional on IssueRow precisely so
+  // that a caller holding no summary has to be handled, and most fixtures here are that
+  // caller. Passing an explicit `null` is a different fixture and gets its own test.
+  worklog?: WorklogSummary | null,
+): IssueRow {
+  const summary = worklog === undefined ? {} : { worklog };
+  return { workspace: "staple", issue: issue(over), claim: activity, ...summary };
 }
 
 /** Just the identifiers, which is what every assertion below is actually about. */
@@ -260,6 +297,143 @@ describe("claim state", () => {
   });
 });
 
+// ---------- handoff risk — W5 (STA-117), STA-108 spec §3F and the §4 table ----------
+
+describe("handoff risk", () => {
+  /** The one clock reading the whole block is written against. */
+  const ACTIVE = "2026-09-01T12:00:00Z";
+  /** N seconds before ACTIVE, as an ISO string. */
+  const before = (seconds: number) => new Date(Date.parse(ACTIVE) - seconds * 1000).toISOString();
+
+  const HOUR = 60 * 60;
+
+  /**
+   * §4's table, verbatim, as three rows. Each one is a case where a reasonable-looking
+   * implementation gets the answer wrong, which is why they are asserted one at a time
+   * rather than as a single "returns the right thing" test.
+   */
+  const table = () => [
+    // Case 1 — busy and no longer checkpointing. The claim badge says "working now" and
+    // is right; the handoff is four hours behind and nothing else on the board can see it.
+    row(
+      { identifier: "BUSY_BEHIND", status: "in_progress", checkoutAgent: "opus-a" },
+      claim(30, "opus-a", ACTIVE),
+      checkpoint(before(4 * HOUR)),
+    ),
+    // Case 2 — the agent died, but wrote its handoff on the way out. NOT a risk. This is
+    // the cell that proves the two thresholds are separate judgements: the claim is stale
+    // by lib/claim.ts's 30 minutes and the row is still perfectly safe to resume.
+    row(
+      { identifier: "DEAD_DOCUMENTED", status: "in_progress", checkoutAgent: "opus-b" },
+      claim(STALE_CLAIM_SECONDS + 1, "opus-b", ACTIVE),
+      checkpoint(before(15 * 60)),
+    ),
+    // Case 3 — §4's "worst cell in the table": hours of work, nothing written down.
+    row(
+      { identifier: "SILENT_UNWRITTEN", status: "in_progress", checkoutAgent: "opus-c" },
+      claim(60, "opus-c", ACTIVE),
+    ),
+    // Not held at all. A backlog ticket with no worklog is not a finding.
+    row({ identifier: "FREE", status: "todo" }),
+  ];
+
+  it("case 1 · a live claim with a stale worklog is a risk the claim badge cannot see", () => {
+    expect(handoffRiskOf(table()[0]!)).toBe("stale");
+    expect(claimStateOf(table()[0]!)).toBe("live");
+  });
+
+  it("case 2 · a stale claim with a fresh worklog is NOT a risk", () => {
+    // Both judgements are asked here on purpose. If this ever returns "stale", someone has
+    // wired handoff risk to `claim.idleSeconds` and the feature is now a second liveness
+    // badge — the exact thing §4 rule 1 forbids.
+    expect(claimStateOf(table()[1]!)).toBe("stale");
+    expect(handoffRiskOf(table()[1]!)).toBeNull();
+  });
+
+  it("case 3 · held with no worklog at all is the loudest cell", () => {
+    expect(handoffRiskOf(table()[2]!)).toBe("none");
+  });
+
+  it("says nothing about a ticket nobody is holding", () => {
+    expect(handoffRiskOf(table()[3]!)).toBeNull();
+  });
+
+  it("treats an undefined worklog and an explicit null as the same answer", () => {
+    const held = { status: "in_progress" as const, checkoutAgent: "opus-c" };
+    expect(handoffRiskOf(row(held, claim(60, "opus-c", ACTIVE), null))).toBe("none");
+    expect(handoffRiskOf(row(held, claim(60, "opus-c", ACTIVE)))).toBe("none");
+  });
+
+  it("counts a bare checkoutAgent as held, exactly as the claim dimension does", () => {
+    // A payload that carried no liveness reading still says somebody has the ticket. If
+    // this row fell through to null, a whole endpoint's worth of handoff risks would be
+    // invisible to the filter while the row cue drew them.
+    expect(handoffRiskOf(row({ status: "in_progress", checkoutAgent: "opus-z" }, null))).toBe("none");
+  });
+
+  it("is downstream of WORKLOG_STALE_MARGIN_SECONDS rather than owning a threshold", () => {
+    // The mirror of the STALE_CLAIM_SECONDS test above. If this starts failing because
+    // someone tuned a number in filters.ts, that is the bug — the margin belongs to
+    // lib/worklog.ts, which argues it, and to nowhere else.
+    const held = { status: "in_progress" as const, checkoutAgent: "opus-a" };
+    const at = row(held, claim(30, "opus-a", ACTIVE), checkpoint(before(WORKLOG_STALE_MARGIN_SECONDS)));
+    const under = row(held, claim(30, "opus-a", ACTIVE), checkpoint(before(WORKLOG_STALE_MARGIN_SECONDS - 1)));
+    expect(handoffRiskOf(at)).toBe("stale");
+    expect(handoffRiskOf(under)).toBeNull();
+  });
+
+  it("does not reuse STALE_CLAIM_SECONDS", () => {
+    // Half an hour past the last checkpoint is over the claim threshold and under the
+    // worklog margin. A build that borrowed 30 minutes would call this stale.
+    const borrowed = row(
+      { status: "in_progress", checkoutAgent: "opus-a" },
+      claim(30, "opus-a", ACTIVE),
+      checkpoint(before(STALE_CLAIM_SECONDS)),
+    );
+    expect(STALE_CLAIM_SECONDS).toBeLessThan(WORKLOG_STALE_MARGIN_SECONDS);
+    expect(handoffRiskOf(borrowed)).toBeNull();
+  });
+
+  it("filters the board down to exactly the risks, and ORs the two within the dimension", () => {
+    expect(ids(applyFilters(table(), state({ dims: { handoff: ["stale"] } })))).toEqual(["BUSY_BEHIND"]);
+    expect(ids(applyFilters(table(), state({ dims: { handoff: ["none"] } })))).toEqual(["SILENT_UNWRITTEN"]);
+    expect(ids(applyFilters(table(), state({ dims: { handoff: [...HANDOFF_RISKS] } })))).toEqual([
+      "BUSY_BEHIND",
+      "SILENT_UNWRITTEN",
+    ]);
+  });
+
+  it("offers both risks in the menu with honest counts, even at zero", () => {
+    const options = dimensionOptions("handoff", table());
+    expect(options.map((o) => o.value)).toEqual(["stale", "none"]);
+    expect(new Map(options.map((o) => [o.value, o.count]))).toEqual(
+      new Map([
+        ["stale", 1],
+        ["none", 1],
+      ]),
+    );
+    // A board with nothing wrong with it still has to offer the question, or you can
+    // never confirm that nothing is at risk.
+    expect(dimensionOptions("handoff", []).map((o) => o.count)).toEqual([0, 0]);
+  });
+
+  it("prints a chip that names the finding, not the wire value", () => {
+    const chips = activeChips(state({ dims: { handoff: ["none"] } }));
+    expect(chips).toHaveLength(1);
+    expect(chips[0]!.dimensionLabel).toBe("Handoff");
+    expect(chips[0]!.label).toBe("No worklog");
+    // Removable through the registry's own mechanism — no chip-specific wiring anywhere.
+    expect(chips[0]!.remove(state({ dims: { handoff: ["none"] } })).dims).toEqual({});
+  });
+
+  it("ANDs with the other dimensions like every other constraint", () => {
+    const both = state({ dims: { handoff: [...HANDOFF_RISKS], assignee: [UNASSIGNED] } });
+    expect(ids(applyFilters(table(), both))).toEqual(["BUSY_BEHIND", "SILENT_UNWRITTEN"]);
+    const nobody = state({ dims: { handoff: [...HANDOFF_RISKS], assignee: ["kim"] } });
+    expect(applyFilters(table(), nobody)).toEqual([]);
+  });
+});
+
 describe("text", () => {
   it("searches identifier, title, assignee and labels", () => {
     const rows = [
@@ -355,13 +529,16 @@ describe("the hidden-parent invariant (STA-97)", () => {
 // ---------- the registry ----------
 
 describe("the dimension registry", () => {
-  it("carries the five menu dimensions (text has its own box)", () => {
+  it("carries the six menu dimensions (text has its own box)", () => {
+    // Order is the menu order AND the chip order. `handoff` sits directly after `claim`
+    // because that is the pair it means something in — see the note on the entry.
     expect(FILTER_DIMENSIONS.map((d) => d.id)).toEqual([
       "status",
       "assignee",
       "priority",
       "label",
       "claim",
+      "handoff",
     ]);
   });
 

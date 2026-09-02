@@ -29,8 +29,8 @@ import { StatusIcon } from "./StatusIcon";
 import { TaskRowLine } from "./TaskRowLine";
 import { resolveTaskListConfig } from "./config";
 import { flatRow } from "./model";
-import { claim, row } from "./fixtures";
-import type { Issue, ClaimActivity, IssueDeps } from "@/lib/types";
+import { claim, row, worklog } from "./fixtures";
+import type { Issue, ClaimActivity, WorklogSummary, IssueDeps } from "@/lib/types";
 
 const NOW = new Date("2026-09-02T12:00:00.000Z");
 
@@ -39,8 +39,9 @@ function renderRow(
   over: Partial<Issue> = {},
   activity: ClaimActivity | null = null,
   pullRequests?: PullRequestRef[],
+  worklogSummary?: WorklogSummary | null,
 ): string {
-  const source = row(over, activity);
+  const source = row(over, activity, worklogSummary);
   const built = buildGroups([{ ...source, pullRequests }], {
     isExpanded: () => true,
     showResolved: true,
@@ -232,6 +233,34 @@ describe("working pill liveness", () => {
     const markup = renderRow();
     expect(markup).not.toContain("working-pill");
     expect(markup).not.toContain("held-pill");
+  });
+});
+
+/**
+ * W4 (STA-116). The cue's own states are exercised in worklog-cue.test.tsx; what THIS
+ * file is for is the wiring — the summary is a sibling of `issue` on the API row, and it
+ * has to survive `buildGroups`' placement pass to reach the rendered line. That hop is
+ * exactly where `claim` was once dropped (see the note on `TaskRow`), so it gets a test.
+ */
+describe("worklog cue, threaded through the real placement pass", () => {
+  it("reaches the row from the API payload and reads its count and age", () => {
+    const markup = renderRow(
+      { status: "in_progress", checkoutAgent: "opus-x" },
+      claim({ idleSeconds: 30, lastActivityAt: "2026-09-02T11:59:30.000Z" }),
+      undefined,
+      worklog({ revisions: 4, updatedAt: "2026-09-02T11:19:00.000Z" }),
+    );
+
+    expect(markup).toContain('data-testid="worklog-cue"');
+    expect(markup).toContain("r4 · 41m");
+    // Both facts on one row, neither contradicting the other: someone IS there, and the
+    // handoff is current.
+    expect(markup).toContain('data-testid="working-pill"');
+    expect(markup).toContain('data-state="fresh"');
+  });
+
+  it("is absent for a free issue that has never been checkpointed", () => {
+    expect(renderRow()).not.toContain("staple-worklog-cue");
   });
 });
 

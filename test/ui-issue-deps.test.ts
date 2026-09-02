@@ -137,7 +137,7 @@ describe("/api/issues carries dependency identifiers", () => {
 
   it("is ADDITIVE — the fields the row already had are untouched", async () => {
     const row = (await issues()).find((r) => r.issue.identifier === ref.target)!;
-    expect(Object.keys(row).sort()).toEqual(["claim", "deps", "issue", "workspace"]);
+    expect(Object.keys(row).sort()).toEqual(["claim", "deps", "issue", "worklog", "workspace"]);
     expect(row.workspace).toBe("deps");
     expect(row.claim).toBeNull();
   });

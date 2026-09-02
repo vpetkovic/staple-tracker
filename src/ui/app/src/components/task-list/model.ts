@@ -8,7 +8,14 @@
  *
  * Nothing here renders, reads a clock, or touches storage.
  */
-import type { ClaimActivity, Issue, IssueDeps, IssueStatus, PullRequestRef } from "@/lib/types";
+import type {
+  ClaimActivity,
+  Issue,
+  IssueDeps,
+  IssueStatus,
+  PullRequestRef,
+  WorklogSummary,
+} from "@/lib/types";
 
 /** Title Case for a status. `in_progress` is two words to a reader, one to the wire. */
 export const STATUS_LABEL: Record<IssueStatus, string> = {
@@ -98,6 +105,21 @@ export interface TaskRow {
   claim: ClaimActivity | null;
   workspace: string;
   pullRequests?: PullRequestRef[];
+  /**
+   * The latest checkpoint, or nothing — W1 (STA-113), rendered by W4 (STA-116).
+   *
+   * A SIBLING of `issue` and of `claim`, never a field on the issue, for the reason
+   * `claim` is one: a different clock than the entity. And OPTIONAL, though the server
+   * always sends it, because a caller with no summary (a fixture, a synthesised row)
+   * passes nothing and every view is then obliged to CHECK the field rather than assume
+   * it. That is the discipline that keeps a missing worklog from ever rendering as a
+   * present-but-empty one.
+   *
+   * It is NOT a second reading of `claim`. `claim.lastActivityAt` says the holder did
+   * something; `worklog.updatedAt` says the holder left a handoff behind. The gap
+   * between those two is the entire point of the field — see lib/worklog.ts.
+   */
+  worklog?: WorklogSummary | null;
   /** Unresolved blockers and open dependents, by identifier — O6 (STA-138). */
   deps?: IssueDeps;
   /** Depth WITHIN THE GROUP. A family head is depth 0 wherever it sits in the real tree. */
@@ -147,6 +169,7 @@ export interface TaskSource {
   claim: ClaimActivity | null;
   workspace: string;
   pullRequests?: PullRequestRef[];
+  worklog?: WorklogSummary | null;
   deps?: IssueDeps;
 }
 
@@ -164,6 +187,7 @@ export function flatRow(source: TaskSource, over: Partial<TaskRow> = {}): TaskRo
     claim: source.claim,
     workspace: source.workspace,
     pullRequests: source.pullRequests,
+    worklog: source.worklog,
     deps: source.deps,
     depth: 0,
     hasChildren: false,

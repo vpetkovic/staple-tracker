@@ -20,6 +20,8 @@ import {
   RESOLVED_STATUSES,
   StapleError,
   type StapleEvent,
+  WORKLOG_KEY,
+  type WorklogSummary,
   assertEstimateSeconds,
   assertPriority,
   assertStatus,
@@ -1215,6 +1217,64 @@ export class WorkspaceStore {
         lastActivityAt,
         heldSeconds: secondsBetween(row.checkout_at, now),
         idleSeconds: secondsBetween(lastActivityAt, now),
+      });
+    }
+    return out;
+  }
+
+  /**
+   * Batch "latest worklog" for a list, keyed by issue id — the same batching shape and
+   * the same contract as `claimActivityFor` above, and for the same reason: a list of 114
+   * rows against a page polled every 1.5s cannot afford one lookup per row.
+   *
+   * ## The contract, which is the point of the method
+   *
+   * This is the ONE definition of "latest worklog" on the server. The row cue, the
+   * Overview panel and the handoff filter all read it, so they cannot disagree about
+   * which revision is current or how old it is — a disagreement that would otherwise
+   * appear as the list and the drawer telling you different things about one ticket.
+   *
+   * An issue with no worklog is **absent from the map**, not present with a null value —
+   * identical to `claimActivityFor`, so callers already know the shape. Routes turn that
+   * absence into an explicit `worklog: null` on the wire; the map itself stays honest.
+   *
+   * ## Why the LEFT JOIN, and why on all three key columns
+   *
+   * `documents` holds the current revision number but not who wrote it; the author lives
+   * on `document_revisions`. Both sides are primary-key lookups — `documents(issue_id,
+   * key)` and `document_revisions(issue_id, key, revision)` — so this stays one indexed
+   * query and needs no new index and no schema change. It is a LEFT join rather than an
+   * inner one so an unsigned revision (`author IS NULL`, which `putDocument` permits)
+   * still yields a summary instead of silently dropping the row: "there is a worklog and
+   * nobody signed it" is a true and useful answer, and losing it would understate
+   * coverage in exactly the direction this epic exists to fix.
+   */
+  worklogSummaryFor(issueIds: string[]): Map<string, WorklogSummary> {
+    const out = new Map<string, WorklogSummary>();
+    if (issueIds.length === 0) return out;
+    const placeholders = issueIds.map(() => "?").join(",");
+    const rows = this.db
+      .prepare(
+        `SELECT d.issue_id AS issue_id, d.key AS key, d.current_revision AS revisions,
+                d.updated_at AS updated_at, r.author AS author
+           FROM documents d
+           LEFT JOIN document_revisions r
+             ON r.issue_id = d.issue_id AND r.key = d.key AND r.revision = d.current_revision
+          WHERE d.key = ? AND d.issue_id IN (${placeholders})`,
+      )
+      .all(WORKLOG_KEY, ...(issueIds as never[])) as Array<{
+      issue_id: string;
+      key: string;
+      revisions: number;
+      updated_at: string;
+      author: string | null;
+    }>;
+    for (const row of rows) {
+      out.set(row.issue_id, {
+        key: row.key,
+        revisions: row.revisions,
+        updatedAt: row.updated_at,
+        author: row.author,
       });
     }
     return out;
