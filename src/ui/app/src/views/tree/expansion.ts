@@ -51,6 +51,19 @@ function write(storage: Storage | undefined, key: string, value: unknown): void 
  * pickup sections. Nothing about the STORED shape changed — it was always an array of
  * strings — so a key written by the previous build loads unchanged, and the two vocabularies
  * are disjoint, so a status fold and a section fold coexist in one set without a prefix.
+ *
+ * O3d (STA-129) widened `GroupKey` itself, from that two-vocabulary union to `string`,
+ * because group-by-epic keys a group on an ISSUE ID and O7a made status ids per-workspace
+ * data. THIS MODULE NEEDED NO EDIT FOR IT, which is the whole point of V5 having widened
+ * the type here rather than spelling `IssueStatus` a second time: the widening arrived
+ * transitively, the stored shape is STILL an array of strings, and a set written by any
+ * previous build still loads unchanged.
+ *
+ * The three vocabularies remain disjoint — no issue id is spelled `backlog` or `up_next` —
+ * so an epic fold, a status fold and a section fold coexist in one set, and switching axes
+ * leaves the other two axes' folds exactly where they were. The catch-all bucket's key is
+ * `NO_PARENT_GROUP_KEY` (`__no_epic__`), chosen in tree-model.ts precisely so it cannot
+ * collide with any of them.
  */
 export function loadCollapsedGroups(storage: Storage | undefined): Set<GroupKey> {
   const raw = read<unknown>(storage, COLLAPSED_GROUPS_KEY, []);

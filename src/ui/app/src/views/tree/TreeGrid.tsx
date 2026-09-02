@@ -39,17 +39,23 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
-import { CircleDashed, Hourglass, PlayCircle, CheckCircle2 } from "lucide-react";
 import {
-  resolveTaskListConfig,
-  StatusIcon,
-  STATUS_LABEL,
-  TaskRowLine,
-  type TaskRow,
-} from "@/components/task-list";
+  Bug,
+  CircleDashed,
+  FlaskConical,
+  Hourglass,
+  Layers,
+  Minus,
+  PlayCircle,
+  CheckCircle2,
+  Square,
+  Wrench,
+} from "lucide-react";
+import { resolveTaskListConfig, StatusIcon, TaskRowLine, type TaskRow } from "@/components/task-list";
 import { clampIndex, useRovingFocus } from "@/components/task-list/roving";
 import "@/components/task-list/task-list.css";
 import type { Selection } from "@/lib/session";
+import { statusLabel } from "@/lib/settings";
 import type { Issue, IssueRow, UiMode } from "@/lib/types";
 import type { GroupBy } from "@/lib/view-prefs";
 import { useTreeExpansion } from "./expansion";
@@ -109,6 +115,44 @@ const PICKUP_ICONS: Record<PickupSectionId, ReactNode> = {
   resolved: <CheckCircle2 className="staple-group-icon" strokeWidth={PICKUP_ICON_STROKE} aria-hidden />,
 };
 
+/**
+ * THE KIND GLYPH ON AN EPIC HEADER — A PLACEHOLDER, AND MARKED AS ONE. O3d (STA-129).
+ *
+ * O1b (STA-125) owns the shared kind glyph and it has not landed on this branch. STA-129's
+ * acceptance criterion says the header shows one, so this draws one: the same lucide family
+ * and the same optical stroke as the pickup glyphs above, sized by `staple-group-icon` like
+ * every other header glyph.
+ *
+ * WHAT O1B REPLACES: this whole component and its map, with the shared glyph, in one edit.
+ * The `data-kind` attribute is the seam a test or a stylesheet keys off, so it should
+ * survive the swap. Nothing else in this file knows a kind exists.
+ *
+ * An UNKNOWN kind — one an operator configured, which O7a made possible — draws the neutral
+ * square rather than nothing. A missing glyph would shift the label 20px left of every
+ * other header, which is a worse answer than a generic one.
+ */
+const KIND_GLYPHS: Record<string, typeof Layers> = {
+  epic: Layers,
+  task: Square,
+  bug: Bug,
+  chore: Wrench,
+  spike: FlaskConical,
+};
+
+function GroupKindGlyph({ kind }: { kind: string | null }) {
+  // `null` is the "No epic" bucket: it names no issue, so there is no kind to draw and the
+  // glyph says exactly that rather than borrowing one.
+  const Glyph = kind === null ? Minus : (KIND_GLYPHS[kind] ?? Square);
+  return (
+    <Glyph
+      className="staple-group-icon"
+      strokeWidth={PICKUP_ICON_STROKE}
+      data-kind={kind ?? "none"}
+      aria-hidden
+    />
+  );
+}
+
 /** One entry in the linear keyboard sequence: a group header or a row. */
 type NavItem =
   | { kind: "group"; key: string; group: GroupKey }
@@ -125,9 +169,11 @@ type NavItem =
 function GroupHeader({
   groupKey,
   label,
+  prefix,
   icon,
   hint,
   count,
+  progress,
   collapsed,
   focused,
   onToggle,
@@ -137,10 +183,26 @@ function GroupHeader({
 }: {
   groupKey: GroupKey;
   label: string;
+  /**
+   * O3d (STA-129). The epic's identifier, between the glyph and the title. `null` on every
+   * axis whose key is its own name.
+   */
+  prefix?: string | null;
   icon: ReactNode;
   /** Tooltip. Present for pickup sections, where membership is derived and worth stating. */
   hint?: string;
   count: number;
+  /**
+   * O3d (STA-129). O3b's rollup for the issue this group is named after, over the
+   * UNFILTERED list — `3/7` in the trailing slot.
+   *
+   * IT REPLACES THE COUNT rather than joining it. Two numbers derived two different ways,
+   * eight pixels apart, in the corner a reader glances at: "5" would mean rows in this
+   * group right now and "3/7" would mean descendants in the workspace, and nobody holds
+   * both readings at once. The count is not lost — it stays in the `aria-label`, which
+   * gains the rollup too, so a screen reader hears both facts named.
+   */
+  progress?: { resolved: number; total: number } | null;
   collapsed: boolean;
   focused: boolean;
   onToggle: () => void;
@@ -158,7 +220,17 @@ function GroupHeader({
       data-status={groupKey}
       title={hint}
       aria-expanded={!collapsed}
-      aria-label={`${label}, ${count} ${count === 1 ? "task" : "tasks"}`}
+      /*
+       * O3d: the identifier is read FIRST when there is one, because "STA-119, Tree
+       * ordering, 4 tasks" is how somebody scanning by ticket number finds the group. The
+       * rollup is appended rather than substituted for the count — the eye can only hold
+       * one number in that corner, but a listener loses nothing by hearing both.
+       */
+      aria-label={[
+        `${prefix ? `${prefix}, ` : ""}${label}`,
+        `${count} ${count === 1 ? "task" : "tasks"}`,
+        ...(progress ? [`${progress.resolved} of ${progress.total} resolved`] : []),
+      ].join(", ")}
       tabIndex={focused ? 0 : -1}
       onClick={onToggle}
       onFocus={onFocus}
@@ -172,10 +244,23 @@ function GroupHeader({
           </svg>
         </span>
         {icon}
+        {/*
+          O3d. Styled with the app's Tailwind arbitrary-token idiom rather than a new class
+          in task-list.css — that stylesheet belongs to O1b (STA-125) this sprint, and one
+          declaration is not worth a conflict in somebody else's file. Same size and colour
+          as the count, so the two ends of the header weigh the same; tabular so a header
+          under STA-9 lines up with one under STA-10.
+        */}
+        {prefix ? (
+          <span className="text-[11px] tabular-nums text-[var(--text-tertiary)]">{prefix}</span>
+        ) : null}
         <span className="staple-group-name">{label}</span>
         {/* The count is the entire reason a collapsed group is still informative, so it is
-            never hidden by the fold. Bare number, no parentheses. */}
-        <span className="staple-group-count">{count}</span>
+            never hidden by the fold. Bare number, no parentheses — or, on an axis whose
+            groups are issues, the rollup that answers the same question better. */}
+        <span className="staple-group-count">
+          {progress ? `${progress.resolved}/${progress.total}` : count}
+        </span>
       </div>
     </div>
   );
@@ -296,24 +381,56 @@ export function TreeGrid({
   const sections = useMemo(() => {
     if (shape.kind === "flat") return [];
     if (shape.kind === "grouped") {
-      return shape.groups.map((group) => ({
-        key: group.status as GroupKey,
-        label: STATUS_LABEL[group.status],
-        icon: <StatusIcon status={group.status} className="staple-group-icon" />,
-        hint: undefined as string | undefined,
-        count: group.count,
-        rows: group.rows,
-        // Status groups have no waiting annotations; the field is present so the render
-        // path does not have to know which shape it is drawing.
-        waitingOn: undefined as ReadonlyMap<string, string> | undefined,
-      }));
+      return shape.groups.map((group) => {
+        /**
+         * O3d (STA-129). THE BRANCH IS ON THE HEADING, NOT ON `groupBy`.
+         *
+         * `groupBy` is in scope right here and reading it would have been one character
+         * shorter. It would also have made every future axis a `groupBy` case in this file
+         * — and the point of putting `heading` on the group is that the MODEL is the only
+         * thing holding the unfiltered source a header has to be named out of. O1c's
+         * group-by-kind adds a builder and nothing here.
+         */
+        const heading = group.heading ?? null;
+        return {
+          key: group.status,
+          /*
+           * O7b's wiring (STA-141). `statusLabel()` rather than `STATUS_LABEL[...]`: the
+           * record is a `Record<IssueStatus, string>` over the built-in seven, so a
+           * workspace's own `pairing` status rendered as `undefined`. The accessor
+           * title-cases an id it has never seen, which is the right failure.
+           */
+          label: heading ? heading.label : statusLabel(group.status),
+          prefix: heading?.identifier ?? null,
+          icon: heading ? (
+            <GroupKindGlyph kind={heading.kind} />
+          ) : (
+            <StatusIcon status={group.status} className="staple-group-icon" />
+          ),
+          // An epic's title is elided by the header's width long before a status label
+          // would be, so the untruncated reading goes in the tooltip.
+          hint: (heading?.issue ? `${heading.identifier} · ${heading.label}` : undefined) as
+            | string
+            | undefined,
+          count: group.count,
+          progress: heading?.rollup
+            ? { resolved: heading.rollup.resolved, total: heading.rollup.total }
+            : null,
+          rows: group.rows,
+          // Status groups have no waiting annotations; the field is present so the render
+          // path does not have to know which shape it is drawing.
+          waitingOn: undefined as ReadonlyMap<string, string> | undefined,
+        };
+      });
     }
     return shape.groups.map((group) => ({
       key: group.id as GroupKey,
       label: group.label,
+      prefix: null as string | null,
       icon: PICKUP_ICONS[group.id],
       hint: group.hint as string | undefined,
       count: group.count,
+      progress: null as { resolved: number; total: number } | null,
       rows: group.rows,
       waitingOn: group.waitingOn as ReadonlyMap<string, string> | undefined,
     }));
@@ -619,9 +736,11 @@ export function TreeGrid({
               <GroupHeader
                 groupKey={section.key}
                 label={section.label}
+                prefix={section.prefix}
                 icon={section.icon}
                 hint={section.hint}
                 count={section.count}
+                progress={section.progress}
                 collapsed={collapsed}
                 focused={activeKey === `group:${section.key}`}
                 onToggle={() => expansion.toggleGroup(section.key)}

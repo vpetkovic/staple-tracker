@@ -169,20 +169,11 @@ describe("GET /api/settings", () => {
     expect(Object.keys(settings.usage.statuses).sort()).toEqual(
       settings.statuses.map((s) => s.id).sort(),
     );
-    /**
-     * O1a (STA-124) landed `issues.kind` after this was written, so the "every kind
-     * counts zero" reading is gone: the two seeded issues were created with no `--kind`
-     * and the column's default put them both on `task`. Repaired here by O1b (STA-125),
-     * which is the first ticket to run this suite on a branch that has both.
-     *
-     * The assertion that matters is unchanged and is the one the migrate-to picker
-     * depends on: EVERY configured id is a key, zeros included, so the client can tell
-     * "nothing uses this" from "the server did not say".
-     */
+    // Both fixture issues were created without a kind, so they carry the default `task`;
+    // every other seeded kind counts zero and none is missing.
     expect(Object.keys(settings.usage.kinds).sort()).toEqual(settings.kinds.map((k) => k.id).sort());
     expect(settings.usage.kinds.task).toBe(2);
-    expect(settings.usage.kinds.epic).toBe(0);
-    expect(Object.values(settings.usage.kinds).filter((count) => count === 0)).toHaveLength(4);
+    expect(Object.values(settings.usage.kinds).reduce((a, b) => a + b, 0)).toBe(2);
   });
 });
 

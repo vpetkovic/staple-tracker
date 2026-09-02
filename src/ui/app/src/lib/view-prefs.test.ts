@@ -38,9 +38,22 @@ describe("the default", () => {
   });
 
   it("offers every dimension in the registry, flat first", () => {
-    expect(GROUP_BY_OPTIONS.map((o) => o.id)).toEqual(["none", "status", "pickup"]);
+    // O3d (STA-129) APPENDED `parent`; O1c (STA-130) appends `kind` after it. The order is
+    // asserted rather than the membership because registry order IS menu order, and an
+    // entry inserted rather than appended moves every entry below it under the pointer of
+    // somebody who has used this control for a year.
+    expect(GROUP_BY_OPTIONS.map((o) => o.id)).toEqual(["none", "status", "pickup", "parent"]);
     // Each one explains itself. A menu of bare nouns makes the user click to find out.
     expect(GROUP_BY_OPTIONS.every((o) => o.label.length > 0 && o.hint.length > 0)).toBe(true);
+  });
+
+  it("offers Epic beside Status and Pickup order, with no duplicate ids", () => {
+    const ids = GROUP_BY_OPTIONS.map((o) => o.id);
+    expect(ids).toContain("parent");
+    expect(new Set(ids).size).toBe(ids.length);
+    // The label is the acceptance criterion's word, and the id is deliberately not it —
+    // the id names the DATA (`parentId`), the label names the common case.
+    expect(GROUP_BY_OPTIONS.find((o) => o.id === "parent")?.label).toBe("Epic");
   });
 });
 
@@ -75,6 +88,29 @@ describe("persistence", () => {
     expect(decodeViewPrefs('{"groupBy":"pickup"}').groupBy).toBe("pickup");
   });
 
+  it("round-trips the epic dimension, for the same reason pickup round-trips", () => {
+    // O3d (STA-129). Nothing in the persistence path was edited for this — the validator
+    // derives from `GROUP_BY_OPTIONS`, so a registry entry IS the feature. That is what
+    // this asserts; the value of the assertion is that it would fail the day somebody
+    // "simplifies" `isGroupBy` into a hand-written list.
+    const storage = memoryStorage();
+    saveViewPrefs(storage, { groupBy: "parent" });
+
+    expect(storage.getItem(VIEW_PREFS_STORAGE_KEY)).toContain('"groupBy":"parent"');
+    expect(loadViewPrefs(storage).groupBy).toBe("parent");
+    expect(decodeViewPrefs('{"groupBy":"parent"}').groupBy).toBe("parent");
+  });
+
+  it("keeps each dimension's stored value distinct from the others", () => {
+    // Three axes now share one key. A save of one must not read back as another — the sort
+    // of thing that cannot happen today and would be silent if it ever did.
+    const storage = memoryStorage();
+    for (const groupBy of ["none", "status", "pickup", "parent"] as const) {
+      saveViewPrefs(storage, { groupBy });
+      expect(loadViewPrefs(storage).groupBy).toBe(groupBy);
+    }
+  });
+
   it("falls back to flat for corruption, junk and unknown dimensions", () => {
     expect(decodeViewPrefs("not json").groupBy).toBe("none");
     expect(decodeViewPrefs("[1,2,3]").groupBy).toBe("none");
@@ -106,5 +142,7 @@ describe("the trigger label", () => {
     expect(groupByLabel("status")).toBe("Status");
     // The trigger renders "Group: " + this, so the exact string is an acceptance criterion.
     expect(groupByLabel("pickup")).toBe("Pickup order");
+    // O3d (STA-129). "Group: Epic", not "Group: Parent".
+    expect(groupByLabel("parent")).toBe("Epic");
   });
 });

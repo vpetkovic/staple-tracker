@@ -56,8 +56,8 @@ import {
   EMPTY_PICKUP_INDEX,
   type PickupGroup,
   type PickupIndex,
-  type PickupSectionId,
 } from "./pickup-model";
+import { configuredGroupOrder, isResolvedStatus as isResolvedInWorkspace } from "@/lib/settings";
 import {
   OPEN_STATUS_ORDER,
   RESOLVED_STATUSES,
@@ -65,13 +65,26 @@ import {
   type IssuePriority,
   type IssueRow,
   type IssueStatus,
+  type StatusId,
 } from "@/lib/types";
 
 /**
- * Group order: the open statuses in board order, then the resolved ones.
+ * The BUILT-IN group order: the open statuses in board order, then the resolved ones.
  *
  * DERIVED, NOT RETYPED. Two constants that both know the column order will drift, and the
  * board already learned that lesson once.
+ *
+ * ── IT IS NO LONGER A LIVE DEFAULT — O7b's wiring (STA-141) ───────────────────────────
+ *
+ * O7a made the status set DATA: statuses can be added, renamed and REORDERED per workspace.
+ * A per-workspace order that changes at runtime cannot be a module constant evaluated once
+ * at import, so every place that used to read this now calls `configuredGroupOrder()`, which
+ * returns exactly this array for a default workspace (asserted in `lib/settings.test.ts`).
+ *
+ * The constant survives as the BUILT-IN reference — what the seed order is, what the tests
+ * compare against, and what a reader needs to see to understand what the accessor returns
+ * when nobody has touched the settings dialog. Deleting it would have turned a substitution
+ * into a redesign.
  */
 export const GROUP_ORDER: readonly IssueStatus[] = [...OPEN_STATUS_ORDER, ...RESOLVED_STATUSES];
 
@@ -81,9 +94,17 @@ export const GROUP_ORDER: readonly IssueStatus[] = [...OPEN_STATUS_ORDER, ...RES
  * V5 must not ship its own "show done" control and must not hardcode the exclusion at a
  * call site either, or turning the filter on becomes a hunt. `buildGroups` consults this
  * and nothing else does.
+ *
+ * O7b's wiring (STA-141): the answer now comes from the workspace's configured CATEGORY for
+ * the status rather than from membership of the built-in `RESOLVED_STATUSES` pair. On a
+ * default workspace those are the same two ids; on a workspace with a custom `shipped`
+ * status in the `done` category they are not, and the old test would have left a shipped
+ * ticket on the page after the filter said it had gone. The function stays here, and stays
+ * the tree's single spelling of the question, so the substitution is one line rather than a
+ * hunt through the call sites.
  */
-export function isResolvedStatus(status: IssueStatus): boolean {
-  return RESOLVED_STATUSES.includes(status);
+export function isResolvedStatus(status: StatusId): boolean {
+  return isResolvedInWorkspace(status);
 }
 
 /**
@@ -104,16 +125,69 @@ const PRIORITY_RANK: Record<IssuePriority, number> = {
   low: 3,
 };
 
+/**
+ * WHAT A HEADER NAMES, when the group is not a status — O3d (STA-129).
+ *
+ * The status axis needs none of this: a status IS its own label and `StatusIcon` draws it
+ * from the key. Every other axis needs a name that the key alone cannot produce, and the
+ * MODEL is where it is produced, because the model is the only thing holding the unfiltered
+ * source the name has to be read out of.
+ *
+ * THIS IS THE SEAM O1C (STA-130) USES. TreeGrid branches on the PRESENCE of a heading, not
+ * on `groupBy`, so group-by-kind is a model-only change: one `GROUP_BY_OPTIONS` entry, one
+ * builder that buckets on `issue.kind` and orders by `KIND_RANK`, and a heading per bucket
+ * with `issue: null`, `label: kindLabel(id)`, `identifier: null`, `kind: id`, `rollup: null`.
+ * No edit to TreeGrid, GroupHeader, expansion.ts or the keyboard sequence.
+ */
+export interface GroupHeading {
+  /**
+   * The issue this group is named after, or `null` for a bucket that names no issue (the
+   * "No epic" catch-all today; every kind bucket tomorrow).
+   *
+   * Read from the UNFILTERED source, so an epic the current filter removed still names and
+   * heads the group holding its children.
+   */
+  issue: Issue | null;
+  /** What the header reads — the epic's title, or "No epic". */
+  label: string;
+  /** Rendered before the label. `null` when there is no issue to identify. */
+  identifier: string | null;
+  /** What the kind glyph is drawn from. `null` when there is no issue. */
+  kind: string | null;
+  /**
+   * O3b's rollup for `issue`, over the UNFILTERED source — `resolved/total` in the header's
+   * trailing slot. `null` for a heading that names no issue, and for an issue with no
+   * descendants, which cannot happen for an epic that heads a group but can for a kind.
+   */
+  rollup: ParentRollup | null;
+}
+
 export interface StatusGroup {
-  status: IssueStatus;
+  /**
+   * THE GROUP'S KEY — a status id, a pickup section id, or (since O3d) an issue id or
+   * `NO_PARENT_GROUP_KEY`. Typed `GroupKey`, which is `string`.
+   *
+   * THE NAME IS A SURVIVAL, NOT A CLAIM. `key` is the honest name now that the value can be
+   * an epic id, and the rename is one mechanical pass — except for one line in
+   * `components/task-list/row-render.test.tsx`, a file O1b (STA-125) is editing on another
+   * branch this sprint. A naming improvement is not worth a merge conflict inside somebody
+   * else's ticket. O1c should do it when that file is free.
+   */
+  status: GroupKey;
   /** Rows to render — children of a collapsed parent are absent. */
   rows: TaskRow[];
   /**
    * How many tasks are in this group, collapsed or not. Deliberately NOT `rows.length`:
    * a count that follows what is rendered says zero for a collapsed group, which deletes
-   * the only reason the count exists.
+   * the only reason the count exists. Since O3c it is also not `rows.length` because
+   * `rows` can contain ghosts — see `buildGroups`.
    */
   count: number;
+  /**
+   * O3d (STA-129). What the header names, for an axis whose key is not self-describing.
+   * `null` on the status axis, where the key IS the name.
+   */
+  heading?: GroupHeading | null;
 }
 
 export interface BuildOptions {
@@ -150,10 +224,18 @@ export interface BuildOptions {
    * wires `/api/settings` through to here. This field is that seam, present ahead of it:
    * when the configured order arrives it is passed down and NOTHING in the sort changes.
    *
-   * Optional and defaulted to `GROUP_ORDER`, so every existing caller compiles untouched
-   * and the tree keeps ordering exactly as it does today until somebody reorders a status.
+   * THE SEAM IS NOW WIRED (STA-141's table, done in STA-129). Absent, it defaults to
+   * `configuredGroupOrder()` — the live per-workspace order, which is byte-identical to
+   * `GROUP_ORDER` on a default workspace. So no caller has to pass it and none does; the
+   * field survives because a TEST must be able to hand this module an order without also
+   * publishing settings into a module-level snapshot the next test would inherit.
+   *
+   * `readonly StatusId[]` rather than `readonly IssueStatus[]`: `IssueStatus` is still the
+   * seven-member built-in union (see the debt note at the top of `lib/types.ts`) and a
+   * configured order contains ids that union has never heard of. Widening here rather than
+   * there is the same fix with a blast radius this ticket can be responsible for.
    */
-  statusOrder?: readonly IssueStatus[];
+  statusOrder?: readonly StatusId[];
   /**
    * THE UNFILTERED LIST, for the collapsed-parent rollup — O3b (STA-127).
    *
@@ -249,14 +331,14 @@ const NO_SUBTREE_TIERS: SubtreeTiers = new Map();
 export function activityRank(
   row: IssueRow,
   subtree: SubtreeTiers = NO_SUBTREE_TIERS,
-  statusOrder: readonly IssueStatus[] = GROUP_ORDER,
+  statusOrder: readonly StatusId[] = configuredGroupOrder(),
 ): number {
   const own = ownActivityTier(row, statusOrder);
   const beneath = subtree.get(row.issue.id);
   return beneath === undefined ? own : Math.min(own, beneath);
 }
 
-function ownActivityTier(row: IssueRow, statusOrder: readonly IssueStatus[]): number {
+function ownActivityTier(row: IssueRow, statusOrder: readonly StatusId[]): number {
   if (row.claim && !isStaleClaim(row.claim)) return LIVE_CLAIM_TIER;
   const index = statusOrder.indexOf(row.issue.status);
   return index === -1 ? statusOrder.length + 1 : index + 1;
@@ -276,7 +358,7 @@ function ownActivityTier(row: IssueRow, statusOrder: readonly IssueStatus[]): nu
  */
 export function subtreeActivityTiers(
   rows: readonly IssueRow[],
-  statusOrder: readonly IssueStatus[] = GROUP_ORDER,
+  statusOrder: readonly StatusId[] = configuredGroupOrder(),
 ): Map<string, number> {
   const best = new Map<string, number>();
   forEachAncestor(rows, (row, ancestorId) => {
@@ -386,6 +468,20 @@ function flatten(
    * one that would acquire them silently if a later edit forgot the argument.
    */
   ghostParents = false,
+  /**
+   * O3d (STA-129). THE ISSUE THIS BUCKET IS TITLED AFTER, when the bucket has a header.
+   *
+   * Under group-by-epic the epic is PROMOTED to the header and is therefore not in its own
+   * bucket — which makes its direct children orphans here, and O3c's ghost rule would
+   * helpfully draw a dimmed copy of the epic inside the group the epic already titles. The
+   * same argument kills the breadcrumb chip: both exist to name a parent the reader cannot
+   * see, and the reader is looking straight at it.
+   *
+   * ONE id, not a set, because a bucket has one head by construction. A ghost of a
+   * MID-LEVEL parent the filter removed is still drawn, and should be — the header names
+   * the epic, not the intermediate task.
+   */
+  headOfGroup?: string,
 ): TaskRow[] {
   const { isExpanded: explicit, hiddenParents } = options;
   const isExpanded = (issue: Issue): boolean => explicit(issue) ?? defaultExpanded(issue);
@@ -413,7 +509,9 @@ function flatten(
    * cannot reach is worse than nothing.
    */
   const missingParentOf = (r: IssueRow): Issue | undefined =>
-    r.issue.parentId
+    // O3d: …and a THIRD way not to have lost it — the group's own header IS the parent, so
+    // it is neither missing nor worth naming twice. See `headOfGroup`.
+    r.issue.parentId && r.issue.parentId !== headOfGroup
       ? (presentAnywhere.get(r.issue.parentId) ?? hiddenParents?.get(r.issue.id))
       : undefined;
 
@@ -568,7 +666,7 @@ export function buildGroups(rows: IssueRow[], options: BuildOptions): StatusGrou
    */
   const rollups = parentRollups(options.rollupSource ?? rows);
 
-  const buckets = new Map<IssueStatus, IssueRow[]>();
+  const buckets = new Map<StatusId, IssueRow[]>();
   for (const r of visible) {
     const bucket = buckets.get(r.issue.status);
     if (bucket) bucket.push(r);
@@ -577,7 +675,14 @@ export function buildGroups(rows: IssueRow[], options: BuildOptions): StatusGrou
 
   const out: StatusGroup[] = [];
 
-  for (const status of GROUP_ORDER) {
+  /*
+   * O7b's wiring (STA-141). `configuredGroupOrder()` rather than the `GROUP_ORDER`
+   * constant — the workspace's live order, byte-identical to the constant until somebody
+   * reorders a status in the settings dialog. Read at CALL time, not at import: it is
+   * per-workspace data that changes while the page is open, and `App.tsx` re-renders the
+   * tree when it does.
+   */
+  for (const status of options.statusOrder ?? configuredGroupOrder()) {
     const bucket = buckets.get(status);
     // Empty groups do not render. A "Blocked 0" header is permanent furniture announcing
     // a non-event, and furniture stops being read within a day.
@@ -604,6 +709,232 @@ export function buildGroups(rows: IssueRow[], options: BuildOptions): StatusGrou
        * than one (a collapsed parent's children, and the ghosts).
        */
       count: bucket.length,
+      // The key IS the name on this axis, so there is nothing to carry. Written explicitly
+      // rather than omitted, so a reader of one group does not have to know which builder
+      // produced it — the same rule O3c applied to `ghost`.
+      heading: null,
+    });
+  }
+
+  return out;
+}
+
+/**
+ * THE KEY OF THE BUCKET FOR ROWS THAT HAVE NO EPIC — O3d (STA-129).
+ *
+ * A double-underscored literal rather than a bare `none`, and rather than prefixing the
+ * epic keys with `parent:`. Three vocabularies now share one collapsed-groups set in
+ * expansion.ts (statuses, pickup sections, issue ids) and this literal cannot collide with
+ * any of them, while leaving the EPIC keys unprefixed keeps `data-status="<issue id>"` on
+ * the header addressable from a test and from the browser exactly as the other two axes
+ * are. Prefix here first if a fourth axis ever makes that untrue.
+ */
+export const NO_PARENT_GROUP_KEY = "__no_epic__";
+
+/** What that group's header reads. Named for what is ABSENT, because that is the fact. */
+export const NO_PARENT_GROUP_LABEL = "No epic";
+
+/**
+ * EVERY ROW'S TOP-LEVEL ANCESTOR — `issue.id -> root id`, for rows that have one.
+ *
+ * Four lines over `forEachAncestor` rather than a second upward walk: that helper visits a
+ * row's ancestors in order from the parent upwards and stops at the first id the input does
+ * not contain, so the LAST id it hands us for a row is that row's root. Overwriting on each
+ * visit is therefore the whole algorithm.
+ *
+ * ABSENT means "this row is itself a root", which is not the same as "this row has no
+ * ancestor in the input" — pass the UNFILTERED list and the two coincide, which is exactly
+ * why `buildParentGroups` does.
+ */
+export function topLevelAncestors(
+  rows: readonly { issue: Pick<Issue, "id" | "parentId"> }[],
+): Map<string, string> {
+  const top = new Map<string, string>();
+  forEachAncestor(rows, (row, ancestorId) => {
+    top.set(row.issue.id, ancestorId);
+  });
+  return top;
+}
+
+/**
+ * BUCKET BY TOP-LEVEL ANCESTOR — group-by-epic, O3d (STA-129).
+ *
+ * ── THE HEADER IS THE EPIC, AND THE EPIC IS NOT ALSO A ROW ────────────────────────────
+ *
+ * The ticket's title is "parents as group headers". Drawing the epic as the header AND as
+ * the first row of its own group puts one issue on the page twice, and makes a reader who
+ * counts the rows disagree with the count in the header. So a row that heads a group is
+ * PROMOTED out of the bucket.
+ *
+ * The completeness half of that rule, and the reason it cannot lose a row: A ROOT THAT
+ * HEADS NO GROUP IS AN ORDINARY ROW UNDER "No epic". A parentless task with no children
+ * heads nothing; so does a parentless epic whose every child the filter removed. Both are
+ * rows in the catch-all bucket, which sorts last. Every row on the page therefore lands in
+ * exactly one place — under its ancestor's header, or promoted to be that header, or in the
+ * catch-all — and nothing is drawn twice.
+ *
+ * The other reading is Linear's: every parentless row goes to "No parent" as a row even
+ * when it also heads a group. Rejected. The epic is already on screen as the header three
+ * pixels above; listing it again in a different group reads as a bug, not as a completion.
+ *
+ * ── THE ANCESTOR MAP IS BUILT FROM THE UNFILTERED SOURCE ──────────────────────────────
+ *
+ * The acceptance criterion is that a FILTERED-OUT epic still names the group holding its
+ * children. Built from `visible`, a done epic hidden by the default filter would stop being
+ * anybody's ancestor and its whole family would fall into "No epic" — the group-by axis
+ * would then be silently rewritten by the status filter. So the map, and the issue the
+ * header is drawn from, come from `options.rollupSource ?? rows`: the same array O3b
+ * already threads through for the rollup counts, already in memory, no new fetch.
+ *
+ * This is deliberately NOT what O3a does with its activity tiers, and the two are not
+ * inconsistent — see `rollupSource`. PLACEMENT and COUNTS must be stable under a filter;
+ * ORDER must be accountable from what is in front of the reader.
+ */
+export function buildParentGroups(rows: IssueRow[], options: BuildOptions): StatusGroup[] {
+  const { showResolved = false, ghostParents = true, statusOrder = configuredGroupOrder() } = options;
+
+  const source = options.rollupSource ?? rows;
+  const visible = showResolved ? rows : rows.filter((r) => !isResolvedStatus(r.issue.status));
+  const presentAnywhere = new Map(rows.map((r) => [r.issue.id, r.issue]));
+  const rollups = parentRollups(source);
+  const topOf = topLevelAncestors(source);
+  const sourceById = new Map(source.map((r) => [r.issue.id, r]));
+
+  /**
+   * WHICH IDS ARE HEADERS: an id is a header exactly when a VISIBLE row claims it as its
+   * top-level ancestor. Computed before the buckets are filled, because a root's own
+   * placement depends on it — a root that heads a group is promoted, one that heads
+   * nothing is a row.
+   */
+  const headerIds = new Set<string>();
+  for (const r of visible) {
+    const top = topOf.get(r.issue.id);
+    if (top !== undefined) headerIds.add(top);
+  }
+
+  const buckets = new Map<string, IssueRow[]>();
+  const fileIn = (key: string, r: IssueRow) => {
+    const bucket = buckets.get(key);
+    if (bucket) bucket.push(r);
+    else buckets.set(key, [r]);
+  };
+
+  for (const r of visible) {
+    const top = topOf.get(r.issue.id);
+    if (top !== undefined) {
+      fileIn(top, r);
+      continue;
+    }
+    // A root. It is either this group's header — in which case it is drawn as one, not as
+    // a row — or it heads nothing and belongs to the catch-all.
+    if (headerIds.has(r.issue.id)) continue;
+    fileIn(NO_PARENT_GROUP_KEY, r);
+  }
+
+  /**
+   * GROUPS ORDER BY THE EPIC'S `activityRank` — O3a (STA-126), through `compareRows` rather
+   * than a bare rank comparison.
+   *
+   * The tier alone leaves ties, and a tie on a list the fingerprint poll rebuilds every
+   * 1.5s is a list that swaps rows under the pointer. `compareRows` is the app's ONE answer
+   * to "these two compare equal, now what" — priority, then newest update, then a
+   * numeric-aware identifier — and reusing it is what keeps the group order and the row
+   * order from drifting into two different notions of important.
+   *
+   * Tiers over `visible`, per O3a: an order the reader cannot account for from what is in
+   * front of them is worse than a plain one. The epic's OWN row comes from the unfiltered
+   * source, so a filtered-away epic holding a live agent still sorts to the top — its claim
+   * is on the row in `source`, and it would have been invisible had we looked in `visible`.
+   */
+  const subtree = subtreeActivityTiers(visible, statusOrder);
+  const tierOf = (row: IssueRow): number => activityRank(row, subtree, statusOrder);
+
+  // Computed once for every bucket below, because it is one walk over the same rows.
+  const holdsActiveWork = subtreesHoldingActiveWork(visible);
+
+  const headers = [...headerIds]
+    .filter((id) => (buckets.get(id)?.length ?? 0) > 0)
+    .map((id) => ({ id, row: sourceById.get(id) }))
+    .filter((entry): entry is { id: string; row: IssueRow } => entry.row !== undefined)
+    .sort((a, b) => compareRows(a.row, b.row, tierOf));
+
+  const out: StatusGroup[] = [];
+
+  for (const { id, row } of headers) {
+    const bucket = buckets.get(id)!;
+    out.push({
+      status: id,
+      rows: flatten(
+        bucket,
+        presentAnywhere,
+        options,
+        /*
+         * THE FLAT DEFAULT, NOT THE STATUS ONE, and this is the one place the two grouped
+         * axes genuinely differ.
+         *
+         * Status grouping folds by the row's own status, which is only coherent because it
+         * SPLITS a parent from a child of a different status — the child is still on screen,
+         * as a root of its own group. Here the whole family is in ONE group, so folding a
+         * backlog sub-epic by its own status would hide the in-progress children that have
+         * nowhere else to appear. That is precisely the trap R1 fell into in flat mode and
+         * had to climb back out of; the answer is the same answer.
+         */
+        (issue) => DEFAULT_EXPANDED_GROUPS.has(issue.status) || holdsActiveWork.has(issue.id),
+        /*
+         * AND THE TIER IS ON, unlike status grouping. `buildGroups` ranks every row 0
+         * because STA-126's acceptance criterion pins grouped output unchanged except for
+         * tie order. This axis is new and carries no such promise, and it is the axis where
+         * the tier is most obviously right: inside one epic, the child somebody is holding
+         * right now belongs at the top of the epic.
+         */
+        tierOf,
+        rollups,
+        ghostParents,
+        // No ghost and no chip for the epic this group is already titled after.
+        id,
+      ),
+      // `bucket.length`, per O3c: the real rows, counted before any ghost exists.
+      count: bucket.length,
+      heading: {
+        issue: row.issue,
+        label: row.issue.title,
+        identifier: row.issue.identifier,
+        kind: row.issue.kind,
+        // O3b, over the unfiltered source. A group's head has descendants by construction,
+        // so this is non-null in practice; `?? null` is the type being honest, not a hedge.
+        rollup: rollups.get(id) ?? null,
+      },
+    });
+  }
+
+  /**
+   * THE CATCH-ALL IS LAST, UNCONDITIONALLY — not ranked, not sorted in.
+   *
+   * It is not an epic and has no activity rank of its own. Ranking it by its best member
+   * would let "everything that belongs to nothing" outrank a real epic, which inverts the
+   * one thing this axis exists to say: work belongs to something.
+   */
+  const orphans = buckets.get(NO_PARENT_GROUP_KEY);
+  if (orphans && orphans.length > 0) {
+    out.push({
+      status: NO_PARENT_GROUP_KEY,
+      rows: flatten(
+        orphans,
+        presentAnywhere,
+        options,
+        (issue) => DEFAULT_EXPANDED_GROUPS.has(issue.status) || holdsActiveWork.has(issue.id),
+        tierOf,
+        rollups,
+        ghostParents,
+      ),
+      count: orphans.length,
+      heading: {
+        issue: null,
+        label: NO_PARENT_GROUP_LABEL,
+        identifier: null,
+        kind: null,
+        rollup: null,
+      },
     });
   }
 
@@ -620,7 +951,7 @@ export function buildGroups(rows: IssueRow[], options: BuildOptions): StatusGrou
  * answers "what does this project look like" rather than "what is happening right now".
  */
 export function flattenFlat(rows: IssueRow[], options: BuildOptions): TaskRow[] {
-  const { showResolved = false, statusOrder = GROUP_ORDER } = options;
+  const { showResolved = false, statusOrder = configuredGroupOrder() } = options;
   const visible = showResolved ? rows : rows.filter((r) => !isResolvedStatus(r.issue.status));
   const presentAnywhere = new Map(rows.map((r) => [r.issue.id, r.issue]));
   const holders = subtreesHoldingActiveWork(visible);
@@ -675,13 +1006,25 @@ export type ListShape =
 /**
  * A group's KEY — what the fold is remembered under and what the keyboard addresses it by.
  *
- * Two disjoint vocabularies in one union, and the disjointness is load-bearing: no status is
- * spelled `up_next` and no section is spelled `in_progress`, so one collapsed-groups set in
- * expansion.ts holds both without a prefix and without either mode disturbing the other's
- * folds. If a future section ever collides with a status name, prefix it there rather than
- * discovering it here.
+ * THREE disjoint vocabularies now, and the disjointness is still load-bearing: no status is
+ * spelled `up_next`, no section is spelled `in_progress`, and no issue id is spelled either
+ * — so one collapsed-groups set in expansion.ts holds all of them without a prefix and
+ * without any axis disturbing another's folds. If a future key ever collides, prefix it at
+ * its own builder rather than discovering it here.
+ *
+ * ── WHY IT IS `string` AND NO LONGER A UNION — O3d (STA-129) ──────────────────────────
+ *
+ * It was `IssueStatus | PickupSectionId` while both vocabularies were closed sets known at
+ * compile time. Group-by-epic keys a group on an ISSUE ID, which is data, and O7a made the
+ * status set data too. A union of two closed sets plus "any string" is `string` with extra
+ * steps, and the union's remaining value — catching a typo'd literal — was already gone the
+ * day a status id became a per-workspace row in a table.
+ *
+ * What replaces the compile-time check is a LABEL RESOLVER at the render site: TreeGrid
+ * asks `statusLabel()` for a status key and reads `StatusGroup.heading` for anything else,
+ * so a key it has never seen renders as a title-cased id rather than as `undefined`.
  */
-export type GroupKey = IssueStatus | PickupSectionId;
+export type GroupKey = string;
 
 /**
  * THE SECTIONS OF WHATEVER SHAPE IS ON SCREEN, key and rows, in render order.
@@ -717,6 +1060,15 @@ export function buildList(
   switch (groupBy) {
     case "status":
       return { kind: "grouped", groups: buildGroups(rows, options) };
+    /*
+     * O3d (STA-129). The SAME `"grouped"` shape, deliberately — the fold, the keyboard
+     * sequence, `visibleOrder`, the `inert` body and the animation are the same behaviour
+     * on both axes, and a third `kind` in the union would have forced every one of those to
+     * grow a branch that does the same thing. What differs is what a header NAMES, which is
+     * carried on the group as `heading` rather than in the shape's type.
+     */
+    case "parent":
+      return { kind: "grouped", groups: buildParentGroups(rows, options) };
     case "pickup":
       return {
         kind: "pickup",
