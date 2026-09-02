@@ -32,6 +32,13 @@ import type { TaskRow } from "@/components/task-list";
 import type { Selection } from "@/lib/session";
 import type { GroupBy } from "@/lib/view-prefs";
 import {
+  buildPickupGroups,
+  EMPTY_PICKUP_INDEX,
+  type PickupGroup,
+  type PickupIndex,
+  type PickupSectionId,
+} from "./pickup-model";
+import {
   OPEN_STATUS_ORDER,
   RESOLVED_STATUSES,
   type Issue,
@@ -222,6 +229,7 @@ function flatten(
         claim: r.claim,
         workspace: r.workspace,
         pullRequests: r.pullRequests,
+        deps: r.deps,
         depth,
         hasChildren: kids.length > 0,
         isExpanded: expanded,
@@ -319,12 +327,66 @@ export function flattenFlat(rows: IssueRow[], options: BuildOptions): TaskRow[] 
  */
 export type ListShape =
   | { kind: "flat"; rows: TaskRow[] }
-  | { kind: "grouped"; groups: StatusGroup[] };
+  | { kind: "grouped"; groups: StatusGroup[] }
+  /** V5 (STA-111). Sections by pickup readiness; built in pickup-model.ts. */
+  | { kind: "pickup"; groups: PickupGroup[] };
 
-export function buildList(rows: IssueRow[], groupBy: GroupBy, options: BuildOptions): ListShape {
-  return groupBy === "status"
-    ? { kind: "grouped", groups: buildGroups(rows, options) }
-    : { kind: "flat", rows: flattenFlat(rows, options) };
+/**
+ * A group's KEY — what the fold is remembered under and what the keyboard addresses it by.
+ *
+ * Two disjoint vocabularies in one union, and the disjointness is load-bearing: no status is
+ * spelled `up_next` and no section is spelled `in_progress`, so one collapsed-groups set in
+ * expansion.ts holds both without a prefix and without either mode disturbing the other's
+ * folds. If a future section ever collides with a status name, prefix it there rather than
+ * discovering it here.
+ */
+export type GroupKey = IssueStatus | PickupSectionId;
+
+/**
+ * THE SECTIONS OF WHATEVER SHAPE IS ON SCREEN, key and rows, in render order.
+ *
+ * The reason this exists rather than each caller switching on `kind`: TreeGrid's keyboard
+ * sequence and `visibleOrder` below must never disagree about what is on the page, and the
+ * file already learned that once (see `visibleRows`). One accessor means a third shape could
+ * not be added to one of them and forgotten in the other — the compiler now refuses.
+ */
+export function sectionsOf(shape: ListShape): { key: GroupKey; rows: TaskRow[] }[] {
+  switch (shape.kind) {
+    case "flat":
+      return [];
+    case "grouped":
+      return shape.groups.map((g) => ({ key: g.status, rows: g.rows }));
+    case "pickup":
+      return shape.groups.map((g) => ({ key: g.id, rows: g.rows }));
+  }
+}
+
+/**
+ * `buildList` needs the inbox to build the pickup shape and cannot fetch it — this module is
+ * pure. So the index is passed in, and its ABSENCE is a legitimate state: `EMPTY_PICKUP_INDEX`
+ * places every row by the race fallback, which is what the view renders for the instant
+ * before `/api/inbox` answers.
+ */
+export function buildList(
+  rows: IssueRow[],
+  groupBy: GroupBy,
+  options: BuildOptions,
+  pickup: PickupIndex = EMPTY_PICKUP_INDEX,
+): ListShape {
+  switch (groupBy) {
+    case "status":
+      return { kind: "grouped", groups: buildGroups(rows, options) };
+    case "pickup":
+      return {
+        kind: "pickup",
+        groups: buildPickupGroups(rows, pickup, {
+          showResolved: options.showResolved,
+          hiddenParents: options.hiddenParents,
+        }),
+      };
+    default:
+      return { kind: "flat", rows: flattenFlat(rows, options) };
+  }
 }
 
 /**
@@ -343,13 +405,13 @@ export function buildList(rows: IssueRow[], groupBy: GroupBy, options: BuildOpti
  */
 export function visibleRows(
   shape: ListShape,
-  isGroupCollapsed: (status: IssueStatus) => boolean,
+  isGroupCollapsed: (key: GroupKey) => boolean,
 ): TaskRow[] {
   if (shape.kind === "flat") return shape.rows;
   const out: TaskRow[] = [];
-  for (const group of shape.groups) {
-    if (isGroupCollapsed(group.status)) continue;
-    out.push(...group.rows);
+  for (const section of sectionsOf(shape)) {
+    if (isGroupCollapsed(section.key)) continue;
+    out.push(...section.rows);
   }
   return out;
 }
@@ -357,7 +419,7 @@ export function visibleRows(
 /** `visibleRows` as the navigation contract published on the session. */
 export function visibleOrder(
   shape: ListShape,
-  isGroupCollapsed: (status: IssueStatus) => boolean,
+  isGroupCollapsed: (key: GroupKey) => boolean,
 ): Selection[] {
   return visibleRows(shape, isGroupCollapsed).map((row) => ({
     workspace: row.workspace,

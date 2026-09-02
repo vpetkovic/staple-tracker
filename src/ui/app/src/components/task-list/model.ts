@@ -8,7 +8,7 @@
  *
  * Nothing here renders, reads a clock, or touches storage.
  */
-import type { ClaimActivity, Issue, IssueStatus, PullRequestRef } from "@/lib/types";
+import type { ClaimActivity, Issue, IssueDeps, IssueStatus, PullRequestRef } from "@/lib/types";
 
 /** Title Case for a status. `in_progress` is two words to a reader, one to the wire. */
 export const STATUS_LABEL: Record<IssueStatus, string> = {
@@ -98,6 +98,8 @@ export interface TaskRow {
   claim: ClaimActivity | null;
   workspace: string;
   pullRequests?: PullRequestRef[];
+  /** Unresolved blockers and open dependents, by identifier — O6 (STA-138). */
+  deps?: IssueDeps;
   /** Depth WITHIN THE GROUP. A family head is depth 0 wherever it sits in the real tree. */
   depth: number;
   hasChildren: boolean;
@@ -123,12 +125,29 @@ export interface TaskRow {
   breadcrumb: Breadcrumb | null;
 }
 
+/**
+ * Does this row BELONG TO something — O5 (STA-137).
+ *
+ * One line, and it lives here rather than inline in the row for the reason every other
+ * derivation in this file does: three surfaces ask the question (the tree, the panel's
+ * children list, the palette) and a fourth — the tests — has to ask it the same way.
+ *
+ * It reads `parentId` and nothing else. In particular it does NOT consult `depth` or
+ * `guides`: those are PLACEMENT facts, true only in a tree, and every surface the connector
+ * glyph was actually asked for renders flat at depth 0. A row that is both a child and a
+ * parent answers `true`, because the question is what it belongs to, not what belongs to it.
+ */
+export function isSubtask(row: Pick<TaskRow, "issue">): boolean {
+  return row.issue.parentId !== null;
+}
+
 /** The three fields `/api/issues` actually sends for a task, before any placement runs. */
 export interface TaskSource {
   issue: Issue;
   claim: ClaimActivity | null;
   workspace: string;
   pullRequests?: PullRequestRef[];
+  deps?: IssueDeps;
 }
 
 /**
@@ -145,6 +164,7 @@ export function flatRow(source: TaskSource, over: Partial<TaskRow> = {}): TaskRo
     claim: source.claim,
     workspace: source.workspace,
     pullRequests: source.pullRequests,
+    deps: source.deps,
     depth: 0,
     hasChildren: false,
     isExpanded: false,

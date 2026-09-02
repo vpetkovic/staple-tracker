@@ -433,12 +433,31 @@ export function startUiServer(options: UiOptions): UiHandle {
             includeResolved: true,
             assignee: assignee || undefined,
           });
+          const ids = issues.map((i) => i.id);
           // One batched liveness query per workspace, not one per row.
-          const claims = h.store.claimActivityFor(issues.map((i) => i.id));
+          const claims = h.store.claimActivityFor(ids);
+          /**
+           * O6 (STA-138): what each row is waiting on, and what is waiting on it.
+           *
+           * ADDITIVE and batched, exactly like `claims` above — two index scans for the
+           * whole page rather than four round trips per row. It rides as ONE sibling field
+           * (`deps`) rather than two, so a reader sees the pair as the pair it is.
+           *
+           * Deliberately here and NOT on `/api/issue` or `/api/agent-context`: the detail
+           * route already sends the full `blockedBy`/`blocks` with titles and statuses, and
+           * `test/ui-agent-context.test.ts` pins that route byte-for-byte against the MCP
+           * `get_task` tool. This is a list affordance and it stays on the list route.
+           */
+          const blockedBy = h.store.unresolvedBlockersFor(ids);
+          const blocks = h.store.openDependentsFor(ids);
           return issues.map((issue) => ({
             workspace: h.slug,
             issue,
             claim: claims.get(issue.id) ?? null,
+            deps: {
+              blockedBy: blockedBy.get(issue.id) ?? [],
+              blocks: blocks.get(issue.id) ?? [],
+            },
           }));
         });
         json(res, 200, out);

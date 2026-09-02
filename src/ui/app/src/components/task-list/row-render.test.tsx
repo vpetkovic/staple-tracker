@@ -28,8 +28,9 @@ import { PrioritySignal } from "./PrioritySignal";
 import { StatusIcon } from "./StatusIcon";
 import { TaskRowLine } from "./TaskRowLine";
 import { resolveTaskListConfig } from "./config";
+import { flatRow } from "./model";
 import { claim, row } from "./fixtures";
-import type { Issue, ClaimActivity } from "@/lib/types";
+import type { Issue, ClaimActivity, IssueDeps } from "@/lib/types";
 
 const NOW = new Date("2026-09-02T12:00:00.000Z");
 
@@ -65,6 +66,96 @@ function renderRow(
 }
 
 const html = (node: ReactElement) => renderToStaticMarkup(node);
+
+/** The same row, plus the optional trailing caption (STA-118). */
+function renderCaptioned(caption?: string, over: Partial<Issue> = {}): string {
+  const built = buildGroups([row(over, null)], {
+    isExpanded: () => true,
+    showResolved: true,
+  })[0]!.rows[0]!;
+
+  return renderToStaticMarkup(
+    <TaskRowLine
+      row={built}
+      config={resolveTaskListConfig("tree", { labelMax: 2 })}
+      semantics="grid"
+      caption={caption}
+      isExpanded
+      isFocused
+      now={NOW}
+      onOpen={() => {}}
+      onOpenParent={() => {}}
+      onToggleExpand={() => {}}
+      onToggleSelect={() => {}}
+      onFocus={() => {}}
+      onKeyDown={() => {}}
+      registerRef={() => {}}
+    />,
+  );
+}
+
+/** A row carrying O6's dependency edges, through whichever preset is asked for. */
+function renderDeps(
+  deps: IssueDeps | undefined,
+  preset: "tree" | "panel" | "popup" = "tree",
+): string {
+  return renderToStaticMarkup(
+    <TaskRowLine
+      row={flatRow({ ...row(), deps })}
+      config={resolveTaskListConfig(preset)}
+      semantics="grid"
+      now={NOW}
+      onOpen={() => {}}
+    />,
+  );
+}
+
+/** The same row through a NARROW preset — the two containers O5's glyph exists for. */
+function renderPreset(preset: "panel" | "popup", over: Partial<Issue> = {}): string {
+  const built = flatRow(row(over, null));
+
+  return renderToStaticMarkup(
+    <TaskRowLine
+      row={built}
+      config={resolveTaskListConfig(preset)}
+      semantics="list"
+      now={NOW}
+      onOpen={() => {}}
+      onOpenParent={() => {}}
+      registerRef={() => {}}
+    />,
+  );
+}
+
+/**
+ * A real parent and its real child, built through `buildGroups` so the placement pass — not
+ * the test — decides which is which.
+ */
+function renderFamily(): { parent: string; child: string } {
+  const parent = row({ id: "id-p", identifier: "STA-10" });
+  const child = row({ id: "id-c", identifier: "STA-11", parentId: "id-p" });
+  const rows = buildGroups([parent, child], {
+    isExpanded: () => true,
+    showResolved: true,
+  })[0]!.rows;
+
+  const draw = (built: (typeof rows)[number]) =>
+    renderToStaticMarkup(
+      <TaskRowLine
+        row={built}
+        config={resolveTaskListConfig("tree", { labelMax: 2 })}
+        semantics="grid"
+        isExpanded
+        now={NOW}
+        onOpen={() => {}}
+        onOpenParent={() => {}}
+        onToggleExpand={() => {}}
+        registerRef={() => {}}
+      />,
+    );
+
+  return { parent: draw(rows[0]!), child: draw(rows[1]!) };
+}
 
 describe("PR badge slot", () => {
   it("puts NOTHING in the DOM when there is no integration — not a hidden placeholder", () => {
@@ -186,6 +277,59 @@ describe("row semantics", () => {
   });
 });
 
+/**
+ * STA-118. The defect these four guard against is not "the caption is missing" — it is the
+ * caption coming back as a SECOND ROW, which is how V5 shipped it: an extra `role="row"`
+ * under every waiting item, its own hairline, and a block 53px tall in a list whose rows are
+ * 36px. Every assertion here is really about the row staying ONE row.
+ *
+ * Rendered size is deliberately not asserted — there is no DOM here and no layout. That the
+ * Waiting rows and the Up next rows measure the same, and that the section-header glyphs
+ * match the status-header glyphs, is checked where it is actually observable: the screenshot
+ * and `getBoundingClientRect` evidence on the ticket.
+ */
+describe("trailing caption", () => {
+  it("adds NO element at all when there is no caption", () => {
+    const markup = renderCaptioned();
+    expect(markup).not.toContain("staple-row-caption");
+    expect(markup).not.toContain('data-testid="row-caption"');
+  });
+
+  it("never emits the second row it replaced", () => {
+    const markup = renderCaptioned("blocked by STA-61");
+    // The V5 classes, by name: if either returns, the two-row fold has returned with it.
+    expect(markup).not.toContain("staple-waiting-note");
+    expect(markup).not.toContain("staple-waiting-cell");
+    // One row, one cell — the caption must not have smuggled in a second of either.
+    expect(markup.match(/role="row"/g)).toHaveLength(1);
+    expect(markup.match(/role="gridcell"/g)).toHaveLength(1);
+  });
+
+  it("sits inside the title cell, ahead of the meta cluster", () => {
+    const markup = renderCaptioned("waiting on VP: decide the schema");
+    const titleCell = markup.indexOf("staple-row-title-cell");
+    const caption = markup.indexOf("staple-row-caption");
+    const meta = markup.indexOf("staple-row-meta");
+
+    // Ordering IS the containment claim in a flat string, and it is the claim that matters:
+    // inside the title's `minmax(0, 1fr)` track the caption is clipped by the track, so it
+    // cannot reach the date, the avatar or the `⋯` at any window width.
+    expect(titleCell).toBeGreaterThan(-1);
+    expect(caption).toBeGreaterThan(titleCell);
+    expect(meta).toBeGreaterThan(caption);
+  });
+
+  it("shows the text and keeps the untruncated version in title", () => {
+    const long =
+      "waiting on VP: create the Cloudflare zone/DNS records for the staple site domain and confirm the domain name";
+    const markup = renderCaptioned(long);
+
+    expect(markup).toContain(long);
+    // The ellipsis is CSS; `title` is what pays for it, exactly as the row title does.
+    expect(markup).toContain(`title="${long}"`);
+  });
+});
+
 describe("labels", () => {
   it("caps at two and puts the rest behind a +N whose tooltip names them", () => {
     const markup = renderRow({ labels: ["bug", "wave-2", "infra", "docs"] });
@@ -267,5 +411,148 @@ describe("status icons", () => {
         .replace(/<title>[^<]*<\/title>/, ""),
     );
     expect(new Set(shapes).size).toBe(7);
+  });
+});
+
+/**
+ * O5 (STA-137). A row that belongs to a parent must be distinguishable from a top-level task
+ * WITHOUT the tree's indent — in the pickup queue, the detail panel and the palette every row
+ * sits at depth 0, and the only parent signal there today is a breadcrumb chip that reads as
+ * part of the title.
+ *
+ * The four ways this breaks, in order: the glyph never arrives; the glyph arrives on
+ * everything; the slot stops being reserved and the identifiers stop aligning down the list;
+ * or it lands in the tree only and the two narrow presets — the ones that actually need it —
+ * are left with nothing.
+ */
+describe("subtask connector glyph", () => {
+  it("marks a row whose issue has a parent", () => {
+    const markup = renderRow({ parentId: "id-999" });
+
+    expect(markup).toContain('data-testid="subtask-glyph"');
+    expect(markup).toContain("staple-row-kin");
+    // The relation is carried in TEXT beside the drawing, not by the drawing — so a
+    // flat-mode row with no breadcrumb chip still says what it is to a screen reader.
+    expect(markup).toContain(">Subtask<");
+  });
+
+  it("leaves a top-level row and a top-level PARENT unmarked", () => {
+    const { parent, child } = renderFamily();
+
+    expect(renderRow()).not.toContain('data-testid="subtask-glyph"');
+    expect(parent).not.toContain('data-testid="subtask-glyph"');
+    expect(parent).not.toContain(">Subtask<");
+    // The parent really was built as one, or this passes for the wrong reason.
+    expect(parent).toContain("aria-expanded=");
+    // …and its child, which is the control, really was marked.
+    expect(child).toContain('data-testid="subtask-glyph"');
+  });
+
+  it("reserves NO space on a top-level row — the glyph is inline, not a slot", () => {
+    /**
+     * The first cut of O5 held a fixed 12px box on every row so the identifiers kept one
+     * left edge. VP rejected it on review: an empty reserve reads as a gap in front of every
+     * top-level identifier, and it costs 16px of title track on every row of every preset to
+     * align a glyph most rows do not carry.
+     *
+     * So a top-level row emits NOTHING — not the glyph, not a spacer, not a class. The price
+     * is that a child's identifier sits one glyph right of a top-level one, and that price is
+     * temporary: O1b (STA-125) puts a real kind glyph on every row and gets the edge back by
+     * filling the space rather than reserving it.
+     */
+    const top = renderRow();
+    expect(top).not.toContain("staple-row-kin");
+    expect(top).not.toContain("staple-row-kin-spacer");
+  });
+
+  it("is on in the panel and popup presets too, not only the tree", () => {
+    for (const preset of ["panel", "popup"] as const) {
+      expect(renderPreset(preset, { parentId: "id-999" })).toContain('data-testid="subtask-glyph"');
+      expect(renderPreset(preset)).not.toContain("staple-row-kin");
+    }
+  });
+
+  it("adds no second row and no second cell", () => {
+    // The glyph lives INSIDE the identifier cluster. If it ever becomes its own grid track
+    // the row's column template changes for every preset at once, which is the expensive
+    // version of this ticket.
+    const markup = renderRow({ parentId: "id-999" });
+    expect(markup.match(/role="row"/g)).toHaveLength(1);
+    expect(markup.match(/role="gridcell"/g)).toHaveLength(1);
+    const id = markup.indexOf("staple-row-id");
+    const glyph = markup.indexOf('data-testid="subtask-glyph"');
+    const status = markup.indexOf("staple-row-status");
+    expect(glyph).toBeGreaterThan(id);
+    expect(status).toBeGreaterThan(glyph);
+  });
+});
+
+/**
+ * O6 (STA-138). The badges replace the `blocked by STA-67, STA-68, …` caption, which means
+ * they inherit its job: on a Waiting row they are now the ONLY thing on the line that says
+ * what is in the way. Four failure modes, in the order they would actually happen.
+ */
+describe("dependency badges", () => {
+  it("puts NOTHING in the DOM when there is nothing to report", () => {
+    // A row with no edges is the common case and must cost the row exactly nothing — no
+    // reserved box, no zero badge, no empty wrapper.
+    for (const deps of [undefined, { blockedBy: [], blocks: [] }]) {
+      const markup = renderDeps(deps);
+      expect(markup).not.toContain('data-testid="dep-badges"');
+      expect(markup).not.toContain("staple-dep-badge");
+    }
+  });
+
+  it("shows a warning triangle with the COUNT for unresolved blockers", () => {
+    const markup = renderDeps({ blockedBy: ["STA-67", "STA-68", "STA-69"], blocks: [] });
+
+    expect(markup).toContain('data-testid="dep-badge-blocked-by"');
+    expect(markup).toContain('aria-label="Blocked by 3 tasks"');
+    // The identifiers did not vanish — they moved to the tooltip, where they cost no width.
+    expect(markup).toContain('title="Blocked by STA-67, STA-68, STA-69"');
+    expect(markup).toContain(">3<");
+    // …and the other direction, which this row has nothing to say about, is absent.
+    expect(markup).not.toContain('data-testid="dep-badge-blocks"');
+  });
+
+  it("shows a stop sign with the count for open dependents", () => {
+    const markup = renderDeps({ blockedBy: [], blocks: ["STA-70"] });
+
+    expect(markup).toContain('data-testid="dep-badge-blocks"');
+    // Singular, because a badge that says "Blocks 1 tasks" was written by a machine.
+    expect(markup).toContain('aria-label="Blocks 1 task"');
+    expect(markup).not.toContain('data-testid="dep-badge-blocked-by"');
+  });
+
+  it("is keyboard reachable and does not swallow the row", () => {
+    const markup = renderDeps({ blockedBy: ["STA-67"], blocks: ["STA-70"] });
+
+    // Real buttons: focusable, in the tab order, announced as controls. A div with an
+    // onClick would be invisible to a keyboard and to a screen reader both.
+    expect(markup.match(/<button type="button" class="staple-dep-badge"/g)).toHaveLength(2);
+    // Still ONE row and ONE cell — the badges are content, not structure.
+    expect(markup.match(/role="row"/g)).toHaveLength(1);
+    expect(markup.match(/role="gridcell"/g)).toHaveLength(1);
+  });
+
+  it("leads the meta cluster — nearest the title, furthest from the clipped edge", () => {
+    const markup = renderDeps({ blockedBy: ["STA-67"], blocks: [] });
+    const title = markup.indexOf("staple-row-title-cell");
+    const meta = markup.indexOf("staple-row-meta");
+    const badge = markup.indexOf("staple-dep-badges");
+    const date = markup.indexOf("staple-row-date");
+
+    expect(badge).toBeGreaterThan(title);
+    expect(badge).toBeGreaterThan(meta);
+    // Before the date, which is the first thing §14 drops. Ordering IS placement here.
+    expect(date).toBeGreaterThan(badge);
+  });
+
+  it("is ON in the panel and OFF in the popup", () => {
+    const deps = { blockedBy: ["STA-67"], blocks: [] };
+    expect(renderDeps(deps, "panel")).toContain('data-testid="dep-badge-blocked-by"');
+    // A palette row is read in under a second on the way to pressing enter, and its status
+    // icon already says `blocked`. See the note on `columns.deps` in config.ts.
+    expect(renderDeps(deps, "popup")).not.toContain("staple-dep-badge");
   });
 });

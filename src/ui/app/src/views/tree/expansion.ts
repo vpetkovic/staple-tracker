@@ -21,7 +21,8 @@
  * wrapped. A browser that refuses storage gets defaults and a working tree, not a blank page.
  */
 import { useCallback, useState } from "react";
-import type { Issue, IssueStatus } from "@/lib/types";
+import type { Issue } from "@/lib/types";
+import type { GroupKey } from "./tree-model";
 
 export const COLLAPSED_GROUPS_KEY = "staple:tree:collapsed-groups";
 export const EXPANDED_ROWS_KEY = "staple:tree:expanded-rows";
@@ -45,9 +46,15 @@ function write(storage: Storage | undefined, key: string, value: unknown): void 
   }
 }
 
-export function loadCollapsedGroups(storage: Storage | undefined): Set<IssueStatus> {
+/**
+ * V5 (STA-111) widened the key from `IssueStatus` to `GroupKey`, which also covers the
+ * pickup sections. Nothing about the STORED shape changed — it was always an array of
+ * strings — so a key written by the previous build loads unchanged, and the two vocabularies
+ * are disjoint, so a status fold and a section fold coexist in one set without a prefix.
+ */
+export function loadCollapsedGroups(storage: Storage | undefined): Set<GroupKey> {
   const raw = read<unknown>(storage, COLLAPSED_GROUPS_KEY, []);
-  return new Set(Array.isArray(raw) ? (raw.filter((s) => typeof s === "string") as IssueStatus[]) : []);
+  return new Set(Array.isArray(raw) ? (raw.filter((s) => typeof s === "string") as GroupKey[]) : []);
 }
 
 export function loadExpandedRows(storage: Storage | undefined): Map<string, boolean> {
@@ -85,8 +92,8 @@ export function explicitExpansion(
 }
 
 export interface TreeExpansion {
-  isGroupCollapsed: (status: IssueStatus) => boolean;
-  toggleGroup: (status: IssueStatus) => void;
+  isGroupCollapsed: (key: GroupKey) => boolean;
+  toggleGroup: (key: GroupKey) => void;
   /** The explicit choice only. `undefined` means "the model decides". */
   explicit: (issue: Issue) => boolean | undefined;
   /**
@@ -101,11 +108,11 @@ export function useTreeExpansion(storage: Storage | undefined = globalThis.local
   const [expandedRows, setExpandedRows] = useState(() => loadExpandedRows(storage));
 
   const toggleGroup = useCallback(
-    (status: IssueStatus) => {
+    (key: GroupKey) => {
       setCollapsedGroups((prev) => {
         const next = new Set(prev);
-        if (next.has(status)) next.delete(status);
-        else next.add(status);
+        if (next.has(key)) next.delete(key);
+        else next.add(key);
         write(storage, COLLAPSED_GROUPS_KEY, [...next]);
         return next;
       });
@@ -125,7 +132,7 @@ export function useTreeExpansion(storage: Storage | undefined = globalThis.local
     [storage],
   );
 
-  const isGroupCollapsed = useCallback((status: IssueStatus) => collapsedGroups.has(status), [collapsedGroups]);
+  const isGroupCollapsed = useCallback((key: GroupKey) => collapsedGroups.has(key), [collapsedGroups]);
   const explicit = useCallback((issue: Issue) => explicitExpansion(expandedRows, issue), [expandedRows]);
 
   return { isGroupCollapsed, toggleGroup, explicit, toggleRow };
