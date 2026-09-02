@@ -87,6 +87,45 @@ describe("column config", () => {
     }
   });
 
+  /**
+   * W4 (STA-116). The cue is the newest optional element on the row and the one most
+   * likely to be quietly promoted — "it's the whole point of the epic, surely it should
+   * always be on". §3C says otherwise for two containers and gives a reason for each, so
+   * the preset table is asserted rather than left to a reviewer's memory.
+   */
+  it("puts the worklog cue on the tree row and off in the two narrow presets", () => {
+    expect(TASK_LIST_PRESETS.tree.columns.worklog).toBe(true);
+    // A palette row is read in under a second on the way to pressing enter.
+    expect(TASK_LIST_PRESETS.popup.columns.worklog).toBe(false);
+    // A children list is already narrow, and an epic reader's question is status, not
+    // handoff. Off BY DEFAULT — a caller who wants it can still override.
+    expect(TASK_LIST_PRESETS.panel.columns.worklog).toBe(false);
+    expect(resolveTaskListConfig("panel", { columns: { worklog: true } }).columns.worklog).toBe(true);
+  });
+
+  it("keeps the worklog cue OUT of the never-drop set", () => {
+    // It is more diagnostic than a PR number and less than liveness; §14 gives it a drop
+    // position between the two. Adding it here would make it un-droppable at every width
+    // and would be the first quiet violation of the row anatomy contract.
+    expect(NEVER_DROPPED as readonly string[]).not.toContain("worklog");
+  });
+
+  it("leaves the worklog cue ABSENT FROM THE DOM wherever the column is off", () => {
+    // Not `display:none`, not a reserved box. The whole argument for a config over a fork
+    // is that a narrow container gets its width back.
+    const held = row(
+      { assignee: "VP", status: "in_progress", checkoutAgent: "opus-x" },
+      claim({ idleSeconds: 5 }),
+    );
+    expect(renderAt("tree", held)).toContain('data-testid="worklog-cue"');
+    for (const preset of ["panel", "popup"] as const) {
+      const markup = renderAt(preset, held);
+      expect(markup, preset).not.toContain('data-testid="worklog-cue"');
+      expect(markup, preset).not.toContain("staple-worklog-cue");
+      expect(markup, preset).not.toContain("display:none");
+    }
+  });
+
   it("puts the workspace pill ONLY where the surface mixes workspaces", () => {
     // STA-97 §6.3's prefix chip was dropped because it rendered `STA STA-22`. This element
     // carries the SLUG, and it is only justified where nothing else says which file a

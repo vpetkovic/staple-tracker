@@ -11,6 +11,7 @@
  * root, so the app's `@` alias — which lives in src/ui/app/vite.config.ts — does not
  * exist at test time.
  */
+import { HANDOFF_RISKS, handoffRiskOf, type HandoffRisk } from "../../lib/filters";
 import { VIEWS, type Selection, type ViewName } from "../../lib/session";
 import { ISSUE_STATUSES, type IssueRow, type IssueStatus, type WorkspaceRef } from "../../lib/types";
 
@@ -23,7 +24,21 @@ export type CommandAction =
   | { type: "page"; page: PalettePage }
   | { type: "view"; view: ViewName }
   | { type: "workspace"; ws: string }
-  | { type: "assignee"; assignee: string };
+  | { type: "assignee"; assignee: string }
+  /**
+   * Set one `lib/filters.ts` dimension to one selection — W5 (STA-117).
+   *
+   * GENERIC ON PURPOSE, and it would have been half the code to write
+   * `{ type: "handoff"; risk }`. `dimension` + `values` is exactly the shape
+   * `withDimension` already takes, so the React layer's case is a one-line call rather
+   * than a translation, and the next dimension that wants a palette entry adds a command
+   * and no action type. An action union that grows a member per feature is how a switch
+   * statement becomes the thing you have to remember to update.
+   *
+   * It SETS rather than toggles. "Show me the handoff risks" is an absolute request; a
+   * command that silently un-filtered on second use would be a command you cannot repeat.
+   */
+  | { type: "dimension"; dimension: string; values: readonly string[] };
 
 export type PalettePage = "checkout" | "assignee";
 
@@ -150,6 +165,54 @@ export interface PaletteContext {
   assignee: string;
   workspaces: readonly WorkspaceRef[];
   hub: boolean;
+  /**
+   * The rows the palette already has in hand, used ONLY to count what a filter command
+   * would select — W5 (STA-117).
+   *
+   * Optional, and the commands exist without it. A filter command with no count is still
+   * a working command; a palette that hides it because no rows have loaded yet is a
+   * palette that flickers. What the count buys is the answer BEFORE the click: an
+   * orchestrator reading "Handoff risks · no worklog — none" has been told what they came
+   * to find out and can close the palette, which is the §1c question answered in one
+   * keystroke rather than two.
+   */
+  rows?: readonly IssueRow[];
+}
+
+/**
+ * The two handoff-risk commands of STA-108 §3F — W5 (STA-117).
+ *
+ * ONE ENTRY PER RISK, not a single "handoff risks" command selecting both. The two are
+ * different findings with different responses — a stale worklog means ask the agent to
+ * checkpoint, a missing one means the work may not be recoverable at all — and §3F's own
+ * mock lists them separately with separate counts. Selecting both is still one click away
+ * through the chip's menu, which is the registry doing its job.
+ *
+ * The labels lead with "Handoff risk" rather than with "Worklog" so that both sort
+ * together under a query for the concept, and the `keywords` carry the words somebody
+ * would actually reach for — "stuck", "abandoned", "orphan" — none of which appear in any
+ * label. That is what `keywords` is for: it is not rendered, so it costs nothing on the
+ * row and buys the command a chance of being found by a person who does not know its name.
+ *
+ * A RECORD keyed by `HandoffRisk`, iterated in `HANDOFF_RISKS`' order. The value set
+ * belongs to lib/filters.ts and is not re-listed here; a third risk added there stops this
+ * file compiling until it has been given words, which is the failure anyone would want.
+ */
+const HANDOFF_COPY: Record<HandoffRisk, { label: string; keywords: string }> = {
+  stale: {
+    label: "Handoff risk · stale worklog",
+    keywords: "handoff risk stale worklog behind checkpoint silent stuck resume takeover",
+  },
+  none: {
+    label: "Handoff risk · no worklog",
+    keywords: "handoff risk no missing worklog never checkpointed undocumented abandoned orphan",
+  },
+};
+
+/** `12 issues`, `1 issue`, or the answer itself when there are none. */
+function issueCount(count: number): string {
+  if (count === 0) return "none";
+  return `${count} issue${count === 1 ? "" : "s"}`;
 }
 
 /**
@@ -219,6 +282,22 @@ export function buildCommands(context: PaletteContext): PaletteCommand[] {
       hint: context.assignee,
       keywords: "clear reset assignee filter all",
       action: { type: "assignee", assignee: "" },
+    });
+  }
+
+  // Handoff risk — the whole of W5's palette surface. Always offered, including when the
+  // count is zero: "nothing is at risk" is the answer the orchestrator came for, and a
+  // command that disappears when the board is healthy is a command nobody ever learns.
+  for (const risk of HANDOFF_RISKS) {
+    const copy = HANDOFF_COPY[risk];
+    const rows = context.rows;
+    commands.push({
+      id: `filter:handoff:${risk}`,
+      group: "filter",
+      label: copy.label,
+      hint: rows ? issueCount(rows.filter((row) => handoffRiskOf(row) === risk).length) : undefined,
+      keywords: copy.keywords,
+      action: { type: "dimension", dimension: "handoff", values: [risk] },
     });
   }
 

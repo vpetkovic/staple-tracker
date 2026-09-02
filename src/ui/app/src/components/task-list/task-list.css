@@ -495,6 +495,55 @@
   color: var(--text-tertiary);
 }
 
+/*
+ * ── Worklog freshness cue — W4 (STA-116) ───────────────────────────────────────────
+ *
+ * NO HUE. The row spends its only colour on the working dot, deliberately, and this
+ * element sits two positions away from it. The three states separate by GLYPH SHAPE
+ * (WorklogCue.tsx draws three different silhouettes) and, second, by which neutral text
+ * token they take. Nothing here may ever reference `--label-hue-*`, `--status-*`,
+ * `--priority-*` or an agent gradient, and worklog-cue.test.tsx reads this stylesheet
+ * back to make sure it does not.
+ *
+ * NO BOX. Unlike the PR badge and the label pills this is bare — no border, no padding,
+ * no background. Two bordered pills side by side start to read as a control strip, and
+ * the cue is a reading, not a control: it is not a link, it has no click target, and
+ * giving it a chip would promise an affordance it does not have.
+ *
+ * NO TRANSITION AND NO HOVER RULE, on purpose. "Nothing shifts on hover" is the row
+ * spec's hardest rule; the cue inherits the row's own background change and adds
+ * nothing of its own to animate.
+ */
+.staple-worklog-cue {
+  display: inline-flex;
+  height: 20px;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  /* So a column of `r3 · 41m` is a column and not a ragged edge — the same reason
+     `.staple-row-date` and `.staple-row-childcount` set it. */
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/*
+ * The two states that are findings, at full text contrast.
+ *
+ * Weight is the only channel monochrome leaves, and these are the two cells of §4's
+ * table that a board scan exists to catch: a handoff that is behind the work, and a held
+ * ticket with no handoff at all. Fresh stays at tertiary with the date, because "this one
+ * is fine" is the answer for most of the list and must not compete with the title.
+ */
+.staple-worklog-cue[data-state="stale"],
+.staple-worklog-cue[data-state="empty"] {
+  color: var(--foreground);
+}
+
+.staple-worklog-text {
+  font-family: var(--font-mono);
+}
+
 /* ── Avatars ───────────────────────────────────────────────────────────────────────── */
 
 .staple-avatar {
@@ -688,6 +737,28 @@
   }
 }
 
+/*
+ * The worklog cue's §14 rung — W4 (STA-116).
+ *
+ * Its drop position is BETWEEN the PR number and the working-pill text: more diagnostic
+ * than a link to a branch, less diagnostic than whether anyone is there right now. The
+ * ladder already had rungs at 1023 and 879 for exactly those two, so this is a new one
+ * strictly between them rather than a shared rung — sharing would have quietly said the
+ * two elements are worth the same, which is the ordering §14 exists to fix.
+ *
+ * `display: none` here, and ABSENCE FROM THE DOM in config.ts, are two different rules
+ * about two different things and both are correct. A container that never wants the
+ * element must not pay a pixel for it, so the preset omits it entirely. A container that
+ * wants it and is merely too narrow today will be wide enough after a drag, and
+ * re-rendering the row on every resize to recover four characters would be worse than a
+ * media query. Every other §14 element drops the same way.
+ */
+@media (max-width: 959px) {
+  .staple-worklog-cue {
+    display: none;
+  }
+}
+
 @media (max-width: 879px) {
   .staple-row-date {
     display: none;
@@ -726,6 +797,14 @@
   .staple-row-date {
     display: inline;
     width: auto;
+  }
+  /*
+   * The cue comes back, for the same reason the date does: below this breakpoint the row
+   * is two lines and `.staple-row-meta` has a whole 28px line to itself, so the width
+   * that was scarce at 959px is not scarce here. §3C called this riding along for free.
+   */
+  .staple-worklog-cue {
+    display: inline-flex;
   }
 }
 

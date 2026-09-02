@@ -6,7 +6,15 @@
  * against a different tsconfig (no DOM lib, no `@` alias) and these fixtures are typed
  * against the browser app's `lib/types.ts`.
  */
-import type { ClaimActivity, Issue, IssuePriority, IssueRow, IssueStatus } from "@/lib/types";
+import {
+  WORKLOG_KEY,
+  type ClaimActivity,
+  type Issue,
+  type IssuePriority,
+  type IssueRow,
+  type IssueStatus,
+  type WorklogSummary,
+} from "@/lib/types";
 
 let seq = 0;
 
@@ -46,9 +54,20 @@ export function issue(over: Partial<Issue> & { title?: string } = {}): Issue {
   };
 }
 
-/** An `IssueRow` as `/api/issues` sends it: issue plus the sibling liveness reading. */
-export function row(over: Partial<Issue> = {}, claim: ClaimActivity | null = null): IssueRow {
-  return { workspace: "staple", issue: issue(over), claim };
+/**
+ * An `IssueRow` as `/api/issues` sends it: issue plus the two sibling readings.
+ *
+ * `worklog` is left UNDEFINED rather than defaulted to null when the caller says nothing.
+ * The server always sends the field explicitly, but the type is optional so that every
+ * view is obliged to check it — and a fixture that quietly supplied `null` would hide the
+ * one case where a view forgot to (STA-113, and §5c of the STA-108 spec).
+ */
+export function row(
+  over: Partial<Issue> = {},
+  claim: ClaimActivity | null = null,
+  worklog?: WorklogSummary | null,
+): IssueRow {
+  return { workspace: "staple", issue: issue(over), claim, worklog };
 }
 
 export function claim(over: Partial<ClaimActivity> = {}): ClaimActivity {
@@ -58,6 +77,23 @@ export function claim(over: Partial<ClaimActivity> = {}): ClaimActivity {
     lastActivityAt: "2026-09-01T00:00:00.000Z",
     heldSeconds: 600,
     idleSeconds: 30,
+    ...over,
+  };
+}
+
+/**
+ * The `WorklogSummary` the server batches onto a row (STA-113).
+ *
+ * `updatedAt` defaults to the same instant as `claim()`'s `lastActivityAt`, so the pair
+ * built with no arguments is FRESH — the unremarkable case. A test that wants the stale
+ * one has to say by how much, which is the number the assertion is really about.
+ */
+export function worklog(over: Partial<WorklogSummary> = {}): WorklogSummary {
+  return {
+    key: WORKLOG_KEY,
+    revisions: 3,
+    updatedAt: "2026-09-01T00:00:00.000Z",
+    author: "opus-x",
     ...over,
   };
 }

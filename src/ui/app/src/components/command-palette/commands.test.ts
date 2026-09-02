@@ -175,6 +175,93 @@ describe("buildCommands", () => {
   });
 });
 
+/**
+ * W5 (STA-117) — the handoff-risk commands of STA-108 §3F.
+ *
+ * Two properties are worth pinning and neither is "the commands exist". The first is that
+ * the action stays PLAIN DATA: the whole reason this file has no React in it is that a
+ * command is a serialisable object, and a closure smuggled into an action would work
+ * perfectly while quietly making the palette untestable. The second is that the risk
+ * judgement is NOT made here — the counts have to come from `handoffRiskOf` in
+ * lib/filters.ts, or the palette will one day advertise "3 issues" over a filter that
+ * selects four.
+ */
+describe("handoff-risk commands", () => {
+  const ACTIVE = "2026-09-01T12:00:00Z";
+  const before = (seconds: number) => new Date(Date.parse(ACTIVE) - seconds * 1000).toISOString();
+
+  /** Held by an agent whose last checkpoint is `checkpointAgo` seconds behind its activity. */
+  const held = (identifier: string, checkpointAgo: number | null): IssueRow => ({
+    ...row(identifier, `task ${identifier}`, { status: "in_progress", checkoutAgent: "opus-a" }),
+    claim: {
+      heldBy: "opus-a",
+      checkoutAt: before(6 * 60 * 60),
+      lastActivityAt: ACTIVE,
+      heldSeconds: 6 * 60 * 60,
+      idleSeconds: 30,
+    },
+    worklog:
+      checkpointAgo === null
+        ? null
+        : { key: "worklog", revisions: 3, updatedAt: before(checkpointAgo), author: "opus-a" },
+  });
+
+  const board = () => [
+    held("STA-1", 4 * 60 * 60), // busy, four hours behind its own handoff → stale
+    held("STA-2", 5 * 60), // checkpointed five minutes ago → not a risk
+    held("STA-3", null), // nothing written down at all → none
+    held("STA-4", null),
+    row("STA-5", "unheld backlog item"), // nobody holding it → not a finding
+  ];
+
+  const handoff = (over: Partial<PaletteContext> = {}) =>
+    buildCommands(context(over)).filter((c) => c.id.startsWith("filter:handoff"));
+
+  it("offers one command per risk, in the registry's order", () => {
+    expect(handoff().map((c) => c.id)).toEqual(["filter:handoff:stale", "filter:handoff:none"]);
+    expect(handoff().every((c) => c.group === "filter")).toBe(true);
+  });
+
+  it("targets the lib/filters.ts dimension by name and value", () => {
+    // The action is generic over dimensions on purpose — see the note on CommandAction.
+    expect(handoff().map((c) => c.action)).toEqual([
+      { type: "dimension", dimension: "handoff", values: ["stale"] },
+      { type: "dimension", dimension: "handoff", values: ["none"] },
+    ]);
+  });
+
+  it("stays plain data — a serialisable object, never a closure", () => {
+    const commands = handoff({ rows: board() });
+    expect(JSON.parse(JSON.stringify(commands))).toEqual(commands);
+  });
+
+  it("counts what each command would select, using the filter's own predicate", () => {
+    const hints = handoff({ rows: board() }).map((c) => c.hint);
+    expect(hints).toEqual(["1 issue", "2 issues"]);
+  });
+
+  it("answers the question before the click when nothing is at risk", () => {
+    // "none" rather than a hidden command: a healthy board is the answer the orchestrator
+    // came for, and a command that disappears when it is true is one nobody ever learns.
+    expect(handoff({ rows: [row("STA-9", "quiet")] }).map((c) => c.hint)).toEqual(["none", "none"]);
+  });
+
+  it("still offers the commands before any rows have loaded, with no invented count", () => {
+    expect(handoff().map((c) => c.hint)).toEqual([undefined, undefined]);
+  });
+
+  it("is findable by words that appear in no label", () => {
+    const all = buildCommands(context({ rows: board() }));
+    expect(filterCommands(all, "abandoned").map((c) => c.id)).toEqual(["filter:handoff:none"]);
+    // Both, and only both. The order between them is `fuzzyScore`'s shorter-haystack
+    // tie-break rather than anything this feature promises, so it is not asserted.
+    expect(filterCommands(all, "handoff").map((c) => c.id).sort()).toEqual([
+      "filter:handoff:none",
+      "filter:handoff:stale",
+    ]);
+  });
+});
+
 describe("orderCommands", () => {
   const commands = buildCommands(
     context({ selection: { workspace: "staple", ref: "STA-13" }, selectionStatus: "todo" }),

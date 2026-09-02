@@ -49,6 +49,7 @@ import { PrBadge } from "./PrBadge";
 import { PrioritySignal } from "./PrioritySignal";
 import { StatusIcon } from "./StatusIcon";
 import { Avatar, RowClaimSlot } from "./WorkingPill";
+import { WorklogCue } from "./WorklogCue";
 import type { TaskListConfig } from "./config";
 import { guideX, indentPx, ROW_PAD_LEFT, type TaskRow } from "./model";
 import { formatRowDate } from "./row-date";
@@ -242,6 +243,25 @@ export function TaskRowLine({
       <span className="staple-row-meta">
         {columns.pr ? <PrBadge pullRequests={row.pullRequests} /> : null}
         {columns.labels ? <LabelPills labels={issue.labels} max={labelMax} /> : null}
+        {/*
+          W4 (STA-116). Immediately LEFT of the claim slot, which is where §3C's mockup
+          puts it and where its §14 drop position says it belongs: more diagnostic than a
+          PR number, less than liveness. The adjacency is the point — "someone is on this"
+          and "and here is what they wrote down" are read together or not at all.
+
+          It must stay ABOVE `RowClaimSlot` in this list and never merge into it. The
+          claim slot is the single place the liveness rule is written down; this is a
+          different fact from a different clock, and the moment one component owned both
+          they would start agreeing with each other instead of with the server.
+        */}
+        {columns.worklog ? (
+          <WorklogCue
+            worklog={row.worklog}
+            claim={claim}
+            checkoutAgent={issue.checkoutAgent}
+            now={now}
+          />
+        ) : null}
         {columns.claim ? <RowClaimSlot claim={claim} checkoutAgent={issue.checkoutAgent} /> : null}
         {columns.assignee && issue.assignee ? (
           <Avatar name={issue.assignee} kind="human" size={20} className="staple-row-assignee" />
