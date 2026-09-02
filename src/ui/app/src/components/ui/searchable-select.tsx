@@ -268,7 +268,10 @@ export function SearchableSelect({
 
   return (
     <div className="grid gap-1.5">
-      <Popover open={open} onOpenChange={setOpen}>
+      {/* modal: the popover portals OUTSIDE the create dialog's content, so the dialog's
+          scroll lock would otherwise swallow wheel/touch over the list — the "can't
+          scroll the dropdown" bug. Modal popovers take over the lock while open. */}
+      <Popover modal open={open} onOpenChange={setOpen}>
         <PopoverTrigger asChild>
           {/* No aria-label on purpose. `<button>` is a labelable element, so the field's
               own `<Label htmlFor>` names it — an aria-label here would OVERRIDE that and
