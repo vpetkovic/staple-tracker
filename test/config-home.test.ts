@@ -17,6 +17,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import {
   clearHomeOverride,
+  defaultHome,
   resolveHome,
   setHomeOverride,
   stapleHome,
@@ -109,12 +110,19 @@ describe("home resolution hygiene", () => {
    * The bug this ticket exists to kill. `process.env.HOME ?? "~"` produced a
    * LITERAL relative directory named `~` beside the cwd; `os.homedir()` falls
    * back to the passwd entry, which is a real absolute path.
+   *
+   * Deleting HOME also deletes this suite's only handle on the locator: with no
+   * HOME there is no scratch directory to point it at, and on macOS the locator
+   * path takes no environment input at all, so `resolveHome()` here reads
+   * whatever locator the real machine happens to have. Pin the DEFAULT branch —
+   * the one the tilde bug lived in — by name, and ask of the full resolver only
+   * the machine-independent thing: no branch of it ever invents a literal `~`.
    */
   it("never yields a literal ~ path when HOME is unset", () => {
     delete process.env.HOME;
-    const resolved = resolveHome().path;
-    expect(resolved.includes("~")).toBe(false);
-    expect(resolved).toBe(join(homedir(), ".staple"));
+    expect(defaultHome()).toBe(join(homedir(), ".staple"));
+    expect(defaultHome()).not.toContain("~");
+    expect(resolveHome().path).not.toContain("~");
   });
 
   it("returns an absolute path for every source", () => {

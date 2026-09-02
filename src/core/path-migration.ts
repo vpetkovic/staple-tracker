@@ -802,7 +802,7 @@ function resume(root: string, initial: MigrationJournal, resumed: boolean): Migr
         );
       }
       barrier = acquireBarrier(journal.sourcePath);
-      assertSameSource(journal, journal.sourcePath);
+      assertSameSource(journal, journal.sourcePath, barrier.db);
       journal = writeJournal(root, {
         ...journal,
         source: { ...journal.source, rowCounts: rowCounts(barrier.db) },
@@ -940,15 +940,52 @@ function resume(root: string, initial: MigrationJournal, resumed: boolean): Migr
   }
 }
 
-/** Prove the file under the journalled source path is still the file we journalled. */
-function assertSameSource(journal: MigrationJournal, path: string): void {
+/**
+ * Prove the file under the journalled source path is still the file we
+ * journalled — by inode AND by what the database says it is.
+ *
+ * `(dev, ino)` alone is not identity. Linux filesystems hand a just-freed inode
+ * NUMBER straight back to the next file created in the same directory, so
+ * deleting the source and dropping a different database in its place can land
+ * on the journalled pair and sail through. APFS never reuses an inode number,
+ * which is the only reason the inode-only check looked sufficient on macOS: the
+ * same swap was caught here on a developer machine and slipped through to
+ * `validateSnapshot` on the Linux runner, where it surfaced as a snapshot
+ * complaint about a source problem. Comparing the workspace identity as well
+ * makes the guard — and therefore the message the operator reads — the same on
+ * every filesystem.
+ */
+function assertSameSource(journal: MigrationJournal, path: string, db: DatabaseSync): void {
   const stat = statSync(path);
-  if (stat.dev === journal.source.identity.dev && stat.ino === journal.source.identity.ino) return;
+  const sameFile =
+    stat.dev === journal.source.identity.dev && stat.ino === journal.source.identity.ino;
+
+  // The plan writes "" for both when it could not read the source's metadata.
+  // There is then nothing to compare against and the inode pair is all we have.
+  const journalled = `${journal.source.slug}/${journal.source.prefix}`;
+  const found = readSourceIdentity(db);
+  const sameWorkspace = journalled === "/" || found === journalled;
+
+  if (sameFile && sameWorkspace) return;
   throw new StapleError(
     "conflict",
-    `${path} is not the file this migration started from (it was replaced or restored from elsewhere). ` +
-      "Staple will not migrate a source it cannot identify.",
+    `${path} is not the file this migration started from (it was replaced or restored from elsewhere): ` +
+      (sameWorkspace
+        ? `dev/ino ${journal.source.identity.dev}/${journal.source.identity.ino} was journalled, ` +
+          `dev/ino ${stat.dev}/${stat.ino} is there now`
+        : `it identifies as ${found}, and ${journalled} was journalled`) +
+      ". Staple will not migrate a source it cannot identify.",
   );
+}
+
+/** `slug/prefix` as the open database reports it; `?/?` when it cannot say. */
+function readSourceIdentity(db: DatabaseSync): string {
+  try {
+    const probe = new WorkspaceStore(db, "", "");
+    return `${readMeta(probe, "slug") ?? ""}/${readMeta(probe, "prefix") ?? ""}`;
+  } catch {
+    return "?/?"; // no readable `meta` table — certainly not the workspace we journalled
+  }
 }
 
 /**

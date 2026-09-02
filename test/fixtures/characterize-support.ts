@@ -39,6 +39,21 @@ export const CLI_ENTRY = join(REPO_ROOT, "src/cli.ts");
 export const MCP_ENTRY = join(REPO_ROOT, "src/mcp.ts");
 
 /**
+ * Every inherited variable that can move the bootstrap locator off `$HOME`.
+ *
+ * `bootstrapLocatorPath()` derives the locator from the home on macOS, but from
+ * `$XDG_CONFIG_HOME` on Linux and `%APPDATA%` on Windows when those are set. A
+ * suite that hands a child its own `HOME` and assumes the locator followed is
+ * therefore correct on macOS and wrong everywhere else: GitHub's ubuntu runner
+ * exports `XDG_CONFIG_HOME=/home/runner/.config`, so every child in a suite
+ * shared ONE locator there and the tests contaminated each other in file order.
+ * Strip them, so on every platform the locator is a function of `HOME` alone —
+ * which is what the suites that set `HOME` already believe. A case that wants
+ * one of these set can still pass it in `extra`.
+ */
+const LOCATOR_ENV_KEYS = ["XDG_CONFIG_HOME", "APPDATA"];
+
+/**
  * A child environment with EVERY staple variable stripped, not just the three
  * contract-support.ts drops. A suite about environment precedence must start
  * from a known-empty environment or the developer's own STAPLE_HOME leaks in
@@ -49,6 +64,7 @@ export function bareEnv(extra: Record<string, string> = {}): Record<string, stri
   for (const [key, value] of Object.entries(process.env)) {
     if (value === undefined) continue;
     if (key.startsWith("STAPLE_")) continue;
+    if (LOCATOR_ENV_KEYS.includes(key)) continue;
     base[key] = value;
   }
   base.NODE_NO_WARNINGS = "1"; // node:sqlite's ExperimentalWarning is runtime noise
