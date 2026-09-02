@@ -53,7 +53,7 @@
  * and 240px of permanent left margin is 240px the list does not get. If a nav rail comes
  * back it replaces tier 2, not tier 1.
  */
-import { Moon, Search, Sun } from "lucide-react";
+import { Moon, Search, Settings, Sun } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { FilterBar } from "@/components/filters/FilterBar";
 import { FilterChips } from "@/components/filters/FilterChips";
@@ -65,7 +65,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { openCommandPalette, openCreateIssue } from "@/lib/shell-events";
+import { openCommandPalette, openCreateIssue, openSettings } from "@/lib/shell-events";
 import { VIEWS, useSession } from "@/lib/session";
 import { cn } from "@/lib/utils";
 
@@ -224,6 +224,22 @@ export function AppShell({ children }: { children: ReactNode }) {
 
           <div className="ml-auto flex shrink-0 items-center gap-1">
             <CommandTrigger />
+            {/*
+              The gear — O7b (STA-141). In tier 1 because the status set and the kind
+              vocabulary are properties of the WORKSPACE, not of the view: reordering
+              statuses changes what every view shows, so the control cannot live on the
+              row that scopes one of them. Next to the theme toggle, which is the other
+              thing here that changes the whole page and belongs to nothing on it.
+            */}
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label="Workspace settings"
+              title="Workspace settings — statuses and kinds"
+              onClick={openSettings}
+            >
+              <Settings className="size-4" />
+            </Button>
             <ThemeToggle />
             <Button
               size="sm"

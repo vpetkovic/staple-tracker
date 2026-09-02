@@ -9,6 +9,15 @@
  * WAVE 2: extend this file. Do not re-declare an issue shape inside a view.
  */
 
+/**
+ * The BUILT-IN statuses — the seed, not the vocabulary.
+ *
+ * O7 (STA-139/140) made the status set workspace DATA: a status can be added,
+ * renamed, recategorised, reordered and removed, so a status id is a string that
+ * came off the wire and not a member of a compile-time union. This tuple is what
+ * migration 004 seeds and what a surface with no `/api/settings` answer in hand may
+ * name as a default; the live list is `lib/settings.ts`.
+ */
 export const ISSUE_STATUSES = [
   "backlog",
   "todo",
@@ -18,9 +27,62 @@ export const ISSUE_STATUSES = [
   "blocked",
   "cancelled",
 ] as const;
-export type IssueStatus = (typeof ISSUE_STATUSES)[number];
+/** The seven ids staple ships. */
+export type BuiltinIssueStatus = (typeof ISSUE_STATUSES)[number];
 
-/** Column order on the board and the order the old page listed things in. */
+/**
+ * ── WHY THIS IS STILL THE SEVEN-MEMBER UNION, AND WHAT IT COSTS ───────────────────────
+ *
+ * `src/core/types.ts` widened `IssueStatus` to `string` in O7a, and this mirror SHOULD
+ * follow — a configured id is not knowable at compile time. O7b deliberately did not,
+ * and the reason is mechanical rather than a preference.
+ *
+ * Widening it here forces exactly one edit outside this file that cannot be avoided from
+ * inside it: `views/tree/TreeGrid.tsx` reads `STATUS_LABEL[group.status]`, and
+ * `STATUS_LABEL` is declared `Record<IssueStatus, string>` in
+ * `components/task-list/model.ts`. Widen the key and that record grows an index
+ * signature, so under `noUncheckedIndexedAccess` the lookup becomes `string | undefined`
+ * and the `label` prop stops accepting it. Both files belong to the O3 chain, which is
+ * live on another branch this sprint; a one-token change in the middle of them buys a
+ * merge conflict for a type-level improvement with no runtime effect.
+ *
+ * Nothing is broken by leaving it. Values arrive off the wire through `request<T>()`,
+ * which casts rather than validates, so a custom status flows through every surface at
+ * runtime today — and everything that has to REASON about one (`lib/settings.ts`, the
+ * settings editor, `StatusIcon`, `StatusBadge`) takes `StatusId` below, which is a
+ * string. What the union costs is honesty in the type, not behaviour.
+ *
+ * TO FINISH IT — one commit, after O3 lands, four lines:
+ *   1. `export type IssueStatus = StatusId;`
+ *   2. `OPEN_STATUS_ORDER` / `RESOLVED_STATUSES` are already `readonly StatusId[]`.
+ *   3. `TreeGrid.tsx`: `STATUS_LABEL[group.status] ?? statusLabel(group.status)`.
+ *   4. `GraphView.tsx`: key `MINIMAP_COLORS` off `statusCategory(...)`.
+ */
+export type IssueStatus = BuiltinIssueStatus;
+
+/**
+ * A status id AS SERVED — any string, because the vocabulary is workspace data.
+ *
+ * This is the type every O7 surface speaks. It is separate from `IssueStatus` only for
+ * the transitional reason argued above; when that union widens, this becomes its alias
+ * and every signature below is already correct.
+ */
+export type StatusId = string;
+/** A kind id — a string for exactly the reason `StatusId` is one. */
+export type KindId = string;
+
+/**
+ * Group-header order for a DEFAULT workspace. The live answer is
+ * `configuredGroupOrder()` in lib/settings.ts, which is what a surface that has
+ * fetched `/api/settings` must ask; this is the seed it falls back to before the
+ * fetch resolves, and it is byte-identical to what this constant always was.
+ *
+ * Still typed `IssueStatus[]` rather than `StatusId[]`, and for the same reason the
+ * union survives above: `views/tree/tree-model.ts` declares
+ * `GROUP_ORDER: readonly IssueStatus[] = [...OPEN_STATUS_ORDER, ...RESOLVED_STATUSES]`,
+ * so widening the element type here breaks a file O3 owns. It widens with the union,
+ * in the same one commit.
+ */
 export const OPEN_STATUS_ORDER: readonly IssueStatus[] = [
   "in_progress",
   "in_review",
@@ -32,18 +94,13 @@ export const OPEN_STATUS_ORDER: readonly IssueStatus[] = [
 export const RESOLVED_STATUSES: readonly IssueStatus[] = ["done", "cancelled"];
 
 /**
- * The BUILT-IN kind vocabulary — mirror of `ISSUE_KINDS` in src/core/types.ts.
- *
- * A SEED, not a closed set. Kinds are configured per workspace (`workspace_kinds`,
- * STA-140), so a workspace may carry `milestone` or have dropped `spike`, and the
- * server's runtime answer is `list_kinds`. That is why `IssueKind` below is
- * `string` and not a union of these five: typing it as a union would make the
- * compiler confidently wrong about a value the server can legitimately send.
+ * The BUILT-IN issue kinds — the seed of `workspace_kinds`, O7a (STA-140).
+ * Like the statuses, the live list is served; this is what it starts as.
  */
 export const ISSUE_KINDS = ["epic", "task", "bug", "chore", "spike"] as const;
 export type BuiltinIssueKind = (typeof ISSUE_KINDS)[number];
-/** A kind id — `string` for exactly the reason `IssueStatus` is a closed union and this is not. */
-export type IssueKind = string;
+/** A kind id, as served. */
+export type IssueKind = KindId;
 export const DEFAULT_ISSUE_KIND = "task";
 
 /**
@@ -58,6 +115,118 @@ export const KIND_RANK: Readonly<Record<string, number>> = Object.fromEntries(
   ISSUE_KINDS.map((kind, index) => [kind, index]),
 );
 
+/**
+ * The eight status CATEGORIES — fixed, non-configurable, and the thing every
+ * behaviour keys off (src/core/types.ts `STATUS_CATEGORIES`).
+ *
+ * This is the constant that makes a custom status renderable. Colour and glyph are a
+ * property of the CATEGORY, never of the id, so a workspace that adds `pairing` in
+ * `active` gets the in_progress half-ring and the in_progress hue without a single new
+ * token — see styles/app.css and components/task-list/StatusIcon.tsx.
+ *
+ * `/api/settings` serves the same list back on every response; this copy is the
+ * fallback for a surface rendering before that fetch resolves.
+ */
+export const STATUS_CATEGORIES = [
+  "unstarted",
+  "ready",
+  "active",
+  "review",
+  "gated",
+  "blocked",
+  "done",
+  "cancelled",
+] as const;
+export type StatusCategory = (typeof STATUS_CATEGORIES)[number];
+
+/** Categories that mean "finished", in either direction. */
+export const RESOLVED_CATEGORIES: readonly StatusCategory[] = ["done", "cancelled"];
+
+/**
+ * The mirror of core's `VOCABULARY_ID_PATTERN`: lowercase snake_case, starting with a
+ * letter, at most 32 characters.
+ *
+ * Ids are interpolated into `IN (…)` and `CASE` SQL fragments the store builds per query,
+ * they are dictionary keys on the wire, and they end up in URLs — a closed character set
+ * is what makes all three safe at once. It is mirrored here, in the leaf module with no
+ * imports, so the settings editor can say what is wrong BEFORE the round trip. The store
+ * still refuses independently, and its sentence is the one a refusal renders.
+ */
+export const VOCABULARY_ID_PATTERN = /^[a-z][a-z0-9_]{0,31}$/;
+
+/** One configured status row, in configured order. Mirrors core `WorkspaceStatus`. */
+export interface WorkspaceStatus {
+  id: string;
+  label: string;
+  category: StatusCategory;
+  sortOrder: number;
+  /** True for a row staple seeded. Informational — built-ins are editable. */
+  isBuiltin: boolean;
+}
+
+/** One configured kind row, in configured order. Mirrors core `WorkspaceKind`. */
+export interface WorkspaceKind {
+  id: string;
+  label: string;
+  sortOrder: number;
+  isBuiltin: boolean;
+}
+
+/**
+ * One edit in an ordered `/api/settings` batch — the wire mirror of core's
+ * `VocabularyOp`, and the same shape MCP's `update_statuses` takes.
+ *
+ * A BATCH rather than a verb per request because "add `pairing` and put it after
+ * `in_progress`" is one intention, and splitting it over two round trips leaves a
+ * window where every list in the workspace is visibly wrong.
+ */
+export type VocabularyOp =
+  | { op: "add"; id: string; label?: string; category?: StatusCategory; after?: string | null }
+  | { op: "rename"; id: string; label: string }
+  | { op: "recategorize"; id: string; category: StatusCategory }
+  | { op: "reorder"; ids: string[] }
+  | { op: "remove"; id: string; migrateTo?: string | null };
+
+/**
+ * What GET /api/settings answers — and what POST answers too, identically.
+ *
+ * The two being the SAME envelope is the point: after a write the editor re-derives
+ * from the response rather than merging it into a list it fetched earlier, which is
+ * where a settings screen usually stops matching what the store believes.
+ */
+export interface WorkspaceSettings {
+  workspace: string;
+  /** CONFIGURED order — what the settings editor's drag produces and paints. */
+  statuses: WorkspaceStatus[];
+  kinds: WorkspaceKind[];
+  /**
+   * GROUP-HEADER AND SORT ORDER — `store.statusOrder()`, computed server-side.
+   *
+   * Not the same list as `statuses` and deliberately so. It tiers by CATEGORY (active,
+   * review, gated, blocked, ready, unstarted, done, cancelled) and lets the configured
+   * order break ties inside a tier, which is the identical rank the store's own SQL
+   * `CASE` fragment sorts rows by. A client that re-derived the tiering would be a
+   * second authority on it, and the first disagreement would be a group header sitting
+   * above rows sorted the other way.
+   *
+   * For a default workspace it is byte-identical to `[...OPEN_STATUS_ORDER,
+   * ...RESOLVED_STATUSES]`, which is what makes it a drop-in for tree-model's
+   * `GROUP_ORDER`.
+   */
+  groupOrder: StatusId[];
+  /** `groupOrder` minus the resolved categories. */
+  openOrder: StatusId[];
+  /** The agent inbox's pickup tiers, for a surface that wants to mirror them. */
+  pickupOrder: StatusId[];
+  categories: StatusCategory[];
+  /** Categories the code writes into: the last member of one may not be removed. */
+  requiredCategories: string[];
+  /**
+   * How many issues still carry each id. What makes the migrate-to picker REQUIRED
+   * rather than merely offered — the store still owns the refusal.
+   */
+  usage: { statuses: Record<string, number>; kinds: Record<string, number> };
+}
 export const ISSUE_PRIORITIES = ["critical", "high", "medium", "low"] as const;
 export type IssuePriority = (typeof ISSUE_PRIORITIES)[number];
 

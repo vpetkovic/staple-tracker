@@ -158,8 +158,48 @@ describe("buildCommands", () => {
   });
 
   it("does not offer the view you are already on", () => {
-    const views = buildCommands(context({ view: "tree" })).filter((c) => c.group === "view");
+    /*
+     * Filtered on the ACTION type rather than on the group. O7b (STA-141) put the
+     * settings command in the `view` group — it changes what the workspace is rather
+     * than narrowing what you are looking at — so "everything in the view group" stopped
+     * meaning "every view switch". The action type is what this test was always about.
+     */
+    const views = buildCommands(context({ view: "tree" })).filter((c) => c.action.type === "view");
     expect(views.map((c) => c.id)).toEqual(["view:graph"]);
+  });
+
+  /**
+   * O7b (STA-141) — the vocabulary editor is reachable from the palette, always, with no
+   * issue selected. It is the second way in (the header gear is the first), and a command
+   * that only appeared when something was open would be a command nobody finds.
+   */
+  it("always offers the workspace settings dialog", () => {
+    const settings = buildCommands(context()).find((c) => c.id === "settings");
+    expect(settings?.action).toEqual({ type: "settings" });
+  });
+
+  /**
+   * The status commands come from the CONFIGURED vocabulary when one is handed over, and
+   * fall back to the built-in seven when it is not — which is what keeps every other test
+   * in this file describing the shipped default.
+   */
+  it("offers the configured statuses, by their configured labels", () => {
+    const commands = buildCommands(
+      context({
+        selection: { workspace: "staple", ref: "STA-13" },
+        selectionStatus: "todo",
+        statuses: [
+          { id: "todo", label: "Queued" },
+          { id: "pairing", label: "Pairing" },
+          { id: "done", label: "Shipped" },
+        ],
+      }),
+    ).filter((c) => c.action.type === "status");
+
+    // `todo` is the selection's own status and is not offered.
+    expect(commands.map((c) => c.id)).toEqual(["status:pairing", "status:done"]);
+    expect(commands.map((c) => c.label)).toEqual(["Set status → Pairing", "Set status → Shipped"]);
+    expect(commands[0]!.action).toEqual({ type: "status", status: "pairing" });
   });
 
   it("only offers to clear the assignee filter when one is set", () => {

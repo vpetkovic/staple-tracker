@@ -44,6 +44,52 @@
 }
 
 /*
+ * Status CATEGORY -> hue — O7b (STA-141), and the rule that makes a custom status
+ * renderable at all.
+ *
+ * O7 made the status set workspace data: `pairing`, `awaiting_qa`, `on_ice` are all
+ * legal ids and none of them has a rule above. What every status DOES have is a category
+ * from a fixed set of eight, and the store keys every behaviour off that category rather
+ * than off the id. Colour follows the same rule, so a workspace that adds a status in
+ * `active` gets the in_progress blue with nothing added here.
+ *
+ * NO NEW HUE TOKENS. Each category re-points at a token the sheet already defines:
+ * gated borrows blocked's, because "parked waiting for an approval" and "parked waiting
+ * for a blocker" are the same colour of waiting — the glyphs differ (see StatusIcon), and
+ * differing in shape rather than in hue is what WCAG 1.4.1 asks for anyway.
+ *
+ * AFTER the id block on purpose. Equal specificity means the later rule wins, so when an
+ * element carries both attributes — every one this ticket re-pointed does — the CATEGORY
+ * decides. That is what makes `recategorize in_review -> active` actually turn the chip
+ * blue instead of leaving it on the hue its id used to imply. For a default workspace the
+ * two rules agree by construction, so nothing that was not recategorised changes colour.
+ */
+[data-status-category="unstarted"] {
+  --sc: var(--status-task-backlog);
+}
+[data-status-category="ready"] {
+  --sc: var(--status-task-todo);
+}
+[data-status-category="active"] {
+  --sc: var(--status-task-in_progress);
+}
+[data-status-category="review"] {
+  --sc: var(--status-task-in_review);
+}
+[data-status-category="gated"] {
+  --sc: var(--status-task-blocked);
+}
+[data-status-category="blocked"] {
+  --sc: var(--status-task-blocked);
+}
+[data-status-category="done"] {
+  --sc: var(--status-task-done);
+}
+[data-status-category="cancelled"] {
+  --sc: var(--status-task-cancelled);
+}
+
+/*
  * A claim whose holder has gone silent (C3 / STA-49) borrows the blocked hue — no new
  * colour, and the chip recipe handles both themes. It has to set its own `--sc` because
  * the badge lives INSIDE a card carrying data-status="in_progress", and would otherwise

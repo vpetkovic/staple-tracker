@@ -48,6 +48,8 @@ import {
 import { action, getIssues } from "@/lib/api";
 import { withDimension } from "@/lib/filters";
 import { useSession } from "@/lib/session";
+import { workspaceSettings } from "@/lib/settings";
+import { openSettings } from "@/lib/shell-events";
 import type { IssueStatus } from "@/lib/types";
 import { useResource } from "@/lib/useStaple";
 import { describeRefusal, type Refusal } from "@/lib/refusal";
@@ -109,6 +111,15 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
           assignee: session.assignee,
           workspaces: session.workspaces,
           hub: session.mode === "hub",
+          /*
+           * O7b (STA-141). The workspace's own status list, so "Set status → …" offers
+           * what this workspace actually has and calls each one what the workspace calls
+           * it. Read through the plain accessor rather than the hook: the palette is
+           * rebuilt on `session.version`, which ticks on the same fingerprint poll that
+           * a vocabulary change moves, so a hook here would only add a second subscriber
+           * to a value this memo already re-reads.
+           */
+          statuses: workspaceSettings().statuses,
           // W5 (STA-117): the filter commands count what they would select, so the
           // palette says "3 issues" before you commit to a board you cannot see yet.
           // The same rows the jump list already ranks — no second fetch.
@@ -117,7 +128,17 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
         recents,
         selected !== null,
       ),
-    [rows, selected, selectedStatus, session.view, session.ws, session.assignee, session.workspaces, session.mode],
+    [
+      rows,
+      selected,
+      selectedStatus,
+      session.view,
+      session.ws,
+      session.assignee,
+      session.workspaces,
+      session.mode,
+      session.version,
+    ],
   );
 
   const visibleCommands = useMemo(() => filterCommands(commands, query), [commands, query]);
@@ -224,6 +245,13 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
           // this file learns nothing about what a "handoff" is.
           session.setFilters(withDimension(session.filters, next.dimension, next.values));
           close();
+          return;
+        case "settings":
+          // The same shell verb the header gear dispatches — one dialog, two triggers.
+          // Closing first: Radix marks the page inert while a dialog is open, and
+          // leaving the palette up would trap focus between the two.
+          close();
+          openSettings();
           return;
         case "page":
           setPage(next.page);
