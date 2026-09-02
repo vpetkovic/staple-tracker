@@ -66,7 +66,7 @@ function row(identifier: string, title: string, overrides: Partial<Issue> = {}):
 const context = (overrides: Partial<PaletteContext> = {}): PaletteContext => ({
   selection: null,
   selectionStatus: null,
-  view: "board",
+  view: "tree",
   ws: "",
   assignee: "",
   workspaces: [{ slug: "staple", prefix: "STA" }],
@@ -157,8 +157,8 @@ describe("buildCommands", () => {
   });
 
   it("does not offer the view you are already on", () => {
-    const views = buildCommands(context({ view: "board" })).filter((c) => c.group === "view");
-    expect(views.map((c) => c.id)).toEqual(["view:inbox", "view:tree", "view:graph"]);
+    const views = buildCommands(context({ view: "tree" })).filter((c) => c.group === "view");
+    expect(views.map((c) => c.id)).toEqual(["view:graph"]);
   });
 
   it("only offers to clear the assignee filter when one is set", () => {
@@ -181,10 +181,10 @@ describe("orderCommands", () => {
   );
 
   it("floats commands acting on the open issue above everything else", () => {
-    const ordered = orderCommands(commands, ["view:inbox"], true);
+    const ordered = orderCommands(commands, ["view:graph"], true);
     expect(ordered[0]?.group).toBe("actions");
-    // Even though view:inbox is the single most recent command.
-    expect(ordered.findIndex((c) => c.id === "view:inbox")).toBeGreaterThan(0);
+    // Even though view:graph is the single most recent command.
+    expect(ordered.findIndex((c) => c.id === "view:graph")).toBeGreaterThan(0);
   });
 
   it("promotes recents when there is no selection to be contextual about", () => {
@@ -195,8 +195,8 @@ describe("orderCommands", () => {
 
   it("orders the recent tier most-recent-first", () => {
     const noSelection = buildCommands(context({ assignee: "kim" }));
-    const ordered = orderCommands(noSelection, ["filter:assignee:clear", "view:inbox"], false);
-    expect(ordered.slice(0, 2).map((c) => c.id)).toEqual(["filter:assignee:clear", "view:inbox"]);
+    const ordered = orderCommands(noSelection, ["filter:assignee:clear", "view:graph"], false);
+    expect(ordered.slice(0, 2).map((c) => c.id)).toEqual(["filter:assignee:clear", "view:graph"]);
   });
 
   it("is stable — it never reshuffles commands within a tier", () => {

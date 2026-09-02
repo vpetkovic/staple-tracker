@@ -91,7 +91,14 @@ import { nodeTypes, type GraphFlowNode } from "./graph/node-types";
 import { EmptyState, ViewState } from "./ViewChrome";
 
 /** Height is explicit because React Flow measures its container and the shell scrolls. */
-const CANVAS_CLASS = "h-[calc(100vh-13rem)] min-h-[26rem] w-full rounded-lg border bg-card";
+/*
+ * V2 (STA-87): was `h-[calc(100vh-13rem)] min-h-[26rem]`. That 13rem was a hard-coded
+ * guess at the height of the app header plus this view's own toolbar, and it was wrong
+ * the moment the header changed — which is exactly what STA-87 did. The canvas now takes
+ * the space that is left, because the shell hands this view a real box to fill instead of
+ * a scrolling page to measure against the viewport.
+ */
+const CANVAS_CLASS = "min-h-0 w-full flex-1 rounded-lg border bg-card";
 
 function Legend() {
   return (
@@ -658,7 +665,7 @@ function GraphCanvas({ graph }: { graph: Graph }) {
 
   return (
     <>
-      <div className="flex flex-wrap items-center justify-between gap-2">
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-2">
         <Legend />
         <div className="flex flex-wrap items-center gap-1.5">
           <GraphToolbar
@@ -734,7 +741,11 @@ export function GraphView({ onAuthError }: { onAuthError: (error: AuthError) => 
   const resource = useResource(load, [session.version], onAuthError);
 
   return (
-    <div className="mx-auto max-w-full">
+    // A column that fills the shell's content box: toolbar at its natural height, canvas
+    // taking the rest. Unlike the tree, this view is INSET rather than full-bleed — a
+    // canvas is a single object you look at, not a list that runs to the edge of the
+    // window, and the border is what says where the coordinate space stops.
+    <div className="flex h-full flex-col gap-2 px-4 py-3">
       <ViewState resource={resource} empty="no dependencies yet">
         {(graph) => (
           // Keyed by scope: switching hub/workspace or the ws filter is a different

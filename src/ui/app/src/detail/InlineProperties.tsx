@@ -13,20 +13,20 @@
  * refuse, so the value the UI guessed and the value the store kept are not reliably the
  * same thing. On a loopback SQLite round trip there is nothing to buy by guessing.
  *
- * Refusals go through describeRefusal() + GuardRefusal from views/board/ — the shared
+ * Refusals go through describeRefusal() + GuardRefusal, now lib/ and components/ — the shared
  * primitive, imported and not re-implemented, so an editor can never show a sentence
  * the store did not say.
  */
 import { Check, Pencil, Plus, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { GuardRefusal } from "@/components/GuardRefusal";
 import { PriorityLabel } from "@/components/PriorityLabel";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
 import { action } from "@/lib/api";
+import { describeRefusal, type Refusal } from "@/lib/refusal";
 import { ISSUE_PRIORITIES, type ActionPayload, type Issue, type IssuePriority } from "@/lib/types";
-import { GuardRefusal } from "@/views/board/GuardRefusal";
-import { describeRefusal, type Refusal } from "@/views/board/refusal";
 
 interface EditorProps {
   issue: Issue;
@@ -225,7 +225,11 @@ export function InlineLabels({ issue, workspace, refresh }: EditorProps) {
   };
 
   return (
-    <div data-edit-labels className="mt-2">
+    // V3 (STA-88): the `mt-2` this carried is gone. It was correct while labels hung
+    // directly under the title; they are now a row of the property grid, and a top
+    // margin inside a grid cell pushes its own row off the baseline every other row
+    // in the block is aligned to. Spacing belongs to whatever places this.
+    <div data-edit-labels>
       <div className="flex flex-wrap items-center gap-1">
         {issue.labels.map((label) => (
           <span

@@ -1,0 +1,565 @@
+/**
+ * V4 (STA-89) — the filter system's contract.
+ *
+ * What is worth pinning here is not "applyFilters returns an array". It is the handful
+ * of ways a filter system quietly becomes a liar:
+ *
+ *   1. **Silently hiding work.** The single worst outcome for a tracker. Two shapes of
+ *      it are tested: a done PARENT must not take its live children off the page with
+ *      it, and an empty selection in a dimension must mean "no constraint", never
+ *      "match nothing".
+ *   2. **AND/OR getting swapped.** Values inside one dimension are alternatives (status
+ *      is todo OR blocked); dimensions are conjunctions (todo AND @kim). Invert either
+ *      and the result is still a plausible-looking list that answers a question nobody
+ *      asked.
+ *   3. **The done default becoming absolute.** Hiding done by default is right; refusing
+ *      to show it when the user explicitly filters FOR Done is a bug that reads as the
+ *      filter being broken.
+ *   4. **Persistence losing state it does not recognise.** The stored envelope is
+ *      versioned and keyed for future saved sets. A round trip must be lossless, and a
+ *      dimension this build has never heard of must survive being read and written by
+ *      it — otherwise shipping dimension seven silently wipes it for anyone who opens
+ *      an older tab.
+ *   5. **Claim-state inventing its own idea of stale.** There is exactly one threshold
+ *      in this app (`STALE_CLAIM_SECONDS`) and the filter must be downstream of it.
+ *
+ * Imports are relative, not "@/…": there is no vitest config at the repo root, so the
+ * app's `@` alias (src/ui/app/vite.config.ts) does not exist at test time.
+ */
+import { describe, expect, it } from "vitest";
+import { STALE_CLAIM_SECONDS } from "./claim.ts";
+import {
+  DEFAULT_FILTER_SET,
+  FILTERS_STORAGE_KEY,
+  FILTER_DIMENSIONS,
+  UNASSIGNED,
+  activeChips,
+  applyFilters,
+  countActive,
+  decodeFilters,
+  dimensionOptions,
+  emptyFilters,
+  encodeFilters,
+  hiddenParents,
+  isFiltering,
+  loadFilters,
+  saveFilters,
+  toggleValue,
+  withDimension,
+} from "./filters.ts";
+import type { FilterState } from "./filters.ts";
+import type { ClaimActivity, Issue, IssuePriority, IssueRow, IssueStatus } from "./types.ts";
+
+// ---------- fixtures ----------
+
+let seq = 0;
+
+function issue(over: Partial<Issue> = {}): Issue {
+  seq += 1;
+  const identifier = over.identifier ?? `STA-${seq}`;
+  return {
+    id: over.id ?? `id-${identifier}`,
+    identifier,
+    title: `task ${identifier}`,
+    description: null,
+    status: "todo",
+    statusVersion: 1,
+    priority: "medium",
+    parentId: null,
+    depth: 0,
+    assignee: null,
+    createdBy: null,
+    labels: [],
+    acceptanceCriteria: null,
+    blockParentUntilDone: false,
+    unblockOwner: null,
+    unblockAction: null,
+    originKind: "human",
+    originId: null,
+    idempotencyKey: null,
+    checkoutAgent: null,
+    checkoutAt: null,
+    blockedTransitionAt: null,
+    startedAt: null,
+    completedAt: null,
+    cancelledAt: null,
+    estimatedSeconds: null,
+    createdAt: "2026-09-01T00:00:00Z",
+    updatedAt: "2026-09-01T00:00:00Z",
+    ...over,
+  };
+}
+
+function claim(idleSeconds: number, heldBy = "opus-x"): ClaimActivity {
+  return {
+    heldBy,
+    checkoutAt: "2026-09-01T00:00:00Z",
+    lastActivityAt: "2026-09-01T00:00:00Z",
+    heldSeconds: idleSeconds + 60,
+    idleSeconds,
+  };
+}
+
+function row(over: Partial<Issue> = {}, activity: ClaimActivity | null = null): IssueRow {
+  return { workspace: "staple", issue: issue(over), claim: activity };
+}
+
+/** Just the identifiers, which is what every assertion below is actually about. */
+const ids = (rows: readonly IssueRow[]): string[] => rows.map((r) => r.issue.identifier);
+
+/** A state with one dimension set, spelled out so no test depends on helper behaviour. */
+function state(over: Partial<FilterState> = {}): FilterState {
+  return { ...emptyFilters(), ...over };
+}
+
+// ---------- the default, and the empty case ----------
+
+describe("emptyFilters", () => {
+  it("hides done out of the box — that is the whole ClickUp behaviour", () => {
+    expect(emptyFilters().showDone).toBe(false);
+  });
+
+  it("constrains nothing else", () => {
+    const empty = emptyFilters();
+    expect(empty.dims).toEqual({});
+    expect(empty.text).toBe("");
+    expect(isFiltering(empty)).toBe(false);
+    expect(countActive(empty)).toBe(0);
+  });
+
+  it("passes every open row through untouched", () => {
+    const rows = [row({ identifier: "A" }), row({ identifier: "B" }), row({ identifier: "C" })];
+    expect(ids(applyFilters(rows, emptyFilters()))).toEqual(["A", "B", "C"]);
+  });
+
+  it("treats an EMPTY selection as no constraint, not as match-nothing", () => {
+    const rows = [row({ identifier: "A" }), row({ identifier: "B" })];
+    expect(ids(applyFilters(rows, state({ dims: { status: [] } })))).toEqual(["A", "B"]);
+  });
+});
+
+// ---------- done / closed ----------
+
+describe("the done default", () => {
+  const rows = () => [
+    row({ identifier: "OPEN", status: "in_progress" }),
+    row({ identifier: "DONE", status: "done" }),
+    row({ identifier: "CANX", status: "cancelled" }),
+  ];
+
+  it("drops done AND cancelled by default", () => {
+    expect(ids(applyFilters(rows(), emptyFilters()))).toEqual(["OPEN"]);
+  });
+
+  it("shows them on explicit opt-in", () => {
+    expect(ids(applyFilters(rows(), state({ showDone: true })))).toEqual(["OPEN", "DONE", "CANX"]);
+  });
+
+  it("lets an explicit status filter override the default hide", () => {
+    // Asking for Done and being shown nothing is the single most confusing thing this
+    // system could do. Selecting a resolved status IS the opt-in.
+    const asked = state({ dims: { status: ["done"] } });
+    expect(asked.showDone).toBe(false);
+    expect(ids(applyFilters(rows(), asked))).toEqual(["DONE"]);
+  });
+
+  it("does not let asking for `done` smuggle `cancelled` back in", () => {
+    const asked = state({ dims: { status: ["done", "in_progress"] } });
+    expect(ids(applyFilters(rows(), asked))).toEqual(["OPEN", "DONE"]);
+  });
+});
+
+// ---------- the six dimensions ----------
+
+describe("status", () => {
+  it("ORs the values within the dimension", () => {
+    const rows = [
+      row({ identifier: "A", status: "todo" }),
+      row({ identifier: "B", status: "blocked" }),
+      row({ identifier: "C", status: "backlog" }),
+    ];
+    expect(ids(applyFilters(rows, state({ dims: { status: ["todo", "blocked"] } })))).toEqual(["A", "B"]);
+  });
+});
+
+describe("assignee", () => {
+  it("matches exactly, and is case-insensitive", () => {
+    const rows = [
+      row({ identifier: "A", assignee: "kim" }),
+      row({ identifier: "B", assignee: "Kim" }),
+      row({ identifier: "C", assignee: "kimberly" }),
+    ];
+    expect(ids(applyFilters(rows, state({ dims: { assignee: ["kim"] } })))).toEqual(["A", "B"]);
+  });
+
+  it("has a first-class unassigned bucket", () => {
+    const rows = [row({ identifier: "A", assignee: "kim" }), row({ identifier: "B", assignee: null })];
+    expect(ids(applyFilters(rows, state({ dims: { assignee: [UNASSIGNED] } })))).toEqual(["B"]);
+  });
+});
+
+describe("priority", () => {
+  it("filters on the wire value, whatever the menu calls it", () => {
+    const rows = [
+      row({ identifier: "A", priority: "critical" }),
+      row({ identifier: "B", priority: "low" }),
+    ];
+    expect(ids(applyFilters(rows, state({ dims: { priority: ["critical"] } })))).toEqual(["A"]);
+  });
+
+  it("renders `critical` as Urgent, per the STA-97 row spec", () => {
+    const priority = FILTER_DIMENSIONS.find((d) => d.id === "priority");
+    expect(priority?.format("critical")).toBe("Urgent");
+  });
+});
+
+describe("label", () => {
+  it("matches a row carrying ANY of the selected labels", () => {
+    const rows = [
+      row({ identifier: "A", labels: ["ui", "chore"] }),
+      row({ identifier: "B", labels: ["infra"] }),
+      row({ identifier: "C", labels: [] }),
+    ];
+    expect(ids(applyFilters(rows, state({ dims: { label: ["ui", "infra"] } })))).toEqual(["A", "B"]);
+  });
+});
+
+describe("claim state", () => {
+  const rows = () => [
+    row({ identifier: "LIVE", status: "in_progress", checkoutAgent: "opus-x" }, claim(30)),
+    row(
+      { identifier: "STALE", status: "in_progress", checkoutAgent: "opus-y" },
+      claim(STALE_CLAIM_SECONDS + 1, "opus-y"),
+    ),
+    row({ identifier: "HELD", status: "in_progress", checkoutAgent: "opus-z" }, null),
+    row({ identifier: "FREE", status: "todo" }, null),
+  ];
+
+  it("splits the four states the row spec names, and they do not overlap", () => {
+    expect(ids(applyFilters(rows(), state({ dims: { claim: ["live"] } })))).toEqual(["LIVE"]);
+    expect(ids(applyFilters(rows(), state({ dims: { claim: ["stale"] } })))).toEqual(["STALE"]);
+    expect(ids(applyFilters(rows(), state({ dims: { claim: ["held"] } })))).toEqual(["HELD"]);
+    expect(ids(applyFilters(rows(), state({ dims: { claim: ["free"] } })))).toEqual(["FREE"]);
+  });
+
+  it("is downstream of STALE_CLAIM_SECONDS rather than owning a threshold", () => {
+    // One second under the shared threshold is live; at it, stale. If this test starts
+    // failing because someone tuned a number in filters.ts, that is the bug.
+    const boundary = [
+      row({ identifier: "UNDER", status: "in_progress" }, claim(STALE_CLAIM_SECONDS - 1)),
+      row({ identifier: "AT", status: "in_progress" }, claim(STALE_CLAIM_SECONDS)),
+    ];
+    expect(ids(applyFilters(boundary, state({ dims: { claim: ["live"] } })))).toEqual(["UNDER"]);
+    expect(ids(applyFilters(boundary, state({ dims: { claim: ["stale"] } })))).toEqual(["AT"]);
+  });
+
+  it("covers every row exactly once across the four states", () => {
+    const all = rows();
+    const everything = state({ dims: { claim: ["live", "stale", "held", "free"] } });
+    expect(applyFilters(all, everything)).toHaveLength(all.length);
+  });
+});
+
+describe("text", () => {
+  it("searches identifier, title, assignee and labels", () => {
+    const rows = [
+      row({ identifier: "STA-1", title: "rebuild the header" }),
+      row({ identifier: "STA-2", title: "unrelated", assignee: "marcus" }),
+      row({ identifier: "STA-3", title: "unrelated", labels: ["header"] }),
+      row({ identifier: "STA-4", title: "nothing here" }),
+    ];
+    expect(ids(applyFilters(rows, state({ text: "header" })))).toEqual(["STA-1", "STA-3"]);
+    expect(ids(applyFilters(rows, state({ text: "marcus" })))).toEqual(["STA-2"]);
+    expect(ids(applyFilters(rows, state({ text: "sta-4" })))).toEqual(["STA-4"]);
+  });
+
+  it("ignores case and surrounding whitespace", () => {
+    const rows = [row({ identifier: "A", title: "Rebuild The Header" })];
+    expect(ids(applyFilters(rows, state({ text: "  the HEADER " })))).toEqual(["A"]);
+  });
+});
+
+// ---------- combination ----------
+
+describe("combining dimensions", () => {
+  it("ANDs across dimensions while ORing within each", () => {
+    const rows = [
+      row({ identifier: "HIT", status: "todo", assignee: "kim", priority: "high" }),
+      row({ identifier: "WRONG_STATUS", status: "backlog", assignee: "kim", priority: "high" }),
+      row({ identifier: "WRONG_WHO", status: "todo", assignee: "sam", priority: "high" }),
+      row({ identifier: "WRONG_PRI", status: "blocked", assignee: "kim", priority: "low" }),
+    ];
+    const combined = state({
+      dims: { status: ["todo", "blocked"], assignee: ["kim"], priority: ["high", "critical"] },
+    });
+    expect(ids(applyFilters(rows, combined))).toEqual(["HIT"]);
+  });
+
+  it("ANDs text with the dimensions", () => {
+    const rows = [
+      row({ identifier: "A", status: "todo", title: "header work" }),
+      row({ identifier: "B", status: "todo", title: "footer work" }),
+    ];
+    expect(ids(applyFilters(rows, state({ dims: { status: ["todo"] }, text: "header" })))).toEqual(["A"]);
+  });
+
+  it("can exclude everything — an empty result is a real answer, not a bug", () => {
+    const rows = [row({ identifier: "A", status: "todo" })];
+    expect(applyFilters(rows, state({ dims: { status: ["blocked"] } }))).toEqual([]);
+  });
+
+  it("ignores a dimension this build does not know about", () => {
+    // Forward compatibility: a state written by a newer build must not blank the list.
+    const rows = [row({ identifier: "A" }), row({ identifier: "B" })];
+    expect(ids(applyFilters(rows, state({ dims: { sprint: ["s-12"] } })))).toEqual(["A", "B"]);
+  });
+});
+
+// ---------- the STA-97 invariant ----------
+
+describe("the hidden-parent invariant (STA-97)", () => {
+  const tree = () => {
+    const parent = issue({ identifier: "EPIC", status: "done" });
+    const child = issue({ identifier: "KID", status: "in_progress", parentId: parent.id });
+    const grandchild = issue({ identifier: "GRANDKID", status: "todo", parentId: child.id });
+    return [
+      { workspace: "staple", issue: parent, claim: null },
+      { workspace: "staple", issue: child, claim: null },
+      { workspace: "staple", issue: grandchild, claim: null },
+    ];
+  };
+
+  it("keeps live children when their done parent is filtered out", () => {
+    // The parent goes. The children are open work and MUST stay on the page.
+    expect(ids(applyFilters(tree(), emptyFilters()))).toEqual(["KID", "GRANDKID"]);
+  });
+
+  it("reports the filtered-out parent so a row can render a breadcrumb", () => {
+    const all = tree();
+    const visible = applyFilters(all, emptyFilters());
+    const orphans = hiddenParents(visible, all);
+    const kid = visible.find((r) => r.issue.identifier === "KID");
+    expect(kid).toBeDefined();
+    expect(orphans.get(kid!.issue.id)?.identifier).toBe("EPIC");
+    // GRANDKID's parent survived the filter, so it is not orphaned and needs no chip.
+    const grandkid = visible.find((r) => r.issue.identifier === "GRANDKID");
+    expect(orphans.has(grandkid!.issue.id)).toBe(false);
+  });
+
+  it("reports nothing when nothing was filtered out", () => {
+    const all = tree();
+    expect(hiddenParents(all, all).size).toBe(0);
+  });
+});
+
+// ---------- the registry ----------
+
+describe("the dimension registry", () => {
+  it("carries the five menu dimensions (text has its own box)", () => {
+    expect(FILTER_DIMENSIONS.map((d) => d.id)).toEqual([
+      "status",
+      "assignee",
+      "priority",
+      "label",
+      "claim",
+    ]);
+  });
+
+  it("derives assignee and label options from the rows on hand", () => {
+    const rows = [
+      row({ assignee: "kim", labels: ["ui", "chore"] }),
+      row({ assignee: "sam", labels: ["ui"] }),
+      row({ assignee: null, labels: [] }),
+    ];
+    const assignees = dimensionOptions("assignee", rows).map((o) => o.value);
+    expect(assignees).toContain("kim");
+    expect(assignees).toContain("sam");
+    expect(assignees).toContain(UNASSIGNED);
+    const labels = dimensionOptions("label", rows).map((o) => o.value);
+    expect(labels).toEqual(["chore", "ui"]);
+  });
+
+  it("counts how many rows each option would match", () => {
+    const rows = [row({ status: "todo" }), row({ status: "todo" }), row({ status: "blocked" })];
+    const byValue = new Map(dimensionOptions("status", rows).map((o) => [o.value, o.count]));
+    expect(byValue.get("todo")).toBe(2);
+    expect(byValue.get("blocked")).toBe(1);
+  });
+
+  it("offers the closed enums in full even when no row uses them", () => {
+    // A status nobody is in still has to be selectable; otherwise you can never filter
+    // for "blocked" to confirm that nothing is blocked.
+    const values = dimensionOptions("status", [row({ status: "todo" })]).map((o) => o.value);
+    const statuses: IssueStatus[] = [
+      "in_progress",
+      "in_review",
+      "blocked",
+      "todo",
+      "backlog",
+      "done",
+      "cancelled",
+    ];
+    expect(values).toEqual(statuses);
+    const priorities: IssuePriority[] = ["critical", "high", "medium", "low"];
+    expect(dimensionOptions("priority", []).map((o) => o.value)).toEqual(priorities);
+  });
+});
+
+// ---------- state helpers the bar is built on ----------
+
+describe("state helpers", () => {
+  it("toggles a value in and back out of a dimension", () => {
+    const on = toggleValue(emptyFilters(), "status", "todo");
+    expect(on.dims.status).toEqual(["todo"]);
+    const off = toggleValue(on, "status", "todo");
+    expect(off.dims.status ?? []).toEqual([]);
+    expect(isFiltering(off)).toBe(false);
+  });
+
+  it("never mutates the state it was given", () => {
+    const before = emptyFilters();
+    toggleValue(before, "status", "todo");
+    expect(before.dims).toEqual({});
+  });
+
+  it("drops a dimension entirely when its last value is removed", () => {
+    const cleared = withDimension(toggleValue(emptyFilters(), "status", "todo"), "status", []);
+    expect("status" in cleared.dims).toBe(false);
+  });
+
+  it("counts text and each selected value as one active filter each", () => {
+    const busy = state({ dims: { status: ["todo", "blocked"], assignee: ["kim"] }, text: "header" });
+    expect(countActive(busy)).toBe(4);
+    expect(isFiltering(busy)).toBe(true);
+  });
+
+  it("does not count `showDone` as a filter — it is a default being lifted", () => {
+    expect(isFiltering(state({ showDone: true }))).toBe(false);
+    expect(countActive(state({ showDone: true }))).toBe(0);
+  });
+
+  it("describes every active value as its own removable chip", () => {
+    const busy = state({ dims: { status: ["todo", "done"], assignee: [UNASSIGNED] }, text: "hi" });
+    const chips = activeChips(busy);
+    expect(chips.map((c) => c.dimension)).toEqual(["status", "status", "assignee", "text"]);
+    expect(chips.map((c) => c.label)).toEqual(["To Do", "Done", "Unassigned", '"hi"']);
+    // Removing a chip must remove exactly that value and leave the rest alone.
+    const first = chips[0]!;
+    const after = first.remove(busy);
+    expect(after.dims.status).toEqual(["done"]);
+    expect(after.dims.assignee).toEqual([UNASSIGNED]);
+    expect(after.text).toBe("hi");
+  });
+});
+
+// ---------- persistence ----------
+
+/** The three Storage methods this module touches, and nothing else. */
+function memoryStorage(seed: Record<string, string> = {}): Storage {
+  const map = new Map(Object.entries(seed));
+  return {
+    getItem: (k: string) => map.get(k) ?? null,
+    setItem: (k: string, v: string) => void map.set(k, v),
+    removeItem: (k: string) => void map.delete(k),
+    clear: () => map.clear(),
+    key: (i: number) => [...map.keys()][i] ?? null,
+    get length() {
+      return map.size;
+    },
+  } as Storage;
+}
+
+describe("persistence", () => {
+  it("round-trips a full state losslessly", () => {
+    const before = state({
+      dims: { status: ["todo", "blocked"], assignee: ["kim", UNASSIGNED], label: ["ui"], claim: ["live"] },
+      text: "header",
+      showDone: true,
+    });
+    expect(decodeFilters(encodeFilters(before))).toEqual(before);
+  });
+
+  it("round-trips through a Storage — set, reload, still applied", () => {
+    // This is the reload, modelled: a second `loadFilters` against the same storage is
+    // exactly what a fresh page load does.
+    const storage = memoryStorage();
+    const before = state({ dims: { status: ["blocked"], assignee: ["kim"] }, text: "x", showDone: true });
+    saveFilters(storage, before);
+    expect(loadFilters(storage)).toEqual(before);
+
+    const rows = [
+      row({ identifier: "HIT", status: "blocked", assignee: "kim", title: "x marks it" }),
+      row({ identifier: "MISS", status: "todo", assignee: "kim", title: "x marks it" }),
+    ];
+    expect(ids(applyFilters(rows, loadFilters(storage)))).toEqual(["HIT"]);
+  });
+
+  it("persists the done opt-in specifically", () => {
+    const storage = memoryStorage();
+    saveFilters(storage, state({ showDone: true }));
+    expect(loadFilters(storage).showDone).toBe(true);
+
+    saveFilters(storage, state({ showDone: false }));
+    expect(loadFilters(storage).showDone).toBe(false);
+  });
+
+  it("writes one key, under an envelope with room for named sets", () => {
+    const storage = memoryStorage();
+    saveFilters(storage, state({ text: "hi" }));
+    const raw = storage.getItem(FILTERS_STORAGE_KEY);
+    expect(raw).not.toBeNull();
+    const envelope = JSON.parse(raw!) as { version: number; active: string; sets: Record<string, unknown> };
+    expect(envelope.version).toBe(1);
+    expect(envelope.active).toBe(DEFAULT_FILTER_SET);
+    expect(Object.keys(envelope.sets)).toEqual([DEFAULT_FILTER_SET]);
+  });
+
+  it("preserves a dimension it has never heard of across a round trip", () => {
+    // Shipping dimension seven must not wipe it for anyone still on an older tab.
+    const future = state({ dims: { status: ["todo"], sprint: ["s-12"] } });
+    expect(decodeFilters(encodeFilters(future)).dims.sprint).toEqual(["s-12"]);
+  });
+
+  it("falls back to the default when there is nothing stored", () => {
+    expect(loadFilters(memoryStorage())).toEqual(emptyFilters());
+  });
+
+  it("falls back to the default on garbage rather than throwing", () => {
+    expect(decodeFilters("not json at all")).toEqual(emptyFilters());
+    expect(decodeFilters(null)).toEqual(emptyFilters());
+    expect(decodeFilters("[1,2,3]")).toEqual(emptyFilters());
+    expect(loadFilters(memoryStorage({ [FILTERS_STORAGE_KEY]: "{" }))).toEqual(emptyFilters());
+  });
+
+  it("repairs a partially-wrong stored shape instead of discarding the good parts", () => {
+    const raw = JSON.stringify({
+      version: 1,
+      active: DEFAULT_FILTER_SET,
+      sets: {
+        [DEFAULT_FILTER_SET]: {
+          dims: { status: ["todo", 7, null], assignee: "not-an-array" },
+          text: 42,
+          showDone: "yes",
+        },
+      },
+    });
+    const repaired = decodeFilters(raw);
+    expect(repaired.dims.status).toEqual(["todo"]);
+    expect(repaired.dims.assignee).toBeUndefined();
+    expect(repaired.text).toBe("");
+    expect(repaired.showDone).toBe(false);
+  });
+
+  it("survives a storage that throws on every call (private mode)", () => {
+    const hostile = {
+      getItem: () => {
+        throw new Error("nope");
+      },
+      setItem: () => {
+        throw new Error("nope");
+      },
+    } as unknown as Storage;
+    expect(loadFilters(hostile)).toEqual(emptyFilters());
+    expect(() => saveFilters(hostile, emptyFilters())).not.toThrow();
+  });
+});

@@ -25,7 +25,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { initWorkspace } from "../src/core/workspace.js";
 import { MAX_TREE_DEPTH } from "../src/core/types.js";
 import { startUiServer, type UiHandle } from "../src/ui/server.js";
-import { describeRefusal, type Refusal } from "../src/ui/app/src/views/board/refusal.js";
+import { describeRefusal, type Refusal } from "../src/ui/app/src/lib/refusal.js";
 
 interface Issue {
   identifier: string;

@@ -11,11 +11,12 @@
  *     command.tsx's missing `shouldFilter` forwarding is not in the way, and nothing
  *     under components/ui/ had to be touched.
  *
- * Refusals render through describeRefusal() + GuardRefusal from views/board/ — the
- * same pair the board uses for a refused drag. Imported, never copied: a second
- * refusal renderer is a second chance to paraphrase a guard.
+ * Refusals render through describeRefusal() + GuardRefusal, which live in lib/ and
+ * components/ since V2 (STA-87) retired the board they used to sit behind. Imported,
+ * never copied: a second refusal renderer is a second chance to paraphrase a guard.
  */
 import { useState } from "react";
+import { GuardRefusal } from "@/components/GuardRefusal";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -30,10 +31,9 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { action } from "@/lib/api";
+import { describeRefusal, type Refusal } from "@/lib/refusal";
 import { useSession } from "@/lib/session";
 import { ISSUE_PRIORITIES, type Issue, type IssuePriority } from "@/lib/types";
-import { GuardRefusal } from "@/views/board/GuardRefusal";
-import { describeRefusal, type Refusal } from "@/views/board/refusal";
 import { EMPTY_CREATE_FORM, buildCreatePayload, type CreateFormState } from "./createIssueForm";
 
 export function CreateIssueDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {

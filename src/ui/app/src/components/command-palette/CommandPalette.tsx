@@ -10,6 +10,7 @@
  * away. It stays open, shows what the store said, and the fix is one more keystroke.
  */
 import { useCallback, useMemo, useState } from "react";
+import { GuardRefusal } from "@/components/GuardRefusal";
 import {
   Command,
   CommandEmpty,
@@ -30,8 +31,7 @@ import { action, getIssues } from "@/lib/api";
 import { useSession } from "@/lib/session";
 import type { IssueStatus } from "@/lib/types";
 import { useResource } from "@/lib/useStaple";
-import { cn } from "@/lib/utils";
-import { describeRefusal, type Refusal } from "@/views/board/refusal";
+import { describeRefusal, type Refusal } from "@/lib/refusal";
 import {
   buildCommands,
   filterCommands,
@@ -128,9 +128,10 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
         session.refresh();
         return true;
       } catch (error) {
-        // The store's own sentence, verbatim — same rule as the board. This imports
-        // views/board/refusal.ts rather than copying it, because two copies of "show
-        // exactly what the store said" is how one of them starts paraphrasing.
+        // The store's own sentence, verbatim. lib/refusal.ts is the single translation
+        // from a rejected write into something renderable, and it is imported rather
+        // than reimplemented because two copies of "show exactly what the store said"
+        // is how one of them starts paraphrasing.
         setRefusal(describeRefusal(error));
         return false;
       } finally {
@@ -312,18 +313,17 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
           </CommandList>
 
           {refusal ? (
-            // The palette stays open on a refusal. The store's sentence, unchanged.
-            <div
-              data-palette-refusal
-              role="alert"
-              className={cn(
-                "border-t border-[var(--status-task-blocked)]/40 bg-[var(--status-task-blocked)]/10 px-3 py-2",
-                "text-[13px] leading-snug wrap-anywhere",
-              )}
-            >
-              <span className="font-mono text-[11px] text-muted-foreground">{refusal.code} · </span>
-              <span data-palette-refusal-message>{refusal.message}</span>
-            </div>
+            // The palette stays open on a refusal, and since V2 (STA-87) it renders the
+            // refusal the same way every other surface does. The strip that used to be
+            // here was hand-rolled and showed only a code and a sentence — it silently
+            // dropped detail.blockers and the store's own retryable verdict, so the
+            // palette told you a start was refused and made you go elsewhere to find out
+            // which blockers, while the board two tabs over showed them as chips.
+            <GuardRefusal
+              refusal={refusal}
+              onDismiss={() => setRefusal(null)}
+              className="border-t border-[var(--status-task-blocked)]/40 bg-[var(--status-task-blocked)]/10 px-3 py-2.5"
+            />
           ) : null}
         </Command>
       </DialogContent>
