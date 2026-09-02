@@ -29,10 +29,12 @@ import {
   ISO,
   ISO_RE,
   PATH,
+  SECONDS,
   UUID,
   UUID_RE,
   asStructured,
   claimGolden,
+  timingGolden,
   commentGolden,
   decodeCursorForAssertion,
   issueGolden,
@@ -570,6 +572,36 @@ describe("tool response shapes (16/16)", () => {
       // C1: liveness of the claim, so a caller can tell a working agent from a
       // dead one. CON-1 is held by the contract agent.
       claim: claimGolden(),
+      /**
+       * STA-81/STA-90: estimate vs actual, derived at read time. CON-1 has no
+       * estimate but IS in_progress with an open interval, so `ownActiveSeconds`
+       * is a reading (tokenized, like the claim durations beside it) and
+       * `countedThrough` names the instant it was counted through — the ISO
+       * token, never `now`.
+       *
+       * `activeSeconds` stays NULL even so, and that is the whole of STA-90 on
+       * one line: CON-1 has a child, so its headline is the aggregation of its
+       * children, and CON-4 has never run. A parent gets no stopwatch of its own
+       * however busy it looks.
+       *
+       * `childrenEstimatedSeconds` is null rather than 0: no child recorded an
+       * estimate, and "none recorded" is not "estimated at nothing".
+       */
+      timing: timingGolden({
+        ownActiveSeconds: SECONDS,
+        childCount: 1,
+        childStatusCounts: {
+          backlog: 1,
+          todo: 0,
+          in_progress: 0,
+          in_review: 0,
+          done: 0,
+          blocked: 0,
+          cancelled: 0,
+        },
+      }),
+      // Keyed by IDENTIFIER, not uuid — which is why this line is readable.
+      childrenTiming: { "CON-4": timingGolden() },
     });
   });
 
@@ -583,6 +615,13 @@ describe("tool response shapes (16/16)", () => {
           priority: "high",
           assignee: CONTRACT_AGENT,
           parentId: null,
+          /**
+           * STA-81: the SCALAR estimate rides on this trimmed summary, and the
+           * `timing` object deliberately does not. This shape exists to make
+           * choosing a task cheap, and seven per-status counts per row is bulk
+           * nobody picking work reads — get_task is where the analysis lives.
+           */
+          estimatedSeconds: null,
           // C1: the only held row on this page carries its liveness.
           claim: claimGolden(),
         },
@@ -593,6 +632,7 @@ describe("tool response shapes (16/16)", () => {
           priority: "medium",
           assignee: null,
           parentId: null,
+          estimatedSeconds: null,
           claim: null,
         },
       ],
@@ -609,6 +649,7 @@ describe("tool response shapes (16/16)", () => {
           priority: "medium",
           assignee: null,
           parentId: null,
+          estimatedSeconds: null,
           claim: null,
         },
         {
@@ -618,6 +659,7 @@ describe("tool response shapes (16/16)", () => {
           priority: "medium",
           assignee: null,
           parentId: UUID,
+          estimatedSeconds: null,
           claim: null,
         },
       ],

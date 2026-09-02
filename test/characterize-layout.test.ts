@@ -143,7 +143,9 @@ describe("a fresh repo-local `staple init`", () => {
       // WORKSPACE_SCHEMA_VERSION, stored as a STRING. A4's ordered registry has
       // to keep reading (and probably keep writing) this exact representation,
       // or an old binary's `CAST(meta.value AS INTEGER)` guard misbehaves.
-      { key: "schema_version", value: "2" },
+      // Bumped to "3" by STA-81 (003-issue-estimate); the TEXT typing is the
+      // characterization, the number just tracks the migration list.
+      { key: "schema_version", value: "3" },
       { key: "slug", value: "metarepo" },
     ]);
   }, 30_000);
@@ -306,7 +308,9 @@ describe("global workspaces", () => {
     expect(diskTree(home)).toEqual(["hub.db 644", "workspaces/", "workspaces/solo.db 644"]);
     expect(metaRows(join(home, "workspaces", "solo.db"))).toEqual([
       { key: "prefix", value: "SOL" },
-      { key: "schema_version", value: "2" },
+      // WORKSPACE_SCHEMA_VERSION — 3 since STA-81. The hub beside it is still 2;
+      // the two databases version independently.
+      { key: "schema_version", value: "3" },
       { key: "slug", value: "solo" },
     ]);
   }, 30_000);

@@ -14,10 +14,13 @@ import {
   type IssueDocumentMeta,
   type IssuePriority,
   type IssueStatus,
+  ISSUE_STATUSES,
+  type IssueTiming,
   MAX_TREE_DEPTH,
   RESOLVED_STATUSES,
   StapleError,
   type StapleEvent,
+  assertEstimateSeconds,
   assertPriority,
   assertStatus,
   claimGuardMessage,
@@ -43,6 +46,8 @@ export interface CreateIssueInput {
   originId?: string | null;
   idempotencyKey?: string | null;
   allowDuplicate?: boolean;
+  /** Plan-time estimate in whole seconds; omit or null for none. */
+  estimatedSeconds?: number | null;
 }
 
 export interface UpdateIssueInput {
@@ -57,6 +62,14 @@ export interface UpdateIssueInput {
   unblockAction?: string | null;
   expectedStatusVersion?: number;
   comment?: string;
+  /**
+   * Same three-state convention every other nullable patch field uses (see
+   * `assignee`): absent leaves the estimate alone, a number sets it, and an
+   * explicit null clears it. There is no in-band "clear" value — 0 is a
+   * validation error precisely so that an accidental empty/unset variable
+   * cannot masquerade as a deliberate erase.
+   */
+  estimatedSeconds?: number | null;
 }
 
 /**
@@ -106,6 +119,7 @@ interface IssueRow {
   checkout_agent: string | null;
   checkout_at: string | null;
   blocked_transition_at: string | null;
+  estimated_seconds: number | null;
   started_at: string | null;
   completed_at: string | null;
   cancelled_at: string | null;
@@ -139,6 +153,8 @@ function rowToIssue(row: IssueRow): Issue {
     checkoutAgent: row.checkout_agent,
     checkoutAt: row.checkout_at,
     blockedTransitionAt: row.blocked_transition_at,
+    // SQLite hands back whatever was stored; a legacy row is NULL, never 0.
+    estimatedSeconds: row.estimated_seconds ?? null,
     startedAt: row.started_at,
     completedAt: row.completed_at,
     cancelledAt: row.cancelled_at,
@@ -177,6 +193,38 @@ const RESOLVED_SQL = "('done','cancelled')";
 function secondsBetween(from: string, to: string): number {
   const delta = (Date.parse(to) - Date.parse(from)) / 1000;
   return Number.isFinite(delta) ? Math.max(0, Math.floor(delta)) : 0;
+}
+
+/**
+ * Every event kind that MOVES an issue's status — the replay's input filter, and
+ * a list that must stay exhaustive.
+ *
+ * If a new status-writing site is added to this file without adding its event
+ * kind here, the replay silently stops reproducing the row's status, every
+ * affected issue quietly degrades to `approximate`, and the numbers get worse
+ * without anything failing. `test/store-timing.test.ts` pins the set against the
+ * store's actual behaviour precisely because a stale list here is invisible.
+ *
+ * See `WorkspaceStore.statusAfterEvent` for what each one means.
+ */
+const STATUS_MOVING_EVENT_KINDS = [
+  "issue_created",
+  "status_changed",
+  "checkout",
+  "claim_stolen",
+  "release",
+  "claim_released_stale",
+] as const;
+
+/**
+ * What the interval replay produces for ONE issue, before rollups: the issue's
+ * own numbers with no opinion yet about children.
+ */
+interface OwnTiming {
+  ownActiveSeconds: number | null;
+  reviewSeconds: number | null;
+  approximate: boolean;
+  countedThrough: string | null;
 }
 
 /**
@@ -288,6 +336,11 @@ export class WorkspaceStore {
     if (!title) throw new StapleError("validation", "Title is required");
     if (input.priority) assertPriority(input.priority);
     if (input.status) assertStatus(input.status);
+    // Validated BEFORE the transaction, like priority and status above: a bad
+    // estimate must not be discovered halfway through a create that has already
+    // consumed an issue number.
+    const estimatedSeconds =
+      input.estimatedSeconds == null ? null : assertEstimateSeconds(input.estimatedSeconds);
 
     // Paperclip default: todo when assigned, backlog otherwise.
     const status: IssueStatus = input.status ?? (input.assignee ? "todo" : "backlog");
@@ -343,8 +396,9 @@ export class WorkspaceStore {
              id, identifier, title, normalized_title, description, status, priority,
              parent_id, depth, assignee, created_by, labels, acceptance_criteria,
              block_parent_until_done, unblock_owner, unblock_action, origin_kind, origin_id,
-             idempotency_key, blocked_transition_at, started_at, created_at, updated_at
-           ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+             idempotency_key, blocked_transition_at, estimated_seconds, started_at,
+             created_at, updated_at
+           ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
            RETURNING *`,
         )
         .get(
@@ -368,6 +422,7 @@ export class WorkspaceStore {
           input.originId ?? null,
           input.idempotencyKey ?? null,
           status === "blocked" ? now : null,
+          estimatedSeconds,
           status === "in_progress" ? now : null,
           now,
           now,
@@ -388,6 +443,12 @@ export class WorkspaceStore {
         actor: input.createdBy ?? null,
         payload: { identifier, title, status },
       });
+      // Transition site 1 of 4: born in_progress under a parent. Rare, but it is
+      // still a child entering in_progress, and the rule is about state, not
+      // about which call produced it.
+      if (status === "in_progress") {
+        this.markAncestorsInProgress(row, input.createdBy ?? null);
+      }
       return { issue: rowToIssue(row), replayed: false };
     });
   }
@@ -546,6 +607,118 @@ export class WorkspaceStore {
     });
   }
 
+  /**
+   * Fires after an issue ENTERS `in_progress`: every ancestor still sitting in a
+   * pre-work status starts reading as in_progress too, so an epic whose children
+   * are being worked stops reporting `backlog`. (STA-79.)
+   *
+   * ## This is a derivation, not a claim — and that is why it skips the guard
+   *
+   * Starting work normally requires an assignee and zero unresolved blockers.
+   * Both rules are deliberately NOT applied here, and the exemption is explicit:
+   * this method writes the ancestor row itself instead of routing through
+   * `updateIssue`, precisely so the bypass is visible at the write rather than
+   * hidden behind a flag threaded through the guard.
+   *
+   * The guard governs *permission to claim*. This status is a *report*.
+   *
+   * - **Assignee.** An epic has none and usually should not — nobody claims an
+   *   epic, they claim its children. Synthesising one would be a lie with teeth:
+   *   the epic would look held, would surface in that agent's assigned work, and
+   *   would acquire claim liveness. So `assignee`, `checkout_agent` and
+   *   `checkout_at` are all left exactly as they were. That is load-bearing —
+   *   `claimActivityOfRow` returns null without a `checkout_agent`, so a derived
+   *   ancestor can never look held, never look stale, and can never be stolen.
+   * - **Blockers.** A blocker answers "may this be started". It does not make the
+   *   observed fact — work IS happening underneath — untrue. Refusing the flip
+   *   there would reinstate exactly the lie this exists to remove.
+   *
+   * Manual and direct transitions keep the guard untouched. Only this
+   * system-driven path is exempt.
+   *
+   * ## What is left alone
+   *
+   * Only `backlog` and `todo` ancestors move. `in_progress` has nothing to say;
+   * `in_review` and `done` are AHEAD of the child and must not be rewound;
+   * `cancelled` is terminal; and `blocked` is a statement the user made about an
+   * epic being worked around — a derivation does not overrule a human.
+   *
+   * The walk CONTINUES past an untouched ancestor rather than stopping at it.
+   * Stopping would make the outcome depend on history: an epic parked in
+   * `in_review` would permanently shield its own parent from ever flipping.
+   * Continuing keeps the rule level-triggered — a function of current state only.
+   *
+   * Note what is deliberately absent: there is no mirror-image rule closing an
+   * ancestor when its children finish. `children_complete` already announces
+   * that, and epic closure stays a deliberate human act.
+   *
+   * Runs inside the caller's transaction, so the ancestor flip commits with the
+   * child's own transition — no window where the child is in_progress and the
+   * epic still reads backlog.
+   */
+  private markAncestorsInProgress(
+    child: Pick<IssueRow, "id" | "identifier" | "parent_id">,
+    actor: string | null,
+  ): void {
+    const now = nowIso();
+    // Iterative, bounded, and cycle-proof: `createIssue` caps depth, but a walk
+    // over possibly-corrupt `parent_id` links should not be the thing that hangs.
+    const seen = new Set<string>([child.id]);
+    let cursor = child.parent_id;
+    let hops = 0;
+    while (cursor && hops < MAX_TREE_DEPTH && !seen.has(cursor)) {
+      seen.add(cursor);
+      const ancestor = this.db.prepare("SELECT * FROM issues WHERE id = ?").get(cursor) as unknown as
+        | IssueRow
+        | undefined;
+      if (!ancestor) break;
+      if (ancestor.status === "backlog" || ancestor.status === "todo") {
+        const result = this.db
+          .prepare(
+            `UPDATE issues SET
+               status = 'in_progress',
+               status_version = status_version + 1,
+               started_at = COALESCE(started_at, ?),
+               updated_at = ?
+             WHERE id = ? AND status IN ('backlog', 'todo')`,
+          )
+          .run(now, now, ancestor.id);
+        // Gate the event on the write, so an event can never claim a flip that
+        // did not land. `status_version` bumps because anyone holding an
+        // `expectedStatusVersion` for this epic must be forced to re-read.
+        if (Number(result.changes) > 0) {
+          /**
+           * Reuses `status_changed` rather than minting a kind, for a concrete
+           * reason: the UI timeline already renders `status_changed` as
+           * "status backlog → in_progress", while an unknown kind falls to its
+           * fail-soft branch and prints raw underscore-prose. Reuse renders
+           * correctly with no UI change; `derived`/`derivedFrom` are additive,
+           * and they are what tells a consumer this was not a human acting on
+           * the epic. The actor is the child's actor, because they caused it.
+           *
+           * No dedupKey, matching every other `status_changed` — and none is
+           * needed, since the flip only ever fires from backlog/todo and so
+           * cannot repeat without an intervening transition out of in_progress.
+           */
+          this.emitEvent({
+            kind: "status_changed",
+            issueId: ancestor.id,
+            actor,
+            payload: {
+              identifier: ancestor.identifier,
+              from: ancestor.status,
+              to: "in_progress",
+              derived: "child_started",
+              derivedFrom: child.identifier,
+            },
+          });
+        }
+      }
+      cursor = ancestor.parent_id;
+      hops += 1;
+    }
+  }
+
   /** Fires after an issue reaches done/cancelled: dependency wakes + parent completion. */
   private afterResolution(row: IssueRow): void {
     for (const dependent of this.dependentsOf(row.id)) {
@@ -618,6 +791,12 @@ export class WorkspaceStore {
       if (patch.acceptanceCriteria !== undefined) {
         next.acceptance_criteria = JSON.stringify(patch.acceptanceCriteria);
       }
+      // Three-state, exactly like assignee above: absent -> untouched,
+      // null -> cleared, number -> validated and set.
+      if (patch.estimatedSeconds !== undefined) {
+        next.estimated_seconds =
+          patch.estimatedSeconds === null ? null : assertEstimateSeconds(patch.estimatedSeconds);
+      }
 
       const statusAfter = patch.status ?? (row.status as IssueStatus);
       const statusChanging = patch.status !== undefined && patch.status !== row.status;
@@ -681,6 +860,11 @@ export class WorkspaceStore {
           actor,
           payload: { identifier: row.identifier, from: row.status, to: patch.status },
         });
+        // Transition site 2 of 4. Guarded above like any manual start; the
+        // ancestors it derives from that start are not (see the method).
+        if (patch.status === "in_progress") {
+          this.markAncestorsInProgress(updated, actor ?? null);
+        }
         if ((RESOLVED_STATUSES as readonly string[]).includes(patch.status!)) {
           this.afterResolution(updated);
         }
@@ -782,6 +966,480 @@ export class WorkspaceStore {
     return out;
   }
 
+  // ---------- estimate vs actual (derived, never stored) ----------
+
+  /**
+   * The status an event leaves the issue in, or null if it is not a transition
+   * this replay can read.
+   *
+   * ## Why this is a table and not "`status_changed` events"
+   *
+   * The obvious implementation of interval reconstruction reads `status_changed`
+   * and nothing else. It is wrong, and it is wrong in the direction that hurts
+   * most: `checkoutIssue` sets `status = 'in_progress'` in its own atomic UPDATE
+   * and emits `checkout`, never `status_changed` — and `staple checkout` is HOW
+   * WORK STARTS. A replay that watched only `status_changed` would miss the
+   * beginning of nearly every interval in the database.
+   *
+   * The full set, one row per status-writing site in this file:
+   *
+   *  - `issue_created`         -> `payload.status` (createIssue; an issue can be
+   *                               born `in_progress`, which opens an interval)
+   *  - `status_changed`        -> `payload.to` (updateIssue's patch, and
+   *                               markAncestorsInProgress' derived flip)
+   *  - `checkout`              -> `in_progress` (the claim UPDATE)
+   *  - `claim_stolen`          -> `in_progress` (the takeover UPDATE)
+   *  - `release`,
+   *    `claim_released_stale`  -> `todo` (the release UPDATE)
+   *
+   * Returning null for an unreadable payload is load-bearing: it is what routes
+   * a history this code cannot trust into the `approximate` fallback instead of
+   * silently producing a confident wrong number.
+   */
+  private static statusAfterEvent(kind: string, payload: Record<string, unknown>): IssueStatus | null {
+    const asStatus = (value: unknown): IssueStatus | null =>
+      typeof value === "string" && (ISSUE_STATUSES as readonly string[]).includes(value)
+        ? (value as IssueStatus)
+        : null;
+    switch (kind) {
+      case "issue_created":
+        return asStatus(payload.status);
+      case "status_changed":
+        return asStatus(payload.to);
+      case "checkout":
+      case "claim_stolen":
+        return "in_progress";
+      case "release":
+      case "claim_released_stale":
+        return "todo";
+      default:
+        return null;
+    }
+  }
+
+  /**
+   * Replay one issue's status-moving events into summed intervals, or null when
+   * the log cannot support the answer.
+   *
+   * ## The rules, and what each one buys
+   *
+   * **Entering `in_progress` opens an interval, leaving it closes one.** That is
+   * the whole fix for "blocked time counts as work": a blocked window is not an
+   * interval, so it costs nothing, and no special case had to be written for it.
+   * `in_review` runs through the identical machinery into a separate bucket.
+   *
+   * **A transition to the status we are already in is a no-op.** `claim_stolen`
+   * fires on an issue that is already `in_progress`; a takeover changes who is
+   * working, not whether work is happening, and treating it as close-then-reopen
+   * would round the interval twice for no reason.
+   *
+   * **An interval opened by a derived flip is dropped, not counted.** STA-79
+   * marks an ancestor `in_progress` when a child starts, tagged
+   * `payload.derived === "child_started"`. That is a REPORT about the children,
+   * and billing the epic's own clock for it is defect #1 of the old scheme. The
+   * interval is still tracked (it has to be, so the next transition closes the
+   * right thing) — it simply contributes nothing.
+   *
+   * **An OPEN interval ends at `clampAt`, never at `now`.** See `timingFor` for
+   * where `clampAt` comes from and what it costs.
+   *
+   * **The replay must land on the row's actual status.** If it does not, the log
+   * and the row disagree — an import, a hand-edit, a history written by another
+   * tool — and this function declines rather than guesses. Same for a log that
+   * does not begin with `issue_created`.
+   *
+   * Zero is not null: an interval that opened and closed inside the same second
+   * reports 0 seconds, because it happened. Null is reserved for "never ran".
+   */
+  private static reconstructIntervals(
+    currentStatus: string,
+    events: readonly { kind: string; createdAt: string; payload: Record<string, unknown> }[],
+    clampAt: string,
+  ): OwnTiming | null {
+    const first = events[0];
+    if (!first || first.kind !== "issue_created") return null;
+    let status = WorkspaceStore.statusAfterEvent(first.kind, first.payload);
+    if (!status) return null;
+
+    let openAt: string | null = null;
+    // A derived open interval is tracked but never counted. Creation is never
+    // derived — nothing flips an issue that does not exist yet.
+    let openDerived = false;
+    let active = 0;
+    let review = 0;
+    let sawActive = false;
+    let sawReview = false;
+    if (status === "in_progress" || status === "in_review") openAt = first.createdAt;
+
+    for (let i = 1; i < events.length; i += 1) {
+      const event = events[i]!;
+      const to = WorkspaceStore.statusAfterEvent(event.kind, event.payload);
+      if (!to) return null;
+      if (to === status) continue;
+      if (openAt !== null) {
+        const seconds = secondsBetween(openAt, event.createdAt);
+        if (status === "in_progress") {
+          if (!openDerived) {
+            active += seconds;
+            sawActive = true;
+          }
+        } else {
+          review += seconds;
+          sawReview = true;
+        }
+        openAt = null;
+      }
+      if (to === "in_progress" || to === "in_review") {
+        openAt = event.createdAt;
+        openDerived = to === "in_progress" && event.payload.derived === "child_started";
+      }
+      status = to;
+    }
+
+    if (status !== currentStatus) return null;
+
+    let countedThrough: string | null = null;
+    if (openAt !== null) {
+      // Guard against a clock that ran backwards between two writes: the clamp
+      // can never pull an interval's end before its own start.
+      const end = clampAt > openAt ? clampAt : openAt;
+      const seconds = secondsBetween(openAt, end);
+      if (status === "in_progress") {
+        if (!openDerived) {
+          active += seconds;
+          sawActive = true;
+          countedThrough = end;
+        }
+      } else {
+        review += seconds;
+        sawReview = true;
+      }
+    }
+
+    return {
+      ownActiveSeconds: sawActive ? active : null,
+      reviewSeconds: sawReview ? review : null,
+      approximate: false,
+      countedThrough,
+    };
+  }
+
+  /**
+   * The pre-STA-90 answer, kept as the FALLBACK for histories the replay cannot
+   * read — and only reachable behind `approximate: true`.
+   *
+   *  - `done`                      -> `completedAt - startedAt`. A `done` row
+   *                                   with no `completed_at` is null rather than
+   *                                   "now minus started", which would report a
+   *                                   finished task as still running.
+   *  - `in_progress` / `in_review` -> `now - startedAt`.
+   *  - `cancelled`, `backlog`,
+   *    `todo`, `blocked`,
+   *    never started               -> null.
+   *
+   * Every defect this shape has is exactly why STA-90 replaced it: `started_at`
+   * is never cleared, so a task parked in `todo` or pushed to `blocked` and then
+   * restarted is billed for the whole span. It survives here because a foreign
+   * database with no usable event log still deserves a number, and a number
+   * labelled approximate is more useful than a blank column.
+   */
+  private static approximateActiveOf(
+    row: Pick<IssueRow, "status" | "started_at" | "completed_at">,
+    now: string,
+  ): number | null {
+    if (!row.started_at) return null;
+    if (row.status === "done") {
+      return row.completed_at ? secondsBetween(row.started_at, row.completed_at) : null;
+    }
+    if (row.status === "in_progress" || row.status === "in_review") {
+      return secondsBetween(row.started_at, now);
+    }
+    return null;
+  }
+
+  /** Every status at zero — so a caller can index any status without a guard. */
+  private static zeroStatusCounts(): Record<IssueStatus, number> {
+    return Object.fromEntries(ISSUE_STATUSES.map((s) => [s, 0])) as Record<IssueStatus, number>;
+  }
+
+  /** The all-absent struct, for an id that no longer resolves to a row. */
+  private static emptyTiming(): IssueTiming {
+    return {
+      estimatedSeconds: null,
+      ownActiveSeconds: null,
+      activeSeconds: null,
+      reviewSeconds: null,
+      approximate: false,
+      countedThrough: null,
+      childCount: 0,
+      childrenEstimatedSeconds: null,
+      childrenActiveSeconds: null,
+      childStatusCounts: WorkspaceStore.zeroStatusCounts(),
+    };
+  }
+
+  /**
+   * Estimate-vs-actual for a set of issues, keyed by issue id. FOUR queries,
+   * whatever the size of the tree underneath them.
+   *
+   * Unlike `claimActivityFor`, EVERY requested id gets an entry. A claim is
+   * absent when nobody holds the issue; timing always has something true to say
+   * (an unestimated, unstarted leaf is all-nulls with `childCount: 0`), and a
+   * surface that must render a row for every issue should not have to invent
+   * the empty case itself.
+   *
+   * ## Where the clamp comes from, and what it costs
+   *
+   * An open `in_progress` interval has no end yet, and the tempting end is `now`.
+   * `now` is the bug VP reported: an agent that died on Friday is several days
+   * into its estimate by Monday, and an epic auto-flipped by a child ticks
+   * forever with nobody working it.
+   *
+   * So an open interval is counted through the last moment there is EVIDENCE of
+   * work:
+   *
+   *  - **Held issue** -> the holder's `lastActivityAt`, straight out of
+   *    `claimActivityFor` — the same C1 derivation the stale-claim badge and the
+   *    steal threshold use. Reused rather than reimplemented so "this claim is
+   *    dead" and "this clock has stopped" can never become two different
+   *    judgements about the same silence.
+   *  - **No holder** (reachable: `staple status X in_progress` with an assignee
+   *    but no checkout) -> the newest event on the issue. Weaker, since any
+   *    actor's event counts, but it is the only evidence there is.
+   *
+   * THE RESOLUTION LIMIT, stated plainly: this measures an agent's WRITE CADENCE,
+   * not its thinking. An agent that works silently for twenty minutes and then
+   * comments is credited from its previous write to that comment — so a long
+   * silent stretch before a crash is not counted at all. The trade is deliberate
+   * and one-directional: under-counting silence beats billing a dead process for
+   * a weekend, because the second error compounds without limit and the first
+   * one cannot.
+   *
+   * ## Rollup: DIRECT children, but each child contributes its HEADLINE
+   *
+   * 1. The parent view renders its direct children as a table. A total that does
+   *    not equal the sum of the rows on screen is a table that lies; depth-1 is
+   *    the only depth whose arithmetic a reader can audit.
+   * 2. A child that is itself a parent contributes its own aggregate, because
+   *    that IS the number its row shows. The table still adds up, and an
+   *    epic-of-epics reports its grandchildren's work instead of the zero it
+   *    would report if parents had no stopwatch and no aggregate either.
+   * 3. Estimates do NOT cascade that way: `childrenEstimatedSeconds` sums the
+   *    children's own estimates only. A parent's estimate is a plan for its whole
+   *    subtree, so folding it together with its children's would double-count it.
+   *
+   * That recursion is why this resolves a bounded DESCENDANT CLOSURE up front
+   * (one recursive CTE, capped at MAX_TREE_DEPTH) and then rolls up deepest-first
+   * — rather than issuing a query per level, which is precisely the N+1 this file
+   * batches away everywhere else.
+   *
+   * Sums skip nulls and stay null when NOTHING contributed: `childrenEstimated`
+   * is null when no child recorded an estimate, never 0. The two are different
+   * facts and a surface has to be able to say the first one.
+   */
+  timingFor(issueIds: string[]): Map<string, IssueTiming> {
+    const out = new Map<string, IssueTiming>();
+    if (issueIds.length === 0) return out;
+    const now = nowIso();
+    const roots = issueIds.map(() => "?").join(",");
+
+    // 1/4 — the descendant closure. UNION (not UNION ALL) dedupes, so a corrupt
+    // parent cycle terminates on its own; the depth cap is the belt to that
+    // braces.
+    const rows = this.db
+      .prepare(
+        `WITH RECURSIVE closure(id, depth) AS (
+             SELECT id, 0 FROM issues WHERE id IN (${roots})
+             UNION
+             SELECT i.id, closure.depth + 1
+               FROM issues i JOIN closure ON i.parent_id = closure.id
+              WHERE closure.depth < ?
+           )
+           SELECT i.id AS id, i.parent_id AS parent_id, i.status AS status,
+                  i.estimated_seconds AS estimated_seconds,
+                  i.started_at AS started_at, i.completed_at AS completed_at,
+                  MAX(closure.depth) AS depth
+             FROM closure JOIN issues i ON i.id = closure.id
+            GROUP BY i.id`,
+      )
+      .all(...(issueIds as never[]), MAX_TREE_DEPTH) as Array<
+      Pick<
+        IssueRow,
+        "id" | "parent_id" | "status" | "estimated_seconds" | "started_at" | "completed_at"
+      > & { depth: number }
+    >;
+    if (rows.length === 0) return out;
+    const ids = rows.map((row) => row.id);
+    const placeholders = ids.map(() => "?").join(",");
+
+    // 2/4 — every status-moving event over the closure, in seq order.
+    const eventRows = this.db
+      .prepare(
+        `SELECT issue_id, kind, payload, created_at
+           FROM events
+          WHERE issue_id IN (${placeholders})
+            AND kind IN (${STATUS_MOVING_EVENT_KINDS.map(() => "?").join(",")})
+          ORDER BY issue_id, seq`,
+      )
+      .all(...([...ids, ...STATUS_MOVING_EVENT_KINDS] as never[])) as Array<{
+      issue_id: string;
+      kind: string;
+      payload: string;
+      created_at: string;
+    }>;
+    const eventsByIssue = new Map<
+      string,
+      Array<{ kind: string; createdAt: string; payload: Record<string, unknown> }>
+    >();
+    for (const row of eventRows) {
+      let list = eventsByIssue.get(row.issue_id);
+      if (!list) eventsByIssue.set(row.issue_id, (list = []));
+      let payload: Record<string, unknown> = {};
+      try {
+        payload = JSON.parse(row.payload) as Record<string, unknown>;
+      } catch {
+        // A payload that will not parse is a payload the replay cannot read;
+        // `statusAfterEvent` sees {} and refuses, routing to the fallback.
+      }
+      list.push({ kind: row.kind, createdAt: row.created_at, payload });
+    }
+
+    // 3/4 — the no-holder clamp: newest event of ANY kind on the issue.
+    const newestEvent = new Map<string, string>();
+    for (const row of this.db
+      .prepare(
+        `SELECT issue_id, MAX(created_at) AS t FROM events
+          WHERE issue_id IN (${placeholders}) GROUP BY issue_id`,
+      )
+      .all(...(ids as never[])) as Array<{ issue_id: string; t: string | null }>) {
+      if (row.t) newestEvent.set(row.issue_id, row.t);
+    }
+
+    // 4/4 — the held clamp, from C1 itself.
+    const claims = this.claimActivityFor(ids);
+
+    const ownTimings = new Map<string, OwnTiming>();
+    for (const row of rows) {
+      const clampAt = claims.get(row.id)?.lastActivityAt ?? newestEvent.get(row.id) ?? now;
+      ownTimings.set(
+        row.id,
+        WorkspaceStore.reconstructIntervals(row.status, eventsByIssue.get(row.id) ?? [], clampAt) ?? {
+          ownActiveSeconds: WorkspaceStore.approximateActiveOf(row, now),
+          reviewSeconds: null,
+          approximate: true,
+          countedThrough: null,
+        },
+      );
+    }
+
+    const childrenOf = new Map<string, typeof rows>();
+    for (const row of rows) {
+      if (!row.parent_id) continue;
+      let list = childrenOf.get(row.parent_id);
+      if (!list) childrenOf.set(row.parent_id, (list = []));
+      list.push(row);
+    }
+
+    // Deepest first, so a parent always reads children that are already final.
+    const timings = new Map<string, IssueTiming>();
+    for (const row of [...rows].sort((a, b) => b.depth - a.depth)) {
+      const own = ownTimings.get(row.id)!;
+      const children = childrenOf.get(row.id) ?? [];
+      const childStatusCounts = WorkspaceStore.zeroStatusCounts();
+      let childrenEstimatedSeconds: number | null = null;
+      let childrenActiveSeconds: number | null = null;
+      let childApproximate = false;
+      for (const child of children) {
+        if ((ISSUE_STATUSES as readonly string[]).includes(child.status)) {
+          childStatusCounts[child.status as IssueStatus] += 1;
+        }
+        if (child.estimated_seconds != null) {
+          childrenEstimatedSeconds = (childrenEstimatedSeconds ?? 0) + child.estimated_seconds;
+        }
+        const childTiming = timings.get(child.id);
+        if (childTiming?.activeSeconds != null) {
+          childrenActiveSeconds = (childrenActiveSeconds ?? 0) + childTiming.activeSeconds;
+        }
+        if (childTiming?.approximate) childApproximate = true;
+      }
+      const hasChildren = children.length > 0;
+      timings.set(row.id, {
+        estimatedSeconds: row.estimated_seconds ?? null,
+        ownActiveSeconds: own.ownActiveSeconds,
+        // The headline. `cancelled` declines to report an actual at all — see
+        // IssueTiming — and a parent reports its aggregation, never a stopwatch.
+        activeSeconds:
+          row.status === "cancelled" ? null : hasChildren ? childrenActiveSeconds : own.ownActiveSeconds,
+        reviewSeconds: own.reviewSeconds,
+        // OR, not "whichever fed the headline": if anything in this struct came
+        // from the fallback, the struct says so. Over-flagging is safe;
+        // under-flagging is a number claiming a provenance it does not have.
+        approximate: own.approximate || childApproximate,
+        // A parent's headline is an aggregate, so an instant describing the
+        // parent's OWN open interval would be labelling the wrong number. Its
+        // children carry their own liveness, which is where a reader should look.
+        countedThrough: hasChildren ? null : own.countedThrough,
+        childCount: children.length,
+        childrenEstimatedSeconds,
+        childrenActiveSeconds,
+        childStatusCounts,
+      });
+    }
+
+    for (const id of issueIds) {
+      const timing = timings.get(id);
+      if (timing) out.set(id, timing);
+    }
+    return out;
+  }
+
+  /**
+   * Timing for one issue. Always returns a value — see `timingFor` for why this
+   * differs from `claimActivity`, which returns null for an unheld issue.
+   */
+  timing(ref: string): IssueTiming {
+    const row = this.requireRow(ref);
+    return this.timingFor([row.id]).get(row.id) ?? WorkspaceStore.emptyTiming();
+  }
+
+  /**
+   * The `{ timing, childrenTiming }` pair every DETAIL surface attaches beside a
+   * context payload — MCP `get_task`, HTTP `/api/issue`, HTTP `/api/agent-context`
+   * and CLI `show --json`.
+   *
+   * It exists as ONE store method rather than as four hand-assembled literals for
+   * the same reason `/api/agent-context` calls `store.context()` instead of
+   * rebuilding it: the surfaces are held equal by sharing the code, not by four
+   * authors remembering the same shape. `test/ui-agent-context.test.ts` asserts
+   * deep equality between get_task and that route, and it can only keep doing so
+   * if both spread the identical expression.
+   *
+   * `childrenTiming` is keyed by child IDENTIFIER (`STA-42`), not by the internal
+   * uuid. Both join fine against the `children: Issue[]` already in the payload,
+   * so the tiebreak is legibility: this is a document an agent reads and a human
+   * debugs, and a map keyed by `4408738e-7edd-…` is unreadable in both roles —
+   * and unpinnable in a golden, where uuids are tokenized as values but keys are
+   * not. Identifier is the handle every other cross-referencing payload in this
+   * codebase uses (see the graph route's `parent`).
+   *
+   * DIRECT children only — see `timingFor` for why depth-1 is the honest rollup.
+   */
+  detailTiming(ref: string): {
+    timing: IssueTiming;
+    childrenTiming: Record<string, IssueTiming>;
+  } {
+    const row = this.requireRow(ref);
+    const children = this.db
+      .prepare("SELECT id, identifier FROM issues WHERE parent_id = ? ORDER BY created_at")
+      .all(row.id) as Array<{ id: string; identifier: string }>;
+    const all = this.timingFor([row.id, ...children.map((child) => child.id)]);
+    const childrenTiming: Record<string, IssueTiming> = {};
+    for (const child of children) {
+      const timing = all.get(child.id);
+      if (timing) childrenTiming[child.identifier] = timing;
+    }
+    return { timing: all.get(row.id) ?? WorkspaceStore.emptyTiming(), childrenTiming };
+  }
   // ---------- checkout / release ----------
 
   /**
@@ -883,6 +1541,10 @@ export class WorkspaceStore {
                     stealIfIdleSeconds,
                   },
                 });
+                // Transition site 4 of 4. A takeover is a fresh start by a new
+                // agent; if the epic went quiet in the meantime it must light up
+                // again, attributed to whoever took over.
+                this.markAncestorsInProgress(stolen, agent);
                 return rowToIssue(stolen);
               }
             }
@@ -914,6 +1576,11 @@ export class WorkspaceStore {
         actor: agent,
         payload: { identifier: row.identifier },
       });
+      // Transition site 3 of 4, and the one that matters most in practice: a
+      // plain `staple checkout` IS how work starts, and its UPDATE above sets
+      // status = 'in_progress' directly. Hooking only `updateIssue` would have
+      // missed the common case entirely.
+      this.markAncestorsInProgress(claimed, agent);
       return rowToIssue(claimed);
     });
   }

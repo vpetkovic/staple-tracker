@@ -55,6 +55,7 @@ export const STALE_CLAIM_SECONDS = 30 * 60;
  * two different systems talking about two different claims.
  */
 export function formatAgo(seconds: number): string {
+  if (!Number.isFinite(seconds)) return "0s"; // never "NaNd" to a human
   const s = Math.max(0, Math.floor(seconds));
   if (s < 60) return `${s}s`;
   if (s < 3600) return `${Math.floor(s / 60)}m`;

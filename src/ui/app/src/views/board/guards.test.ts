@@ -40,6 +40,9 @@ function issue(overrides: Partial<Issue> = {}): Issue {
     checkoutAgent: null,
     checkoutAt: null,
     blockedTransitionAt: null,
+    // STA-81. null is the honest default: no estimate recorded, which the
+    // Analytics tab renders as a sentence rather than as a zero.
+    estimatedSeconds: null,
     startedAt: null,
     completedAt: null,
     cancelledAt: null,

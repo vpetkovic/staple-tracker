@@ -71,6 +71,16 @@ export interface Issue {
   checkoutAgent: string | null;
   checkoutAt: string | null;
   blockedTransitionAt: string | null;
+  /**
+   * Plan-time guess, in whole seconds. STORED, unlike everything in
+   * `IssueTiming` below — it is a fact somebody asserted, not a reading off a
+   * clock, so it belongs on the entity exactly like `priority` does.
+   *
+   * null means "no estimate recorded", which is deliberately NOT the same fact
+   * as zero: a surface comparing plan against actual has to be able to say the
+   * plan is missing rather than invent a 0 and report an infinite overrun.
+   */
+  estimatedSeconds: number | null;
   startedAt: string | null;
   completedAt: string | null;
   cancelledAt: string | null;
@@ -100,15 +110,232 @@ export interface ClaimActivity {
 }
 
 /**
+ * Estimate vs actual for one issue — the analytics payload, and a SIBLING of the
+ * issue for exactly the reason `ClaimActivity` above is one.
+ *
+ * ## What "actual" means here — STA-90 replaced the answer
+ *
+ * The first version (STA-81) subtracted two timestamps: `now - startedAt` while
+ * live, `completedAt - startedAt` when done. That shape has three defects and
+ * they all point the same way — it over-reports:
+ *
+ *  1. `started_at` is never cleared, so a task that went `in_progress -> blocked
+ *     -> in_progress` was billed for the blocked week in between.
+ *  2. An epic that STA-79 auto-flipped to `in_progress` because a child started
+ *     ran its own stopwatch forever, with nobody working the epic itself.
+ *  3. Anything `in_progress` counted to `now`, so a task whose agent died on
+ *     Friday was still "running" on Monday, several days deep into its estimate.
+ *
+ * So `activeSeconds` is now the sum of reconstructed `in_progress` INTERVALS,
+ * replayed from the event log (see `WorkspaceStore.timingFor`). Blocked and
+ * parked windows fall out for free because they are simply not intervals, and an
+ * open interval is clamped to the holder's last activity rather than to `now`:
+ * when agents stop, the clock stops.
+ *
+ * ## Why none of this lives on `Issue`
+ *
+ * The struct is still derived at read time, for every status, and still must not
+ * become a column. The clamp made the numbers far more stable than they were —
+ * a silent holder's `activeSeconds` no longer moves between reads — but "stable
+ * right now" is not "immutable": the holder's next comment extends the open
+ * interval, and a later transition closes it somewhere else entirely. An `Issue`
+ * is precisely the thing callers cache, pipe to a file, and hand to an MCP client
+ * that keeps it for a session, and ONE FIELD CANNOT HAVE TWO STORAGE
+ * DISCIPLINES — a value trustworthy-when-frozen for some statuses and stale for
+ * others forces every consumer to check the status before believing it.
+ *
+ * ## Why `estimatedSeconds` is echoed here
+ *
+ * It is a COPY of `Issue.estimatedSeconds`, read from the same row in the same
+ * query — not a derivation, and incapable of drifting from it. It is duplicated
+ * so this object is self-contained: the analytics surface renders a per-child
+ * table from one map keyed by child id, instead of zipping a timing map against
+ * a separate issue list to recover half of each row.
+ *
+ * ## Null is not zero
+ *
+ * Every nullable number here distinguishes "not recorded" from "recorded as
+ * nothing". `childrenEstimatedSeconds` is null when NO child carries an
+ * estimate, so a parent view can print "no estimates recorded" instead of a
+ * fabricated 0 and a delta computed against it.
+ */
+export interface IssueTiming {
+  /** Echo of the stored `Issue.estimatedSeconds`; null when none was recorded. */
+  estimatedSeconds: number | null;
+  /**
+   * Seconds this issue itself was `in_progress`, summed over reconstructed
+   * intervals — EXCLUDING intervals opened by a derived `child_started` flip.
+   *
+   * Usually null (never ran) or 0-ish for an epic: nobody claims an epic, they
+   * claim its children, and the flip that made the epic look busy was a report
+   * about its children, not work on the epic. Exposed beside `activeSeconds` so
+   * a surface can say "this parent's number is an aggregation" rather than the
+   * store having to guess what the reader wanted.
+   *
+   * This is a pure MEASUREMENT — it reports what ran, for any status including
+   * `cancelled`. `activeSeconds` below is the COMPARABLE actual and applies the
+   * judgement about what may be weighed against a plan.
+   */
+  ownActiveSeconds: number | null;
+  /**
+   * THE HEADLINE ACTUAL, and the one field a surface should print as "ran".
+   *
+   *  - `cancelled`               -> null, whatever ran
+   *  - leaf (`childCount === 0`) -> `ownActiveSeconds`
+   *  - parent                    -> `childrenActiveSeconds`, the aggregation
+   *
+   * A parent has no independent stopwatch by construction. It keeps its own
+   * `estimatedSeconds` — a parent can be somebody's child and carry a plan — and
+   * that estimate is compared against the aggregate, which is the comparison
+   * anyone actually wants ("we planned the epic at 8h, its children cost 5h").
+   *
+   * `cancelled` is null on purpose even when `ownActiveSeconds` proves it ran:
+   * an abandoned attempt is not an "actual" you can weigh a plan against, and
+   * because the rollup sums this field rather than the measurement, a cancelled
+   * child drops out of its parent's total for free — no second rule, and the
+   * on-screen table still equals its own total.
+   */
+  activeSeconds: number | null;
+  /**
+   * Seconds spent in `in_review`, summed over intervals, kept OUT of
+   * `activeSeconds`.
+   *
+   * The decision (STA-90): review is not execution. This feature exists to
+   * answer "what did agentic execution cost against the human plan", and a task
+   * that sat two days waiting on a human reviewer did not take two days to
+   * build. Folding it in would make every reviewed task look slower to execute
+   * than it was, and dropping it entirely would hide a real and frequently
+   * enormous queue. Separate bucket, surfaced only when nonzero.
+   *
+   * null when the issue was never in review — not 0, which would claim an
+   * instant review that never happened.
+   */
+  reviewSeconds: number | null;
+  /**
+   * True when the event log could not be replayed and the numbers above fell
+   * back to the old two-timestamp span.
+   *
+   * Reachable for imported or foreign databases, and for rows hand-edited out of
+   * agreement with their own history. Surfaces render it as "approx" — a number
+   * whose provenance is weaker must say so rather than sit in the same column
+   * looking identical to a reconstructed one.
+   *
+   * Contagious upward: a parent aggregating an approximate child is approximate.
+   */
+  approximate: boolean;
+  /**
+   * The instant an OPEN, CONTRIBUTING interval was counted through — the
+   * holder's `lastActivityAt`, or the newest event on the issue when
+   * `in_progress` was set with no checkout behind it. NEVER `now`.
+   *
+   * null means nothing is accumulating: either no interval is open, or the only
+   * open interval is a derived flip that this issue does not get to count. That
+   * null is what finally lets a surface stop printing "still running" under an
+   * epic nobody is working.
+   *
+   * When it is set, `now - countedThrough` is how long the clock has been
+   * frozen, which is the honest thing to show beside a live figure.
+   */
+  countedThrough: string | null;
+  /** Direct children only. 0 for a leaf. */
+  childCount: number;
+  /**
+   * Sum over DIRECT children that carry an estimate; null when none do.
+   *
+   * Strictly depth-1, unlike `childrenActiveSeconds` below, and the asymmetry is
+   * deliberate: a parent's estimate is a plan for its whole subtree, so adding it
+   * to its children's estimates double-counts the plan. An actual has no such
+   * problem — a parent has no own actual to double-count.
+   */
+  childrenEstimatedSeconds: number | null;
+  /**
+   * Sum over DIRECT children of each child's HEADLINE `activeSeconds`; null when
+   * no child contributed one.
+   *
+   * Because it sums the headline, a child that is itself a parent contributes
+   * its own aggregate. That keeps two things true at once: the on-screen table
+   * still adds up (every row shows the number that was summed), and an
+   * epic-of-epics reports its grandchildren's work instead of zero.
+   *
+   * `cancelled` children contribute nothing, without needing a rule here: their
+   * own `activeSeconds` is already null.
+   */
+  childrenActiveSeconds: number | null;
+  /** Direct children per status. Every status is present, zeros included. */
+  childStatusCounts: Record<IssueStatus, number>;
+}
+
+/**
+ * One year. An estimate is a plan-time guess about a unit of work, so a value
+ * past this is a mistyped unit (`2h` fat-fingered into seconds, a millisecond
+ * figure pasted in) rather than an intention — and a single bad row poisons
+ * every rollup it lands in. Refusing at the door is cheaper than explaining a
+ * nonsense epic total later.
+ */
+export const MAX_ESTIMATE_SECONDS = 365 * 86400;
+
+/**
+ * Estimates are positive whole seconds. Zero is refused rather than accepted as
+ * a clear: "estimated at nothing" and "no estimate" are different claims, and
+ * every surface has an explicit way to say the second one (`--no-estimate`, or
+ * an explicit null).
+ */
+export function assertEstimateSeconds(value: number): number {
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new StapleError(
+      "validation",
+      `estimate must be a positive whole number of seconds (got ${value}); clear it explicitly instead of passing 0`,
+    );
+  }
+  if (value > MAX_ESTIMATE_SECONDS) {
+    throw new StapleError(
+      "validation",
+      `estimate must be at most ${MAX_ESTIMATE_SECONDS} seconds (365d); ${value} looks like a mistyped unit`,
+    );
+  }
+  return value;
+}
+
+/**
  * Human-readable age used inside the staleness guard sentences: 45s / 3m / 2h / 5d.
  * Floored, single unit — this is prose for a refusal message, not a duration type.
  */
 export function formatAgo(seconds: number): string {
+  if (!Number.isFinite(seconds)) return "0s"; // never "NaNd" to a human
   const s = Math.max(0, Math.floor(seconds));
   if (s < 60) return `${s}s`;
   if (s < 3600) return `${Math.floor(s / 60)}m`;
   if (s < 86400) return `${Math.floor(s / 3600)}h`;
   return `${Math.floor(s / 86400)}d`;
+}
+
+/**
+ * Durations for estimate-vs-actual prose: `45s`, `20m`, `3h10m`, `2d4h`.
+ *
+ * Distinct from `formatAgo` on purpose, and the two are NOT interchangeable.
+ * `formatAgo` answers "how long ago", where a single floored unit is the honest
+ * resolution — nobody needs "silent for 3h10m", and pretending to that precision
+ * about an idleness threshold would invite reading it as exact. This one answers
+ * "how long did it take", where the second unit is the whole point: `2h` and
+ * `2h55m` are the difference between hitting an estimate and blowing it, and
+ * flooring them to the same string erases the comparison the feature exists for.
+ *
+ * At most two units, largest first, trailing zero unit dropped (`2h` not `2h0m`).
+ */
+export function formatDuration(seconds: number): string {
+  if (!Number.isFinite(seconds)) return "0s"; // never "NaNd" to a human
+  const s = Math.max(0, Math.floor(seconds));
+  if (s < 60) return `${s}s`;
+  if (s < 3600) {
+    const rest = s % 60;
+    return rest ? `${Math.floor(s / 60)}m${rest}s` : `${Math.floor(s / 60)}m`;
+  }
+  if (s < 86400) {
+    const rest = Math.floor((s % 3600) / 60);
+    return rest ? `${Math.floor(s / 3600)}h${rest}m` : `${Math.floor(s / 3600)}h`;
+  }
+  const rest = Math.floor((s % 86400) / 3600);
+  return rest ? `${Math.floor(s / 86400)}d${rest}h` : `${Math.floor(s / 86400)}d`;
 }
 
 /**

@@ -49,14 +49,19 @@ describe.each([
   ["stamped '1'", FIXTURES.workspaceV1],
   ["present but never stamped", FIXTURES.workspaceV1Unstamped],
 ])("a v1 workspace (%s)", (_label, fixture) => {
-  it("is detected as version 1 with migration 2 pending", () => {
+  it("is detected as version 1 with migrations 2 and 3 pending", () => {
     withFixture(fixture, (path) => {
       const db = new DatabaseSync(path);
       try {
         const state = describeSchema(db, WORKSPACE_TARGET);
         expect(state.current).toBe(1);
-        expect(state.latest).toBe(2);
-        expect(state.pending).toEqual([2]);
+        expect(state.latest).toBe(3);
+        // Ordered and complete: a v1 file has to walk BOTH steps, and it has to
+        // walk them in this order — 003 assumes 002 already ran. This list
+        // grows by one every time a migration is appended, and that is the
+        // point: a migration that never reaches an old file is the bug this
+        // assertion exists to catch.
+        expect(state.pending).toEqual([2, 3]);
       } finally {
         db.close();
       }
@@ -141,7 +146,7 @@ describe.each([
     });
   });
 
-  it("is stamped '2' as TEXT, the representation an old binary can still read", () => {
+  it("is stamped '3' as TEXT, the representation an old binary can still read", () => {
     withFixture(fixture, (path) => {
       const db = openDb(path);
       try {
@@ -149,7 +154,10 @@ describe.each([
         const row = db
           .prepare("SELECT typeof(value) AS t, value FROM meta WHERE key='schema_version'")
           .get() as { t: string; value: string };
-        expect(row).toEqual({ t: "text", value: "2" });
+        // TEXT is the load-bearing half of this assertion, not the number: an
+        // older binary reads the stamp as a string, and an INTEGER here would
+        // make it unreadable rather than merely too new.
+        expect(row).toEqual({ t: "text", value: "3" });
       } finally {
         db.close();
       }
@@ -181,15 +189,25 @@ describe.each([
   });
 });
 
-describe("a current v2 workspace", () => {
-  it("is detected as current with nothing pending", () => {
+/**
+ * STA-81: this fixture is now the PRE-ESTIMATE artefact.
+ *
+ * It was written by walking migrations 001 and 002 and then left alone, so it is
+ * a real file from before `estimated_seconds` existed — exactly the kind of
+ * database sitting in repos that adopted staple before this feature landed. What
+ * matters is not that it upgrades, but that upgrading it leaves every row it
+ * already had untouched and every issue correctly reading as UN-estimated rather
+ * than estimated-at-zero.
+ */
+describe("a v2 workspace — the last shape before estimates", () => {
+  it("is detected as version 2 with migration 3 pending", () => {
     withFixture(FIXTURES.workspaceV2, (path) => {
       const db = new DatabaseSync(path);
       try {
         expect(describeSchema(db, WORKSPACE_TARGET)).toEqual({
           current: 2,
-          latest: 2,
-          pending: [],
+          latest: 3,
+          pending: [3],
           detection: "stamped",
         });
       } finally {
@@ -198,18 +216,82 @@ describe("a current v2 workspace", () => {
     });
   });
 
-  it("opens without changing a single schema object or row", () => {
+  it("has no estimate column at all before the walk", () => {
+    withFixture(FIXTURES.workspaceV2, (path) => {
+      const db = new DatabaseSync(path);
+      try {
+        const columns = (
+          db.prepare("PRAGMA table_info(issues)").all() as unknown as Array<{ name: string }>
+        ).map((c) => c.name);
+        expect(columns).not.toContain("estimated_seconds");
+      } finally {
+        db.close();
+      }
+    });
+  });
+
+  it("walks forward keeping every existing row, with estimates NULL not zero", () => {
     withFixture(FIXTURES.workspaceV2, (path) => {
       const before = schemaObjects(path);
       const db = openDb(path);
       try {
         migrateWorkspace(db);
         const store = new WorkspaceStore(db, "legacyrepo", "LEG");
-        expect(store.listComments(store.getIssue("LEG-1").id)[0]!.idempotencyKey).toBe("seed-key-1");
+        const issue = store.getIssue("LEG-1");
+
+        // Everything the fixture carried is still exactly as it was.
+        expect(store.listComments(issue.id)[0]!.idempotencyKey).toBe("seed-key-1");
+        expect(issue.title).toBe("Existing work");
+        expect(issue.status).toBe("in_progress");
+
+        // The whole reason the column is nullable with no DEFAULT: a task
+        // written before estimates existed has NO estimate, which is a different
+        // fact from "estimated at 0" and must not be reported as one.
+        expect(issue.estimatedSeconds).toBeNull();
+        for (const row of store.listIssues({ includeResolved: true })) {
+          expect(row.estimatedSeconds).toBeNull();
+        }
+
+        // Derived timing works on the upgraded file: LEG-1 is in_progress with
+        // a started_at, LEG-2 is done but was never started.
+        const timing = store.timing("LEG-1");
+        expect(timing.estimatedSeconds).toBeNull();
+        expect(timing.childCount).toBe(1);
+        expect(timing.childrenEstimatedSeconds).toBeNull();
+        expect(store.timing("LEG-2").activeSeconds).toBeNull();
+        /**
+         * STA-90: this legacy fixture is exactly the case the fallback exists
+         * for. Its rows were written by hand with no event log at all, so the
+         * interval replay has nothing to replay and the struct must SAY the
+         * number is approximate rather than quietly reporting a reconstructed
+         * figure it did not reconstruct. A migrated-in workspace from another
+         * tool lands here too.
+         */
+        expect(timing.approximate).toBe(true);
+        expect(store.timing("LEG-2").approximate).toBe(true);
+
+        // And the new write path lands on the old file.
+        store.updateIssue("LEG-1", { estimatedSeconds: 5400 }, "vlad");
+        expect(store.getIssue("LEG-1").estimatedSeconds).toBe(5400);
+        expect(store.timing("LEG-1").estimatedSeconds).toBe(5400);
       } finally {
         db.close();
       }
+      // ADD COLUMN appends to the stored CREATE text; it mints no new
+      // sqlite_master entries, so the object list is untouched.
       expect(schemaObjects(path)).toEqual(before);
+    });
+  });
+
+  it("reaches exactly the schema a fresh database has", () => {
+    withFixture(FIXTURES.workspaceV2, (path) => {
+      const db = openDb(path);
+      try {
+        migrateWorkspace(db);
+        expect(normalizedSchema(db)).toBe(freshWorkspaceSchema());
+      } finally {
+        db.close();
+      }
     });
   });
 });
@@ -229,12 +311,16 @@ describe("a v2 workspace created by the SHIPPED pre-A4 fresh-create path", () =>
    * read as objects). New databases converge on the walked layout from here on;
    * existing ones stay as they are.
    */
-  it("is recognised as current and opened without modification", () => {
+  it("takes the estimate migration without its old column order being disturbed", () => {
     withFixture(FIXTURES.workspaceV2LegacyDdl, (path) => {
       const before = schemaObjects(path);
       const db = openDb(path);
       try {
-        expect(describeSchema(db, WORKSPACE_TARGET).pending).toEqual([]);
+        // STA-81: this used to be `[]`. The legacy layout is still version 2, so
+        // it walks 003 like any other v2 file — which is the point. A shape the
+        // runner "recognises as current" must not become a shape it forgets to
+        // migrate the moment a new column is appended.
+        expect(describeSchema(db, WORKSPACE_TARGET).pending).toEqual([3]);
         expect(() => migrateWorkspace(db)).not.toThrow();
 
         // The layout really is the old one: idempotency_key sits in the middle.

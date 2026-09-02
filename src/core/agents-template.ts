@@ -54,7 +54,16 @@ Read this before you touch the repo. It takes a minute.
    claim is already held; retrying just burns turns. (Exit code 4 / \`conflict\`.)
 3. Write the plan: \`staple doc ${ref} plan --put plan.md\`. Documents are keyed
    and revisioned — this replaces a scratch \`plan.md\` nobody else can find.
+   **Record your estimate while you are planning** — \`staple status ${ref} in_progress
+   --estimate 2h\`, or \`--estimate\` on \`staple new\`. An estimate written after the
+   work is a memory of how long it took, not a prediction, and the whole
+   estimate-vs-actual comparison is worthless the moment it becomes one.
 4. Work. Leave progress as you go: \`staple comment ${ref} "…"\`.
+   **Your comments are the clock.** Time worked is measured as the span from your
+   claim to your newest event or comment — never to "now" — so a task you hold in
+   silence records nothing, and one you narrate records what you actually did.
+   That is deliberate: it means a crashed agent's ticket stops accruing instead
+   of billing the estimate for the weekend. Comment when you finish a step.
 5. \`staple done ${ref} -m "<evidence>"\` — evidence, not a victory lap. What you
    ran, what passed, what you deliberately left.
 6. \`staple events\` — see what your completion unblocked (\`blockers_resolved\`,

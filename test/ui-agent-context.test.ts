@@ -107,6 +107,8 @@ describe("the pane cannot drift from the tool", () => {
       "blockedBy",
       "blocks",
       "children",
+      // STA-81: estimate vs actual for the direct children, keyed by identifier.
+      "childrenTiming",
       // C1: claim liveness. get_task grew it, so this pane grew it in lockstep —
       // which is the drift this whole suite exists to catch.
       "claim",
@@ -114,6 +116,10 @@ describe("the pane cannot drift from the tool", () => {
       "crossBlockers",
       "documents",
       "issue",
+      // STA-81, and the same lockstep story as `claim`: both surfaces spread the
+      // SAME store.detailTiming() call, which is why the deep-equality tests
+      // above went on passing while this inventory needed a deliberate edit.
+      "timing",
     ]);
   });
 

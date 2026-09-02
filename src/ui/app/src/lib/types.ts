@@ -59,11 +59,75 @@ export interface Issue {
   checkoutAgent: string | null;
   checkoutAt: string | null;
   blockedTransitionAt: string | null;
+  /**
+   * Plan-time estimate in seconds. STORED, unlike everything in `IssueTiming`
+   * below, so it belongs on the entity — it is a fact somebody asserted, not a
+   * reading off a clock.
+   *
+   * null means "no estimate recorded", which is NOT the same as zero. Anything
+   * rendering this must say the first thing rather than draw the second.
+   */
+  estimatedSeconds: number | null;
   startedAt: string | null;
   completedAt: string | null;
   cancelledAt: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+/**
+ * Estimate vs actual, mirroring `IssueTiming` in src/core/types.ts.
+ *
+ * A SIBLING of the issue on the wire, for exactly the reason `ClaimActivity` is
+ * one: it is derived against the server's data at response time. The UI never
+ * recomputes it and never ticks it forward locally — it re-reads it on the
+ * existing fingerprint poll, the same way the claim durations are re-read.
+ *
+ * The actual is a sum of reconstructed `in_progress` INTERVALS, so blocked and
+ * parked windows cost nothing, and an open interval is counted through the
+ * holder's last activity rather than through `now`. That is why a page can now
+ * say "idle" instead of "still running" about a task whose agent went quiet: the
+ * server hands it the instant the clock stopped (`countedThrough`).
+ *
+ * Every nullable number distinguishes "not recorded" from "recorded as nothing".
+ * `childrenEstimatedSeconds` is null when NO direct child carries an estimate,
+ * so a parent view prints "no estimates recorded" instead of a fabricated 0 and
+ * a delta computed against it.
+ *
+ * Rollups cover DIRECT children, and each child contributes its own headline —
+ * so the totals equal the sum of the rows a parent view actually lists.
+ */
+export interface IssueTiming {
+  /** Echo of `Issue.estimatedSeconds`; null when none was recorded. */
+  estimatedSeconds: number | null;
+  /**
+   * Seconds this issue itself was in_progress, EXCLUDING intervals opened by a
+   * derived `child_started` flip. Usually null for an epic — nobody claims an
+   * epic, they claim its children.
+   */
+  ownActiveSeconds: number | null;
+  /**
+   * The headline actual: `ownActiveSeconds` for a leaf, `childrenActiveSeconds`
+   * for a parent (a parent has no independent stopwatch), null when cancelled or
+   * never run.
+   */
+  activeSeconds: number | null;
+  /** in_review time, deliberately NOT part of the actual; null when never reviewed. */
+  reviewSeconds: number | null;
+  /** True when the numbers fell back to the two-timestamp span — render "approx". */
+  approximate: boolean;
+  /**
+   * The instant an open interval was counted through — never `now`. null when
+   * nothing is accumulating, which is what lets the page stop saying "still
+   * running" under an epic nobody is working.
+   */
+  countedThrough: string | null;
+  /** Direct children only. 0 for a leaf. */
+  childCount: number;
+  childrenEstimatedSeconds: number | null;
+  childrenActiveSeconds: number | null;
+  /** Direct children per status; every status present, zeros included. */
+  childStatusCounts: Record<IssueStatus, number>;
 }
 
 /**
@@ -216,6 +280,13 @@ export interface IssueDetail {
   documents: IssueDocumentMeta[];
   crossBlockers: CrossBlocker[];
   claim: ClaimActivity | null;
+  /** Estimate vs actual for this issue. What the Analytics tab renders. */
+  timing: IssueTiming;
+  /**
+   * Estimate vs actual per DIRECT child, keyed by child IDENTIFIER (`STA-42`),
+   * not by the internal uuid. Joins against `children` on `.identifier`.
+   */
+  childrenTiming: Record<string, IssueTiming>;
 }
 
 /**
@@ -237,6 +308,9 @@ export interface AgentContext {
   crossBlockers: CrossBlocker[];
   /** get_task carries this, so the "what the agent sees" pane must show it too. */
   claim: ClaimActivity | null;
+  /** So does the timing pair — both surfaces spread the same store expression. */
+  timing: IssueTiming;
+  childrenTiming: Record<string, IssueTiming>;
 }
 
 /** GET /api/graph */

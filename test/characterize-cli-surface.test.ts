@@ -64,10 +64,17 @@ const COMMANDS: ReadonlyArray<{
   // `--dir` so a caller can name a project other than the cwd. `--db` and
   // `--ws` are still deliberately absent; see the KNOWN test below.
   { name: "init", strings: ["slug", "global", "dir"], booleans: ["yes", "json", "no-gitignore"], shorts: [] },
+  // STA-81 added `--estimate` (a duration) and `--no-estimate` (the explicit
+  // clear). Both are hand-added here because this inventory never goes red on
+  // its own — a flag that exists in src/cli.ts and not in this table is exactly
+  // the drift the suite was written to catch.
   {
     name: "new",
-    strings: ["db", "ws", "description", "priority", "parent", "assignee", "blocked-by", "status", "criteria"],
-    booleans: ["json", "allow-duplicate"],
+    strings: [
+      "db", "ws", "description", "priority", "parent", "assignee", "blocked-by", "status",
+      "criteria", "estimate",
+    ],
+    booleans: ["json", "allow-duplicate", "no-estimate"],
     shorts: ["d", "p"],
   },
   { name: "ls", strings: ["db", "ws", "status", "assignee", "q"], booleans: ["json", "all"], shorts: ["q"] },
@@ -76,7 +83,9 @@ const COMMANDS: ReadonlyArray<{
   { name: "start", strings: ["db", "ws", "agent", "steal-if-stale"], booleans: ["json"], shorts: [] },
   { name: "done", strings: ["db", "ws", "message"], booleans: ["json"], shorts: ["m"] },
   { name: "cancel", strings: ["db", "ws", "message"], booleans: ["json"], shorts: ["m"] },
-  { name: "status", strings: ["db", "ws"], booleans: ["json"], shorts: [] },
+  // `status` is the CLI's only update path, so STA-81's re-estimate lands here
+  // too — same two flags as `new`.
+  { name: "status", strings: ["db", "ws", "estimate"], booleans: ["json", "no-estimate"], shorts: [] },
   { name: "release", strings: ["db", "ws", "if-stale"], booleans: ["json"], shorts: [] },
   { name: "block", strings: ["db", "ws", "owner", "action"], booleans: ["json"], shorts: [] },
   { name: "blocked-by", strings: ["db", "ws"], booleans: ["json", "none"], shorts: [] },

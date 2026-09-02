@@ -26,8 +26,10 @@ import {
   CONTRACT_AGENT,
   ISO,
   REPO_ROOT,
+  SECONDS,
   UUID,
   claimGolden,
+  timingGolden,
   commentGolden,
   issueGolden,
   normalize,
@@ -257,6 +259,16 @@ describe("read shapes", () => {
       crossBlockers: [],
       // C1: claim liveness rides with the issue, matching MCP get_task.
       claim: claimGolden(),
+      // STA-81/STA-90: so does the timing pair. CON-1 here is in_progress with
+      // no children in this fixture, so it is a LEAF — its own interval IS the
+      // headline, and `countedThrough` names where that open interval was
+      // counted through (the holder's last activity, never `now`).
+      timing: timingGolden({
+        ownActiveSeconds: SECONDS,
+        activeSeconds: SECONDS,
+        countedThrough: ISO,
+      }),
+      childrenTiming: {},
     });
   });
 

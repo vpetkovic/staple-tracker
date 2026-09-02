@@ -116,8 +116,12 @@ describe("version detection", () => {
     db.close();
   });
 
-  it("reports both real targets as version 2", () => {
-    expect(latestVersion(WORKSPACE_TARGET)).toBe(2);
+  it("reports the real targets at their current latest versions", () => {
+    // The two targets version INDEPENDENTLY and are expected to diverge — the
+    // workspace gained 003-issue-estimate (STA-81) while the hub did not. Pinned
+    // as two separate numbers precisely so a migration added to one target
+    // cannot be silently assumed to have been added to both.
+    expect(latestVersion(WORKSPACE_TARGET)).toBe(3);
     expect(latestVersion(HUB_TARGET)).toBe(2);
   });
 });

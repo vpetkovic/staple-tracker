@@ -38,6 +38,7 @@ import {
   StapleError,
   errorEnvelope,
   formatAgo,
+  formatDuration,
   type Issue,
   type IssueStatus,
   type StapleEvent,
@@ -164,6 +165,36 @@ function parseDuration(raw: string, flag: string): number {
   return Number(match[1]) * scale;
 }
 
+/**
+ * `--estimate <dur>` / `--no-estimate`, folded into the store's three-state
+ * patch value: undefined (untouched), null (cleared), or a number of seconds.
+ *
+ * ## Why clearing is a separate BOOLEAN flag, not `--estimate ""`
+ *
+ * `--estimate "$EST"` with `EST` unset expands to `--estimate ""`, and an empty
+ * string that means "erase the estimate" would make an unset shell variable
+ * silently destroy data. A distinct flag cannot be produced by accident: nothing
+ * expands to `--no-estimate`. So an empty value is a validation error (via
+ * parseDuration, which already refuses one), and erasing is something you have
+ * to say out loud.
+ *
+ * Passing both is refused rather than resolved by precedence — whichever order
+ * we picked, half the users who typed both would get the opposite of what they
+ * meant, and there is no reading of "set it to 2h and also clear it" worth
+ * guessing at.
+ */
+function estimateOption(
+  raw: string | undefined,
+  clear: boolean | undefined,
+): number | null | undefined {
+  if (clear && raw !== undefined) {
+    throw new StapleError("validation", "--estimate and --no-estimate cannot be used together");
+  }
+  if (clear) return null;
+  if (raw === undefined) return undefined;
+  return parseDuration(raw, "estimate");
+}
+
 /** Read from argv, not parsed values: a parse failure must still honour --json. */
 const jsonMode = process.argv.includes("--json");
 
@@ -199,8 +230,18 @@ function persistentUiToken(): string {
   return token;
 }
 
-function completeWithHub(store: WorkspaceStore, ref: string, status: IssueStatus, comment?: string) {
-  const updated = store.updateIssue(ref, { status, comment }, agentName());
+function completeWithHub(
+  store: WorkspaceStore,
+  ref: string,
+  status: IssueStatus,
+  comment?: string,
+  estimatedSeconds?: number | null,
+) {
+  const updated = store.updateIssue(
+    ref,
+    { status, comment, ...(estimatedSeconds === undefined ? {} : { estimatedSeconds }) },
+    agentName(),
+  );
   notifyHubResolvedSafe(store.slug, updated.identifier);
   return updated;
 }
@@ -593,6 +634,7 @@ Workspace
 Tasks
   new <title> [-d text] [-p prio] [--parent REF] [--assignee A]
               [--blocked-by R1,R2] [--status S] [--criteria "a;b"]
+              [--estimate <dur>]        record the plan-time estimate AT PLAN TIME
   ls [--status s1,s2] [--assignee A] [-q text] [--all]
   show <ref>                            full context (ancestry, relations, comments, docs)
   tree [ref]                            subtask tree
@@ -605,7 +647,9 @@ Flow
               issue held by another agent that has been silent at least <dur>
   done <ref> [-m comment]               complete (+ cross-workspace fan-out)
   cancel <ref> [-m comment]
-  status <ref> <status>                 any status, guards enforced
+  status <ref> <status> [--estimate <dur>|--no-estimate]
+              any status, guards enforced; --estimate also re-records the
+              estimate (same status = estimate-only write), --no-estimate clears
   release <ref> [--if-stale <dur>]      give a claim back -> todo; --if-stale frees
               a claim whose holder has been silent at least <dur> (any caller)
   block <ref> --owner O --action TEXT   mark blocked with an unblock descriptor
@@ -639,6 +683,11 @@ Durations (<dur>): 90s, 30m, 2h, 3d, or a bare number of seconds.
 Claim liveness: in_progress rows show "held <dur> · silent <dur>" in ls/show; the
               same numbers ride in --json as "claim". Nothing expires a claim on
               its own — a takeover only ever happens because you asked for one.
+Estimates:    --estimate takes a <dur> and is what makes estimate-vs-actual honest,
+              so record it when you PLAN, not when you finish. Actuals are derived
+              from started_at/completed_at and never stored; show prints
+              "time   est 2h · ran 3h10m" and --json carries "timing" (with
+              children rollups over DIRECT children) beside the issue.
 
 Global flags: --db <path>, --ws <slug|prefix>  (default: walk up for .staple/staple.db,
                       then a legacy .tasks/tasks.db)
@@ -701,6 +750,8 @@ function main() {
           "blocked-by": { type: "string" },
           status: { type: "string" },
           criteria: { type: "string" },
+          estimate: { type: "string" },
+          "no-estimate": { type: "boolean" },
           "allow-duplicate": { type: "boolean" },
         },
       });
@@ -709,6 +760,7 @@ function main() {
       const issue = store.createIssue({
         title,
         description: values.description,
+        estimatedSeconds: estimateOption(values.estimate, values["no-estimate"]) ?? null,
         priority: values.priority as never,
         parent: values.parent,
         assignee: values.assignee,
@@ -772,12 +824,18 @@ function main() {
       const { store } = getStore(values);
       const ctx = store.context(positionals[0]!);
       if (values.json) {
-        // Mirrors MCP get_task: claim rides alongside the context, null unless held.
-        outJson({ ...ctx, claim: store.claimActivity(ctx.issue.id) });
+        // Mirrors MCP get_task: claim and the timing pair ride alongside the
+        // context, from the same store expressions get_task spreads.
+        outJson({
+          ...ctx,
+          claim: store.claimActivity(ctx.issue.id),
+          ...store.detailTiming(ctx.issue.id),
+        });
         break;
       }
       const i = ctx.issue;
       const claim = store.claimActivity(i.id);
+      const timing = store.timing(i.id);
       console.log(`${i.identifier} · ${i.title}`);
       console.log(`status ${i.status} (v${i.statusVersion}) · priority ${i.priority}${i.assignee ? ` · @${i.assignee}` : ""}${i.checkoutAgent ? ` · held by ${i.checkoutAgent}` : ""}`);
       if (claim) {
@@ -785,6 +843,45 @@ function main() {
           `claim  held ${formatAgo(claim.heldSeconds)} · silent ${formatAgo(claim.idleSeconds)} (last activity ${claim.lastActivityAt.slice(0, 19)}Z)`,
         );
       }
+      /**
+       * Its own line, beside `claim`, and emitted only when there is something
+       * to say — so an issue with neither an estimate nor a start renders
+       * exactly as it always did.
+       *
+       * Deliberately NOT folded into `ls`'s row: `line()` is shared by nine
+       * commands and its columns are already full, and this is the surface
+       * built for detail. `--json` carries the full rollup for anything that
+       * wants to do arithmetic.
+       */
+      const timingParts: string[] = [];
+      if (timing.estimatedSeconds != null) timingParts.push(`est ${formatDuration(timing.estimatedSeconds)}`);
+      /**
+       * `ran` prints the HEADLINE `activeSeconds`, which for a parent is its
+       * children's aggregate — so it is labelled `aggregated` there rather than
+       * left to read as an epic's own stopwatch, which is exactly the lie STA-90
+       * removed. `children ran` still follows for the audit trail.
+       */
+      if (timing.activeSeconds != null) {
+        timingParts.push(
+          `ran ${formatDuration(timing.activeSeconds)}${timing.childCount > 0 ? " (aggregated)" : ""}`,
+        );
+      }
+      // Only when nonzero, and never folded into `ran`: review is a queue, not
+      // execution. See IssueTiming.reviewSeconds.
+      if (timing.reviewSeconds) timingParts.push(`review ${formatDuration(timing.reviewSeconds)}`);
+      if (timing.childrenEstimatedSeconds != null) {
+        timingParts.push(`children est ${formatDuration(timing.childrenEstimatedSeconds)}`);
+      }
+      if (timing.childrenActiveSeconds != null) {
+        timingParts.push(`children ran ${formatDuration(timing.childrenActiveSeconds)}`);
+      }
+      // The clock stopped here, and it is not `now`. Said out loud so nobody
+      // reads a frozen number as a live one.
+      if (timing.countedThrough) {
+        timingParts.push(`counted through ${timing.countedThrough.slice(0, 19)}Z`);
+      }
+      if (timing.approximate && timingParts.length > 0) timingParts.push("approx");
+      if (timingParts.length > 0) console.log(`time   ${timingParts.join(" · ")}`);
       if (ctx.ancestors.length > 0) {
         console.log(`path   ${[...ctx.ancestors.map((a) => a.identifier), i.identifier].join(" > ")}`);
       }
@@ -873,13 +970,33 @@ function main() {
     }
 
     case "status": {
-      const { values, positionals } = parseArgs({ args: rest, allowPositionals: true, options: common });
+      const { values, positionals } = parseArgs({
+        args: rest,
+        allowPositionals: true,
+        options: {
+          ...common,
+          estimate: { type: "string" },
+          "no-estimate": { type: "boolean" },
+        },
+      });
       const { store } = getStore(values);
       const target = positionals[1]! as IssueStatus;
+      /**
+       * `status` is the CLI's only update path, so it is also where a re-estimate
+       * lands. `staple status STA-81 in_progress --estimate 2h` is the natural
+       * moment for one; `staple status STA-81 backlog --estimate 2h` sets an
+       * estimate without moving the ticket (a same-status write is a no-op
+       * transition, not an error).
+       */
+      const estimatedSeconds = estimateOption(values.estimate, values["no-estimate"]);
       const issue =
         target === "done" || target === "cancelled"
-          ? completeWithHub(store, positionals[0]!, target)
-          : store.updateIssue(positionals[0]!, { status: target }, agentName());
+          ? completeWithHub(store, positionals[0]!, target, undefined, estimatedSeconds)
+          : store.updateIssue(
+              positionals[0]!,
+              { status: target, ...(estimatedSeconds === undefined ? {} : { estimatedSeconds }) },
+              agentName(),
+            );
       if (values.json) {
         outJson(issue);
         break;

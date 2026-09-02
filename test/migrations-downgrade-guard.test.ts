@@ -8,6 +8,8 @@ import { openDb } from "../src/core/db.js";
 import { migrateHub, migrateWorkspace } from "../src/core/schema.js";
 import { normalizedSchema } from "../src/core/migrations/dump.js";
 import { StapleError } from "../src/core/types.js";
+import { WORKSPACE_LATEST_VERSION } from "../src/core/migrations/workspace/index.js";
+import { HUB_LATEST_VERSION } from "../src/core/migrations/hub/index.js";
 import { CLI_ENTRY, TSX_CLI, bareEnv } from "./fixtures/characterize-support.js";
 import { FIXTURES, fixturePath, withFixture } from "./fixtures/schema/support.js";
 
@@ -26,9 +28,9 @@ import { FIXTURES, fixturePath, withFixture } from "./fixtures/schema/support.js
  */
 
 describe.each([
-  ["workspace", FIXTURES.workspaceV99, migrateWorkspace, "workspace database"],
-  ["hub", FIXTURES.hubV99, migrateHub, "hub database"],
-] as const)("a %s stamped newer than this build", (_label, fixture, migrate, description) => {
+  ["workspace", FIXTURES.workspaceV99, migrateWorkspace, "workspace database", WORKSPACE_LATEST_VERSION],
+  ["hub", FIXTURES.hubV99, migrateHub, "hub database", HUB_LATEST_VERSION],
+] as const)("a %s stamped newer than this build", (_label, fixture, migrate, description, latest) => {
   it("throws a conflict naming the version, the build, and the fix", () => {
     withFixture(fixture, (path) => {
       const db = openDb(path);
@@ -45,7 +47,10 @@ describe.each([
         expect(error.code).toBe("conflict");
         expect(error.message).toContain(description);
         expect(error.message).toContain("schema version 99");
-        expect(error.message).toContain("this build understands 2");
+        // Derived, not literal: the two targets version independently (the
+        // workspace is at 3 since STA-81, the hub still at 2), and hard-coding
+        // one number here made this assertion quietly wrong for one of them.
+        expect(error.message).toContain(`this build understands ${latest}`);
         expect(error.message).toContain("Upgrade staple");
         // The path is in the message so a user with several databases knows
         // which one to stop touching.
@@ -108,13 +113,23 @@ describe("the boundary", () => {
 
   it("refuses at latest + 1, not only at some far-future number", () => {
     withFixture(FIXTURES.workspaceV2, (path) => {
+      /**
+       * Derived from WORKSPACE_LATEST_VERSION rather than written as a literal.
+       * This test was pinned at '3' when latest was 2; STA-81 made 3 a REAL
+       * version, so the literal silently stopped testing the boundary and
+       * started testing an ordinary successful upgrade. Computing it means the
+       * boundary moves with the migration list instead of rotting beside it.
+       */
+      const tooNew = WORKSPACE_LATEST_VERSION + 1;
       const setup = new DatabaseSync(path);
-      setup.exec("UPDATE meta SET value = '3' WHERE key = 'schema_version'");
+      setup.exec(`UPDATE meta SET value = '${tooNew}' WHERE key = 'schema_version'`);
       setup.close();
 
       const db = openDb(path);
       try {
-        expect(() => migrateWorkspace(db)).toThrowError(/schema version 3/);
+        expect(() => migrateWorkspace(db)).toThrowError(
+          new RegExp(`schema version ${tooNew}`),
+        );
       } finally {
         db.close();
       }

@@ -145,6 +145,24 @@ function optionalSeconds(value: unknown, name: string): number | undefined {
   return seconds;
 }
 
+/**
+ * `estimateSeconds` off a JSON body.
+ *
+ * Deliberately NOT `optionalSeconds`: that one collapses null to undefined,
+ * which is right for an idleness threshold ("not asked for") and wrong here,
+ * where null is the CLEAR. This returns undefined only for a genuinely absent
+ * key and lets the store own every range refusal — one sentence, one place.
+ */
+function optionalEstimate(value: unknown): number | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === null || value === "") return null;
+  const seconds = Number(value);
+  if (!Number.isFinite(seconds)) {
+    throw new StapleError("validation", "estimateSeconds must be a number of seconds or null");
+  }
+  return seconds;
+}
+
 function stringList(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) return undefined;
   return value.filter((item): item is string => typeof item === "string" && item.trim() !== "").map((item) => item.trim());
@@ -454,6 +472,9 @@ export function startUiServer(options: UiOptions): UiHandle {
           ...context,
           crossBlockers,
           claim: handle.store.claimActivity(context.issue.id),
+          // Additive: the Analytics tab's whole payload, from the one store
+          // method get_task also spreads, so the two cannot drift.
+          ...handle.store.detailTiming(context.issue.id),
         });
         return;
       }
@@ -500,12 +521,14 @@ export function startUiServer(options: UiOptions): UiHandle {
         } catch {
           crossBlockers = [];
         }
-        // get_task carries `claim`, so this route must too — the whole point of
-        // this pane is that it differs from the agent's view by exactly nothing.
+        // get_task carries `claim` and the timing pair, so this route must too —
+        // the whole point of this pane is that it differs from the agent's view
+        // by exactly nothing.
         json(res, 200, {
           ...context,
           crossBlockers,
           claim: handle.store.claimActivity(context.issue.id),
+          ...handle.store.detailTiming(context.issue.id),
         });
         return;
       }
@@ -698,6 +721,7 @@ export function startUiServer(options: UiOptions): UiHandle {
             parent: (body.parent as string) || null,
             labels: stringList(body.labels),
             blockedBy: stringList(body.blockedBy),
+            estimatedSeconds: optionalEstimate(body.estimateSeconds),
             createdBy: actor,
           });
         } else if (type === "update") {
@@ -725,8 +749,19 @@ export function startUiServer(options: UiOptions): UiHandle {
             }
             patch.labels = labels;
           }
+          /**
+           * Three-state, and the reason this is checked for PRESENCE rather than
+           * truthiness: `null` is the clear, and `if (body.estimateSeconds)`
+           * would drop it silently along with the clear the user asked for.
+           */
+          if (body.estimateSeconds !== undefined) {
+            patch.estimatedSeconds = optionalEstimate(body.estimateSeconds) ?? null;
+          }
           if (Object.keys(patch).length === 0) {
-            throw new StapleError("validation", "update requires one of title, priority, labels");
+            throw new StapleError(
+              "validation",
+              "update requires one of title, priority, labels, estimateSeconds",
+            );
           }
           result = handle.store.updateIssue(ref, patch, actor);
         } else {

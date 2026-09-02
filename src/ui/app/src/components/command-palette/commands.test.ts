@@ -51,6 +51,8 @@ function row(identifier: string, title: string, overrides: Partial<Issue> = {}):
       checkoutAgent: null,
       checkoutAt: null,
       blockedTransitionAt: null,
+      // STA-81. null = no estimate recorded, which is not the same as zero.
+      estimatedSeconds: null,
       startedAt: null,
       completedAt: null,
       cancelledAt: null,

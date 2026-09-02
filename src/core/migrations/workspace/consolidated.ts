@@ -3,7 +3,7 @@
  * Regenerate with: npx tsx scripts/regen-migration-snapshots.ts
  *
  * The `sqlite_master` dump of a workspace database that walked migrations
- * 001, 002. Executed verbatim by the runner when — and only when —
+ * 001, 002, 003. Executed verbatim by the runner when — and only when —
  * version detection proved the file has no tables at all.
  *
  * No `IF NOT EXISTS` anywhere, deliberately: reaching this text with tables
@@ -47,7 +47,7 @@ CREATE TABLE issues (
   cancelled_at TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
-);
+, estimated_seconds INTEGER);
 
 CREATE UNIQUE INDEX issues_idempotency_uq
   ON issues(idempotency_key) WHERE idempotency_key IS NOT NULL;

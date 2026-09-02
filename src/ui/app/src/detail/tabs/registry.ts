@@ -40,6 +40,7 @@ import { OverviewTab } from "./OverviewTab";
 import { DocumentsTab } from "./DocumentsTab";
 import { ActivityTab } from "./ActivityTab";
 import { AgentViewTab } from "./AgentViewTab";
+import { AnalyticsTab } from "./AnalyticsTab";
 
 export const TABS: readonly TabDefinition[] = [
   { id: "overview", label: "Overview", component: OverviewTab },
@@ -51,6 +52,17 @@ export const TABS: readonly TabDefinition[] = [
   },
   { id: "activity", label: "Activity", component: ActivityTab },
   { id: "agent", label: "Agent view", component: AgentViewTab },
+  /**
+   * STA-82 — estimate vs actual. LAST, after "Agent view", per the epic.
+   *
+   * Deliberately has NO `available` predicate. It is tempting to hide the tab
+   * when nothing is estimated, but that is exactly backwards: an issue with no
+   * estimate is the one where the tab has something to tell you ("no estimate
+   * recorded — set one with --estimate at plan time"), and a tab that vanishes
+   * teaches nobody that the feature exists. Hiding it would also make the tab
+   * strip's width jump around as work moves through statuses.
+   */
+  { id: "analytics", label: "Analytics", component: AnalyticsTab },
 ];
 
 export function visibleTabs(detail: IssueDetail): TabDefinition[] {

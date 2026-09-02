@@ -37,7 +37,14 @@ import {
   encodeSeqCursor,
   errorEnvelope,
 } from "./core/types.js";
-import type { ClaimActivity, Issue, IssueComment, IssueStatus, PageLimits } from "./core/types.js";
+import type {
+  ClaimActivity,
+  Issue,
+  IssueComment,
+  IssueStatus,
+  IssueTiming,
+  PageLimits,
+} from "./core/types.js";
 
 /**
  * Agent identity, resolved per call (never captured at startup — a long-lived
@@ -201,6 +208,22 @@ const cursorSchema = z
   .describe(
     "Opaque cursor from a previous page's nextCursor. Send the SAME filters back with it; a cursor from different arguments is rejected.",
   );
+/**
+ * Plan-time estimate, in seconds. Three-state, exactly like `assignee`: absent
+ * leaves it alone, a number sets it, an explicit null clears it.
+ *
+ * Range and integrality are checked by the store (`assertEstimateSeconds`), not
+ * duplicated here as zod constraints — one refusal sentence, spoken by one
+ * place, on every surface. Zod only pins the TYPE, which is what the SDK needs
+ * to validate the call shape.
+ */
+const estimateSchema = z
+  .number()
+  .nullable()
+  .optional()
+  .describe(
+    "Plan-time estimate in SECONDS (90m = 5400, 2h = 7200). Record it when you plan, before you start — that is what makes the estimate-vs-actual comparison honest. Must be a positive whole number of seconds, at most 365d. Pass null to clear; omit to leave unchanged.",
+  );
 function limitSchema(limits: PageLimits) {
   return z
     .number()
@@ -299,6 +322,10 @@ const issueShape = {
   checkoutAgent: z.string().nullable(),
   checkoutAt: z.string().nullable(),
   blockedTransitionAt: z.string().nullable(),
+  estimatedSeconds: z
+    .number()
+    .nullable()
+    .describe("Plan-time estimate in seconds; null when none was recorded (NOT zero)"),
   startedAt: z.string().nullable(),
   completedAt: z.string().nullable(),
   cancelledAt: z.string().nullable(),
@@ -338,6 +365,84 @@ const claimField = {
     .describe("Liveness of the current claim; null when the issue is not held"),
 };
 
+/**
+ * Estimate vs actual. A sibling of the issue for the same reason `claim` is one:
+ * these are derived at read time and must not be frozen onto an entity a client
+ * will hold for a session. See `IssueTiming` in core/types.ts.
+ *
+ * The actual is a sum of reconstructed `in_progress` intervals, not two
+ * timestamps subtracted, so blocked and parked windows cost nothing and an open
+ * interval stops at the holder's last activity rather than at `now`.
+ */
+const timingShape = {
+  estimatedSeconds: z.number().nullable().describe("Plan-time estimate; null when none recorded"),
+  ownActiveSeconds: z
+    .number()
+    .nullable()
+    .describe(
+      "Seconds this issue itself was in_progress, summed over intervals, EXCLUDING intervals opened by a derived child_started flip. Usually null for an epic",
+    ),
+  activeSeconds: z
+    .number()
+    .nullable()
+    .describe(
+      "THE ACTUAL to compare against the estimate: ownActiveSeconds for a leaf, childrenActiveSeconds for a parent (a parent has no stopwatch), null when cancelled",
+    ),
+  reviewSeconds: z
+    .number()
+    .nullable()
+    .describe(
+      "Seconds spent in in_review, summed over intervals and deliberately NOT part of activeSeconds; null when never reviewed",
+    ),
+  approximate: z
+    .boolean()
+    .describe(
+      "True when the event log could not be replayed and these numbers fell back to completedAt/startedAt — treat them as an estimate of an estimate",
+    ),
+  countedThrough: z
+    .string()
+    .nullable()
+    .describe(
+      "Instant an open interval was counted through (the holder's last activity), never now; null when nothing is accumulating — including an epic flipped by a child",
+    ),
+  childCount: z.number().describe("Direct children only"),
+  childrenEstimatedSeconds: z
+    .number()
+    .nullable()
+    .describe("Sum over DIRECT children that have an estimate; null when none do"),
+  childrenActiveSeconds: z
+    .number()
+    .nullable()
+    .describe(
+      "Sum over DIRECT children of each child's activeSeconds, so a child that is itself a parent contributes its own aggregate; null when none contributed",
+    ),
+  childStatusCounts: z
+    .object(
+      Object.fromEntries(ISSUE_STATUSES.map((status) => [status, z.number()])) as {
+        [K in IssueStatus]: z.ZodNumber;
+      },
+    )
+    .describe("Direct children per status; every status present, zeros included"),
+};
+type _TimingShapeMatchesInterface = Expect<
+  Equals<z.infer<z.ZodObject<typeof timingShape>>, IssueTiming>
+>;
+
+/**
+ * Attached to the DETAIL surface only, never to `list_tasks`/`inbox`.
+ *
+ * The trimmed summary shapes exist to keep choosing a task cheap; seven
+ * per-status counts on every row of a 50-issue page is bulk nobody picking work
+ * reads. `estimatedSeconds` still rides along on those surfaces, because it is a
+ * scalar on the entity and genuinely answers "what is a 30m task I could take".
+ */
+const timingField = {
+  timing: z.object(timingShape).describe("Estimate vs actual for this issue, derived at read time"),
+  childrenTiming: z
+    .record(z.string(), z.object(timingShape))
+    .describe("Estimate vs actual per DIRECT child, keyed by child IDENTIFIER (e.g. STA-42)"),
+};
+
 const inboxEntryShape = {
   ...issueShape,
   unresolvedBlockers: z.array(z.string()),
@@ -367,6 +472,12 @@ const taskSummaryShape = {
   priority: priorityEnum,
   assignee: z.string().nullable(),
   parentId: z.string().nullable(),
+  /**
+   * The scalar, not the whole timing object: "what is a 30m task I could take"
+   * is a picking question, while rollups and per-status counts are an analysis
+   * question that belongs on get_task.
+   */
+  estimatedSeconds: z.number().nullable(),
   ...claimField,
 };
 
@@ -481,6 +592,7 @@ server.registerTool(
           priority: i.priority,
           assignee: i.assignee,
           parentId: i.parentId,
+          estimatedSeconds: i.estimatedSeconds,
           claim: claims.get(i.id) ?? null,
         })),
         nextCursor: nextCursorFor(window, items.length, hasMore),
@@ -514,6 +626,7 @@ server.registerTool(
         .array(z.object(crossBlockerShape))
         .describe("Cross-workspace blockers via the hub; [] when the hub is unavailable"),
       ...claimField,
+      ...timingField,
     },
     annotations: { title: "Get task context", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
   },
@@ -525,6 +638,7 @@ server.registerTool(
         ...context,
         crossBlockers: crossBlockersSafe(context.issue.identifier),
         claim: store.claimActivity(context.issue.id),
+        ...store.detailTiming(context.issue.id),
       };
     }),
 );
@@ -545,6 +659,7 @@ server.registerTool(
       acceptance_criteria: z.array(z.string()).max(20).optional(),
       blocked_by: z.array(refSchema).optional(),
       block_parent_until_done: z.boolean().optional(),
+      estimate_seconds: estimateSchema,
       idempotency_key: z.string().optional(),
       allow_duplicate: z.boolean().optional(),
       actor: actorSchema,
@@ -572,6 +687,7 @@ server.registerTool(
         acceptanceCriteria: input.acceptance_criteria,
         blockedBy: input.blocked_by,
         blockParentUntilDone: input.block_parent_until_done,
+        estimatedSeconds: input.estimate_seconds,
         idempotencyKey: input.idempotency_key,
         allowDuplicate: input.allow_duplicate,
         createdBy: requireActor(input.actor),
@@ -595,6 +711,7 @@ server.registerTool(
       labels: z.array(z.string()).optional(),
       unblock_owner: z.string().nullable().optional(),
       unblock_action: z.string().nullable().optional(),
+      estimate_seconds: estimateSchema,
       expected_status_version: z.number().int().optional(),
       comment: z.string().optional(),
       actor: actorSchema,
@@ -623,6 +740,7 @@ server.registerTool(
           labels: input.labels,
           unblockOwner: input.unblock_owner,
           unblockAction: input.unblock_action,
+          estimatedSeconds: input.estimate_seconds,
           expectedStatusVersion: input.expected_status_version,
           comment: input.comment,
         },

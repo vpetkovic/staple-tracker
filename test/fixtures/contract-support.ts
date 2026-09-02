@@ -43,14 +43,34 @@ export const ISO = "<iso>";
 export const CURSOR = "<cursor>";
 export const PATH = "<path>";
 /**
- * Elapsed-seconds fields are clock readings, not stored data: a fixture that
- * takes 1100ms instead of 900ms flips them from 0 to 1. Their FORMAT is pinned
- * (a non-negative finite number, asserted below) while their value is tokenized,
- * exactly as ISO instants are.
+ * Derived-seconds fields are readings taken off a real fixture's real history,
+ * not stored data: a fixture that takes 1100ms instead of 900ms flips them from
+ * 0 to 1. Their FORMAT is pinned (a non-negative finite number, asserted below)
+ * while their value is tokenized, exactly as ISO instants are.
  */
 export const SECONDS = "<seconds>";
-/** Keys whose numeric value is a live clock reading. */
-const ELAPSED_SECONDS_KEYS = new Set(["heldSeconds", "idleSeconds"]);
+/**
+ * Keys whose numeric value is derived from the clock rather than chosen.
+ *
+ * STA-90 renamed the timing fields; `elapsedSeconds`/`childrenElapsedSeconds`
+ * became `activeSeconds`/`childrenActiveSeconds` and gained `ownActiveSeconds`
+ * and `reviewSeconds` beside them. All four belong here for the same reason the
+ * originals did — and note that the clamp did NOT make them pinnable: a contract
+ * fixture claims and reads within the same few milliseconds, so the open interval
+ * is 0 or 1 depending on how the machine felt.
+ *
+ * `estimatedSeconds` deliberately stays OUT: an estimate is stored data a
+ * fixture chose, so `5400` must be pinned as `5400`. Tokenizing it would hide the
+ * exact bug this feature can have — a write path that stores the wrong number.
+ */
+const ELAPSED_SECONDS_KEYS = new Set([
+  "heldSeconds",
+  "idleSeconds",
+  "activeSeconds",
+  "ownActiveSeconds",
+  "reviewSeconds",
+  "childrenActiveSeconds",
+]);
 
 /**
  * Decode an opaque cursor the way a consumer never should. Used ONLY to assert
@@ -109,7 +129,7 @@ export function normalize(value: unknown, tempRoots: readonly string[] = []): un
 /**
  * Every field of core/types.ts Issue, at its create-time default. Callers
  * override only what their fixture changed, so the golden stays readable while
- * still pinning all 27 fields: a new field in Issue is missing here and fails,
+ * still pinning all 28 fields: a new field in Issue is missing here and fails,
  * a removed field is extra here and fails.
  */
 export function issueGolden(over: Record<string, unknown> = {}): Record<string, unknown> {
@@ -136,11 +156,46 @@ export function issueGolden(over: Record<string, unknown> = {}): Record<string, 
     checkoutAgent: null,
     checkoutAt: null,
     blockedTransitionAt: null,
+    // STA-81. NULL is the create-time default and the honest one: an issue
+    // created without an estimate has none, which is not the same fact as zero.
+    estimatedSeconds: null,
     startedAt: null,
     completedAt: null,
     cancelledAt: null,
     createdAt: ISO,
     updatedAt: ISO,
+    ...over,
+  };
+}
+
+/**
+ * Every field of core/types.ts IssueTiming, for an issue with no estimate, no
+ * start, and no children. Callers override what their fixture actually has.
+ *
+ * Elapsed values are normalized to SECONDS by `normalize` (see
+ * ELAPSED_SECONDS_KEYS) for the same reason claim durations are: they are
+ * readings off a wall clock and cannot be pinned to a literal.
+ */
+export function timingGolden(over: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    estimatedSeconds: null,
+    ownActiveSeconds: null,
+    activeSeconds: null,
+    reviewSeconds: null,
+    approximate: false,
+    countedThrough: null,
+    childCount: 0,
+    childrenEstimatedSeconds: null,
+    childrenActiveSeconds: null,
+    childStatusCounts: {
+      backlog: 0,
+      todo: 0,
+      in_progress: 0,
+      in_review: 0,
+      done: 0,
+      blocked: 0,
+      cancelled: 0,
+    },
     ...over,
   };
 }

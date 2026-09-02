@@ -317,6 +317,13 @@ describe("schema migration against a live database", () => {
       // Rewind to the v1 shape: the column and its index disappear, the rows stay.
       legacyDb.exec("DROP INDEX IF EXISTS comments_idempotency_uq");
       legacyDb.exec("ALTER TABLE comments DROP COLUMN idempotency_key");
+      // STA-81 added migration 003. This rewind builds a synthetic v1 out of a
+      // CURRENT database, so every column a later migration introduced has to
+      // come back off — otherwise the file is stamped '1' while carrying v3
+      // columns, and 003 fails on "duplicate column name" rather than testing
+      // anything. The genuine pre-estimate evidence lives in
+      // test/fixtures/schema/workspace-v{1,2}.sqlite, which are real artefacts.
+      legacyDb.exec("ALTER TABLE issues DROP COLUMN estimated_seconds");
       legacyDb.prepare("UPDATE meta SET value = '1' WHERE key = 'schema_version'").run();
       legacyDb.close();
 

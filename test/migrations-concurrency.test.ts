@@ -9,6 +9,8 @@ import { normalizedSchema } from "../src/core/migrations/dump.js";
 import { openDb } from "../src/core/db.js";
 import { migrateHub, migrateWorkspace } from "../src/core/schema.js";
 import { FIXTURES, fixturePath, schemaObjects } from "./fixtures/schema/support.js";
+import { WORKSPACE_LATEST_VERSION } from "../src/core/migrations/workspace/index.js";
+import { HUB_LATEST_VERSION } from "../src/core/migrations/hub/index.js";
 
 /**
  * Several real processes racing the first open of an old database.
@@ -104,7 +106,10 @@ describe("six processes racing the first open of a v1 workspace", () => {
       // idempotency_key` a second time and died with "duplicate column name".
       const failures = results.filter((r) => !r.ok);
       expect(failures, JSON.stringify(failures, null, 2)).toEqual([]);
-      expect(results.every((r) => r.endedAt === 2)).toBe(true);
+      // Every worker converges on the SAME latest version — derived, so appending
+      // a migration (STA-81 appended 003) moves the target instead of reddening
+      // a race test that is not about version numbers at all.
+      expect(results.every((r) => r.endedAt === WORKSPACE_LATEST_VERSION)).toBe(true);
 
       // At least one worker genuinely observed the pre-migration state, so the
       // race was real and not an artefact of the first worker finishing early.
@@ -122,7 +127,7 @@ describe("six processes racing the first open of a v1 workspace", () => {
           (db.prepare("SELECT value FROM meta WHERE key='schema_version'").get() as {
             value: string;
           }).value,
-        ).toBe("2");
+        ).toBe(String(WORKSPACE_LATEST_VERSION));
         // The rows the upgrade was protecting are still there.
         expect((db.prepare("SELECT count(*) AS n FROM comments").get() as { n: number }).n).toBe(1);
         expect((db.prepare("SELECT count(*) AS n FROM issues").get() as { n: number }).n).toBe(2);
@@ -143,7 +148,7 @@ describe("six processes racing the first open of a pre-A4 hub", () => {
 
       const failures = results.filter((r) => !r.ok);
       expect(failures, JSON.stringify(failures, null, 2)).toEqual([]);
-      expect(results.every((r) => r.endedAt === 2)).toBe(true);
+      expect(results.every((r) => r.endedAt === HUB_LATEST_VERSION)).toBe(true);
       expect(results.some((r) => r.sawVersion === 1)).toBe(true);
 
       // Hub migration 002 is a bare `CREATE TABLE meta` — a second application
@@ -242,7 +247,7 @@ describe("six processes racing the CREATION of a brand new workspace", () => {
     // says "empty" and every one of them wants to execute the consolidated DDL
     // — which carries no `IF NOT EXISTS` at all, on purpose. Five of the six
     // must discover inside their own transaction that the database is already
-    // at version 2 and do nothing.
+    // at the latest version and do nothing.
     const dir = mkdtempSync(join(tmpdir(), "staple-race-new-"));
     const path = join(dir, "tasks.db");
     try {
@@ -250,7 +255,7 @@ describe("six processes racing the CREATION of a brand new workspace", () => {
 
       const failures = results.filter((r) => !r.ok);
       expect(failures, JSON.stringify(failures, null, 2)).toEqual([]);
-      expect(results.every((r) => r.endedAt === 2)).toBe(true);
+      expect(results.every((r) => r.endedAt === WORKSPACE_LATEST_VERSION)).toBe(true);
       expect(results.filter((r) => r.sawVersion === 0).length).toBeGreaterThan(0);
 
       const db = new DatabaseSync(path);

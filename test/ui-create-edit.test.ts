@@ -284,7 +284,13 @@ describe("inline property editing", () => {
     const { http, refusal } = await refuse({ type: "update", ref: refs.editable });
     expect(http).toBe(409);
     expect(refusal.code).toBe("validation");
-    expect(refusal.message).toBe("update requires one of title, priority, labels");
+    // STA-81 added estimateSeconds to the patchable set, so it joins the list of
+    // things this refusal names. The refusal itself is the characterization: an
+    // update that patches NOTHING is a mistake worth saying out loud, not a
+    // silent no-op write that bumps updated_at.
+    expect(refusal.message).toBe(
+      "update requires one of title, priority, labels, estimateSeconds",
+    );
   });
 
   it("refuses a bad priority with the store's list of the good ones", async () => {
