@@ -58,8 +58,8 @@
  */
 import { flatRow, type TaskRow } from "@/components/task-list";
 import { waitingLine } from "@/lib/derived-blocked";
+import { isResolvedStatus } from "@/lib/settings";
 import type { BlockingChild, InboxIssue, InboxRow, Issue, IssueRow } from "@/lib/types";
-import { RESOLVED_STATUSES } from "@/lib/types";
 
 /**
  * The sections, in the order they appear. A registry rather than a switch, the same trick
@@ -141,8 +141,17 @@ export const EMPTY_PICKUP_INDEX: PickupIndex = {
   size: 0,
 };
 
+/**
+ * O7b's wiring (STA-141). The workspace's configured CATEGORY for the status, not
+ * membership of the built-in `RESOLVED_STATUSES` pair — the same substitution tree-model.ts
+ * makes, and it has to be the same substitution or a custom `shipped` status would land in
+ * the resolved section on one axis and in `waiting` on the other.
+ *
+ * On a default workspace the two spellings agree exactly, which is what makes this a wiring
+ * change rather than a behaviour change.
+ */
 function isResolved(status: Issue["status"]): boolean {
-  return RESOLVED_STATUSES.includes(status);
+  return isResolvedStatus(status);
 }
 
 /**

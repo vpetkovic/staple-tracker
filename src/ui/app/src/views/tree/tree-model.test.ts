@@ -22,6 +22,7 @@ import {
   OPEN_STATUS_ORDER,
   RESOLVED_STATUSES,
   type ClaimActivity,
+  type IssueRow,
   type IssueStatus,
 } from "@/lib/types";
 import { STALE_CLAIM_SECONDS } from "@/lib/claim";
@@ -31,12 +32,18 @@ import {
   activityRank,
   buildGroups,
   buildList,
+  buildParentGroups,
   flattenFlat,
   GROUP_ORDER,
   LIVE_CLAIM_TIER,
+  NO_PARENT_GROUP_KEY,
+  NO_PARENT_GROUP_LABEL,
+  sectionsOf,
   subtreeActivityTiers,
+  topLevelAncestors,
   visibleOrder,
   visibleRows,
+  type BuildOptions,
 } from "./tree-model";
 
 /** Everything expanded — the default for the groups these tests mostly use. */
@@ -1082,5 +1089,369 @@ describe("the collapsed-parent rollup", () => {
     const flat = flattenFlat(onScreen, { isExpanded: () => true, rollupSource: FIVE });
 
     expect(flat.map((r) => r.issue.id)).toEqual(["epic", "k6", "k5"]);
+  });
+});
+
+/**
+ * O3d (STA-129) — group by epic, and the ways a group-by-ANCESTOR axis quietly loses or
+ * duplicates a row.
+ *
+ * This axis INVERTS the §1 invariant at the top of this file rather than breaking it: under
+ * group-by-status a header is a claim about every row's STATUS, and here it is a claim about
+ * every row's LINEAGE. So "every task under the STA-1 header descends from STA-1" is the
+ * property, and the failure modes are the mirror image of the status axis's:
+ *
+ *   1. The epic drawn as the header AND as a row inside its own group — one issue twice.
+ *   2. A root that heads nothing VANISHING, because it was promoted to the header of an
+ *      empty group and empty groups do not render. The one thing a tracker must never do.
+ *   3. The ancestor map built from the FILTERED rows, so hiding `done` silently re-buckets a
+ *      whole family into "No epic" — the status filter rewriting the grouping axis.
+ *   4. O3c's ghost drawing the epic a second time inside the group it already titles.
+ */
+describe("group by epic", () => {
+  /** Everything expanded, and the whole list is also the rollup source. */
+  const opts = (rows: IssueRow[], over: Partial<BuildOptions> = {}): BuildOptions => ({
+    isExpanded: () => true,
+    showResolved: true,
+    rollupSource: rows,
+    ...over,
+  });
+
+  const byEpic = (rows: IssueRow[], over: Partial<BuildOptions> = {}) =>
+    buildParentGroups(rows, opts(rows, over));
+
+  it("puts every row under its TOP-LEVEL ancestor, not under its direct parent", () => {
+    // A three-deep family. The GRANDCHILD is the assertion: bucketing on `parentId` would
+    // have filed it under STA-2, which is a group header nobody asked for and which splits
+    // the epic in half.
+    const epic = row({ identifier: "STA-1", kind: "epic", title: "Tree ordering" });
+    const mid = row({ identifier: "STA-2", parentId: "id-1" });
+    const leaf = row({ identifier: "STA-3", parentId: "id-2" });
+
+    const groups = byEpic([epic, mid, leaf]);
+
+    expect(groups.map((g) => g.status)).toEqual(["id-1"]);
+    expect(groups[0]!.rows.map((r) => r.issue.identifier)).toEqual(["STA-2", "STA-3"]);
+    // And the lineage is DRAWN, not flattened: the grandchild is still nested under its own
+    // parent inside the group.
+    expect(groups[0]!.rows.map((r) => r.depth)).toEqual([0, 1]);
+  });
+
+  it("promotes the epic to the header and does NOT also render it as a row", () => {
+    const epic = row({ identifier: "STA-1", kind: "epic", title: "Tree ordering" });
+    const child = row({ identifier: "STA-2", parentId: "id-1" });
+
+    const groups = byEpic([epic, child]);
+
+    expect(groups[0]!.heading).toMatchObject({
+      identifier: "STA-1",
+      label: "Tree ordering",
+      kind: "epic",
+    });
+    // The whole point. One issue, one place on the page.
+    expect(groups[0]!.rows.map((r) => r.issue.identifier)).toEqual(["STA-2"]);
+    expect(groups.flatMap((g) => g.rows).filter((r) => r.issue.identifier === "STA-1")).toEqual([]);
+  });
+
+  it("files a root that heads NOTHING under 'No epic' rather than losing it", () => {
+    // The failure this pins: promote every root to a header, and a childless root becomes
+    // the header of an empty group — which does not render, so the row is simply gone.
+    const epic = row({ identifier: "STA-1", kind: "epic" });
+    const child = row({ identifier: "STA-2", parentId: "id-1" });
+    const loner = row({ identifier: "STA-3" });
+
+    const groups = byEpic([epic, child, loner]);
+
+    expect(groups.map((g) => g.status)).toEqual(["id-1", NO_PARENT_GROUP_KEY]);
+    expect(groups[1]!.heading).toMatchObject({
+      issue: null,
+      label: NO_PARENT_GROUP_LABEL,
+      identifier: null,
+      kind: null,
+      rollup: null,
+    });
+    expect(groups[1]!.rows.map((r) => r.issue.identifier)).toEqual(["STA-3"]);
+  });
+
+  it("keeps 'No epic' LAST even when its rows are the most active on the page", () => {
+    // Ranked by its best member the catch-all would lead the page, which inverts the one
+    // thing this axis says: work belongs to something.
+    const epic = row({ identifier: "STA-1", kind: "epic", status: "backlog" });
+    const child = row({ identifier: "STA-2", parentId: "id-1", status: "backlog" });
+    const live = row({ identifier: "STA-3", status: "in_progress" }, claim());
+
+    expect(byEpic([epic, child, live]).map((g) => g.status)).toEqual([
+      "id-1",
+      NO_PARENT_GROUP_KEY,
+    ]);
+  });
+
+  it("draws one catch-all group and nothing else when nothing has a parent", () => {
+    const groups = byEpic([row({ identifier: "STA-1" }), row({ identifier: "STA-2" })]);
+
+    expect(groups.map((g) => g.status)).toEqual([NO_PARENT_GROUP_KEY]);
+    expect(groups[0]!.count).toBe(2);
+  });
+
+  it("lets a FILTERED-OUT epic still name and head its group", () => {
+    /*
+     * The acceptance criterion, and the reason the ancestor map is built from `rollupSource`
+     * rather than from `rows`. A done epic is hidden by the default filter; built from the
+     * visible rows it would stop being anybody's ancestor and its whole family would land in
+     * "No epic" — the status filter silently rewriting the grouping axis.
+     */
+    const epic = row({ identifier: "STA-1", kind: "epic", title: "Shipped epic", status: "done" });
+    const child = row({ identifier: "STA-2", parentId: "id-1", status: "todo" });
+
+    const groups = buildParentGroups([child], {
+      isExpanded: () => true,
+      showResolved: true,
+      rollupSource: [epic, child],
+    });
+
+    expect(groups.map((g) => g.status)).toEqual(["id-1"]);
+    expect(groups[0]!.heading).toMatchObject({ identifier: "STA-1", label: "Shipped epic" });
+    expect(groups[0]!.rows.map((r) => r.issue.identifier)).toEqual(["STA-2"]);
+    // And NO ghost of it, and no breadcrumb either: the header names the parent more loudly
+    // than a dimmed row would. This is what `headOfGroup` buys.
+    expect(ghosts(groups[0]!.rows)).toEqual([]);
+    expect(groups[0]!.rows[0]!.breadcrumb).toBeNull();
+  });
+
+  it("suppresses the head's ghost even when the filter hid it via hiddenParents", () => {
+    // The other route to a ghost. `hiddenParents` is keyed by CHILD id and yields the parent
+    // directly, so a suppression that only consulted `presentAnywhere` would still draw one.
+    const epic = row({ identifier: "STA-1", kind: "epic", status: "done" });
+    const child = row({ identifier: "STA-2", parentId: "id-1", status: "todo" });
+
+    const groups = buildParentGroups([child], {
+      isExpanded: () => true,
+      showResolved: true,
+      rollupSource: [epic, child],
+      hiddenParents: new Map([["id-2", epic.issue]]),
+    });
+
+    expect(ghosts(groups[0]!.rows)).toEqual([]);
+    expect(groups[0]!.rows[0]!.breadcrumb).toBeNull();
+  });
+
+  it("orders groups by the EPIC's activity rank, including its best descendant", () => {
+    /*
+     * O3a's rule, applied to headers. `idle` is `in_progress` and would lead on its own
+     * status; `sleepy` is `backlog` and only outranks it because of the live claim on its
+     * child. A group order that read the epic's own status would put them the other way
+     * round, which is exactly the reading STA-126 exists to replace.
+     */
+    const sleepy = row({ identifier: "STA-1", kind: "epic", status: "backlog" });
+    const held = row({ identifier: "STA-2", parentId: "id-1", status: "todo" }, claim());
+    const idle = row({ identifier: "STA-3", kind: "epic", status: "in_progress" });
+    const quiet = row({ identifier: "STA-4", parentId: "id-3", status: "backlog" });
+
+    expect(byEpic([idle, quiet, sleepy, held]).map((g) => g.status)).toEqual(["id-1", "id-3"]);
+  });
+
+  it("ranks a filtered-away epic by the claim on its OWN row in the unfiltered source", () => {
+    // The epic's row is not in `rows` at all, so its claim is only visible in `rollupSource`
+    // — and a header ranked off `visible` would have silently dropped to the bottom.
+    const held = row({ identifier: "STA-1", kind: "epic", status: "done" }, claim());
+    const heldKid = row({ identifier: "STA-2", parentId: "id-1", status: "backlog" });
+    const plain = row({ identifier: "STA-3", kind: "epic", status: "in_progress" });
+    const plainKid = row({ identifier: "STA-4", parentId: "id-3", status: "backlog" });
+
+    const groups = buildParentGroups([heldKid, plain, plainKid], {
+      isExpanded: () => true,
+      showResolved: true,
+      rollupSource: [held, heldKid, plain, plainKid],
+    });
+
+    expect(groups.map((g) => g.status)).toEqual(["id-1", "id-3"]);
+  });
+
+  it("breaks a tie between two equally idle epics deterministically", () => {
+    // The list rebuilds every 1.5s on the fingerprint poll. Two headers that compare equal
+    // and swap on each rebuild read as the page twitching, so the identifier tiebreak is
+    // numeric-aware and STA-9 must precede STA-10.
+    const nine = row({ identifier: "STA-9", kind: "epic", status: "todo" });
+    const nineKid = row({ identifier: "STA-11", parentId: "id-9", status: "todo" });
+    const ten = row({ identifier: "STA-10", kind: "epic", status: "todo" });
+    const tenKid = row({ identifier: "STA-12", parentId: "id-10", status: "todo" });
+
+    expect(byEpic([ten, tenKid, nine, nineKid]).map((g) => g.status)).toEqual(["id-9", "id-10"]);
+    // Same answer from the other input order — a sort, not an accident of insertion.
+    expect(byEpic([nine, nineKid, ten, tenKid]).map((g) => g.status)).toEqual(["id-9", "id-10"]);
+  });
+
+  it("puts the epic's rollup on the header, counted over the UNFILTERED source", () => {
+    // Three of the five descendants are done and hidden by the filter. A rollup read off the
+    // bucket would say 0/2, which is not a partial answer but the wrong one.
+    const epic = row({ identifier: "STA-1", kind: "epic" });
+    const all = [
+      epic,
+      row({ identifier: "STA-2", parentId: "id-1", status: "done" }),
+      row({ identifier: "STA-3", parentId: "id-1", status: "done" }),
+      row({ identifier: "STA-4", parentId: "id-1", status: "done" }),
+      row({ identifier: "STA-5", parentId: "id-1", status: "todo" }),
+      row({ identifier: "STA-6", parentId: "id-1", status: "todo" }),
+    ];
+
+    const groups = buildParentGroups(all, {
+      isExpanded: () => true,
+      showResolved: false,
+      rollupSource: all,
+    });
+
+    expect(groups[0]!.heading?.rollup).toMatchObject({ resolved: 3, total: 5 });
+    // …while the COUNT is what is actually in the bucket, which is a different number and is
+    // meant to be. Two numbers, two questions; the header renders the rollup.
+    expect(groups[0]!.count).toBe(2);
+  });
+
+  it("counts `bucket.length`, so a ghost cannot reach the count", () => {
+    /*
+     * O3c's rule, restated on this axis. The MID-LEVEL parent is filtered away, so its child
+     * gets a ghost of it inside the epic's group — three rows drawn, two rows real. The
+     * epic itself never becomes one; that is `headOfGroup`, asserted above.
+     */
+    const epic = row({ identifier: "STA-1", kind: "epic" });
+    const mid = row({ identifier: "STA-2", parentId: "id-1", status: "done" });
+    const leaf = row({ identifier: "STA-3", parentId: "id-2", status: "todo" });
+    const other = row({ identifier: "STA-4", parentId: "id-1", status: "todo" });
+
+    const groups = buildParentGroups([leaf, other], {
+      isExpanded: () => true,
+      showResolved: true,
+      rollupSource: [epic, mid, leaf, other],
+      hiddenParents: new Map([["id-3", mid.issue]]),
+    });
+
+    const drawn = groups[0]!.rows;
+    expect(ghosts(drawn).map((r) => r.issue.identifier)).toEqual(["STA-2"]);
+    // O3c's other rule, still holding here: the ghost sorts as the BEST ROW IT BRACKETS, so
+    // the block lands at STA-3's position rather than at the missing parent's, and STA-3
+    // precedes STA-4 on the identifier tiebreak exactly as it would have unbracketed.
+    expect(real(drawn).map((r) => r.issue.identifier)).toEqual(["STA-3", "STA-4"]);
+    expect(groups[0]!.count).toBe(2);
+    expect(ghosts(drawn).map((r) => r.issue.identifier)).not.toContain("STA-1");
+  });
+
+  it("ranks rows INSIDE a group by activity, unlike the status axis", () => {
+    // Status grouping ranks every row 0 because STA-126 promised its output unchanged. This
+    // axis carries no such promise, and the live child belongs at the top of its epic
+    // however low its priority.
+    const epic = row({ identifier: "STA-1", kind: "epic" });
+    const urgent = row({ identifier: "STA-2", parentId: "id-1", priority: "critical" });
+    const live = row({ identifier: "STA-3", parentId: "id-1", priority: "low" }, claim());
+
+    expect(byEpic([epic, urgent, live])[0]!.rows.map((r) => r.issue.identifier)).toEqual([
+      "STA-3",
+      "STA-2",
+    ]);
+  });
+
+  it("uses the FLAT expansion default, so a backlog sub-epic cannot hide live work", () => {
+    /*
+     * The whole family is in ONE group here, so the status rule — fold a parent whose own
+     * status is idle — has nowhere to put the children it folds away. Status grouping can
+     * afford that rule only because it files the child in its own group. This is R1's trap,
+     * one axis over.
+     */
+    const epic = row({ identifier: "STA-1", kind: "epic", status: "backlog" });
+    const sub = row({ identifier: "STA-2", parentId: "id-1", status: "backlog" });
+    const live = row({ identifier: "STA-3", parentId: "id-2", status: "in_progress" });
+
+    // `isExpanded` returns undefined — nobody has clicked anything, so the DEFAULT decides.
+    const groups = buildParentGroups([epic, sub, live], {
+      isExpanded: () => undefined,
+      showResolved: true,
+      rollupSource: [epic, sub, live],
+    });
+
+    expect(groups[0]!.rows.map((r) => r.issue.identifier)).toEqual(["STA-2", "STA-3"]);
+  });
+
+  it("is reachable through buildList and produces the SAME shape as status grouping", () => {
+    // Not a third `kind` in the union: the fold, the keyboard sequence, `visibleOrder` and
+    // the animation are the same behaviour on both grouped axes, and a second shape would
+    // have made every one of them grow a branch that does the same thing.
+    const epic = row({ identifier: "STA-1", kind: "epic" });
+    const child = row({ identifier: "STA-2", parentId: "id-1" });
+    const rows = [epic, child];
+
+    const shape = buildList(rows, "parent", opts(rows));
+
+    expect(shape.kind).toBe("grouped");
+    expect(sectionsOf(shape).map((s) => s.key)).toEqual(["id-1"]);
+    // And the navigation contract follows for free — no header and no ghost in it, and a
+    // collapsed group contributes nothing.
+    expect(visibleOrder(shape, () => false).map((s) => s.ref)).toEqual(["STA-2"]);
+    expect(visibleOrder(shape, (key) => key === "id-1")).toEqual([]);
+  });
+
+  it("keys the fold on the EPIC's id, which no status or section is spelled as", () => {
+    // The three vocabularies share one collapsed-groups set in expansion.ts. This is the
+    // property that lets them, asserted where the keys are MINTED rather than where they
+    // are stored.
+    const epic = row({ identifier: "STA-1", kind: "epic" });
+    const child = row({ identifier: "STA-2", parentId: "id-1" });
+    const loner = row({ identifier: "STA-3" });
+
+    const keys = byEpic([epic, child, loner]).map((g) => g.status);
+
+    expect(keys).toEqual(["id-1", "__no_epic__"]);
+    for (const key of keys) {
+      expect(GROUP_ORDER as readonly string[]).not.toContain(key);
+      expect(["up_next", "in_flight", "waiting", "resolved"]).not.toContain(key);
+    }
+  });
+});
+
+/**
+ * O3d (STA-129) — the ancestor walk the epic axis is built on.
+ *
+ * Extracted and tested separately because it is the one piece whose failure is SILENT: a
+ * walk that stopped one level early would still produce groups, still produce headers, and
+ * still look right on a two-deep tree, which is the depth every fixture in this file used
+ * before this ticket.
+ */
+describe("topLevelAncestors", () => {
+  it("answers the ROOT, not the parent, at every depth", () => {
+    const rows = [
+      row({ identifier: "STA-1" }),
+      row({ identifier: "STA-2", parentId: "id-1" }),
+      row({ identifier: "STA-3", parentId: "id-2" }),
+      row({ identifier: "STA-4", parentId: "id-3" }),
+    ];
+
+    const top = topLevelAncestors(rows);
+
+    expect(top.get("id-4")).toBe("id-1");
+    expect(top.get("id-3")).toBe("id-1");
+    expect(top.get("id-2")).toBe("id-1");
+    // A root has no ancestor. ABSENT, not itself — the caller's placement rule depends on
+    // being able to tell "I am a root" from "my root is me".
+    expect(top.has("id-1")).toBe(false);
+  });
+
+  it("stops at the highest ancestor the input contains", () => {
+    // The epic is not in the list, so the mid-level task IS the top-level ancestor of what
+    // is here. Which is why `buildParentGroups` passes the UNFILTERED source: hand it a
+    // filtered list and this function will honestly answer a different question.
+    const rows = [
+      row({ identifier: "STA-2", parentId: "id-1" }),
+      row({ identifier: "STA-3", parentId: "id-2" }),
+    ];
+
+    expect(topLevelAncestors(rows).get("id-3")).toBe("id-2");
+  });
+
+  it("terminates on a cycle the store should never produce", () => {
+    // `forEachAncestor`'s `seen` guard, inherited. A hang here would take the render down
+    // rather than draw a wrong row, which is the worse of the two failures.
+    const rows = [
+      row({ identifier: "STA-1", parentId: "id-2" }),
+      row({ identifier: "STA-2", parentId: "id-1" }),
+    ];
+
+    expect(() => topLevelAncestors(rows)).not.toThrow();
   });
 });

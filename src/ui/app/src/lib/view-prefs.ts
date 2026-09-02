@@ -40,12 +40,28 @@
  * — is exactly what that would break. So they are separate axes, and the registry is what
  * makes a third axis cost one entry.
  */
-export type GroupBy = "none" | "status" | "pickup";
+/**
+ * ── WHY THE EPIC AXIS IS `parent` AND NOT `epic` — O3d (STA-129) ──────────────────────
+ *
+ * The ID names the DATA and the LABEL names the reading. What the grouping actually reads
+ * is `issue.parentId` — the TOP-LEVEL ancestor of every row — and "epic" is what that
+ * ancestor almost always is, not what it must be. O1a (STA-124) made `kind` a real field
+ * and a workspace may add its own kinds; the day somebody groups a page whose top-level
+ * rows are `task` or `initiative`, an id spelled `epic` would be a stored preference that
+ * lies. The label can say "Epic" because a label is allowed to name the common case.
+ */
+export type GroupBy = "none" | "status" | "pickup" | "parent";
 
 /**
  * The dimensions offered, in menu order. A registry rather than a switch, so a third entry
  * appears in the menu, in the trigger label and in the persistence validator with no edit to
  * any of them — the same trick `FILTER_DIMENSIONS` plays in lib/filters.ts.
+ *
+ * A NEW DIMENSION APPENDS. O3d (STA-129) added `parent` at the end rather than beside
+ * `status` where it arguably belongs by kinship, and O1c (STA-130) will append `kind` after
+ * it. Registry order IS menu order, so inserting moves every entry below the insertion
+ * point — and the three that exist today are a year of muscle memory for anyone who has
+ * used the control. Kinship is not worth a menu that reshuffles under the pointer.
  */
 export const GROUP_BY_OPTIONS: readonly { id: GroupBy; label: string; hint: string }[] = [
   {
@@ -65,6 +81,12 @@ export const GROUP_BY_OPTIONS: readonly { id: GroupBy; label: string; hint: stri
     // answers rather than the mechanism, which is why it is not "Readiness".
     label: "Pickup order",
     hint: "what to grab next — up next, in flight, waiting; the inbox's own ordering",
+  },
+  {
+    id: "parent",
+    // O3d (STA-129). The trigger reads "Group: Epic".
+    label: "Epic",
+    hint: "the parent heads the group; every task sits under its top-level ancestor",
   },
 ];
 
