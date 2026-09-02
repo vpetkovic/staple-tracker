@@ -36,8 +36,7 @@
  * ## `--yes` (epic D, D5)
  *
  * Bare `staple --yes` (and therefore `npx staple-cli --yes`) is the
- * "require explicit flags" half of that edge-case row, mirroring
- * `npx paperclipai onboard --yes`:
+ * "require explicit flags" half of that edge-case row:
  *
  *   - At a terminal, `--yes` skips the questions and takes the defaults — the
  *     exact choices `staple init --yes` makes, because it IS the same

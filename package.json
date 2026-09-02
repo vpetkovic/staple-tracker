@@ -2,7 +2,7 @@
   "name": "staple",
   "version": "0.1.0",
   "private": true,
-  "description": "Local-first task tracker for coding agents - a smaller paperclip. SQLite workspaces, hub federation, MCP + CLI + local web UI.",
+  "description": "Local-first task tracker for coding agents. SQLite workspaces, hub federation, MCP + CLI + local web UI.",
   "license": "MIT",
   "type": "module",
   "engines": {

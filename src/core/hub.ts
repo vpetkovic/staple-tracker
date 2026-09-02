@@ -105,7 +105,7 @@ export class Hub {
 
   // ---------- registry ----------
 
-  /** Mint a hub-unique prefix from a slug: BASE, BASEA, BASEAA, ... (Paperclip's scheme). */
+  /** Mint a hub-unique prefix from a slug: BASE, BASEA, BASEAA, ... */
   allocatePrefix(slug: string): string {
     const base = derivePrefixBase(slug);
     const taken = new Set(

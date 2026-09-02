@@ -6,7 +6,8 @@ import { dirname } from "node:path";
  * SQLite wrapper: WAL for multi-process safety on one machine, busy_timeout so
  * concurrent agent writers queue instead of erroring, foreign keys on.
  * Claims and guards are single statements or short BEGIN IMMEDIATE
- * transactions, mirroring the semantics Paperclip gets from Postgres row locks.
+ * transactions — the SQLite equivalent of the row locks a server database would
+ * use for the same job.
  */
 const BUSY_TIMEOUT_MS = 5_000;
 

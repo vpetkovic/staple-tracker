@@ -12,7 +12,7 @@
  *     assets/assets/*         its hashed js/css
  *     README.md
  *     LICENSE
- *     THIRD-PARTY-NOTICES.md  generated from the bundled dependency graph
+ *     THIRD-PARTY-NOTICES.md  the repository's notices + the bundled dependency graph
  *
  * The layout is flat on purpose: STA-24 §6 has the installer stage a packed runtime
  * into `<home>/runtime/versions/<version>/` as `staple.mjs` beside `assets/`, so the
@@ -162,8 +162,15 @@ function writeArtifactManifest(bundledPackages: string[]): void {
     )}\n`,
   );
 
+  // The artifact's notices are the repository's hand-maintained notices (the vendored
+  // source whose licenses require a preserved copyright, which the UI bundle ships)
+  // plus the generated list of packages esbuild compiled into staple.mjs. Both halves
+  // ride in the tarball, so one file has to carry both.
+  const vendoredNotices = readFileSync(join(repoRoot, "THIRD-PARTY-NOTICES.md"), "utf8").trimEnd();
   const notices = [
-    "# Third-party notices",
+    vendoredNotices,
+    "",
+    "## Bundled npm packages",
     "",
     "`staple.mjs` is a single bundle. The following packages are compiled into it;",
     "their own licenses continue to apply to their code.",

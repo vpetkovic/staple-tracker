@@ -10,7 +10,7 @@
  * within a day and stops being read. The badge earns its loudness by being rare.
  *
  * COLOUR. `data-stale-claim` maps to the blocked hue in app.css and the element wears
- * `.status-chip`, Paperclip's own chip recipe — so this introduces no colour, and it
+ * `.status-chip`, the shared chip recipe — so this introduces no colour, and it
  * tracks a light/dark theme change for free. The blocked tone is the honest one: a stale
  * claim is not an error, it is work that is stuck behind an agent that is not coming back.
  */

@@ -2,7 +2,7 @@
  * Presentation for a revision diff. All of the thinking is in ./diff.ts — this file
  * only decides what a changed line looks like.
  *
- * Colour comes from the Paperclip token sheet, never a hex: additions borrow
+ * Colour comes from the theme token sheet, never a hex: additions borrow
  * --status-task-done (the "this landed" green), deletions --status-task-blocked (the
  * "this is gone" red), both at the 12%/22% mix the sheet uses for status chips so they
  * read the same in light and dark.

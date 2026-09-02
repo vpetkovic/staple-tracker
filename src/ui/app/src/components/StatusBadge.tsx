@@ -1,8 +1,8 @@
 /**
  * The status chip.
  *
- * This is the payoff of lifting Paperclip's token sheet: `.status-chip` is their
- * color-mix recipe (hue toward white in light mode, hue at low alpha in dark), and
+ * This is the payoff of the token sheet: `.status-chip` is a color-mix recipe
+ * (hue toward white in light mode, hue at low alpha in dark), and
  * `data-status` picks the hue via app.css. One hue covers both modes, so there is no
  * light/dark table to keep in sync here.
  */

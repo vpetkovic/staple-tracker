@@ -21,7 +21,7 @@ const w = workshop.store;
 const core = s.createIssue({
   title: "M1: core store — schema, guards, claims, dependency graph",
   description:
-    "SQLite workspace store cloning Paperclip's ticket semantics: status guards, atomic checkout/release, blocks graph with cycle detection, level-triggered ready events, revisioned documents, idempotency + duplicate guards.",
+    "SQLite workspace store: status guards, atomic checkout/release, blocks graph with cycle detection, level-triggered ready events, revisioned documents, idempotency + duplicate guards.",
   assignee: "claude",
   priority: "critical",
   status: "in_progress",
@@ -67,7 +67,7 @@ const cli = s.createIssue({
 const ui = s.createIssue({
   title: "M1.5: staple ui — board, tree, graph, detail, hub mode",
   description:
-    "Local web UI served by `staple ui`. Views: inbox (pickup order), kanban board, subtask tree, dependency graph (the view Paperclip doesn't have), detail panel with documents + comments. Polls a change fingerprint — no daemon.",
+    "Local web UI served by `staple ui`. Views: inbox (pickup order), kanban board, subtask tree, dependency graph, detail panel with documents + comments. Polls a change fingerprint — no daemon.",
   assignee: "claude",
   priority: "high",
   status: "in_progress",

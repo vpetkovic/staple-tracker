@@ -4,9 +4,9 @@ import type { Migration } from "../types.js";
 /**
  * Version 1 — the original workspace schema.
  *
- * A trimmed port of Paperclip's issue tables: same semantics, ~10 tables
- * instead of 122. jsonb -> TEXT JSON, trigram search -> LIKE (FTS5 later),
- * FOR UPDATE -> BEGIN IMMEDIATE + single-statement claims.
+ * Around ten tables, sized for one workspace on one machine: JSON columns
+ * instead of jsonb, LIKE instead of trigram search (FTS5 later), and
+ * BEGIN IMMEDIATE + single-statement claims instead of SELECT ... FOR UPDATE.
  *
  * This is the schema as it shipped, reconstructed exactly: `comments` has NO
  * `idempotency_key` and there is no `comments_idempotency_uq`. Those arrive in
@@ -55,7 +55,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS issues_idempotency_uq
 -- Open-issue duplicate guard support (checked in-transaction; index keeps it fast)
 CREATE INDEX IF NOT EXISTS issues_normalized_title_open_idx
   ON issues(normalized_title) WHERE status NOT IN ('done','cancelled');
--- One live machine-origin issue per source (Paperclip's origin dedup pattern)
+-- One live machine-origin issue per source (origin dedup)
 CREATE UNIQUE INDEX IF NOT EXISTS issues_live_origin_uq
   ON issues(origin_kind, origin_id)
   WHERE origin_kind <> 'manual' AND origin_id IS NOT NULL
@@ -117,7 +117,7 @@ CREATE TABLE IF NOT EXISTS events (
   dedup_key TEXT,
   created_at TEXT NOT NULL
 );
--- Level-triggered wake dedup (Paperclip's issue-dependency-wakeups key idea)
+-- Level-triggered dependency-wake dedup
 CREATE UNIQUE INDEX IF NOT EXISTS events_dedup_uq
   ON events(dedup_key) WHERE dedup_key IS NOT NULL;
 CREATE INDEX IF NOT EXISTS events_issue_idx ON events(issue_id, seq);
