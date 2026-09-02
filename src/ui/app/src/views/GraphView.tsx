@@ -49,9 +49,10 @@ import {
   absorption,
   collapseGraph,
   isResolved,
-  restrictToEpic,
+  restrictToEpics,
   shouldDefaultCollapse,
   summarizeEpics,
+  withDescendantEpics,
 } from "./graph/graph-clusters";
 import {
   bridgeResolved,
@@ -87,7 +88,8 @@ import {
   withGraphView,
   type GraphViewState,
 } from "./graph/graph-share";
-import { EpicControls, GraphToolbar } from "./graph/GraphToolbar";
+import { GraphToolbar } from "./graph/GraphToolbar";
+import { EpicPicker } from "./graph/EpicPicker";
 import { nodeTypes, type GraphFlowNode } from "./graph/node-types";
 import { EmptyState, NoMatchesState, ViewState } from "./ViewChrome";
 
@@ -190,8 +192,28 @@ function GraphCanvas({
     return shouldDefaultCollapse(drawn.length) ? new Set(epics.map((epic) => epic.id)) : new Set();
   });
 
-  /** Pin the canvas to one epic's members. null = the whole graph. */
-  const [epicFilter, setEpicFilter] = useState<string | null>(shared?.epicFilter ?? null);
+  /**
+   * Pin the canvas to a SET of epics — O4b (STA-134). Empty = the whole graph.
+   *
+   * A set rather than a single id because the question people arrive with in a review is
+   * "show me these two and how they relate", and the canvas answers it by drawing the
+   * UNION of their subgraphs. It is also state that must never move when collapse moves:
+   * these are two `useState`s with no effect joining them, which is the strongest form of
+   * "selecting an epic does not collapse it" available.
+   */
+  const [epicFilters, setEpicFilters] = useState<ReadonlySet<string>>(
+    () => new Set(shared?.epicFilters ?? []),
+  );
+
+  const toggleEpicFilter = useCallback((epic: string) => {
+    setEpicFilters((previous) => {
+      const next = new Set(previous);
+      if (!next.delete(epic)) next.add(epic);
+      return next;
+    });
+  }, []);
+
+  const clearEpicFilters = useCallback(() => setEpicFilters(new Set()), []);
 
   /**
    * G4's two controls. Both default to the plain graph: a view that opened already
@@ -226,11 +248,18 @@ function GraphCanvas({
     setDoneMode(globalShowDone ? "show" : "hide");
   }, [globalShowDone]);
 
-  const activeFilter = useMemo(
-    // A filter naming an epic that has since vanished must fall back to the whole graph
-    // rather than render an empty canvas nobody can explain.
-    () => epics.find((epic) => epic.id === epicFilter) ?? null,
-    [epics, epicFilter],
+  /**
+   * The selection, resolved to summaries and widened to descendants.
+   *
+   * A filter naming an epic that has since vanished simply contributes nothing, so a
+   * stale link degrades toward the whole graph rather than rendering an empty canvas
+   * nobody can explain. `withDescendantEpics` is why picking a parent shows the work
+   * inside its child epics too — `summarizeEpics` buckets by DIRECT parent, so without it
+   * a parent would draw the child epic's node with its contents surgically removed.
+   */
+  const activeFilters = useMemo(
+    () => withDescendantEpics(epics, epicFilters),
+    [epics, epicFilters],
   );
 
   /**
@@ -241,9 +270,9 @@ function GraphCanvas({
    * would have to un-collapse to find out whether a member passed the filter.
    */
   const canvas = useMemo(() => {
-    const scoped = restrictToEpic(drawn, graph.edges, activeFilter);
+    const scoped = restrictToEpics(drawn, graph.edges, activeFilters);
     return collapseGraph(scoped.nodes, scoped.edges, epics, collapsed);
-  }, [drawn, graph.edges, activeFilter, epics, collapsed]);
+  }, [drawn, graph.edges, activeFilters, epics, collapsed]);
 
   /**
    * Every box reduced to what the planning modes need (G4). A collapsed epic contributes
@@ -339,10 +368,19 @@ function GraphCanvas({
    * same identity, so nothing downstream would recompute and the toggle would appear to
    * do nothing.
    */
-  const toggleEpic = useCallback((epic: string) => {
+  /**
+   * Set one epic's collapse state ABSOLUTELY rather than flipping it — O4b (STA-134).
+   *
+   * The picker's Left and Right keys are directions, not toggles: pressing Left twice on
+   * an already-collapsed epic must leave it collapsed, and a toggle would expand it on
+   * the second press. The row's chevron passes the negation and gets its flip back.
+   */
+  const setEpicCollapse = useCallback((epic: string, collapse: boolean) => {
     setCollapsed((previous) => {
+      if (previous.has(epic) === collapse) return previous;
       const next = new Set(previous);
-      if (!next.delete(epic)) next.add(epic);
+      if (collapse) next.add(epic);
+      else next.delete(epic);
       return next;
     });
   }, []);
@@ -451,8 +489,14 @@ function GraphCanvas({
    * kept in step with.
    */
   const viewState = useMemo<GraphViewState>(
-    () => ({ mode, doneMode, epicFilter, collapsed: [...collapsed], target: selected }),
-    [mode, doneMode, epicFilter, collapsed, selected],
+    () => ({
+      mode,
+      doneMode,
+      epicFilters: [...epicFilters],
+      collapsed: [...collapsed],
+      target: selected,
+    }),
+    [mode, doneMode, epicFilters, collapsed, selected],
   );
 
   /**
@@ -736,14 +780,15 @@ function GraphCanvas({
             onCopyLink={copyLink}
             copied={copied}
           />
-          <EpicControls
+          <EpicPicker
             epics={epics}
+            selected={epicFilters}
+            onToggleSelect={toggleEpicFilter}
+            onClearSelection={clearEpicFilters}
             collapsed={collapsed}
-            onToggle={toggleEpic}
+            onSetCollapse={setEpicCollapse}
             onCollapseAll={collapseAll}
             onExpandAll={expandAll}
-            filter={epicFilter}
-            onFilter={setEpicFilter}
           />
           <Button type="button" variant="outline" size="sm" onClick={autoArrange}>
             auto-arrange

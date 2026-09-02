@@ -26,7 +26,7 @@
  * repo root, so the app's `@` alias does not exist at test time). graph-positions.ts
  * established that trick; this file follows it.
  */
-import type { GraphEdge, GraphNode, IssueStatus } from "@/lib/types";
+import type { GraphEdge, GraphNode, IssueKind, IssueStatus } from "@/lib/types";
 
 /**
  * Resolved = finished, one way or the other.
@@ -91,6 +91,24 @@ export interface EpicSummary {
   resolved: number;
   /** The tint the super-node wears. See `aggregateStatus`. */
   status: IssueStatus;
+  /**
+   * The epic's OWN parent — O4b (STA-134).
+   *
+   * `null` when the epic is top-level, when its ticket is not in the payload at all (the
+   * hub-shaped case `summarizeEpics` already tolerates), or when the parent it names is
+   * not itself an epic on this canvas. That last clause is what makes the field safe to
+   * indent by: a `parent` that points at nothing visible would produce a row indented
+   * under a row that is not there.
+   */
+  parent: string | null;
+  /**
+   * The epic's declared kind — O1a (STA-124), read straight off `GraphNode.kind`.
+   *
+   * `undefined` means the page is talking to an older server that omits the field, NOT
+   * "this has no kind"; treat it as the default kind rather than as an error. Carried
+   * here so the picker can draw a kind mark without a second lookup into the node list.
+   */
+  kind?: IssueKind;
 }
 
 /**
@@ -168,9 +186,158 @@ export function summarizeEpics(
       total: group.length,
       resolved: group.filter((node) => isResolved(node.status)).length,
       status: aggregateStatus(group.map((node) => node.status)),
+      // Provisional: the raw parent ref. Narrowed to "a parent that is itself an epic
+      // here" in the pass below, once every epic id is known.
+      parent: own?.parent && own.parent !== epic ? own.parent : null,
+      kind: own?.kind,
     });
   }
-  return summaries.sort((a, b) => a.id.localeCompare(b.id));
+  summaries.sort((a, b) => a.id.localeCompare(b.id));
+
+  // O4b: an epic whose parent is not ITSELF an epic on this canvas is top-level as far
+  // as the picker is concerned. Nesting a row under an id that has no row would indent
+  // it under nothing, which reads as a bug rather than as a hierarchy. This is a second
+  // pass rather than a lookup inside the loop because the set of epics is only complete
+  // once the loop has finished — an epic's parent may be summarized after it.
+  const epicIds = new Set(summaries.map((summary) => summary.id));
+  for (const summary of summaries) {
+    if (summary.parent !== null && !epicIds.has(summary.parent)) summary.parent = null;
+  }
+  return summaries;
+}
+
+/**
+ * The epics reachable DOWN the parent chain from a selection — O4b (STA-134).
+ *
+ * Selecting an epic means "show me this epic's work", and on a nested tree that includes
+ * the work inside its child epics: `summarizeEpics` buckets by DIRECT parent, so a
+ * grandchild lives in the child's bucket and nowhere else. Without this expansion,
+ * picking the parent would show the child epic's node and none of the tickets under it —
+ * a box with its contents surgically removed.
+ *
+ * Separate from `restrictToEpics` on purpose. "What does selecting a parent mean" is a
+ * policy that could reasonably change; "keep only these members" is not, and folding the
+ * two together would make the second untestable without the first.
+ *
+ * Order: the input epics in list order, each followed by its descendants. Cycles cannot
+ * occur (the store forbids them) but the `seen` set makes that a fact rather than a hang.
+ */
+export function withDescendantEpics(
+  epics: readonly EpicSummary[],
+  selected: ReadonlySet<string>,
+): EpicSummary[] {
+  const children = new Map<string, EpicSummary[]>();
+  for (const epic of epics) {
+    if (epic.parent === null) continue;
+    const bucket = children.get(epic.parent);
+    if (bucket) bucket.push(epic);
+    else children.set(epic.parent, [epic]);
+  }
+
+  const seen = new Set<string>();
+  const out: EpicSummary[] = [];
+  const walk = (epic: EpicSummary) => {
+    if (seen.has(epic.id)) return;
+    seen.add(epic.id);
+    out.push(epic);
+    for (const child of children.get(epic.id) ?? []) walk(child);
+  };
+  for (const epic of epics) if (selected.has(epic.id)) walk(epic);
+  return out;
+}
+
+/** One line of the picker: an epic and how far it is indented. */
+export interface EpicRow {
+  epic: EpicSummary;
+  /** 0 for a top-level epic, 1 for a child of one, and so on. */
+  depth: number;
+}
+
+/**
+ * The epic list as the picker draws it — parents immediately followed by their children.
+ *
+ * The flat, identifier-sorted list `summarizeEpics` returns is right for a super-node
+ * order and wrong for a menu: `STA-53` and its child `STA-91` end up thirty rows apart
+ * with unrelated epics between them, and the containment that is the whole reason epics
+ * exist is invisible. Roots keep their sorted order and so do siblings, so the list is
+ * still stable across polls.
+ *
+ * An epic whose parent chain is broken (`parent` already narrowed to a real epic by
+ * `summarizeEpics`) is a root. Every epic appears exactly once — `seen` guards against a
+ * cycle turning a render into a hang, which is the one failure mode of this shape that
+ * would take the page down rather than merely look wrong.
+ */
+export function flattenEpics(epics: readonly EpicSummary[]): EpicRow[] {
+  const children = new Map<string, EpicSummary[]>();
+  for (const epic of epics) {
+    if (epic.parent === null) continue;
+    const bucket = children.get(epic.parent);
+    if (bucket) bucket.push(epic);
+    else children.set(epic.parent, [epic]);
+  }
+
+  const seen = new Set<string>();
+  const rows: EpicRow[] = [];
+  const walk = (epic: EpicSummary, depth: number) => {
+    if (seen.has(epic.id)) return;
+    seen.add(epic.id);
+    rows.push({ epic, depth });
+    for (const child of children.get(epic.id) ?? []) walk(child, depth + 1);
+  };
+  for (const epic of epics) if (epic.parent === null) walk(epic, 0);
+  // A cycle would leave epics unvisited by the root walk. Emit them flat rather than
+  // dropping them: a row missing from the picker is a row of work nobody can reach.
+  for (const epic of epics) walk(epic, 0);
+  return rows;
+}
+
+/**
+ * Narrow the picker's rows to a query — O4b (STA-134).
+ *
+ * ORDER IS THE INPUT'S, ALWAYS. Same rule, for the same reason, as R7's `filterOptions`:
+ * a fuzzy scorer would put `STA-118` above `STA-1` for the query "STA-1", and a list of
+ * identifiers that reorders itself as you type is a list you cannot aim at.
+ *
+ * Every whitespace-separated token must hit SOMETHING — the identifier or the title —
+ * so "auth STA-1" narrows rather than widens.
+ *
+ * A MATCHED ROW BRINGS ITS ANCESTORS WITH IT, unmatched. Indentation is a claim about
+ * the row above; a child surfacing alone at depth 1 under an unrelated epic would state
+ * a containment that is false. Ancestors come back flagged `matched: false` so the
+ * caller can draw them as the context they are rather than as results.
+ */
+export interface FilteredEpicRow extends EpicRow {
+  /** False for a row present only to hold up the indentation of a match beneath it. */
+  matched: boolean;
+}
+
+export function filterEpicRows(
+  rows: readonly EpicRow[],
+  query: string,
+): FilteredEpicRow[] {
+  const tokens = query.toLowerCase().split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return rows.map((row) => ({ ...row, matched: true }));
+
+  const matched = new Set<string>();
+  for (const row of rows) {
+    const haystack = `${row.epic.id} ${row.epic.title}`.toLowerCase();
+    if (tokens.every((token) => haystack.includes(token))) matched.add(row.epic.id);
+  }
+
+  const parentOf = new Map(rows.map((row) => [row.epic.id, row.epic.parent]));
+  const keep = new Set(matched);
+  for (const id of matched) {
+    let cursor = parentOf.get(id) ?? null;
+    // `keep.has` also terminates a cycle, which `flattenEpics` already tolerates.
+    while (cursor !== null && !keep.has(cursor)) {
+      keep.add(cursor);
+      cursor = parentOf.get(cursor) ?? null;
+    }
+  }
+
+  return rows
+    .filter((row) => keep.has(row.epic.id))
+    .map((row) => ({ ...row, matched: matched.has(row.epic.id) }));
 }
 
 /** A box on the canvas: either a real ticket or an epic standing in for several. */
@@ -287,24 +454,50 @@ export function collapseGraph(
 }
 
 /**
- * Pin the canvas to one epic — the filter that falls out of the grouping.
+ * Pin the canvas to a set of epics — the filter that falls out of the grouping.
  *
- * Edges need BOTH ends inside the epic. Keeping the half-edges would draw arrows to
+ * O4b (STA-134) made this plural. The single-epic version could answer "show me this
+ * epic" and nothing else; the question people actually arrive with in a review is "show
+ * me these two and how they relate", and with one slot the only way to ask it was to
+ * clear the filter and read the whole board again.
+ *
+ * IT IS THE UNION, NOT THE INTERSECTION. Two epics share no members by construction —
+ * a ticket has one parent — so an intersecting filter would go blank the moment it was
+ * used for the thing it exists for.
+ *
+ * Edges need BOTH ends inside the union. Keeping the half-edges would draw arrows to
  * boxes that are not on screen, which is the one thing worse than not drawing them: an
  * arrow into nothing reads as a rendering bug, while a missing arrow reads as "you asked
- * to see this epic only", which is what happened.
+ * to see these epics only", which is what happened. Note that the union makes edges
+ * BETWEEN two selected epics survive, which is the point of selecting two.
  *
- * `null` means no filter and returns the inputs, so the caller has no branch.
+ * An empty list means no filter and returns the inputs, so the caller has no branch.
+ */
+export function restrictToEpics<T extends { id: string }>(
+  nodes: readonly T[],
+  edges: readonly GraphEdge[],
+  epics: readonly EpicSummary[],
+): { nodes: T[]; edges: GraphEdge[] } {
+  if (epics.length === 0) return { nodes: [...nodes], edges: [...edges] };
+  const members = new Set(epics.flatMap((epic) => epic.members));
+  return {
+    nodes: nodes.filter((node) => members.has(node.id)),
+    edges: edges.filter((edge) => members.has(edge.from) && members.has(edge.to)),
+  };
+}
+
+/**
+ * The single-epic form, kept as a one-line wrapper.
+ *
+ * Not dead weight: "restrict to this one epic" is a real question — it is what a
+ * double-click on a cluster would ask — and expressing it as `restrictToEpics(n, e,
+ * epic ? [epic] : [])` at every call site is the kind of ceremony that eventually gets
+ * inlined wrong. `null` still means the whole graph.
  */
 export function restrictToEpic<T extends { id: string }>(
   nodes: readonly T[],
   edges: readonly GraphEdge[],
   epic: EpicSummary | null,
 ): { nodes: T[]; edges: GraphEdge[] } {
-  if (!epic) return { nodes: [...nodes], edges: [...edges] };
-  const members = new Set(epic.members);
-  return {
-    nodes: nodes.filter((node) => members.has(node.id)),
-    edges: edges.filter((edge) => members.has(edge.from) && members.has(edge.to)),
-  };
+  return restrictToEpics(nodes, edges, epic ? [epic] : []);
 }

@@ -25,10 +25,14 @@ import {
   clusterId,
   collapseGraph,
   epicOfClusterId,
+  filterEpicRows,
+  flattenEpics,
   isClusterId,
   restrictToEpic,
+  restrictToEpics,
   shouldDefaultCollapse,
   summarizeEpics,
+  withDescendantEpics,
 } from "./graph-clusters";
 
 const task = (
@@ -231,5 +235,182 @@ describe("shouldDefaultCollapse", () => {
   it("opens flat below the threshold and clustered above it", () => {
     expect(shouldDefaultCollapse(COLLAPSE_THRESHOLD)).toBe(false);
     expect(shouldDefaultCollapse(COLLAPSE_THRESHOLD + 1)).toBe(true);
+  });
+});
+
+/**
+ * ── O4b (STA-134): the picker's data layer ──────────────────────────────────────────
+ *
+ * Everything below exists because the epic picker has to answer three questions the
+ * single-epic filter never had to: which epics contain which (so rows can indent), what
+ * a selection of several means (the union, and how far down it reaches), and what a query
+ * leaves standing. All three are pure, and all three are the kind of thing that looks
+ * right in a screenshot of a two-epic fixture and is wrong on a real board.
+ */
+
+/** A nested fixture: E1 > E2 > E3, plus a sibling root E9 and tickets under each. */
+const nested = () => {
+  const all = [
+    { ...task("E1"), title: "Platform" },
+    { ...task("E2", "E1"), title: "Auth" },
+    { ...task("E3", "E2"), title: "Tokens" },
+    { ...task("E9"), title: "Docs" },
+    task("A1", "E1"),
+    task("A2", "E2"),
+    task("A3", "E3"),
+    task("A9", "E9"),
+  ];
+  // Every ticket is drawn, and so are the child epics (they are members of their parents).
+  return summarizeEpics(all, all);
+};
+
+describe("summarizeEpics — hierarchy and kind (O4b)", () => {
+  it("reports the epic's own parent, so rows can nest", () => {
+    const byId = new Map(nested().map((epic) => [epic.id, epic]));
+    expect(byId.get("E1")!.parent).toBeNull();
+    expect(byId.get("E2")!.parent).toBe("E1");
+    expect(byId.get("E3")!.parent).toBe("E2");
+    expect(byId.get("E9")!.parent).toBeNull();
+  });
+
+  it("drops a parent that is not itself an epic on this canvas", () => {
+    // Indenting a row under a row that does not exist is the failure being prevented:
+    // GHOST parents E and nothing else here, so it gets no bucket and therefore no row,
+    // and E has to read as top-level rather than as a child of something invisible.
+    const orphan = summarizeEpics([task("E", "GHOST"), task("A", "E")], [task("A", "E")]);
+    expect(one(orphan).parent).toBeNull();
+  });
+
+  it("carries the epic's declared kind through from the graph node", () => {
+    const all = [{ ...task("E"), kind: "epic" }, task("A", "E")];
+    expect(one(summarizeEpics(all, all.slice(1))).kind).toBe("epic");
+    // Absent means "an older server omitted the field", never "no kind" — the picker
+    // draws its default mark rather than treating it as an error.
+    expect(one(summarizeEpics([task("E"), task("A", "E")], [task("A", "E")])).kind).toBeUndefined();
+  });
+});
+
+describe("restrictToEpics", () => {
+  const nodes = [task("A1", "E1"), task("A2", "E1"), task("B1", "E2"), task("C1", "E3")];
+  const epics = summarizeEpics([task("E1"), task("E2"), task("E3"), ...nodes], nodes);
+  const pick = (...ids: string[]) => epics.filter((epic) => ids.includes(epic.id));
+
+  it("shows the UNION of the selected epics, not their intersection", () => {
+    // Two epics share no members by construction — a ticket has one parent — so an
+    // intersecting filter would go blank the moment it was used for what it is for.
+    const result = restrictToEpics(nodes, [], pick("E1", "E2"));
+    expect(result.nodes.map((n) => n.id)).toEqual(["A1", "A2", "B1"]);
+  });
+
+  it("keeps an edge that runs BETWEEN two selected epics", () => {
+    // This is the whole reason the filter went plural: "show me these two and how they
+    // relate" is unanswerable if the arrow between them is dropped as a half-edge.
+    const result = restrictToEpics(nodes, [edge("A2", "B1"), edge("B1", "C1")], pick("E1", "E2"));
+    expect(result.edges).toEqual([{ from: "A2", to: "B1", cross: false }]);
+  });
+
+  it("is a no-op on an empty selection — that is the whole graph", () => {
+    const edges = [edge("A2", "B1")];
+    const result = restrictToEpics(nodes, edges, []);
+    expect(result.nodes).toHaveLength(4);
+    expect(result.edges).toEqual(edges);
+  });
+
+  it("ignores a selected epic that no longer exists rather than emptying the canvas", () => {
+    // A shared link outlives the epic it named. `pick` returns nothing for a dead id, so
+    // a selection of only-dead ids is an empty list, which is "the whole graph".
+    expect(restrictToEpics(nodes, [], pick("GONE")).nodes).toHaveLength(4);
+  });
+
+  it("still answers the single-epic question through the wrapper", () => {
+    const e1 = epics.find((e) => e.id === "E1")!;
+    expect(restrictToEpic(nodes, [], e1).nodes.map((n) => n.id)).toEqual(["A1", "A2"]);
+    expect(restrictToEpic(nodes, [], null).nodes).toHaveLength(4);
+  });
+});
+
+describe("withDescendantEpics", () => {
+  it("pulls a selected epic's child epics in with it", () => {
+    // Without this, selecting E1 draws E2's node and NONE of the tickets under it —
+    // a box with its contents surgically removed. summarizeEpics buckets by DIRECT
+    // parent, so the grandchildren live nowhere else.
+    const ids = withDescendantEpics(nested(), new Set(["E1"])).map((epic) => epic.id);
+    expect(ids).toEqual(["E1", "E2", "E3"]);
+  });
+
+  it("does not reach upward", () => {
+    expect(withDescendantEpics(nested(), new Set(["E2"])).map((e) => e.id)).toEqual(["E2", "E3"]);
+  });
+
+  it("returns each epic once when two selections overlap", () => {
+    const ids = withDescendantEpics(nested(), new Set(["E1", "E3"])).map((epic) => epic.id);
+    expect(ids).toEqual(["E1", "E2", "E3"]);
+  });
+
+  it("is empty for an empty selection, which the caller reads as no filter", () => {
+    expect(withDescendantEpics(nested(), new Set())).toEqual([]);
+  });
+});
+
+describe("flattenEpics", () => {
+  it("puts every epic directly under its parent, indented", () => {
+    // The identifier-sorted list summarizeEpics returns is right for super-nodes and
+    // wrong for a menu: an epic and its child end up rows apart with strangers between.
+    expect(flattenEpics(nested()).map((row) => [row.epic.id, row.depth])).toEqual([
+      ["E1", 0],
+      ["E2", 1],
+      ["E3", 2],
+      ["E9", 0],
+    ]);
+  });
+
+  it("emits every epic exactly once even if the parent links form a cycle", () => {
+    // A cycle cannot come out of the store, and a render that hangs is a worse way to
+    // find out than a list that is merely flat.
+    const self = one(summarizeEpics([task("E1"), task("A", "E1")], [task("A", "E1")]));
+    const rows = flattenEpics([{ ...self, parent: self.id }]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.depth).toBe(0);
+  });
+});
+
+describe("filterEpicRows", () => {
+  const rows = flattenEpics(nested());
+  const shown = (query: string) => filterEpicRows(rows, query).map((row) => row.epic.id);
+
+  it("returns everything, matched, for an empty query", () => {
+    expect(filterEpicRows(rows, "  ").every((row) => row.matched)).toBe(true);
+    expect(shown("")).toHaveLength(4);
+  });
+
+  it("matches on identifier and on title", () => {
+    expect(shown("e9")).toEqual(["E9"]);
+    expect(shown("docs")).toEqual(["E9"]);
+  });
+
+  it("keeps the list's order rather than a relevance order", () => {
+    // The R7 rule: a fuzzy scorer puts STA-118 above STA-1 for the query "STA-1", and a
+    // list of identifiers that reshuffles as you type is a list you cannot aim at.
+    expect(shown("e")).toEqual(["E1", "E2", "E3", "E9"]);
+  });
+
+  it("narrows on every token, so two words mean AND", () => {
+    expect(shown("e3 tokens")).toEqual(["E1", "E2", "E3"]);
+    expect(shown("e3 platform")).toEqual([]);
+  });
+
+  it("brings a match's ancestors along, flagged as context", () => {
+    // Indentation is a claim about the row above it. A child surfacing alone at depth 2
+    // under an unrelated epic would state a containment that is false.
+    const result = filterEpicRows(rows, "tokens");
+    expect(result.map((row) => [row.epic.id, row.depth, row.matched])).toEqual([
+      ["E1", 0, false],
+      ["E2", 1, false],
+      ["E3", 2, true],
+    ]);
+  });
+
+  it("says nothing rather than everything when the query matches no epic", () => {
+    expect(shown("zzz")).toEqual([]);
   });
 });

@@ -36,22 +36,8 @@ import { Check, Download, Link2, SlidersHorizontal } from "lucide-react";
 import { useState, type KeyboardEvent, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import type { EpicSummary } from "./graph-clusters";
 import type { DoneMode, PlanningMode } from "./graph-planning";
-
-/**
- * Radix forbids an empty-string item value, so "no filter" needs a sentinel. Same
- * device, same reason, as ALL_WORKSPACES in AppShell.
- */
-const ALL_EPICS = "__all__";
 
 /**
  * One row of a radiogroup. `hint` is not decoration: it is the difference between a menu
@@ -407,113 +393,12 @@ function ViewRadio<T extends string>({
   );
 }
 
-/** G3 — the epic controls. Separate because they vanish when a graph has no epics. */
-export interface EpicControlsProps {
-  epics: readonly EpicSummary[];
-  collapsed: ReadonlySet<string>;
-  onToggle: (epic: string) => void;
-  onCollapseAll: () => void;
-  onExpandAll: () => void;
-  /** The epic the canvas is pinned to, or null for the whole graph. */
-  filter: string | null;
-  onFilter: (epic: string | null) => void;
-}
-
-export function EpicControls({
-  epics,
-  collapsed,
-  onToggle,
-  onCollapseAll,
-  onExpandAll,
-  filter,
-  onFilter,
-}: EpicControlsProps) {
-  // No epics means no parent information (hub mode) or a genuinely flat workspace.
-  // Either way these controls would all be no-ops, and a row of dead buttons is worse
-  // than no row.
-  if (epics.length === 0) return null;
-
-  const collapsedCount = epics.filter((epic) => collapsed.has(epic.id)).length;
-
-  return (
-    <div className="flex flex-wrap items-center gap-1.5">
-      <Popover>
-        <PopoverTrigger asChild>
-          <Button type="button" variant="outline" size="sm">
-            epics
-            <span className="ml-1 tabular-nums text-muted-foreground">
-              {collapsedCount}/{epics.length} collapsed
-            </span>
-          </Button>
-        </PopoverTrigger>
-        <PopoverContent align="end" className="w-[22rem] p-1.5">
-          <div className="flex items-center gap-1 px-1 pb-1.5">
-            <Button type="button" variant="ghost" size="sm" onClick={onCollapseAll}>
-              collapse all
-            </Button>
-            <Button type="button" variant="ghost" size="sm" onClick={onExpandAll}>
-              expand all
-            </Button>
-          </div>
-          {/*
-            A scroll cap because the epic count is the workspace's, not ours — eight
-            today, forty on a repo that has been running a while, and a popover taller
-            than the viewport has no way back to its own buttons.
-          */}
-          <div className="max-h-[16rem] overflow-y-auto">
-            {epics.map((epic) => {
-              const isCollapsed = collapsed.has(epic.id);
-              return (
-                <button
-                  key={epic.id}
-                  type="button"
-                  onClick={() => onToggle(epic.id)}
-                  aria-pressed={isCollapsed}
-                  className="flex w-full items-center gap-2 rounded-sm px-1.5 py-1 text-left hover:bg-muted"
-                >
-                  <span
-                    data-status={epic.status}
-                    className="staple-accent-edge h-4 w-1 shrink-0 rounded-full"
-                    aria-hidden
-                  />
-                  <span className="w-[4.5rem] shrink-0 font-mono text-[11px] text-muted-foreground">
-                    {epic.id}
-                  </span>
-                  <span className="truncate text-[12px]">{epic.title}</span>
-                  <span className="ml-auto shrink-0 tabular-nums text-[11px] text-muted-foreground">
-                    {epic.resolved}/{epic.total}
-                  </span>
-                  <span
-                    className={cn(
-                      "w-[4.5rem] shrink-0 text-right text-[11px]",
-                      isCollapsed ? "text-foreground" : "text-muted-foreground/60",
-                    )}
-                  >
-                    {isCollapsed ? "collapsed" : "expanded"}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        </PopoverContent>
-      </Popover>
-
-      <Select
-        value={filter ?? ALL_EPICS}
-        onValueChange={(value) => onFilter(value === ALL_EPICS ? null : value)}
-      >
-        <SelectTrigger size="sm" className="w-[11rem]" aria-label="Epic filter">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value={ALL_EPICS}>all epics</SelectItem>
-          {epics.map((epic) => (
-            <SelectItem key={epic.id} value={epic.id}>
-              {epic.id} · {epic.title}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-    </div>
-  );
-}
+/*
+ * G3's `EpicControls` LIVED HERE AND IS GONE — O4b (STA-134).
+ *
+ * It was two controls answering two different questions with the same nouns a hand's
+ * width apart: a popover whose rows toggled COLLAPSE, and a `<Select>` beside it that set
+ * the FILTER to exactly one epic. `views/graph/EpicPicker.tsx` is the single control that
+ * replaces both, and the `Select` primitive left this file with it — the View menu is a
+ * popover of radios, and nothing in this row is a native select any more.
+ */
