@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Staple is a local-first task tracker built for coding agents. Atomic claims, dependency-aware work, revisioned plans, and one SQLite file per workspace.">
+  <title>Staple | Local task tracking for coding agents</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <nav class="nav wrap" aria-label="Primary navigation">
+      <a class="brand" href="./"><span class="mark" aria-hidden="true"></span> staple</a>
+      <div class="links">
+        <a href="#features">Features</a>
+        <a href="./roadmap.html">Roadmap</a>
+        <a href="./docs.html">Docs</a>
+        <a class="button" href="./docs.html#quickstart">Get started</a>
+      </div>
+    </nav>
+  </header>
+
+  <main>
+    <section class="hero wrap">
+      <div>
+        <p class="eyebrow">Local-first coordination</p>
+        <h1>Give your agents work they can trust.</h1>
+        <p class="lead">Staple replaces loose plan files and chat-only handoffs with a small task system that lives beside your code. Agents can claim work safely, follow dependencies, and leave a readable history without a hosted service.</p>
+        <div class="actions">
+          <a class="button" href="./docs.html#quickstart">Run npx staple-cli</a>
+          <a class="button secondary" href="./docs.html#agent-loop">See the agent loop</a>
+        </div>
+      </div>
+      <div class="terminal" aria-label="Example Staple agent workflow">
+        <pre><span class="prompt">you ›</span> npx staple-cli
+<span class="muted-code">onboard + open the UI</span>
+
+<span class="prompt">you ›</span> claude mcp add staple -e STAPLE_AGENT=claude \
+        -- npx -y staple-cli mcp
+
+<span class="prompt">agent ›</span> staple inbox --json
+<span class="muted-code">ready for pickup</span>
+STA-12  todo  Add retry policy
+
+<span class="prompt">agent ›</span> staple start STA-12
+◐ STA-12  in_progress  Add retry policy @codex
+
+<span class="prompt">agent ›</span> staple doc STA-12 plan --put plan.md
+plan@r1 saved
+
+<span class="prompt">agent ›</span> staple done STA-12 -m "Tests pass"
+● STA-12  done  Add retry policy @codex</pre>
+      </div>
+    </section>
+
+    <section class="proof" aria-label="Project facts">
+      <div class="proof-grid wrap">
+        <div class="proof-item"><strong>1 file</strong><span>per workspace</span></div>
+        <div class="proof-item"><strong>16 tools</strong><span>through MCP</span></div>
+        <div class="proof-item"><strong>0 daemons</strong><span>running in the background</span></div>
+        <div class="proof-item"><strong>3 views</strong><span>board, tree, and graph</span></div>
+      </div>
+    </section>
+
+    <section class="section wrap" id="features">
+      <div class="section-head">
+        <div><p class="eyebrow">Why Staple</p><h2>Small enough to carry. Strict where it counts.</h2></div>
+        <p>Coding agents fail in boring ways. Two agents pick the same task. A blocked task starts too early. A plan gets overwritten. Staple handles those races in SQLite, close to the work, with errors agents can act on.</p>
+      </div>
+      <div class="feature-grid">
+        <article class="feature"><span class="num">01</span><h3>Atomic checkout</h3><p>One agent wins the claim. Every other agent gets a typed conflict and moves to a different task. The same agent can reclaim after a crash.</p></article>
+        <article class="feature"><span class="num">02</span><h3>Dependency-aware inbox</h3><p>The inbox puts workable tasks first and names every unresolved blocker. Cycle detection stops impossible graphs before they land.</p></article>
+        <article class="feature"><span class="num">03</span><h3>Revisioned plans</h3><p>Store plans and notes on the task. Optimistic concurrency catches stale edits, while the revision history keeps old decisions recoverable.</p></article>
+        <article class="feature"><span class="num">04</span><h3>Workspace hub</h3><p>Each repository keeps its own database. The local hub gives every workspace a unique prefix and connects dependencies across repositories.</p></article>
+        <article class="feature"><span class="num">05</span><h3>Events agents can poll</h3><p>Completion emits events when blockers clear or the last child finishes. Agents resume from a sequence cursor instead of rereading everything.</p></article>
+        <article class="feature"><span class="num">06</span><h3>One model, three interfaces</h3><p>MCP is the agent interface. The CLI mirrors it for people and CI. The local UI turns the same data into an inbox, board, tree, dependency graph, and task detail.</p></article>
+        <article class="feature"><span class="num">07</span><h3>Safe retries</h3><p>Idempotency keys replay task creation without duplicates. Open sibling titles and machine-origin records have duplicate guards.</p></article>
+        <article class="feature"><span class="num">08</span><h3>Machine-readable failures</h3><p>JSON errors have stable codes, details, and a retryable flag. CLI exit codes let scripts branch without scraping prose.</p></article>
+        <article class="feature"><span class="num">09</span><h3>Local by default</h3><p>State stays in a copyable SQLite file. There is no account, cloud database, background service, or native runtime dependency.</p></article>
+      </div>
+    </section>
+
+    <section class="section dark" id="workflow">
+      <div class="wrap">
+        <p class="eyebrow">The working loop</p>
+        <h2>Agents always know what to do next.</h2>
+        <div class="workflow">
+          <div class="step"><span>01</span><strong>Read the inbox</strong><small>Find ready work in pickup order.</small></div>
+          <div class="step"><span>02</span><strong>Claim one task</strong><small>Checkout is atomic across processes.</small></div>
+          <div class="step"><span>03</span><strong>Write the plan</strong><small>Keep decisions with the task.</small></div>
+          <div class="step"><span>04</span><strong>Report progress</strong><small>Comments preserve the handoff trail.</small></div>
+          <div class="step"><span>05</span><strong>Complete and poll</strong><small>See which dependent work woke up.</small></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="cta">
+      <div class="cta-box wrap">
+        <div><p class="eyebrow">Prototype 0.1</p><h2>Run it beside one real project. See whether your agents stop stepping on each other.</h2></div>
+        <div class="actions"><a class="button" href="./docs.html">Read the docs</a><a class="button secondary" href="./roadmap.html">View roadmap</a></div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer"><div class="wrap"><span>Staple is an MIT-licensed proof of concept.</span><span>A smaller paperclip for local agent work.</span></div></footer>
+</body>
+</html>

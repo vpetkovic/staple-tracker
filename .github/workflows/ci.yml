@@ -1,0 +1,44 @@
+name: CI
+
+# Gates only. This workflow never publishes anything; publishing lives
+# exclusively in release.yml and is reachable only via a v* tag ref.
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  gates:
+    name: Gates + clean-machine drill
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node 22 (engines require >= 22.5)
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: MCP smoke test
+        run: npm run smoke:mcp
+
+      # Builds dist-package itself, packs it, and installs the tarball into an
+      # empty temp prefix with only node+npm on PATH. Exits nonzero on any
+      # failure; writes nothing into the checkout.
+      - name: Clean-machine npx drill
+        run: npm run drill:npx
