@@ -38,7 +38,8 @@
  * relies on the same fact.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { KeyboardEvent } from "react";
+import type { KeyboardEvent, ReactNode } from "react";
+import { CircleDashed, Hourglass, PlayCircle, CheckCircle2 } from "lucide-react";
 import {
   resolveTaskListConfig,
   StatusIcon,
@@ -49,10 +50,11 @@ import {
 import { clampIndex, useRovingFocus } from "@/components/task-list/roving";
 import "@/components/task-list/task-list.css";
 import type { Selection } from "@/lib/session";
-import type { Issue, IssueRow, IssueStatus, UiMode } from "@/lib/types";
+import type { Issue, IssueRow, UiMode } from "@/lib/types";
 import type { GroupBy } from "@/lib/view-prefs";
 import { useTreeExpansion } from "./expansion";
-import { buildList, visibleOrder, type ListShape } from "./tree-model";
+import { EMPTY_PICKUP_INDEX, type PickupIndex, type PickupSectionId } from "./pickup-model";
+import { buildList, sectionsOf, visibleOrder, type GroupKey, type ListShape } from "./tree-model";
 
 /**
  * How many label pills fit — §14's degradation, decided in JS rather than CSS.
@@ -80,13 +82,51 @@ function useLabelCapacity(): number {
   return capacity;
 }
 
+/**
+ * A pickup header's glyph must weigh the same as a status header's — STA-118.
+ *
+ * The BOX is settled in CSS by `--group-icon-size`, on the class both families wear. The
+ * STROKE cannot be, because the two families draw in different coordinate systems and a
+ * single `stroke-width` would land differently in each: `StatusIcon` strokes 1.5 in a
+ * 16-unit viewBox, lucide defaults to 2 in a 24-unit one. Scaled into the same square that
+ * is 1.5px against 1.33px — close enough to look like a mistake and not close enough to be
+ * one. Same rendered hairline therefore means 1.5 restated in lucide's units.
+ *
+ * Written as the arithmetic rather than as `2.25` so it stays honest if either box changes.
+ */
+const STATUS_ICON_STROKE = 1.5;
+const PICKUP_ICON_STROKE = STATUS_ICON_STROKE * (24 / 16);
+
+/**
+ * A pickup section's icon. Deliberately NOT a `StatusIcon` — these sections are not
+ * statuses, and borrowing the status glyphs would quietly imply that "Up next" is a status
+ * a ticket can be in. Geist-weight lucide strokes, matching the rest of the chrome.
+ */
+const PICKUP_ICONS: Record<PickupSectionId, ReactNode> = {
+  up_next: <CircleDashed className="staple-group-icon" strokeWidth={PICKUP_ICON_STROKE} aria-hidden />,
+  in_flight: <PlayCircle className="staple-group-icon" strokeWidth={PICKUP_ICON_STROKE} aria-hidden />,
+  waiting: <Hourglass className="staple-group-icon" strokeWidth={PICKUP_ICON_STROKE} aria-hidden />,
+  resolved: <CheckCircle2 className="staple-group-icon" strokeWidth={PICKUP_ICON_STROKE} aria-hidden />,
+};
+
 /** One entry in the linear keyboard sequence: a group header or a row. */
 type NavItem =
-  | { kind: "group"; key: string; status: IssueStatus }
+  | { kind: "group"; key: string; group: GroupKey }
   | { kind: "row"; key: string; row: TaskRow };
 
+/**
+ * One group header, for either axis — V5 (STA-111) generalised it.
+ *
+ * It used to take an `IssueStatus` and derive its own label and icon from it. It now takes
+ * the LABEL and the ICON, because a pickup section has neither a status nor a status icon
+ * and faking one would have meant inventing a status that does not exist. `groupKey` is
+ * still passed for `data-*` and the fold, so nothing that keys off the DOM had to change.
+ */
 function GroupHeader({
-  status,
+  groupKey,
+  label,
+  icon,
+  hint,
   count,
   collapsed,
   focused,
@@ -95,7 +135,11 @@ function GroupHeader({
   onKeyDown,
   registerRef,
 }: {
-  status: IssueStatus;
+  groupKey: GroupKey;
+  label: string;
+  icon: ReactNode;
+  /** Tooltip. Present for pickup sections, where membership is derived and worth stating. */
+  hint?: string;
   count: number;
   collapsed: boolean;
   focused: boolean;
@@ -109,9 +153,12 @@ function GroupHeader({
       ref={registerRef}
       role="row"
       data-testid="group-header"
-      data-status={status}
+      /* Unchanged attribute name: it has always carried the group's key, and for the status
+         axis that key is still the status. Pickup sections put their own id here. */
+      data-status={groupKey}
+      title={hint}
       aria-expanded={!collapsed}
-      aria-label={`${STATUS_LABEL[status]}, ${count} ${count === 1 ? "task" : "tasks"}`}
+      aria-label={`${label}, ${count} ${count === 1 ? "task" : "tasks"}`}
       tabIndex={focused ? 0 : -1}
       onClick={onToggle}
       onFocus={onFocus}
@@ -124,8 +171,8 @@ function GroupHeader({
             <path d="M1 2.4 L4 5.6 L7 2.4" fill="currentColor" />
           </svg>
         </span>
-        <StatusIcon status={status} className="staple-group-icon" />
-        <span className="staple-group-name">{STATUS_LABEL[status]}</span>
+        {icon}
+        <span className="staple-group-name">{label}</span>
         {/* The count is the entire reason a collapsed group is still informative, so it is
             never hidden by the fold. Bare number, no parentheses. */}
         <span className="staple-group-count">{count}</span>
@@ -138,6 +185,7 @@ export function TreeGrid({
   rows,
   mode,
   groupBy,
+  pickup = EMPTY_PICKUP_INDEX,
   currentRef,
   showResolved,
   hiddenParents,
@@ -155,6 +203,12 @@ export function TreeGrid({
   mode: UiMode;
   /** R1 (STA-100). `"none"` is the default and renders no headers at all. */
   groupBy: GroupBy;
+  /**
+   * V5 (STA-111). `/api/inbox`, indexed — the ONE definition of ready, borrowed rather than
+   * re-derived. Only consulted when `groupBy` is `"pickup"`; the empty index is a valid
+   * state and is what the list uses for the instant before the fetch answers.
+   */
+  pickup?: PickupIndex;
   /** Identifier currently open in the detail drawer. */
   currentRef: string | null;
   /** V4 (STA-89) owns the hide-resolved decision; the list only reads it. */
@@ -195,18 +249,61 @@ export function TreeGrid({
    * The list in whichever shape the preference asks for. A tagged union, so the render
    * cannot half-use one shape while displaying the other.
    */
-  const shape = useMemo<ListShape>(() => buildList(rows, groupBy, build), [rows, groupBy, build]);
+  const shape = useMemo<ListShape>(
+    () => buildList(rows, groupBy, build, pickup),
+    [rows, groupBy, build, pickup],
+  );
+
+  /**
+   * THE RENDERABLE SECTIONS — the one place the two grouped shapes become one thing.
+   *
+   * `sectionsOf` in the model gives the key and the rows, which is all the KEYBOARD and
+   * `visibleOrder` need. The header additionally needs a name, a glyph, a count and a
+   * tooltip, and those come from different places per axis: a status derives them from
+   * `STATUS_LABEL`/`StatusIcon`, a pickup section carries its own from its registry. This
+   * memo is that join, and it exists so the JSX below has exactly one loop rather than two
+   * near-identical ones that drift.
+   */
+  const sections = useMemo(() => {
+    if (shape.kind === "flat") return [];
+    if (shape.kind === "grouped") {
+      return shape.groups.map((group) => ({
+        key: group.status as GroupKey,
+        label: STATUS_LABEL[group.status],
+        icon: <StatusIcon status={group.status} className="staple-group-icon" />,
+        hint: undefined as string | undefined,
+        count: group.count,
+        rows: group.rows,
+        // Status groups have no waiting annotations; the field is present so the render
+        // path does not have to know which shape it is drawing.
+        waitingOn: undefined as ReadonlyMap<string, string> | undefined,
+      }));
+    }
+    return shape.groups.map((group) => ({
+      key: group.id as GroupKey,
+      label: group.label,
+      icon: PICKUP_ICONS[group.id],
+      hint: group.hint as string | undefined,
+      count: group.count,
+      rows: group.rows,
+      waitingOn: group.waitingOn as ReadonlyMap<string, string> | undefined,
+    }));
+  }, [shape]);
 
   /** The keyboard sequence: headers (when there are any) and the rows that are on screen. */
   const nav = useMemo<NavItem[]>(() => {
     if (shape.kind === "flat") {
       return shape.rows.map((row) => ({ kind: "row", key: row.issue.id, row }));
     }
+    // Derived from `sectionsOf`, the SAME accessor `visibleOrder` uses. If the keyboard
+    // sequence and the published order were built from two walks over the shape, a third
+    // shape could be added to one and forgotten in the other — and it would surface as an
+    // off-by-one that only appears once a section is collapsed.
     const out: NavItem[] = [];
-    for (const group of shape.groups) {
-      out.push({ kind: "group", key: `group:${group.status}`, status: group.status });
-      if (expansion.isGroupCollapsed(group.status)) continue;
-      for (const row of group.rows) out.push({ kind: "row", key: row.issue.id, row });
+    for (const section of sectionsOf(shape)) {
+      out.push({ kind: "group", key: `group:${section.key}`, group: section.key });
+      if (expansion.isGroupCollapsed(section.key)) continue;
+      for (const row of section.rows) out.push({ kind: "row", key: row.issue.id, row });
     }
     return out;
   }, [shape, expansion]);
@@ -305,7 +402,7 @@ export function TreeGrid({
         case "ArrowRight": {
           event.preventDefault();
           if (item.kind === "group") {
-            if (expansion.isGroupCollapsed(item.status)) expansion.toggleGroup(item.status);
+            if (expansion.isGroupCollapsed(item.group)) expansion.toggleGroup(item.group);
             else focus.go(at(index + 1)!.key);
             return;
           }
@@ -319,7 +416,7 @@ export function TreeGrid({
         case "ArrowLeft": {
           event.preventDefault();
           if (item.kind === "group") {
-            if (!expansion.isGroupCollapsed(item.status)) expansion.toggleGroup(item.status);
+            if (!expansion.isGroupCollapsed(item.group)) expansion.toggleGroup(item.group);
             return;
           }
           const { row } = item;
@@ -340,7 +437,7 @@ export function TreeGrid({
 
         case "Enter":
           event.preventDefault();
-          if (item.kind === "group") expansion.toggleGroup(item.status);
+          if (item.kind === "group") expansion.toggleGroup(item.group);
           else openIssue(item.row);
           return;
 
@@ -376,12 +473,20 @@ export function TreeGrid({
     [nav, expansion, focus, toggleSelect, openIssue, selected.size, onCloseDrawer],
   );
 
-  /** One row, wherever it sits. `index` is its position in the keyboard sequence. */
-  const renderRow = (row: TaskRow, index: number) => (
+  /**
+   * One row, wherever it sits. `index` is its position in the keyboard sequence.
+   *
+   * `caption` is the Waiting section's "who this row waits on" (STA-118). It is a per-row
+   * string rather than a second element, because it has to travel inside the row: the
+   * separate caption ROW it replaced gave every waiting item its own hairline and a 53px
+   * pitch against the 36px of Up next and In flight.
+   */
+  const renderRow = (row: TaskRow, index: number, caption?: string) => (
     <TaskRowLine
       key={row.issue.id}
       row={row}
       config={config}
+      caption={caption}
       semantics="grid"
       isExpanded={row.isExpanded}
       isSelected={selected.has(row.issue.id)}
@@ -419,22 +524,32 @@ export function TreeGrid({
           {shape.rows.map((row) => renderRow(row, (index += 1)))}
         </div>
       ) : (
-        shape.groups.map((group) => {
-          const collapsed = expansion.isGroupCollapsed(group.status);
+        /**
+         * BOTH grouped shapes render through here. They differ only in what a section is
+         * called, which glyph it wears, and whether its rows carry a "waiting on" line —
+         * the fold, the keyboard index, the `inert` body and the animation are identical.
+         * Duplicating this block per axis is exactly how two sections quietly stop
+         * behaving the same way six months from now.
+         */
+        sections.map((section) => {
+          const collapsed = expansion.isGroupCollapsed(section.key);
           index += 1;
           const headerIndex = index;
 
           return (
-            <div role="rowgroup" key={group.status} className="staple-group">
+            <div role="rowgroup" key={section.key} className="staple-group">
               <GroupHeader
-                status={group.status}
-                count={group.count}
+                groupKey={section.key}
+                label={section.label}
+                icon={section.icon}
+                hint={section.hint}
+                count={section.count}
                 collapsed={collapsed}
-                focused={activeKey === `group:${group.status}`}
-                onToggle={() => expansion.toggleGroup(group.status)}
-                onFocus={() => focus.set(`group:${group.status}`)}
+                focused={activeKey === `group:${section.key}`}
+                onToggle={() => expansion.toggleGroup(section.key)}
+                onFocus={() => focus.set(`group:${section.key}`)}
                 onKeyDown={(event) => handleKey(event, headerIndex)}
-                registerRef={focus.register(`group:${group.status}`)}
+                registerRef={focus.register(`group:${section.key}`)}
               />
 
               {/*
@@ -451,9 +566,23 @@ export function TreeGrid({
                 aria-hidden={collapsed || undefined}
               >
                 <div className="staple-group-rows">
-                  {group.rows.map((row) => {
+                  {section.rows.map((row) => {
                     if (!collapsed) index += 1;
-                    return renderRow(row, index);
+                    /*
+                      WHO THIS ROW IS WAITING ON — V5 (STA-111)'s third section, folded into
+                      the row itself by STA-118.
+
+                      It used to be a second `role="row"` beneath this one. The ARIA was
+                      defensible — a treegrid's descendants must be rows and cells — but the
+                      LAYOUT was not: two hairlines and a 53px pitch per item, against 36px
+                      everywhere else, and a caption indented by a hard-coded 64px that ran
+                      under the meta cluster as the window narrowed.
+
+                      As a caption inside the row's title cell it costs no height, no second
+                      border, and no extra ARIA node — and, because it was never in `nav`, no
+                      keyboard index moves. See TaskRowLine's `caption` prop.
+                    */
+                    return renderRow(row, index, section.waitingOn?.get(row.issue.id));
                   })}
                 </div>
               </div>

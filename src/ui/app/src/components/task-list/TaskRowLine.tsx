@@ -44,6 +44,7 @@
  */
 import type { CSSProperties, KeyboardEvent, ReactNode } from "react";
 import { cn } from "@/lib/utils";
+import { DependencyBadges } from "./DependencyBadges";
 import { LabelPills } from "./LabelPills";
 import { PrBadge } from "./PrBadge";
 import { PrioritySignal } from "./PrioritySignal";
@@ -51,7 +52,7 @@ import { StatusIcon } from "./StatusIcon";
 import { Avatar, RowClaimSlot } from "./WorkingPill";
 import { WorklogCue } from "./WorklogCue";
 import type { TaskListConfig } from "./config";
-import { guideX, indentPx, ROW_PAD_LEFT, type TaskRow } from "./model";
+import { guideX, indentPx, isSubtask, ROW_PAD_LEFT, type TaskRow } from "./model";
 import { formatRowDate } from "./row-date";
 
 function Chevron() {
@@ -65,6 +66,35 @@ function Chevron() {
         strokeLinecap="round"
         strokeLinejoin="round"
       />
+    </svg>
+  );
+}
+
+/**
+ * "This belongs to something" — O5 (STA-137).
+ *
+ * A ring, a rounded elbow, a node: the shape of a thing hanging off another thing. It is
+ * VP's reference drawn at 12 units, minus the reference's colour, because nothing else in
+ * the identifier cluster carries a hue and a single green glyph there would read as a status
+ * rather than as a relation.
+ *
+ * Hand-rolled rather than lucide, for the same two reasons `Chevron` and the actions dots
+ * are: at 12px a 24-unit glyph needs the size override the group headers had to invent
+ * (`--group-icon-size`), and the stroke weight here has to match a hairline elbow drawn one
+ * column to the left, which a stock icon has no reason to agree with.
+ */
+function SubtaskGlyph() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true" focusable="false">
+      <circle cx="3.6" cy="3.5" r="2.4" fill="none" stroke="currentColor" strokeWidth="1.2" />
+      <path
+        d="M3.6 6.5 V8.4 A1.4 1.4 0 0 0 5 9.8 H6.7"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.2"
+        strokeLinecap="round"
+      />
+      <circle cx="8.9" cy="9.8" r="1.5" fill="currentColor" />
     </svg>
   );
 }
@@ -130,6 +160,22 @@ export interface TaskRowLineProps {
   isFocused?: boolean;
   /** Any row selected anywhere: every checkbox becomes visible. */
   anySelected?: boolean;
+  /**
+   * ONE muted trailing sentence about this row, inside the title cell — STA-118.
+   *
+   * Additive and per-ROW, which is why it is not a column: a column is a decision the
+   * CONTAINER makes for every row it draws ("this surface is too narrow for the date"),
+   * and this is a fact only some rows have ("waiting on VP: …", "blocked by STA-61").
+   * Undefined means ABSENT FROM THE DOM, per the column rule above — the row's height is
+   * identical with and without it, which is the whole point of putting it in the title
+   * cell rather than under the row.
+   *
+   * It shares the title's `minmax(0, 1fr)` track, so it can only ever eat space the title
+   * was going to have; it cannot push the meta cluster or collide with it at any width.
+   * Truncated with an ellipsis, full text in `title` — the same bargain the title itself
+   * makes one element to the left.
+   */
+  caption?: string;
   onOpen?: () => void;
   onOpenParent?: (identifier: string) => void;
   onToggleExpand?: () => void;
@@ -149,6 +195,7 @@ export function TaskRowLine({
   isCurrent = false,
   isFocused = false,
   anySelected = false,
+  caption,
   onOpen,
   onOpenParent,
   onToggleExpand,
@@ -207,7 +254,37 @@ export function TaskRowLine({
         carries the slug, which the prefix does not, and it is only on where a surface
         mixes workspaces with no heading to say so. See config.ts.
       */}
-      {columns.identifier ? <span className="staple-row-id">{issue.identifier}</span> : null}
+      {/*
+        THE IDENTIFIER CLUSTER, not a bare label — O5 (STA-137).
+
+        The connector glyph goes INSIDE this box rather than in a grid track of its own,
+        because a new track changes the column template for all three presets and every §14
+        breakpoint at once to say one thing about one row. This element was already a
+        `display:flex; gap:4px` cluster; the glyph is simply its first child.
+
+        IT IS INLINE AND UNRESERVED, which is the shape VP asked for on review. The first cut
+        held a fixed 12px slot on every row so the identifiers kept one left edge; that
+        renders as an empty gap in front of every top-level identifier and costs 16px of
+        title track everywhere to align something most rows do not have. A child's identifier
+        therefore sits one glyph right of a top-level one until O1b (STA-125) gives every row
+        a real kind glyph and restores the edge by filling the space rather than reserving it.
+      */}
+      {columns.identifier ? (
+        <span className="staple-row-id">
+          {isSubtask(row) ? (
+            <>
+              <span className="staple-row-kin" data-testid="subtask-glyph" aria-hidden="true">
+                <SubtaskGlyph />
+              </span>
+              {/* The glyph is decoration; THIS is the relation. A flat surface (the pickup
+                  queue, the palette) has no indent and may have no breadcrumb chip, so
+                  without this a screen reader gets no parent signal at all. */}
+              <span className="sr-only">Subtask</span>
+            </>
+          ) : null}
+          {issue.identifier}
+        </span>
+      ) : null}
 
       {columns.status ? <StatusIcon status={issue.status} className="staple-row-status" /> : null}
 
@@ -238,9 +315,25 @@ export function TaskRowLine({
         </span>
         {/* A collapsed parent still declares what it is hiding. */}
         {collapsedParent ? <span className="staple-row-childcount">+{childCount}</span> : null}
+        {/* Last in the cell, so it reads as an aside on the title and never as part of it —
+            and so it is the element the flexbox squeezes first when the title is long. */}
+        {caption ? (
+          <span className="staple-row-caption" data-testid="row-caption" title={caption}>
+            {caption}
+          </span>
+        ) : null}
       </span>
 
       <span className="staple-row-meta">
+        {/*
+          FIRST in the meta cluster — O6 (STA-138), and therefore the element nearest the
+          title. VP's reference puts the warning triangle immediately beside the priority
+          mark, i.e. adjacent to the text it is about; on this row the meta cluster is
+          right-aligned, so "adjacent to the title" means leading the cluster rather than
+          trailing it. It also puts the two most diagnostic elements on the row furthest from
+          the edge that gets clipped first.
+        */}
+        {columns.deps ? <DependencyBadges row={row} /> : null}
         {columns.pr ? <PrBadge pullRequests={row.pullRequests} /> : null}
         {columns.labels ? <LabelPills labels={issue.labels} max={labelMax} /> : null}
         {/*

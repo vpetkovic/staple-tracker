@@ -29,7 +29,18 @@
  * stored-data migration, which is the expensive kind.
  */
 
-export type GroupBy = "none" | "status";
+/**
+ * ── WHY "pickup" IS A THIRD DIMENSION AND NOT A REARRANGEMENT OF "status" ─────────────
+ *
+ * V5 (STA-111). Status is a WORKFLOW dimension — a stored field somebody set. Pickup
+ * readiness is a DERIVED one: status, plus unresolved blockers, plus who is holding it.
+ * Folding the second into the first forces duplicate or ambiguous membership (an
+ * in-progress ticket with an unresolved blocker is both "in progress" and "waiting"), and
+ * the §1 invariant in tree-model.ts — every task in a group really is what the header says
+ * — is exactly what that would break. So they are separate axes, and the registry is what
+ * makes a third axis cost one entry.
+ */
+export type GroupBy = "none" | "status" | "pickup";
 
 /**
  * The dimensions offered, in menu order. A registry rather than a switch, so a third entry
@@ -47,6 +58,13 @@ export const GROUP_BY_OPTIONS: readonly { id: GroupBy; label: string; hint: stri
     id: "status",
     label: "Status",
     hint: "collapsible headers with counts; a task sits in the group of its own status",
+  },
+  {
+    id: "pickup",
+    // The label the trigger shows as "Group: Pickup order". Named for the QUESTION it
+    // answers rather than the mechanism, which is why it is not "Readiness".
+    label: "Pickup order",
+    hint: "what to grab next — up next, in flight, waiting; the inbox's own ordering",
   },
 ];
 

@@ -610,6 +610,34 @@ export class WorkspaceStore {
     return byIssue;
   }
 
+  /**
+   * The OPEN issues each of `issueIds` blocks, by identifier, in ONE query — O6 (STA-138).
+   *
+   * The mirror image of `unresolvedBlockersFor`, and it is deliberately written as its
+   * reflection rather than as a generalised helper with a direction flag: the two SELECTs
+   * differ in which end of the edge they join and WHICH END'S STATUS they filter on, and a
+   * flag hides exactly that distinction. Here it is the DEPENDENT's status that matters — a
+   * cancelled task waiting on you is not waiting on you.
+   *
+   * The badge could have been fed a bare count. Identifiers cost the same query, and they
+   * are what lets the badge's tooltip name what it is counting without a second fetch.
+   */
+  openDependentsFor(issueIds: readonly string[]): Map<string, string[]> {
+    const byIssue = new Map<string, string[]>(issueIds.map((id) => [id, []]));
+    if (issueIds.length === 0) return byIssue;
+    const rows = this.db
+      .prepare(
+        `SELECT r.blocker_id AS blocker_id, d.identifier AS identifier
+         FROM relations r JOIN issues d ON d.id = r.blocked_id
+         WHERE r.type = 'blocks' AND d.status NOT IN ${RESOLVED_SQL}
+           AND r.blocker_id IN (${issueIds.map(() => "?").join(",")})
+         ORDER BY d.identifier`,
+      )
+      .all(...(issueIds as never[])) as Array<{ blocker_id: string; identifier: string }>;
+    for (const row of rows) byIssue.get(row.blocker_id)?.push(row.identifier);
+    return byIssue;
+  }
+
   private maybeEmitBlockersResolved(dependent: IssueRow): void {
     const all = this.blockersOf(dependent.id);
     if (all.length === 0) return;
