@@ -37,7 +37,7 @@
  * that decision; the container lives in TreeView.tsx, one level up. R1's scroll-into-view
  * relies on the same fact.
  */
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
 import { CircleDashed, Hourglass, PlayCircle, CheckCircle2 } from "lucide-react";
 import {
@@ -49,7 +49,6 @@ import {
 } from "@/components/task-list";
 import { clampIndex, useRovingFocus } from "@/components/task-list/roving";
 import "@/components/task-list/task-list.css";
-import "./pickup.css";
 import type { Selection } from "@/lib/session";
 import type { Issue, IssueRow, UiMode } from "@/lib/types";
 import type { GroupBy } from "@/lib/view-prefs";
@@ -84,15 +83,30 @@ function useLabelCapacity(): number {
 }
 
 /**
+ * A pickup header's glyph must weigh the same as a status header's — STA-118.
+ *
+ * The BOX is settled in CSS by `--group-icon-size`, on the class both families wear. The
+ * STROKE cannot be, because the two families draw in different coordinate systems and a
+ * single `stroke-width` would land differently in each: `StatusIcon` strokes 1.5 in a
+ * 16-unit viewBox, lucide defaults to 2 in a 24-unit one. Scaled into the same square that
+ * is 1.5px against 1.33px — close enough to look like a mistake and not close enough to be
+ * one. Same rendered hairline therefore means 1.5 restated in lucide's units.
+ *
+ * Written as the arithmetic rather than as `2.25` so it stays honest if either box changes.
+ */
+const STATUS_ICON_STROKE = 1.5;
+const PICKUP_ICON_STROKE = STATUS_ICON_STROKE * (24 / 16);
+
+/**
  * A pickup section's icon. Deliberately NOT a `StatusIcon` — these sections are not
  * statuses, and borrowing the status glyphs would quietly imply that "Up next" is a status
  * a ticket can be in. Geist-weight lucide strokes, matching the rest of the chrome.
  */
 const PICKUP_ICONS: Record<PickupSectionId, ReactNode> = {
-  up_next: <CircleDashed className="staple-group-icon" aria-hidden />,
-  in_flight: <PlayCircle className="staple-group-icon" aria-hidden />,
-  waiting: <Hourglass className="staple-group-icon" aria-hidden />,
-  resolved: <CheckCircle2 className="staple-group-icon" aria-hidden />,
+  up_next: <CircleDashed className="staple-group-icon" strokeWidth={PICKUP_ICON_STROKE} aria-hidden />,
+  in_flight: <PlayCircle className="staple-group-icon" strokeWidth={PICKUP_ICON_STROKE} aria-hidden />,
+  waiting: <Hourglass className="staple-group-icon" strokeWidth={PICKUP_ICON_STROKE} aria-hidden />,
+  resolved: <CheckCircle2 className="staple-group-icon" strokeWidth={PICKUP_ICON_STROKE} aria-hidden />,
 };
 
 /** One entry in the linear keyboard sequence: a group header or a row. */
@@ -459,12 +473,20 @@ export function TreeGrid({
     [nav, expansion, focus, toggleSelect, openIssue, selected.size, onCloseDrawer],
   );
 
-  /** One row, wherever it sits. `index` is its position in the keyboard sequence. */
-  const renderRow = (row: TaskRow, index: number) => (
+  /**
+   * One row, wherever it sits. `index` is its position in the keyboard sequence.
+   *
+   * `caption` is the Waiting section's "who this row waits on" (STA-118). It is a per-row
+   * string rather than a second element, because it has to travel inside the row: the
+   * separate caption ROW it replaced gave every waiting item its own hairline and a 53px
+   * pitch against the 36px of Up next and In flight.
+   */
+  const renderRow = (row: TaskRow, index: number, caption?: string) => (
     <TaskRowLine
       key={row.issue.id}
       row={row}
       config={config}
+      caption={caption}
       semantics="grid"
       isExpanded={row.isExpanded}
       isSelected={selected.has(row.issue.id)}
@@ -546,30 +568,21 @@ export function TreeGrid({
                 <div className="staple-group-rows">
                   {section.rows.map((row) => {
                     if (!collapsed) index += 1;
-                    const waiting = section.waitingOn?.get(row.issue.id);
-                    if (!waiting) return renderRow(row, index);
                     /*
-                      WHO THIS ROW IS WAITING ON — V5 (STA-111)'s third section.
+                      WHO THIS ROW IS WAITING ON — V5 (STA-111)'s third section, folded into
+                      the row itself by STA-118.
 
-                      A real `role="row"` carrying one `gridcell`, not a bare div: the
-                      ancestor is a `treegrid`, whose descendants must be rows and cells, and
-                      an annotation smuggled in as an untyped div is invalid ARIA that some
-                      screen readers drop on the floor entirely.
+                      It used to be a second `role="row"` beneath this one. The ARIA was
+                      defensible — a treegrid's descendants must be rows and cells — but the
+                      LAYOUT was not: two hairlines and a 53px pitch per item, against 36px
+                      everywhere else, and a caption indented by a hard-coded 64px that ran
+                      under the meta cluster as the window narrowed.
 
-                      It is deliberately NOT in `nav`, so it takes no tab stop and does not
-                      shift any row's keyboard index. It is a caption on the row above it,
-                      not somewhere you can land.
+                      As a caption inside the row's title cell it costs no height, no second
+                      border, and no extra ARIA node — and, because it was never in `nav`, no
+                      keyboard index moves. See TaskRowLine's `caption` prop.
                     */
-                    return (
-                      <Fragment key={row.issue.id}>
-                        {renderRow(row, index)}
-                        <div role="row" className="staple-waiting-note">
-                          <div role="gridcell" className="staple-waiting-cell">
-                            {waiting}
-                          </div>
-                        </div>
-                      </Fragment>
-                    );
+                    return renderRow(row, index, section.waitingOn?.get(row.issue.id));
                   })}
                 </div>
               </div>

@@ -129,6 +129,22 @@ export interface TaskRowLineProps {
   isFocused?: boolean;
   /** Any row selected anywhere: every checkbox becomes visible. */
   anySelected?: boolean;
+  /**
+   * ONE muted trailing sentence about this row, inside the title cell — STA-118.
+   *
+   * Additive and per-ROW, which is why it is not a column: a column is a decision the
+   * CONTAINER makes for every row it draws ("this surface is too narrow for the date"),
+   * and this is a fact only some rows have ("waiting on VP: …", "blocked by STA-61").
+   * Undefined means ABSENT FROM THE DOM, per the column rule above — the row's height is
+   * identical with and without it, which is the whole point of putting it in the title
+   * cell rather than under the row.
+   *
+   * It shares the title's `minmax(0, 1fr)` track, so it can only ever eat space the title
+   * was going to have; it cannot push the meta cluster or collide with it at any width.
+   * Truncated with an ellipsis, full text in `title` — the same bargain the title itself
+   * makes one element to the left.
+   */
+  caption?: string;
   onOpen?: () => void;
   onOpenParent?: (identifier: string) => void;
   onToggleExpand?: () => void;
@@ -148,6 +164,7 @@ export function TaskRowLine({
   isCurrent = false,
   isFocused = false,
   anySelected = false,
+  caption,
   onOpen,
   onOpenParent,
   onToggleExpand,
@@ -237,6 +254,13 @@ export function TaskRowLine({
         </span>
         {/* A collapsed parent still declares what it is hiding. */}
         {collapsedParent ? <span className="staple-row-childcount">+{childCount}</span> : null}
+        {/* Last in the cell, so it reads as an aside on the title and never as part of it —
+            and so it is the element the flexbox squeezes first when the title is long. */}
+        {caption ? (
+          <span className="staple-row-caption" data-testid="row-caption" title={caption}>
+            {caption}
+          </span>
+        ) : null}
       </span>
 
       <span className="staple-row-meta">

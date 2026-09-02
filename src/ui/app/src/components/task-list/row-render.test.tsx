@@ -66,6 +66,33 @@ function renderRow(
 
 const html = (node: ReactElement) => renderToStaticMarkup(node);
 
+/** The same row, plus the optional trailing caption (STA-118). */
+function renderCaptioned(caption?: string, over: Partial<Issue> = {}): string {
+  const built = buildGroups([row(over, null)], {
+    isExpanded: () => true,
+    showResolved: true,
+  })[0]!.rows[0]!;
+
+  return renderToStaticMarkup(
+    <TaskRowLine
+      row={built}
+      config={resolveTaskListConfig("tree", { labelMax: 2 })}
+      semantics="grid"
+      caption={caption}
+      isExpanded
+      isFocused
+      now={NOW}
+      onOpen={() => {}}
+      onOpenParent={() => {}}
+      onToggleExpand={() => {}}
+      onToggleSelect={() => {}}
+      onFocus={() => {}}
+      onKeyDown={() => {}}
+      registerRef={() => {}}
+    />,
+  );
+}
+
 describe("PR badge slot", () => {
   it("puts NOTHING in the DOM when there is no integration — not a hidden placeholder", () => {
     const absent = renderRow();
@@ -183,6 +210,59 @@ describe("row semantics", () => {
     expect(markup).toContain('data-kind="agent"');
     expect(markup).toContain(">VP<");
     expect(markup).toContain(">OX<");
+  });
+});
+
+/**
+ * STA-118. The defect these four guard against is not "the caption is missing" — it is the
+ * caption coming back as a SECOND ROW, which is how V5 shipped it: an extra `role="row"`
+ * under every waiting item, its own hairline, and a block 53px tall in a list whose rows are
+ * 36px. Every assertion here is really about the row staying ONE row.
+ *
+ * Rendered size is deliberately not asserted — there is no DOM here and no layout. That the
+ * Waiting rows and the Up next rows measure the same, and that the section-header glyphs
+ * match the status-header glyphs, is checked where it is actually observable: the screenshot
+ * and `getBoundingClientRect` evidence on the ticket.
+ */
+describe("trailing caption", () => {
+  it("adds NO element at all when there is no caption", () => {
+    const markup = renderCaptioned();
+    expect(markup).not.toContain("staple-row-caption");
+    expect(markup).not.toContain('data-testid="row-caption"');
+  });
+
+  it("never emits the second row it replaced", () => {
+    const markup = renderCaptioned("blocked by STA-61");
+    // The V5 classes, by name: if either returns, the two-row fold has returned with it.
+    expect(markup).not.toContain("staple-waiting-note");
+    expect(markup).not.toContain("staple-waiting-cell");
+    // One row, one cell — the caption must not have smuggled in a second of either.
+    expect(markup.match(/role="row"/g)).toHaveLength(1);
+    expect(markup.match(/role="gridcell"/g)).toHaveLength(1);
+  });
+
+  it("sits inside the title cell, ahead of the meta cluster", () => {
+    const markup = renderCaptioned("waiting on VP: decide the schema");
+    const titleCell = markup.indexOf("staple-row-title-cell");
+    const caption = markup.indexOf("staple-row-caption");
+    const meta = markup.indexOf("staple-row-meta");
+
+    // Ordering IS the containment claim in a flat string, and it is the claim that matters:
+    // inside the title's `minmax(0, 1fr)` track the caption is clipped by the track, so it
+    // cannot reach the date, the avatar or the `⋯` at any window width.
+    expect(titleCell).toBeGreaterThan(-1);
+    expect(caption).toBeGreaterThan(titleCell);
+    expect(meta).toBeGreaterThan(caption);
+  });
+
+  it("shows the text and keeps the untruncated version in title", () => {
+    const long =
+      "waiting on VP: create the Cloudflare zone/DNS records for the staple site domain and confirm the domain name";
+    const markup = renderCaptioned(long);
+
+    expect(markup).toContain(long);
+    // The ellipsis is CSS; `title` is what pays for it, exactly as the row title does.
+    expect(markup).toContain(`title="${long}"`);
   });
 });
 

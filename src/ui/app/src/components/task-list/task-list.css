@@ -25,6 +25,21 @@
   --row-id-width: 60px;
 
   /*
+   * THE GROUP-HEADER GLYPH BOX — STA-118.
+   *
+   * Two icon families sit in this slot and they do not agree on their own size. `StatusIcon`
+   * draws in a 16-unit viewBox and declares `width="16"`, so 16px is its native size; the
+   * pickup sections (TreeGrid.tsx) use lucide, which draws in a 24-unit viewBox and defaults
+   * to `width="24"`. Left to their own attributes the pickup headers rendered 50% larger
+   * than the status headers — the exact defect STA-118 reports.
+   *
+   * So the size lives HERE, on the one class both families wear, rather than as a number
+   * hand-tuned into whichever component looked wrong last. Neither header can drift from the
+   * other, and a third icon family would inherit the agreement for free.
+   */
+  --group-icon-size: 16px;
+
+  /*
    * Unfilled priority bars and the no-priority dashes. Points at --border because that is
    * exactly the register wanted: present, structural, and not competing with the filled
    * bars beside it.
@@ -122,7 +137,13 @@
   transform: rotate(-90deg);
 }
 
+/*
+ * `width`/`height` beat the SVG's own presentation attributes, which is what lets ONE rule
+ * govern both the 16-unit StatusIcon and the 24-unit lucide glyphs. See --group-icon-size.
+ */
 .staple-group-icon {
+  width: var(--group-icon-size);
+  height: var(--group-icon-size);
   flex-shrink: 0;
 }
 
@@ -410,6 +431,40 @@
   color: var(--text-tertiary);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
+}
+
+/*
+ * The muted trailing aside — STA-118, and today only the Waiting section's "waiting on VP: …".
+ *
+ * IT IS IN THE TITLE CELL AND THAT IS THE FIX. V5 shipped this text as a second `role="row"`
+ * under the task row: two hairlines, ~53px of pitch against the 36px of every other section,
+ * and a hard-coded 64px indent that had nothing to do with the row's own `minmax(0, 1fr)`
+ * title track — so as the window narrowed the caption ran under the meta cluster. Inside the
+ * title track it is clipped by the track, so overlap is structurally impossible at any width.
+ *
+ * NOT in `.staple-row-meta`: that cluster is fixed content by contract (only the label
+ * cluster may shrink), and below 720px §14 moves it to line 2, which would strand the caption
+ * away from the title it annotates.
+ *
+ * `flex-shrink` is left at its default 1 on both this and the title, so the browser shrinks
+ * them in proportion to their content — a long reason gives way to a long title and a short
+ * "blocked by STA-61" survives. Both then ellipsize, and both keep the full text in `title`.
+ */
+.staple-row-caption {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  line-height: 1.2;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* The separator, so title and aside read as two things rather than one long sentence. It is
+   first in the box, so clipping never eats it. */
+.staple-row-caption::before {
+  content: "·";
+  margin-right: 6px;
 }
 
 /* ── Right of the title ────────────────────────────────────────────────────────────── */
