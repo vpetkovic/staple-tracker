@@ -20,12 +20,22 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  CONTAINER_HEADER_H,
+  CONTAINER_PAD,
+  MIN_CONTAINER_H,
+  MIN_CONTAINER_W,
   NODE_H,
   NODE_W,
+  absolutePositions,
+  clampInside,
+  compoundLayout,
   connectedNodes,
   dagreLayout,
+  fitContainers,
   graphSignature,
   mergePositions,
+  relayout,
+  type CompoundLayout,
   type XY,
 } from "./graph-layout";
 
@@ -213,5 +223,475 @@ describe("mergePositions", () => {
     const snapshot = JSON.stringify(canonical);
     mergePositions(canonical, stored);
     expect(JSON.stringify(canonical)).toBe(snapshot);
+  });
+});
+
+/**
+ * O4c — the compound arrangement, and the ways a box can lie about what is in it.
+ *
+ * The layout half of this ticket has one job that nothing downstream can recover from: a
+ * member drawn OUTSIDE the box it is a member of. Every assertion below is that job from
+ * a different angle — the child's coordinate frame, the box's size, the box's size after
+ * a human dragged something, and the flattening the export has to do to get back to one
+ * coordinate space.
+ *
+ * The other risk is silent: the flat graph going through a new code path and coming out
+ * subtly different. `dagreLayout` is now a wrapper over `compoundLayout`, so every
+ * assertion in the `dagreLayout` block above is also an assertion about this one — plus
+ * the equivalence that opens this block.
+ */
+const leaf = (id: string, parent: string | null = null) => ({ id, parent, container: false });
+const box = (id: string, parent: string | null = null) => ({ id, parent, container: true });
+
+/** The top-left of `id` relative to whatever it is drawn inside. */
+const at = (layout: CompoundLayout, id: string): XY => {
+  const position = layout.positions[id];
+  expect(position, `no position for ${id}`).toBeDefined();
+  return position!;
+};
+
+describe("compoundLayout, flat", () => {
+  it("is exactly dagreLayout when nothing is a container", () => {
+    // dagreLayout IS this function with no boxes. The equivalence is not an aspiration —
+    // it is the reason a feature about epics could not move an ordinary graph's nodes.
+    const nodes = [leaf("A"), leaf("B"), leaf("C")];
+    const edges = [
+      { from: "A", to: "B" },
+      { from: "B", to: "C" },
+    ];
+    expect(compoundLayout(nodes, edges).positions).toEqual(dagreLayout(nodes, edges));
+  });
+
+  it("reports no sizes when there are no containers", () => {
+    expect(compoundLayout([leaf("A"), leaf("B")], [{ from: "A", to: "B" }]).sizes).toEqual({});
+  });
+
+  it("has nothing to say about an empty canvas", () => {
+    expect(compoundLayout([], [])).toEqual({ positions: {}, sizes: {} });
+  });
+});
+
+describe("compoundLayout, one box", () => {
+  const nodes = [box("epic:E"), leaf("A", "epic:E"), leaf("B", "epic:E")];
+  const edges = [{ from: "A", to: "B" }];
+
+  it("positions members RELATIVE to their box, under the header", () => {
+    // The load-bearing assertion of the block. React Flow reads a sub-flow child's
+    // position as an offset from its parent, so a member holding an absolute coordinate
+    // here is drawn at box.position PLUS that coordinate — off in the distance.
+    const layout = compoundLayout(nodes, edges);
+    expect(at(layout, "A").x).toBe(CONTAINER_PAD);
+    expect(at(layout, "A").y).toBe(CONTAINER_HEADER_H);
+    // And the header is genuinely clear: nothing is allowed above it.
+    expect(at(layout, "B").y).toBeGreaterThanOrEqual(CONTAINER_HEADER_H);
+  });
+
+  it("still puts a blocker left of what it blocks, inside the box", () => {
+    // The rule the whole view is read by does not stop applying at a box's border.
+    const layout = compoundLayout(nodes, edges);
+    expect(at(layout, "A").x).toBeLessThan(at(layout, "B").x);
+  });
+
+  it("measures a box that holds everything inside it", () => {
+    const layout = compoundLayout(nodes, edges);
+    const size = layout.sizes["epic:E"]!;
+    for (const id of ["A", "B"]) {
+      expect(at(layout, id).x + NODE_W).toBeLessThanOrEqual(size.width);
+      expect(at(layout, id).y + NODE_H).toBeLessThanOrEqual(size.height);
+    }
+  });
+
+  it("keeps an empty box big enough to read as a box", () => {
+    const layout = compoundLayout([box("epic:E")], []);
+    expect(layout.sizes["epic:E"]).toEqual({ width: MIN_CONTAINER_W, height: MIN_CONTAINER_H });
+  });
+
+  it("places the box itself in the outer graph, framed like any other node", () => {
+    expect(at(compoundLayout(nodes, edges), "epic:E")).toEqual({ x: 24, y: 24 });
+  });
+});
+
+describe("compoundLayout, nesting", () => {
+  const nodes = [
+    box("epic:OUTER"),
+    box("epic:INNER", "epic:OUTER"),
+    leaf("A", "epic:INNER"),
+    leaf("B", "epic:OUTER"),
+  ];
+
+  it("draws a box inside a box, big enough to hold it", () => {
+    const layout = compoundLayout(nodes, []);
+    const inner = layout.sizes["epic:INNER"]!;
+    const outer = layout.sizes["epic:OUTER"]!;
+    const nested = at(layout, "epic:INNER");
+    expect(nested.y).toBeGreaterThanOrEqual(CONTAINER_HEADER_H);
+    expect(nested.x + inner.width).toBeLessThanOrEqual(outer.width);
+    expect(nested.y + inner.height).toBeLessThanOrEqual(outer.height);
+  });
+
+  it("measures the inner box before the outer one needs it", () => {
+    // Deepest-first is not a preference. An outer box packed before its inner box was
+    // measured packs a zero-size hole and then draws a box on top of its neighbours.
+    const layout = compoundLayout(nodes, []);
+    expect(layout.sizes["epic:OUTER"]!.width).toBeGreaterThan(layout.sizes["epic:INNER"]!.width);
+  });
+
+  it("keeps the grandchild's coordinate relative to its OWN box", () => {
+    const layout = compoundLayout(nodes, []);
+    expect(at(layout, "A")).toEqual({ x: CONTAINER_PAD, y: CONTAINER_HEADER_H });
+  });
+});
+
+describe("compoundLayout, edges across boxes", () => {
+  it("ranks two boxes by an edge drawn between their members", () => {
+    // The two-pass trade, asserted. The arrow is drawn member-to-member, but the OUTER
+    // pass sees it lifted to the boxes — which is what puts box A left of box B instead
+    // of leaving the two in arbitrary order.
+    const nodes = [box("epic:A"), leaf("A1", "epic:A"), box("epic:B"), leaf("B1", "epic:B")];
+    const layout = compoundLayout(nodes, [{ from: "A1", to: "B1" }]);
+    expect(at(layout, "epic:A").x).toBeLessThan(at(layout, "epic:B").x);
+  });
+
+  it("does not let an edge inside a box rank anything outside it", () => {
+    // Lifted to the outer level both ends are the same box, which says nothing there.
+    // Dropping it is what stops dagre being handed a self-loop on the container.
+    const nodes = [box("epic:A"), leaf("A1", "epic:A"), leaf("A2", "epic:A"), leaf("LOOSE")];
+    const layout = compoundLayout(nodes, [{ from: "A1", to: "A2" }]);
+    // Same rank, so the same centre — compared on centres rather than left edges because
+    // the box and the card are different widths and dagre ranks by centre.
+    const boxCentre = at(layout, "epic:A").x + layout.sizes["epic:A"]!.width / 2;
+    expect(boxCentre).toBe(at(layout, "LOOSE").x + NODE_W / 2);
+  });
+
+  it("ignores an edge naming something it is not drawing", () => {
+    // Cross-workspace blockers in a file this page never loaded do exactly this, and
+    // dagre would otherwise invent a zero-size node and open a hole in the layout.
+    const nodes = [box("epic:A"), leaf("A1", "epic:A")];
+    const edges = [{ from: "A1", to: "ELSEWHERE" }];
+    expect(() => compoundLayout(nodes, edges)).not.toThrow();
+    expect(compoundLayout(nodes, edges).positions["ELSEWHERE"]).toBeUndefined();
+  });
+});
+
+describe("fitContainers", () => {
+  const nodes = [box("epic:E"), leaf("A", "epic:E")];
+
+  it("grows a box that a stored position would otherwise hang out of", () => {
+    // The reload case, exactly: yesterday's arrangement had this member further right
+    // than today's membership measures for. Without this it is drawn outside its epic.
+    const stored = { "epic:E": { x: 0, y: 0 }, A: { x: 600, y: 400 } };
+    const grown = fitContainers(nodes, stored, { "epic:E": { width: 240, height: 120 } });
+    expect(grown["epic:E"]!.width).toBeGreaterThanOrEqual(600 + NODE_W);
+    expect(grown["epic:E"]!.height).toBeGreaterThanOrEqual(400 + NODE_H);
+  });
+
+  it("never shrinks a box onto its contents", () => {
+    // Shrink-wrapping would ratchet: `extent: "parent"` clamps members inside the box, so
+    // a box that hugged them after every tidy-up would get smaller and smaller and there
+    // would be no gesture that grew it back.
+    const stored = { "epic:E": { x: 0, y: 0 }, A: { x: CONTAINER_PAD, y: CONTAINER_HEADER_H } };
+    const roomy = { "epic:E": { width: 900, height: 700 } };
+    expect(fitContainers(nodes, stored, roomy)).toEqual(roomy);
+  });
+
+  it("grows an outer box when the inner one had to grow", () => {
+    const nested = [box("epic:O"), box("epic:I", "epic:O"), leaf("A", "epic:I")];
+    const stored = {
+      "epic:O": { x: 0, y: 0 },
+      "epic:I": { x: CONTAINER_PAD, y: CONTAINER_HEADER_H },
+      A: { x: 500, y: 300 },
+    };
+    const grown = fitContainers(nested, stored, {
+      "epic:O": { width: 100, height: 100 },
+      "epic:I": { width: 100, height: 100 },
+    });
+    expect(grown["epic:O"]!.width).toBeGreaterThan(grown["epic:I"]!.width);
+  });
+
+  it("does not mutate the sizes it was handed", () => {
+    const sizes = { "epic:E": { width: 240, height: 120 } };
+    fitContainers(nodes, { "epic:E": { x: 0, y: 0 }, A: { x: 600, y: 400 } }, sizes);
+    expect(sizes).toEqual({ "epic:E": { width: 240, height: 120 } });
+  });
+});
+
+describe("clampInside", () => {
+  const child = { width: NODE_W, height: NODE_H };
+  const parent = { width: 600, height: 300 };
+
+  it("keeps a member out from behind the header", () => {
+    // `extent: "parent"` clamps to the parent RECTANGLE, whose top is 0 — it has never
+    // heard of a header, so it will happily park a card over the epic's own title.
+    expect(clampInside({ x: 40, y: 0 }, child, parent).y).toBe(CONTAINER_HEADER_H);
+    expect(clampInside({ x: 40, y: -500 }, child, parent).y).toBe(CONTAINER_HEADER_H);
+  });
+
+  it("keeps a member inside the right and bottom edges", () => {
+    const held = clampInside({ x: 9999, y: 9999 }, child, parent);
+    expect(held.x + NODE_W).toBeLessThanOrEqual(parent.width - CONTAINER_PAD);
+    expect(held.y + NODE_H).toBeLessThanOrEqual(parent.height - CONTAINER_PAD);
+  });
+
+  it("leaves a position that was already inside exactly alone", () => {
+    expect(clampInside({ x: 100, y: 90 }, child, parent)).toEqual({ x: 100, y: 90 });
+  });
+
+  it("still returns a usable spot when the box is smaller than what is in it", () => {
+    // Membership can shrink a box under a card that a filter has not removed yet. The
+    // floor wins over the ceiling: inside-and-overflowing beats a negative coordinate.
+    const tiny = { width: 40, height: 40 };
+    expect(clampInside({ x: 999, y: 999 }, child, tiny)).toEqual({
+      x: CONTAINER_PAD,
+      y: CONTAINER_HEADER_H,
+    });
+  });
+});
+
+describe("absolutePositions", () => {
+  it("flattens a grandchild through both of its boxes", () => {
+    // The export does not go through React Flow, so it has to do this itself or write a
+    // file that disagrees with the screen.
+    const nodes = [box("epic:O"), box("epic:I", "epic:O"), leaf("A", "epic:I")];
+    const positions = {
+      "epic:O": { x: 100, y: 200 },
+      "epic:I": { x: 10, y: 40 },
+      A: { x: 5, y: 8 },
+    };
+    expect(absolutePositions(nodes, positions)["A"]).toEqual({ x: 115, y: 248 });
+  });
+
+  it("leaves a top-level node exactly where it was", () => {
+    expect(absolutePositions([leaf("A")], { A: { x: 7, y: 9 } })["A"]).toEqual({ x: 7, y: 9 });
+  });
+
+  it("treats a missing coordinate as no offset rather than as NaN", () => {
+    const nodes = [box("epic:O"), leaf("A", "epic:O")];
+    expect(absolutePositions(nodes, { A: { x: 5, y: 5 } })["A"]).toEqual({ x: 5, y: 5 });
+  });
+});
+
+describe("graphSignature and containment", () => {
+  it("tells a node inside a box from the same node loose", () => {
+    // O4d re-seeds on this. Without containment in the signature, opening an epic would
+    // leave its members at whatever coordinates they held on the outside — which are now
+    // measured from the box's corner, so hundreds of pixels away from where they read.
+    const loose = graphSignature([{ id: "A" }, { id: "epic:E", container: true }], []);
+    const inside = graphSignature(
+      [
+        { id: "A", parent: "epic:E" },
+        { id: "epic:E", container: true },
+      ],
+      [],
+    );
+    expect(inside).not.toBe(loose);
+  });
+
+  it("is unchanged for a graph with no boxes in it", () => {
+    // The flat case must produce the string it always produced, or every saved
+    // arrangement re-seeds once for no reason on the first load after this ships.
+    expect(graphSignature([{ id: "A" }, { id: "B" }], [{ from: "A", to: "B" }])).toBe("A,B|A>B");
+  });
+});
+
+/**
+ * ── relayout — O4d (STA-136) ──────────────────────────────────────────────────────────
+ *
+ * The risk this block exists for is not "the arrangement looks wrong". It is that the
+ * arrangement looks FINE and is a different one — a whole-graph re-seed produces a
+ * perfectly good layout, and the only way to notice is that everything you had tidied
+ * moved while you were looking at it. That is invisible in a screenshot, and it is
+ * invisible in a test that compares numbers loosely, so the assertions below compare by
+ * IDENTITY: `toBe`, not `toEqual`. An untouched node must come back holding the same
+ * object it went in with.
+ *
+ * The fixtures are the two states of one canvas, and they are the states GraphView really
+ * produces. Collapsed: the epic is a plain node — O4c made the container reuse the cluster
+ * id, so it is `epic:E` either way — and its members are not drawn at all. Expanded: the
+ * same id is a container and the members are inside it. That the id survives the fold is
+ * what makes the top level's child SET identical across one, which is the observation the
+ * whole feature rests on.
+ */
+const CLOSED = [leaf("W"), leaf("epic:E"), leaf("Z")];
+const OPEN = [leaf("W"), box("epic:E"), leaf("A", "epic:E"), leaf("B", "epic:E"), leaf("Z")];
+const WIRING = [
+  { from: "W", to: "epic:E" },
+  { from: "epic:E", to: "Z" },
+  { from: "A", to: "B" },
+];
+
+/** The snapshot GraphView hands `relayout`: a shape, and where its nodes sit now. */
+const snapshotOf = (
+  nodes: readonly { id: string; parent: string | null; container: boolean }[],
+  layout: CompoundLayout,
+) => ({ nodes, positions: layout.positions, sizes: layout.sizes });
+
+describe("relayout has nothing to leave alone on the first arrangement", () => {
+  it("is exactly compoundLayout when there is no previous", () => {
+    // Not an aspiration: the first seed of every canvas goes through here, and a partial
+    // arrangement that differed from the canonical one would mean the graph you open is
+    // not the graph auto-arrange puts you back to.
+    expect(relayout(OPEN, WIRING, null)).toEqual(compoundLayout(OPEN, WIRING));
+  });
+});
+
+describe("relayout, expanding one epic", () => {
+  const before = compoundLayout(CLOSED, WIRING);
+  const after = relayout(OPEN, WIRING, snapshotOf(CLOSED, before));
+
+  it("leaves every other node's coordinate BYTE-IDENTICAL", () => {
+    // THE LOAD-BEARING ASSERTION OF THE TICKET. `toBe` on purpose — a re-seed that
+    // happened to land on the same numbers would still be a re-seed, and the next change
+    // to the node set or to dagre's version would expose it as one.
+    for (const id of ["W", "Z"]) {
+      expect(after.positions[id]).toBe(before.positions[id]);
+    }
+  });
+
+  it("leaves the epic itself where it was, so the box opens in the cluster's slot", () => {
+    // O4c's "collapsing swaps the box for the cluster IN THE SAME PLACE", read backwards.
+    expect(after.positions["epic:E"]).toBe(before.positions["epic:E"]);
+  });
+
+  it("lays out the newly revealed members inside the box", () => {
+    expect(at(after, "A").x).toBe(CONTAINER_PAD);
+    expect(at(after, "A").y).toBe(CONTAINER_HEADER_H);
+    expect(at(after, "A").x).toBeLessThan(at(after, "B").x);
+  });
+
+  it("measures the box around what it now holds", () => {
+    const size = after.sizes["epic:E"]!;
+    for (const id of ["A", "B"]) {
+      expect(at(after, id).x + NODE_W).toBeLessThanOrEqual(size.width);
+      expect(at(after, id).y + NODE_H).toBeLessThanOrEqual(size.height);
+    }
+    // And it really is bigger than the card it replaced, which is why "nothing else
+    // moves" is a decision rather than a coincidence: the box CAN overlap its neighbours,
+    // and the viewport fit plus auto-arrange are the two answers to that.
+    expect(size.width).toBeGreaterThan(NODE_W);
+  });
+
+  it("settles a dragged node where the user put it, not where dagre last put it", () => {
+    // The snapshot's positions are where things are NOW. This is the difference between
+    // "nothing moved" and "nothing moved except the four you had tidied".
+    const dragged = {
+      nodes: CLOSED,
+      positions: { ...before.positions, W: { x: 999, y: -40 } },
+      sizes: before.sizes,
+    };
+    const out = relayout(OPEN, WIRING, dragged);
+    expect(out.positions["W"]).toBe(dragged.positions["W"]);
+  });
+});
+
+describe("relayout, collapsing one epic", () => {
+  const before = compoundLayout(OPEN, WIRING);
+  const after = relayout(CLOSED, WIRING, snapshotOf(OPEN, before));
+
+  it("moves NOTHING — no level gained a child, so no level is re-laid out", () => {
+    for (const id of ["W", "Z", "epic:E"]) {
+      expect(after.positions[id]).toBe(before.positions[id]);
+    }
+  });
+
+  it("forgets the box's measurement, so the cluster is not laid out as if it were huge", () => {
+    // Load-bearing rather than tidy. `sizeOf` reads `sizes[id]`, so a leftover box size
+    // for an id now drawn as a 208x62 card would open a hole in the outer layout the
+    // size of the epic that just closed.
+    expect(after.sizes["epic:E"]).toBeUndefined();
+  });
+
+  it("drops the members entirely rather than keeping stale coordinates for them", () => {
+    expect(after.positions["A"]).toBeUndefined();
+    expect(after.positions["B"]).toBeUndefined();
+  });
+});
+
+describe("relayout, a nested epic opening", () => {
+  const OUTER_CLOSED = [
+    box("epic:OUTER"),
+    leaf("epic:INNER", "epic:OUTER"),
+    leaf("M", "epic:OUTER"),
+    leaf("Z"),
+  ];
+  const OUTER_OPEN = [
+    box("epic:OUTER"),
+    box("epic:INNER", "epic:OUTER"),
+    leaf("N", "epic:INNER"),
+    leaf("M", "epic:OUTER"),
+    leaf("Z"),
+  ];
+  const edges = [{ from: "epic:OUTER", to: "Z" }];
+
+  const before = compoundLayout(OUTER_CLOSED, edges);
+  const after = relayout(OUTER_OPEN, edges, snapshotOf(OUTER_CLOSED, before));
+
+  it("re-lays only the level that gained a child", () => {
+    // `epic:INNER` gained `N`, so INNER's level runs. OUTER's own children — INNER and M
+    // — are all settled, so OUTER's level does not, and neither does the top.
+    expect(after.positions["M"]).toBe(before.positions["M"]);
+    expect(after.positions["epic:INNER"]).toBe(before.positions["epic:INNER"]);
+    expect(after.positions["Z"]).toBe(before.positions["Z"]);
+    expect(after.positions["epic:OUTER"]).toBe(before.positions["epic:OUTER"]);
+  });
+
+  it("grows the settled box that now holds a bigger one", () => {
+    // A kept level keeps its size GROW-ONLY. Without that, OUTER would still be measured
+    // for a 208x62 INNER and would draw its own contents hanging out of it.
+    const outer = after.sizes["epic:OUTER"]!;
+    const inner = after.sizes["epic:INNER"]!;
+    expect(at(after, "epic:INNER").x + inner.width).toBeLessThanOrEqual(outer.width);
+    expect(at(after, "epic:INNER").y + inner.height).toBeLessThanOrEqual(outer.height);
+    expect(outer.width).toBeGreaterThanOrEqual(before.sizes["epic:OUTER"]!.width);
+  });
+});
+
+describe("relayout, when a node changes box", () => {
+  it("does NOT let it keep a coordinate measured against a different corner", () => {
+    // Positions inside a box are relative to it, so the same {x, y} means two different
+    // places depending on which box reads it. A node that moved box holds a coordinate
+    // that is no longer about anywhere; keeping it would park it near the new header.
+    const from = [box("epic:P"), box("epic:Q"), leaf("A", "epic:P")];
+    const to = [box("epic:P"), box("epic:Q"), leaf("A", "epic:Q")];
+    const before = compoundLayout(from, []);
+    const after = relayout(to, [], snapshotOf(from, before));
+    expect(after.positions["A"]).not.toBe(before.positions["A"]);
+    expect(at(after, "A").y).toBeGreaterThanOrEqual(CONTAINER_HEADER_H);
+    expect(after.sizes["epic:Q"]!.height).toBeGreaterThanOrEqual(at(after, "A").y + NODE_H);
+  });
+});
+
+describe("relayout, when a genuinely new ticket arrives", () => {
+  it("re-lays the level it landed on, because a newcomer has nowhere else to be", () => {
+    // The pre-O4d behaviour, preserved deliberately. Keeping the settled coordinates and
+    // taking dagre's for the newcomer alone would place it relative to an arrangement
+    // that no longer exists — i.e. on top of something.
+    const before = compoundLayout([leaf("A"), leaf("B")], [{ from: "A", to: "B" }]);
+    const after = relayout(
+      [leaf("A"), leaf("B"), leaf("C")],
+      [
+        { from: "A", to: "B" },
+        { from: "B", to: "C" },
+      ],
+      snapshotOf([leaf("A"), leaf("B")], before),
+    );
+    expect(after.positions["C"]).toBeDefined();
+    expect(at(after, "B").x).toBeLessThan(at(after, "C").x);
+  });
+
+  it("does not disturb a DIFFERENT level than the one it landed on", () => {
+    // The narrowing is per level, not per graph: a ticket appearing at the top must not
+    // rearrange the inside of an epic nobody touched.
+    const from = [box("epic:E"), leaf("A", "epic:E"), leaf("B", "epic:E"), leaf("Z")];
+    const to = [...from, leaf("NEW")];
+    const edges = [
+      { from: "A", to: "B" },
+      { from: "epic:E", to: "Z" },
+      { from: "Z", to: "NEW" },
+    ];
+    const before = compoundLayout(from, edges);
+    const after = relayout(to, edges, snapshotOf(from, before));
+    expect(after.positions["A"]).toBe(before.positions["A"]);
+    expect(after.positions["B"]).toBe(before.positions["B"]);
+    expect(after.positions["NEW"]).toBeDefined();
   });
 });

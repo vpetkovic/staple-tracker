@@ -26,7 +26,7 @@
  * repo root, so the app's `@` alias does not exist at test time). graph-positions.ts
  * established that trick; this file follows it.
  */
-import type { GraphEdge, GraphNode, IssueStatus } from "@/lib/types";
+import type { GraphEdge, GraphNode, IssueKind, IssueStatus } from "@/lib/types";
 
 /**
  * Resolved = finished, one way or the other.
@@ -91,6 +91,24 @@ export interface EpicSummary {
   resolved: number;
   /** The tint the super-node wears. See `aggregateStatus`. */
   status: IssueStatus;
+  /**
+   * The epic's OWN parent — O4b (STA-134).
+   *
+   * `null` when the epic is top-level, when its ticket is not in the payload at all (the
+   * hub-shaped case `summarizeEpics` already tolerates), or when the parent it names is
+   * not itself an epic on this canvas. That last clause is what makes the field safe to
+   * indent by: a `parent` that points at nothing visible would produce a row indented
+   * under a row that is not there.
+   */
+  parent: string | null;
+  /**
+   * The epic's declared kind — O1a (STA-124), read straight off `GraphNode.kind`.
+   *
+   * `undefined` means the page is talking to an older server that omits the field, NOT
+   * "this has no kind"; treat it as the default kind rather than as an error. Carried
+   * here so the picker can draw a kind mark without a second lookup into the node list.
+   */
+  kind?: IssueKind;
 }
 
 /**
@@ -168,15 +186,171 @@ export function summarizeEpics(
       total: group.length,
       resolved: group.filter((node) => isResolved(node.status)).length,
       status: aggregateStatus(group.map((node) => node.status)),
+      // Provisional: the raw parent ref. Narrowed to "a parent that is itself an epic
+      // here" in the pass below, once every epic id is known.
+      parent: own?.parent && own.parent !== epic ? own.parent : null,
+      kind: own?.kind,
     });
   }
-  return summaries.sort((a, b) => a.id.localeCompare(b.id));
+  summaries.sort((a, b) => a.id.localeCompare(b.id));
+
+  // O4b: an epic whose parent is not ITSELF an epic on this canvas is top-level as far
+  // as the picker is concerned. Nesting a row under an id that has no row would indent
+  // it under nothing, which reads as a bug rather than as a hierarchy. This is a second
+  // pass rather than a lookup inside the loop because the set of epics is only complete
+  // once the loop has finished — an epic's parent may be summarized after it.
+  const epicIds = new Set(summaries.map((summary) => summary.id));
+  for (const summary of summaries) {
+    if (summary.parent !== null && !epicIds.has(summary.parent)) summary.parent = null;
+  }
+  return summaries;
 }
 
-/** A box on the canvas: either a real ticket or an epic standing in for several. */
+/**
+ * The epics reachable DOWN the parent chain from a selection — O4b (STA-134).
+ *
+ * Selecting an epic means "show me this epic's work", and on a nested tree that includes
+ * the work inside its child epics: `summarizeEpics` buckets by DIRECT parent, so a
+ * grandchild lives in the child's bucket and nowhere else. Without this expansion,
+ * picking the parent would show the child epic's node and none of the tickets under it —
+ * a box with its contents surgically removed.
+ *
+ * Separate from `restrictToEpics` on purpose. "What does selecting a parent mean" is a
+ * policy that could reasonably change; "keep only these members" is not, and folding the
+ * two together would make the second untestable without the first.
+ *
+ * Order: the input epics in list order, each followed by its descendants. Cycles cannot
+ * occur (the store forbids them) but the `seen` set makes that a fact rather than a hang.
+ */
+export function withDescendantEpics(
+  epics: readonly EpicSummary[],
+  selected: ReadonlySet<string>,
+): EpicSummary[] {
+  const children = new Map<string, EpicSummary[]>();
+  for (const epic of epics) {
+    if (epic.parent === null) continue;
+    const bucket = children.get(epic.parent);
+    if (bucket) bucket.push(epic);
+    else children.set(epic.parent, [epic]);
+  }
+
+  const seen = new Set<string>();
+  const out: EpicSummary[] = [];
+  const walk = (epic: EpicSummary) => {
+    if (seen.has(epic.id)) return;
+    seen.add(epic.id);
+    out.push(epic);
+    for (const child of children.get(epic.id) ?? []) walk(child);
+  };
+  for (const epic of epics) if (selected.has(epic.id)) walk(epic);
+  return out;
+}
+
+/** One line of the picker: an epic and how far it is indented. */
+export interface EpicRow {
+  epic: EpicSummary;
+  /** 0 for a top-level epic, 1 for a child of one, and so on. */
+  depth: number;
+}
+
+/**
+ * The epic list as the picker draws it — parents immediately followed by their children.
+ *
+ * The flat, identifier-sorted list `summarizeEpics` returns is right for a super-node
+ * order and wrong for a menu: `STA-53` and its child `STA-91` end up thirty rows apart
+ * with unrelated epics between them, and the containment that is the whole reason epics
+ * exist is invisible. Roots keep their sorted order and so do siblings, so the list is
+ * still stable across polls.
+ *
+ * An epic whose parent chain is broken (`parent` already narrowed to a real epic by
+ * `summarizeEpics`) is a root. Every epic appears exactly once — `seen` guards against a
+ * cycle turning a render into a hang, which is the one failure mode of this shape that
+ * would take the page down rather than merely look wrong.
+ */
+export function flattenEpics(epics: readonly EpicSummary[]): EpicRow[] {
+  const children = new Map<string, EpicSummary[]>();
+  for (const epic of epics) {
+    if (epic.parent === null) continue;
+    const bucket = children.get(epic.parent);
+    if (bucket) bucket.push(epic);
+    else children.set(epic.parent, [epic]);
+  }
+
+  const seen = new Set<string>();
+  const rows: EpicRow[] = [];
+  const walk = (epic: EpicSummary, depth: number) => {
+    if (seen.has(epic.id)) return;
+    seen.add(epic.id);
+    rows.push({ epic, depth });
+    for (const child of children.get(epic.id) ?? []) walk(child, depth + 1);
+  };
+  for (const epic of epics) if (epic.parent === null) walk(epic, 0);
+  // A cycle would leave epics unvisited by the root walk. Emit them flat rather than
+  // dropping them: a row missing from the picker is a row of work nobody can reach.
+  for (const epic of epics) walk(epic, 0);
+  return rows;
+}
+
+/**
+ * Narrow the picker's rows to a query — O4b (STA-134).
+ *
+ * ORDER IS THE INPUT'S, ALWAYS. Same rule, for the same reason, as R7's `filterOptions`:
+ * a fuzzy scorer would put `STA-118` above `STA-1` for the query "STA-1", and a list of
+ * identifiers that reorders itself as you type is a list you cannot aim at.
+ *
+ * Every whitespace-separated token must hit SOMETHING — the identifier or the title —
+ * so "auth STA-1" narrows rather than widens.
+ *
+ * A MATCHED ROW BRINGS ITS ANCESTORS WITH IT, unmatched. Indentation is a claim about
+ * the row above; a child surfacing alone at depth 1 under an unrelated epic would state
+ * a containment that is false. Ancestors come back flagged `matched: false` so the
+ * caller can draw them as the context they are rather than as results.
+ */
+export interface FilteredEpicRow extends EpicRow {
+  /** False for a row present only to hold up the indentation of a match beneath it. */
+  matched: boolean;
+}
+
+export function filterEpicRows(
+  rows: readonly EpicRow[],
+  query: string,
+): FilteredEpicRow[] {
+  const tokens = query.toLowerCase().split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return rows.map((row) => ({ ...row, matched: true }));
+
+  const matched = new Set<string>();
+  for (const row of rows) {
+    const haystack = `${row.epic.id} ${row.epic.title}`.toLowerCase();
+    if (tokens.every((token) => haystack.includes(token))) matched.add(row.epic.id);
+  }
+
+  const parentOf = new Map(rows.map((row) => [row.epic.id, row.epic.parent]));
+  const keep = new Set(matched);
+  for (const id of matched) {
+    let cursor = parentOf.get(id) ?? null;
+    // `keep.has` also terminates a cycle, which `flattenEpics` already tolerates.
+    while (cursor !== null && !keep.has(cursor)) {
+      keep.add(cursor);
+      cursor = parentOf.get(cursor) ?? null;
+    }
+  }
+
+  return rows
+    .filter((row) => keep.has(row.epic.id))
+    .map((row) => ({ ...row, matched: matched.has(row.epic.id) }));
+}
+
+/**
+ * A box on the canvas. Three kinds, and the third is the other half of the second.
+ *
+ * `cluster` and `container` are the SAME epic in its two states — collapsed, standing in
+ * for its members; and expanded, drawn around them. They share an id (`clusterId`) on
+ * purpose: see `containerize`.
+ */
 export type CanvasNode =
   | { kind: "task"; id: string; task: GraphNode }
-  | { kind: "cluster"; id: string; epic: EpicSummary };
+  | { kind: "cluster"; id: string; epic: EpicSummary }
+  | { kind: "container"; id: string; epic: EpicSummary };
 
 /** An arrow on the canvas, possibly standing for several. */
 export interface CanvasEdge {
@@ -287,24 +461,371 @@ export function collapseGraph(
 }
 
 /**
- * Pin the canvas to one epic — the filter that falls out of the grouping.
+ * Pin the canvas to a set of epics — the filter that falls out of the grouping.
  *
- * Edges need BOTH ends inside the epic. Keeping the half-edges would draw arrows to
+ * O4b (STA-134) made this plural. The single-epic version could answer "show me this
+ * epic" and nothing else; the question people actually arrive with in a review is "show
+ * me these two and how they relate", and with one slot the only way to ask it was to
+ * clear the filter and read the whole board again.
+ *
+ * IT IS THE UNION, NOT THE INTERSECTION. Two epics share no members by construction —
+ * a ticket has one parent — so an intersecting filter would go blank the moment it was
+ * used for the thing it exists for.
+ *
+ * Edges need BOTH ends inside the union. Keeping the half-edges would draw arrows to
  * boxes that are not on screen, which is the one thing worse than not drawing them: an
  * arrow into nothing reads as a rendering bug, while a missing arrow reads as "you asked
- * to see this epic only", which is what happened.
+ * to see these epics only", which is what happened. Note that the union makes edges
+ * BETWEEN two selected epics survive, which is the point of selecting two.
  *
- * `null` means no filter and returns the inputs, so the caller has no branch.
+ * An empty list means no filter and returns the inputs, so the caller has no branch.
+ */
+export function restrictToEpics<T extends { id: string }>(
+  nodes: readonly T[],
+  edges: readonly GraphEdge[],
+  epics: readonly EpicSummary[],
+): { nodes: T[]; edges: GraphEdge[] } {
+  if (epics.length === 0) return { nodes: [...nodes], edges: [...edges] };
+  const members = new Set(epics.flatMap((epic) => epic.members));
+  return {
+    nodes: nodes.filter((node) => members.has(node.id)),
+    edges: edges.filter((edge) => members.has(edge.from) && members.has(edge.to)),
+  };
+}
+
+/**
+ * The single-epic form, kept as a one-line wrapper.
+ *
+ * Not dead weight: "restrict to this one epic" is a real question — it is what a
+ * double-click on a cluster would ask — and expressing it as `restrictToEpics(n, e,
+ * epic ? [epic] : [])` at every call site is the kind of ceremony that eventually gets
+ * inlined wrong. `null` still means the whole graph.
  */
 export function restrictToEpic<T extends { id: string }>(
   nodes: readonly T[],
   edges: readonly GraphEdge[],
   epic: EpicSummary | null,
 ): { nodes: T[]; edges: GraphEdge[] } {
-  if (!epic) return { nodes: [...nodes], edges: [...edges] };
-  const members = new Set(epic.members);
-  return {
-    nodes: nodes.filter((node) => members.has(node.id)),
-    edges: edges.filter((edge) => members.has(edge.from) && members.has(edge.to)),
+  return restrictToEpics(nodes, edges, epic ? [epic] : []);
+}
+
+/* ── Epic containers — O4c (STA-135) ─────────────────────────────────────────────────
+ *
+ * The expanded half of what `collapseGraph` does to a collapsed epic. Where collapsing
+ * REPLACES an epic's members with one box, expanding DRAWS a box around them: the same
+ * grouping, at the other end of the same gesture.
+ *
+ * THE CONTAINER REUSES THE CLUSTER ID. `epic:STA-53` names the collapsed super-node and
+ * the expanded box, and only `collapsed` says which one you are looking at. That is the
+ * acceptance criterion expressed as a data structure — "collapsing swaps the box for the
+ * existing ClusterNode IN THE SAME PLACE" is free when the two share the coordinate slot
+ * that GraphView's `positions` keys by. It also means every existing consumer of an
+ * absorbed id — the detail-panel selection mapping, the share link — keeps working
+ * without learning a second namespace.
+ *
+ * THE EPIC'S OWN TICKET BECOMES THE HEADER. When `STA-53` is drawn as a box, its own node
+ * is dropped from the canvas and its edges are re-pointed at the box. Exactly the rule
+ * `summarizeEpics` already states for collapsing, and for the identical reason: the header
+ * says `STA-53`, so a `STA-53` card inside it would be the epic twice, wired to the same
+ * things.
+ */
+
+/** Which nodes live inside which box, and which epics became a header. */
+export interface Containment {
+  /**
+   * The canvas, in RENDER ORDER: every container appears before anything drawn inside
+   * it. React Flow requires this of sub-flows — it warns and mis-positions otherwise —
+   * so the order is part of the contract rather than a convenience.
+   */
+  nodes: CanvasNode[];
+  /** node id -> the container id it is drawn inside. Absent means top level. */
+  parentOf: Map<string, string>;
+  /**
+   * epic id -> the container id that now draws it, for epics whose own ticket became a
+   * header. This is `absorption`'s counterpart for the expanded case, and it maps to the
+   * same value `absorption` would produce if the epic were collapsed.
+   */
+  headers: Map<string, string>;
+}
+
+/**
+ * Draw a box around every expanded epic that has work on this canvas.
+ *
+ * Runs on the output of `collapseGraph` AFTER the view has dropped hidden nodes, which is
+ * what keeps `bridgeResolved` and the done modes untouched by this feature: they still
+ * see the flat ticket graph they were written against, and an epic whose members were all
+ * filtered away simply never becomes a box.
+ *
+ * A box needs at least ONE member on the canvas other than the epic's own ticket. Not
+ * two: "an expanded epic with work on the canvas is a box" is one rule, and the `>= 2`
+ * version is two rules whose second makes boxes appear and vanish as work lands.
+ */
+export function containerize(
+  nodes: readonly CanvasNode[],
+  epics: readonly EpicSummary[],
+  collapsed: ReadonlySet<string>,
+): Containment {
+  /** member id -> the epic that owns it. Self-membership is not ownership. */
+  const ownerOf = new Map<string, string>();
+  for (const epic of epics) {
+    for (const member of epic.members) {
+      if (member !== epic.id) ownerOf.set(member, epic.id);
+    }
+  }
+
+  /**
+   * The ticket each box on the canvas stands for. A task stands for itself; a collapsed
+   * cluster stands for its epic. This is what lets one rule — "your place is the box of
+   * whoever you belong to" — cover tasks, nested clusters, and nested boxes alike.
+   */
+  const standsFor = (node: CanvasNode): string =>
+    node.kind === "task" ? node.id : node.epic.id;
+
+  const present = new Set(nodes.map(standsFor));
+  const summaryOf = new Map(epics.map((epic) => [epic.id, epic]));
+
+  /**
+   * The epic a ticket belongs INSIDE — and the two answers are not the same question.
+   *
+   * A plain ticket belongs to the epic whose `members` it is in. AN EPIC BELONGS TO ITS
+   * OWN `parent`, and this distinction is the whole reason O4b put `parent` on the
+   * summary. `summarizeEpics` buckets by direct parent over DRAWN nodes only, so an epic
+   * that blocks nothing — which is most of them, since the graph draws only tickets that
+   * participate in a dependency — is in nobody's `members` even though its place in the
+   * tree is perfectly well known. Nesting through `members` would leave every such epic's
+   * box floating at the top level beside its own parent.
+   */
+  const placeOf = (ticket: string): string | null => {
+    const summary = summaryOf.get(ticket);
+    if (summary) return summary.parent;
+    return ownerOf.get(ticket) ?? null;
   };
+
+  /** How deep in the epic tree, so that "what is inside me" can be answered bottom-up. */
+  const depthOfEpic = (id: string): number => {
+    let depth = 0;
+    const seen = new Set<string>([id]);
+    let cursor = summaryOf.get(id)?.parent ?? null;
+    while (cursor !== null && !seen.has(cursor)) {
+      seen.add(cursor);
+      depth += 1;
+      cursor = summaryOf.get(cursor)?.parent ?? null;
+    }
+    return depth;
+  };
+
+  /**
+   * An epic earns a box when something will be drawn INSIDE it — a member ticket, a
+   * collapsed child epic's super-node, or a child epic that earned a box of its own.
+   *
+   * Deepest first, because the third clause is a question about the answer one level
+   * down: a grandparent's box exists because its child's box does, which exists because
+   * that child holds real work. One pass in `epics` order would get this right only by
+   * accident of sorting.
+   */
+  const boxed = new Map<string, EpicSummary>();
+  const byDepth = [...epics].sort((a, b) => depthOfEpic(b.id) - depthOfEpic(a.id));
+  for (const epic of byDepth) {
+    // A collapsed epic is a super-node, not a place. That is what collapsing means.
+    if (collapsed.has(epic.id)) continue;
+    const holdsWork = epic.members.some((member) => member !== epic.id && present.has(member));
+    const holdsEpic = epics.some(
+      (child) =>
+        child.parent === epic.id && (boxed.has(child.id) || (collapsed.has(child.id) && present.has(child.id))),
+    );
+    if (holdsWork || holdsEpic) boxed.set(epic.id, epic);
+  }
+
+  const headers = new Map<string, string>();
+  for (const epic of boxed.keys()) headers.set(epic, clusterId(epic));
+
+  /** Anything belonging to a boxed epic is drawn inside that box. */
+  const parentOf = new Map<string, string>();
+  const boxFor = (ticket: string): string | undefined => {
+    const place = placeOf(ticket);
+    return place !== null && boxed.has(place) ? clusterId(place) : undefined;
+  };
+
+  const kept: CanvasNode[] = [];
+  for (const node of nodes) {
+    // The epic's own ticket IS the header now; drawing it too would be the epic twice.
+    if (node.kind === "task" && boxed.has(node.id)) continue;
+    kept.push(node);
+    const box = boxFor(standsFor(node));
+    if (box !== undefined) parentOf.set(node.id, box);
+  }
+
+  const containers: CanvasNode[] = [];
+  for (const [id, epic] of boxed) {
+    const container: CanvasNode = { kind: "container", id: clusterId(id), epic };
+    containers.push(container);
+    const box = boxFor(id);
+    if (box !== undefined) parentOf.set(container.id, box);
+  }
+
+  /*
+   * Render order: containers outermost-first, then everything else in the order
+   * `collapseGraph` produced. Sorting the containers by nesting depth is what satisfies
+   * React Flow's parent-before-child rule for boxes inside boxes; leaves keep their
+   * original order so that collapsing and expanding does not reshuffle the canvas.
+   */
+  const depthOf = (id: string): number => {
+    let depth = 0;
+    const seen = new Set<string>([id]);
+    let cursor = parentOf.get(id);
+    while (cursor !== undefined && !seen.has(cursor)) {
+      seen.add(cursor);
+      depth += 1;
+      cursor = parentOf.get(cursor);
+    }
+    return depth;
+  };
+  containers.sort((a, b) => depthOf(a.id) - depthOf(b.id));
+
+  return { nodes: [...containers, ...kept], parentOf, headers };
+}
+
+/** True for the id of an epic that is currently COLLAPSED — a super-node, not a box. */
+function isCollapsedCluster(id: string, collapsed: ReadonlySet<string>): boolean {
+  const epic = epicOfClusterId(id);
+  return epic !== null && collapsed.has(epic);
+}
+
+/** One arrow after containment, and the input edges it stands for. */
+export interface BoundaryEdge {
+  from: string;
+  to: string;
+  /**
+   * Indices into the edge list this was computed from, in order. One entry is the
+   * ordinary case; several means the arrow was lifted to a box's edge and bundled.
+   * Indices rather than the edges themselves so the caller keeps whatever it knows about
+   * them — `cross`, `count`, whether the edge was derived by bridging — without this
+   * module having to learn any of it.
+   */
+  sources: number[];
+}
+
+/**
+ * Re-point the edges at the boxes — O4c (STA-135).
+ *
+ * TWO THINGS HAPPEN HERE, AND ONLY TWO.
+ *
+ * 1. An epic that became a header has no node left, so its edges move to its container.
+ *    Not a policy, just bookkeeping: the node they named is gone.
+ *
+ * 2. AN ENDPOINT INSIDE A BOX LIFTS TO THAT BOX WHEN THE FAR SIDE IS COLLAPSED, and the
+ *    lifted arrows bundle. This is the acceptance criterion "inter-epic edges render once
+ *    at the container boundary when the far side is collapsed", and the reason is what
+ *    collapsing is FOR: nine arrows from nine members of an open epic to one collapsed
+ *    epic is nine drawn on top of each other saying one thing — "these two epics are
+ *    connected" — which the reader already asked to be told once by collapsing the far
+ *    side. When the far side is EXPANDED both ends are real work and the arrow stays
+ *    member-to-member, crossing the box borders, because at that point the reader is
+ *    asking exactly which ticket waits on which.
+ *
+ * The NEAREST box, not the outermost: a member of a box inside a box lifts one level, so
+ * the arrow still says which of the nested epics it came from.
+ *
+ * The lift is refused when the box would be an ancestor of the far end — otherwise a box
+ * would draw an arrow to something drawn inside itself, which is a picture of nothing.
+ */
+export function boundaryEdges(
+  edges: readonly { from: string; to: string }[],
+  containment: Containment,
+  collapsed: ReadonlySet<string>,
+): BoundaryEdge[] {
+  const { parentOf, headers } = containment;
+  const resolve = (id: string): string => headers.get(id) ?? id;
+
+  const isAncestorOf = (box: string, id: string): boolean => {
+    const seen = new Set<string>([id]);
+    let cursor = parentOf.get(id);
+    while (cursor !== undefined && !seen.has(cursor)) {
+      if (cursor === box) return true;
+      seen.add(cursor);
+      cursor = parentOf.get(cursor);
+    }
+    return false;
+  };
+
+  const liftTowards = (id: string, far: string): string => {
+    const box = parentOf.get(id);
+    if (box === undefined || box === far || isAncestorOf(box, far)) return id;
+    return box;
+  };
+
+  const bundled = new Map<string, BoundaryEdge>();
+  edges.forEach((edge, index) => {
+    const source = resolve(edge.from);
+    const sink = resolve(edge.to);
+    // Both decisions read the ORIGINAL pair: lifting one end must not change whether the
+    // other end sees a collapsed epic across from it.
+    const from = isCollapsedCluster(sink, collapsed) ? liftTowards(source, sink) : source;
+    const to = isCollapsedCluster(source, collapsed) ? liftTowards(sink, source) : sink;
+    // An edge whose ends land on the same box is an internal dependency of that box, and
+    // hiding exactly those is what drawing the box means.
+    if (from === to) return;
+    // NUL-joined for the same reason collapseGraph does it.
+    const key = `${from}\u0000${to}`;
+    const existing = bundled.get(key);
+    if (existing) existing.sources.push(index);
+    else bundled.set(key, { from, to, sources: [index] });
+  });
+  return [...bundled.values()];
+}
+
+/**
+ * Which boxes should be dimmed, given which nodes are.
+ *
+ * A CONTAINER IS NOT DIMMED WHILE ANYTHING INSIDE IT IS LIT. React Flow draws children as
+ * siblings of the box rather than inside it, so a dimmed box does not fade its contents —
+ * it just draws a ghost outline around perfectly bright cards, which reads as a rendering
+ * fault rather than as "you did not ask about this". The honest rule is that a box is
+ * background only when everything it holds is background.
+ *
+ * Takes the dimmed set for the LEAVES and returns the full set including boxes, so the
+ * caller has one answer to consult rather than two. Deepest first, because an outer box
+ * cannot be judged until the boxes inside it have been.
+ */
+export function dimContainers(
+  nodes: readonly CanvasNode[],
+  parentOf: ReadonlyMap<string, string>,
+  dimmed: ReadonlySet<string>,
+): Set<string> {
+  const out = new Set(dimmed);
+  const children = new Map<string, string[]>();
+  for (const node of nodes) {
+    const parent = parentOf.get(node.id);
+    if (parent === undefined) continue;
+    const bucket = children.get(parent);
+    if (bucket) bucket.push(node.id);
+    else children.set(parent, [node.id]);
+  }
+
+  const depthOf = (id: string): number => {
+    let depth = 0;
+    const seen = new Set<string>([id]);
+    let cursor = parentOf.get(id);
+    while (cursor !== undefined && !seen.has(cursor)) {
+      seen.add(cursor);
+      depth += 1;
+      cursor = parentOf.get(cursor);
+    }
+    return depth;
+  };
+
+  const containers = nodes
+    .filter((node) => node.kind === "container")
+    .map((node) => node.id)
+    .sort((a, b) => depthOf(b) - depthOf(a));
+
+  for (const container of containers) {
+    const kids = children.get(container) ?? [];
+    // A box with nothing in it has nothing to protect, so it keeps whatever the emphasis
+    // said about it — the same answer any other node gets.
+    if (kids.length === 0) continue;
+    if (kids.every((kid) => out.has(kid))) out.add(container);
+    else out.delete(container);
+  }
+  return out;
 }
