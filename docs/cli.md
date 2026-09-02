@@ -54,6 +54,28 @@ headers, tree sort — so a reorder changes what everyone in the repo sees.
 `--migrate-to`), and with exit 2 when it is the last status of a category staple
 writes into.
 
+## Kinds
+
+Every issue declares a **kind** — `epic`, `task`, `bug`, `chore` or `spike` out
+of the box, plus whatever else `staple kinds add` put in this workspace.
+
+```bash
+staple new "Login 500s on retry" --kind bug
+staple new "Q3 billing rework" --kind epic
+staple ls --kind epic                 # only epics
+staple ls --kind bug,chore            # comma-separated, like --status
+```
+
+The default is `task`, and an unconfigured kind is refused with exit 2 naming
+the valid set. **Kind is declared, never derived**: a task that grows subtasks
+stays a task until somebody re-declares it (`update_task` over MCP, or the UI).
+The one exception was a one-shot backfill in migration 005, which marked every
+issue that already had children as an `epic` at upgrade time.
+
+`ls`, `tree` and `inbox` print the kind only when it is *not* `task` — a bare
+row is a task — so an epic or a bug stands out without a column of noise on
+every other line. `staple show` always names it.
+
 ## Estimates vs actuals
 
 One stored number and a handful of read-time derivations, so you can say what

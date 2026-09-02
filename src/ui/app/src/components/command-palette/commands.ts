@@ -13,7 +13,13 @@
  */
 import { HANDOFF_RISKS, handoffRiskOf, type HandoffRisk } from "../../lib/filters";
 import { VIEWS, type Selection, type ViewName } from "../../lib/session";
-import { ISSUE_STATUSES, type IssueRow, type IssueStatus, type WorkspaceRef } from "../../lib/types";
+import {
+  ISSUE_STATUSES,
+  type IssueRow,
+  type IssueStatus,
+  type StatusId,
+  type WorkspaceRef,
+} from "../../lib/types";
 
 /** What running a command does. The React layer switches on `type`; nothing else does. */
 export type CommandAction =
@@ -38,7 +44,17 @@ export type CommandAction =
    * It SETS rather than toggles. "Show me the handoff risks" is an absolute request; a
    * command that silently un-filtered on second use would be a command you cannot repeat.
    */
-  | { type: "dimension"; dimension: string; values: readonly string[] };
+  | { type: "dimension"; dimension: string; values: readonly string[] }
+  /**
+   * Open the workspace vocabulary editor — O7b (STA-141).
+   *
+   * A `settings` action rather than a `page`, because a palette PAGE is a free-text
+   * prompt the palette itself submits (`checkout`, `assignee`), and this opens a dialog
+   * that outlives the palette. The React layer dispatches the same `lib/shell-events`
+   * verb the header's gear does, so there is one way in with two triggers rather than
+   * two ways in.
+   */
+  | { type: "settings" };
 
 export type PalettePage = "checkout" | "assignee";
 
@@ -160,6 +176,17 @@ export interface PaletteContext {
   selection: Selection | null;
   /** Status of the selected issue, when known — used to hide a no-op transition. */
   selectionStatus?: IssueStatus | null;
+  /**
+   * The workspace's CONFIGURED status ids and labels, in configured order — O7b (STA-141).
+   *
+   * Optional, defaulting to the built-in seven, and that default is what keeps every
+   * existing test in this file passing unchanged. It is passed IN rather than read from
+   * `lib/settings.ts` here for the reason stated in this file's header: these are pure
+   * functions over plain data, tested with no fetch and no module state, and a
+   * `buildCommands` that consulted a live snapshot would be a `buildCommands` whose
+   * output depends on what some other test happened to publish.
+   */
+  statuses?: readonly { id: StatusId; label: string }[];
   view: ViewName;
   ws: string;
   assignee: string;
@@ -224,17 +251,27 @@ export function buildCommands(context: PaletteContext): PaletteCommand[] {
 
   if (context.selection) {
     const ref = context.selection.ref;
-    for (const status of ISSUE_STATUSES) {
+    /*
+     * The CONFIGURED statuses, not the frozen seven — O7b (STA-141). A workspace that
+     * added `awaiting_qa` gets a "Set status → Awaiting QA" command with no change here,
+     * and one that removed `blocked` stops offering a transition the store would refuse.
+     *
+     * The LABEL is what the row shows and the ID is what the action carries: renaming a
+     * status has to change the words in the palette without changing the write. The
+     * fallback repeats the id in both, which is exactly what this loop said before.
+     */
+    const statuses = context.statuses ?? ISSUE_STATUSES.map((id) => ({ id, label: id }));
+    for (const status of statuses) {
       // The status it already has is not a command, it is a no-op that would occupy a
       // row and, if run, spend a round trip to be told nothing changed.
-      if (context.selectionStatus === status) continue;
+      if (context.selectionStatus === status.id) continue;
       commands.push({
-        id: `status:${status}`,
+        id: `status:${status.id}`,
         group: "actions",
-        label: `Set status → ${status}`,
+        label: `Set status → ${status.label}`,
         hint: ref,
-        keywords: `status ${status} move ${ref}`,
-        action: { type: "status", status },
+        keywords: `status ${status.id} ${status.label} move ${ref}`,
+        action: { type: "status", status: status.id as IssueStatus },
       });
     }
     commands.push({
@@ -300,6 +337,20 @@ export function buildCommands(context: PaletteContext): PaletteCommand[] {
       action: { type: "dimension", dimension: "handoff", values: [risk] },
     });
   }
+
+  /*
+   * The workspace vocabulary editor — O7b (STA-141). In the `view` group rather than in
+   * `filter`, because it does not narrow what you are looking at: it changes what the
+   * workspace IS. Always offered, and it needs no selection.
+   */
+  commands.push({
+    id: "settings",
+    group: "view",
+    label: "Workspace settings — statuses and kinds",
+    keywords:
+      "settings workspace statuses kinds vocabulary configure reorder rename category customise",
+    action: { type: "settings" },
+  });
 
   if (context.hub) {
     if (context.ws !== "") {

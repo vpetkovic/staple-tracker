@@ -2,23 +2,36 @@
  * The status chip.
  *
  * This is the payoff of the token sheet: `.status-chip` is a color-mix recipe
- * (hue toward white in light mode, hue at low alpha in dark), and
- * `data-status` picks the hue via app.css. One hue covers both modes, so there is no
- * light/dark table to keep in sync here.
+ * (hue toward white in light mode, hue at low alpha in dark), and the hue comes from
+ * app.css.
+ *
+ * ── O7b (STA-141): `data-status-category` IS THE ONE THAT PICKS THE HUE ───────────────
+ *
+ * The status set is workspace data now, so `data-status` alone cannot pick a colour —
+ * there is no rule in app.css for `pairing`, and there never can be. Both attributes are
+ * emitted: `data-status` because a handful of surfaces and tests still select on it and it
+ * costs nothing, and `data-status-category` because that is what the sheet's later,
+ * equal-specificity rule keys on, so the CATEGORY wins whenever the two would disagree.
+ *
+ * The chip prints the configured LABEL, not the raw id. `In Progress` rather than
+ * `in_progress` — and, more to the point, whatever the workspace renamed it to. The label
+ * is the thing a human chose; the id is the thing the wire needs.
  */
-import type { IssueStatus } from "@/lib/types";
+import { statusCategory, statusLabel } from "@/lib/settings";
+import type { StatusId } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 export function StatusBadge({
   status,
   className,
 }: {
-  status: IssueStatus;
+  status: StatusId;
   className?: string;
 }) {
   return (
     <span
       data-status={status}
+      data-status-category={statusCategory(status)}
       className={cn(
         // `rounded-md`, not `rounded-full`. A pill is a Jira-era shape; Geist
         // and Linear both use a small rounded rectangle for a status badge, and it
@@ -32,17 +45,18 @@ export function StatusBadge({
         className,
       )}
     >
-      {status}
+      {statusLabel(status)}
     </span>
   );
 }
 
 /** A bare dot, for places a full chip would be too loud (tree rows, graph legends). */
-export function StatusDot({ status, className }: { status: IssueStatus; className?: string }) {
+export function StatusDot({ status, className }: { status: StatusId; className?: string }) {
   return (
     <span
       data-status={status}
-      aria-label={status}
+      data-status-category={statusCategory(status)}
+      aria-label={statusLabel(status)}
       className={cn("status-fill inline-block size-2 shrink-0 rounded-full", className)}
     />
   );

@@ -330,6 +330,10 @@ describe("schema migration against a live database", () => {
       // testing the walk.
       legacyDb.exec("DROP TABLE IF EXISTS workspace_statuses");
       legacyDb.exec("DROP TABLE IF EXISTS workspace_kinds");
+      // STA-124 added migration 005 — a column again, so the same rule as
+      // `estimated_seconds` above: it has to come back off, or 005 fails on
+      // "duplicate column name" instead of testing the walk.
+      legacyDb.exec("ALTER TABLE issues DROP COLUMN kind");
       legacyDb.prepare("UPDATE meta SET value = '1' WHERE key = 'schema_version'").run();
       legacyDb.close();
 

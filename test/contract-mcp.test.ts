@@ -670,6 +670,9 @@ describe("tool response shapes (20/20)", () => {
           identifier: "CON-1",
           title: "Contract root task",
           status: "in_progress",
+          // STA-124: the summary carries the kind too — "is this an epic"
+          // is a picking question, and picking is what this shape is for.
+          kind: "task",
           priority: "high",
           assignee: CONTRACT_AGENT,
           parentId: null,
@@ -687,6 +690,7 @@ describe("tool response shapes (20/20)", () => {
           identifier: "CON-2",
           title: "Contract idempotent",
           status: "backlog",
+          kind: "task",
           priority: "medium",
           assignee: null,
           parentId: null,
@@ -704,6 +708,7 @@ describe("tool response shapes (20/20)", () => {
           identifier: "CON-3",
           title: "Contract blocker",
           status: "backlog",
+          kind: "task",
           priority: "medium",
           assignee: null,
           parentId: null,
@@ -714,6 +719,7 @@ describe("tool response shapes (20/20)", () => {
           identifier: "CON-4",
           title: "Contract child",
           status: "backlog",
+          kind: "task",
           priority: "medium",
           assignee: null,
           parentId: UUID,

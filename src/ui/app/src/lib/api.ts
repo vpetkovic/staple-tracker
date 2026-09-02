@@ -24,6 +24,8 @@ import type {
   IssueRow,
   Poll,
   StapleEvent,
+  VocabularyOp,
+  WorkspaceSettings,
 } from "./types";
 
 const TOKEN_KEY = "staple:token";
@@ -211,4 +213,40 @@ export const action = <T = unknown>(target: { ws?: string; ref?: string; actor?:
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ actor: "ui", ...target, ...payload }),
+  });
+
+// ---------- workspace vocabulary (O7b / STA-141) ----------
+
+/**
+ * The workspace's statuses and kinds. THE ONLY ROUTE THAT READS AND WRITES ON ONE PATH —
+ * `/api/settings` is GET here and POST below, which is why the server's method pin is a
+ * list rather than a string.
+ *
+ * It is a read on its own function rather than a branch of `getBootstrap` because the
+ * vocabulary is per WORKSPACE and bootstrap is per process: in hub mode switching the
+ * workspace has to refetch this and must not refetch that.
+ */
+export const getSettings = (params: { ws?: string } = {}) =>
+  request<WorkspaceSettings>(`/api/settings${qs(params)}`);
+
+/**
+ * Apply an ordered batch of vocabulary edits. Same-origin POST for the same reason
+ * `action` is one: the server pins the method and checks Origin.
+ *
+ * Returns the WHOLE new settings envelope, identical in shape to `getSettings`. That is
+ * the contract that lets the editor re-derive everything from one response instead of
+ * merging a write result into the list it was holding — which is where a settings screen
+ * usually stops agreeing with the store.
+ *
+ * The ops apply in order in ONE transaction, so a refusal anywhere leaves nothing behind.
+ */
+export const putSettings = (
+  target: "statuses" | "kinds",
+  ops: readonly VocabularyOp[],
+  params: { ws?: string; actor?: string } = {},
+) =>
+  request<WorkspaceSettings>("/api/settings", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ actor: "ui", ...params, target, ops }),
   });

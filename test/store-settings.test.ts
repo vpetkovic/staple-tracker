@@ -224,15 +224,29 @@ describe("editing kinds", () => {
   });
 
   /**
-   * O1a (STA-124) adds `issues.kind` after this ticket. Until then nothing can
-   * reference a kind, so the counter must say 0 rather than throw on a missing
-   * column — and it must start telling the truth the moment the column lands,
-   * which is why it probes rather than assumes.
+   * The counter O7a left probing for a column that did not exist yet. O1a
+   * (STA-124) added `issues.kind`, so this now reads real rows — which is the
+   * whole point of having written it as a probe rather than a hardcoded 0.
    */
-  it("reports zero kind usage while issues have no kind column yet", () => {
+  it("counts real kind usage now that issues carry a kind", () => {
     expect(store.kindUsageCount("task")).toBe(0);
     store.createIssue({ title: "anything" });
-    expect(store.kindUsageCount("task")).toBe(0);
+    expect(store.kindUsageCount("task")).toBe(1);
+    store.createIssue({ title: "a defect", kind: "bug" });
+    expect(store.kindUsageCount("task")).toBe(1);
+    expect(store.kindUsageCount("bug")).toBe(1);
+  });
+
+  /**
+   * The guard O7a wrote against a future it could not yet exercise: removing a
+   * kind that rows still reference must refuse rather than orphan them.
+   */
+  it("refuses to remove a kind issues still carry, and migrates on request", () => {
+    store.createIssue({ title: "a defect", kind: "bug" });
+    expect(() => store.removeKind("bug")).toThrowError(/1 issue still has kind "bug"/);
+    expect(store.removeKind("bug", { migrateTo: "chore" })).toEqual({ migrated: 1 });
+    expect(store.kindUsageCount("chore")).toBe(1);
+    expect(idsOf(store.getKinds())).not.toContain("bug");
   });
 
   it("keeps at least one kind", () => {

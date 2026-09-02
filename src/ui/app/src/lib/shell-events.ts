@@ -1,5 +1,5 @@
 /**
- * Two shell verbs, as window events — V2 (STA-87).
+ * The shell verbs, as window events — V2 (STA-87), a third added by O7b (STA-141).
  *
  * The command palette and the create dialog are mounted ABOVE the shell, deliberately:
  * a palette has to outlive view switches, and a create dialog has to be triggerable from
@@ -19,6 +19,8 @@
 
 const CREATE_ISSUE = "staple:open-create-issue";
 const COMMAND_PALETTE = "staple:open-command-palette";
+/** O7b (STA-141) — the workspace vocabulary editor. Third verb, same idiom. */
+const SETTINGS = "staple:open-settings";
 
 /** Ask whatever owns the create dialog to open it. No-op if nothing is listening. */
 export function openCreateIssue(): void {
@@ -39,4 +41,14 @@ export function onOpenCreateIssue(handler: () => void): () => void {
 export function onOpenCommandPalette(handler: () => void): () => void {
   window.addEventListener(COMMAND_PALETTE, handler);
   return () => window.removeEventListener(COMMAND_PALETTE, handler);
+}
+
+/** Ask whatever owns the settings dialog to open it. No-op if nothing is listening. */
+export function openSettings(): void {
+  window.dispatchEvent(new CustomEvent(SETTINGS));
+}
+
+export function onOpenSettings(handler: () => void): () => void {
+  window.addEventListener(SETTINGS, handler);
+  return () => window.removeEventListener(SETTINGS, handler);
 }

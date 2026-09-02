@@ -8,8 +8,9 @@ One command, no daemon: the server runs in the foreground and Ctrl-C closes it
 along with every database handle. `--hub` serves every registered workspace at
 once; the browser behaviour follows `config browser=auto|always|never`.
 
-Views: inbox (pickup order), kanban board, subtask tree, dependency graph, and
-a detail panel with documents, comments, and the agent-payload pane.
+Views: subtask tree and dependency graph, plus a detail panel with documents,
+comments, and the agent-payload pane, and a workspace settings dialog for the
+status and kind vocabularies.
 
 ## Auth
 
@@ -19,9 +20,43 @@ token screen. The token — for curl, agents, and remote tabs — lives in
 
 Every `/api/*` route is gated by the per-process token (`X-Staple-Token`,
 `Authorization: Bearer`, or `?token=`), compared with `timingSafeEqual`; writes
-are `POST`-only and Origin-checked. The app reads the token out of its own URL
-once, keeps it in `sessionStorage`, and strips it from the address bar.
-Arriving without a valid token renders an explanation, not a blank page.
+are `POST`-only and Origin-checked, and every route pins the methods it accepts.
+The app reads the token out of its own URL once, keeps it in `sessionStorage`,
+and strips it from the address bar. Arriving without a valid token renders an
+explanation, not a blank page.
+
+## Workspace settings
+
+The status set and the kind vocabulary are workspace data, not staple's
+(see [semantics.md](semantics.md)). The page edits them from a gear in the
+header, or from the command palette — "Workspace settings".
+
+Two lists. Each row has an editable label, a drag handle, and — for statuses —
+a category select; removing a row that issues still carry requires a target to
+migrate them onto. Reorder by dragging, or with the per-row move buttons, which
+are the keyboard path and are always visible rather than revealed on hover.
+Every edit applies immediately; there is no save button, and a refusal is the
+store's own sentence.
+
+Behaviour follows the CATEGORY, never the id. A workspace that adds `pairing` in
+`active` gets a claimable status wearing the in-progress glyph and the
+in-progress colour, with no new theme token — `styles/app.css` maps the eight
+categories onto the existing `--status-task-*` hues.
+
+**Order.** The dialog's list is the CONFIGURED order. Lists and group headers use
+the LIST RANK, which the server computes: categories in a fixed sequence (active,
+review, gated, blocked, ready, unstarted, then done and cancelled) with the
+configured order breaking ties inside each one. So dragging reorders statuses
+within a category, and moving one between groups means changing its category.
+Rows sort by the same rank, so a header can never sit above rows ordered
+differently.
+
+`GET /api/settings` returns the vocabulary, the derived orders, the category set,
+and a per-id count of what still carries it. `POST /api/settings` takes
+`{ target, ops }` — the same ordered, all-or-nothing op batch as the
+`update_statuses` / `update_kinds` MCP tools — and answers with the identical
+envelope, so the page re-derives from one response rather than merging. It is
+the only route that both reads and writes.
 
 ## Stack
 
@@ -42,8 +77,11 @@ light and dark scales, the radius and type ladders, motion, and the
 layer on top — the status-to-hue mapping and the SVG chrome for the dependency
 graph, which has no Tailwind equivalent.
 
-The load-bearing family is `--status-task-*`: one hue per status, so a status
-badge is one variable and light/dark both fall out of the same color-mix.
+The load-bearing family is `--status-task-*`: one hue per built-in status, so a
+status badge is one variable and light/dark both fall out of the same color-mix.
+Since the status set became configurable, the mapping that matters is
+`[data-status-category]` — eight categories onto those same hues, declared after
+the per-id rules so the category wins. Adding a status never needs a new token.
 
 Working on the app itself is a contributor path — dev server, rebuild loop, and
 the rest are in [CONTRIBUTING.md](../CONTRIBUTING.md).

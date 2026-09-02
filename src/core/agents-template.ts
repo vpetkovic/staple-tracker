@@ -144,6 +144,21 @@ staple statuses rm old_status --migrate-to backlog   # --migrate-to is required
                                                      # while issues still use it
 \`\`\`
 
+Every issue **declares a kind** — \`epic\`, \`bug\`, \`spike\`, whatever this
+workspace configured. Declare it when you file the ticket, because nothing infers
+it later:
+
+\`\`\`bash
+staple new "Login 500s on retry" --kind bug
+staple ls --kind epic          # just the epics
+\`\`\`
+
+The default is \`task\`. **Kind is declared, never derived**: a task that grows
+subtasks stays a task until somebody says otherwise, so if you break an epic out
+into children, set the parent's kind yourself. \`staple ls\` prints the kind only
+when it is not \`task\` — a bare row IS a task — while \`staple show\` always names
+it.
+
 **Edit the vocabulary only when a human asks.** It is workspace-wide
 configuration, not a per-task decision, and a reorder moves every board in the
 repo. The MCP tools are \`list_statuses\`, \`list_kinds\`, \`update_statuses\` and

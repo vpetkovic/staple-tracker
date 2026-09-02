@@ -116,6 +116,13 @@ describe("the guide teaches the whole protocol", () => {
     // …and that editing it is a human's decision, like a steal is.
     expect(guide).toMatch(/only when a human asks/i);
     // The MCP half mirrors the CLI half, named so an agent with no shell can act.
+    // STA-124: the guide has to teach DECLARING a kind, not just reading the
+    // vocabulary — an agent that never passes --kind files everything as `task`
+    // and the epic/bug distinction never gets made in the first place.
+    expect(guide).toContain("staple new \"Login 500s on retry\" --kind bug");
+    expect(guide).toContain("staple ls --kind epic");
+    expect(guide).toMatch(/declared, never derived/i);
+    expect(guide).toMatch(/default is `task`/i);
     for (const tool of ["list_statuses", "list_kinds", "update_statuses", "update_kinds"]) {
       expect(guide, tool).toContain(tool);
     }

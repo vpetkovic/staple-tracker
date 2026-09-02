@@ -173,6 +173,25 @@ export const BUILTIN_KIND_SEED: readonly { id: BuiltinIssueKind; label: string }
   { id: "spike", label: "Spike" },
 ];
 
+/**
+ * Sort/group rank for the SEEDED kinds — the exact twin of `OPEN_STATUS_ORDER`
+ * below, and used the same way.
+ *
+ * The per-workspace answer is `WorkspaceStore.kindOrder()`, whose INDEX is the
+ * rank; this map is what a surface with no store may use instead. That surface
+ * is the browser: `src/ui/app` cannot import this file (src/core is Node-only),
+ * so it keeps a hand mirror, and grouping a board by kind needs a rank from
+ * somewhere. A kind the operator added is absent from this map — callers sort
+ * it last rather than first, on the same principle as `statusRankSql`: a value
+ * nobody configured belongs at the bottom, not the top of everyone's list.
+ */
+export const KIND_RANK: Readonly<Record<BuiltinIssueKind, number>> = Object.freeze(
+  Object.fromEntries(ISSUE_KINDS.map((kind, index) => [kind, index])) as Record<
+    BuiltinIssueKind,
+    number
+  >,
+);
+
 /** One configured status row, in configured order. */
 export interface WorkspaceStatus {
   id: string;
@@ -257,6 +276,20 @@ export interface Issue {
   description: string | null;
   status: IssueStatus;
   statusVersion: number;
+  /**
+   * What KIND of work this is — `epic`, `bug`, `spike`, whatever this workspace
+   * configured (STA-124). Never null: migration 005 gave the column a DEFAULT,
+   * so "no kind recorded" is not a state that exists. Every issue has always had
+   * a kind; before that migration the tracker just had nowhere to write it down.
+   *
+   * DECLARED, not derived — and that is the whole design. A `task` that grows
+   * children stays a `task` until a human says otherwise; the UI may SUGGEST
+   * promoting it to an epic, but nothing recomputes this field behind their
+   * back. The one and only automatic write was migration 005's one-shot
+   * backfill of rows that already had children, which exists to give a
+   * pre-existing backlog a sensible starting shape and never runs again.
+   */
+  kind: IssueKind;
   priority: IssuePriority;
   parentId: string | null;
   depth: number;
