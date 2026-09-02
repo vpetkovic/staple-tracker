@@ -16,6 +16,28 @@ violates a guard is refused with a `validation` error naming what is missing.
 Timestamps (`startedAt`, `completedAt`, the blocked-cycle stamp) are written
 automatically as a side effect of the transition, never by a caller.
 
+## Kinds — declared, never derived
+
+Every issue carries a `kind` (`issues.kind`, NOT NULL, default `task`). Like
+statuses, the vocabulary is data: it lives in `workspace_kinds` and is edited
+with `staple kinds` or MCP `update_kinds`, so validation asks the workspace what
+it has rather than consulting a compile-time list. That is why adding
+`milestone` needs no code change and why the MCP schemas type `kind` as a string
+rather than an enum — an enum would silently strip a configured kind on output.
+
+Unlike a status, a kind carries **no category and therefore no behaviour**.
+Nothing branches on it: an epic is not checked out differently, does not derive
+its status differently, and is not ordered differently. It is a label for humans
+and for filtering, and keeping it inert is deliberate — the moment a kind
+implied a rule, adding one would mean adding a rule nobody had tested.
+
+The name is the whole design: **kind is declared, not derived**. A `task` that
+gains children stays a `task`. Surfaces may *suggest* promoting it to an `epic`,
+but nothing recomputes the field, because a value that rewrites itself is a
+value nobody can rely on having set. Migration 005 marked every issue that
+already had children as an `epic` exactly once, at upgrade time, to give
+existing backlogs a sensible starting shape; it has not run since.
+
 ## Categories — why a configurable status set is still safe
 
 Every status carries a **category** from a fixed, non-configurable set:

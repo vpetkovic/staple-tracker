@@ -9,10 +9,12 @@ import {
 import {
   CHECKOUT_EXPECTED_CATEGORY_ORDER,
   type ClaimActivity,
+  DEFAULT_ISSUE_KIND,
   INBOX_PICKUP_CATEGORY_ORDER,
   type Issue,
   type IssueComment,
   type IssueDocumentMeta,
+  type IssueKind,
   type IssuePriority,
   type IssueStatus,
   type IssueTiming,
@@ -42,6 +44,8 @@ export interface CreateIssueInput {
   title: string;
   description?: string | null;
   status?: IssueStatus;
+  /** Declared kind; omit for the workspace's default (see `defaultKind`). */
+  kind?: IssueKind;
   priority?: IssuePriority;
   parent?: string | null;
   assignee?: string | null;
@@ -64,6 +68,14 @@ export interface UpdateIssueInput {
   title?: string;
   description?: string | null;
   status?: IssueStatus;
+  /**
+   * Re-declare the kind. Two-state, not three: absent leaves it alone and a
+   * string sets it. There is no null, because there is no "no kind" — the
+   * column is NOT NULL with a DEFAULT, so clearing it is not a state the
+   * tracker can represent (unlike `estimatedSeconds`, where the absence of an
+   * estimate is a real and distinct fact).
+   */
+  kind?: IssueKind;
   priority?: IssuePriority;
   assignee?: string | null;
   labels?: string[];
@@ -99,6 +111,7 @@ export interface AddCommentResult {
 
 export interface IssueFilters {
   status?: IssueStatus[];
+  kind?: IssueKind[];
   assignee?: string;
   parent?: string | null;
   q?: string;
@@ -113,6 +126,7 @@ interface IssueRow {
   description: string | null;
   status: string;
   status_version: number;
+  kind: string;
   priority: string;
   parent_id: string | null;
   depth: number;
@@ -145,6 +159,7 @@ function rowToIssue(row: IssueRow): Issue {
     description: row.description,
     status: row.status as IssueStatus,
     statusVersion: row.status_version,
+    kind: row.kind as IssueKind,
     priority: row.priority as IssuePriority,
     parentId: row.parent_id,
     depth: row.depth,
@@ -505,6 +520,45 @@ export class WorkspaceStore {
   /** The workspace's kind vocabulary, in configured order. O1a reads this. */
   getKinds(): WorkspaceKind[] {
     return this.settings().kinds.map((kind) => ({ ...kind }));
+  }
+
+  /**
+   * The configured kind ids in configured order — `KIND_RANK` for THIS
+   * workspace, where the rank of a kind is simply its index (STA-124).
+   *
+   * The seed twin in `core/types.ts` is the static `KIND_RANK` map, which is
+   * what a surface with no store (the browser) uses instead.
+   */
+  kindOrder(): string[] {
+    return this.settings().kinds.map((kind) => kind.id);
+  }
+
+  /**
+   * The kind a create with no `kind` writes.
+   *
+   * `DEFAULT_ISSUE_KIND` when the workspace still has it, and otherwise the
+   * FIRST configured kind — because `removeKind` is allowed to delete `task`,
+   * and a default pointing at a kind that no longer exists would write rows
+   * that fail their own validation.
+   *
+   * Deliberately NOT "the first configured kind" unconditionally. That would
+   * mean reordering the vocabulary silently changed what every new issue is:
+   * move `epic` to the front to make it sort first on a board, and suddenly
+   * every ticket anyone files is an epic. Ordering is a display decision and it
+   * must not double as a semantic one.
+   */
+  defaultKind(): string {
+    const kinds = this.settings().kinds;
+    if (kinds.some((kind) => kind.id === DEFAULT_ISSUE_KIND)) return DEFAULT_ISSUE_KIND;
+    const first = kinds[0]?.id;
+    if (first === undefined) {
+      throw new StapleError(
+        "validation",
+        `This workspace has no kinds configured, and an issue must declare one. ` +
+          `Add one with: staple kinds add ${DEFAULT_ISSUE_KIND}`,
+      );
+    }
+    return first;
   }
 
   /** The configured status ids in list rank; the tree/board group order. */
@@ -1121,6 +1175,13 @@ export class WorkspaceStore {
     if (!title) throw new StapleError("validation", "Title is required");
     if (input.priority) assertPriority(input.priority);
     if (input.status) this.assertConfiguredStatus(input.status);
+    // Validated against THIS workspace's vocabulary, not a compile-time union —
+    // which is what makes `staple kinds add milestone` work with no code change.
+    // Before the transaction, like status and priority above, so a bad kind
+    // cannot be discovered halfway through a create that has already consumed
+    // an issue number.
+    if (input.kind) this.assertConfiguredKind(input.kind);
+    const kind = input.kind ?? this.defaultKind();
     // Validated BEFORE the transaction, like priority and status above: a bad
     // estimate must not be discovered halfway through a create that has already
     // consumed an issue number.
@@ -1184,12 +1245,12 @@ export class WorkspaceStore {
       const row = this.db
         .prepare(
           `INSERT INTO issues (
-             id, identifier, title, normalized_title, description, status, priority,
+             id, identifier, title, normalized_title, description, status, kind, priority,
              parent_id, depth, assignee, created_by, labels, acceptance_criteria,
              block_parent_until_done, unblock_owner, unblock_action, origin_kind, origin_id,
              idempotency_key, blocked_transition_at, estimated_seconds, started_at,
              created_at, updated_at
-           ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+           ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
            RETURNING *`,
         )
         .get(
@@ -1199,6 +1260,7 @@ export class WorkspaceStore {
           normalized,
           input.description ?? null,
           status,
+          kind,
           input.priority ?? "medium",
           parent?.id ?? null,
           parent ? parent.depth + 1 : 0,
@@ -1805,6 +1867,7 @@ export class WorkspaceStore {
 
   updateIssue(ref: string, patch: UpdateIssueInput, actor?: string | null): Issue {
     if (patch.status) this.assertConfiguredStatus(patch.status);
+    if (patch.kind) this.assertConfiguredKind(patch.kind);
     if (patch.priority) assertPriority(patch.priority);
     return tx(this.db, () => {
       const row = this.requireRow(ref);
@@ -1828,6 +1891,10 @@ export class WorkspaceStore {
         next.normalized_title = normalizeTitle(title);
       }
       if (patch.description !== undefined) next.description = patch.description;
+      // Two-state: absent leaves it alone, a string sets it. Re-declaring the
+      // kind is a plain field write with no guard of its own — unlike status, a
+      // kind carries no category and therefore no behaviour to violate.
+      if (patch.kind !== undefined) next.kind = patch.kind;
       if (patch.priority !== undefined) next.priority = patch.priority;
       if (patch.assignee !== undefined) next.assignee = patch.assignee;
       if (patch.labels !== undefined) next.labels = JSON.stringify(patch.labels);
@@ -3092,6 +3159,10 @@ export class WorkspaceStore {
       params.push(...filters.status);
     } else if (!filters.includeResolved) {
       where.push(`status NOT IN ${this.resolvedSql()}`);
+    }
+    if (filters.kind && filters.kind.length > 0) {
+      where.push(`kind IN (${filters.kind.map(() => "?").join(",")})`);
+      params.push(...filters.kind);
     }
     if (filters.assignee) {
       where.push("assignee = ?");

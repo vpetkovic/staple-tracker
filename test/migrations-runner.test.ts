@@ -121,7 +121,7 @@ describe("version detection", () => {
     // workspace gained 003-issue-estimate (STA-81) while the hub did not. Pinned
     // as two separate numbers precisely so a migration added to one target
     // cannot be silently assumed to have been added to both.
-    expect(latestVersion(WORKSPACE_TARGET)).toBe(4);
+    expect(latestVersion(WORKSPACE_TARGET)).toBe(5);
     expect(latestVersion(HUB_TARGET)).toBe(2);
   });
 });

@@ -454,6 +454,57 @@ try {
     "list_kinds returns the seeded kind vocabulary",
   );
 
+  // ── issue kinds on the wire (STA-124) ─────────────────────────────────────
+  const aBug = JSON.parse(
+    toolText(await rpc("tools/call", {
+      name: "create_task",
+      arguments: { title: "Smoke defect", kind: "bug", actor: "smoke-agent" },
+    })),
+  );
+  assert(aBug.kind === "bug", "create_task accepts a kind and returns it");
+  const plain = JSON.parse(
+    toolText(await rpc("tools/call", {
+      name: "create_task",
+      arguments: { title: "Smoke plain work", actor: "smoke-agent" },
+    })),
+  );
+  assert(plain.kind === "task", "create_task defaults the kind to task");
+
+  const promoted = JSON.parse(
+    toolText(await rpc("tools/call", {
+      name: "update_task",
+      arguments: { ref: plain.identifier, kind: "epic", actor: "smoke-agent" },
+    })),
+  );
+  assert(promoted.kind === "epic", "update_task re-declares the kind");
+
+  const bugs = JSON.parse(
+    toolText(await rpc("tools/call", { name: "list_tasks", arguments: { kind: ["bug"] } })),
+  ).items;
+  assert(
+    bugs.length === 1 && bugs[0].identifier === aBug.identifier && bugs[0].kind === "bug",
+    "list_tasks filters by kind and returns it on the summary row",
+  );
+
+  const fetchedKind = JSON.parse(
+    toolText(await rpc("tools/call", { name: "get_task", arguments: { ref: aBug.identifier } })),
+  ).issue.kind;
+  assert(fetchedKind === "bug", "get_task returns the kind");
+
+  // A kind the code has never heard of, added at runtime — the whole point of
+  // the schema being z.string() rather than z.enum.
+  await rpc("tools/call", {
+    name: "update_kinds",
+    arguments: { ops: [{ op: "add", id: "milestone", label: "Milestone" }] },
+  });
+  const ga = JSON.parse(
+    toolText(await rpc("tools/call", {
+      name: "create_task",
+      arguments: { title: "Smoke GA", kind: "milestone", actor: "smoke-agent" },
+    })),
+  );
+  assert(ga.kind === "milestone", "a configured custom kind survives create_task's output schema");
+
   const added = JSON.parse(
     toolText(await rpc("tools/call", {
       name: "update_statuses",

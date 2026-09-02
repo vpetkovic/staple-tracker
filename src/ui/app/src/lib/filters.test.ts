@@ -82,6 +82,7 @@ function issue(over: Partial<Issue> = {}): Issue {
     description: null,
     status: "todo",
     statusVersion: 1,
+    kind: "task",
     priority: "medium",
     parentId: null,
     depth: 0,
