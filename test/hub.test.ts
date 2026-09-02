@@ -117,6 +117,13 @@ describe("holistic views", () => {
 
     const graph = hub.graph();
     expect(graph.nodes).toHaveLength(3);
+    /**
+     * STA-124: the HUB branch of the graph carries `kind` too. Deliberately
+     * unlike `parent`, which only the workspace route derives — a kind is a
+     * scalar already on the row, so there is no reason for the two producers to
+     * disagree and no degraded state for the client to detect.
+     */
+    for (const node of graph.nodes) expect(node.kind).toBe("task");
     const cross = graph.edges.filter((e) => e.cross);
     const local = graph.edges.filter((e) => !e.cross);
     expect(cross).toHaveLength(1);

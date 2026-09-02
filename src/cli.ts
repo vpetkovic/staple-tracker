@@ -33,8 +33,10 @@ import { Hub, notifyHubResolvedSafe } from "./core/hub.js";
 import { runInstallCommand } from "./install/index.js";
 import { dataVersion } from "./core/db.js";
 import {
+  DEFAULT_ISSUE_KIND,
   ISSUE_STATUSES,
-  RESOLVED_STATUSES,
+  STATUS_CATEGORIES,
+  type StatusCategory,
   StapleError,
   errorEnvelope,
   formatAgo,
@@ -55,6 +57,33 @@ const STATUS_GLYPHS: Record<string, string> = {
   cancelled: "✕",
 };
 
+/**
+ * A glyph for a status this file has never heard of (STA-140), chosen by the
+ * status's CATEGORY — so `awaiting_approval` renders as the gate it is instead
+ * of as `?`. The built-in map above still wins for the seeded seven, which keeps
+ * every existing line byte-identical.
+ */
+const CATEGORY_GLYPHS: Record<StatusCategory, string> = {
+  unstarted: "◌",
+  ready: "○",
+  active: "◐",
+  review: "◑",
+  gated: "⏸",
+  blocked: "⊘",
+  done: "●",
+  cancelled: "✕",
+};
+
+/**
+ * Status id -> category for the workspace this process opened.
+ *
+ * Module-level and populated by `getStore` because `line()` is shared by nine
+ * commands and threading a store through all of them to render one character
+ * would be a worse trade than one process-scoped map. A CLI process opens
+ * exactly one workspace, so there is nothing here to get stale.
+ */
+const statusCategories = new Map<string, StatusCategory>();
+
 const PRIORITY_MARKS: Record<string, string> = {
   critical: "!!",
   high: "!",
@@ -62,17 +91,48 @@ const PRIORITY_MARKS: Record<string, string> = {
   low: "·",
 };
 
+function statusGlyph(status: string): string {
+  const category = statusCategories.get(status);
+  return STATUS_GLYPHS[status] ?? (category ? CATEGORY_GLYPHS[category] : undefined) ?? "?";
+}
+
 function glyph(issue: Pick<Issue, "status" | "priority">): string {
-  return `${STATUS_GLYPHS[issue.status] ?? "?"}${PRIORITY_MARKS[issue.priority] ?? " "}`;
+  return `${statusGlyph(issue.status)}${PRIORITY_MARKS[issue.priority] ?? " "}`;
+}
+
+/**
+ * The kind, as a suffix, and ONLY when it is not the default (STA-124).
+ *
+ * Two decisions in one line. It is a SUFFIX rather than a column because
+ * `line()` is shared by nine commands and its three columns are load-bearing —
+ * `characterize-cli-human-output` pins them by byte offset — so a new column
+ * would reshuffle every row in the tracker to say `task` on most of them.
+ *
+ * And it is SUPPRESSED for the default because `task` is the unremarkable case.
+ * A row that says `· epic` or `· bug` is carrying information; a column that
+ * reads `task` nine times out of ten is carrying noise, and it would push the
+ * title — the thing you are actually scanning for — further right on every
+ * line. The criterion this serves is "an epic is distinguishable in the
+ * terminal", and distinguishability is a property of the exception, not of the
+ * rule. `staple show` prints the kind unconditionally; that is the surface for
+ * completeness.
+ */
+function kindSuffix(kind: string): string {
+  return kind === DEFAULT_ISSUE_KIND ? "" : ` · ${kind}`;
 }
 
 function line(issue: Issue, extra = ""): string {
   const assignee = issue.assignee ? ` @${issue.assignee}` : "";
-  return `${glyph(issue)} ${issue.identifier.padEnd(9)} ${issue.status.padEnd(11)} ${issue.title}${assignee}${extra}`;
+  return `${glyph(issue)} ${issue.identifier.padEnd(9)} ${issue.status.padEnd(11)} ${issue.title}${assignee}${kindSuffix(issue.kind)}${extra}`;
 }
 
 function getStore(values: { db?: string; ws?: string }) {
-  return resolveWorkspace({ db: values.db, ws: values.ws });
+  const opened = resolveWorkspace({ db: values.db, ws: values.ws });
+  // One place, so every command that renders a row can draw a configured status
+  // (STA-140) without being handed the store just to look up a glyph.
+  statusCategories.clear();
+  for (const status of opened.store.getStatuses()) statusCategories.set(status.id, status.category);
+  return opened;
 }
 
 /** Distinct exit codes so CI can branch on the failure class without parsing stderr. */
@@ -634,8 +694,10 @@ Workspace
 Tasks
   new <title> [-d text] [-p prio] [--parent REF] [--assignee A]
               [--blocked-by R1,R2] [--status S] [--criteria "a;b"]
+              [--kind K]                epic|task|bug|chore|spike (default task),
+              or whatever "staple kinds ls" shows for this workspace
               [--estimate <dur>]        record the plan-time estimate AT PLAN TIME
-  ls [--status s1,s2] [--assignee A] [-q text] [--all]
+  ls [--status s1,s2] [--kind k1,k2] [--assignee A] [-q text] [--all]
   show <ref>                            full context (ancestry, relations, comments, docs)
   tree [ref]                            subtask tree
   board                                 terminal kanban
@@ -693,7 +755,20 @@ Global flags: --db <path>, --ws <slug|prefix>  (default: walk up for .staple/sta
                       then a legacy .tasks/tasks.db)
               --json  machine-readable output (store objects, full ISO-8601 timestamps;
                       events emits NDJSON; errors are single-line JSON on stderr)
-Statuses: ${ISSUE_STATUSES.join(" ")}
+Workspace vocabulary
+  statuses ls                           configured statuses, in configured order
+  statuses add <id> --category C [--label L] [--after <id>]
+              C is one of ${STATUS_CATEGORIES.join("|")}
+              — every behaviour (checkout, derived epic status, resolved, pickup
+              order) keys off the CATEGORY, never off the id
+  statuses rename <id> --label "New Label"
+  statuses recategorize <id> --category C
+  statuses reorder a,b,c                 the new order, ALL of them; drives sort
+  statuses rm <id> [--migrate-to <id>]   --migrate-to required while issues use it
+  kinds ls|add|rename|reorder|rm         same verbs, no categories
+
+Statuses (built-in seed; run "staple statuses ls" for this workspace's actual set):
+          ${ISSUE_STATUSES.join(" ")}
 
 Exit codes: 0 ok · 1 unknown · 2 validation · 3 not_found · 4 conflict
             5 duplicate · 6 cycle · 7 revision_conflict · 8 timeout (wait)`;
@@ -749,6 +824,7 @@ function main() {
           assignee: { type: "string" },
           "blocked-by": { type: "string" },
           status: { type: "string" },
+          kind: { type: "string" },
           criteria: { type: "string" },
           estimate: { type: "string" },
           "no-estimate": { type: "boolean" },
@@ -765,6 +841,7 @@ function main() {
         parent: values.parent,
         assignee: values.assignee,
         status: values.status as never,
+        kind: values.kind,
         blockedBy: values["blocked-by"]?.split(",").map((s) => s.trim()).filter(Boolean),
         acceptanceCriteria: values.criteria?.split(";").map((s) => s.trim()).filter(Boolean),
         allowDuplicate: values["allow-duplicate"],
@@ -784,6 +861,7 @@ function main() {
         options: {
           ...common,
           status: { type: "string" },
+          kind: { type: "string" },
           assignee: { type: "string" },
           q: { type: "string", short: "q" },
           all: { type: "boolean" },
@@ -792,6 +870,9 @@ function main() {
       const { store } = getStore(values);
       const issues = store.listIssues({
         status: values.status?.split(",").map((s) => s.trim()) as never,
+        // Comma-separated, for symmetry with --status. `--kind epic` is the
+        // acceptance case; `--kind bug,chore` falls out of the same split.
+        kind: values.kind?.split(",").map((s) => s.trim()).filter(Boolean),
         assignee: values.assignee,
         q: values.q,
         includeResolved: values.all,
@@ -837,7 +918,11 @@ function main() {
       const claim = store.claimActivity(i.id);
       const timing = store.timing(i.id);
       console.log(`${i.identifier} · ${i.title}`);
-      console.log(`status ${i.status} (v${i.statusVersion}) · priority ${i.priority}${i.assignee ? ` · @${i.assignee}` : ""}${i.checkoutAgent ? ` · held by ${i.checkoutAgent}` : ""}`);
+      // `kind` is unconditional here — unlike `line()`, which suppresses the
+      // default. This is the detail surface: "it is a task" is a fact somebody
+      // asked for by name, and leaving it out would make its absence ambiguous
+      // between "task" and "this build does not know about kinds".
+      console.log(`status ${i.status} (v${i.statusVersion}) · kind ${i.kind} · priority ${i.priority}${i.assignee ? ` · @${i.assignee}` : ""}${i.checkoutAgent ? ` · held by ${i.checkoutAgent}` : ""}`);
       if (claim) {
         console.log(
           `claim  held ${formatAgo(claim.heldSeconds)} · silent ${formatAgo(claim.idleSeconds)} (last activity ${claim.lastActivityAt.slice(0, 19)}Z)`,
@@ -1085,12 +1170,14 @@ function main() {
       const probe = () => {
         const issue = store.getIssue(ref);
         const unresolvedBlockers = store.unresolvedBlockersOf(issue.id).map((b) => b.identifier);
-        const finished = (RESOLVED_STATUSES as readonly string[]).includes(issue.status);
+        const finished = store.isResolvedStatus(issue.status);
+        const category = store.categoryOf(issue.status);
+        const parked = category === "blocked" || category === "gated";
         return {
           issue,
           unresolvedBlockers,
           reason: finished ? "finished" : "ready",
-          ready: finished || (issue.status !== "blocked" && unresolvedBlockers.length === 0),
+          ready: finished || (!parked && unresolvedBlockers.length === 0),
         };
       };
       // data_version only moves when another connection commits — an idle tick
@@ -1197,19 +1284,24 @@ function main() {
       const { values } = parseArgs({ args: rest, options: common });
       const { store } = getStore(values);
       const issues = store.listIssues({ includeResolved: true });
+      // Columns are the CONFIGURED statuses in configured order (STA-140). For a
+      // default workspace that is the ISSUE_STATUSES order this used to hardcode.
+      const columns = store.getStatuses();
       if (values.json) {
         // Full columns: the 15-row cap below is a terminal concern, not a data one.
         outJson(
           Object.fromEntries(
-            ISSUE_STATUSES.map((status) => [status, issues.filter((i) => i.status === status)]),
+            columns.map(({ id }) => [id, issues.filter((i) => i.status === id)]),
           ),
         );
         break;
       }
-      for (const status of ISSUE_STATUSES) {
+      for (const { id: status, category } of columns) {
         const column = issues.filter((i) => i.status === status);
-        if (column.length === 0 && (status === "done" || status === "cancelled")) continue;
-        console.log(`\n${STATUS_GLYPHS[status]} ${status.toUpperCase()} (${column.length})`);
+        // An empty RESOLVED column is noise on a terminal board; every other
+        // empty column is information ("nothing is in review").
+        if (column.length === 0 && (category === "done" || category === "cancelled")) continue;
+        console.log(`\n${statusGlyph(status)} ${status.toUpperCase()} (${column.length})`);
         for (const issue of column.slice(0, 15)) {
           console.log(`   ${issue.identifier.padEnd(9)} ${issue.title}${issue.assignee ? ` @${issue.assignee}` : ""}`);
         }
@@ -1257,7 +1349,7 @@ function main() {
         const blockingChildren = store.blockingChildrenOf(inbox.blocked.map((i) => i.id));
         for (const issue of inbox.blocked) {
           const borrowed =
-            issue.status === "blocked" && !issue.unblockOwner && !issue.unblockAction
+            store.categoryOf(issue.status) === "blocked" && !issue.unblockOwner && !issue.unblockAction
               ? (blockingChildren.get(issue.id) ?? [])
                   .map((c) => `waiting on ${c.unblockOwner ?? "?"}${c.unblockAction ? `: ${c.unblockAction}` : ""}`)
                   .join(" · ")
@@ -1268,6 +1360,124 @@ function main() {
               : borrowed || `${issue.unblockOwner ?? "?"} must ${issue.unblockAction ?? "act"}`;
           console.log(`  ${line(issue, `  [${why}]`)}`);
         }
+      }
+      break;
+    }
+
+    /**
+     * ------------------------------------------------------- vocabulary (O7a)
+     *
+     * `staple statuses …` and `staple kinds …` are the CLI half of STA-140.
+     * Both take the same verbs and both print the FULL list after a write, so a
+     * reorder or a rename shows you the state you just created rather than an
+     * "ok" you have to verify with a second command.
+     */
+    case "statuses":
+    case "kinds": {
+      const isStatus = command === "statuses";
+      const { values, positionals } = parseArgs({
+        args: rest,
+        allowPositionals: true,
+        options: {
+          ...common,
+          label: { type: "string" },
+          category: { type: "string" },
+          after: { type: "string" },
+          "migrate-to": { type: "string" },
+        },
+      });
+      const { store } = getStore(values);
+      const sub = positionals[0] ?? "ls";
+      const target = positionals[1];
+      const show = () => {
+        if (isStatus) {
+          const rows = store.getStatuses();
+          if (values.json) return outJson(rows);
+          for (const row of rows) {
+            console.log(
+              `${statusGlyph(row.id)} ${row.id.padEnd(20)} ${row.category.padEnd(10)} ${row.label}${row.isBuiltin ? "" : "  (custom)"}`,
+            );
+          }
+        } else {
+          const rows = store.getKinds();
+          if (values.json) return outJson(rows);
+          for (const row of rows) {
+            console.log(`  ${row.id.padEnd(20)} ${row.label}${row.isBuiltin ? "" : "  (custom)"}`);
+          }
+        }
+      };
+      const need = (what: string): string => {
+        if (!target) throw new StapleError("validation", `staple ${command} ${sub} needs ${what}`);
+        return target;
+      };
+      const actor = agentName();
+      switch (sub) {
+        case "ls":
+          show();
+          break;
+        case "add":
+          if (isStatus) {
+            if (!values.category) {
+              throw new StapleError(
+                "validation",
+                "--category is required: every status inherits its behaviour from one. " +
+                  `Valid: ${STATUS_CATEGORIES.join(", ")}`,
+              );
+            }
+            store.addStatus(
+              { id: need("an id"), label: values.label, category: values.category, after: values.after },
+              actor,
+            );
+          } else {
+            store.addKind({ id: need("an id"), label: values.label, after: values.after }, actor);
+          }
+          show();
+          break;
+        case "rename": {
+          const label = values.label ?? positionals[2];
+          if (!label) {
+            throw new StapleError("validation", `staple ${command} rename <id> --label "New Label"`);
+          }
+          if (isStatus) store.renameStatus(need("an id"), label, actor);
+          else store.renameKind(need("an id"), label, actor);
+          show();
+          break;
+        }
+        case "recategorize": {
+          if (!isStatus) throw new StapleError("validation", "Kinds have no category — only statuses do.");
+          const category = values.category ?? positionals[2];
+          if (!category) {
+            throw new StapleError("validation", `staple statuses recategorize <id> --category <${STATUS_CATEGORIES.join("|")}>`);
+          }
+          store.recategorizeStatus(need("an id"), category, actor);
+          show();
+          break;
+        }
+        case "reorder": {
+          // Comma-separated, like `--blocked-by` and `--criteria`: one shell word
+          // per LIST, so the order survives a copy-paste out of `ls`.
+          const ids = need("a comma-separated order").split(",").map((s) => s.trim()).filter(Boolean);
+          if (isStatus) store.reorderStatuses(ids, actor);
+          else store.reorderKinds(ids, actor);
+          show();
+          break;
+        }
+        case "rm": {
+          const id = need("an id");
+          const result = isStatus
+            ? store.removeStatus(id, { migrateTo: values["migrate-to"] }, actor)
+            : store.removeKind(id, { migrateTo: values["migrate-to"] }, actor);
+          if (!values.json && result.migrated > 0) {
+            console.log(`moved ${result.migrated} issue(s) to ${values["migrate-to"]}`);
+          }
+          show();
+          break;
+        }
+        default:
+          throw new StapleError(
+            "validation",
+            `Unknown subcommand "${sub}". Use: ls, add, rename, ${isStatus ? "recategorize, " : ""}reorder, rm`,
+          );
       }
       break;
     }

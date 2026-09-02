@@ -35,6 +35,7 @@ function row(identifier: string, title: string, overrides: Partial<Issue> = {}):
       description: null,
       status: "todo",
       statusVersion: 0,
+      kind: "task",
       priority: "medium",
       parentId: null,
       depth: 0,

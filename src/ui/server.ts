@@ -664,6 +664,9 @@ export function startUiServer(options: UiOptions): UiHandle {
               workspace: handle.slug,
               title: issue.title,
               status: issue.status,
+              // Both graph producers send this one (STA-124) — see the note in
+              // Hub.graph(). Unlike `parent`, there is no degraded branch.
+              kind: issue.kind,
               parent: issue.parentId ? (identifierOf.get(issue.parentId) ?? null) : null,
             })),
             edges: handle.store.edges().map((edge) => ({ from: edge.blocker, to: edge.blocked, cross: false })),

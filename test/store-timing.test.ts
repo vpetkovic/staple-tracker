@@ -420,9 +420,12 @@ describe("STA-98 rungs are reports too — a derived epic still has no stopwatch
     // whose marker is not in an equality check simply starts billing epics, and
     // no assertion anywhere goes red. Derived from the source for the same
     // reason contract-http derives its route list from the server.
+    // STA-140 de-static'd the replay (it reads the workspace's configured
+    // vocabulary now), so the slice is bounded by the next private method rather
+    // than the next static one. Same assertion, same window.
     const source = readFileSync(new URL("../src/core/store.ts", import.meta.url), "utf8");
-    const start = source.indexOf("private static reconstructIntervals");
-    const replay = source.slice(start, source.indexOf("private static", start + 10));
+    const start = source.indexOf("private reconstructIntervals");
+    const replay = source.slice(start, source.indexOf("  private ", start + 10));
     expect(replay).toMatch(/typeof event\.payload\.derived === "string"/);
     for (const marker of ["child_started", "child_in_review", "children_workable", "children_blocked"]) {
       expect(replay, marker).not.toContain(`"${marker}"`);

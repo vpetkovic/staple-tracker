@@ -31,6 +31,33 @@ export const OPEN_STATUS_ORDER: readonly IssueStatus[] = [
 
 export const RESOLVED_STATUSES: readonly IssueStatus[] = ["done", "cancelled"];
 
+/**
+ * The BUILT-IN kind vocabulary — mirror of `ISSUE_KINDS` in src/core/types.ts.
+ *
+ * A SEED, not a closed set. Kinds are configured per workspace (`workspace_kinds`,
+ * STA-140), so a workspace may carry `milestone` or have dropped `spike`, and the
+ * server's runtime answer is `list_kinds`. That is why `IssueKind` below is
+ * `string` and not a union of these five: typing it as a union would make the
+ * compiler confidently wrong about a value the server can legitimately send.
+ */
+export const ISSUE_KINDS = ["epic", "task", "bug", "chore", "spike"] as const;
+export type BuiltinIssueKind = (typeof ISSUE_KINDS)[number];
+/** A kind id — `string` for exactly the reason `IssueStatus` is a closed union and this is not. */
+export type IssueKind = string;
+export const DEFAULT_ISSUE_KIND = "task";
+
+/**
+ * Sort/group rank for the seeded kinds — what a view grouping a board or a list
+ * by kind orders its buckets on (O1c). Mirror of `KIND_RANK` in core/types.ts.
+ *
+ * A configured kind the operator added is absent here. Sort it LAST rather than
+ * first (`KIND_RANK[k] ?? ISSUE_KINDS.length`): a value this mirror has never
+ * heard of belongs at the bottom of the list, not the top of everyone's board.
+ */
+export const KIND_RANK: Readonly<Record<string, number>> = Object.fromEntries(
+  ISSUE_KINDS.map((kind, index) => [kind, index]),
+);
+
 export const ISSUE_PRIORITIES = ["critical", "high", "medium", "low"] as const;
 export type IssuePriority = (typeof ISSUE_PRIORITIES)[number];
 
@@ -43,6 +70,8 @@ export interface Issue {
   description: string | null;
   status: IssueStatus;
   statusVersion: number;
+  /** Declared kind (STA-124). Never null — the column is NOT NULL with a default. */
+  kind: IssueKind;
   priority: IssuePriority;
   parentId: string | null;
   depth: number;
@@ -473,6 +502,15 @@ export interface GraphNode {
    * liveness reading to show.
    */
   claim?: ClaimActivity | null;
+  /**
+   * The issue's declared kind (STA-124) — what the canvas draws its kind glyph from.
+   *
+   * Optional here for one reason only: BOTH producers send it (the workspace route
+   * and `Hub.graph()` alike, unlike `parent` below), so absence never means "this
+   * graph has no kind information" — it means the page is talking to an older
+   * server. Treat a missing value as `DEFAULT_ISSUE_KIND` rather than as a hole.
+   */
+  kind?: IssueKind;
   /**
    * The parent ticket's IDENTIFIER (`STA-53`), not its uuid — this whole payload is
    * keyed by identifier. What epic clustering groups on (G3).

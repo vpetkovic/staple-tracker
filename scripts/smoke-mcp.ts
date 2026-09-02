@@ -109,7 +109,7 @@ try {
   await pinned.handshake();
 
   const tools = await rpc("tools/list", {});
-  assert(tools.tools.length >= 14, `tools/list exposes ${tools.tools.length} tools`);
+  assert(tools.tools.length >= 20, `tools/list exposes ${tools.tools.length} tools`);
 
   const byName = new Map<string, any>(tools.tools.map((t: any) => [t.name, t]));
   assert(
@@ -118,11 +118,20 @@ try {
   );
   const readOnly = tools.tools.filter((t: any) => t.annotations?.readOnlyHint === true).map((t: any) => t.name);
   assert(
-    readOnly.length === 7 &&
-      ["inbox", "list_tasks", "get_task", "list_comments", "get_document", "events_since", "hub_overview"].every(
-        (n) => readOnly.includes(n),
-      ),
-    `exactly the 7 read-only tools flagged readOnlyHint (${readOnly.join(", ")})`,
+    readOnly.length === 9 &&
+      [
+        "inbox",
+        "list_tasks",
+        "get_task",
+        "list_comments",
+        "get_document",
+        "events_since",
+        // STA-140: reading the workspace vocabulary is as read-only as reading a task.
+        "list_statuses",
+        "list_kinds",
+        "hub_overview",
+      ].every((n) => readOnly.includes(n)),
+    `exactly the 9 read-only tools flagged readOnlyHint (${readOnly.join(", ")})`,
   );
   assert(byName.get("checkout_task").annotations.idempotentHint === true, "checkout_task flagged idempotent");
   assert(
@@ -424,6 +433,151 @@ try {
     "hub_overview nests its event log as a page",
   );
 
+  // ── the workspace vocabulary (STA-140) ────────────────────────────────────
+  const seededStatuses = JSON.parse(
+    toolText(await rpc("tools/call", { name: "list_statuses", arguments: {} })),
+  ).statuses;
+  assert(
+    seededStatuses.map((s: any) => s.id).join(",") ===
+      "backlog,todo,in_progress,in_review,done,blocked,cancelled",
+    "list_statuses returns the seeded seven in seed order",
+  );
+  assert(
+    seededStatuses.every((s: any) => typeof s.category === "string" && s.isBuiltin === true),
+    "every seeded status carries a category and is flagged built-in",
+  );
+  const seededKinds = JSON.parse(
+    toolText(await rpc("tools/call", { name: "list_kinds", arguments: {} })),
+  ).kinds;
+  assert(
+    seededKinds.map((k: any) => k.id).join(",") === "epic,task,bug,chore,spike",
+    "list_kinds returns the seeded kind vocabulary",
+  );
+
+  // ── issue kinds on the wire (STA-124) ─────────────────────────────────────
+  const aBug = JSON.parse(
+    toolText(await rpc("tools/call", {
+      name: "create_task",
+      arguments: { title: "Smoke defect", kind: "bug", actor: "smoke-agent" },
+    })),
+  );
+  assert(aBug.kind === "bug", "create_task accepts a kind and returns it");
+  const plain = JSON.parse(
+    toolText(await rpc("tools/call", {
+      name: "create_task",
+      arguments: { title: "Smoke plain work", actor: "smoke-agent" },
+    })),
+  );
+  assert(plain.kind === "task", "create_task defaults the kind to task");
+
+  const promoted = JSON.parse(
+    toolText(await rpc("tools/call", {
+      name: "update_task",
+      arguments: { ref: plain.identifier, kind: "epic", actor: "smoke-agent" },
+    })),
+  );
+  assert(promoted.kind === "epic", "update_task re-declares the kind");
+
+  const bugs = JSON.parse(
+    toolText(await rpc("tools/call", { name: "list_tasks", arguments: { kind: ["bug"] } })),
+  ).items;
+  assert(
+    bugs.length === 1 && bugs[0].identifier === aBug.identifier && bugs[0].kind === "bug",
+    "list_tasks filters by kind and returns it on the summary row",
+  );
+
+  const fetchedKind = JSON.parse(
+    toolText(await rpc("tools/call", { name: "get_task", arguments: { ref: aBug.identifier } })),
+  ).issue.kind;
+  assert(fetchedKind === "bug", "get_task returns the kind");
+
+  // A kind the code has never heard of, added at runtime — the whole point of
+  // the schema being z.string() rather than z.enum.
+  await rpc("tools/call", {
+    name: "update_kinds",
+    arguments: { ops: [{ op: "add", id: "milestone", label: "Milestone" }] },
+  });
+  const ga = JSON.parse(
+    toolText(await rpc("tools/call", {
+      name: "create_task",
+      arguments: { title: "Smoke GA", kind: "milestone", actor: "smoke-agent" },
+    })),
+  );
+  assert(ga.kind === "milestone", "a configured custom kind survives create_task's output schema");
+
+  const added = JSON.parse(
+    toolText(await rpc("tools/call", {
+      name: "update_statuses",
+      arguments: {
+        ops: [{ op: "add", id: "awaiting_approval", category: "gated", after: "in_review" }],
+      },
+    })),
+  ).statuses;
+  assert(
+    added.map((s: any) => s.id).indexOf("awaiting_approval") === 4,
+    "update_statuses places an added status exactly after the one named by `after`",
+  );
+
+  // The added status is a first-class one immediately: update_task takes it.
+  const parked = JSON.parse(
+    toolText(await rpc("tools/call", {
+      name: "update_task",
+      arguments: { ref: "SMO-2", status: "awaiting_approval" },
+    })),
+  );
+  assert(
+    parked.status === "awaiting_approval",
+    "a status added at runtime is accepted by update_task like any other",
+  );
+
+  // Guard 1: a status rows still carry cannot vanish out from under them.
+  const refusedRemove = await rpc("tools/call", {
+    name: "update_statuses",
+    arguments: { ops: [{ op: "remove", id: "awaiting_approval" }] },
+  });
+  assert(
+    refusedRemove.isError && toolError(refusedRemove).code === "conflict",
+    "removing a status issues still carry is refused without migrateTo",
+  );
+
+  // Guard 2: the LAST status of a category staple writes into is never removable,
+  // whether or not anything currently carries it.
+  const refusedLast = await rpc("tools/call", {
+    name: "update_statuses",
+    arguments: { ops: [{ op: "remove", id: "backlog", migrateTo: "todo" }] },
+  });
+  assert(
+    refusedLast.isError && toolError(refusedLast).code === "validation",
+    "removing the only status of a required category is refused outright",
+  );
+
+  const migratedRemove = JSON.parse(
+    toolText(await rpc("tools/call", {
+      name: "update_statuses",
+      arguments: { ops: [{ op: "remove", id: "awaiting_approval", migrateTo: "todo" }] },
+    })),
+  ).statuses;
+  assert(
+    !migratedRemove.some((s: any) => s.id === "awaiting_approval"),
+    "remove --migrate-to drops the status and the list comes back without it",
+  );
+  assert(
+    JSON.parse(toolText(await rpc("tools/call", { name: "get_task", arguments: { ref: "SMO-2" } })))
+      .issue.status === "todo",
+    "every issue that carried the removed status was migrated onto the target",
+  );
+
+  const renamedKinds = JSON.parse(
+    toolText(await rpc("tools/call", {
+      name: "update_kinds",
+      arguments: { ops: [{ op: "rename", id: "spike", label: "Spike / Research" }] },
+    })),
+  ).kinds;
+  assert(
+    renamedKinds.find((k: any) => k.id === "spike").label === "Spike / Research",
+    "update_kinds renames in place, keeping the id",
+  );
+
   // STAPLE_DB pins this server, so ws targeting must not escape it (existing
   // resolveWorkspace precedence) — and must not open a second handle either.
   const pinnedWs = await rpc("tools/call", { name: "inbox", arguments: { ws: "smoke" } });
@@ -439,7 +593,7 @@ try {
 
   const coldTools = await cold.rpc("tools/list", {});
   assert(
-    coldTools.tools.length === tools.tools.length && coldTools.tools.length >= 16,
+    coldTools.tools.length === tools.tools.length && coldTools.tools.length >= 20,
     `server connects and lists ${coldTools.tools.length} tools with no workspace anywhere above cwd`,
   );
 
@@ -454,7 +608,7 @@ try {
   const wsTargetable = coldTools.tools
     .filter((t: any) => t.inputSchema?.properties?.ws)
     .map((t: any) => t.name);
-  assert(wsTargetable.length === 13, `13 workspace tools accept ws targeting (${wsTargetable.length} found)`);
+  assert(wsTargetable.length === 17, `17 workspace tools accept ws targeting (${wsTargetable.length} found)`);
   assert(
     !coldByName.get("cross_link").inputSchema.properties?.ws &&
       !coldByName.get("hub_overview").inputSchema.properties?.ws,
@@ -561,6 +715,9 @@ try {
         "put_document",
         "release_task",
         "set_blocked_by",
+        // STA-140: a vocabulary edit is a write and is attributed like one.
+        "update_kinds",
+        "update_statuses",
         "update_task",
       ].join(","),
     `every write tool accepts actor (${actorTools.join(", ")})`,

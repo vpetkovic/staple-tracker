@@ -116,6 +116,54 @@ or a crashed harness — the whole class of events that make a handoff necessary
 are exactly the events that prevent you from writing one. Assume every turn is
 your last one and the protocol costs you nothing.
 
+## The vocabulary is this workspace's, not staple's
+
+Statuses and kinds are **configured per workspace**. Do not assume the seven you
+have seen elsewhere — read them:
+
+\`\`\`bash
+staple statuses ls          # id, category, label, in the configured order
+staple kinds ls
+\`\`\`
+
+Every status carries a **category** from a fixed set — \`unstarted\`, \`ready\`,
+\`active\`, \`review\`, \`gated\`, \`blocked\`, \`done\`, \`cancelled\` — and **all
+behaviour keys off the category, never off the id**: checkout claims from
+\`ready\`/\`unstarted\`/\`blocked\`, a claim only ever sits in \`active\`, \`done\` and
+\`cancelled\` mean resolved, and an epic's status is derived from its children by
+their categories. So a workspace can rename \`in_review\` or add
+\`awaiting_approval\` and every guard still means what it meant.
+
+The configured ORDER is the canonical order everywhere — group headers, board
+columns, tree sort. Changing it changes what everyone sees:
+
+\`\`\`bash
+staple statuses add awaiting_approval --category gated --after in_review
+staple statuses reorder backlog,todo,in_progress,in_review,done,blocked,cancelled
+staple statuses rm old_status --migrate-to backlog   # --migrate-to is required
+                                                     # while issues still use it
+\`\`\`
+
+Every issue **declares a kind** — \`epic\`, \`bug\`, \`spike\`, whatever this
+workspace configured. Declare it when you file the ticket, because nothing infers
+it later:
+
+\`\`\`bash
+staple new "Login 500s on retry" --kind bug
+staple ls --kind epic          # just the epics
+\`\`\`
+
+The default is \`task\`. **Kind is declared, never derived**: a task that grows
+subtasks stays a task until somebody says otherwise, so if you break an epic out
+into children, set the parent's kind yourself. \`staple ls\` prints the kind only
+when it is not \`task\` — a bare row IS a task — while \`staple show\` always names
+it.
+
+**Edit the vocabulary only when a human asks.** It is workspace-wide
+configuration, not a per-task decision, and a reorder moves every board in the
+repo. The MCP tools are \`list_statuses\`, \`list_kinds\`, \`update_statuses\` and
+\`update_kinds\`; the two reads cost nothing, so prefer reading over guessing.
+
 ## Branch pointer
 
 The task says what; it does not say where. **At checkout, comment where the
@@ -170,7 +218,8 @@ claude mcp add staple -e STAPLE_AGENT=your-name -- npx tsx ${mcpEntryPath()}
 
 The MCP tools mirror the CLI: \`inbox\`, \`checkout_task\` (with
 \`steal_if_idle_seconds\`), \`put_document\`, \`add_comment\`, \`update_task\`,
-\`release_task\` (with \`if_idle_seconds\`), \`events_since\`. Writes require an
+\`release_task\` (with \`if_idle_seconds\`), \`events_since\`, \`list_statuses\`,
+\`list_kinds\`, \`update_statuses\`, \`update_kinds\`. Writes require an
 identity — pass \`actor\` or set \`STAPLE_AGENT\`; there is no silent default.
 
 ---

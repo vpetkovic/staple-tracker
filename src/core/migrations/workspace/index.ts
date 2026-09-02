@@ -4,6 +4,8 @@ import { CONSOLIDATED_DDL } from "./consolidated.js";
 import { migration as m001 } from "./001-initial-schema.js";
 import { migration as m002 } from "./002-comment-idempotency.js";
 import { migration as m003 } from "./003-issue-estimate.js";
+import { migration as m004 } from "./004-workspace-settings.js";
+import { migration as m005 } from "./005-issue-kind.js";
 
 /**
  * The workspace database — the per-repo (or global) task store.
@@ -17,7 +19,7 @@ export const WORKSPACE_TARGET: MigrationTarget = {
   label: "workspace database",
   // `issues` has existed since version 1, so its absence means an empty file.
   sentinelTable: "issues",
-  migrations: [m001, m002, m003],
+  migrations: [m001, m002, m003, m004, m005],
   consolidated: CONSOLIDATED_DDL,
 };
 

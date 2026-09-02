@@ -18,7 +18,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { initWorkspace, resolveWorkspace } from "./core/workspace.js";
 import type { OpenedWorkspace } from "./core/workspace.js";
-import type { WorkspaceStore } from "./core/store.js";
+import type { VocabularyOp, WorkspaceStore } from "./core/store.js";
 import { Hub, notifyHubResolvedSafe } from "./core/hub.js";
 import type { CrossBlockerState } from "./core/hub.js";
 import {
@@ -26,8 +26,10 @@ import {
   COMMENT_PAGE_LIMITS,
   HUB_EVENT_PAGE_LIMITS,
   ISSUE_PAGE_LIMITS,
+  ISSUE_KINDS,
   ISSUE_PRIORITIES,
   ISSUE_STATUSES,
+  STATUS_CATEGORIES,
   StapleError,
   clampLimit,
   cursorScope,
@@ -44,6 +46,8 @@ import type {
   IssueStatus,
   IssueTiming,
   PageLimits,
+  WorkspaceKind,
+  WorkspaceStatus,
 } from "./core/types.js";
 
 /**
@@ -182,7 +186,9 @@ function run(fn: () => unknown): ToolResult {
 }
 
 function notifyHubIfResolved(store: WorkspaceStore, ref: string, status?: string) {
-  if (status !== "done" && status !== "cancelled") return;
+  // Category, not the two literals (STA-140): a workspace that renamed `done` to
+  // `shipped` must still wake its cross-workspace dependents.
+  if (!status || !store.isResolvedStatus(status)) return;
   try {
     notifyHubResolvedSafe(store.slug, store.getIssue(ref).identifier);
   } catch {
@@ -190,7 +196,39 @@ function notifyHubIfResolved(store: WorkspaceStore, ref: string, status?: string
   }
 }
 
-const statusEnum = z.enum(ISSUE_STATUSES);
+/**
+ * A status id — `z.string()`, not `z.enum`, since STA-140.
+ *
+ * The vocabulary is per-workspace data now, and a single MCP server answers for
+ * several workspaces, so there is no one enum it could be. On INPUT the store
+ * validates against the calling workspace's own list and refuses with a sentence
+ * that names the valid ids (`list_statuses` returns the same list). On OUTPUT the
+ * widening is not a nicety but a correctness fix: zod strips what an enum does
+ * not recognise, so a custom status would have vanished off the wire silently.
+ *
+ * The built-ins are named in the description so a client with no `list_statuses`
+ * call behind it still has somewhere to start.
+ */
+const statusEnum = z
+  .string()
+  .describe(
+    `Status id, configurable per workspace. Built-in: ${ISSUE_STATUSES.join(", ")}. ` +
+      "Call list_statuses for this workspace's actual set.",
+  );
+/**
+ * Kind id — `z.string()` for exactly the reason `statusEnum` above is one, and
+ * it is a correctness fix rather than a nicety: a `z.enum` STRIPS what it does
+ * not recognise, so an operator who ran `staple kinds add milestone` would watch
+ * that kind vanish off the wire in silence on every read. The built-in seed is
+ * named in the description so a client with no `list_kinds` call behind it still
+ * has somewhere to start.
+ */
+const kindSchema = z
+  .string()
+  .describe(
+    `Kind id, configurable per workspace. Built-in: ${ISSUE_KINDS.join(", ")}. ` +
+      "Call list_kinds for this workspace's actual set.",
+  );
 const priorityEnum = z.enum(ISSUE_PRIORITIES);
 const refSchema = z
   .string()
@@ -306,6 +344,7 @@ const issueShape = {
   description: z.string().nullable(),
   status: statusEnum,
   statusVersion: z.number(),
+  kind: kindSchema,
   priority: priorityEnum,
   parentId: z.string().nullable(),
   depth: z.number(),
@@ -416,13 +455,17 @@ const timingShape = {
     .describe(
       "Sum over DIRECT children of each child's activeSeconds, so a child that is itself a parent contributes its own aggregate; null when none contributed",
     ),
+  /**
+   * A RECORD, not a fixed seven-key object, since STA-140: the key set is the
+   * workspace's configured vocabulary. For a default workspace the emitted keys
+   * and their order are byte-identical to what the fixed object produced — only
+   * the schema widened, so no existing consumer sees a different payload.
+   */
   childStatusCounts: z
-    .object(
-      Object.fromEntries(ISSUE_STATUSES.map((status) => [status, z.number()])) as {
-        [K in IssueStatus]: z.ZodNumber;
-      },
-    )
-    .describe("Direct children per status; every status present, zeros included"),
+    .record(z.string(), z.number())
+    .describe(
+      "Direct children per status; every CONFIGURED status present, zeros included (see list_statuses)",
+    ),
 };
 type _TimingShapeMatchesInterface = Expect<
   Equals<z.infer<z.ZodObject<typeof timingShape>>, IssueTiming>
@@ -469,6 +512,7 @@ const taskSummaryShape = {
   identifier: z.string(),
   title: z.string(),
   status: statusEnum,
+  kind: kindSchema,
   priority: priorityEnum,
   assignee: z.string().nullable(),
   parentId: z.string().nullable(),
@@ -560,6 +604,7 @@ server.registerTool(
       "List issues in this workspace with optional filters (open issues by default), newest-relevant first. Paginated: pass nextCursor back with the SAME filters to continue.",
     inputSchema: {
       status: z.array(statusEnum).optional(),
+      kind: z.array(kindSchema).optional().describe("Restrict to these kinds, e.g. [\"epic\"]"),
       assignee: z.string().optional(),
       q: z.string().optional().describe("Substring match on title/identifier/description"),
       include_resolved: z.boolean().optional(),
@@ -570,16 +615,16 @@ server.registerTool(
     outputSchema: { items: z.array(z.object(taskSummaryShape)), ...pageTailShape },
     annotations: { title: "List tasks", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
   },
-  ({ status, assignee, q, include_resolved, limit, cursor, ws }) =>
+  ({ status, kind, assignee, q, include_resolved, limit, cursor, ws }) =>
     run(() => {
       const window = pageWindow(
-        { t: "list_tasks", ws, status, assignee, q, include_resolved },
+        { t: "list_tasks", ws, status, kind, assignee, q, include_resolved },
         { limit, cursor },
         ISSUE_PAGE_LIMITS,
       );
       const store = storeFor(ws);
       const { items, hasMore } = store.listIssuesPage(
-        { status, assignee, q, includeResolved: include_resolved },
+        { status, kind, assignee, q, includeResolved: include_resolved },
         window,
       );
       // One batched liveness query for the whole page, never one per row.
@@ -589,6 +634,7 @@ server.registerTool(
           identifier: i.identifier,
           title: i.title,
           status: i.status,
+          kind: i.kind,
           priority: i.priority,
           assignee: i.assignee,
           parentId: i.parentId,
@@ -652,6 +698,7 @@ server.registerTool(
       title: z.string(),
       description: z.string().optional(),
       status: statusEnum.optional(),
+      kind: kindSchema.optional().describe("Declared kind; defaults to task."),
       priority: priorityEnum.optional(),
       parent: refSchema.optional(),
       assignee: z.string().optional(),
@@ -680,6 +727,7 @@ server.registerTool(
         title: input.title,
         description: input.description,
         status: input.status,
+        kind: input.kind,
         priority: input.priority,
         parent: input.parent,
         assignee: input.assignee,
@@ -706,6 +754,7 @@ server.registerTool(
       title: z.string().optional(),
       description: z.string().optional(),
       status: statusEnum.optional(),
+      kind: kindSchema.optional().describe("Re-declare the kind. Omit to leave unchanged."),
       priority: priorityEnum.optional(),
       assignee: z.string().nullable().optional(),
       labels: z.array(z.string()).optional(),
@@ -735,6 +784,7 @@ server.registerTool(
           title: input.title,
           description: input.description,
           status: input.status,
+          kind: input.kind,
           priority: input.priority,
           assignee: input.assignee,
           labels: input.labels,
@@ -977,6 +1027,152 @@ server.registerTool(
     annotations: { title: "Events since cursor", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
   },
   ({ since, limit, ws }) => run(() => storeFor(ws).listEvents(since ?? 0, limit ?? 200)),
+);
+
+/**
+ * ---------------------------------------------------------------- vocabulary
+ *
+ * The workspace's statuses and kinds are DATA (STA-140), so an agent has to be
+ * able to read them before it sets one, and a human's agent has to be able to
+ * change them without a shell. Four tools: two reads, two ordered write batches.
+ */
+const statusRowShape = {
+  id: z.string(),
+  label: z.string(),
+  category: z.enum(STATUS_CATEGORIES).describe("Fixed behaviour class; NOT configurable"),
+  sortOrder: z.number(),
+  isBuiltin: z.boolean().describe("True for a row staple seeded. Informational — built-ins are editable."),
+};
+type _StatusRowMatchesInterface = Expect<
+  Equals<z.infer<z.ZodObject<typeof statusRowShape>>, WorkspaceStatus>
+>;
+
+const kindRowShape = {
+  id: z.string(),
+  label: z.string(),
+  sortOrder: z.number(),
+  isBuiltin: z.boolean(),
+};
+type _KindRowMatchesInterface = Expect<
+  Equals<z.infer<z.ZodObject<typeof kindRowShape>>, WorkspaceKind>
+>;
+
+/**
+ * One op. A BATCH rather than a tool per verb because "add awaiting_approval and
+ * put it after in_review" is a single intention, and splitting it over two calls
+ * leaves a window where every board in the workspace is visibly wrong. Applied
+ * in order, in one transaction: all of it lands or none of it does.
+ */
+const vocabularyOpSchema = z
+  .object({
+    op: z.enum(["add", "rename", "recategorize", "reorder", "remove"]),
+    id: z.string().optional().describe("Target id; required for every op except reorder"),
+    label: z.string().optional().describe("Display label. Required for rename; derived from the id on add."),
+    category: z
+      .enum(STATUS_CATEGORIES)
+      .optional()
+      .describe("Statuses only. Required for add; the behaviour the status inherits."),
+    after: z
+      .string()
+      .nullable()
+      .optional()
+      .describe("add only: place directly after this id. Omit or null to append."),
+    ids: z.array(z.string()).optional().describe("reorder only: EVERY id, in the order you want."),
+    migrateTo: z
+      .string()
+      .nullable()
+      .optional()
+      .describe("remove only: move every issue that still carries this id onto that one. Required when any do."),
+  })
+  .describe("One vocabulary edit; ops apply in order, in a single transaction");
+
+/** zod's optional-everything shape, narrowed to what the store's union demands. */
+function toVocabularyOp(raw: z.infer<typeof vocabularyOpSchema>): VocabularyOp {
+  const need = (value: string | undefined, field: string): string => {
+    if (value === undefined || value.trim() === "") {
+      throw new StapleError("validation", `"${raw.op}" needs "${field}"`);
+    }
+    return value;
+  };
+  switch (raw.op) {
+    case "add":
+      return { op: "add", id: need(raw.id, "id"), label: raw.label, category: raw.category, after: raw.after };
+    case "rename":
+      return { op: "rename", id: need(raw.id, "id"), label: need(raw.label, "label") };
+    case "recategorize":
+      return { op: "recategorize", id: need(raw.id, "id"), category: need(raw.category, "category") };
+    case "reorder":
+      if (!raw.ids) throw new StapleError("validation", '"reorder" needs "ids"');
+      return { op: "reorder", ids: raw.ids };
+    case "remove":
+      return { op: "remove", id: need(raw.id, "id"), migrateTo: raw.migrateTo };
+  }
+}
+
+server.registerTool(
+  "list_statuses",
+  {
+    description:
+      "This workspace's status vocabulary, in configured order — the order the board, tree and group headers use. Every status carries a CATEGORY from a fixed set (unstarted, ready, active, review, gated, blocked, done, cancelled) and ALL behaviour keys off that category, never off the id: checkout claims from ready/unstarted/blocked, a claim only ever sits in active, done/cancelled mean resolved. Read this before setting a status you did not get from a task.",
+    inputSchema: { ws: wsSchema },
+    outputSchema: { statuses: z.array(z.object(statusRowShape)) },
+    annotations: { title: "List statuses", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+  },
+  ({ ws }) => run(() => ({ statuses: storeFor(ws).getStatuses() })),
+);
+
+server.registerTool(
+  "list_kinds",
+  {
+    description:
+      "This workspace's issue-kind vocabulary (epic, task, bug, chore, spike by default), in configured order. Kinds are a label for what a ticket IS; unlike statuses they carry no behaviour.",
+    inputSchema: { ws: wsSchema },
+    outputSchema: { kinds: z.array(z.object(kindRowShape)) },
+    annotations: { title: "List kinds", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+  },
+  ({ ws }) => run(() => ({ kinds: storeFor(ws).getKinds() })),
+);
+
+server.registerTool(
+  "update_statuses",
+  {
+    description:
+      "Change the status vocabulary: add, rename, recategorize, reorder, remove. Ops apply IN ORDER in one transaction. Removing a status that issues still carry requires migrateTo, and removing the last status of a category staple writes into (unstarted, ready, active, blocked, done, cancelled) is refused outright. Returns the full new list. This reorders every board and tree in the workspace — do it because a human asked.",
+    inputSchema: { ops: z.array(vocabularyOpSchema).min(1), actor: z.string().optional(), ws: wsSchema },
+    outputSchema: { statuses: z.array(z.object(statusRowShape)) },
+    annotations: {
+      title: "Update statuses",
+      readOnlyHint: false,
+      // Removal rewrites the status of every issue that carried it.
+      destructiveHint: true,
+      // add/remove of the same id are not; a reorder of the same list is. Say no.
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  ({ ops, actor, ws }) =>
+    run(() => ({
+      statuses: storeFor(ws).applyStatusOps(ops.map(toVocabularyOp), requireActor(actor)),
+    })),
+);
+
+server.registerTool(
+  "update_kinds",
+  {
+    description:
+      "Change the issue-kind vocabulary: add, rename, reorder, remove. Same batch semantics as update_statuses; recategorize is not valid here because kinds have no category. Removing a kind issues still carry requires migrateTo. Returns the full new list.",
+    inputSchema: { ops: z.array(vocabularyOpSchema).min(1), actor: z.string().optional(), ws: wsSchema },
+    outputSchema: { kinds: z.array(z.object(kindRowShape)) },
+    annotations: {
+      title: "Update kinds",
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  ({ ops, actor, ws }) =>
+    run(() => ({ kinds: storeFor(ws).applyKindOps(ops.map(toVocabularyOp), requireActor(actor)) })),
 );
 
 server.registerTool(

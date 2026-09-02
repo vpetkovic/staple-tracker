@@ -318,6 +318,28 @@ describe("KNOWN: logical errors this surface cannot project", () => {
     ]);
   });
 
+  /**
+   * STA-124. The acceptance criterion is that BOTH graph producers carry `kind`
+   * — this is the workspace branch; `Hub.graph()` is pinned in test/hub.test.ts.
+   * They are separate code paths in separate files, which is exactly why the
+   * field needs an assertion on each rather than one on "the graph".
+   */
+  it("carries the issue kind on every graph node", async () => {
+    const graph = (await (await get("/api/graph")).json()) as {
+      nodes: Array<{ id: string; kind: string; status: string; parent: string | null }>;
+    };
+    expect(graph.nodes.map((n) => n.id).sort()).toEqual(["CON-1", "CON-2"]);
+    for (const node of graph.nodes) expect(node.kind).toBe("task");
+    expect(Object.keys(graph.nodes[0]!).sort()).toEqual([
+      "id",
+      "kind",
+      "parent",
+      "status",
+      "title",
+      "workspace",
+    ]);
+  });
+
   it("documents why two canonical errors have no HTTP projection", () => {
     // Keyed by the canonical code, so a reader of error-contract.ts can see at a
     // glance which surfaces owe a projection and which structurally cannot.
