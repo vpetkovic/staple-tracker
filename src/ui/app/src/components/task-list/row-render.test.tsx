@@ -905,3 +905,187 @@ describe("the ghost parent context row", () => {
     expect(markup).toContain('aria-selected="false"');
   });
 });
+
+/**
+ * O1b (STA-125) — the kind glyph.
+ *
+ * Four things can go wrong here and only one of them is "the glyph is missing".
+ *
+ *   1. TWO KINDS DRAW THE SAME MARK. Monochrome means shape carries the whole signal, so
+ *      a copy-paste between two `case` arms is invisible on the page and fatal to the
+ *      feature. Every kind's markup is compared against every other kind's.
+ *   2. A CONFIGURED KIND DRAWS NOTHING. `staple kinds add milestone` is supported, so a
+ *      switch that only knows the five built-ins would drop the glyph — and with it the
+ *      16px that puts that row's identifier on the same left edge as every other row.
+ *   3. THE GLYPH LANDS RIGHT OF THE IDENTIFIER. It has to lead the cluster, in the DOM as
+ *      well as visually, because that ordering is also what a screen reader reads.
+ *   4. IT IS ON THE TREE AND NOWHERE ELSE. The panel, the palette and the ghost rows all
+ *      get it from this one component, with no code of their own — which is only true if
+ *      it is gated on `columns.identifier` and carries no `ghost` guard.
+ */
+describe("kind glyph", () => {
+  const BUILT_INS = ["epic", "task", "bug", "chore", "spike"] as const;
+
+  /** Just the glyph element, sliced out of a rendered row. */
+  function glyphOf(markup: string): string {
+    const start = markup.indexOf('<span class="staple-kind-glyph"');
+    expect(start).toBeGreaterThan(-1);
+    const end = markup.indexOf("</span></span>", start);
+    return markup.slice(start, end + "</span></span>".length);
+  }
+
+  /** The drawing alone — the attribute names the kind, so it cannot be compared. */
+  const drawingOf = (kind: string) =>
+    glyphOf(renderRow({ kind })).replace(`data-issue-kind="${kind}"`, "");
+
+  it("draws a distinct mark for every built-in kind", () => {
+    for (const kind of BUILT_INS) {
+      expect(glyphOf(renderRow({ kind }))).toContain(`data-issue-kind="${kind}"`);
+    }
+    // The whole set, pairwise. `new Set(...).size` would also catch a duplicate, but it
+    // would not say WHICH two collided, and a duplicated `case` arm is the failure this
+    // test exists for.
+    for (const a of BUILT_INS) {
+      for (const b of BUILT_INS) {
+        if (a === b) continue;
+        expect(drawingOf(a), `${a} and ${b} draw the same mark`).not.toBe(drawingOf(b));
+      }
+    }
+  });
+
+  it("gives an epic the only solid mark in the set", () => {
+    // Not decoration: colour is unavailable in this cluster, so MASS is the entire reason
+    // an epic is recognisable in a folded list. Every other kind is an outline.
+    expect(glyphOf(renderRow({ kind: "epic" }))).toContain('fill="currentColor"');
+    for (const kind of ["task", "bug", "chore", "spike"] as const) {
+      expect(glyphOf(renderRow({ kind })), kind).toContain('fill="none"');
+    }
+  });
+
+  it("draws task as the hollow twin of epic — the container and the unit", () => {
+    // The one pair allowed to share a silhouette, and the assertion is what stops the
+    // relationship from being quietly redesigned into two unrelated shapes: epic and
+    // task must both be diamonds, and must differ ONLY in fill and size.
+    const epic = glyphOf(renderRow({ kind: "epic" }));
+    const task = glyphOf(renderRow({ kind: "task" }));
+    expect(epic).toMatch(/d="M8 [\d.]+ L[\d.]+ 8 L8 [\d.]+ L[\d.]+ 8 Z"/);
+    expect(task).toMatch(/d="M8 [\d.]+ L[\d.]+ 8 L8 [\d.]+ L[\d.]+ 8 Z"/);
+    // And it must not echo the priority column: `critical` is a filled rounded RECT one
+    // column to the left, which is why neither of these may be a rect at all.
+    expect(epic).not.toContain("<rect");
+    expect(task).not.toContain("<rect");
+  });
+
+  it("gives a kind the operator added a neutral mark rather than nothing", () => {
+    const markup = renderRow({ kind: "milestone" });
+
+    expect(markup).toContain('data-issue-kind="milestone"');
+    // It must not impersonate one of the five: this file cannot know what `milestone`
+    // means, and guessing a shape for it would be worse than staying quiet.
+    for (const kind of BUILT_INS) {
+      expect(drawingOf("milestone"), kind).not.toBe(drawingOf(kind));
+    }
+    // …and it is still announced, by the title-cased id the settings module falls back to.
+    expect(markup).toContain("Kind: Milestone");
+  });
+
+  it("leads the identifier cluster — before the identifier and before the connector", () => {
+    const child = renderRow({ identifier: "STA-2", kind: "bug", parentId: "p" });
+
+    const glyph = child.indexOf("staple-kind-glyph");
+    const connector = child.indexOf("staple-row-kin");
+    const identifier = child.indexOf("STA-2<");
+
+    expect(glyph).toBeGreaterThan(-1);
+    expect(glyph).toBeLessThan(connector);
+    expect(connector).toBeLessThan(identifier);
+  });
+
+  it("is decoration to the eye and text to a screen reader", () => {
+    const markup = renderRow({ kind: "epic" });
+
+    // aria-hidden rather than role="img": an image announced in the middle of the row's
+    // name would break the sentence the cluster reads as.
+    expect(glyphOf(markup)).toContain('aria-hidden="true"');
+    expect(glyphOf(markup)).not.toContain('role="img"');
+    // Said in the flow instead, before the identifier, so the row reads
+    // "Kind: Epic, STA-n, the title".
+    expect(markup).toContain('<span class="sr-only">Kind: Epic</span>');
+    expect(markup.indexOf("Kind: Epic")).toBeLessThan(markup.indexOf("staple-row-status"));
+  });
+
+  it("says the label the workspace configured, not the raw id", () => {
+    // `kindLabel` is the only thing that knows what the operator called a kind. A row
+    // printing the raw id would be this component holding a second copy of the vocabulary.
+    expect(renderRow({ kind: "spike" })).toContain("Kind: Spike");
+    expect(renderRow({ kind: "chore" })).toContain("Kind: Chore");
+  });
+
+  it("is on every preset that shows an identifier, including the palette's bare row", () => {
+    const built = buildGroups([row({ kind: "epic" })], {
+      isExpanded: () => true,
+      showResolved: true,
+    })[0]!.rows[0]!;
+
+    for (const preset of ["tree", "panel", "popup"] as const) {
+      const markup = renderToStaticMarkup(
+        <TaskRowLine
+          row={built}
+          config={resolveTaskListConfig(preset)}
+          semantics={preset === "popup" ? "bare" : "grid"}
+          now={NOW}
+        />,
+      );
+      // R5's criterion, and it is delivered by a MECHANISM rather than by a third call
+      // site: the glyph is gated on `columns.identifier`, which every preset sets.
+      expect(markup, preset).toContain('data-issue-kind="epic"');
+    }
+  });
+});
+
+/**
+ * O1b (STA-125) again, from the other side: the ghost keeps its glyph.
+ *
+ * O3c's worklog asked for this explicitly and gave the reason — a dimmed epic that does
+ * not LOOK like an epic defeats the point of drawing the parent at all. It is the one
+ * element added since O3c that has no `ghost` guard, and this is what says that is
+ * deliberate rather than forgotten.
+ */
+describe("kind glyph on a ghost parent", () => {
+  const family = () => [
+    row({ id: "p", identifier: "STA-1", title: "The epic", status: "backlog", kind: "epic" }),
+    row({ id: "c", identifier: "STA-2", title: "The task", status: "in_progress", parentId: "p" }),
+  ];
+
+  const ghostMarkup = () => {
+    const rows = family();
+    const group = buildGroups(rows, { isExpanded: () => true, rollupSource: rows }).find(
+      (g) => g.status === "in_progress",
+    )!;
+    return renderToStaticMarkup(
+      <TaskRowLine
+        row={group.rows[0]!}
+        config={resolveTaskListConfig("tree", { labelMax: 2 })}
+        semantics="grid"
+        isExpanded
+        now={NOW}
+        onOpen={() => {}}
+      />,
+    );
+  };
+
+  it("keeps the epic's glyph, dimmed with the rest of the row", () => {
+    const markup = ghostMarkup();
+
+    expect(markup).toContain('data-ghost="true"');
+    expect(markup).toContain('data-issue-kind="epic"');
+    // No glyph-specific dimming rule anywhere: `.staple-row-ghost` is one `opacity` on
+    // the row, so anything added inside it fades with it and nothing has to be told to.
+    expect(markup).not.toContain("staple-kind-glyph-ghost");
+  });
+
+  it("still reads its kind before the note that it is only context", () => {
+    const markup = ghostMarkup();
+    expect(markup.indexOf("Kind: Epic")).toBeLessThan(markup.indexOf("parent shown for context"));
+  });
+});

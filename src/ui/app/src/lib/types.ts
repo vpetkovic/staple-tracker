@@ -758,6 +758,13 @@ export type ActionPayload =
       title: string;
       description?: string;
       priority?: IssuePriority;
+      /**
+       * The declared kind (O1b, STA-125). Absent is the WORKSPACE's default, which is
+       * `store.defaultKind()` and not necessarily `task` — a workspace that removed
+       * `task` from its vocabulary has a different one, and hard-coding the string here
+       * would make the dialog a second authority on it.
+       */
+      kind?: IssueKind;
       parent?: string;
       labels?: string[];
       blockedBy?: string[];
@@ -785,7 +792,14 @@ export type ActionPayload =
    * Status is not here on purpose. It has its own `status` member and its own server
    * branch, which is also the branch that fans a done/cancelled out to the hub.
    */
-  | { type: "update"; title?: string; priority?: IssuePriority; labels?: string[] };
+  /**
+   * `kind` (O1b, STA-125) is TWO-STATE, not three, and that is `UpdateIssueInput`'s rule
+   * carried onto the wire rather than a shortcut: `issues.kind` is NOT NULL with a
+   * default, so "no kind" is not a state the tracker can represent and there is nothing
+   * for a `null` to mean. Contrast `assignee`, which has its own action precisely
+   * because clearing it IS a real and distinct fact.
+   */
+  | { type: "update"; title?: string; priority?: IssuePriority; kind?: IssueKind; labels?: string[] };
 
 /** The error envelope every staple surface speaks. */
 export interface ErrorEnvelope {

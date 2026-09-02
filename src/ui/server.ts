@@ -964,6 +964,15 @@ export function startUiServer(options: UiOptions): UiHandle {
               title: body.title as string,
               description: (body.description as string) || null,
               priority: (body.priority as IssuePriority) || undefined,
+              /**
+               * O1b (STA-125). Additive, and shaped exactly like `priority` above: an
+               * absent or empty value becomes `undefined`, which `createIssue` reads as
+               * "use the workspace's default kind". It is NOT validated here — a kind
+               * outside the configured vocabulary is refused by
+               * `store.assertConfiguredKind()` in its own words, which is the same
+               * bargain every other field on this branch makes.
+               */
+              kind: (body.kind as string) || undefined,
               parent: (body.parent as string) || null,
               labels: stringList(body.labels),
               blockedBy: blockedBy.local,
@@ -1060,6 +1069,14 @@ export function startUiServer(options: UiOptions): UiHandle {
           const patch: UpdateIssueInput = {};
           if (body.title !== undefined) patch.title = body.title as string;
           if (body.priority !== undefined) patch.priority = body.priority as IssuePriority;
+          /**
+           * O1b (STA-125). Presence, not truthiness, like every other key on this patch —
+           * but unlike `estimateSeconds` below there is no clear to express: `kind` is
+           * two-state because the column is NOT NULL with a default (see
+           * `UpdateIssueInput.kind`). An unconfigured value is `assertConfiguredKind`'s
+           * to refuse, not this branch's.
+           */
+          if (body.kind !== undefined) patch.kind = body.kind as string;
           if (body.labels !== undefined) {
             const labels = stringList(body.labels);
             // A present-but-malformed labels value must not collapse to "delete all".

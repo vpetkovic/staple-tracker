@@ -29,12 +29,19 @@
    * reserve reads as an empty gap in front of every top-level identifier, and paying 16px of
    * title track on every row to align a glyph most rows do not have is the wrong trade.
    *
-   * So the width is back to 60 and the glyph is INLINE: it appears only on a child row and
-   * pushes that row's identifier one glyph right. The misalignment is accepted and is
-   * temporary — O1b (STA-125) gives every row a real per-row kind column, which restores a
-   * single left edge for free rather than by reserving space for an absence.
+   * So the width went back to 60 and the connector glyph became INLINE: it appears only on
+   * a child row and pushes that row's identifier one glyph right.
+   *
+   * O1b (STA-125) IS THE BILL COMING DUE, and it pays it. Every row now leads with a kind
+   * glyph, so the 16px in front of the identifier is FILLED on every row instead of
+   * reserved for an absence on most of them — which is the exact thing VP's review
+   * objected to, and the only thing it objected to. The width therefore goes back to O5's
+   * 76, and it has to: a child row now carries kind + connector + `STA-146`, about 78px,
+   * which at 60px would overflow the track by 18px into an 8px column gap and land on top
+   * of the status icon. 76 + the gap absorbs it exactly as 60 + the gap absorbed one glyph
+   * before, and every row that is not a subtask has one left edge again.
    */
-  --row-id-width: 60px;
+  --row-id-width: 76px;
 
   /*
    * THE GROUP-HEADER GLYPH BOX — STA-118.
@@ -478,6 +485,30 @@
   display: inline-flex;
   width: 12px;
   height: 12px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+}
+
+/*
+ * The kind glyph — O1b (STA-125). First child of the identifier cluster, on every row.
+ *
+ * NO WIDTH AND NO HEIGHT. The svg carries its own `width`/`height` attributes (12 in the
+ * row, 16 for a caller that wants StatusIcon's size), and a fixed box here would clip the
+ * bigger one — the graph's kind mark is meant to be this component, not a copy of it.
+ * `flex-shrink: 0` is the only geometry it needs: the cluster is a flex row and the
+ * identifier beside it is `white-space: nowrap`, so without it a long identifier in a
+ * narrow preset would squeeze the glyph rather than overflow the track.
+ *
+ * NO COLOUR RULE. It inherits `--text-tertiary` from `.staple-row-id`, which is what keeps
+ * it in the identifier's register and out of the status one — and what makes `epic` read
+ * by MASS rather than by hue, which is the only axis available in a monochrome mark.
+ *
+ * No transition and no hover rule, for the reason `.staple-row-kin` has none: this row
+ * does not move when the pointer crosses it.
+ */
+.staple-kind-glyph {
+  display: inline-flex;
   flex-shrink: 0;
   align-items: center;
   justify-content: center;
@@ -1217,7 +1248,10 @@
  */
 [data-density="compact"] {
   --row-height: 28px;
-  --row-id-width: 52px;
+  /* +16 with the comfortable width, and for the same reason: O1b (STA-125) put a glyph in
+     front of every identifier here too, and the panel and the palette are the two surfaces
+     where an overflowing identifier has the least room to go. */
+  --row-id-width: 68px;
 }
 
 @media (pointer: coarse) {
