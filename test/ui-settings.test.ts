@@ -169,9 +169,11 @@ describe("GET /api/settings", () => {
     expect(Object.keys(settings.usage.statuses).sort()).toEqual(
       settings.statuses.map((s) => s.id).sort(),
     );
-    // No issues.kind column yet (O1a owns it), so every kind counts zero and none is missing.
+    // Both fixture issues were created without a kind, so they carry the default `task`;
+    // every other seeded kind counts zero and none is missing.
     expect(Object.keys(settings.usage.kinds).sort()).toEqual(settings.kinds.map((k) => k.id).sort());
-    expect(Object.values(settings.usage.kinds)).toEqual([0, 0, 0, 0, 0]);
+    expect(settings.usage.kinds.task).toBe(2);
+    expect(Object.values(settings.usage.kinds).reduce((a, b) => a + b, 0)).toBe(2);
   });
 });
 
