@@ -22,8 +22,11 @@ import type { GraphEdge, GraphNode, IssueStatus } from "@/lib/types";
 import {
   COLLAPSE_THRESHOLD,
   aggregateStatus,
+  boundaryEdges,
   clusterId,
   collapseGraph,
+  containerize,
+  dimContainers,
   epicOfClusterId,
   filterEpicRows,
   flattenEpics,
@@ -33,6 +36,7 @@ import {
   shouldDefaultCollapse,
   summarizeEpics,
   withDescendantEpics,
+  type CanvasNode,
 } from "./graph-clusters";
 
 const task = (
@@ -412,5 +416,301 @@ describe("filterEpicRows", () => {
 
   it("says nothing rather than everything when the query matches no epic", () => {
     expect(shown("zzz")).toEqual([]);
+  });
+});
+
+/**
+ * O4c — the boxes, and the two claims a box makes that could be false.
+ *
+ * A container says two things at once: "this work is inside this epic" and "this arrow
+ * touches this epic". The first is `containerize` and its failure mode is a member drawn
+ * in the wrong box (or an epic drawn twice, once as a header and once as a card inside
+ * itself). The second is `boundaryEdges`, whose failure mode is the one collapsing exists
+ * to prevent — nine arrows drawn on top of each other saying one thing.
+ *
+ * The fixtures below always go through `collapseGraph` first, because that is the only
+ * way `containerize` is ever called and building its input by hand would let these tests
+ * agree with an input the view never produces.
+ */
+describe("containerize", () => {
+  /** The canvas as GraphView assembles it: draw, summarize, collapse, then box. */
+  const canvas = (
+    nodes: readonly GraphNode[],
+    edges: readonly GraphEdge[],
+    collapsed: readonly string[] = [],
+  ) => {
+    const epics = summarizeEpics(nodes, nodes);
+    const collapse = new Set(collapsed);
+    const flat = collapseGraph(nodes, edges, epics, collapse);
+    return {
+      epics,
+      collapse,
+      flat,
+      containment: containerize(flat.nodes, epics, collapse),
+    };
+  };
+
+  it("draws an expanded epic as a box with its members inside", () => {
+    const { containment } = canvas(
+      [task("E"), task("M1", "E"), task("M2", "E")],
+      [edge("M1", "M2")],
+    );
+    const container = containment.nodes.find((node) => node.kind === "container");
+    expect(container?.id).toBe(clusterId("E"));
+    expect(containment.parentOf.get("M1")).toBe(clusterId("E"));
+    expect(containment.parentOf.get("M2")).toBe(clusterId("E"));
+  });
+
+  it("turns the epic's own ticket into the header rather than drawing it twice", () => {
+    // `summarizeEpics` puts a drawn epic in its own bucket, so without this the canvas
+    // would show `E` as the box AND `E` as a card inside itself, wired to the same
+    // things. Exactly the duplicate collapsing already refuses to draw.
+    const { containment } = canvas([task("E"), task("M1", "E")], [edge("E", "M1")]);
+    expect(containment.nodes.some((node) => node.kind === "task" && node.id === "E")).toBe(false);
+    expect(containment.headers.get("E")).toBe(clusterId("E"));
+  });
+
+  it("gives a container and a cluster the SAME id", () => {
+    // This is the acceptance criterion expressed as data: collapsing swaps the box for
+    // the ClusterNode "in the same place", and place is what GraphView's positions record
+    // is keyed by. Two ids would mean two slots and a jump.
+    const nodes = [task("E"), task("M1", "E"), task("M2", "E")];
+    const edges = [edge("M1", "M2")];
+    const open = canvas(nodes, edges);
+    const shut = canvas(nodes, edges, ["E"]);
+    const container = open.containment.nodes.find((node) => node.kind === "container");
+    const cluster = shut.containment.nodes.find((node) => node.kind === "cluster");
+    expect(container!.id).toBe(cluster!.id);
+  });
+
+  it("draws no box for a collapsed epic", () => {
+    const { containment } = canvas([task("E"), task("M1", "E")], [edge("E", "M1")], ["E"]);
+    expect(containment.nodes.some((node) => node.kind === "container")).toBe(false);
+    expect(containment.parentOf.size).toBe(0);
+  });
+
+  it("draws no box for an epic with nothing but itself on the canvas", () => {
+    // A lone epic ticket that happens to block something is a ticket, not a place.
+    const { containment } = canvas([task("E"), task("OTHER")], [edge("E", "OTHER")]);
+    expect(containment.nodes.some((node) => node.kind === "container")).toBe(false);
+  });
+
+  it("nests a box inside its parent's box", () => {
+    const { containment } = canvas(
+      [task("P"), task("C", "P"), task("M", "C"), task("PM", "P")],
+      [edge("M", "PM")],
+    );
+    expect(containment.parentOf.get(clusterId("C"))).toBe(clusterId("P"));
+    expect(containment.parentOf.get("M")).toBe(clusterId("C"));
+    expect(containment.parentOf.get("PM")).toBe(clusterId("P"));
+  });
+
+  it("puts a collapsed epic INSIDE its expanded parent's box", () => {
+    // One level of collapse at a time, which `absorption` already promises: a nested epic
+    // stays its own super-node rather than vanishing into its grandparent. The box is
+    // where that super-node then has to sit.
+    const { containment } = canvas(
+      [task("P"), task("C", "P"), task("M", "C"), task("PM", "P")],
+      [edge("M", "PM")],
+      ["C"],
+    );
+    expect(containment.parentOf.get(clusterId("C"))).toBe(clusterId("P"));
+    expect(containment.nodes.some((node) => node.kind === "cluster" && node.id === clusterId("C"))).toBe(true);
+  });
+
+  it("boxes an epic that has no node of its own but does have members", () => {
+    // The common case, in fact: the graph draws only tickets that participate in a
+    // dependency, and an epic that merely contains work often blocks nothing itself.
+    const { containment } = canvas([task("M1", "E"), task("M2", "E")], [edge("M1", "M2")]);
+    expect(containment.nodes.some((node) => node.id === clusterId("E"))).toBe(true);
+    expect(containment.parentOf.get("M1")).toBe(clusterId("E"));
+  });
+
+  it("nests through the epic tree, not through membership", () => {
+    // THE CASE THIS FILE EXISTS FOR, found in the browser and not in a fixture. `P` and
+    // `C` block nothing, so neither is DRAWN, so neither is in the other's `members` —
+    // `summarizeEpics` buckets drawn nodes only. Nesting through membership therefore
+    // leaves `C`'s box floating at the top level beside its own parent's. `EpicSummary`
+    // carries `parent` (O4b) precisely so the tree survives its epics not being drawn.
+    const { containment } = canvas([task("M1", "C"), task("M2", "C")], [edge("M1", "M2")], []);
+    // Only C has members, so only C is a box — P is not on this canvas at all.
+    expect(containment.parentOf.get(clusterId("C"))).toBeUndefined();
+
+    // Now give P a drawn member of its own: C's box must land INSIDE P's.
+    const deeper = canvas(
+      [task("P"), task("C", "P"), task("M1", "C"), task("PM", "P")],
+      [edge("M1", "PM")],
+    );
+    expect(deeper.containment.parentOf.get(clusterId("C"))).toBe(clusterId("P"));
+  });
+
+  it("boxes a grandparent whose only content is a child's box", () => {
+    // `P` holds no ticket directly — everything real is one level further down. It is
+    // still a place, and drawing `C`'s box outside it would state that `C` is top-level.
+    const { containment } = canvas(
+      [task("P"), task("C", "P"), task("M1", "C"), task("M2", "C")],
+      [edge("M1", "M2")],
+    );
+    expect(containment.nodes.some((node) => node.id === clusterId("P"))).toBe(true);
+    expect(containment.parentOf.get(clusterId("C"))).toBe(clusterId("P"));
+  });
+
+  it("lists every box before anything drawn inside it", () => {
+    // React Flow's rule for sub-flows, and it warns and mis-positions rather than
+    // failing, which is the kind of bug that ships.
+    const { containment } = canvas(
+      [task("P"), task("C", "P"), task("M", "C"), task("PM", "P")],
+      [edge("M", "PM")],
+    );
+    const index = new Map(containment.nodes.map((node, i) => [node.id, i]));
+    for (const [child, parent] of containment.parentOf) {
+      expect(index.get(parent)!, `${parent} must precede ${child}`).toBeLessThan(index.get(child)!);
+    }
+  });
+});
+
+describe("boundaryEdges", () => {
+  /** The whole pipeline, returning what GraphView would draw. */
+  const arrows = (
+    nodes: readonly GraphNode[],
+    edges: readonly GraphEdge[],
+    collapsed: readonly string[] = [],
+  ) => {
+    const epics = summarizeEpics(nodes, nodes);
+    const collapse = new Set(collapsed);
+    const flat = collapseGraph(nodes, edges, epics, collapse);
+    const containment = containerize(flat.nodes, epics, collapse);
+    return boundaryEdges(flat.edges, containment, collapse).map((arrow) => ({
+      from: arrow.from,
+      to: arrow.to,
+      count: arrow.sources.length,
+    }));
+  };
+
+  it("bundles a box's members into ONE arrow when the far side is collapsed", () => {
+    // The acceptance criterion, and the reason the feature is worth having: three arrows
+    // from three cards to one collapsed epic say the same thing three times, and the
+    // reader already asked to be told it once by collapsing that epic.
+    const drawn = arrows(
+      [
+        task("A1", "A"),
+        task("A2", "A"),
+        task("A3", "A"),
+        task("B1", "B"),
+        task("B2", "B"),
+      ],
+      [edge("A1", "B1"), edge("A2", "B1"), edge("A3", "B2")],
+      ["B"],
+    );
+    expect(drawn).toEqual([{ from: clusterId("A"), to: clusterId("B"), count: 3 }]);
+  });
+
+  it("leaves the arrows member-to-member while both sides are open", () => {
+    // Nothing is being simplified for the reader here — they opened both epics, which is
+    // the gesture that asks exactly which ticket waits on which.
+    const drawn = arrows(
+      [task("A1", "A"), task("A2", "A"), task("B1", "B"), task("B2", "B")],
+      [edge("A1", "B1"), edge("A2", "B2")],
+    );
+    expect(drawn).toEqual([
+      { from: "A1", to: "B1", count: 1 },
+      { from: "A2", to: "B2", count: 1 },
+    ]);
+  });
+
+  it("moves an epic's own edges onto its box", () => {
+    // The epic's node became the header, so an edge naming it has nothing else to land on.
+    const drawn = arrows([task("E"), task("M", "E"), task("OUT")], [edge("OUT", "E")]);
+    expect(drawn).toEqual([{ from: "OUT", to: clusterId("E"), count: 1 }]);
+  });
+
+  it("lifts to the NEAREST box, not the outermost", () => {
+    // A member of a box inside a box lifts one level, so the arrow still says which of
+    // the nested epics it came from — which is the only reason to have drawn two boxes.
+    const drawn = arrows(
+      [
+        task("P"),
+        task("C", "P"),
+        task("M", "C"),
+        task("X1", "X"),
+      ],
+      [edge("M", "X1")],
+      ["X"],
+    );
+    expect(drawn).toEqual([{ from: clusterId("C"), to: clusterId("X"), count: 1 }]);
+  });
+
+  it("never draws a box pointing at something inside itself", () => {
+    // Lifting `M` to its box would produce an arrow from the box to the collapsed epic it
+    // contains: a picture of nothing, and one that reads as a rendering fault.
+    const drawn = arrows(
+      [task("P"), task("M", "P"), task("C", "P"), task("CM", "C")],
+      [edge("M", "C")],
+      ["C"],
+    );
+    expect(drawn).toEqual([{ from: "M", to: clusterId("C"), count: 1 }]);
+  });
+
+  it("leaves an arrow between two members of the same box alone", () => {
+    // It is drawn INSIDE the box, between the two cards it is about. Bundling it to the
+    // box would produce a self-loop, and hiding it would throw away the only dependency
+    // information an opened epic exists to show.
+    const drawn = arrows([task("E"), task("M1", "E"), task("M2", "E")], [edge("M1", "M2")]);
+    expect(drawn).toEqual([{ from: "M1", to: "M2", count: 1 }]);
+  });
+
+  it("keeps members' arrows to a collapsed epic INSIDE their own box separate", () => {
+    // The ancestor guard, from the other side. Neither member may lift, because the box
+    // they would lift to is the box the collapsed epic is drawn in — so what is left is
+    // two honest arrows drawn inside the box between the things they are about.
+    const drawn = arrows(
+      [task("E"), task("M1", "E"), task("M2", "E"), task("C", "E"), task("CM", "C")],
+      [edge("M1", "CM"), edge("M2", "CM")],
+      ["C"],
+    );
+    expect(drawn).toEqual([
+      { from: "M1", to: clusterId("C"), count: 1 },
+      { from: "M2", to: clusterId("C"), count: 1 },
+    ]);
+  });
+
+  it("changes nothing about a graph with no boxes in it", () => {
+    const flat = [task("A"), task("B")];
+    expect(arrows(flat, [edge("A", "B")])).toEqual([{ from: "A", to: "B", count: 1 }]);
+  });
+});
+
+describe("dimContainers", () => {
+  const nodes: CanvasNode[] = [
+    { kind: "container", id: "epic:E", epic: one(summarizeEpics([task("E"), task("M1", "E")], [task("E"), task("M1", "E")])) },
+    { kind: "task", id: "M1", task: task("M1", "E") },
+    { kind: "task", id: "M2", task: task("M2", "E") },
+  ];
+  const parentOf = new Map([
+    ["M1", "epic:E"],
+    ["M2", "epic:E"],
+  ]);
+
+  it("does not dim a box while anything inside it is lit", () => {
+    // React Flow draws a box's members as SIBLINGS of the box, not inside it, so a dimmed
+    // box does not fade its contents — it draws a ghost outline around bright cards, which
+    // reads as a rendering fault rather than as "you did not ask about this".
+    expect(dimContainers(nodes, parentOf, new Set(["epic:E", "M2"])).has("epic:E")).toBe(false);
+  });
+
+  it("dims a box once everything inside it is background", () => {
+    expect(dimContainers(nodes, parentOf, new Set(["epic:E", "M1", "M2"])).has("epic:E")).toBe(true);
+  });
+
+  it("leaves the leaves exactly as it found them", () => {
+    const out = dimContainers(nodes, parentOf, new Set(["M2"]));
+    expect(out.has("M2")).toBe(true);
+    expect(out.has("M1")).toBe(false);
+  });
+
+  it("lets an empty box follow its own emphasis", () => {
+    // Nothing inside to protect, so the box answers for itself.
+    const empty: CanvasNode[] = [nodes[0]!];
+    expect(dimContainers(empty, new Map(), new Set(["epic:E"])).has("epic:E")).toBe(true);
   });
 });

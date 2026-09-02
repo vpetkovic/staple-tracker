@@ -15,10 +15,29 @@ import type { UiMode } from "@/lib/types";
 import type { XY } from "./graph-layout";
 
 /**
- * `v1` is in the key so a future change to the stored shape can be ignored rather than
- * migrated — the cost of a wrong guess here is that someone re-drags a few nodes.
+ * The schema version, in the key so a change to the stored shape can be IGNORED rather
+ * than migrated — the cost of a wrong guess here is that someone re-drags a few nodes.
+ *
+ * ── v1 -> v2, O4c (STA-135) ──────────────────────────────────────────────────────────
+ *
+ * v1 held one absolute coordinate per node. v2 holds a coordinate that is absolute for a
+ * top-level node and RELATIVE TO ITS EPIC CONTAINER for a node drawn inside one. The two
+ * shapes are indistinguishable — same keys, same `{x, y}` — so a v1 record read under v2
+ * would not fail, it would place every member of every box at its old canvas coordinate
+ * measured from the box's corner, i.e. hundreds of pixels outside the box it belongs to.
+ * Silently wrong is the reason this needed a version and the epic picker's share links
+ * did not: there, the old shape decodes into the new one correctly.
+ *
+ * v1 entries are ABANDONED, not swept. A sweep means enumerating storage and removing
+ * keys, which is a second thing that can throw inside a module whose entire contract is
+ * that nothing here throws; the reward would be a few hundred stale bytes.
+ *
+ * Exported so the test can pin it: bumping this is a decision, and a decision should
+ * break something when it is made by accident.
  */
-const PREFIX = "staple:graph-positions:v1";
+export const POSITIONS_VERSION = "v2";
+
+const PREFIX = `staple:graph-positions:${POSITIONS_VERSION}`;
 
 /**
  * One arrangement per scope, where scope is (hub-vs-single, workspace filter).

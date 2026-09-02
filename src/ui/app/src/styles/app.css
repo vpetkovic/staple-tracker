@@ -129,6 +129,46 @@ body,
   border-color: var(--ring);
 }
 
+/*
+ * Epic containers — O4c (STA-135).
+ *
+ * A BOX IS A PLACE, NOT A CARD, and every rule below follows from that one sentence.
+ *
+ * The fill is a wash of --muted rather than --card: the members drawn on top ARE --card,
+ * and a box painted the same colour would make a card sitting in it invisible at the
+ * edges. The border is quieter than a card's for the same reason — the loudest border on
+ * the canvas should be a ticket you can act on, not the folder it is filed in.
+ *
+ * No shadow and no hover border. ClusterNode wears a doubled shadow to say "this is
+ * several boxes"; a container does not need to say that, because you can see them.
+ *
+ * The body takes no pointer events so that panning, marquee and clicking the canvas still
+ * work over an epic that covers half the screen. The header opts back in — it is the drag
+ * handle and the click target. See EpicContainerNode.tsx.
+ */
+.staple-epic-container {
+  pointer-events: none;
+  background: color-mix(in oklab, var(--muted) 45%, transparent);
+  border-color: color-mix(in oklab, var(--border) 80%, transparent);
+  transition: opacity 120ms ease-out;
+}
+.staple-epic-container-bar {
+  pointer-events: auto;
+  cursor: grab;
+  border-bottom: 1px solid color-mix(in oklab, var(--border) 60%, transparent);
+  background: color-mix(in oklab, var(--card) 55%, transparent);
+  border-top-left-radius: inherit;
+  border-top-right-radius: inherit;
+}
+.react-flow__node-container.dragging .staple-epic-container-bar,
+.staple-epic-container-bar:active {
+  cursor: grabbing;
+}
+/* Same fade as a card, applied to the box. `dimContainers` decides when it is honest. */
+.staple-epic-container[data-dim] {
+  opacity: 0.16;
+}
+
 .react-flow__attribution {
   font-size: 9px;
   opacity: 0.45;

@@ -18,7 +18,13 @@
  * be resolved.
  */
 import { describe, expect, it } from "vitest";
-import { clearPositions, loadPositions, positionsKey, savePositions } from "./graph-positions";
+import {
+  POSITIONS_VERSION,
+  clearPositions,
+  loadPositions,
+  positionsKey,
+  savePositions,
+} from "./graph-positions";
 
 /** A Storage good enough for these tests; `throws` turns it into a hostile one. */
 class FakeStorage implements Storage {
@@ -67,11 +73,54 @@ describe("positionsKey", () => {
   });
 
   it("names the all-workspaces scope rather than leaving the segment empty", () => {
-    expect(positionsKey("hub", "")).toBe("staple:graph-positions:v1:hub:*");
+    expect(positionsKey("hub", "")).toBe("staple:graph-positions:v2:hub:*");
   });
 
-  it("is versioned, so a future shape change can be ignored instead of migrated", () => {
-    expect(positionsKey("hub", "staple")).toContain(":v1:");
+  it("is versioned, so a shape change can be ignored instead of migrated", () => {
+    expect(positionsKey("hub", "staple")).toContain(`:${POSITIONS_VERSION}:`);
+  });
+});
+
+/**
+ * The version bump — O4c (STA-135).
+ *
+ * This block exists because the failure it prevents is INVISIBLE. v1 stored one absolute
+ * coordinate per node; v2 stores a coordinate that is relative to the epic container a
+ * node is drawn inside. Same keys, same `{x, y}`, both perfectly valid — so a v1 record
+ * read under v2 would not throw, would not be filtered out by `isXY`, and would simply
+ * place every member of every box hundreds of pixels outside the box it belongs to. The
+ * key is the only thing standing between a stored arrangement and that reading.
+ */
+describe("schema version", () => {
+  it("is v2, and saying so out loud is the point", () => {
+    // A bump is a decision. Making it silently — because the shape changed and nobody
+    // remembered the key — is precisely what this pins.
+    expect(POSITIONS_VERSION).toBe("v2");
+  });
+
+  it("does not read a v1 arrangement", () => {
+    const storage = new FakeStorage();
+    // Exactly what the previous version wrote: absolute canvas coordinates.
+    storage.setItem("staple:graph-positions:v1:workspace:staple", JSON.stringify({ A: { x: 900, y: 40 } }));
+
+    // Discarded rather than misread. The user re-drags a few nodes; nothing lands outside
+    // its container.
+    expect(loadPositions(storage, positionsKey("workspace", "staple"))).toBeNull();
+  });
+
+  it("writes under the new key, leaving the old one untouched", () => {
+    const storage = new FakeStorage();
+    const old = "staple:graph-positions:v1:workspace:staple";
+    storage.setItem(old, JSON.stringify({ A: { x: 900, y: 40 } }));
+
+    savePositions(storage, positionsKey("workspace", "staple"), { A: { x: 12, y: 34 } });
+
+    // Abandoned, not swept: a sweep means enumerating storage inside a module whose whole
+    // contract is that nothing here throws, and the reward is a few hundred stale bytes.
+    expect(storage.raw(old)).toBe(JSON.stringify({ A: { x: 900, y: 40 } }));
+    expect(loadPositions(storage, positionsKey("workspace", "staple"))).toEqual({
+      A: { x: 12, y: 34 },
+    });
   });
 });
 
