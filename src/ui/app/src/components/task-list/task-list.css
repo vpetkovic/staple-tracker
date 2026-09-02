@@ -1,10 +1,20 @@
 /*
- * The row — V5 (STA-97). Geometry, the tokens V5 owns, and the six things that move.
+ * The task row — V5 (STA-97) geometry, generalised by R4 (STA-102).
  *
- * Imported by TreeGrid.tsx rather than added to app.css on purpose: the whole sheet is
- * scoped to this view and nothing outside `views/tree/` reads it, so it costs no other
- * ticket a merge. Everything below references a token role and never a hex — the only new
- * VALUES in this file are the eight label hues, which V1 explicitly declined to provide.
+ * Was `views/tree/tree-row.css`. It moved here with the row itself, unchanged rule for rule
+ * and class for class, plus two additions at the bottom: the column toggles that let a
+ * narrow container drop a column without forking the sheet, and the compact density.
+ *
+ * Imported by the components that use it (TaskList, TreeGrid) rather than added to app.css,
+ * so it costs no other ticket a merge. Everything below references a token role and never a
+ * hex — the only literal VALUES in this file are two of the eight label hues, which V1
+ * explicitly declined to provide.
+ *
+ * ── DENSITY IS A NUMBER SWAP, NOT A SECOND STYLESHEET ────────────────────────────────
+ *
+ * `[data-density="compact"]` re-points the geometry custom properties and nothing else.
+ * There is exactly one set of rules and two sets of numbers, so a change to the row cannot
+ * land in one density and quietly miss the other.
  */
 
 :root {
@@ -160,9 +170,18 @@
    * and the title silently refuses to ellipsize — the single most common way this row gets
    * built wrong.
    */
+  /*
+   * The two structural columns are named through custom properties so a preset can empty
+   * one (`--col-select: ;` below) without this template being restated anywhere. Restating
+   * it is the trap: an inline style or a higher-specificity override would then outrank the
+   * §14 media queries at the bottom of this file, and the narrow layouts would stop working
+   * for exactly the containers that need them most.
+   */
+  --col-select: [select] 24px;
+  --col-disclosure: [disclosure] 16px;
   grid-template-columns:
-    [select] 24px
-    [disclosure] 16px
+    var(--col-select)
+    var(--col-disclosure)
     [priority] 16px
     [identifier] var(--row-id-width)
     [status] 20px
@@ -191,6 +210,21 @@
   /* Background and opacity only. NEVER a transform or a layout property: at 36px with a
      hairline separator a 1px shift on hover reads as the whole list twitching. */
   transition: background-color var(--motion-duration-instant) var(--motion-ease-standard);
+  /*
+   * Where `scrollIntoView({ block: "nearest" })` is allowed to park this row — R1 (STA-100),
+   * for R6's prev/next arrows.
+   *
+   * The start value is NOT cosmetic. Group headers are `position: sticky; top: 0; height:
+   * 32px`, so a row scrolled flush to the top of the scroller lands UNDERNEATH the header
+   * that is pinned there and is simply not visible — which is the exact failure the
+   * scroll-into-view exists to prevent, reintroduced one row higher. 40px clears the header
+   * and leaves 8px of air.
+   *
+   * The end value is the cosmetic half: 8px so a row paged into view from below is not flush
+   * against the bottom edge of the window.
+   */
+  scroll-margin-block-start: 40px;
+  scroll-margin-block-end: 8px;
 }
 
 .staple-row-cell {
@@ -672,7 +706,7 @@
   .staple-row {
     height: 56px;
     grid-template-columns:
-      [disclosure] 16px
+      var(--col-disclosure)
       [priority] 16px
       [identifier] var(--row-id-width)
       [status] 20px
@@ -716,4 +750,160 @@
   .staple-group-body {
     transition: none;
   }
+}
+
+/* ══ R4 (STA-102) — column toggles, density, and the flat list container ═════════════ */
+
+/*
+ * A column that is OFF contributes nothing: no track, no gap, no reserved width.
+ *
+ * The empty custom-property value is deliberate and is the only way to do this without
+ * restating the whole template — see the note in `.staple-row`. `--col-select: ;` is a
+ * valid declaration whose value is empty, and `var()` substitutes nothing for it.
+ */
+.staple-row[data-select="off"] {
+  --col-select: ;
+}
+
+.staple-row[data-disclosure="off"] {
+  --col-disclosure: ;
+}
+
+/*
+ * Compact: 28px rows and a narrower identifier, for the detail panel and the palette.
+ *
+ * The FONT SIZES DO NOT CHANGE. Shrinking the title to 12px would have been the easy way to
+ * find the 8px, and it would have made every constrained list slightly harder to read than
+ * the main one — which is backwards, because a drawer is where you are reading closely. The
+ * 8px comes out of vertical padding, which nobody reads.
+ */
+[data-density="compact"] {
+  --row-height: 28px;
+  --row-id-width: 52px;
+}
+
+@media (pointer: coarse) {
+  /* Touch still gets a real target; compact only closes the gap to the 44px minimum. */
+  [data-density="compact"] {
+    --row-height: 36px;
+  }
+}
+
+/*
+ * The flat list container — the listbox equivalent of `.staple-tree`.
+ *
+ * No card background of its own: a children list inside a drawer is part of the drawer's
+ * surface, and a second panel inside a panel is the "boxes inside boxes" look this design
+ * language spends most of its rules avoiding. It gets a hairline at the top and bottom and
+ * lets the rows do the rest.
+ */
+.staple-task-list {
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.staple-task-list .staple-row {
+  padding-right: 8px;
+}
+
+/* The last row's hairline IS the list's bottom edge — no double line. */
+.staple-task-list .staple-row:last-child {
+  border-bottom: none;
+}
+
+/*
+ * The workspace pill.
+ *
+ * Carries the workspace SLUG, not the identifier's three-letter prefix — see config.ts for
+ * why that distinction is the whole justification for this element existing at all after
+ * STA-97 dropped §6.3's prefix chip. Squared and outlined, like every other static badge on
+ * the row; the capsule silhouette is reserved for the one live element.
+ */
+.staple-row-workspace {
+  flex-shrink: 0;
+  max-width: 12ch;
+  overflow: hidden;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/*
+ * `semantics="bare"`: the host owns the role, the tab stop and the selection paint. cmdk
+ * highlights its own `[data-selected]` item, so the row must not also paint a hover — two
+ * highlight systems on one line renders as a row that is lit twice and aligned once.
+ */
+.staple-row-bare {
+  cursor: inherit;
+}
+
+.staple-row-bare:hover,
+.staple-row-bare:focus-within {
+  background: transparent;
+}
+
+/* ══ R5 (STA-105) — the row inside cmdk's popup ══════════════════════════════════════ */
+
+/*
+ * `CommandItem` is a flex container and our row is a grid. Without this the row sizes to its
+ * content and the meta cluster floats in the middle of the item instead of sitting on its
+ * right edge — which looks like a bug in the row and is actually a missing `flex: 1`.
+ */
+[data-slot="command-item"] > .staple-row-bare {
+  flex: 1;
+  min-width: 0;
+}
+
+/*
+ * NO HAIRLINE between results.
+ *
+ * In the list the separator is what makes twenty rows read as one continuous surface. In a
+ * popup of six results with a rounded, highlighted selection travelling through them, the
+ * same separator turns the thing into a small table and fights the highlight for the eye.
+ * The row keeps every other property; it loses the one that only made sense at length.
+ */
+[data-preset="popup"] .staple-row {
+  height: var(--row-height);
+  padding-right: 4px;
+  border-bottom: none;
+}
+
+/*
+ * cmdk paints the selected item, so the row must not paint anything itself — including the
+ * `aria-current` accent edge, which in a search popup would claim "you are looking at this"
+ * about a row you have not opened.
+ */
+[data-preset="popup"] .staple-row[aria-current="true"] {
+  background: transparent;
+  box-shadow: none;
+}
+
+/*
+ * §14's claim degradation, applied by CONTAINER rather than by viewport width.
+ *
+ * The spec drops the working pill's prose at ≤879px and keeps the avatar and the breathing
+ * dot, on the grounds that "someone is on this" survives losing the word "Working…". A
+ * 512px popup is that same constraint arriving a different way, so the popup gets the same
+ * treatment at any window size. The dot and the initials — the never-drop half — stay.
+ *
+ * The STALE badge deliberately does NOT degrade. V5 tried clamping it and it rendered
+ * `held by claude · 3…`, eating "silent 3h", which is the entire diagnosis. It is rare, it is
+ * the loudest thing on the row on purpose, and it may take the width it needs — the title has
+ * `minmax(0, 1fr)` and is what gives way. That trade is as right in a popup as in the list:
+ * a result whose holder died four hours ago is worth a truncated title.
+ */
+[data-preset="popup"] .staple-working-label,
+[data-preset="popup"] .staple-held-label {
+  display: none;
+}
+
+[data-preset="popup"] .staple-working-pill,
+[data-preset="popup"] .staple-held-pill {
+  padding-right: 4px;
 }

@@ -22,7 +22,6 @@
  */
 import { useCallback, useState } from "react";
 import type { Issue, IssueStatus } from "@/lib/types";
-import { DEFAULT_EXPANDED_GROUPS } from "./tree-model";
 
 export const COLLAPSED_GROUPS_KEY = "staple:tree:collapsed-groups";
 export const EXPANDED_ROWS_KEY = "staple:tree:expanded-rows";
@@ -62,23 +61,39 @@ export function loadExpandedRows(storage: Storage | undefined): Map<string, bool
 }
 
 /**
- * Is this parent's subtree shown?
+ * The user's EXPLICIT choice for this row, or `undefined` if they have not made one.
  *
- * An explicit toggle always wins. Absent one, the answer comes from the row's GROUP: active
- * work is what you came to see, and a fully expanded backlog is a wall. Note that this is
- * keyed on the issue's own status, which under the §11.3 placement rule is also the group
- * it is rendered in — the two cannot disagree.
+ * R1 (STA-100) moved the DEFAULT out of this module and into tree-model.ts, and that is not
+ * tidying. The default depends on the shape of the list:
+ *
+ *   grouped — a row is expanded by default if its own status is active. Coherent, because
+ *     under the §11.3 placement rule a parent and the children nested beneath it are in the
+ *     same group and therefore share a status axis.
+ *   flat — that same rule HIDES WORK. A backlog epic holding in-progress children is
+ *     collapsed by its own status, and in flat mode its children have nowhere else to
+ *     appear; in grouped mode they were still on screen as roots of the In Progress group.
+ *     So the flat default is "expanded if this row or anything under it is active", which is
+ *     what "active work is what you came to see" actually meant all along.
+ *
+ * A module that persists a preference cannot know which of those applies. The model can.
  */
-export function isRowExpanded(overrides: ReadonlyMap<string, boolean>, issue: Issue): boolean {
-  const explicit = overrides.get(issue.id);
-  return explicit ?? DEFAULT_EXPANDED_GROUPS.has(issue.status);
+export function explicitExpansion(
+  overrides: ReadonlyMap<string, boolean>,
+  issue: Issue,
+): boolean | undefined {
+  return overrides.get(issue.id);
 }
 
 export interface TreeExpansion {
   isGroupCollapsed: (status: IssueStatus) => boolean;
   toggleGroup: (status: IssueStatus) => void;
-  isExpanded: (issue: Issue) => boolean;
-  toggleRow: (issue: Issue) => void;
+  /** The explicit choice only. `undefined` means "the model decides". */
+  explicit: (issue: Issue) => boolean | undefined;
+  /**
+   * Flip a row. Takes what it is CURRENTLY showing, because that is a fact about the
+   * rendered list (which knows the mode's default) and not about this store.
+   */
+  toggleRow: (issue: Issue, currentlyExpanded: boolean) => void;
 }
 
 export function useTreeExpansion(storage: Storage | undefined = globalThis.localStorage): TreeExpansion {
@@ -99,10 +114,10 @@ export function useTreeExpansion(storage: Storage | undefined = globalThis.local
   );
 
   const toggleRow = useCallback(
-    (issue: Issue) => {
+    (issue: Issue, currentlyExpanded: boolean) => {
       setExpandedRows((prev) => {
         const next = new Map(prev);
-        next.set(issue.id, !isRowExpanded(prev, issue));
+        next.set(issue.id, !currentlyExpanded);
         write(storage, EXPANDED_ROWS_KEY, Object.fromEntries(next));
         return next;
       });
@@ -111,7 +126,7 @@ export function useTreeExpansion(storage: Storage | undefined = globalThis.local
   );
 
   const isGroupCollapsed = useCallback((status: IssueStatus) => collapsedGroups.has(status), [collapsedGroups]);
-  const isExpanded = useCallback((issue: Issue) => isRowExpanded(expandedRows, issue), [expandedRows]);
+  const explicit = useCallback((issue: Issue) => explicitExpansion(expandedRows, issue), [expandedRows]);
 
-  return { isGroupCollapsed, toggleGroup, isExpanded, toggleRow };
+  return { isGroupCollapsed, toggleGroup, explicit, toggleRow };
 }

@@ -23,7 +23,7 @@
  * is the obvious mistake and it produces a glyph nobody can see in light mode.
  */
 import type { IssueStatus } from "@/lib/types";
-import { STATUS_LABEL } from "./tree-model";
+import { STATUS_LABEL } from "./model";
 
 /**
  * 8 even dashes around an r=6 ring. The spec wrote `2 2`, which on a 37.7px circumference

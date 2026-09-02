@@ -29,6 +29,7 @@
  * blur would just make the box feel broken.
  */
 import { Eye, EyeOff, ListFilter, Search } from "lucide-react";
+import { GroupByMenu } from "@/components/view-options/GroupByMenu";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { countActive, withShowDone, withText } from "@/lib/filters";
@@ -44,6 +45,15 @@ export function FilterBar() {
 
   return (
     <div className="ml-auto flex shrink-0 items-center gap-1.5">
+      {/*
+        R1 (STA-100) mounts the group-by control here rather than in AppShell, because this
+        cluster already owns its own `ml-auto` and the alternative was a wrapper in the shell
+        that would have had to reason about it. Grouping is not a filter — it takes no count
+        badge and `clearFilters()` does not touch it — but it IS view scoping, and it belongs
+        on the left of this group where the eye reaches it before Search.
+      */}
+      <GroupByMenu />
+
       {/* Ghost until you point at it — the same register the assignee box used, kept
           because the argument V2 made for it still holds: this row exists for the tabs,
           and a full-contrast field on the right outshouts them. */}

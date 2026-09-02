@@ -8,6 +8,7 @@
 import { createContext, useContext } from "react";
 import type { FilterState } from "./filters";
 import type { IssueRow, UiMode, WorkspaceRef } from "./types";
+import type { GroupBy } from "./view-prefs";
 import type { Resource } from "./useStaple";
 
 /**
@@ -84,6 +85,35 @@ export interface StapleSession {
    */
   assignee: string;
   setAssignee: (assignee: string) => void;
+
+  /**
+   * How the list is ARRANGED — R1 (STA-100). Flat is the default; see lib/view-prefs.ts for
+   * why this is not a field on the filter envelope.
+   *
+   * It sits on the session rather than inside the tree because the palette will want to
+   * offer "Group by status" as a command, and because App owns the autosave for every
+   * persisted preference in one place.
+   */
+  groupBy: GroupBy;
+  setGroupBy: (next: GroupBy) => void;
+
+  /**
+   * THE VISIBLE ORDERED LIST — the contract R6 (STA-106) navigates by.
+   *
+   * Every task the user can currently see, in the order they see it: post-filter,
+   * post-group, flattened. Group HEADERS are not in it (they are not tasks). Rows inside a
+   * collapsed group or under a collapsed parent are not in it either — they are not
+   * visible, and a "next" that lands on a row you cannot see is the bug the arrows exist to
+   * avoid. `[]` when the active view has no list, so a consumer disables rather than guesses.
+   *
+   * PUBLISHED BY THE VIEW, HELD HERE. The alternative — deriving it in App — would need the
+   * tree's collapse and expansion state, which lives in views/tree/expansion.ts; hoisting a
+   * view's private UI state into the page's global state to serve a consumer in the drawer
+   * is the wrong trade. App holds it behind an identity guard, so an unchanged order on the
+   * 1.5s poll does not re-render everything that reads it.
+   */
+  visibleOrder: readonly Selection[];
+  publishVisibleOrder: (order: readonly Selection[]) => void;
 
   selection: Selection | null;
   /** The single navigation primitive: open an issue in the detail drawer. */

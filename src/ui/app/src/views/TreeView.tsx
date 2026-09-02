@@ -1,38 +1,29 @@
 /**
- * The task list. Status-grouped, one line per task, everything readable without opening it.
+ * The task list. One line per task, everything readable without opening it.
  *
  * ── This file is a CONTAINER and nothing else ─────────────────────────────────────────
  *
- * Three tickets converge here and each owns a different layer, which is the only reason
- * three agents could work on it at once:
+ * Four tickets converge here and each owns a different layer, which is the only reason
+ * several agents could work on it at once:
  *
- *   V2 (STA-87) — the scroll box and the full-bleed width.
- *   V4 (STA-89) — what is IN the list: `session.issues` + `applyFilters`.
- *   V5 (STA-97) — everything from the group headers down, in `views/tree/`.
+ *   V2 (STA-87)  — the scroll box and the full-bleed width.
+ *   V4 (STA-89)  — what is IN the list: `session.issues` + `applyFilters`.
+ *   V5 (STA-97)  — the row and the group headers, now in `components/task-list/`.
+ *   R1 (STA-100) — whether there are group headers at all, and publishing what is visible.
  *
  * The scroller lives here rather than in the shell because `position: sticky` resolves
- * against the nearest scrolling ancestor, and V5's group headers are sticky. A shell that
- * owned the scrolling would have owned that decision on the list's behalf.
+ * against the nearest scrolling ancestor, V5's group headers are sticky, and R1's
+ * scroll-into-view measures against the same box. A shell that owned the scrolling would have
+ * owned all three decisions on the list's behalf.
  *
- * V5 removed the padded inner wrapper V2 left behind (`px-4 py-3`). Rows are flush and
- * hairline-separated now, so the list reads as one continuous surface and a gutter would
- * only have stopped the separators reaching the window edge.
+ * ── The two empty states are different sentences ──────────────────────────────────────
  *
- * ── What V5 deleted from this file, and why it was a bug ──────────────────────────────
- *
- * `groupByWorkspace()` mapped `IssueRow[] -> Issue[]` and dropped `row.claim` on the floor.
- * `/api/issues` runs a batched liveness query per workspace and sends `claim` on every row;
- * the view threw the result away, which made the live "Working…" pill impossible. The
- * pipeline now carries `{ issue, claim, workspace }` end to end. Hub mode no longer groups
- * by workspace either — status is the primary axis in both modes and the workspace became a
- * prefix chip on the identifier, because "which file did this come from" is a property of a
- * row and not a reason to split the list.
- *
- * `flatten()` also moved, into `tree/tree-model.ts`, where it gained the thing it was
- * missing: a placement rule. It used to nest a whole family under its head regardless of
- * status, which under status grouping would put an in-progress child inside Backlog.
+ * An empty workspace and a filter that excluded everything are DIFFERENT facts, and telling
+ * the second as the first is how a filter convinces someone the tracker lost their work.
+ * Both of them also have to CLEAR the published visible order, or the detail drawer's
+ * prev/next arrows would keep paging a list that is no longer on the page.
  */
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import type { AuthError } from "@/lib/api";
 import { applyFilters, hiddenParents } from "@/lib/filters";
 import { useSession } from "@/lib/session";
@@ -41,7 +32,7 @@ import { EmptyState, NoMatchesState, ViewState } from "./ViewChrome";
 
 export function TreeView(_props: { onAuthError: (error: AuthError) => void }) {
   const session = useSession();
-  const { mode, selection, filters } = session;
+  const { mode, selection, filters, groupBy, publishVisibleOrder } = session;
 
   const all = useMemo(() => session.issues.data ?? [], [session.issues.data]);
   const rows = useMemo(() => applyFilters(all, filters), [all, filters]);
@@ -49,19 +40,27 @@ export function TreeView(_props: { onAuthError: (error: AuthError) => void }) {
   /** Children whose parent a filter removed — V4's seam for V5's breadcrumb chip. */
   const orphanedBy = useMemo(() => hiddenParents(rows, all), [rows, all]);
 
+  /**
+   * Nothing on screen means nothing to navigate. TreeGrid publishes its own order and clears
+   * it when it unmounts, but it never mounts at all in the loading and empty states — and
+   * those are exactly the states where a stale order would be most confusing, because the
+   * drawer can still be open over an empty list.
+   */
+  useEffect(() => {
+    if (rows.length === 0) publishVisibleOrder([]);
+  }, [rows.length, publishVisibleOrder]);
+
   return (
     <div className="scrollbar-auto-hide h-full overflow-y-auto">
       <ViewState resource={session.issues} empty="no open issues">
         {(loaded) => {
-          // An empty workspace and a filter that excluded everything are DIFFERENT
-          // sentences, and telling the second as the first is how a filter convinces
-          // someone the tracker lost their work.
           if (loaded.length === 0) return <EmptyState>no issues yet</EmptyState>;
           if (rows.length === 0) return <NoMatchesState />;
           return (
             <TreeGrid
               rows={rows}
               mode={mode}
+              groupBy={groupBy}
               currentRef={selection?.ref ?? null}
               /*
                * TRUE, and this is the rewiring the spec asked for rather than a
@@ -75,6 +74,7 @@ export function TreeView(_props: { onAuthError: (error: AuthError) => void }) {
               hiddenParents={orphanedBy}
               onOpen={session.open}
               onCloseDrawer={session.close}
+              onVisibleOrder={publishVisibleOrder}
             />
           );
         }}

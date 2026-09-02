@@ -23,10 +23,11 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { ReactElement } from "react";
 import type { PullRequestRef } from "@/lib/types";
 import { STALE_CLAIM_SECONDS } from "@/lib/claim";
-import { IssueRowLine } from "./IssueRowLine";
+import { buildGroups } from "@/views/tree/tree-model";
 import { PrioritySignal } from "./PrioritySignal";
 import { StatusIcon } from "./StatusIcon";
-import { buildGroups } from "./tree-model";
+import { TaskRowLine } from "./TaskRowLine";
+import { resolveTaskListConfig } from "./config";
 import { claim, row } from "./fixtures";
 import type { Issue, ClaimActivity } from "@/lib/types";
 
@@ -45,14 +46,12 @@ function renderRow(
   })[0]!.rows[0]!;
 
   return renderToStaticMarkup(
-    <IssueRowLine
+    <TaskRowLine
       row={built}
+      config={resolveTaskListConfig("tree", { labelMax: 2 })}
+      semantics="grid"
       isExpanded
-      isSelected={false}
-      isCurrent={false}
       isFocused
-      anySelected={false}
-      labelMax={2}
       now={NOW}
       onOpen={() => {}}
       onOpenParent={() => {}}
@@ -158,13 +157,16 @@ describe("row semantics", () => {
     expect(markup.startsWith("<div")).toBe(true);
   });
 
-  it("reserves the select, disclosure, priority and actions columns on every row", () => {
+  it("reserves the disclosure, priority and actions columns on every row", () => {
     // A leaf row with no children still holds the disclosure width, or titles stop aligning.
     const leaf = renderRow();
     expect(leaf).toContain("staple-row-chevron-spacer");
-    expect(leaf).toContain("staple-row-check");
     expect(leaf).toContain("staple-row-priority");
     expect(leaf).toContain("staple-row-actions");
+    // The SELECT column is deliberately absent since R2 (STA-101) — it is switched off at
+    // `SHOW_ROW_CHECKBOXES`, and a column that is off must occupy no width at all. That is
+    // asserted, along with the one-line-to-restore wiring, in task-list.test.tsx.
+    expect(leaf).not.toContain("staple-row-check");
   });
 
   it("names an unassigned row calmly — no placeholder avatar", () => {

@@ -8,9 +8,27 @@
  * The palette does NOT close after a write. A status change can be refused by a guard —
  * staple has no transition table — and closing on the refusal would throw the reason
  * away. It stays open, shows what the store said, and the fix is one more keystroke.
+ *
+ * ── R5 (STA-105): THE RESULTS ARE THE SAME ROW AS THE LIST ────────────────────────────
+ *
+ * Issue results used to be `"${identifier} ${title}"` in a truncating span with the status
+ * as a right-aligned hint. That is a different language from the list two hundred pixels
+ * behind it: the same task, found two ways, looked like two kinds of object. They now render
+ * `TaskRowLine` in the `popup` preset, so a search result carries the same priority glyph,
+ * the same status glyph and the same identifier register as the row it will take you to.
+ *
+ * `semantics="bare"` is the important part. cmdk's `CommandItem` is ALREADY the option: it
+ * owns the role, the roving selection and the `data-selected` highlight. A row that also
+ * declared `role="option"` would nest two options, and one that also took a tab stop would
+ * double every arrow key. So the row renders as a line with no role, no tabindex and no
+ * hover paint of its own, and the host keeps everything it already owned.
  */
 import { useCallback, useMemo, useState } from "react";
 import { GuardRefusal } from "@/components/GuardRefusal";
+import { TaskRowLine, flatRow, resolveTaskListConfig } from "@/components/task-list";
+// Explicit: the palette is mounted beside the views, not inside one, and must not
+// depend on whichever view happens to be on screen having pulled this in.
+import "@/components/task-list/task-list.css";
 import {
   Command,
   CommandEmpty,
@@ -98,10 +116,43 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
   );
 
   const visibleCommands = useMemo(() => filterCommands(commands, query), [commands, query]);
+
+  /**
+   * The ranked ROWS, not their labels. `issueCommand` still produces the id, the keywords and
+   * the action — the ranking and the "what does enter do" question are unchanged and still
+   * live in commands.ts — but the row itself is carried through so the result can be rendered
+   * as a row rather than as a string describing one.
+   */
   const visibleIssues = useMemo(
-    () => rankIssues(rows, query).map(({ row }) => issueCommand(row, session.mode === "hub")),
+    () =>
+      rankIssues(rows, query).map(({ row }) => ({
+        row,
+        command: issueCommand(row, session.mode === "hub"),
+      })),
     [rows, query, session.mode],
   );
+
+  /**
+   * The popup preset: compact rows, the workspace pill ON (results are the one surface that
+   * mixes workspaces with no heading to say so), and everything §14 drops least-diagnostic-
+   * first — date, then label names, then the PR number — dropped. What survives is §14's
+   * never-drop set: priority, identifier, status, assignee and the working pill.
+   *
+   * One clock reading for the whole list, so ten results cannot disagree about "3h".
+   */
+  const rowConfig = useMemo(
+    () =>
+      resolveTaskListConfig("popup", {
+        // HUB MODE ONLY. The pill exists so a cross-workspace result is identifiable; in a
+        // single-workspace app there is nothing to tell apart, and it would be ~70px of
+        // identical grey text on every row. This is the same condition `issueCommand` already
+        // used to decide whether to name the workspace in the old hint, so the palette keeps
+        // one answer to "should we say which file this came from".
+        columns: { workspace: session.mode === "hub" },
+      }),
+    [session.mode],
+  );
+  const now = useMemo(() => new Date(), [visibleIssues]);
 
   const close = useCallback(() => {
     setQuery("");
@@ -291,13 +342,24 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
                 ) : null}
 
                 {visibleIssues.length > 0 ? (
-                  <CommandGroup heading="issues">
-                    {visibleIssues.map((command) => (
-                      <CommandItem key={command.id} value={command.id} onSelect={() => void run(command)}>
-                        <span className="truncate">{command.label}</span>
-                        {command.hint ? (
-                          <CommandShortcut className="font-mono normal-case">{command.hint}</CommandShortcut>
-                        ) : null}
+                  // `data-preset` so the stylesheet can reach these rows: they are `bare`,
+                  // so unlike <TaskList> there is no list root of ours around them.
+                  <CommandGroup heading="issues" data-preset="popup">
+                    {visibleIssues.map(({ row, command }) => (
+                      <CommandItem
+                        key={command.id}
+                        value={command.id}
+                        onSelect={() => void run(command)}
+                        // The row is full-bleed inside the item and owns its own geometry;
+                        // the item keeps only its rounded corner and its selected background.
+                        className="p-0 gap-0"
+                      >
+                        <TaskRowLine
+                          row={flatRow(row)}
+                          config={rowConfig}
+                          semantics="bare"
+                          now={now}
+                        />
                       </CommandItem>
                     ))}
                   </CommandGroup>

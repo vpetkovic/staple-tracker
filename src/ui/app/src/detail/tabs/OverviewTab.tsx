@@ -6,8 +6,8 @@
  * comments, events, revisions — belongs in the Activity tab (U3), not here.
  */
 import type { ReactNode } from "react";
-import { IssueCard } from "@/components/IssueCard";
 import { StatusBadge } from "@/components/StatusBadge";
+import { TaskList } from "@/components/task-list";
 import { blockingDescriptor, needsBorrowedDescriptor } from "@/lib/derived-blocked";
 import { Markdown } from "@/lib/markdown";
 import { useSession } from "@/lib/session";
@@ -149,11 +149,21 @@ export function OverviewTab({ detail, workspace }: TabProps) {
       {detail.children.length > 0 ? (
         <>
           <Heading>Children</Heading>
-          <div className="space-y-1.5">
-            {detail.children.map((child) => (
-              <IssueCard key={child.id} workspace={workspace} issue={child} showStatus onOpen={session.open} />
-            ))}
-          </div>
+          {/*
+            R4 (STA-102): the SAME Linear row the tree renders, in the `panel` preset —
+            compact, no checkbox, no connectors, no date column. It replaces a stack of
+            `IssueCard`s, which was a second visual language for the same object: a card
+            with a status badge, in a panel, beside a list that had spent a whole ticket
+            learning to be a row. One import, one element, and every future improvement to
+            the row lands here for free.
+          */}
+          <TaskList
+            label="Children"
+            preset="panel"
+            rows={detail.children.map((child) => ({ workspace, issue: child, claim: null }))}
+            currentRef={issue.identifier}
+            onOpen={session.open}
+          />
         </>
       ) : null}
 

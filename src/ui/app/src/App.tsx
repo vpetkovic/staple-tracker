@@ -42,6 +42,7 @@ import {
   type StapleSession,
   type ViewName,
 } from "@/lib/session";
+import { loadViewPrefs, saveViewPrefs, type GroupBy } from "@/lib/view-prefs";
 import { useDataVersion, useResource } from "@/lib/useStaple";
 import { GraphView } from "@/views/GraphView";
 import { TreeView } from "@/views/TreeView";
@@ -57,6 +58,16 @@ const VIEW_COMPONENTS: Record<ViewName, typeof TreeView> = {
   tree: TreeView,
   graph: GraphView,
 };
+
+/**
+ * Same list, same order? Compared by value so a rebuilt-but-identical order keeps its old
+ * array identity and every `useMemo`/`useEffect` downstream stays asleep.
+ */
+function sameOrder(a: readonly Selection[], b: readonly Selection[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  return a.every((entry, i) => entry.ref === b[i]!.ref && entry.workspace === b[i]!.workspace);
+}
 
 export function App() {
   // Set once, by the first AuthError anything throws. Non-null means: stop rendering
@@ -94,6 +105,30 @@ export function App() {
   useEffect(() => {
     saveFilters(window.localStorage, filters);
   }, [filters]);
+
+  /**
+   * How the list is arranged — R1 (STA-100). Seeded during the FIRST render for the same
+   * reason the filters are: an effect would paint one frame of the wrong layout and then
+   * correct itself, and a list that re-arranges itself 16ms after it appears reads as a bug.
+   */
+  const [groupBy, setGroupBy] = useState<GroupBy>(() => loadViewPrefs(window.localStorage).groupBy);
+
+  useEffect(() => {
+    saveViewPrefs(window.localStorage, { groupBy });
+  }, [groupBy]);
+
+  /**
+   * The visible ordered list — published by whichever view is on screen, held here.
+   *
+   * The identity guard is the whole reason this is a callback and not a plain setter. The
+   * fingerprint poll rebuilds the row list every 1.5s; nine times out of ten it produces the
+   * SAME order, and handing a fresh array to every consumer each time would re-render the
+   * detail drawer twice a second for no change at all.
+   */
+  const [visibleOrder, setVisibleOrder] = useState<readonly Selection[]>([]);
+  const publishVisibleOrder = useCallback((next: readonly Selection[]) => {
+    setVisibleOrder((prev) => (sameOrder(prev, next) ? prev : next));
+  }, []);
 
   const { version, bump } = useDataVersion(onAuthError);
   const bootstrap = useResource(() => getBootstrap(), [], onAuthError);
@@ -133,6 +168,10 @@ export function App() {
       issues,
       filters,
       setFilters,
+      groupBy,
+      setGroupBy,
+      visibleOrder,
+      publishVisibleOrder,
       assignee,
       setAssignee,
       selection,
@@ -147,6 +186,9 @@ export function App() {
     ws,
     issues,
     filters,
+    groupBy,
+    visibleOrder,
+    publishVisibleOrder,
     assignee,
     setAssignee,
     selection,

@@ -39,6 +39,7 @@ export function issue(over: Partial<Issue> & { title?: string } = {}): Issue {
     startedAt: null,
     completedAt: null,
     cancelledAt: null,
+    estimatedSeconds: null,
     createdAt: "2026-09-01T00:00:00.000Z",
     updatedAt: "2026-09-01T00:00:00.000Z",
     ...over,

@@ -1,8 +1,13 @@
 /**
- * Where a row goes, in what order, and what the connector under it looks like — V5 (STA-97).
+ * WHERE A ROW GOES — the tree view's placement rule, and nothing else. V5 (STA-97).
  *
- * This is the whole placement rule of the tree view, kept as pure functions so the thing
- * that is genuinely easy to get wrong is also the thing that is cheap to pin down in a test.
+ * R4 (STA-102) took the row's SHAPE and GEOMETRY out of this file and into
+ * `components/task-list/model.ts`, where the detail panel and the palette can reach them
+ * without also inheriting the tree's bucketing rules. What is left here is the one thing
+ * that is genuinely about the tree: which status group a task lands in, how a family
+ * flattens inside it, and what the connector under it looks like — kept as pure functions
+ * so the thing that is easy to get wrong is also the thing that is cheap to pin down.
+ *
  * Nothing here renders, reads a clock, or touches storage.
  *
  * ── THE INVARIANT (row spec §1) ───────────────────────────────────────────────────────
@@ -22,20 +27,17 @@
  * status grouping is a triage view whose job is "what is happening right now", not "how is
  * this epic shaped". The graph view and the detail drawer's children list own the whole-tree
  * question properly.
- *
- * `buildGroups` therefore takes placement inputs and derives none of them. When V4's
- * grouping control grows a `group by: none` mode (spec §18 Q3), it supplies a different
- * bucketing and reuses every row component untouched.
  */
+import type { TaskRow } from "@/components/task-list";
+import type { Selection } from "@/lib/session";
+import type { GroupBy } from "@/lib/view-prefs";
 import {
   OPEN_STATUS_ORDER,
   RESOLVED_STATUSES,
-  type ClaimActivity,
   type Issue,
   type IssuePriority,
   type IssueRow,
   type IssueStatus,
-  type PullRequestRef,
 } from "@/lib/types";
 
 /**
@@ -45,17 +47,6 @@ import {
  * board already learned that lesson once.
  */
 export const GROUP_ORDER: readonly IssueStatus[] = [...OPEN_STATUS_ORDER, ...RESOLVED_STATUSES];
-
-/** Title Case for a group header. `in_progress` is two words to a reader, one to the wire. */
-export const STATUS_LABEL: Record<IssueStatus, string> = {
-  backlog: "Backlog",
-  todo: "Todo",
-  in_progress: "In Progress",
-  in_review: "In Review",
-  done: "Done",
-  blocked: "Blocked",
-  cancelled: "Cancelled",
-};
 
 /**
  * THE ONE PLACE "hidden unless asked for" is decided — V4 (STA-89) rewires exactly here.
@@ -79,55 +70,6 @@ export const DEFAULT_EXPANDED_GROUPS: ReadonlySet<IssueStatus> = new Set<IssueSt
   "blocked",
 ]);
 
-/** 20px per level (§11.1). */
-export const INDENT_STEP = 20;
-
-/**
- * Past six levels the indent stops growing. The store's own depth cap makes this largely
- * theoretical, which is precisely why it should cost one `Math.min` and no more thought
- * than that: rows stay legible and the title column never starves.
- */
-export const MAX_INDENT_DEPTH = 6;
-
-export function indentPx(depth: number): number {
-  return Math.min(Math.max(depth, 0), MAX_INDENT_DEPTH) * INDENT_STEP;
-}
-
-/**
- * Row grid geometry. MIRRORED IN tree-row.css — the grid template there uses these same
- * numbers, and this is the only duplication in the module. It exists because the connector
- * rails are absolutely positioned by JavaScript and CSS cannot tell it where a named grid
- * column starts. If you change one, change the other; a mismatch is instantly visible as a
- * connector that misses the chevron it is supposed to hang from.
- */
-export const ROW_PAD_LEFT = 8;
-export const COL_SELECT = 24;
-export const COL_DISCLOSURE = 16;
-export const COL_GAP = 8;
-
-/**
- * The x a connector hangs from, for a parent sitting at `level`.
- *
- * ── DELIBERATE DEVIATION FROM SPEC §11.2, AND WHY IT HAD TO BE ONE ────────────────────
- *
- * The spec puts the origin at the centre of the parent's IDENTIFIER column. That number
- * does not work against the spec's own grid: the identifier column centre lands roughly
- * 110px in, while the CHILD's priority glyph — where §11.2 says the horizontal segment must
- * terminate — starts around 84px in. The elbow would have to run backwards. (The spec's own
- * arithmetic, `24 + 16 + 8 + idWidth/2`, also omits two of the three column gaps, so its
- * "≈78" is short of its own layout; either way the ordering is wrong.)
- *
- * The origin used instead is the centre of the parent's DISCLOSURE column — under the
- * chevron. That is where the eye already is when it decides to expand something, it is what
- * Linear actually does, and the arithmetic closes: origin at 48 + 20·level, a 12px elbow
- * landing exactly on the child's own disclosure column, entirely inside the indent gutter
- * and clear of every glyph on the child row. Everything else in §11.2 — 1px
- * `--border-strong`, 6px radius, terminate-on-last-child, ancestor rails — is unchanged.
- */
-export function guideX(level: number): number {
-  return ROW_PAD_LEFT + indentPx(level) + COL_SELECT + COL_GAP + COL_DISCLOSURE / 2;
-}
-
 const PRIORITY_RANK: Record<IssuePriority, number> = {
   critical: 0,
   high: 1,
@@ -135,45 +77,10 @@ const PRIORITY_RANK: Record<IssuePriority, number> = {
   low: 3,
 };
 
-/** The parent chip a cross-group child wears instead of an indent. */
-export interface Breadcrumb {
-  identifier: string;
-  title: string;
-}
-
-/**
- * One rendered line. Everything the row component needs and nothing it has to derive.
- *
- * `claim` rides along because the working pill is impossible without it — and because the
- * view used to drop it: `groupByWorkspace()` mapped `IssueRow[] -> Issue[]` and threw the
- * liveness the server had already batched a query to produce. That map is deleted; this
- * type is the shape that replaces it.
- */
-export interface TreeRow {
-  issue: Issue;
-  claim: ClaimActivity | null;
-  workspace: string;
-  pullRequests?: PullRequestRef[];
-  /** Depth WITHIN THE GROUP. A family head is depth 0 wherever it sits in the real tree. */
-  depth: number;
-  hasChildren: boolean;
-  /** Children in this same group — what a collapsed parent's `+N` chip declares. */
-  childCount: number;
-  /**
-   * One entry per level from 0 to `depth - 1`: does a vertical rail continue BELOW this row
-   * at that level. The last entry is this row's own level and is `!isLast`; the earlier ones
-   * are ancestor rails whose subtrees are not yet exhausted.
-   */
-  guides: boolean[];
-  isLast: boolean;
-  /** Set only when the parent exists but landed in another group (§11.3). */
-  breadcrumb: Breadcrumb | null;
-}
-
 export interface StatusGroup {
   status: IssueStatus;
   /** Rows to render — children of a collapsed parent are absent. */
-  rows: TreeRow[];
+  rows: TaskRow[];
   /**
    * How many tasks are in this group, collapsed or not. Deliberately NOT `rows.length`:
    * a count that follows what is rendered says zero for a collapsed group, which deletes
@@ -183,8 +90,12 @@ export interface StatusGroup {
 }
 
 export interface BuildOptions {
-  /** Whether a parent's children are shown. Owned by expansion.ts, injected here. */
-  isExpanded: (issue: Issue) => boolean;
+  /**
+   * The user's EXPLICIT expand/collapse choice for a row, or `undefined` if they have not
+   * made one — in which case this module supplies the default, which differs by mode. See
+   * `defaultExpansion` below and the note in expansion.ts.
+   */
+  isExpanded: (issue: Issue) => boolean | undefined;
   /**
    * Whether resolved statuses may form groups. THE ONE PLACE the hide-resolved default is
    * applied inside V5 — and in the live app it is now handed `true`, because V4 (STA-89)
@@ -220,6 +131,120 @@ function compareRows(a: Issue, b: Issue): number {
 }
 
 /**
+ * Flatten one bucket of rows into rendered lines, depth-first.
+ *
+ * Shared by `buildGroups` (one call per status bucket) and by `flattenFlat` (one call over
+ * the whole page, for R1's ungrouped default). Extracting it is what makes "flat mode is
+ * the same list without the bucketing step" true in the code and not only in the ticket.
+ */
+/**
+ * Which parents are expanded when the user has not said — and why it is not one rule.
+ *
+ * GROUPED: the row's own status. Coherent, because §11.3 places a parent and the children
+ * nested under it in the same group, so "active work is open, the backlog is folded" applies
+ * to both ends of every parent/child edge that is actually drawn.
+ *
+ * FLAT: that rule HIDES WORK, and this is the trap R1 walked into and had to climb back out
+ * of. A backlog epic holding in-progress children is folded by its own status — and in flat
+ * mode its children have nowhere else to appear, where in grouped mode they were still on
+ * screen as roots of the In Progress group wearing a breadcrumb. Making flat the default
+ * would therefore have made active work *less* visible, which is the opposite of the point.
+ * So the flat default is "this row, or anything beneath it, is active".
+ *
+ * Found by looking at the evidence screenshots, not by a failing unit test: the seeded
+ * in-progress child of a backlog parent simply was not on the page.
+ */
+function subtreesHoldingActiveWork(rows: IssueRow[]): Set<string> {
+  const parentOf = new Map(rows.map((r) => [r.issue.id, r.issue.parentId]));
+  const holders = new Set<string>();
+
+  for (const r of rows) {
+    if (!DEFAULT_EXPANDED_GROUPS.has(r.issue.status)) continue;
+    // Walk up marking every ancestor. `seen` guards against a cycle the store should never
+    // produce and which would otherwise hang the render rather than draw a wrong row.
+    const seen = new Set<string>();
+    let parentId = parentOf.get(r.issue.id) ?? null;
+    while (parentId && parentOf.has(parentId) && !seen.has(parentId)) {
+      seen.add(parentId);
+      holders.add(parentId);
+      parentId = parentOf.get(parentId) ?? null;
+    }
+  }
+
+  return holders;
+}
+
+function flatten(
+  bucket: IssueRow[],
+  presentAnywhere: Map<string, Issue>,
+  options: BuildOptions,
+  defaultExpanded: (issue: Issue) => boolean,
+): TaskRow[] {
+  const { isExpanded: explicit, hiddenParents } = options;
+  const isExpanded = (issue: Issue): boolean => explicit(issue) ?? defaultExpanded(issue);
+
+  const inGroup = new Map(bucket.map((r) => [r.issue.id, r]));
+  const children = new Map<string, IssueRow[]>();
+  const roots: IssueRow[] = [];
+
+  for (const r of bucket) {
+    const parentId = r.issue.parentId;
+    // Nesting happens ONLY where parent and child are both in this bucket.
+    if (parentId && inGroup.has(parentId)) {
+      const bucketed = children.get(parentId);
+      if (bucketed) bucketed.push(r);
+      else children.set(parentId, [r]);
+    } else {
+      roots.push(r);
+    }
+  }
+
+  const byIssue = (a: IssueRow, b: IssueRow) => compareRows(a.issue, b.issue);
+  roots.sort(byIssue);
+  for (const list of children.values()) list.sort(byIssue);
+
+  const rendered: TaskRow[] = [];
+
+  const walk = (list: IssueRow[], depth: number, ancestorGuides: boolean[]): void => {
+    list.forEach((r, index) => {
+      const kids = children.get(r.issue.id) ?? [];
+      const isLast = index === list.length - 1;
+      const expanded = kids.length > 0 && isExpanded(r.issue);
+      // Two ways to lose your parent, both worth a chip: it landed in another GROUP, or
+      // it was removed by a FILTER. The first is on the page somewhere, the second is not
+      // — and neither is a reason to render a child as though it were a root.
+      const parent = r.issue.parentId
+        ? (presentAnywhere.get(r.issue.parentId) ?? hiddenParents?.get(r.issue.id))
+        : undefined;
+
+      rendered.push({
+        issue: r.issue,
+        claim: r.claim,
+        workspace: r.workspace,
+        pullRequests: r.pullRequests,
+        depth,
+        hasChildren: kids.length > 0,
+        isExpanded: expanded,
+        childCount: kids.length,
+        guides: depth === 0 ? [] : [...ancestorGuides, !isLast],
+        isLast,
+        // A nested child is placed by lineage and the elbow already says so; only a row
+        // that could NOT be nested needs to name the parent it belongs to.
+        breadcrumb:
+          depth === 0 && parent ? { identifier: parent.identifier, title: parent.title } : null,
+      });
+
+      if (expanded) {
+        walk(kids, depth + 1, depth === 0 ? [] : [...ancestorGuides, !isLast]);
+      }
+    });
+  };
+
+  walk(roots, 0, []);
+  return rendered;
+}
+
+/**
  * Bucket by own status, nest only within a bucket, emit rows depth-first.
  *
  * The two-pass shape matters: `presentAnywhere` is built from the WHOLE input, not from the
@@ -228,7 +253,7 @@ function compareRows(a: Issue, b: Issue): number {
  * at a ticket the reader cannot see is worse than no chip.
  */
 export function buildGroups(rows: IssueRow[], options: BuildOptions): StatusGroup[] {
-  const { isExpanded, showResolved = false, hiddenParents } = options;
+  const { showResolved = false } = options;
 
   const visible = showResolved ? rows : rows.filter((r) => !isResolvedStatus(r.issue.status));
   const presentAnywhere = new Map(rows.map((r) => [r.issue.id, r.issue]));
@@ -247,67 +272,95 @@ export function buildGroups(rows: IssueRow[], options: BuildOptions): StatusGrou
     // Empty groups do not render. A "Blocked 0" header is permanent furniture announcing
     // a non-event, and furniture stops being read within a day.
     if (!bucket || bucket.length === 0) continue;
-
-    const inGroup = new Map(bucket.map((r) => [r.issue.id, r]));
-    const children = new Map<string, IssueRow[]>();
-    const roots: IssueRow[] = [];
-
-    for (const r of bucket) {
-      const parentId = r.issue.parentId;
-      // Nesting happens ONLY where parent and child landed in the same group.
-      if (parentId && inGroup.has(parentId)) {
-        const bucketed = children.get(parentId);
-        if (bucketed) bucketed.push(r);
-        else children.set(parentId, [r]);
-      } else {
-        roots.push(r);
-      }
-    }
-
-    const byIssue = (a: IssueRow, b: IssueRow) => compareRows(a.issue, b.issue);
-    roots.sort(byIssue);
-    for (const list of children.values()) list.sort(byIssue);
-
-    const rendered: TreeRow[] = [];
-
-    const walk = (list: IssueRow[], depth: number, ancestorGuides: boolean[]): void => {
-      list.forEach((r, index) => {
-        const kids = children.get(r.issue.id) ?? [];
-        const isLast = index === list.length - 1;
-        // Two ways to lose your parent, both worth a chip: it landed in another GROUP, or
-        // it was removed by a FILTER. The first is on the page somewhere, the second is not
-        // — and neither is a reason to render a child as though it were a root.
-        const parent = r.issue.parentId
-          ? (presentAnywhere.get(r.issue.parentId) ?? hiddenParents?.get(r.issue.id))
-          : undefined;
-
-        rendered.push({
-          issue: r.issue,
-          claim: r.claim,
-          workspace: r.workspace,
-          pullRequests: r.pullRequests,
-          depth,
-          hasChildren: kids.length > 0,
-          childCount: kids.length,
-          guides: depth === 0 ? [] : [...ancestorGuides, !isLast],
-          isLast,
-          // A nested child is placed by lineage and the elbow already says so; only a row
-          // that could NOT be nested needs to name the parent it belongs to.
-          breadcrumb:
-            depth === 0 && parent
-              ? { identifier: parent.identifier, title: parent.title }
-              : null,
-        });
-
-        if (kids.length > 0 && isExpanded(r.issue)) {
-          walk(kids, depth + 1, depth === 0 ? [] : [...ancestorGuides, !isLast]);
-        }
-      });
-    };
-
-    walk(roots, 0, []);
-    out.push({ status, rows: rendered, count: bucket.length });
+    out.push({
+      status,
+      // Grouped: the row's own status, which is also the group it is rendered in.
+      rows: flatten(bucket, presentAnywhere, options, (issue) =>
+        DEFAULT_EXPANDED_GROUPS.has(issue.status),
+      ),
+      count: bucket.length,
+    });
   }
 
   return out;
+}
+
+/**
+ * The SAME list with the bucketing step skipped — R1 (STA-100)'s default view.
+ *
+ * One bucket, so a parent and child of different statuses nest normally and no breadcrumb
+ * is needed for a parent that is right there on the screen above. Sorting is unchanged:
+ * priority, then recency, then identifier. Which means flat mode is not "grouped mode minus
+ * headers" — it is a genuinely different reading of the same data, and it is the one that
+ * answers "what does this project look like" rather than "what is happening right now".
+ */
+export function flattenFlat(rows: IssueRow[], options: BuildOptions): TaskRow[] {
+  const { showResolved = false } = options;
+  const visible = showResolved ? rows : rows.filter((r) => !isResolvedStatus(r.issue.status));
+  const presentAnywhere = new Map(rows.map((r) => [r.issue.id, r.issue]));
+  const holders = subtreesHoldingActiveWork(visible);
+  return flatten(
+    visible,
+    presentAnywhere,
+    options,
+    // Flat: this row, or anything beneath it, is active. Anything else stays folded, so the
+    // backlog is still not a wall.
+    (issue) => DEFAULT_EXPANDED_GROUPS.has(issue.status) || holders.has(issue.id),
+  );
+}
+
+
+/**
+ * The list, in whichever of its two shapes is currently on screen — R1 (STA-100).
+ *
+ * A tagged union rather than "groups, or null, plus rows, or null", so a caller cannot
+ * half-use one shape while rendering the other, and so the two functions below can be
+ * exhaustive over it instead of defensive.
+ */
+export type ListShape =
+  | { kind: "flat"; rows: TaskRow[] }
+  | { kind: "grouped"; groups: StatusGroup[] };
+
+export function buildList(rows: IssueRow[], groupBy: GroupBy, options: BuildOptions): ListShape {
+  return groupBy === "status"
+    ? { kind: "grouped", groups: buildGroups(rows, options) }
+    : { kind: "flat", rows: flattenFlat(rows, options) };
+}
+
+/**
+ * The rows the user can actually SEE, in the order they see them.
+ *
+ * This is the single derivation behind two things that must never disagree: the keyboard
+ * sequence in TreeGrid, and `session.visibleOrder`, which R6 (STA-106) pages through with the
+ * detail view's prev/next arrows. If they were computed separately, the arrows would
+ * eventually land somewhere the keyboard says is not there — and it would be an off-by-one
+ * that only appears once a group is collapsed.
+ *
+ * A collapsed group's rows are excluded. They are still in the DOM so the fold can animate,
+ * and they are `inert`, and they are not visible — "next" landing on a row you cannot see is
+ * exactly the bug the arrows exist to avoid. Rows under a COLLAPSED PARENT are excluded for
+ * the same reason, and for free: `buildGroups`/`flattenFlat` never emitted them.
+ */
+export function visibleRows(
+  shape: ListShape,
+  isGroupCollapsed: (status: IssueStatus) => boolean,
+): TaskRow[] {
+  if (shape.kind === "flat") return shape.rows;
+  const out: TaskRow[] = [];
+  for (const group of shape.groups) {
+    if (isGroupCollapsed(group.status)) continue;
+    out.push(...group.rows);
+  }
+  return out;
+}
+
+/** `visibleRows` as the navigation contract published on the session. */
+export function visibleOrder(
+  shape: ListShape,
+  isGroupCollapsed: (status: IssueStatus) => boolean,
+): Selection[] {
+  return visibleRows(shape, isGroupCollapsed).map((row) => ({
+    workspace: row.workspace,
+    ref: row.issue.identifier,
+  }));
 }

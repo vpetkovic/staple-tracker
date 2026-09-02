@@ -48,7 +48,7 @@ import { useSession } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { loadMode, otherMode, panelClass, saveMode, type DetailMode } from "./drawer";
 import { IssueDetailPanel } from "./IssueDetailPanel";
-import { neighbours, readNavOrder, type NavSource, type NavTarget } from "./navigation";
+import { neighbours, type NavTarget } from "./navigation";
 import "./detail.css";
 
 /** `window.localStorage` can throw on ACCESS, not just on use, when site data is blocked. */
@@ -112,21 +112,17 @@ export function IssueDetailMount() {
    * next to these), so the panel keeps taking a small, explicit set of props instead
    * of learning how to find the list it is floating over.
    *
-   * `useMemo` and not state: while the DOM bridge in `readNavOrder` is still in play
-   * this is a render-phase read of the rendered treegrid, which is not something to
-   * be proud of and is not something to work around either — a `useEffect` mirror
-   * would only add a frame of staleness to a value that is recomputed from scratch
-   * anyway. When STA-100 publishes `session.visibleOrder` this becomes an ordinary
-   * derivation over plain data and the caveat disappears with the bridge.
-   *
-   * `session.version` is in the deps because it ticks on every poll that changed
-   * anything: the list can be re-ordered, filtered or re-grouped underneath an open
-   * panel, and the arrows must be answering about the list as it is now.
+   * Two dependencies, and no more, because `session.visibleOrder` is plain data held
+   * behind a value-equality guard: an unchanged list on the 1.5s poll is the SAME
+   * array, so this memo sleeps through every tick that did not actually reorder
+   * anything, and wakes for every one that did. That guard is the whole reason this
+   * can be an ordinary derivation — the first cut of this ticket had to read the
+   * rendered treegrid during render, and depend on `session.version` to know when to
+   * bother, because there was no published order to depend on instead.
    */
   const nav = useMemo(
-    () => neighbours(readNavOrder(session as NavSource), selection),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- see the note above
-    [session.issues.data, session.version, selection, mode],
+    () => neighbours(session.visibleOrder, selection),
+    [session.visibleOrder, selection],
   );
 
   const navigate = useCallback(

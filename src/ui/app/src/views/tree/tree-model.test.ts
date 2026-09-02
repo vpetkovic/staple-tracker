@@ -19,8 +19,9 @@
  */
 import { describe, expect, it } from "vitest";
 import { OPEN_STATUS_ORDER, RESOLVED_STATUSES } from "@/lib/types";
-import { buildGroups, GROUP_ORDER, guideX, indentPx, MAX_INDENT_DEPTH } from "./tree-model";
-import { issue, row } from "./fixtures";
+import { guideX, indentPx, MAX_INDENT_DEPTH } from "@/components/task-list";
+import { issue, row } from "@/components/task-list/fixtures";
+import { buildGroups, buildList, flattenFlat, GROUP_ORDER, visibleOrder, visibleRows } from "./tree-model";
 
 /** Everything expanded — the default for the groups these tests mostly use. */
 const openAll = { isExpanded: () => true };
@@ -226,5 +227,226 @@ describe("indent", () => {
     }
     // …and one level's rail must sit exactly one indent step left of the next.
     expect(guideX(1) - guideX(0)).toBe(20);
+  });
+});
+
+
+/**
+ * R4 (STA-102) extracted the flatten pass out of `buildGroups` so the ungrouped view
+ * (R1 / STA-100) is literally the same code with the bucketing step skipped. These pin the
+ * two properties that make that claim true rather than merely plausible.
+ */
+describe("flattenFlat — one bucket, no status axis", () => {
+  const openAllFlat = { isExpanded: () => true, showResolved: true };
+
+  it("nests a parent and child that grouped mode would have split across two groups", () => {
+    const rows = [
+      row({ id: "p", identifier: "STA-1", status: "backlog" }),
+      row({ id: "c", identifier: "STA-2", status: "in_progress", parentId: "p" }),
+    ];
+
+    // Grouped: two groups, the child at depth 0 wearing a breadcrumb instead of an indent.
+    const grouped = buildGroups(rows, openAllFlat);
+    expect(grouped).toHaveLength(2);
+    expect(grouped.flatMap((g) => g.rows).every((r) => r.depth === 0)).toBe(true);
+
+    // Flat: one list, the child indented under its parent and needing no breadcrumb,
+    // because the parent it would point at is the row directly above it.
+    const flat = flattenFlat(rows, openAllFlat);
+    expect(flat.map((r) => r.issue.identifier)).toEqual(["STA-1", "STA-2"]);
+    expect(flat[1]!.depth).toBe(1);
+    expect(flat[1]!.breadcrumb).toBeNull();
+    expect(flat[0]!.hasChildren).toBe(true);
+  });
+
+  it("still honours the resolved gate, so the two modes hide the same rows", () => {
+    const rows = [
+      row({ id: "a", identifier: "STA-1", status: "todo" }),
+      row({ id: "b", identifier: "STA-2", status: "done" }),
+    ];
+
+    expect(flattenFlat(rows, { isExpanded: () => true }).map((r) => r.issue.id)).toEqual(["a"]);
+    expect(
+      flattenFlat(rows, { isExpanded: () => true, showResolved: true }).map((r) => r.issue.id),
+    ).toEqual(["a", "b"]);
+  });
+});
+
+
+/**
+ * R1 (STA-100) — `session.visibleOrder`, the contract R6 (STA-106) pages through with the
+ * detail view's prev/next arrows.
+ *
+ * The reason this is tested at the model layer rather than only in the browser: the arrows
+ * and the list's own keyboard sequence must never disagree about what is visible, and the way
+ * they would come to disagree is by being computed twice. They are not — both go through
+ * `visibleRows` — and these pin the three properties that make that worth relying on.
+ */
+describe("the visible ordered list", () => {
+  const opts = { isExpanded: () => true, showResolved: true };
+  const none = () => false;
+
+  const family = () => [
+    row({ id: "p", identifier: "STA-1", status: "in_progress" }),
+    row({ id: "c", identifier: "STA-2", status: "in_progress", parentId: "p" }),
+    row({ id: "t", identifier: "STA-3", status: "todo" }),
+    row({ id: "b", identifier: "STA-4", status: "backlog" }),
+  ];
+
+  it("is screen order, headers excluded, in both modes", () => {
+    const flat = buildList(family(), "none", opts);
+    const grouped = buildList(family(), "status", opts);
+
+    // Flat: one list, priority/recency order, the child nested under its parent.
+    expect(visibleOrder(flat, none).map((s) => s.ref)).toEqual(["STA-1", "STA-2", "STA-3", "STA-4"]);
+    // Grouped: in_progress, then todo, then backlog — GROUP_ORDER, with no header entries.
+    expect(visibleOrder(grouped, none).map((s) => s.ref)).toEqual([
+      "STA-1",
+      "STA-2",
+      "STA-3",
+      "STA-4",
+    ]);
+    // And it carries the workspace, because `open()` needs both halves.
+    expect(visibleOrder(flat, none)[0]).toEqual({ workspace: "staple", ref: "STA-1" });
+  });
+
+  it("EXCLUDES the rows of a collapsed group", () => {
+    // The bug this prevents: the rows are still in the DOM so the fold can animate, and
+    // `next` landing on a row nobody can see is exactly what the arrows exist to avoid.
+    const grouped = buildList(family(), "status", opts);
+    const order = visibleOrder(grouped, (status) => status === "in_progress");
+
+    expect(order.map((s) => s.ref)).toEqual(["STA-3", "STA-4"]);
+  });
+
+  it("EXCLUDES rows hidden under a collapsed parent", () => {
+    const collapsed = buildList(family(), "none", { isExpanded: () => false, showResolved: true });
+    expect(visibleOrder(collapsed, none).map((s) => s.ref)).toEqual(["STA-1", "STA-3", "STA-4"]);
+  });
+
+  it("is exactly the rows the keyboard can reach — one derivation, not two", () => {
+    const grouped = buildList(family(), "status", opts);
+    const collapse = (status: string) => status === "backlog";
+
+    const rows = visibleRows(grouped, collapse as never);
+    const order = visibleOrder(grouped, collapse as never);
+
+    expect(order).toHaveLength(rows.length);
+    expect(order.map((s) => s.ref)).toEqual(rows.map((r) => r.issue.identifier));
+  });
+
+  it("is empty when the filtered page is empty", () => {
+    expect(visibleOrder(buildList([], "none", opts), none)).toEqual([]);
+    expect(visibleOrder(buildList([], "status", opts), none)).toEqual([]);
+  });
+});
+
+/**
+ * R1's other half: `buildList` is the only place `groupBy` becomes a shape, so the default
+ * cannot be re-decided at a call site.
+ */
+describe("buildList", () => {
+  const opts = { isExpanded: () => true, showResolved: true };
+
+  it("maps the preference onto exactly two shapes", () => {
+    const rows = [row({ id: "a", identifier: "STA-1", status: "todo" })];
+    expect(buildList(rows, "none", opts).kind).toBe("flat");
+    expect(buildList(rows, "status", opts).kind).toBe("grouped");
+  });
+
+  it("puts a parent and child of different statuses TOGETHER when flat and APART when grouped", () => {
+    // This is the whole argument for changing the default: grouped mode is honest about
+    // status and therefore cannot show a family in one place.
+    const rows = [
+      row({ id: "p", identifier: "STA-1", status: "backlog" }),
+      row({ id: "c", identifier: "STA-2", status: "in_progress", parentId: "p" }),
+    ];
+
+    const flat = buildList(rows, "none", opts);
+    expect(flat.kind === "flat" && flat.rows.map((r) => r.depth)).toEqual([0, 1]);
+
+    const grouped = buildList(rows, "status", opts);
+    expect(grouped.kind === "grouped" && grouped.groups).toHaveLength(2);
+    expect(grouped.kind === "grouped" && grouped.groups.flatMap((g) => g.rows).map((r) => r.depth)).toEqual([0, 0]);
+  });
+});
+
+
+/**
+ * R1 (STA-100) — the default expansion rule, which is NOT the same in both shapes.
+ *
+ * This is the bug that flat-by-default would otherwise have shipped, and no assertion caught
+ * it: it was found by looking at the evidence screenshot and noticing a seeded in-progress
+ * task was simply not on the page. Grouped mode folds a row by its OWN status, which is
+ * coherent there because a parent and its nested children share a group. Flat mode has no
+ * such guarantee — a backlog epic can hold in-progress children, and folding it by its own
+ * status hides live work that grouped mode kept on screen as a root of the In Progress group.
+ */
+describe("default expansion depends on the shape", () => {
+  /** A backlog epic with an in-progress child — the case that exposes the difference. */
+  const backlogEpicWithLiveChild = () => [
+    row({ id: "e", identifier: "STA-1", status: "backlog" }),
+    row({ id: "k", identifier: "STA-2", status: "in_progress", parentId: "e" }),
+    row({ id: "z", identifier: "STA-3", status: "backlog", parentId: "e" }),
+  ];
+
+  /** No explicit choice anywhere — `undefined` means "the model decides". */
+  const untouched = { isExpanded: () => undefined, showResolved: true };
+
+  it("FLAT: opens a folded parent that is hiding active work", () => {
+    const flat = flattenFlat(backlogEpicWithLiveChild(), untouched);
+
+    expect(flat.map((r) => r.issue.identifier)).toEqual(["STA-1", "STA-2", "STA-3"]);
+    expect(flat[0]!.isExpanded).toBe(true);
+    expect(flat[1]!.depth).toBe(1);
+  });
+
+  it("FLAT: still folds a backlog parent with nothing live under it", () => {
+    // The other half of the rule. Without this, "flat" would mean "everything expanded",
+    // and a large backlog becomes the wall V5 folded it to avoid.
+    const rows = [
+      row({ id: "e", identifier: "STA-1", status: "backlog" }),
+      row({ id: "z", identifier: "STA-2", status: "backlog", parentId: "e" }),
+    ];
+    const flat = flattenFlat(rows, untouched);
+
+    expect(flat.map((r) => r.issue.identifier)).toEqual(["STA-1"]);
+    expect(flat[0]!.isExpanded).toBe(false);
+    expect(flat[0]!.childCount).toBe(1);
+  });
+
+  it("FLAT: an explicit collapse still wins over the active-descendant default", () => {
+    const flat = flattenFlat(backlogEpicWithLiveChild(), {
+      isExpanded: (issue) => (issue.id === "e" ? false : undefined),
+      showResolved: true,
+    });
+
+    expect(flat.map((r) => r.issue.identifier)).toEqual(["STA-1"]);
+    expect(flat[0]!.isExpanded).toBe(false);
+  });
+
+  it("GROUPED: unchanged — a row is folded by its own status", () => {
+    // The live child is not hidden here; it is a ROOT of its own group with a breadcrumb,
+    // which is exactly why the grouped default was correct and the flat one could not be.
+    const groups = buildGroups(backlogEpicWithLiveChild(), untouched);
+    const backlog = groups.find((g) => g.status === "backlog")!;
+    const progress = groups.find((g) => g.status === "in_progress")!;
+
+    expect(backlog.rows[0]!.isExpanded).toBe(false);
+    expect(backlog.rows.map((r) => r.issue.identifier)).toEqual(["STA-1"]);
+    expect(progress.rows.map((r) => r.issue.identifier)).toEqual(["STA-2"]);
+    expect(progress.rows[0]!.breadcrumb?.identifier).toBe("STA-1");
+  });
+
+  it("walks the WHOLE ancestor chain, not just the immediate parent", () => {
+    const rows = [
+      row({ id: "a", identifier: "STA-1", status: "backlog" }),
+      row({ id: "b", identifier: "STA-2", status: "backlog", parentId: "a" }),
+      row({ id: "c", identifier: "STA-3", status: "in_progress", parentId: "b" }),
+    ];
+    const flat = flattenFlat(rows, untouched);
+
+    expect(flat.map((r) => r.issue.identifier)).toEqual(["STA-1", "STA-2", "STA-3"]);
+    expect(flat.map((r) => r.depth)).toEqual([0, 1, 2]);
   });
 });

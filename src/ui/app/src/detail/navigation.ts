@@ -10,24 +10,26 @@
  *
  * ─── WHERE "THE LIST THE USER CAN SEE" COMES FROM ─────────────────────────────
  *
- * Not from here. The visible order is the tree view's own business — it is what is
- * left after the filter, the grouping, the sort and any collapsed groups — and
- * r-rows publishes it on the session as part of R1 (STA-100):
+ * Not from here. The visible order is the tree view's own business — what is left
+ * after the filter, the grouping, the sort, and every kind of fold — and it arrives
+ * on the session as `session.visibleOrder` (STA-100): post-filter, post-group,
+ * flattened, screen order, group headers excluded, rows inside a collapsed group or
+ * under a collapsed parent excluded, `[]` when the active view has no list.
  *
- *     session.visibleOrder: readonly Selection[]
+ * This module used to carry a bridge that read that order off the rendered DOM,
+ * because the contract did not exist yet and the alternative was shipping the
+ * feature dark. It is gone, and it is worth saying what replacing it actually
+ * bought, because "we deleted a shim" undersells it: the DOM bridge could not
+ * verify its own ordering — the evidence compared a walk against the same DOM the
+ * bridge had read, which proves the wiring and nothing about the order. The
+ * published array comes from the SAME `visibleOrder()` derivation the grid's own
+ * keyboard sequence uses, so the arrows and the arrow keys cannot drift into an
+ * off-by-one that only appears once a group is collapsed. That is a real check
+ * where there was previously an assumption.
  *
- * post-filter, post-group, flattened, group headers excluded, rows inside a
- * collapsed group excluded. `readNavOrder` below prefers that the moment it exists.
- *
- * Until it does, there is a bridge that reads the order off the DOM. That is
- * uncomfortable and deliberately temporary, but it is not a lie: the rendered
- * treegrid IS the visible order, by definition, and reading it is how this ticket
- * ships something real instead of something dark. What makes it wrong long-term is
- * ownership, not correctness — the detail should not know the shape of markup it
- * does not own. See `orderFromDom` for how it is written to fail safely, and delete
- * it when the contract lands.
+ * It also removed a render-phase DOM read from the mount. The order is plain data
+ * now, held behind a value-equality guard, so this is an ordinary derivation.
  */
-import type { IssueRow } from "@/lib/types";
 
 /** An issue, addressed the way `session.open()` addresses one. */
 export interface NavTarget {
@@ -92,70 +94,3 @@ export function neighbours(order: readonly NavTarget[], current: NavTarget | nul
   };
 }
 
-/**
- * A session that may or may not publish the visible order yet.
- *
- * Structural and optional on purpose: `lib/session.ts` belongs to r-rows and is
- * being edited in parallel, so this reads what it needs without requiring the
- * session type to have grown the field. When STA-100 lands, `visibleOrder` is simply
- * present and the DOM branch below stops being reached.
- */
-export interface NavSource {
-  visibleOrder?: readonly NavTarget[];
-  issues: { data: IssueRow[] | undefined };
-}
-
-/**
- * The visible order: the published contract if there is one, the DOM otherwise.
- */
-export function readNavOrder(source: NavSource): readonly NavTarget[] {
-  if (source.visibleOrder) return source.visibleOrder;
-  return orderFromDom(source.issues.data ?? []);
-}
-
-/**
- * TEMPORARY BRIDGE — delete when `session.visibleOrder` exists (STA-100).
- *
- * Reads the rendered treegrid in document order. Three deliberate choices about how
- * it fails, because a bridge that breaks loudly in someone else's ticket is worse
- * than the coupling it is standing in for:
- *
- *  - Selected on `[role='row'][data-identifier]`, NOT on `data-testid`. Roles are a
- *    contract with assistive technology and change rarely; that testid already
- *    changed once this session (`tree-row` -> `task-row`) and would have taken
- *    prev/next silently dark with it. Group headers carry no `data-identifier`, so
- *    they fall out of the query rather than needing to be filtered.
- *
- *  - Rows inside a collapsed group are skipped via `closest("[inert]")`. TreeGrid
- *    marks a collapsed body `inert`, which is exactly the "cannot be reached"
- *    signal; "next" landing on a row the user cannot see is the bug this avoids.
- *
- *  - The workspace is never guessed. The DOM supplies the ORDER; `session.issues`
- *    supplies which workspace each identifier belongs to. An identifier with no
- *    matching row is dropped rather than defaulted, because a wrong workspace is a
- *    silently wrong ticket.
- *
- * Returns empty when there is no treegrid at all — the graph view, most obviously —
- * and empty is a perfectly good answer there: both arrows disable.
- */
-function orderFromDom(issues: readonly IssueRow[]): readonly NavTarget[] {
-  if (typeof document === "undefined") return [];
-  const nodes = document.querySelectorAll("[role='treegrid'] [role='row'][data-identifier]");
-  if (nodes.length === 0) return [];
-
-  const workspaceOf = new Map<string, string>();
-  for (const row of issues) {
-    if (!workspaceOf.has(row.issue.identifier)) workspaceOf.set(row.issue.identifier, row.workspace);
-  }
-
-  const order: NavTarget[] = [];
-  for (const node of nodes) {
-    if (node.closest("[inert]")) continue;
-    const ref = node.getAttribute("data-identifier");
-    if (!ref) continue;
-    const workspace = workspaceOf.get(ref);
-    if (!workspace) continue;
-    order.push({ workspace, ref });
-  }
-  return order;
-}
