@@ -1,0 +1,402 @@
+/**
+ * A type-to-filter select over a list you already have — R7 (STA-103).
+ *
+ * WHY THIS EXISTS AT ALL. Before R7 the create dialog asked for a parent by making you
+ * type `STA-12` into a text box from memory. That is fine for the agent that wrote the
+ * ref down a second ago and hostile to the human who did not, and it fails silently:
+ * the store's `not_found` arrives after you have already filled in the rest of the form.
+ * Every option here is a task that exists, so a ref cannot be wrong.
+ *
+ * WHY IT DOES ITS OWN FILTERING. cmdk filters for you, and `filters/FilterMenu.tsx`
+ * lets it. This one passes `shouldFilter={false}` and hands cmdk a list that is already
+ * narrowed, for two reasons that are both about being able to prove it works:
+ *
+ *   1. cmdk scores fuzzily and REORDERS. For a list of identifiers that is actively
+ *      wrong — typing "STA-1" should not put "STA-118" above "STA-1" because the
+ *      former scored better. `filterOptions` keeps the caller's order, always.
+ *   2. `filterOptions` and `shouldOfferCreate` are pure and unit-tested next door.
+ *      Filtering that lives inside cmdk is filtering no test can reach, and "the
+ *      dropdown filters as you type" is precisely the claim R7 has to evidence.
+ *
+ * cmdk is still here, and still earning its place: arrow keys, wrap-around, the
+ * highlighted-item-on-enter contract, and the aria plumbing are all things this file
+ * would otherwise have to reimplement worse.
+ *
+ * THE CREATE OFFER IS LAST, not first, and that ordering is load-bearing. cmdk
+ * highlights the top item, so with the offer last, enter on a query that matches an
+ * existing value picks the EXISTING value; the offer is only ever what enter lands on
+ * when genuinely nothing matched.
+ *
+ * SELECTIONS ARE CHIPS BELOW THE TRIGGER, in both single and multiple mode. Putting
+ * them inside the trigger would nest a remove button inside a button, and keeping the
+ * two modes structurally identical means the workspace pill has exactly one place to
+ * live rather than two that can disagree.
+ */
+import { useEffect, useState, type ReactNode } from "react";
+import { Check, ChevronsUpDown, Plus, X } from "lucide-react";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { cn } from "@/lib/utils";
+
+export interface SelectOption {
+  /** What ends up in the payload — an identifier, or a label. */
+  value: string;
+  /** The primary text. Usually the same as `value`. */
+  label: string;
+  /** Secondary text: an issue title. Searched as well as shown. */
+  hint?: string;
+  /** The workspace pill. Searched as well as shown; absent for things no workspace owns. */
+  pill?: string;
+  /** How many issues carry this value. Shown when present; never searched. */
+  count?: number;
+}
+
+/** Everything a query is matched against. Value first: it is what people paste. */
+function haystack(option: SelectOption): string {
+  return `${option.value} ${option.label} ${option.hint ?? ""} ${option.pill ?? ""}`.toLowerCase();
+}
+
+/**
+ * Narrow by every whitespace-separated token, each of which may hit a different field.
+ *
+ * Tokens rather than one substring because "ship pinecone" is a title word plus a
+ * workspace, and that string appears in no single field of the row it obviously means.
+ * Order is the caller's — see the file header.
+ */
+export function filterOptions(
+  options: readonly SelectOption[],
+  query: string,
+): SelectOption[] {
+  const tokens = query.toLowerCase().split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return [...options];
+  return options.filter((option) => {
+    const text = haystack(option);
+    return tokens.every((token) => text.includes(token));
+  });
+}
+
+/**
+ * Should the list end with "create «query»"?
+ *
+ * Only when the query names something that is neither an existing option nor already
+ * chipped. The second half matters more than it looks: a label created thirty seconds
+ * ago is selected but is in no option list yet — those are derived from issues the
+ * server has already stored — so without it the control offers to create it twice.
+ *
+ * Comparison is trimmed and case-insensitive. It is deliberately NOT the store's
+ * `normalizeTitle`: this is an affordance, not a guard. If it guesses wrong the worst
+ * case is an offer that dedupes into nothing, whereas the store's own rules stay the
+ * only thing that decides what a label may be.
+ */
+export function shouldOfferCreate(
+  query: string,
+  options: readonly SelectOption[],
+  selected: readonly string[],
+): boolean {
+  const wanted = query.trim().toLowerCase();
+  if (!wanted) return false;
+  if (options.some((option) => option.value.trim().toLowerCase() === wanted)) return false;
+  if (selected.some((value) => value.trim().toLowerCase() === wanted)) return false;
+  return true;
+}
+
+/**
+ * The values a paste should add: what `expand` found, kept only where it names a real
+ * option.
+ *
+ * The intersection is the safety. `splitRefs("STA-13, oops")` is happy to hand back
+ * `oops`, and a chip reading `oops` would ride all the way to a store refusal at submit
+ * time. Silently dropping it leaves the user with the refs that exist and the query box
+ * still holding what they pasted if nothing landed.
+ */
+export function resolvePaste(
+  text: string,
+  expand: (text: string) => string[],
+  options: readonly SelectOption[],
+): string[] {
+  const known = new Set(options.map((option) => option.value.toLowerCase()));
+  const byLower = new Map(options.map((option) => [option.value.toLowerCase(), option.value]));
+  return expand(text)
+    .filter((value) => known.has(value.toLowerCase()))
+    .map((value) => byLower.get(value.toLowerCase())!);
+}
+
+export interface SearchableSelectProps {
+  /** Identifies the control in the DOM (`data-searchable-select`) and in evidence. */
+  name: string;
+  id?: string;
+  options: readonly SelectOption[];
+  selected: readonly string[];
+  onChange: (next: string[]) => void;
+  /** Multiple appends and keeps the list open; single replaces and closes. */
+  multiple?: boolean;
+  /** Trigger text when nothing is chosen. */
+  placeholder: string;
+  /**
+   * Trigger text once something IS chosen. Required, because the alternative is a
+   * trigger reading "No parent" above a chip reading STA-11 — the control contradicting
+   * itself in the one place a user looks to find out what it holds.
+   */
+  actionLabel: string;
+  searchPlaceholder?: string;
+  emptyText?: string;
+  /**
+   * Turns on the create-on-enter offer. Returns the values to add — plural, because
+   * typing "ui, api" into a label box means two labels and splitting it is the
+   * caller's rule, not this control's.
+   *
+   * Only pass this where a value may be INVENTED. A relation field must not offer to
+   * create `STA-999`: the store would refuse the ref, which is exactly the late,
+   * silent failure this control exists to remove.
+   */
+  onCreate?: (query: string) => string[];
+  /**
+   * Turns on multi-paste. Expands pasted text into candidate values — and only those
+   * that are already options are added, which is what makes it safe on a field with
+   * no create offer: pasting a list of refs cannot invent one that does not exist.
+   */
+  expandPaste?: (text: string) => string[];
+  /**
+   * A footer inside the dropdown. Where a field says what it CANNOT do.
+   *
+   * In the list rather than under the trigger on purpose: the restriction only matters
+   * while you are choosing, and three fields each carrying the same sentence under them
+   * turns one caveat into a wall of repeated text in a dialog that is already tall.
+   */
+  note?: ReactNode;
+  /**
+   * Render values monospace. Right for identifiers, where the eye scans a column of
+   * `STA-1` / `STA-15` and column alignment is the whole point — and wrong for a label,
+   * which is prose and reads as code the moment you set it in a mono face.
+   */
+  mono?: boolean;
+  disabled?: boolean;
+}
+
+export function SearchableSelect({
+  name,
+  id,
+  options,
+  selected,
+  onChange,
+  multiple = false,
+  placeholder,
+  actionLabel,
+  searchPlaceholder,
+  emptyText = "nothing matches",
+  onCreate,
+  expandPaste,
+  note,
+  mono = false,
+  disabled = false,
+}: SearchableSelectProps) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+
+  // Clear on every open rather than on close: a list that reopens still holding the
+  // last query looks broken, and clearing on close is visible under the animation.
+  useEffect(() => {
+    if (open) setQuery("");
+  }, [open]);
+
+  const matches = filterOptions(options, query);
+  const offerCreate = onCreate !== undefined && shouldOfferCreate(query, options, selected);
+
+  const add = (values: string[]) => {
+    const next = multiple
+      ? [...selected, ...values.filter((value) => !selected.includes(value))]
+      : values.slice(0, 1);
+    onChange(next);
+    if (!multiple) setOpen(false);
+    setQuery("");
+  };
+
+  const remove = (value: string) => onChange(selected.filter((entry) => entry !== value));
+
+  const pillFor = (value: string) => options.find((option) => option.value === value)?.pill;
+
+  return (
+    <div className="grid gap-1.5">
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+          {/* No aria-label on purpose. `<button>` is a labelable element, so the field's
+              own `<Label htmlFor>` names it — an aria-label here would OVERRIDE that and
+              announce "Nothing blocking this" where the visible label says "Blocked by". */}
+          <button
+            type="button"
+            id={id}
+            disabled={disabled}
+            data-searchable-select={name}
+            data-open={open ? "" : undefined}
+            className={cn(
+              // Deliberately the Input recipe rather than the Button one: this is a
+              // field, and a field that looks like a button reads as an action.
+              "border-input bg-field flex h-9 w-full items-center gap-2 rounded-md border px-3 py-1",
+              "text-left text-sm shadow-xs transition-(--tp-color-box-shadow) outline-none",
+              "hover:border-border-strong",
+              "focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-(length:--rad-3)",
+              "disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50",
+            )}
+          >
+            {/* The trigger describes what it DOES, not what it holds — the chips below
+                already say that, and a trigger repeating them would either duplicate or,
+                worse, disagree. */}
+            <span className="flex-1 truncate text-text-tertiary">
+              {selected.length > 0 ? actionLabel : placeholder}
+            </span>
+            <ChevronsUpDown className="size-3.5 shrink-0 text-text-tertiary" aria-hidden />
+          </button>
+        </PopoverTrigger>
+        <PopoverContent
+          align="start"
+          sideOffset={4}
+          className="w-(--radix-popover-trigger-width) min-w-64 p-0"
+          data-select-list={name}
+        >
+          <Command shouldFilter={false}>
+            <CommandInput
+              value={query}
+              onValueChange={setQuery}
+              placeholder={searchPlaceholder ?? placeholder}
+              data-select-search={name}
+              onPaste={
+                expandPaste === undefined
+                  ? undefined
+                  : (event) => {
+                      const resolved = resolvePaste(
+                        event.clipboardData.getData("text"),
+                        expandPaste,
+                        options,
+                      );
+                      // One value is indistinguishable from typing it, so let it through
+                      // and search for it. Two or more is a list, and a list is a paste.
+                      if (resolved.length < 2) return;
+                      event.preventDefault();
+                      add(resolved);
+                    }
+              }
+            />
+            <CommandList>
+              {/* Only when there is genuinely nothing to show. With an offer pending the
+                  list is not empty, and cmdk's empty slot would sit above it. */}
+              {matches.length === 0 && !offerCreate ? <CommandEmpty>{emptyText}</CommandEmpty> : null}
+              {matches.length > 0 ? (
+                <CommandGroup>
+                  {matches.map((option) => {
+                    const checked = selected.includes(option.value);
+                    return (
+                      <CommandItem
+                        key={option.value}
+                        value={option.value}
+                        onSelect={() => (checked ? remove(option.value) : add([option.value]))}
+                        data-select-option={option.value}
+                        data-option-workspace={option.pill}
+                        data-checked={checked ? "" : undefined}
+                      >
+                        <span
+                          aria-hidden
+                          className={cn(
+                            "flex size-3.5 shrink-0 items-center justify-center rounded-[3px] border transition-colors",
+                            checked
+                              ? "border-primary bg-primary text-primary-foreground"
+                              : "border-border-strong",
+                          )}
+                        >
+                          {checked ? <Check className="size-2.5" strokeWidth={3} /> : null}
+                        </span>
+                        <span className={cn("shrink-0 text-[12px]", mono && "font-mono")}>
+                          {option.label}
+                        </span>
+                        {option.hint ? (
+                          <span className="flex-1 truncate text-text-tertiary">{option.hint}</span>
+                        ) : (
+                          <span className="flex-1" />
+                        )}
+                        {option.count !== undefined ? (
+                          <span className="font-mono text-[11px] text-text-tertiary tabular-nums">
+                            {option.count}
+                          </span>
+                        ) : null}
+                        {/* The pill rides every option, not only the foreign ones. Which
+                            project a ref belongs to is a question worth answering before
+                            it is a problem, and a pill that appears only sometimes is a
+                            pill nobody learns to read. */}
+                        {option.pill ? <WorkspacePill>{option.pill}</WorkspacePill> : null}
+                      </CommandItem>
+                    );
+                  })}
+                </CommandGroup>
+              ) : null}
+              {offerCreate ? (
+                <CommandGroup>
+                  <CommandItem
+                    value={`__create__${query}`}
+                    onSelect={() => add(onCreate!(query))}
+                    data-select-create={query.trim()}
+                  >
+                    <Plus className="size-3.5 shrink-0" aria-hidden />
+                    <span className="truncate">
+                      Create <span className="font-medium">“{query.trim()}”</span>
+                    </span>
+                  </CommandItem>
+                </CommandGroup>
+              ) : null}
+            </CommandList>
+            {note ? (
+              <div className="text-text-tertiary border-t px-2.5 py-1.5 text-[11px]">{note}</div>
+            ) : null}
+          </Command>
+        </PopoverContent>
+      </Popover>
+
+      {selected.length > 0 ? (
+        <div className="flex flex-wrap gap-1" data-select-chips={name}>
+          {selected.map((value) => {
+            const pill = pillFor(value);
+            return (
+              <span
+                key={value}
+                data-select-chip={value}
+                data-chip-workspace={pill}
+                className="border-input bg-surface-hover flex items-center gap-1 rounded-md border py-0.5 pr-0.5 pl-1.5 text-[12px]"
+              >
+                {pill ? <WorkspacePill>{pill}</WorkspacePill> : null}
+                <span className={mono ? "font-mono" : undefined}>{value}</span>
+                <button
+                  type="button"
+                  onClick={() => remove(value)}
+                  aria-label={`Remove ${value}`}
+                  data-select-chip-remove={value}
+                  className={cn(
+                    "flex size-4 items-center justify-center rounded-sm text-text-tertiary transition-colors",
+                    "hover:bg-surface-hover hover:text-foreground",
+                    "outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring",
+                  )}
+                >
+                  <X className="size-3" aria-hidden />
+                </button>
+              </span>
+            );
+          })}
+        </div>
+      ) : null}
+
+    </div>
+  );
+}
+
+/** The workspace indication, in one place so the option and the chip cannot diverge. */
+function WorkspacePill({ children }: { children: ReactNode }) {
+  return (
+    <span className="border-input text-text-tertiary shrink-0 rounded-sm border px-1 text-[10px] leading-4 tracking-wide uppercase">
+      {children}
+    </span>
+  );
+}

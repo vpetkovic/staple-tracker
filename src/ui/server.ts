@@ -729,7 +729,7 @@ export function startUiServer(options: UiOptions): UiHandle {
            * `actor` is the same `body.actor || "ui"` every other branch uses, so a
            * task created from the page is attributed rather than anonymous.
            */
-          result = handle.store.createIssue({
+          const created = handle.store.createIssue({
             title: body.title as string,
             description: (body.description as string) || null,
             priority: (body.priority as IssuePriority) || undefined,
@@ -739,6 +739,64 @@ export function startUiServer(options: UiOptions): UiHandle {
             estimatedSeconds: optionalEstimate(body.estimateSeconds),
             createdBy: actor,
           });
+
+          /**
+           * `blocking` — the INVERSE relation, added by R7 (STA-103).
+           *
+           * The store has no create-time input for it, and no method with these
+           * semantics: `setBlockedBy` REPLACES an issue's whole blocker set
+           * (`DELETE … WHERE blocked_id = ?` then re-insert), so "also let this new
+           * task block T" means writing T's entire next list, not appending to it.
+           * This composes two public store methods to get there, exactly as the
+           * `doc_restore` branch above composes `getDocument` + `putDocument` for the
+           * same reason.
+           *
+           * IT HAPPENS HERE AND NOT IN THE CLIENT, and that is the whole point. A UI
+           * doing read-union-write across two round trips would silently delete any
+           * blocker another agent added to T in between — and this tracker's normal
+           * operating condition is several agents writing at once. Inside one request
+           * the read and the write are adjacent, and `setBlockedBy` runs in its own
+           * transaction with the cycle check the store already owns.
+           *
+           * NOT TRANSACTIONAL WITH THE CREATE, and deliberately not pretended to be.
+           * A cycle refusal on the third target leaves the task created and two edges
+           * written. The alternative is swallowing the store's own cycle sentence or
+           * hand-rolling a compensating delete, and a partial result the user can see
+           * and fix beats either. `blockers_changed` is emitted per target, so the
+           * event log says exactly how far it got.
+           */
+          const blocking = stringList(body.blocking) ?? [];
+          try {
+            for (const targetRef of blocking) {
+              const target = handle.store.getIssue(targetRef);
+              const current = handle.store.blockersOf(target.id).map((row) => row.identifier);
+              // INSERT OR IGNORE dedupes the edge, but the identifier list is what gets
+              // re-inserted, so a repeat here would be a wasted write, not a duplicate.
+              if (current.includes(created.identifier)) continue;
+              handle.store.setBlockedBy(targetRef, [...current, created.identifier], actor);
+            }
+          } catch (error) {
+            /**
+             * The task is already written and cannot be unwritten here — `tx()` opens
+             * `BEGIN IMMEDIATE` and is not re-entrant, so `createIssue` and
+             * `setBlockedBy` are two transactions and no third one can enclose them.
+             *
+             * So the refusal says so. The store's own sentence is kept verbatim and
+             * prefixed with what DID happen, because "Blocking relations cannot contain
+             * cycles" on its own reads as "nothing was created" — and the user would
+             * then hit the duplicate-title guard retrying a task that already exists.
+             * A refusal that misdescribes the state it left behind is worse than the
+             * refusal itself.
+             */
+            const because = error instanceof Error ? error.message : String(error);
+            throw new StapleError(
+              error instanceof StapleError ? error.code : "conflict",
+              `${created.identifier} was created, but its Blocking links were not applied: ${because}`,
+              { identifier: created.identifier, blocking },
+            );
+          }
+
+          result = created;
         } else if (type === "update") {
           /**
            * Inline property editing: title, priority, labels.

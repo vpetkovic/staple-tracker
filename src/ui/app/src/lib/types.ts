@@ -460,6 +460,21 @@ export type ActionPayload =
       parent?: string;
       labels?: string[];
       blockedBy?: string[];
+      /**
+       * Refs the NEW task should block — the inverse of `blockedBy`, added by R7
+       * (STA-103) for the create form's Blocking field.
+       *
+       * There is no store input for this and there never was: `CreateIssueInput` has no
+       * `blocking`, and neither does the CLI's `new` nor MCP's `create_task`. The
+       * inverse relation is only expressible as "rewrite the OTHER issue's blocked-by
+       * set", which `store.setBlockedBy` does with REPLACE semantics — so it has to be
+       * read-modify-written, and the server's `create` branch does that inside the same
+       * request rather than letting the UI straddle a round trip with it.
+       *
+       * Absent is exactly the old behaviour, which is why this is a key on `create`
+       * rather than a second action type.
+       */
+      blocking?: string[];
     }
   /**
    * Inline property editing (U5). A partial patch: a key that is absent is left
