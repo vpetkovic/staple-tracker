@@ -46,6 +46,7 @@ function issue(patch: Partial<Issue> = {}): Issue {
     description: null,
     status: "in_progress",
     statusVersion: 1,
+    kind: "task",
     priority: "high",
     parentId: null,
     depth: 0,

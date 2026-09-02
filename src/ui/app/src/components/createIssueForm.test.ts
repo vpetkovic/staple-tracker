@@ -146,6 +146,7 @@ function issue(over: Partial<Issue> = {}): Issue {
     description: null,
     status: "backlog",
     statusVersion: 0,
+    kind: "task",
     priority: "medium",
     parentId: null,
     depth: 0,

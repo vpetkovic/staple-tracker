@@ -33,6 +33,7 @@ import { Hub, notifyHubResolvedSafe } from "./core/hub.js";
 import { runInstallCommand } from "./install/index.js";
 import { dataVersion } from "./core/db.js";
 import {
+  DEFAULT_ISSUE_KIND,
   ISSUE_STATUSES,
   STATUS_CATEGORIES,
   type StatusCategory,
@@ -99,9 +100,30 @@ function glyph(issue: Pick<Issue, "status" | "priority">): string {
   return `${statusGlyph(issue.status)}${PRIORITY_MARKS[issue.priority] ?? " "}`;
 }
 
+/**
+ * The kind, as a suffix, and ONLY when it is not the default (STA-124).
+ *
+ * Two decisions in one line. It is a SUFFIX rather than a column because
+ * `line()` is shared by nine commands and its three columns are load-bearing —
+ * `characterize-cli-human-output` pins them by byte offset — so a new column
+ * would reshuffle every row in the tracker to say `task` on most of them.
+ *
+ * And it is SUPPRESSED for the default because `task` is the unremarkable case.
+ * A row that says `· epic` or `· bug` is carrying information; a column that
+ * reads `task` nine times out of ten is carrying noise, and it would push the
+ * title — the thing you are actually scanning for — further right on every
+ * line. The criterion this serves is "an epic is distinguishable in the
+ * terminal", and distinguishability is a property of the exception, not of the
+ * rule. `staple show` prints the kind unconditionally; that is the surface for
+ * completeness.
+ */
+function kindSuffix(kind: string): string {
+  return kind === DEFAULT_ISSUE_KIND ? "" : ` · ${kind}`;
+}
+
 function line(issue: Issue, extra = ""): string {
   const assignee = issue.assignee ? ` @${issue.assignee}` : "";
-  return `${glyph(issue)} ${issue.identifier.padEnd(9)} ${issue.status.padEnd(11)} ${issue.title}${assignee}${extra}`;
+  return `${glyph(issue)} ${issue.identifier.padEnd(9)} ${issue.status.padEnd(11)} ${issue.title}${assignee}${kindSuffix(issue.kind)}${extra}`;
 }
 
 function getStore(values: { db?: string; ws?: string }) {
@@ -672,8 +694,10 @@ Workspace
 Tasks
   new <title> [-d text] [-p prio] [--parent REF] [--assignee A]
               [--blocked-by R1,R2] [--status S] [--criteria "a;b"]
+              [--kind K]                epic|task|bug|chore|spike (default task),
+              or whatever "staple kinds ls" shows for this workspace
               [--estimate <dur>]        record the plan-time estimate AT PLAN TIME
-  ls [--status s1,s2] [--assignee A] [-q text] [--all]
+  ls [--status s1,s2] [--kind k1,k2] [--assignee A] [-q text] [--all]
   show <ref>                            full context (ancestry, relations, comments, docs)
   tree [ref]                            subtask tree
   board                                 terminal kanban
@@ -800,6 +824,7 @@ function main() {
           assignee: { type: "string" },
           "blocked-by": { type: "string" },
           status: { type: "string" },
+          kind: { type: "string" },
           criteria: { type: "string" },
           estimate: { type: "string" },
           "no-estimate": { type: "boolean" },
@@ -816,6 +841,7 @@ function main() {
         parent: values.parent,
         assignee: values.assignee,
         status: values.status as never,
+        kind: values.kind,
         blockedBy: values["blocked-by"]?.split(",").map((s) => s.trim()).filter(Boolean),
         acceptanceCriteria: values.criteria?.split(";").map((s) => s.trim()).filter(Boolean),
         allowDuplicate: values["allow-duplicate"],
@@ -835,6 +861,7 @@ function main() {
         options: {
           ...common,
           status: { type: "string" },
+          kind: { type: "string" },
           assignee: { type: "string" },
           q: { type: "string", short: "q" },
           all: { type: "boolean" },
@@ -843,6 +870,9 @@ function main() {
       const { store } = getStore(values);
       const issues = store.listIssues({
         status: values.status?.split(",").map((s) => s.trim()) as never,
+        // Comma-separated, for symmetry with --status. `--kind epic` is the
+        // acceptance case; `--kind bug,chore` falls out of the same split.
+        kind: values.kind?.split(",").map((s) => s.trim()).filter(Boolean),
         assignee: values.assignee,
         q: values.q,
         includeResolved: values.all,
@@ -888,7 +918,11 @@ function main() {
       const claim = store.claimActivity(i.id);
       const timing = store.timing(i.id);
       console.log(`${i.identifier} · ${i.title}`);
-      console.log(`status ${i.status} (v${i.statusVersion}) · priority ${i.priority}${i.assignee ? ` · @${i.assignee}` : ""}${i.checkoutAgent ? ` · held by ${i.checkoutAgent}` : ""}`);
+      // `kind` is unconditional here — unlike `line()`, which suppresses the
+      // default. This is the detail surface: "it is a task" is a fact somebody
+      // asked for by name, and leaving it out would make its absence ambiguous
+      // between "task" and "this build does not know about kinds".
+      console.log(`status ${i.status} (v${i.statusVersion}) · kind ${i.kind} · priority ${i.priority}${i.assignee ? ` · @${i.assignee}` : ""}${i.checkoutAgent ? ` · held by ${i.checkoutAgent}` : ""}`);
       if (claim) {
         console.log(
           `claim  held ${formatAgo(claim.heldSeconds)} · silent ${formatAgo(claim.idleSeconds)} (last activity ${claim.lastActivityAt.slice(0, 19)}Z)`,

@@ -72,13 +72,13 @@ describe.each([
       try {
         const state = describeSchema(db, WORKSPACE_TARGET);
         expect(state.current).toBe(1);
-        expect(state.latest).toBe(4);
+        expect(state.latest).toBe(5);
         // Ordered and complete: a v1 file has to walk BOTH steps, and it has to
         // walk them in this order — 003 assumes 002 already ran. This list
         // grows by one every time a migration is appended, and that is the
         // point: a migration that never reaches an old file is the bug this
         // assertion exists to catch.
-        expect(state.pending).toEqual([2, 3, 4]);
+        expect(state.pending).toEqual([2, 3, 4, 5]);
       } finally {
         db.close();
       }
@@ -174,7 +174,7 @@ describe.each([
         // TEXT is the load-bearing half of this assertion, not the number: an
         // older binary reads the stamp as a string, and an INTEGER here would
         // make it unreadable rather than merely too new.
-        expect(row).toEqual({ t: "text", value: "4" });
+        expect(row).toEqual({ t: "text", value: "5" });
       } finally {
         db.close();
       }
@@ -217,14 +217,14 @@ describe.each([
  * than estimated-at-zero.
  */
 describe("a v2 workspace — the last shape before estimates", () => {
-  it("is detected as version 2 with migrations 3 and 4 pending", () => {
+  it("is detected as version 2 with migrations 3, 4 and 5 pending", () => {
     withFixture(FIXTURES.workspaceV2, (path) => {
       const db = new DatabaseSync(path);
       try {
         expect(describeSchema(db, WORKSPACE_TARGET)).toEqual({
           current: 2,
-          latest: 4,
-          pending: [3, 4],
+          latest: 5,
+          pending: [3, 4, 5],
           detection: "stamped",
         });
       } finally {
@@ -342,7 +342,7 @@ describe("a v2 workspace created by the SHIPPED pre-A4 fresh-create path", () =>
         // it walks 003 like any other v2 file — which is the point. A shape the
         // runner "recognises as current" must not become a shape it forgets to
         // migrate the moment a new column is appended.
-        expect(describeSchema(db, WORKSPACE_TARGET).pending).toEqual([3, 4]);
+        expect(describeSchema(db, WORKSPACE_TARGET).pending).toEqual([3, 4, 5]);
         expect(() => migrateWorkspace(db)).not.toThrow();
 
         // The layout really is the old one: idempotency_key sits in the middle.

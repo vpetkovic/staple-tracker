@@ -26,6 +26,7 @@ import {
   COMMENT_PAGE_LIMITS,
   HUB_EVENT_PAGE_LIMITS,
   ISSUE_PAGE_LIMITS,
+  ISSUE_KINDS,
   ISSUE_PRIORITIES,
   ISSUE_STATUSES,
   STATUS_CATEGORIES,
@@ -214,6 +215,20 @@ const statusEnum = z
     `Status id, configurable per workspace. Built-in: ${ISSUE_STATUSES.join(", ")}. ` +
       "Call list_statuses for this workspace's actual set.",
   );
+/**
+ * Kind id — `z.string()` for exactly the reason `statusEnum` above is one, and
+ * it is a correctness fix rather than a nicety: a `z.enum` STRIPS what it does
+ * not recognise, so an operator who ran `staple kinds add milestone` would watch
+ * that kind vanish off the wire in silence on every read. The built-in seed is
+ * named in the description so a client with no `list_kinds` call behind it still
+ * has somewhere to start.
+ */
+const kindSchema = z
+  .string()
+  .describe(
+    `Kind id, configurable per workspace. Built-in: ${ISSUE_KINDS.join(", ")}. ` +
+      "Call list_kinds for this workspace's actual set.",
+  );
 const priorityEnum = z.enum(ISSUE_PRIORITIES);
 const refSchema = z
   .string()
@@ -329,6 +344,7 @@ const issueShape = {
   description: z.string().nullable(),
   status: statusEnum,
   statusVersion: z.number(),
+  kind: kindSchema,
   priority: priorityEnum,
   parentId: z.string().nullable(),
   depth: z.number(),
@@ -496,6 +512,7 @@ const taskSummaryShape = {
   identifier: z.string(),
   title: z.string(),
   status: statusEnum,
+  kind: kindSchema,
   priority: priorityEnum,
   assignee: z.string().nullable(),
   parentId: z.string().nullable(),
@@ -587,6 +604,7 @@ server.registerTool(
       "List issues in this workspace with optional filters (open issues by default), newest-relevant first. Paginated: pass nextCursor back with the SAME filters to continue.",
     inputSchema: {
       status: z.array(statusEnum).optional(),
+      kind: z.array(kindSchema).optional().describe("Restrict to these kinds, e.g. [\"epic\"]"),
       assignee: z.string().optional(),
       q: z.string().optional().describe("Substring match on title/identifier/description"),
       include_resolved: z.boolean().optional(),
@@ -597,16 +615,16 @@ server.registerTool(
     outputSchema: { items: z.array(z.object(taskSummaryShape)), ...pageTailShape },
     annotations: { title: "List tasks", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
   },
-  ({ status, assignee, q, include_resolved, limit, cursor, ws }) =>
+  ({ status, kind, assignee, q, include_resolved, limit, cursor, ws }) =>
     run(() => {
       const window = pageWindow(
-        { t: "list_tasks", ws, status, assignee, q, include_resolved },
+        { t: "list_tasks", ws, status, kind, assignee, q, include_resolved },
         { limit, cursor },
         ISSUE_PAGE_LIMITS,
       );
       const store = storeFor(ws);
       const { items, hasMore } = store.listIssuesPage(
-        { status, assignee, q, includeResolved: include_resolved },
+        { status, kind, assignee, q, includeResolved: include_resolved },
         window,
       );
       // One batched liveness query for the whole page, never one per row.
@@ -616,6 +634,7 @@ server.registerTool(
           identifier: i.identifier,
           title: i.title,
           status: i.status,
+          kind: i.kind,
           priority: i.priority,
           assignee: i.assignee,
           parentId: i.parentId,
@@ -679,6 +698,7 @@ server.registerTool(
       title: z.string(),
       description: z.string().optional(),
       status: statusEnum.optional(),
+      kind: kindSchema.optional().describe("Declared kind; defaults to task."),
       priority: priorityEnum.optional(),
       parent: refSchema.optional(),
       assignee: z.string().optional(),
@@ -707,6 +727,7 @@ server.registerTool(
         title: input.title,
         description: input.description,
         status: input.status,
+        kind: input.kind,
         priority: input.priority,
         parent: input.parent,
         assignee: input.assignee,
@@ -733,6 +754,7 @@ server.registerTool(
       title: z.string().optional(),
       description: z.string().optional(),
       status: statusEnum.optional(),
+      kind: kindSchema.optional().describe("Re-declare the kind. Omit to leave unchanged."),
       priority: priorityEnum.optional(),
       assignee: z.string().nullable().optional(),
       labels: z.array(z.string()).optional(),
@@ -762,6 +784,7 @@ server.registerTool(
           title: input.title,
           description: input.description,
           status: input.status,
+          kind: input.kind,
           priority: input.priority,
           assignee: input.assignee,
           labels: input.labels,
