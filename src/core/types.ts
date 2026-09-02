@@ -164,7 +164,8 @@ export interface IssueTiming {
   estimatedSeconds: number | null;
   /**
    * Seconds this issue itself was `in_progress`, summed over reconstructed
-   * intervals — EXCLUDING intervals opened by a derived `child_started` flip.
+   * intervals — EXCLUDING intervals opened by ANY derived flip (a parent status
+   * derived from its children carries a `derived` marker, whichever rung fired).
    *
    * Usually null (never ran) or 0-ish for an epic: nobody claims an epic, they
    * claim its children, and the flip that made the epic look busy was a report

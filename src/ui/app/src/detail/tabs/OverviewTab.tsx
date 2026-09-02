@@ -8,6 +8,7 @@
 import type { ReactNode } from "react";
 import { IssueCard } from "@/components/IssueCard";
 import { StatusBadge } from "@/components/StatusBadge";
+import { blockingDescriptor, needsBorrowedDescriptor } from "@/lib/derived-blocked";
 import { Markdown } from "@/lib/markdown";
 import { useSession } from "@/lib/session";
 import type { CrossBlocker, IssueRef } from "@/lib/types";
@@ -62,6 +63,16 @@ export function OverviewTab({ detail, workspace }: TabProps) {
   const { issue } = detail;
   const openRef = (identifier: string) => session.open(workspace, identifier);
 
+  /**
+   * A parent whose `blocked` was DERIVED from its children (STA-98) carries no
+   * descriptor of its own, so it borrows its blocking children's. Computed from
+   * `detail.children`, which is already on the wire — this panel needs no new
+   * API, and what it shows can never disagree with the children listed below it.
+   */
+  const borrowedBlockers = needsBorrowedDescriptor(issue)
+    ? detail.children.filter((child) => child.status === "blocked")
+    : [];
+
   return (
     <div className="text-sm">
       {issue.description ? <Markdown text={issue.description} className="text-[13px]" /> : null}
@@ -81,6 +92,34 @@ export function OverviewTab({ detail, workspace }: TabProps) {
         <p className="mt-3 rounded-md border border-[var(--status-task-blocked)]/40 bg-[var(--status-task-blocked)]/10 px-3 py-2 text-[13px]">
           unblock: {issue.unblockOwner ?? "?"} must {issue.unblockAction ?? "?"}
         </p>
+      ) : null}
+
+      {/*
+        A parent blocked BY ITS CHILDREN (STA-98). Same slot and same colour as
+        the descriptor above, because it answers the identical question — the
+        only difference is whose sentence it is, so each line names the child it
+        came from and opens it. Nothing here is styled as "derived": the
+        descriptor IS the point, and a reader who wants provenance has the child
+        identifier right there.
+      */}
+      {borrowedBlockers.length > 0 ? (
+        <div
+          data-derived-blocked="true"
+          className="mt-3 rounded-md border border-[var(--status-task-blocked)]/40 bg-[var(--status-task-blocked)]/10 px-3 py-2 text-[13px]"
+        >
+          {borrowedBlockers.map((child) => (
+            <div key={child.id} className="flex flex-wrap items-baseline gap-x-1.5">
+              <span>{blockingDescriptor(child)}</span>
+              <button
+                type="button"
+                onClick={() => openRef(child.identifier)}
+                className="font-mono text-[11px] text-muted-foreground hover:underline"
+              >
+                {child.identifier}
+              </button>
+            </div>
+          ))}
+        </div>
       ) : null}
 
       <Heading>Blocked by</Heading>

@@ -380,7 +380,7 @@ const timingShape = {
     .number()
     .nullable()
     .describe(
-      "Seconds this issue itself was in_progress, summed over intervals, EXCLUDING intervals opened by a derived child_started flip. Usually null for an epic",
+      "Seconds this issue itself was in_progress, summed over intervals, EXCLUDING intervals opened by any derived flip (a parent status derived from its children). Usually null for an epic",
     ),
   activeSeconds: z
     .number()

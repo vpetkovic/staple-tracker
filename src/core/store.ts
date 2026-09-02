@@ -217,6 +217,28 @@ const STATUS_MOVING_EVENT_KINDS = [
 ] as const;
 
 /**
+ * The `payload.derived` marker written on each rung of the parent-status
+ * derivation (STA-98). Present on a `status_changed` event, it means "this was a
+ * REPORT about the children, not a human acting on this issue" — which is what
+ * `isDerivationOwned` reads to decide reversibility, what the timing replay
+ * reads to refuse to bill the interval, and what a timeline can render as
+ * provenance.
+ *
+ * The value names the RUNG so a reader can see WHY, and `in_progress` keeps
+ * STA-79's exact `child_started`: that rung's behaviour did not change, so its
+ * wire format must not either.
+ *
+ * Anything consuming these must test for "is a string", never for one value —
+ * a new rung must never silently fall out of an exclusion.
+ */
+const DERIVED_MARKERS = {
+  in_progress: "child_started",
+  in_review: "child_in_review",
+  backlog: "children_workable",
+  blocked: "children_blocked",
+} as const satisfies Partial<Record<IssueStatus, string>>;
+
+/**
  * What the interval replay produces for ONE issue, before rollups: the issue's
  * own numbers with no opinion yet about children.
  */
@@ -443,11 +465,14 @@ export class WorkspaceStore {
         actor: input.createdBy ?? null,
         payload: { identifier, title, status },
       });
-      // Transition site 1 of 4: born in_progress under a parent. Rare, but it is
-      // still a child entering in_progress, and the rule is about state, not
-      // about which call produced it.
-      if (status === "in_progress") {
-        this.markAncestorsInProgress(row, input.createdBy ?? null);
+      // Transition site 1 of 5: a child appearing under a parent changes the
+      // child landscape as surely as one moving does. The rule is about state,
+      // not about which call produced it — so this is no longer gated on the
+      // child being born `in_progress` (STA-98 widened it from STA-79's flip).
+      // A backlog child born under a backlog/todo parent is still a no-op: the
+      // workable band absorbs it without a write.
+      if (parent) {
+        this.recomputeAncestorStatuses(row, input.createdBy ?? null);
       }
       return { issue: rowToIssue(row), replayed: false };
     });
@@ -608,9 +633,133 @@ export class WorkspaceStore {
   }
 
   /**
-   * Fires after an issue ENTERS `in_progress`: every ancestor still sitting in a
-   * pre-work status starts reading as in_progress too, so an epic whose children
-   * are being worked stops reporting `backlog`. (STA-79.)
+   * The blocked OPEN children of each of `issueIds`, with the descriptor the
+   * child was blocked with — one query for the whole set.
+   *
+   * This is what a derived-blocked parent renders instead of an unblock
+   * descriptor of its own (STA-98). The parent deliberately has none: the fact
+   * being reported lives on the child, and copying it onto the parent would
+   * create a second copy that goes stale the moment the child moves.
+   *
+   * Ordered by `created_at`, so a parent waiting on several children reads them
+   * in the order they were raised.
+   */
+  blockingChildrenOf(
+    issueIds: readonly string[],
+  ): Map<string, Array<{ identifier: string; title: string; unblockOwner: string | null; unblockAction: string | null }>> {
+    const byParent = new Map<
+      string,
+      Array<{ identifier: string; title: string; unblockOwner: string | null; unblockAction: string | null }>
+    >(issueIds.map((id) => [id, []]));
+    if (issueIds.length === 0) return byParent;
+    const rows = this.db
+      .prepare(
+        `SELECT parent_id, identifier, title, unblock_owner, unblock_action
+           FROM issues
+          WHERE status = 'blocked'
+            AND parent_id IN (${issueIds.map(() => "?").join(",")})
+          ORDER BY created_at, rowid`,
+      )
+      .all(...(issueIds as never[])) as Array<{
+      parent_id: string;
+      identifier: string;
+      title: string;
+      unblock_owner: string | null;
+      unblock_action: string | null;
+    }>;
+    for (const row of rows) {
+      byParent.get(row.parent_id)?.push({
+        identifier: row.identifier,
+        title: row.title,
+        unblockOwner: row.unblock_owner,
+        unblockAction: row.unblock_action,
+      });
+    }
+    return byParent;
+  }
+
+  /**
+   * Is this row's CURRENT status something derivation wrote, rather than
+   * something a human or an agent asserted?
+   *
+   * Read from the event log, not from a column — no schema change, and the
+   * answer stays correct for every row already in every database, because the
+   * log has carried `payload.derived` since STA-79.
+   *
+   * Two conditions, both load-bearing:
+   *
+   *  - the NEWEST status-moving event is a `status_changed` carrying a `derived`
+   *    marker. Any other newest kind — a `checkout`, a `release`, a plain manual
+   *    `status_changed` — means somebody acted on this issue last, and their
+   *    statement outranks the derivation that preceded it. This is also what
+   *    makes a claim and a derivation structurally unable to fight: the instant
+   *    an agent checks an epic out, the epic becomes immune.
+   *  - that event's `to` must equal the row's actual status. If the log cannot
+   *    explain the row — a hand-edit, an import, a history written by another
+   *    tool — this returns false and the row is treated as MANUAL, so derivation
+   *    keeps its hands off. Declining beats guessing, the same instinct as
+   *    `reconstructIntervals`.
+   */
+  private isDerivationOwned(row: Pick<IssueRow, "id" | "status">): boolean {
+    const event = this.db
+      .prepare(
+        `SELECT kind, payload FROM events
+          WHERE issue_id = ?
+            AND kind IN (${STATUS_MOVING_EVENT_KINDS.map(() => "?").join(",")})
+          ORDER BY seq DESC LIMIT 1`,
+      )
+      .get(row.id, ...(STATUS_MOVING_EVENT_KINDS as readonly string[])) as
+      | { kind: string; payload: string }
+      | undefined;
+    if (!event || event.kind !== "status_changed") return false;
+    let payload: Record<string, unknown>;
+    try {
+      payload = JSON.parse(event.payload) as Record<string, unknown>;
+    } catch {
+      return false;
+    }
+    return typeof payload.derived === "string" && payload.to === row.status;
+  }
+
+  /**
+   * The ladder: what a parent's status SHOULD read, given its children.
+   *
+   * Computed over OPEN children only — `done` and `cancelled` contribute
+   * nothing, at any rung. Returns null for "no derivation applies", which is a
+   * distinct outcome from any status: it means leave the parent exactly as it is.
+   *
+   *  1. any `in_progress`        -> `in_progress`
+   *  2. else any `in_review`     -> `in_review`
+   *  3. else any `todo`/`backlog`-> the WORKABLE BAND (see `WORKABLE_BAND`)
+   *  4. else (all open blocked)  -> `blocked`
+   *  0. no open children at all  -> null
+   *
+   * Rung 4 is why `blocked` is EXCLUSIVE: it is last, so it wins only when it is
+   * all that remains. One blocked child beside one backlog child derives the
+   * workable band, because there is still work an agent can pick up underneath.
+   *
+   * Rung 0 is why nothing auto-closes. When every child is resolved the parent
+   * keeps whatever status it had and waits for a deliberate close;
+   * `children_complete` is still the only signal, and it is still only a nudge.
+   * The same rung is why nothing auto-REOPENS either.
+   */
+  private static deriveStatusFromChildren(
+    childStatuses: readonly string[],
+  ): "in_progress" | "in_review" | "workable" | "blocked" | null {
+    const open = childStatuses.filter(
+      (status) => !(RESOLVED_STATUSES as readonly string[]).includes(status),
+    );
+    if (open.length === 0) return null;
+    if (open.includes("in_progress")) return "in_progress";
+    if (open.includes("in_review")) return "in_review";
+    if (open.some((status) => status === "todo" || status === "backlog")) return "workable";
+    return "blocked";
+  }
+
+  /**
+   * Recompute every ancestor's derived status after a child transition, and
+   * write the ones derivation is allowed to write. (STA-98, generalizing
+   * STA-79's one-way `in_progress` flip.)
    *
    * ## This is a derivation, not a claim — and that is why it skips the guard
    *
@@ -636,33 +785,55 @@ export class WorkspaceStore {
    * Manual and direct transitions keep the guard untouched. Only this
    * system-driven path is exempt.
    *
-   * ## What is left alone
+   * ## Which ancestors may be written — the reversibility law
    *
-   * Only `backlog` and `todo` ancestors move. `in_progress` has nothing to say;
-   * `in_review` and `done` are AHEAD of the child and must not be rewound;
-   * `cancelled` is terminal; and `blocked` is a statement the user made about an
-   * epic being worked around — a derivation does not overrule a human.
+   * Derivation may only change what derivation set, so:
    *
-   * The walk CONTINUES past an untouched ancestor rather than stopping at it.
-   * Stopping would make the outcome depend on history: an epic parked in
-   * `in_review` would permanently shield its own parent from ever flipping.
-   * Continuing keeps the rule level-triggered — a function of current state only.
+   * - `done`/`cancelled`: never. Resolved is terminal in BOTH directions — no
+   *   auto-close, and equally no auto-reopen.
+   * - `backlog`/`todo`: always. This is STA-79's law unchanged: the pre-work band
+   *   is the ABSENCE of a statement about the parent, not a statement, so
+   *   derivation is free to speak into it.
+   * - `in_progress`/`in_review`/`blocked`: only when `isDerivationOwned` says
+   *   derivation itself wrote it. A manual `blocked` with an unblockOwner, a
+   *   manual `in_review`, a genuinely claimed epic — all immune, permanently,
+   *   until whoever set them moves them.
    *
-   * Note what is deliberately absent: there is no mirror-image rule closing an
-   * ancestor when its children finish. `children_complete` already announces
-   * that, and epic closure stays a deliberate human act.
+   * ## The workable band
    *
-   * Runs inside the caller's transaction, so the ancestor flip commits with the
-   * child's own transition — no window where the child is in_progress and the
-   * epic still reads backlog.
+   * Rung 3 targets a BAND — {`backlog`, `todo`} — rather than a value. A parent
+   * already in either is left completely alone: no write, no version bump, no
+   * event. That is what stops the rule generating churn in the two directions
+   * that would only ever be noise: a `todo` epic a human deliberately readied is
+   * never demoted to `backlog`, and creating a `backlog` child under a
+   * `backlog`/`todo` parent changes nothing at all.
+   *
+   * Entering the band writes `backlog`, not `todo`. `todo` in this tracker means
+   * READY FOR PICKUP — `inbox` orders the ready list in_progress -> in_review ->
+   * todo -> backlog — and an epic is never picked up, its children are. Deriving
+   * epics into `todo` would seed the top of the pickup queue with rows no agent
+   * should ever claim. `backlog` says the honest thing: there is open, workable,
+   * unstarted work underneath, and nothing is in flight.
+   *
+   * ## The walk
+   *
+   * Iterative, bounded by `MAX_TREE_DEPTH`, and cycle-proof — `createIssue` caps
+   * depth, but a walk over possibly-corrupt `parent_id` links must not be the
+   * thing that hangs. It CONTINUES past an ancestor it did not write rather than
+   * stopping at it: stopping would make the outcome depend on history, where an
+   * epic parked in `in_review` would permanently shield its own parent. What
+   * propagates upward is each ancestor's CURRENT status, so an immune ancestor
+   * stops propagating its own value without stopping the walk.
+   *
+   * Runs inside the caller's transaction, so every ancestor write commits with
+   * the child's own transition — there is no window where the child has moved
+   * and an epic still reports the old thing.
    */
-  private markAncestorsInProgress(
+  private recomputeAncestorStatuses(
     child: Pick<IssueRow, "id" | "identifier" | "parent_id">,
     actor: string | null,
   ): void {
     const now = nowIso();
-    // Iterative, bounded, and cycle-proof: `createIssue` caps depth, but a walk
-    // over possibly-corrupt `parent_id` links should not be the thing that hangs.
     const seen = new Set<string>([child.id]);
     let cursor = child.parent_id;
     let hops = 0;
@@ -672,51 +843,106 @@ export class WorkspaceStore {
         | IssueRow
         | undefined;
       if (!ancestor) break;
-      if (ancestor.status === "backlog" || ancestor.status === "todo") {
-        const result = this.db
-          .prepare(
-            `UPDATE issues SET
-               status = 'in_progress',
-               status_version = status_version + 1,
-               started_at = COALESCE(started_at, ?),
-               updated_at = ?
-             WHERE id = ? AND status IN ('backlog', 'todo')`,
-          )
-          .run(now, now, ancestor.id);
-        // Gate the event on the write, so an event can never claim a flip that
-        // did not land. `status_version` bumps because anyone holding an
-        // `expectedStatusVersion` for this epic must be forced to re-read.
-        if (Number(result.changes) > 0) {
-          /**
-           * Reuses `status_changed` rather than minting a kind, for a concrete
-           * reason: the UI timeline already renders `status_changed` as
-           * "status backlog → in_progress", while an unknown kind falls to its
-           * fail-soft branch and prints raw underscore-prose. Reuse renders
-           * correctly with no UI change; `derived`/`derivedFrom` are additive,
-           * and they are what tells a consumer this was not a human acting on
-           * the epic. The actor is the child's actor, because they caused it.
-           *
-           * No dedupKey, matching every other `status_changed` — and none is
-           * needed, since the flip only ever fires from backlog/todo and so
-           * cannot repeat without an intervening transition out of in_progress.
-           */
-          this.emitEvent({
-            kind: "status_changed",
-            issueId: ancestor.id,
-            actor,
-            payload: {
-              identifier: ancestor.identifier,
-              from: ancestor.status,
-              to: "in_progress",
-              derived: "child_started",
-              derivedFrom: child.identifier,
-            },
-          });
-        }
-      }
+      this.deriveOneAncestor(ancestor, child.identifier, actor, now);
       cursor = ancestor.parent_id;
       hops += 1;
     }
+  }
+
+  /** One rung of the walk: decide, check permission, CAS, and log. */
+  private deriveOneAncestor(
+    ancestor: IssueRow,
+    trigger: string,
+    actor: string | null,
+    now: string,
+  ): void {
+    // Resolved is terminal in both directions — decided before anything is read.
+    if ((RESOLVED_STATUSES as readonly string[]).includes(ancestor.status)) return;
+
+    const childStatuses = (
+      this.db.prepare("SELECT status FROM issues WHERE parent_id = ?").all(ancestor.id) as Array<{
+        status: string;
+      }>
+    ).map((row) => row.status);
+    const target = WorkspaceStore.deriveStatusFromChildren(childStatuses);
+    if (target === null) return; // rung 0: nothing open underneath, nothing to say
+
+    // The workable band is satisfied by either of its two members.
+    if (target === "workable" && (ancestor.status === "backlog" || ancestor.status === "todo")) return;
+    const next: IssueStatus = target === "workable" ? "backlog" : target;
+    if (next === ancestor.status) return;
+
+    // Reversibility law: outside the pre-work band, only what derivation set.
+    const inPreWorkBand = ancestor.status === "backlog" || ancestor.status === "todo";
+    if (!inPreWorkBand && !this.isDerivationOwned(ancestor)) return;
+
+    /**
+     * `started_at` is stamped once and never rewound, so an epic that lights up,
+     * goes quiet and lights up again keeps the instant work FIRST began under it.
+     *
+     * A derived `blocked` gets `blocked_transition_at` but explicitly NO
+     * descriptor: `unblock_owner`/`unblock_action` are forced NULL, because the
+     * fact belongs to the blocking child and the UI borrows it from there. Any
+     * descriptor left over from an earlier manual block would be a stale lie, so
+     * leaving `blocked` clears all three exactly as `updateIssue` does.
+     *
+     * Nothing here touches `assignee`, `checkout_agent` or `checkout_at`. That
+     * omission is the guard exemption made structural rather than promised.
+     */
+    const columns: Record<string, unknown> = {
+      status: next,
+      updated_at: now,
+    };
+    if (next === "in_progress") columns.started_at = ancestor.started_at ?? now;
+    if (next === "blocked") {
+      columns.blocked_transition_at = now;
+      columns.unblock_owner = null;
+      columns.unblock_action = null;
+    } else if (ancestor.status === "blocked") {
+      columns.blocked_transition_at = null;
+      columns.unblock_owner = null;
+      columns.unblock_action = null;
+    }
+
+    // Compare-and-swap on the status the decision was made from, and gate the
+    // event on the write, so an event can never claim a transition that did not
+    // land. `status_version` bumps because anyone holding an
+    // `expectedStatusVersion` for this epic must be forced to re-read.
+    const assignments = Object.keys(columns).map((c) => `${c} = ?`).join(", ");
+    const result = this.db
+      .prepare(
+        `UPDATE issues SET ${assignments}, status_version = status_version + 1
+          WHERE id = ? AND status = ?`,
+      )
+      .run(...(Object.values(columns) as never[]), ancestor.id, ancestor.status);
+    if (Number(result.changes) === 0) return;
+
+    /**
+     * Reuses `status_changed` rather than minting a kind, for a concrete reason:
+     * the UI timeline already renders `status_changed` as "status backlog →
+     * in_progress", while an unknown kind falls to its fail-soft branch and
+     * prints raw underscore-prose. Reuse renders correctly with no UI change;
+     * `derived`/`derivedFrom` are additive, and they are what tells a consumer —
+     * the timeline, the timing replay, and `isDerivationOwned` itself — that this
+     * was not a human acting on the epic. The actor is the child's actor, because
+     * they caused it.
+     *
+     * The marker names the RUNG that fired, not just "derived", so a timeline can
+     * say why. `in_progress` keeps STA-79's exact `child_started` value: that
+     * rung's behaviour did not change, so neither should its wire format.
+     */
+    this.emitEvent({
+      kind: "status_changed",
+      issueId: ancestor.id,
+      actor,
+      payload: {
+        identifier: ancestor.identifier,
+        from: ancestor.status,
+        to: next,
+        derived: DERIVED_MARKERS[next],
+        derivedFrom: trigger,
+      },
+    });
   }
 
   /** Fires after an issue reaches done/cancelled: dependency wakes + parent completion. */
@@ -860,11 +1086,12 @@ export class WorkspaceStore {
           actor,
           payload: { identifier: row.identifier, from: row.status, to: patch.status },
         });
-        // Transition site 2 of 4. Guarded above like any manual start; the
-        // ancestors it derives from that start are not (see the method).
-        if (patch.status === "in_progress") {
-          this.markAncestorsInProgress(updated, actor ?? null);
-        }
+        // Transition site 2 of 5, and the one the generalization widened most:
+        // EVERY status change recomputes the ancestors, not only a start.
+        // Guarded above like any manual transition; the ancestors it derives
+        // from it are not (see the method). Emitted after the child's own event,
+        // so the log reads cause-then-effect.
+        this.recomputeAncestorStatuses(updated, actor ?? null);
         if ((RESOLVED_STATUSES as readonly string[]).includes(patch.status!)) {
           this.afterResolution(updated);
         }
@@ -986,7 +1213,7 @@ export class WorkspaceStore {
    *  - `issue_created`         -> `payload.status` (createIssue; an issue can be
    *                               born `in_progress`, which opens an interval)
    *  - `status_changed`        -> `payload.to` (updateIssue's patch, and
-   *                               markAncestorsInProgress' derived flip)
+   *                               recomputeAncestorStatuses' derived flips)
    *  - `checkout`              -> `in_progress` (the claim UPDATE)
    *  - `claim_stolen`          -> `in_progress` (the takeover UPDATE)
    *  - `release`,
@@ -1033,12 +1260,18 @@ export class WorkspaceStore {
    * working, not whether work is happening, and treating it as close-then-reopen
    * would round the interval twice for no reason.
    *
-   * **An interval opened by a derived flip is dropped, not counted.** STA-79
-   * marks an ancestor `in_progress` when a child starts, tagged
-   * `payload.derived === "child_started"`. That is a REPORT about the children,
-   * and billing the epic's own clock for it is defect #1 of the old scheme. The
-   * interval is still tracked (it has to be, so the next transition closes the
-   * right thing) — it simply contributes nothing.
+   * **An interval opened by a derived flip is dropped, not counted.** A parent's
+   * status is derived from its children (STA-79, generalized by STA-98), and any
+   * such flip carries a `payload.derived` marker. That is a REPORT about the
+   * children, and billing the epic's own clock for it is defect #1 of the old
+   * scheme. The interval is still tracked (it has to be, so the next transition
+   * closes the right thing) — it simply contributes nothing.
+   *
+   * The test is "carries a `derived` marker", NOT equality against one value.
+   * STA-98 added rungs beyond `child_started`, and matching one string would
+   * have silently started billing epics again for the new ones — a regression
+   * that changes numbers without failing anything. It applies to `in_review`
+   * too: a derived review window is the identical lie in a different bucket.
    *
    * **An OPEN interval ends at `clampAt`, never at `now`.** See `timingFor` for
    * where `clampAt` comes from and what it costs.
@@ -1062,8 +1295,8 @@ export class WorkspaceStore {
     if (!status) return null;
 
     let openAt: string | null = null;
-    // A derived open interval is tracked but never counted. Creation is never
-    // derived — nothing flips an issue that does not exist yet.
+    // A derived open interval is tracked but never counted, in EITHER bucket.
+    // Creation is never derived — nothing flips an issue that does not exist yet.
     let openDerived = false;
     let active = 0;
     let review = 0;
@@ -1078,20 +1311,20 @@ export class WorkspaceStore {
       if (to === status) continue;
       if (openAt !== null) {
         const seconds = secondsBetween(openAt, event.createdAt);
-        if (status === "in_progress") {
-          if (!openDerived) {
+        if (!openDerived) {
+          if (status === "in_progress") {
             active += seconds;
             sawActive = true;
+          } else {
+            review += seconds;
+            sawReview = true;
           }
-        } else {
-          review += seconds;
-          sawReview = true;
         }
         openAt = null;
       }
       if (to === "in_progress" || to === "in_review") {
         openAt = event.createdAt;
-        openDerived = to === "in_progress" && event.payload.derived === "child_started";
+        openDerived = typeof event.payload.derived === "string";
       }
       status = to;
     }
@@ -1104,15 +1337,15 @@ export class WorkspaceStore {
       // can never pull an interval's end before its own start.
       const end = clampAt > openAt ? clampAt : openAt;
       const seconds = secondsBetween(openAt, end);
-      if (status === "in_progress") {
-        if (!openDerived) {
+      if (!openDerived) {
+        if (status === "in_progress") {
           active += seconds;
           sawActive = true;
           countedThrough = end;
+        } else {
+          review += seconds;
+          sawReview = true;
         }
-      } else {
-        review += seconds;
-        sawReview = true;
       }
     }
 
@@ -1541,10 +1774,10 @@ export class WorkspaceStore {
                     stealIfIdleSeconds,
                   },
                 });
-                // Transition site 4 of 4. A takeover is a fresh start by a new
+                // Transition site 4 of 5. A takeover is a fresh start by a new
                 // agent; if the epic went quiet in the meantime it must light up
                 // again, attributed to whoever took over.
-                this.markAncestorsInProgress(stolen, agent);
+                this.recomputeAncestorStatuses(stolen, agent);
                 return rowToIssue(stolen);
               }
             }
@@ -1576,11 +1809,11 @@ export class WorkspaceStore {
         actor: agent,
         payload: { identifier: row.identifier },
       });
-      // Transition site 3 of 4, and the one that matters most in practice: a
+      // Transition site 3 of 5, and the one that matters most in practice: a
       // plain `staple checkout` IS how work starts, and its UPDATE above sets
       // status = 'in_progress' directly. Hooking only `updateIssue` would have
       // missed the common case entirely.
-      this.markAncestorsInProgress(claimed, agent);
+      this.recomputeAncestorStatuses(claimed, agent);
       return rowToIssue(claimed);
     });
   }
@@ -1654,6 +1887,11 @@ export class WorkspaceStore {
               payload: { identifier: row.identifier },
             },
       );
+      // Transition site 5 of 5, and one STA-79 structurally could not have: a
+      // release writes `todo`, which its one-way flip into in_progress had
+      // nothing to say about. A recompute must see it, or an epic keeps
+      // reporting in_progress after its last child was handed back.
+      this.recomputeAncestorStatuses(updated, agent ?? null);
       return rowToIssue(updated);
     });
   }

@@ -222,13 +222,23 @@ describe("ancestors that must be left alone", () => {
   it("walks PAST an untouched ancestor instead of stopping at it", () => {
     // A mid-chain epic parked in in_review must not permanently shield the root:
     // the rule is a function of current state, not of what happened first.
+    //
+    // MOVED BY STA-98. The walk still continues past the untouched ancestor —
+    // that is what this test is for, and it still passes. What changed is the
+    // VALUE at the top. STA-79's one-way flip pushed `in_progress` all the way
+    // up from the GRANDCHILD; the holistic rule has each ancestor read its OWN
+    // children, and the root's own child is the feature, which reads in_review.
+    // So the root now reports in_review, which is the honest answer: the thing
+    // directly underneath the root is in review.
     const { epic, feature, leaf } = threeDeep();
     forceStatus(feature.identifier, "in_review");
 
     store.checkoutIssue(leaf.identifier, "agent-a");
 
     expect(statusOf(feature.identifier)).toBe("in_review");
-    expect(statusOf(epic.identifier)).toBe("in_progress");
+    expect(statusOf(epic.identifier)).toBe("in_review");
+    // The root DID move, which is the proof the walk did not stop at `feature`.
+    expect(statusEventsFor(epic.identifier)).toHaveLength(1);
   });
 
   it("is idempotent: a second child starting changes nothing on an already-flipped epic", () => {

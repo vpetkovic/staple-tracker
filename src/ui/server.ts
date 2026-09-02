@@ -435,6 +435,18 @@ export function startUiServer(options: UiOptions): UiHandle {
           const claims = h.store.claimActivityFor(
             [...inbox.ready, ...inbox.blocked].map((i) => i.id),
           );
+          /**
+           * A derived-blocked parent (STA-98) has no unblock descriptor of its
+           * own — the fact belongs to the blocking CHILD — so the card would
+           * otherwise render "? must act". One batched lookup over the blocked
+           * bucket hands the page what it needs to name the real owner.
+           *
+           * Deliberately added HERE and not inside `store.inbox()`: the MCP
+           * inbox tool spreads that return value straight onto the wire, and its
+           * shape is a pinned contract. This is a UI affordance, so it lives on
+           * the UI's route.
+           */
+          const blockingChildren = h.store.blockingChildrenOf(inbox.blocked.map((i) => i.id));
           const withClaim = <T extends { id: string }>(entry: T) => ({
             ...entry,
             claim: claims.get(entry.id) ?? null,
@@ -443,8 +455,11 @@ export function startUiServer(options: UiOptions): UiHandle {
             workspace: h.slug,
             inbox: {
               ...inbox,
-              ready: inbox.ready.map(withClaim),
-              blocked: inbox.blocked.map(withClaim),
+              ready: inbox.ready.map((entry) => ({ ...withClaim(entry), derivedBlockers: [] })),
+              blocked: inbox.blocked.map((entry) => ({
+                ...withClaim(entry),
+                derivedBlockers: blockingChildren.get(entry.id) ?? [],
+              })),
             },
           };
         });

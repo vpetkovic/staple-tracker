@@ -165,7 +165,7 @@ export function isStillRunning(status: IssueStatus): boolean {
  * What the clock is doing, from `timing.countedThrough` alone.
  *
  *  - `stopped` — nothing is accumulating. Either no interval is open, or the
- *    only open one is a derived `child_started` flip the issue does not get to
+ *    only open one is a derived flip (any rung) the issue does not get to
  *    count. This is what an epic returns, and it is why the tab no longer prints
  *    "still running" underneath one.
  *  - `running` — an interval is open and the holder wrote something recently.

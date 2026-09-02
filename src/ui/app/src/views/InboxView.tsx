@@ -7,6 +7,7 @@
 import { useCallback } from "react";
 import { IssueCard } from "@/components/IssueCard";
 import { getInbox } from "@/lib/api";
+import { borrowedWaitingLine, needsBorrowedDescriptor } from "@/lib/derived-blocked";
 import { useSession } from "@/lib/session";
 import type { AuthError } from "@/lib/api";
 import type { InboxIssue } from "@/lib/types";
@@ -17,6 +18,13 @@ import { EmptyState, SectionHeading, ViewState } from "./ViewChrome";
 function blockedReason(issue: InboxIssue): string {
   if (issue.unresolvedBlockers.length > 0) {
     return `waiting on ${issue.unresolvedBlockers.join(", ")}`;
+  }
+  // A parent whose `blocked` was derived has no descriptor of its own, so it
+  // borrows its blocking children's (STA-98). Without this the card would read
+  // "? must act" — the epic knows it is waiting but cannot say on whom.
+  if (needsBorrowedDescriptor(issue)) {
+    const borrowed = borrowedWaitingLine(issue.derivedBlockers);
+    if (borrowed) return borrowed;
   }
   return `${issue.unblockOwner ?? "?"} must ${issue.unblockAction ?? "act"}`;
 }

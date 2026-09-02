@@ -102,7 +102,7 @@ export interface IssueTiming {
   estimatedSeconds: number | null;
   /**
    * Seconds this issue itself was in_progress, EXCLUDING intervals opened by a
-   * derived `child_started` flip. Usually null for an epic — nobody claims an
+   * derived flip of ANY rung. Usually null for an epic — nobody claims an
    * epic, they claim its children.
    */
   ownActiveSeconds: number | null;
@@ -161,9 +161,27 @@ export interface ClaimActivity {
  * beside the issue's own fields) rather than sitting beside it as it does on IssueRow.
  * The two endpoints genuinely differ in shape here; this type follows the wire.
  */
+/**
+ * A child that is blocking its parent, with the descriptor the CHILD was blocked
+ * with (STA-98).
+ *
+ * A parent whose `blocked` was derived from its children deliberately carries no
+ * `unblockOwner`/`unblockAction` of its own — copying them onto the parent would
+ * be a second copy that goes stale the moment the child moves. So the parent
+ * borrows the child's at render time, and this is what it borrows.
+ */
+export interface BlockingChild {
+  identifier: string;
+  title: string;
+  unblockOwner: string | null;
+  unblockAction: string | null;
+}
+
 export interface InboxIssue extends Issue {
   unresolvedBlockers: string[];
   claim: ClaimActivity | null;
+  /** Blocked open children, when this row is in the blocked bucket. */
+  derivedBlockers: BlockingChild[];
 }
 
 export interface IssueComment {

@@ -1251,11 +1251,21 @@ function main() {
       if (inbox.ready.length === 0) console.log("  (nothing ready)");
       if (inbox.blocked.length) {
         console.log("BLOCKED:");
+        // A parent blocked BY ITS CHILDREN (STA-98) has no descriptor of its own
+        // — the fact lives on the child — so it borrows theirs rather than
+        // printing "? must act". One batched lookup for the whole list.
+        const blockingChildren = store.blockingChildrenOf(inbox.blocked.map((i) => i.id));
         for (const issue of inbox.blocked) {
+          const borrowed =
+            issue.status === "blocked" && !issue.unblockOwner && !issue.unblockAction
+              ? (blockingChildren.get(issue.id) ?? [])
+                  .map((c) => `waiting on ${c.unblockOwner ?? "?"}${c.unblockAction ? `: ${c.unblockAction}` : ""}`)
+                  .join(" · ")
+              : "";
           const why =
             issue.unresolvedBlockers.length > 0
               ? `waiting on ${issue.unresolvedBlockers.join(", ")}`
-              : `${issue.unblockOwner ?? "?"} must ${issue.unblockAction ?? "act"}`;
+              : borrowed || `${issue.unblockOwner ?? "?"} must ${issue.unblockAction ?? "act"}`;
           console.log(`  ${line(issue, `  [${why}]`)}`);
         }
       }

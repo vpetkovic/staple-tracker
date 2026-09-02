@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it } from "vitest";
 import { openDb } from "../src/core/db.js";
 import { migrateWorkspace } from "../src/core/schema.js";
@@ -332,6 +333,100 @@ describe("a derived flip is a report about children, not work on the parent", ()
     // The derived 8000->6000 window is free; the manual one from 4000 is
     // counted, clamped to the newest evidence at 1000.
     expect(store.timing(epic.id).ownActiveSeconds).toBe(3000);
+  });
+});
+
+// ---------------------------------------- STA-98: the other derived rungs
+
+describe("STA-98 rungs are reports too — a derived epic still has no stopwatch", () => {
+  it("a derived-BLOCKED epic accrues no own-time", () => {
+    const epic = store.createIssue({ title: "Epic" });
+    const child = store.createChild(epic.id, { title: "Child" });
+    store.updateIssue(
+      child.id,
+      { status: "blocked", unblockOwner: "VP", unblockAction: "decide the schema" },
+      "agent-a",
+    );
+
+    expect(store.getIssue(epic.id).status).toBe("blocked");
+    expect(eventKinds(epic.id)).toEqual(["issue_created", "status_changed"]);
+    backdateEvents(epic.id, [5000, 4000]);
+    backdateEvents(child.id, [5000, 4000]);
+
+    const timing = store.timing(epic.id);
+    // `blocked` opens no interval at all, so this holds by construction — pinned
+    // anyway, because "by construction" is exactly what a refactor breaks.
+    expect(timing.ownActiveSeconds).toBeNull();
+    expect(timing.countedThrough).toBeNull();
+    expect(timing.approximate).toBe(false);
+  });
+
+  it("an epic derived through blocked -> workable -> in_progress accrues nothing across the whole dance", () => {
+    // The full un-derive cycle: three derived transitions on the epic, none of
+    // them the epic's own work.
+    const epic = store.createIssue({ title: "Epic" });
+    const child = store.createChild(epic.id, { title: "Child" });
+    store.updateIssue(child.id, { status: "blocked", unblockOwner: "VP" }, "agent-a");
+    expect(store.getIssue(epic.id).status).toBe("blocked");
+    store.updateIssue(child.id, { status: "todo" }, "agent-a");
+    expect(store.getIssue(epic.id).status).toBe("backlog");
+    store.checkoutIssue(child.id, "agent-a");
+    expect(store.getIssue(epic.id).status).toBe("in_progress");
+
+    expect(eventKinds(epic.id)).toEqual([
+      "issue_created",
+      "status_changed",
+      "status_changed",
+      "status_changed",
+    ]);
+    backdateEvents(epic.id, [8000, 7000, 6000, 5000]);
+    backdateCheckout(child.id, 5000);
+
+    const timing = store.timing(epic.id);
+    // The open in_progress interval was opened by a derived flip, so it is
+    // tracked (the next transition must close the right thing) and counted at
+    // zero. This is the regression the marker generalization exists to prevent:
+    // matching one literal marker would have started billing this epic again.
+    expect(timing.ownActiveSeconds).toBeNull();
+    expect(timing.countedThrough).toBeNull();
+  });
+
+  it("a derived IN_REVIEW epic bills no review time either", () => {
+    const epic = store.createIssue({ title: "Epic" });
+    const child = store.createChild(epic.id, { title: "Child" });
+    store.updateIssue(child.id, { status: "in_review" }, "agent-a");
+
+    expect(store.getIssue(epic.id).status).toBe("in_review");
+    backdateEvents(epic.id, [5000, 4000]);
+    backdateEvents(child.id, [5000, 4000]);
+
+    // Same lie, different bucket: an epic is not IN review because a child is.
+    expect(store.timing(epic.id).reviewSeconds).toBeNull();
+  });
+
+  it("but a review a human opened on the epic by hand is still counted", () => {
+    // The control for the test above — the exclusion is about DERIVED
+    // intervals, never about parents.
+    const epic = store.createIssue({ title: "Epic" });
+    store.updateIssue(epic.id, { status: "in_review" }, "vp");
+    store.updateIssue(epic.id, { status: "done" }, "vp");
+    backdateEvents(epic.id, [8000, 5000, 2000]);
+
+    expect(store.timing(epic.id).reviewSeconds).toBe(3000);
+  });
+
+  it("tests the MARKER's presence, never one marker's value", () => {
+    // Structural, because the failure mode is silent: a new derivation rung
+    // whose marker is not in an equality check simply starts billing epics, and
+    // no assertion anywhere goes red. Derived from the source for the same
+    // reason contract-http derives its route list from the server.
+    const source = readFileSync(new URL("../src/core/store.ts", import.meta.url), "utf8");
+    const start = source.indexOf("private static reconstructIntervals");
+    const replay = source.slice(start, source.indexOf("private static", start + 10));
+    expect(replay).toMatch(/typeof event\.payload\.derived === "string"/);
+    for (const marker of ["child_started", "child_in_review", "children_workable", "children_blocked"]) {
+      expect(replay, marker).not.toContain(`"${marker}"`);
+    }
   });
 });
 
