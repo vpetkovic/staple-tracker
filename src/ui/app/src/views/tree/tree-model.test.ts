@@ -25,7 +25,7 @@ import {
   type IssueStatus,
 } from "@/lib/types";
 import { STALE_CLAIM_SECONDS } from "@/lib/claim";
-import { guideX, indentPx, MAX_INDENT_DEPTH } from "@/components/task-list";
+import { guideX, indentPx, MAX_INDENT_DEPTH, type TaskRow } from "@/components/task-list";
 import { claim, issue, row } from "@/components/task-list/fixtures";
 import {
   activityRank,
@@ -42,6 +42,17 @@ import {
 /** Everything expanded — the default for the groups these tests mostly use. */
 const openAll = { isExpanded: () => true };
 const closedAll = { isExpanded: () => false };
+
+/**
+ * O3c (STA-128). The rows that are actually IN a bucket, with the ghost context rows
+ * dropped — which is the set the group's count, `visibleOrder` and the keyboard all read.
+ *
+ * A helper rather than an inline `filter` per assertion, so a test that means "membership"
+ * cannot accidentally be written as one that means "everything drawn". The two were the
+ * same set before this ticket, which is exactly why they now need different spellings.
+ */
+const real = (rows: readonly TaskRow[]): TaskRow[] => rows.filter((r) => !r.ghost);
+const ghosts = (rows: readonly TaskRow[]): TaskRow[] => rows.filter((r) => r.ghost);
 
 describe("group order", () => {
   it("is the open order followed by the resolved statuses, not a retyped array", () => {
@@ -62,19 +73,163 @@ describe("placement", () => {
     const groups = buildGroups([parent, child], openAll);
     const byStatus = Object.fromEntries(groups.map((g) => [g.status, g]));
 
-    expect(byStatus.in_progress?.rows.map((r) => r.issue.id)).toEqual(["c"]);
-    expect(byStatus.backlog?.rows.map((r) => r.issue.id)).toEqual(["p"]);
+    // MEMBERSHIP, not everything drawn: since O3c the In Progress group also draws a
+    // dimmed ghost of the backlog parent, and the invariant is about who is IN the group.
+    expect(real(byStatus.in_progress!.rows).map((r) => r.issue.id)).toEqual(["c"]);
+    expect(real(byStatus.backlog!.rows).map((r) => r.issue.id)).toEqual(["p"]);
+    // The parent is a MEMBER of exactly one group and a GHOST in the other. If those two
+    // ever became the same thing, the header would start lying again.
+    expect(ghosts(byStatus.in_progress!.rows).map((r) => r.issue.id)).toEqual(["p"]);
+    expect(ghosts(byStatus.backlog!.rows)).toEqual([]);
+    expect(byStatus.in_progress!.count).toBe(1);
   });
 
-  it("renders a cross-group child at depth 0 with a parent breadcrumb, not nested", () => {
+  it("draws a cross-group parent as a GHOST inside the child's group, child nested", () => {
     const parent = row({ id: "p", identifier: "STA-1", title: "The epic", status: "backlog" });
     const child = row({ id: "c", identifier: "STA-2", status: "in_progress", parentId: "p" });
 
     const groups = buildGroups([parent, child], openAll);
     const inProgress = groups.find((g) => g.status === "in_progress")!;
 
-    expect(inProgress.rows[0]?.depth).toBe(0);
-    expect(inProgress.rows[0]?.breadcrumb).toEqual({ identifier: "STA-1", title: "The epic" });
+    expect(inProgress.rows.map((r) => [r.issue.identifier, r.depth, r.ghost === true])).toEqual([
+      ["STA-1", 0, true],
+      ["STA-2", 1, false],
+    ]);
+    // The chip is what the ghost REPLACES. Keeping both would say the same thing twice,
+    // once as an indent and once as a token pointing at the row directly above.
+    expect(inProgress.rows[1]!.breadcrumb).toBeNull();
+    // The ghost brackets its children and says so, but carries nothing of the parent's own
+    // liveness — `hiddenParents` could never supply it, so no ghost is allowed to.
+    expect(inProgress.rows[0]!.hasChildren).toBe(true);
+    expect(inProgress.rows[0]!.isExpanded).toBe(true);
+    expect(inProgress.rows[0]!.childCount).toBe(1);
+    expect(inProgress.rows[0]!.claim).toBeNull();
+  });
+
+  it("draws ONE ghost for several orphaned siblings, not one per row", () => {
+    const parent = row({ id: "p", identifier: "STA-1", title: "The epic", status: "backlog" });
+    const rows = [
+      parent,
+      row({ id: "a", identifier: "STA-2", status: "in_progress", parentId: "p" }),
+      row({ id: "b", identifier: "STA-3", status: "in_progress", parentId: "p" }),
+      row({ id: "c", identifier: "STA-4", status: "in_progress", parentId: "p" }),
+    ];
+
+    const inProgress = buildGroups(rows, openAll).find((g) => g.status === "in_progress")!;
+
+    expect(inProgress.rows.map((r) => [r.issue.identifier, r.depth])).toEqual([
+      ["STA-1", 0],
+      ["STA-2", 1],
+      ["STA-3", 1],
+      ["STA-4", 1],
+    ]);
+    expect(ghosts(inProgress.rows)).toHaveLength(1);
+    // Three rows are in this group. The bracket around them is not a fourth.
+    expect(inProgress.count).toBe(3);
+  });
+
+  it("renders the NEAREST missing ancestor only — never a chain of ghosts", () => {
+    // A three-deep family split three ways. The in-progress leaf gets its parent back and
+    // stops there: re-materialising the grandparent too would rebuild the whole tree
+    // inside a status group, which is the one thing grouped mode declines to do.
+    const rows = [
+      row({ id: "g", identifier: "STA-1", status: "backlog" }),
+      row({ id: "p", identifier: "STA-2", status: "todo", parentId: "g" }),
+      row({ id: "c", identifier: "STA-3", status: "in_progress", parentId: "p" }),
+    ];
+
+    const inProgress = buildGroups(rows, openAll).find((g) => g.status === "in_progress")!;
+
+    expect(inProgress.rows.map((r) => [r.issue.identifier, r.depth, r.ghost === true])).toEqual([
+      ["STA-2", 0, true],
+      ["STA-3", 1, false],
+    ]);
+    // And the ghost itself wears no chip up to ITS missing parent: one level, full stop.
+    expect(inProgress.rows[0]!.breadcrumb).toBeNull();
+    // Depth growth is therefore capped at exactly +1, whatever the real tree looks like.
+    expect(Math.max(...inProgress.rows.map((r) => r.depth))).toBe(1);
+  });
+
+  it("gives the ghost the PARENT's rollup, so an epic's progress rides with the bracket", () => {
+    const rows = [
+      row({ id: "p", identifier: "STA-1", status: "backlog" }),
+      row({ id: "a", identifier: "STA-2", status: "in_progress", parentId: "p" }),
+      row({ id: "b", identifier: "STA-3", status: "done", parentId: "p" }),
+    ];
+
+    const inProgress = buildGroups(rows, { ...openAll, rollupSource: rows }).find(
+      (g) => g.status === "in_progress",
+    )!;
+
+    // 2 descendants, 1 of them done — counted over the UNFILTERED source, so the done
+    // child the default filter hides is still in the denominator (O3b's rule, unchanged).
+    expect(inProgress.rows[0]!.ghost).toBe(true);
+    expect(inProgress.rows[0]!.rollup).toMatchObject({ total: 2, resolved: 1 });
+  });
+
+  it("a ghost sorts as the BEST row it brackets, so no real row is moved by it", () => {
+    // The epic is `low`; the task it holds is `critical`. Ranked by the epic's own
+    // priority the whole block would sink below STA-9 and take the critical row with it —
+    // acquiring a context line would have reordered real work.
+    const rows = [
+      row({ id: "e", identifier: "STA-1", status: "backlog", priority: "low" }),
+      row({ id: "c", identifier: "STA-2", status: "todo", parentId: "e", priority: "critical" }),
+      row({ id: "o", identifier: "STA-9", status: "todo", priority: "high" }),
+    ];
+
+    const todo = buildGroups(rows, openAll).find((g) => g.status === "todo")!;
+
+    expect(todo.rows.map((r) => r.issue.identifier)).toEqual(["STA-1", "STA-2", "STA-9"]);
+    // The critical row is still first among the group's REAL rows, exactly as it was.
+    expect(real(todo.rows).map((r) => r.issue.identifier)).toEqual(["STA-2", "STA-9"]);
+  });
+
+  it("keeps a real parent's own placement untouched — the ghost is a copy, not a move", () => {
+    const rows = [
+      row({ id: "p", identifier: "STA-1", status: "backlog" }),
+      row({ id: "c", identifier: "STA-2", status: "in_progress", parentId: "p" }),
+    ];
+
+    const groups = buildGroups(rows, openAll);
+    const backlog = groups.find((g) => g.status === "backlog")!;
+
+    // It is still a full, real, countable row in the group its own status put it in.
+    expect(backlog.rows.map((r) => [r.issue.identifier, r.ghost === true])).toEqual([
+      ["STA-1", false],
+    ]);
+    expect(backlog.count).toBe(1);
+  });
+
+  it("takes the ghost from V4's hiddenParents when a FILTER removed the parent", () => {
+    // The done-epic case: `applyFilters` removed the parent under the hide-resolved
+    // default, so it is not in `rows` at all — but it is on the board and worth drawing.
+    const child = row({ id: "c", identifier: "STA-2", status: "in_progress", parentId: "p" });
+    const parent = issue({ id: "p", identifier: "STA-1", title: "Shipped epic", status: "done" });
+
+    const groups = buildGroups([child], { ...openAll, hiddenParents: new Map([["c", parent]]) });
+
+    expect(groups[0]!.rows.map((r) => [r.issue.identifier, r.depth, r.ghost === true])).toEqual([
+      ["STA-1", 0, true],
+      ["STA-2", 1, false],
+    ]);
+    // A filtered-away ghost and a cross-group ghost are the SAME shape. If they diverged,
+    // the reader would have to know which kind of absence they were looking at.
+    expect(groups[0]!.rows[0]!.claim).toBeNull();
+    expect(groups[0]!.count).toBe(1);
+  });
+
+  it("turns the ghost off for a container with no indent, and the chip comes back", () => {
+    // `TreeGrid` passes `columns.disclosure` — the existing switch meaning "this surface
+    // can nest". With it off the placement takes the pre-O3c path, element for element.
+    const parent = row({ id: "p", identifier: "STA-1", title: "The epic", status: "backlog" });
+    const child = row({ id: "c", identifier: "STA-2", status: "in_progress", parentId: "p" });
+
+    const groups = buildGroups([parent, child], { ...openAll, ghostParents: false });
+    const inProgress = groups.find((g) => g.status === "in_progress")!;
+
+    expect(inProgress.rows.map((r) => [r.issue.identifier, r.depth])).toEqual([["STA-2", 0]]);
+    expect(inProgress.rows[0]!.ghost).toBe(false);
+    expect(inProgress.rows[0]!.breadcrumb).toEqual({ identifier: "STA-1", title: "The epic" });
   });
 
   it("nests only when parent and child land in the SAME group", () => {
@@ -93,20 +248,10 @@ describe("placement", () => {
     expect(inProgress.rows[0]?.childCount).toBe(1);
   });
 
-  it("takes a breadcrumb from V4's hiddenParents when the parent was FILTERED away", () => {
-    // The done-epic case: `applyFilters` removed the parent under the hide-resolved
-    // default, so it is not in `rows` at all — but it is on the board and worth naming.
-    const child = row({ id: "c", identifier: "STA-2", status: "in_progress", parentId: "p" });
-    const parent = issue({ id: "p", identifier: "STA-1", title: "Shipped epic", status: "done" });
-
-    const groups = buildGroups([child], { ...openAll, hiddenParents: new Map([["c", parent]]) });
-
-    expect(groups[0]!.rows[0]?.breadcrumb).toEqual({ identifier: "STA-1", title: "Shipped epic" });
-  });
-
-  it("keeps a row whose parent is absent from the data entirely, with no breadcrumb", () => {
-    // The parent was filtered out upstream (assignee filter, or resolved-away). Dropping
-    // the child would hide live work, which is the one thing a tracker must never do.
+  it("keeps a row whose parent is absent from the data entirely — no ghost, no breadcrumb", () => {
+    // The parent is in NEITHER map: not in another group, not reported by `hiddenParents`.
+    // Dropping the child would hide live work, which is the one thing a tracker must never
+    // do — and inventing a ghost with no title to put in it would be worse than silence.
     const orphan = row({ id: "c", identifier: "STA-2", status: "todo", parentId: "gone" });
 
     const todo = buildGroups([orphan], openAll).find((g) => g.status === "todo")!;
@@ -114,6 +259,7 @@ describe("placement", () => {
     expect(todo.rows.map((r) => r.issue.id)).toEqual(["c"]);
     expect(todo.rows[0]?.depth).toBe(0);
     expect(todo.rows[0]?.breadcrumb).toBeNull();
+    expect(todo.rows[0]?.ghost).toBe(false);
   });
 });
 
@@ -261,10 +407,15 @@ describe("flattenFlat — one bucket, no status axis", () => {
       row({ id: "c", identifier: "STA-2", status: "in_progress", parentId: "p" }),
     ];
 
-    // Grouped: two groups, the child at depth 0 wearing a breadcrumb instead of an indent.
+    // Grouped: two groups, and the parent is a MEMBER of one and a ghost bracket in the
+    // other — so each group still contains exactly one real row (O3c).
     const grouped = buildGroups(rows, openAllFlat);
     expect(grouped).toHaveLength(2);
-    expect(grouped.flatMap((g) => g.rows).every((r) => r.depth === 0)).toBe(true);
+    expect(grouped.map((g) => g.count)).toEqual([1, 1]);
+    expect(grouped.map((g) => real(g.rows).map((r) => r.issue.identifier))).toEqual([
+      ["STA-2"],
+      ["STA-1"],
+    ]);
 
     // Flat: one list, the child indented under its parent and needing no breadcrumb,
     // because the parent it would point at is the row directly above it.
@@ -273,6 +424,29 @@ describe("flattenFlat — one bucket, no status axis", () => {
     expect(flat[1]!.depth).toBe(1);
     expect(flat[1]!.breadcrumb).toBeNull();
     expect(flat[0]!.hasChildren).toBe(true);
+  });
+
+  it("NEVER emits a ghost, so the ungrouped view is what it was before O3c", () => {
+    // The one case flat mode can still orphan: a filter took the parent off the page
+    // entirely. Grouped mode draws it back as a ghost; flat mode must not, because
+    // redrawing a filtered row is undoing the filter in the view whose whole reading is
+    // "what does this project look like right now".
+    const child = row({ id: "c", identifier: "STA-2", status: "in_progress", parentId: "p" });
+    const parent = issue({ id: "p", identifier: "STA-1", title: "Shipped epic", status: "done" });
+    const options = { isExpanded: () => true, hiddenParents: new Map([["c", parent]]) };
+
+    const flat = flattenFlat([child], options);
+
+    expect(flat.map((r) => [r.issue.identifier, r.depth, r.ghost === true])).toEqual([
+      ["STA-2", 0, false],
+    ]);
+    expect(flat[0]!.breadcrumb).toEqual({ identifier: "STA-1", title: "Shipped epic" });
+
+    // And it stays off even if a caller asks for ghosts: `flattenFlat` passes a hard
+    // `false`, so the option cannot reach it by accident from a shared options object.
+    expect(
+      flattenFlat([child], { ...options, ghostParents: true }).every((r) => !r.ghost),
+    ).toBe(true);
   });
 
   it("still honours the resolved gate, so the two modes hide the same rows", () => {
@@ -355,6 +529,51 @@ describe("the visible ordered list", () => {
     expect(visibleOrder(buildList([], "none", opts), none)).toEqual([]);
     expect(visibleOrder(buildList([], "status", opts), none)).toEqual([]);
   });
+
+  /**
+   * O3c (STA-128). The three ghost exclusions, and the reason each one is not optional.
+   */
+  const split = () => [
+    row({ id: "p", identifier: "STA-1", status: "backlog" }),
+    row({ id: "c", identifier: "STA-2", status: "in_progress", parentId: "p" }),
+  ];
+
+  it("EXCLUDES ghost context rows, so prev/next never lands on one", () => {
+    const grouped = buildList(split(), "status", opts);
+
+    // The In Progress group draws STA-1 as a ghost above STA-2…
+    const drawn = grouped.kind === "grouped" ? grouped.groups[0]!.rows : [];
+    expect(drawn.map((r) => [r.issue.identifier, r.ghost === true])).toEqual([
+      ["STA-1", true],
+      ["STA-2", false],
+    ]);
+
+    // …and the arrows walk STA-2 then STA-1-the-real-row, ONCE each. Without the
+    // exclusion STA-1 would appear twice in one traversal, and the second visit would
+    // open a ticket the reader had already paged past.
+    expect(visibleOrder(grouped, none).map((s) => s.ref)).toEqual(["STA-2", "STA-1"]);
+  });
+
+  it("keeps `visibleRows` and `visibleOrder` in step across the ghost exclusion too", () => {
+    const grouped = buildList(split(), "status", opts);
+
+    const rows = visibleRows(grouped, none);
+    const order = visibleOrder(grouped, none);
+
+    expect(rows.some((r) => r.ghost)).toBe(false);
+    expect(order).toHaveLength(rows.length);
+    expect(order.map((s) => s.ref)).toEqual(rows.map((r) => r.issue.identifier));
+  });
+
+  it("excludes ghosts under PICKUP grouping as well as status", () => {
+    // Same rule, other axis. A reader who learned it on one menu entry must not find a
+    // different answer on the next.
+    const pickupShape = buildList(split(), "pickup", opts);
+    const drawn = pickupShape.kind === "pickup" ? pickupShape.groups.flatMap((g) => g.rows) : [];
+
+    expect(drawn.some((r) => r.ghost)).toBe(true);
+    expect(visibleOrder(pickupShape, none).map((s) => s.ref).sort()).toEqual(["STA-1", "STA-2"]);
+  });
 });
 
 /**
@@ -383,7 +602,13 @@ describe("buildList", () => {
 
     const grouped = buildList(rows, "status", opts);
     expect(grouped.kind === "grouped" && grouped.groups).toHaveLength(2);
-    expect(grouped.kind === "grouped" && grouped.groups.flatMap((g) => g.rows).map((r) => r.depth)).toEqual([0, 0]);
+    // Each group holds exactly one real row — the family is still SPLIT BY STATUS. O3c
+    // draws a dimmed bracket around the child; it does not reunite the family.
+    expect(
+      grouped.kind === "grouped" &&
+        grouped.groups.map((g) => real(g.rows).map((r) => r.issue.identifier)),
+    ).toEqual([["STA-2"], ["STA-1"]]);
+    expect(grouped.kind === "grouped" && grouped.groups.map((g) => g.count)).toEqual([1, 1]);
   });
 });
 
@@ -442,16 +667,27 @@ describe("default expansion depends on the shape", () => {
   });
 
   it("GROUPED: unchanged — a row is folded by its own status", () => {
-    // The live child is not hidden here; it is a ROOT of its own group with a breadcrumb,
-    // which is exactly why the grouped default was correct and the flat one could not be.
+    // The live child is not hidden here; it is in its own group, under a ghost of the
+    // epic since O3c, which is exactly why the grouped default was correct and the flat
+    // one could not be. The FOLD is still decided by each row's own status.
     const groups = buildGroups(backlogEpicWithLiveChild(), untouched);
     const backlog = groups.find((g) => g.status === "backlog")!;
     const progress = groups.find((g) => g.status === "in_progress")!;
 
     expect(backlog.rows[0]!.isExpanded).toBe(false);
     expect(backlog.rows.map((r) => r.issue.identifier)).toEqual(["STA-1"]);
-    expect(progress.rows.map((r) => r.issue.identifier)).toEqual(["STA-2"]);
-    expect(progress.rows[0]!.breadcrumb?.identifier).toBe("STA-1");
+    expect(real(progress.rows).map((r) => r.issue.identifier)).toEqual(["STA-2"]);
+
+    /*
+     * THE GHOST IS NOT SUBJECT TO THE FOLD, and this is the assertion that pins it.
+     * `untouched` makes no explicit choice, so the backlog epic's default is COLLAPSED —
+     * and it is collapsed, in the backlog group, where its own children live. Its ghost in
+     * the In Progress group is open regardless, because folding it would take a live row
+     * out of the group its status put it in.
+     */
+    expect(progress.rows[0]!.ghost).toBe(true);
+    expect(progress.rows[0]!.isExpanded).toBe(true);
+    expect(progress.rows[1]!.depth).toBe(1);
   });
 
   it("walks the WHOLE ancestor chain, not just the immediate parent", () => {

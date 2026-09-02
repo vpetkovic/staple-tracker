@@ -159,6 +159,24 @@ export interface TaskRow {
    * every DESCENDANT in the unfiltered list. See `parentRollups`.
    */
   rollup?: ParentRollup | null;
+  /**
+   * ── THIS ROW IS CONTEXT, NOT CONTENT — O3c (STA-128) ────────────────────────────────
+   *
+   * A GHOST: a parent that is NOT in this bucket, drawn inside it anyway so the children
+   * that are can be nested under it and read as one epic instead of three unrelated rows
+   * wearing the same chip. Its parent landed in another group, or a filter removed it.
+   *
+   * A ghost is a BRACKET AROUND ROWS, not a row, and every consumer has to treat it as
+   * one. It is excluded from the group's count, from `visibleOrder` (R6's prev/next
+   * contract) and from the keyboard sequence; it is dimmed; it is non-interactive except
+   * that clicking it opens the parent. See `views/tree/tree-model.ts`.
+   *
+   * OPTIONAL for the reason `rollup`, `worklog` and `deps` are: a caller with nothing to
+   * say passes nothing, so a surface that has never heard of ghosts CHECKS the field
+   * rather than inheriting a default it did not choose. Absent means "an ordinary row",
+   * which is what every existing caller means.
+   */
+  ghost?: boolean;
 }
 
 /**
@@ -491,6 +509,11 @@ export function flatRow(source: TaskSource, over: Partial<TaskRow> = {}): TaskRo
     // for the same reason every other field here is: the shorthand's whole job is that a
     // caller never has to remember which of these has a no-tree value.
     rollup: null,
+    // O3c (STA-128). A row that is not in a tree cannot be standing in for a parent that
+    // is missing from a bucket, because there are no buckets. Explicit for the same reason
+    // `rollup` is: the shorthand's whole job is that a caller never has to remember which
+    // of these has a no-tree value.
+    ghost: false,
     ...over,
   };
 }

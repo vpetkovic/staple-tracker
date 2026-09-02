@@ -256,8 +256,22 @@ export function TreeGrid({
    * one it is building. See tree-model.ts `subtreesHoldingActiveWork`.
    */
   const build = useMemo(
-    () => ({ isExpanded: expansion.explicit, showResolved, hiddenParents, rollupSource: allRows }),
-    [expansion.explicit, showResolved, hiddenParents, allRows],
+    () => ({
+      isExpanded: expansion.explicit,
+      showResolved,
+      hiddenParents,
+      rollupSource: allRows,
+      /**
+       * O3c (STA-128). A ghost needs an INDENT to be legible, and `columns.disclosure` is
+       * the existing switch that means "this container has one" — the `panel` and `popup`
+       * presets turn it off. Reusing it rather than inventing a second flag is what keeps
+       * "where is the ghost row on and where is the breadcrumb chip" a single answer: a
+       * surface that cannot nest keeps the chip, automatically, for free, and would not
+       * have to be remembered when a fourth preset arrives.
+       */
+      ghostParents: config.columns.disclosure,
+    }),
+    [expansion.explicit, showResolved, hiddenParents, allRows, config.columns.disclosure],
   );
 
   /**
@@ -318,7 +332,21 @@ export function TreeGrid({
     for (const section of sectionsOf(shape)) {
       out.push({ kind: "group", key: `group:${section.key}`, group: section.key });
       if (expansion.isGroupCollapsed(section.key)) continue;
-      for (const row of section.rows) out.push({ kind: "row", key: row.issue.id, row });
+      for (const row of section.rows) {
+        /*
+         * O3c (STA-128). GHOSTS ARE NOT IN THE KEYBOARD SEQUENCE, and this is the same
+         * exclusion `visibleRows` makes in the model — deliberately expressed against the
+         * same `sectionsOf` walk, because the whole reason that accessor exists is that
+         * these two must never disagree about what is on the page.
+         *
+         * There is a second, harder reason here: `key` is the issue id, and a ghost's id
+         * is the id of a REAL row that already sits in another group. Two entries with one
+         * key would make the roving `tabIndex` ambiguous and `focus.register` would hand
+         * the same id two elements. Skipping ghosts is what keeps `navKeys` unique.
+         */
+        if (row.ghost) continue;
+        out.push({ kind: "row", key: row.issue.id, row });
+      }
     }
     return out;
   }, [shape, expansion]);
@@ -369,7 +397,11 @@ export function TreeGrid({
   useEffect(() => {
     if (!currentRef) return;
     const row = rootRef.current?.querySelector<HTMLElement>(
-      `[data-testid="task-row"][data-identifier="${CSS.escape(currentRef)}"]`,
+      // `:not([data-ghost])` — O3c (STA-128). `data-identifier` stopped being unique the
+      // moment a parent could appear as a dimmed context row inside another group, and
+      // scrolling to the context copy would park the reader next to a row that is not the
+      // one the drawer just opened.
+      `[data-testid="task-row"][data-identifier="${CSS.escape(currentRef)}"]:not([data-ghost])`,
     );
     if (!row || row.closest('[data-collapsed="true"]')) return;
     row.scrollIntoView({ block: "nearest" });
@@ -519,6 +551,37 @@ export function TreeGrid({
     />
   );
 
+  /**
+   * A GHOST PARENT CONTEXT ROW — O3c (STA-128).
+   *
+   * The same component, and everything it is NOT given is the point. No `registerRef`, so
+   * the roving focus never hands it a tab stop and `focus.register` is never called twice
+   * with one id. No `onFocus`/`onKeyDown`, so it takes no position in the arrow sequence.
+   * No `isSelected`/`onToggleSelect`, because it is not in this bucket to be selected in
+   * it. No `isCurrent`: the drawer's highlight belongs on the parent's REAL row, in the
+   * group its status actually put it in, and lighting up both would say the same ticket is
+   * in two groups at once.
+   *
+   * What it does get is `onOpen` — the ticket's "opens the parent on click" — which needs
+   * nothing special because the ghost carries the parent's identifier and the child's
+   * workspace, and `parentId` is intra-workspace by construction.
+   *
+   * The React key is prefixed. A ghost's `issue.id` is a real row's id and the two can be
+   * on the page at once; unprefixed, React would be told two siblings in different
+   * rowgroups are the same element the moment a future change put them in one list.
+   */
+  const renderGhost = (row: TaskRow) => (
+    <TaskRowLine
+      key={`ghost:${row.issue.id}`}
+      row={row}
+      config={config}
+      semantics="grid"
+      isExpanded
+      now={now}
+      onOpen={() => openIssue(row)}
+    />
+  );
+
   let index = -1;
 
   return (
@@ -582,6 +645,13 @@ export function TreeGrid({
               >
                 <div className="staple-group-rows">
                   {section.rows.map((row) => {
+                    /*
+                      O3c (STA-128). Returned BEFORE the index moves, which is the whole
+                      contract: `index` is a position in `nav`, `nav` skips ghosts, so a
+                      ghost that incremented it would shift every row beneath it by one and
+                      hand each of them another row's keyboard handler.
+                    */
+                    if (row.ghost) return renderGhost(row);
                     if (!collapsed) index += 1;
                     /*
                       WHO THIS ROW IS WAITING ON — V5 (STA-111)'s third section, folded into

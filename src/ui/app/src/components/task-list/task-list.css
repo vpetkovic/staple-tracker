@@ -377,6 +377,65 @@
   width: 16px;
 }
 
+/*
+ * ── The ghost parent context row — O3c (STA-128) ──────────────────────────────────────
+ *
+ * A parent that is NOT in this bucket, drawn inside it so the children that are can nest
+ * under it. It has to read as "context, not content" at a glance and from a distance, and
+ * it has to do it without introducing a new colour: a hue here would be a status, and this
+ * row's status is already drawn by its own `StatusIcon`.
+ *
+ * ONE PROPERTY, `opacity`, on the whole row. Dimming each element by swapping it to a
+ * tertiary token would mean thirteen rules that have to be kept in step with thirteen
+ * elements, and the first one added after this ticket would be the one at full strength.
+ * Opacity dims what is there, including anything O1b adds tomorrow.
+ *
+ * NO HEIGHT, NO GEOMETRY, NOTHING THAT MOVES. The row is the same 36px as its neighbours
+ * and its columns land on the same tracks — the chevron and the `⋯` are replaced in place
+ * rather than removed, see TaskRowLine. A context row that broke the list's alignment
+ * would cost more attention than the relationship it is there to explain.
+ */
+.staple-row-ghost {
+  opacity: 0.55;
+  transition:
+    background-color var(--motion-duration-instant) var(--motion-ease-standard),
+    opacity var(--motion-duration-instant) var(--motion-ease-standard);
+}
+
+/* It IS clickable — it opens the parent — so it has to answer the pointer. Back towards
+   full rather than to it: a ghost that reached full strength on hover would read as having
+   become a member of the group. */
+.staple-row-ghost:hover {
+  opacity: 0.85;
+}
+
+/*
+ * The static disclosure glyph. Same box and same rotation as the real chevron so the indent
+ * beneath it hangs from exactly the same x, and deliberately NOT a button: folding a ghost
+ * would remove real rows from the group they belong to.
+ */
+.staple-row-chevron-static {
+  cursor: inherit;
+}
+
+.staple-row:hover .staple-row-chevron-static {
+  /* The button brightens on row hover to advertise the fold. This one has no fold to
+     advertise, so it stays where it is. */
+  color: var(--text-tertiary);
+}
+
+/* Reserved width, no affordance — see TaskRowLine's ghost branch for why each of these
+   cannot simply be dropped from the DOM. */
+.staple-row-check-spacer {
+  width: 24px;
+}
+
+.staple-row-actions-spacer {
+  display: inline-flex;
+  width: 20px;
+  height: 20px;
+}
+
 .staple-row-priority {
   display: inline-flex;
   width: 16px;
@@ -1124,6 +1183,7 @@
   .staple-row-check,
   .staple-row-actions,
   .staple-row-chevron,
+  .staple-row-ghost,
   .staple-group-triangle,
   .staple-group-body {
     transition: none;

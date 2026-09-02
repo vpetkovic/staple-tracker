@@ -756,3 +756,152 @@ describe("parent rollup", () => {
     expect(markup).not.toContain("0/0");
   });
 });
+
+/**
+ * ── THE GHOST PARENT CONTEXT ROW — O3c (STA-128) ──────────────────────────────────────
+ *
+ * A parent that is NOT in this bucket, drawn inside it so the children that ARE can nest
+ * under it. Built through the real `buildGroups` rather than a hand-made `TaskRow`, because
+ * the whole claim of this ticket is that the model and the row agree about what a ghost is
+ * — a fixture asserting the row alone would still pass on the day the model stopped
+ * producing one.
+ *
+ * Three ways this could quietly become wrong, and one test each:
+ *
+ *   1. It grows an affordance. A fold on a ghost REMOVES REAL ROWS from the group they
+ *      belong to; a checkbox offers to select a row that is not in the bucket.
+ *   2. It loses its geometry. The select and actions columns are reserved width, so
+ *      dropping either element slides this one row's glyphs out of the list's columns.
+ *   3. It says something about the parent it cannot know — a claim, in particular, which
+ *      `hiddenParents` could never supply and which belongs to the parent's real row.
+ */
+describe("the ghost parent context row", () => {
+  const family = () => [
+    row(
+      { id: "p", identifier: "STA-1", title: "The epic", status: "backlog" },
+      claim({ heldBy: "opus-p", idleSeconds: 10 }),
+    ),
+    row({ id: "c", identifier: "STA-2", title: "The task", status: "in_progress", parentId: "p" }),
+    row({ id: "d", identifier: "STA-3", title: "Shipped", status: "done", parentId: "p" }),
+  ];
+
+  /** The In Progress group: `[ghost STA-1, STA-2]`. */
+  function inProgressRows() {
+    const rows = family();
+    return buildGroups(rows, { isExpanded: () => true, rollupSource: rows }).find(
+      (g) => g.status === "in_progress",
+    )!.rows;
+  }
+
+  /**
+   * The ghost, rendered the way `TreeGrid.renderGhost` renders it: no keyboard, no
+   * selection, no `registerRef` — just the click that opens the parent.
+   */
+  const renderGhostRow = () =>
+    renderToStaticMarkup(
+      <TaskRowLine
+        row={inProgressRows()[0]!}
+        config={resolveTaskListConfig("tree", { labelMax: 2 })}
+        semantics="grid"
+        isExpanded
+        now={NOW}
+        onOpen={() => {}}
+      />,
+    );
+
+  it("is the parent, marked as a ghost and dimmed by class rather than by hue", () => {
+    const markup = renderGhostRow();
+
+    expect(inProgressRows()[0]!.ghost).toBe(true);
+    expect(markup).toContain('data-identifier="STA-1"');
+    expect(markup).toContain('data-ghost="true"');
+    expect(markup).toContain("staple-row-ghost");
+    // Still a real treegrid row at the top level of the group, with the children it
+    // brackets one level down — `aria-level` is 1-based.
+    expect(markup).toContain('role="row"');
+    expect(markup).toContain('aria-level="1"');
+    expect(markup).toContain('aria-expanded="true"');
+  });
+
+  it("offers NO fold, NO selection and NO row menu — click is the only interaction", () => {
+    const markup = renderGhostRow();
+
+    // The chevron is a static glyph in the open position, not a button: folding a ghost
+    // would take the live rows underneath it out of the group their status put them in.
+    expect(markup).toContain("staple-row-chevron-static");
+    expect(markup).not.toContain("Collapse STA-1");
+    expect(markup).not.toContain("Expand STA-1");
+    // No `⋯`, and no `aria-selected` advertising a selection it cannot join.
+    expect(markup).not.toContain("Open details for STA-1");
+    expect(markup).not.toContain("aria-selected");
+    // Not a tab stop. The arrow keys skip it because `nav` skips it; this is the DOM half.
+    expect(markup).toContain('tabindex="-1"');
+  });
+
+  it("keeps every reserved column, so one dimmed row cannot break the list's alignment", () => {
+    const wide = renderToStaticMarkup(
+      <TaskRowLine
+        row={inProgressRows()[0]!}
+        // The checkbox gutter is off by default (STA-101). Forced on here, because the
+        // failure this guards is invisible until somebody turns it back on: the row is a
+        // GRID, so an absent element does not leave a gap, it shifts every later glyph one
+        // track left.
+        config={resolveTaskListConfig("tree", { labelMax: 2, columns: { select: true } })}
+        semantics="grid"
+        isExpanded
+        now={NOW}
+        onOpen={() => {}}
+      />,
+    );
+
+    expect(wide).toContain("staple-row-check-spacer");
+    expect(wide).not.toContain("Select STA-1");
+    expect(renderGhostRow()).toContain("staple-row-actions-spacer");
+  });
+
+  it("says what is UNDER the parent and nothing about the parent's own liveness", () => {
+    const markup = renderGhostRow();
+
+    // The rollup rides along — it is the epic's own progress, over the unfiltered source,
+    // so the `done` child the default filter hides is still in the denominator.
+    expect(markup).toContain('data-testid="parent-rollup"');
+    expect(markup).toContain("1/2");
+    // Expanded form: the count, no bar. The rows the bar would restate are on the screen
+    // directly underneath it.
+    expect(markup).not.toContain('data-testid="parent-rollup-bar"');
+    // And NO claim, even though this parent is genuinely held — `hiddenParents` yields an
+    // `Issue` alone, so a ghost could never report liveness consistently, and the parent's
+    // real row in the Backlog group is where it is written down.
+    expect(markup).not.toContain('data-testid="working-pill"');
+    expect(markup).not.toContain("opus-p is working");
+  });
+
+  it("tells a screen reader it is context, since the dimming tells it nothing", () => {
+    expect(renderGhostRow()).toContain("parent shown for context");
+  });
+
+  it("takes the chip off the child it brackets — the elbow is now saying it", () => {
+    const child = inProgressRows()[1]!;
+    const markup = renderToStaticMarkup(
+      <TaskRowLine
+        row={child}
+        config={resolveTaskListConfig("tree", { labelMax: 2 })}
+        semantics="grid"
+        now={NOW}
+        onOpen={() => {}}
+        onOpenParent={() => {}}
+        registerRef={() => {}}
+      />,
+    );
+
+    expect(child.depth).toBe(1);
+    expect(markup).not.toContain("staple-row-breadcrumb");
+    expect(markup).not.toContain("Parent STA-1");
+    // Nested, so it draws the connector the chip used to stand in for.
+    expect(markup).toContain("staple-guide-elbow");
+    expect(markup).toContain('aria-level="2"');
+    // An ordinary row in every other respect: focusable, selectable, and NOT dimmed.
+    expect(markup).not.toContain('data-ghost="true"');
+    expect(markup).toContain('aria-selected="false"');
+  });
+});

@@ -22,11 +22,25 @@
  *
  * The cost is stated plainly in the spec and is worth restating here, because it is the
  * first thing a reader will want to "fix": in status-grouped mode YOU DO NOT SEE THE WHOLE
- * TREE IN ONE PLACE. A parent and child with different statuses appear in different groups
- * and the child carries a breadcrumb chip instead of an indent. That is the correct trade —
- * status grouping is a triage view whose job is "what is happening right now", not "how is
- * this epic shaped". The graph view and the detail drawer's children list own the whole-tree
- * question properly.
+ * TREE IN ONE PLACE. A parent and child with different statuses appear in different groups.
+ * That is the correct trade — status grouping is a triage view whose job is "what is
+ * happening right now", not "how is this epic shaped". The graph view and the detail
+ * drawer's children list own the whole-tree question properly.
+ *
+ * ── GHOSTS: ONE LEVEL OF THE TREE, BORROWED BACK — O3c (STA-128) ──────────────────────
+ *
+ * The child used to carry a breadcrumb CHIP instead of an indent, and three children of one
+ * epic then read as three unrelated rows that happen to wear the same 11px token. So the
+ * missing parent is now drawn ONCE inside the bucket as a dimmed GHOST with its children
+ * nested under it.
+ *
+ * THAT DOES NOT WEAKEN THE INVARIANT ABOVE, and the distinction is the whole design. A
+ * ghost is a BRACKET AROUND ROWS, not a row: it is not in the group's count, not in
+ * `visibleOrder`, not in the keyboard sequence, cannot be selected, and cannot be folded.
+ * Every task in the "In Progress" group is still in progress — the ghost is not a task in
+ * the group, it is a caption on three of them. Exactly ONE level is borrowed (the nearest
+ * missing ancestor); a chain would rebuild the whole tree inside a status group, which is
+ * the thing this note has just finished saying grouped mode deliberately does not do.
  */
 import {
   forEachAncestor,
@@ -162,6 +176,30 @@ export interface BuildOptions {
    * over what it does have.
    */
   rollupSource?: readonly IssueRow[];
+  /**
+   * MAY A MISSING PARENT BE DRAWN INSIDE THIS BUCKET — O3c (STA-128).
+   *
+   * A child whose parent landed in another group, or was removed by a filter, used to
+   * render at depth 0 wearing a breadcrumb chip. Three children of one epic then read as
+   * three unrelated rows that happen to carry the same 11px token. With this on, the
+   * parent is drawn ONCE inside the bucket as a dimmed GHOST and its children nest under
+   * it, so the epic's unit of work reads as a unit.
+   *
+   * It is a switch rather than a constant because a ghost needs an INDENT to be legible,
+   * and two surfaces have none:
+   *
+   *   FLAT MODE, always. `flattenFlat` passes `false` at the call site and does not read
+   *   this field, because the ungrouped view must stay pixel-identical to today — there,
+   *   lineage already nests and the only orphan is one a filter made, which keeps its chip.
+   *
+   *   NARROW CONTAINERS. `TreeGrid` passes `columns.disclosure`, the EXISTING switch that
+   *   means "this container has an indent to nest into". The `panel` and `popup` presets
+   *   turn it off; a ghost there would be a dimmed row at depth 0 indistinguishable from a
+   *   real one, so the breadcrumb chip stays and this path is not taken at all.
+   *
+   * Defaulted to `true` for the grouped shapes, which is where the ticket lives.
+   */
+  ghostParents?: boolean;
 }
 
 /**
@@ -342,6 +380,12 @@ function flatten(
    * those calls would otherwise walk the same ancestor chains again to produce the same map.
    */
   rollups: ReadonlyMap<string, ParentRollup> = EMPTY_ROLLUPS,
+  /**
+   * O3c (STA-128). See `BuildOptions.ghostParents`. Defaulted OFF here rather than on,
+   * because the one call site that must never grow ghosts — `flattenFlat` — is also the
+   * one that would acquire them silently if a later edit forgot the argument.
+   */
+  ghostParents = false,
 ): TaskRow[] {
   const { isExpanded: explicit, hiddenParents } = options;
   const isExpanded = (issue: Issue): boolean => explicit(issue) ?? defaultExpanded(issue);
@@ -349,38 +393,111 @@ function flatten(
   const inGroup = new Map(bucket.map((r) => [r.issue.id, r]));
   const children = new Map<string, IssueRow[]>();
   const roots: IssueRow[] = [];
+  /**
+   * O3c (STA-128). The synthesised parents, by id — MEMBERSHIP HERE IS WHAT MAKES A ROW A
+   * GHOST, and it is the only thing `walk` below has to learn.
+   *
+   * A ghost is injected as an ordinary root with its orphans filed under it in `children`,
+   * so depth, guides, the elbow, `isLast` and the recursive nesting of the orphans' OWN
+   * children all fall out of the existing traversal. Teaching `walk` a second shape would
+   * have been a second placement rule, and two placement rules is how the ghost path and
+   * the real path start drawing different trees.
+   */
+  const ghosts = new Map<string, IssueRow>();
+
+  /**
+   * Two ways to lose your parent: it landed in another GROUP, or a FILTER removed it. The
+   * first is on the page somewhere, the second is not — and neither is a reason to render
+   * a child as though it were a root. A parent that is in NEITHER map is absent from the
+   * data entirely, and earns silence: a chip or a ghost pointing at a ticket the reader
+   * cannot reach is worse than nothing.
+   */
+  const missingParentOf = (r: IssueRow): Issue | undefined =>
+    r.issue.parentId
+      ? (presentAnywhere.get(r.issue.parentId) ?? hiddenParents?.get(r.issue.id))
+      : undefined;
+
+  const fileUnder = (parentId: string, r: IssueRow) => {
+    const filed = children.get(parentId);
+    if (filed) filed.push(r);
+    else children.set(parentId, [r]);
+  };
 
   for (const r of bucket) {
     const parentId = r.issue.parentId;
-    // Nesting happens ONLY where parent and child are both in this bucket.
+    // Nesting happens where parent and child are both in this bucket…
     if (parentId && inGroup.has(parentId)) {
-      const bucketed = children.get(parentId);
-      if (bucketed) bucketed.push(r);
-      else children.set(parentId, [r]);
-    } else {
-      roots.push(r);
+      fileUnder(parentId, r);
+      continue;
     }
+    // …and, since O3c, where the parent can be NAMED even though it is not in the bucket.
+    // ONE ghost per family: the second orphan finds the first one's and nests beside it.
+    const missing = ghostParents && parentId ? missingParentOf(r) : undefined;
+    if (missing && parentId) {
+      if (!ghosts.has(parentId)) {
+        /**
+         * WHAT A GHOST CARRIES: the parent's issue, and nothing about the parent's own
+         * liveness. `hiddenParents` yields an `Issue` and nothing more, so a ghost built
+         * from a filtered-away parent could never show a claim; letting the cross-group
+         * ghost show one would mean two ghosts of identical shape reporting different
+         * KINDS of fact about the same relationship. `RowClaimSlot` on the parent's real
+         * row — in its own group, or behind the filter — stays the single place the row's
+         * own claim is written down.
+         *
+         * The WORKSPACE is the child's. `parentId` is intra-workspace by construction, so
+         * that is not an approximation, and it is what makes click-to-open work with no
+         * new plumbing.
+         */
+        const ghost: IssueRow = { issue: missing, claim: null, workspace: r.workspace };
+        ghosts.set(parentId, ghost);
+        roots.push(ghost);
+      }
+      fileUnder(parentId, r);
+      continue;
+    }
+    roots.push(r);
   }
 
   // Siblings are ranked against siblings, at every depth — so an epic's live child rises
-  // inside that epic exactly as the epic itself rises among the roots.
+  // inside that epic exactly as the epic itself rises among the roots. Children FIRST,
+  // because a ghost's rank is read off the head of its sorted child list below.
   const byRow = (a: IssueRow, b: IssueRow) => compareRows(a, b, tierOf);
-  roots.sort(byRow);
   for (const list of children.values()) list.sort(byRow);
+
+  /**
+   * A GHOST SORTS AS THE BEST ROW IT BRACKETS — O3c (STA-128).
+   *
+   * It is not a row and must not be ranked as one. Ranked by the PARENT's own priority, a
+   * low-priority epic holding the group's most urgent task would sink and take that task
+   * down with it: acquiring a context line would have reordered real work, which nothing
+   * asked for and every reader would notice. Ranked by its best child, the block lands
+   * exactly where that child would have landed and the epic's other children move up to
+   * join it — minimum disturbance, same comparator, no second ordering rule to drift.
+   */
+  const rankedAs = (r: IssueRow): IssueRow =>
+    ghosts.has(r.issue.id) ? (children.get(r.issue.id)?.[0] ?? r) : r;
+  roots.sort((a, b) => byRow(rankedAs(a), rankedAs(b)));
 
   const rendered: TaskRow[] = [];
 
   const walk = (list: IssueRow[], depth: number, ancestorGuides: boolean[]): void => {
     list.forEach((r, index) => {
+      const isGhost = ghosts.has(r.issue.id);
       const kids = children.get(r.issue.id) ?? [];
       const isLast = index === list.length - 1;
-      const expanded = kids.length > 0 && isExpanded(r.issue);
-      // Two ways to lose your parent, both worth a chip: it landed in another GROUP, or
-      // it was removed by a FILTER. The first is on the page somewhere, the second is not
-      // — and neither is a reason to render a child as though it were a root.
-      const parent = r.issue.parentId
-        ? (presentAnywhere.get(r.issue.parentId) ?? hiddenParents?.get(r.issue.id))
-        : undefined;
+      // A ghost is ALWAYS open. A fold on it would remove real rows from the group they
+      // belong to, which is the one thing tree-model.ts's §1 invariant exists to prevent.
+      const expanded = isGhost || (kids.length > 0 && isExpanded(r.issue));
+      /**
+       * NEAREST MISSING ANCESTOR ONLY, and this line is where that rule is enforced.
+       *
+       * A ghost gets no chip of its own and no ghost above it. The direct parent IS the
+       * nearest missing ancestor, so one level is the whole answer: it buys "these three
+       * rows are the same epic" for 20px of indent, where a chain would rebuild the entire
+       * tree inside a status group — precisely the thing this file's header says grouped
+       * mode deliberately does not do. It also caps rendered depth growth at exactly +1.
+       */
+      const parent = isGhost ? undefined : missingParentOf(r);
 
       rendered.push({
         issue: r.issue,
@@ -411,6 +528,15 @@ function flatten(
         // that could NOT be nested needs to name the parent it belongs to.
         breadcrumb:
           depth === 0 && parent ? { identifier: parent.identifier, title: parent.title } : null,
+        /*
+         * O3c (STA-128). The one field every consumer of this list has to check: a ghost is
+         * excluded from the group's count, from `visibleOrder` and from the keyboard
+         * sequence, and it is drawn dimmed and non-interactive except for the click that
+         * opens the parent. Written explicitly on every row rather than only on ghosts, so
+         * `row.ghost` is never `undefined` inside the tree and a reader of one row does not
+         * have to know which of two shapes produced it.
+         */
+        ghost: isGhost,
       });
 
       if (expanded) {
@@ -432,7 +558,7 @@ function flatten(
  * at a ticket the reader cannot see is worse than no chip.
  */
 export function buildGroups(rows: IssueRow[], options: BuildOptions): StatusGroup[] {
-  const { showResolved = false } = options;
+  const { showResolved = false, ghostParents = true } = options;
 
   const visible = showResolved ? rows : rows.filter((r) => !isResolvedStatus(r.issue.status));
   const presentAnywhere = new Map(rows.map((r) => [r.issue.id, r.issue]));
@@ -466,7 +592,17 @@ export function buildGroups(rows: IssueRow[], options: BuildOptions): StatusGrou
         (issue) => DEFAULT_EXPANDED_GROUPS.has(issue.status),
         NO_ACTIVITY_TIER,
         rollups,
+        ghostParents,
       ),
+      /*
+       * THE REAL ROWS, COUNTED BEFORE ANY GHOST EXISTS — O3c (STA-128).
+       *
+       * `bucket` is what the placement rule put in this group; the ghost is a bracket drawn
+       * around some of them. So ghosts cannot reach this number by construction, which is
+       * stronger than subtracting them afterwards would have been — and it is why the
+       * tempting "simplification" to `rows.length` is now wrong in two separate ways rather
+       * than one (a collapsed parent's children, and the ghosts).
+       */
       count: bucket.length,
     });
   }
@@ -508,6 +644,17 @@ export function flattenFlat(rows: IssueRow[], options: BuildOptions): TaskRow[] 
     // O3b (STA-127). The unfiltered source, NOT `visible` — the one line where the rollup
     // and the tier above deliberately disagree about which set they read.
     parentRollups(options.rollupSource ?? rows),
+    /*
+     * NO GHOSTS IN FLAT MODE — O3c (STA-128), and it is a hard `false` rather than a read
+     * of `options.ghostParents` on purpose.
+     *
+     * The acceptance criterion is that the ungrouped view is pixel-identical to today, and
+     * the reason is not caution: flat mode has ONE bucket, so lineage already nests and the
+     * only orphan left is one a filter made. Drawing that filtered-away parent back in
+     * would undo the filter in the one view whose whole reading is "what does this project
+     * actually look like right now". It keeps its breadcrumb chip, exactly as before.
+     */
+    false,
   );
 }
 
@@ -576,6 +723,10 @@ export function buildList(
         groups: buildPickupGroups(rows, pickup, {
           showResolved: options.showResolved,
           hiddenParents: options.hiddenParents,
+          // O3c (STA-128). The ghost rule is the SAME rule on both grouped axes, so it is
+          // the same switch — a reader who has learned it under status grouping must not
+          // find a different answer one menu entry away.
+          ghostParents: options.ghostParents,
         }),
       };
     default:
@@ -596,18 +747,31 @@ export function buildList(
  * and they are `inert`, and they are not visible — "next" landing on a row you cannot see is
  * exactly the bug the arrows exist to avoid. Rows under a COLLAPSED PARENT are excluded for
  * the same reason, and for free: `buildGroups`/`flattenFlat` never emitted them.
+ *
+ * GHOSTS ARE EXCLUDED TOO — O3c (STA-128). A ghost is a bracket around rows, not a row: it
+ * is a parent that is not in this group, drawn here for context, and it already has a real
+ * position of its own somewhere else on the page (or behind the filter). Paging onto it
+ * would open a ticket the arrows had no business visiting from here, and it would make the
+ * same ticket appear twice in one traversal. Applied in BOTH branches of the union rather
+ * than only the grouped one: flat mode never emits a ghost today, and the day something
+ * changes that, this is the line that must not have been an assumption.
  */
 export function visibleRows(
   shape: ListShape,
   isGroupCollapsed: (key: GroupKey) => boolean,
 ): TaskRow[] {
-  if (shape.kind === "flat") return shape.rows;
+  if (shape.kind === "flat") return shape.rows.filter(isNotGhost);
   const out: TaskRow[] = [];
   for (const section of sectionsOf(shape)) {
     if (isGroupCollapsed(section.key)) continue;
-    out.push(...section.rows);
+    for (const row of section.rows) if (isNotGhost(row)) out.push(row);
   }
   return out;
+}
+
+/** O3c (STA-128). One predicate, so "is this navigable" has exactly one spelling. */
+function isNotGhost(row: TaskRow): boolean {
+  return row.ghost !== true;
 }
 
 /** `visibleRows` as the navigation contract published on the session. */

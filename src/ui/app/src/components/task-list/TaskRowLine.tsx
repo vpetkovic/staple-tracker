@@ -209,23 +209,65 @@ export function TaskRowLine({
   const { columns, labelMax } = config;
   const collapsedParent = columns.disclosure && hasChildren && !isExpanded;
   const bare = semantics === "bare";
+  /**
+   * ── THE GHOST VARIANT — O3c (STA-128) ────────────────────────────────────────────────
+   *
+   * A parent that is not in this bucket, drawn inside it so the children that ARE can nest
+   * under it. It is CONTEXT, not content: dimmed, skipped by the arrow keys, absent from
+   * the group's count and from `visibleOrder`, and non-interactive except that clicking it
+   * opens the parent — which is what the row's own `onClick` already does.
+   *
+   * Three elements come off, and each for a stated reason rather than for tidiness:
+   *
+   *   THE CHEVRON BUTTON, replaced by a static glyph in the open position. A fold on a
+   *   ghost would remove REAL rows from the group they belong to, which is exactly what
+   *   the placement invariant exists to prevent. The glyph stays because the indent under
+   *   it needs an origin and the reader needs to be told those rows are its.
+   *
+   *   THE CHECKBOX. A ghost is not in this bucket, so it cannot be part of a selection
+   *   made in it.
+   *
+   *   THE `⋯`. It is a second way to do the one thing the whole row already does.
+   *
+   * Everything else the parent genuinely has, it shows, dimmed — a context row that
+   * abbreviated the parent's status or age would be worse than no context row. What it
+   * does NOT show is a claim: the model gives a ghost `claim: null` deliberately, so
+   * `RowClaimSlot` renders nothing and the parent's own row stays the single place its
+   * liveness is written down. See views/tree/tree-model.ts.
+   */
+  const ghost = row.ghost === true;
 
   const cell = (
     <div role={semantics === "grid" ? "gridcell" : undefined} className="staple-row-cell">
       {columns.select ? (
-        <input
-          type="checkbox"
-          data-slot="checkbox"
-          className="staple-row-check"
-          checked={isSelected}
-          aria-label={`Select ${issue.identifier}`}
-          onClick={(event) => event.stopPropagation()}
-          onChange={() => onToggleSelect?.()}
-        />
+        ghost ? (
+          /* The column is a GRID TRACK, so the element cannot simply be dropped — the
+             chevron would slide into the select column and every glyph on this one row
+             would sit a track left of the list it is inside. A spacer keeps the geometry
+             and removes the affordance, which is the only combination that is correct. */
+          <span className="staple-row-check-spacer" aria-hidden="true" />
+        ) : (
+          <input
+            type="checkbox"
+            data-slot="checkbox"
+            className="staple-row-check"
+            checked={isSelected}
+            aria-label={`Select ${issue.identifier}`}
+            onClick={(event) => event.stopPropagation()}
+            onChange={() => onToggleSelect?.()}
+          />
+        )
       ) : null}
 
       {columns.disclosure ? (
-        hasChildren ? (
+        ghost ? (
+          /* Static, and in the open position. It is the origin the indent below hangs
+             from and it says "those rows are mine"; it is not a fold, because folding a
+             ghost would take real rows out of the group they belong to. */
+          <span className="staple-row-chevron staple-row-chevron-static" data-expanded="true" aria-hidden="true">
+            <Chevron />
+          </span>
+        ) : hasChildren ? (
           <button
             type="button"
             className="staple-row-chevron"
@@ -284,6 +326,11 @@ export function TaskRowLine({
             </>
           ) : null}
           {issue.identifier}
+          {/* O3c (STA-128). The dimming is the whole signal for a sighted reader and no
+              signal at all for a screen reader, which would otherwise hear this parent as
+              a member of a group it is not in. Said once, after the identifier, so the row
+              still reads "STA-1, parent shown for context, The epic". */}
+          {ghost ? <span className="sr-only"> parent shown for context</span> : null}
         </span>
       ) : null}
 
@@ -393,7 +440,13 @@ export function TaskRowLine({
           and it will be where a real menu hangs the day one exists. Off in every narrow
           preset, where the whole row is already a single-purpose target.
         */}
-        {columns.actions ? (
+        {columns.actions && ghost ? (
+          /* Reserved, never drawn: the `⋯` is a second way to do the one thing the whole
+             ghost row already does, but its 20px is what keeps this row's date aligned
+             with the dates above and below it. */
+          <span className="staple-row-actions-spacer" aria-hidden="true" />
+        ) : null}
+        {columns.actions && !ghost ? (
           <button
             type="button"
             className="staple-row-actions"
@@ -421,6 +474,14 @@ export function TaskRowLine({
       data-status={issue.status}
       data-testid="task-row"
       data-identifier={issue.identifier}
+      /*
+       * O3c (STA-128). The attribute a QUERY has to be able to exclude: `data-identifier`
+       * is no longer unique in the document, because the same parent can be a real row in
+       * its own group and a ghost in another. Anything that finds a row BY IDENTIFIER —
+       * TreeGrid's scroll-into-view, an evidence script, a test — must say
+       * `:not([data-ghost])` or it will act on the context copy.
+       */
+      data-ghost={ghost ? "true" : undefined}
       // Which columns are on drives the grid template — see task-list.css. Attributes
       // rather than an inline style, so the §14 media queries can still override the
       // whole template at the narrow breakpoints (an inline style could not be beaten).
@@ -431,7 +492,9 @@ export function TaskRowLine({
       data-density={config.density}
       aria-level={semantics === "grid" ? depth + 1 : undefined}
       aria-expanded={semantics === "grid" && hasChildren ? isExpanded : undefined}
-      aria-selected={bare ? undefined : isSelected}
+      // A ghost is not in this bucket, so it cannot be part of a selection made in it, and
+      // `aria-selected="false"` would advertise that it could be.
+      aria-selected={bare || ghost ? undefined : isSelected}
       aria-current={isCurrent ? "true" : undefined}
       // Exactly one row in the whole list is tabbable, so the list is a single tab stop and
       // arrow keys do the moving — the standard treegrid/listbox contract.
@@ -439,7 +502,12 @@ export function TaskRowLine({
       onClick={bare ? undefined : onOpen}
       onFocus={bare ? undefined : onFocus}
       onKeyDown={bare ? undefined : onKeyDown}
-      className={cn("staple-row", anySelected && "staple-row-selecting", bare && "staple-row-bare")}
+      className={cn(
+        "staple-row",
+        anySelected && !ghost && "staple-row-selecting",
+        bare && "staple-row-bare",
+        ghost && "staple-row-ghost",
+      )}
       style={{ paddingLeft: ROW_PAD_LEFT + indentPx(columns.disclosure ? depth : 0) } as CSSProperties}
     >
       {columns.disclosure ? <Connectors guides={guides} hasSelectColumn={columns.select} /> : null}
