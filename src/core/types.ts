@@ -1,7 +1,6 @@
 /**
- * Core vocabulary — cloned from Paperclip's ticket model (MIT,
- * github.com/paperclipai/paperclip): same statuses, priorities, and guard
- * semantics, so agents trained on one feel at home in the other.
+ * Core vocabulary: the statuses, priorities, and guard semantics every surface
+ * — CLI, MCP, HTTP, UI — agrees on. Defined once, here.
  */
 import { createHash } from "node:crypto";
 

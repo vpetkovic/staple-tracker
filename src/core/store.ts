@@ -364,7 +364,7 @@ export class WorkspaceStore {
     const estimatedSeconds =
       input.estimatedSeconds == null ? null : assertEstimateSeconds(input.estimatedSeconds);
 
-    // Paperclip default: todo when assigned, backlog otherwise.
+    // Default status: todo when assigned, backlog otherwise.
     const status: IssueStatus = input.status ?? (input.assignee ? "todo" : "backlog");
     if ((input.unblockOwner || input.unblockAction) && status !== "blocked") {
       throw new StapleError("validation", "unblockOwner/unblockAction require status \"blocked\"");
@@ -505,9 +505,8 @@ export class WorkspaceStore {
   }
 
   /**
-   * BFS over the whole "blocks" graph, cloned from Paperclip's
-   * assertNoBlockingCycles: adding each proposed blocker may not create a path
-   * from the issue back to that blocker.
+   * BFS over the whole "blocks" graph: adding each proposed blocker may not
+   * create a path from the issue back to that blocker.
    */
   private assertNoCycle(issueId: string, blockerIds: string[]): void {
     if (blockerIds.length === 0) return;
@@ -538,7 +537,7 @@ export class WorkspaceStore {
     }
   }
 
-  /** Replace the full blocked-by set (Paperclip's set-replacement semantics). */
+  /** Replace the full blocked-by set — set replacement, never incremental add. */
   setBlockedBy(ref: string, blockerRefs: string[], actor?: string | null): Issue {
     return tx(this.db, () => {
       const row = this.requireRow(ref);
@@ -1676,7 +1675,7 @@ export class WorkspaceStore {
   // ---------- checkout / release ----------
 
   /**
-   * Atomic claim, Paperclip semantics: wins iff status is in expectedStatuses
+   * Atomic claim: wins iff status is in expectedStatuses
    * AND no unresolved blockers — otherwise a conflict that callers must treat
    * as "pick a different task", never retry. Idempotent when the same agent
    * already holds the issue.

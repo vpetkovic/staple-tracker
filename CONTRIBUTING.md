@@ -4,6 +4,9 @@ This guide is for people hacking on staple itself. If you just want to *use*
 staple, you never need any of this — the entire install is
 `npx staple-cli` (see the [README](README.md)).
 
+Reference material on how staple behaves — semantics, the agent surface,
+continuity, configuration, migration, packaging — lives in [docs/](docs/).
+
 ## Prerequisites
 
 - Node.js >= 22.5 (`node:sqlite` is built in from there; it prints an

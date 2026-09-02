@@ -4,13 +4,10 @@ export function newId(): string {
   return randomUUID();
 }
 
-/** Fallback prefix when a slug has no letters (Paperclip uses "CMP"). */
+/** Fallback prefix when a slug has no letters at all. */
 export const PREFIX_FALLBACK = "WS";
 
-/**
- * Slug -> candidate identifier prefix: first three letters, uppercased.
- * Adapted from Paperclip's deriveIssuePrefixBase (server/src/services/issue-prefix.ts).
- */
+/** Slug -> candidate identifier prefix: first three letters, uppercased. */
 export function derivePrefixBase(slug: string): string {
   const letters = slug.toUpperCase().replace(/[^A-Z]/g, "");
   return letters.slice(0, 3) || PREFIX_FALLBACK;
@@ -30,9 +27,8 @@ export function parseIdentifier(identifier: string): { prefix: string; number: n
 }
 
 /**
- * Level-triggered dependency-wake key, cloned from Paperclip's
- * issue-dependency-wakeups.ts: one wake per (dependent, exact blocker set,
- * blocked cycle). A new blocked cycle produces a new key, so re-blocking
+ * Level-triggered dependency-wake key: one wake per (dependent, exact blocker
+ * set, blocked cycle). A new blocked cycle produces a new key, so re-blocking
  * re-arms the wake; a duplicate ready-state is suppressed by the unique index.
  */
 export function blockersResolvedDedupKey(input: {

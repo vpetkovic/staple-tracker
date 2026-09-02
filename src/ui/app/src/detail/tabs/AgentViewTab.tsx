@@ -2,10 +2,9 @@
  * "What the agent sees" — the exact MCP `get_task` payload for this issue, and what it
  * costs.
  *
- * Paperclip has no equivalent. The gap it closes: a human hands an issue to an agent
- * believing the ticket says something, the agent receives a payload that says something
- * slightly different, and nothing anywhere shows the two side by side. This pane is the
- * agent's side.
+ * The gap it closes: a human hands an issue to an agent believing the ticket says
+ * something, the agent receives a payload that says something slightly different, and
+ * nothing anywhere shows the two side by side. This pane is the agent's side.
  *
  * The payload comes from GET /api/agent-context, which is the get_task handler's
  * expression verbatim — see the comment on that route in src/ui/server.ts and the

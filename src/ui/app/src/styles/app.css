@@ -1,17 +1,17 @@
 /*
- * staple's own layer on top of the Paperclip token sheet.
+ * staple's own layer on top of the theme token sheet.
  *
- * Rule of thumb: if it is a value, it belongs in paperclip-tokens.css (or is already
+ * Rule of thumb: if it is a value, it belongs in theme-tokens.css (or is already
  * there). This file only holds the few places where staple's vocabulary has to be
- * *mapped* onto Paperclip's, plus the SVG chrome for the dependency graph, which has
+ * *mapped* onto a token, plus the SVG chrome for the dependency graph, which has
  * no Tailwind equivalent.
  */
-@import "./paperclip-tokens.css";
+@import "./theme-tokens.css";
 
 /*
- * Status -> hue. Paperclip already names one hue per task status and its enum is a
- * superset of ours, so this is a pure re-point: a component sets data-status and
- * inherits both the chip recipe and the accent stripe from the sheet.
+ * Status -> hue. The token sheet names one hue per task status, so this is a pure
+ * re-point: a component sets data-status and inherits both the chip recipe and the
+ * accent stripe from the sheet.
  */
 [data-status="backlog"] {
   --sc: var(--status-task-backlog);
@@ -65,7 +65,7 @@ body,
 
 /*
  * React Flow ships a stylesheet of hard-coded light-mode values (main.tsx imports it
- * before this file). Everything below is a RE-POINT onto Paperclip tokens, not a rewrite:
+ * before this file). Everything below is a RE-POINT onto theme tokens, not a rewrite:
  * the library keeps owning geometry, transforms, and hit areas — the parts that are load
  * bearing and easy to break — and staple only says what colour things are, once, in terms
  * the rest of the app already uses. That is also what makes dark mode work for free.

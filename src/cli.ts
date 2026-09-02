@@ -588,7 +588,7 @@ function runMigrateCommand(options: { dir?: string; yes: boolean; json: boolean 
   for (const warning of result.warnings) console.log(`warning: ${warning}`);
 }
 
-const HELP = `staple — local-first task tracker for coding agents (a smaller paperclip)
+const HELP = `staple — local-first task tracker for coding agents
 
 Workspace
   (no command) [--yes]                  set this repo up if it needs it, then open the UI;

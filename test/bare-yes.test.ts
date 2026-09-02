@@ -1,5 +1,5 @@
 /**
- * D5 (STA-96) — bare `staple --yes`, mirroring `npx paperclipai onboard --yes`.
+ * D5 (STA-96) — bare `staple --yes`, the non-interactive onboarding path.
  *
  * The contract, row by row (spec: STA-91 plan, section D5):
  *
