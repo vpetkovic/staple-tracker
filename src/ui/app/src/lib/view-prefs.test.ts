@@ -38,7 +38,7 @@ describe("the default", () => {
   });
 
   it("offers every dimension in the registry, flat first", () => {
-    expect(GROUP_BY_OPTIONS.map((o) => o.id)).toEqual(["none", "status"]);
+    expect(GROUP_BY_OPTIONS.map((o) => o.id)).toEqual(["none", "status", "pickup"]);
     // Each one explains itself. A menu of bare nouns makes the user click to find out.
     expect(GROUP_BY_OPTIONS.every((o) => o.label.length > 0 && o.hint.length > 0)).toBe(true);
   });
@@ -61,6 +61,18 @@ describe("persistence", () => {
       version: 1,
       groupBy: "status",
     });
+  });
+
+  it("round-trips the pickup dimension, so the selector survives a reload", () => {
+    // V5 (STA-111). This passes because the REGISTRY grew — the validator derives from
+    // `GROUP_BY_OPTIONS` — and not because a third string was added to a hand-written
+    // whitelist somewhere. That is the property worth pinning down.
+    const storage = memoryStorage();
+    saveViewPrefs(storage, { groupBy: "pickup" });
+
+    expect(storage.getItem(VIEW_PREFS_STORAGE_KEY)).toContain('"groupBy":"pickup"');
+    expect(loadViewPrefs(storage).groupBy).toBe("pickup");
+    expect(decodeViewPrefs('{"groupBy":"pickup"}').groupBy).toBe("pickup");
   });
 
   it("falls back to flat for corruption, junk and unknown dimensions", () => {
@@ -92,5 +104,7 @@ describe("the trigger label", () => {
   it("names the active dimension", () => {
     expect(groupByLabel("none")).toBe("No grouping");
     expect(groupByLabel("status")).toBe("Status");
+    // The trigger renders "Group: " + this, so the exact string is an acceptance criterion.
+    expect(groupByLabel("pickup")).toBe("Pickup order");
   });
 });

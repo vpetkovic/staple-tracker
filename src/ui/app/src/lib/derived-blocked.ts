@@ -38,3 +38,53 @@ export function borrowedWaitingLine(children: readonly BlockingChild[]): string 
   if (children.length === 0) return null;
   return children.map(blockingDescriptor).join(" · ");
 }
+
+/**
+ * WHO OR WHAT THIS ROW IS WAITING ON — one sentence, whichever of the three sources has
+ * it. V5 (STA-111)'s "Waiting" section renders this under every row in it.
+ *
+ * The three sources are tried in order of how specific they are, and the order is the
+ * whole point:
+ *
+ *   1. The row's OWN `unblockOwner`/`unblockAction`. Somebody typed this about this
+ *      ticket. Nothing derived may overwrite it — that is `needsBorrowedDescriptor`'s
+ *      existing rule and this only obeys it.
+ *   2. A BORROWED descriptor from the blocking children, for a parent whose `blocked`
+ *      was derived (STA-98). Reuses `borrowedWaitingLine` rather than re-wording it, so
+ *      the tree section and the inbox card cannot drift apart.
+ *   3. The bare `unresolvedBlockers` identifiers. No prose exists, but "blocked by
+ *      STA-4" is still a fact the reader can act on, and it is the ONLY thing available
+ *      for an ordinary dependency edge — which is the most common blocked row there is.
+ *
+ * `null` means genuinely nothing to say. A caller renders no line at all rather than an
+ * empty reason, because "waiting on:" followed by nothing reads as a bug in the tracker.
+ */
+export function waitingLine(
+  issue: BlockedLike,
+  evidence: {
+    unresolvedBlockers?: readonly string[];
+    derivedBlockers?: readonly BlockingChild[];
+  } = {},
+): string | null {
+  if (!needsBorrowedDescriptor(issue)) {
+    // Its own words. `blockingDescriptor` is shaped for a child, but the two fields it
+    // reads are the same two, so the wording stays identical by construction.
+    const own = blockingDescriptor({
+      identifier: "",
+      title: "",
+      unblockOwner: issue.unblockOwner,
+      unblockAction: issue.unblockAction,
+    });
+    // Only when there is something to say: a row that is not blocked at all has neither
+    // field and must not be given a "waiting on ?" line.
+    if (issue.unblockOwner || issue.unblockAction) return own;
+  }
+
+  const borrowed = borrowedWaitingLine(evidence.derivedBlockers ?? []);
+  if (borrowed) return borrowed;
+
+  const blockers = evidence.unresolvedBlockers ?? [];
+  if (blockers.length > 0) return `blocked by ${blockers.join(", ")}`;
+
+  return null;
+}

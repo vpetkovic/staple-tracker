@@ -24,13 +24,16 @@
  * prev/next arrows would keep paging a list that is no longer on the page.
  */
 import { useEffect, useMemo } from "react";
-import type { AuthError } from "@/lib/api";
+import { getInbox, type AuthError } from "@/lib/api";
 import { applyFilters, hiddenParents } from "@/lib/filters";
 import { useSession } from "@/lib/session";
+import type { InboxRow } from "@/lib/types";
+import { useResource } from "@/lib/useStaple";
+import { buildPickupIndex, EMPTY_PICKUP_INDEX } from "./tree/pickup-model";
 import { TreeGrid } from "./tree/TreeGrid";
 import { EmptyState, NoMatchesState, ViewState } from "./ViewChrome";
 
-export function TreeView(_props: { onAuthError: (error: AuthError) => void }) {
+export function TreeView({ onAuthError }: { onAuthError: (error: AuthError) => void }) {
   const session = useSession();
   const { mode, selection, filters, groupBy, publishVisibleOrder } = session;
 
@@ -39,6 +42,40 @@ export function TreeView(_props: { onAuthError: (error: AuthError) => void }) {
 
   /** Children whose parent a filter removed — V4's seam for V5's breadcrumb chip. */
   const orphanedBy = useMemo(() => hiddenParents(rows, all), [rows, all]);
+
+  /**
+   * PICKUP ORDER COMES FROM THE SERVER — V5 (STA-111).
+   *
+   * `/api/inbox` is the one definition of "ready", and it is dependency-aware in a way no
+   * amount of client-side status inspection could reproduce. This fetches it and hands the
+   * tree an index; the tree never decides readiness for itself.
+   *
+   * THREE DELIBERATE CHOICES HERE:
+   *
+   *  1. FETCHED ONLY IN PICKUP MODE. The loader short-circuits to `[]` in the other two, so
+   *     the default view does not pay for an endpoint it never reads. `wantPickup` is in the
+   *     deps, so switching the selector fetches immediately rather than at the next poll.
+   *
+   *  2. FETCHED UNFILTERED — no `assignee` argument, even when a filter has one. The inbox
+   *     is used purely as an ORDER-AND-SECTION ORACLE; membership stays `applyFilters`.
+   *     Narrowing both would mean a row could survive the filter and then be missing from
+   *     the oracle, which is the one way this design could still drop a row.
+   *
+   *  3. REFETCHED ON `session.version`, the same 1.5s fingerprint every other read uses, so
+   *     a claim taken by another agent moves the ticket from Up next to In flight within a
+   *     poll rather than on a reload.
+   */
+  const wantPickup = groupBy === "pickup";
+  const inbox = useResource<InboxRow[]>(
+    () => (wantPickup ? getInbox() : Promise.resolve([])),
+    [wantPickup, session.version],
+    onAuthError,
+  );
+
+  const pickup = useMemo(
+    () => (wantPickup && inbox.data ? buildPickupIndex(inbox.data) : EMPTY_PICKUP_INDEX),
+    [wantPickup, inbox.data],
+  );
 
   /**
    * Nothing on screen means nothing to navigate. TreeGrid publishes its own order and clears
@@ -61,6 +98,7 @@ export function TreeView(_props: { onAuthError: (error: AuthError) => void }) {
               rows={rows}
               mode={mode}
               groupBy={groupBy}
+              pickup={pickup}
               currentRef={selection?.ref ?? null}
               /*
                * TRUE, and this is the rewiring the spec asked for rather than a
