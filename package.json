@@ -13,6 +13,7 @@
     "mcp": "tsx src/mcp.ts",
     "ui": "tsx src/cli.ts ui",
     "dev": "npm run build:ui && tsx src/cli.ts ui --hub --no-open",
+    "dev:all": "tsx scripts/dev-ui.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit && tsc --noEmit -p src/ui/app/tsconfig.json",
     "seed-demo": "tsx scripts/seed-demo.ts",

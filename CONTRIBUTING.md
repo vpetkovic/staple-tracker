@@ -34,6 +34,7 @@ The source tree runs through `tsx`; no build step for the CLI or MCP server:
 ```bash
 npx tsx src/cli.ts --help        # the CLI
 npx tsx src/mcp.ts               # the MCP stdio server
+npm run dev:all                  # API on :4400 + hot-reloading UI on :4401
 npm run dev                      # build the UI + serve http://localhost:4400 (--hub)
 ```
 
@@ -80,13 +81,26 @@ npm run smoke:mcp       # full MCP JSON-RPC workflow over stdio
 ## Working on the web UI
 
 ```bash
-npm run dev:ui   # Vite dev server on :4401, proxying /api to a running UI server on :4400
+npm run dev:all  # the pair: API on :4400 + hot-reloading app on :4401
 ```
 
-Start the UI server first (`npm run dev` or `npx tsx src/cli.ts open`), then
-open the dev server with the `?token=…` the CLI printed. After changing
-anything under `src/ui/app/`, `npm run build:ui` refreshes the static bundle
-the real server serves.
+That is the loop you want while editing the app — open http://localhost:4401/
+and edits under `src/ui/app/` hot-reload. Ctrl-C stops both halves.
+
+The two halves also run separately, which is only worth doing if you want the
+server under a debugger or on a different home:
+
+```bash
+npx tsx src/cli.ts open --hub    # the API, on :4400
+npm run dev:ui                   # Vite on :4401, proxying /api to it
+```
+
+`dev:ui` starts no server of its own — on its own it renders `HTTP 500` over a
+wall of ECONNREFUSED, because its proxy target is empty. Start the server first.
+
+Neither dev path touches the static bundle. `npm run build:ui` is what refreshes
+the bundle the real `:4400` page serves, and `npm run dev` rebuilds it and
+serves it — that is the "what ships" check, not the edit loop.
 
 ## Building and drilling the package
 
