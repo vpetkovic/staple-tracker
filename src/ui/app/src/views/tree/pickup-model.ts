@@ -48,11 +48,18 @@
  * trade for status grouping ("you do not see the whole tree in one place"); a pickup queue
  * takes it one step further, and gets to skip the flatten and expansion machinery entirely
  * as a result.
+ *
+ * O3c (STA-128) adds ONE exception and it does not cost the queue anything, which is why it
+ * is allowed: a parent that is NOT IN THIS SECTION AT ALL has no rank here to move anything
+ * off. It is drawn as a dimmed GHOST at the position of its best-ranked orphan, and that
+ * orphan's siblings are lifted under it. A parent that IS in this section keeps the old
+ * behaviour exactly — flat, ranked, chip — because it does have a rank and moving it would
+ * be the trade this file just refused.
  */
 import { flatRow, type TaskRow } from "@/components/task-list";
 import { waitingLine } from "@/lib/derived-blocked";
+import { isResolvedStatus } from "@/lib/settings";
 import type { BlockingChild, InboxIssue, InboxRow, Issue, IssueRow } from "@/lib/types";
-import { RESOLVED_STATUSES } from "@/lib/types";
 
 /**
  * The sections, in the order they appear. A registry rather than a switch, the same trick
@@ -134,8 +141,17 @@ export const EMPTY_PICKUP_INDEX: PickupIndex = {
   size: 0,
 };
 
+/**
+ * O7b's wiring (STA-141). The workspace's configured CATEGORY for the status, not
+ * membership of the built-in `RESOLVED_STATUSES` pair — the same substitution tree-model.ts
+ * makes, and it has to be the same substitution or a custom `shipped` status would land in
+ * the resolved section on one axis and in `waiting` on the other.
+ *
+ * On a default workspace the two spellings agree exactly, which is what makes this a wiring
+ * change rather than a behaviour change.
+ */
 function isResolved(status: Issue["status"]): boolean {
-  return RESOLVED_STATUSES.includes(status);
+  return isResolvedStatus(status);
 }
 
 /**
@@ -269,6 +285,18 @@ export interface PickupBuildOptions {
   showResolved?: boolean;
   /** V4's `hiddenParents()`: a breadcrumb for a child whose parent a FILTER removed. */
   hiddenParents?: ReadonlyMap<string, Issue>;
+  /**
+   * MAY A MISSING PARENT BE DRAWN INSIDE THIS SECTION — O3c (STA-128).
+   *
+   * The same switch, spelled the same way, as `BuildOptions.ghostParents` in tree-model.ts,
+   * and passed through from the same place (`buildList`). The ghost rule is ONE rule across
+   * both grouped axes: a reader who has learned it under group-by-status must not find a
+   * different answer one menu entry away.
+   *
+   * Defaulted to `true`; `TreeGrid` hands it `columns.disclosure`, so a container with no
+   * indent to nest into keeps the breadcrumb chip instead.
+   */
+  ghostParents?: boolean;
 }
 
 /**
@@ -284,7 +312,7 @@ export function buildPickupGroups(
   index: PickupIndex,
   options: PickupBuildOptions = {},
 ): PickupGroup[] {
-  const { showResolved = false, hiddenParents } = options;
+  const { showResolved = false, hiddenParents, ghostParents = true } = options;
 
   const visible = showResolved ? rows : rows.filter((r) => !isResolved(r.issue.status));
   const presentAnywhere = new Map(rows.map((r) => [r.issue.id, r.issue]));
@@ -324,21 +352,117 @@ export function buildPickupGroups(
       return a.issue.identifier.localeCompare(b.issue.identifier, undefined, { numeric: true });
     });
 
-    const waitingOn = new Map<string, string>();
-    const taskRows = ordered.map((r) => {
-      if (section.id === "waiting") {
-        const line = index.waitingOn(r.issue.id);
-        if (line) waitingOn.set(r.issue.id, line);
+    /**
+     * ── GHOST BLOCKS, PLACED BY THE QUEUE'S OWN ORDER — O3c (STA-128) ─────────────────
+     *
+     * A row whose parent is NOT in this section is filed under a synthesised ghost of that
+     * parent, and the ghost is created THE FIRST TIME one of its orphans is reached in the
+     * ordered sequence. That single fact is what keeps the queue a queue: the block lands
+     * exactly where its best-ranked orphan would have landed, and the epic's other orphans
+     * are lifted to join it rather than every row being moved to accommodate a parent.
+     *
+     * A row whose parent IS in this section is left exactly as it was: flat, at depth 0,
+     * wearing the chip. Pickup mode does not nest a real parent/child pair — that would
+     * move the child off its rank, which is the trade this file's header refuses — and the
+     * ghost does not change that, because a ghost is not a rank, it is a bracket around
+     * rows that already have one.
+     *
+     * NO ROLLUP ON A PICKUP GHOST. No row in this view carries one (`flatRow` sets null and
+     * this module never computes `parentRollups`), and a ghost that alone showed a progress
+     * count would read as a different KIND of object rather than as the same object dimmed.
+     */
+    const inSection = new Set(bucket.map((r) => r.issue.id));
+
+    interface Block {
+      /** The parent to draw above `rows`, or null for an ordinary single row. */
+      ghost: Issue | null;
+      rows: IssueRow[];
+    }
+
+    const blocks: Block[] = [];
+    const ghostOf = new Map<string, Block>();
+
+    for (const r of ordered) {
+      const parentId = r.issue.parentId;
+      const missing =
+        ghostParents && parentId && !inSection.has(parentId)
+          ? (presentAnywhere.get(parentId) ?? hiddenParents?.get(r.issue.id))
+          : undefined;
+
+      if (missing && parentId) {
+        const existing = ghostOf.get(parentId);
+        if (existing) {
+          existing.rows.push(r);
+        } else {
+          const block: Block = { ghost: missing, rows: [r] };
+          ghostOf.set(parentId, block);
+          blocks.push(block);
+        }
+        continue;
       }
+      blocks.push({ ghost: null, rows: [r] });
+    }
+
+    const waitingOn = new Map<string, string>();
+    const noteWaiting = (r: IssueRow) => {
+      if (section.id !== "waiting") return;
+      const line = index.waitingOn(r.issue.id);
+      if (line) waitingOn.set(r.issue.id, line);
+    };
+
+    const taskRows: TaskRow[] = [];
+
+    for (const block of blocks) {
+      if (block.ghost) {
+        taskRows.push(
+          flatRow(
+            // The parent's issue and NOTHING about the parent's own liveness — the same
+            // reading tree-model.ts's ghost makes, for the same reason: `hiddenParents`
+            // yields an `Issue` alone, so a ghost could not report a claim consistently.
+            // The workspace is the child's; `parentId` is intra-workspace by construction.
+            { issue: block.ghost, claim: null, workspace: block.rows[0]!.workspace },
+            {
+              ghost: true,
+              hasChildren: true,
+              // Always open. A fold here would take real, ranked rows out of the queue
+              // they belong to, which is the one thing a queue may not do.
+              isExpanded: true,
+              childCount: block.rows.length,
+            },
+          ),
+        );
+        block.rows.forEach((r, i) => {
+          noteWaiting(r);
+          const last = i === block.rows.length - 1;
+          taskRows.push(
+            flatRow(r, {
+              // One level, and one only: the ghost IS the nearest missing ancestor.
+              depth: 1,
+              guides: [!last],
+              isLast: last,
+              // The parent is the row directly above; the elbow says so and a chip
+              // pointing at it would be the same fact twice.
+              breadcrumb: null,
+            }),
+          );
+        });
+        continue;
+      }
+
+      const r = block.rows[0]!;
+      noteWaiting(r);
       const parent = r.issue.parentId
         ? (presentAnywhere.get(r.issue.parentId) ?? hiddenParents?.get(r.issue.id))
         : undefined;
-      return flatRow(r, {
-        // A queue has no indentation to lose a parent to, so EVERY row with a parent wears
-        // the chip — unlike the tree, where only a row that could not be nested needs one.
-        breadcrumb: parent ? { identifier: parent.identifier, title: parent.title } : null,
-      });
-    });
+      taskRows.push(
+        flatRow(r, {
+          // A queue has no indentation to lose a parent to, so EVERY row with a parent
+          // still on this list wears the chip — unlike the tree, where only a row that
+          // could not be nested needs one.
+          breadcrumb: parent ? { identifier: parent.identifier, title: parent.title } : null,
+        }),
+      );
+    }
 
     out.push({
       id: section.id,

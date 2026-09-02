@@ -317,7 +317,7 @@ describe("grouping arranges; it never decides membership", () => {
     expect(ids(section(groups, "up_next")!.rows)).toEqual(["a"]);
   });
 
-  it("gives a row whose parent a filter removed a breadcrumb rather than dropping it", () => {
+  it("draws a GHOST of the parent a filter removed, rather than a chip or nothing", () => {
     const parent = issue({ id: "p", identifier: "STA-1", title: "The epic" });
     const child = row({ id: "c", identifier: "STA-2", parentId: "p" });
     const index = buildPickupIndex(inbox([entry({ id: "c" })]));
@@ -325,14 +325,66 @@ describe("grouping arranges; it never decides membership", () => {
     const groups = buildPickupGroups([child], index, {
       hiddenParents: new Map([["c", parent]]),
     });
+    const rows = section(groups, "up_next")!.rows;
 
-    expect(section(groups, "up_next")!.rows[0]!.breadcrumb).toEqual({
-      identifier: "STA-1",
-      title: "The epic",
-    });
+    expect(rows.map((r) => [r.issue.identifier, r.depth, r.ghost === true])).toEqual([
+      ["STA-1", 0, true],
+      ["STA-2", 1, false],
+    ]);
+    // The chip is what the ghost replaces — the parent is the row directly above now.
+    expect(rows[1]!.breadcrumb).toBeNull();
+    // The bracket is not a queue item: one row is ready to pick up, not two.
+    expect(section(groups, "up_next")!.count).toBe(1);
   });
 
-  it("renders as a FLAT queue — no nesting, because nesting moves a row off its rank", () => {
+  it("draws ONE ghost for several orphaned siblings, at the best one's rank", () => {
+    const parent = issue({ id: "p", identifier: "STA-1", title: "The epic" });
+    const rows = [
+      row({ id: "x", identifier: "STA-9" }),
+      row({ id: "a", identifier: "STA-2", parentId: "p" }),
+      row({ id: "b", identifier: "STA-3", parentId: "p" }),
+    ];
+    // The store's order: STA-9 first, then the two orphans.
+    const index = buildPickupIndex(
+      inbox([entry({ id: "x" }), entry({ id: "a" }), entry({ id: "b" })]),
+    );
+
+    const rendered = section(
+      buildPickupGroups(rows, index, { hiddenParents: new Map([["a", parent], ["b", parent]]) }),
+      "up_next",
+    )!.rows;
+
+    // STA-9 keeps rank 0. The ghost appears where its FIRST-RANKED orphan was, and the
+    // second orphan is lifted under it rather than every row being moved to make room.
+    expect(rendered.map((r) => [r.issue.identifier, r.depth])).toEqual([
+      ["STA-9", 0],
+      ["STA-1", 0],
+      ["STA-2", 1],
+      ["STA-3", 1],
+    ]);
+    expect(rendered.filter((r) => r.ghost)).toHaveLength(1);
+    expect(rendered[1]!.childCount).toBe(2);
+  });
+
+  it("carries NO rollup on a pickup ghost — no row in this view has one", () => {
+    const parent = issue({ id: "p", identifier: "STA-1" });
+    const child = row({ id: "c", identifier: "STA-2", parentId: "p" });
+    const index = buildPickupIndex(inbox([entry({ id: "c" })]));
+
+    const rows = section(
+      buildPickupGroups([child], index, { hiddenParents: new Map([["c", parent]]) }),
+      "up_next",
+    )!.rows;
+
+    // A ghost that alone showed a progress count would read as a different KIND of object
+    // rather than as the same object dimmed.
+    expect(rows.every((r) => r.rollup === null)).toBe(true);
+  });
+
+  it("still renders a FLAT queue for a parent that IS in the section", () => {
+    // The ghost is only ever for a parent with no rank HERE. A parent that has one keeps
+    // it: nesting a real, ranked row moves it off its rank, and a dependency-ordered
+    // queue whose items are not in order has stopped being a queue.
     const parent = row({ id: "p", identifier: "STA-1" });
     const child = row({ id: "c", identifier: "STA-2", parentId: "p" });
     const index = buildPickupIndex(inbox([entry({ id: "c" }), entry({ id: "p" })]));
@@ -341,7 +393,49 @@ describe("grouping arranges; it never decides membership", () => {
 
     // The child ranks first and stays first, at depth 0, wearing its parent's chip.
     expect(ids(rendered)).toEqual(["c", "p"]);
-    expect(rendered.every((r) => r.depth === 0 && !r.hasChildren)).toBe(true);
+    expect(rendered.every((r) => r.depth === 0 && !r.hasChildren && !r.ghost)).toBe(true);
     expect(rendered[0]!.breadcrumb?.identifier).toBe("STA-1");
+  });
+
+  it("draws a ghost for a parent that landed in ANOTHER section", () => {
+    // STA-1 is held, so it is In flight; its child is free, so it is Up next. The child's
+    // section gets the bracket; the parent's own section is untouched.
+    const parent = row({ id: "p", identifier: "STA-1" }, claim({ heldBy: "opus" }));
+    const child = row({ id: "c", identifier: "STA-2", parentId: "p" });
+    const index = buildPickupIndex(inbox([entry({ id: "p" }), entry({ id: "c" })]));
+
+    const groups = buildPickupGroups([parent, child], index);
+
+    expect(
+      section(groups, "up_next")!.rows.map((r) => [r.issue.identifier, r.depth, r.ghost === true]),
+    ).toEqual([
+      ["STA-1", 0, true],
+      ["STA-2", 1, false],
+    ]);
+    expect(section(groups, "up_next")!.count).toBe(1);
+    // The ghost carries none of the parent's own liveness — that belongs to the real row,
+    // which is still a full member of In flight.
+    expect(section(groups, "up_next")!.rows[0]!.claim).toBeNull();
+    expect(section(groups, "in_flight")!.rows.map((r) => [r.issue.identifier, r.ghost === true]))
+      .toEqual([["STA-1", false]]);
+  });
+
+  it("turns the ghost off for a container with no indent, and the chip comes back", () => {
+    const parent = issue({ id: "p", identifier: "STA-1", title: "The epic" });
+    const child = row({ id: "c", identifier: "STA-2", parentId: "p" });
+    const index = buildPickupIndex(inbox([entry({ id: "c" })]));
+
+    const rows = section(
+      buildPickupGroups([child], index, {
+        hiddenParents: new Map([["c", parent]]),
+        ghostParents: false,
+      }),
+      "up_next",
+    )!.rows;
+
+    expect(rows.map((r) => [r.issue.identifier, r.depth, r.ghost === true])).toEqual([
+      ["STA-2", 0, false],
+    ]);
+    expect(rows[0]!.breadcrumb).toEqual({ identifier: "STA-1", title: "The epic" });
   });
 });

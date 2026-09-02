@@ -377,6 +377,65 @@
   width: 16px;
 }
 
+/*
+ * ── The ghost parent context row — O3c (STA-128) ──────────────────────────────────────
+ *
+ * A parent that is NOT in this bucket, drawn inside it so the children that are can nest
+ * under it. It has to read as "context, not content" at a glance and from a distance, and
+ * it has to do it without introducing a new colour: a hue here would be a status, and this
+ * row's status is already drawn by its own `StatusIcon`.
+ *
+ * ONE PROPERTY, `opacity`, on the whole row. Dimming each element by swapping it to a
+ * tertiary token would mean thirteen rules that have to be kept in step with thirteen
+ * elements, and the first one added after this ticket would be the one at full strength.
+ * Opacity dims what is there, including anything O1b adds tomorrow.
+ *
+ * NO HEIGHT, NO GEOMETRY, NOTHING THAT MOVES. The row is the same 36px as its neighbours
+ * and its columns land on the same tracks — the chevron and the `⋯` are replaced in place
+ * rather than removed, see TaskRowLine. A context row that broke the list's alignment
+ * would cost more attention than the relationship it is there to explain.
+ */
+.staple-row-ghost {
+  opacity: 0.55;
+  transition:
+    background-color var(--motion-duration-instant) var(--motion-ease-standard),
+    opacity var(--motion-duration-instant) var(--motion-ease-standard);
+}
+
+/* It IS clickable — it opens the parent — so it has to answer the pointer. Back towards
+   full rather than to it: a ghost that reached full strength on hover would read as having
+   become a member of the group. */
+.staple-row-ghost:hover {
+  opacity: 0.85;
+}
+
+/*
+ * The static disclosure glyph. Same box and same rotation as the real chevron so the indent
+ * beneath it hangs from exactly the same x, and deliberately NOT a button: folding a ghost
+ * would remove real rows from the group they belong to.
+ */
+.staple-row-chevron-static {
+  cursor: inherit;
+}
+
+.staple-row:hover .staple-row-chevron-static {
+  /* The button brightens on row hover to advertise the fold. This one has no fold to
+     advertise, so it stays where it is. */
+  color: var(--text-tertiary);
+}
+
+/* Reserved width, no affordance — see TaskRowLine's ghost branch for why each of these
+   cannot simply be dropped from the DOM. */
+.staple-row-check-spacer {
+  width: 24px;
+}
+
+.staple-row-actions-spacer {
+  display: inline-flex;
+  width: 20px;
+  height: 20px;
+}
+
 .staple-row-priority {
   display: inline-flex;
   width: 16px;
@@ -471,6 +530,117 @@
   color: var(--text-tertiary);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
+}
+
+/*
+ * ── The collapsed-parent rollup — O3b (STA-127) ───────────────────────────────────────
+ *
+ * NOTHING HERE HAS A HEIGHT, and that is the acceptance criterion made structural rather
+ * than measured. The bar is 3px, the dot 5px, the text 11px/1.2 — every one of them shorter
+ * than the 13px title already in this cell — so the tallest line box in
+ * `.staple-row-title-cell` is unchanged and `.staple-row`'s `height: var(--row-height)`
+ * decides the row in every density preset and at every §14 breakpoint, exactly as before.
+ *
+ * It sits in the title's `minmax(0, 1fr)` track, so the space it takes is space the title
+ * was going to have. It can never push the meta cluster or collide with it at any width —
+ * the same argument `.staple-row-caption` makes one element to the right, and for the same
+ * reason: that is the only track in this row where an additive element is structurally safe.
+ */
+.staple-rollup {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 6px;
+}
+
+.staple-rollup-count {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  /* So a column of parents is a column and not a ragged edge — the same bargain the date
+     and the worklog cue make. */
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/*
+ * 36px, fixed. A bar whose width tracked the child count would make two epics on adjacent
+ * rows incomparable at a glance, which is the one thing a progress bar is for.
+ */
+.staple-rollup-bar {
+  display: flex;
+  overflow: hidden;
+  width: 36px;
+  height: 3px;
+  flex-shrink: 0;
+  border-radius: 999px;
+  /* The unfilled remainder is the same token the unfilled priority bars use — present,
+     structural, not competing with the segments in front of it. */
+  background: var(--priority-track);
+}
+
+.staple-rollup-seg {
+  min-width: 2px;
+  /* `flex-grow` is set inline from the count, so four numbers become four widths with no
+     arithmetic here and no rounding drift at the right edge. */
+  flex-basis: 0;
+}
+
+/*
+ * NO NEW HUE. Four aliases onto colours the row already spends: the three status tokens the
+ * status glyph itself wears, and the priority track for the remainder. A rollup that
+ * introduced its own palette would be a second colour system for the same seven statuses.
+ */
+.staple-rollup-seg[data-segment="done"] {
+  background: var(--status-task-done);
+}
+
+.staple-rollup-seg[data-segment="in_progress"] {
+  background: var(--status-task-in_progress);
+}
+
+.staple-rollup-seg[data-segment="blocked"] {
+  background: var(--status-task-blocked);
+}
+
+.staple-rollup-seg[data-segment="open"] {
+  background: var(--priority-track);
+}
+
+/*
+ * "A CHILD IS LIVE" — and it is not `.staple-working-pill`.
+ *
+ * No capsule, no border, no avatar circle, no "Working…". The working pill is a 22px
+ * bordered capsule at the far right of the row; this is a bare dot and two mono characters
+ * at the far left, next to `+N`. Two different silhouettes at two different ends of the row,
+ * which is what stops a reader parsing the rollup's fact ("someone is in a child") as the
+ * claim slot's ("someone holds THIS row").
+ *
+ * It shares the tempo and the hue on purpose: one house heartbeat, and the row's single
+ * accent still means exactly one thing.
+ */
+.staple-rollup-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.staple-rollup-live-dot {
+  width: 5px;
+  height: 5px;
+  flex-shrink: 0;
+  border-radius: 999px;
+  background: var(--status-task-in_progress);
+  animation: staple-breathe var(--motion-working-pulse) var(--motion-ease-standard) infinite;
+}
+
+.staple-rollup-live-initials {
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  line-height: 1.2;
+  white-space: nowrap;
 }
 
 /*
@@ -1001,7 +1171,10 @@
  * reinforcement and never the message.
  */
 @media (prefers-reduced-motion: reduce) {
-  .staple-working-dot {
+  /* Both live dots, and for the same reason: the initials beside the rollup dot still name
+     the holder, so stopping the movement costs no information. O3b (STA-127). */
+  .staple-working-dot,
+  .staple-rollup-live-dot {
     animation: none;
     opacity: 1;
     transform: none;
@@ -1010,6 +1183,7 @@
   .staple-row-check,
   .staple-row-actions,
   .staple-row-chevron,
+  .staple-row-ghost,
   .staple-group-triangle,
   .staple-group-body {
     transition: none;
