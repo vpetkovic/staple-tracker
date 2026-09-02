@@ -1,0 +1,110 @@
+name: Release
+
+# Publishing is reachable ONLY via a version tag push (refs/tags/v*).
+# No branch triggers, no workflow_dispatch, no schedule. Authentication is
+# npm trusted publishing (OIDC) — there is no NPM_TOKEN secret anywhere.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  gates:
+    name: Gates + clean-machine drill
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node 22 (engines require >= 22.5)
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: MCP smoke test
+        run: npm run smoke:mcp
+
+      - name: Clean-machine npx drill
+        run: npm run drill:npx
+
+  publish:
+    name: Publish to npm with provenance
+    needs: gates
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Required for npm trusted publishing (OIDC) and --provenance.
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node 22 (engines require >= 22.5)
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+          cache: npm
+
+      # npm >= 11.5.1 is required for OIDC trusted publishing; Node 22 ships
+      # an older npm, so upgrade it before publishing.
+      - name: Upgrade npm for trusted publishing
+        run: |
+          npm install -g npm@latest
+          npm --version
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build package artifact
+        run: npm run build:package
+
+      # Refuse to publish unless the tag, the source package.json, and the
+      # built dist-package/package.json all agree on the version.
+      - name: Verify tag matches package versions
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          tag_version="${tag#v}"
+          src_version="$(node -p "require('./package.json').version")"
+          dist_version="$(node -p "require('./dist-package/package.json').version")"
+          echo "tag=${tag} src=${src_version} dist=${dist_version}"
+          if [ "${tag_version}" != "${src_version}" ]; then
+            echo "FAIL: tag ${tag} does not match package.json version ${src_version}" >&2
+            exit 1
+          fi
+          if [ "${tag_version}" != "${dist_version}" ]; then
+            echo "FAIL: tag ${tag} does not match dist-package/package.json version ${dist_version}" >&2
+            exit 1
+          fi
+
+      - name: Publish
+        run: npm publish ./dist-package --provenance --access public
+
+      # The registry can lag a few seconds after publish; retry briefly.
+      - name: Verify published version matches tag
+        run: |
+          expected="${GITHUB_REF_NAME#v}"
+          for i in 1 2 3 4 5 6; do
+            actual="$(npm view staple-cli version 2>/dev/null || true)"
+            if [ "${actual}" = "${expected}" ]; then
+              echo "OK: npm view staple-cli version = ${actual}"
+              exit 0
+            fi
+            echo "attempt ${i}: registry reports '${actual}', want '${expected}'; waiting..."
+            sleep 10
+          done
+          echo "FAIL: npm view staple-cli version never reported ${expected}" >&2
+          exit 1

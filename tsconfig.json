@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2022"],
+    "types": ["node"],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "noEmit": true
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts", "scripts/**/*.ts"],
+  // The browser app is a separate compilation with its own lib/jsx/resolution — see
+  // src/ui/app/tsconfig.json. `npm run typecheck` runs both; this only keeps the
+  // Node-side check from trying to typecheck DOM code against Node settings.
+  "exclude": ["src/ui/app"]
+}

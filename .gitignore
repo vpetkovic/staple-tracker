@@ -141,3 +141,23 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
+
+# staple's own workspace state. `.tasks/` is the pre-A5 layout, kept so a
+# checkout that predates the path migration stays clean. Note this is THIS
+# repository ignoring its own dogfooded workspace — `staple init` still does not
+# write a `.gitignore` rule into the repositories it initializes.
+.staple/
+.tasks/
+*.db
+*.db-wal
+*.db-shm
+__scratch-*
+
+# The web UI bundle. Not committed: it is generated and large.
+# `npm run build:ui` regenerates it; `staple ui` says so if it is missing.
+src/ui/app/dist/
+# The landing/docs site bundle (vite.site.config.ts), same reasoning.
+dist-site/
+# The publishable staple-cli payload and its packed tarballs (scripts/build-package.ts).
+# Generated from src/ on demand; `npm run build:package` regenerates it.
+dist-package/

@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Programmatic guide to Staple's MCP tools, CLI, workspace model, task lifecycle, documents, events, and errors.">
+  <title>Staple documentation</title><link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <header class="topbar"><nav class="nav wrap" aria-label="Primary navigation"><a class="brand" href="./"><span class="mark" aria-hidden="true"></span> staple</a><div class="links"><a href="./#features">Features</a><a href="./roadmap.html">Roadmap</a><a href="./docs.html">Docs</a><a class="button" href="#quickstart">Get started</a></div></nav></header>
+  <main class="docs-shell wrap">
+    <aside class="sidebar" aria-label="Documentation sections"><strong>On this page</strong><a href="#quickstart">Quickstart</a><a href="#workspace-model">Workspace model</a><a href="#mcp">MCP setup</a><a href="#agent-loop">Agent loop</a><a href="#tools">Tool reference</a><a href="#cli">CLI and JSON</a><a href="#documents">Documents</a><a href="#dependencies">Dependencies</a><a href="#events">Events</a><a href="#errors">Errors</a><a href="#ui">Local UI</a><a href="#limits">Limits</a></aside>
+    <article class="docs">
+      <p class="eyebrow">Documentation</p><h1>Use Staple programmatically</h1>
+      <p class="lead">Staple exposes the same task model through MCP and the command line. MCP is the main interface for agents. The CLI is useful for people, scripts, and CI.</p>
+
+      <h2 id="quickstart">Quickstart</h2>
+      <p>Staple needs Node.js 22.5 or newer. Nothing else. One command sets a repository up and opens the local UI; one more wires an agent harness.</p>
+      <div class="codeblock"><button class="copy">copy</button><pre><code>npx staple-cli   # onboard + open the UI
+claude mcp add staple -e STAPLE_AGENT=claude -- npx -y staple-cli mcp</code></pre></div>
+      <p>The first run asks a couple of questions; <code>npx staple-cli --yes</code> accepts the defaults, and in CI it performs the setup without starting the UI server. For a global workspace, use <code>staple init --global &lt;slug&gt;</code>. Set <code>STAPLE_HOME</code> to relocate the local hub. To put <code>staple</code> on your <code>PATH</code> permanently, run <code>npx staple-cli install --yes</code>.</p>
+
+      <h2 id="workspace-model">Workspace model</h2>
+      <p>A repository workspace lives at <code>.staple/staple.db</code>. Staple finds it by walking up from the current directory; a legacy <code>.tasks/tasks.db</code> is still found, and <code>staple migrate --yes</code> moves it. Global workspaces live under <code>~/.staple/workspaces/</code>. The hub at <code>~/.staple/hub.db</code> registers both kinds.</p>
+      <p>Each workspace receives a unique prefix, so references such as <code>STA-12</code> remain clear across repositories. Cross-workspace dependency edges live in the hub. If a referenced workspace is missing on the current machine, Staple treats that blocker as unresolved.</p>
+      <table><thead><tr><th>Variable</th><th>Purpose</th></tr></thead><tbody><tr><td><code>STAPLE_DB</code></td><td>Use an explicit workspace database.</td></tr><tr><td><code>STAPLE_WS</code></td><td>Select a hub workspace by slug or prefix.</td></tr><tr><td><code>STAPLE_AGENT</code></td><td>Set the default agent identity.</td></tr><tr><td><code>STAPLE_HOME</code></td><td>Move the hub and global workspace directory.</td></tr></tbody></table>
+
+      <h2 id="mcp">Connect an MCP client</h2>
+      <p>Register the stdio server with the agent name in its environment. This Claude Code example starts a fresh Staple process when the client connects.</p>
+      <div class="codeblock"><button class="copy">copy</button><pre><code>claude mcp add staple -e STAPLE_AGENT=claude -- npx -y staple-cli mcp</code></pre></div>
+      <p>Any MCP client can launch <code>npx -y staple-cli mcp</code> the same way. Writes require an identity: set <code>STAPLE_AGENT</code> in the server environment or pass <code>actor</code> per call.</p>
+
+      <h2 id="agent-loop">The recommended agent loop</h2>
+      <ol><li>Call <code>inbox</code> at session start.</li><li>Call <code>checkout_task</code>. If it returns <code>conflict</code>, pick a different task. Do not retry that claim.</li><li>Call <code>get_task</code> for ancestry, acceptance criteria, relations, comments, and documents.</li><li>Write the plan with <code>put_document</code>, then add progress through <code>add_comment</code>.</li><li>Finish with <code>update_task</code> and status <code>done</code>.</li><li>Call <code>events_since</code> with the last sequence number to discover work that became ready.</li></ol>
+      <div class="callout">A task can enter <code>in_progress</code> only when it has an assignee and no unresolved blockers. Staple enforces that rule in every interface.</div>
+
+      <h2 id="tools">MCP tool reference</h2>
+      <table><thead><tr><th>Tool</th><th>Use it to</th></tr></thead><tbody>
+        <tr><td><code>init</code></td><td>Create and register a workspace headlessly.</td></tr><tr><td><code>inbox</code></td><td>Read ready and blocked work in pickup order.</td></tr><tr><td><code>list_tasks</code></td><td>Filter tasks by status, assignee, or text.</td></tr><tr><td><code>get_task</code></td><td>Read full task context, including ancestry and relations.</td></tr><tr><td><code>create_task</code></td><td>Create a task, subtask, or dependency-aware task with an idempotency key.</td></tr><tr><td><code>update_task</code></td><td>Patch fields or status with an optional status-version check and comment.</td></tr><tr><td><code>checkout_task</code></td><td>Atomically claim ready work.</td></tr><tr><td><code>release_task</code></td><td>Return a held task to <code>todo</code>.</td></tr><tr><td><code>add_comment</code></td><td>Record progress or a handoff.</td></tr><tr><td><code>list_comments</code></td><td>Read the task conversation oldest first.</td></tr><tr><td><code>set_blocked_by</code></td><td>Replace the complete local blocker set.</td></tr><tr><td><code>put_document</code></td><td>Create a keyed document revision.</td></tr><tr><td><code>get_document</code></td><td>Read the latest or a named document revision.</td></tr><tr><td><code>events_since</code></td><td>Poll the workspace event log from a cursor.</td></tr><tr><td><code>cross_link</code></td><td>Create a dependency between workspace identifiers.</td></tr><tr><td><code>hub_overview</code></td><td>Read registered workspaces, cross-links, and hub events.</td></tr>
+      </tbody></table>
+
+      <h2 id="cli">CLI and machine-readable output</h2>
+      <p>The CLI covers initialization, task creation and flow, comments, dependencies, documents, events, hub operations, terminal views, and the local web UI. Run <code>staple help</code> for the full option list.</p>
+      <div class="codeblock"><button class="copy">copy</button><pre><code>staple new "Add retry policy" --assignee codex -p high
+staple start STA-12 --agent codex
+staple block STA-12 --owner user --action "choose timeout"
+staple blocked-by STA-12 STA-9,STA-10
+staple done STA-12 -m "Added policy and tests"</code></pre></div>
+      <p>Add <code>--json</code> to task commands for full store objects with ISO-8601 timestamps. <code>events --json</code> writes NDJSON, one event per line.</p>
+
+      <h2 id="documents">Revisioned documents</h2>
+      <p>Documents are keyed records attached to a task. Common keys include <code>plan</code> and <code>notes</code>. Every write creates a revision. Pass <code>base_revision</code> through MCP or <code>--base</code> through the CLI to prevent a stale writer from overwriting newer work.</p>
+      <div class="codeblock"><button class="copy">copy</button><pre><code>staple doc STA-12 plan --put plan.md
+staple doc STA-12 plan
+staple doc STA-12 plan --put revised.md --base 1
+staple doc STA-12 plan --revisions</code></pre></div>
+
+      <h2 id="dependencies">Dependencies and task trees</h2>
+      <p><code>set_blocked_by</code> replaces the full blocker set. Staple rejects self-links and cycles. When all blockers resolve, it emits <code>blockers_resolved</code>. Parent tasks can also block on their children, and the last completed child emits <code>children_complete</code>.</p>
+      <p>Use <code>cross_link</code> or <code>staple link</code> for dependencies between repositories. Local and cross-workspace edges appear together in hub graph mode.</p>
+
+      <h2 id="events">Event cursors</h2>
+      <p>Events have increasing sequence numbers. Save the last number an agent saw, then pass it back on the next poll. Completion events are level-triggered and deduplicated, so a task that becomes blocked again can wake again after its new blockers resolve.</p>
+
+      <h2 id="errors">Errors and retries</h2>
+      <p>All programmatic errors include <code>code</code>, <code>message</code>, optional <code>detail</code>, and <code>retryable</code>. Only <code>revision_conflict</code> is retryable. Reread the document, merge, and submit against the current revision.</p>
+      <table><thead><tr><th>Exit</th><th>Code</th><th>Meaning</th></tr></thead><tbody><tr><td>2</td><td><code>validation</code></td><td>Input or state rule failed.</td></tr><tr><td>3</td><td><code>not_found</code></td><td>The reference does not exist.</td></tr><tr><td>4</td><td><code>conflict</code></td><td>Another agent holds the task, or checkout is not allowed.</td></tr><tr><td>5</td><td><code>duplicate</code></td><td>A guarded duplicate exists.</td></tr><tr><td>6</td><td><code>cycle</code></td><td>The dependency would create a cycle.</td></tr><tr><td>7</td><td><code>revision_conflict</code></td><td>The document changed after the supplied base.</td></tr></tbody></table>
+
+      <h2 id="ui">Local UI</h2>
+      <p>Start <code>staple open</code> for one workspace or <code>staple open --hub</code> for every available workspace (<code>staple ui</code> is a compatibility alias). The page includes a dependency-aware inbox, seven-column board, task tree, dependency graph, document viewer, comments, relations, and common task actions. It binds to <code>127.0.0.1</code> and runs only while the command is active.</p>
+
+      <h2 id="limits">Prototype limits</h2>
+      <ul><li>There is no remote sync engine yet. GitHub Issues and ClickUp adapters are planned.</li><li>Combined cycles that span three workspace files are not detected. Each local graph and the hub graph guard their own edges.</li><li>Search uses SQL <code>LIKE</code>, and labels live in a JSON column.</li><li>SQLite coordinates processes on one machine. It is not intended for shared NFS mounts or multi-host writes.</li></ul>
+      <p>See the <a href="./roadmap.html">roadmap</a> for shipped milestones and the next planned work.</p>
+    </article>
+  </main>
+  <footer class="footer"><div class="wrap"><span>Staple documentation for prototype 0.1.</span><a href="./">Back to the landing page</a></div></footer><script type="module" src="./site.js"></script>
+</body></html>

@@ -1,0 +1,187 @@
+/*
+ * staple's own layer on top of the Paperclip token sheet.
+ *
+ * Rule of thumb: if it is a value, it belongs in paperclip-tokens.css (or is already
+ * there). This file only holds the few places where staple's vocabulary has to be
+ * *mapped* onto Paperclip's, plus the SVG chrome for the dependency graph, which has
+ * no Tailwind equivalent.
+ */
+@import "./paperclip-tokens.css";
+
+/*
+ * Status -> hue. Paperclip already names one hue per task status and its enum is a
+ * superset of ours, so this is a pure re-point: a component sets data-status and
+ * inherits both the chip recipe and the accent stripe from the sheet.
+ */
+[data-status="backlog"] {
+  --sc: var(--status-task-backlog);
+}
+[data-status="todo"] {
+  --sc: var(--status-task-todo);
+}
+[data-status="in_progress"] {
+  --sc: var(--status-task-in_progress);
+}
+[data-status="in_review"] {
+  --sc: var(--status-task-in_review);
+}
+[data-status="done"] {
+  --sc: var(--status-task-done);
+}
+[data-status="blocked"] {
+  --sc: var(--status-task-blocked);
+}
+[data-status="cancelled"] {
+  --sc: var(--status-task-cancelled);
+}
+
+/*
+ * A claim whose holder has gone silent (C3 / STA-49) borrows the blocked hue — no new
+ * colour, and the chip recipe handles both themes. It has to set its own `--sc` because
+ * the badge lives INSIDE a card carrying data-status="in_progress", and would otherwise
+ * inherit the calm blue of the status it is contradicting.
+ */
+[data-stale-claim] {
+  --sc: var(--status-task-blocked);
+}
+
+/*
+ * The card's left edge carries the status colour. It is the one piece of the old
+ * vanilla page worth keeping verbatim: at board density the stripe is what makes a
+ * column scannable without reading a single word.
+ */
+.staple-accent-edge {
+  border-left: 3px solid var(--sc, var(--border));
+}
+
+/* The app owns the viewport; only the scroll regions inside it scroll. */
+html,
+body,
+#root {
+  height: 100%;
+}
+
+/* ── Dependency graph (React Flow canvas — G2 / STA-55) ───────────────────── */
+
+/*
+ * React Flow ships a stylesheet of hard-coded light-mode values (main.tsx imports it
+ * before this file). Everything below is a RE-POINT onto Paperclip tokens, not a rewrite:
+ * the library keeps owning geometry, transforms, and hit areas — the parts that are load
+ * bearing and easy to break — and staple only says what colour things are, once, in terms
+ * the rest of the app already uses. That is also what makes dark mode work for free.
+ */
+.react-flow {
+  --xy-background-color: var(--card);
+  --xy-node-border-radius: var(--radius-md, 0.375rem);
+  --xy-edge-stroke: var(--muted-foreground);
+  --xy-edge-stroke-selected: var(--ring);
+  --xy-controls-button-background-color: var(--card);
+  --xy-controls-button-background-color-hover: var(--muted);
+  --xy-controls-button-color: var(--card-foreground);
+  --xy-controls-button-border-color: var(--border);
+  --xy-minimap-background-color: var(--card);
+  --xy-minimap-mask-background-color: color-mix(in oklab, var(--muted) 70%, transparent);
+  --xy-attribution-background-color: transparent;
+}
+
+/*
+ * The node wrapper must not paint. TaskNode.tsx renders the whole card — border, radius,
+ * accent stripe — and a default background underneath it shows as a light rectangle
+ * peeking out from behind rounded corners in dark mode.
+ */
+.react-flow__node {
+  background: none;
+  border: none;
+  padding: 0;
+  border-radius: 0;
+  font-size: inherit;
+  color: inherit;
+  text-align: left;
+  width: auto;
+}
+.react-flow__node-task {
+  cursor: grab;
+}
+.react-flow__node-task.dragging,
+.react-flow__node-task:active {
+  cursor: grabbing;
+}
+.staple-rf-node {
+  transition: opacity 120ms ease-out;
+}
+.staple-rf-node:hover {
+  border-color: var(--ring);
+}
+
+.react-flow__attribution {
+  font-size: 9px;
+  opacity: 0.45;
+}
+
+/*
+ * Edge semantics. Exactly the two the legend names — solid for same-workspace, dashed and
+ * in_progress-hued for cross-workspace — carried over verbatim from the SVG view so the
+ * migration did not quietly change what an arrow means.
+ */
+.react-flow__edge.staple-rf-edge .react-flow__edge-path {
+  stroke: var(--muted-foreground);
+  stroke-width: 1.4;
+  opacity: 0.75;
+}
+.react-flow__edge.staple-rf-edge.cross .react-flow__edge-path {
+  stroke: var(--status-task-in_progress);
+  stroke-dasharray: 5 4;
+  opacity: 1;
+}
+/* The arrowhead is a <marker> and does not inherit the path's stroke. */
+.react-flow__edge.staple-rf-edge .react-flow__arrowhead polyline,
+.react-flow__edge.staple-rf-edge .react-flow__arrowhead path {
+  stroke: var(--muted-foreground);
+  fill: var(--muted-foreground);
+}
+.react-flow__edge.staple-rf-edge.cross .react-flow__arrowhead polyline,
+.react-flow__edge.staple-rf-edge.cross .react-flow__arrowhead path {
+  stroke: var(--status-task-in_progress);
+  fill: var(--status-task-in_progress);
+}
+
+/*
+ * Chain highlight — G1 (STA-54), carried onto the canvas.
+ *
+ * OPACITY ONLY, NO NEW COLOUR. The graph already spends its whole palette on status (the
+ * accent stripe) and on same- vs cross-workspace (solid vs dashed). Highlighting with a
+ * colour would have to compete with both, and the thing being said here is not a new
+ * category — it is "these are the ones you asked about". Fading is the honest verb.
+ *
+ * The dim is deep enough to read as background rather than as a fourth status tint, and
+ * lit edges gain WEIGHT rather than hue so a traced chain reads as a line you could
+ * follow across a room — this view is meant to survive being projected in a meeting.
+ * Nothing transitions on transform, so dimming never moves a node.
+ */
+.staple-rf-node[data-dim] {
+  opacity: 0.16;
+}
+.react-flow__edge.staple-rf-edge.dim {
+  opacity: 0.1;
+}
+.react-flow__edge.staple-rf-edge.lineage .react-flow__edge-path {
+  stroke-width: 2.4;
+  opacity: 1;
+}
+
+/*
+ * The legend swatches, which are plain inline SVG rather than React Flow's. Kept on the
+ * original class names so the legend and the canvas cannot drift into describing
+ * different things.
+ */
+.staple-graph-edge {
+  fill: none;
+  stroke: var(--muted-foreground);
+  stroke-width: 1.4;
+  opacity: 0.75;
+}
+.staple-graph-edge.cross {
+  stroke: var(--status-task-in_progress);
+  stroke-dasharray: 5 4;
+  opacity: 1;
+}
