@@ -26,6 +26,12 @@
  * right of tier 2 beside — or in place of — the assignee box, and it will not have to
  * negotiate for space with the brand.
  *
+ * V4 TOOK THAT SEAM, in place of rather than beside: `FilterBar` replaced the assignee
+ * input outright, and the active-filter chips landed as a strip BELOW the header instead
+ * of as a third tier — see the note on `<FilterChips />` further down, and the longer
+ * argument in components/filters/FilterChips.tsx. The prediction that a filter system
+ * would not have to negotiate with the brand held; nothing in tier 1 moved.
+ *
  * ── The workspace switcher is now the breadcrumb ──────────────────────────────────────
  *
  * It used to be a bare select floating at the far right, while a separate mono line next
@@ -47,10 +53,11 @@
  * and 240px of permanent left margin is 240px the list does not get. If a nav rail comes
  * back it replaces tier 2, not tier 1.
  */
-import { Moon, Search, Sun, UserRound } from "lucide-react";
+import { Moon, Search, Sun } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
+import { FilterBar } from "@/components/filters/FilterBar";
+import { FilterChips } from "@/components/filters/FilterChips";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -232,37 +239,23 @@ export function AppShell({ children }: { children: ReactNode }) {
         {/* ── tier 2: what the view is, and how much of it ── */}
         <div className="flex h-11 items-center gap-3 px-4">
           <ViewTabs />
-          {/* Ghost until you point at it. At full field contrast this box was the
-              highest-contrast object on the row, which put the most visual weight on the
-              control you touch least and outshouted the tabs the row exists for. The icon
-              is what keeps it findable while it is quiet — a bare ghost input at the far
-              right would just read as a stray word. */}
-          <div className="relative ml-auto shrink-0">
-            <UserRound
-              aria-hidden
-              className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-text-tertiary"
-            />
-            <Input
-              // Keyed so a filter set elsewhere (command palette) re-seeds the box;
-              // an uncontrolled input would keep stale text and commit it on blur.
-              key={session.assignee}
-              defaultValue={session.assignee}
-              placeholder="assignee"
-              aria-label="Assignee filter"
-              className={cn(
-                "h-8 w-[10rem] max-w-[40vw] pl-7 text-[13px]",
-                "border-transparent bg-transparent shadow-none",
-                "hover:border-input focus-visible:border-ring",
-              )}
-              // Commit on blur/Enter, not per keystroke: every change refetches the view.
-              onBlur={(e) => session.setAssignee(e.currentTarget.value.trim())}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") e.currentTarget.blur();
-              }}
-            />
-          </div>
+          {/*
+            V4 (STA-89) took the seam this row was built to leave open. The ghost assignee
+            input that stood here is gone — assignee is now one of five dimensions behind
+            the Filter button, which is what it always was. `FilterBar` owns its own
+            `ml-auto`, so this row still says nothing about what sits on its right.
+          */}
+          <FilterBar />
         </div>
       </header>
+
+      {/*
+        The active-filter strip. A SIBLING of the header rather than a third tier inside
+        it, because the tab underline above draws itself on the header's bottom border and
+        a row inserted between the two would strand it. Renders nothing — no border, no
+        height — when no filter is on, which is the app's usual state. See FilterChips.
+      */}
+      <FilterChips />
 
       {/*
         `relative` so anything that wants to anchor to the content area rather than the

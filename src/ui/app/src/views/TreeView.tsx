@@ -1,124 +1,82 @@
 /**
- * The subtask tree. Flat rows with ASCII guides rather than nested boxes — it matches
- * what `staple tree` prints in the terminal, which is the point: the same shape in
- * both surfaces means an agent and a human describing a tree describe the same thing.
+ * The task list. Status-grouped, one line per task, everything readable without opening it.
+ *
+ * ── This file is a CONTAINER and nothing else ─────────────────────────────────────────
+ *
+ * Three tickets converge here and each owns a different layer, which is the only reason
+ * three agents could work on it at once:
+ *
+ *   V2 (STA-87) — the scroll box and the full-bleed width.
+ *   V4 (STA-89) — what is IN the list: `session.issues` + `applyFilters`.
+ *   V5 (STA-97) — everything from the group headers down, in `views/tree/`.
+ *
+ * The scroller lives here rather than in the shell because `position: sticky` resolves
+ * against the nearest scrolling ancestor, and V5's group headers are sticky. A shell that
+ * owned the scrolling would have owned that decision on the list's behalf.
+ *
+ * V5 removed the padded inner wrapper V2 left behind (`px-4 py-3`). Rows are flush and
+ * hairline-separated now, so the list reads as one continuous surface and a gutter would
+ * only have stopped the separators reaching the window edge.
+ *
+ * ── What V5 deleted from this file, and why it was a bug ──────────────────────────────
+ *
+ * `groupByWorkspace()` mapped `IssueRow[] -> Issue[]` and dropped `row.claim` on the floor.
+ * `/api/issues` runs a batched liveness query per workspace and sends `claim` on every row;
+ * the view threw the result away, which made the live "Working…" pill impossible. The
+ * pipeline now carries `{ issue, claim, workspace }` end to end. Hub mode no longer groups
+ * by workspace either — status is the primary axis in both modes and the workspace became a
+ * prefix chip on the identifier, because "which file did this come from" is a property of a
+ * row and not a reason to split the list.
+ *
+ * `flatten()` also moved, into `tree/tree-model.ts`, where it gained the thing it was
+ * missing: a placement rule. It used to nest a whole family under its head regardless of
+ * status, which under status grouping would put an in-progress child inside Backlog.
  */
-import { useCallback } from "react";
-import { StatusBadge } from "@/components/StatusBadge";
-import { getIssues } from "@/lib/api";
+import { useMemo } from "react";
 import type { AuthError } from "@/lib/api";
+import { applyFilters, hiddenParents } from "@/lib/filters";
 import { useSession } from "@/lib/session";
-import type { Issue, IssueRow } from "@/lib/types";
-import { cn } from "@/lib/utils";
-import { useResource } from "@/lib/useStaple";
-import { EmptyState, SectionHeading, ViewState } from "./ViewChrome";
+import { TreeGrid } from "./tree/TreeGrid";
+import { EmptyState, NoMatchesState, ViewState } from "./ViewChrome";
 
-interface TreeRow {
-  issue: Issue;
-  depth: number;
-}
-
-/**
- * Depth-first walk over parentId. Issues whose parent is missing from the set — a
- * resolved-away parent, or a parent filtered out by the assignee filter — are appended
- * at depth 0 rather than dropped, because silently hiding work is the one thing a
- * tracker must never do.
- */
-function flatten(issues: Issue[]): TreeRow[] {
-  const byParent = new Map<string, Issue[]>();
-  for (const issue of issues) {
-    const key = issue.parentId ?? "";
-    const bucket = byParent.get(key);
-    if (bucket) bucket.push(issue);
-    else byParent.set(key, [issue]);
-  }
-  const present = new Set(issues.map((i) => i.id));
-  const out: TreeRow[] = [];
-  const walk = (parentKey: string, depth: number): void => {
-    for (const issue of byParent.get(parentKey) ?? []) {
-      out.push({ issue, depth });
-      walk(issue.id, depth + 1);
-    }
-  };
-  walk("", 0);
-  for (const issue of issues) {
-    if (issue.parentId && !present.has(issue.parentId)) {
-      // Orphaned subtree root (its parent is filtered out) — and its DESCENDANTS,
-      // which neither the root walk nor this fallback would otherwise ever reach.
-      out.push({ issue, depth: 0 });
-      walk(issue.id, 1);
-    }
-  }
-  return out;
-}
-
-function groupByWorkspace(rows: IssueRow[]): Map<string, Issue[]> {
-  const byWs = new Map<string, Issue[]>();
-  for (const row of rows) {
-    const bucket = byWs.get(row.workspace);
-    if (bucket) bucket.push(row.issue);
-    else byWs.set(row.workspace, [row.issue]);
-  }
-  return byWs;
-}
-
-export function TreeView({ onAuthError }: { onAuthError: (error: AuthError) => void }) {
+export function TreeView(_props: { onAuthError: (error: AuthError) => void }) {
   const session = useSession();
-  const { ws, assignee, mode, version, selection } = session;
+  const { mode, selection, filters } = session;
 
-  const load = useCallback(() => getIssues({ ws, assignee }), [ws, assignee]);
-  const resource = useResource(load, [ws, assignee, version], onAuthError);
+  const all = useMemo(() => session.issues.data ?? [], [session.issues.data]);
+  const rows = useMemo(() => applyFilters(all, filters), [all, filters]);
+
+  /** Children whose parent a filter removed — V4's seam for V5's breadcrumb chip. */
+  const orphanedBy = useMemo(() => hiddenParents(rows, all), [rows, all]);
 
   return (
-    <div className="mx-auto max-w-5xl">
-      <ViewState resource={resource} empty="no open issues">
-        {(rows) => {
-          if (rows.length === 0) return <EmptyState>no open issues</EmptyState>;
-          return [...groupByWorkspace(rows)].map(([workspace, issues]) => (
-            <section key={workspace}>
-              {mode === "hub" ? <SectionHeading className="font-mono">{workspace}</SectionHeading> : null}
-              <div className="space-y-1">
-                {flatten(issues).map(({ issue, depth }) => (
-                  <button
-                    key={issue.id}
-                    type="button"
-                    data-status={issue.status}
-                    onClick={() => session.open(workspace, issue.identifier)}
-                    className={cn(
-                      "staple-accent-edge flex w-full items-center gap-2 rounded-md border bg-card px-2.5 py-1.5 text-left",
-                      // Hover tints the SURFACE and firms the border; it no longer
-                      // turns the whole outline accent-blue. Blue is the focus
-                      // colour in this language, and a row that went blue under the
-                      // pointer meant the page had two different things saying
-                      // "here" in the same colour. Selection is the alpha surface
-                      // plus a real ring, so hovered and selected stay distinct.
-                      "transition-colors hover:border-border-strong hover:bg-surface-hover",
-                      "focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring",
-                      selection?.ref === issue.identifier &&
-                        "border-ring bg-surface-selected ring-1 ring-ring",
-                    )}
-                  >
-                    {depth > 0 ? (
-                      // The guides were `text-border` — the hairline colour — which
-                      // at the new subliminal border value made the tree structure
-                      // almost invisible. Tertiary text is the right register: read
-                      // it when you look for it, ignore it when you are scanning.
-                      <span aria-hidden className="font-mono text-xs whitespace-pre text-text-tertiary">
-                        {"│  ".repeat(depth - 1)}
-                        {"├─"}
-                      </span>
-                    ) : null}
-                    <StatusBadge status={issue.status} />
-                    <span className="shrink-0 font-mono text-[11px] text-text-tertiary">{issue.identifier}</span>
-                    <span className="truncate text-[13px]">{issue.title}</span>
-                    {issue.assignee ? (
-                      <span className="ml-auto shrink-0 text-[11px] text-muted-foreground">@{issue.assignee}</span>
-                    ) : null}
-                  </button>
-                ))}
-              </div>
-            </section>
-          ));
+    <div className="scrollbar-auto-hide h-full overflow-y-auto">
+      <ViewState resource={session.issues} empty="no open issues">
+        {(loaded) => {
+          // An empty workspace and a filter that excluded everything are DIFFERENT
+          // sentences, and telling the second as the first is how a filter convinces
+          // someone the tracker lost their work.
+          if (loaded.length === 0) return <EmptyState>no issues yet</EmptyState>;
+          if (rows.length === 0) return <NoMatchesState />;
+          return (
+            <TreeGrid
+              rows={rows}
+              mode={mode}
+              currentRef={selection?.ref ?? null}
+              /*
+               * TRUE, and this is the rewiring the spec asked for rather than a
+               * disabled gate. `lib/filters.ts` is now the single authority on whether
+               * resolved work is on the page, and its rule is subtler than a boolean:
+               * selecting the "Done" status is itself the opt-in. Re-applying a
+               * hide-resolved default here would throw those rows away again and show
+               * an empty list to someone who explicitly asked for done tasks.
+               */
+              showResolved
+              hiddenParents={orphanedBy}
+              onOpen={session.open}
+              onCloseDrawer={session.close}
+            />
+          );
         }}
       </ViewState>
     </div>

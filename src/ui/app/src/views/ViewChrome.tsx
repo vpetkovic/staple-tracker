@@ -3,7 +3,11 @@
  * has to decide what a spinner looks like.
  */
 import type { ReactNode } from "react";
+import { FilterX } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { clearFilters, countActive } from "@/lib/filters";
+import { useSession } from "@/lib/session";
 import { cn } from "@/lib/utils";
 
 export function SectionHeading({ children, className }: { children: ReactNode; className?: string }) {
@@ -25,6 +29,42 @@ export function SectionHeading({ children, className }: { children: ReactNode; c
 
 export function EmptyState({ children }: { children: ReactNode }) {
   return <div className="py-4 text-sm text-muted-foreground">{children}</div>;
+}
+
+/**
+ * "Your filters excluded everything" — V4 (STA-89), and it is a DIFFERENT state from
+ * "there is nothing here".
+ *
+ * Conflating the two is the classic filter bug: a user narrows the list, lands on an
+ * empty page that says "no open issues", and concludes the tracker lost their work. This
+ * says what happened, how many constraints did it, and offers the one-click way out.
+ *
+ * The count comes from the same `countActive` the Filter button's badge uses, so the two
+ * numbers cannot disagree. Clearing goes through `clearFilters`, so this button and
+ * "Clear all" in the chip strip land in the same place — including re-hiding done, which
+ * is part of the shipped default rather than an extra thing this button does.
+ */
+export function NoMatchesState({ noun = "tasks" }: { noun?: string }) {
+  const session = useSession();
+  const active = countActive(session.filters);
+  return (
+    <div
+      data-filter-empty
+      className="flex flex-col items-center gap-3 py-16 text-center"
+    >
+      <FilterX className="size-6 text-text-tertiary" aria-hidden />
+      <div className="space-y-1">
+        <p className="text-[13px] font-medium">no {noun} match these filters</p>
+        <p className="text-[13px] text-muted-foreground">
+          {active === 1 ? "1 filter is" : `${active} filters are`} narrowing this view
+          {session.filters.showDone ? "" : ", and done tasks are hidden"}.
+        </p>
+      </div>
+      <Button variant="outline" size="sm" onClick={() => session.setFilters(clearFilters())}>
+        Clear filters
+      </Button>
+    </div>
+  );
 }
 
 export function ErrorState({ error }: { error: Error }) {

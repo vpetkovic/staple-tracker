@@ -28,7 +28,13 @@ import { CommandPaletteMount } from "@/components/CommandPaletteMount";
 import { CreateIssueMount } from "@/components/CreateIssueMount";
 import { TokenGate } from "@/components/TokenGate";
 import { IssueDetailMount } from "@/detail/IssueDetailMount";
-import { AuthError, getBootstrap, hasToken } from "@/lib/api";
+import { AuthError, getBootstrap, getIssues, hasToken } from "@/lib/api";
+import {
+  loadFilters,
+  saveFilters,
+  withDimension,
+  type FilterState,
+} from "@/lib/filters";
 import {
   DEFAULT_VIEW,
   SessionContext,
@@ -69,11 +75,48 @@ export function App() {
 
   const [view, setView] = useState<ViewName>(DEFAULT_VIEW);
   const [ws, setWs] = useState("");
-  const [assignee, setAssignee] = useState("");
   const [selection, setSelection] = useState<Selection | null>(null);
+
+  /**
+   * The filter state — V4 (STA-89). Seeded from localStorage during the FIRST render, not
+   * in an effect: an effect would paint one frame of the unfiltered list before correcting
+   * itself, and the frame it would paint is the one containing all the done tasks this
+   * ticket exists to hide.
+   */
+  const [filters, setFilters] = useState<FilterState>(() => loadFilters(window.localStorage));
+
+  /**
+   * Autosave. Every change, no save button, no debounce — the value is a few hundred bytes
+   * and the write is synchronous and idempotent, so the honest implementation is the naive
+   * one. This also fires once on mount with the value it just loaded, which is a no-op and
+   * costs less than the branch it would take to avoid it.
+   */
+  useEffect(() => {
+    saveFilters(window.localStorage, filters);
+  }, [filters]);
 
   const { version, bump } = useDataVersion(onAuthError);
   const bootstrap = useResource(() => getBootstrap(), [], onAuthError);
+
+  /**
+   * The page's one issue fetch. Scoped by workspace only — every other dimension is
+   * applied client-side by `applyFilters`, because the filter menu has to offer the
+   * assignees and labels of the WHOLE page, and a server that had already filtered them
+   * out could not tell it what they were.
+   *
+   * `/api/issues` returns resolved work too (`includeResolved: true`), which is what makes
+   * "hide done by default, show it on opt-in" a client-side decision rather than a refetch.
+   */
+  const loadIssues = useCallback(() => getIssues({ ws }), [ws]);
+  const issues = useResource(loadIssues, [ws, version], onAuthError);
+
+  /** The palette's single-assignee view over the assignee dimension. See session.ts. */
+  const assignee = filters.dims.assignee?.[0] ?? "";
+  const setAssignee = useCallback(
+    (who: string) =>
+      setFilters((current) => withDimension(current, "assignee", who ? [who] : [])),
+    [],
+  );
 
   const open = useCallback((workspace: string, ref: string) => setSelection({ workspace, ref }), []);
   const close = useCallback(() => setSelection(null), []);
@@ -87,6 +130,9 @@ export function App() {
       setView,
       ws,
       setWs,
+      issues,
+      filters,
+      setFilters,
       assignee,
       setAssignee,
       selection,
@@ -95,7 +141,20 @@ export function App() {
       version,
       refresh: bump,
     };
-  }, [bootstrap.data, view, ws, assignee, selection, open, close, version, bump]);
+  }, [
+    bootstrap.data,
+    view,
+    ws,
+    issues,
+    filters,
+    assignee,
+    setAssignee,
+    selection,
+    open,
+    close,
+    version,
+    bump,
+  ]);
 
   if (authFailure !== null) {
     return <TokenGate reason={authFailure === "" ? undefined : authFailure} />;

@@ -6,7 +6,9 @@
  * owning it.
  */
 import { createContext, useContext } from "react";
-import type { UiMode, WorkspaceRef } from "./types";
+import type { FilterState } from "./filters";
+import type { IssueRow, UiMode, WorkspaceRef } from "./types";
+import type { Resource } from "./useStaple";
 
 /**
  * The views, in the order the header shows them. FIRST IS THE DEFAULT.
@@ -52,6 +54,34 @@ export interface StapleSession {
   ws: string;
   setWs: (ws: string) => void;
 
+  /**
+   * Every issue in scope, UNFILTERED, fetched once for the whole page — V4 (STA-89).
+   *
+   * It lives here rather than inside each view because three surfaces need the same
+   * list and they must agree about it: the tree renders it, the graph uses it to decide
+   * which nodes survive the filter, and the filter menu derives its assignee and label
+   * options from it. Three independent fetches on a 1.5s poll would be three chances for
+   * the menu to offer a filter the list has never heard of.
+   *
+   * The FILTERED list is nowhere on the session on purpose. It is `applyFilters(rows,
+   * filters)` — one pure call at one wiring point per view — and caching it here would
+   * be a second source of truth for something that is already cheap to derive.
+   */
+  issues: Resource<IssueRow[]>;
+
+  /**
+   * What the page is filtered by, everywhere. Autosaved to localStorage by App.tsx on
+   * every change; see lib/filters.ts for the shape and why `showDone` is on it.
+   */
+  filters: FilterState;
+  setFilters: (next: FilterState) => void;
+
+  /**
+   * The assignee filter as a single string — a DERIVED view over `filters.dims.assignee`,
+   * kept because the command palette speaks in these terms ("Filter by assignee…", "Clear
+   * the assignee filter") and there is no reason for it to learn about dimensions. Reading
+   * gives the first selected assignee or ""; writing replaces the whole dimension.
+   */
   assignee: string;
   setAssignee: (assignee: string) => void;
 
