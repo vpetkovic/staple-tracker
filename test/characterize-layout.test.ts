@@ -131,7 +131,7 @@ describe("a fresh repo-local `staple init`", () => {
     expect(readFileSync(ignore, "utf8")).toBe("node_modules\n");
   }, 30_000);
 
-  it("pins the workspace meta table: slug, prefix, and schema_version 2 as TEXT", () => {
+  it("pins the workspace meta table: slug, prefix, and schema_version as TEXT", () => {
     const home = scratch("char-layout-home3");
     const root = scratch("char-layout-root3");
     const project = join(root, "metarepo");
@@ -143,9 +143,9 @@ describe("a fresh repo-local `staple init`", () => {
       // WORKSPACE_SCHEMA_VERSION, stored as a STRING. A4's ordered registry has
       // to keep reading (and probably keep writing) this exact representation,
       // or an old binary's `CAST(meta.value AS INTEGER)` guard misbehaves.
-      // Bumped to "3" by STA-81 (003-issue-estimate); the TEXT typing is the
+      // Bumped to "4" by STA-140 (004-workspace-settings); the TEXT typing is the
       // characterization, the number just tracks the migration list.
-      { key: "schema_version", value: "3" },
+      { key: "schema_version", value: "4" },
       { key: "slug", value: "metarepo" },
     ]);
   }, 30_000);
@@ -178,6 +178,12 @@ describe("a fresh repo-local `staple init`", () => {
       "index:sqlite_autoindex_issues_2",
       "index:sqlite_autoindex_meta_1",
       "index:sqlite_autoindex_relations_1",
+      // STA-140 (004-workspace-settings): the statuses and kinds a workspace
+      // configures are rows now, so the vocabulary is part of the pinned shape.
+      "index:sqlite_autoindex_workspace_kinds_1",
+      "index:sqlite_autoindex_workspace_statuses_1",
+      "index:workspace_kinds_order_idx",
+      "index:workspace_statuses_order_idx",
       "table:comments",
       "table:document_revisions",
       "table:documents",
@@ -186,6 +192,8 @@ describe("a fresh repo-local `staple init`", () => {
       "table:meta",
       "table:relations",
       "table:sqlite_sequence",
+      "table:workspace_kinds",
+      "table:workspace_statuses",
     ]);
   }, 30_000);
 
@@ -308,9 +316,9 @@ describe("global workspaces", () => {
     expect(diskTree(home)).toEqual(["hub.db 644", "workspaces/", "workspaces/solo.db 644"]);
     expect(metaRows(join(home, "workspaces", "solo.db"))).toEqual([
       { key: "prefix", value: "SOL" },
-      // WORKSPACE_SCHEMA_VERSION — 3 since STA-81. The hub beside it is still 2;
+      // WORKSPACE_SCHEMA_VERSION — 4 since STA-140. The hub beside it is still 2;
       // the two databases version independently.
-      { key: "schema_version", value: "3" },
+      { key: "schema_version", value: "4" },
       { key: "slug", value: "solo" },
     ]);
   }, 30_000);

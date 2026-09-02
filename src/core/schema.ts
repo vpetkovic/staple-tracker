@@ -2,6 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { describeSchema, runMigrations } from "./migrations/runner.js";
 import type { SchemaState } from "./migrations/types.js";
 import { WORKSPACE_TARGET, WORKSPACE_LATEST_VERSION } from "./migrations/workspace/index.js";
+import { seedWorkspaceSettings } from "./migrations/workspace/004-workspace-settings.js";
 import { HUB_TARGET, HUB_LATEST_VERSION } from "./migrations/hub/index.js";
 
 /**
@@ -38,6 +39,19 @@ export type { SchemaState };
  */
 export function migrateWorkspace(db: DatabaseSync): void {
   runMigrations(db, WORKSPACE_TARGET);
+  /**
+   * The one thing `runMigrations` structurally cannot do (STA-140).
+   *
+   * A consolidated snapshot is a `sqlite_master` dump — schema, never rows — so
+   * the fresh-create fast path produces the two settings TABLES and none of the
+   * vocabulary that gives them meaning. Migration 004's own `up()` seeds for the
+   * walk path; this call covers the fast one, from the same function.
+   *
+   * It is count-guarded and therefore idempotent: on every open after the first
+   * it reads two COUNT(*)s off tiny tables and writes nothing. Notably it does
+   * NOT re-insert row by row, so a status an operator removed stays removed.
+   */
+  seedWorkspaceSettings(db);
 }
 
 /** Bring a hub database up to `HUB_SCHEMA_VERSION`. Same guarantees. */

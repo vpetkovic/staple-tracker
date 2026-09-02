@@ -24,6 +24,23 @@ import { FIXTURES, schemaObjects, withFixture } from "./fixtures/schema/support.
  * again changes nothing.
  */
 
+/**
+ * Everything migration 004 (STA-140, workspace settings) adds to `sqlite_master`.
+ *
+ * Spelled out rather than diffed so an accidental THIRD table in a later
+ * migration fails here loudly instead of being absorbed by a lenient comparison.
+ * The `sqlite_autoindex_*` rows are the evidence that each table really got its
+ * TEXT PRIMARY KEY.
+ */
+const SETTINGS_SCHEMA_OBJECTS = [
+  "index:sqlite_autoindex_workspace_kinds_1",
+  "index:sqlite_autoindex_workspace_statuses_1",
+  "index:workspace_kinds_order_idx",
+  "index:workspace_statuses_order_idx",
+  "table:workspace_kinds",
+  "table:workspace_statuses",
+];
+
 /** The schema a database created today has — the target every upgrade converges on. */
 function freshWorkspaceSchema(): string {
   const db = new DatabaseSync(":memory:");
@@ -49,19 +66,19 @@ describe.each([
   ["stamped '1'", FIXTURES.workspaceV1],
   ["present but never stamped", FIXTURES.workspaceV1Unstamped],
 ])("a v1 workspace (%s)", (_label, fixture) => {
-  it("is detected as version 1 with migrations 2 and 3 pending", () => {
+  it("is detected as version 1 with migrations 2, 3 and 4 pending", () => {
     withFixture(fixture, (path) => {
       const db = new DatabaseSync(path);
       try {
         const state = describeSchema(db, WORKSPACE_TARGET);
         expect(state.current).toBe(1);
-        expect(state.latest).toBe(3);
+        expect(state.latest).toBe(4);
         // Ordered and complete: a v1 file has to walk BOTH steps, and it has to
         // walk them in this order — 003 assumes 002 already ran. This list
         // grows by one every time a migration is appended, and that is the
         // point: a migration that never reaches an old file is the bug this
         // assertion exists to catch.
-        expect(state.pending).toEqual([2, 3]);
+        expect(state.pending).toEqual([2, 3, 4]);
       } finally {
         db.close();
       }
@@ -146,7 +163,7 @@ describe.each([
     });
   });
 
-  it("is stamped '3' as TEXT, the representation an old binary can still read", () => {
+  it("is stamped '4' as TEXT, the representation an old binary can still read", () => {
     withFixture(fixture, (path) => {
       const db = openDb(path);
       try {
@@ -157,7 +174,7 @@ describe.each([
         // TEXT is the load-bearing half of this assertion, not the number: an
         // older binary reads the stamp as a string, and an INTEGER here would
         // make it unreadable rather than merely too new.
-        expect(row).toEqual({ t: "text", value: "3" });
+        expect(row).toEqual({ t: "text", value: "4" });
       } finally {
         db.close();
       }
@@ -200,14 +217,14 @@ describe.each([
  * than estimated-at-zero.
  */
 describe("a v2 workspace — the last shape before estimates", () => {
-  it("is detected as version 2 with migration 3 pending", () => {
+  it("is detected as version 2 with migrations 3 and 4 pending", () => {
     withFixture(FIXTURES.workspaceV2, (path) => {
       const db = new DatabaseSync(path);
       try {
         expect(describeSchema(db, WORKSPACE_TARGET)).toEqual({
           current: 2,
-          latest: 3,
-          pending: [3],
+          latest: 4,
+          pending: [3, 4],
           detection: "stamped",
         });
       } finally {
@@ -277,9 +294,14 @@ describe("a v2 workspace — the last shape before estimates", () => {
       } finally {
         db.close();
       }
-      // ADD COLUMN appends to the stored CREATE text; it mints no new
-      // sqlite_master entries, so the object list is untouched.
-      expect(schemaObjects(path)).toEqual(before);
+      /**
+       * ADD COLUMN appends to the stored CREATE text and mints no new
+       * `sqlite_master` entries, so 003 is invisible here. 004 (STA-140) is the
+       * first migration that creates TABLES, so the object list grows by exactly
+       * its two tables and their indexes — and by nothing else, which is the
+       * assertion: a migration that quietly rebuilt `issues` would show up here.
+       */
+      expect(schemaObjects(path)).toEqual([...before, ...SETTINGS_SCHEMA_OBJECTS].sort());
     });
   });
 
@@ -320,7 +342,7 @@ describe("a v2 workspace created by the SHIPPED pre-A4 fresh-create path", () =>
         // it walks 003 like any other v2 file — which is the point. A shape the
         // runner "recognises as current" must not become a shape it forgets to
         // migrate the moment a new column is appended.
-        expect(describeSchema(db, WORKSPACE_TARGET).pending).toEqual([3]);
+        expect(describeSchema(db, WORKSPACE_TARGET).pending).toEqual([3, 4]);
         expect(() => migrateWorkspace(db)).not.toThrow();
 
         // The layout really is the old one: idempotency_key sits in the middle.
@@ -340,7 +362,8 @@ describe("a v2 workspace created by the SHIPPED pre-A4 fresh-create path", () =>
       } finally {
         db.close();
       }
-      expect(schemaObjects(path)).toEqual(before);
+      // Same as above: 004's two tables arrive, the legacy layout is untouched.
+      expect(schemaObjects(path)).toEqual([...before, ...SETTINGS_SCHEMA_OBJECTS].sort());
     });
   });
 

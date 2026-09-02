@@ -90,6 +90,37 @@ describe("the guide teaches the whole protocol", () => {
     expect(guide).toMatch(/written at the end never survives a kill/i);
   });
 
+  /**
+   * STA-140. The guide is the only onboarding surface a cold harness is
+   * guaranteed to find, and the single most expensive thing it can get wrong now
+   * is assuming the seven statuses it saw in some other repo. What is pinned is
+   * the instruction to LOOK (`staple statuses ls`), the rule that explains why
+   * looking is enough (behaviour is the category's, not the id's), and the rule
+   * that stops an agent reordering a human's board on its own initiative.
+   */
+  it("teaches that the vocabulary is per-workspace and must be read, not assumed", () => {
+    expect(guide).toContain("staple statuses ls");
+    expect(guide).toContain("staple kinds ls");
+    expect(guide).toMatch(/configured per workspace/i);
+    expect(guide).toMatch(/do not assume/i);
+    // The category set, in full — an agent that knows it can reason about a
+    // status nobody has told it about.
+    for (const category of ["unstarted", "ready", "active", "review", "gated", "blocked", "cancelled"]) {
+      expect(guide, category).toContain(category);
+    }
+    expect(guide).toMatch(/keys off the category, never off the id/i);
+    // The edit surface, including the guard that makes removal safe.
+    expect(guide).toContain("staple statuses add");
+    expect(guide).toContain("staple statuses reorder");
+    expect(guide).toContain("--migrate-to");
+    // …and that editing it is a human's decision, like a steal is.
+    expect(guide).toMatch(/only when a human asks/i);
+    // The MCP half mirrors the CLI half, named so an agent with no shell can act.
+    for (const tool of ["list_statuses", "list_kinds", "update_statuses", "update_kinds"]) {
+      expect(guide, tool).toContain(tool);
+    }
+  });
+
   it("teaches the branch pointer at checkout", () => {
     expect(guide).toContain("Branch pointer");
     expect(guide).toMatch(/at checkout, comment where the\s+physical work lives/i);

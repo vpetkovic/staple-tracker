@@ -372,16 +372,31 @@ describe("help surface", () => {
   it("pins the help section headings a reader navigates by", () => {
     const help = cli("help").stdout;
     const headings = help.split("\n").filter((l) => /^[A-Z][A-Za-z &]*$/.test(l));
-    expect(headings).toEqual(["Workspace", "Tasks", "Flow", "Documents & events", "UI"]);
+    // "Workspace vocabulary" arrived with STA-140 (staple statuses / kinds).
+    expect(headings).toEqual([
+      "Workspace",
+      "Tasks",
+      "Flow",
+      "Documents & events",
+      "UI",
+      "Workspace vocabulary",
+    ]);
   });
 
   it("pins the global-flag and status footer scripts read", () => {
     const help = cli("help").stdout;
     expect(help).toContain("Global flags: --db <path>, --ws <slug|prefix>  (default: walk up for .staple/staple.db,");
-    // ISSUE_STATUSES order, verbatim — `board` renders its columns in exactly
-    // this sequence, so `done` sitting BEFORE `blocked` is load-bearing, not a
-    // typo in the help text.
-    expect(help).toContain("Statuses: backlog todo in_progress in_review done blocked cancelled");
+    /**
+     * ISSUE_STATUSES order, verbatim — `board` renders its columns in exactly
+     * this sequence for a DEFAULT workspace, so `done` sitting BEFORE `blocked`
+     * is load-bearing, not a typo in the help text.
+     *
+     * STA-140 made the footer say "built-in seed" out loud, because `staple help`
+     * has no workspace in hand and can only ever print the seed — the workspace's
+     * actual set comes from `staple statuses ls`.
+     */
+    expect(help).toContain("Statuses (built-in seed;");
+    expect(help).toContain("backlog todo in_progress in_review done blocked cancelled");
   });
 
   /**
