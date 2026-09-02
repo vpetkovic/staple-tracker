@@ -19,9 +19,20 @@
  */
 import { describe, expect, it } from "vitest";
 import { OPEN_STATUS_ORDER, RESOLVED_STATUSES } from "@/lib/types";
+import { STALE_CLAIM_SECONDS } from "@/lib/claim";
 import { guideX, indentPx, MAX_INDENT_DEPTH } from "@/components/task-list";
-import { issue, row } from "@/components/task-list/fixtures";
-import { buildGroups, buildList, flattenFlat, GROUP_ORDER, visibleOrder, visibleRows } from "./tree-model";
+import { claim, issue, row } from "@/components/task-list/fixtures";
+import {
+  activityRank,
+  buildGroups,
+  buildList,
+  flattenFlat,
+  GROUP_ORDER,
+  LIVE_CLAIM_TIER,
+  subtreeActivityTiers,
+  visibleOrder,
+  visibleRows,
+} from "./tree-model";
 
 /** Everything expanded — the default for the groups these tests mostly use. */
 const openAll = { isExpanded: () => true };
@@ -448,5 +459,286 @@ describe("default expansion depends on the shape", () => {
 
     expect(flat.map((r) => r.issue.identifier)).toEqual(["STA-1", "STA-2", "STA-3"]);
     expect(flat.map((r) => r.depth)).toEqual([0, 1, 2]);
+  });
+});
+
+
+/**
+ * O3a (STA-126) — ACTIVITY-FIRST SORT.
+ *
+ * The bug this fixes is visible on the tracker's own board: `STA-26`, a high-priority
+ * backlog epic nobody has touched, outranks `STA-108`, which is in progress with an agent
+ * inside it. Priority is a statement of intent; activity is a statement of fact, and a list
+ * that answers "what is happening right now" has to read the fact first.
+ *
+ * Four ways this could quietly become wrong again:
+ *
+ *   1. Ranking a STALE claim. A holder that died four hours ago pinned to the top of the
+ *      list is worse than no claim at all — it is a lie with a badge on it.
+ *   2. Rolling up only ONE level, so an epic whose live work is a grandchild stays idle.
+ *   3. Applying the tier inside a status GROUP, which reorders a bucket by something other
+ *      than a tie break and breaks the ticket's own "unchanged under grouping" criterion.
+ *   4. Hardcoding the tier list, which would make O7's configurable status order a code
+ *      change instead of the data change it was designed to be.
+ */
+describe("activity rank", () => {
+  const live = () => claim({ idleSeconds: 30 });
+  const dead = () => claim({ idleSeconds: STALE_CLAIM_SECONDS });
+
+  describe("the tiers themselves", () => {
+    it("puts a LIVE claim above every status", () => {
+      const held = row({ id: "h", status: "backlog" }, live());
+      const working = row({ id: "w", status: "in_progress" });
+
+      expect(activityRank(held)).toBe(LIVE_CLAIM_TIER);
+      expect(activityRank(held)).toBeLessThan(activityRank(working));
+    });
+
+    it("does NOT rank a stale claim — a corpse falls back to its own status", () => {
+      // The single liveness judgement is lib/claim.ts's isStaleClaim; this reads it rather
+      // than spelling a second threshold that could drift from the badge's.
+      const abandoned = row({ id: "h", status: "backlog" }, dead());
+
+      expect(activityRank(abandoned)).not.toBe(LIVE_CLAIM_TIER);
+      expect(activityRank(abandoned)).toBe(activityRank(row({ id: "u", status: "backlog" })));
+    });
+
+    it("orders in_progress, in_review, blocked, todo, backlog, then the resolved ones", () => {
+      const ranks = (
+        ["in_progress", "in_review", "blocked", "todo", "backlog", "done", "cancelled"] as const
+      ).map((status) => activityRank(row({ status })));
+
+      expect(ranks).toEqual([...ranks].sort((a, b) => a - b));
+      expect(new Set(ranks).size).toBe(ranks.length); // strictly increasing, no ties
+    });
+
+    it("defaults to GROUP_ORDER rather than a second hand-typed tier list", () => {
+      // The board already learned once that two constants which both know the column order
+      // will drift. The tier list IS that order, offset past the claim's tier.
+      for (const [index, status] of GROUP_ORDER.entries()) {
+        expect(activityRank(row({ status }))).toBe(index + 1);
+      }
+    });
+
+    it("ranks a status the configured order does not mention LAST, never NaN", () => {
+      const order = ["in_progress"] as const;
+      const known = activityRank(row({ status: "in_progress" }), undefined, order);
+      const unknown = activityRank(row({ status: "backlog" }), undefined, order);
+
+      expect(Number.isFinite(unknown)).toBe(true);
+      expect(unknown).toBeGreaterThan(known);
+    });
+  });
+
+  describe("the parent rollup", () => {
+    it("gives a parent its child's tier", () => {
+      const rows = [
+        row({ id: "p", identifier: "STA-1", status: "backlog" }),
+        row({ id: "c", identifier: "STA-2", status: "in_progress", parentId: "p" }),
+      ];
+      const subtree = subtreeActivityTiers(rows);
+
+      expect(activityRank(rows[0]!, subtree)).toBe(activityRank(rows[1]!));
+    });
+
+    it("reaches a GRANDCHILD — the rollup is the whole subtree, not one level", () => {
+      const rows = [
+        row({ id: "top", identifier: "STA-1", status: "backlog" }),
+        row({ id: "mid", identifier: "STA-2", status: "backlog", parentId: "top" }),
+        row({ id: "leaf", identifier: "STA-3", status: "backlog", parentId: "mid" }, live()),
+      ];
+      const subtree = subtreeActivityTiers(rows);
+
+      expect(activityRank(rows[0]!, subtree)).toBe(LIVE_CLAIM_TIER);
+      expect(activityRank(rows[1]!, subtree)).toBe(LIVE_CLAIM_TIER);
+    });
+
+    it("never lowers a row that has nothing beneath it", () => {
+      const rows = [
+        row({ id: "lonely", identifier: "STA-1", status: "backlog" }),
+        row({ id: "busy", identifier: "STA-2", status: "in_progress" }),
+      ];
+      const subtree = subtreeActivityTiers(rows);
+
+      expect(subtree.has("lonely")).toBe(false);
+      expect(activityRank(rows[0]!, subtree)).toBe(activityRank(row({ status: "backlog" })));
+    });
+
+    it("keeps the parent's OWN tier when it beats everything beneath it", () => {
+      const rows = [
+        row({ id: "p", identifier: "STA-1", status: "in_progress" }),
+        row({ id: "c", identifier: "STA-2", status: "backlog", parentId: "p" }),
+      ];
+      const subtree = subtreeActivityTiers(rows);
+
+      expect(activityRank(rows[0]!, subtree)).toBe(activityRank(row({ status: "in_progress" })));
+    });
+
+    it("survives a parent cycle the store should never produce", () => {
+      const rows = [
+        row({ id: "a", identifier: "STA-1", status: "backlog", parentId: "b" }),
+        row({ id: "b", identifier: "STA-2", status: "in_progress", parentId: "a" }),
+      ];
+      expect(() => subtreeActivityTiers(rows)).not.toThrow();
+    });
+  });
+
+  describe("the flat list", () => {
+    const opts = { isExpanded: () => true, showResolved: true };
+
+    it("sorts an in_progress epic with a live child above a HIGHER-PRIORITY backlog epic", () => {
+      // The exact case named in STA-126: today STA-26 (critical, untouched) outranks STA-108.
+      const rows = [
+        row({ id: "idle", identifier: "STA-26", status: "backlog", priority: "critical" }),
+        row({ id: "epic", identifier: "STA-108", status: "in_progress", priority: "low" }),
+        row(
+          { id: "kid", identifier: "STA-109", status: "todo", priority: "low", parentId: "epic" },
+          live(),
+        ),
+      ];
+
+      expect(flattenFlat(rows, opts).map((r) => r.issue.identifier)).toEqual([
+        "STA-108",
+        "STA-109",
+        "STA-26",
+      ]);
+    });
+
+    it("lifts a backlog epic whose only live work is a GRANDCHILD", () => {
+      const rows = [
+        row({ id: "other", identifier: "STA-1", status: "backlog", priority: "critical" }),
+        row({ id: "top", identifier: "STA-2", status: "backlog", priority: "low" }),
+        row({ id: "mid", identifier: "STA-3", status: "backlog", priority: "low", parentId: "top" }),
+        row(
+          { id: "leaf", identifier: "STA-4", status: "backlog", priority: "low", parentId: "mid" },
+          live(),
+        ),
+      ];
+
+      expect(flattenFlat(rows, opts).map((r) => r.issue.identifier)).toEqual([
+        "STA-2",
+        "STA-3",
+        "STA-4",
+        "STA-1",
+      ]);
+    });
+
+    it("does NOT lift an epic whose held child went silent", () => {
+      const rows = [
+        row({ id: "other", identifier: "STA-1", status: "backlog", priority: "critical" }),
+        row({ id: "top", identifier: "STA-2", status: "backlog", priority: "low" }),
+        row(
+          { id: "leaf", identifier: "STA-3", status: "backlog", priority: "low", parentId: "top" },
+          dead(),
+        ),
+      ];
+
+      expect(flattenFlat(rows, opts).map((r) => r.issue.identifier)[0]).toBe("STA-1");
+    });
+
+    it("falls back to priority, then newest update, then identifier INSIDE a tier", () => {
+      const rows = [
+        row({ id: "d", identifier: "STA-4", status: "todo", priority: "low" }),
+        row({
+          id: "c",
+          identifier: "STA-3",
+          status: "todo",
+          priority: "high",
+          updatedAt: "2026-09-01T00:00:00.000Z",
+        }),
+        row({
+          id: "b",
+          identifier: "STA-2",
+          status: "todo",
+          priority: "high",
+          updatedAt: "2026-09-02T00:00:00.000Z",
+        }),
+        row({ id: "a", identifier: "STA-1", status: "todo", priority: "critical" }),
+      ];
+
+      expect(flattenFlat(rows, opts).map((r) => r.issue.id)).toEqual(["a", "b", "c", "d"]);
+    });
+
+    it("ranks siblings against siblings at every depth, not only the roots", () => {
+      const rows = [
+        row({ id: "p", identifier: "STA-1", status: "backlog" }),
+        row({
+          id: "sleepy",
+          identifier: "STA-2",
+          status: "backlog",
+          priority: "critical",
+          parentId: "p",
+        }),
+        row(
+          { id: "held", identifier: "STA-3", status: "backlog", priority: "low", parentId: "p" },
+          live(),
+        ),
+      ];
+
+      expect(flattenFlat(rows, opts).map((r) => r.issue.identifier)).toEqual([
+        "STA-1",
+        "STA-3",
+        "STA-2",
+      ]);
+    });
+
+    it("is DETERMINISTIC across rebuilds — the 1.5s poll must not make rows jitter", () => {
+      const build = () => [
+        row({ id: "a", identifier: "STA-9", status: "todo" }),
+        row({ id: "b", identifier: "STA-10", status: "in_progress" }),
+        row({ id: "c", identifier: "STA-11", status: "todo" }, live()),
+        row({ id: "d", identifier: "STA-12", status: "todo", parentId: "a" }),
+      ];
+
+      const once = flattenFlat(build(), opts).map((r) => r.issue.identifier);
+      const twice = flattenFlat(build().reverse(), opts).map((r) => r.issue.identifier);
+
+      expect(once).toEqual(twice);
+      expect(once).toEqual(["STA-11", "STA-10", "STA-9", "STA-12"]);
+    });
+
+    it("takes the CONFIGURED status order, so O7 reorders the tree with no code change", () => {
+      const rows = [
+        row({ id: "w", identifier: "STA-1", status: "in_progress" }),
+        row({ id: "b", identifier: "STA-2", status: "backlog" }),
+      ];
+      const reversed = [...GROUP_ORDER].reverse();
+
+      expect(flattenFlat(rows, opts).map((r) => r.issue.id)).toEqual(["w", "b"]);
+      expect(flattenFlat(rows, { ...opts, statusOrder: reversed }).map((r) => r.issue.id)).toEqual([
+        "b",
+        "w",
+      ]);
+    });
+  });
+
+  /**
+   * The ticket's own boundary: grouped output is unchanged EXCEPT for tie order inside a
+   * group. The tempting shortcut — "every row in a status bucket shares a status, so the
+   * tier is inert there anyway" — is false in two ways, and both are pinned here.
+   */
+  describe("group-by-status is unchanged", () => {
+    const opts = { isExpanded: () => true, showResolved: true };
+
+    it("does not let a live claim jump a higher-priority row inside a group", () => {
+      const rows = [
+        row({ id: "crit", identifier: "STA-1", status: "todo", priority: "critical" }),
+        row({ id: "held", identifier: "STA-2", status: "todo", priority: "low" }, live()),
+      ];
+      const todo = buildGroups(rows, opts).find((g) => g.status === "todo")!;
+
+      expect(todo.rows.map((r) => r.issue.id)).toEqual(["crit", "held"]);
+    });
+
+    it("does not let a descendant in ANOTHER group reorder a bucket", () => {
+      const rows = [
+        row({ id: "crit", identifier: "STA-1", status: "backlog", priority: "critical" }),
+        row({ id: "epic", identifier: "STA-2", status: "backlog", priority: "low" }),
+        row({ id: "kid", identifier: "STA-3", status: "in_progress", parentId: "epic" }, live()),
+      ];
+      const backlog = buildGroups(rows, opts).find((g) => g.status === "backlog")!;
+
+      expect(backlog.rows.map((r) => r.issue.id)).toEqual(["crit", "epic"]);
+    });
   });
 });

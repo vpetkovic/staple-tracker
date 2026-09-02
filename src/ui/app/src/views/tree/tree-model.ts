@@ -29,6 +29,7 @@
  * question properly.
  */
 import type { TaskRow } from "@/components/task-list";
+import { isStaleClaim } from "@/lib/claim";
 import type { Selection } from "@/lib/session";
 import type { GroupBy } from "@/lib/view-prefs";
 import {
@@ -121,21 +122,139 @@ export interface BuildOptions {
    * at depth 0 with no indication of where they came from.
    */
   hiddenParents?: ReadonlyMap<string, Issue>;
+  /**
+   * The workspace's configured status order — O3a (STA-126) / O7 (STA-139).
+   *
+   * O7a made the status set DATA: statuses can be added, renamed and REORDERED per
+   * workspace, and the configured order is the canonical order everywhere. The UI still
+   * carries a hand-kept mirror of the built-in order (`lib/types.ts`), and O7b is what
+   * wires `/api/settings` through to here. This field is that seam, present ahead of it:
+   * when the configured order arrives it is passed down and NOTHING in the sort changes.
+   *
+   * Optional and defaulted to `GROUP_ORDER`, so every existing caller compiles untouched
+   * and the tree keeps ordering exactly as it does today until somebody reorders a status.
+   */
+  statusOrder?: readonly IssueStatus[];
 }
 
 /**
- * Sort key within a group: priority, then newest update, then identifier.
+ * ACTIVITY TIER — O3a (STA-126). Lower is more active. Reserved for the live claim; the
+ * configured statuses are offset past it.
+ */
+export const LIVE_CLAIM_TIER = 0;
+
+/**
+ * The best tier among a row's STRICT descendants, by issue id. Absent means "nothing
+ * beneath this row", which is not the same as "beneath this row is idle" — see
+ * `activityRank`, which folds absence into the row's own tier rather than into a floor.
+ */
+export type SubtreeTiers = ReadonlyMap<string, number>;
+
+const NO_SUBTREE_TIERS: SubtreeTiers = new Map();
+
+/**
+ * HOW ACTIVE IS THIS ROW — the one rank O3a (STA-126) adds ahead of priority.
+ *
+ * Two rungs, and deliberately only two:
+ *
+ * 1. A LIVE CLAIM is tier 0 and beats everything. Somebody is inside this ticket right
+ *    now, and no amount of priority on an untouched ticket is more urgent than that.
+ *    Liveness is `lib/claim.ts`'s `isStaleClaim` and NOTHING ELSE. That file is the single
+ *    judgement the whole app makes about `idleSeconds`, and a second threshold spelled
+ *    here would let the badge and the sort disagree about the same claim. A STALE claim is
+ *    pointedly NOT a tier: an agent that died four hours ago must not hold the top of the
+ *    list, so it falls through to its status like any unheld row.
+ *
+ * 2. Otherwise, POSITION IN THE CONFIGURED STATUS ORDER, offset by one so tier 0 stays the
+ *    claim's. Today that order is `GROUP_ORDER` — in_progress, in_review, blocked, todo,
+ *    backlog, then the resolved statuses — which is the tier list STA-126 spells out and
+ *    also O7a's documented board rank under the built-in seed. It is a PARAMETER rather
+ *    than a constant because O7 (STA-139) makes it per-workspace data: reordering statuses
+ *    must reorder the tree with no code change here.
+ *
+ * A status the order does not mention ranks last but still ranks — an unranked row would
+ * make the comparator return `NaN` and a `NaN` comparator is not merely wrong, it is not
+ * self-consistent, which is how a list starts changing shape on every poll.
+ *
+ * `subtree` is what makes a PARENT rank by its best descendant: an epic holding a live
+ * child outranks an idle high-priority epic, and because the rollup is computed over the
+ * whole ancestor chain a GRANDCHILD counts exactly as much as a child. Defaulted to empty
+ * so the function is meaningful on one row with no tree around it.
+ */
+export function activityRank(
+  row: IssueRow,
+  subtree: SubtreeTiers = NO_SUBTREE_TIERS,
+  statusOrder: readonly IssueStatus[] = GROUP_ORDER,
+): number {
+  const own = ownActivityTier(row, statusOrder);
+  const beneath = subtree.get(row.issue.id);
+  return beneath === undefined ? own : Math.min(own, beneath);
+}
+
+function ownActivityTier(row: IssueRow, statusOrder: readonly IssueStatus[]): number {
+  if (row.claim && !isStaleClaim(row.claim)) return LIVE_CLAIM_TIER;
+  const index = statusOrder.indexOf(row.issue.status);
+  return index === -1 ? statusOrder.length + 1 : index + 1;
+}
+
+/**
+ * THE BEST TIER BENEATH EACH ROW, in one pass over the ancestor chains.
+ *
+ * Computed UPWARDS rather than downwards, and that is the whole trick: every row walks to
+ * its own ancestors and lowers each one's recorded tier, so a grandchild reaches its
+ * grandparent on the same pass that reaches its parent. A downward recursion would need a
+ * child index, a depth bound, and a decision about what to do with a cycle; this needs
+ * none of them.
+ *
+ * Strict descendants only — the row's own tier is folded in by `activityRank`, so this map
+ * answers exactly one question and callers cannot half-apply it.
+ */
+export function subtreeActivityTiers(
+  rows: readonly IssueRow[],
+  statusOrder: readonly IssueStatus[] = GROUP_ORDER,
+): Map<string, number> {
+  const best = new Map<string, number>();
+  forEachAncestor(rows, (row, ancestorId) => {
+    const tier = ownActivityTier(row, statusOrder);
+    const carried = best.get(ancestorId);
+    if (carried === undefined || tier < carried) best.set(ancestorId, tier);
+  });
+  return best;
+}
+
+/**
+ * Sort key within a bucket: activity tier, then priority, then newest update, then
+ * identifier.
+ *
+ * `IssueRow`-typed since O3a (STA-126), and it had to be: `claim` is a SIBLING of `issue`
+ * on the row, so an `Issue` alone literally cannot see whether anybody is holding it.
  *
  * The identifier tiebreak is not cosmetic. The view refetches every 1.5s on the fingerprint
  * poll, and two rows that compare equal are free to swap on every rebuild — which reads as
  * the list twitching under the pointer. Numeric-aware so STA-9 precedes STA-10.
  */
-function compareRows(a: Issue, b: Issue): number {
-  const byPriority = PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority];
+function compareRows(a: IssueRow, b: IssueRow, tierOf: (row: IssueRow) => number): number {
+  const byActivity = tierOf(a) - tierOf(b);
+  if (byActivity !== 0) return byActivity;
+  const byPriority = PRIORITY_RANK[a.issue.priority] - PRIORITY_RANK[b.issue.priority];
   if (byPriority !== 0) return byPriority;
-  if (a.updatedAt !== b.updatedAt) return a.updatedAt < b.updatedAt ? 1 : -1;
-  return a.identifier.localeCompare(b.identifier, undefined, { numeric: true });
+  if (a.issue.updatedAt !== b.issue.updatedAt) return a.issue.updatedAt < b.issue.updatedAt ? 1 : -1;
+  return a.issue.identifier.localeCompare(b.issue.identifier, undefined, { numeric: true });
 }
+
+/**
+ * THE TIER, TURNED OFF — what `buildGroups` sorts with, and why that is not a hedge.
+ *
+ * STA-126 is explicit that under group-by-status the tier is a no-op and priority still
+ * decides, and its acceptance criterion is that grouped output is unchanged EXCEPT for tie
+ * order inside a group. It is tempting to argue the tier is naturally inert in a status
+ * bucket because every row in it shares a status. It is not: a live claim would lift a
+ * low-priority held row above a critical one, and the descendant rollup would lift a parent
+ * by a child that grouped mode filed in a DIFFERENT group. Both are real reorderings, not
+ * tie breaks, and both would break the criterion. So the grouped path ranks every row 0 and
+ * means it.
+ */
+const NO_ACTIVITY_TIER = (): number => 0;
 
 /**
  * Flatten one bucket of rows into rendered lines, depth-first.
@@ -161,24 +280,40 @@ function compareRows(a: Issue, b: Issue): number {
  * Found by looking at the evidence screenshots, not by a failing unit test: the seeded
  * in-progress child of a backlog parent simply was not on the page.
  */
-function subtreesHoldingActiveWork(rows: IssueRow[]): Set<string> {
-  const parentOf = new Map(rows.map((r) => [r.issue.id, r.issue.parentId]));
+function subtreesHoldingActiveWork(rows: readonly IssueRow[]): Set<string> {
   const holders = new Set<string>();
+  forEachAncestor(rows, (row, ancestorId) => {
+    if (DEFAULT_EXPANDED_GROUPS.has(row.issue.status)) holders.add(ancestorId);
+  });
+  return holders;
+}
+
+/**
+ * THE SUBTREE WALK, ONCE — every row paired with each of its ancestors, upwards.
+ *
+ * Extracted by O3a (STA-126) and not duplicated: the expansion default above and the
+ * activity rollup in `subtreeActivityTiers` ask different questions of the same traversal,
+ * and two hand-written copies of "walk up the parent chain" is exactly the kind of pair
+ * that drifts once and is then wrong in only one view.
+ *
+ * `seen` guards against a cycle the store should never produce and which would otherwise
+ * hang the render rather than draw a wrong row.
+ */
+function forEachAncestor(
+  rows: readonly IssueRow[],
+  visit: (row: IssueRow, ancestorId: string) => void,
+): void {
+  const parentOf = new Map(rows.map((r) => [r.issue.id, r.issue.parentId]));
 
   for (const r of rows) {
-    if (!DEFAULT_EXPANDED_GROUPS.has(r.issue.status)) continue;
-    // Walk up marking every ancestor. `seen` guards against a cycle the store should never
-    // produce and which would otherwise hang the render rather than draw a wrong row.
     const seen = new Set<string>();
     let parentId = parentOf.get(r.issue.id) ?? null;
     while (parentId && parentOf.has(parentId) && !seen.has(parentId)) {
       seen.add(parentId);
-      holders.add(parentId);
+      visit(r, parentId);
       parentId = parentOf.get(parentId) ?? null;
     }
   }
-
-  return holders;
 }
 
 function flatten(
@@ -186,6 +321,7 @@ function flatten(
   presentAnywhere: Map<string, Issue>,
   options: BuildOptions,
   defaultExpanded: (issue: Issue) => boolean,
+  tierOf: (row: IssueRow) => number = NO_ACTIVITY_TIER,
 ): TaskRow[] {
   const { isExpanded: explicit, hiddenParents } = options;
   const isExpanded = (issue: Issue): boolean => explicit(issue) ?? defaultExpanded(issue);
@@ -206,9 +342,11 @@ function flatten(
     }
   }
 
-  const byIssue = (a: IssueRow, b: IssueRow) => compareRows(a.issue, b.issue);
-  roots.sort(byIssue);
-  for (const list of children.values()) list.sort(byIssue);
+  // Siblings are ranked against siblings, at every depth — so an epic's live child rises
+  // inside that epic exactly as the epic itself rises among the roots.
+  const byRow = (a: IssueRow, b: IssueRow) => compareRows(a, b, tierOf);
+  roots.sort(byRow);
+  for (const list of children.values()) list.sort(byRow);
 
   const rendered: TaskRow[] = [];
 
@@ -307,10 +445,19 @@ export function buildGroups(rows: IssueRow[], options: BuildOptions): StatusGrou
  * answers "what does this project look like" rather than "what is happening right now".
  */
 export function flattenFlat(rows: IssueRow[], options: BuildOptions): TaskRow[] {
-  const { showResolved = false } = options;
+  const { showResolved = false, statusOrder = GROUP_ORDER } = options;
   const visible = showResolved ? rows : rows.filter((r) => !isResolvedStatus(r.issue.status));
   const presentAnywhere = new Map(rows.map((r) => [r.issue.id, r.issue]));
   const holders = subtreesHoldingActiveWork(visible);
+
+  /**
+   * O3a (STA-126). The rollup is computed over the VISIBLE rows — the same set that is
+   * about to be sorted — so a parent is never ranked by a descendant the current filter
+   * has taken off the page. Ranking by an invisible row would be an order the reader
+   * cannot account for from what is in front of them, which is worse than a plain one.
+   */
+  const subtree = subtreeActivityTiers(visible, statusOrder);
+
   return flatten(
     visible,
     presentAnywhere,
@@ -318,6 +465,7 @@ export function flattenFlat(rows: IssueRow[], options: BuildOptions): TaskRow[] 
     // Flat: this row, or anything beneath it, is active. Anything else stays folded, so the
     // backlog is still not a wall.
     (issue) => DEFAULT_EXPANDED_GROUPS.has(issue.status) || holders.has(issue.id),
+    (row) => activityRank(row, subtree, statusOrder),
   );
 }
 
