@@ -199,3 +199,40 @@
 .staple-detail-tabstrip {
   padding-bottom: 5px;
 }
+
+/*
+ * ── The Relations tab's canvas — O2b (STA-132) ───────────────────────────────────────
+ *
+ * React Flow MEASURES its container, and the tab body sits inside the panel's scrolling
+ * box rather than inside a flex column with a height to inherit. An unstated height there
+ * collapses to zero and the canvas renders as a hairline. So it is stated, once, here.
+ *
+ * `clamp` rather than a branch on drawer vs fullscreen: the tab is not told which one it
+ * is in, and teaching `TabProps` about the panel's chrome would make all six tabs know
+ * about it in order to serve one. A viewport-relative height is the right answer in both
+ * — a 440px drawer and a full-screen panel differ in WIDTH, and the canvas fits its
+ * content to whatever width it is given.
+ */
+.staple-relations-canvas {
+  height: clamp(18rem, 46vh, 34rem);
+}
+
+/*
+ * An unresolved blocker — a DIRECT blocker that is not done or cancelled, i.e. one of the
+ * things actually stopping this ticket from starting.
+ *
+ * The token is `--status-task-blocked`, the same one the strip's "N unresolved" segment
+ * and every blocked badge in the app already use. NO NEW HUE: the canvas spends its
+ * palette on status (the accent stripe) and on same- versus cross-workspace (solid versus
+ * dashed), and this borrows from the first rather than opening a third scale.
+ *
+ * It rides on React Flow's node wrapper rather than on the card, which is what let
+ * `TaskNode` stay read-only — it does not have to learn what a blocker is in order to be
+ * tinted like one. `box-shadow` rather than a thicker border because a border change
+ * would resize the box, and the box size is the fact `dagreLayout` and `relationLayout`
+ * both lay out against.
+ */
+.react-flow__node.staple-relation-unresolved .staple-rf-node {
+  border-color: var(--status-task-blocked);
+  box-shadow: 0 0 0 1px var(--status-task-blocked);
+}
