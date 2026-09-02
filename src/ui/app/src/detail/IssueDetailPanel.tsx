@@ -47,8 +47,12 @@ export function IssueDetailPanel({
       aria-label="Issue detail"
       className="flex h-full min-h-0 flex-col overflow-hidden border-l bg-card"
     >
-      <div className="flex items-center gap-2 border-b px-4 py-2">
-        <span className="font-mono text-[11px] text-muted-foreground">{selection.ref}</span>
+      {/* A fixed 40px header bar rather than padding-derived height: this bar and
+          the app header are the two pieces of persistent chrome on the page, and
+          when their heights are computed from different padding they never quite
+          line up across a viewport resize. */}
+      <div className="flex h-10 shrink-0 items-center gap-2 border-b px-3">
+        <span className="font-mono text-[11px] text-text-tertiary">{selection.ref}</span>
         {resource.data ? <StatusBadge status={resource.data.issue.status} /> : null}
         <Button
           variant="ghost"
@@ -93,7 +97,13 @@ export function IssueDetailPanel({
                   ) : null}
                   {session.mode === "hub" ? <span className="font-mono">{detail.workspace}</span> : null}
                 </div>
-                <div className="mt-1 font-mono text-[11px] text-muted-foreground">{path}</div>
+                {/* The ancestry path is orientation, not content — tertiary, and
+                    truncated rather than allowed to wrap into a paragraph that
+                    pushes the title (the actual subject of the panel) below the
+                    fold on a deep tree. */}
+                <div className="mt-1 truncate font-mono text-[11px] text-text-tertiary" title={path}>
+                  {path}
+                </div>
                 <InlineTitle issue={issue} workspace={detail.workspace} refresh={session.refresh} />
                 <InlineLabels issue={issue} workspace={detail.workspace} refresh={session.refresh} />
 

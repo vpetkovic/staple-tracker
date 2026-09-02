@@ -1,0 +1,536 @@
+/*
+ * ─────────────────────────────────────────────────────────────────────────────
+ * staple · Geist layer (V1 / STA-86)
+ * ─────────────────────────────────────────────────────────────────────────────
+ *
+ * This file makes the app speak Vercel/Geist. It is a RELAYER, not a rewrite.
+ *
+ * WHY A LAYER AND NOT A REPLACEMENT. theme-tokens.css is two different things
+ * wearing one filename: (a) a palette, which is what we are replacing, and (b) a
+ * ~700-line dictionary of extracted geometry — `--sz-*`, `--gtc-*`, `--tp-*`,
+ * `--rad-3`, `--gtr-1` — that the vendored shadcn primitives reference directly in
+ * arbitrary-value classes (`ring-(length:--rad-3)`, `grid-rows-(--gtr-1)`,
+ * `transition-(--tp-color-box-shadow)`). Deleting the sheet to "put Geist in its
+ * place" would take the dictionary with it and break every primitive on the page.
+ * So the sheet stays where it is, keeps owning the Tailwind `@theme` mapping and
+ * the geometry, and everything a human can SEE is overridden from here.
+ *
+ * Cascade order is the whole mechanism, and it is set in app.css:
+ *     theme-tokens.css   →   geist-tokens.css   →   app.css
+ *     (mapping + geometry)       (this file: colour,     (staple's status→hue
+ *                                 type, surface, focus)    map, graph chrome)
+ * `:root` and `.dark` both resolve on <html>, so `.dark` wins by specificity and
+ * a mode flip is a class toggle with no second sheet to keep in sync.
+ *
+ * THE LANGUAGE, in one paragraph. Monochrome. Contrast comes from a neutral ramp,
+ * not from hue. Depth comes from a 1px border, not from a shadow — shadows exist
+ * only for things that genuinely float (menus, dialogs), and in dark mode they are
+ * nearly absent because a shadow on near-black is a smudge. Exactly one accent
+ * (blue) and it is spent almost entirely on focus. Type is tight rather than airy:
+ * Geist at a slightly negative tracking, and the wide-tracked uppercase eyebrows
+ * this app inherited are pulled back to a whisper. The colour that is left is
+ * SEMANTIC — a hue on this page means a task status, and nothing else.
+ *
+ * NAMING. `--ds-*` is the raw scale (matching Vercel's own prefix, so a value can
+ * be checked against their published palette). Everything above it re-points the
+ * semantic tokens the components already use, under the names they already use.
+ * No component has to learn a new vocabulary to get the new look, which is exactly
+ * why this could be done without touching most of them.
+ */
+
+/* ── Typeface ────────────────────────────────────────────────────────────────
+ *
+ * Geist Sans and Geist Mono, vendored as two variable woff2 files rather than
+ * pulled from the `geist` npm package. The package was installed, the two files
+ * that matter were lifted out of it, and it was uninstalled again: this is a local
+ * tool that ships as a static bundle, and a 140KB pair of fonts in-tree beats a
+ * dependency that every other agent on this epic would have to install before the
+ * app rendered correctly for them. Licence (SIL OFL 1.1) sits beside them in
+ * assets/fonts/.
+ *
+ * `font-display: block`, not `swap`. The font is in the same bundle served from
+ * loopback, so the block window is single-digit milliseconds — whereas swap would
+ * show a frame of system-ui at Geist's metrics, and the one thing a design system
+ * must not do is flash the wrong typeface at the person reviewing it.
+ */
+@font-face {
+  font-family: "Geist Sans";
+  src: url("../assets/fonts/Geist-Variable.woff2") format("woff2-variations");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: block;
+}
+
+@font-face {
+  font-family: "Geist Mono";
+  src: url("../assets/fonts/GeistMono-Variable.woff2") format("woff2-variations");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: block;
+}
+
+/* ── Tailwind theme re-point ─────────────────────────────────────────────────
+ *
+ * `inline` on purpose: it substitutes the value into the utility instead of
+ * emitting a copy into :root, so a `var()` inside one of these resolves against
+ * the ELEMENT that uses the utility. That is what lets one `--shadow-md`
+ * definition be a soft drop in light mode and almost nothing in dark, without a
+ * second declaration anywhere.
+ */
+@theme inline {
+  --font-sans: "Geist Sans", "Inter", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+
+  /* New semantic colours, exposed as utilities so a component can say what it
+     means (`hover:bg-surface-hover`) instead of reaching for an arbitrary value. */
+  --color-border-strong: var(--border-strong);
+  --color-surface-hover: var(--surface-hover);
+  --color-surface-selected: var(--surface-selected);
+  --color-surface-active: var(--surface-active);
+  --color-text-tertiary: var(--text-tertiary);
+  --color-field: var(--field);
+  --color-segment-track: var(--segment-track);
+  --color-segment-thumb: var(--segment-thumb);
+
+  /* Elevation. Geist's shadows are short, tight and almost colourless — the
+     border does the separating and the shadow only says "this floats". */
+  --shadow-2xs: 0 1px 1px var(--elevation-weak);
+  --shadow-xs: 0 1px 2px var(--elevation-weak);
+  --shadow-sm: 0 1px 2px var(--elevation-weak), 0 1px 3px var(--elevation);
+  --shadow-md: 0 2px 4px var(--elevation-weak), 0 6px 16px -6px var(--elevation);
+  --shadow-lg: 0 2px 6px var(--elevation-weak), 0 12px 32px -12px var(--elevation-strong);
+  --shadow-xl: 0 4px 8px var(--elevation), 0 24px 48px -16px var(--elevation-strong);
+}
+
+/* ── Raw scale · light ───────────────────────────────────────────────────────
+ *
+ * The Geist neutral ramp runs 100 (nearest the background) to 1000 (the text
+ * colour), which is the inverse of Tailwind's convention and exactly the reason
+ * to keep Vercel's numbering rather than translate it: `gray-1000` means "as far
+ * from the page as a colour gets" in BOTH modes, and that sentence survives the
+ * mode flip. The alpha ramp exists because a hover state on a card that sits on a
+ * page has to tint whatever is underneath it, not paint a fixed grey that only
+ * looks right on one of the two surfaces.
+ */
+:root {
+  color-scheme: light;
+
+  --ds-gray-100: #f2f2f2;
+  --ds-gray-200: #ebebeb;
+  --ds-gray-300: #e5e5e5;
+  --ds-gray-400: #d4d4d4;
+  --ds-gray-500: #b8b8b8;
+  --ds-gray-600: #a1a1a1;
+  --ds-gray-700: #8f8f8f;
+  --ds-gray-800: #666666;
+  --ds-gray-900: #454545;
+  --ds-gray-1000: #171717;
+
+  --ds-gray-alpha-100: rgb(0 0 0 / 0.035);
+  --ds-gray-alpha-200: rgb(0 0 0 / 0.06);
+  --ds-gray-alpha-300: rgb(0 0 0 / 0.09);
+  --ds-gray-alpha-400: rgb(0 0 0 / 0.14);
+  --ds-gray-alpha-500: rgb(0 0 0 / 0.26);
+  --ds-gray-alpha-600: rgb(0 0 0 / 0.44);
+
+  /* The one accent. Spent on focus, on the brand mark, and on the in_progress
+     status — nowhere else, which is what keeps it meaning something. */
+  --ds-blue-700: #0072f5;
+  --ds-blue-800: #0062d1;
+
+  --ds-red-700: #e5484d;
+  --ds-red-800: #cb2b31;
+  --ds-amber-700: #f5a623;
+  --ds-amber-800: #b26a00;
+  --ds-green-700: #17a34a;
+  --ds-green-800: #0f7b34;
+  --ds-purple-700: #8e4ec6;
+
+  /* Elevation ink: soft black at low alpha. */
+  --elevation-weak: rgb(0 0 0 / 0.04);
+  --elevation: rgb(0 0 0 / 0.08);
+  --elevation-strong: rgb(0 0 0 / 0.14);
+}
+
+/* ── Raw scale · dark ────────────────────────────────────────────────────────
+ *
+ * Vercel's dashboard and Linear both sit at near-black rather than true black,
+ * and the reason is structural: on pure #000 a 1px border is either invisible or
+ * a hard line, with nothing in between. #0a0a0a for the page and #111 for
+ * anything raised gives the border somewhere to live, and gives a card an edge
+ * you can see without drawing one brighter than the text.
+ */
+.dark {
+  color-scheme: dark;
+
+  --ds-gray-100: #1a1a1a;
+  --ds-gray-200: #1f1f1f;
+  --ds-gray-300: #262626;
+  --ds-gray-400: #333333;
+  --ds-gray-500: #444444;
+  --ds-gray-600: #5c5c5c;
+  --ds-gray-700: #7d7d7d;
+  --ds-gray-800: #a1a1a1;
+  --ds-gray-900: #ededed;
+  --ds-gray-1000: #ffffff;
+
+  --ds-gray-alpha-100: rgb(255 255 255 / 0.05);
+  --ds-gray-alpha-200: rgb(255 255 255 / 0.08);
+  --ds-gray-alpha-300: rgb(255 255 255 / 0.12);
+  --ds-gray-alpha-400: rgb(255 255 255 / 0.18);
+  --ds-gray-alpha-500: rgb(255 255 255 / 0.3);
+  --ds-gray-alpha-600: rgb(255 255 255 / 0.5);
+
+  --ds-blue-700: #3291ff;
+  --ds-blue-800: #52a8ff;
+
+  --ds-red-700: #ff6166;
+  --ds-red-800: #ff8f92;
+  --ds-amber-700: #f5a623;
+  --ds-amber-800: #fbbf5c;
+  --ds-green-700: #3dd68c;
+  --ds-green-800: #6ee7ae;
+  --ds-purple-700: #bf7af0;
+
+  /* Dark mode barely uses shadow. What is left keeps a menu from dissolving into
+     the page; it is not there to suggest height. */
+  --elevation-weak: rgb(0 0 0 / 0.3);
+  --elevation: rgb(0 0 0 / 0.5);
+  --elevation-strong: rgb(0 0 0 / 0.7);
+}
+
+/* ── Semantic re-point · mode-independent ────────────────────────────────────
+ *
+ * Everything here is written in terms of the raw scale, which is why it does not
+ * need repeating in the `.dark` block: the scale flips underneath and these
+ * follow. Only tokens whose ROLE inverts between modes are restated below.
+ */
+:root {
+  --foreground: var(--ds-gray-1000);
+  --card-foreground: var(--ds-gray-1000);
+  --popover-foreground: var(--ds-gray-1000);
+  --primary: var(--ds-gray-1000);
+  --secondary: var(--ds-gray-100);
+  --secondary-foreground: var(--ds-gray-1000);
+
+  --muted: var(--ds-gray-100);
+  /* Secondary text. #666 on white is 5.7:1, #a1a1a1 on #0a0a0a is 8.9:1 — this
+     token carries most of the metadata in the app and had to clear AA in both. */
+  --muted-foreground: var(--ds-gray-800);
+
+  /* shadcn's `--accent` is a HOVER SURFACE, not the brand accent. Keeping it
+     neutral is the single most important line in this file for not looking
+     generic: a menu row that tints blue on hover is the tell. */
+  --accent: var(--ds-gray-100);
+  --accent-foreground: var(--ds-gray-1000);
+
+  --destructive: var(--ds-red-700);
+  --destructive-foreground: var(--ds-gray-100);
+
+  /* Two border weights, and the distinction is load-bearing. `--border` is the
+     structural hairline — card edges, the header underline, table rules — and is
+     meant to be almost subliminal. `--border-strong` is for a border being USED
+     as a signal: a hovered control, a divider that separates rather than
+     encloses, a field about to be typed into. */
+  --border: var(--ds-gray-300);
+  --border-strong: var(--ds-gray-400);
+  /* Form-control borders sit one step stronger than structure so a field reads
+     as a field before it is focused. This is shadcn's `--input`, unchanged in
+     meaning — it is a border colour despite the name. */
+  --input: var(--ds-gray-400);
+
+  /* Focus. The accent at full strength, and where nearly the whole colour budget
+     goes. Primitives pair it as a 1px border plus a 3px ring at 50% — the Geist
+     double ring — so focus is unmistakable at a glance and still quiet enough to
+     live on a dense list. */
+  --ring: var(--ds-blue-700);
+
+  /* Interaction surfaces. Alpha, not opaque grey, so the same three tokens work
+     on the page, on a card and inside a menu with no per-context table. */
+  --surface-hover: var(--ds-gray-alpha-100);
+  --surface-selected: var(--ds-gray-alpha-200);
+  --surface-active: var(--ds-gray-alpha-300);
+
+  /* Tertiary text: identifiers, timestamps, tree guides, "held by" — present,
+     subordinate, never the thing you read first.
+     NOT `--ds-gray-700`, and the difference is deliberate. Vercel's own gray-700
+     is #8f8f8f and they do use it for exactly this register, but on white that is
+     3.0:1 — fine as a non-text hairline, below AA as words. #737373 is 4.7:1 on
+     #ffffff and 4.6:1 on the #fafafa page, so the whole tier clears AA on both
+     surfaces it can land on. Dark mode needs no such nudge: gray-700 there is
+     #7d7d7d, which is 4.9:1 on the page and 4.7:1 on a card. */
+  --text-tertiary: #737373;
+
+  /* One knob for the corner language; the ladder in theme-tokens.css is
+     multiplicative off it. An 8px anchor puts buttons, rows and chips at ~6px
+     (`rounded-md`) and cards and dialogs at 8px (`rounded-lg`), which is Geist. */
+  --radius: 0.5rem;
+
+  --scrollbar-thumb: var(--ds-gray-alpha-400);
+  --scrollbar-thumb-hover: var(--ds-gray-alpha-500);
+  --scrollbar-size: 8px;
+  --scrollbar-radius: 999px;
+
+  /* The chart ramp is monochrome by design: a neutral ramp cannot accidentally
+     collide with the status hues, which are the only meaningful colour here. */
+  --chart-1: var(--ds-gray-1000);
+  --chart-2: var(--ds-gray-900);
+  --chart-3: var(--ds-gray-800);
+  --chart-4: var(--ds-gray-700);
+  --chart-5: var(--ds-gray-500);
+}
+
+/* ── Semantic re-point · the tokens whose role inverts ───────────────────── */
+:root {
+  --background: #fafafa; /* page — a hair off white, so a white card has an edge */
+  --card: #ffffff;
+  --popover: #ffffff;
+  --primary-foreground: #ffffff;
+  --field: #ffffff;
+
+  /* The segmented control needs its own pair, and this is the one place the
+     surface roles do NOT simply invert. Its rule is relational, not absolute:
+     the selected thumb must sit one step ABOVE its own track in both modes.
+     Deriving the thumb from `--card` looked right in light (white on #f2f2f2)
+     and inverted in dark (#111 thumb inside a #1a1a1a track), where the selected
+     tab read as a hole punched in the control. */
+  --segment-track: var(--ds-gray-100);
+  --segment-thumb: #ffffff;
+}
+
+.dark {
+  --background: #0a0a0a; /* page */
+  --card: #111111; /* anything raised: rows, panels, the header, menus */
+  --popover: #111111;
+  --primary-foreground: #0a0a0a;
+  /* A field sits BELOW its surface in dark mode — inset rather than raised —
+     which is how Vercel's inputs read against a panel. */
+  --field: #0a0a0a;
+
+  --segment-track: var(--ds-gray-100); /* #1a1a1a */
+  --segment-thumb: var(--ds-gray-300); /* #262626 — one step UP from the track */
+}
+
+/* ── Sidebar family ──────────────────────────────────────────────────────────
+ * Unused by staple today (there is no sidebar yet), re-pointed anyway so that
+ * whichever wave adds one inherits this language rather than the theme sheet's.
+ */
+:root {
+  --sidebar: var(--card);
+  --sidebar-foreground: var(--foreground);
+  --sidebar-primary: var(--primary);
+  --sidebar-primary-foreground: var(--primary-foreground);
+  --sidebar-accent: var(--accent);
+  --sidebar-accent-foreground: var(--accent-foreground);
+  --sidebar-border: var(--border);
+  --sidebar-ring: var(--ring);
+}
+
+/* ── Status hues ─────────────────────────────────────────────────────────────
+ *
+ * The names are the theme sheet's and they STAY — `--status-task-*` is consumed by
+ * app.css's `[data-status]` map, by StatusBadge, by the graph edges, by the
+ * accent edge, and by the V5 row spec being written against them right now. Only
+ * the values move.
+ *
+ * Departing from the theme sheet on one point: these are now mode-specific. It
+ * ran a single hue through a color-mix in both modes, which is elegant and, at
+ * these saturations against a #0a0a0a page, wrong — the light-mode blue and green
+ * go muddy on near-black. Two values per status is a small price for a chip that
+ * is legible in the mode you are actually in.
+ */
+:root {
+  --status-task-backlog: var(--ds-gray-700);
+  --status-task-todo: var(--ds-amber-700);
+  --status-task-in_progress: var(--ds-blue-700);
+  --status-task-in_review: var(--ds-purple-700);
+  --status-task-done: var(--ds-green-700);
+  --status-task-blocked: var(--ds-red-700);
+  --status-task-cancelled: var(--ds-gray-700);
+
+  --status-agent-idle: var(--ds-gray-700);
+  --status-agent-running: var(--ds-blue-700);
+  --status-agent-paused: var(--ds-amber-700);
+  --status-agent-error: var(--ds-red-700);
+
+  /* Bare glyphs get no chip to sit on, so they need a hue that clears 3:1
+     against the page unaided. */
+  --status-task-icon-backlog: var(--ds-gray-800);
+  --status-task-icon-todo: var(--ds-amber-800);
+  --status-task-icon-in_progress: var(--status-task-in_progress);
+  --status-task-icon-in_review: var(--status-task-in_review);
+  --status-task-icon-done: var(--ds-green-800);
+  --status-task-icon-blocked: var(--status-task-blocked);
+  --status-task-icon-cancelled: var(--ds-gray-800);
+  --status-task-icon-in_queue: var(--status-task-in_progress);
+
+  /* Priority. Split out from the status hues it used to borrow, because `high`
+     was rendering as raw amber text on white at roughly 2.2:1 — a real contrast
+     bug hiding behind a reasonable-sounding "reuse the palette" decision. These
+     two are tuned as TEXT colours, not as chip fills. */
+  --priority-critical: var(--ds-red-800);
+  --priority-high: var(--ds-amber-800);
+}
+
+.dark {
+  --text-tertiary: var(--ds-gray-700);
+  --status-task-icon-todo: var(--ds-amber-700);
+  --status-task-icon-done: var(--ds-green-700);
+  --status-task-icon-backlog: var(--ds-gray-700);
+  --status-task-icon-cancelled: var(--ds-gray-700);
+  --priority-critical: var(--ds-red-700);
+  --priority-high: var(--ds-amber-700);
+}
+
+/* ── Type ────────────────────────────────────────────────────────────────────
+ *
+ * "Letter-spacing restraint" is the brief, and the biggest single win is here.
+ * The inherited eyebrow trackings were 0.08 / 0.14 / 0.2em — a 2010s dashboard
+ * mannerism that reads as SHOUTING when it lands on 11px uppercase. Pulling them
+ * to 0.02 / 0.04 / 0.06em calms every section heading, every uppercase label and
+ * the mode line in the header at once, without editing a single component,
+ * because they all already reference these names.
+ */
+:root {
+  --tracking-label: 0.02em;
+  --tracking-eyebrow: 0.04em;
+  --tracking-caps: 0.06em;
+
+  /* Optical tightening, the way Geist is set on Vercel's own surfaces: body
+     barely negative, headings more so, and it comes off entirely in mono, where
+     negative tracking just closes up the counters. */
+  --tracking-body: -0.011em;
+  --tracking-heading: -0.021em;
+
+  --text-nano: 10px;
+  --text-micro: 11px;
+  --text-compact: 13px;
+}
+
+@layer base {
+  html {
+    /* No faux bold — the variable font has real weights, and synthesising them
+       on top is the blurry double-strike that makes an app look cheap. */
+    font-synthesis-weight: none;
+    font-optical-sizing: auto;
+  }
+
+  body {
+    letter-spacing: var(--tracking-body);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    letter-spacing: var(--tracking-heading);
+  }
+
+  /* Identifiers, timestamps and counts are set in mono all over this app and are
+     overwhelmingly numeric. Tabular figures stop a polling list from twitching
+     horizontally every time a duration ticks over. */
+  code,
+  kbd,
+  pre,
+  samp,
+  .font-mono {
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0;
+  }
+
+  ::selection {
+    background-color: color-mix(in oklab, var(--ring) 26%, transparent);
+  }
+
+  /* A last-resort focus ring for anything that never got an explicit one. The
+     primitives override this with the Geist double ring; this is the floor, and
+     the point of a floor is that nothing in the app can be focused invisibly. */
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+}
+
+/* ── Status chip recipe ──────────────────────────────────────────────────────
+ *
+ * Same contract as the theme sheet's — a consumer sets `--sc` to a status hue and this
+ * derives fill, text and border — with the recipe itself rewritten.
+ *
+ * What changed and why: the theme sheet put the hue at FULL saturation on the border
+ * (`border-color: var(--sc)`) over a 15%-toward-white fill. That is a Jira chip.
+ * The outline becomes the loudest thing in the row, and with six of them stacked
+ * down a list the page turns into a colour chart. Geist badges do the opposite:
+ * fill and border are both quiet, and the TEXT carries the hue. You read the
+ * word, and the colour confirms it — rather than the colour arriving first and
+ * the word turning into decoration.
+ *
+ * Light mixes toward `--card` rather than hard white, so a chip on the page and
+ * a chip on a card are the same chip.
+ */
+.status-chip {
+  background-color: color-mix(in oklab, var(--sc) 10%, var(--card));
+  color: color-mix(in oklab, var(--sc) 72%, var(--ds-gray-1000));
+  border-color: color-mix(in oklab, var(--sc) 26%, transparent);
+}
+
+.dark .status-chip {
+  background-color: color-mix(in oklab, var(--sc) 14%, transparent);
+  color: color-mix(in oklab, var(--sc) 82%, var(--ds-gray-1000));
+  border-color: color-mix(in oklab, var(--sc) 28%, transparent);
+}
+
+.status-fill {
+  background-color: var(--sc);
+}
+
+/* ── Scrollbars ──────────────────────────────────────────────────────────────
+ *
+ * The theme sheet's rules hard-code oklch values, including a PAINTED dark track at
+ * `oklch(0.205 0 0)` — which on a #0a0a0a page is a visible light rail down the
+ * side of every scroll region. Re-pointed onto tokens and un-painted: the track
+ * is the surface, the thumb is a low-alpha neutral. `!important` appears only
+ * where the theme sheet used it first — matching it, not escalating.
+ */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: var(--scrollbar-size);
+  height: var(--scrollbar-size);
+}
+
+*::-webkit-scrollbar-track,
+.dark *::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb,
+.dark *::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: var(--scrollbar-radius);
+}
+
+*::-webkit-scrollbar-thumb:hover,
+.dark *::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+}
+
+.scrollbar-auto-hide:hover,
+.dark .scrollbar-auto-hide:hover {
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+
+.scrollbar-auto-hide:hover::-webkit-scrollbar-thumb,
+.dark .scrollbar-auto-hide:hover::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb) !important;
+  border-radius: var(--scrollbar-radius) !important;
+}
+
+.scrollbar-auto-hide:hover::-webkit-scrollbar-thumb:hover,
+.dark .scrollbar-auto-hide:hover::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover) !important;
+}

@@ -55,16 +55,21 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   return (
     <div className="flex h-full flex-col bg-background text-foreground">
-      <header className="sticky top-0 z-20 flex shrink-0 flex-wrap items-center gap-3 border-b bg-card px-4 py-2">
-        <span className="flex items-baseline gap-1.5 font-semibold tracking-[0.02em]">
+      {/* V1 (STA-86) touches TYPOGRAPHY AND SURFACE here and nothing else — the
+          shell's structure is V2's ticket, so this keeps every element, order and
+          class hook and only changes how they read. */}
+      <header className="sticky top-0 z-20 flex min-h-12 shrink-0 flex-wrap items-center gap-3 border-b bg-card px-3 py-1.5">
+        <span className="flex items-baseline gap-1.5 text-[15px] font-semibold tracking-[var(--tracking-heading)]">
+          {/* The one place the accent is spent on brand rather than on focus. */}
           <span aria-hidden className="text-[var(--status-task-in_progress)]">
             &#9680;
           </span>
           staple
         </span>
-        <span className="font-mono text-[11px] tracking-[var(--tracking-label)] text-muted-foreground uppercase">
-          {modeLine}
-        </span>
+        {/* Was uppercase at 0.08em. The mode line is a fact about the session, not
+            a heading — lower-case mono in the tertiary register says it once and
+            then gets out of the way. */}
+        <span className="font-mono text-[11px] text-text-tertiary">{modeLine}</span>
 
         <Tabs value={session.view} onValueChange={(v) => session.setView(v as ViewName)}>
           <TabsList>

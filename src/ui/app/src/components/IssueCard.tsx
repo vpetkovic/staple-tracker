@@ -55,12 +55,17 @@ export function IssueCard({
       onClick={() => onOpen(workspace, issue.identifier)}
       className={cn(
         "staple-accent-edge block w-full rounded-md border bg-card px-2.5 py-2 text-left",
-        "transition-colors hover:border-ring focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring",
-        selected && "border-ring ring-1 ring-ring",
+        // Identical hover/selected treatment to the tree row, on purpose: this
+        // card and that row are the same object at two densities, and the moment
+        // they disagree about what "hovered" looks like the app has two design
+        // systems in it.
+        "transition-colors hover:border-border-strong hover:bg-surface-hover",
+        "focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring",
+        selected && "border-ring bg-surface-selected ring-1 ring-ring",
         className,
       )}
     >
-      <div className="flex flex-wrap items-center gap-x-1.5 text-[11px] text-muted-foreground">
+      <div className="flex flex-wrap items-center gap-x-1.5 text-[11px] text-text-tertiary">
         {showWorkspace ? <span className="font-mono">{workspace} ·</span> : null}
         <span className="font-mono">{issue.identifier}</span>
         <span aria-hidden>·</span>

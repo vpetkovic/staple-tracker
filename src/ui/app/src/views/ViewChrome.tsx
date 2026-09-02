@@ -10,7 +10,11 @@ export function SectionHeading({ children, className }: { children: ReactNode; c
   return (
     <h2
       className={cn(
-        "mt-4 mb-2 text-[11px] font-medium tracking-[var(--tracking-eyebrow)] text-muted-foreground uppercase first:mt-0",
+        // `--tracking-eyebrow` came down from 0.14em to 0.04em in the Geist layer,
+        // so this heading calms without the component changing. What it needed on
+        // top of that was the tertiary register: a group label is scaffolding, and
+        // at the old weight it competed with the rows it was labelling.
+        "mt-5 mb-2 text-[11px] font-medium tracking-[var(--tracking-eyebrow)] text-text-tertiary uppercase first:mt-0",
         className,
       )}
     >
@@ -25,7 +29,13 @@ export function EmptyState({ children }: { children: ReactNode }) {
 
 export function ErrorState({ error }: { error: Error }) {
   return (
-    <div className="my-3 rounded-md border border-[var(--status-task-blocked)]/40 bg-[var(--status-task-blocked)]/10 px-3 py-2 text-sm">
+    // Routed through the status-chip recipe rather than hand-mixed alphas, so a
+    // failure notice, a blocked chip and a stale-claim badge are demonstrably the
+    // same red — and all three follow the theme without a second table.
+    <div
+      data-status="blocked"
+      className="status-chip my-3 rounded-md border px-3 py-2 text-[13px]"
+    >
       {error.message}
     </div>
   );

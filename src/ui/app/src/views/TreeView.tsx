@@ -86,18 +86,30 @@ export function TreeView({ onAuthError }: { onAuthError: (error: AuthError) => v
                     onClick={() => session.open(workspace, issue.identifier)}
                     className={cn(
                       "staple-accent-edge flex w-full items-center gap-2 rounded-md border bg-card px-2.5 py-1.5 text-left",
-                      "transition-colors hover:border-ring focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring",
-                      selection?.ref === issue.identifier && "border-ring ring-1 ring-ring",
+                      // Hover tints the SURFACE and firms the border; it no longer
+                      // turns the whole outline accent-blue. Blue is the focus
+                      // colour in this language, and a row that went blue under the
+                      // pointer meant the page had two different things saying
+                      // "here" in the same colour. Selection is the alpha surface
+                      // plus a real ring, so hovered and selected stay distinct.
+                      "transition-colors hover:border-border-strong hover:bg-surface-hover",
+                      "focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring",
+                      selection?.ref === issue.identifier &&
+                        "border-ring bg-surface-selected ring-1 ring-ring",
                     )}
                   >
                     {depth > 0 ? (
-                      <span aria-hidden className="font-mono text-xs whitespace-pre text-border">
+                      // The guides were `text-border` — the hairline colour — which
+                      // at the new subliminal border value made the tree structure
+                      // almost invisible. Tertiary text is the right register: read
+                      // it when you look for it, ignore it when you are scanning.
+                      <span aria-hidden className="font-mono text-xs whitespace-pre text-text-tertiary">
                         {"│  ".repeat(depth - 1)}
                         {"├─"}
                       </span>
                     ) : null}
                     <StatusBadge status={issue.status} />
-                    <span className="font-mono text-[11px] text-muted-foreground">{issue.identifier}</span>
+                    <span className="shrink-0 font-mono text-[11px] text-text-tertiary">{issue.identifier}</span>
                     <span className="truncate text-[13px]">{issue.title}</span>
                     {issue.assignee ? (
                       <span className="ml-auto shrink-0 text-[11px] text-muted-foreground">@{issue.assignee}</span>

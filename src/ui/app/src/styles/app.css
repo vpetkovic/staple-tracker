@@ -1,12 +1,20 @@
 /*
  * staple's own layer on top of the theme token sheet.
  *
- * Rule of thumb: if it is a value, it belongs in theme-tokens.css (or is already
+ * Rule of thumb: if it is a value, it belongs in the token sheets (or is already
  * there). This file only holds the few places where staple's vocabulary has to be
- * *mapped* onto a token, plus the SVG chrome for the dependency graph, which has
+ * *mapped* onto them, plus the SVG chrome for the dependency graph, which has
  * no Tailwind equivalent.
+ *
+ * geist-tokens.css is inserted BETWEEN the theme sheet and this file.
+ * The order is the mechanism and it is not incidental: the theme sheet keeps owning
+ * the Tailwind `@theme` mapping and the extracted geometry dictionary that the shadcn
+ * primitives reference by name; Geist overrides every value a human can see; this
+ * file has the last word on staple's own vocabulary. Adding a sheet here means
+ * putting it AFTER geist-tokens.css or it will be silently overruled.
  */
 @import "./theme-tokens.css";
+@import "./geist-tokens.css";
 
 /*
  * Status -> hue. The token sheet names one hue per task status, so this is a pure
@@ -49,9 +57,17 @@
  * The card's left edge carries the status colour. It is the one piece of the old
  * vanilla page worth keeping verbatim: at board density the stripe is what makes a
  * column scannable without reading a single word.
+ *
+ * V1 (STA-86) TONED IT RATHER THAN REMOVING IT, and the distinction matters. A 3px
+ * bar of full-saturation hue on the left of every row is the least Vercel/Linear
+ * thing in this app — Linear encodes status in a small leading GLYPH and leaves the
+ * row edge alone, precisely so that a list of forty tickets is not forty stripes.
+ * But which of those two a row uses is a row-design decision, and row design is V5
+ * (STA-97). So this stays at 2px and a mix that sits under the text rather than
+ * competing with it, and V5 is free to delete the class from the row outright.
  */
 .staple-accent-edge {
-  border-left: 3px solid var(--sc, var(--border));
+  border-left: 2px solid color-mix(in oklab, var(--sc, var(--border)) 62%, var(--card));
 }
 
 /* The app owns the viewport; only the scroll regions inside it scroll. */
