@@ -38,7 +38,7 @@
  * — which is ClickUp's own move at width, and, more practically, the only difference
  * worth having. A second layout would be a second thing to keep correct.
  */
-import { ChevronRight, Maximize2, Minimize2, X } from "lucide-react";
+import { ChevronDown, ChevronRight, ChevronUp, Maximize2, Minimize2, X } from "lucide-react";
 import { useCallback, useState, type ReactNode } from "react";
 import { StaleClaimBadge } from "@/components/StaleClaimBadge";
 import { StatusBadge } from "@/components/StatusBadge";
@@ -53,6 +53,7 @@ import { useResource } from "@/lib/useStaple";
 import { cn } from "@/lib/utils";
 import { ErrorState, LoadingState } from "@/views/ViewChrome";
 import type { DetailMode } from "./drawer";
+import type { NavState, NavTarget } from "./navigation";
 import { IssueActions } from "./IssueActions";
 import { InlineLabels, InlinePriority, InlineTitle } from "./InlineProperties";
 import { FactRow, PropertyGrid, type PropertyLayout } from "./PropertyGrid";
@@ -63,12 +64,16 @@ export function IssueDetailPanel({
   selection,
   mode,
   onToggleMode,
+  nav,
+  onNavigate,
   onClose,
   onAuthError,
 }: {
   selection: Selection;
   mode: DetailMode;
   onToggleMode: () => void;
+  nav: NavState;
+  onNavigate: (target: NavTarget | null) => void;
   onClose: () => void;
   onAuthError: (error: AuthError) => void;
 }) {
@@ -127,6 +132,31 @@ export function IssueDetailPanel({
         ) : null}
 
         <div className="ml-auto flex shrink-0 items-center gap-0.5">
+          {/* ── prev/next (R6 / STA-106) ─────────────────────────────────────
+              Left of the frame controls, and separated from them by a hairline,
+              because they are answering a different question. Expand and close act
+              on this panel; these two act on WHICH ISSUE the panel is showing. Three
+              same-sized ghost icon buttons in an undifferentiated row would be four
+              controls that all look like chrome, and the one that navigates you away
+              from the ticket you are reading is the one worth a beat of separation.
+
+              Up is previous and down is next, matching the list they move through —
+              not left/right, which would imply a sequence the list does not have. */}
+          <NavButton
+            direction="prev"
+            target={nav.prev}
+            nav={nav}
+            onNavigate={onNavigate}
+            icon={<ChevronUp className="size-4" />}
+          />
+          <NavButton
+            direction="next"
+            target={nav.next}
+            nav={nav}
+            onNavigate={onNavigate}
+            icon={<ChevronDown className="size-4" />}
+          />
+          <span aria-hidden className="bg-border mx-1 h-4 w-px" />
           <Button
             variant="ghost"
             size="icon"
@@ -166,24 +196,35 @@ export function IssueDetailPanel({
             className={cn(
               "flex w-full flex-col",
               expanded
-                ? // No inner max-width. The first cut capped this at 80rem inside an
-                  // 86rem panel and centred it, which read as a bug: the rail floated
-                  // with ~90px of dead panel to its right while the panel's own edge
-                  // sat further out still. The panel is already the measure — it is
-                  // capped at 86rem for exactly this reason — so the content fills it
-                  // and the padding does the rest.
-                  "gap-8 px-6 pt-6 pb-10 lg:flex-row lg:items-start lg:gap-10 lg:px-10"
+                ? // R3 (STA-104) MOVED THE CAP IN HERE, and it is the same 86rem it
+                  // always was. The panel used to be capped and the content used to
+                  // fill it; the panel is now the whole viewport, so if nothing were
+                  // capped, a 2560px display would give the description a ~200
+                  // character line and strand the property rail a thousand pixels to
+                  // its right — the exact "floating with dead space beside it" bug
+                  // the first cut had, scaled up.
+                  //
+                  // Capping HERE rather than back on the panel is the difference
+                  // between a page and a modal: the chrome bar, the surface and the
+                  // background all still reach the edges; only the reading measure
+                  // is bounded, centred by `mx-auto`. That is what Linear, GitHub and
+                  // ClickUp's task page all do, for the same reason. Below 1376px —
+                  // every laptop this runs on — the cap never engages and this is
+                  // byte-identical to what shipped.
+                  "mx-auto max-w-[86rem] gap-8 px-6 pt-6 pb-10 lg:flex-row lg:items-start lg:gap-10 lg:px-10"
                 : "px-5 pt-5 pb-8 sm:px-6",
             )}
           >
-            {/* The reading measure is capped when expanded, and the rail is pushed to
-                the panel edge with `ml-auto` to absorb what is left over. Without the
-                cap, an 86rem panel gives the description a ~140-character line and the
-                activity timeline a row with the actor at one end and the timestamp
-                1300px away at the other — technically more room, and materially worse
-                to read. 56rem is wide enough for the things that genuinely want width
-                here (the revision diff, the agent payload, a table) and short enough
-                that prose does not turn into a ribbon. */}
+            {/* The reading measure is capped again, INSIDE the 86rem row, and the rail
+                is pushed to the row's edge with `ml-auto` to absorb what is left over.
+                Two caps is not redundancy: 86rem bounds the SURFACE the content sits
+                on (see the container above), and 56rem bounds the PROSE within it.
+                Without the inner one, an 86rem column gives the description a
+                ~140-character line and the activity timeline a row with the actor at
+                one end and the timestamp 1300px away at the other — technically more
+                room, and materially worse to read. 56rem is wide enough for the things
+                that genuinely want width here (the revision diff, the agent payload, a
+                table) and short enough that prose does not turn into a ribbon. */}
             <div className={cn("flex min-w-0 flex-1 flex-col", expanded && "lg:max-w-[56rem]")}>
               {/* Title. Bigger when the panel is bigger — the reading measure
                   roughly doubles on expand, and a 16px heading in an 80rem column
@@ -288,6 +329,65 @@ export function IssueDetailPanel({
         ) : null}
       </div>
     </aside>
+  );
+}
+
+/**
+ * One of the two navigation chevrons.
+ *
+ * The interesting part is the TITLE, which is why this is a component and not two
+ * inline `<Button>`s. A disabled icon button with no explanation is the most
+ * annoying control in any app — it has decided something about your situation and
+ * will not say what — and this one has three genuinely different reasons to be off:
+ *
+ *   - you are at that end of the list (the ordinary one)
+ *   - the panel is showing an issue the visible list does not contain, because you
+ *     arrived here from a blocker chip or a breadcrumb past the filter
+ *   - there is no list to move through at all — the graph view, or a filter that
+ *     matched nothing
+ *
+ * The first is obvious from context; the second and third are not, and a user who
+ * cannot tell them apart concludes the feature is broken. Enabled, the title names
+ * the destination, so the arrow is never a leap of faith.
+ *
+ * `aria-label` stays constant ("Previous task" / "Next task") while the title
+ * varies: the label is the control's identity and must not churn under a screen
+ * reader every time the selection moves.
+ */
+function NavButton({
+  direction,
+  target,
+  nav,
+  onNavigate,
+  icon,
+}: {
+  direction: "prev" | "next";
+  target: NavTarget | null;
+  nav: NavState;
+  onNavigate: (target: NavTarget | null) => void;
+  icon: ReactNode;
+}) {
+  const label = direction === "prev" ? "Previous task" : "Next task";
+  const hint =
+    direction === "prev" ? "K, or Alt+Up" : "J, or Alt+Down";
+
+  let title: string;
+  if (target) title = `${label} — ${target.ref}  (${hint})`;
+  else if (nav.total === 0) title = `${label} — no list to move through in this view`;
+  else if (nav.index < 0) title = `${label} — this issue is not in the current list`;
+  else title = direction === "prev" ? "Already at the top of the list" : "Already at the end of the list";
+
+  return (
+    <Button
+      variant="ghost"
+      size="icon"
+      aria-label={label}
+      title={title}
+      disabled={!target}
+      onClick={() => onNavigate(target)}
+    >
+      {icon}
+    </Button>
   );
 }
 

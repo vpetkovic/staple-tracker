@@ -12,8 +12,19 @@
  * An overlay unpicks both at once. The view underneath does not move, does not
  * reflow, and does not know this exists; the panel is as wide as it wants to be
  * because it is not taking the width from anybody. Once nothing behind it is
- * negotiating for space, "and it can also be nearly full-screen" costs one extra
+ * negotiating for space, "and it can also be the entire screen" costs one extra
  * class list rather than a second layout.
+ *
+ * WHY THE EXPANDED MODE IS STILL A DIALOG WHEN IT LOOKS LIKE A PAGE. R3 (STA-104)
+ * made `full` edge-to-edge with no visible scrim, which is a fair description of a
+ * route. It is deliberately NOT one. A route would need the list's scroll position,
+ * filter state and expansion state to survive a round trip, plus a URL scheme, plus
+ * an answer for what the back button does mid-edit — to arrive at a screen that
+ * already behaves correctly. What page-mode actually needed from us was geometry,
+ * and geometry is a class list. Esc, the focus trap, focus RESTORE to the row you
+ * came from, `aria-modal` and the scroll lock keep working precisely because this
+ * is still a dialog underneath, and every one of them is right for this screen.
+ * See drawer.ts's `panelClass` for the frame argument in full.
  *
  * WHY A MOUNT AND NOT A PROP. This renders next to CommandPaletteMount and
  * CreateIssueMount, above the shell, and takes no props at all: it reads
@@ -30,13 +41,14 @@
  * for this file is the part that is actually staple's: which mode, how wide, and the
  * two places Radix's defaults are wrong for this panel (see onEscapeKeyDown).
  */
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { Dialog as DialogPrimitive, VisuallyHidden } from "radix-ui";
 import type { AuthError } from "@/lib/api";
 import { useSession } from "@/lib/session";
 import { cn } from "@/lib/utils";
-import { loadMode, otherMode, saveMode, type DetailMode } from "./drawer";
+import { loadMode, otherMode, panelClass, saveMode, type DetailMode } from "./drawer";
 import { IssueDetailPanel } from "./IssueDetailPanel";
+import { neighbours, readNavOrder, type NavSource, type NavTarget } from "./navigation";
 import "./detail.css";
 
 /** `window.localStorage` can throw on ACCESS, not just on use, when site data is blocked. */
@@ -49,27 +61,17 @@ function safeStorage(): Storage | undefined {
 }
 
 /**
- * The geometry, per mode, and the only place either number appears.
+ * Is this event coming out of somewhere the user is TYPING?
  *
- *   drawer — 46rem (736px), flush to the right edge, full height. Roughly twice the
- *            old column. The width is chosen against content rather than against a
- *            breakpoint: the widest thing this panel has to render is DocumentDiff's
- *            side-by-side revision compare, which needs two ~40ch columns plus
- *            gutters before it starts wrapping mid-word. `94vw` is the floor so the
- *            drawer is still a drawer on a small laptop rather than a full cover.
- *
- *   full   — inset from every edge and capped at 86rem (1376px). NOT `inset-0`, and
- *            the margin is load-bearing: an overlay that reaches all four edges has
- *            stopped being an overlay and become a page, at which point closing it
- *            feels like navigating back, and the scrim — the thing telling you the
- *            list is still there behind this — has nowhere to show. The cap keeps
- *            the reading measure sane on a 32" display, where a 3000px-wide
- *            description would be unreadable at any font size.
+ * Shared by the Escape handler and the prev/next hotkeys because they are the same
+ * question and must never answer it differently. The panel contains an inline title
+ * editor, a label composer and a comment box; a hotkey that fires while one of them
+ * has the caret is not a hotkey, it is data loss with a keyboard shortcut.
  */
-const PANEL_CLASS: Record<DetailMode, string> = {
-  drawer: "inset-y-0 right-0 w-[min(46rem,94vw)] border-l",
-  full: "inset-2 mx-auto max-w-[86rem] rounded-xl border shadow-xl sm:inset-4 lg:inset-6",
-};
+function isEditingTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  return target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable;
+}
 
 export function IssueDetailMount() {
   const session = useSession();
@@ -103,6 +105,41 @@ export function IssueDetailMount() {
     /* handled by App.tsx, over the window channel api.ts broadcasts on */
   }, []);
 
+  /**
+   * PREV/NEXT (R6 / STA-106). The logic is all in navigation.ts; what is here is the
+   * wiring, and the one thing worth defending is where it lives. The mount already
+   * holds `session` and already owns the frame-level controls (the mode toggle sits
+   * next to these), so the panel keeps taking a small, explicit set of props instead
+   * of learning how to find the list it is floating over.
+   *
+   * `useMemo` and not state: while the DOM bridge in `readNavOrder` is still in play
+   * this is a render-phase read of the rendered treegrid, which is not something to
+   * be proud of and is not something to work around either — a `useEffect` mirror
+   * would only add a frame of staleness to a value that is recomputed from scratch
+   * anyway. When STA-100 publishes `session.visibleOrder` this becomes an ordinary
+   * derivation over plain data and the caveat disappears with the bridge.
+   *
+   * `session.version` is in the deps because it ticks on every poll that changed
+   * anything: the list can be re-ordered, filtered or re-grouped underneath an open
+   * panel, and the arrows must be answering about the list as it is now.
+   */
+  const nav = useMemo(
+    () => neighbours(readNavOrder(session as NavSource), selection),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- see the note above
+    [session.issues.data, session.version, selection, mode],
+  );
+
+  const navigate = useCallback(
+    (target: NavTarget | null) => {
+      // `session.open()` is the single navigation primitive, and using it is what
+      // makes the list highlight follow for free: TreeView passes
+      // `currentRef={selection?.ref}` down to the rows, which render `aria-current`.
+      // The dialog is never closed and reopened — only its selection changes.
+      if (target) session.open(target.workspace, target.ref);
+    },
+    [session],
+  );
+
   return (
     <DialogPrimitive.Root
       open={selection !== null}
@@ -127,7 +164,7 @@ export function IssueDetailMount() {
           aria-describedby={undefined}
           className={cn(
             "staple-detail-panel bg-card text-foreground fixed z-50 flex flex-col overflow-hidden shadow-xl outline-none",
-            PANEL_CLASS[mode],
+            panelClass(mode),
           )}
           /**
            * Radix's default sends focus to the first tabbable thing, which here is
@@ -157,15 +194,48 @@ export function IssueDetailMount() {
            * its descendants are editors.
            */
           onEscapeKeyDown={(event) => {
-            const target = event.target;
-            if (!(target instanceof HTMLElement)) return;
-            if (
-              target.tagName === "INPUT" ||
-              target.tagName === "TEXTAREA" ||
-              target.isContentEditable
-            ) {
-              event.preventDefault();
-            }
+            if (isEditingTarget(event.target)) event.preventDefault();
+          }}
+          /**
+           * PREV/NEXT FROM THE KEYBOARD (R6 / STA-106).
+           *
+           * `J` / `K` — next and previous. Linear's binding for exactly this, and
+           * vim's before it, which is most of the argument: the people who will use a
+           * hotkey to page through tickets are the people who already have these two
+           * in their hands.
+           *
+           * `Alt+ArrowDown` / `Alt+ArrowUp` for everyone else, because a letter key
+           * is not discoverable and the arrows are.
+           *
+           * WHAT IS DELIBERATELY NOT BOUND: bare ArrowUp/ArrowDown. This panel has one
+           * scroll container and can hold a thousand-row activity timeline; taking the
+           * arrow keys away from scrolling to save a modifier would break the panel's
+           * most ordinary interaction to speed up one of its rarest. The modifier is
+           * cheap and scrolling is not.
+           *
+           * The listener sits on Content rather than on the document because Radix
+           * traps focus inside it — everything the user can type while the panel is
+           * open bubbles through here, and nothing else does, so there is no global
+           * listener to install, scope or tear down.
+           */
+          onKeyDown={(event) => {
+            if (event.metaKey || event.ctrlKey) return;
+            if (isEditingTarget(event.target)) return;
+
+            const alt = event.altKey;
+            const key = event.key;
+            const wantsNext = (!alt && key === "j") || (alt && key === "ArrowDown");
+            const wantsPrev = (!alt && key === "k") || (alt && key === "ArrowUp");
+            if (!wantsNext && !wantsPrev) return;
+
+            const target = wantsNext ? nav.next : nav.prev;
+            // Swallow the key even at the ends of the list. Letting a bare `j` fall
+            // through to the page would type it into whatever the app decides to do
+            // with a loose keystroke, and "the shortcut did nothing because you are
+            // at the bottom" is a better outcome than "the shortcut did something
+            // else because you are at the bottom".
+            event.preventDefault();
+            navigate(target);
           }}
         >
           {/*
@@ -190,6 +260,8 @@ export function IssueDetailMount() {
               selection={selection}
               mode={mode}
               onToggleMode={toggleMode}
+              nav={nav}
+              onNavigate={navigate}
               onClose={session.close}
               onAuthError={onAuthError}
             />

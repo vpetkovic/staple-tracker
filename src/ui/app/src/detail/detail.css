@@ -32,15 +32,25 @@
  * matter what the duration says.
  */
 
-/* The scrim. Two weights, because the two modes are making different claims:
+/* The scrim, and the one mode that does not draw it.
  *
- *   drawer  — you are still working in the list; the drawer is a side channel and
- *             the rows behind it must stay readable. Light wash, no blur.
- *   full    — you have left the list. Heavier, with the same 2px blur the dialog
- *             primitive uses, so this reads as the same family of modal.
+ *   drawer — you are still working in the list; the drawer is a side channel and the
+ *            rows behind it must stay readable. Light wash, no blur. Black-alpha
+ *            rather than a token, matching dialog.tsx: a scrim is not a surface, it
+ *            is an absence of one, and it has to work over both themes unchanged.
  *
- * Both are black-alpha rather than a token, matching dialog.tsx: a scrim is not a
- * surface, it is an absence of one, and it has to work over both themes unchanged. */
+ *   full   — nothing. R3 (STA-104) made expanded edge-to-edge, and a scrim under an
+ *            opaque panel that covers the viewport has no pixels to occupy. It is
+ *            zeroed EXPLICITLY rather than left to be covered, because of the 160ms
+ *            where that is not yet true: the panel fades in from 0, and a scrim
+ *            darkening underneath it would show through as a grey wash that resolves
+ *            into the page. One frame of that and the whole thing reads as a modal
+ *            opening, which is the exact impression this ticket exists to remove.
+ *
+ * The element stays MOUNTED in full mode. Radix hangs the scroll lock, the pointer
+ * blocking and the open/closed animation contract off the overlay's presence, not
+ * off its paint, so deleting it to remove a colour would cost three behaviours to
+ * save one declaration. Transparent is the cheap, boring, correct version. */
 .staple-detail-scrim {
   position: fixed;
   inset: 0;
@@ -49,8 +59,8 @@
 }
 
 .staple-detail-scrim[data-mode="full"] {
-  background-color: rgb(0 0 0 / 0.45);
-  backdrop-filter: blur(2px);
+  background-color: transparent;
+  backdrop-filter: none;
 }
 
 @keyframes staple-detail-scrim-in {
@@ -80,8 +90,9 @@
 }
 
 /*
- * The panel. Position and size are Tailwind utilities on the element (they differ
- * per mode and belong next to the rest of the layout); only motion is here.
+ * The panel. Position and size are Tailwind utilities applied to the element from
+ * `drawer.ts`'s `panelClass` (they differ per mode, and the argument for each mode's
+ * geometry belongs beside the mode itself); only motion is here.
  *
  * The `[data-mode]` selectors are doing something slightly clever that is worth
  * naming, because it looks accidental: they are also how EXPANDING is animated.
@@ -109,25 +120,33 @@
   }
 }
 
+/*
+ * Full mode is opacity ONLY, and the missing `scale(0.985)` is the point rather than
+ * an omission. A 1.5% scale on a panel inset from the edges is a modal settling into
+ * place and looks right. The same 1.5% on an edge-to-edge panel pulls all four of
+ * its edges INSIDE the viewport and reveals the list behind them — so the animation
+ * would spend its first frames drawing precisely the inset card R3 removed, and the
+ * expand would read as "a modal appears, then grows to fit". The geometry changed,
+ * so the motion that flattered the old geometry had to go with it.
+ *
+ * The keyframe NAMES are load-bearing and must stay distinct from the drawer's; see
+ * the note above about animation-name being what restarts the animation on expand.
+ */
 @keyframes staple-detail-full-in {
   from {
     opacity: 0;
-    transform: scale(0.985);
   }
   to {
     opacity: 1;
-    transform: scale(1);
   }
 }
 
 @keyframes staple-detail-full-out {
   from {
     opacity: 1;
-    transform: scale(1);
   }
   to {
     opacity: 0;
-    transform: scale(0.985);
   }
 }
 
