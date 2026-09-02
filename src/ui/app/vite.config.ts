@@ -1,17 +1,19 @@
 import { fileURLToPath } from "node:url";
 import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
+import { resolveHome } from "../../config/home.js";
 
 /**
  * Dev-only mirror of the loopback courtesy `src/ui/server.ts` extends to its own
  * page: a tokenless visit to the dev server redirects to `/?token=…` using the
- * CLI's persistent `~/.staple/ui-token`, so plain http://localhost:4401 just works.
- * The token is read per request (rotation needs no vite restart) and the plugin
- * never runs at build time, so nothing token-shaped can reach the bundle.
+ * CLI's persistent `<staple home>/ui-token`, so plain http://localhost:4401 just
+ * works. The home comes from `resolveHome()` — the one sanctioned resolver — so a
+ * relocated or STAPLE_HOME-overridden home is honoured. The token is read per
+ * request (rotation needs no vite restart) and the plugin never runs at build
+ * time, so nothing token-shaped can reach the bundle.
  */
 function seedUiToken(): Plugin {
   return {
@@ -23,7 +25,7 @@ function seedUiToken(): Plugin {
         if (url.pathname !== "/" || url.searchParams.has("token")) return next();
         let token: string;
         try {
-          token = readFileSync(join(homedir(), ".staple", "ui-token"), "utf8").trim();
+          token = readFileSync(join(resolveHome().path, "ui-token"), "utf8").trim();
         } catch {
           return next(); // no token file: fall through to the app's token screen
         }
