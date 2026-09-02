@@ -68,3 +68,55 @@ export const TABS: readonly TabDefinition[] = [
 export function visibleTabs(detail: IssueDetail): TabDefinition[] {
   return TABS.filter((tab) => tab.available?.(detail) ?? true);
 }
+
+/**
+ * ─────────────────────────────────────────────────────────────────────────────
+ * ONE TAB SENDING THE READER TO ANOTHER — W3 (STA-115).
+ *
+ * The seam above is about tabs that mind their own business, and it was right to be.
+ * But the worklog panel on Overview has an honest "Show all" that must land on the
+ * Documents tab with the `worklog` key selected, and nothing in `TabProps` can express
+ * that: the active tab is `useState` inside IssueDetailPanel, and Radix unmounts an
+ * inactive `TabsContent`, so DocumentsTab is not even mounted to be told.
+ *
+ * A window event, following `lib/shell-events.ts` verbatim — the file that exists
+ * because the palette and the create dialog "cannot simply be handed a prop by the
+ * header that now needs to open them". Same shape of problem, same ten-line answer,
+ * and no new context. The panel keeps owning its tab state; this only asks.
+ *
+ * The pinned key is a module variable rather than event detail because the two halves
+ * happen in different places: the panel receives the event and switches tabs, and
+ * DocumentsTab reads the key in its own lazy `useState` initialiser one render later.
+ * Passing it through the event would mean the panel carrying a value it has no use for
+ * down to a tab it knows nothing about, which is the coupling this seam was built to
+ * avoid. It is consumed on read, so it can never re-pin a later visit to the tab.
+ */
+const OPEN_TAB = "staple:detail-open-tab";
+
+let pendingDocumentKey: string | null = null;
+
+/** Ask the detail panel to show `tabId`, optionally pinning a document key on arrival. */
+export function openDetailTab(tabId: string, documentKey?: string): void {
+  pendingDocumentKey = documentKey ?? null;
+  window.dispatchEvent(new CustomEvent(OPEN_TAB, { detail: tabId }));
+}
+
+/** Subscribe the panel that owns the tab state. Returns the unsubscribe, for useEffect. */
+export function onOpenDetailTab(handler: (tabId: string) => void): () => void {
+  const listener = (event: Event) => {
+    const { detail } = event as CustomEvent<string>;
+    if (typeof detail === "string") handler(detail);
+  };
+  window.addEventListener(OPEN_TAB, listener);
+  return () => window.removeEventListener(OPEN_TAB, listener);
+}
+
+/**
+ * The key a tab was asked to open on, or null. CONSUMES it: a reader who later returns
+ * to Documents on their own should get their own default, not last week's pin.
+ */
+export function takePendingDocumentKey(): string | null {
+  const key = pendingDocumentKey;
+  pendingDocumentKey = null;
+  return key;
+}

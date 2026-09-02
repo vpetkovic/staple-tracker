@@ -435,10 +435,26 @@ export function startUiServer(options: UiOptions): UiHandle {
           });
           // One batched liveness query per workspace, not one per row.
           const claims = h.store.claimActivityFor(issues.map((i) => i.id));
+          /**
+           * The same treatment for "when did anyone last leave a handoff" (STA-113).
+           * One batched query per workspace, for the reason spelled out in §2a of the
+           * STA-108 spec: a client-side path would be 114 `/api/document` calls against
+           * a page polled every 1.5s, which is a non-starter rather than a slow option.
+           *
+           * A SIBLING of `issue`, never a field on it — the argument `lib/types.ts`
+           * already makes for `claim` and `pullRequests`. A worklog summary is a
+           * different clock than the issue, and freezing a clock reading into a cached
+           * entity is a lie waiting to happen.
+           */
+          const worklogs = h.store.worklogSummaryFor(issues.map((i) => i.id));
           return issues.map((issue) => ({
             workspace: h.slug,
             issue,
             claim: claims.get(issue.id) ?? null,
+            // Absent-from-the-map becomes an explicit null on the wire, exactly as
+            // `claim` does, so the page never has to tell "no worklog" from "field
+            // missing" — it never invents a fact it was not sent.
+            worklog: worklogs.get(issue.id) ?? null,
           }));
         });
         json(res, 200, out);
@@ -449,9 +465,20 @@ export function startUiServer(options: UiOptions): UiHandle {
         const assignee = url.searchParams.get("assignee") ?? undefined;
         const out = allHandles().map((h) => {
           const inbox = h.store.inbox(assignee || undefined);
-          const claims = h.store.claimActivityFor(
-            [...inbox.ready, ...inbox.blocked].map((i) => i.id),
-          );
+          const entries = [...inbox.ready, ...inbox.blocked];
+          const claims = h.store.claimActivityFor(entries.map((i) => i.id));
+          /**
+           * The same worklog summary `/api/issues` carries (STA-113), from the same store
+           * method, so the two routes cannot disagree about one ticket.
+           *
+           * Attached ONTO the entry beside `claim` rather than beside it, because that is
+           * the shape this route already has — `claim` is spread in here while on
+           * `/api/issues` it sits next to `issue`. `lib/types.ts` documents that
+           * divergence deliberately ("the two endpoints genuinely differ in shape here;
+           * this type follows the wire"). Following the spec's prose instead would put two
+           * different shapes on one route, which is worse than the inconsistency.
+           */
+          const worklogs = h.store.worklogSummaryFor(entries.map((i) => i.id));
           /**
            * A derived-blocked parent (STA-98) has no unblock descriptor of its
            * own — the fact belongs to the blocking CHILD — so the card would
@@ -467,6 +494,7 @@ export function startUiServer(options: UiOptions): UiHandle {
           const withClaim = <T extends { id: string }>(entry: T) => ({
             ...entry,
             claim: claims.get(entry.id) ?? null,
+            worklog: worklogs.get(entry.id) ?? null,
           });
           return {
             workspace: h.slug,

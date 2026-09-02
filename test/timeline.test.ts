@@ -37,10 +37,19 @@ const event = (
   createdAt: at,
 });
 
-const revision = (n: number, at: string, summary: string | null, author: string | null = "opus-detail") =>
-  ({ key: "plan", revision: n, author, changeSummary: summary, createdAt: at }) as DocumentRevision & {
+const revision = (
+  n: number,
+  at: string,
+  summary: string | null,
+  author: string | null = "opus-detail",
+  key = "plan",
+) =>
+  ({ key, revision: n, author, changeSummary: summary, createdAt: at }) as DocumentRevision & {
     key: string;
   };
+
+const worklog = (n: number, at: string, summary: string | null, author: string | null = "opus-detail") =>
+  revision(n, at, summary, author, "worklog");
 
 describe("describeEvent", () => {
   it("drops comment_added — the comment row carries the body, the event carries 120 chars", () => {
@@ -201,5 +210,95 @@ describe("buildTimeline", () => {
 
   it("returns an empty thread rather than throwing when nothing has happened", () => {
     expect(buildTimeline({ comments: [], events: [], revisions: [] })).toEqual([]);
+  });
+});
+
+/**
+ * Promotion of the worklog key (STA-114).
+ *
+ * The contract is narrow on purpose: worklog rows read as checkpoints, and every other
+ * key comes out of the merge exactly as it did before, because an issue with three
+ * documents must not bury its own comments under promoted rows.
+ */
+describe("buildTimeline — worklog checkpoints", () => {
+  it("promotes a worklog revision to a checkpoint and renders its change summary", () => {
+    const merged = buildTimeline({
+      comments: [],
+      events: [],
+      revisions: [worklog(3, "2026-09-01T11:45:00Z", "guard ported, HTTP surface next")],
+    });
+    expect(merged).toHaveLength(1);
+    expect(merged[0]).toMatchObject({
+      kind: "checkpoint",
+      summary: "checkpoint · guard ported, HTTP surface next",
+      actor: "opus-detail",
+      chips: ["worklog r3"],
+    });
+  });
+
+  it("degrades a summary-less checkpoint to the old phrasing rather than to an empty row", () => {
+    const merged = buildTimeline({
+      comments: [],
+      events: [],
+      revisions: [worklog(1, "2026-09-01T11:45:00Z", null)],
+    });
+    expect(merged[0]!.kind).toBe("checkpoint");
+    expect(merged[0]!.summary).toBe("checkpoint · wrote worklog");
+  });
+
+  it("leaves a revision of any other key exactly as it was — kind, words, chip and id", () => {
+    const input = {
+      comments: [],
+      events: [],
+      revisions: [revision(2, "2026-09-01T10:20:00Z", "restore revision 1"), revision(3, "2026-09-01T10:30:00Z", null)],
+    };
+    expect(buildTimeline(input)).toEqual([
+      {
+        id: "revision:plan@2",
+        kind: "revision",
+        at: "2026-09-01T10:20:00Z",
+        actor: "opus-detail",
+        summary: "restore revision 1",
+        chips: ["plan r2"],
+      },
+      {
+        id: "revision:plan@3",
+        kind: "revision",
+        at: "2026-09-01T10:30:00Z",
+        actor: "opus-detail",
+        summary: "wrote plan",
+        chips: ["plan r3"],
+      },
+    ]);
+  });
+
+  it("still borrows the doc_updated actor on a checkpoint whose row has no author", () => {
+    const merged = buildTimeline({
+      comments: [],
+      events: [event(9, "doc_updated", "2026-09-01T11:45:00Z", { key: "worklog", revision: 2 }, "opus-w2")],
+      revisions: [worklog(2, "2026-09-01T11:45:00Z", "done: rail; next: tests", null)],
+    });
+    expect(merged).toHaveLength(1);
+    expect(merged[0]).toMatchObject({ kind: "checkpoint", actor: "opus-w2" });
+  });
+
+  it("promotes on the key the caller names, so the canonical constant can be passed in", () => {
+    const merged = buildTimeline({
+      comments: [],
+      events: [],
+      revisions: [worklog(1, "2026-09-01T11:45:00Z", "not the key in play"), revision(1, "2026-09-01T11:46:00Z", "is")],
+      worklogKey: "plan",
+    });
+    expect(merged.map((e) => e.kind)).toEqual(["revision", "checkpoint"]);
+  });
+
+  it("keeps a checkpoint in its own place in the thread rather than floating it", () => {
+    const at = "2026-09-01T11:45:00Z";
+    const merged = buildTimeline({
+      comments: [comment("c1", at, "same second")],
+      events: [event(1, "status_changed", at, { from: "in_progress", to: "in_review" })],
+      revisions: [worklog(2, at, "handing off")],
+    });
+    expect(merged.map((e) => e.kind)).toEqual(["status", "comment", "checkpoint"]);
   });
 });

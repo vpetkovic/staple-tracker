@@ -15,7 +15,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { action, ApiError, getEvents, getRevisions } from "@/lib/api";
 import { Markdown } from "@/lib/markdown";
-import type { DocumentRevision } from "@/lib/types";
+import { WORKLOG_KEY, type DocumentRevision } from "@/lib/types";
 import { useResource } from "@/lib/useStaple";
 import { cn } from "@/lib/utils";
 import { EmptyState, ErrorState, LoadingState } from "@/views/ViewChrome";
@@ -28,15 +28,28 @@ const stamp = (iso: string) => iso.slice(0, 16).replace("T", " ");
  * The left rail. Status entries borrow the status colour so a run of transitions reads
  * as a colour sequence; everything else stays muted, because a timeline where every
  * row shouts is a timeline nobody scans.
+ *
+ * A worklog checkpoint is the one exception, and it earns it without a hue: this app
+ * spends colour on task status and nothing else, so the checkpoint differs in SHAPE
+ * (a diamond against everything else's dot — the ◆ the spec drew) and in WEIGHT (the
+ * same `--foreground` token the comment rail already uses, carried at a heavier alpha
+ * and a slightly wider square). Scanning a column of dots, the diamond is the row that
+ * says "somebody wrote down how to continue".
  */
 function Rail({ entry }: { entry: TimelineEntry }) {
+  const checkpoint = entry.kind === "checkpoint";
   return (
     <span
       aria-hidden
       data-status={entry.status}
       className={cn(
-        "mt-1.5 h-2 w-2 shrink-0 rounded-full",
-        entry.status ? "status-chip" : entry.kind === "comment" ? "bg-foreground/40" : "bg-muted-foreground/30",
+        "shrink-0",
+        checkpoint
+          ? "mt-2 h-[9px] w-[9px] rotate-45 rounded-[1px] bg-foreground/75"
+          : cn(
+              "mt-1.5 h-2 w-2 rounded-full",
+              entry.status ? "status-chip" : entry.kind === "comment" ? "bg-foreground/40" : "bg-muted-foreground/30",
+            ),
       )}
     />
   );
@@ -52,7 +65,9 @@ function Entry({ entry }: { entry: TimelineEntry }) {
             {entry.actor ?? "system"}
           </span>
           {entry.authorType ? <span>({entry.authorType})</span> : null}
-          <span>{entry.summary}</span>
+          {/* Weight, not hue: a checkpoint's line is the one worth reading in a run of
+              revision rows, so it gets the foreground the muted rows do not. */}
+          <span className={cn(entry.kind === "checkpoint" && "text-foreground")}>{entry.summary}</span>
           <span className="ml-auto font-mono">{stamp(entry.at)}</span>
         </div>
         {entry.chips?.length ? (
@@ -108,12 +123,19 @@ export function ActivityTab({ detail, workspace, onAuthError, refresh }: TabProp
     onAuthError,
   );
 
+  /**
+   * `worklogKey` is passed rather than left to `timeline.ts`'s default: that module
+   * compiles under the Node tsconfig for `test/`, where `@/*` does not resolve, so it
+   * keeps a local literal it cannot check. This file can see the mirror in lib/types,
+   * so the value the UI actually renders comes from one place.
+   */
   const timeline = useMemo(
     () =>
       buildTimeline({
         comments: detail.comments,
         events: events.data ?? [],
         revisions: revisions.data ?? [],
+        worklogKey: WORKLOG_KEY,
       }),
     [detail.comments, events.data, revisions.data],
   );

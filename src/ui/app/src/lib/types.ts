@@ -180,6 +180,12 @@ export interface BlockingChild {
 export interface InboxIssue extends Issue {
   unresolvedBlockers: string[];
   claim: ClaimActivity | null;
+  /**
+   * Latest worklog, or null when nothing has been checkpointed. Spread onto the entry
+   * beside `claim` because that is the shape this route has — see the note above.
+   * Optional here for the same reason it is optional on `IssueRow`.
+   */
+  worklog?: WorklogSummary | null;
   /** Blocked open children, when this row is in the blocked bucket. */
   derivedBlockers: BlockingChild[];
 }
@@ -203,6 +209,45 @@ export interface IssueDocumentMeta {
   updatedAt: string;
   /** Only present when the server was asked for bodies. */
   body?: string;
+}
+
+/**
+ * The document key agents checkpoint under, and the ONE place the app writes that
+ * string down.
+ *
+ * A hand-kept mirror of `WORKLOG_KEY` in src/core/types.ts, for the same reason
+ * everything else in this file is one: the app cannot import Node-only `src/core`.
+ * If the canonical value there changes, change it here.
+ *
+ * Every app-side module that needs the key should import it from HERE rather than
+ * declaring its own — including `lib/worklog.ts`, which STA-108's spec §5d originally
+ * nominated as the owner. A second literal is the exact grep-across-files problem the
+ * constant exists to prevent, and this module is pure and import-free, so a relative
+ * import of it stays typecheckable from `test/` under the Node tsconfig.
+ */
+export const WORKLOG_KEY = "worklog";
+
+/**
+ * The server's summary of the latest worklog, mirroring `WorklogSummary` in
+ * src/core/types.ts. Attached by `/api/issues` and `/api/inbox` (STA-113).
+ *
+ * This is NOT a second reading of claim liveness and must never be rendered as one.
+ * `claim.lastActivityAt` says the holder did something; `updatedAt` says the holder
+ * left a handoff. An agent who is busy and has stopped checkpointing looks live on the
+ * first and stale on the second, and that gap is the entire point of the field.
+ *
+ * Read it, never recompute it: like the claim durations, this is a server reading
+ * refreshed by the fingerprint poll, not something the page ticks locally.
+ */
+export interface WorklogSummary {
+  /** `WORKLOG_KEY` today. A field, not an assumption — do not hardcode it in a view. */
+  key: string;
+  /** How many checkpoints exist, not merely whether one does. */
+  revisions: number;
+  /** ISO-8601. The ONE freshness reading. */
+  updatedAt: string;
+  /** Author of the current revision; null when the writer did not sign it. */
+  author: string | null;
 }
 
 export interface IssueDocument {
@@ -299,6 +344,21 @@ export interface IssueRow {
   issue: Issue;
   /** Liveness of the holder, or null when the issue is not held. One batched query per workspace. */
   claim: ClaimActivity | null;
+  /**
+   * Latest worklog, or null when nothing has been checkpointed (STA-113). One batched
+   * query per workspace, exactly like `claim`.
+   *
+   * A SIBLING of `issue` and not a field on it, for the reason given on `pullRequests`
+   * below: a different clock than the entity.
+   *
+   * The SERVER always sends this field — `/api/issues` writes an explicit null rather
+   * than omitting it, and `test/ui-worklog-summary.test.ts` pins that. It is optional
+   * HERE for the reason §5c of the STA-108 spec gives: a caller that has no summary
+   * (a fixture, a synthesised row) passes nothing, and every view is then obliged to
+   * *check* the field rather than assume it — which is the same discipline that keeps
+   * a missing worklog from ever rendering as a present-but-empty one.
+   */
+  worklog?: WorklogSummary | null;
   /**
    * Linked pull requests, newest-first. OPTIONAL and absent today — see `PullRequestRef`.
    *
