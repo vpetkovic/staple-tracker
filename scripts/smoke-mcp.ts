@@ -454,7 +454,10 @@ try {
   const wsTargetable = coldTools.tools
     .filter((t: any) => t.inputSchema?.properties?.ws)
     .map((t: any) => t.name);
-  assert(wsTargetable.length === 13, `13 workspace tools accept ws targeting (${wsTargetable.length} found)`);
+  // 16 since STA-143 added gate_task, approve_task and request_changes — all
+  // three act on ONE workspace's issue, so all three take `ws` like every other
+  // workspace tool.
+  assert(wsTargetable.length === 16, `16 workspace tools accept ws targeting (${wsTargetable.length} found)`);
   assert(
     !coldByName.get("cross_link").inputSchema.properties?.ws &&
       !coldByName.get("hub_overview").inputSchema.properties?.ws,
@@ -555,11 +558,18 @@ try {
   assert(
     actorTools.join(",") ===
       [
+        // Sorted, so the three gate verbs (STA-143) land where the alphabet puts
+        // them rather than where they were registered. All three are writes and
+        // all three are attributable — a gate with no requester is exactly the
+        // kind of unattributable decision this assertion exists to prevent.
         "add_comment",
+        "approve_task",
         "checkout_task",
         "create_task",
+        "gate_task",
         "put_document",
         "release_task",
+        "request_changes",
         "set_blocked_by",
         "update_task",
       ].join(","),
