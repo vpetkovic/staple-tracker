@@ -141,10 +141,15 @@ describe("placement", () => {
     expect(inProgress.count).toBe(3);
   });
 
-  it("renders the NEAREST missing ancestor only — never a chain of ghosts", () => {
-    // A three-deep family split three ways. The in-progress leaf gets its parent back and
-    // stops there: re-materialising the grandparent too would rebuild the whole tree
-    // inside a status group, which is the one thing grouped mode declines to do.
+  it("renders the WHOLE missing ancestor chain, not only the nearest — O8b (STA-150)", () => {
+    /*
+     * THE CAP THIS FILE USED TO PIN. O3c drew the nearest missing ancestor and stopped,
+     * on the argument that a chain "rebuilds the whole tree inside a status group, which
+     * is the one thing grouped mode declines to do". STA-148 overturns the premise: the
+     * full hierarchy is always visible and context-only ancestors are marked. A reader
+     * shown "part of STA-2" and not "…which is part of STA-1" has been told half of where
+     * the row lives, and the half that was dropped is the half with the epic in it.
+     */
     const rows = [
       row({ id: "g", identifier: "STA-1", status: "backlog" }),
       row({ id: "p", identifier: "STA-2", status: "todo", parentId: "g" }),
@@ -154,13 +159,107 @@ describe("placement", () => {
     const inProgress = buildGroups(rows, openAll).find((g) => g.status === "in_progress")!;
 
     expect(inProgress.rows.map((r) => [r.issue.identifier, r.depth, r.ghost === true])).toEqual([
+      ["STA-1", 0, true],
+      ["STA-2", 1, true],
+      ["STA-3", 2, false],
+    ]);
+    // No ghost wears a chip. Its context is the ghost above it, which says more than a
+    // chip could; the top of the chain has nothing left to name.
+    expect(inProgress.rows.every((r) => r.breadcrumb === null)).toBe(true);
+    // One real row is in this group. The brackets around it are not two more.
+    expect(inProgress.count).toBe(1);
+    // And a bracket is transparent to `+N`: STA-1 hides one TASK, not one bracket.
+    expect(inProgress.rows[0]!.childCount).toBe(1);
+    expect(inProgress.rows[0]!.hasChildren).toBe(true);
+  });
+
+  it("stops the chain at the first ancestor that is a REAL row in the bucket", () => {
+    // The epic is in this group itself, so it is the terminator: a dimmed copy of a row
+    // the reader is looking straight at would be the same fact twice.
+    const rows = [
+      row({ id: "g", identifier: "STA-1", status: "in_progress" }),
+      row({ id: "p", identifier: "STA-2", status: "todo", parentId: "g" }),
+      row({ id: "c", identifier: "STA-3", status: "in_progress", parentId: "p" }),
+    ];
+
+    const inProgress = buildGroups(rows, openAll).find((g) => g.status === "in_progress")!;
+
+    expect(inProgress.rows.map((r) => [r.issue.identifier, r.depth, r.ghost === true])).toEqual([
+      ["STA-1", 0, false],
+      ["STA-2", 1, true],
+      ["STA-3", 2, false],
+    ]);
+    expect(ghosts(inProgress.rows)).toHaveLength(1);
+    // Two real rows; the bracket between them is not a third.
+    expect(inProgress.count).toBe(2);
+    // The real epic hides one TASK behind its fold, not one bracket.
+    expect(inProgress.rows[0]!.childCount).toBe(1);
+  });
+
+  it("inserts a chain ONCE, however many siblings and sub-families hang off it", () => {
+    // Two sub-epics of one epic, none of the three in this group, four leaves between them.
+    // Six ghosts would be one per orphan; three would be one per orphan family per level.
+    // The answer is three: the epic once, each sub-epic once.
+    const rows = [
+      row({ id: "e", identifier: "STA-1", status: "backlog" }),
+      row({ id: "a", identifier: "STA-2", status: "backlog", parentId: "e" }),
+      row({ id: "b", identifier: "STA-3", status: "backlog", parentId: "e" }),
+      row({ id: "a1", identifier: "STA-4", status: "in_progress", parentId: "a" }),
+      row({ id: "a2", identifier: "STA-5", status: "in_progress", parentId: "a" }),
+      row({ id: "b1", identifier: "STA-6", status: "in_progress", parentId: "b" }),
+      row({ id: "b2", identifier: "STA-7", status: "in_progress", parentId: "b" }),
+    ];
+
+    const inProgress = buildGroups(rows, openAll).find((g) => g.status === "in_progress")!;
+
+    expect(inProgress.rows.map((r) => [r.issue.identifier, r.depth, r.ghost === true])).toEqual([
+      ["STA-1", 0, true],
+      ["STA-2", 1, true],
+      ["STA-4", 2, false],
+      ["STA-5", 2, false],
+      ["STA-3", 1, true],
+      ["STA-6", 2, false],
+      ["STA-7", 2, false],
+    ]);
+    expect(ghosts(inProgress.rows)).toHaveLength(3);
+    expect(inProgress.count).toBe(4);
+    // The epic's `+N` counts the four tickets under it, not the two brackets.
+    expect(inProgress.rows[0]!.childCount).toBe(4);
+  });
+
+  it("stops the chain where the ancestor cannot be NAMED, rather than inventing one", () => {
+    // The grandparent is not in the data the page was handed at all. A chain that guessed
+    // would point the reader at a ticket they cannot reach, which is worse than silence.
+    const rows = [
+      row({ id: "p", identifier: "STA-2", status: "todo", parentId: "nowhere" }),
+      row({ id: "c", identifier: "STA-3", status: "in_progress", parentId: "p" }),
+    ];
+
+    const inProgress = buildGroups(rows, openAll).find((g) => g.status === "in_progress")!;
+
+    expect(inProgress.rows.map((r) => [r.issue.identifier, r.depth, r.ghost === true])).toEqual([
       ["STA-2", 0, true],
       ["STA-3", 1, false],
     ]);
-    // And the ghost itself wears no chip up to ITS missing parent: one level, full stop.
-    expect(inProgress.rows[0]!.breadcrumb).toBeNull();
-    // Depth growth is therefore capped at exactly +1, whatever the real tree looks like.
-    expect(Math.max(...inProgress.rows.map((r) => r.depth))).toBe(1);
+  });
+
+  it("terminates on an ancestor CYCLE and still renders the row", () => {
+    // The store should never produce this. If it does, the chain must stop rather than
+    // recurse forever — and unlike a cycle among real rows, the orphan still gets a page.
+    const rows = [
+      row({ id: "a", identifier: "STA-1", status: "backlog", parentId: "b" }),
+      row({ id: "b", identifier: "STA-2", status: "backlog", parentId: "a" }),
+      row({ id: "c", identifier: "STA-3", status: "in_progress", parentId: "a" }),
+    ];
+
+    const inProgress = buildGroups(rows, openAll).find((g) => g.status === "in_progress")!;
+
+    expect(inProgress.rows.map((r) => [r.issue.identifier, r.ghost === true])).toEqual([
+      ["STA-2", true],
+      ["STA-1", true],
+      ["STA-3", false],
+    ]);
+    expect(inProgress.count).toBe(1);
   });
 
   it("gives the ghost the PARENT's rollup, so an epic's progress rides with the bracket", () => {
