@@ -120,7 +120,15 @@ describe("read command renderings", () => {
     expect(out).toBe(
       [
         "HUM-1 · Alpha",
-        "status backlog (v0) · priority high",
+        // STA-124 put `kind` on this line, unconditionally — `show` is the
+        // detail surface, so it names the kind even when it is the default.
+        // `ls`/`tree`/`inbox` rows deliberately do NOT: `line()` suppresses the
+        // default kind, which is why every other golden in this file is
+        // unchanged by that ticket and HUM-1 still renders `◌! HUM-1 …` bare.
+        // Note HUM-1 is a `task` despite having a child: kind is DECLARED, and
+        // migration 005's parents-become-epics backfill only ever ran against
+        // rows that predated it, not against issues a fixture creates.
+        "status backlog (v0) · kind task · priority high",
         // No `path` line: HUM-1 is a root, and the path line is emitted only
         // when there is at least one ancestor — so a top-level issue and a
         // depth-1 child are formatted differently.

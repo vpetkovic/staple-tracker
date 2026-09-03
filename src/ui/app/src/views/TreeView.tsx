@@ -110,6 +110,18 @@ export function TreeView({ onAuthError }: { onAuthError: (error: AuthError) => v
           return (
             <TreeGrid
               rows={rows}
+              /*
+               * O3b (STA-127). The UNFILTERED list, for the collapsed-parent rollup's counts
+               * and nothing else — `rows` above still decides membership, order and
+               * everything the keyboard walks.
+               *
+               * It has to be this array rather than `rows`, because `done` is hidden by the
+               * default filter: a rollup computed from what is on screen would tell an epic
+               * with three finished children and two open ones that it is `0/2`, which is
+               * not a partial answer but the wrong one. No new fetch — `/api/issues` is
+               * unpaged and `session.issues.data` IS the whole list.
+               */
+              allRows={all}
               mode={mode}
               groupBy={groupBy}
               pickup={pickup}

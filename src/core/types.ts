@@ -5,20 +5,27 @@
 import { createHash } from "node:crypto";
 
 /**
- * `awaiting_approval` (STA-143) is a BUILT-IN status with hard-coded semantics,
- * exactly like every other member of this list today. It means: this parent is
- * PARKED behind a human review gate, and everything open underneath it is
- * queued rather than pickable.
+ * The BUILT-IN status vocabulary — the SEED, not the law (STA-140).
  *
- * It ships decoupled from O7a (STA-140), which will later seed it in the
- * settings store with category `gated` — the category distinguishes it from
- * `review`, which means work is FINISHED and ranks READY in the inbox. Until
- * that lands, the "never ready" half of the meaning lives in this file and in
- * `store.inbox()`, not in a category table. When O7a arrives, the seed replaces
- * the hard-coding; nothing about the status's behaviour needs to change.
+ * Since O7a a workspace's statuses live in `workspace_statuses` and are read
+ * through `WorkspaceStore.getStatuses()`. This array is what a database gets
+ * seeded with, and what a surface with no database in hand (the CLI's static
+ * `--help`, a type default) may fall back to. Nothing that has a store should
+ * consult it: an operator who renamed `in_review` or added `needs_qa` is
+ * entitled to have every surface agree with them.
  *
- * Placed between `in_review` and `done` because that is where it sits in the
- * life of a ticket, and because `board` renders its columns in this order.
+ * The ORDER is load-bearing and is preserved verbatim by the seed: it is the
+ * board's column order, pinned by `characterize-cli-surface.test.ts`.
+ *
+ * `awaiting_approval` (STA-143) is a member like any other, and that is the
+ * whole point of it living here rather than in a hard-coded guard: it means
+ * "this parent is PARKED behind a human review gate, and everything open
+ * underneath it is queued rather than pickable", and it gets that meaning from
+ * its CATEGORY (`gated`), not from its id. The gate commands are the only way in
+ * or out of it, but every guard that reads it — inbox partition, list rank,
+ * derived rungs, resolved-ness — reads the category, exactly as it does for
+ * `blocked` or `in_review`. Placed between `in_review` and `done` because that
+ * is where it sits in the life of a ticket.
  */
 export const ISSUE_STATUSES = [
   "backlog",
@@ -30,9 +37,219 @@ export const ISSUE_STATUSES = [
   "blocked",
   "cancelled",
 ] as const;
-export type IssueStatus = (typeof ISSUE_STATUSES)[number];
 
-export const OPEN_STATUSES: readonly IssueStatus[] = [
+/** The eight ids staple seeds. A configured workspace may have others. */
+export type BuiltinIssueStatus = (typeof ISSUE_STATUSES)[number];
+
+/**
+ * A status id — a STRING, deliberately, since STA-140.
+ *
+ * It was a closed union of the seven built-ins, and it could not stay one: the
+ * whole point of O7 is that a workspace adds its own. A union would have forced
+ * every configured id through a cast at the boundary and, worse, would have
+ * pushed `z.enum(ISSUE_STATUSES)` into the MCP OUTPUT schemas, where zod strips
+ * what it does not recognise — a custom status would have vanished off the wire
+ * silently. `BuiltinIssueStatus` above keeps the narrow type for the places that
+ * genuinely mean "one of the seeded seven".
+ *
+ * Validation moved with the data: `WorkspaceStore.assertConfiguredStatus`.
+ */
+export type IssueStatus = string;
+
+/**
+ * The fixed, NON-configurable set of behaviours a status can have (STA-140).
+ *
+ * This is the design constraint that keeps the store honest. Statuses are data;
+ * their SEMANTICS are not. Every guard, every derived parent rung, every "is this
+ * finished" test and the whole inbox pickup order key off the CATEGORY, so a
+ * custom status inherits a behaviour that already has tests instead of inventing
+ * one nothing knows how to enforce.
+ *
+ *  - `unstarted` — in the backlog; workable, claimable, not started.
+ *  - `ready`     — queued for pickup; workable, claimable. `release` lands here.
+ *  - `active`    — work is happening. A claim can only ever be held here.
+ *  - `review`    — waiting on a reviewer. Not execution: see `IssueTiming.reviewSeconds`.
+ *  - `gated`     — parked awaiting an approval that is not a dependency (STA-143).
+ *                  Seeded with `awaiting_approval`. Open, not workable, not
+ *                  claimable, and NEVER ready in the inbox — a member of this
+ *                  category is entered and left only by the gate commands
+ *                  (`gate` / `approve` / `request-changes`), never by
+ *                  `updateIssue`, and a parent sitting in it is immune to the
+ *                  derived-parent rungs in BOTH directions. Add your own member
+ *                  and it inherits all of that; nothing keys off the id.
+ *  - `blocked`   — waiting on something nameable. Claimable, because taking a
+ *                  blocked ticket to unblock it is how work gets unstuck.
+ *  - `done`      — resolved, succeeded.
+ *  - `cancelled` — resolved, abandoned.
+ */
+export const STATUS_CATEGORIES = [
+  "unstarted",
+  "ready",
+  "active",
+  "review",
+  "gated",
+  "blocked",
+  "done",
+  "cancelled",
+] as const;
+export type StatusCategory = (typeof STATUS_CATEGORIES)[number];
+
+/** Categories whose members mean "this issue is finished, in either direction". */
+export const RESOLVED_CATEGORIES: readonly StatusCategory[] = ["done", "cancelled"];
+
+/** Categories an agent may pick work up from — the derivation's "workable band". */
+export const WORKABLE_CATEGORIES: readonly StatusCategory[] = ["unstarted", "ready"];
+
+/**
+ * The rank a list sorts open-then-resolved work by, as CATEGORIES.
+ *
+ * For the seeded seven this reproduces the previous hardcoded
+ * `CASE status WHEN 'in_progress' THEN 0 WHEN 'in_review' THEN 1 …` exactly.
+ * Configured order breaks ties WITHIN a tier, which is what makes "reorder the
+ * statuses and the tree reorders" true without letting a reorder move `done`
+ * above `in_progress`.
+ */
+export const LIST_CATEGORY_ORDER: readonly StatusCategory[] = [
+  "active",
+  "review",
+  "gated",
+  "blocked",
+  "ready",
+  "unstarted",
+  "done",
+  "cancelled",
+];
+
+/** Pickup order for the agent inbox: current work first, then reviews, then queue. */
+export const INBOX_PICKUP_CATEGORY_ORDER: readonly StatusCategory[] = [
+  "active",
+  "review",
+  "ready",
+  "unstarted",
+];
+
+/**
+ * What a bare `checkout` will claim from, as categories — and in this order,
+ * because the order is quoted verbatim in the refusal sentence.
+ */
+export const CHECKOUT_EXPECTED_CATEGORY_ORDER: readonly StatusCategory[] = [
+  "ready",
+  "unstarted",
+  "blocked",
+];
+
+/**
+ * Categories the CODE writes into, so the last status in one may never be removed.
+ *
+ * `release` writes `ready`, `checkout` writes `active`, `done`/`cancel` write
+ * theirs, the derivation's rung 4 writes `blocked` and its rung 3 writes
+ * `unstarted`. `review` is absent on purpose: nothing can enter a category with
+ * no members, so emptying it is a coherent configuration.
+ *
+ * `gated` is absent for the same reason, and it is worth being explicit about
+ * why, since `gate` DOES write into it: `gateIssue` resolves its target status
+ * through the CATEGORY rather than naming `awaiting_approval`, and refuses with
+ * a configuration error when the category is empty. A team that does not review
+ * may remove `awaiting_approval` and lose the gate command; it may not remove it
+ * and keep a gate command that writes a status the workspace does not have.
+ */
+export const REQUIRED_STATUS_CATEGORIES: readonly StatusCategory[] = [
+  "unstarted",
+  "ready",
+  "active",
+  "blocked",
+  "done",
+  "cancelled",
+];
+
+/**
+ * Built-in status seed rows, in seed order — what a fresh workspace starts with.
+ *
+ * Migration 004 writes these into the tables it creates, and `schema.ts` writes
+ * them on the consolidated fresh-create path. A database that was already
+ * stamped 4 or 5 before `awaiting_approval` joined this list was seeded WITHOUT
+ * it, which is exactly what migration 006 exists to repair — see
+ * `006-approval-gates.ts`.
+ */
+export const BUILTIN_STATUS_SEED: readonly { id: BuiltinIssueStatus; label: string; category: StatusCategory }[] = [
+  { id: "backlog", label: "Backlog", category: "unstarted" },
+  { id: "todo", label: "Todo", category: "ready" },
+  { id: "in_progress", label: "In Progress", category: "active" },
+  { id: "in_review", label: "In Review", category: "review" },
+  { id: "awaiting_approval", label: "Awaiting Approval", category: "gated" },
+  { id: "done", label: "Done", category: "done" },
+  { id: "blocked", label: "Blocked", category: "blocked" },
+  { id: "cancelled", label: "Cancelled", category: "cancelled" },
+];
+
+/**
+ * The BUILT-IN kind vocabulary — the seed for `workspace_kinds` (STA-140).
+ *
+ * O1a (STA-124) adds `issues.kind` and reads the RUNTIME list through
+ * `WorkspaceStore.getKinds()`; this export is what seeds it and what a surface
+ * with no store may name as the default vocabulary. `DEFAULT_ISSUE_KIND` is the
+ * value that column will default to.
+ */
+export const ISSUE_KINDS = ["epic", "task", "bug", "chore", "spike"] as const;
+export type BuiltinIssueKind = (typeof ISSUE_KINDS)[number];
+/** A kind id — a string for exactly the reason `IssueStatus` is one. */
+export type IssueKind = string;
+export const DEFAULT_ISSUE_KIND: BuiltinIssueKind = "task";
+
+export const BUILTIN_KIND_SEED: readonly { id: BuiltinIssueKind; label: string }[] = [
+  { id: "epic", label: "Epic" },
+  { id: "task", label: "Task" },
+  { id: "bug", label: "Bug" },
+  { id: "chore", label: "Chore" },
+  { id: "spike", label: "Spike" },
+];
+
+/**
+ * Sort/group rank for the SEEDED kinds — the exact twin of `OPEN_STATUS_ORDER`
+ * below, and used the same way.
+ *
+ * The per-workspace answer is `WorkspaceStore.kindOrder()`, whose INDEX is the
+ * rank; this map is what a surface with no store may use instead. That surface
+ * is the browser: `src/ui/app` cannot import this file (src/core is Node-only),
+ * so it keeps a hand mirror, and grouping a board by kind needs a rank from
+ * somewhere. A kind the operator added is absent from this map — callers sort
+ * it last rather than first, on the same principle as `statusRankSql`: a value
+ * nobody configured belongs at the bottom, not the top of everyone's list.
+ */
+export const KIND_RANK: Readonly<Record<BuiltinIssueKind, number>> = Object.freeze(
+  Object.fromEntries(ISSUE_KINDS.map((kind, index) => [kind, index])) as Record<
+    BuiltinIssueKind,
+    number
+  >,
+);
+
+/** One configured status row, in configured order. */
+export interface WorkspaceStatus {
+  id: string;
+  label: string;
+  category: StatusCategory;
+  sortOrder: number;
+  /** True for a row migration 004 seeded. Informational — built-ins are editable. */
+  isBuiltin: boolean;
+}
+
+/** One configured kind row, in configured order. */
+export interface WorkspaceKind {
+  id: string;
+  label: string;
+  sortOrder: number;
+  isBuiltin: boolean;
+}
+
+/**
+ * Vocabulary ids are lowercase snake_case, and that is enforced rather than
+ * suggested: they are interpolated into `IN (…)` and `CASE` SQL fragments the
+ * store builds per query, they are dictionary keys on the wire, and they end up
+ * in URLs. A closed character set is what makes all three safe at once.
+ */
+export const VOCABULARY_ID_PATTERN = /^[a-z][a-z0-9_]{0,31}$/;
+
+export const OPEN_STATUSES: readonly BuiltinIssueStatus[] = [
   "backlog",
   "todo",
   "in_progress",
@@ -40,16 +257,33 @@ export const OPEN_STATUSES: readonly IssueStatus[] = [
   "awaiting_approval",
   "blocked",
 ];
-export const RESOLVED_STATUSES: readonly IssueStatus[] = ["done", "cancelled"];
+export const RESOLVED_STATUSES: readonly BuiltinIssueStatus[] = ["done", "cancelled"];
+
+/**
+ * Built-in open statuses in list rank — the server-side twin of the UI mirror's
+ * `OPEN_STATUS_ORDER`, which is where this constant used to live alone. The
+ * per-workspace answer is `WorkspaceStore.openStatusOrder()`; this is the seed.
+ */
+export const OPEN_STATUS_ORDER: readonly BuiltinIssueStatus[] = [
+  "in_progress",
+  "in_review",
+  "awaiting_approval",
+  "blocked",
+  "todo",
+  "backlog",
+];
 
 /**
  * Pickup order for the agent inbox: current work first, then reviews, then queue.
  *
- * `awaiting_approval` is deliberately ABSENT. A parked parent is never picked
- * up — that is the whole point of parking it — so it has no place in a pickup
- * order, and `store.inbox()` routes it to the `queued` bucket instead.
+ * `awaiting_approval` is deliberately ABSENT, and it is absent BY CATEGORY: the
+ * per-workspace answer is `WorkspaceStore.inboxPickupOrder()`, which filters on
+ * `INBOX_PICKUP_CATEGORY_ORDER`, and `gated` is not in it. A parked parent is
+ * never picked up — that is the whole point of parking it — so it has no place
+ * in a pickup order, and `store.inbox()` routes it to the `queued` bucket
+ * instead. Any status an operator files under `gated` inherits that.
  */
-export const INBOX_PICKUP_ORDER: readonly IssueStatus[] = [
+export const INBOX_PICKUP_ORDER: readonly BuiltinIssueStatus[] = [
   "in_progress",
   "in_review",
   "todo",
@@ -142,7 +376,13 @@ export type IssuePriority = (typeof ISSUE_PRIORITIES)[number];
 export const COMMENT_AUTHOR_TYPES = ["user", "agent", "system"] as const;
 export type CommentAuthorType = (typeof COMMENT_AUTHOR_TYPES)[number];
 
-export const DEFAULT_CHECKOUT_EXPECTED: readonly IssueStatus[] = [
+/**
+ * Built-in fallback for a bare checkout. The per-workspace answer is
+ * `WorkspaceStore.checkoutExpectedStatuses()`, derived from
+ * `CHECKOUT_EXPECTED_CATEGORY_ORDER`; this list is what that derivation produces
+ * for the seeded seven, and it is kept so a caller without a store can name one.
+ */
+export const DEFAULT_CHECKOUT_EXPECTED: readonly BuiltinIssueStatus[] = [
   "todo",
   "backlog",
   "blocked",
@@ -158,6 +398,20 @@ export interface Issue {
   description: string | null;
   status: IssueStatus;
   statusVersion: number;
+  /**
+   * What KIND of work this is — `epic`, `bug`, `spike`, whatever this workspace
+   * configured (STA-124). Never null: migration 005 gave the column a DEFAULT,
+   * so "no kind recorded" is not a state that exists. Every issue has always had
+   * a kind; before that migration the tracker just had nowhere to write it down.
+   *
+   * DECLARED, not derived — and that is the whole design. A `task` that grows
+   * children stays a `task` until a human says otherwise; the UI may SUGGEST
+   * promoting it to an epic, but nothing recomputes this field behind their
+   * back. The one and only automatic write was migration 005's one-shot
+   * backfill of rows that already had children, which exists to give a
+   * pre-existing backlog a sensible starting shape and never runs again.
+   */
+  kind: IssueKind;
   priority: IssuePriority;
   parentId: string | null;
   depth: number;
@@ -365,8 +619,12 @@ export interface IssueTiming {
    * own `activeSeconds` is already null.
    */
   childrenActiveSeconds: number | null;
-  /** Direct children per status. Every status is present, zeros included. */
-  childStatusCounts: Record<IssueStatus, number>;
+  /**
+   * Direct children per status. Every CONFIGURED status is present, zeros
+   * included — so since STA-140 the key set is the workspace's own vocabulary
+   * rather than a fixed seven, which is why the type is an open record.
+   */
+  childStatusCounts: Record<string, number>;
 }
 
 /**
@@ -686,10 +944,36 @@ export function decodeSeqCursor(cursor: string): number {
   return payload.s;
 }
 
-export function assertStatus(value: string): asserts value is IssueStatus {
-  if (!(ISSUE_STATUSES as readonly string[]).includes(value)) {
-    throw new StapleError("validation", `Unknown status "${value}". Valid: ${ISSUE_STATUSES.join(", ")}`);
+/**
+ * There is deliberately no `assertStatus` here any more (STA-140).
+ *
+ * The authority on "is this a status" is `WorkspaceStore.assertConfiguredStatus`,
+ * which reads `workspace_statuses` — because the answer is a property of the
+ * WORKSPACE, and a module-level checker against the seeded seven would give the
+ * wrong answer for every workspace that configured its own. A second validator
+ * that is right most of the time is exactly how the two drift apart.
+ */
+export function assertStatusCategory(value: string): asserts value is StatusCategory {
+  if (!(STATUS_CATEGORIES as readonly string[]).includes(value)) {
+    throw new StapleError(
+      "validation",
+      `Unknown status category "${value}". Valid: ${STATUS_CATEGORIES.join(", ")}. ` +
+        "The category set is fixed — every behaviour in the store keys off it.",
+    );
   }
+}
+
+/** Normalize and validate a vocabulary id (status or kind). Returns the id. */
+export function assertVocabularyId(value: string, what: "status" | "kind"): string {
+  const id = value.trim().toLowerCase();
+  if (!VOCABULARY_ID_PATTERN.test(id)) {
+    throw new StapleError(
+      "validation",
+      `"${value}" is not a usable ${what} id. Use lowercase letters, digits and underscores, ` +
+        "starting with a letter, at most 32 characters (e.g. awaiting_approval).",
+    );
+  }
+  return id;
 }
 
 export function assertPriority(value: string): asserts value is IssuePriority {

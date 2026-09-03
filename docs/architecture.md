@@ -7,7 +7,7 @@
 | Core store | `src/core/store.ts` | Issues, guards, claims, dependencies — see [semantics.md](semantics.md) |
 | Hub | `src/core/hub.ts` | Workspace registry, unique prefixes, cross-workspace links, holistic views |
 | Agent guide | `src/core/agents-template.ts` | The working protocol `init` writes to `.staple/AGENTS.md` |
-| MCP server | `src/mcp.ts` | 16 stdio tools — the whole agent surface |
+| MCP server | `src/mcp.ts` | 20 stdio tools — the whole agent surface |
 | CLI | `src/cli.ts` | Human/CI mirror of the tools |
 | Web UI server | `src/ui/server.ts` | `staple open`: token-gated JSON API + serves the built app; per-workspace or `--hub` |
 | Web UI app | `src/ui/app/` | Vite + React + shadcn/ui (new-york) — inbox, board, tree, dependency graph, detail panel |

@@ -72,12 +72,12 @@ const COMMANDS: ReadonlyArray<{
     name: "new",
     strings: [
       "db", "ws", "description", "priority", "parent", "assignee", "blocked-by", "status",
-      "criteria", "estimate",
+      "kind", "criteria", "estimate",
     ],
     booleans: ["json", "allow-duplicate", "no-estimate"],
     shorts: ["d", "p"],
   },
-  { name: "ls", strings: ["db", "ws", "status", "assignee", "q"], booleans: ["json", "all"], shorts: ["q"] },
+  { name: "ls", strings: ["db", "ws", "status", "kind", "assignee", "q"], booleans: ["json", "all"], shorts: ["q"] },
   { name: "show", strings: ["db", "ws"], booleans: ["json"], shorts: [] },
   { name: "checkout", strings: ["db", "ws", "agent", "steal-if-stale"], booleans: ["json"], shorts: [] },
   { name: "start", strings: ["db", "ws", "agent", "steal-if-stale"], booleans: ["json"], shorts: [] },
@@ -372,16 +372,38 @@ describe("help surface", () => {
   it("pins the help section headings a reader navigates by", () => {
     const help = cli("help").stdout;
     const headings = help.split("\n").filter((l) => /^[A-Z][A-Za-z &]*$/.test(l));
-    expect(headings).toEqual(["Workspace", "Tasks", "Flow", "Approval gates", "Documents & events", "UI"]);
+    // "Approval gates" arrived with STA-143 and sits with the flow it belongs to;
+    // "Workspace vocabulary" arrived with STA-140 (staple statuses / kinds) and sits
+    // last, after the global flags, because it is configuration rather than work.
+    expect(headings).toEqual([
+      "Workspace",
+      "Tasks",
+      "Flow",
+      "Approval gates",
+      "Documents & events",
+      "UI",
+      "Workspace vocabulary",
+    ]);
   });
 
   it("pins the global-flag and status footer scripts read", () => {
     const help = cli("help").stdout;
     expect(help).toContain("Global flags: --db <path>, --ws <slug|prefix>  (default: walk up for .staple/staple.db,");
-    // ISSUE_STATUSES order, verbatim — `board` renders its columns in exactly
-    // this sequence, so `done` sitting BEFORE `blocked` is load-bearing, not a
-    // typo in the help text.
-    expect(help).toContain("Statuses: backlog todo in_progress in_review awaiting_approval done blocked cancelled");
+    /**
+     * ISSUE_STATUSES order, verbatim — `board` renders its columns in exactly
+     * this sequence for a DEFAULT workspace, so `done` sitting BEFORE `blocked`
+     * is load-bearing, not a typo in the help text.
+     *
+     * STA-140 made the footer say "built-in seed" out loud, because `staple help`
+     * has no workspace in hand and can only ever print the seed — the workspace's
+     * actual set comes from `staple statuses ls`. STA-143 added
+     * `awaiting_approval` to that seed, between `in_review` and `done`, which is
+     * where the life of a ticket puts it.
+     */
+    expect(help).toContain("Statuses (built-in seed;");
+    expect(help).toContain(
+      "backlog todo in_progress in_review awaiting_approval done blocked cancelled",
+    );
   });
 
   /**

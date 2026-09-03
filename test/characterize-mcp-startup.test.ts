@@ -1,7 +1,7 @@
 /**
  * A1 — MCP SERVER STARTUP and workspace-less behaviour, frozen before A2 and B1.
  *
- * `contract-mcp.test.ts` already pins the 16-tool inventory, every annotation,
+ * `contract-mcp.test.ts` already pins the 20-tool inventory, every annotation,
  * and every tool payload — that ground is covered and is deliberately not
  * repeated here. What it never touches is the process boundary AROUND those
  * tools: the readiness banner the server writes to stderr, and what happens when
@@ -130,11 +130,13 @@ describe("a server started with no workspace in reach", () => {
     await client?.close();
   });
 
-  it("still connects and still lists all 19 tools", async () => {
+  it("still connects and still lists all 23 tools", async () => {
     const { tools } = await client.listTools();
     // The inventory does not shrink when there is nowhere to write: a harness
     // configured before the user ever ran `init` sees the full tool set.
-    expect(tools).toHaveLength(19);
+    // 16 before this merge, plus STA-140's four vocabulary tools and STA-143's
+    // three gate verbs.
+    expect(tools).toHaveLength(23);
   });
 
   it("pins the not_found guidance a read tool returns instead of an empty result", async () => {

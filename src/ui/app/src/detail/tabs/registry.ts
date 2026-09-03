@@ -41,9 +41,24 @@ import { DocumentsTab } from "./DocumentsTab";
 import { ActivityTab } from "./ActivityTab";
 import { AgentViewTab } from "./AgentViewTab";
 import { AnalyticsTab } from "./AnalyticsTab";
+import { RelationsTab } from "./RelationsTab";
 
 export const TABS: readonly TabDefinition[] = [
   { id: "overview", label: "Overview", component: OverviewTab },
+  /**
+   * O2b (STA-132) — the ticket's place in the plan, on a mini canvas.
+   *
+   * SECOND, straight after Overview, because it answers the question a reader has while
+   * still looking at Overview: "what is this attached to?". Overview lists the relations
+   * as chips; this draws them, and the two belong next to each other rather than either
+   * side of the activity feed.
+   *
+   * NO `available` predicate, deliberately, and for the same reason Analytics has none:
+   * a ticket with nothing attached to it is a fact worth being able to check, and a tab
+   * that vanishes teaches nobody that the feature exists. The tab renders "no relations"
+   * rather than an empty canvas, which is the honest version of the same answer.
+   */
+  { id: "relations", label: "Relations", component: RelationsTab },
   {
     id: "documents",
     label: "Documents",

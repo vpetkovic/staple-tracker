@@ -32,7 +32,7 @@ describe("encode / decode", () => {
     const original = state({
       mode: "path",
       doneMode: "hide",
-      epicFilter: "STA-24",
+      epicFilters: ["STA-24", "STA-30"],
       collapsed: ["STA-1", "STA-12"],
       target: "STA-37",
     });
@@ -41,7 +41,7 @@ describe("encode / decode", () => {
 
   it("produces a legible value with no percent-encoding", () => {
     const encoded = encodeGraphView(
-      state({ mode: "path", doneMode: "hide", epicFilter: "STA-24", collapsed: ["STA-1"], target: "STA-37" }),
+      state({ mode: "path", doneMode: "hide", epicFilters: ["STA-24"], collapsed: ["STA-1"], target: "STA-37" }),
     );
     expect(encoded).toBe("ph_STA-24_STA-1_STA-37");
     // The whole reason for `_` and `.`: URLSearchParams must leave them alone.
@@ -75,7 +75,7 @@ describe("decoding is total", () => {
     expect(decodeGraphView("f")).toEqual({
       mode: "frontier",
       doneMode: "show",
-      epicFilter: null,
+      epicFilters: [],
       collapsed: [],
       target: null,
     });
@@ -88,7 +88,7 @@ describe("decoding is total", () => {
     expect(decoded).toEqual({
       mode: "frontier",
       doneMode: "show",
-      epicFilter: "STA-24",
+      epicFilters: ["STA-24"],
       collapsed: ["STA-1"],
       target: "STA-37",
     });
@@ -128,5 +128,78 @@ describe("withGraphView", () => {
     const next = new URL(withGraphView(withWs, state({ doneMode: "hide" })));
     expect(next.searchParams.get("ws")).toBe("staple");
     expect(next.searchParams.get("token")).toBe("T");
+  });
+});
+
+/**
+ * ── O4b (STA-134): the filter went plural, and old links still have to open ──────────
+ *
+ * The single `epicFilter` became `epicFilters[]`. The promise that costs something is
+ * the second one: every graph link anyone has already pasted into a doc, a ticket or a
+ * Slack thread was written by the old encoder, nobody can go back and reissue them, and
+ * the person opening one cannot fix it. A link that 404s the view is a feature that
+ * broke silently for everyone who was using it well.
+ */
+describe("epic filters (O4b)", () => {
+  it("round-trips several epics", () => {
+    const many = state({ epicFilters: ["STA-24", "STA-30", "STA-31"] });
+    expect(decodeGraphView(encodeGraphView(many))!.epicFilters).toEqual([
+      "STA-24",
+      "STA-30",
+      "STA-31",
+    ]);
+  });
+
+  it("stays legible — the list is `.`-joined and URLSearchParams leaves it alone", () => {
+    const encoded = encodeGraphView(
+      state({ mode: "path", doneMode: "hide", epicFilters: ["STA-24", "STA-30"], collapsed: ["STA-1"] }),
+    );
+    expect(encoded).toBe("ph_STA-24.STA-30_STA-1_");
+    expect(new URLSearchParams({ [GRAPH_PARAM]: encoded }).toString()).toContain(encoded);
+  });
+
+  it("sorts and de-duplicates, so the same view is always the same link", () => {
+    const a = encodeGraphView(state({ epicFilters: ["STA-30", "STA-24"] }));
+    const b = encodeGraphView(state({ epicFilters: ["STA-24", "STA-30", "STA-24"] }));
+    expect(a).toBe(b);
+  });
+
+  it("OPENS AN OLD LINK that carried a single epicFilter", () => {
+    // Written by the pre-O4b encoder, byte for byte. A scalar is a one-element list, so
+    // this needs no version flag and no legacy branch — see decodeGraphView.
+    const legacy = "ph_STA-24_STA-1.STA-12_STA-37";
+    expect(decodeGraphView(legacy)).toEqual({
+      mode: "path",
+      doneMode: "hide",
+      epicFilters: ["STA-24"],
+      collapsed: ["STA-1", "STA-12"],
+      target: "STA-37",
+    });
+  });
+
+  it("re-encodes an old link to the new shape without changing what it means", () => {
+    const decoded = decodeGraphView("ph_STA-24_STA-1_STA-37")!;
+    expect(encodeGraphView(decoded)).toBe("ph_STA-24_STA-1_STA-37");
+  });
+
+  it("treats an empty filter field as the whole graph, not as an epic named ''", () => {
+    expect(decodeGraphView("os__STA-1_")!.epicFilters).toEqual([]);
+    expect(decodeGraphView("os_..._")!.epicFilters).toEqual([]);
+  });
+
+  it("keeps selection and collapse in separate fields", () => {
+    // The bug this ticket exists to kill is the two being confused. In the link they are
+    // two fields, so a change to one cannot move the other.
+    const selectedOnly = encodeGraphView(state({ epicFilters: ["STA-24"] }));
+    const collapsedOnly = encodeGraphView(state({ collapsed: ["STA-24"] }));
+    expect(selectedOnly).not.toBe(collapsedOnly);
+    expect(decodeGraphView(selectedOnly)!.collapsed).toEqual([]);
+    expect(decodeGraphView(collapsedOnly)!.epicFilters).toEqual([]);
+  });
+
+  it("drops the parameter for a state with no filters and nothing collapsed", () => {
+    const href = "http://127.0.0.1:4400/?token=T";
+    const next = withGraphView(href, state({ epicFilters: [] }));
+    expect(new URL(next).searchParams.has(GRAPH_PARAM)).toBe(false);
   });
 });

@@ -39,21 +39,44 @@
  * the gap between the issues fetch and the inbox fetch. It reads the row's own `status`
  * field and derives nothing, so it cannot become a rival definition of ready.
  *
- * ── PICKUP MODE IS A QUEUE, NOT A TREE ────────────────────────────────────────────────
+ * ── PICKUP MODE IS A QUEUE, AND SINCE O8a IT IS ALSO A TREE ───────────────────────────
  *
- * Rows render FLAT, at depth 0, in the store's order, wearing a parent breadcrumb chip
- * instead of an indent. This is a real trade and it is the right one: nesting a child under
- * its parent moves it off its rank, and a dependency-ordered queue whose items are not in
- * order has stopped being a queue. tree-model.ts already accepts the smaller version of this
- * trade for status grouping ("you do not see the whole tree in one place"); a pickup queue
- * takes it one step further, and gets to skip the flatten and expansion machinery entirely
- * as a result.
+ * Rows used to render FLAT, at depth 0, in the store's order, wearing a parent breadcrumb
+ * chip instead of an indent. The argument was that nesting a child under its parent moves
+ * it off its rank, and a dependency-ordered queue whose items are not in order has stopped
+ * being a queue. O3c (STA-128) then carved out one exception — a parent that is not in this
+ * section at all has no rank here, so it may be drawn as a dimmed GHOST bracketing its
+ * orphans — and left a parent that IS in the section flat.
+ *
+ * STA-148 rejected that, and rightly. The exception had already conceded the principle:
+ * ghost blocks lift orphans out of strict rank order, and the sections are themselves a far
+ * coarser reordering than any indent. What the flat rule actually produced was one family
+ * reading as a unit under group-by-status and as unrelated rows one menu entry away — the
+ * screenshot is STA-25 and STA-40 in Up next, the child flat and chipped a row below its
+ * own parent. GROUPING IS A PRESENTATION LAYER: the same rows, the same hierarchy, the same
+ * row behaviour, arranged under different headings.
+ *
+ * So O8a (STA-149) hands the placement to `nesting.ts` — the same call `flatten` makes —
+ * and this file keeps exactly the two things that are its own:
+ *
+ *   THE ORDER. The store's, never re-sorted. A parent sits at its OWN rank; its children
+ *   keep the store's order among themselves; a ghost still lands at its best-ranked
+ *   orphan's position. Nothing moves ahead of a row it ranks behind except to join the
+ *   family it belongs to.
+ *
+ *   THE LINE. What a rendered row looks like — the chip where there is no indent to draw,
+ *   the waiting caption, and no rollup on anything.
  */
 import { flatRow, type TaskRow } from "@/components/task-list";
 import { waitingLine } from "@/lib/derived-blocked";
 import { isGateParked, isQueuedBehindGate } from "@/lib/derived-queued";
+import { isResolvedStatus } from "@/lib/settings";
 import type { BlockingChild, InboxIssue, InboxRow, Issue, IssueRow } from "@/lib/types";
-import { RESOLVED_STATUSES } from "@/lib/types";
+/**
+ * O8a (STA-149). The placement, shared with `tree-model.ts` rather than reimplemented flat
+ * here — which is what let the two axes disagree about the same parent/child pair.
+ */
+import { placeRows, walkPlaced } from "./nesting";
 
 /**
  * The sections, in the order they appear. A registry rather than a switch, the same trick
@@ -158,8 +181,17 @@ export const EMPTY_PICKUP_INDEX: PickupIndex = {
   size: 0,
 };
 
+/**
+ * O7b's wiring (STA-141). The workspace's configured CATEGORY for the status, not
+ * membership of the built-in `RESOLVED_STATUSES` pair — the same substitution tree-model.ts
+ * makes, and it has to be the same substitution or a custom `shipped` status would land in
+ * the resolved section on one axis and in `waiting` on the other.
+ *
+ * On a default workspace the two spellings agree exactly, which is what makes this a wiring
+ * change rather than a behaviour change.
+ */
 function isResolved(status: Issue["status"]): boolean {
-  return RESOLVED_STATUSES.includes(status);
+  return isResolvedStatus(status);
 }
 
 /**
@@ -308,14 +340,21 @@ export interface PickupGroup {
   id: PickupSectionId;
   label: string;
   hint: string;
-  /** Rows to render, in the store's order. Flat: pickup mode is a queue. */
+  /**
+   * Rows to render, in the store's order, nested by lineage — O8a (STA-149). Ghost rows are
+   * in here too, and every consumer filters them with `row.ghost`.
+   */
   rows: TaskRow[];
   /**
    * How many tasks are in this section, folded or not. Same reason `StatusGroup.count` is
    * not `rows.length`: a count that follows what is rendered says zero for a collapsed
-   * section, which deletes the only reason the count exists. Here they happen to be equal —
-   * nothing is nested, so nothing is hidden by a collapsed parent — and it stays a separate
-   * field so that a later change to either cannot silently make the header lie.
+   * section, which deletes the only reason the count exists.
+   *
+   * The two used to be equal by accident, because nothing was nested and nothing could be
+   * hidden. O8a made them genuinely different in two ways at once — a ghost is in `rows`
+   * and is not a task, and a collapsed parent's children are tasks and are not in `rows` —
+   * which is exactly the drift the field was kept separate to survive. `bucket.length` is
+   * computed before any of that happens, so it cannot be reached by either.
    */
   count: number;
   /**
@@ -336,6 +375,37 @@ export interface PickupBuildOptions {
   showResolved?: boolean;
   /** V4's `hiddenParents()`: a breadcrumb for a child whose parent a FILTER removed. */
   hiddenParents?: ReadonlyMap<string, Issue>;
+  /**
+   * MAY A MISSING PARENT BE DRAWN INSIDE THIS SECTION — O3c (STA-128).
+   *
+   * The same switch, spelled the same way, as `BuildOptions.ghostParents` in tree-model.ts,
+   * and passed through from the same place (`buildList`). The ghost rule is ONE rule across
+   * both grouped axes: a reader who has learned it under group-by-status must not find a
+   * different answer one menu entry away.
+   *
+   * Defaulted to `true`; `TreeGrid` hands it `columns.disclosure`, so a container with no
+   * indent to nest into keeps the breadcrumb chip instead.
+   *
+   * O8a (STA-149) WIDENED WHAT IT GATES, not what it means: it now also decides whether a
+   * child nests under a parent that IS in the section. Both the ghost and the indent spend
+   * the same pixels to say the same thing, and a container that cannot draw one cannot draw
+   * the other — so one switch, not two that would eventually disagree.
+   */
+  ghostParents?: boolean;
+  /**
+   * THE USER'S EXPLICIT FOLD, or `undefined` where they have not chosen — O8a (STA-149).
+   *
+   * `BuildOptions.isExpanded`, passed through unchanged by `buildList`, because it is the
+   * same fact about the same issue: expansion is stored per issue and STA-148's principle
+   * is that a row keeps its expansion state across every grouping. Absent means EXPANDED
+   * here, which is not the tree's default (`DEFAULT_EXPANDED_GROUPS`, by status) and should
+   * not be: the sections already fold the backlog away, and a queue that hid ranked work
+   * behind an unfolded parent nobody folded would be answering a question nobody asked.
+   *
+   * It arrived with nesting because nesting is what created chevrons in this view. A
+   * chevron that does not toggle is exactly the defect STA-148 raises against ghost rows.
+   */
+  isExpanded?: (issue: Issue) => boolean | undefined;
 }
 
 /**
@@ -351,7 +421,7 @@ export function buildPickupGroups(
   index: PickupIndex,
   options: PickupBuildOptions = {},
 ): PickupGroup[] {
-  const { showResolved = false, hiddenParents } = options;
+  const { showResolved = false, hiddenParents, ghostParents = true, isExpanded } = options;
 
   const visible = showResolved ? rows : rows.filter((r) => !isResolved(r.issue.status));
   const presentAnywhere = new Map(rows.map((r) => [r.issue.id, r.issue]));
@@ -417,18 +487,146 @@ export function buildPickupGroups(
       return a.issue.identifier.localeCompare(b.issue.identifier, undefined, { numeric: true });
     });
 
-    const waitingOn = new Map<string, string>();
-    const taskRows = ordered.map((r) => {
-      if (section.id === "waiting") {
-        const line = index.waitingOn(r.issue.id);
-        if (line) waitingOn.set(r.issue.id, line);
-      }
-      const parent = r.issue.parentId
+    /**
+     * ── THE PLACEMENT IS THE TREE'S — O8a (STA-149) ───────────────────────────────────
+     *
+     * It was not, and that was the bug. This file used to lay every row of a section flat
+     * at its own rank and draw exactly one kind of nesting: O3c's ghost, for a parent with
+     * no rank here at all. A parent that WAS in the section stayed a sibling of its own
+     * child, so STA-25 and STA-40 sat side by side in Up next with STA-40 wearing a
+     * `STA-25 ›` chip — the same family reading as one unit under group-by-status and as
+     * two unrelated rows one menu entry away.
+     *
+     * STA-148's principle is that grouping is a PRESENTATION LAYER: a row behaves the same
+     * inside every group, and the hierarchy is always visible. So the placement is now
+     * literally `nesting.ts`'s, the same call `flatten` makes, and the queue keeps only the
+     * two things that are genuinely its own — the ORDER (the store's, never re-sorted) and
+     * what a rendered line looks like.
+     *
+     * WHAT THIS COSTS THE QUEUE, HONESTLY. The file header used to argue that nesting a
+     * child under its parent moves it off its rank and a dependency-ordered queue whose
+     * items are out of order has stopped being a queue. That is still true and it is the
+     * price. It is worth paying because the thing it bought — a strict global rank — was
+     * already not what the reader got: ghost blocks lift orphans out of rank order, and the
+     * sections themselves are a coarser reordering than any nesting. What is preserved is
+     * the part the rank was FOR: a parent sits at its own rank, its children keep the
+     * store's order among themselves, and no row ever moves ahead of a row it ranks behind
+     * except to join the family it belongs to.
+     *
+     * GHOSTS ARE UNCHANGED (O3c). A parent that is not in this section is drawn as a dimmed
+     * bracket at its best-ranked orphan's position — `placeRows` creates it the first time
+     * one of its orphans is reached, which in a list already in rank order is exactly that
+     * position.
+     */
+    const ghostFor = (r: IssueRow): Issue | undefined =>
+      r.issue.parentId
         ? (presentAnywhere.get(r.issue.parentId) ?? hiddenParents?.get(r.issue.id))
         : undefined;
+
+    /**
+     * `ghostParents` GATES BOTH THE GHOST AND THE NESTING, and it is one switch because it
+     * is one fact: `TreeGrid` hands it `columns.disclosure`, "this container has an indent".
+     * With no indent, `TaskRowLine` draws neither the padding nor the connectors, so a
+     * nested child would be indistinguishable from a root AND would have given up its chip.
+     * The `panel` and `popup` presets therefore keep exactly the flat, chipped queue they
+     * render today — see `PlaceOptions.nest`.
+     */
+    /**
+     * O8b (STA-150). THE CHAIN, and it is the same rule the tree runs: the next ancestor up
+     * from a ghost, read from `presentAnywhere` only. `hiddenParents` is keyed by the
+     * CHILD's id, so it has nothing to say about a row that is not on the page, and a chain
+     * that climbed into what the filter removed would be undoing the filter.
+     *
+     * It matters most here, of all places: a section is a much coarser cut than a status
+     * group, so an epic and its sub-epic land in different sections routinely and the
+     * nearest ghost alone would say "part of O8" where the reader needs "part of O8, which
+     * is part of O".
+     */
+    const ancestorFor = (issue: Issue): Issue | undefined =>
+      issue.parentId ? presentAnywhere.get(issue.parentId) : undefined;
+
+    const roots = placeRows(ordered, {
+      nest: ghostParents,
+      ghostFor: ghostParents ? ghostFor : undefined,
+      ancestorFor: ghostParents ? ancestorFor : undefined,
+    });
+
+    /**
+     * NO SORT AFTER THE PLACEMENT, and that is the whole of "children keep the store's
+     * pickup order among themselves". `placeRows` preserves encounter order, `ordered` is
+     * the store's rank, and a sibling list is a subsequence of it. The tree sorts here
+     * because it has a comparator; the queue has an answer already and re-sorting it would
+     * throw away the only thing `/api/inbox` was called for.
+     */
+
+    /**
+     * EVERY PARENT FOLDS, GHOST OR REAL, defaulting to open — O8c (STA-151) removing the
+     * `node.ghost ||` O8a left here.
+     *
+     * Pickup mode has no "the backlog stays shut" story: its sections are the folding, and
+     * a row is open unless the user folded it. That default was already right for a ghost,
+     * so this axis needed only the short-circuit taken off. The choice is the user's own
+     * explicit one, keyed by issue id and therefore shared with the tree and the flat view
+     * — which is what STA-148 means by the same expansion state in every grouping, and it
+     * now covers the bracket as well as the row it brackets.
+     */
+    const lines = walkPlaced(
+      roots,
+      (node) => node.children.length > 0 && (isExpanded?.(node.row.issue) ?? true),
+    );
+
+    const waitingOn = new Map<string, string>();
+    const noteWaiting = (r: IssueRow) => {
+      if (section.id !== "waiting") return;
+      const line = index.waitingOn(r.issue.id);
+      if (line) waitingOn.set(r.issue.id, line);
+    };
+
+    const taskRows: TaskRow[] = lines.map((line) => {
+      const r = line.row;
+
+      if (line.ghost) {
+        return flatRow(r, {
+          ghost: true,
+          depth: line.depth,
+          guides: line.guides,
+          isLast: line.isLast,
+          /*
+           * FROM THE WALK, not hard-coded — O8c (STA-151). A ghost folds now, so `true`
+           * here would have been the component being told the opposite of what the model
+           * just decided, and the chevron would have drawn open over a folded subtree.
+           */
+          hasChildren: line.hasChildren,
+          isExpanded: line.isExpanded,
+          childCount: line.childCount,
+          /*
+           * NO ROLLUP ON A PICKUP GHOST — `flatRow`'s `null` stands. No row in this view
+           * carries one, and a ghost that alone showed a progress count would read as a
+           * different KIND of object rather than as the same object dimmed.
+           */
+        });
+      }
+
+      noteWaiting(r);
+
+      /**
+       * THE CHIP IS WHAT IS LEFT WHEN THE INDENT COULD NOT SAY IT — the tree's rule, now
+       * this file's too. A nested row is placed by lineage and the elbow already says so;
+       * a row at depth 0 whose parent is on the page somewhere else, in a container that
+       * could not draw a ghost, still needs to name it.
+       */
+      const parent =
+        line.depth === 0 && r.issue.parentId
+          ? (presentAnywhere.get(r.issue.parentId) ?? hiddenParents?.get(r.issue.id))
+          : undefined;
+
       return flatRow(r, {
-        // A queue has no indentation to lose a parent to, so EVERY row with a parent wears
-        // the chip — unlike the tree, where only a row that could not be nested needs one.
+        depth: line.depth,
+        guides: line.guides,
+        isLast: line.isLast,
+        hasChildren: line.hasChildren,
+        isExpanded: line.isExpanded,
+        childCount: line.childCount,
         breadcrumb: parent ? { identifier: parent.identifier, title: parent.title } : null,
       });
     });

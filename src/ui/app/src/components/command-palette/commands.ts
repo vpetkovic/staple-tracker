@@ -13,7 +13,29 @@
  */
 import { HANDOFF_RISKS, handoffRiskOf, type HandoffRisk } from "../../lib/filters";
 import { VIEWS, type Selection, type ViewName } from "../../lib/session";
-import { ISSUE_STATUSES, type IssueRow, type IssueStatus, type WorkspaceRef } from "../../lib/types";
+import { SEED_SETTINGS } from "../../lib/settings";
+import {
+  type IssueRow,
+  type IssueStatus,
+  type StatusCategory,
+  type StatusId,
+  type WorkspaceRef,
+} from "../../lib/types";
+
+/**
+ * The fallback vocabulary — the built-in seed, ids doubling as labels.
+ *
+ * A module constant rather than a call, because this file's whole discipline is
+ * that `buildCommands` is a pure function over the data it is handed: reading a
+ * live snapshot here would make its output depend on what some other test last
+ * published. `SEED_SETTINGS` is frozen data, not a snapshot.
+ *
+ * Labels repeat the id, which is what this loop always said before a workspace
+ * vocabulary existed. The CATEGORIES are the new part, and they are why the
+ * gated suppression below still works before `/api/settings` has answered.
+ */
+const SEED_STATUSES: readonly { id: StatusId; label: string; category: StatusCategory }[] =
+  SEED_SETTINGS.statuses.map((row) => ({ id: row.id, label: row.id, category: row.category }));
 
 /** What running a command does. The React layer switches on `type`; nothing else does. */
 export type CommandAction =
@@ -38,7 +60,17 @@ export type CommandAction =
    * It SETS rather than toggles. "Show me the handoff risks" is an absolute request; a
    * command that silently un-filtered on second use would be a command you cannot repeat.
    */
-  | { type: "dimension"; dimension: string; values: readonly string[] };
+  | { type: "dimension"; dimension: string; values: readonly string[] }
+  /**
+   * Open the workspace vocabulary editor — O7b (STA-141).
+   *
+   * A `settings` action rather than a `page`, because a palette PAGE is a free-text
+   * prompt the palette itself submits (`checkout`, `assignee`), and this opens a dialog
+   * that outlives the palette. The React layer dispatches the same `lib/shell-events`
+   * verb the header's gear does, so there is one way in with two triggers rather than
+   * two ways in.
+   */
+  | { type: "settings" };
 
 export type PalettePage = "checkout" | "assignee";
 
@@ -160,6 +192,17 @@ export interface PaletteContext {
   selection: Selection | null;
   /** Status of the selected issue, when known — used to hide a no-op transition. */
   selectionStatus?: IssueStatus | null;
+  /**
+   * The workspace's CONFIGURED status ids and labels, in configured order — O7b (STA-141).
+   *
+   * Optional, defaulting to the built-in seven, and that default is what keeps every
+   * existing test in this file passing unchanged. It is passed IN rather than read from
+   * `lib/settings.ts` here for the reason stated in this file's header: these are pure
+   * functions over plain data, tested with no fetch and no module state, and a
+   * `buildCommands` that consulted a live snapshot would be a `buildCommands` whose
+   * output depends on what some other test happened to publish.
+   */
+  statuses?: readonly { id: StatusId; label: string; category?: StatusCategory }[];
   view: ViewName;
   ws: string;
   assignee: string;
@@ -224,19 +267,38 @@ export function buildCommands(context: PaletteContext): PaletteCommand[] {
 
   if (context.selection) {
     const ref = context.selection.ref;
-    for (const status of ISSUE_STATUSES) {
+    /*
+     * The CONFIGURED statuses, not a frozen list — O7b (STA-141). A workspace that
+     * added `awaiting_qa` gets a "Set status → Awaiting QA" command with no change here,
+     * and one that removed `blocked` stops offering a transition the store would refuse.
+     *
+     * The LABEL is what the row shows and the ID is what the action carries: renaming a
+     * status has to change the words in the palette without changing the write. The
+     * fallback repeats the id in both, which is exactly what this loop said before — it
+     * carries the seed's CATEGORIES too, which is what lets the gated suppression below
+     * work before `/api/settings` has answered.
+     */
+    const statuses = context.statuses ?? SEED_STATUSES;
+    for (const status of statuses) {
       // The status it already has is not a command, it is a no-op that would occupy a
       // row and, if run, spend a round trip to be told nothing changed.
-      if (context.selectionStatus === status) continue;
+      if (context.selectionStatus === status.id) continue;
       /**
-       * `awaiting_approval` IS NOT A STATUS YOU SET — Q2 (STA-144), closing the
-       * follow-up Q1 left here.
+       * A GATED STATUS IS NOT A STATUS YOU SET — Q2 (STA-144), closing the follow-up
+       * Q1 left here, re-keyed onto the CATEGORY by the O7 merge.
        *
-       * `store.updateIssue` REFUSES every transition into or out of it, so this entry
-       * was a command that could only ever fail. It is reached through `gate`, which
-       * takes the one thing the status cannot carry: WHO must approve. A parked issue
-       * with no named owner is a queue with nobody to drain it, which is why the store
-       * makes the owner mandatory and why this loop cannot produce the status.
+       * `store.updateIssue` REFUSES every transition into or out of the `gated`
+       * category, so these entries are commands that could only ever fail. The way in
+       * is `gate`, which takes the one thing a status cannot carry: WHO must approve. A
+       * parked issue with no named owner is a queue with nobody to drain it, which is
+       * why the store makes the owner mandatory and why this loop cannot produce the
+       * status.
+       *
+       * Keyed on the category rather than on `awaiting_approval`, so a workspace that
+       * renamed the row, or added a gated status of its own, does not get an offer the
+       * store will refuse. A caller that hands over statuses WITHOUT categories (the
+       * pure-data test fixtures) simply gets no suppression, which is correct — it has
+       * not told us any of them are gated.
        *
        * Suppressed rather than replaced with a gate command. A gate needs an owner, and
        * this palette has no way to ask for one — `checkout` already routes to a `page`
@@ -244,14 +306,14 @@ export function buildCommands(context: PaletteContext): PaletteCommand[] {
        * "remove the option the store refuses" would be scope this ticket did not buy.
        * The detail panel's "Request approval" is the affordance, and it can ask.
        */
-      if (status === "awaiting_approval") continue;
+      if (status.category === "gated") continue;
       commands.push({
-        id: `status:${status}`,
+        id: `status:${status.id}`,
         group: "actions",
-        label: `Set status → ${status}`,
+        label: `Set status → ${status.label}`,
         hint: ref,
-        keywords: `status ${status} move ${ref}`,
-        action: { type: "status", status },
+        keywords: `status ${status.id} ${status.label} move ${ref}`,
+        action: { type: "status", status: status.id as IssueStatus },
       });
     }
     commands.push({
@@ -317,6 +379,20 @@ export function buildCommands(context: PaletteContext): PaletteCommand[] {
       action: { type: "dimension", dimension: "handoff", values: [risk] },
     });
   }
+
+  /*
+   * The workspace vocabulary editor — O7b (STA-141). In the `view` group rather than in
+   * `filter`, because it does not narrow what you are looking at: it changes what the
+   * workspace IS. Always offered, and it needs no selection.
+   */
+  commands.push({
+    id: "settings",
+    group: "view",
+    label: "Workspace settings — statuses and kinds",
+    keywords:
+      "settings workspace statuses kinds vocabulary configure reorder rename category customise",
+    action: { type: "settings" },
+  });
 
   if (context.hub) {
     if (context.ws !== "") {

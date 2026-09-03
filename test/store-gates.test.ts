@@ -253,9 +253,12 @@ describe("queuedBy: who is standing in whose queue", () => {
    */
   it("never queues a RESOLVED issue — a queue is a queue of work still to do", () => {
     const { epic, children } = epicWithChildren(2);
+    // Gate first, land the work after: since STA-153 resolving every child first
+    // would auto-close the epic, and `gate` refuses finished work. This is the
+    // realistic order anyway — the queue drains while the reviewer is reading.
+    store.gateIssue(epic, { owner: "VP" }, "a");
     resolve(children[0]!);
     resolve(children[1]!, "cancelled");
-    store.gateIssue(epic, { owner: "VP" }, "a");
 
     // Nothing is being held back from anyone: the work is finished. A done row
     // reading "Queued · awaiting VP" is a lie the reviewer cannot act on, and it
@@ -269,6 +272,11 @@ describe("queuedBy: who is standing in whose queue", () => {
     const parent = children[0]!;
     const a = store.createChild(parent, { title: "A" }).identifier;
     const b = store.createChild(parent, { title: "B" }).identifier;
+    // `parent` is CHECKED OUT, which is what keeps it open after its children land:
+    // since STA-153 a derivation-owned parent closes itself, and this rule is about
+    // an OPEN parent with nothing left underneath. A claim is the ordinary way a row
+    // stays open past its children — somebody is holding it.
+    store.checkoutIssue(parent, "agent-p");
     resolve(a);
     resolve(b);
     store.gateIssue(epic, { owner: "VP" }, "a");
@@ -292,6 +300,8 @@ describe("queuedBy: who is standing in whose queue", () => {
     const parent = children[0]!;
     const middle = store.createChild(parent, { title: "Middle" }).identifier;
     const deep = store.createChild(middle, { title: "Deep" }).identifier;
+    // Held, so it stays open once `middle` lands — see the note two tests above.
+    store.checkoutIssue(parent, "agent-p");
     resolve(middle);
     store.gateIssue(epic, { owner: "VP" }, "a");
 
@@ -360,6 +370,8 @@ describe("gateQueueOf: the rows this gate is holding, as a tree", () => {
     const parent = children[0]!;
     const middle = store.createChild(parent, { title: "Middle" }).identifier;
     const deep = store.createChild(middle, { title: "Deep" }).identifier;
+    // Held, so it stays open once `middle` lands (STA-153's auto-close).
+    store.checkoutIssue(parent, "agent-p");
     resolve(middle);
     store.gateIssue(epic, { owner: "VP" }, "a");
 
@@ -485,7 +497,7 @@ describe("checkout of a queued issue is refused, and cannot be routed around", (
 
 // --------------------------------------------------------------- derivation
 
-describe("a gate is immune to derivation, and invisible upward", () => {
+describe("a gate is immune to derivation, and outranks the automatic close", () => {
   it("a child moving does not un-park the parent", () => {
     const { epic, children } = epicWithChildren(2);
     store.checkoutIssue(children[0]!, "agent-a"); // in flight when the gate goes up
@@ -501,19 +513,118 @@ describe("a gate is immune to derivation, and invisible upward", () => {
     expect(store.gate(epic)!.state).toBe("pending");
   });
 
-  it("a gated child never derives `blocked` on its grandparent", () => {
+  /**
+   * A GATED CHILD IS AN ORDINARY RUNG-4 INPUT.
+   *
+   * This reverses what STA-143 shipped alone, and the reason is the ladder it
+   * shipped against. Then, rung 0 meant "nothing open" and dropping the gated
+   * child from the inputs left the grandparent untouched. Since STA-153 rung 0
+   * means "no children at all" and an EMPTY open list means FINISHED — so
+   * dropping the child would hand a grandparent whose only remaining child is
+   * parked behind a human review straight to rung 6 and close it. A gate is the
+   * one thing that must never be mistaken for a completion.
+   *
+   * Rung 4 says the true thing anyway: an approval nobody has given is not work
+   * an agent can pick up, which is exactly what `blocked` means to a reader of
+   * this list. The descriptor argument still holds and is still honoured — a
+   * DERIVED `blocked` carries no unblockOwner/unblockAction, and never has.
+   */
+  it("a gated child derives rung 4 on its grandparent, and never rung 6", () => {
     const program = store.createIssue({ title: "Program" }).identifier;
     const epic = store.createChild(program, { title: "Epic" }).identifier;
     store.createChild(epic, { title: "Task" });
 
-    const before = statusOf(program);
     store.gateIssue(epic, { owner: "VP" }, "a");
 
-    // `blocked` promises a named person can clear it and carries a descriptor.
-    // None of that is true of a gate, so the ladder declines instead.
-    expect(statusOf(program)).toBe(before);
-    expect(statusOf(program)).not.toBe("blocked");
+    expect(statusOf(program)).toBe("blocked");
+    // The whole point: parked is not finished.
+    expect(statusOf(program)).not.toBe("done");
+    // A derived block borrows its descriptor from the blocking child and mints none.
+    const row = store.getIssue(program);
+    expect(row.unblockOwner).toBeNull();
+    expect(row.unblockAction).toBeNull();
   });
+
+  /**
+   * ── THE AUTO-CLOSE RULE MEETS THE GATE (STA-143 x STA-153) ──────────────────
+   *
+   * STA-153 made a parent close itself when its last child lands. A gate says a
+   * human still has to answer. Where they meet the human wins, in both of the
+   * two states a gate can be open in — and the two get there by different
+   * routes, which is why both are pinned.
+   */
+  it("does not auto-close a parent whose gate is still PENDING", () => {
+    const { epic, children } = epicWithChildren(2);
+    store.gateIssue(epic, { owner: "VP" }, "a");
+
+    for (const child of children) resolve(child);
+
+    // The parent is IN the gated category, so the category immunity caught it
+    // before the ladder was ever consulted.
+    expect(statusOf(epic)).toBe("awaiting_approval");
+    expect(store.gate(epic)!.state).toBe("pending");
+    expect(store.getIssue(epic).completedAt).toBeNull();
+  });
+
+  /**
+   * The case the explicit guard exists for. `request-changes` deliberately puts
+   * the parent BACK in the workable band so the work can resume, so it is not in
+   * the gated category and the category immunity does not apply — while the gate
+   * itself is still unanswered. Without the guard, the last child landing again
+   * would close the ticket out from under the reviewer who asked for changes,
+   * skipping the resubmit loop entirely.
+   */
+  it("does not auto-close a parent whose gate is CHANGES_REQUESTED", () => {
+    const { epic, children } = epicWithChildren(2);
+    store.gateIssue(epic, { owner: "VP" }, "a");
+    store.requestChanges(epic, { comment: "the API shape is wrong" }, "VP");
+    expect(statusOf(epic)).toBe("todo"); // back in the writable pre-work band
+    expect(store.gate(epic)!.state).toBe("changes_requested");
+
+    for (const child of children) resolve(child);
+
+    /**
+     * NOT `done`, and not `todo` either.
+     *
+     * The guard DECLINES the closing rungs rather than substituting a status of
+     * its own, so the parent keeps the last thing the open rungs said — here
+     * `in_progress`, written while the children were being worked. That is the
+     * conservative behaviour and the honest one: the tracker refuses to answer
+     * the question the reviewer was asked, and the unanswered gate is the fact
+     * every surface renders. The one thing that must not happen is a resolved
+     * timestamp, and there is none.
+     */
+    expect(statusOf(epic)).toBe("in_progress");
+    expect(store.isResolvedStatus(statusOf(epic))).toBe(false);
+    expect(store.getIssue(epic).completedAt).toBeNull();
+    // Re-gating is the resubmit loop, and it is still available.
+    expect(() => store.gateIssue(epic, { owner: "VP" }, "a")).not.toThrow();
+  });
+
+  /** Only the CLOSING rungs are refused. A report is still a report. */
+  it("still reports rungs 1-4 while changes are requested", () => {
+    const { epic, children } = epicWithChildren(2);
+    store.gateIssue(epic, { owner: "VP" }, "a");
+    store.requestChanges(epic, { comment: "again please" }, "VP");
+
+    store.updateIssue(children[0]!, { assignee: "agent-a" }, "agent-a");
+    store.updateIssue(children[0]!, { status: "in_progress" }, "agent-a");
+
+    expect(statusOf(epic)).toBe("in_progress");
+  });
+
+  it("auto-closes normally once the gate is approved", () => {
+    const { epic, children } = epicWithChildren(2);
+    store.gateIssue(epic, { owner: "VP" }, "a");
+    store.approveGate(epic, {}, "VP");
+    expect(store.gate(epic)!.state).toBe("approved");
+
+    for (const child of children) resolve(child);
+
+    expect(statusOf(epic)).toBe("done");
+    expect(store.getIssue(epic).completedAt).not.toBeNull();
+  });
+
 
   it("a sibling that is still workable still derives normally past the gate", () => {
     const program = store.createIssue({ title: "Program" }).identifier;
@@ -588,15 +699,31 @@ describe("approve releases the queue", () => {
     for (const child of children) expect(store.queuedBy(child)).toBeNull();
   });
 
-  it("lands on `todo` when nothing is open underneath", () => {
+  /**
+   * THE SUBTREE FINISHED WHILE THE REVIEWER WAS READING IT.
+   *
+   * STA-143 landed this on `todo`, because the ladder it had said "leave it
+   * alone" when nothing was open and leaving a parked parent alone was not an
+   * available answer. STA-153 gave the ladder rungs 5 and 6, so it now has a
+   * real answer — and it is the right one: the auto-close was DEFERRED by the
+   * open gate, not cancelled by it, so answering the gate is exactly when it
+   * should fire. Landing an epic whose every child has shipped in `todo` would
+   * put it back at the top of somebody's pickup queue with nothing to pick up.
+   *
+   * The `todo` fallback still exists, for rung 0 — no children at all — which
+   * `gate` itself refuses to create and only a reparent or a delete can reach.
+   */
+  it("closes the parent when everything underneath has already landed", () => {
     const { epic, children } = epicWithChildren(1);
     store.gateIssue(epic, { owner: "VP" }, "a");
     // Resolve the only child while the epic is parked.
     store.updateIssue(children[0]!, { status: "done" }, "a");
+    expect(statusOf(epic)).toBe("awaiting_approval"); // deferred, not cancelled
 
-    // The ladder's "leave it alone" is not available: leaving it alone means
-    // leaving it parked, which is the state this call exists to clear.
-    expect(store.approveGate(epic, {}, "VP").status).toBe("todo");
+    const approved = store.approveGate(epic, {}, "VP");
+    expect(approved.status).toBe("done");
+    expect(approved.completedAt).not.toBeNull();
+    expect(store.gate(epic)!.state).toBe("approved");
   });
 
   it("derives in_progress when a child kept working through the gate", () => {

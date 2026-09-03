@@ -1,18 +1,37 @@
 /**
- * All seven statuses as a 16px glyph — V5 (STA-97) §6.1.
+ * A status as a 16px glyph — V5 (STA-97) §6.1, re-keyed onto the CATEGORY by O7b (STA-141).
  *
  * ── THE SEQUENCE IS THE POINT ─────────────────────────────────────────────────────────
  *
- *   backlog → todo → in_progress → in_review → done
- *   dashed  → empty → half        → three-quarter → complete
+ *   unstarted → ready → active → review → done
+ *   dashed    → empty → half   → three-quarter → complete
  *
  * It reads as a progress ring filling up, which is the whole reason this icon language
  * works at 16px from four feet away: you do not read the glyph, you read how full it is.
- * `blocked` and `cancelled` deliberately break the sequence — a filled disc with a minus,
- * and a faded ring with a cross. They are not stops on the path and must not look like one.
+ * `blocked`, `gated` and `cancelled` deliberately break the sequence — a filled disc with
+ * a minus, a ring with a minus, and a faded ring with a cross. They are not stops on the
+ * path and must not look like one.
  *
  * Every state differs in SHAPE, not only in hue. That is a WCAG 1.4.1 requirement and it is
  * also what makes the list survive a projector, a bad monitor, and a red-deficient reader.
+ *
+ * ── WHY THE SWITCH IS ON THE CATEGORY AND NOT ON THE ID ───────────────────────────────
+ *
+ * O7 (STA-139/140) made the status set workspace DATA. `pairing`, `awaiting_qa` and
+ * `on_ice` are all legal ids, and a switch over the seven built-ins would have fallen
+ * through to nothing for every one of them — a row with an invisible status column.
+ *
+ * Every status carries a category from a fixed set of eight, and the store keys every
+ * BEHAVIOUR off that category rather than off the id. This file now keys the glyph off it
+ * too, which is what makes the language closed again: a workspace can invent any status it
+ * likes and it will draw as the thing it behaves like. A custom status in `active` gets the
+ * half-ring and the in_progress hue, which is STA-141's acceptance criterion stated as a
+ * picture. The switch is exhaustive over `StatusCategory`, so a ninth category cannot be
+ * added to core without this file failing to compile.
+ *
+ * `gated` — parked awaiting an approval, reserved for STA-142/143 — takes `blocked`'s hue
+ * and a DIFFERENT shape: the same minus bar on an unfilled ring rather than a filled disc.
+ * Two kinds of waiting, told apart by fill, which is the axis this set already uses.
  *
  * ── COLOUR COMES FROM THE ICON FAMILY, NOT THE CHIP FAMILY ────────────────────────────
  *
@@ -21,9 +40,37 @@
  * `--status-task-*` tokens are CHIP-FILL SEEDS — they are mixed toward the card inside
  * `.status-chip` and are far too light to carry a bare 1.5px stroke. Reaching for them here
  * is the obvious mistake and it produces a glyph nobody can see in light mode.
+ *
+ * NO NEW TOKENS were added for the categories. Each one names the icon token of the
+ * built-in that seeds it, which is why a default workspace renders byte-identically to
+ * what V5 shipped.
  */
-import type { IssueStatus } from "@/lib/types";
-import { STATUS_LABEL } from "./model";
+import { statusCategory, statusLabel } from "@/lib/settings";
+import type { StatusCategory, StatusId } from "@/lib/types";
+
+/**
+ * Category -> the existing icon hue token. Eight categories, six tokens: `gated` and
+ * `blocked` share, which is deliberate (see the header) and is the same pairing
+ * styles/app.css makes for the chip.
+ */
+const CATEGORY_HUE: Record<StatusCategory, string> = {
+  unstarted: "backlog",
+  ready: "todo",
+  active: "in_progress",
+  review: "in_review",
+  // `gated` borrows `blocked`'s hue rather than minting a ninth token: an approval
+  // you are waiting on and a blocker you are waiting on are the same kind of answer
+  // to "why has this not moved". The GLYPH is what distinguishes them.
+  gated: "blocked",
+  blocked: "blocked",
+  done: "done",
+  cancelled: "cancelled",
+};
+
+/** The CSS custom property carrying a category's stroke/fill colour. */
+export function statusIconColour(category: StatusCategory): string {
+  return `var(--status-task-icon-${CATEGORY_HUE[category]})`;
+}
 
 /**
  * 8 even dashes around an r=6 ring. The spec wrote `2 2`, which on a 37.7px circumference
@@ -32,33 +79,20 @@ import { STATUS_LABEL } from "./model";
  */
 const BACKLOG_DASHES = "2.4 2.31";
 
-function Glyph({ status }: { status: IssueStatus }) {
+function Glyph({ category }: { category: StatusCategory }) {
   /**
-   * `awaiting_approval` SHARES `in_review`'s hue, deliberately and permanently —
-   * Q2 (STA-144). No new token is minted.
-   *
-   * Q1 wrote this as a CSS fallback off an undefined custom property, which was
-   * the honest placeholder ("nobody has decided yet") but is the wrong shape for
-   * a decision: a fallback reads as a token that is coming, and the first person
-   * to define `--status-task-icon-awaiting_approval` would silently change the
-   * icon. This points at the real token by name instead.
-   *
-   * SHARING IS CORRECT HERE, not a shortcut. The icon language differentiates by
-   * SHAPE — that is the WCAG 1.4.1 argument at the top of this file, and it is
-   * why `done` and `blocked` can both be a filled disc. in_review and
-   * awaiting_approval are the two "a human is looking at this" states, so one hue
-   * across the pair is the same fact the ring/hourglass split then refines. A
-   * ninth hue would claim a distinction the palette does not have room to make
-   * legibly at 16px, and every hue added past that point makes the other eight
-   * harder to tell apart.
+   * The hue comes from the CATEGORY (STA-140) and no glyph mints a token of its
+   * own. That is the constraint the shapes are designed under: the icon language
+   * differentiates by SHAPE — the WCAG 1.4.1 argument at the top of this file —
+   * which is why `done` and `blocked` can both be a filled disc, and why `gated`
+   * can borrow `blocked`'s hue without becoming it. A ninth hue would claim a
+   * distinction the palette has no room to make legibly at 16px, and every hue
+   * added past that point makes the other eight harder to tell apart.
    */
-  const colour =
-    status === "awaiting_approval"
-      ? "var(--status-task-icon-in_review)"
-      : `var(--status-task-icon-${status})`;
+  const colour = statusIconColour(category);
 
-  switch (status) {
-    case "backlog":
+  switch (category) {
+    case "unstarted":
       return (
         <circle
           cx="8"
@@ -71,10 +105,10 @@ function Glyph({ status }: { status: IssueStatus }) {
         />
       );
 
-    case "todo":
+    case "ready":
       return <circle cx="8" cy="8" r="6" fill="none" stroke={colour} strokeWidth="1.5" />;
 
-    case "in_progress":
+    case "active":
       return (
         <>
           <circle cx="8" cy="8" r="6" fill="none" stroke={colour} strokeWidth="1.5" />
@@ -83,7 +117,7 @@ function Glyph({ status }: { status: IssueStatus }) {
         </>
       );
 
-    case "in_review":
+    case "review":
       return (
         <>
           <circle cx="8" cy="8" r="6" fill="none" stroke={colour} strokeWidth="1.5" />
@@ -107,7 +141,15 @@ function Glyph({ status }: { status: IssueStatus }) {
         </>
       );
 
-    case "awaiting_approval":
+    case "blocked":
+      return (
+        <>
+          <circle cx="8" cy="8" r="7" fill={colour} />
+          <rect x="4.5" y="7.2" width="7" height="1.6" rx="0.8" fill="var(--card)" />
+        </>
+      );
+
+    case "gated":
       /**
        * AN HOURGLASS IN A RING — Q2 (STA-144).
        *
@@ -119,14 +161,18 @@ function Glyph({ status }: { status: IssueStatus }) {
        * (STA-108 sitting in_progress for 56 minutes while it waited on a human),
        * so the glyph is the sentence.
        *
-       * The ring is `in_review`'s exact ring, and that is the intended reading:
-       * this is the in_review family, one step further along. The hourglass is
-       * two triangles meeting at a waist, drawn as a single path so it stays one
-       * mark rather than three at 16px, with the caps left as separate 1.4px bars
-       * so the silhouette survives being scaled down or printed.
+       * The HUE is `blocked`'s, from `CATEGORY_HUE` and no exception to it. That
+       * is the right pairing: "waiting on a person" beside "waiting on a thing"
+       * are the two answers to "why has this not moved", and the shape is what
+       * tells them apart — blocked fills the disc, gated is an unfilled ring, so
+       * the pair survives a monochrome print. The ring is also `in_review`'s
+       * exact ring, which is the second intended reading: this is the in_review
+       * family, one step further along.
        *
-       * Sized to sit inside r=6 with the same optical weight as the pause bars it
-       * replaces: 5px wide, 6.4px tall, centred on (8, 8).
+       * The hourglass is two triangles meeting at a waist, drawn as a single path
+       * so it stays one mark rather than three at 16px. Sized to sit inside r=6
+       * with the same optical weight as the other inner marks: 4.8px wide, 6.2px
+       * tall, centred on (8, 8).
        */
       return (
         <>
@@ -139,14 +185,6 @@ function Glyph({ status }: { status: IssueStatus }) {
             strokeWidth="0.7"
             strokeLinejoin="round"
           />
-        </>
-      );
-
-    case "blocked":
-      return (
-        <>
-          <circle cx="8" cy="8" r="7" fill={colour} />
-          <rect x="4.5" y="7.2" width="7" height="1.6" rx="0.8" fill="var(--card)" />
         </>
       );
 
@@ -168,7 +206,22 @@ function Glyph({ status }: { status: IssueStatus }) {
   }
 }
 
-export function StatusIcon({ status, className }: { status: IssueStatus; className?: string }) {
+/**
+ * `category` may be passed by a caller that already has the row in hand (the settings
+ * editor previewing a category it has not saved yet); everything else passes the id and
+ * lets `statusCategory` resolve it against the served vocabulary.
+ */
+export function StatusIcon({
+  status,
+  category,
+  className,
+}: {
+  status: StatusId;
+  category?: StatusCategory;
+  className?: string;
+}) {
+  const resolved = category ?? statusCategory(status);
+  const name = `Status: ${statusLabel(status)}`;
   return (
     <svg
       width="16"
@@ -176,11 +229,11 @@ export function StatusIcon({ status, className }: { status: IssueStatus; classNa
       viewBox="0 0 16 16"
       className={className}
       role="img"
-      aria-label={`Status: ${STATUS_LABEL[status]}`}
+      aria-label={name}
       focusable="false"
     >
-      <title>{`Status: ${STATUS_LABEL[status]}`}</title>
-      <Glyph status={status} />
+      <title>{name}</title>
+      <Glyph category={resolved} />
     </svg>
   );
 }

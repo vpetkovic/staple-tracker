@@ -12,6 +12,11 @@ It covers:
 - the loop (below);
 - the **identity rule** — act under the identity you claimed with, all session,
   or your own writes stop counting as liveness;
+- **parents close themselves** — an epic's status follows its children, so the
+  last child to land closes it (see [semantics.md](semantics.md)). Nobody has to
+  remember to close an epic; what is still owed is the **summary comment**, and
+  an explicit `staple done <epic>` remains allowed, idempotent, and immune to
+  the derivation afterwards;
 - the **worklog convention** — `Done` / `Next` / `Files touched`, revised at
   every milestone. A checkpoint written *before* the interruption is the
   handoff; one written at the end never survives a kill;
@@ -66,6 +71,12 @@ like `update_task`.
 - **`request_changes`** — `{ref, comment}`. `comment` is required and is stored
   as a real comment. The parent returns to `todo` with no automatic
   re-checkout; **the children stay queued.**
+
+**An open gate outranks the automatic close.** A parent normally closes itself
+when its last child resolves; one whose gate is `pending` or
+`changes_requested` does not, because the review is the remaining work. Answer
+the gate and the ordinary rule resumes — `approve_task` on a subtree that has
+already finished closes the parent then and there.
 
 None is idempotent: a second whole-gate call is refused rather than absorbed.
 

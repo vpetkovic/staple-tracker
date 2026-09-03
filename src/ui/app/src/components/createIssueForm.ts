@@ -21,13 +21,19 @@
  * Pure and DOM-free on purpose — it is unit-tested next door without React.
  */
 import type { SelectOption } from "./ui/searchable-select";
-import type { ActionPayload, IssuePriority, IssueRow } from "../lib/types";
+import { DEFAULT_ISSUE_KIND, type ActionPayload, type IssueKind, type IssuePriority, type IssueRow } from "../lib/types";
 
 /** Exactly what the dialog holds in state. */
 export interface CreateFormState {
   title: string;
   description: string;
   priority: IssuePriority;
+  /**
+   * The declared kind — O1b (STA-125). Always a real value, never "": the control is a
+   * select over the workspace's vocabulary, so there is no "untouched" state to
+   * distinguish, exactly as with `priority`.
+   */
+  kind: IssueKind;
   /** A single ref, or "". Single-select, because a task has one parent. */
   parent: string;
   labels: string[];
@@ -49,11 +55,35 @@ export const EMPTY_CREATE_FORM: CreateFormState = {
   title: "",
   description: "",
   priority: "medium",
+  // Same rule as `priority`: the store's own create-time default, so an untouched form
+  // agrees with what a `staple new` with no flags would have produced. The DIALOG
+  // reconciles this against the served vocabulary — see createFormDefaultKind().
+  kind: DEFAULT_ISSUE_KIND,
   parent: "",
   labels: [],
   blockedBy: [],
   blocking: [],
 };
+
+/**
+ * Which kind a fresh form starts on, given the workspace's served vocabulary — O1b
+ * (STA-125).
+ *
+ * `task` when it is there, which is the ticket's requirement and is true of every
+ * workspace that has not been reconfigured. The fallback is the FIRST served kind, and
+ * only ever reached when the operator has removed `task` — at which point defaulting to
+ * it anyway would put a value in the form that `store.assertConfiguredKind()` is
+ * guaranteed to refuse, i.e. a control that cannot be used correctly.
+ *
+ * This deliberately does NOT mirror `store.defaultKind()` by rederiving its rule; it
+ * mirrors its OUTCOME from the list the server sent, which is the only thing the browser
+ * actually knows. An empty list (settings not fetched yet) answers the constant, because
+ * a form that opens in the first 40ms of a cold page must still open on something.
+ */
+export function createFormDefaultKind(kinds: readonly string[]): IssueKind {
+  if (kinds.length === 0) return DEFAULT_ISSUE_KIND;
+  return kinds.includes(DEFAULT_ISSUE_KIND) ? DEFAULT_ISSUE_KIND : kinds[0]!;
+}
 
 /** Trim, drop blanks, de-duplicate — keeping the order they were first chosen in. */
 function tidy(parts: readonly string[]): string[] {
@@ -100,6 +130,16 @@ export function buildCreatePayload(state: CreateFormState): Extract<ActionPayloa
     title: state.title.trim(),
     priority: state.priority,
   };
+
+  /**
+   * O1b (STA-125). Sent the way `priority` is — always, because the select always holds
+   * a real value and there is no "untouched" to distinguish. The one guard is a blank,
+   * which cannot come from the control and CAN come from a caller building this state by
+   * hand: omitting it there is what makes the store apply its own default rather than
+   * refusing an empty string, and rule 1 at the top of this file is exactly that.
+   */
+  const kind = state.kind.trim();
+  if (kind) payload.kind = kind;
 
   const description = state.description.trim();
   if (description) payload.description = description;

@@ -129,7 +129,7 @@ export function normalize(value: unknown, tempRoots: readonly string[] = []): un
 /**
  * Every field of core/types.ts Issue, at its create-time default. Callers
  * override only what their fixture changed, so the golden stays readable while
- * still pinning all 28 fields: a new field in Issue is missing here and fails,
+ * still pinning all 29 fields: a new field in Issue is missing here and fails,
  * a removed field is extra here and fails.
  */
 export function issueGolden(over: Record<string, unknown> = {}): Record<string, unknown> {
@@ -140,6 +140,10 @@ export function issueGolden(over: Record<string, unknown> = {}): Record<string, 
     description: null,
     status: "backlog",
     statusVersion: 0,
+    // STA-124. `task` is the create-time default, and migration 005's backfill of
+    // parents to `epic` ran once against pre-existing rows — it does not fire for
+    // an issue created by a fixture, so even a fixture PARENT is a `task` here.
+    kind: "task",
     priority: "medium",
     parentId: null,
     depth: 0,

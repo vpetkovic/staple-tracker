@@ -71,6 +71,28 @@ describe("the guide teaches the whole protocol", () => {
     expect(guide).toMatch(/blockers_resolved/);
   });
 
+  /**
+   * STA-153. An agent that believes it must close an epic by hand will either
+   * forget (the bug) or "fix" an epic the tracker already closed. What is pinned
+   * is the fact (parents follow their children), the thing the automatic close
+   * CANNOT do (write the summary), and the escape hatch, so nobody reads
+   * "automatic" as "you may not touch it".
+   */
+  it("teaches that parents close themselves, and what is still owed", () => {
+    expect(guide).toMatch(/epic's status follows its children/i);
+    expect(guide).toMatch(/never have to remember to close\s+one/i);
+    expect(guide).toMatch(/last open child of a parent lands, the parent goes \`done\`/i);
+    expect(guide).toMatch(/cancelled` only if every child was cancelled/i);
+    expect(guide).toMatch(/no children.{0,40}untouched/is);
+    // The summary is the part a close cannot write for you.
+    expect(guide).toMatch(/write the summary/i);
+    expect(guide).toContain("children_complete");
+    // And closing one by hand is still allowed, and still wins afterwards.
+    expect(guide).toMatch(/still allowed/i);
+    expect(guide).toMatch(/idempotent/i);
+    expect(guide).toMatch(/outranks/i);
+  });
+
   it("teaches the identity rule and why a mismatch reads as idle", () => {
     expect(guide).toContain("STAPLE_AGENT");
     expect(guide).toMatch(/same value you claimed with for the entire session/i);
@@ -88,6 +110,44 @@ describe("the guide teaches the whole protocol", () => {
     expect(guide).toMatch(/commit SHAs/i);
     // The reason, which is what makes an agent actually do it.
     expect(guide).toMatch(/written at the end never survives a kill/i);
+  });
+
+  /**
+   * STA-140. The guide is the only onboarding surface a cold harness is
+   * guaranteed to find, and the single most expensive thing it can get wrong now
+   * is assuming the seven statuses it saw in some other repo. What is pinned is
+   * the instruction to LOOK (`staple statuses ls`), the rule that explains why
+   * looking is enough (behaviour is the category's, not the id's), and the rule
+   * that stops an agent reordering a human's board on its own initiative.
+   */
+  it("teaches that the vocabulary is per-workspace and must be read, not assumed", () => {
+    expect(guide).toContain("staple statuses ls");
+    expect(guide).toContain("staple kinds ls");
+    expect(guide).toMatch(/configured per workspace/i);
+    expect(guide).toMatch(/do not assume/i);
+    // The category set, in full — an agent that knows it can reason about a
+    // status nobody has told it about.
+    for (const category of ["unstarted", "ready", "active", "review", "gated", "blocked", "cancelled"]) {
+      expect(guide, category).toContain(category);
+    }
+    expect(guide).toMatch(/keys off the category, never off the id/i);
+    // The edit surface, including the guard that makes removal safe.
+    expect(guide).toContain("staple statuses add");
+    expect(guide).toContain("staple statuses reorder");
+    expect(guide).toContain("--migrate-to");
+    // …and that editing it is a human's decision, like a steal is.
+    expect(guide).toMatch(/only when a human asks/i);
+    // The MCP half mirrors the CLI half, named so an agent with no shell can act.
+    // STA-124: the guide has to teach DECLARING a kind, not just reading the
+    // vocabulary — an agent that never passes --kind files everything as `task`
+    // and the epic/bug distinction never gets made in the first place.
+    expect(guide).toContain("staple new \"Login 500s on retry\" --kind bug");
+    expect(guide).toContain("staple ls --kind epic");
+    expect(guide).toMatch(/declared, never derived/i);
+    expect(guide).toMatch(/default is `task`/i);
+    for (const tool of ["list_statuses", "list_kinds", "update_statuses", "update_kinds"]) {
+      expect(guide, tool).toContain(tool);
+    }
   });
 
   it("teaches the branch pointer at checkout", () => {

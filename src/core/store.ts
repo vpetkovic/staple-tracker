@@ -7,37 +7,50 @@ import {
   parseIdentifier,
 } from "./ids.js";
 import {
+  CHECKOUT_EXPECTED_CATEGORY_ORDER,
   type ClaimActivity,
   DEFAULT_CHECKOUT_EXPECTED,
+  DEFAULT_ISSUE_KIND,
   type GateQueueEntry,
   type GateState,
+  INBOX_PICKUP_CATEGORY_ORDER,
   type Issue,
   type IssueComment,
   type IssueDocumentMeta,
   type IssueGate,
+  type IssueKind,
   type IssuePriority,
   type IssueStatus,
-  ISSUE_STATUSES,
   type IssueTiming,
+  LIST_CATEGORY_ORDER,
   MAX_TREE_DEPTH,
   type QueuedBy,
-  RESOLVED_STATUSES,
+  REQUIRED_STATUS_CATEGORIES,
+  RESOLVED_CATEGORIES,
   StapleError,
   type StapleEvent,
+  type StatusCategory,
+  WORKABLE_CATEGORIES,
   WORKLOG_KEY,
   type WorklogSummary,
+  type WorkspaceKind,
+  type WorkspaceStatus,
   assertEstimateSeconds,
   assertPriority,
-  assertStatus,
+  assertStatusCategory,
+  assertVocabularyId,
   claimGuardMessage,
   normalizeTitle,
   nowIso,
 } from "./types.js";
+import { SORT_ORDER_STEP } from "./migrations/workspace/004-workspace-settings.js";
 
 export interface CreateIssueInput {
   title: string;
   description?: string | null;
   status?: IssueStatus;
+  /** Declared kind; omit for the workspace's default (see `defaultKind`). */
+  kind?: IssueKind;
   priority?: IssuePriority;
   parent?: string | null;
   assignee?: string | null;
@@ -60,6 +73,14 @@ export interface UpdateIssueInput {
   title?: string;
   description?: string | null;
   status?: IssueStatus;
+  /**
+   * Re-declare the kind. Two-state, not three: absent leaves it alone and a
+   * string sets it. There is no null, because there is no "no kind" — the
+   * column is NOT NULL with a DEFAULT, so clearing it is not a state the
+   * tracker can represent (unlike `estimatedSeconds`, where the absence of an
+   * estimate is a real and distinct fact).
+   */
+  kind?: IssueKind;
   priority?: IssuePriority;
   assignee?: string | null;
   labels?: string[];
@@ -95,6 +116,7 @@ export interface AddCommentResult {
 
 export interface IssueFilters {
   status?: IssueStatus[];
+  kind?: IssueKind[];
   assignee?: string;
   parent?: string | null;
   q?: string;
@@ -127,6 +149,7 @@ interface IssueRow {
   description: string | null;
   status: string;
   status_version: number;
+  kind: string;
   priority: string;
   parent_id: string | null;
   depth: number;
@@ -166,6 +189,7 @@ function rowToIssue(row: IssueRow): Issue {
     description: row.description,
     status: row.status as IssueStatus,
     statusVersion: row.status_version,
+    kind: row.kind as IssueKind,
     priority: row.priority as IssuePriority,
     parentId: row.parent_id,
     depth: row.depth,
@@ -218,7 +242,60 @@ function rowToComment(row: CommentRow): IssueComment {
   };
 }
 
-const RESOLVED_SQL = "('done','cancelled')";
+/**
+ * The memoized vocabulary of ONE open workspace, plus every list the store's
+ * guards derive from it. Built once per (connection, settings revision).
+ */
+interface SettingsSnapshot {
+  /** The revision it was built at; see `WorkspaceStore.settings`. */
+  revision: string;
+  statuses: WorkspaceStatus[];
+  kinds: WorkspaceKind[];
+  byId: Map<string, WorkspaceStatus>;
+  /** Configured ids grouped by category, each group in configured order. */
+  byCategory: Map<StatusCategory, string[]>;
+  /** Ids in list rank: `LIST_CATEGORY_ORDER` tiers, configured order within. */
+  listOrder: string[];
+  /** `listOrder` minus the resolved categories — the server-side open status order. */
+  openOrder: string[];
+  resolved: string[];
+  active: string[];
+  review: string[];
+  workable: string[];
+  blocked: string[];
+  checkoutExpected: string[];
+  pickupOrder: string[];
+}
+
+/** One op in an `update_statuses` / `update_kinds` batch. */
+export type VocabularyOp =
+  | { op: "add"; id: string; label?: string; category?: string; after?: string | null }
+  | { op: "rename"; id: string; label: string }
+  | { op: "recategorize"; id: string; category: string }
+  | { op: "reorder"; ids: string[] }
+  | { op: "remove"; id: string; migrateTo?: string | null };
+
+/**
+ * SQL literal list for an `IN (…)` fragment.
+ *
+ * Ids reach the database only through `assertVocabularyId`, so they are already
+ * `[a-z][a-z0-9_]*` and cannot carry a quote. The escape is here anyway, because
+ * "a validator upstream makes this safe" is exactly the sentence that precedes an
+ * injection — the fragment has to be safe to read on its own line.
+ */
+function sqlIdList(ids: readonly string[]): string {
+  if (ids.length === 0) return "(NULL)";
+  return `(${ids.map((id) => `'${id.replace(/'/g, "''")}'`).join(",")})`;
+}
+
+/** `awaiting_approval` -> `Awaiting Approval`, so `--label` is optional, not required. */
+function defaultLabel(id: string): string {
+  return id
+    .split("_")
+    .filter(Boolean)
+    .map((word) => word[0]!.toUpperCase() + word.slice(1))
+    .join(" ");
+}
 
 /**
  * The gate states that QUEUE the descendants underneath them (STA-143).
@@ -242,11 +319,6 @@ const GATE_QUEUEING_STATES: readonly GateState[] = ["pending", "changes_requeste
 /** `gate` and `request-changes` and `approve` all act on a gate that is not yet finished. */
 function isActiveGate(state: string | null): boolean {
   return state !== null && (GATE_QUEUEING_STATES as readonly string[]).includes(state);
-}
-
-/** `done` or `cancelled` — the two statuses that end a ticket's claim on anyone. */
-function isResolvedStatus(status: string): boolean {
-  return (RESOLVED_STATUSES as readonly string[]).includes(status);
 }
 
 /**
@@ -342,11 +414,25 @@ const STATUS_MOVING_EVENT_KINDS = [
  * a new rung must never silently fall out of an exclusion.
  */
 const DERIVED_MARKERS = {
-  in_progress: "child_started",
-  in_review: "child_in_review",
-  backlog: "children_workable",
+  active: "child_started",
+  review: "child_in_review",
+  workable: "children_workable",
   blocked: "children_blocked",
-} as const satisfies Partial<Record<IssueStatus, string>>;
+  done: "children_resolved",
+  cancelled: "children_cancelled",
+} as const satisfies Record<DerivedRung, string>;
+
+/**
+ * What the ladder decided, as a CATEGORY-shaped verdict rather than a status id
+ * (STA-140). `workable` is the two-member band {unstarted, ready}; the others
+ * name the category the parent should be moved into. Which concrete status that
+ * becomes is the workspace's business — see `primaryStatusFor`.
+ *
+ * `done`/`cancelled` are STA-153's two closing rungs: a parent whose children
+ * have ALL landed is finished, and saying so is the same kind of report as
+ * saying it is in progress.
+ */
+type DerivedRung = "active" | "review" | "workable" | "blocked" | "done" | "cancelled";
 
 /**
  * What the interval replay produces for ONE issue, before rollups: the issue's
@@ -379,6 +465,737 @@ export class WorkspaceStore {
     readonly slug: string,
     readonly prefix: string,
   ) {}
+
+  // ---------- workspace settings: statuses and kinds (STA-140) ----------
+
+  /** Per-connection memo. Never read directly — go through `settings()`. */
+  private settingsCache: SettingsSnapshot | null = null;
+
+  private txDepth = 0;
+  private savepointSeq = 0;
+
+  /**
+   * A transaction that NESTS, unlike `tx` (whose `BEGIN IMMEDIATE` throws inside
+   * another transaction). Only the settings writers use it, and only because
+   * `applyStatusOps` composes them: "add awaiting_approval, then reorder" is one
+   * intention and must not be able to half-apply, while each op also has to work
+   * on its own from the CLI.
+   *
+   * Outermost call takes the real write lock; inner calls take a SAVEPOINT, so a
+   * failing op rolls back its own work and rethrows into the outer rollback.
+   */
+  private atomically<T>(fn: () => T): T {
+    if (this.txDepth > 0) {
+      const savepoint = `staple_cfg_${(this.savepointSeq += 1)}`;
+      this.db.exec(`SAVEPOINT ${savepoint}`);
+      try {
+        const result = fn();
+        this.db.exec(`RELEASE ${savepoint}`);
+        return result;
+      } catch (error) {
+        try {
+          this.db.exec(`ROLLBACK TO ${savepoint}`);
+          this.db.exec(`RELEASE ${savepoint}`);
+        } catch {
+          // the outer transaction is already aborting; it owns the rollback
+        }
+        throw error;
+      }
+    }
+    this.txDepth += 1;
+    try {
+      return tx(this.db, fn);
+    } finally {
+      this.txDepth -= 1;
+    }
+  }
+
+  /**
+   * The revision the vocabulary is currently at.
+   *
+   * A single primary-key read of `meta.settings_revision`, and ABSENT means "0" —
+   * which is why nothing writes the row until a setting actually changes, so a
+   * freshly initialised workspace still has exactly the three `meta` keys
+   * `characterize-layout.test.ts` pins.
+   *
+   * The row exists because the cache below has to survive a SECOND PROCESS. A
+   * long-lived UI or MCP server holds one `WorkspaceStore` for hours; a CLI
+   * `staple statuses add` runs in a different process against the same file.
+   * Invalidating only on our own writes would leave that server serving a
+   * vocabulary the operator has already changed — the exact failure that makes
+   * caches worse than no cache.
+   */
+  private settingsRevision(): string {
+    const row = this.db
+      .prepare("SELECT value FROM meta WHERE key = 'settings_revision'")
+      .get() as { value: string } | undefined;
+    return row?.value ?? "0";
+  }
+
+  /** Bump the revision so every other connection's snapshot is stale. */
+  private bumpSettingsRevision(): void {
+    this.db
+      .prepare(
+        `INSERT INTO meta (key, value) VALUES ('settings_revision', '1')
+         ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(meta.value AS INTEGER) + 1 AS TEXT)`,
+      )
+      .run();
+    this.settingsCache = null;
+  }
+
+  /**
+   * The configured vocabulary and everything derived from it, memoized.
+   *
+   * Rebuilt only when the revision moved. This is on the hot path — `issuesQuery`
+   * needs the resolved-status list on every list call — so the steady state is
+   * one indexed `meta` read and a map lookup.
+   */
+  private settings(): SettingsSnapshot {
+    const revision = this.settingsRevision();
+    const cached = this.settingsCache;
+    if (cached && cached.revision === revision) return cached;
+
+    const statuses = (
+      this.db
+        .prepare(
+          `SELECT id, label, category, sort_order, is_builtin FROM workspace_statuses
+            ORDER BY sort_order, id`,
+        )
+        .all() as Array<{
+        id: string;
+        label: string;
+        category: string;
+        sort_order: number;
+        is_builtin: number;
+      }>
+    ).map((row) => ({
+      id: row.id,
+      label: row.label,
+      category: row.category as StatusCategory,
+      sortOrder: row.sort_order,
+      isBuiltin: row.is_builtin === 1,
+    }));
+
+    const kinds = (
+      this.db
+        .prepare(`SELECT id, label, sort_order, is_builtin FROM workspace_kinds ORDER BY sort_order, id`)
+        .all() as Array<{ id: string; label: string; sort_order: number; is_builtin: number }>
+    ).map((row) => ({
+      id: row.id,
+      label: row.label,
+      sortOrder: row.sort_order,
+      isBuiltin: row.is_builtin === 1,
+    }));
+
+    const byId = new Map(statuses.map((status) => [status.id, status]));
+    const byCategory = new Map<StatusCategory, string[]>();
+    for (const status of statuses) {
+      const list = byCategory.get(status.category);
+      if (list) list.push(status.id);
+      else byCategory.set(status.category, [status.id]);
+    }
+    /**
+     * Tiered by CATEGORY first, configured order second. That split is the whole
+     * ordering contract: reordering statuses reorders the tree, but it can never
+     * lift `done` above `in_progress`, because the tier is not configurable.
+     */
+    const inCategories = (categories: readonly StatusCategory[]): string[] =>
+      categories.flatMap((category) => byCategory.get(category) ?? []);
+
+    const snapshot: SettingsSnapshot = {
+      revision,
+      statuses,
+      kinds,
+      byId,
+      byCategory,
+      listOrder: inCategories(LIST_CATEGORY_ORDER),
+      openOrder: inCategories(LIST_CATEGORY_ORDER.filter((c) => !RESOLVED_CATEGORIES.includes(c))),
+      resolved: inCategories(RESOLVED_CATEGORIES),
+      active: byCategory.get("active") ?? [],
+      review: byCategory.get("review") ?? [],
+      workable: inCategories(WORKABLE_CATEGORIES),
+      blocked: inCategories(["gated", "blocked"]),
+      checkoutExpected: inCategories(CHECKOUT_EXPECTED_CATEGORY_ORDER),
+      pickupOrder: inCategories(INBOX_PICKUP_CATEGORY_ORDER),
+    };
+    this.settingsCache = snapshot;
+    return snapshot;
+  }
+
+  /** The workspace's statuses, in configured order. */
+  getStatuses(): WorkspaceStatus[] {
+    return this.settings().statuses.map((status) => ({ ...status }));
+  }
+
+  /** The workspace's kind vocabulary, in configured order. O1a reads this. */
+  getKinds(): WorkspaceKind[] {
+    return this.settings().kinds.map((kind) => ({ ...kind }));
+  }
+
+  /**
+   * The configured kind ids in configured order — `KIND_RANK` for THIS
+   * workspace, where the rank of a kind is simply its index (STA-124).
+   *
+   * The seed twin in `core/types.ts` is the static `KIND_RANK` map, which is
+   * what a surface with no store (the browser) uses instead.
+   */
+  kindOrder(): string[] {
+    return this.settings().kinds.map((kind) => kind.id);
+  }
+
+  /**
+   * The kind a create with no `kind` writes.
+   *
+   * `DEFAULT_ISSUE_KIND` when the workspace still has it, and otherwise the
+   * FIRST configured kind — because `removeKind` is allowed to delete `task`,
+   * and a default pointing at a kind that no longer exists would write rows
+   * that fail their own validation.
+   *
+   * Deliberately NOT "the first configured kind" unconditionally. That would
+   * mean reordering the vocabulary silently changed what every new issue is:
+   * move `epic` to the front to make it sort first on a board, and suddenly
+   * every ticket anyone files is an epic. Ordering is a display decision and it
+   * must not double as a semantic one.
+   */
+  defaultKind(): string {
+    const kinds = this.settings().kinds;
+    if (kinds.some((kind) => kind.id === DEFAULT_ISSUE_KIND)) return DEFAULT_ISSUE_KIND;
+    const first = kinds[0]?.id;
+    if (first === undefined) {
+      throw new StapleError(
+        "validation",
+        `This workspace has no kinds configured, and an issue must declare one. ` +
+          `Add one with: staple kinds add ${DEFAULT_ISSUE_KIND}`,
+      );
+    }
+    return first;
+  }
+
+  /** The configured status ids in list rank; the tree/board group order. */
+  statusOrder(): string[] {
+    return [...this.settings().listOrder];
+  }
+
+  /** Configured open statuses in list rank — the per-workspace OPEN_STATUS_ORDER. */
+  openStatusOrder(): string[] {
+    return [...this.settings().openOrder];
+  }
+
+  /** Configured pickup order for the agent inbox: active, review, ready, unstarted. */
+  inboxPickupOrder(): string[] {
+    return [...this.settings().pickupOrder];
+  }
+
+  /** What a bare `checkout` claims from, in the order the refusal sentence names. */
+  checkoutExpectedStatuses(): string[] {
+    return [...this.settings().checkoutExpected];
+  }
+
+  /** The category of a configured status, or null when the id is not configured. */
+  categoryOf(status: string): StatusCategory | null {
+    return this.settings().byId.get(status)?.category ?? null;
+  }
+
+  /** Is this status one of the "finished" categories (done/cancelled)? */
+  isResolvedStatus(status: string): boolean {
+    const category = this.categoryOf(status);
+    return category !== null && RESOLVED_CATEGORIES.includes(category);
+  }
+
+  isActiveStatus(status: string): boolean {
+    return this.categoryOf(status) === "active";
+  }
+
+  /**
+   * The status a code path that means a CATEGORY should actually write.
+   *
+   * The first configured status of that category — so `release` lands in whatever
+   * the operator calls "ready" and the derivation's rung 4 lands in whatever they
+   * call "blocked". Throws rather than guessing when the category is empty:
+   * `removeStatus` refuses to empty a `REQUIRED_STATUS_CATEGORIES` member, so
+   * reaching this is a bug or a hand-edited database, and either deserves a
+   * sentence rather than a silent write to the wrong column.
+   */
+  primaryStatusFor(category: StatusCategory): string {
+    const first = this.settings().byCategory.get(category)?.[0];
+    if (first === undefined) {
+      throw new StapleError(
+        "validation",
+        `This workspace has no status in the "${category}" category, and one is required here. ` +
+          `Add one with: staple statuses add <id> --category ${category}`,
+      );
+    }
+    return first;
+  }
+
+  /** Validate a status id against THIS workspace's configuration. */
+  assertConfiguredStatus(value: string): void {
+    if (this.settings().byId.has(value)) return;
+    throw new StapleError(
+      "validation",
+      `Unknown status "${value}" in workspace ${this.slug}. Valid: ${this.settings().listOrder.join(", ")}`,
+    );
+  }
+
+  /** Validate a kind id against THIS workspace's configuration. */
+  assertConfiguredKind(value: string): void {
+    if (this.settings().kinds.some((kind) => kind.id === value)) return;
+    throw new StapleError(
+      "validation",
+      `Unknown kind "${value}" in workspace ${this.slug}. Valid: ${this.settings().kinds.map((k) => k.id).join(", ")}`,
+    );
+  }
+
+  /** `('done','cancelled')` for the seeded seven — configured ids otherwise. */
+  private resolvedSql(): string {
+    return sqlIdList(this.settings().resolved);
+  }
+
+  /**
+   * `CASE status WHEN … THEN n … ELSE n END` in list rank.
+   *
+   * Generated rather than written out, which is what makes "reorder the statuses
+   * and the tree reorders" true. A status not in the table sorts last rather than
+   * first: a row carrying an id nobody configured is a data problem, and burying
+   * it is better than putting it at the top of everyone's inbox.
+   */
+  private statusRankSql(column = "status"): string {
+    const order = this.settings().listOrder;
+    const arms = order.map((id, index) => `WHEN '${id.replace(/'/g, "''")}' THEN ${index}`).join(" ");
+    return `CASE ${column} ${arms} ELSE ${order.length} END`;
+  }
+
+  // ---------- workspace settings: writes ----------
+
+  private requireStatusRow(id: string): WorkspaceStatus {
+    const row = this.settings().byId.get(id);
+    if (!row) {
+      throw new StapleError(
+        "not_found",
+        `No status "${id}" in workspace ${this.slug}. Configured: ${this.settings().listOrder.join(", ")}`,
+      );
+    }
+    return row;
+  }
+
+  private requireKindRow(id: string): WorkspaceKind {
+    const row = this.settings().kinds.find((kind) => kind.id === id);
+    if (!row) {
+      throw new StapleError(
+        "not_found",
+        `No kind "${id}" in workspace ${this.slug}. Configured: ${this.settings().kinds.map((k) => k.id).join(", ")}`,
+      );
+    }
+    return row;
+  }
+
+  /** How many issues currently carry this status. The remove guard's evidence. */
+  statusUsageCount(id: string): number {
+    const row = this.db.prepare("SELECT COUNT(*) AS n FROM issues WHERE status = ?").get(id) as
+      | { n: number }
+      | undefined;
+    return row?.n ?? 0;
+  }
+
+  /**
+   * How many issues carry this kind — 0 until O1a (STA-124) adds `issues.kind`.
+   *
+   * The column probe is deliberate rather than a hardcoded 0: O1a lands on this
+   * same branch right after O7a, and a counter that starts telling the truth the
+   * moment the column exists is one fewer edit for it to remember.
+   */
+  kindUsageCount(id: string): number {
+    const hasColumn = (
+      this.db.prepare("SELECT name FROM pragma_table_info('issues')").all() as Array<{ name: string }>
+    ).some((column) => column.name === "kind");
+    if (!hasColumn) return 0;
+    const row = this.db.prepare("SELECT COUNT(*) AS n FROM issues WHERE kind = ?").get(id) as
+      | { n: number }
+      | undefined;
+    return row?.n ?? 0;
+  }
+
+  /**
+   * `sort_order` for a row inserted after `after` (or at the end when null).
+   *
+   * Rows are seeded ten apart precisely so this is an arithmetic mean rather than
+   * a rewrite of the column. When the gap is exhausted the whole table is
+   * renormalised, which is rare and cheap on a table this size.
+   */
+  private insertionOrder(rows: Array<{ id: string; sortOrder: number }>, after: string | null | undefined): number {
+    if (rows.length === 0) return SORT_ORDER_STEP;
+    if (after === undefined || after === null) {
+      return rows[rows.length - 1]!.sortOrder + SORT_ORDER_STEP;
+    }
+    const index = rows.findIndex((row) => row.id === after);
+    if (index === -1) {
+      throw new StapleError("not_found", `Cannot place after "${after}": no such entry in workspace ${this.slug}`);
+    }
+    const previous = rows[index]!.sortOrder;
+    const next = rows[index + 1]?.sortOrder;
+    if (next === undefined) return previous + SORT_ORDER_STEP;
+    if (next - previous > 1) return Math.floor((previous + next) / 2);
+    return Number.NaN; // caller renormalises, then retries
+  }
+
+  private renormalize(table: "workspace_statuses" | "workspace_kinds"): void {
+    const ids = (
+      this.db.prepare(`SELECT id FROM ${table} ORDER BY sort_order, id`).all() as Array<{ id: string }>
+    ).map((row) => row.id);
+    const update = this.db.prepare(`UPDATE ${table} SET sort_order = ? WHERE id = ?`);
+    ids.forEach((id, index) => update.run((index + 1) * SORT_ORDER_STEP, id));
+  }
+
+  addStatus(
+    input: { id: string; label?: string; category: string; after?: string | null },
+    actor?: string | null,
+  ): WorkspaceStatus {
+    const id = assertVocabularyId(input.id, "status");
+    const category = input.category.trim().toLowerCase();
+    assertStatusCategory(category);
+    const label = (input.label ?? "").trim() || defaultLabel(id);
+    return this.atomically(() => {
+      if (this.settings().byId.has(id)) {
+        throw new StapleError("duplicate", `Status "${id}" already exists in workspace ${this.slug}`);
+      }
+      let order = this.insertionOrder(this.settings().statuses, input.after);
+      if (Number.isNaN(order)) {
+        this.renormalize("workspace_statuses");
+        this.settingsCache = null;
+        order = this.insertionOrder(this.settings().statuses, input.after);
+      }
+      this.db
+        .prepare(
+          `INSERT INTO workspace_statuses (id, label, category, sort_order, is_builtin) VALUES (?, ?, ?, ?, 0)`,
+        )
+        .run(id, label, category, order);
+      this.bumpSettingsRevision();
+      this.emitEvent({
+        kind: "status_config_changed",
+        actor: actor ?? null,
+        payload: { action: "add", id, label, category },
+      });
+      return this.requireStatusRow(id);
+    });
+  }
+
+  renameStatus(id: string, label: string, actor?: string | null): WorkspaceStatus {
+    const next = label.trim();
+    if (!next) throw new StapleError("validation", "Status label cannot be empty");
+    return this.atomically(() => {
+      const before = this.requireStatusRow(id);
+      this.db.prepare("UPDATE workspace_statuses SET label = ? WHERE id = ?").run(next, id);
+      this.bumpSettingsRevision();
+      this.emitEvent({
+        kind: "status_config_changed",
+        actor: actor ?? null,
+        payload: { action: "rename", id, from: before.label, to: next },
+      });
+      return this.requireStatusRow(id);
+    });
+  }
+
+  /**
+   * Move a status to a different category — i.e. give it different BEHAVIOUR.
+   *
+   * Included because "I called it `in_review` but it should behave as blocked" is
+   * a real correction, and the alternative is remove-and-re-add, which forces a
+   * migrate-to and rewrites every row twice.
+   */
+  recategorizeStatus(id: string, category: string, actor?: string | null): WorkspaceStatus {
+    const next = category.trim().toLowerCase();
+    assertStatusCategory(next);
+    return this.atomically(() => {
+      const before = this.requireStatusRow(id);
+      if (before.category === next) return before;
+      this.assertCategoryStaysPopulated(before, next);
+      this.db.prepare("UPDATE workspace_statuses SET category = ? WHERE id = ?").run(next, id);
+      this.bumpSettingsRevision();
+      this.emitEvent({
+        kind: "status_config_changed",
+        actor: actor ?? null,
+        payload: { action: "recategorize", id, from: before.category, to: next },
+      });
+      return this.requireStatusRow(id);
+    });
+  }
+
+  /**
+   * The one rule protecting the code paths that write a CATEGORY rather than an
+   * id: `release` needs a `ready`, `checkout` needs an `active`, `done` needs a
+   * `done`. Emptying one of those is not a preference, it is a workspace that
+   * cannot complete a task.
+   */
+  private assertCategoryStaysPopulated(row: WorkspaceStatus, movingTo: StatusCategory | null): void {
+    if (!REQUIRED_STATUS_CATEGORIES.includes(row.category)) return;
+    if (movingTo === row.category) return;
+    const remaining = (this.settings().byCategory.get(row.category) ?? []).filter((id) => id !== row.id);
+    if (remaining.length > 0) return;
+    throw new StapleError(
+      "validation",
+      `"${row.id}" is the only status in the "${row.category}" category, and staple writes into that ` +
+        `category (checkout, release, done, cancel and the derived parent rungs all do). ` +
+        `Add another "${row.category}" status first, then retry.`,
+    );
+  }
+
+  /**
+   * Set the whole order at once. `ids` must be a PERMUTATION of the configured
+   * ids — a partial list is refused rather than interpreted, because "the ones
+   * you left out go… somewhere" is the kind of guess that silently reorders a
+   * board nobody touched.
+   */
+  reorderStatuses(ids: string[], actor?: string | null): WorkspaceStatus[] {
+    return this.atomically(() => {
+      const normalized = ids.map((id) => assertVocabularyId(id, "status"));
+      this.assertPermutation(normalized, this.settings().statuses.map((s) => s.id), "status");
+      const update = this.db.prepare("UPDATE workspace_statuses SET sort_order = ? WHERE id = ?");
+      normalized.forEach((id, index) => update.run((index + 1) * SORT_ORDER_STEP, id));
+      this.bumpSettingsRevision();
+      this.emitEvent({
+        kind: "status_config_changed",
+        actor: actor ?? null,
+        payload: { action: "reorder", order: normalized },
+      });
+      return this.getStatuses();
+    });
+  }
+
+  private assertPermutation(given: string[], configured: string[], what: "status" | "kind"): void {
+    const seen = new Set<string>();
+    for (const id of given) {
+      if (seen.has(id)) throw new StapleError("validation", `"${id}" appears twice in the new ${what} order`);
+      seen.add(id);
+    }
+    const missing = configured.filter((id) => !seen.has(id));
+    const unknown = given.filter((id) => !configured.includes(id));
+    if (unknown.length > 0) {
+      throw new StapleError("validation", `Unknown ${what}${unknown.length > 1 ? "s" : ""}: ${unknown.join(", ")}`);
+    }
+    if (missing.length > 0) {
+      throw new StapleError(
+        "validation",
+        `A reorder must list every ${what}. Missing: ${missing.join(", ")}. ` +
+          `Send all ${configured.length} in the order you want.`,
+      );
+    }
+  }
+
+  /**
+   * Remove a status. Two independent guards, and neither is a warning:
+   *
+   *  - rows still carry it -> `--migrate-to <status>` is REQUIRED, and every such
+   *    row is moved in the same transaction. Without it the issues would keep an
+   *    id with no configuration, which is the state every guard in this file
+   *    would then have to have an opinion about.
+   *  - it is the last member of a category the code writes into -> refused
+   *    outright. See `assertCategoryStaysPopulated`.
+   *
+   * The migration is a bare status rewrite: no events per issue, no timestamps,
+   * no derivation. It is a RENAME of a vocabulary entry from the rows' point of
+   * view, not seven hundred status transitions, and logging it as transitions
+   * would poison every interval the timing replay reconstructs.
+   */
+  removeStatus(id: string, opts: { migrateTo?: string | null } = {}, actor?: string | null): { migrated: number } {
+    return this.atomically(() => {
+      const row = this.requireStatusRow(id);
+      this.assertCategoryStaysPopulated(row, null);
+      const used = this.statusUsageCount(id);
+      let migrated = 0;
+      if (used > 0) {
+        const target = opts.migrateTo?.trim();
+        if (!target) {
+          throw new StapleError(
+            "conflict",
+            `${used} issue${used === 1 ? "" : "s"} still ${used === 1 ? "has" : "have"} status "${id}". ` +
+              `Pass --migrate-to <status> to move ${used === 1 ? "it" : "them"} first.`,
+            { status: id, issues: used },
+          );
+        }
+        if (target === id) {
+          throw new StapleError("validation", "--migrate-to must name a different status");
+        }
+        this.requireStatusRow(target);
+        const result = this.db
+          .prepare("UPDATE issues SET status = ?, updated_at = ? WHERE status = ?")
+          .run(target, nowIso(), id);
+        migrated = Number(result.changes);
+      }
+      this.db.prepare("DELETE FROM workspace_statuses WHERE id = ?").run(id);
+      this.bumpSettingsRevision();
+      this.emitEvent({
+        kind: "status_config_changed",
+        actor: actor ?? null,
+        payload: { action: "remove", id, migrateTo: opts.migrateTo ?? null, migrated },
+      });
+      return { migrated };
+    });
+  }
+
+  addKind(input: { id: string; label?: string; after?: string | null }, actor?: string | null): WorkspaceKind {
+    const id = assertVocabularyId(input.id, "kind");
+    const label = (input.label ?? "").trim() || defaultLabel(id);
+    return this.atomically(() => {
+      if (this.settings().kinds.some((kind) => kind.id === id)) {
+        throw new StapleError("duplicate", `Kind "${id}" already exists in workspace ${this.slug}`);
+      }
+      let order = this.insertionOrder(this.settings().kinds, input.after);
+      if (Number.isNaN(order)) {
+        this.renormalize("workspace_kinds");
+        this.settingsCache = null;
+        order = this.insertionOrder(this.settings().kinds, input.after);
+      }
+      this.db
+        .prepare("INSERT INTO workspace_kinds (id, label, sort_order, is_builtin) VALUES (?, ?, ?, 0)")
+        .run(id, label, order);
+      this.bumpSettingsRevision();
+      this.emitEvent({
+        kind: "kind_config_changed",
+        actor: actor ?? null,
+        payload: { action: "add", id, label },
+      });
+      return this.requireKindRow(id);
+    });
+  }
+
+  renameKind(id: string, label: string, actor?: string | null): WorkspaceKind {
+    const next = label.trim();
+    if (!next) throw new StapleError("validation", "Kind label cannot be empty");
+    return this.atomically(() => {
+      const before = this.requireKindRow(id);
+      this.db.prepare("UPDATE workspace_kinds SET label = ? WHERE id = ?").run(next, id);
+      this.bumpSettingsRevision();
+      this.emitEvent({
+        kind: "kind_config_changed",
+        actor: actor ?? null,
+        payload: { action: "rename", id, from: before.label, to: next },
+      });
+      return this.requireKindRow(id);
+    });
+  }
+
+  reorderKinds(ids: string[], actor?: string | null): WorkspaceKind[] {
+    return this.atomically(() => {
+      const normalized = ids.map((id) => assertVocabularyId(id, "kind"));
+      this.assertPermutation(normalized, this.settings().kinds.map((k) => k.id), "kind");
+      const update = this.db.prepare("UPDATE workspace_kinds SET sort_order = ? WHERE id = ?");
+      normalized.forEach((id, index) => update.run((index + 1) * SORT_ORDER_STEP, id));
+      this.bumpSettingsRevision();
+      this.emitEvent({
+        kind: "kind_config_changed",
+        actor: actor ?? null,
+        payload: { action: "reorder", order: normalized },
+      });
+      return this.getKinds();
+    });
+  }
+
+  /**
+   * Same contract as `removeStatus`, minus the category guard — kinds have no
+   * behaviour, so emptying the list is merely useless rather than incoherent.
+   * The last kind is still protected: O1a's `issues.kind` is NOT NULL, so a
+   * workspace with no kinds could not create an issue.
+   */
+  removeKind(id: string, opts: { migrateTo?: string | null } = {}, actor?: string | null): { migrated: number } {
+    return this.atomically(() => {
+      this.requireKindRow(id);
+      if (this.settings().kinds.length === 1) {
+        throw new StapleError("validation", `"${id}" is the only kind left; a workspace needs at least one.`);
+      }
+      const used = this.kindUsageCount(id);
+      let migrated = 0;
+      if (used > 0) {
+        const target = opts.migrateTo?.trim();
+        if (!target) {
+          throw new StapleError(
+            "conflict",
+            `${used} issue${used === 1 ? "" : "s"} still ${used === 1 ? "has" : "have"} kind "${id}". ` +
+              `Pass --migrate-to <kind> to move ${used === 1 ? "it" : "them"} first.`,
+            { kind: id, issues: used },
+          );
+        }
+        if (target === id) throw new StapleError("validation", "--migrate-to must name a different kind");
+        this.requireKindRow(target);
+        const result = this.db
+          .prepare("UPDATE issues SET kind = ?, updated_at = ? WHERE kind = ?")
+          .run(target, nowIso(), id);
+        migrated = Number(result.changes);
+      }
+      this.db.prepare("DELETE FROM workspace_kinds WHERE id = ?").run(id);
+      this.bumpSettingsRevision();
+      this.emitEvent({
+        kind: "kind_config_changed",
+        actor: actor ?? null,
+        payload: { action: "remove", id, migrateTo: opts.migrateTo ?? null, migrated },
+      });
+      return { migrated };
+    });
+  }
+
+  /**
+   * Apply a batch of ops in ONE transaction, in the order given.
+   *
+   * The MCP write tools take a batch rather than one op per call because "add
+   * `awaiting_approval` and put it after `in_review`" is one intention, and
+   * splitting it across two round trips leaves a window where the board is
+   * visibly wrong. Ordered, not set-based: `add` then `reorder` in the same
+   * batch has to see the added row.
+   */
+  applyStatusOps(ops: readonly VocabularyOp[], actor?: string | null): WorkspaceStatus[] {
+    return this.atomically(() => {
+      for (const op of ops) {
+        switch (op.op) {
+          case "add":
+            this.addStatus(
+              { id: op.id, label: op.label, category: op.category ?? "", after: op.after },
+              actor,
+            );
+            break;
+          case "rename":
+            this.renameStatus(op.id, op.label, actor);
+            break;
+          case "recategorize":
+            this.recategorizeStatus(op.id, op.category, actor);
+            break;
+          case "reorder":
+            this.reorderStatuses(op.ids, actor);
+            break;
+          case "remove":
+            this.removeStatus(op.id, { migrateTo: op.migrateTo }, actor);
+            break;
+          default:
+            throw new StapleError("validation", `Unknown status op "${(op as { op: string }).op}"`);
+        }
+      }
+      return this.getStatuses();
+    });
+  }
+
+  applyKindOps(ops: readonly VocabularyOp[], actor?: string | null): WorkspaceKind[] {
+    return this.atomically(() => {
+      for (const op of ops) {
+        switch (op.op) {
+          case "add":
+            this.addKind({ id: op.id, label: op.label, after: op.after }, actor);
+            break;
+          case "rename":
+            this.renameKind(op.id, op.label, actor);
+            break;
+          case "reorder":
+            this.reorderKinds(op.ids, actor);
+            break;
+          case "remove":
+            this.removeKind(op.id, { migrateTo: op.migrateTo }, actor);
+            break;
+          case "recategorize":
+            throw new StapleError("validation", "Kinds have no category — only statuses do.");
+          default:
+            throw new StapleError("validation", `Unknown kind op "${(op as { op: string }).op}"`);
+        }
+      }
+      return this.getKinds();
+    });
+  }
 
   // ---------- lookup ----------
 
@@ -467,17 +1284,30 @@ export class WorkspaceStore {
     const title = input.title?.trim();
     if (!title) throw new StapleError("validation", "Title is required");
     if (input.priority) assertPriority(input.priority);
-    if (input.status) assertStatus(input.status);
+    if (input.status) this.assertConfiguredStatus(input.status);
+    // Validated against THIS workspace's vocabulary, not a compile-time union —
+    // which is what makes `staple kinds add milestone` work with no code change.
+    // Before the transaction, like status and priority above, so a bad kind
+    // cannot be discovered halfway through a create that has already consumed
+    // an issue number.
+    if (input.kind) this.assertConfiguredKind(input.kind);
+    const kind = input.kind ?? this.defaultKind();
     // Validated BEFORE the transaction, like priority and status above: a bad
     // estimate must not be discovered halfway through a create that has already
     // consumed an issue number.
     const estimatedSeconds =
       input.estimatedSeconds == null ? null : assertEstimateSeconds(input.estimatedSeconds);
 
-    // Default status: todo when assigned, backlog otherwise.
-    const status: IssueStatus = input.status ?? (input.assignee ? "todo" : "backlog");
-    if ((input.unblockOwner || input.unblockAction) && status !== "blocked") {
-      throw new StapleError("validation", "unblockOwner/unblockAction require status \"blocked\"");
+    /**
+     * Default status: the workspace's READY status when the issue is assigned,
+     * its UNSTARTED one otherwise. Same rule as before ("todo when assigned,
+     * backlog otherwise") stated in categories, so a renamed vocabulary keeps it.
+     */
+    const status: IssueStatus =
+      input.status ?? this.primaryStatusFor(input.assignee ? "ready" : "unstarted");
+    const statusCategory = this.categoryOf(status);
+    if ((input.unblockOwner || input.unblockAction) && statusCategory !== "blocked") {
+      throw new StapleError("validation", "unblockOwner/unblockAction require a status in the \"blocked\" category");
     }
 
     return tx(this.db, () => {
@@ -503,7 +1333,7 @@ export class WorkspaceStore {
         const dup = this.db
           .prepare(
             `SELECT identifier FROM issues
-             WHERE normalized_title = ? AND status NOT IN ${RESOLVED_SQL}
+             WHERE normalized_title = ? AND status NOT IN ${this.resolvedSql()}
                AND parent_id IS ?`,
           )
           .get(normalized, parent?.id ?? null) as { identifier: string } | undefined;
@@ -525,12 +1355,12 @@ export class WorkspaceStore {
       const row = this.db
         .prepare(
           `INSERT INTO issues (
-             id, identifier, title, normalized_title, description, status, priority,
+             id, identifier, title, normalized_title, description, status, kind, priority,
              parent_id, depth, assignee, created_by, labels, acceptance_criteria,
              block_parent_until_done, unblock_owner, unblock_action, origin_kind, origin_id,
              idempotency_key, blocked_transition_at, estimated_seconds, started_at,
              created_at, updated_at
-           ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+           ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
            RETURNING *`,
         )
         .get(
@@ -540,6 +1370,7 @@ export class WorkspaceStore {
           normalized,
           input.description ?? null,
           status,
+          kind,
           input.priority ?? "medium",
           parent?.id ?? null,
           parent ? parent.depth + 1 : 0,
@@ -548,14 +1379,14 @@ export class WorkspaceStore {
           JSON.stringify(input.labels ?? []),
           input.acceptanceCriteria ? JSON.stringify(input.acceptanceCriteria) : null,
           input.blockParentUntilDone ? 1 : 0,
-          status === "blocked" ? (input.unblockOwner ?? null) : null,
-          status === "blocked" ? (input.unblockAction ?? null) : null,
+          statusCategory === "blocked" ? (input.unblockOwner ?? null) : null,
+          statusCategory === "blocked" ? (input.unblockAction ?? null) : null,
           input.originKind ?? "manual",
           input.originId ?? null,
           input.idempotencyKey ?? null,
-          status === "blocked" ? now : null,
+          statusCategory === "blocked" ? now : null,
           estimatedSeconds,
-          status === "in_progress" ? now : null,
+          statusCategory === "active" ? now : null,
           now,
           now,
         ) as unknown as IssueRow;
@@ -693,7 +1524,7 @@ export class WorkspaceStore {
 
   unresolvedBlockersOf(issueId: string): IssueRow[] {
     return this.blockersOf(issueId).filter(
-      (b) => !(RESOLVED_STATUSES as readonly string[]).includes(b.status),
+      (b) => !this.isResolvedStatus(b.status),
     );
   }
 
@@ -709,7 +1540,7 @@ export class WorkspaceStore {
       .prepare(
         `SELECT r.blocked_id AS blocked_id, b.identifier AS identifier
          FROM relations r JOIN issues b ON b.id = r.blocker_id
-         WHERE r.type = 'blocks' AND b.status NOT IN ${RESOLVED_SQL}
+         WHERE r.type = 'blocks' AND b.status NOT IN ${this.resolvedSql()}
            AND r.blocked_id IN (${issueIds.map(() => "?").join(",")})
          ORDER BY b.identifier`,
       )
@@ -737,7 +1568,7 @@ export class WorkspaceStore {
       .prepare(
         `SELECT r.blocker_id AS blocker_id, d.identifier AS identifier
          FROM relations r JOIN issues d ON d.id = r.blocked_id
-         WHERE r.type = 'blocks' AND d.status NOT IN ${RESOLVED_SQL}
+         WHERE r.type = 'blocks' AND d.status NOT IN ${this.resolvedSql()}
            AND r.blocker_id IN (${issueIds.map(() => "?").join(",")})
          ORDER BY d.identifier`,
       )
@@ -750,7 +1581,7 @@ export class WorkspaceStore {
     const all = this.blockersOf(dependent.id);
     if (all.length === 0) return;
     const unresolved = all.filter(
-      (b) => !(RESOLVED_STATUSES as readonly string[]).includes(b.status),
+      (b) => !this.isResolvedStatus(b.status),
     );
     if (unresolved.length > 0) return;
     this.emitEvent({
@@ -861,50 +1692,63 @@ export class WorkspaceStore {
   /**
    * The ladder: what a parent's status SHOULD read, given its children.
    *
-   * Computed over OPEN children only — `done` and `cancelled` contribute
-   * nothing, at any rung. Returns null for "no derivation applies", which is a
-   * distinct outcome from any status: it means leave the parent exactly as it is.
+   * The OPEN rungs are computed over open children only — a `done` child
+   * contributes nothing to rungs 1-4. Returns null for "no derivation applies",
+   * which is a distinct outcome from any status: it means leave the parent
+   * exactly as it is.
    *
-   *  1. any `in_progress`        -> `in_progress`
-   *  2. else any `in_review`     -> `in_review`
-   *  3. else any `todo`/`backlog`-> the WORKABLE BAND (see `WORKABLE_BAND`)
-   *  4. else (all open blocked)  -> `blocked`
-   *  0. no open children at all  -> null
+   * Every rung is stated in CATEGORIES since STA-140, never in status ids, so a
+   * renamed, added or reordered status keeps exactly these semantics:
    *
-   * Rung 4 is why `blocked` is EXCLUSIVE: it is last, so it wins only when it is
-   * all that remains. One blocked child beside one backlog child derives the
-   * workable band, because there is still work an agent can pick up underneath.
+   *  0. NO CHILDREN AT ALL            -> null
+   *  1. any open child `active`       -> `active`
+   *  2. else any open `review`        -> `review`
+   *  3. else any open `unstarted`/`ready` -> the WORKABLE BAND
+   *  4. else (all open blocked/gated) -> `blocked`
+   *  5. nothing open, every child `cancelled` -> `cancelled`
+   *  6. nothing open, at least one `done`     -> `done`
    *
-   * Rung 0 is why nothing auto-closes. When every child is resolved the parent
-   * keeps whatever status it had and waits for a deliberate close;
-   * `children_complete` is still the only signal, and it is still only a nudge.
-   * The same rung is why nothing auto-REOPENS either.
+   * Rung 4 is why `blocked` is EXCLUSIVE: it is last of the open rungs, so it
+   * wins only when it is all that remains. One blocked child beside one backlog
+   * child derives the workable band, because there is still work an agent can
+   * pick up underneath. `gated` falls into the same rung as `blocked` — an
+   * approval nobody has given is not work an agent can pick up, and it is not a
+   * reason to demote a parent.
    *
-   * ## `awaiting_approval` children are not input (STA-143)
+   * That rung is also where a GATED CHILD lands (STA-143). The approval-gates
+   * branch used to drop `awaiting_approval` children from the list entirely, so
+   * a gate was invisible upward; the category ladder makes that both unnecessary
+   * and unsafe. Unnecessary, because rung 4 exists and says the true thing — an
+   * epic parked behind a review is not pickable, exactly like a blocked one.
+   * Unsafe, because dropping it would empty `open` and hand the parent to rungs
+   * 5/6, which read "nothing open" as FINISHED: a grandparent whose only
+   * remaining child is parked behind a human review would auto-close. A gate is
+   * the one thing that must never be mistaken for a completion.
    *
-   * A parked child is dropped from the list before any rung is consulted, so it
-   * contributes nothing rather than falling through to rung 4. Without this, a
-   * grandparent whose only open child is a gated epic would derive `blocked` —
-   * a status with an unblock descriptor, a blocked-cycle stamp, and a promise
-   * that some named person can clear it, none of which is true of a gate.
+   * Rungs 5 and 6 are STA-153, and they REPLACE STA-98's refinement 2 ("resolved
+   * never derives upward"). A parent whose every child has landed is finished:
+   * leaving it in `in_progress` was the lie the ticket exists to remove. The two
+   * rungs are asymmetric on purpose — `cancelled` needs unanimity, because one
+   * shipped child means the parent shipped something, so any mix of done and
+   * cancelled reads `done`. `children_complete` still fires: it is the wake that
+   * tells the owner to write the summary the automatic close cannot write.
    *
-   * The effect is that a gate is INVISIBLE upward: it says nothing about the
-   * grandparent, and if there is no other open child the grandparent falls to
-   * rung 0 and is left exactly as it is. That is the same "decline rather than
-   * guess" instinct rung 0 already encodes, applied to a parked subtree.
+   * Rung 0 is now the ONLY "nothing to say" answer, and it is the ticket's
+   * explicit carve-out: a leaf — an issue with no children at all — is untouched
+   * by every rule here, forever.
    */
-  private static deriveStatusFromChildren(
-    childStatuses: readonly string[],
-  ): "in_progress" | "in_review" | "workable" | "blocked" | null {
-    const open = childStatuses.filter(
-      (status) =>
-        !(RESOLVED_STATUSES as readonly string[]).includes(status) &&
-        status !== "awaiting_approval",
-    );
-    if (open.length === 0) return null;
-    if (open.includes("in_progress")) return "in_progress";
-    if (open.includes("in_review")) return "in_review";
-    if (open.some((status) => status === "todo" || status === "backlog")) return "workable";
+  private deriveStatusFromChildren(childStatuses: readonly string[]): DerivedRung | null {
+    if (childStatuses.length === 0) return null; // rung 0: a leaf is nobody's parent
+    const open = childStatuses.filter((status) => !this.isResolvedStatus(status));
+    if (open.length === 0) {
+      return childStatuses.every((status) => this.categoryOf(status) === "cancelled")
+        ? "cancelled"
+        : "done";
+    }
+    const categories = new Set(open.map((status) => this.categoryOf(status)));
+    if (categories.has("active")) return "active";
+    if (categories.has("review")) return "review";
+    if (WORKABLE_CATEGORIES.some((category) => categories.has(category))) return "workable";
     return "blocked";
   }
 
@@ -941,15 +1785,24 @@ export class WorkspaceStore {
    *
    * Derivation may only change what derivation set, so:
    *
-   * - `done`/`cancelled`: never. Resolved is terminal in BOTH directions — no
-   *   auto-close, and equally no auto-reopen.
    * - `backlog`/`todo`: always. This is STA-79's law unchanged: the pre-work band
    *   is the ABSENCE of a statement about the parent, not a statement, so
    *   derivation is free to speak into it.
-   * - `in_progress`/`in_review`/`blocked`: only when `isDerivationOwned` says
-   *   derivation itself wrote it. A manual `blocked` with an unblockOwner, a
-   *   manual `in_review`, a genuinely claimed epic — all immune, permanently,
-   *   until whoever set them moves them.
+   * - EVERYTHING ELSE — `in_progress`, `in_review`, `blocked`, and since STA-153
+   *   `done`/`cancelled` too: only when `isDerivationOwned` says derivation
+   *   itself wrote it. A manual `blocked` with an unblockOwner, a manual
+   *   `in_review`, a genuinely claimed epic, an epic a human closed by hand —
+   *   all immune, permanently, until whoever set them moves them.
+   *
+   * STA-153 deleted the one exception this law used to carry ("resolved is
+   * terminal in both directions") rather than adding a second rule beside it, so
+   * closing and re-opening a parent are governed by the same sentence as every
+   * other rung. What follows from that is the whole of the new behaviour:
+   * a parent the tracker put in `in_progress` closes itself when its last child
+   * lands, and re-opens when a child comes back; a parent a HUMAN closed, or
+   * cancelled, or parked, stays where the human put it. The parents VP saw stuck
+   * in `in_progress` are in the first set by construction — they got there
+   * through STA-79's derivation, never through a human.
    *
    * ## The workable band
    *
@@ -1008,42 +1861,83 @@ export class WorkspaceStore {
     actor: string | null,
     now: string,
   ): void {
-    // Resolved is terminal in both directions — decided before anything is read.
-    if ((RESOLVED_STATUSES as readonly string[]).includes(ancestor.status)) return;
-
     /**
-     * A PARKED parent is immune, exactly like a manual `in_review` (STA-143).
+     * A PARKED parent is immune, in both directions (STA-143).
      *
      * The gate is a statement by a human about this issue — the strongest kind
      * of statement in the reversibility law — so derivation may not speak over
      * it. Concretely: a child that is still in flight when the gate goes up
-     * would otherwise derive `in_progress` and un-park the parent the moment it
-     * moved, silently discarding the review.
+     * would otherwise derive the active rung and un-park the parent the moment
+     * it moved, silently discarding the review.
      *
-     * Written as an explicit status check rather than relying on
-     * `isDerivationOwned` returning false. It would: the newest status-moving
-     * event on a gated parent is a plain `status_changed` with no `derived`
-     * marker. But "only the gate's transitions may leave `awaiting_approval`" is
-     * a rule of this feature, not an accident of what the log happens to hold,
-     * and a rule nobody can see is a rule that gets refactored away.
+     * Stated as a CATEGORY (STA-140), not as the id `awaiting_approval`, so a
+     * workspace that renamed the row or added a second gated status gets the
+     * same immunity with no line changing here. And stated explicitly rather
+     * than left to `isDerivationOwned` returning false — it would, since the
+     * newest status-moving event on a parked parent is a plain `status_changed`
+     * with no `derived` marker, but "only the gate's own transitions may leave
+     * the gated category" is a rule of this feature, not an accident of what the
+     * log happens to hold, and a rule nobody can see is a rule that gets
+     * refactored away.
      */
-    if (ancestor.status === "awaiting_approval") return;
+    if (this.categoryOf(ancestor.status) === "gated") return;
 
     const childStatuses = (
       this.db.prepare("SELECT status FROM issues WHERE parent_id = ?").all(ancestor.id) as Array<{
         status: string;
       }>
     ).map((row) => row.status);
-    const target = WorkspaceStore.deriveStatusFromChildren(childStatuses);
-    if (target === null) return; // rung 0: nothing open underneath, nothing to say
+    const target = this.deriveStatusFromChildren(childStatuses);
+    if (target === null) return; // rung 0: no children, so nothing to report
 
-    // The workable band is satisfied by either of its two members.
-    if (target === "workable" && (ancestor.status === "backlog" || ancestor.status === "todo")) return;
-    const next: IssueStatus = target === "workable" ? "backlog" : target;
+    /**
+     * AN OPEN GATE OUTRANKS THE CLOSING RUNGS (STA-143 x STA-153).
+     *
+     * STA-153 made a parent close itself when its last child lands. STA-143 made
+     * a parent something a human has to sign off. Where those meet, the human
+     * wins: an issue whose gate is `pending` or `changes_requested` may not be
+     * closed by rungs 5/6, because the review IS the remaining work and an
+     * automatic `done` would answer the question the gate was asked to put to a
+     * person.
+     *
+     * `pending` is already covered by the category immunity above — the parent
+     * sits in the gated category while it waits. `changes_requested` is not, and
+     * it is the case that matters: `requestChanges` deliberately moves the parent
+     * back into the workable band so the work can resume, so the parent is in
+     * `todo` with an unanswered gate on it, and the last child landing again
+     * would otherwise close it out from under the reviewer who asked for the
+     * changes. Re-gating is the resubmit loop; auto-closing would skip it.
+     *
+     * Only the CLOSING rungs are refused. Rungs 1-4 still apply, so a parent
+     * with changes requested still reports that work has restarted underneath —
+     * that is a report, and reports are what derivation is for.
+     */
+    if ((target === "done" || target === "cancelled") && isActiveGate(ancestor.gate_state)) return;
+
+    /**
+     * Everything below is stated in CATEGORIES (STA-140). The band, the
+     * reversibility law and the write target were literal ids; they are now the
+     * `unstarted`/`ready` pair, the ancestor's own category, and the FIRST
+     * configured status of the target category — so a workspace that renamed
+     * `blocked` to `waiting` derives into `waiting` without a line changing here.
+     */
+    const ancestorCategory = this.categoryOf(ancestor.status);
+    const inPreWorkBand =
+      ancestorCategory !== null && WORKABLE_CATEGORIES.includes(ancestorCategory);
+
+    // The workable band is satisfied by either of its members.
+    if (target === "workable" && inPreWorkBand) return;
+    /**
+     * Entering the band writes the UNSTARTED status, never the READY one, and
+     * that is the same decision as before under a different name: `ready` means
+     * READY FOR PICKUP and heads the inbox, while an epic is never picked up —
+     * its children are. Deriving epics into `ready` would seed the top of every
+     * agent's queue with rows nobody should claim.
+     */
+    const next = this.primaryStatusFor(target === "workable" ? "unstarted" : target);
     if (next === ancestor.status) return;
 
     // Reversibility law: outside the pre-work band, only what derivation set.
-    const inPreWorkBand = ancestor.status === "backlog" || ancestor.status === "todo";
     if (!inPreWorkBand && !this.isDerivationOwned(ancestor)) return;
 
     /**
@@ -1056,6 +1950,16 @@ export class WorkspaceStore {
      * descriptor left over from an earlier manual block would be a stale lie, so
      * leaving `blocked` clears all three exactly as `updateIssue` does.
      *
+     * A derived close stamps the SAME timestamp a manual one does —
+     * `completed_at` for the done category, `cancelled_at` for cancelled — so
+     * every consumer that reads "when did this finish" keeps working without
+     * learning that a parent finishes differently from a leaf (STA-153).
+     *
+     * A derived RE-OPEN clears both, for the same reason the blocked descriptor
+     * is cleared on the way out: a row that is open again while still carrying
+     * the instant it completed is a stale lie, and derivation cleans up exactly
+     * what derivation stamped.
+     *
      * Nothing here touches `assignee`, `checkout_agent` or `checkout_at`. That
      * omission is the guard exemption made structural rather than promised.
      */
@@ -1063,12 +1967,23 @@ export class WorkspaceStore {
       status: next,
       updated_at: now,
     };
-    if (next === "in_progress") columns.started_at = ancestor.started_at ?? now;
-    if (next === "blocked") {
+    if (target === "active") columns.started_at = ancestor.started_at ?? now;
+    const wasResolved = ancestorCategory !== null && RESOLVED_CATEGORIES.includes(ancestorCategory);
+    if (target === "done") {
+      columns.completed_at = now;
+      if (wasResolved) columns.cancelled_at = null;
+    } else if (target === "cancelled") {
+      columns.cancelled_at = now;
+      if (wasResolved) columns.completed_at = null;
+    } else if (wasResolved) {
+      columns.completed_at = null;
+      columns.cancelled_at = null;
+    }
+    if (target === "blocked") {
       columns.blocked_transition_at = now;
       columns.unblock_owner = null;
       columns.unblock_action = null;
-    } else if (ancestor.status === "blocked") {
+    } else if (ancestorCategory === "blocked" || ancestorCategory === "gated") {
       columns.blocked_transition_at = null;
       columns.unblock_owner = null;
       columns.unblock_action = null;
@@ -1078,14 +1993,18 @@ export class WorkspaceStore {
     // event on the write, so an event can never claim a transition that did not
     // land. `status_version` bumps because anyone holding an
     // `expectedStatusVersion` for this epic must be forced to re-read.
+    // `RETURNING *` because a close has to hand the FRESH row to
+    // `afterResolution` below — the row as it now is, not as it was decided from.
     const assignments = Object.keys(columns).map((c) => `${c} = ?`).join(", ");
-    const result = this.db
+    const written = this.db
       .prepare(
         `UPDATE issues SET ${assignments}, status_version = status_version + 1
-          WHERE id = ? AND status = ?`,
+          WHERE id = ? AND status = ? RETURNING *`,
       )
-      .run(...(Object.values(columns) as never[]), ancestor.id, ancestor.status);
-    if (Number(result.changes) === 0) return;
+      .get(...(Object.values(columns) as never[]), ancestor.id, ancestor.status) as unknown as
+      | IssueRow
+      | undefined;
+    if (!written) return;
 
     /**
      * Reuses `status_changed` rather than minting a kind, for a concrete reason:
@@ -1109,13 +2028,33 @@ export class WorkspaceStore {
         identifier: ancestor.identifier,
         from: ancestor.status,
         to: next,
-        derived: DERIVED_MARKERS[next],
+        derived: DERIVED_MARKERS[target],
         derivedFrom: trigger,
       },
     });
+
+    /**
+     * A derived close is a resolution like any other, so it runs the WHOLE
+     * resolution hook rather than a hand-picked half of it (STA-153):
+     *
+     *  - anything `blocks`-dependent on this epic is woken, because "the epic is
+     *    done" is exactly the fact those dependents were waiting for, and an
+     *    automatic close that skipped the wake would strand them;
+     *  - the epic's OWN parent gets `children_complete` when this was its last
+     *    open child, which is what makes the wake transitive up a chain that is
+     *    closing itself level by level.
+     *
+     * It cannot recurse: `afterResolution` only emits events. The walk in
+     * `recomputeAncestorStatuses` is what climbs, and it is bounded.
+     */
+    if (this.isResolvedStatus(next)) this.afterResolution(written);
   }
 
-  /** Fires after an issue reaches done/cancelled: dependency wakes + parent completion. */
+  /**
+   * Fires after an issue reaches done/cancelled: dependency wakes + parent
+   * completion. Called from the manual transition in `updateIssue` and from a
+   * derived close in `deriveOneAncestor` — the two ways an issue can resolve.
+   */
   private afterResolution(row: IssueRow): void {
     for (const dependent of this.dependentsOf(row.id)) {
       this.maybeEmitBlockersResolved(dependent);
@@ -1125,13 +2064,13 @@ export class WorkspaceStore {
         .prepare("SELECT id, identifier, status, title FROM issues WHERE parent_id = ?")
         .all(row.parent_id) as Array<{ id: string; identifier: string; status: string; title: string }>;
       const open = siblings.filter(
-        (s) => !(RESOLVED_STATUSES as readonly string[]).includes(s.status),
+        (s) => !this.isResolvedStatus(s.status),
       );
       if (open.length === 0 && siblings.length > 0) {
         const parent = this.db
           .prepare("SELECT * FROM issues WHERE id = ?")
           .get(row.parent_id) as unknown as IssueRow | undefined;
-        if (parent && !(RESOLVED_STATUSES as readonly string[]).includes(parent.status)) {
+        if (parent && !this.isResolvedStatus(parent.status)) {
           this.emitEvent({
             kind: "children_complete",
             issueId: parent.id,
@@ -1268,7 +2207,7 @@ export class WorkspaceStore {
      * every inbox and every checkout.
      */
     for (const node of nodes.values()) {
-      if (isResolvedStatus(node.status)) continue;
+      if (this.isResolvedStatus(node.status)) continue;
       let cursor = node.parentId;
       const seen = new Set<string>([node.id]);
       let hops = 0;
@@ -1307,7 +2246,7 @@ export class WorkspaceStore {
    * statement about a container.
    */
   private isQueueEligible(node: GateWalkNode): boolean {
-    if (isResolvedStatus(node.status)) return false;
+    if (this.isResolvedStatus(node.status)) return false;
     if (node.hasChildren && !node.hasOpenDescendant) return false;
     return true;
   }
@@ -1502,13 +2441,23 @@ export class WorkspaceStore {
     }
     return tx(this.db, () => {
       const row = this.requireRow(ref);
-      if ((RESOLVED_STATUSES as readonly string[]).includes(row.status)) {
+      if (this.isResolvedStatus(row.status)) {
         throw new StapleError(
           "conflict",
           `Cannot gate ${row.identifier}: it is already ${row.status}.`,
           { currentStatus: row.status },
         );
       }
+      /**
+       * WHERE THE GATE PARKS ITS PARENT IS A CONFIGURATION QUESTION (STA-140).
+       *
+       * The first status in the `gated` category, which on a default workspace
+       * is `awaiting_approval`. Resolved before the write so a workspace that
+       * has no gated status fails HERE, with `primaryStatusFor`'s sentence
+       * naming the command that fixes it, rather than writing an id the
+       * workspace does not have and failing a validation somewhere downstream.
+       */
+      const parkedStatus = this.primaryStatusFor("gated");
       const children = (
         this.db.prepare("SELECT id FROM issues WHERE parent_id = ?").all(row.id) as Array<{
           id: string;
@@ -1531,7 +2480,7 @@ export class WorkspaceStore {
       const updated = this.db
         .prepare(
           `UPDATE issues SET
-             status = 'awaiting_approval',
+             status = ?,
              status_version = status_version + 1,
              gate_state = 'pending',
              gate_owner = ?,
@@ -1545,7 +2494,7 @@ export class WorkspaceStore {
              updated_at = ?
            WHERE id = ? RETURNING *`,
         )
-        .get(owner, actor ?? null, now, now, row.id) as unknown as IssueRow;
+        .get(parkedStatus, owner, actor ?? null, now, now, row.id) as unknown as IssueRow;
 
       /**
        * TWO events, and the pairing is load-bearing.
@@ -1564,7 +2513,7 @@ export class WorkspaceStore {
         kind: "status_changed",
         issueId: row.id,
         actor,
-        payload: { identifier: row.identifier, from: row.status, to: "awaiting_approval" },
+        payload: { identifier: row.identifier, from: row.status, to: parkedStatus },
       });
       this.emitEvent({
         kind: "gate_requested",
@@ -1581,9 +2530,10 @@ export class WorkspaceStore {
         this.insertComment(row.id, actor ?? "unknown", actor ? "agent" : "system", opts.comment);
       }
       // Transition site 6 of 7: parking a parent changes its status, so its own
-      // ancestors have to be recomputed like any other transition. The gated
-      // row is excluded from their ladder (see deriveStatusFromChildren), which
-      // is what stops the gate propagating upward as a false `blocked`.
+      // ancestors have to be recomputed like any other transition. The gated row
+      // reaches their ladder at rung 4 — an approval nobody has given is not
+      // work anyone can pick up — so a grandparent with nothing else open reads
+      // `blocked`, never `done` (see deriveStatusFromChildren).
       this.recomputeAncestorStatuses(updated, actor ?? null);
       return rowToIssue(updated);
     });
@@ -1683,22 +2633,34 @@ export class WorkspaceStore {
           status: string;
         }>
       ).map((r) => r.status);
-      const derived = WorkspaceStore.deriveStatusFromChildren(childStatuses);
+      const derived = this.deriveStatusFromChildren(childStatuses);
       /**
-       * `todo` when the ladder declines (rung 0: nothing open underneath).
+       * WHERE AN APPROVED PARENT LANDS.
        *
-       * The ladder's "leave it alone" answer is not available to us — leaving it
-       * alone means leaving it `awaiting_approval`, which is precisely the state
-       * this call exists to clear. `todo` is the same landing the
-       * request-changes path uses and it says the true thing: the gate is
-       * answered, and this row is now somebody's to pick up.
+       * The ladder decides, because "what does this parent's own work look like
+       * now" is exactly the ladder's question and the gate has stopped being the
+       * answer to it. Three cases and each is deliberate:
+       *
+       *  - The ladder declines (rung 0: no children at all). Its "leave it
+       *    alone" answer is not available to us — leaving it alone means leaving
+       *    it parked, which is precisely the state this call exists to clear —
+       *    so the READY status, the same landing request-changes uses. `gate`
+       *    refuses a childless issue, so this is only reachable if the children
+       *    were reparented or deleted while the gate was open.
+       *  - The workable band, which enters at the UNSTARTED status for the same
+       *    reason rung 3 does: an epic is never picked up, its children are.
+       *  - Anything else, including `done` and `cancelled` (STA-153). A gate
+       *    whose whole subtree landed while the reviewer was reading it SHOULD
+       *    close on approval — that is the normal auto-close rule resuming the
+       *    moment the human answers, and the auto-close guard in
+       *    `deriveOneAncestor` is scoped to gates that are still OPEN precisely
+       *    so that this one is not.
        */
       const next: IssueStatus =
         derived === null
-          ? "todo"
-          : derived === "workable"
-            ? "backlog"
-            : derived;
+          ? this.primaryStatusFor("ready")
+          : this.primaryStatusFor(derived === "workable" ? "unstarted" : derived);
+      const nextCategory = this.categoryOf(next);
 
       const updated = this.db
         .prepare(
@@ -1709,13 +2671,29 @@ export class WorkspaceStore {
              gate_resolved_by = ?,
              gate_resolved_at = ?,
              gate_released = 0,
-             started_at = CASE WHEN ? = 'in_progress' THEN COALESCE(started_at, ?) ELSE started_at END,
-             blocked_transition_at = CASE WHEN ? = 'blocked' THEN ? ELSE NULL END,
+             started_at = CASE WHEN ? = 1 THEN COALESCE(started_at, ?) ELSE started_at END,
+             blocked_transition_at = CASE WHEN ? = 1 THEN ? ELSE NULL END,
+             completed_at = CASE WHEN ? = 1 THEN ? ELSE completed_at END,
+             cancelled_at = CASE WHEN ? = 1 THEN ? ELSE cancelled_at END,
              unblock_owner = NULL, unblock_action = NULL,
              updated_at = ?
            WHERE id = ? RETURNING *`,
         )
-        .get(next, actor ?? null, now, next, now, next, now, now, row.id) as unknown as IssueRow;
+        .get(
+          next,
+          actor ?? null,
+          now,
+          nextCategory === "active" ? 1 : 0,
+          now,
+          nextCategory === "blocked" ? 1 : 0,
+          now,
+          nextCategory === "done" ? 1 : 0,
+          now,
+          nextCategory === "cancelled" ? 1 : 0,
+          now,
+          now,
+          row.id,
+        ) as unknown as IssueRow;
 
       this.emitEvent({
         kind: "status_changed",
@@ -1737,6 +2715,14 @@ export class WorkspaceStore {
       if (opts.comment) {
         this.insertComment(row.id, actor ?? "unknown", actor ? "agent" : "system", opts.comment);
       }
+      /**
+       * An approval that CLOSES the parent is a resolution like any other, so it
+       * runs the whole hook before the walk, in the order STA-153 established:
+       * dependents of a just-finished epic get woken, and the level above gets
+       * its own `children_complete` before `recomputeAncestorStatuses` closes
+       * it — the reverse order swallows the wake exactly when it matters.
+       */
+      if (this.isResolvedStatus(next)) this.afterResolution(updated);
       // Transition site 7 of 7 — unparking is a transition like any other.
       this.recomputeAncestorStatuses(updated, actor ?? null);
       return rowToIssue(updated);
@@ -1778,10 +2764,14 @@ export class WorkspaceStore {
         );
       }
       const now = nowIso();
+      // The READY status of this workspace, not the literal `todo` — the same
+      // resolution `release` makes, for the same reason: this row is now
+      // somebody's to pick up.
+      const next = this.primaryStatusFor("ready");
       const updated = this.db
         .prepare(
           `UPDATE issues SET
-             status = 'todo',
+             status = ?,
              status_version = status_version + 1,
              gate_state = 'changes_requested',
              gate_resolved_by = ?,
@@ -1792,13 +2782,13 @@ export class WorkspaceStore {
              updated_at = ?
            WHERE id = ? RETURNING *`,
         )
-        .get(actor ?? null, now, now, row.id) as unknown as IssueRow;
+        .get(next, actor ?? null, now, now, row.id) as unknown as IssueRow;
 
       this.emitEvent({
         kind: "status_changed",
         issueId: row.id,
         actor,
-        payload: { identifier: row.identifier, from: row.status, to: "todo" },
+        payload: { identifier: row.identifier, from: row.status, to: next },
       });
       this.emitEvent({
         kind: "gate_changes_requested",
@@ -1815,7 +2805,8 @@ export class WorkspaceStore {
   // ---------- update ----------
 
   updateIssue(ref: string, patch: UpdateIssueInput, actor?: string | null): Issue {
-    if (patch.status) assertStatus(patch.status);
+    if (patch.status) this.assertConfiguredStatus(patch.status);
+    if (patch.kind) this.assertConfiguredKind(patch.kind);
     if (patch.priority) assertPriority(patch.priority);
     return tx(this.db, () => {
       const row = this.requireRow(ref);
@@ -1839,6 +2830,10 @@ export class WorkspaceStore {
         next.normalized_title = normalizeTitle(title);
       }
       if (patch.description !== undefined) next.description = patch.description;
+      // Two-state: absent leaves it alone, a string sets it. Re-declaring the
+      // kind is a plain field write with no guard of its own — unlike status, a
+      // kind carries no category and therefore no behaviour to violate.
+      if (patch.kind !== undefined) next.kind = patch.kind;
       if (patch.priority !== undefined) next.priority = patch.priority;
       if (patch.assignee !== undefined) next.assignee = patch.assignee;
       if (patch.labels !== undefined) next.labels = JSON.stringify(patch.labels);
@@ -1854,15 +2849,26 @@ export class WorkspaceStore {
 
       const statusAfter = patch.status ?? (row.status as IssueStatus);
       const statusChanging = patch.status !== undefined && patch.status !== row.status;
+      /**
+       * Every guard below reads a CATEGORY (STA-140). `in_progress requires an
+       * assignee` is really "the ACTIVE category requires an assignee", and
+       * `completed_at` is stamped by entering the DONE category, so a workspace
+       * that renamed `done` to `shipped` still stamps it.
+       */
+      const categoryBefore = this.categoryOf(row.status);
+      const categoryAfter = this.categoryOf(statusAfter);
 
       if ((patch.unblockOwner !== undefined || patch.unblockAction !== undefined) &&
-          statusAfter !== "blocked") {
-        throw new StapleError("validation", "unblockOwner/unblockAction require status \"blocked\"");
+          categoryAfter !== "blocked") {
+        throw new StapleError(
+          "validation",
+          "unblockOwner/unblockAction require a status in the \"blocked\" category",
+        );
       }
 
       if (statusChanging) {
         /**
-         * `awaiting_approval` is reachable and leavable ONLY through the gate
+         * THE GATED CATEGORY is reachable and leavable ONLY through the gate
          * commands (STA-143). Both directions are refused here, and both matter:
          *
          *  - INTO it, because a status written without a gate would be a parked
@@ -1876,14 +2882,20 @@ export class WorkspaceStore {
          * This includes `done` and `cancelled`: resolve the gate first, then
          * close the ticket. That is one extra command in exchange for never
          * having a resolved issue that still carries an unanswered gate.
+         *
+         * Keyed off the CATEGORY (STA-140), so a workspace that renamed
+         * `awaiting_approval`, or added a second gated status of its own, gets
+         * the same protection — and so does a workspace that removed the gated
+         * vocabulary entirely, where the guard simply never fires because no
+         * status can be in a category with no members.
          */
-        if (patch.status === "awaiting_approval") {
+        if (categoryAfter === "gated") {
           throw new StapleError(
             "validation",
-            'Cannot set "awaiting_approval" directly — park the issue with `staple gate <ref> --owner <who>`, which records who must approve it.',
+            `Cannot set "${statusAfter}" directly — park the issue with \`staple gate <ref> --owner <who>\`, which records who must approve it.`,
           );
         }
-        if (row.status === "awaiting_approval") {
+        if (categoryBefore === "gated") {
           throw new StapleError(
             "validation",
             `${row.identifier} is parked behind a review gate${row.gate_owner ? ` awaiting ${row.gate_owner}` : ""}; resolve it with \`staple approve ${row.identifier}\` or \`staple request-changes ${row.identifier} -m "..."\` before changing its status.`,
@@ -1892,9 +2904,9 @@ export class WorkspaceStore {
         }
         const assigneeAfter =
           patch.assignee !== undefined ? patch.assignee : row.assignee;
-        if (patch.status === "in_progress") {
+        if (categoryAfter === "active") {
           if (!assigneeAfter) {
-            throw new StapleError("validation", "in_progress requires an assignee");
+            throw new StapleError("validation", `${statusAfter} requires an assignee`);
           }
           const unresolved = this.unresolvedBlockersOf(row.id);
           if (unresolved.length > 0) {
@@ -1906,25 +2918,25 @@ export class WorkspaceStore {
           }
           next.started_at = row.started_at ?? now;
         }
-        if (patch.status === "done") next.completed_at = now;
-        if (patch.status === "cancelled") next.cancelled_at = now;
-        if (patch.status === "blocked") {
+        if (categoryAfter === "done") next.completed_at = now;
+        if (categoryAfter === "cancelled") next.cancelled_at = now;
+        if (categoryAfter === "blocked") {
           next.blocked_transition_at = now;
           if (patch.unblockOwner !== undefined) next.unblock_owner = patch.unblockOwner;
           if (patch.unblockAction !== undefined) next.unblock_action = patch.unblockAction;
         }
-        if (row.status === "blocked" && patch.status !== "blocked") {
+        if (categoryBefore === "blocked" && categoryAfter !== "blocked") {
           next.unblock_owner = null;
           next.unblock_action = null;
           next.blocked_transition_at = null;
         }
-        if (row.status === "in_progress" && patch.status !== "in_progress") {
+        if (categoryBefore === "active" && categoryAfter !== "active") {
           next.checkout_agent = null;
           next.checkout_at = null;
         }
         next.status = patch.status;
         next.status_version = row.status_version + 1;
-      } else if (statusAfter === "blocked") {
+      } else if (categoryAfter === "blocked") {
         if (patch.unblockOwner !== undefined) next.unblock_owner = patch.unblockOwner;
         if (patch.unblockAction !== undefined) next.unblock_action = patch.unblockAction;
       }
@@ -1943,15 +2955,25 @@ export class WorkspaceStore {
           actor,
           payload: { identifier: row.identifier, from: row.status, to: patch.status },
         });
+        /**
+         * The wake goes FIRST, and the order is load-bearing since STA-153.
+         * `afterResolution` asks "is the parent still open?" before it wakes it,
+         * and the parent is exactly what the recompute below is about to close.
+         * Running the recompute first would mean the last child of an epic
+         * silently swallowed the `children_complete` that tells the epic's owner
+         * to go and write the summary. Reading the world as it was when the
+         * child landed, then reacting to it, also makes the log read
+         * cause-then-effect: child moved -> children complete -> epic closed.
+         */
+        if (this.isResolvedStatus(patch.status!)) {
+          this.afterResolution(updated);
+        }
         // Transition site 2 of 5, and the one the generalization widened most:
         // EVERY status change recomputes the ancestors, not only a start.
         // Guarded above like any manual transition; the ancestors it derives
         // from it are not (see the method). Emitted after the child's own event,
         // so the log reads cause-then-effect.
         this.recomputeAncestorStatuses(updated, actor ?? null);
-        if ((RESOLVED_STATUSES as readonly string[]).includes(patch.status!)) {
-          this.afterResolution(updated);
-        }
       }
       if (patch.comment) {
         this.insertComment(row.id, actor ?? "unknown", actor ? "agent" : "system", patch.comment);
@@ -1987,7 +3009,7 @@ export class WorkspaceStore {
   }
 
   private claimActivityOfRow(row: IssueRow, now: string = nowIso()): ClaimActivity | null {
-    if (row.status !== "in_progress" || !row.checkout_agent || !row.checkout_at) return null;
+    if (!this.isActiveStatus(row.status) || !row.checkout_agent || !row.checkout_at) return null;
     const lastActivityAt = this.lastActivityOf(row.id, row.checkout_agent, row.checkout_at);
     return {
       heldBy: row.checkout_agent,
@@ -2025,7 +3047,7 @@ export class WorkspaceStore {
                FROM comments c WHERE c.deleted_at IS NULL
            ) a ON a.issue_id = i.id AND a.who = i.checkout_agent
           WHERE i.id IN (${placeholders})
-            AND i.status = 'in_progress'
+            AND i.status IN ${sqlIdList(this.settings().active)}
             AND i.checkout_agent IS NOT NULL
             AND i.checkout_at IS NOT NULL
           GROUP BY i.id`,
@@ -2138,11 +3160,18 @@ export class WorkspaceStore {
    * a history this code cannot trust into the `approximate` fallback instead of
    * silently producing a confident wrong number.
    */
-  private static statusAfterEvent(kind: string, payload: Record<string, unknown>): IssueStatus | null {
+  private statusAfterEvent(kind: string, payload: Record<string, unknown>): IssueStatus | null {
+    /**
+     * A status the replay can TRUST is one this workspace still configures. A
+     * removed status is deliberately unreadable here rather than passed through:
+     * the replay's whole contract is that it either reproduces the row's current
+     * status exactly or declines and routes to `approximate`, and reasoning about
+     * a vocabulary entry that no longer exists is precisely the guessing that
+     * contract exists to forbid. (`removeStatus` migrates the ROWS, never the
+     * event log — history is what happened.)
+     */
     const asStatus = (value: unknown): IssueStatus | null =>
-      typeof value === "string" && (ISSUE_STATUSES as readonly string[]).includes(value)
-        ? (value as IssueStatus)
-        : null;
+      typeof value === "string" && this.settings().byId.has(value) ? value : null;
     switch (kind) {
       case "issue_created":
         return asStatus(payload.status);
@@ -2150,10 +3179,10 @@ export class WorkspaceStore {
         return asStatus(payload.to);
       case "checkout":
       case "claim_stolen":
-        return "in_progress";
+        return this.primaryStatusFor("active");
       case "release":
       case "claim_released_stale":
-        return "todo";
+        return this.primaryStatusFor("ready");
       default:
         return null;
     }
@@ -2199,14 +3228,14 @@ export class WorkspaceStore {
    * Zero is not null: an interval that opened and closed inside the same second
    * reports 0 seconds, because it happened. Null is reserved for "never ran".
    */
-  private static reconstructIntervals(
+  private reconstructIntervals(
     currentStatus: string,
     events: readonly { kind: string; createdAt: string; payload: Record<string, unknown> }[],
     clampAt: string,
   ): OwnTiming | null {
     const first = events[0];
     if (!first || first.kind !== "issue_created") return null;
-    let status = WorkspaceStore.statusAfterEvent(first.kind, first.payload);
+    let status = this.statusAfterEvent(first.kind, first.payload);
     if (!status) return null;
 
     let openAt: string | null = null;
@@ -2217,17 +3246,27 @@ export class WorkspaceStore {
     let review = 0;
     let sawActive = false;
     let sawReview = false;
-    if (status === "in_progress" || status === "in_review") openAt = first.createdAt;
+    /**
+     * Which bucket an interval belongs to is a CATEGORY question (STA-140): the
+     * `active` category accrues the actual, `review` accrues the queue, and every
+     * other category is simply not an interval — which is still how blocked and
+     * parked time costs nothing without a special case.
+     */
+    const opensInterval = (id: string): boolean => {
+      const category = this.categoryOf(id);
+      return category === "active" || category === "review";
+    };
+    if (opensInterval(status)) openAt = first.createdAt;
 
     for (let i = 1; i < events.length; i += 1) {
       const event = events[i]!;
-      const to = WorkspaceStore.statusAfterEvent(event.kind, event.payload);
+      const to = this.statusAfterEvent(event.kind, event.payload);
       if (!to) return null;
       if (to === status) continue;
       if (openAt !== null) {
         const seconds = secondsBetween(openAt, event.createdAt);
         if (!openDerived) {
-          if (status === "in_progress") {
+          if (this.categoryOf(status) === "active") {
             active += seconds;
             sawActive = true;
           } else {
@@ -2237,7 +3276,7 @@ export class WorkspaceStore {
         }
         openAt = null;
       }
-      if (to === "in_progress" || to === "in_review") {
+      if (opensInterval(to)) {
         openAt = event.createdAt;
         openDerived = typeof event.payload.derived === "string";
       }
@@ -2253,7 +3292,7 @@ export class WorkspaceStore {
       const end = clampAt > openAt ? clampAt : openAt;
       const seconds = secondsBetween(openAt, end);
       if (!openDerived) {
-        if (status === "in_progress") {
+        if (this.categoryOf(status) === "active") {
           active += seconds;
           sawActive = true;
           countedThrough = end;
@@ -2291,27 +3330,37 @@ export class WorkspaceStore {
    * database with no usable event log still deserves a number, and a number
    * labelled approximate is more useful than a blank column.
    */
-  private static approximateActiveOf(
+  private approximateActiveOf(
     row: Pick<IssueRow, "status" | "started_at" | "completed_at">,
     now: string,
   ): number | null {
     if (!row.started_at) return null;
-    if (row.status === "done") {
+    const category = this.categoryOf(row.status);
+    if (category === "done") {
       return row.completed_at ? secondsBetween(row.started_at, row.completed_at) : null;
     }
-    if (row.status === "in_progress" || row.status === "in_review") {
+    if (category === "active" || category === "review") {
       return secondsBetween(row.started_at, now);
     }
     return null;
   }
 
-  /** Every status at zero — so a caller can index any status without a guard. */
-  private static zeroStatusCounts(): Record<IssueStatus, number> {
-    return Object.fromEntries(ISSUE_STATUSES.map((s) => [s, 0])) as Record<IssueStatus, number>;
+  /**
+   * Every CONFIGURED status at zero — so a caller can index any status the
+   * workspace has without a guard.
+   *
+   * Keys follow `sort_order`, NOT the list rank, and that is deliberate: for the
+   * seeded seven it reproduces the previous `ISSUE_STATUSES` key order byte for
+   * byte, so nothing that compares this object as JSON moves. The list rank is
+   * for SORTING ROWS; this is a dictionary, and a dictionary reordering itself
+   * because somebody added a status would be a gratuitous wire change.
+   */
+  private zeroStatusCounts(): Record<string, number> {
+    return Object.fromEntries(this.settings().statuses.map((s) => [s.id, 0]));
   }
 
   /** The all-absent struct, for an id that no longer resolves to a row. */
-  private static emptyTiming(): IssueTiming {
+  private emptyTiming(): IssueTiming {
     return {
       estimatedSeconds: null,
       ownActiveSeconds: null,
@@ -2322,7 +3371,7 @@ export class WorkspaceStore {
       childCount: 0,
       childrenEstimatedSeconds: null,
       childrenActiveSeconds: null,
-      childStatusCounts: WorkspaceStore.zeroStatusCounts(),
+      childStatusCounts: this.zeroStatusCounts(),
     };
   }
 
@@ -2471,8 +3520,8 @@ export class WorkspaceStore {
       const clampAt = claims.get(row.id)?.lastActivityAt ?? newestEvent.get(row.id) ?? now;
       ownTimings.set(
         row.id,
-        WorkspaceStore.reconstructIntervals(row.status, eventsByIssue.get(row.id) ?? [], clampAt) ?? {
-          ownActiveSeconds: WorkspaceStore.approximateActiveOf(row, now),
+        this.reconstructIntervals(row.status, eventsByIssue.get(row.id) ?? [], clampAt) ?? {
+          ownActiveSeconds: this.approximateActiveOf(row, now),
           reviewSeconds: null,
           approximate: true,
           countedThrough: null,
@@ -2493,14 +3542,15 @@ export class WorkspaceStore {
     for (const row of [...rows].sort((a, b) => b.depth - a.depth)) {
       const own = ownTimings.get(row.id)!;
       const children = childrenOf.get(row.id) ?? [];
-      const childStatusCounts = WorkspaceStore.zeroStatusCounts();
+      const childStatusCounts = this.zeroStatusCounts();
       let childrenEstimatedSeconds: number | null = null;
       let childrenActiveSeconds: number | null = null;
       let childApproximate = false;
       for (const child of children) {
-        if ((ISSUE_STATUSES as readonly string[]).includes(child.status)) {
-          childStatusCounts[child.status as IssueStatus] += 1;
-        }
+        // Only configured statuses get a bucket; an orphaned id is counted
+        // nowhere rather than inventing a key no consumer's schema knows about.
+        const bucket = childStatusCounts[child.status];
+        if (bucket !== undefined) childStatusCounts[child.status] = bucket + 1;
         if (child.estimated_seconds != null) {
           childrenEstimatedSeconds = (childrenEstimatedSeconds ?? 0) + child.estimated_seconds;
         }
@@ -2547,7 +3597,7 @@ export class WorkspaceStore {
    */
   timing(ref: string): IssueTiming {
     const row = this.requireRow(ref);
-    return this.timingFor([row.id]).get(row.id) ?? WorkspaceStore.emptyTiming();
+    return this.timingFor([row.id]).get(row.id) ?? this.emptyTiming();
   }
 
   /**
@@ -2586,7 +3636,7 @@ export class WorkspaceStore {
       const timing = all.get(child.id);
       if (timing) childrenTiming[child.identifier] = timing;
     }
-    return { timing: all.get(row.id) ?? WorkspaceStore.emptyTiming(), childrenTiming };
+    return { timing: all.get(row.id) ?? this.emptyTiming(), childrenTiming };
   }
   // ---------- checkout / release ----------
 
@@ -2605,15 +3655,23 @@ export class WorkspaceStore {
   checkoutIssue(
     ref: string,
     agent: string,
-    expectedStatuses: readonly IssueStatus[] = DEFAULT_CHECKOUT_EXPECTED,
+    /**
+     * Defaults to the CONFIGURED claimable set (`ready`, `unstarted`, `blocked`,
+     * in that order) rather than the built-in triple, so a workspace that renamed
+     * or added a queue status can still claim out of it. Callers that pass an
+     * explicit list are validated against the workspace's own vocabulary.
+     */
+    expectedStatuses?: readonly IssueStatus[],
     opts: { stealIfIdleSeconds?: number } = {},
   ): Issue {
     if (!agent?.trim()) throw new StapleError("validation", "agent is required for checkout");
-    for (const status of expectedStatuses) assertStatus(status);
+    const expected = expectedStatuses ?? this.checkoutExpectedStatuses();
+    for (const status of expected) this.assertConfiguredStatus(status);
+    const activeStatus = this.primaryStatusFor("active");
     const stealIfIdleSeconds = assertIdleThreshold(opts.stealIfIdleSeconds, "stealIfIdleSeconds");
     return tx(this.db, () => {
       const row = this.requireRow(ref);
-      if (row.status === "in_progress" && row.checkout_agent === agent) {
+      if (this.isActiveStatus(row.status) && row.checkout_agent === agent) {
         return rowToIssue(row); // crash-recovery re-claim
       }
       /**
@@ -2646,11 +3704,11 @@ export class WorkspaceStore {
         );
       }
       const now = nowIso();
-      const placeholders = expectedStatuses.map(() => "?").join(",");
+      const placeholders = expected.map(() => "?").join(",");
       const claimed = this.db
         .prepare(
           `UPDATE issues SET
-             status = 'in_progress',
+             status = ?,
              status_version = status_version + 1,
              assignee = ?,
              checkout_agent = ?,
@@ -2662,11 +3720,13 @@ export class WorkspaceStore {
              AND NOT EXISTS (
                SELECT 1 FROM relations r JOIN issues b ON b.id = r.blocker_id
                WHERE r.blocked_id = issues.id AND r.type = 'blocks'
-                 AND b.status NOT IN ${RESOLVED_SQL}
+                 AND b.status NOT IN ${this.resolvedSql()}
              )
            RETURNING *`,
         )
-        .get(agent, agent, now, now, now, row.id, ...expectedStatuses) as unknown as IssueRow | undefined;
+        .get(activeStatus, agent, agent, now, now, now, row.id, ...expected) as unknown as
+        | IssueRow
+        | undefined;
       if (!claimed) {
         const unresolved = this.unresolvedBlockersOf(row.id).map((b) => b.identifier);
         // Explicit takeover. Blockers still win: taking over dead work must not
@@ -2685,7 +3745,7 @@ export class WorkspaceStore {
               const stolen = this.db
                 .prepare(
                   `UPDATE issues SET
-                     status = 'in_progress',
+                     status = ?,
                      status_version = status_version + 1,
                      assignee = ?,
                      checkout_agent = ?,
@@ -2693,10 +3753,10 @@ export class WorkspaceStore {
                      started_at = COALESCE(started_at, ?),
                      unblock_owner = NULL, unblock_action = NULL, blocked_transition_at = NULL,
                      updated_at = ?
-                   WHERE id = ? AND status = 'in_progress' AND checkout_agent = ?
+                   WHERE id = ? AND status IN ${sqlIdList(this.settings().active)} AND checkout_agent = ?
                    RETURNING *`,
                 )
-                .get(agent, agent, now, now, now, row.id, claim.heldBy) as unknown as
+                .get(activeStatus, agent, agent, now, now, now, row.id, claim.heldBy) as unknown as
                 | IssueRow
                 | undefined;
               if (stolen) {
@@ -2729,7 +3789,7 @@ export class WorkspaceStore {
             // the CURRENT state is, so the sentence never names a stale holder.
             const current = this.claimActivityOfRow(this.requireRow(ref), now) ?? claim;
             throw new StapleError("conflict", claimGuardMessage("Checkout", current), {
-              currentStatus: "in_progress",
+              currentStatus: row.status,
               heldBy: current.heldBy,
               blockers: [],
               lastActivityAt: current.lastActivityAt,
@@ -2743,7 +3803,7 @@ export class WorkspaceStore {
           "conflict",
           unresolved.length > 0
             ? `Checkout refused: unresolved blockers ${unresolved.join(", ")}. Pick a different task.`
-            : `Checkout refused: status is "${row.status}"${row.checkout_agent ? ` (held by ${row.checkout_agent})` : ""}, expected one of ${expectedStatuses.join(", ")}. Pick a different task — do not retry.`,
+            : `Checkout refused: status is "${row.status}"${row.checkout_agent ? ` (held by ${row.checkout_agent})` : ""}, expected one of ${expected.join(", ")}. Pick a different task — do not retry.`,
           { currentStatus: row.status, heldBy: row.checkout_agent, blockers: unresolved },
         );
       }
@@ -2774,7 +3834,7 @@ export class WorkspaceStore {
     const ifIdleSeconds = assertIdleThreshold(opts.ifIdleSeconds, "ifIdleSeconds");
     return tx(this.db, () => {
       const row = this.requireRow(ref);
-      if (row.status !== "in_progress") {
+      if (!this.isActiveStatus(row.status)) {
         throw new StapleError("conflict", `Cannot release: status is "${row.status}"`);
       }
       const claim = ifIdleSeconds === undefined ? null : this.claimActivityOfRow(row);
@@ -2803,11 +3863,11 @@ export class WorkspaceStore {
       }
       const updated = this.db
         .prepare(
-          `UPDATE issues SET status = 'todo', status_version = status_version + 1,
+          `UPDATE issues SET status = ?, status_version = status_version + 1,
              checkout_agent = NULL, checkout_at = NULL, updated_at = ?
            WHERE id = ? RETURNING *`,
         )
-        .get(nowIso(), row.id) as unknown as IssueRow;
+        .get(this.primaryStatusFor("ready"), nowIso(), row.id) as unknown as IssueRow;
       // Dedicated event for the stale path, mirroring claim_stolen: a plain
       // `release` cannot say whose claim was cut short, or how dead it looked.
       this.emitEvent(
@@ -3111,7 +4171,11 @@ export class WorkspaceStore {
       where.push(`status IN (${filters.status.map(() => "?").join(",")})`);
       params.push(...filters.status);
     } else if (!filters.includeResolved) {
-      where.push(`status NOT IN ${RESOLVED_SQL}`);
+      where.push(`status NOT IN ${this.resolvedSql()}`);
+    }
+    if (filters.kind && filters.kind.length > 0) {
+      where.push(`kind IN (${filters.kind.map(() => "?").join(",")})`);
+      params.push(...filters.kind);
     }
     if (filters.assignee) {
       where.push("assignee = ?");
@@ -3129,14 +4193,19 @@ export class WorkspaceStore {
       const like = `%${filters.q}%`;
       params.push(like, like, like);
     }
-    // `awaiting_approval` ranks after the workable band and before the resolved
-    // statuses: it is open work, but not work anyone can pick up, so it must not
-    // sit above a `todo` that somebody could start right now.
+    /**
+     * The status rank is GENERATED from the workspace's configuration (STA-140)
+     * rather than written out, which is what makes "reorder the statuses and the
+     * list reorders" true. For the seeded statuses it produces exactly the
+     * hardcoded `CASE` it replaced, with the gated band (STA-143) slotted where
+     * `LIST_CATEGORY_ORDER` puts it — beside `blocked`, above the workable band.
+     * That is the same judgement `blocked` has always had: work that needs
+     * somebody's attention ranks above work that is merely waiting to be picked
+     * up, and a parked parent is the most attention-needing row on the list.
+     */
     const sql = `SELECT * FROM issues ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
       ORDER BY
-        CASE status WHEN 'in_progress' THEN 0 WHEN 'in_review' THEN 1 WHEN 'blocked' THEN 2
-          WHEN 'todo' THEN 3 WHEN 'backlog' THEN 4 WHEN 'awaiting_approval' THEN 5
-          WHEN 'done' THEN 6 ELSE 7 END,
+        ${this.statusRankSql()},
         CASE priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END,
         created_at,
         rowid`;
@@ -3177,7 +4246,9 @@ export class WorkspaceStore {
    * it, the work it is holding underneath.
    *
    * `ready` therefore excludes both, and that is the whole "gated is never
-   * ready" rule, enforced here rather than in a category table until O7a lands.
+   * ready" rule. It is enforced by CATEGORY (STA-140): `gated` is absent from
+   * `INBOX_PICKUP_CATEGORY_ORDER`, so any status an operator files under it
+   * inherits the rule without a line changing here.
    */
   inbox(
     assignee?: string,
@@ -3209,11 +4280,20 @@ export class WorkspaceStore {
         queuedBy: queuedByIssue.get(issue.id) ?? null,
         gate: gatesByIssue.get(issue.id) ?? null,
       };
-      // Gate first: a queued issue with unresolved blockers is still gated, and
-      // naming the gate is the more actionable of the two facts — the blocker
-      // cannot even be worked until the gate opens.
-      if (entry.queuedBy || issue.status === "awaiting_approval") queued.push(entry);
-      else if (issue.status === "blocked" || unresolved.length > 0) blocked.push(entry);
+      /**
+       * "Not ready" is a CATEGORY question since STA-140: `gated` and `blocked`
+       * both mean an agent cannot pick this up, and an unresolved dependency
+       * means it regardless of what the status says. Everything left is ready,
+       * already in `inboxPickupOrder()` because `issuesQuery` sorted it there.
+       *
+       * Which of the two NOT-READY buckets it lands in is the STA-143 question,
+       * and gate first: a queued issue with unresolved blockers is still gated,
+       * and naming the gate is the more actionable of the two facts — the
+       * blocker cannot even be worked until the gate opens.
+       */
+      const category = this.categoryOf(issue.status);
+      if (entry.queuedBy || category === "gated") queued.push(entry);
+      else if (category === "blocked" || unresolved.length > 0) blocked.push(entry);
       else ready.push(entry);
     }
     return { ready, queued, blocked, hasMore };

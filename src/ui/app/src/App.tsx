@@ -28,6 +28,7 @@ import { CommandPaletteMount } from "@/components/CommandPaletteMount";
 import { CreateIssueMount } from "@/components/CreateIssueMount";
 import { TokenGate } from "@/components/TokenGate";
 import { IssueDetailMount } from "@/detail/IssueDetailMount";
+import { SettingsMount } from "@/settings/SettingsMount";
 import { AuthError, getBootstrap, getIssues, hasToken } from "@/lib/api";
 import {
   loadFilters,
@@ -42,6 +43,7 @@ import {
   type StapleSession,
   type ViewName,
 } from "@/lib/session";
+import { useWorkspaceSettings } from "@/lib/settings";
 import { loadViewPrefs, saveViewPrefs, type GroupBy } from "@/lib/view-prefs";
 import { useDataVersion, useResource } from "@/lib/useStaple";
 import { GraphView } from "@/views/GraphView";
@@ -145,6 +147,29 @@ export function App() {
   const loadIssues = useCallback(() => getIssues({ ws }), [ws]);
   const issues = useResource(loadIssues, [ws, version], onAuthError);
 
+  /**
+   * THE WORKSPACE VOCABULARY — O7b (STA-141). Fetched HERE, once, for the whole page.
+   *
+   * It has to be at the root and it took a browser to prove it. While this hook lived
+   * only inside the settings dialog, nothing fetched `/api/settings` until somebody
+   * opened the dialog — so a workspace with a custom status painted every row of it with
+   * the SEED's fallback category, which is `unstarted`. A status called `pairing` in the
+   * `active` category rendered as a dashed backlog ring, and the label looked right only
+   * because `statusLabel` title-cases an id it does not recognise. Every unit test passed;
+   * the page was wrong.
+   *
+   * The result is deliberately not put on the session. `lib/settings.ts` holds it in a
+   * module snapshot precisely so that pure modules — `views/tree/tree-model.ts`,
+   * `lib/filters.ts`, a `StatusIcon` three components deep — can ask without a hook and
+   * without prop drilling. What this call buys is (a) the fetch, and (b) a re-render of
+   * the whole tree when the answer changes, which is why `settings.settings` is a
+   * dependency of the session memo below.
+   *
+   * `version` re-runs it on the fingerprint poll, so a vocabulary changed by an agent
+   * through MCP or by a shell through the CLI reaches an open page within 1.5s.
+   */
+  const settings = useWorkspaceSettings({ ws: ws || undefined, version, onAuthError });
+
   /** The palette's single-assignee view over the assignee dimension. See session.ts. */
   const assignee = filters.dims.assignee?.[0] ?? "";
   const setAssignee = useCallback(
@@ -155,6 +180,8 @@ export function App() {
 
   const open = useCallback((workspace: string, ref: string) => setSelection({ workspace, ref }), []);
   const close = useCallback(() => setSelection(null), []);
+
+  const settingsSnapshot = settings.settings;
 
   const session = useMemo<StapleSession | null>(() => {
     if (!bootstrap.data) return null;
@@ -182,6 +209,9 @@ export function App() {
     };
   }, [
     bootstrap.data,
+    // Not read by the session — held as a dependency so that a vocabulary change
+    // rebuilds it and every view re-renders against the new statuses. See above.
+    settingsSnapshot,
     view,
     ws,
     issues,
@@ -223,7 +253,7 @@ export function App() {
   return (
     <SessionContext value={session}>
       {/*
-        All three mounts sit above the shell on purpose. A palette has to outlive view
+        All four mounts sit above the shell on purpose. A palette has to outlive view
         switches, a create dialog has to be triggerable from the header or a keystroke
         without either owning it, and the detail drawer portals out of the layout
         entirely. None of them are affected by what the shell does below.
@@ -231,6 +261,12 @@ export function App() {
       <CommandPaletteMount />
       <CreateIssueMount />
       <IssueDetailMount />
+      {/*
+        O7b (STA-141). A fourth mount for the same reason as the other three: the
+        workspace vocabulary editor has to be openable from the header and from the
+        palette without either owning its open flag, and it must survive a view switch.
+      */}
+      <SettingsMount />
 
       <AppShell>
         <View onAuthError={onAuthError} />

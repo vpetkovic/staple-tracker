@@ -257,7 +257,7 @@ describe("ancestors that must be left alone", () => {
     expect(eventsFor(epic.identifier).filter((e) => e.kind === "status_changed")).toHaveLength(1);
   });
 
-  it("still does not auto-close an epic when its children finish", () => {
+  it("closes the epic when its children finish (STA-153 reversed this)", () => {
     const epic = store.createIssue({ title: "Epic" });
     const leaf = store.createIssue({ title: "Leaf", parent: epic.identifier });
     store.checkoutIssue(leaf.identifier, "agent-a");
@@ -265,9 +265,10 @@ describe("ancestors that must be left alone", () => {
 
     store.updateIssue(leaf.identifier, { status: "done" }, "agent-a");
 
-    // Opening up is derived; closing out stays deliberate. `children_complete`
-    // is the nudge, and it is still only a nudge.
-    expect(statusOf(epic.identifier)).toBe("in_progress");
+    // Closing out is derived too now: the epic the tracker opened is the epic
+    // the tracker closes. `children_complete` is still emitted — it is the wake
+    // that asks the owner for the summary the automatic close cannot write.
+    expect(statusOf(epic.identifier)).toBe("done");
     expect(eventsFor(epic.identifier).map((e) => e.kind)).toContain("children_complete");
   });
 });

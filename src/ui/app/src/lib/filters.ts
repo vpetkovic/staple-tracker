@@ -53,9 +53,12 @@
  */
 import { isStaleClaim } from "./claim";
 import { isGateParked, isQueuedBehindGate } from "./derived-queued";
+import { configuredKindOrder, kindLabel } from "./settings";
 import { worklogStaleness } from "./worklog";
 import {
+  ISSUE_KINDS,
   ISSUE_PRIORITIES,
+  KIND_RANK,
   OPEN_STATUS_ORDER,
   RESOLVED_STATUSES,
   type IssuePriority,
@@ -298,6 +301,19 @@ const matchGate = (row: IssueRow, value: string) =>
 
 const matchStatus = (row: IssueRow, value: string) => row.issue.status === value;
 const matchPriority = (row: IssueRow, value: string) => row.issue.priority === value;
+/**
+ * O1c (STA-130). EXACT, like `matchStatus` and unlike `matchAssignee` — a kind is an id
+ * from a controlled vocabulary, not a name a human typed, so there is no casing to be
+ * generous about.
+ *
+ * It deliberately does NOT fall back to `DEFAULT_ISSUE_KIND` for an empty value, which
+ * `buildKindGroups` in views/tree/tree-model.ts deliberately does. The asymmetry is the
+ * consequence being different, not the rule: a row whose kind is missing from a malformed
+ * payload matches no kind option here and simply stays on the page unfiltered — exactly
+ * what a row with an unrecognised STATUS already does — whereas over there the same row
+ * would land in no bucket at all and vanish from the list entirely.
+ */
+const matchKind = (row: IssueRow, value: string) => row.issue.kind === value;
 const matchClaim = (row: IssueRow, value: string) => claimStateOf(row) === value;
 const matchHandoff = (row: IssueRow, value: string) => handoffRiskOf(row) === value;
 
@@ -334,6 +350,74 @@ export const FILTER_DIMENSIONS: readonly FilterDimension[] = [
       ),
     matches: matchStatus,
     format: (value) => STATUS_LABELS[value as IssueStatus] ?? titleCase(value),
+  },
+  /**
+   * KIND — O1c (STA-130). Directly after Status, and INSERTED rather than appended.
+   *
+   * `GROUP_BY_OPTIONS` in lib/view-prefs.ts has an explicit append-only rule and this
+   * registry does not; its order is argued semantically, entry by entry, and the two
+   * per-workspace VOCABULARIES belong together. Status and Kind are the only two
+   * dimensions that resolve their labels through lib/settings.ts, they are the two facts
+   * an issue DECLARES about itself, and "what is it / what state is it in" is one reading.
+   *
+   * Appending would also have made the note on `handoff` below false — it says "Last, and
+   * directly after Claim". Inserting here leaves that pair adjacent AND leaves `handoff`
+   * last, so nothing already argued in this file has to be re-argued.
+   *
+   * ── AN OPEN SET, NOT A CLOSED ENUM, WHICH IS THE OPPOSITE OF STATUS ─────────────────
+   *
+   * `status` and `priority` list every member whether or not a row uses one, because
+   * "filter for blocked to confirm nothing is blocked" is a real question over a fixed
+   * seven. Kind is not a fixed anything since O7a (STA-140) made the vocabulary DATA: a
+   * workspace can configure a dozen, and `closedOptions` would then put ten zero-count
+   * rows in a two-row menu. So this offers the kinds actually on the page — the same
+   * shape `assignee` and `label` use, and the same reason the `assignee` entry refuses to
+   * offer an "Unassigned 0".
+   *
+   * ── ORDERED BY THE CONFIGURED ORDER, NOT ALPHABETICALLY ────────────────────────────
+   *
+   * Unlike `assignee` and `label`, this open set HAS a canonical order: the settings
+   * dialog's drag order, which the detail picker, the create form and the group headers
+   * all already paint. Sorting it `bug, chore, epic, spike, task` would make this menu the
+   * one surface that disagrees. A kind on a row that `configuredKindOrder()` has never
+   * heard of — a workspace edited seconds ago in another tab, arriving on the wire before
+   * /api/settings catches up — is offered LAST rather than dropped, ranked by `KIND_RANK`
+   * and then by id so the order is stable across polls.
+   */
+  {
+    id: "kind",
+    label: "Kind",
+    options: (rows) => {
+      const present = new Set<string>();
+      for (const row of rows) {
+        if (row.issue.kind) present.add(row.issue.kind);
+      }
+      const configured = configuredKindOrder();
+      const known = configured.filter((id) => present.has(id));
+      const unknown = [...present]
+        .filter((id) => !configured.includes(id))
+        .sort(
+          (a, b) =>
+            (KIND_RANK[a] ?? ISSUE_KINDS.length) - (KIND_RANK[b] ?? ISSUE_KINDS.length) ||
+            a.localeCompare(b),
+        );
+      const values = [...known, ...unknown];
+      const counts = tally(rows, values, matchKind);
+      return values.map((value) => ({
+        value,
+        label: kindLabel(value),
+        count: counts.get(value) ?? 0,
+      }));
+    },
+    matches: matchKind,
+    /*
+     * `kindLabel`, so the chip reads "Kind: Epic" — the LABEL, like every other dimension
+     * here, and not the raw id. `titleCase`'s note above is the rule ("the wire value is
+     * never shown to a human"), and `kindLabel` is additionally the only thing that knows
+     * a workspace renamed `spike` to "Investigation". A hard-coded id would make the chip
+     * strip the one surface that lies about a renamed kind.
+     */
+    format: (value) => kindLabel(value),
   },
   {
     id: "assignee",

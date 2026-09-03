@@ -45,7 +45,9 @@
 import type { CSSProperties, KeyboardEvent, ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { DependencyBadges } from "./DependencyBadges";
+import { KindGlyph } from "./KindGlyph";
 import { LabelPills } from "./LabelPills";
+import { ParentRollupBar } from "./ParentRollup";
 import { PrBadge } from "./PrBadge";
 import { PrioritySignal } from "./PrioritySignal";
 import { StatusIcon } from "./StatusIcon";
@@ -204,25 +206,76 @@ export function TaskRowLine({
   onKeyDown,
   registerRef,
 }: TaskRowLineProps) {
-  const { issue, claim, depth, hasChildren, childCount, guides, breadcrumb } = row;
+  const { issue, claim, depth, hasChildren, childCount, guides, breadcrumb, rollup } = row;
   const { columns, labelMax } = config;
   const collapsedParent = columns.disclosure && hasChildren && !isExpanded;
   const bare = semantics === "bare";
+  /**
+   * ── THE GHOST VARIANT — O3c (STA-128) ────────────────────────────────────────────────
+   *
+   * A parent that is not in this bucket, drawn inside it so the children that ARE can nest
+   * under it. It is CONTEXT, not content: dimmed, absent from the group's count and from
+   * `visibleOrder`, and it opens the PARENT when clicked — which is what the row's own
+   * `onClick` already does.
+   *
+   * ── WHAT O8c (STA-151) CHANGED ────────────────────────────────────────────────────────
+   *
+   * IT FOLDS. O3c replaced the chevron with a static glyph because "a fold on a ghost
+   * would remove real rows from the group they belong to". STA-148 rejects the premise:
+   * a group is a way of DISPLAYING rows, so a fold hides rows from the display and changes
+   * nothing about membership — and the group's `count` is `bucket.length`, which no fold
+   * can reach. The chevron is now the ordinary button, wearing the ordinary label, driven
+   * by the ordinary per-issue expansion state, so folding this bracket and folding the
+   * parent's own row in the flat view are one act recorded once.
+   *
+   * TWO elements still come off, and each for a reason that survived that argument:
+   *
+   *   THE CHECKBOX. A ghost is not in this bucket, so it cannot be part of a selection
+   *   made in it.
+   *
+   *   THE `⋯`. It is a second way to do the one thing the whole row already does.
+   *
+   * Everything else the parent genuinely has, it shows, dimmed — a context row that
+   * abbreviated the parent's status or age would be worse than no context row. What it
+   * does NOT show is a claim: the model gives a ghost `claim: null` deliberately, so
+   * `RowClaimSlot` renders nothing and the parent's own row stays the single place its
+   * liveness is written down. See views/tree/tree-model.ts.
+   */
+  const ghost = row.ghost === true;
 
   const cell = (
     <div role={semantics === "grid" ? "gridcell" : undefined} className="staple-row-cell">
       {columns.select ? (
-        <input
-          type="checkbox"
-          data-slot="checkbox"
-          className="staple-row-check"
-          checked={isSelected}
-          aria-label={`Select ${issue.identifier}`}
-          onClick={(event) => event.stopPropagation()}
-          onChange={() => onToggleSelect?.()}
-        />
+        ghost ? (
+          /* The column is a GRID TRACK, so the element cannot simply be dropped — the
+             chevron would slide into the select column and every glyph on this one row
+             would sit a track left of the list it is inside. A spacer keeps the geometry
+             and removes the affordance, which is the only combination that is correct. */
+          <span className="staple-row-check-spacer" aria-hidden="true" />
+        ) : (
+          <input
+            type="checkbox"
+            data-slot="checkbox"
+            className="staple-row-check"
+            checked={isSelected}
+            aria-label={`Select ${issue.identifier}`}
+            onClick={(event) => event.stopPropagation()}
+            onChange={() => onToggleSelect?.()}
+          />
+        )
       ) : null}
 
+      {/*
+        NO `ghost` BRANCH HERE — O8c (STA-151). O3c drew a static glyph, on the grounds
+        that a fold would take real rows out of the group they belong to. STA-148 answers
+        that a group is a way of DISPLAYING rows: a fold hides rows from the display and
+        changes nothing about membership, and the group's `count` is `bucket.length`,
+        which no fold can reach. So the ghost gets the ordinary chevron, with the ordinary
+        label — one control, not two that look alike and behave differently.
+
+        The `stopPropagation` below is what keeps "the chevron folds, the rest of the row
+        opens the parent" true on a ghost without a second rule for it.
+      */}
       {columns.disclosure ? (
         hasChildren ? (
           <button
@@ -271,6 +324,25 @@ export function TaskRowLine({
       */}
       {columns.identifier ? (
         <span className="staple-row-id">
+          {/*
+            THE KIND GLYPH — O1b (STA-125). First child, so it is left of everything.
+
+            It is here and not in a grid track of its own for the reason the connector
+            glyph is: a new track changes the column template for all three presets and
+            every §14 breakpoint at once. It is on EVERY row rather than on epics only,
+            which is what finally pays O5's bill above — the space in front of the
+            identifier is now filled rather than reserved, so `--row-id-width` could go
+            back to the 76px O5 measured (see task-list.css) and every identifier in the
+            list has one left edge again.
+
+            NO `ghost` GUARD, deliberately. A dimmed epic that does not look like an epic
+            defeats the point of the context row, and `.staple-row-ghost` is a single
+            `opacity` rule on the row, so this dims with everything else for free. It is
+            also gated on `columns.identifier` rather than on a switch of its own: every
+            preset that draws an identifier wants the type of the thing it identifies,
+            and the palette (R5) gets it through this component with no code of its own.
+          */}
+          <KindGlyph kind={issue.kind} />
           {isSubtask(row) ? (
             <>
               <span className="staple-row-kin" data-testid="subtask-glyph" aria-hidden="true">
@@ -283,6 +355,11 @@ export function TaskRowLine({
             </>
           ) : null}
           {issue.identifier}
+          {/* O3c (STA-128). The dimming is the whole signal for a sighted reader and no
+              signal at all for a screen reader, which would otherwise hear this parent as
+              a member of a group it is not in. Said once, after the identifier, so the row
+              still reads "STA-1, parent shown for context, The epic". */}
+          {ghost ? <span className="sr-only"> parent shown for context</span> : null}
         </span>
       ) : null}
 
@@ -313,8 +390,27 @@ export function TaskRowLine({
         <span className="staple-row-title" title={issue.title}>
           {issue.title || <span className="staple-row-untitled">(untitled)</span>}
         </span>
-        {/* A collapsed parent still declares what it is hiding. */}
+        {/* A collapsed parent still declares what it is hiding. `+N` is DIRECT children in
+            this bucket — literally the rows the fold removed — and it stays collapsed-only,
+            because "+3" printed above three visible children would be a lie. */}
         {collapsedParent ? <span className="staple-row-childcount">+{childCount}</span> : null}
+        {/*
+          O3b (STA-127). Immediately after `+N` and inside the title cell, which is the slot
+          the ticket names and the only one that can take it: the meta cluster is fixed
+          content by contract, and below 720px §14 moves that cluster to line 2, which would
+          strand a parent's progress away from the parent.
+
+          BOTH STATES RENDER, and the component decides which. Collapsed gets the count, the
+          bar and the child-live dot; expanded gets only the count — the bar restates rows
+          that are on the screen, but the count cannot be recovered by looking, because the
+          filter may be hiding some of the descendants it counts.
+
+          A leaf has no `rollup` at all and this is absent from the DOM, per the column rule
+          at the top of this file.
+        */}
+        {columns.disclosure && hasChildren && rollup ? (
+          <ParentRollupBar rollup={rollup} collapsed={collapsedParent} />
+        ) : null}
         {/* Last in the cell, so it reads as an aside on the title and never as part of it —
             and so it is the element the flexbox squeezes first when the title is long. */}
         {caption ? (
@@ -373,7 +469,13 @@ export function TaskRowLine({
           and it will be where a real menu hangs the day one exists. Off in every narrow
           preset, where the whole row is already a single-purpose target.
         */}
-        {columns.actions ? (
+        {columns.actions && ghost ? (
+          /* Reserved, never drawn: the `⋯` is a second way to do the one thing the whole
+             ghost row already does, but its 20px is what keeps this row's date aligned
+             with the dates above and below it. */
+          <span className="staple-row-actions-spacer" aria-hidden="true" />
+        ) : null}
+        {columns.actions && !ghost ? (
           <button
             type="button"
             className="staple-row-actions"
@@ -401,6 +503,14 @@ export function TaskRowLine({
       data-status={issue.status}
       data-testid="task-row"
       data-identifier={issue.identifier}
+      /*
+       * O3c (STA-128). The attribute a QUERY has to be able to exclude: `data-identifier`
+       * is no longer unique in the document, because the same parent can be a real row in
+       * its own group and a ghost in another. Anything that finds a row BY IDENTIFIER —
+       * TreeGrid's scroll-into-view, an evidence script, a test — must say
+       * `:not([data-ghost])` or it will act on the context copy.
+       */
+      data-ghost={ghost ? "true" : undefined}
       // Which columns are on drives the grid template — see task-list.css. Attributes
       // rather than an inline style, so the §14 media queries can still override the
       // whole template at the narrow breakpoints (an inline style could not be beaten).
@@ -411,7 +521,9 @@ export function TaskRowLine({
       data-density={config.density}
       aria-level={semantics === "grid" ? depth + 1 : undefined}
       aria-expanded={semantics === "grid" && hasChildren ? isExpanded : undefined}
-      aria-selected={bare ? undefined : isSelected}
+      // A ghost is not in this bucket, so it cannot be part of a selection made in it, and
+      // `aria-selected="false"` would advertise that it could be.
+      aria-selected={bare || ghost ? undefined : isSelected}
       aria-current={isCurrent ? "true" : undefined}
       // Exactly one row in the whole list is tabbable, so the list is a single tab stop and
       // arrow keys do the moving — the standard treegrid/listbox contract.
@@ -419,7 +531,12 @@ export function TaskRowLine({
       onClick={bare ? undefined : onOpen}
       onFocus={bare ? undefined : onFocus}
       onKeyDown={bare ? undefined : onKeyDown}
-      className={cn("staple-row", anySelected && "staple-row-selecting", bare && "staple-row-bare")}
+      className={cn(
+        "staple-row",
+        anySelected && !ghost && "staple-row-selecting",
+        bare && "staple-row-bare",
+        ghost && "staple-row-ghost",
+      )}
       style={{ paddingLeft: ROW_PAD_LEFT + indentPx(columns.disclosure ? depth : 0) } as CSSProperties}
     >
       {columns.disclosure ? <Connectors guides={guides} hasSelectColumn={columns.select} /> : null}

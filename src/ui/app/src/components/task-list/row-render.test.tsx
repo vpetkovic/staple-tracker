@@ -23,7 +23,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { ReactElement } from "react";
 import type { PullRequestRef } from "@/lib/types";
 import { STALE_CLAIM_SECONDS } from "@/lib/claim";
-import { buildGroups } from "@/views/tree/tree-model";
+import { buildGroups, flattenFlat } from "@/views/tree/tree-model";
 import { PrioritySignal } from "./PrioritySignal";
 import { StatusIcon } from "./StatusIcon";
 import { TaskRowLine } from "./TaskRowLine";
@@ -583,5 +583,549 @@ describe("dependency badges", () => {
     // A palette row is read in under a second on the way to pressing enter, and its status
     // icon already says `blocked`. See the note on `columns.deps` in config.ts.
     expect(renderDeps(deps, "popup")).not.toContain("staple-dep-badge");
+  });
+});
+
+/**
+ * ── THE COLLAPSED-PARENT ROLLUP — O3b (STA-127) ──────────────────────────────────────
+ *
+ * The arithmetic is pinned in row-bits.test.ts. What is pinned HERE is the row: which
+ * elements exist in which fold state, and the one confusion this element must never create.
+ *
+ * `flattenFlat` rather than `buildGroups`, because a folded parent needs its children in the
+ * SAME bucket to have any — under status grouping a done child of an in-progress epic is
+ * filed in a different group by design (§11.3), which is a different ticket's subject.
+ */
+describe("parent rollup", () => {
+  /**
+   * A five-child epic through the REAL model, with `rollupSource` doing the job it exists
+   * for: the list on screen is the default filter's (no done rows), the counts are the
+   * whole payload's.
+   */
+  function renderEpic(
+    over: {
+      expanded?: boolean;
+      showResolved?: boolean;
+      childClaim?: ClaimActivity | null;
+      parentClaim?: ClaimActivity | null;
+      statuses?: string[];
+    } = {},
+  ): string {
+    const {
+      expanded = false,
+      showResolved = false,
+      childClaim = null,
+      parentClaim = null,
+      statuses = ["done", "done", "done", "todo", "in_progress"],
+    } = over;
+
+    const all = [
+      row({ identifier: "STA-1", status: "in_progress" }, parentClaim),
+      ...statuses.map((status, index) =>
+        row(
+          { identifier: `STA-${index + 2}`, parentId: "id-1", status: status as Issue["status"] },
+          // The claim, when there is one, goes on the LAST child.
+          index === statuses.length - 1 ? childClaim : null,
+        ),
+      ),
+    ];
+
+    const built = flattenFlat(all, {
+      isExpanded: () => expanded,
+      showResolved,
+      rollupSource: all,
+    })[0]!;
+
+    return renderToStaticMarkup(
+      <TaskRowLine
+        row={built}
+        config={resolveTaskListConfig("tree", { labelMax: 2 })}
+        semantics="grid"
+        isExpanded={expanded}
+        now={NOW}
+      />,
+    );
+  }
+
+  it("shows resolved/total and the segmented bar when folded", () => {
+    const markup = renderEpic();
+
+    expect(markup).toContain('data-testid="parent-rollup"');
+    expect(markup).toContain('data-testid="parent-rollup-bar"');
+    expect(markup).toContain("3/5");
+    // Three segments present, not four: an empty segment is ABSENT rather than a
+    // zero-width box, which still paints a hairline at some zoom levels.
+    expect(markup).toContain('data-segment="done"');
+    expect(markup).toContain('data-segment="in_progress"');
+    expect(markup).toContain('data-segment="open"');
+    expect(markup).not.toContain('data-segment="blocked"');
+    // The bar is silent; the count carries the reading, spelled out rather than "3/5",
+    // which a screen reader says as "three slash five".
+    expect(markup).toContain('aria-label="3 of 5 done"');
+  });
+
+  it("counts the UNFILTERED list — 3 of 5 done while the filter hides the done ones", () => {
+    const markup = renderEpic({ showResolved: false });
+
+    // The acceptance criterion, and the reason `rollupSource` is threaded down from
+    // TreeView at all. Built from what is on screen this would read 0/2.
+    expect(markup).toContain("3/5");
+    // And `+N` still means what it always meant: DIRECT children the fold removed, which
+    // the filter has already cut to two. The two numbers are allowed to differ.
+    expect(markup).toContain("+2");
+  });
+
+  it("keeps the count and drops the bar when the parent is expanded", () => {
+    const markup = renderEpic({ expanded: true });
+
+    // The bar restates rows that are now on the screen underneath. The count does not: the
+    // filter may still be hiding some of the descendants it counts.
+    expect(markup).toContain('data-testid="parent-rollup"');
+    expect(markup).toContain("3/5");
+    expect(markup).not.toContain('data-testid="parent-rollup-bar"');
+    // `+N` stays collapsed-only — "+2" printed above two visible children would be a lie.
+    expect(markup).not.toContain("staple-row-childcount");
+  });
+
+  it("puts NOTHING in the DOM for a leaf", () => {
+    const markup = renderRow();
+
+    expect(markup).not.toContain('data-testid="parent-rollup"');
+    expect(markup).not.toContain("staple-rollup");
+  });
+
+  it("pulses with the holder's initials for a LIVE descendant claim", () => {
+    const markup = renderEpic({ childClaim: claim({ heldBy: "opus-x", idleSeconds: 30 }) });
+
+    expect(markup).toContain('data-testid="rollup-child-live"');
+    expect(markup).toContain("staple-rollup-live-dot");
+    expect(markup).toContain("OX");
+    // The name says CHILD and names the ticket, so it can never be read as the parent's
+    // own claim — which is the single confusion this element must not create.
+    expect(markup).toContain('aria-label="child STA-6: opus-x is working"');
+  });
+
+  it("never animates for a STALE descendant claim — it renders nothing at all", () => {
+    const markup = renderEpic({ childClaim: claim({ idleSeconds: STALE_CLAIM_SECONDS }) });
+
+    // Not a static variant and not a dimmed one. An agent that died four hours ago is not
+    // inside this subtree, and the child's own row says so honestly when you unfold.
+    expect(markup).not.toContain('data-testid="rollup-child-live"');
+    expect(markup).not.toContain("staple-rollup-live-dot");
+    // The count and the bar are unaffected — liveness and progress are different facts.
+    expect(markup).toContain("3/5");
+    expect(markup).toContain('data-testid="parent-rollup-bar"');
+  });
+
+  it("is NOT the claim slot: it never appears there and never claims the parent is held", () => {
+    const markup = renderEpic({ childClaim: claim({ heldBy: "opus-x", idleSeconds: 30 }) });
+    const titleCell = markup.indexOf("staple-row-title-cell");
+    const live = markup.indexOf('data-testid="rollup-child-live"');
+    const meta = markup.indexOf("staple-row-meta");
+
+    // In the TITLE cell, at the opposite end of the row from the meta cluster where
+    // `RowClaimSlot` lives. Different position, and no working pill on this row at all:
+    // the parent is unheld and the rollup must not invent a holder for it.
+    expect(live).toBeGreaterThan(titleCell);
+    expect(live).toBeLessThan(meta);
+    expect(markup).not.toContain('data-testid="working-pill"');
+    expect(markup).not.toContain("Working…");
+  });
+
+  it("coexists with the parent's OWN claim — two agents, two tickets, two elements", () => {
+    const markup = renderEpic({
+      parentClaim: claim({ heldBy: "opus-p", idleSeconds: 10 }),
+      childClaim: claim({ heldBy: "opus-x", idleSeconds: 30 }),
+    });
+
+    // `RowClaimSlot` stays the single place the row's own liveness is written down, and the
+    // rollup says something else entirely. Both are true at once and both are drawn.
+    expect(markup).toContain('data-testid="working-pill"');
+    expect(markup).toContain("opus-p is working");
+    expect(markup).toContain('data-testid="rollup-child-live"');
+    expect(markup).toContain('aria-label="child STA-6: opus-x is working"');
+    // Two dots, two silhouettes — the capsule's and the bare one beside the count.
+    expect(markup).toContain("staple-working-dot");
+    expect(markup).toContain("staple-rollup-live-dot");
+  });
+
+  it("renders no bar when every descendant is cancelled — 0/0 is furniture", () => {
+    const markup = renderEpic({ statuses: ["cancelled", "cancelled"], showResolved: true });
+
+    expect(markup).not.toContain('data-testid="parent-rollup"');
+    expect(markup).not.toContain("0/0");
+  });
+});
+
+/**
+ * ── THE GHOST PARENT CONTEXT ROW — O3c (STA-128) ──────────────────────────────────────
+ *
+ * A parent that is NOT in this bucket, drawn inside it so the children that ARE can nest
+ * under it. Built through the real `buildGroups` rather than a hand-made `TaskRow`, because
+ * the whole claim of this ticket is that the model and the row agree about what a ghost is
+ * — a fixture asserting the row alone would still pass on the day the model stopped
+ * producing one.
+ *
+ * Three ways this could quietly become wrong, and one test each:
+ *
+ *   1. It grows a SELECTION affordance. A ghost is not in this bucket, so a checkbox here
+ *      offers to select a row that is not in the group the selection was made in.
+ *      (The FOLD used to be on this list and is not any more — see O8c below.)
+ *   2. It loses its geometry. The select and actions columns are reserved width, so
+ *      dropping either element slides this one row's glyphs out of the list's columns.
+ *   3. It says something about the parent it cannot know — a claim, in particular, which
+ *      `hiddenParents` could never supply and which belongs to the parent's real row.
+ *
+ * ── O8c (STA-151) — THE CHEVRON IS A BUTTON NOW ───────────────────────────────────────
+ *
+ * O3c drew a static glyph here on the grounds that a fold would "remove real rows from the
+ * group they belong to". STA-148 answers that a group is a way of DISPLAYING rows, so a
+ * fold hides rows from the display and changes nothing about membership — and the group's
+ * `count` is `bucket.length`, which no fold can reach. What is left of O3c's argument is
+ * that the ghost is CONTEXT: it stays dimmed, carries no claim and joins no selection.
+ */
+describe("the ghost parent context row", () => {
+  const family = () => [
+    row(
+      { id: "p", identifier: "STA-1", title: "The epic", status: "backlog" },
+      claim({ heldBy: "opus-p", idleSeconds: 10 }),
+    ),
+    row({ id: "c", identifier: "STA-2", title: "The task", status: "in_progress", parentId: "p" }),
+    row({ id: "d", identifier: "STA-3", title: "Shipped", status: "done", parentId: "p" }),
+  ];
+
+  /** The In Progress group: `[ghost STA-1, STA-2]`. */
+  function inProgressRows(isExpanded: (issue: { id: string }) => boolean | undefined = () => true) {
+    const rows = family();
+    return buildGroups(rows, { isExpanded, rollupSource: rows }).find(
+      (g) => g.status === "in_progress",
+    )!.rows;
+  }
+
+  /**
+   * The ghost, rendered the way `TreeGrid.renderGhost` renders it: no selection, no
+   * `isCurrent` — the click that opens the parent, and (since O8c) the fold.
+   *
+   * `isExpanded` comes from the ROW rather than being asserted at the call site, which is
+   * the seam this ticket moved: `renderGhost` used to pass a hard `true`.
+   */
+  const renderGhostRow = (rows = inProgressRows()) =>
+    renderToStaticMarkup(
+      <TaskRowLine
+        row={rows[0]!}
+        config={resolveTaskListConfig("tree", { labelMax: 2 })}
+        semantics="grid"
+        isExpanded={rows[0]!.isExpanded}
+        now={NOW}
+        onOpen={() => {}}
+        onToggleExpand={() => {}}
+        onFocus={() => {}}
+        onKeyDown={() => {}}
+        registerRef={() => {}}
+      />,
+    );
+
+  it("is the parent, marked as a ghost and dimmed by class rather than by hue", () => {
+    const markup = renderGhostRow();
+
+    expect(inProgressRows()[0]!.ghost).toBe(true);
+    expect(markup).toContain('data-identifier="STA-1"');
+    expect(markup).toContain('data-ghost="true"');
+    expect(markup).toContain("staple-row-ghost");
+    // Still a real treegrid row at the top level of the group, with the children it
+    // brackets one level down — `aria-level` is 1-based.
+    expect(markup).toContain('role="row"');
+    expect(markup).toContain('aria-level="1"');
+    expect(markup).toContain('aria-expanded="true"');
+  });
+
+  it("FOLDS — the chevron is the same button a real parent gets — O8c (STA-151)", () => {
+    const markup = renderGhostRow();
+
+    // The static glyph is gone, and with it the class that styled it.
+    expect(markup).not.toContain("staple-row-chevron-static");
+    // A real chevron, labelled exactly as a real row's is, so a screen reader hears one
+    // control rather than two that happen to look alike.
+    expect(markup).toContain("Collapse STA-1");
+    expect(markup).toContain('aria-expanded="true"');
+  });
+
+  it("stays dimmed and stays context when it is FOLDED — O8c (STA-151)", () => {
+    // The model's fold arrives through the ROW, which is the whole point: the ghost and
+    // the parent's real row read one entry, keyed by the issue id.
+    const folded = inProgressRows((issue) => (issue.id === "p" ? false : undefined));
+
+    expect(folded.map((r) => [r.issue.identifier, r.ghost === true])).toEqual([["STA-1", true]]);
+
+    const markup = renderGhostRow(folded);
+    expect(markup).toContain("Expand STA-1");
+    expect(markup).toContain('aria-expanded="false"');
+    // Dimming is the signal for "context", and a fold is not a promotion out of it.
+    expect(markup).toContain("staple-row-ghost");
+    expect(markup).toContain('data-ghost="true"');
+    expect(markup).toContain("parent shown for context");
+  });
+
+  it("offers NO selection and NO row menu — the fold and the click are the interactions", () => {
+    const markup = renderGhostRow();
+
+    // No `⋯`, and no `aria-selected` advertising a selection it cannot join.
+    expect(markup).not.toContain("Open details for STA-1");
+    expect(markup).not.toContain("aria-selected");
+    // Not the tab stop, because it is not the focused row in this fixture. It IS in the
+    // arrow sequence now (TreeGrid), under a prefixed key; the roving `tabIndex` is what
+    // makes exactly one row in the list tabbable, and it is not this one.
+    expect(markup).toContain('tabindex="-1"');
+  });
+
+  it("keeps every reserved column, so one dimmed row cannot break the list's alignment", () => {
+    const wide = renderToStaticMarkup(
+      <TaskRowLine
+        row={inProgressRows()[0]!}
+        // The checkbox gutter is off by default (STA-101). Forced on here, because the
+        // failure this guards is invisible until somebody turns it back on: the row is a
+        // GRID, so an absent element does not leave a gap, it shifts every later glyph one
+        // track left.
+        config={resolveTaskListConfig("tree", { labelMax: 2, columns: { select: true } })}
+        semantics="grid"
+        isExpanded
+        now={NOW}
+        onOpen={() => {}}
+      />,
+    );
+
+    expect(wide).toContain("staple-row-check-spacer");
+    expect(wide).not.toContain("Select STA-1");
+    expect(renderGhostRow()).toContain("staple-row-actions-spacer");
+  });
+
+  it("says what is UNDER the parent and nothing about the parent's own liveness", () => {
+    const markup = renderGhostRow();
+
+    // The rollup rides along — it is the epic's own progress, over the unfiltered source,
+    // so the `done` child the default filter hides is still in the denominator.
+    expect(markup).toContain('data-testid="parent-rollup"');
+    expect(markup).toContain("1/2");
+    // Expanded form: the count, no bar. The rows the bar would restate are on the screen
+    // directly underneath it.
+    expect(markup).not.toContain('data-testid="parent-rollup-bar"');
+    // And NO claim, even though this parent is genuinely held — `hiddenParents` yields an
+    // `Issue` alone, so a ghost could never report liveness consistently, and the parent's
+    // real row in the Backlog group is where it is written down.
+    expect(markup).not.toContain('data-testid="working-pill"');
+    expect(markup).not.toContain("opus-p is working");
+  });
+
+  it("tells a screen reader it is context, since the dimming tells it nothing", () => {
+    expect(renderGhostRow()).toContain("parent shown for context");
+  });
+
+  it("takes the chip off the child it brackets — the elbow is now saying it", () => {
+    const child = inProgressRows()[1]!;
+    const markup = renderToStaticMarkup(
+      <TaskRowLine
+        row={child}
+        config={resolveTaskListConfig("tree", { labelMax: 2 })}
+        semantics="grid"
+        now={NOW}
+        onOpen={() => {}}
+        onOpenParent={() => {}}
+        registerRef={() => {}}
+      />,
+    );
+
+    expect(child.depth).toBe(1);
+    expect(markup).not.toContain("staple-row-breadcrumb");
+    expect(markup).not.toContain("Parent STA-1");
+    // Nested, so it draws the connector the chip used to stand in for.
+    expect(markup).toContain("staple-guide-elbow");
+    expect(markup).toContain('aria-level="2"');
+    // An ordinary row in every other respect: focusable, selectable, and NOT dimmed.
+    expect(markup).not.toContain('data-ghost="true"');
+    expect(markup).toContain('aria-selected="false"');
+  });
+});
+
+/**
+ * O1b (STA-125) — the kind glyph.
+ *
+ * Four things can go wrong here and only one of them is "the glyph is missing".
+ *
+ *   1. TWO KINDS DRAW THE SAME MARK. Monochrome means shape carries the whole signal, so
+ *      a copy-paste between two `case` arms is invisible on the page and fatal to the
+ *      feature. Every kind's markup is compared against every other kind's.
+ *   2. A CONFIGURED KIND DRAWS NOTHING. `staple kinds add milestone` is supported, so a
+ *      switch that only knows the five built-ins would drop the glyph — and with it the
+ *      16px that puts that row's identifier on the same left edge as every other row.
+ *   3. THE GLYPH LANDS RIGHT OF THE IDENTIFIER. It has to lead the cluster, in the DOM as
+ *      well as visually, because that ordering is also what a screen reader reads.
+ *   4. IT IS ON THE TREE AND NOWHERE ELSE. The panel, the palette and the ghost rows all
+ *      get it from this one component, with no code of their own — which is only true if
+ *      it is gated on `columns.identifier` and carries no `ghost` guard.
+ */
+describe("kind glyph", () => {
+  const BUILT_INS = ["epic", "task", "bug", "chore", "spike"] as const;
+
+  /** Just the glyph element, sliced out of a rendered row. */
+  function glyphOf(markup: string): string {
+    const start = markup.indexOf('<span class="staple-kind-glyph"');
+    expect(start).toBeGreaterThan(-1);
+    const end = markup.indexOf("</span></span>", start);
+    return markup.slice(start, end + "</span></span>".length);
+  }
+
+  /** The drawing alone — the attribute names the kind, so it cannot be compared. */
+  const drawingOf = (kind: string) =>
+    glyphOf(renderRow({ kind })).replace(`data-issue-kind="${kind}"`, "");
+
+  it("draws a distinct mark for every built-in kind", () => {
+    for (const kind of BUILT_INS) {
+      expect(glyphOf(renderRow({ kind }))).toContain(`data-issue-kind="${kind}"`);
+    }
+    // The whole set, pairwise. `new Set(...).size` would also catch a duplicate, but it
+    // would not say WHICH two collided, and a duplicated `case` arm is the failure this
+    // test exists for.
+    for (const a of BUILT_INS) {
+      for (const b of BUILT_INS) {
+        if (a === b) continue;
+        expect(drawingOf(a), `${a} and ${b} draw the same mark`).not.toBe(drawingOf(b));
+      }
+    }
+  });
+
+  it("gives an epic the only solid mark in the set", () => {
+    // Not decoration: colour is unavailable in this cluster, so MASS is the entire reason
+    // an epic is recognisable in a folded list. Every other kind is an outline.
+    expect(glyphOf(renderRow({ kind: "epic" }))).toContain('fill="currentColor"');
+    for (const kind of ["task", "bug", "chore", "spike"] as const) {
+      expect(glyphOf(renderRow({ kind })), kind).toContain('fill="none"');
+    }
+  });
+
+  it("draws task as the hollow twin of epic — the container and the unit", () => {
+    // The one pair allowed to share a silhouette, and the assertion is what stops the
+    // relationship from being quietly redesigned into two unrelated shapes: epic and
+    // task must both be diamonds, and must differ ONLY in fill and size.
+    const epic = glyphOf(renderRow({ kind: "epic" }));
+    const task = glyphOf(renderRow({ kind: "task" }));
+    expect(epic).toMatch(/d="M8 [\d.]+ L[\d.]+ 8 L8 [\d.]+ L[\d.]+ 8 Z"/);
+    expect(task).toMatch(/d="M8 [\d.]+ L[\d.]+ 8 L8 [\d.]+ L[\d.]+ 8 Z"/);
+    // And it must not echo the priority column: `critical` is a filled rounded RECT one
+    // column to the left, which is why neither of these may be a rect at all.
+    expect(epic).not.toContain("<rect");
+    expect(task).not.toContain("<rect");
+  });
+
+  it("gives a kind the operator added a neutral mark rather than nothing", () => {
+    const markup = renderRow({ kind: "milestone" });
+
+    expect(markup).toContain('data-issue-kind="milestone"');
+    // It must not impersonate one of the five: this file cannot know what `milestone`
+    // means, and guessing a shape for it would be worse than staying quiet.
+    for (const kind of BUILT_INS) {
+      expect(drawingOf("milestone"), kind).not.toBe(drawingOf(kind));
+    }
+    // …and it is still announced, by the title-cased id the settings module falls back to.
+    expect(markup).toContain("Kind: Milestone");
+  });
+
+  it("leads the identifier cluster — before the identifier and before the connector", () => {
+    const child = renderRow({ identifier: "STA-2", kind: "bug", parentId: "p" });
+
+    const glyph = child.indexOf("staple-kind-glyph");
+    const connector = child.indexOf("staple-row-kin");
+    const identifier = child.indexOf("STA-2<");
+
+    expect(glyph).toBeGreaterThan(-1);
+    expect(glyph).toBeLessThan(connector);
+    expect(connector).toBeLessThan(identifier);
+  });
+
+  it("is decoration to the eye and text to a screen reader", () => {
+    const markup = renderRow({ kind: "epic" });
+
+    // aria-hidden rather than role="img": an image announced in the middle of the row's
+    // name would break the sentence the cluster reads as.
+    expect(glyphOf(markup)).toContain('aria-hidden="true"');
+    expect(glyphOf(markup)).not.toContain('role="img"');
+    // Said in the flow instead, before the identifier, so the row reads
+    // "Kind: Epic, STA-n, the title".
+    expect(markup).toContain('<span class="sr-only">Kind: Epic</span>');
+    expect(markup.indexOf("Kind: Epic")).toBeLessThan(markup.indexOf("staple-row-status"));
+  });
+
+  it("says the label the workspace configured, not the raw id", () => {
+    // `kindLabel` is the only thing that knows what the operator called a kind. A row
+    // printing the raw id would be this component holding a second copy of the vocabulary.
+    expect(renderRow({ kind: "spike" })).toContain("Kind: Spike");
+    expect(renderRow({ kind: "chore" })).toContain("Kind: Chore");
+  });
+
+  it("is on every preset that shows an identifier, including the palette's bare row", () => {
+    const built = buildGroups([row({ kind: "epic" })], {
+      isExpanded: () => true,
+      showResolved: true,
+    })[0]!.rows[0]!;
+
+    for (const preset of ["tree", "panel", "popup"] as const) {
+      const markup = renderToStaticMarkup(
+        <TaskRowLine
+          row={built}
+          config={resolveTaskListConfig(preset)}
+          semantics={preset === "popup" ? "bare" : "grid"}
+          now={NOW}
+        />,
+      );
+      // R5's criterion, and it is delivered by a MECHANISM rather than by a third call
+      // site: the glyph is gated on `columns.identifier`, which every preset sets.
+      expect(markup, preset).toContain('data-issue-kind="epic"');
+    }
+  });
+});
+
+/**
+ * O1b (STA-125) again, from the other side: the ghost keeps its glyph.
+ *
+ * O3c's worklog asked for this explicitly and gave the reason — a dimmed epic that does
+ * not LOOK like an epic defeats the point of drawing the parent at all. It is the one
+ * element added since O3c that has no `ghost` guard, and this is what says that is
+ * deliberate rather than forgotten.
+ */
+describe("kind glyph on a ghost parent", () => {
+  const family = () => [
+    row({ id: "p", identifier: "STA-1", title: "The epic", status: "backlog", kind: "epic" }),
+    row({ id: "c", identifier: "STA-2", title: "The task", status: "in_progress", parentId: "p" }),
+  ];
+
+  const ghostMarkup = () => {
+    const rows = family();
+    const group = buildGroups(rows, { isExpanded: () => true, rollupSource: rows }).find(
+      (g) => g.status === "in_progress",
+    )!;
+    return renderToStaticMarkup(
+      <TaskRowLine
+        row={group.rows[0]!}
+        config={resolveTaskListConfig("tree", { labelMax: 2 })}
+        semantics="grid"
+        isExpanded
+        now={NOW}
+        onOpen={() => {}}
+      />,
+    );
+  };
+
+  it("keeps the epic's glyph, dimmed with the rest of the row", () => {
+    const markup = ghostMarkup();
+
+    expect(markup).toContain('data-ghost="true"');
+    expect(markup).toContain('data-issue-kind="epic"');
+    // No glyph-specific dimming rule anywhere: `.staple-row-ghost` is one `opacity` on
+    // the row, so anything added inside it fades with it and nothing has to be told to.
+    expect(markup).not.toContain("staple-kind-glyph-ghost");
+  });
+
+  it("still reads its kind before the note that it is only context", () => {
+    const markup = ghostMarkup();
+    expect(markup.indexOf("Kind: Epic")).toBeLessThan(markup.indexOf("parent shown for context"));
   });
 });

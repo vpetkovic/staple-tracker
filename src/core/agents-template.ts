@@ -78,6 +78,39 @@ Read this before you touch the repo. It takes a minute.
 6. \`staple events\` — see what your completion unblocked (\`blockers_resolved\`,
    \`children_complete\`). Then go back to \`inbox\`.
 
+## Parents close themselves
+
+**An epic's status follows its children. You never have to remember to close
+one.** When the last open child of a parent lands, the parent goes \`done\` on its
+own — \`cancelled\` only if every child was cancelled, and any mix of done and
+cancelled reads \`done\`. Re-open a child and the parent comes back out. A parent
+is \`in_progress\` only while a child genuinely is, so an epic can never sit there
+claiming work that stopped days ago. An issue with **no children** is untouched
+by any of this.
+
+\`\`\`bash
+staple done ${ref}          # the last child of an epic…
+staple show <epic>          # …and the epic already reads done
+\`\`\`
+
+**One exception: an epic with an open review gate does not close itself.** While
+its gate is \`pending\` or \`changes_requested\`, the human review IS the remaining
+work, so the last child landing leaves the epic open and waiting. It closes on
+the next transition after the gate is answered — or the moment \`staple approve\`
+is run, if everything underneath had already landed.
+
+What is still yours to do:
+
+- **Write the summary.** The automatic close records *that* the epic finished,
+  never *what* shipped. When you see \`children_complete\` on a parent, comment on
+  it: \`staple comment <epic> "Shipped X and Y; Z deliberately left, see …"\`.
+  That comment is the only account of the epic anyone will read later.
+- **\`staple done <epic>\` is still allowed**, and still idempotent — close one by
+  hand whenever you mean it, for instance while a child is deliberately being
+  abandoned. A status a human or an agent sets on a parent **outranks** the
+  derivation from then on: the tracker will not re-open or re-close it behind
+  you.
+
 ## Act under one identity, all session
 
 Set \`STAPLE_AGENT\` (or pass \`--agent\` / \`--author\` / MCP \`actor\`) and **use the
@@ -124,6 +157,57 @@ the handoff. A summary written at the end never survives a kill, a usage limit,
 or a crashed harness — the whole class of events that make a handoff necessary
 are exactly the events that prevent you from writing one. Assume every turn is
 your last one and the protocol costs you nothing.
+
+## The vocabulary is this workspace's, not staple's
+
+Statuses and kinds are **configured per workspace**. Do not assume the eight you
+have seen elsewhere — read them:
+
+\`\`\`bash
+staple statuses ls          # id, category, label, in the configured order
+staple kinds ls
+\`\`\`
+
+Every status carries a **category** from a fixed set — \`unstarted\`, \`ready\`,
+\`active\`, \`review\`, \`gated\`, \`blocked\`, \`done\`, \`cancelled\` — and **all
+behaviour keys off the category, never off the id**: checkout claims from
+\`ready\`/\`unstarted\`/\`blocked\`, a claim only ever sits in \`active\`, \`done\` and
+\`cancelled\` mean resolved, and an epic's status is derived from its children by
+their categories — including the automatic close above, which lands in whatever
+status this workspace puts in the \`done\` category, and the review gate, which
+parks a parent in whatever it puts in the \`gated\` one. So a workspace can rename
+\`in_review\`, or call its gate \`needs_signoff\`, and every guard still means what
+it meant.
+
+The configured ORDER is the canonical order everywhere — group headers, board
+columns, tree sort. Changing it changes what everyone sees:
+
+\`\`\`bash
+staple statuses add awaiting_approval --category gated --after in_review
+staple statuses reorder backlog,todo,in_progress,in_review,done,blocked,cancelled
+staple statuses rm old_status --migrate-to backlog   # --migrate-to is required
+                                                     # while issues still use it
+\`\`\`
+
+Every issue **declares a kind** — \`epic\`, \`bug\`, \`spike\`, whatever this
+workspace configured. Declare it when you file the ticket, because nothing infers
+it later:
+
+\`\`\`bash
+staple new "Login 500s on retry" --kind bug
+staple ls --kind epic          # just the epics
+\`\`\`
+
+The default is \`task\`. **Kind is declared, never derived**: a task that grows
+subtasks stays a task until somebody says otherwise, so if you break an epic out
+into children, set the parent's kind yourself. \`staple ls\` prints the kind only
+when it is not \`task\` — a bare row IS a task — while \`staple show\` always names
+it.
+
+**Edit the vocabulary only when a human asks.** It is workspace-wide
+configuration, not a per-task decision, and a reorder moves every board in the
+repo. The MCP tools are \`list_statuses\`, \`list_kinds\`, \`update_statuses\` and
+\`update_kinds\`; the two reads cost nothing, so prefer reading over guessing.
 
 ## Branch pointer
 
@@ -230,7 +314,8 @@ claude mcp add staple -e STAPLE_AGENT=your-name -- npx tsx ${mcpEntryPath()}
 
 The MCP tools mirror the CLI: \`inbox\`, \`checkout_task\` (with
 \`steal_if_idle_seconds\`), \`put_document\`, \`add_comment\`, \`update_task\`,
-\`release_task\` (with \`if_idle_seconds\`), \`events_since\`, and the gate verbs
+\`release_task\` (with \`if_idle_seconds\`), \`events_since\`, \`list_statuses\`,
+\`list_kinds\`, \`update_statuses\`, \`update_kinds\`, and the gate verbs
 \`gate_task\` / \`approve_task\` / \`request_changes\`. Writes require an
 identity — pass \`actor\` or set \`STAPLE_AGENT\`; there is no silent default.
 

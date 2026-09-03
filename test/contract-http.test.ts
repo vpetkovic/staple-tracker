@@ -315,10 +315,18 @@ describe("KNOWN: logical errors this surface cannot project", () => {
    */
   it("pins the exact API surface, read out of the server source", () => {
     // Derived, not restated: adding a route to src/ui/server.ts changes this
-    // list and fails here, which is the review moment. POST /api/action is the
-    // only write route (the gate in server.ts pins every other path to GET),
-    // which is why U5's create and update are branches inside it rather than
-    // routes of their own — and why this list did not move for them.
+    // list and fails here, which is the review moment. U5's create and update
+    // are branches inside POST /api/action rather than routes of their own,
+    // which is why this list did not move for them.
+    //
+    // O7b (STA-141) MOVED IT, and moved the sentence above with it: /api/action
+    // is no longer the only path that accepts a write. `/api/settings` is the
+    // one route that reads AND writes — GET lists the workspace vocabulary,
+    // POST applies an ordered op batch — because the two are the same resource
+    // and a second path for the write half would have been a second name for it.
+    // The gate now pins a LIST of methods per path rather than a single one, and
+    // `test/ui-settings.test.ts` asserts that every other route kept exactly the
+    // pin it had (bootstrap GET-only, action POST-only).
     const source = readFileSync(join(REPO_ROOT, "src/ui/server.ts"), "utf8");
     const routes = [...new Set([...source.matchAll(/url\.pathname === "(\/api\/[a-z-]+)"/g)].map((m) => m[1]!))];
     expect(routes.sort()).toEqual([
@@ -333,6 +341,29 @@ describe("KNOWN: logical errors this surface cannot project", () => {
       "/api/issues",
       "/api/poll",
       "/api/revisions",
+      "/api/settings",
+    ]);
+  });
+
+  /**
+   * STA-124. The acceptance criterion is that BOTH graph producers carry `kind`
+   * — this is the workspace branch; `Hub.graph()` is pinned in test/hub.test.ts.
+   * They are separate code paths in separate files, which is exactly why the
+   * field needs an assertion on each rather than one on "the graph".
+   */
+  it("carries the issue kind on every graph node", async () => {
+    const graph = (await (await get("/api/graph")).json()) as {
+      nodes: Array<{ id: string; kind: string; status: string; parent: string | null }>;
+    };
+    expect(graph.nodes.map((n) => n.id).sort()).toEqual(["CON-1", "CON-2"]);
+    for (const node of graph.nodes) expect(node.kind).toBe("task");
+    expect(Object.keys(graph.nodes[0]!).sort()).toEqual([
+      "id",
+      "kind",
+      "parent",
+      "status",
+      "title",
+      "workspace",
     ]);
   });
 

@@ -12,9 +12,20 @@
  * and on this canvas that is every 1.5 seconds.
  */
 import { ClusterNode, type ClusterFlowNode } from "./ClusterNode";
+import { EpicContainerNode, type EpicContainerFlowNode } from "./EpicContainerNode";
 import { TaskNode, type TaskFlowNode } from "./TaskNode";
 
 /** Every box the canvas can draw. React Flow needs the union to type its handlers. */
-export type GraphFlowNode = TaskFlowNode | ClusterFlowNode;
+export type GraphFlowNode = TaskFlowNode | ClusterFlowNode | EpicContainerFlowNode;
 
-export const nodeTypes = { task: TaskNode, cluster: ClusterNode };
+/**
+ * O4c added `container`: the expanded state of the same epic `cluster` draws collapsed.
+ * Both entries stay — a canvas normally shows some of each — and they are registered side
+ * by side here rather than one component branching, because "collapsed" and "expanded"
+ * are two silhouettes, not two props of one.
+ */
+export const nodeTypes = {
+  task: TaskNode,
+  cluster: ClusterNode,
+  container: EpicContainerNode,
+};

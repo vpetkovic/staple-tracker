@@ -1,5 +1,5 @@
 /**
- * Click-to-edit title, priority and labels — owned by U5.
+ * Click-to-edit title, kind, priority and labels — owned by U5, extended by O1b (STA-125).
  *
  * These three live here rather than in IssueActions because they belong where they are
  * READ: a title you have to scroll to a form to change is not inline editing. The panel
@@ -21,12 +21,14 @@ import { Check, Pencil, Plus, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { GuardRefusal } from "@/components/GuardRefusal";
 import { PriorityLabel } from "@/components/PriorityLabel";
+import { KindGlyph } from "@/components/task-list";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
 import { action } from "@/lib/api";
 import { describeRefusal, type Refusal } from "@/lib/refusal";
-import { ISSUE_PRIORITIES, type ActionPayload, type Issue, type IssuePriority } from "@/lib/types";
+import { configuredKindOrder, kindLabel } from "@/lib/settings";
+import { ISSUE_PRIORITIES, type ActionPayload, type Issue, type IssueKind, type IssuePriority } from "@/lib/types";
 
 interface EditorProps {
   issue: Issue;
@@ -151,6 +153,86 @@ export function InlineTitle({ issue, workspace, refresh }: EditorProps) {
       </div>
       <RefusalSlot refusal={refusal} onDismiss={dismiss} />
     </div>
+  );
+}
+
+// ----------------------------------------------------------------- kind
+
+/**
+ * The declared kind — O1b (STA-125).
+ *
+ * ── WHY IT IS AN EDITOR AND NOT A FACT ────────────────────────────────────────────────
+ *
+ * O1's premise (STA-120) is that a kind is DECLARED, never derived: a task can gain
+ * children and stay a task, and the UI may suggest promoting it but must never do it. A
+ * declaration that has no control is not a declaration — it is a value somebody else
+ * chose — so the moment kind became a first-class field it had to become writable on the
+ * surface it is read on. That is the same argument priority makes below, which is why
+ * this is the same component shape and not a new one.
+ *
+ * ── THE OPTIONS COME FROM THE SERVED VOCABULARY, NEVER FROM `ISSUE_KINDS` ─────────────
+ *
+ * O7a (STA-140) made kinds workspace DATA and O1a's own worklog says so explicitly: a
+ * picker rendering the five built-in constants would omit every kind the operator added
+ * and would offer any they removed. `configuredKindOrder()` is the list the settings
+ * dialog edits, in the order it edits it, and `kindLabel()` is the name the operator gave
+ * it — so renaming `spike` to "Investigation" renames it here with no change to this file.
+ *
+ * ── SURVIVING THE POLL ────────────────────────────────────────────────────────────────
+ *
+ * Nothing here is optimistic. `update()` POSTs and then `refresh()`es, which bumps the
+ * version the panel refetches on, so the value on screen after a write is the value the
+ * store actually holds — and the 1.5s poll that lands next finds the same thing and
+ * changes nothing. A local `useState` mirror of the kind would be the bug this avoids:
+ * it would win against the poll for as long as the component stayed mounted and lose the
+ * moment it did not.
+ */
+export function InlineKind({ issue, workspace, refresh }: EditorProps) {
+  const { update, busy, refusal, dismiss } = useUpdate(issue, workspace, refresh);
+  const kinds = configuredKindOrder();
+
+  return (
+    <>
+      <Select
+        value={issue.kind}
+        disabled={busy}
+        onValueChange={(value) => void update({ type: "update", kind: value as IssueKind })}
+      >
+        {/* Unstyled as a control, exactly like the priority trigger beside it: this is a
+            row of the property block, where a full-width bordered select would outshout
+            every read-only value in the same grid. The trigger draws the real
+            `KindGlyph` rather than a `<SelectValue/>`, so making kind editable does not
+            quietly drop the mark every ROW in the app now carries — the same component,
+            the same shapes, at the 16px StatusIcon size the panel has room for. */}
+        <SelectTrigger
+          size="sm"
+          data-edit-kind
+          aria-label="Kind"
+          className="h-auto w-auto gap-1.5 rounded-sm border-0 bg-transparent px-1 py-0 text-[12px] shadow-none hover:bg-accent"
+        >
+          <span className="flex items-center gap-1.5">
+            {/* `labelled={false}`: the label is right there in text, and two readings of
+                one fact is worse than none. */}
+            <KindGlyph kind={issue.kind} size={16} labelled={false} />
+            {kindLabel(issue.kind)}
+          </span>
+        </SelectTrigger>
+        {/* `position="popper"` for the reason spelled out under InlinePriority: the
+            vendored "item-aligned" default positions the list by the SELECTED row, so a
+            kind near the end of the vocabulary pushes the top of the list off-screen. */}
+        <SelectContent position="popper" align="start">
+          {kinds.map((kind) => (
+            <SelectItem key={kind} value={kind}>
+              <span className="flex items-center gap-1.5">
+                <KindGlyph kind={kind} size={16} labelled={false} />
+                {kindLabel(kind)}
+              </span>
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      <RefusalSlot refusal={refusal} onDismiss={dismiss} />
+    </>
   );
 }
 
