@@ -10,6 +10,7 @@
  */
 import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { WORKSPACE_LATEST_VERSION } from "../../src/core/migrations/workspace/index.js";
 
 export interface FakePayloadOptions {
   /** Omit `assets/index.html` — A2's silent-UI-failure hazard. */
@@ -22,6 +23,12 @@ export interface FakePayloadOptions {
   doubleShebang?: boolean;
   /** Omit package.json, so the version cannot be established. */
   withoutPackageJson?: boolean;
+  /**
+   * The workspace schema the payload declares under `staple.workspaceSchema`.
+   * Defaults to what this build understands, as the real artifact does;
+   * `null` omits the field, as a payload built before it was recorded would.
+   */
+  workspaceSchema?: number | null;
 }
 
 /**
@@ -57,9 +64,21 @@ export function writeFakePayload(
   }
 
   if (!options.withoutPackageJson) {
+    const workspaceSchema =
+      options.workspaceSchema === undefined ? WORKSPACE_LATEST_VERSION : options.workspaceSchema;
     writeFileSync(
       join(dir, "package.json"),
-      `${JSON.stringify({ name: "staple-cli", version, type: "module", bin: { staple: "staple.mjs" } }, null, 2)}\n`,
+      `${JSON.stringify(
+        {
+          name: "staple-cli",
+          version,
+          type: "module",
+          bin: { staple: "staple.mjs" },
+          ...(workspaceSchema === null ? {} : { staple: { workspaceSchema } }),
+        },
+        null,
+        2,
+      )}\n`,
     );
   }
 

@@ -20,18 +20,21 @@
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   installRuntime,
   installStatus,
   listInstalledVersions,
+  payloadWorkspaceSchema,
   readCurrent,
   rollbackRuntime,
   verifyRuntimeTree,
 } from "../src/install/index.js";
+import { WORKSPACE_LATEST_VERSION } from "../src/core/migrations/workspace/index.js";
 import { removeDir, tempDir } from "./fixtures/characterize-support.js";
+import { FIXTURES, fixturePath } from "./fixtures/schema/support.js";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const distPackage = join(repoRoot, "dist-package");
@@ -100,6 +103,59 @@ describe.skipIf(!built)("installing the built dist-package/", () => {
     const run = runLauncher(["--version"]);
     expect(run.status).toBe(0);
     expect(run.stdout.trim()).toBe(packageVersion);
+  });
+
+  it("the installed launcher selects a runtime that understands workspace schema 6 (STA-163)", () => {
+    const result = install(distPackage);
+
+    // Declared by the artifact, from the migration list compiled into it…
+    expect(payloadWorkspaceSchema(distPackage)).toBe(WORKSPACE_LATEST_VERSION);
+    expect(result.workspaceSchema).toBe(WORKSPACE_LATEST_VERSION);
+    expect(WORKSPACE_LATEST_VERSION).toBeGreaterThanOrEqual(6);
+    // …reported for what the launcher would exec…
+    const status = installStatus({ home, binDir, env: { ...process.env, STAPLE_HOME: home } });
+    expect(status.workspaceSchema).toBe(WORKSPACE_LATEST_VERSION);
+    expect(status.launcher.workspaceSchema).toBe(WORKSPACE_LATEST_VERSION);
+
+    // …and true in practice: through the launcher, the real runtime opens a
+    // schema-6 workspace with nothing pending and no snapshot taken.
+    const repo = join(scratch, "repo-v6");
+    mkdirSync(join(repo, ".staple"), { recursive: true });
+    copyFileSync(fixturePath(FIXTURES.workspaceV6), join(repo, ".staple", "staple.db"));
+    const run = spawnSync(join(binDir, "staple"), ["ls", "--all", "--json"], {
+      cwd: repo,
+      encoding: "utf8",
+      env: { ...process.env, STAPLE_HOME: home, NODE_NO_WARNINGS: "1" },
+    });
+    expect(run.stderr).toBe("");
+    expect(run.status).toBe(0);
+    expect((JSON.parse(run.stdout) as Array<{ identifier: string }>).map((i) => i.identifier).sort()).toEqual([
+      "LEG-1",
+      "LEG-2",
+    ]);
+    expect(existsSync(join(repo, ".staple", "snapshots"))).toBe(false);
+  });
+
+  it("the installed runtime refuses a workspace newer than it, before any write", () => {
+    install(distPackage);
+    const repo = join(scratch, "repo-v99");
+    mkdirSync(join(repo, ".staple"), { recursive: true });
+    const db = join(repo, ".staple", "staple.db");
+    copyFileSync(fixturePath(FIXTURES.workspaceV99), db);
+    const before = readFileSync(db);
+
+    const run = spawnSync(join(binDir, "staple"), ["ls"], {
+      cwd: repo,
+      encoding: "utf8",
+      env: { ...process.env, STAPLE_HOME: home, NODE_NO_WARNINGS: "1" },
+    });
+
+    expect(run.status).toBe(4);
+    expect(run.stderr).toContain("error(conflict)");
+    expect(run.stderr).toContain("schema version 99");
+    expect(run.stderr).toContain(`this build understands ${WORKSPACE_LATEST_VERSION}`);
+    expect(readFileSync(db).equals(before)).toBe(true);
+    expect(existsSync(`${db}-wal`)).toBe(false);
   });
 
   it("the installed runtime serves real CLI help, with no node_modules present", () => {

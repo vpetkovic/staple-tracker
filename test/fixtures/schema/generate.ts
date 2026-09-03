@@ -46,6 +46,18 @@ export const FIXTURES = {
    * exact shape exist on disk right now.
    */
   workspaceV2LegacyDdl: "workspace-v2-legacy-ddl.sqlite",
+  /**
+   * Stamped '5', with real content — the last shape before approval gates, and
+   * the shape some installed builds still write. The pre-upgrade snapshot
+   * tests walk THIS forward.
+   */
+  workspaceV5: "workspace-v5.sqlite",
+  /**
+   * Stamped '6', with real content — what the live workspace looks like today.
+   * A build that understands 3 or 5 must refuse it; this build opens it with
+   * nothing pending.
+   */
+  workspaceV6: "workspace-v6.sqlite",
   /** Stamped '99' — the downgrade guard's target. */
   workspaceV99: "workspace-v99.sqlite",
   /** Today's hub: registry tables, NO meta table, therefore unversioned. */
@@ -320,6 +332,16 @@ function main(): void {
   buildRaw(FIXTURES.workspaceV2LegacyDdl, LEGACY_V2_DDL, (db) => {
     seedWorkspaceRows(db, { idempotencyKey: true });
     stampRaw(db, "2");
+  });
+
+  build(WORKSPACE_TARGET, FIXTURES.workspaceV5, 5, (db) => {
+    seedWorkspaceRows(db, { idempotencyKey: true });
+    stampRaw(db, "5");
+  });
+
+  build(WORKSPACE_TARGET, FIXTURES.workspaceV6, 6, (db) => {
+    seedWorkspaceRows(db, { idempotencyKey: true });
+    stampRaw(db, "6");
   });
 
   build(WORKSPACE_TARGET, FIXTURES.workspaceV99, 2, (db) => {

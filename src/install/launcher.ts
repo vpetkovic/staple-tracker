@@ -38,6 +38,7 @@ import {
 } from "../config/index.js";
 import { CURRENT_FILENAME, RUNTIME_DIRNAME, currentPath, runtimeDir } from "./types.js";
 import { readCurrent } from "./current.js";
+import { payloadWorkspaceSchema } from "./payload.js";
 
 /**
  * Stamped into every launcher we write. `install` refuses to overwrite a file
@@ -284,6 +285,8 @@ export interface LauncherVerification {
   /** The absolute entrypoint it would exec, or null when it would fail. */
   target: string | null;
   version: string | null;
+  /** The workspace schema the runtime it would exec understands; null when unknown. */
+  workspaceSchema: number | null;
 }
 
 /**
@@ -313,6 +316,7 @@ export function verifyLauncherTarget(
       home: null,
       target: null,
       version: null,
+      workspaceSchema: null,
     };
   }
 
@@ -331,6 +335,7 @@ export function verifyLauncherTarget(
 
   let target: string | null = null;
   let version: string | null = null;
+  let workspaceSchema: number | null = null;
   const current = readCurrent(resolved.home);
   if (current === null) {
     problems.push(`${currentPath(resolved.home)}: no runtime is installed for this home`);
@@ -340,6 +345,9 @@ export function verifyLauncherTarget(
     if (!existsSync(target)) {
       problems.push(`${target}: the entrypoint named by current.json does not exist`);
     }
+    // What the runtime the launcher selects can open — read from the payload the
+    // pointer names, so the answer is about the bytes that would run.
+    workspaceSchema = payloadWorkspaceSchema(dirname(target));
   }
 
   return {
@@ -352,5 +360,6 @@ export function verifyLauncherTarget(
     home: resolved.home,
     target,
     version,
+    workspaceSchema,
   };
 }

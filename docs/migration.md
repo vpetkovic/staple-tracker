@@ -75,3 +75,47 @@ blocks mutation; the legacy copy is still there and still readable.
 new path, realpath-normalised (macOS stores the same file as both `/var/…` and
 `/private/var/…`). Nothing else in the registry is touched, and a registry
 conflict is a warning, not a failed migration — the data is already safe by then.
+
+## Schema upgrades on open
+
+Numbered schema migrations (`src/core/migrations/workspace/`) run when a
+workspace is opened, not through a separate command. The live workspace is at
+schema 6; the retired prototype checkout understands 3 and some installed
+builds understand 5. What every open does, in order:
+
+1. **Inspect through a read-only handle.** The schema version is read with
+   SQLite's read-only mode, before the ordinary open — whose
+   `PRAGMA journal_mode=WAL` rewrites the file header and creates the
+   `-wal`/`-shm` sidecars. A refusal therefore leaves the file byte-identical.
+2. **Refuse a newer file.** A workspace stamped higher than the runtime
+   understands exits 4 with `error(conflict)`, naming the file, both versions,
+   and `Upgrade staple`. An older runtime never writes to a newer workspace.
+3. **Snapshot before migrating.** If migrations are pending, the file is copied
+   with `VACUUM INTO` from that same read-only handle — a SQLite-consistent
+   copy that reads *through* the write-ahead log, so rows another process
+   committed and never checkpointed are in it. It is never a file copy. The
+   copy gets `integrity_check` and must be stamped with the old version; if it
+   cannot be taken or does not verify, the workspace is not opened and nothing
+   in it changes.
+4. **Open and migrate.** Only now is a writable handle opened; the migrations
+   run under `BEGIN IMMEDIATE` as before.
+
+The snapshot lives beside the database and is named for what it holds:
+
+```text
+.staple/snapshots/staple.db.schema-5.20260903T231500Z-48213.db
+```
+
+The open prints one line to stderr naming it —
+`staple: upgrading workspace <db> from schema 5 to 6; pre-upgrade snapshot
+retained at <path>` — before the migration runs, so the path is on your
+terminal even if the migration fails. Snapshots are never deleted by staple.
+
+**Rolling back a schema upgrade.** Roll the runtime back first
+(`staple install --rollback --yes`; the prior version's path is printed and
+shown by `staple install status`), then, with nothing using the workspace,
+move the migrated database and its `-wal`/`-shm` sidecars aside and copy the
+snapshot to the database path. The older runtime opens the snapshot because it
+is stamped with the version that runtime understands. Do not restore over a
+live database: the file being replaced may have a `-wal` sidecar that belongs
+to the newer schema.

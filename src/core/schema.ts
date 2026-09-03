@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import { DatabaseSync } from "node:sqlite";
 import { describeSchema, runMigrations } from "./migrations/runner.js";
 import type { SchemaState } from "./migrations/types.js";
 import { WORKSPACE_TARGET, WORKSPACE_LATEST_VERSION } from "./migrations/workspace/index.js";
@@ -70,4 +70,23 @@ export function workspaceSchemaState(db: DatabaseSync): SchemaState {
 
 export function hubSchemaState(db: DatabaseSync): SchemaState {
   return describeSchema(db, HUB_TARGET);
+}
+
+/**
+ * Inspect a workspace file's schema state WITHOUT a writable handle.
+ *
+ * `openDb` is not read-only: its `PRAGMA journal_mode=WAL` rewrites the file
+ * header on a rollback-journal database. So an inspection that went through
+ * `openDb` would already have written to a file it might be about to refuse.
+ * SQLite's read-only mode makes this a guarantee rather than a claim — a write
+ * attempted through this handle fails — and the handle is closed before the
+ * caller decides anything.
+ */
+export function inspectWorkspaceSchema(dbPath: string): SchemaState {
+  const db = new DatabaseSync(dbPath, { readOnly: true });
+  try {
+    return describeSchema(db, WORKSPACE_TARGET);
+  } finally {
+    db.close();
+  }
 }
