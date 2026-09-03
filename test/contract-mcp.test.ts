@@ -5,7 +5,7 @@
  *  - the exact tool inventory (names, annotations, which tools declare an
  *    outputSchema), so adding or removing a tool is a deliberate diff;
  *  - the full JSON shape of structuredContent for a successful call to EVERY
- *    one of the 16 tools, plus the invariant that the text block parses to the
+ *    one of the 20 tools, plus the invariant that the text block parses to the
  *    same payload;
  *  - the error envelope for every StapleError class the surface can produce,
  *    checked against the ONE canonical table in fixtures/error-contract.ts.
@@ -187,6 +187,25 @@ beforeAll(async () => {
     "err_missing_actor",
     await anon.call("create_task", { title: "No actor here", ws: WS }),
   );
+
+  /**
+   * The vocabulary tools (STA-140) run LAST, and that placement is the point:
+   * `update_statuses` changes the order every list above is sorted by, so
+   * capturing it earlier would make the other goldens depend on when it ran.
+   */
+  await call("list_statuses", "list_statuses", { ws: WS });
+  await call("list_kinds", "list_kinds", { ws: WS });
+  await call("update_statuses", "update_statuses", {
+    ops: [{ op: "add", id: "awaiting_approval", category: "gated", after: "in_review" }],
+    ws: WS,
+  });
+  await call("update_kinds", "update_kinds", {
+    ops: [
+      { op: "add", id: "milestone" },
+      { op: "rename", id: "milestone", label: "Milestone" },
+    ],
+    ws: WS,
+  });
 }, 60_000);
 
 afterAll(async () => {
@@ -205,7 +224,7 @@ describe("tool inventory", () => {
    * moment this ticket is buying. Read-only tools deliberately omit
    * destructiveHint (the MCP spec only defines it when readOnlyHint is false).
    */
-  it("exposes exactly these 16 tools with these annotations and output schemas", async () => {
+  it("exposes exactly these 20 tools with these annotations and output schemas", async () => {
     const tools = await harness.listTools();
     const inventory = tools.map((t) => ({
       name: t.name,
@@ -334,6 +353,42 @@ describe("tool inventory", () => {
         annotations: { title: "Events since cursor", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
         hasOutputSchema: false,
       },
+      // ------ the vocabulary surface (STA-140) ------
+      {
+        name: "list_statuses",
+        annotations: { title: "List statuses", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+        hasOutputSchema: true,
+      },
+      {
+        name: "list_kinds",
+        annotations: { title: "List kinds", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+        hasOutputSchema: true,
+      },
+      {
+        // destructiveHint: removing a status rewrites the status of every issue
+        // that carried it. idempotentHint: false — replaying an `add` is a
+        // duplicate error, and replaying a `remove` is a not_found.
+        name: "update_statuses",
+        annotations: {
+          title: "Update statuses",
+          readOnlyHint: false,
+          destructiveHint: true,
+          idempotentHint: false,
+          openWorldHint: false,
+        },
+        hasOutputSchema: true,
+      },
+      {
+        name: "update_kinds",
+        annotations: {
+          title: "Update kinds",
+          readOnlyHint: false,
+          destructiveHint: true,
+          idempotentHint: false,
+          openWorldHint: false,
+        },
+        hasOutputSchema: true,
+      },
       {
         name: "cross_link",
         annotations: {
@@ -364,7 +419,7 @@ describe("tool inventory", () => {
     ]);
   });
 
-  it("marks exactly the seven read tools readOnlyHint: true", async () => {
+  it("marks exactly the nine read tools readOnlyHint: true", async () => {
     const tools = await harness.listTools();
     const readOnly = tools.filter((t) => t.annotations?.readOnlyHint === true).map((t) => t.name);
     expect(readOnly).toEqual([
@@ -374,6 +429,9 @@ describe("tool inventory", () => {
       "list_comments",
       "get_document",
       "events_since",
+      // STA-140: reading the workspace vocabulary is as read-only as reading a task.
+      "list_statuses",
+      "list_kinds",
       "hub_overview",
     ]);
   });
@@ -391,7 +449,7 @@ describe("tool inventory", () => {
 
 // ----------------------------------------------------------- success shapes
 
-describe("tool response shapes (16/16)", () => {
+describe("tool response shapes (20/20)", () => {
   it("init", () => {
     // Both fixtures are global workspaces, which get no AGENTS.md — the guide
     // belongs beside a repo's .staple. test/agents-guide.test.ts covers the repo case.
@@ -612,6 +670,9 @@ describe("tool response shapes (16/16)", () => {
           identifier: "CON-1",
           title: "Contract root task",
           status: "in_progress",
+          // STA-124: the summary carries the kind too — "is this an epic"
+          // is a picking question, and picking is what this shape is for.
+          kind: "task",
           priority: "high",
           assignee: CONTRACT_AGENT,
           parentId: null,
@@ -629,6 +690,7 @@ describe("tool response shapes (16/16)", () => {
           identifier: "CON-2",
           title: "Contract idempotent",
           status: "backlog",
+          kind: "task",
           priority: "medium",
           assignee: null,
           parentId: null,
@@ -646,6 +708,7 @@ describe("tool response shapes (16/16)", () => {
           identifier: "CON-3",
           title: "Contract blocker",
           status: "backlog",
+          kind: "task",
           priority: "medium",
           assignee: null,
           parentId: null,
@@ -656,6 +719,7 @@ describe("tool response shapes (16/16)", () => {
           identifier: "CON-4",
           title: "Contract child",
           status: "backlog",
+          kind: "task",
           priority: "medium",
           assignee: null,
           parentId: UUID,
@@ -797,6 +861,81 @@ describe("tool response shapes (16/16)", () => {
     });
   });
 
+  /**
+   * STA-140. Two things are pinned here beyond the field names: the SEED itself
+   * — a workspace `init` created answers with exactly these seven statuses, in
+   * this order, with these categories — and the `sortOrder` spacing of ten that
+   * makes `after` an insert rather than a rewrite of the column.
+   */
+  it("list_statuses", () => {
+    assertGolden("list_statuses", {
+      statuses: [
+        { id: "backlog", label: "Backlog", category: "unstarted", sortOrder: 10, isBuiltin: true },
+        { id: "todo", label: "Todo", category: "ready", sortOrder: 20, isBuiltin: true },
+        { id: "in_progress", label: "In Progress", category: "active", sortOrder: 30, isBuiltin: true },
+        { id: "in_review", label: "In Review", category: "review", sortOrder: 40, isBuiltin: true },
+        { id: "done", label: "Done", category: "done", sortOrder: 50, isBuiltin: true },
+        { id: "blocked", label: "Blocked", category: "blocked", sortOrder: 60, isBuiltin: true },
+        { id: "cancelled", label: "Cancelled", category: "cancelled", sortOrder: 70, isBuiltin: true },
+      ],
+    });
+  });
+
+  it("list_kinds", () => {
+    assertGolden("list_kinds", {
+      kinds: [
+        { id: "epic", label: "Epic", sortOrder: 10, isBuiltin: true },
+        { id: "task", label: "Task", sortOrder: 20, isBuiltin: true },
+        { id: "bug", label: "Bug", sortOrder: 30, isBuiltin: true },
+        { id: "chore", label: "Chore", sortOrder: 40, isBuiltin: true },
+        { id: "spike", label: "Spike", sortOrder: 50, isBuiltin: true },
+      ],
+    });
+  });
+
+  /**
+   * The write tools answer with the FULL new list, not an ack — a reorder or an
+   * insert is only verifiable against the whole thing, and a caller that had to
+   * make a second `list_statuses` call to see what it did would race anyone else
+   * writing. `awaiting_approval` lands at 45: strictly between `in_review` (40)
+   * and `done` (50), which is `after` doing arithmetic instead of a rewrite.
+   */
+  it("update_statuses", () => {
+    assertGolden("update_statuses", {
+      statuses: [
+        { id: "backlog", label: "Backlog", category: "unstarted", sortOrder: 10, isBuiltin: true },
+        { id: "todo", label: "Todo", category: "ready", sortOrder: 20, isBuiltin: true },
+        { id: "in_progress", label: "In Progress", category: "active", sortOrder: 30, isBuiltin: true },
+        { id: "in_review", label: "In Review", category: "review", sortOrder: 40, isBuiltin: true },
+        {
+          id: "awaiting_approval",
+          // No --label was passed: the id is title-cased into one.
+          label: "Awaiting Approval",
+          category: "gated",
+          sortOrder: 45,
+          isBuiltin: false,
+        },
+        { id: "done", label: "Done", category: "done", sortOrder: 50, isBuiltin: true },
+        { id: "blocked", label: "Blocked", category: "blocked", sortOrder: 60, isBuiltin: true },
+        { id: "cancelled", label: "Cancelled", category: "cancelled", sortOrder: 70, isBuiltin: true },
+      ],
+    });
+  });
+
+  it("update_kinds", () => {
+    // Two ops, one call, applied IN ORDER: the rename sees the row the add made.
+    assertGolden("update_kinds", {
+      kinds: [
+        { id: "epic", label: "Epic", sortOrder: 10, isBuiltin: true },
+        { id: "task", label: "Task", sortOrder: 20, isBuiltin: true },
+        { id: "bug", label: "Bug", sortOrder: 30, isBuiltin: true },
+        { id: "chore", label: "Chore", sortOrder: 40, isBuiltin: true },
+        { id: "spike", label: "Spike", sortOrder: 50, isBuiltin: true },
+        { id: "milestone", label: "Milestone", sortOrder: 60, isBuiltin: false },
+      ],
+    });
+  });
+
   it("covers every registered tool exactly once", async () => {
     const tools = (await harness.listTools()).map((t) => t.name);
     const covered = new Set([
@@ -816,6 +955,10 @@ describe("tool response shapes (16/16)", () => {
       "events_since",
       "cross_link",
       "hub_overview",
+      "list_statuses",
+      "list_kinds",
+      "update_statuses",
+      "update_kinds",
     ]);
     expect([...covered].sort()).toEqual([...tools].sort());
   });

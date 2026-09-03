@@ -18,6 +18,15 @@
 export { TaskList } from "./TaskList";
 export { TaskRowLine, RowSkeleton, type TaskRowLineProps, type TaskRowSemantics } from "./TaskRowLine";
 export { StatusIcon } from "./StatusIcon";
+/**
+ * O1b (STA-125). Exported because the row is not the only surface with kinds on it: the
+ * graph canvas draws one per node and O4b left an `EpicKindMark` placeholder for it. That
+ * placeholder should become this import rather than a second set of paths — two glyph sets
+ * for one vocabulary is how the canvas and the list start disagreeing about what an epic
+ * looks like. It takes a `size` (16 matches StatusIcon) and a `labelled` switch for a
+ * surface that already names the kind in text.
+ */
+export { KindGlyph, KIND_GLYPH_SIZE, type KindGlyphProps } from "./KindGlyph";
 export { PrioritySignal } from "./PrioritySignal";
 export {
   NEVER_DROPPED,
@@ -30,13 +39,22 @@ export {
 } from "./config";
 export {
   flatRow,
+  forEachAncestor,
   guideX,
   indentPx,
   INDENT_STEP,
   MAX_INDENT_DEPTH,
+  parentRollups,
+  ROLLUP_SEGMENTS,
+  rollupSegmentOf,
   ROW_PAD_LEFT,
   STATUS_LABEL,
   type Breadcrumb,
+  type ParentRollup,
+  type RollupInput,
+  type RollupLive,
+  type RollupOptions,
+  type RollupSegment,
   type TaskRow,
   type TaskSource,
 } from "./model";

@@ -25,10 +25,19 @@
  *   duration in this file — how long a holder has been silent — is a server
  *   reading, read rather than recomputed.
  *
- * Editable properties are deliberately NOT here. Title, priority and labels are
+ * Editable properties are deliberately NOT here. Title, kind, priority and labels are
  * click-to-edit components (InlineProperties.tsx) and status is a verb with its own
  * refusal path (IssueActions.tsx); a pure function can model a fact, but it cannot
  * model a control that can be refused by the store.
+ *
+ * KIND (O1b, STA-125) is the newest member of that list and the one most likely to be
+ * added here by mistake, because it reads exactly like a fact: a short string in a
+ * table of short strings. It is not one. `store.assertConfiguredKind()` can refuse a
+ * value, so the control has a failure path, and a `DetailFact` has nowhere to put one —
+ * a row rendered from this function would show the OLD kind after a refused write with
+ * no sentence saying why. It also has to be the same element that displayed it or it is
+ * not inline editing, so a read-only row here plus a control elsewhere would be two
+ * places showing one field. `properties.test.ts` pins its absence for that reason.
  */
 import { formatAgo } from "../lib/claim";
 import type { IssueDetail, UiMode } from "../lib/types";

@@ -25,6 +25,57 @@ staple release <ref> --if-stale <dur>               free a dead agent's claim
 `staple help` has the full option list. `checkout` is an alias for `start`, and
 `staple ui` is a compatibility alias for `staple open`.
 
+## Workspace vocabulary
+
+Statuses and kinds are per-workspace configuration, not constants. Every
+subcommand takes `--json`, and every write prints the full new list — a reorder
+is only verifiable against the whole thing.
+
+```bash
+staple statuses ls                       # id, category, label, in configured order
+staple statuses add awaiting_approval --category gated --after in_review
+staple statuses rename todo --label "Ready"
+staple statuses recategorize in_review --category gated
+staple statuses reorder in_progress,in_review,blocked,todo,backlog,done,cancelled
+staple statuses rm on_hold --migrate-to backlog
+
+staple kinds ls | add | rename | reorder | rm     # same verbs, no categories
+```
+
+`--category` is required on `add` and is one of `unstarted`, `ready`, `active`,
+`review`, `gated`, `blocked`, `done`, `cancelled`. That category is where a
+status's behaviour comes from — see [semantics.md](semantics.md#categories--why-a-configurable-status-set-is-still-safe).
+`--label` is optional: `awaiting_approval` becomes `Awaiting Approval`.
+
+The configured order is the canonical order everywhere — `board` columns, group
+headers, tree sort — so a reorder changes what everyone in the repo sees.
+
+`rm` refuses with exit 4 while issues still carry the status (pass
+`--migrate-to`), and with exit 2 when it is the last status of a category staple
+writes into.
+
+## Kinds
+
+Every issue declares a **kind** — `epic`, `task`, `bug`, `chore` or `spike` out
+of the box, plus whatever else `staple kinds add` put in this workspace.
+
+```bash
+staple new "Login 500s on retry" --kind bug
+staple new "Q3 billing rework" --kind epic
+staple ls --kind epic                 # only epics
+staple ls --kind bug,chore            # comma-separated, like --status
+```
+
+The default is `task`, and an unconfigured kind is refused with exit 2 naming
+the valid set. **Kind is declared, never derived**: a task that grows subtasks
+stays a task until somebody re-declares it (`update_task` over MCP, or the UI).
+The one exception was a one-shot backfill in migration 005, which marked every
+issue that already had children as an `epic` at upgrade time.
+
+`ls`, `tree` and `inbox` print the kind only when it is *not* `task` — a bare
+row is a task — so an epic or a bug stands out without a column of noise on
+every other line. `staple show` always names it.
+
 ## Estimates vs actuals
 
 One stored number and a handful of read-time derivations, so you can say what

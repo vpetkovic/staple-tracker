@@ -46,6 +46,7 @@ function issue(patch: Partial<Issue> = {}): Issue {
     description: null,
     status: "in_progress",
     statusVersion: 1,
+    kind: "task",
     priority: "high",
     parentId: null,
     depth: 0,
@@ -232,5 +233,23 @@ describe("detailFacts — what it refuses to do", () => {
 
   it("keeps the full instant available as a hover, since the row is truncated", () => {
     expect(byId(detail(), "created")?.title).toBe("2026-09-01T22:13:04Z");
+  });
+
+  /**
+   * O1b (STA-125). Kind reads exactly like a fact — a short string in a table of short
+   * strings — which is precisely why this pin exists. It is not one:
+   * `store.assertConfiguredKind()` can refuse a value, and a `DetailFact` has nowhere to
+   * put a refusal, so a row rendered from here would show the OLD kind after a rejected
+   * write with no sentence saying why. It is an editor (`InlineKind`), mounted into the
+   * SAME grid as a `FactRow` so its label stays in the label column.
+   *
+   * A read-only copy here would also be the second place one field is shown, which is
+   * how the two start disagreeing during the 1.5s poll.
+   */
+  it("does not model kind as a fact — it is an editor, not a value", () => {
+    expect(ids(detail())).not.toContain("kind");
+    expect(byId(detail(), "kind")).toBeUndefined();
+    // And not smuggled in under another name, either.
+    expect(detailFacts(detail(), "workspace").map((fact) => fact.label)).not.toContain("Kind");
   });
 });

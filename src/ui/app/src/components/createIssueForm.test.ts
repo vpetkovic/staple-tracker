@@ -20,6 +20,7 @@ import { describe, expect, it } from "vitest";
 import {
   EMPTY_CREATE_FORM,
   buildCreatePayload,
+  createFormDefaultKind,
   labelOptions,
   parentOptions,
   relationOptions,
@@ -68,11 +69,15 @@ describe("splitRefs", () => {
 });
 
 describe("buildCreatePayload", () => {
-  it("sends only type, title and priority when nothing else was filled in", () => {
+  it("sends only type, title, priority and kind when nothing else was filled in", () => {
     expect(buildCreatePayload(form({ title: "Ship the thing" }))).toEqual({
       type: "create",
       title: "Ship the thing",
       priority: "medium",
+      // O1b (STA-125). Always present, like `priority`, because both come from a select
+      // that is never empty — and both agree with the store's own create-time default,
+      // so an untouched form produces what `staple new` with no flags produces.
+      kind: "task",
     });
   });
 
@@ -80,7 +85,10 @@ describe("buildCreatePayload", () => {
     const payload = buildCreatePayload(
       form({ title: "t", description: "  ", parent: " ", labels: [], blockedBy: [], blocking: [] }),
     );
-    expect(Object.keys(payload).sort()).toEqual(["priority", "title", "type"]);
+    // `kind` joined `priority` in the always-sent set with O1b (STA-125), and for the
+    // same reason: both come from a select that is never empty, so there is no untouched
+    // state to omit. The optional fields above are still omitted rather than blanked.
+    expect(Object.keys(payload).sort()).toEqual(["kind", "priority", "title", "type"]);
   });
 
   it("carries every field through when they are filled in", () => {
@@ -90,6 +98,7 @@ describe("buildCreatePayload", () => {
           title: "  Add the create dialog  ",
           description: "  table stakes  ",
           priority: "high",
+          kind: "bug",
           parent: " STA-12 ",
           labels: ["ui", "u5"],
           blockedBy: ["STA-13", "STA-9"],
@@ -101,6 +110,7 @@ describe("buildCreatePayload", () => {
       title: "Add the create dialog",
       description: "table stakes",
       priority: "high",
+      kind: "bug",
       parent: "STA-12",
       labels: ["ui", "u5"],
       blockedBy: ["STA-13", "STA-9"],
@@ -132,7 +142,74 @@ describe("buildCreatePayload", () => {
       type: "create",
       title: "",
       priority: "medium",
+      kind: "task",
     });
+  });
+});
+
+/**
+ * O1b (STA-125) — the declared kind.
+ *
+ * Three properties, and the third is an acceptance criterion in its own right.
+ */
+describe("kind on the create form", () => {
+  it("starts a fresh form on task, which is the store's own create-time default", () => {
+    expect(EMPTY_CREATE_FORM.kind).toBe("task");
+    expect(buildCreatePayload(form({ title: "t" })).kind).toBe("task");
+  });
+
+  it("sends whatever the select holds, since the select is never empty", () => {
+    expect(buildCreatePayload(form({ title: "t", kind: "epic" })).kind).toBe("epic");
+    // A kind the operator added is a legal value here. This module validates NOTHING —
+    // `store.assertConfiguredKind()` owns that sentence, exactly as it owns the one about
+    // an empty title.
+    expect(buildCreatePayload(form({ title: "t", kind: "milestone" })).kind).toBe("milestone");
+  });
+
+  it("omits a blank kind rather than sending an empty string", () => {
+    // Unreachable from the control, reachable from a caller assembling this state by
+    // hand — and an empty string would be REFUSED, where an absent key is the store
+    // applying its own default. Rule 1 at the top of createIssueForm.ts.
+    expect(buildCreatePayload(form({ title: "t", kind: "   " })).kind).toBeUndefined();
+  });
+
+  /**
+   * THE CRITERION: "choosing a parent does not change it."
+   *
+   * STA-120's premise is that a kind is DECLARED, never derived. Filing a ticket under
+   * an epic does not make it a sub-anything, and the tempting little convenience — "you
+   * picked a parent, so you must mean a task" — is exactly the derivation the whole epic
+   * exists to refuse. It is one assertion because it is one line of code NOT being
+   * written, and this is what keeps it unwritten.
+   */
+  it("is untouched by choosing a parent, in either direction", () => {
+    const withParent = form({ title: "t", kind: "epic", parent: "STA-1" });
+    expect(buildCreatePayload(withParent).kind).toBe("epic");
+    expect(buildCreatePayload(withParent).parent).toBe("STA-1");
+
+    // …and a parentless bug does not become a task on its way out either.
+    expect(buildCreatePayload(form({ title: "t", kind: "bug" })).kind).toBe("bug");
+  });
+});
+
+describe("createFormDefaultKind", () => {
+  it("picks task whenever the workspace still has it, wherever it sits in the order", () => {
+    expect(createFormDefaultKind(["epic", "task", "bug", "chore", "spike"])).toBe("task");
+    // Ordering is a DISPLAY decision and must not double as a semantic one — the same
+    // argument `store.defaultKind()` makes. Moving `epic` to the front of the vocabulary
+    // to sort it first on a board must not make everything anyone files an epic.
+    expect(createFormDefaultKind(["spike", "chore", "task"])).toBe("task");
+  });
+
+  it("falls back to the first kind only when the operator removed task", () => {
+    expect(createFormDefaultKind(["story", "defect"])).toBe("story");
+  });
+
+  it("answers the constant before the vocabulary has arrived", () => {
+    // The dialog can mount inside the first paint, before /api/settings resolves. A form
+    // that opened on nothing would be worse than one that opens on the built-in default
+    // and corrects itself — which is what the dialog does when the list lands.
+    expect(createFormDefaultKind([])).toBe("task");
   });
 });
 
@@ -146,6 +223,7 @@ function issue(over: Partial<Issue> = {}): Issue {
     description: null,
     status: "backlog",
     statusVersion: 0,
+    kind: "task",
     priority: "medium",
     parentId: null,
     depth: 0,

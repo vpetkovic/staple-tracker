@@ -29,10 +29,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Background,
   Controls,
-  MarkerType,
   MiniMap,
   ReactFlow,
   ReactFlowProvider,
+  useReactFlow,
   type Edge,
   type NodeChange,
   type NodeMouseHandler,
@@ -41,18 +41,27 @@ import { Button } from "@/components/ui/button";
 import { getGraph } from "@/lib/api";
 import type { AuthError } from "@/lib/api";
 import { applyFilters } from "@/lib/filters";
-import { buildLineageIndex, edgeKey, lineageFrom, type Lineage } from "@/lib/graph-lineage";
+import { buildLineageIndex, lineageFrom, type Lineage } from "@/lib/graph-lineage";
 import { useSession } from "@/lib/session";
 import type { Graph, IssueStatus } from "@/lib/types";
 import { useResource } from "@/lib/useStaple";
 import {
   absorption,
+  clusterId,
   collapseGraph,
   isResolved,
-  restrictToEpic,
+  restrictToEpics,
   shouldDefaultCollapse,
   summarizeEpics,
+  withDescendantEpics,
 } from "./graph/graph-clusters";
+import {
+  canvasDimmed,
+  canvasFlowEdges,
+  canvasFlowNodes,
+  canvasShape,
+  canvasTicket,
+} from "./graph/graph-canvas";
 import {
   bridgeResolved,
   emphasisFor,
@@ -63,14 +72,28 @@ import {
   type PlanningMode,
 } from "./graph/graph-planning";
 import {
+  MIN_CONTAINER_H,
+  MIN_CONTAINER_W,
   NODE_H,
   NODE_W,
+  absolutePositions,
+  clampInside,
+  compoundLayout,
   connectedNodes,
-  dagreLayout,
-  graphSignature,
+  fitContainers,
   mergePositions,
+  relayout,
+  type CompoundNode,
+  type Size,
   type XY,
 } from "./graph/graph-layout";
+import {
+  FOLD_FIT_MS,
+  FOLD_FIT_PADDING,
+  foldFitZoom,
+  foldOf,
+  selectionTarget,
+} from "./graph/graph-folding";
 import { clearPositions, loadPositions, positionsKey, savePositions } from "./graph/graph-positions";
 import {
   buildSvg,
@@ -87,7 +110,8 @@ import {
   withGraphView,
   type GraphViewState,
 } from "./graph/graph-share";
-import { EpicControls, GraphToolbar } from "./graph/GraphToolbar";
+import { GraphToolbar } from "./graph/GraphToolbar";
+import { EpicPicker } from "./graph/EpicPicker";
 import { nodeTypes, type GraphFlowNode } from "./graph/node-types";
 import { EmptyState, NoMatchesState, ViewState } from "./ViewChrome";
 
@@ -146,6 +170,14 @@ function GraphCanvas({
   const session = useSession();
   const [hovered, setHovered] = useState<string | null>(null);
   const [positions, setPositions] = useState<Record<string, XY>>({});
+  /**
+   * Container boxes — O4c (STA-135). State beside `positions` rather than derived from
+   * them, and the reason is `extent: "parent"`: React Flow clamps a child inside the box
+   * it is given, so a box RE-MEASURED on every drag would shrink onto whatever the member
+   * currently sits at and never grow back. Sizes are settled when the shape is (the
+   * effect below), and a drag moves things inside a box that does not move.
+   */
+  const [sizes, setSizes] = useState<Record<string, Size>>({});
 
   /**
    * The shared link, read ONCE (G5).
@@ -190,8 +222,28 @@ function GraphCanvas({
     return shouldDefaultCollapse(drawn.length) ? new Set(epics.map((epic) => epic.id)) : new Set();
   });
 
-  /** Pin the canvas to one epic's members. null = the whole graph. */
-  const [epicFilter, setEpicFilter] = useState<string | null>(shared?.epicFilter ?? null);
+  /**
+   * Pin the canvas to a SET of epics — O4b (STA-134). Empty = the whole graph.
+   *
+   * A set rather than a single id because the question people arrive with in a review is
+   * "show me these two and how they relate", and the canvas answers it by drawing the
+   * UNION of their subgraphs. It is also state that must never move when collapse moves:
+   * these are two `useState`s with no effect joining them, which is the strongest form of
+   * "selecting an epic does not collapse it" available.
+   */
+  const [epicFilters, setEpicFilters] = useState<ReadonlySet<string>>(
+    () => new Set(shared?.epicFilters ?? []),
+  );
+
+  const toggleEpicFilter = useCallback((epic: string) => {
+    setEpicFilters((previous) => {
+      const next = new Set(previous);
+      if (!next.delete(epic)) next.add(epic);
+      return next;
+    });
+  }, []);
+
+  const clearEpicFilters = useCallback(() => setEpicFilters(new Set()), []);
 
   /**
    * G4's two controls. Both default to the plain graph: a view that opened already
@@ -226,11 +278,18 @@ function GraphCanvas({
     setDoneMode(globalShowDone ? "show" : "hide");
   }, [globalShowDone]);
 
-  const activeFilter = useMemo(
-    // A filter naming an epic that has since vanished must fall back to the whole graph
-    // rather than render an empty canvas nobody can explain.
-    () => epics.find((epic) => epic.id === epicFilter) ?? null,
-    [epics, epicFilter],
+  /**
+   * The selection, resolved to summaries and widened to descendants.
+   *
+   * A filter naming an epic that has since vanished simply contributes nothing, so a
+   * stale link degrades toward the whole graph rather than rendering an empty canvas
+   * nobody can explain. `withDescendantEpics` is why picking a parent shows the work
+   * inside its child epics too — `summarizeEpics` buckets by DIRECT parent, so without it
+   * a parent would draw the child epic's node with its contents surgically removed.
+   */
+  const activeFilters = useMemo(
+    () => withDescendantEpics(epics, epicFilters),
+    [epics, epicFilters],
   );
 
   /**
@@ -241,9 +300,9 @@ function GraphCanvas({
    * would have to un-collapse to find out whether a member passed the filter.
    */
   const canvas = useMemo(() => {
-    const scoped = restrictToEpic(drawn, graph.edges, activeFilter);
+    const scoped = restrictToEpics(drawn, graph.edges, activeFilters);
     return collapseGraph(scoped.nodes, scoped.edges, epics, collapsed);
-  }, [drawn, graph.edges, activeFilter, epics, collapsed]);
+  }, [drawn, graph.edges, activeFilters, epics, collapsed]);
 
   /**
    * Every box reduced to what the planning modes need (G4). A collapsed epic contributes
@@ -254,7 +313,7 @@ function GraphCanvas({
     () =>
       canvas.nodes.map((node) => ({
         id: node.id,
-        status: node.kind === "cluster" ? node.epic.status : node.task.status,
+        status: node.kind === "task" ? node.task.status : node.epic.status,
       })),
     [canvas.nodes],
   );
@@ -290,22 +349,38 @@ function GraphCanvas({
     return out;
   }, [doneMode, resolvedIds, hiddenByFilter]);
 
-  const nodes = useMemo(
+  const visible = useMemo(
     () => canvas.nodes.filter((node) => !hidden.has(node.id)),
     [canvas.nodes, hidden],
   );
   const bridged = useMemo(() => bridgeResolved(canvas.edges, hidden), [canvas.edges, hidden]);
-  /** The edge list dagre and the lineage index work on: post-collapse, post-bridge. */
-  const pairs = useMemo(() => bridged.map(({ from, to }) => ({ from, to })), [bridged]);
 
   /**
-   * The signature is computed over the FINAL lists — collapsed, then filtered, then
-   * bridged — which is how both the collapse set and the done mode get folded in without
-   * `graphSignature` growing an argument: either one changes which ids and which edge
-   * pairs exist, so the signature changes and the layout effect below re-seeds. Toggling
-   * a cluster or hiding done work re-runs dagre; a poll still does not.
+   * Boxes around the expanded epics, arrows re-pointed at them, and the two projections
+   * the layout works on — O4c (STA-135), extracted to `graph-canvas.ts` by O2c (STA-155)
+   * so that the Relations tab draws the same picture with the same code rather than a
+   * parallel one that slowly disagrees about what an arrow means.
+   *
+   * CONTAINMENT LAST, AND THAT ORDER IS THE FEATURE'S WHOLE BLAST RADIUS. Everything
+   * above this line — the epic filter, collapsing, the global filter, `bridgeResolved` —
+   * still sees the flat ticket graph it was written against, so none of it had to learn
+   * what a container is. What containment changes is only which box a node is drawn
+   * INSIDE and where an arrow lands.
+   *
+   * One memo where there were five, because all five derived from these same four inputs
+   * and only ever changed together. `signature` is still computed over the FINAL lists,
+   * which is how the collapse set, the done mode and containment get folded in without
+   * `graphSignature` growing an argument: each one changes which ids, which parents or
+   * which edge pairs exist, so the signature changes and the layout effect below
+   * re-seeds. Toggling an epic or hiding done work re-runs the arrangement; a poll does
+   * not.
    */
-  const signature = useMemo(() => graphSignature(nodes, pairs), [nodes, pairs]);
+  const shape = useMemo(
+    () => canvasShape(visible, bridged, epics, collapsed),
+    [visible, bridged, epics, collapsed],
+  );
+  /** The canvas, in render order: every box before the things drawn inside it. */
+  const { nodes, containment, links, pairs, compound, signature } = shape;
 
   /**
    * The seeding effect keys on the SHAPE, not on `graph`.
@@ -317,20 +392,103 @@ function GraphCanvas({
    * summarises. So "the signature changed" and "the ref holds something new" are the
    * same event by construction.
    */
-  const latest = useRef({ nodes, edges: pairs });
-  latest.current = { nodes, edges: pairs };
+  /*
+   * O4d added `collapsed`, `positions` and `sizes` to the same ref, for the same reason
+   * the ref exists at all: the effect below has to read WHERE THINGS ARE NOW in order to
+   * leave them there, and listing live coordinates as dependencies would re-seed the
+   * layout on every frame of a drag.
+   */
+  const latest = useRef({ nodes: compound, edges: pairs, collapsed, positions, sizes });
+  latest.current = { nodes: compound, edges: pairs, collapsed, positions, sizes };
+
+  /**
+   * The arrangement the effect last produced, as a SHAPE — O4d (STA-136).
+   *
+   * Only the node list, because the coordinates come from `latest` (they may have been
+   * dragged since). Paired, the two are `relayout`'s `previous`: the shape as it was laid
+   * out, and where its nodes actually sit today. `null` until the first seed, which is
+   * how "the first arrangement is the whole arrangement" stays true without a flag.
+   */
+  const seeded = useRef<readonly CompoundNode[] | null>(null);
+  /** The collapse set as of the last seed — the other half of `foldOf` below. */
+  const folded = useRef<ReadonlySet<string>>(collapsed);
+
+  const flow = useReactFlow();
 
   useEffect(() => {
-    const { nodes: current, edges } = latest.current;
-    const canonical = dagreLayout(current, edges);
-    setPositions(mergePositions(canonical, loadPositions(window.localStorage, storageKey)));
-  }, [signature, storageKey]);
+    const { nodes: current, edges, collapsed: folds, positions: at, sizes: boxes } = latest.current;
 
-  /** Auto-arrange: back to canonical, and forget the manual arrangement for good. */
+    /**
+     * PARTIAL, NOT WHOLE — this is STA-136. `relayout` re-runs only the levels whose
+     * children changed, so opening an epic lays out that epic's members and leaves every
+     * other coordinate byte-identical. See the write-up on `relayout`.
+     */
+    const previous = seeded.current ? { nodes: seeded.current, positions: at, sizes: boxes } : null;
+    const arranged = relayout(current, edges, previous);
+    const merged = mergePositions(arranged.positions, loadPositions(window.localStorage, storageKey));
+    // Grow-only, against the MERGED positions: a stored arrangement can sit outside the
+    // box today's membership measures, and a member drawn outside its container is the
+    // one failure this feature cannot survive. See fitContainers.
+    const fitted = fitContainers(current, merged, arranged.sizes);
+    seeded.current = current;
+    setPositions(merged);
+    setSizes(fitted);
+
+    /**
+     * The viewport follows the fold — O4d (STA-136).
+     *
+     * `foldOf` reads the gesture out of the two collapse sets rather than being told by a
+     * call site, so all four affordances go through one rule and the two board-wide ones
+     * (Expand all, Collapse all) go through none of it. See graph-folding.ts.
+     */
+    const fold = foldOf(folded.current, folds);
+    folded.current = folds;
+    if (!fold) return;
+    const id = clusterId(fold.epic);
+    /*
+     * An epic with no work on this canvas folds without changing anything on screen, and
+     * so has nothing to fly to. Guarding on "is it drawn" is also what disposes of the one
+     * way a request could go stale: that fold produces no signature change, so this effect
+     * never runs for it, and when it eventually does run the id is still not on the canvas.
+     */
+    if (!current.some((node) => node.id === id)) return;
+
+    /*
+     * A FRAME LATER, AND IT HAS TO BE. The `setPositions`/`setSizes` above are what give
+     * React Flow the container's new box, and they have not rendered yet while this effect
+     * body is running — fitting here would frame the arrangement that is being replaced.
+     * `requestAnimationFrame` runs after React has committed that render, so the store
+     * holds the box we just measured. Cancelled on cleanup so a second fold in the same
+     * frame does not leave two animations fighting over the viewport.
+     */
+    const frame = requestAnimationFrame(() => {
+      void flow.fitView({
+        nodes: [{ id }],
+        padding: FOLD_FIT_PADDING,
+        maxZoom: foldFitZoom(fold.opened, flow.getZoom()),
+        duration: FOLD_FIT_MS,
+      });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [signature, storageKey, flow]);
+
+  /**
+   * Auto-arrange: back to canonical, and forget the manual arrangement for good.
+   *
+   * THE ONE GESTURE THAT MOVES EVERYTHING, and after O4d it is the only one — `relayout`
+   * above touches a level at a time, a drag touches a node, and a fold touches the epic it
+   * folded. This calls `compoundLayout`, not `relayout`, and the difference is the whole
+   * point of the button: it is asking for the canonical arrangement rather than for the
+   * smallest change that stays correct. `seeded` is updated too, so the next fold measures
+   * "untouched" against the board as it now stands rather than against the one it replaced.
+   */
   const autoArrange = useCallback(() => {
     const { nodes: current, edges } = latest.current;
     clearPositions(window.localStorage, storageKey);
-    setPositions(dagreLayout(current, edges));
+    const canonical = compoundLayout(current, edges);
+    seeded.current = current;
+    setPositions(canonical.positions);
+    setSizes(canonical.sizes);
   }, [storageKey]);
 
   /**
@@ -339,10 +497,19 @@ function GraphCanvas({
    * same identity, so nothing downstream would recompute and the toggle would appear to
    * do nothing.
    */
-  const toggleEpic = useCallback((epic: string) => {
+  /**
+   * Set one epic's collapse state ABSOLUTELY rather than flipping it — O4b (STA-134).
+   *
+   * The picker's Left and Right keys are directions, not toggles: pressing Left twice on
+   * an already-collapsed epic must leave it collapsed, and a toggle would expand it on
+   * the second press. The row's chevron passes the negation and gets its flip back.
+   */
+  const setEpicCollapse = useCallback((epic: string, collapse: boolean) => {
     setCollapsed((previous) => {
+      if (previous.has(epic) === collapse) return previous;
       const next = new Set(previous);
-      if (!next.delete(epic)) next.add(epic);
+      if (collapse) next.add(epic);
+      else next.delete(epic);
       return next;
     });
   }, []);
@@ -352,6 +519,21 @@ function GraphCanvas({
       if (!previous.has(epic)) return previous;
       const next = new Set(previous);
       next.delete(epic);
+      return next;
+    });
+  }, []);
+
+  /**
+   * The container header's chevron — O4c (STA-135). `expandOne`'s mirror, and deliberately
+   * a second one-way callback rather than a toggle: these two are the box's two visible
+   * affordances, each stating which direction it goes, and a shared toggle would let a
+   * double-click on the chevron undo itself.
+   */
+  const collapseOne = useCallback((epic: string) => {
+    setCollapsed((previous) => {
+      if (previous.has(epic)) return previous;
+      const next = new Set(previous);
+      next.add(epic);
       return next;
     });
   }, []);
@@ -399,7 +581,18 @@ function GraphCanvas({
    */
   const absorbed = useMemo(() => absorption(epics, collapsed), [epics, collapsed]);
   const selected = session.selection?.ref ?? null;
-  const target = selected ? (absorbed.get(selected) ?? selected) : null;
+  /**
+   * O4c added the second half of the same question; O4d moved both into `selectionTarget`
+   * so that the answer has a signature.
+   *
+   * THE EXTRACTION IS THE ACCEPTANCE CRITERION, not tidiness. "Selecting a task outside
+   * the graph never changes collapse state or the epic filter" is guaranteed here by the
+   * fact that a selection goes into a function that returns AN ID TO LIGHT — no collapse
+   * set among its arguments, no fold among its results. A selection arriving from a tree
+   * row, the command palette or prev/next in the detail panel reaches the canvas through
+   * this line and nowhere else, and this line cannot fold anything.
+   */
+  const target = selectionTarget(selected, absorbed, containment.headers);
 
   /** Path-to-target has nothing to answer about a target that is not on the canvas. */
   const hasTarget = target !== null && nodes.some((node) => node.id === target);
@@ -415,13 +608,33 @@ function GraphCanvas({
 
   // Computed only when its mode is on: both walk the whole graph, and doing that on
   // every poll to throw the answer away is exactly the waste G2 went to lengths to avoid.
+  /**
+   * The planning modes read the boxes AS DRAWN, which is how "which of these is ready"
+   * keeps answering the question at whatever level the canvas is currently showing —
+   * tickets where an epic is open, the epic itself where it is not. A container carries
+   * its aggregate status for exactly the reason a cluster does, so `graph-planning.ts`
+   * still never learns that either of them exists.
+   *
+   * Separate from `planning` above because that one has to be computed BEFORE the hidden
+   * set it feeds; this one is computed after. Both say the same thing about every node
+   * they share.
+   */
+  const boxes = useMemo(
+    () =>
+      nodes.map((node) => ({
+        id: node.id,
+        status: node.kind === "task" ? node.task.status : node.epic.status,
+      })),
+    [nodes],
+  );
+
   const frontierSet = useMemo(
-    () => (mode === "frontier" ? frontier(planning, pairs) : null),
-    [mode, planning, pairs],
+    () => (mode === "frontier" ? frontier(boxes, pairs) : null),
+    [mode, boxes, pairs],
   );
   const pathChain = useMemo(
-    () => (mode === "path" && hasTarget && target ? unfinishedChain(planning, pairs, target) : null),
-    [mode, hasTarget, target, planning, pairs],
+    () => (mode === "path" && hasTarget && target ? unfinishedChain(boxes, pairs, target) : null),
+    [mode, hasTarget, target, boxes, pairs],
   );
 
   /**
@@ -451,8 +664,14 @@ function GraphCanvas({
    * kept in step with.
    */
   const viewState = useMemo<GraphViewState>(
-    () => ({ mode, doneMode, epicFilter, collapsed: [...collapsed], target: selected }),
-    [mode, doneMode, epicFilter, collapsed, selected],
+    () => ({
+      mode,
+      doneMode,
+      epicFilters: [...epicFilters],
+      collapsed: [...collapsed],
+      target: selected,
+    }),
+    [mode, doneMode, epicFilters, collapsed, selected],
   );
 
   /**
@@ -487,6 +706,11 @@ function GraphCanvas({
    * laid out — so the file cannot disagree with the screen. Only the edge SHAPES are read
    * from the DOM, because smoothstep routing is React Flow's and re-deriving it would be
    * a second, worse implementation of it.
+   *
+   * O4c: `positions` is no longer one coordinate space. A member of a box is stored
+   * relative to the box, and the export does NOT go through React Flow, so it has to
+   * flatten first — otherwise every member of every epic would export at its
+   * offset-from-the-header instead of where anyone can see it is.
    */
   const exportView = useCallback(
     async (format: "svg" | "png") => {
@@ -503,24 +727,35 @@ function GraphCanvas({
         muted: readVar("--muted-foreground", "#777777"),
       };
 
+      const flat = absolutePositions(compound, positions);
+      /*
+       * Boxes are drawn FIRST so the members land on top of them, exactly as on screen.
+       * `nodes` is already in that order (containers precede their contents — React Flow
+       * requires it), so this is the same list, not a second opinion about it.
+       */
       const exportNodes: ExportNode[] = nodes.map((node) => {
-        const at = positions[node.id] ?? { x: 0, y: 0 };
-        const status = node.kind === "cluster" ? node.epic.status : node.task.status;
+        const at = flat[node.id] ?? { x: 0, y: 0 };
+        const status = node.kind === "task" ? node.task.status : node.epic.status;
+        const box =
+          node.kind === "container"
+            ? (sizes[node.id] ?? { width: MIN_CONTAINER_W, height: MIN_CONTAINER_H })
+            : { width: NODE_W, height: NODE_H };
         return {
           x: at.x,
           y: at.y,
-          w: NODE_W,
-          h: NODE_H,
+          w: box.width,
+          h: box.height,
           label:
-            node.kind === "cluster"
-              ? `${showWorkspace ? `${node.epic.workspace} · ` : ""}${node.epic.id}`
-              : `${showWorkspace ? `${node.task.workspace} · ` : ""}${node.id}`,
-          title: node.kind === "cluster" ? node.epic.title : node.task.title,
+            node.kind === "task"
+              ? `${showWorkspace ? `${node.task.workspace} · ` : ""}${node.id}`
+              : `${showWorkspace ? `${node.epic.workspace} · ` : ""}${node.epic.id}`,
+          title: node.kind === "task" ? node.task.title : node.epic.title,
           // Resolved here, not in the SVG: a `var(--…)` inside an exported file refers to
           // a custom property that does not exist once the file leaves the page.
           accent: readVar(`--status-task-${status}`, colors.muted),
-          badge: node.kind === "cluster" ? `${node.epic.resolved}/${node.epic.total} done` : undefined,
-          cluster: node.kind === "cluster",
+          badge:
+            node.kind === "task" ? undefined : `${node.epic.resolved}/${node.epic.total} done`,
+          cluster: node.kind !== "task",
           faded: faded?.has(node.id) ?? false,
         };
       });
@@ -529,13 +764,17 @@ function GraphCanvas({
        * Edge shapes, by index. `flowEdges` and the rendered paths are the same list in
        * the same order, so position in the DOM is the join key — matching on the `d`
        * string instead would fail on two edges that happen to be routed identically.
+       *
+       * The join is against `links` rather than `bridged` since O4c: an arrow lifted to a
+       * box's edge stands for several bridged edges, so `bridged` is no longer the list
+       * that got rendered.
        */
       const drawnPaths = canvasEl?.querySelectorAll<SVGPathElement>(".react-flow__edge-path") ?? [];
       const exportEdges: ExportEdge[] = [...drawnPaths].flatMap((path, i) => {
         const d = path.getAttribute("d");
-        const source = bridged[i];
+        const source = links[i];
         if (!d || !source) return [];
-        return [{ d, cross: !source.derived && source.edge.cross, derived: source.derived }];
+        return [{ d, cross: source.cross, derived: source.derived }];
       });
 
       const svg = buildSvg({
@@ -552,120 +791,63 @@ function GraphCanvas({
       }
       downloadBlob(await svgToPngBlob(svg), `staple-graph-${stamp}.png`);
     },
-    [nodes, positions, bridged, faded, showWorkspace, session.mode, session.ws],
+    [nodes, compound, positions, sizes, links, faded, showWorkspace, session.mode, session.ws],
+  );
+
+  /** Who is faded back, boxes included. See `canvasDimmed`. */
+  const dimmed = useMemo(
+    () => canvasDimmed(nodes, containment, emphasis),
+    [nodes, containment, emphasis],
   );
 
   const flowNodes = useMemo<GraphFlowNode[]>(
     () =>
-      nodes.map((node): GraphFlowNode => {
-        /**
-         * Everything both kinds of box share. The only difference between a ticket and a
-         * collapsed epic on this canvas is which component draws it and what it carries
-         * in `data` — same size, same position source, same dim/focus rules.
-         *
-         * SIZE IS DECLARED RATHER THAN MEASURED, and it has to be declared HERE.
-         *
-         * React Flow normally learns a node's size by measuring the DOM and writing the
-         * result back through an `onNodesChange` "dimensions" event. This component
-         * derives its nodes fresh from `positions` on every render and applies only
-         * position changes, so a measured size would be discarded on the next render —
-         * and anything downstream of size silently gets nothing. The minimap is that
-         * downstream: without this it draws an empty box.
-         *
-         * Stating the size is honest rather than a workaround: both cards ARE fixed at
-         * NODE_W × NODE_H, and dagre already laid the graph out on that assumption.
-         */
-        const shared = {
-          id: node.id,
-          position: positions[node.id] ?? { x: 0, y: 0 },
-          width: NODE_W,
-          height: NODE_H,
-          // The card is the drag handle; React Flow adds its own. Nothing is connectable.
-          connectable: false,
-          // `emphasis === null` means nothing was asked, which must dim NOTHING.
-          dim: emphasis ? !emphasis.nodes.has(node.id) : false,
-          focused: focus === node.id,
-        };
-        const { dim, focused, ...box } = shared;
-        /*
-         * Fade is an inline style rather than a class because it must NOT compete with
-         * the dim/lit vocabulary in app.css — a faded node that is also dimmed should
-         * read as dimmed, and the two are applied to different elements (this wrapper
-         * vs. the card inside), so they multiply instead of fighting.
-         */
-        const style = faded?.has(node.id) && !dim ? { opacity: 0.32 } : undefined;
-
-        if (node.kind === "cluster") {
-          return {
-            ...box,
-            style,
-            type: "cluster" as const,
-            data: { epic: node.epic, showWorkspace, dim, focused, onExpand: expandOne },
-          };
-        }
-        return {
-          ...box,
-          style,
-          type: "task" as const,
-          data: { node: node.task, showWorkspace, dim, focused },
-        };
+      canvasFlowNodes({
+        nodes,
+        containment,
+        positions,
+        sizes,
+        dimmed,
+        faded,
+        focus,
+        showWorkspace,
+        onExpand: expandOne,
+        onCollapse: collapseOne,
       }),
-    [nodes, positions, emphasis, faded, focus, showWorkspace, expandOne],
+    [
+      nodes,
+      positions,
+      sizes,
+      containment,
+      dimmed,
+      faded,
+      focus,
+      showWorkspace,
+      expandOne,
+      collapseOne,
+    ],
   );
 
-  const flowEdges = useMemo<Edge[]>(
-    () =>
-      bridged.map((link, i) => {
-        const { edge, from, to, derived } = link;
-        const lit = emphasis?.edges.has(edgeKey(from, to)) ?? false;
-        const dim = emphasis ? !lit : false;
-        return {
-          // Index is in the id because a duplicated dependency row would otherwise
-          // collide and React Flow would drop one of them silently.
-          id: `${from}->${to}#${i}`,
-          source: from,
-          target: to,
-          type: "smoothstep",
-          // Semantics live in the class; app.css turns them into pixels. `cross` is the
-          // same class name the legend swatches use, so the two cannot drift apart.
-          // A bridged edge is never `cross`: the workspaces it passed through are
-          // precisely the information that was hidden, so claiming either answer would
-          // be making it up.
-          className: [
-            "staple-rf-edge",
-            !derived && edge.cross ? "cross" : "",
-            emphasis ? (lit ? "lineage" : "dim") : "",
-          ]
-            .filter(Boolean)
-            .join(" "),
-          /*
-           * A bridged edge is dotted, and inline rather than a class so that no new CSS
-           * has to know about it. It is a DIFFERENT dash pattern from the cross-workspace
-           * dash (5 4) on purpose — two dashed lines meaning different things would be
-           * the graph's third ambiguity, and this one reads as "inferred", not "crosses".
-           *
-           * Not applied when the edge is dimmed: the dim class owns opacity, and an
-           * inline style here would override it and make ignored edges the loudest.
-           */
-          style: derived && !dim ? { strokeDasharray: "1 4", opacity: 0.7 } : undefined,
-          /*
-           * How many real dependencies this one arrow stands for. Only shown when it
-           * stands for more than one — labelling every ordinary edge "×1" would add a
-           * hundred pieces of text to say nothing. A bridged edge carries no count: it
-           * says "there is a path", not "there are n dependencies".
-           */
-          label: !derived && edge.count > 1 ? `×${edge.count}` : undefined,
-          labelShowBg: false,
-          labelStyle: { fill: "var(--muted-foreground)", fontSize: 10 },
-          markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16 },
-        };
-      }),
-    [bridged, emphasis],
-  );
+  const flowEdges = useMemo<Edge[]>(() => canvasFlowEdges(links, emphasis), [links, emphasis]);
+
+  /**
+   * Every box's size, in one lookup, for the drag clamp below. Through a ref so that
+   * `onNodesChange` stays referentially stable across the poll — React Flow re-subscribes
+   * on a new handler, and doing that every 1.5s is how a smooth drag becomes a jumpy one.
+   */
+  const geometry = useRef({ parentOf: containment.parentOf, sizes, nodes });
+  geometry.current = { parentOf: containment.parentOf, sizes, nodes };
 
   /**
    * Drag. Only position changes are applied — selection and dimensions are React Flow's
    * business, and this app's idea of "selected" is `session.selection`, not the canvas's.
+   *
+   * O4c CLAMPS A MEMBER TO ITS BOX HERE rather than trusting `extent: "parent"`, because
+   * `extent` clamps what React Flow DRAWS and not what it REPORTS. A drag that overshoots
+   * the bottom of a box reports the position the pointer asked for, that coordinate is
+   * what gets persisted, and on the next load the box grows to hold it and the whole
+   * arrangement visibly shifts. `clampInside` also keeps a card out from behind the
+   * header, which `extent` cannot do because it has never heard of one.
    */
   const onNodesChange = useCallback((changes: NodeChange<GraphFlowNode>[]) => {
     const moves = changes.filter(
@@ -673,9 +855,21 @@ function GraphCanvas({
         change.type === "position" && change.position !== undefined,
     );
     if (moves.length === 0) return;
+    const { parentOf, sizes: boxes, nodes: current } = geometry.current;
+    const sizeOf = (id: string): Size => {
+      const node = current.find((candidate) => candidate.id === id);
+      return node?.kind === "container"
+        ? (boxes[id] ?? { width: MIN_CONTAINER_W, height: MIN_CONTAINER_H })
+        : { width: NODE_W, height: NODE_H };
+    };
     setPositions((previous) => {
       const next = { ...previous };
-      for (const move of moves) if (move.position) next[move.id] = move.position;
+      for (const move of moves) {
+        if (!move.position) continue;
+        const parent = parentOf.get(move.id);
+        const box = parent === undefined ? undefined : boxes[parent];
+        next[move.id] = box ? clampInside(move.position, sizeOf(move.id), box) : move.position;
+      }
       return next;
     });
   }, []);
@@ -698,10 +892,10 @@ function GraphCanvas({
    * ClusterNode), so that "click a node, read the node" survives collapsing.
    */
   const onNodeClick = useCallback<NodeMouseHandler<GraphFlowNode>>(
-    (_event, node) =>
-      node.type === "cluster"
-        ? session.open(node.data.epic.workspace, node.data.epic.id)
-        : session.open(node.data.node.workspace, node.id),
+    (_event, node) => {
+      const ticket = canvasTicket(node);
+      session.open(ticket.workspace, ticket.id);
+    },
     [session],
   );
 
@@ -736,17 +930,23 @@ function GraphCanvas({
             onCopyLink={copyLink}
             copied={copied}
           />
-          <EpicControls
+          <EpicPicker
             epics={epics}
+            selected={epicFilters}
+            onToggleSelect={toggleEpicFilter}
+            onClearSelection={clearEpicFilters}
             collapsed={collapsed}
-            onToggle={toggleEpic}
+            onSetCollapse={setEpicCollapse}
             onCollapseAll={collapseAll}
             onExpandAll={expandAll}
-            filter={epicFilter}
-            onFilter={setEpicFilter}
           />
+          {/*
+            O4a's hand-off (STA-133): the label was lowercase because that file deliberately
+            left this button alone. Sentence case matches every other word in this row —
+            View, Copy link, Export — and the picker's Collapse all / Expand all.
+          */}
           <Button type="button" variant="outline" size="sm" onClick={autoArrange}>
-            auto-arrange
+            Auto-arrange
           </Button>
         </div>
       </div>
@@ -781,7 +981,7 @@ function GraphCanvas({
             nodeColor={(node) => {
               const box = node as GraphFlowNode;
               return MINIMAP_COLORS[
-                box.type === "cluster" ? box.data.epic.status : box.data.node.status
+                box.type === "task" ? box.data.node.status : box.data.epic.status
               ];
             }}
             nodeStrokeWidth={0}

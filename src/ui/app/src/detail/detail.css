@@ -199,3 +199,75 @@
 .staple-detail-tabstrip {
   padding-bottom: 5px;
 }
+
+/*
+ * ── The Relations tab's canvas — O2b (STA-132) ───────────────────────────────────────
+ *
+ * React Flow MEASURES its container, and the tab body sits inside the panel's scrolling
+ * box rather than inside a flex column with a height to inherit. An unstated height there
+ * collapses to zero and the canvas renders as a hairline. So it is stated, once, here.
+ *
+ * `clamp` rather than a branch on drawer vs fullscreen: the tab is not told which one it
+ * is in, and teaching `TabProps` about the panel's chrome would make all six tabs know
+ * about it in order to serve one. A viewport-relative height is the right answer in both
+ * — a 440px drawer and a full-screen panel differ in WIDTH, and the canvas fits its
+ * content to whatever width it is given.
+ */
+.staple-relations-canvas {
+  height: clamp(18rem, 46vh, 34rem);
+}
+
+/*
+ * An unresolved blocker — a DIRECT blocker that is not done or cancelled, i.e. one of the
+ * things actually stopping this ticket from starting.
+ *
+ * The token is `--status-task-blocked`, the same one the strip's "N unresolved" segment
+ * and every blocked badge in the app already use. NO NEW HUE: the canvas spends its
+ * palette on status (the accent stripe) and on same- versus cross-workspace (solid versus
+ * dashed), and this borrows from the first rather than opening a third scale.
+ *
+ * It rides on React Flow's node wrapper rather than on the card, which is what let
+ * `TaskNode` stay read-only — it does not have to learn what a blocker is in order to be
+ * tinted like one. `box-shadow` rather than a thicker border because a border change
+ * would resize the box, and the box size is the fact `compoundLayout` lays out against.
+ */
+.react-flow__node.staple-relation-unresolved .staple-rf-node {
+  border-color: var(--status-task-blocked);
+  box-shadow: 0 0 0 1px var(--status-task-blocked);
+}
+
+/*
+ * ── The three read-only adjustments — O2c (STA-155) ──────────────────────────────────
+ *
+ * O2c made this tab a second caller of the graph view's canvas derivation, which is what
+ * the ticket asked for: same node components, same edge classes, same dagre LR
+ * arrangement. Three things about the big canvas are affordances rather than looks, and
+ * they are turned off HERE rather than by giving the shared components a read-only prop —
+ * the components belong to O4c and nothing about them needs to change for this.
+ *
+ * 1. THE DIM IS GENTLER, AND ONLY HERE. `app.css` fades an un-asked-about box to 0.16,
+ *    which earns its severity on a fifty-box board where a faded box is genuinely
+ *    irrelevant to the question. This canvas has ALREADY been narrowed to the focus's own
+ *    relatives, so a dimmed box is still its ancestor, its child or its cousin — something
+ *    the reader opened this tab to see. Same class, same verb, a value tuned to a canvas
+ *    where nothing is irrelevant. `app.css` is untouched, so the graph view is unchanged.
+ *
+ * 2. NO COLLAPSE CHEVRON. An epic container offers one, and collapsing means nothing on a
+ *    canvas whose entire purpose is to show one ticket's tree fully expanded. The handler
+ *    is a no-op in the tab; this is what stops a control being offered that does nothing.
+ *
+ * 3. NO GRAB CURSOR. `nodesDraggable={false}` already pins every box, but the container's
+ *    header still advertises itself as a drag handle. A cursor that promises a gesture the
+ *    canvas refuses is the smallest possible lie and the easiest one to remove.
+ */
+.staple-relations-canvas .staple-rf-node[data-dim],
+.staple-relations-canvas .staple-epic-container[data-dim] {
+  opacity: 0.42;
+}
+.staple-relations-canvas .staple-epic-container-bar button {
+  display: none;
+}
+.staple-relations-canvas .staple-epic-container-bar,
+.staple-relations-canvas .react-flow__node-task {
+  cursor: pointer;
+}

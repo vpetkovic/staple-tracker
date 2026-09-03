@@ -16,7 +16,10 @@ import { fileURLToPath } from "node:url";
 import { Hub, notifyHubResolvedSafe } from "../core/hub.js";
 import { openWorkspace, resolveWorkspace } from "../core/workspace.js";
 import { StapleError, errorEnvelope, type IssuePriority, type IssueStatus } from "../core/types.js";
-import type { UpdateIssueInput, WorkspaceStore } from "../core/store.js";
+// O7b (STA-141): the closed category set and the categories the code writes into,
+// both served verbatim on /api/settings so the browser never hand-keeps a copy.
+import { REQUIRED_STATUS_CATEGORIES, STATUS_CATEGORIES } from "../core/types.js";
+import type { UpdateIssueInput, VocabularyOp, WorkspaceStore } from "../core/store.js";
 
 interface UiOptions {
   port: number;
@@ -399,12 +402,31 @@ export function startUiServer(options: UiOptions): UiHandle {
           );
           return;
         }
-        const expected = url.pathname === "/api/action" ? "POST" : "GET";
-        if (req.method !== expected) {
-          deny(res, 405, "method_not_allowed", `${url.pathname} accepts ${expected} only`, { allow: expected });
+        /**
+         * Every route still pins its method. `/api/settings` (STA-141) is the one
+         * route that reads AND writes on the same path — GET lists the workspace
+         * vocabulary, POST applies an op batch — so `expected` became a LIST rather
+         * than a string. A route not named here is unchanged: GET only, or POST only
+         * for `/api/action`.
+         */
+        const expected =
+          url.pathname === "/api/action"
+            ? ["POST"]
+            : url.pathname === "/api/settings"
+              ? ["GET", "POST"]
+              : ["GET"];
+        const allow = expected.join(", ");
+        if (!expected.includes(req.method ?? "")) {
+          deny(res, 405, "method_not_allowed", `${url.pathname} accepts ${allow} only`, { allow });
           return;
         }
-        if (expected === "POST" && !originAllowed(req)) {
+        /**
+         * Keyed on the ACTUAL method rather than on the pinned one, which is the
+         * only change the settings route required here: a POST is Origin-checked
+         * wherever it lands, and a GET on a read/write path is not — same guard,
+         * same sentence, now stated about the request instead of about the route.
+         */
+        if (req.method === "POST" && !originAllowed(req)) {
           deny(res, 403, "forbidden", `Cross-origin request rejected (Origin: ${req.headers.origin})`);
           return;
         }
@@ -664,6 +686,9 @@ export function startUiServer(options: UiOptions): UiHandle {
               workspace: handle.slug,
               title: issue.title,
               status: issue.status,
+              // Both graph producers send this one (STA-124) — see the note in
+              // Hub.graph(). Unlike `parent`, there is no degraded branch.
+              kind: issue.kind,
               parent: issue.parentId ? (identifierOf.get(issue.parentId) ?? null) : null,
             })),
             edges: handle.store.edges().map((edge) => ({ from: edge.blocker, to: edge.blocked, cross: false })),
@@ -723,6 +748,95 @@ export function startUiServer(options: UiOptions): UiHandle {
           return;
         }
         json(res, 200, handle.store.listEvents(Number(url.searchParams.get("since") ?? 0), 100));
+        return;
+      }
+
+      /**
+       * The workspace vocabulary — O7b (STA-141). The ONE route that both reads
+       * and writes, which is why the method pin above became a list.
+       *
+       * GET and POST answer the SAME envelope. That is deliberate and it is what
+       * lets the settings editor re-derive everything from one shape after a write
+       * instead of merging a write result into a read it fetched earlier — the
+       * merge is where a list quietly stops matching what the store believes.
+       *
+       * `usage` is the field the UI cannot do without: it is what makes the
+       * migrate-to picker REQUIRED rather than merely offered, because the client
+       * knows before it asks whether any issue still carries the row being removed.
+       * The store remains the only authority on whether the removal is ALLOWED —
+       * `removeStatus` refuses without a target and refuses to empty a required
+       * category, and both refusals reach the page as the store's own sentence
+       * through the catch below. The count only decides which control renders.
+       */
+      if (url.pathname === "/api/settings") {
+        const handle = handleFor(
+          (req.method === "POST" ? undefined : url.searchParams.get("ws")) ?? undefined,
+        );
+
+        /** The whole vocabulary, plus what a removal would have to move. */
+        const envelope = (h: StoreHandle) => {
+          const statuses = h.store.getStatuses();
+          const kinds = h.store.getKinds();
+          return {
+            workspace: h.slug,
+            statuses,
+            kinds,
+            /**
+             * THE DERIVED ORDERS, computed by the store and never by the browser.
+             *
+             * `statuses` above is the CONFIGURED order — what the editor's drag
+             * produces and what it must paint. It is NOT the order a list groups by:
+             * `statusOrder()` tiers by category (active, review, gated, blocked,
+             * ready, unstarted, done, cancelled) and lets the configured order break
+             * ties WITHIN a tier, which is the same rank the store's own `CASE`
+             * fragment sorts rows by.
+             *
+             * Serving it rather than letting the client re-derive it is the whole
+             * point: a browser that reimplemented the tiering would be a second
+             * authority on it, and the first time the two disagreed a group header
+             * would sit above rows that sorted the other way. For a default
+             * workspace `groupOrder` is byte-identical to the UI mirror's old
+             * `[...OPEN_STATUS_ORDER, ...RESOLVED_STATUSES]`.
+             */
+            groupOrder: h.store.statusOrder(),
+            openOrder: h.store.openStatusOrder(),
+            /** Agent-inbox pickup tiers, for a surface that wants to mirror them. */
+            pickupOrder: h.store.inboxPickupOrder(),
+            // Fixed and non-configurable — the category select's options, named by
+            // the server so the client never hand-keeps a copy of a closed set.
+            categories: [...STATUS_CATEGORIES],
+            requiredCategories: [...REQUIRED_STATUS_CATEGORIES],
+            usage: {
+              statuses: Object.fromEntries(statuses.map((s) => [s.id, h.store.statusUsageCount(s.id)])),
+              kinds: Object.fromEntries(kinds.map((k) => [k.id, h.store.kindUsageCount(k.id)])),
+            },
+          };
+        };
+
+        if (req.method === "GET") {
+          json(res, 200, envelope(handle));
+          return;
+        }
+
+        // POST. Method and Origin were already enforced by the gate above.
+        const body = await readBody(req);
+        const target = body.target;
+        const ops = body.ops;
+        if (target !== "statuses" && target !== "kinds") {
+          throw new StapleError("validation", 'settings requires target "statuses" or "kinds"');
+        }
+        if (!Array.isArray(ops) || ops.length === 0) {
+          throw new StapleError("validation", "settings requires a non-empty ops array");
+        }
+        const writeHandle = handleFor((body.ws as string) ?? undefined);
+        const actor = (body.actor as string) || "ui";
+        // One ordered, all-or-nothing batch — the same store call `update_statuses`
+        // and `update_kinds` make, so the two surfaces cannot disagree about what
+        // an op means or about which of them is refused.
+        const batch = ops as VocabularyOp[];
+        if (target === "statuses") writeHandle.store.applyStatusOps(batch, actor);
+        else writeHandle.store.applyKindOps(batch, actor);
+        json(res, 200, envelope(writeHandle));
         return;
       }
 
@@ -850,6 +964,15 @@ export function startUiServer(options: UiOptions): UiHandle {
               title: body.title as string,
               description: (body.description as string) || null,
               priority: (body.priority as IssuePriority) || undefined,
+              /**
+               * O1b (STA-125). Additive, and shaped exactly like `priority` above: an
+               * absent or empty value becomes `undefined`, which `createIssue` reads as
+               * "use the workspace's default kind". It is NOT validated here — a kind
+               * outside the configured vocabulary is refused by
+               * `store.assertConfiguredKind()` in its own words, which is the same
+               * bargain every other field on this branch makes.
+               */
+              kind: (body.kind as string) || undefined,
               parent: (body.parent as string) || null,
               labels: stringList(body.labels),
               blockedBy: blockedBy.local,
@@ -946,6 +1069,14 @@ export function startUiServer(options: UiOptions): UiHandle {
           const patch: UpdateIssueInput = {};
           if (body.title !== undefined) patch.title = body.title as string;
           if (body.priority !== undefined) patch.priority = body.priority as IssuePriority;
+          /**
+           * O1b (STA-125). Presence, not truthiness, like every other key on this patch —
+           * but unlike `estimateSeconds` below there is no clear to express: `kind` is
+           * two-state because the column is NOT NULL with a default (see
+           * `UpdateIssueInput.kind`). An unconfigured value is `assertConfiguredKind`'s
+           * to refuse, not this branch's.
+           */
+          if (body.kind !== undefined) patch.kind = body.kind as string;
           if (body.labels !== undefined) {
             const labels = stringList(body.labels);
             // A present-but-malformed labels value must not collapse to "delete all".

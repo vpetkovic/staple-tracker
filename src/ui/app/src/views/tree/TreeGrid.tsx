@@ -39,17 +39,18 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
-import { CircleDashed, Hourglass, PlayCircle, CheckCircle2 } from "lucide-react";
+import { CircleDashed, Hourglass, Minus, PlayCircle, CheckCircle2 } from "lucide-react";
 import {
+  KindGlyph,
   resolveTaskListConfig,
   StatusIcon,
-  STATUS_LABEL,
   TaskRowLine,
   type TaskRow,
 } from "@/components/task-list";
 import { clampIndex, useRovingFocus } from "@/components/task-list/roving";
 import "@/components/task-list/task-list.css";
 import type { Selection } from "@/lib/session";
+import { statusLabel } from "@/lib/settings";
 import type { Issue, IssueRow, UiMode } from "@/lib/types";
 import type { GroupBy } from "@/lib/view-prefs";
 import { useTreeExpansion } from "./expansion";
@@ -109,10 +110,70 @@ const PICKUP_ICONS: Record<PickupSectionId, ReactNode> = {
   resolved: <CheckCircle2 className="staple-group-icon" strokeWidth={PICKUP_ICON_STROKE} aria-hidden />,
 };
 
+/**
+ * THE KIND GLYPH ON A GROUP HEADER — the shared mark, since O1c (STA-130).
+ *
+ * O3d (STA-129) drew a marked PLACEHOLDER here: a local lucide map, because O1b's shared
+ * glyph lived on another branch and the acceptance criterion still needed a mark. Both
+ * branches have landed, so this is the swap that placeholder existed to receive — one
+ * component, one import, and the five lucide icons it alone used are gone from the file.
+ * Two glyph sets for one vocabulary is how the header and the row start disagreeing about
+ * what an epic looks like.
+ *
+ * `size={16}` is the header's box (`--group-icon-size`), not the row's 12; `KindGlyph`
+ * draws from a 16-unit viewBox at a stroke chosen to render correctly at both, which is why
+ * one set of paths serves both call sites. It needs no `strokeWidth` for the same reason
+ * the pickup glyphs above need one: it is already in `StatusIcon`'s coordinate system.
+ *
+ * `labelled={false}` because THIS header already names the kind in text — the label beside
+ * the glyph IS `kindLabel(kind)`, and the `aria-label` reads "Epic, 12 tasks". The prop
+ * exists for exactly this caller; two readings of one fact is worse than none.
+ *
+ * ── THE SEAM IS NOW SPELLED `data-issue-kind` ─────────────────────────────────────────
+ *
+ * O3d asked for `data-kind` to survive the swap, and it could not have known why it cannot:
+ * the shared glyph had already chosen `data-issue-kind` on the other branch, because the
+ * ROW carries `data-kind` on its avatars, where it means human-or-agent. Wrapping this in a
+ * span whose only job is to carry a second spelling would recreate exactly the collision
+ * that rename exists to prevent, on the one surface that had escaped it. The seam survives;
+ * it is spelled the way the shared component spells it everywhere else.
+ */
+function GroupKindGlyph({ kind }: { kind: string | null }) {
+  // `null` is the "No epic" bucket: it names no issue, so there is no kind to draw and the
+  // glyph says exactly that rather than borrowing one. Every KIND bucket is non-null by
+  // construction — see `buildKindGroups` — so this branch belongs to the epic axis alone.
+  if (kind === null) {
+    return (
+      <Minus
+        className="staple-group-icon"
+        strokeWidth={PICKUP_ICON_STROKE}
+        data-issue-kind="none"
+        aria-hidden
+      />
+    );
+  }
+  return <KindGlyph kind={kind} size={16} className="staple-group-icon" labelled={false} />;
+}
+
 /** One entry in the linear keyboard sequence: a group header or a row. */
 type NavItem =
   | { kind: "group"; key: string; group: GroupKey }
   | { kind: "row"; key: string; row: TaskRow };
+
+/**
+ * THE ROVING-FOCUS KEY FOR A ROW — O8c (STA-151).
+ *
+ * `issue.id` for a real row, `ghost:<issue.id>` for a context row. The prefix exists
+ * because a ghost's `issue.id` IS a real row's id and both can be on the page at once: one
+ * key for two elements makes the roving `tabIndex` ambiguous and hands `focus.register`
+ * the same id twice. It is the same device the group headers (`group:<key>`) and
+ * `renderGhost`'s React key already use.
+ *
+ * ONE FUNCTION, used by `nav`, by `registerRef` and by `isFocused`, because those three
+ * agreeing is the whole contract — a key minted in three places is a key that drifts in
+ * two of them, and it surfaces as a row that cannot be focused rather than as an error.
+ */
+const navKeyOf = (row: TaskRow): string => (row.ghost ? `ghost:${row.issue.id}` : row.issue.id);
 
 /**
  * One group header, for either axis — V5 (STA-111) generalised it.
@@ -125,9 +186,11 @@ type NavItem =
 function GroupHeader({
   groupKey,
   label,
+  prefix,
   icon,
   hint,
   count,
+  progress,
   collapsed,
   focused,
   onToggle,
@@ -137,10 +200,26 @@ function GroupHeader({
 }: {
   groupKey: GroupKey;
   label: string;
+  /**
+   * O3d (STA-129). The epic's identifier, between the glyph and the title. `null` on every
+   * axis whose key is its own name.
+   */
+  prefix?: string | null;
   icon: ReactNode;
   /** Tooltip. Present for pickup sections, where membership is derived and worth stating. */
   hint?: string;
   count: number;
+  /**
+   * O3d (STA-129). O3b's rollup for the issue this group is named after, over the
+   * UNFILTERED list — `3/7` in the trailing slot.
+   *
+   * IT REPLACES THE COUNT rather than joining it. Two numbers derived two different ways,
+   * eight pixels apart, in the corner a reader glances at: "5" would mean rows in this
+   * group right now and "3/7" would mean descendants in the workspace, and nobody holds
+   * both readings at once. The count is not lost — it stays in the `aria-label`, which
+   * gains the rollup too, so a screen reader hears both facts named.
+   */
+  progress?: { resolved: number; total: number } | null;
   collapsed: boolean;
   focused: boolean;
   onToggle: () => void;
@@ -158,7 +237,17 @@ function GroupHeader({
       data-status={groupKey}
       title={hint}
       aria-expanded={!collapsed}
-      aria-label={`${label}, ${count} ${count === 1 ? "task" : "tasks"}`}
+      /*
+       * O3d: the identifier is read FIRST when there is one, because "STA-119, Tree
+       * ordering, 4 tasks" is how somebody scanning by ticket number finds the group. The
+       * rollup is appended rather than substituted for the count — the eye can only hold
+       * one number in that corner, but a listener loses nothing by hearing both.
+       */
+      aria-label={[
+        `${prefix ? `${prefix}, ` : ""}${label}`,
+        `${count} ${count === 1 ? "task" : "tasks"}`,
+        ...(progress ? [`${progress.resolved} of ${progress.total} resolved`] : []),
+      ].join(", ")}
       tabIndex={focused ? 0 : -1}
       onClick={onToggle}
       onFocus={onFocus}
@@ -172,10 +261,23 @@ function GroupHeader({
           </svg>
         </span>
         {icon}
+        {/*
+          O3d. Styled with the app's Tailwind arbitrary-token idiom rather than a new class
+          in task-list.css — that stylesheet belongs to O1b (STA-125) this sprint, and one
+          declaration is not worth a conflict in somebody else's file. Same size and colour
+          as the count, so the two ends of the header weigh the same; tabular so a header
+          under STA-9 lines up with one under STA-10.
+        */}
+        {prefix ? (
+          <span className="text-[11px] tabular-nums text-[var(--text-tertiary)]">{prefix}</span>
+        ) : null}
         <span className="staple-group-name">{label}</span>
         {/* The count is the entire reason a collapsed group is still informative, so it is
-            never hidden by the fold. Bare number, no parentheses. */}
-        <span className="staple-group-count">{count}</span>
+            never hidden by the fold. Bare number, no parentheses — or, on an axis whose
+            groups are issues, the rollup that answers the same question better. */}
+        <span className="staple-group-count">
+          {progress ? `${progress.resolved}/${progress.total}` : count}
+        </span>
       </div>
     </div>
   );
@@ -183,6 +285,7 @@ function GroupHeader({
 
 export function TreeGrid({
   rows,
+  allRows,
   mode,
   groupBy,
   pickup = EMPTY_PICKUP_INDEX,
@@ -194,6 +297,20 @@ export function TreeGrid({
   onVisibleOrder,
 }: {
   rows: IssueRow[];
+  /**
+   * THE SAME LIST BEFORE `applyFilters` — O3b (STA-127), and read for exactly one purpose:
+   * the collapsed-parent rollup's counts.
+   *
+   * `rows` above has already been filtered, and `done` is hidden by default, so a rollup
+   * built from it would tell an epic with three finished children and two open ones that it
+   * is `0/2`. The unfiltered array is already in `TreeView` and already in memory — this is
+   * a reference, not a fetch. Membership, ordering, grouping, the keyboard sequence and the
+   * published visible order all still come from `rows` and nothing else.
+   *
+   * Optional, and the model defaults it to `rows`, so a caller that has no wider list still
+   * renders a coherent rollup over what it does have.
+   */
+  allRows?: IssueRow[];
   /**
    * Only reaches `data-mode` on the container. Hub mode does not split the list by
    * workspace — status is the primary axis when there is one at all — and the workspace
@@ -241,8 +358,22 @@ export function TreeGrid({
    * one it is building. See tree-model.ts `subtreesHoldingActiveWork`.
    */
   const build = useMemo(
-    () => ({ isExpanded: expansion.explicit, showResolved, hiddenParents }),
-    [expansion.explicit, showResolved, hiddenParents],
+    () => ({
+      isExpanded: expansion.explicit,
+      showResolved,
+      hiddenParents,
+      rollupSource: allRows,
+      /**
+       * O3c (STA-128). A ghost needs an INDENT to be legible, and `columns.disclosure` is
+       * the existing switch that means "this container has one" — the `panel` and `popup`
+       * presets turn it off. Reusing it rather than inventing a second flag is what keeps
+       * "where is the ghost row on and where is the breadcrumb chip" a single answer: a
+       * surface that cannot nest keeps the chip, automatically, for free, and would not
+       * have to be remembered when a fourth preset arrives.
+       */
+      ghostParents: config.columns.disclosure,
+    }),
+    [expansion.explicit, showResolved, hiddenParents, allRows, config.columns.disclosure],
   );
 
   /**
@@ -267,24 +398,65 @@ export function TreeGrid({
   const sections = useMemo(() => {
     if (shape.kind === "flat") return [];
     if (shape.kind === "grouped") {
-      return shape.groups.map((group) => ({
-        key: group.status as GroupKey,
-        label: STATUS_LABEL[group.status],
-        icon: <StatusIcon status={group.status} className="staple-group-icon" />,
-        hint: undefined as string | undefined,
-        count: group.count,
-        rows: group.rows,
-        // Status groups have no waiting annotations; the field is present so the render
-        // path does not have to know which shape it is drawing.
-        waitingOn: undefined as ReadonlyMap<string, string> | undefined,
-      }));
+      return shape.groups.map((group) => {
+        /**
+         * O3d (STA-129). THE BRANCH IS ON THE HEADING, NOT ON `groupBy`.
+         *
+         * `groupBy` is in scope right here and reading it would have been one character
+         * shorter. It would also have made every future axis a `groupBy` case in this file
+         * — and the point of putting `heading` on the group is that the MODEL is the only
+         * thing holding the unfiltered source a header has to be named out of. O1c's
+         * group-by-kind adds a builder and nothing here.
+         */
+        const heading = group.heading ?? null;
+        return {
+          key: group.status,
+          /*
+           * O8d (STA-152). The third state of "what does this group's head look like": a
+           * status key names itself, a heading names an issue or a kind, and `headedByRow`
+           * says the head is the first ROW and there is no header to draw at all. Read off
+           * the model for the same reason `heading` is — the view does not know which axis
+           * it is on, and adding a `groupBy` case here is how it would start to.
+           */
+          headedByRow: group.headedByRow === true,
+          /*
+           * O7b's wiring (STA-141). `statusLabel()` rather than `STATUS_LABEL[...]`: the
+           * record is a `Record<IssueStatus, string>` over the built-in seven, so a
+           * workspace's own `pairing` status rendered as `undefined`. The accessor
+           * title-cases an id it has never seen, which is the right failure.
+           */
+          label: heading ? heading.label : statusLabel(group.status),
+          prefix: heading?.identifier ?? null,
+          icon: heading ? (
+            <GroupKindGlyph kind={heading.kind} />
+          ) : (
+            <StatusIcon status={group.status} className="staple-group-icon" />
+          ),
+          // An epic's title is elided by the header's width long before a status label
+          // would be, so the untruncated reading goes in the tooltip.
+          hint: (heading?.issue ? `${heading.identifier} · ${heading.label}` : undefined) as
+            | string
+            | undefined,
+          count: group.count,
+          progress: heading?.rollup
+            ? { resolved: heading.rollup.resolved, total: heading.rollup.total }
+            : null,
+          rows: group.rows,
+          // Status groups have no waiting annotations; the field is present so the render
+          // path does not have to know which shape it is drawing.
+          waitingOn: undefined as ReadonlyMap<string, string> | undefined,
+        };
+      });
     }
     return shape.groups.map((group) => ({
       key: group.id as GroupKey,
+      headedByRow: false,
       label: group.label,
+      prefix: null as string | null,
       icon: PICKUP_ICONS[group.id],
       hint: group.hint as string | undefined,
       count: group.count,
+      progress: null as { resolved: number; total: number } | null,
       rows: group.rows,
       waitingOn: group.waitingOn as ReadonlyMap<string, string> | undefined,
     }));
@@ -293,7 +465,7 @@ export function TreeGrid({
   /** The keyboard sequence: headers (when there are any) and the rows that are on screen. */
   const nav = useMemo<NavItem[]>(() => {
     if (shape.kind === "flat") {
-      return shape.rows.map((row) => ({ kind: "row", key: row.issue.id, row }));
+      return shape.rows.map((row) => ({ kind: "row", key: navKeyOf(row), row }));
     }
     // Derived from `sectionsOf`, the SAME accessor `visibleOrder` uses. If the keyboard
     // sequence and the published order were built from two walks over the shape, a third
@@ -301,9 +473,38 @@ export function TreeGrid({
     // off-by-one that only appears once a section is collapsed.
     const out: NavItem[] = [];
     for (const section of sectionsOf(shape)) {
-      out.push({ kind: "group", key: `group:${section.key}`, group: section.key });
-      if (expansion.isGroupCollapsed(section.key)) continue;
-      for (const row of section.rows) out.push({ kind: "row", key: row.issue.id, row });
+      /*
+       * O8d (STA-152). A section whose head is a ROW contributes no header entry and cannot
+       * be group-collapsed: its first row IS the head, it is already in this list, and its
+       * chevron is the fold. Two entries over one set of rows — a header stop and a row stop
+       * that fold the same thing differently — is the defect STA-148 raises.
+       */
+      if (!section.headedByRow) {
+        out.push({ kind: "group", key: `group:${section.key}`, group: section.key });
+        if (expansion.isGroupCollapsed(section.key)) continue;
+      }
+      for (const row of section.rows) {
+        /*
+         * O8c (STA-151). GHOSTS ARE IN THE KEYBOARD SEQUENCE, under a PREFIXED key.
+         *
+         * O3c skipped them for two reasons and exactly one of them survives. The one that
+         * does: `key` is the issue id, and a ghost's id is the id of a REAL row sitting in
+         * another group — two entries with one key make the roving `tabIndex` ambiguous
+         * and hand `focus.register` the same id twice. That is a KEY problem, and it is
+         * fixed by the prefix, the same device the group headers and `renderGhost`'s React
+         * key already use.
+         *
+         * The one that does not: "a ghost is not a row you navigate to". STA-148 says a
+         * context-only ancestor is an otherwise ordinary row, and this ticket gives it a
+         * fold — a fold nobody can reach from the keyboard is half an affordance.
+         *
+         * `visibleOrder` is a DIFFERENT list and still excludes them (`visibleRows` in the
+         * model). That is the drawer's prev/next: paging from STA-2 to a dimmed duplicate
+         * of a ticket you already have open is exactly what it must not do. The arrow keys
+         * move the focus inside one grid; prev/next walks the tickets.
+         */
+        out.push({ kind: "row", key: navKeyOf(row), row });
+      }
     }
     return out;
   }, [shape, expansion]);
@@ -354,7 +555,11 @@ export function TreeGrid({
   useEffect(() => {
     if (!currentRef) return;
     const row = rootRef.current?.querySelector<HTMLElement>(
-      `[data-testid="task-row"][data-identifier="${CSS.escape(currentRef)}"]`,
+      // `:not([data-ghost])` — O3c (STA-128). `data-identifier` stopped being unique the
+      // moment a parent could appear as a dimmed context row inside another group, and
+      // scrolling to the context copy would park the reader next to a row that is not the
+      // one the drawer just opened.
+      `[data-testid="task-row"][data-identifier="${CSS.escape(currentRef)}"]:not([data-ghost])`,
     );
     if (!row || row.closest('[data-collapsed="true"]')) return;
     row.scrollIntoView({ block: "nearest" });
@@ -380,9 +585,16 @@ export function TreeGrid({
       if (!item) return;
       const at = (i: number) => nav[clampIndex(i, nav.length)];
 
+      /*
+       * O8c (STA-151). A GHOST IS NOT SELECTABLE, and this is one of the two places that
+       * has to say so. `toggleSelect` is keyed by issue id, so selecting from a ghost
+       * would tick the parent's REAL row over in another group — a selection made in a
+       * bucket the ghost is not in. The fold and the open are the ghost's interactions;
+       * the checkbox column is a spacer on it for the same reason (see TaskRowLine).
+       */
       const extendTo = (i: number) => {
         const target = at(i);
-        if (target?.kind === "row") toggleSelect(target.row.issue.id);
+        if (target?.kind === "row" && !target.row.ghost) toggleSelect(target.row.issue.id);
         if (target) focus.go(target.key);
       };
 
@@ -442,7 +654,8 @@ export function TreeGrid({
           return;
 
         case " ":
-          if (item.kind !== "row") return;
+          // The other half of the ghost's selection guard — see `extendTo` above.
+          if (item.kind !== "row" || item.row.ghost) return;
           event.preventDefault();
           toggleSelect(item.row.issue.id);
           return;
@@ -498,9 +711,47 @@ export function TreeGrid({
       onOpenParent={(identifier) => onOpen(row.workspace, identifier)}
       onToggleExpand={() => expansion.toggleRow(row.issue, row.isExpanded)}
       onToggleSelect={() => toggleSelect(row.issue.id)}
-      onFocus={() => focus.set(row.issue.id)}
+      onFocus={() => focus.set(navKeyOf(row))}
       onKeyDown={(event) => handleKey(event, index)}
-      registerRef={focus.register(row.issue.id)}
+      registerRef={focus.register(navKeyOf(row))}
+    />
+  );
+
+  /**
+   * A GHOST PARENT CONTEXT ROW — O3c (STA-128), rewritten by O8c (STA-151).
+   *
+   * It is an ordinary row now, and that is the ticket: the same component, the same
+   * chevron, the same keyboard handler, the same per-issue expansion state. What still
+   * makes it a ghost is what the MODEL says about it (dimmed, uncounted, out of
+   * `visibleOrder`) plus the two props it is still not given:
+   *
+   *   NO `isSelected`/`onToggleSelect`. It is not in this bucket, so it cannot be part of
+   *   a selection made in it. `handleKey` guards the keyboard half.
+   *   NO `isCurrent`. The drawer's highlight belongs on the parent's REAL row, in the
+   *   group its own status put it in; lighting up both says one ticket is in two groups.
+   *
+   * `onOpen` is the "clicking the title opens the parent" half and needs nothing special:
+   * the ghost carries the parent's identifier and the child's workspace, and `parentId` is
+   * intra-workspace by construction. The chevron `stopPropagation`s, so the fold does not
+   * also open the drawer.
+   *
+   * Both keys are prefixed — the React key and the roving-focus key, through `navKeyOf`.
+   * A ghost's `issue.id` is a real row's id and the two are on the page at once.
+   */
+  const renderGhost = (row: TaskRow, index: number) => (
+    <TaskRowLine
+      key={`ghost:${row.issue.id}`}
+      row={row}
+      config={config}
+      semantics="grid"
+      isExpanded={row.isExpanded}
+      isFocused={activeKey === navKeyOf(row)}
+      now={now}
+      onOpen={() => openIssue(row)}
+      onToggleExpand={() => expansion.toggleRow(row.issue, row.isExpanded)}
+      onFocus={() => focus.set(navKeyOf(row))}
+      onKeyDown={(event) => handleKey(event, index)}
+      registerRef={focus.register(navKeyOf(row))}
     />
   );
 
@@ -532,25 +783,44 @@ export function TreeGrid({
          * behaving the same way six months from now.
          */
         sections.map((section) => {
-          const collapsed = expansion.isGroupCollapsed(section.key);
-          index += 1;
+          /*
+           * O8d (STA-152). A section whose head is a ROW never folds as a group and never
+           * takes a header index — both mirrored from `nav` above, and both read off the
+           * same `headedByRow` the model published, so the render and the keyboard sequence
+           * cannot drift apart about how many stops this section has.
+           */
+          const collapsed = !section.headedByRow && expansion.isGroupCollapsed(section.key);
+          if (!section.headedByRow) index += 1;
           const headerIndex = index;
 
           return (
-            <div role="rowgroup" key={section.key} className="staple-group">
-              <GroupHeader
-                groupKey={section.key}
-                label={section.label}
-                icon={section.icon}
-                hint={section.hint}
-                count={section.count}
-                collapsed={collapsed}
-                focused={activeKey === `group:${section.key}`}
-                onToggle={() => expansion.toggleGroup(section.key)}
-                onFocus={() => focus.set(`group:${section.key}`)}
-                onKeyDown={(event) => handleKey(event, headerIndex)}
-                registerRef={focus.register(`group:${section.key}`)}
-              />
+            <div
+              role="rowgroup"
+              key={section.key}
+              className="staple-group"
+              /* The key was only ever addressable through the header's `data-status`. With
+                 no header there is nothing to address, so it moves to the group itself —
+                 for a test, an evidence script, or the browser. */
+              data-group-key={section.key}
+              data-headed-by-row={section.headedByRow ? "true" : undefined}
+            >
+              {section.headedByRow ? null : (
+                <GroupHeader
+                  groupKey={section.key}
+                  label={section.label}
+                  prefix={section.prefix}
+                  icon={section.icon}
+                  hint={section.hint}
+                  count={section.count}
+                  progress={section.progress}
+                  collapsed={collapsed}
+                  focused={activeKey === `group:${section.key}`}
+                  onToggle={() => expansion.toggleGroup(section.key)}
+                  onFocus={() => focus.set(`group:${section.key}`)}
+                  onKeyDown={(event) => handleKey(event, headerIndex)}
+                  registerRef={focus.register(`group:${section.key}`)}
+                />
+              )}
 
               {/*
                 Kept in the DOM while folded so the 160ms height transition has something to
@@ -567,7 +837,16 @@ export function TreeGrid({
               >
                 <div className="staple-group-rows">
                   {section.rows.map((row) => {
+                    /*
+                      O8c (STA-151). The ghost NOW MOVES THE INDEX, because `nav` now
+                      contains it. `index` is a position in `nav` and the two walks are the
+                      same walk; a row that is in one and not the other shifts every row
+                      beneath it by one and hands each of them another row's keyboard
+                      handler, which is precisely why O3c returned before the increment
+                      while ghosts were excluded.
+                    */
                     if (!collapsed) index += 1;
+                    if (row.ghost) return renderGhost(row, index);
                     /*
                       WHO THIS ROW IS WAITING ON — V5 (STA-111)'s third section, folded into
                       the row itself by STA-118.

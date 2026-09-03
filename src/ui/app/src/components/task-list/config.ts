@@ -66,6 +66,19 @@ export interface TaskListColumns {
   /** Chevron + connector rails. A flat list has nothing to disclose. */
   disclosure: boolean;
   priority: boolean;
+  /**
+   * The identifier — and, since O1b (STA-125), the KIND GLYPH that leads it.
+   *
+   * There is deliberately no `kind` switch beside this one. The glyph is not an
+   * independent element: it lives inside the identifier cluster, it is what puts every
+   * identifier in the list on one left edge (see `--row-id-width` in task-list.css), and
+   * a preset that drew the identifier without it would be a preset with a ragged left
+   * edge. A switch nobody could sensibly set to `false` is not a column, it is a fourth
+   * thing this file has to explain.
+   *
+   * That also gives the command palette (R5) the glyph for free, which is STA-125's "with
+   * no extra code" criterion stated as a mechanism rather than as a hope.
+   */
   identifier: boolean;
   status: boolean;
   /**

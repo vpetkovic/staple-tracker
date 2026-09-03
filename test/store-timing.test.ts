@@ -260,19 +260,22 @@ describe("a derived flip is a report about children, not work on the parent", ()
     store.checkoutIssue(child.id, "agent-a");
     store.updateIssue(child.id, { status: "done" }, "agent-a");
     backdateEvents(child.id, [5000, 4000, 3000]);
-    // The epic's own history: created, flipped by the child's checkout, then
-    // told its children were done. Only the middle one is a transition.
+    // The epic's own history: created, flipped by the child's checkout, told its
+    // children were done, then closed by the same derivation (STA-153). Two of
+    // those are transitions, and BOTH of them are derived.
     expect(eventKinds(epic.id)).toEqual([
       "issue_created",
       "status_changed",
       "children_complete",
+      "status_changed",
     ]);
-    backdateEvents(epic.id, [5000, 4000, 3000]);
+    backdateEvents(epic.id, [5000, 4000, 3000, 3000]);
 
     const timing = store.timing(epic.id);
-    expect(store.getIssue(epic.id).status).toBe("in_progress");
-    // The epic looks busy — correctly, its child was worked — but it has no
-    // stopwatch of its own, and nothing is accumulating on it.
+    expect(store.getIssue(epic.id).status).toBe("done");
+    // The epic looks like it ran for 1000s — correctly, its child was worked —
+    // but it has no stopwatch of its own, and the derived interval that opened
+    // on it and the derived close that ended it are both refused.
     expect(timing.ownActiveSeconds).toBeNull();
     expect(timing.countedThrough).toBeNull();
     // Its headline is its children's work, and its own estimate still has
@@ -420,9 +423,12 @@ describe("STA-98 rungs are reports too — a derived epic still has no stopwatch
     // whose marker is not in an equality check simply starts billing epics, and
     // no assertion anywhere goes red. Derived from the source for the same
     // reason contract-http derives its route list from the server.
+    // STA-140 de-static'd the replay (it reads the workspace's configured
+    // vocabulary now), so the slice is bounded by the next private method rather
+    // than the next static one. Same assertion, same window.
     const source = readFileSync(new URL("../src/core/store.ts", import.meta.url), "utf8");
-    const start = source.indexOf("private static reconstructIntervals");
-    const replay = source.slice(start, source.indexOf("private static", start + 10));
+    const start = source.indexOf("private reconstructIntervals");
+    const replay = source.slice(start, source.indexOf("  private ", start + 10));
     expect(replay).toMatch(/typeof event\.payload\.derived === "string"/);
     for (const marker of ["child_started", "child_in_review", "children_workable", "children_blocked"]) {
       expect(replay, marker).not.toContain(`"${marker}"`);

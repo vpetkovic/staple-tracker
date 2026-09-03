@@ -182,9 +182,9 @@ describe("derivation un-derives when the child landscape changes", () => {
 
     move(children[1]!.identifier, "done");
 
-    // Now everything is resolved: rung 0, no derivation, the epic KEEPS what it
-    // had and waits for its deliberate close.
-    expect(statusOf(epic.identifier)).toBe("blocked");
+    // Now everything is resolved: rung 6 closes the epic (STA-153). Before that
+    // ticket this was rung 0 and the epic sat in `blocked` forever.
+    expect(statusOf(epic.identifier)).toBe("done");
   });
 
   it("clears the derived blocked descriptor fields when it leaves blocked", () => {
@@ -309,31 +309,188 @@ describe("derivation may only change what derivation set", () => {
   });
 });
 
-describe("resolved parents, and the absence of an auto-close", () => {
-  it("all children resolved does NOT close the epic", () => {
+/**
+ * STA-153. The ladder gained two rungs and LOST its exception: resolved is no
+ * longer terminal, it is just another status the reversibility law governs.
+ */
+describe("rung 6 — the last open child closes the parent", () => {
+  it("completing the last open child flips the epic to done", () => {
     const { epic, children } = epicWith(2);
     store.checkoutIssue(children[0]!.identifier, "agent-a");
     store.updateIssue(children[0]!.identifier, { status: "done" }, "agent-a");
+    expect(statusOf(epic.identifier)).toBe("backlog"); // a sibling is still open
+
     store.updateIssue(children[1]!.identifier, { status: "done" }, "agent-a");
 
-    expect(statusOf(epic.identifier)).not.toBe("done");
-    expect(eventsFor(epic.identifier).map((e) => e.kind)).toContain("children_complete");
+    expect(statusOf(epic.identifier)).toBe("done");
   });
 
-  it("all children resolved leaves the epic EXACTLY where it was", () => {
+  it("stamps completedAt, exactly as a manual close does", () => {
     const { epic, children } = epicWith(1);
-    store.checkoutIssue(children[0]!.identifier, "agent-a");
-    const derived = store.getIssue(epic.identifier);
-    expect(derived.status).toBe("in_progress");
+    expect(store.getIssue(epic.identifier).completedAt).toBeNull();
+
+    store.updateIssue(children[0]!.identifier, { status: "done" }, "agent-a");
+
+    expect(store.getIssue(epic.identifier).completedAt).not.toBeNull();
+  });
+
+  it("marks the close derived, and names the child that caused it", () => {
+    const { epic, children } = epicWith(1);
+    store.updateIssue(children[0]!.identifier, { status: "done" }, "agent-a");
+
+    const last = statusEventsFor(epic.identifier).at(-1)!;
+    expect(last.payload).toMatchObject({
+      to: "done",
+      derived: "children_resolved",
+      derivedFrom: children[0]!.identifier,
+    });
+    expect(last.actor).toBe("agent-a");
+  });
+
+  it("mixed done and cancelled reads done — one shipped child means shipped", () => {
+    expect(deriveFrom(["done", "cancelled"])).toBe("done");
+    expect(deriveFrom(["cancelled", "done", "cancelled"])).toBe("done");
+  });
+
+  it("still fires children_complete — the close cannot write the summary", () => {
+    const { epic, children } = epicWith(1);
+    store.updateIssue(children[0]!.identifier, { status: "done" }, "agent-a");
+
+    const kinds = eventsFor(epic.identifier).map((e) => e.kind);
+    expect(kinds).toContain("children_complete");
+    // The wake is evaluated BEFORE the epic closes, and the log reads
+    // cause-then-effect: children complete, therefore the epic is done.
+    expect(kinds.indexOf("children_complete")).toBeLessThan(kinds.lastIndexOf("status_changed"));
+  });
+
+  it("wakes whatever was blocked on the epic itself", () => {
+    const { epic, children } = epicWith(1);
+    const dependent = store.createIssue({ title: "Needs the epic" });
+    store.setBlockedBy(dependent.identifier, [epic.identifier]);
+
+    store.updateIssue(children[0]!.identifier, { status: "done" }, "agent-a");
+
+    expect(statusOf(epic.identifier)).toBe("done");
+    const wakes = store.listEvents(0, 1000).filter((e) => e.kind === "blockers_resolved");
+    expect(wakes.map((e) => e.issueId)).toContain(store.getIssue(dependent.identifier).id);
+  });
+
+  it("is idempotent — a recompute that changes nothing writes nothing", () => {
+    const { epic, children } = epicWith(2);
+    store.updateIssue(children[0]!.identifier, { status: "done" }, "agent-a");
+    store.updateIssue(children[1]!.identifier, { status: "done" }, "agent-a");
+    const closed = store.getIssue(epic.identifier);
+    const events = eventsFor(epic.identifier).length;
+
+    // Another resolved-to-resolved child transition: same verdict, no write.
+    store.updateIssue(children[1]!.identifier, { status: "cancelled" }, "agent-a");
+
+    const after = store.getIssue(epic.identifier);
+    expect(after.status).toBe("done");
+    expect(after.statusVersion).toBe(closed.statusVersion);
+    expect(after.completedAt).toBe(closed.completedAt);
+    expect(eventsFor(epic.identifier)).toHaveLength(events);
+  });
+});
+
+describe("rung 5 — cancelled needs unanimity", () => {
+  it("cancelling every child cancels the epic", () => {
+    const { epic, children } = epicWith(2);
+    store.updateIssue(children[0]!.identifier, { status: "cancelled" }, "agent-a");
+    store.updateIssue(children[1]!.identifier, { status: "cancelled" }, "agent-a");
+
+    const after = store.getIssue(epic.identifier);
+    expect(after.status).toBe("cancelled");
+    expect(after.cancelledAt).not.toBeNull();
+    expect(statusEventsFor(epic.identifier).at(-1)!.payload).toMatchObject({
+      to: "cancelled",
+      derived: "children_cancelled",
+    });
+  });
+
+  it("a revived child moves the epic from cancelled to done, stamp and all", () => {
+    const { epic, children } = epicWith(1);
+    store.updateIssue(children[0]!.identifier, { status: "cancelled" }, "agent-a");
+    expect(store.getIssue(epic.identifier).cancelledAt).not.toBeNull();
 
     store.updateIssue(children[0]!.identifier, { status: "done" }, "agent-a");
 
     const after = store.getIssue(epic.identifier);
-    expect(after.status).toBe("in_progress");
-    expect(after.statusVersion).toBe(derived.statusVersion); // not even a write
+    expect(after.status).toBe("done");
+    expect(after.completedAt).not.toBeNull();
+    // The stamp that no longer applies goes with it — no row claiming both.
+    expect(after.cancelledAt).toBeNull();
   });
 
-  it("never re-opens a done epic when a child moves", () => {
+  it("one done child among the cancelled ones is enough to read done", () => {
+    expect(deriveFrom(["cancelled", "cancelled"])).toBe("cancelled");
+    expect(deriveFrom(["cancelled", "cancelled", "done"])).toBe("done");
+  });
+});
+
+describe("re-opening a child re-opens the parent", () => {
+  it("a reopened child pulls the epic back to the rung its children imply", () => {
+    const { epic, children } = epicWith(1);
+    store.updateIssue(children[0]!.identifier, { status: "done" }, "agent-a");
+    expect(statusOf(epic.identifier)).toBe("done");
+
+    store.updateIssue(children[0]!.identifier, { status: "todo" }, "agent-a");
+
+    // One open, workable child -> the unstarted band, not a guess at in_progress.
+    expect(statusOf(epic.identifier)).toBe("backlog");
+  });
+
+  it("clears completedAt on the way back out", () => {
+    const { epic, children } = epicWith(1);
+    store.updateIssue(children[0]!.identifier, { status: "done" }, "agent-a");
+    expect(store.getIssue(epic.identifier).completedAt).not.toBeNull();
+
+    store.updateIssue(children[0]!.identifier, { status: "todo" }, "agent-a");
+
+    const after = store.getIssue(epic.identifier);
+    expect(after.completedAt).toBeNull();
+    expect(after.cancelledAt).toBeNull();
+  });
+
+  it("a child STARTING again lands the epic straight in in_progress", () => {
+    const { epic, children } = epicWith(1);
+    store.updateIssue(children[0]!.identifier, { status: "done" }, "agent-a");
+    expect(statusOf(epic.identifier)).toBe("done");
+
+    store.updateIssue(children[0]!.identifier, { status: "todo" }, "agent-a");
+    store.checkoutIssue(children[0]!.identifier, "agent-a");
+
+    expect(statusOf(epic.identifier)).toBe("in_progress");
+  });
+
+  it("a NEW open child under a closed epic re-opens it", () => {
+    const { epic, children } = epicWith(1);
+    store.updateIssue(children[0]!.identifier, { status: "done" }, "agent-a");
+    expect(statusOf(epic.identifier)).toBe("done");
+
+    store.createIssue({ title: "One more thing", parent: epic.identifier });
+
+    expect(statusOf(epic.identifier)).toBe("backlog");
+  });
+
+  it("closes again when the reopened child lands, and stamps a fresh completedAt", () => {
+    const { epic, children } = epicWith(1);
+    store.updateIssue(children[0]!.identifier, { status: "done" }, "agent-a");
+    const first = store.getIssue(epic.identifier).completedAt;
+    store.updateIssue(children[0]!.identifier, { status: "todo" }, "agent-a");
+    expect(statusOf(epic.identifier)).toBe("backlog");
+
+    store.updateIssue(children[0]!.identifier, { status: "done" }, "agent-a");
+
+    const after = store.getIssue(epic.identifier);
+    expect(after.status).toBe("done");
+    expect(after.completedAt).not.toBeNull();
+    expect(first).not.toBeNull();
+  });
+});
+
+describe("the closing rungs obey the SAME reversibility law as every other rung", () => {
+  it("never re-opens a MANUALLY done epic when a child moves", () => {
     const { epic, children } = epicWith(2);
     store.updateIssue(epic.identifier, { status: "done" }, "human");
 
@@ -342,13 +499,76 @@ describe("resolved parents, and the absence of an auto-close", () => {
     expect(statusOf(epic.identifier)).toBe("done");
   });
 
-  it("never re-opens a cancelled epic either", () => {
+  it("never re-opens a MANUALLY cancelled epic either", () => {
     const { epic, children } = epicWith(1);
     store.updateIssue(epic.identifier, { status: "cancelled" }, "human");
 
     move(children[0]!.identifier, "blocked", { unblockOwner: "VP" });
 
     expect(statusOf(epic.identifier)).toBe("cancelled");
+  });
+
+  it("does not close an epic a human parked in blocked", () => {
+    const { epic, children } = epicWith(1);
+    store.updateIssue(
+      epic.identifier,
+      { status: "blocked", unblockOwner: "vlad", unblockAction: "decide whether to ship" },
+      "human",
+    );
+
+    store.updateIssue(children[0]!.identifier, { status: "done" }, "agent-a");
+
+    // The human's pending decision outranks the tracker's opinion; the nudge is
+    // still delivered.
+    const after = store.getIssue(epic.identifier);
+    expect(after.status).toBe("blocked");
+    expect(after.unblockOwner).toBe("vlad");
+    expect(eventsFor(epic.identifier).map((e) => e.kind)).toContain("children_complete");
+  });
+
+  it("does not close an epic an agent genuinely claimed", () => {
+    const { epic, children } = epicWith(1);
+    store.checkoutIssue(epic.identifier, "human");
+
+    store.updateIssue(children[0]!.identifier, { status: "done" }, "agent-a");
+
+    expect(statusOf(epic.identifier)).toBe("in_progress");
+    expect(store.getIssue(epic.identifier).checkoutAgent).toBe("human");
+  });
+
+  it("an explicit close on top of a derived one still works, and is idempotent", () => {
+    const { epic, children } = epicWith(2);
+    store.updateIssue(children[0]!.identifier, { status: "done" }, "agent-a");
+
+    // Closed by hand while a child is still open — allowed, and it sticks.
+    store.updateIssue(epic.identifier, { status: "done", comment: "shipping it" }, "human");
+    expect(statusOf(epic.identifier)).toBe("done");
+    const closed = store.getIssue(epic.identifier);
+
+    // Re-running it is a no-op, not an error and not a second event.
+    const events = eventsFor(epic.identifier).length;
+    store.updateIssue(epic.identifier, { status: "done" }, "human");
+    expect(statusOf(epic.identifier)).toBe("done");
+    expect(store.getIssue(epic.identifier).statusVersion).toBe(closed.statusVersion);
+    expect(eventsFor(epic.identifier)).toHaveLength(events);
+
+    // And the still-open child cannot pull it back out — that was a statement.
+    store.checkoutIssue(children[1]!.identifier, "agent-a");
+    expect(statusOf(epic.identifier)).toBe("done");
+  });
+
+  it("leaves a childless issue alone, forever — rung 0", () => {
+    const leaf = store.createIssue({ title: "Leaf", assignee: "agent-a" });
+    const before = store.getIssue(leaf.identifier);
+
+    store.checkoutIssue(leaf.identifier, "agent-a");
+    store.updateIssue(leaf.identifier, { status: "in_review" }, "agent-a");
+
+    // Its own transitions moved it; nothing DERIVED anything onto it.
+    expect(statusEventsFor(leaf.identifier).every((e) => e.payload.derived === undefined)).toBe(
+      true,
+    );
+    expect(before.status).toBe("todo");
   });
 });
 
@@ -377,6 +597,51 @@ describe("the cascade is multi-level", () => {
 
     expect(statusOf(mid.identifier)).toBe("in_progress");
     expect(statusOf(root.identifier)).toBe("in_progress");
+  });
+
+  it("closes the whole chain — a grandparent follows through its child parent", () => {
+    const root = store.createIssue({ title: "Root" });
+    const mid = store.createIssue({ title: "Mid", parent: root.identifier });
+    const leaf = store.createIssue({ title: "Leaf", parent: mid.identifier });
+    store.checkoutIssue(leaf.identifier, "agent-a");
+    expect(statusOf(root.identifier)).toBe("in_progress");
+
+    store.updateIssue(leaf.identifier, { status: "done" }, "agent-a");
+
+    // leaf done -> mid's last child landed -> mid done -> root's last child
+    // landed -> root done. One transaction, and each level got its own wake.
+    expect(statusOf(mid.identifier)).toBe("done");
+    expect(statusOf(root.identifier)).toBe("done");
+    expect(store.getIssue(root.identifier).completedAt).not.toBeNull();
+    expect(eventsFor(mid.identifier).map((e) => e.kind)).toContain("children_complete");
+    expect(eventsFor(root.identifier).map((e) => e.kind)).toContain("children_complete");
+  });
+
+  it("re-opens the whole chain when the deep child comes back", () => {
+    const root = store.createIssue({ title: "Root" });
+    const mid = store.createIssue({ title: "Mid", parent: root.identifier });
+    const leaf = store.createIssue({ title: "Leaf", parent: mid.identifier });
+    store.updateIssue(leaf.identifier, { status: "done" }, "agent-a");
+    expect(statusOf(root.identifier)).toBe("done");
+
+    store.updateIssue(leaf.identifier, { status: "todo" }, "agent-a");
+    store.checkoutIssue(leaf.identifier, "agent-a");
+
+    expect(statusOf(leaf.identifier)).toBe("in_progress");
+    expect(statusOf(mid.identifier)).toBe("in_progress");
+    expect(statusOf(root.identifier)).toBe("in_progress");
+    expect(store.getIssue(root.identifier).completedAt).toBeNull();
+  });
+
+  it("cancelling the only leaf cancels every level above it", () => {
+    const root = store.createIssue({ title: "Root" });
+    const mid = store.createIssue({ title: "Mid", parent: root.identifier });
+    const leaf = store.createIssue({ title: "Leaf", parent: mid.identifier });
+
+    store.updateIssue(leaf.identifier, { status: "cancelled" }, "agent-a");
+
+    expect(statusOf(mid.identifier)).toBe("cancelled");
+    expect(statusOf(root.identifier)).toBe("cancelled");
   });
 
   it("a mid-chain MANUAL status stops propagating its own value, not the walk", () => {

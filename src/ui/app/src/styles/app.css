@@ -44,6 +44,52 @@
 }
 
 /*
+ * Status CATEGORY -> hue — O7b (STA-141), and the rule that makes a custom status
+ * renderable at all.
+ *
+ * O7 made the status set workspace data: `pairing`, `awaiting_qa`, `on_ice` are all
+ * legal ids and none of them has a rule above. What every status DOES have is a category
+ * from a fixed set of eight, and the store keys every behaviour off that category rather
+ * than off the id. Colour follows the same rule, so a workspace that adds a status in
+ * `active` gets the in_progress blue with nothing added here.
+ *
+ * NO NEW HUE TOKENS. Each category re-points at a token the sheet already defines:
+ * gated borrows blocked's, because "parked waiting for an approval" and "parked waiting
+ * for a blocker" are the same colour of waiting — the glyphs differ (see StatusIcon), and
+ * differing in shape rather than in hue is what WCAG 1.4.1 asks for anyway.
+ *
+ * AFTER the id block on purpose. Equal specificity means the later rule wins, so when an
+ * element carries both attributes — every one this ticket re-pointed does — the CATEGORY
+ * decides. That is what makes `recategorize in_review -> active` actually turn the chip
+ * blue instead of leaving it on the hue its id used to imply. For a default workspace the
+ * two rules agree by construction, so nothing that was not recategorised changes colour.
+ */
+[data-status-category="unstarted"] {
+  --sc: var(--status-task-backlog);
+}
+[data-status-category="ready"] {
+  --sc: var(--status-task-todo);
+}
+[data-status-category="active"] {
+  --sc: var(--status-task-in_progress);
+}
+[data-status-category="review"] {
+  --sc: var(--status-task-in_review);
+}
+[data-status-category="gated"] {
+  --sc: var(--status-task-blocked);
+}
+[data-status-category="blocked"] {
+  --sc: var(--status-task-blocked);
+}
+[data-status-category="done"] {
+  --sc: var(--status-task-done);
+}
+[data-status-category="cancelled"] {
+  --sc: var(--status-task-cancelled);
+}
+
+/*
  * A claim whose holder has gone silent (C3 / STA-49) borrows the blocked hue — no new
  * colour, and the chip recipe handles both themes. It has to set its own `--sc` because
  * the badge lives INSIDE a card carrying data-status="in_progress", and would otherwise
@@ -127,6 +173,46 @@ body,
 }
 .staple-rf-node:hover {
   border-color: var(--ring);
+}
+
+/*
+ * Epic containers — O4c (STA-135).
+ *
+ * A BOX IS A PLACE, NOT A CARD, and every rule below follows from that one sentence.
+ *
+ * The fill is a wash of --muted rather than --card: the members drawn on top ARE --card,
+ * and a box painted the same colour would make a card sitting in it invisible at the
+ * edges. The border is quieter than a card's for the same reason — the loudest border on
+ * the canvas should be a ticket you can act on, not the folder it is filed in.
+ *
+ * No shadow and no hover border. ClusterNode wears a doubled shadow to say "this is
+ * several boxes"; a container does not need to say that, because you can see them.
+ *
+ * The body takes no pointer events so that panning, marquee and clicking the canvas still
+ * work over an epic that covers half the screen. The header opts back in — it is the drag
+ * handle and the click target. See EpicContainerNode.tsx.
+ */
+.staple-epic-container {
+  pointer-events: none;
+  background: color-mix(in oklab, var(--muted) 45%, transparent);
+  border-color: color-mix(in oklab, var(--border) 80%, transparent);
+  transition: opacity 120ms ease-out;
+}
+.staple-epic-container-bar {
+  pointer-events: auto;
+  cursor: grab;
+  border-bottom: 1px solid color-mix(in oklab, var(--border) 60%, transparent);
+  background: color-mix(in oklab, var(--card) 55%, transparent);
+  border-top-left-radius: inherit;
+  border-top-right-radius: inherit;
+}
+.react-flow__node-container.dragging .staple-epic-container-bar,
+.staple-epic-container-bar:active {
+  cursor: grabbing;
+}
+/* Same fade as a card, applied to the box. `dimContainers` decides when it is honest. */
+.staple-epic-container[data-dim] {
+  opacity: 0.16;
 }
 
 .react-flow__attribution {

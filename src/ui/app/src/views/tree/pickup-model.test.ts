@@ -317,7 +317,7 @@ describe("grouping arranges; it never decides membership", () => {
     expect(ids(section(groups, "up_next")!.rows)).toEqual(["a"]);
   });
 
-  it("gives a row whose parent a filter removed a breadcrumb rather than dropping it", () => {
+  it("draws a GHOST of the parent a filter removed, rather than a chip or nothing", () => {
     const parent = issue({ id: "p", identifier: "STA-1", title: "The epic" });
     const child = row({ id: "c", identifier: "STA-2", parentId: "p" });
     const index = buildPickupIndex(inbox([entry({ id: "c" })]));
@@ -325,23 +325,434 @@ describe("grouping arranges; it never decides membership", () => {
     const groups = buildPickupGroups([child], index, {
       hiddenParents: new Map([["c", parent]]),
     });
+    const rows = section(groups, "up_next")!.rows;
 
-    expect(section(groups, "up_next")!.rows[0]!.breadcrumb).toEqual({
-      identifier: "STA-1",
-      title: "The epic",
-    });
+    expect(rows.map((r) => [r.issue.identifier, r.depth, r.ghost === true])).toEqual([
+      ["STA-1", 0, true],
+      ["STA-2", 1, false],
+    ]);
+    // The chip is what the ghost replaces — the parent is the row directly above now.
+    expect(rows[1]!.breadcrumb).toBeNull();
+    // The bracket is not a queue item: one row is ready to pick up, not two.
+    expect(section(groups, "up_next")!.count).toBe(1);
   });
 
-  it("renders as a FLAT queue — no nesting, because nesting moves a row off its rank", () => {
-    const parent = row({ id: "p", identifier: "STA-1" });
+  it("draws ONE ghost for several orphaned siblings, at the best one's rank", () => {
+    const parent = issue({ id: "p", identifier: "STA-1", title: "The epic" });
+    const rows = [
+      row({ id: "x", identifier: "STA-9" }),
+      row({ id: "a", identifier: "STA-2", parentId: "p" }),
+      row({ id: "b", identifier: "STA-3", parentId: "p" }),
+    ];
+    // The store's order: STA-9 first, then the two orphans.
+    const index = buildPickupIndex(
+      inbox([entry({ id: "x" }), entry({ id: "a" }), entry({ id: "b" })]),
+    );
+
+    const rendered = section(
+      buildPickupGroups(rows, index, { hiddenParents: new Map([["a", parent], ["b", parent]]) }),
+      "up_next",
+    )!.rows;
+
+    // STA-9 keeps rank 0. The ghost appears where its FIRST-RANKED orphan was, and the
+    // second orphan is lifted under it rather than every row being moved to make room.
+    expect(rendered.map((r) => [r.issue.identifier, r.depth])).toEqual([
+      ["STA-9", 0],
+      ["STA-1", 0],
+      ["STA-2", 1],
+      ["STA-3", 1],
+    ]);
+    expect(rendered.filter((r) => r.ghost)).toHaveLength(1);
+    expect(rendered[1]!.childCount).toBe(2);
+  });
+
+  it("carries NO rollup on a pickup ghost — no row in this view has one", () => {
+    const parent = issue({ id: "p", identifier: "STA-1" });
     const child = row({ id: "c", identifier: "STA-2", parentId: "p" });
+    const index = buildPickupIndex(inbox([entry({ id: "c" })]));
+
+    const rows = section(
+      buildPickupGroups([child], index, { hiddenParents: new Map([["c", parent]]) }),
+      "up_next",
+    )!.rows;
+
+    // A ghost that alone showed a progress count would read as a different KIND of object
+    // rather than as the same object dimmed.
+    expect(rows.every((r) => r.rollup === null)).toBe(true);
+  });
+
+  it("NESTS a child under a parent that is in the same section — O8a (STA-149)", () => {
+    /*
+     * THE REGRESSION THIS FILE USED TO PIN. It asserted `["c", "p"]`, both at depth 0, the
+     * child wearing a chip that pointed at a row one line below it — VP's screenshot, where
+     * STA-25 and STA-40 sat side by side in Up next. The old reasoning was that nesting
+     * moves a row off its rank; STA-148 answers that grouping is a presentation layer and
+     * the same pair must read the same way on every axis. The child moves to its parent.
+     */
+    const parent = row({ id: "p", identifier: "STA-25" });
+    const child = row({ id: "c", identifier: "STA-40", parentId: "p" });
+    // The child ranks FIRST in the store's order and the parent second, which is the case
+    // that makes the trade visible: the family is placed at the PARENT's rank.
     const index = buildPickupIndex(inbox([entry({ id: "c" }), entry({ id: "p" })]));
 
-    const rendered = section(buildPickupGroups([parent, child], index), "up_next")!.rows;
+    const group = section(buildPickupGroups([parent, child], index), "up_next")!;
 
-    // The child ranks first and stays first, at depth 0, wearing its parent's chip.
-    expect(ids(rendered)).toEqual(["c", "p"]);
-    expect(rendered.every((r) => r.depth === 0 && !r.hasChildren)).toBe(true);
-    expect(rendered[0]!.breadcrumb?.identifier).toBe("STA-1");
+    expect(group.rows.map((r) => [r.issue.identifier, r.depth])).toEqual([
+      ["STA-25", 0],
+      ["STA-40", 1],
+    ]);
+    // The elbow says whose child it is; the chip was standing in for an elbow it did not
+    // have, and two ways of saying one thing is how they start disagreeing.
+    expect(group.rows[1]!.breadcrumb).toBeNull();
+    expect(group.rows[0]!.hasChildren).toBe(true);
+    expect(group.rows[0]!.childCount).toBe(1);
+    expect(group.rows[0]!.isExpanded).toBe(true);
+    // Neither row is a ghost — both are real, ranked members of this section.
+    expect(group.rows.some((r) => r.ghost)).toBe(false);
+    // And the count still means "tasks in this section", nesting or no nesting.
+    expect(group.count).toBe(2);
+  });
+
+  it("keeps the STORE's order among siblings, not the identifier's", () => {
+    // STA-27/28 under STA-26. If the nesting ever starts sorting, this is what catches it:
+    // the store ranks STA-28 ahead of STA-27 and the queue must say so.
+    const parent = row({ id: "p", identifier: "STA-26" });
+    const second = row({ id: "b", identifier: "STA-27", parentId: "p" });
+    const first = row({ id: "a", identifier: "STA-28", parentId: "p" });
+    const index = buildPickupIndex(
+      inbox([entry({ id: "p" }), entry({ id: "a" }), entry({ id: "b" })]),
+    );
+
+    const rendered = section(
+      buildPickupGroups([parent, second, first], index),
+      "up_next",
+    )!.rows;
+
+    expect(rendered.map((r) => [r.issue.identifier, r.depth])).toEqual([
+      ["STA-26", 0],
+      ["STA-28", 1],
+      ["STA-27", 1],
+    ]);
+    // The elbow belongs to the last sibling and to nothing else.
+    expect(rendered.map((r) => r.isLast)).toEqual([true, false, true]);
+    expect(rendered.map((r) => r.guides)).toEqual([[], [true], [false]]);
+  });
+
+  it("nests inside the WAITING section too — STA-83 under STA-80", () => {
+    // Both blocked, so both are in the same bucket by a different route than Up next's.
+    const parent = row({ id: "p", identifier: "STA-80", status: "blocked" });
+    const child = row({ id: "c", identifier: "STA-83", parentId: "p", status: "blocked" });
+    const index = buildPickupIndex(
+      inbox(
+        [],
+        [
+          entry({ id: "p", status: "blocked", unblockOwner: "VP", unblockAction: "decide" }),
+          entry({ id: "c", status: "blocked", unresolvedBlockers: ["STA-80"] }),
+        ],
+      ),
+    );
+
+    const group = section(buildPickupGroups([parent, child], index), "waiting")!;
+
+    expect(group.rows.map((r) => [r.issue.identifier, r.depth])).toEqual([
+      ["STA-80", 0],
+      ["STA-83", 1],
+    ]);
+    // The caption is a property of the ROW and survives the row acquiring a depth.
+    expect(group.waitingOn.get("p")).toBe("waiting on VP: decide");
+  });
+
+  it("nests inside IN FLIGHT too — STA-120 under STA-119", () => {
+    const parent = row({ id: "p", identifier: "STA-119" }, claim({ heldBy: "opus" }));
+    const child = row({ id: "c", identifier: "STA-120", parentId: "p", status: "in_progress" });
+    const index = buildPickupIndex(inbox([entry({ id: "p" }), entry({ id: "c" })]));
+
+    const group = section(buildPickupGroups([parent, child], index), "in_flight")!;
+
+    expect(group.rows.map((r) => [r.issue.identifier, r.depth, r.ghost === true])).toEqual([
+      ["STA-119", 0, false],
+      ["STA-120", 1, false],
+    ]);
+    // The real parent keeps its own liveness — it is not a ghost of itself.
+    expect(group.rows[0]!.claim).not.toBeNull();
+    expect(group.count).toBe(2);
+  });
+
+  it("nests to WHATEVER depth the family has, not one level", () => {
+    const epic = row({ id: "e", identifier: "STA-1" });
+    const mid = row({ id: "m", identifier: "STA-2", parentId: "e" });
+    const leaf = row({ id: "l", identifier: "STA-3", parentId: "m" });
+    const index = buildPickupIndex(
+      inbox([entry({ id: "e" }), entry({ id: "m" }), entry({ id: "l" })]),
+    );
+
+    const rendered = section(buildPickupGroups([epic, mid, leaf], index), "up_next")!.rows;
+
+    expect(rendered.map((r) => r.depth)).toEqual([0, 1, 2]);
+    // One entry per ancestor level, each saying "does that ancestor have a sibling below
+    // it". An only child is always last, so this chain draws no continuation lines at all.
+    expect(rendered[2]!.guides).toEqual([false, false]);
+    expect(rendered.map((r) => r.guides.length)).toEqual([0, 1, 2]);
+  });
+
+  it("still ghosts a parent that is in ANOTHER section, beside a family that is whole", () => {
+    // The two rules coexist: nesting for the parent that is here, a ghost for the one that
+    // is not. Getting one of them wrong is how the section would start drawing two trees.
+    const here = row({ id: "p", identifier: "STA-25" });
+    const mine = row({ id: "c", identifier: "STA-40", parentId: "p" });
+    const held = row({ id: "h", identifier: "STA-80" }, claim({ heldBy: "opus" }));
+    const orphan = row({ id: "o", identifier: "STA-83", parentId: "h" });
+    const index = buildPickupIndex(
+      inbox([
+        entry({ id: "p" }),
+        entry({ id: "c" }),
+        entry({ id: "h" }),
+        entry({ id: "o" }),
+      ]),
+    );
+
+    const group = section(
+      buildPickupGroups([here, mine, held, orphan], index),
+      "up_next",
+    )!;
+
+    expect(group.rows.map((r) => [r.issue.identifier, r.depth, r.ghost === true])).toEqual([
+      ["STA-25", 0, false],
+      ["STA-40", 1, false],
+      ["STA-80", 0, true],
+      ["STA-83", 1, false],
+    ]);
+    // Three real rows are in Up next; the ghost is a bracket, not a fourth thing to pick up.
+    expect(group.count).toBe(3);
+  });
+
+  it("folds a real parent when the user has folded it, and the count does not follow", () => {
+    // The chevron nesting created has to do something, or it is the inert chevron STA-148
+    // raises against ghosts, reproduced on a real row.
+    const parent = row({ id: "p", identifier: "STA-25" });
+    const child = row({ id: "c", identifier: "STA-40", parentId: "p" });
+    const index = buildPickupIndex(inbox([entry({ id: "p" }), entry({ id: "c" })]));
+
+    const group = section(
+      buildPickupGroups([parent, child], index, { isExpanded: (i) => i.id !== "p" }),
+      "up_next",
+    )!;
+
+    expect(ids(group.rows)).toEqual(["p"]);
+    expect(group.rows[0]!.isExpanded).toBe(false);
+    expect(group.rows[0]!.childCount).toBe(1);
+    // A count that followed what is rendered would say one task is up next. Two are.
+    expect(group.count).toBe(2);
+  });
+
+  it("defaults to EXPANDED where the user has not chosen — the queue hides nothing", () => {
+    const parent = row({ id: "p", identifier: "STA-25", status: "backlog" });
+    const child = row({ id: "c", identifier: "STA-40", parentId: "p", status: "backlog" });
+    const index = buildPickupIndex(inbox([entry({ id: "p" }), entry({ id: "c" })]));
+
+    // `undefined` is "the user has not said", and the tree's status default would fold a
+    // backlog parent here. Pickup's sections already do the folding; a second one would
+    // hide ranked work nobody asked to hide.
+    const rendered = section(
+      buildPickupGroups([parent, child], index, { isExpanded: () => undefined }),
+      "up_next",
+    )!.rows;
+
+    expect(ids(rendered)).toEqual(["p", "c"]);
+  });
+
+  it("draws the WHOLE missing ancestor chain, not only the nearest — O8b (STA-150)", () => {
+    /*
+     * The live case, and the reason this matters more in pickup mode than in the tree: a
+     * section is a far coarser cut than a status group, so an epic and its sub-epic land in
+     * different sections routinely. Waiting drew "STA-148" over three of its children while
+     * STA-148's own parent STA-119 sat in In flight, unmentioned — "part of O8", where the
+     * reader needed "part of O8, which is part of O".
+     */
+    const epic = row({ id: "e", identifier: "STA-119" }, claim({ heldBy: "opus" }));
+    const sub = row({ id: "s", identifier: "STA-148", parentId: "e" }, claim({ heldBy: "opus" }));
+    const child = row({ id: "c", identifier: "STA-150", parentId: "s", status: "blocked" });
+    const index = buildPickupIndex(
+      inbox(
+        [entry({ id: "e" }), entry({ id: "s" })],
+        [entry({ id: "c", status: "blocked", unresolvedBlockers: ["STA-149"] })],
+      ),
+    );
+
+    const groups = buildPickupGroups([epic, sub, child], index);
+
+    expect(
+      section(groups, "waiting")!.rows.map((r) => [r.issue.identifier, r.depth, r.ghost === true]),
+    ).toEqual([
+      ["STA-119", 0, true],
+      ["STA-148", 1, true],
+      ["STA-150", 2, false],
+    ]);
+    // One task is waiting. The two brackets above it are not two more.
+    expect(section(groups, "waiting")!.count).toBe(1);
+    // Neither ghost carries the parent's own liveness — both real rows are full members of
+    // In flight, and that is the single place their claims are written down.
+    expect(section(groups, "waiting")!.rows.every((r) => r.claim === null)).toBe(true);
+    expect(ids(section(groups, "in_flight")!.rows)).toEqual(["e", "s"]);
+  });
+
+  it("terminates a chain on a real row in the section, and shares it between families", () => {
+    // STA-119 is here for real, so it is the terminator. Two sub-epics are not, so each
+    // gets one ghost under it — not one per orphan, and not a second copy of STA-119.
+    const epic = row({ id: "e", identifier: "STA-119" });
+    const subA = row({ id: "a", identifier: "STA-148", parentId: "e" }, claim({ heldBy: "x" }));
+    const subB = row({ id: "b", identifier: "STA-142", parentId: "e" }, claim({ heldBy: "x" }));
+    const a1 = row({ id: "a1", identifier: "STA-150", parentId: "a" });
+    const a2 = row({ id: "a2", identifier: "STA-151", parentId: "a" });
+    const b1 = row({ id: "b1", identifier: "STA-154", parentId: "b" });
+    const index = buildPickupIndex(
+      inbox([
+        entry({ id: "e" }),
+        entry({ id: "a" }),
+        entry({ id: "b" }),
+        entry({ id: "a1" }),
+        entry({ id: "a2" }),
+        entry({ id: "b1" }),
+      ]),
+    );
+
+    const group = section(
+      buildPickupGroups([epic, subA, subB, a1, a2, b1], index),
+      "up_next",
+    )!;
+
+    expect(group.rows.map((r) => [r.issue.identifier, r.depth, r.ghost === true])).toEqual([
+      ["STA-119", 0, false],
+      ["STA-148", 1, true],
+      ["STA-150", 2, false],
+      ["STA-151", 2, false],
+      ["STA-142", 1, true],
+      ["STA-154", 2, false],
+    ]);
+    expect(group.rows.filter((r) => r.ghost)).toHaveLength(2);
+    expect(group.count).toBe(4);
+    // `+N` on the real epic counts the three tickets the brackets hold, not the two
+    // brackets — folding STA-119 takes three pieces of work off the page, not two rows.
+    expect(group.rows[0]!.childCount).toBe(3);
+  });
+
+  it("does NOT nest in a container with no indent — the flat, chipped queue survives", () => {
+    // `ghostParents` is `columns.disclosure` at the call site: the panel and popup presets
+    // draw neither padding nor connectors, so a nested child would look exactly like a root
+    // AND would have given up the chip that was standing in for the indent.
+    const parent = row({ id: "p", identifier: "STA-25" });
+    const child = row({ id: "c", identifier: "STA-40", parentId: "p" });
+    const index = buildPickupIndex(inbox([entry({ id: "c" }), entry({ id: "p" })]));
+
+    const rendered = section(
+      buildPickupGroups([parent, child], index, { ghostParents: false }),
+      "up_next",
+    )!.rows;
+
+    expect(rendered.map((r) => [r.issue.identifier, r.depth])).toEqual([
+      ["STA-40", 0],
+      ["STA-25", 0],
+    ]);
+    expect(rendered[0]!.breadcrumb?.identifier).toBe("STA-25");
+    expect(rendered.every((r) => !r.hasChildren && !r.ghost)).toBe(true);
+  });
+
+  it("draws a ghost for a parent that landed in ANOTHER section", () => {
+    // STA-1 is held, so it is In flight; its child is free, so it is Up next. The child's
+    // section gets the bracket; the parent's own section is untouched.
+    const parent = row({ id: "p", identifier: "STA-1" }, claim({ heldBy: "opus" }));
+    const child = row({ id: "c", identifier: "STA-2", parentId: "p" });
+    const index = buildPickupIndex(inbox([entry({ id: "p" }), entry({ id: "c" })]));
+
+    const groups = buildPickupGroups([parent, child], index);
+
+    expect(
+      section(groups, "up_next")!.rows.map((r) => [r.issue.identifier, r.depth, r.ghost === true]),
+    ).toEqual([
+      ["STA-1", 0, true],
+      ["STA-2", 1, false],
+    ]);
+    expect(section(groups, "up_next")!.count).toBe(1);
+    // The ghost carries none of the parent's own liveness — that belongs to the real row,
+    // which is still a full member of In flight.
+    expect(section(groups, "up_next")!.rows[0]!.claim).toBeNull();
+    expect(section(groups, "in_flight")!.rows.map((r) => [r.issue.identifier, r.ghost === true]))
+      .toEqual([["STA-1", false]]);
+  });
+
+  /**
+   * O8c (STA-151). THE GHOST FOLDS HERE TOO, AND BY THE SAME KEY.
+   *
+   * O8a made the chevron on a real pickup parent live and routed it through the SAME
+   * per-issue expansion state the tree uses. A ghost that stayed inert would be the one
+   * remaining row in the app whose chevron does nothing — which is the defect STA-148
+   * raises, surviving in the last place it was allowed to.
+   */
+  it("folds a ghost when the user folds it, and the section's count does not follow", () => {
+    const parent = issue({ id: "p", identifier: "STA-1", title: "The epic" });
+    const rows = [
+      row({ id: "a", identifier: "STA-2", parentId: "p" }),
+      row({ id: "b", identifier: "STA-3", parentId: "p" }),
+    ];
+    const index = buildPickupIndex(inbox([entry({ id: "a" }), entry({ id: "b" })]));
+
+    const group = section(
+      buildPickupGroups(rows, index, {
+        hiddenParents: new Map([
+          ["a", parent],
+          ["b", parent],
+        ]),
+        // The flat view's fold of STA-1, arriving here through the same store.
+        isExpanded: (i) => i.id !== "p",
+      }),
+      "up_next",
+    )!;
+
+    expect(group.rows.map((r) => [r.issue.identifier, r.ghost === true])).toEqual([
+      ["STA-1", true],
+    ]);
+    expect(group.rows[0]!.isExpanded).toBe(false);
+    expect(group.rows[0]!.childCount).toBe(2);
+    // Two tasks are still up next. A fold is a fact about the display, not the queue.
+    expect(group.count).toBe(2);
+  });
+
+  it("keeps a ghost OPEN when the user has expressed no choice", () => {
+    const parent = issue({ id: "p", identifier: "STA-1", title: "The epic" });
+    const child = row({ id: "c", identifier: "STA-2", parentId: "p" });
+    const index = buildPickupIndex(inbox([entry({ id: "c" })]));
+
+    const group = section(
+      buildPickupGroups([child], index, {
+        hiddenParents: new Map([["c", parent]]),
+        isExpanded: () => undefined,
+      }),
+      "up_next",
+    )!;
+
+    expect(group.rows.map((r) => [r.issue.identifier, r.depth, r.ghost === true])).toEqual([
+      ["STA-1", 0, true],
+      ["STA-2", 1, false],
+    ]);
+    expect(group.rows[0]!.isExpanded).toBe(true);
+  });
+
+  it("turns the ghost off for a container with no indent, and the chip comes back", () => {
+    const parent = issue({ id: "p", identifier: "STA-1", title: "The epic" });
+    const child = row({ id: "c", identifier: "STA-2", parentId: "p" });
+    const index = buildPickupIndex(inbox([entry({ id: "c" })]));
+
+    const rows = section(
+      buildPickupGroups([child], index, {
+        hiddenParents: new Map([["c", parent]]),
+        ghostParents: false,
+      }),
+      "up_next",
+    )!.rows;
+
+    expect(rows.map((r) => [r.issue.identifier, r.depth, r.ghost === true])).toEqual([
+      ["STA-2", 0, false],
+    ]);
+    expect(rows[0]!.breadcrumb).toEqual({ identifier: "STA-1", title: "The epic" });
   });
 });

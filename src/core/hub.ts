@@ -490,10 +490,24 @@ export class Hub {
 
   /** Cross-workspace dependency graph: nodes + both local and hub edges. */
   graph(): {
-    nodes: Array<{ id: string; workspace: string; title: string; status: string; parent: string | null }>;
+    nodes: Array<{
+      id: string;
+      workspace: string;
+      title: string;
+      status: string;
+      kind: string;
+      parent: string | null;
+    }>;
     edges: Array<{ from: string; to: string; cross: boolean }>;
   } {
-    const nodes: Array<{ id: string; workspace: string; title: string; status: string; parent: string | null }> = [];
+    const nodes: Array<{
+      id: string;
+      workspace: string;
+      title: string;
+      status: string;
+      kind: string;
+      parent: string | null;
+    }> = [];
     const edges: Array<{ from: string; to: string; cross: boolean }> = [];
     for (const entry of this.list()) {
       if (!entry.available) continue;
@@ -511,6 +525,11 @@ export class Hub {
             workspace: entry.slug,
             title: issue.title,
             status: issue.status,
+            // Unconditional, deliberately unlike `parent` below: `kind` is a
+            // scalar already on the row, so both graph producers can always
+            // send it and the client never has to ask which graph it is
+            // looking at before it can draw a kind glyph.
+            kind: issue.kind,
             parent: issue.parentId ? (identifierOf.get(issue.parentId) ?? null) : null,
           });
         }

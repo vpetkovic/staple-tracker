@@ -2,14 +2,22 @@
  * The canvas as a pasteable link — G5 (STA-58).
  *
  * A prepared view is worth something only if it survives being sent to someone. Everything
- * G3 and G4 added — which epics are collapsed, which epic is pinned, which planning mode
- * is on, what done work is doing, which ticket is the target — is view state, and view
- * state that lives only in a component dies when the tab does.
+ * G3 and G4 added — which epics are collapsed, which epics are pinned, which planning
+ * mode is on, what done work is doing, which ticket is the target — is view state, and
+ * view state that lives only in a component dies when the tab does.
+ *
+ * Collapsed and pinned are TWO FIELDS and always have been, which is what makes O4b's
+ * "selecting an epic must not change its collapse state" true of the link as well as of
+ * the control: nothing in this file can move one when the other changes.
  *
  * ── The format ───────────────────────────────────────────────────────────────────────
  *
- *     graph=<flags>_<epicFilter>_<collapsed.list>_<target>
- *     graph=ph_STA-24_STA-1.STA-12_STA-37
+ *     graph=<flags>_<epicFilters.list>_<collapsed.list>_<target>
+ *     graph=ph_STA-24.STA-30_STA-1.STA-12_STA-37
+ *
+ * Field 2 became a LIST in O4b (STA-134) and the format did not have to change to allow
+ * it: a scalar IS a one-element `.`-list, so `ph_STA-24_STA-1_STA-37` — every link
+ * anyone has already pasted into a doc — keeps decoding, into `["STA-24"]`.
  *
  * SEPARATORS ARE `_` AND `.` ON PURPOSE. Both are in form-urlencoding's safe set, so
  * `URLSearchParams` leaves them alone and the link stays legible; `~` and `:` — the more
@@ -33,8 +41,16 @@ import type { DoneMode, PlanningMode } from "./graph-planning";
 export interface GraphViewState {
   mode: PlanningMode;
   doneMode: DoneMode;
-  /** Epic the canvas is pinned to, or null. */
-  epicFilter: string | null;
+  /**
+   * The epics the canvas is pinned to. Empty means the whole graph.
+   *
+   * O4b (STA-134) widened this from a single `epicFilter` to a list, and the wire format
+   * absorbed it for free: field 2 was already a scalar in a `_`-delimited record, and a
+   * scalar is a one-element `.`-list. An old link carrying `_STA-24_` therefore decodes
+   * to `["STA-24"]` with no legacy branch, no version flag, and no second parser — see
+   * `decodeGraphView`.
+   */
+  epicFilters: string[];
   collapsed: string[];
   /** The selected ticket, which path-to-target aims at. */
   target: string | null;
@@ -54,27 +70,30 @@ const CHAR_TO_DONE: Record<string, DoneMode> = { s: "show", f: "fade", h: "hide"
 export const DEFAULT_VIEW_STATE: GraphViewState = {
   mode: "off",
   doneMode: "show",
-  epicFilter: null,
+  epicFilters: [],
   collapsed: [],
   target: null,
 };
 
+/** A `.`-joined field, sorted and de-duplicated. See `encodeGraphView`. */
+function list(values: readonly string[]): string {
+  return [...new Set(values)].sort().join(LIST);
+}
+
 /**
  * State to param value.
  *
- * The collapsed list is SORTED so that the same view always produces the same link.
- * Two people who arrived at an identical canvas by collapsing epics in a different order
- * should be able to compare links by eye, and a link that changes for no reason looks
- * like it encodes something it does not.
+ * Both lists are SORTED so that the same view always produces the same link. Two people
+ * who arrived at an identical canvas by collapsing epics in a different order should be
+ * able to compare links by eye, and a link that changes for no reason looks like it
+ * encodes something it does not. Selection order carries no meaning here — the canvas
+ * shows the union — so sorting the filter list costs nothing and buys the same property.
  */
 export function encodeGraphView(state: GraphViewState): string {
   const flags = `${MODE_TO_CHAR[state.mode]}${DONE_TO_CHAR[state.doneMode]}`;
-  return [
-    flags,
-    state.epicFilter ?? "",
-    [...state.collapsed].sort().join(LIST),
-    state.target ?? "",
-  ].join(FIELD);
+  return [flags, list(state.epicFilters), list(state.collapsed), state.target ?? ""].join(
+    FIELD,
+  );
 }
 
 /**
@@ -89,11 +108,15 @@ export function encodeGraphView(state: GraphViewState): string {
  */
 export function decodeGraphView(raw: string | null): GraphViewState | null {
   if (raw === null || raw === "") return null;
-  const [flags = "", epicFilter = "", collapsed = "", target = ""] = raw.split(FIELD);
+  const [flags = "", epicFilters = "", collapsed = "", target = ""] = raw.split(FIELD);
   return {
     mode: CHAR_TO_MODE[flags[0] ?? ""] ?? DEFAULT_VIEW_STATE.mode,
     doneMode: CHAR_TO_DONE[flags[1] ?? ""] ?? DEFAULT_VIEW_STATE.doneMode,
-    epicFilter: epicFilter === "" ? null : epicFilter,
+    // THIS LINE IS THE WHOLE BACK-COMPAT STORY. A pre-O4b link wrote one identifier here
+    // and `"STA-24".split(".")` is `["STA-24"]`, so the old shape decodes to the new one
+    // without a version check, a try/catch, or a second code path that only old links
+    // ever take — which is the code path that rots, because nothing new exercises it.
+    epicFilters: epicFilters === "" ? [] : epicFilters.split(LIST).filter(Boolean),
     collapsed: collapsed === "" ? [] : collapsed.split(LIST).filter(Boolean),
     target: target === "" ? null : target,
   };
