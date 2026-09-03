@@ -58,6 +58,45 @@ and a per-id count of what still carries it. `POST /api/settings` takes
 envelope, so the page re-derives from one response rather than merging. It is
 the only route that both reads and writes.
 
+## Glyph catalog
+
+Kinds will wear configurable glyphs (R5). The catalog they pick from is not a
+hand-kept list: it is generated from the INSTALLED `lucide-react`, and checked in.
+
+```bash
+npx tsx scripts/gen-lucide-catalog.ts    # after bumping lucide-react, or editing the category table
+```
+
+That writes two modules under `src/ui/app/src/lib/`. `icon-catalog.generated.ts`
+is data only — the pinned `LUCIDE_VERSION`, the category list, and every canonical
+key with its category and aliases. `icon-previews.generated.ts`
+names every icon by a real import from `lucide-react`, so a key that does not
+exist in the package fails `npm run typecheck` and `npm run build:ui`, not a user.
+`test/lucide-catalog-freshness.test.ts` regenerates in memory and fails, with the
+command above, if the checked-in text is stale.
+
+The source of truth is the package's own `dynamicIconImports` map. A key that
+points at itself is canonical; one that points elsewhere is an alias, and aliases
+never become keys — `alert-triangle` collapses onto `triangle-alert`, is recorded
+on that entry, and its words join the entry's search terms (Lucide's aliases are
+its synonym list: `home` finds `house`). The package ships
+no tags or categories, so the category comes from an ordered keyword table in the
+generator — first row sharing a word with the key wins, then the same pass over
+alias words, then `other`. Deterministic and offline: the same version gives the
+same catalog on every machine.
+
+`lib/icon-catalog.ts` is what the app consumes. It rebuilds the human label
+("Triangle Alert"), the search terms, and the alias map from the manifest at
+load, so the checked-in data stays small enough for the main view to carry
+(rows resolve persisted keys synchronously). `resolveIcon(key)` accepts a
+canonical key, an alias, or "Triangle Alert" and answers the canonical entry (or
+`undefined` — the cue to fall back); `searchIcons(query, { category, limit })` is
+ranked (exact key, whole word, prefix, alias word, substring) and stable;
+`loadIconComponent(key)` reaches the React component through `import()`, so the
+module that names every icon is its own chunk (about 140 kB gzipped) and the main
+view never pays for icons it does not draw. Importing the catalog module costs
+the manifest alone, about 12 kB gzipped.
+
 ## Stack
 
 The page is a Vite + React + TypeScript app in `src/ui/app/`, shipped inside the
