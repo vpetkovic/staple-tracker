@@ -224,9 +224,29 @@ describe("dependencies", () => {
   it("blockParentUntilDone creates a real dependency edge", () => {
     const parent = store.createIssue({ title: "P", assignee: "claude" });
     const child = store.createChild(parent.id, { title: "c", blockParentUntilDone: true });
+    // A sibling keeps the parent open, so this test pins the EDGE and nothing
+    // else: the parent is unstartable while the blocker is open, startable once
+    // it lands. (With no sibling the parent would auto-close instead — see
+    // below.)
+    const sibling = store.createChild(parent.id, { title: "s" });
     expect(() => store.checkoutIssue(parent.id, "claude")).toThrowError(/unresolved blockers/);
     store.updateIssue(child.id, { status: "done" });
     expect(() => store.checkoutIssue(parent.id, "claude")).not.toThrow();
+    expect(store.getIssue(sibling.id).status).toBe("backlog");
+  });
+
+  it("a blocking child that is also the LAST child closes the parent instead", () => {
+    // STA-153's consequence, stated rather than discovered: the parent's status
+    // follows its children, so a parent whose only child lands is done — the
+    // gate it was waiting behind opened and closed in the same move. A human who
+    // wants the parent's own follow-up work says so by giving it a status, and
+    // that statement is then immune to derivation.
+    const parent = store.createIssue({ title: "P", assignee: "claude" });
+    const child = store.createChild(parent.id, { title: "c", blockParentUntilDone: true });
+
+    store.updateIssue(child.id, { status: "done" });
+
+    expect(store.getIssue(parent.id).status).toBe("done");
   });
 });
 

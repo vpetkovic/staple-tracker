@@ -256,7 +256,7 @@ describe("the row reads like the search popup's row", () => {
     );
     // The kind mark is a PLACEHOLDER for O1b's shared glyph and the data attribute is
     // what makes it replaceable in one place — see EpicKindMark.
-    expect(row).toContain('data-epic-kind="epic"');
+    expect(row).toContain('data-issue-kind="epic"');
     // StatusIcon brings its own accessible name; a second set of status shapes in this
     // popover would be a second set to keep in step with the list.
     expect(row).toContain("Status: Todo");

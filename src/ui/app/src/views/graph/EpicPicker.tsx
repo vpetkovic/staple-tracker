@@ -54,7 +54,7 @@ import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 // Through the barrel, never from a file inside it — the same rule searchable-select.tsx
 // follows. A second set of status shapes is a second set to keep in step.
-import { StatusIcon } from "@/components/task-list";
+import { StatusIcon, KindGlyph } from "@/components/task-list";
 import { cn } from "@/lib/utils";
 import type { IssueKind } from "@/lib/types";
 import { filterEpicRows, flattenEpics, type EpicSummary } from "./graph-clusters";
@@ -471,22 +471,17 @@ function EpicPickerRow({
 }
 
 /**
- * The kind glyph — PLACEHOLDER, and deliberately the only place that has to change.
- *
- * O1a (STA-124) put `kind` on every graph node, so the DATA is here and `data-epic-kind`
- * already carries the truth. O1b, which owns the shared `KindGlyph` in
- * `components/task-list`, has not landed — and inventing a second set of kind shapes in a
- * graph popover is how two vocabularies of the same icon end up in one app.
- *
- * So: one monochrome mark, in one component, with the real kind on the element. When the
- * shared glyph exists this becomes `<KindGlyph kind={kind} />` and nothing else moves.
+ * The kind glyph — the shared one from the task list, so a graph popover and a tree row
+ * draw an epic with the same mark. A cluster without a kind on the wire is an epic by
+ * construction (it has children), hence the fallback.
  */
 function EpicKindMark({ kind }: { kind?: IssueKind }) {
   return (
-    <Layers
-      className="size-3.5 shrink-0 text-muted-foreground"
-      aria-hidden
-      data-epic-kind={kind ?? "epic"}
+    <KindGlyph
+      kind={kind ?? "epic"}
+      size={14}
+      labelled={false}
+      className="shrink-0 text-muted-foreground"
     />
   );
 }
