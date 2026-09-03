@@ -411,9 +411,17 @@ describe("every semantic keys off category, not off the built-in ids", () => {
     store.updateIssue(child.id, { status: "stuck" });
     expect(store.getIssue(epic.id).status).toBe("stuck");
 
-    // rung 0: nothing open left — no auto-close.
+    // rung 6: nothing open left, so the epic closes — into whatever this
+    // workspace calls done, never into the literal `done`.
     store.updateIssue(child.id, { status: "shipped" });
-    expect(store.getIssue(epic.id).status).toBe("stuck");
+    expect(store.getIssue(epic.id).status).toBe("shipped");
+    expect(store.getIssue(epic.id).completedAt).not.toBeNull();
+
+    // rung 5 is the same, in the workspace's own cancelled status.
+    const other = store.createIssue({ title: "other epic" });
+    const dropped = store.createIssue({ title: "dropped child", parent: other.id });
+    store.updateIssue(dropped.id, { status: "dropped" });
+    expect(store.getIssue(other.id).status).toBe("dropped");
   });
 
   it("partitions the inbox by category, gated included", () => {

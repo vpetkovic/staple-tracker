@@ -69,6 +69,33 @@ Read this before you touch the repo. It takes a minute.
 6. \`staple events\` — see what your completion unblocked (\`blockers_resolved\`,
    \`children_complete\`). Then go back to \`inbox\`.
 
+## Parents close themselves
+
+**An epic's status follows its children. You never have to remember to close
+one.** When the last open child of a parent lands, the parent goes \`done\` on its
+own — \`cancelled\` only if every child was cancelled, and any mix of done and
+cancelled reads \`done\`. Re-open a child and the parent comes back out. A parent
+is \`in_progress\` only while a child genuinely is, so an epic can never sit there
+claiming work that stopped days ago. An issue with **no children** is untouched
+by any of this.
+
+\`\`\`bash
+staple done ${ref}          # the last child of an epic…
+staple show <epic>          # …and the epic already reads done
+\`\`\`
+
+What is still yours to do:
+
+- **Write the summary.** The automatic close records *that* the epic finished,
+  never *what* shipped. When you see \`children_complete\` on a parent, comment on
+  it: \`staple comment <epic> "Shipped X and Y; Z deliberately left, see …"\`.
+  That comment is the only account of the epic anyone will read later.
+- **\`staple done <epic>\` is still allowed**, and still idempotent — close one by
+  hand whenever you mean it, for instance while a child is deliberately being
+  abandoned. A status a human or an agent sets on a parent **outranks** the
+  derivation from then on: the tracker will not re-open or re-close it behind
+  you.
+
 ## Act under one identity, all session
 
 Set \`STAPLE_AGENT\` (or pass \`--agent\` / \`--author\` / MCP \`actor\`) and **use the
@@ -131,8 +158,9 @@ Every status carries a **category** from a fixed set — \`unstarted\`, \`ready\
 behaviour keys off the category, never off the id**: checkout claims from
 \`ready\`/\`unstarted\`/\`blocked\`, a claim only ever sits in \`active\`, \`done\` and
 \`cancelled\` mean resolved, and an epic's status is derived from its children by
-their categories. So a workspace can rename \`in_review\` or add
-\`awaiting_approval\` and every guard still means what it meant.
+their categories — including the automatic close above, which lands in whatever
+status this workspace puts in the \`done\` category. So a workspace can rename
+\`in_review\` or add \`awaiting_approval\` and every guard still means what it meant.
 
 The configured ORDER is the canonical order everywhere — group headers, board
 columns, tree sort. Changing it changes what everyone sees:
