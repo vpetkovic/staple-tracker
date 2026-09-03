@@ -62,53 +62,74 @@ const CHILD_DONE = row({ identifier: "STA-2", parentId: "id-1", status: "done" }
 const CHILD_OPEN = row({ identifier: "STA-3", parentId: "id-1", status: "in_progress" }, claim());
 const LONER = row({ identifier: "STA-4", status: "todo" });
 
-describe("the epic header", () => {
+/**
+ * O8d (STA-152) — THE EPIC GROUP HAS NO HEADER. Its head is the epic's own row.
+ *
+ * O3d's header carried a triangle, a click-to-fold, a collapsed-groups key, a label, a kind
+ * glyph and a rollup — six things the epic's ROW already has, drawn eight pixels above it
+ * and behaving differently from it in every other view. This block is what stops that
+ * coming back: the assertions are about the ROW now, and about the ABSENCE of the header.
+ */
+describe("the epic group", () => {
   const markup = renderTree([EPIC, CHILD_DONE, CHILD_OPEN, LONER], "parent");
 
-  it("shows the identifier, the title and the kind glyph", () => {
-    const epic = header(markup, "id-1");
+  /** The epic's own row, as a slice of markup — anchored on the row testid, not the header. */
+  function epicRow(): string {
+    const at = markup.indexOf('data-testid="task-row" data-identifier="STA-1"');
+    expect(at, "no row for STA-1").toBeGreaterThan(-1);
+    return markup.slice(at, markup.indexOf('data-testid="task-row"', at + 20));
+  }
 
+  it("draws NO group header for the epic — the rowgroup says so", () => {
+    expect(markup).not.toContain('data-testid="group-header" data-status="id-1"');
+    // The rowgroup still carries the key, so a test or a script can still address the group.
+    expect(markup).toContain('data-group-key="id-1"');
+    expect(markup).toContain('data-headed-by-row="true"');
+  });
+
+  it("draws the epic as a real row at depth 0, with the identifier, title and kind glyph", () => {
+    const epic = epicRow();
+
+    expect(epic).toContain('aria-level="1"');
     expect(epic).toContain(">STA-1<");
     expect(epic).toContain(">Tree ordering<");
-    // O1c (STA-130) made the swap O1b's glyph was waiting for, and the seam moved with it:
-    // the shared `KindGlyph` spells it `data-issue-kind`, because the ROW already carries
-    // `data-kind` on its avatars where it means human-or-agent. One spelling app-wide is
-    // the point of the rename, so this header wears the shared one rather than a private
-    // alias. Still the only thing this test knows about the glyph.
+    // The SHARED glyph, from `TaskRowLine`'s identifier cluster — the same element every
+    // other row in the app draws, rather than the header's private copy of the idea.
     expect(epic).toContain('data-issue-kind="epic"');
+    expect(epic).not.toContain("staple-group-triangle");
   });
 
-  it("shows resolved/total from the rollup INSTEAD of the row count", () => {
-    // One of the two descendants is done, so the rollup reads 1/2. The bare count would
-    // have read 2, and the two numbers answer different questions in the same corner — see
-    // `GroupHeader`'s `progress`.
-    const epic = header(markup, "id-1");
+  it("gives the epic row the ordinary chevron and the ordinary rollup", () => {
+    const epic = epicRow();
 
-    expect(epic).toContain(">1/2<");
-    expect(epic).not.toContain('staple-group-count">2<');
+    // The standard disclosure button, labelled as every other parent's is — this is the
+    // fold, and there is no second one.
+    expect(epic).toContain("Collapse STA-1");
+    expect(epic).toContain('aria-expanded="true"');
+    // One of the two descendants is done, so the rollup reads 1/2 — on the row, through
+    // `ParentRollup`, exactly as it does in the flat view.
+    expect(epic).toContain('data-testid="parent-rollup"');
+    expect(epic).toContain("1/2");
   });
 
-  it("names both numbers in the accessible name, so nothing is lost to the eye's version", () => {
-    expect(markup).toContain(
-      'aria-label="STA-1, Tree ordering, 2 tasks, 1 of 2 resolved"',
-    );
+  it("keeps the epic in the rows it heads, drawn once, with the family nested under it", () => {
+    expect(markup).toContain('data-identifier="STA-1"');
+    expect(markup).toContain('data-identifier="STA-2"');
+    expect(markup).toContain('data-identifier="STA-3"');
+    // Once, not twice: no header copy and no second row in the catch-all.
+    expect(markup.split('data-identifier="STA-1"')).toHaveLength(2);
   });
 
   it("gives the catch-all a header with no identifier, no glyph kind and no rollup", () => {
     const orphans = header(markup, NO_PARENT_GROUP_KEY);
 
+    // O8d: "No epic" NAMES NO ISSUE, so there is no row it could become. It keeps the plain
+    // header and keeps folding as a group, which is the whole reason this case is separate.
     expect(orphans).toContain(">No epic<");
     expect(orphans).toContain('data-issue-kind="none"');
     expect(orphans).not.toContain(">STA-4<");
     // No rollup, so the trailing slot falls back to the count it was always meant to show.
     expect(orphans).toContain('staple-group-count">1<');
-  });
-
-  it("puts the epic in the header and NOT in the rows beneath it", () => {
-    // The model's promise, asserted where a reader would actually notice it broken.
-    expect(markup).not.toContain('data-identifier="STA-1"');
-    expect(markup).toContain('data-identifier="STA-2"');
-    expect(markup).toContain('data-identifier="STA-3"');
   });
 });
 

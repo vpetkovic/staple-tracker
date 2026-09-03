@@ -768,12 +768,21 @@ describe("parent rollup", () => {
  *
  * Three ways this could quietly become wrong, and one test each:
  *
- *   1. It grows an affordance. A fold on a ghost REMOVES REAL ROWS from the group they
- *      belong to; a checkbox offers to select a row that is not in the bucket.
+ *   1. It grows a SELECTION affordance. A ghost is not in this bucket, so a checkbox here
+ *      offers to select a row that is not in the group the selection was made in.
+ *      (The FOLD used to be on this list and is not any more — see O8c below.)
  *   2. It loses its geometry. The select and actions columns are reserved width, so
  *      dropping either element slides this one row's glyphs out of the list's columns.
  *   3. It says something about the parent it cannot know — a claim, in particular, which
  *      `hiddenParents` could never supply and which belongs to the parent's real row.
+ *
+ * ── O8c (STA-151) — THE CHEVRON IS A BUTTON NOW ───────────────────────────────────────
+ *
+ * O3c drew a static glyph here on the grounds that a fold would "remove real rows from the
+ * group they belong to". STA-148 answers that a group is a way of DISPLAYING rows, so a
+ * fold hides rows from the display and changes nothing about membership — and the group's
+ * `count` is `bucket.length`, which no fold can reach. What is left of O3c's argument is
+ * that the ghost is CONTEXT: it stays dimmed, carries no claim and joins no selection.
  */
 describe("the ghost parent context row", () => {
   const family = () => [
@@ -786,26 +795,33 @@ describe("the ghost parent context row", () => {
   ];
 
   /** The In Progress group: `[ghost STA-1, STA-2]`. */
-  function inProgressRows() {
+  function inProgressRows(isExpanded: (issue: { id: string }) => boolean | undefined = () => true) {
     const rows = family();
-    return buildGroups(rows, { isExpanded: () => true, rollupSource: rows }).find(
+    return buildGroups(rows, { isExpanded, rollupSource: rows }).find(
       (g) => g.status === "in_progress",
     )!.rows;
   }
 
   /**
-   * The ghost, rendered the way `TreeGrid.renderGhost` renders it: no keyboard, no
-   * selection, no `registerRef` — just the click that opens the parent.
+   * The ghost, rendered the way `TreeGrid.renderGhost` renders it: no selection, no
+   * `isCurrent` — the click that opens the parent, and (since O8c) the fold.
+   *
+   * `isExpanded` comes from the ROW rather than being asserted at the call site, which is
+   * the seam this ticket moved: `renderGhost` used to pass a hard `true`.
    */
-  const renderGhostRow = () =>
+  const renderGhostRow = (rows = inProgressRows()) =>
     renderToStaticMarkup(
       <TaskRowLine
-        row={inProgressRows()[0]!}
+        row={rows[0]!}
         config={resolveTaskListConfig("tree", { labelMax: 2 })}
         semantics="grid"
-        isExpanded
+        isExpanded={rows[0]!.isExpanded}
         now={NOW}
         onOpen={() => {}}
+        onToggleExpand={() => {}}
+        onFocus={() => {}}
+        onKeyDown={() => {}}
+        registerRef={() => {}}
       />,
     );
 
@@ -823,18 +839,42 @@ describe("the ghost parent context row", () => {
     expect(markup).toContain('aria-expanded="true"');
   });
 
-  it("offers NO fold, NO selection and NO row menu — click is the only interaction", () => {
+  it("FOLDS — the chevron is the same button a real parent gets — O8c (STA-151)", () => {
     const markup = renderGhostRow();
 
-    // The chevron is a static glyph in the open position, not a button: folding a ghost
-    // would take the live rows underneath it out of the group their status put them in.
-    expect(markup).toContain("staple-row-chevron-static");
-    expect(markup).not.toContain("Collapse STA-1");
-    expect(markup).not.toContain("Expand STA-1");
+    // The static glyph is gone, and with it the class that styled it.
+    expect(markup).not.toContain("staple-row-chevron-static");
+    // A real chevron, labelled exactly as a real row's is, so a screen reader hears one
+    // control rather than two that happen to look alike.
+    expect(markup).toContain("Collapse STA-1");
+    expect(markup).toContain('aria-expanded="true"');
+  });
+
+  it("stays dimmed and stays context when it is FOLDED — O8c (STA-151)", () => {
+    // The model's fold arrives through the ROW, which is the whole point: the ghost and
+    // the parent's real row read one entry, keyed by the issue id.
+    const folded = inProgressRows((issue) => (issue.id === "p" ? false : undefined));
+
+    expect(folded.map((r) => [r.issue.identifier, r.ghost === true])).toEqual([["STA-1", true]]);
+
+    const markup = renderGhostRow(folded);
+    expect(markup).toContain("Expand STA-1");
+    expect(markup).toContain('aria-expanded="false"');
+    // Dimming is the signal for "context", and a fold is not a promotion out of it.
+    expect(markup).toContain("staple-row-ghost");
+    expect(markup).toContain('data-ghost="true"');
+    expect(markup).toContain("parent shown for context");
+  });
+
+  it("offers NO selection and NO row menu — the fold and the click are the interactions", () => {
+    const markup = renderGhostRow();
+
     // No `⋯`, and no `aria-selected` advertising a selection it cannot join.
     expect(markup).not.toContain("Open details for STA-1");
     expect(markup).not.toContain("aria-selected");
-    // Not a tab stop. The arrow keys skip it because `nav` skips it; this is the DOM half.
+    // Not the tab stop, because it is not the focused row in this fixture. It IS in the
+    // arrow sequence now (TreeGrid), under a prefixed key; the roving `tabIndex` is what
+    // makes exactly one row in the list tabbable, and it is not this one.
     expect(markup).toContain('tabindex="-1"');
   });
 

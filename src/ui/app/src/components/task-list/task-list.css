@@ -199,6 +199,23 @@
   overflow: hidden;
 }
 
+/*
+ * ── The group separator, group-by-epic — O8d (STA-152) ────────────────────────────────
+ *
+ * The epic's own ROW is the top of its group now, so there is no sticky header to say where
+ * one epic ends and the next begins. Rows are already hairline-separated from each other, so
+ * a heavier line would read as a new KIND of divider rather than as a stronger one; what is
+ * missing is AIR. 8px plus the existing line weight, and nothing else.
+ *
+ * A rule on the rowgroup rather than an element between rowgroups: a `<div>` there is a node
+ * the accessibility tree inside `role="treegrid"` has to explain, and it is one more thing
+ * that could fall out of step with the fold. `+` so the first group has no leading gap.
+ */
+.staple-group + .staple-group[data-headed-by-row="true"] {
+  margin-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
 .staple-row {
   position: relative;
   display: grid;
@@ -398,9 +415,14 @@
  * Opacity dims what is there, including anything O1b adds tomorrow.
  *
  * NO HEIGHT, NO GEOMETRY, NOTHING THAT MOVES. The row is the same 36px as its neighbours
- * and its columns land on the same tracks — the chevron and the `⋯` are replaced in place
+ * and its columns land on the same tracks — the checkbox and the `⋯` are replaced in place
  * rather than removed, see TaskRowLine. A context row that broke the list's alignment
  * would cost more attention than the relationship it is there to explain.
+ *
+ * O8c (STA-151) DELETED `.staple-row-chevron-static` and its hover rule from this block.
+ * The ghost draws the ordinary chevron button now, so it inherits every chevron rule
+ * above — including the hover brightening, which it has earned: there IS a fold to
+ * advertise. The dimming is still the one `opacity` below and still covers both states.
  */
 .staple-row-ghost {
   opacity: 0.55;
@@ -414,21 +436,6 @@
    become a member of the group. */
 .staple-row-ghost:hover {
   opacity: 0.85;
-}
-
-/*
- * The static disclosure glyph. Same box and same rotation as the real chevron so the indent
- * beneath it hangs from exactly the same x, and deliberately NOT a button: folding a ghost
- * would remove real rows from the group they belong to.
- */
-.staple-row-chevron-static {
-  cursor: inherit;
-}
-
-.staple-row:hover .staple-row-chevron-static {
-  /* The button brightens on row hover to advertise the fold. This one has no fold to
-     advertise, so it stays where it is. */
-  color: var(--text-tertiary);
 }
 
 /* Reserved width, no affordance — see TaskRowLine's ghost branch for why each of these
