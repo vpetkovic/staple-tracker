@@ -20,8 +20,19 @@
  * ## The arithmetic is not here
  *
  * Every computation and every sentence lives in detail/analytics.ts, which is
- * tested. There are no component tests in this repo, so logic inside a `.tsx` is
- * logic nothing checks — this file is layout and tokens only.
+ * tested. This file is layout and tokens; AnalyticsTab.test.tsx pins what the
+ * layout puts in the DOM, and in what order.
+ *
+ * ## One headline, then the breakdown (R7b, STA-193)
+ *
+ * The tab used to open with a card of this issue's own figures and, for a parent,
+ * follow it with a second, larger card of its children's — two competing
+ * summaries, and "no estimate recorded" set in the typeface and size reserved for
+ * the numbers. Now there is ONE summary for leaf and parent alike, led by the
+ * recursive plan, and a parent gets a compact "This issue / Children" block
+ * beneath it in which every figure names its source. The reading order is the
+ * same in the drawer and on the full-screen page because it is one component in
+ * one column; nothing here consults the detail mode.
  */
 import { StatusBadge } from "@/components/StatusBadge";
 import { cn } from "@/lib/utils";
@@ -31,15 +42,15 @@ import {
   activityHint,
   activityState,
   aggregationHint,
+  buildBreakdown,
   buildChildRows,
-  computeDelta,
+  computeSummary,
   computeTotals,
   explainMissingDelta,
+  formatDuration,
   formatOptionalDuration,
-  headline,
   isAggregated,
   isStillRunning,
-  subtreePlanHint,
   totalsCaveat,
   type Delta,
 } from "../analytics";
@@ -65,32 +76,82 @@ function deltaTone(delta: Delta | null): string {
   return "text-muted-foreground";
 }
 
+/** The one class list a real figure wears, so numbers and deltas line up on the same digits. */
+const FIGURE = "font-mono text-2xl leading-tight tabular-nums";
+/** The one class list a placeholder wears: the interface face, small, muted. */
+const PLACEHOLDER = "text-xs text-muted-foreground";
+
+/**
+ * A headline slot. A real duration is a large tabular figure; an absence is the
+ * placeholder WORD in the normal interface face. The two never share a style,
+ * which is the whole of the "giant monospace 'not started'" fix.
+ */
 function Figure({
   label,
-  value,
+  seconds,
+  absent,
   hint,
-  strong,
-  tone,
 }: {
   label: string;
-  value: string;
-  hint?: string;
-  strong?: boolean;
-  tone?: string;
+  seconds: number | null;
+  absent: string;
+  hint?: string | null;
 }) {
   return (
     <div className="min-w-0">
       <Eyebrow>{label}</Eyebrow>
-      <div
-        className={cn(
-          "font-mono tabular-nums",
-          strong ? "text-2xl leading-tight" : "text-sm",
-          tone,
-        )}
-      >
-        {value}
-      </div>
+      {seconds === null ? (
+        <div className={PLACEHOLDER}>{absent}</div>
+      ) : (
+        <div className={FIGURE}>{formatDuration(seconds)}</div>
+      )}
       {hint ? <div className="text-[10px] text-muted-foreground">{hint}</div> : null}
+    </div>
+  );
+}
+
+/** The delta slot: same treatment, and "No comparison" rather than a dash that reads as zero. */
+function DeltaFigure({ delta, hint }: { delta: Delta | null; hint?: string | null }) {
+  return (
+    <div className="min-w-0">
+      <Eyebrow>difference</Eyebrow>
+      {delta ? (
+        <div className={cn(FIGURE, deltaTone(delta))}>{delta.label}</div>
+      ) : (
+        <div className={PLACEHOLDER}>No comparison</div>
+      )}
+      {hint ? <div className="text-[10px] text-muted-foreground">{hint}</div> : null}
+    </div>
+  );
+}
+
+/**
+ * One cell of the breakdown: `est 6h` or `ran 1h50m` as a small tabular figure,
+ * or the placeholder word — and, under either, the words that say where the
+ * number came from.
+ */
+function BreakdownCell({
+  prefix,
+  seconds,
+  absent,
+  source,
+}: {
+  prefix: string;
+  seconds: number | null;
+  absent: string;
+  source: string;
+}) {
+  return (
+    <div className="min-w-0">
+      {seconds === null ? (
+        <div className="text-muted-foreground">{absent}</div>
+      ) : (
+        <div className="font-mono tabular-nums">
+          <span className="text-muted-foreground">{prefix} </span>
+          {formatDuration(seconds)}
+        </div>
+      )}
+      <div className="text-[10px] text-muted-foreground">{source}</div>
     </div>
   );
 }
@@ -139,125 +200,96 @@ export function AnalyticsTab({ detail }: TabProps) {
 
   /**
    * `activeSeconds` is the HEADLINE actual, and for a parent it is already the
-   * children's aggregate — so this card never renders an epic's own stopwatch.
+   * children's aggregate — so the summary never renders an epic's own stopwatch.
    * That is the whole of VP's second complaint: the epic STA-79 auto-flipped had
    * an own-elapsed here that ticked forever with nobody working it.
    */
-  const ownDelta = computeDelta(timing.estimatedSeconds, timing.activeSeconds);
+  const summary = computeSummary(timing);
   const aggregated = isAggregated(timing);
   const running = isStillRunning(issue.status);
   const activity = activityState(timing.countedThrough);
   const rows = buildChildRows(children, childrenTiming);
   const totals = computeTotals(timing, rows);
-  const caveat = totalsCaveat(totals);
+  const breakdown = buildBreakdown(timing);
+
+  /**
+   * The caveats, in one muted block under the headline: why there is no delta,
+   * what the parent's totals leave out, whether the number is approximate, and
+   * time spent in review. Each is one sentence; none is a figure.
+   */
+  const caveats: string[] = [];
+  if (!summary.delta) caveats.push(explainMissingDelta(summary.plannedSeconds, summary.actualSeconds));
+  const caveat = aggregated ? totalsCaveat(totals) : null;
+  if (caveat) caveats.push(caveat);
+  if (timing.approximate) {
+    caveats.push("Approximate — no usable history, so the time is completed-minus-started rather than a sum of intervals.");
+  }
+  // Review is a queue, not execution — named, but never counted as active time.
+  if (timing.reviewSeconds) {
+    caveats.push(`${formatDuration(timing.reviewSeconds)} in review, not counted as active time.`);
+  }
 
   return (
     <div className="space-y-4 text-sm">
-      {/* ---------------------------------------------------------- task view */}
-      <section>
+      {/* ----------------------------------------------------------- headline */}
+      <section aria-label="Summary">
         <div className="flex flex-wrap items-end gap-x-8 gap-y-3 rounded-md border bg-muted/40 px-4 py-3">
           <Figure
-            label="estimate"
-            value={formatOptionalDuration(timing.estimatedSeconds, NO_ESTIMATE)}
-            hint={timing.estimatedSeconds === null ? "set one with --estimate at plan time" : undefined}
+            label="planned"
+            seconds={summary.plannedSeconds}
+            absent={NO_ESTIMATE}
+            hint={summary.planHint}
           />
           <Figure
-            label={aggregated ? "actual (children)" : "actual"}
-            value={formatOptionalDuration(timing.activeSeconds, NOT_STARTED)}
+            label="actual"
+            seconds={summary.actualSeconds}
+            absent={NOT_STARTED}
             /**
              * Three different sentences, and never "still running" over a frozen
              * number: a parent says where its figure came from, a live leaf says
              * it is moving, a stalled leaf says how long ago it stopped.
              */
-            hint={
-              aggregated
-                ? aggregationHint(timing.childCount)
-                : (activityHint(activity) ?? undefined)
-            }
+            hint={aggregated ? aggregationHint(timing.childCount) : activityHint(activity)}
           />
-          {/* Review is a queue, not execution — its own slot, only when nonzero. */}
-          {timing.reviewSeconds ? (
-            <Figure
-              label="in review"
-              value={formatOptionalDuration(timing.reviewSeconds, NOT_STARTED)}
-              hint="not counted as active time"
-            />
-          ) : null}
-          <Figure
-            label="delta"
-            value={ownDelta ? ownDelta.label : "—"}
-            tone={deltaTone(ownDelta)}
-            hint={
-              ownDelta && running
-                ? "provisional — this task has not finished"
-                : undefined
-            }
+          <DeltaFigure
+            delta={summary.delta}
+            hint={summary.delta && running ? "provisional — not finished" : null}
           />
         </div>
-        {/* The honest sentence, whenever there is no delta to show. */}
-        {ownDelta ? null : (
-          <p className="mt-1.5 text-[11px] text-muted-foreground">
-            {explainMissingDelta(timing.estimatedSeconds, timing.activeSeconds)}
-          </p>
-        )}
-        {/* A number with a weaker provenance has to say so in its own column. */}
-        {timing.approximate ? (
-          <p className="mt-1.5 text-[11px] text-muted-foreground">
-            approx — no usable history for this issue, so the time is
-            completed-minus-started rather than a sum of intervals.
-          </p>
-        ) : null}
-        {/* The epic's own time, when it genuinely has some, kept out of the headline. */}
-        {aggregated && timing.ownActiveSeconds ? (
-          <p className="mt-1.5 text-[11px] text-muted-foreground">
-            This issue was itself worked for {formatOptionalDuration(timing.ownActiveSeconds, "—")},
-            which is not part of the total above.
-          </p>
+        {caveats.length > 0 ? (
+          <p className="mt-1.5 text-[11px] text-muted-foreground">{caveats.join(" ")}</p>
         ) : null}
       </section>
 
-      {/* -------------------------------------------------- parent / epic view */}
-      {rows.length > 0 ? (
-        <section>
-          <div className="mt-4 mb-2 flex flex-wrap items-end gap-x-8 gap-y-3 rounded-md border bg-muted/40 px-4 py-3">
-            {/* The headline figure: the whole reason this tab exists. */}
-            <Figure
-              strong
-              label="estimated total"
-              value={formatOptionalDuration(totals.estimatedSeconds, NO_ESTIMATE)}
-              hint={`${totals.estimatedCount} of ${totals.childCount} estimated`}
-            />
-            <Figure
-              strong
-              label="actual total"
-              value={formatOptionalDuration(totals.actualSeconds, NOT_STARTED)}
-              hint={aggregationHint(totals.childCount)}
-            />
-            <Figure
-              strong
-              label="difference"
-              value={totals.delta ? totals.delta.label : "—"}
-              tone={deltaTone(totals.delta)}
-            />
-            {/*
-              The recursive plan, BESIDE the direct-child total rather than in
-              its place: the total above still equals the rows below, and this
-              figure is the one that survives an epic-of-epics. Its hint names
-              where the number came from and how much of the subtree fed it.
-            */}
-            <Figure
-              label="subtree plan"
-              value={formatOptionalDuration(timing.subtreePlan.estimatedSeconds, NO_ESTIMATE)}
-              hint={subtreePlanHint(timing.subtreePlan) ?? undefined}
-            />
+      {/* ---------------------------------------------- own versus children */}
+      {breakdown.length > 0 ? (
+        <section aria-label="Breakdown">
+          <h3 className="mb-1.5 text-[11px] font-medium tracking-[var(--tracking-eyebrow)] text-muted-foreground uppercase">
+            This issue vs children
+          </h3>
+          <div className="divide-y border-t border-b">
+            {breakdown.map((row) => (
+              <div
+                key={row.label}
+                className="grid grid-cols-[5.5rem_minmax(0,1fr)_minmax(0,1fr)] gap-x-3 py-2 text-[11px]"
+              >
+                <span className="font-medium">{row.label}</span>
+                <BreakdownCell prefix="est" seconds={row.plannedSeconds} absent={NO_ESTIMATE} source={row.planSource} />
+                <BreakdownCell prefix="ran" seconds={row.actualSeconds} absent={NOT_STARTED} source={row.actualSource} />
+              </div>
+            ))}
           </div>
+          <p className="mt-1.5 text-[10px] text-muted-foreground">
+            The planned figure above is this issue&apos;s own estimate when one is set, otherwise
+            the children&apos;s — the two are alternatives, never added together.
+          </p>
+        </section>
+      ) : null}
 
-          <p className="text-[13px]">{headline(totals)}</p>
-          {caveat ? (
-            <p className="mt-1 text-[11px] text-muted-foreground">{caveat}</p>
-          ) : null}
-
-          <h3 className="mt-4 mb-1.5 text-[11px] font-medium tracking-[var(--tracking-eyebrow)] text-muted-foreground uppercase">
+      {/* ------------------------------------------------------- per child */}
+      {rows.length > 0 ? (
+        <section aria-label="Per child">
+          <h3 className="mb-1.5 text-[11px] font-medium tracking-[var(--tracking-eyebrow)] text-muted-foreground uppercase">
             Per child
           </h3>
 
@@ -304,21 +336,6 @@ export function AnalyticsTab({ detail }: TabProps) {
                 />
               </div>
             ))}
-
-            {/* Totals, from the server's own sums — never re-added in the browser. */}
-            <div className="space-y-0.5 py-2 text-[11px] font-medium">
-              <ChildLine
-                left="total"
-                right={totals.delta ? totals.delta.label : "—"}
-                rightTone={deltaTone(totals.delta)}
-              />
-              <ChildLine
-                muted
-                left={`${totals.childCount} direct ${totals.childCount === 1 ? "child" : "children"}`}
-                right={pair(totals.estimatedSeconds, totals.actualSeconds)}
-                rightTone="text-muted-foreground"
-              />
-            </div>
           </div>
 
           {totals.runningCount > 0 ? (
@@ -334,10 +351,9 @@ export function AnalyticsTab({ detail }: TabProps) {
           ) : null}
 
           <p className="mt-2 text-[10px] text-muted-foreground">
-            Totals sum the DIRECT children listed above, so the column adds up. A child
-            that is itself a parent contributes its own aggregate, which is the number its
-            row shows. The subtree plan looks all the way down instead: each issue counts
-            its own estimate if it has one, otherwise its children&apos;s — never both.
+            A child that is itself a parent shows its own aggregate. The children&apos;s plan
+            above looks all the way down: each issue counts its own estimate if it has one,
+            otherwise its children&apos;s — never both.
           </p>
         </section>
       ) : null}
