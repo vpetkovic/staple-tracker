@@ -25,7 +25,7 @@
 // stays resolvable without the alias — so a later edit that needs a VALUE from here
 // cannot quietly make this file untestable.
 import { STALE_CLAIM_SECONDS, formatAgo } from "../lib/claim";
-import type { IssueStatus, IssueTiming } from "../lib/types";
+import type { IssueStatus, IssueTiming, SubtreePlan } from "../lib/types";
 
 /**
  * Durations for estimate-vs-actual prose: `45s`, `20m`, `3h10m`, `2d4h`.
@@ -345,6 +345,28 @@ export function computeTotals(timing: IssueTiming, rows: readonly ChildRow[]): T
     idleCount: rows.filter((row) => row.running && row.activity.kind !== "running").length,
     approximate: rows.some((row) => row.approximate),
   };
+}
+
+// ---------------------------------------------------------- the subtree plan
+
+/**
+ * The sentence under the recursive plan, or null when the figure needs none.
+ *
+ * Which sentence depends on where the number came from, because the two cases
+ * mean opposite things to a reader: an INHERITED plan is a total nobody typed
+ * and must say what it was built from, while an OWN plan sitting over planned
+ * work must show the bottom-up number beside it rather than let one side win
+ * quietly. Coverage is over descendants at every depth — not the direct-child
+ * count the totals row reports — because that is the population the sum was
+ * actually drawn from.
+ */
+export function subtreePlanHint(plan: SubtreePlan): string | null {
+  const coverage = `${plan.contributingCount} of ${plan.totalCount} descendants`;
+  if (plan.source === "descendants") return `inherited from ${coverage}`;
+  if (plan.source === "own" && plan.descendantsEstimatedSeconds !== null) {
+    return `own estimate; descendants add up to ${formatDuration(plan.descendantsEstimatedSeconds)} (${coverage})`;
+  }
+  return null;
 }
 
 /**

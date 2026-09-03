@@ -39,6 +39,7 @@ import {
   headline,
   isAggregated,
   isStillRunning,
+  subtreePlanHint,
   totalsCaveat,
   type Delta,
 } from "../analytics";
@@ -238,6 +239,17 @@ export function AnalyticsTab({ detail }: TabProps) {
               value={totals.delta ? totals.delta.label : "—"}
               tone={deltaTone(totals.delta)}
             />
+            {/*
+              The recursive plan, BESIDE the direct-child total rather than in
+              its place: the total above still equals the rows below, and this
+              figure is the one that survives an epic-of-epics. Its hint names
+              where the number came from and how much of the subtree fed it.
+            */}
+            <Figure
+              label="subtree plan"
+              value={formatOptionalDuration(timing.subtreePlan.estimatedSeconds, NO_ESTIMATE)}
+              hint={subtreePlanHint(timing.subtreePlan) ?? undefined}
+            />
           </div>
 
           <p className="text-[13px]">{headline(totals)}</p>
@@ -324,7 +336,8 @@ export function AnalyticsTab({ detail }: TabProps) {
           <p className="mt-2 text-[10px] text-muted-foreground">
             Totals sum the DIRECT children listed above, so the column adds up. A child
             that is itself a parent contributes its own aggregate, which is the number its
-            row shows.
+            row shows. The subtree plan looks all the way down instead: each issue counts
+            its own estimate if it has one, otherwise its children&apos;s — never both.
           </p>
         </section>
       ) : null}

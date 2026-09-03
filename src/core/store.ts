@@ -3372,6 +3372,13 @@ export class WorkspaceStore {
       childrenEstimatedSeconds: null,
       childrenActiveSeconds: null,
       childStatusCounts: this.zeroStatusCounts(),
+      subtreePlan: {
+        estimatedSeconds: null,
+        source: "none",
+        descendantsEstimatedSeconds: null,
+        contributingCount: 0,
+        totalCount: 0,
+      },
     };
   }
 
@@ -3424,6 +3431,12 @@ export class WorkspaceStore {
    * 3. Estimates do NOT cascade that way: `childrenEstimatedSeconds` sums the
    *    children's own estimates only. A parent's estimate is a plan for its whole
    *    subtree, so folding it together with its children's would double-count it.
+   * 4. The RECURSIVE plan (STA-192) lives beside it as `subtreePlan`, and gets
+   *    through the same double-count problem with one rule: an issue contributes
+   *    its own estimate if it has one, otherwise its children's contributions.
+   *    Own wins, so the estimates under an estimated parent are shadowed for
+   *    every ancestor rather than added — and a parent with no estimate passes
+   *    its children's plan straight up. See `SubtreePlan` in core/types.ts.
    *
    * That recursion is why this resolves a bounded DESCENDANT CLOSURE up front
    * (one recursive CTE, capped at MAX_TREE_DEPTH) and then rolls up deepest-first
@@ -3546,6 +3559,11 @@ export class WorkspaceStore {
       let childrenEstimatedSeconds: number | null = null;
       let childrenActiveSeconds: number | null = null;
       let childApproximate = false;
+      // The recursive plan (STA-192), accumulated from each child's already-final
+      // `subtreePlan` — the same deepest-first order the actuals rely on.
+      let descendantsEstimatedSeconds: number | null = null;
+      let contributingCount = 0;
+      let totalCount = 0;
       for (const child of children) {
         // Only configured statuses get a bucket; an orphaned id is counted
         // nowhere rather than inventing a key no consumer's schema knows about.
@@ -3559,10 +3577,24 @@ export class WorkspaceStore {
           childrenActiveSeconds = (childrenActiveSeconds ?? 0) + childTiming.activeSeconds;
         }
         if (childTiming?.approximate) childApproximate = true;
+        const childPlan = childTiming?.subtreePlan;
+        if (childPlan) {
+          // The child's EFFECTIVE plan is its contribution — own if it has one,
+          // else what flowed up through it. Never both, which is the whole rule.
+          if (childPlan.estimatedSeconds != null) {
+            descendantsEstimatedSeconds =
+              (descendantsEstimatedSeconds ?? 0) + childPlan.estimatedSeconds;
+          }
+          // A child that contributed its own estimate is ONE contributing item,
+          // and shadows whatever its subtree counted; otherwise its count flows up.
+          contributingCount += childPlan.source === "own" ? 1 : childPlan.contributingCount;
+          totalCount += 1 + childPlan.totalCount;
+        }
       }
       const hasChildren = children.length > 0;
+      const ownEstimate = row.estimated_seconds ?? null;
       timings.set(row.id, {
-        estimatedSeconds: row.estimated_seconds ?? null,
+        estimatedSeconds: ownEstimate,
         ownActiveSeconds: own.ownActiveSeconds,
         // The headline. `cancelled` declines to report an actual at all — see
         // IssueTiming — and a parent reports its aggregation, never a stopwatch.
@@ -3581,6 +3613,15 @@ export class WorkspaceStore {
         childrenEstimatedSeconds,
         childrenActiveSeconds,
         childStatusCounts,
+        subtreePlan: {
+          // Own wins; otherwise the children's plan flows up unchanged.
+          estimatedSeconds: ownEstimate ?? descendantsEstimatedSeconds,
+          source:
+            ownEstimate != null ? "own" : descendantsEstimatedSeconds != null ? "descendants" : "none",
+          descendantsEstimatedSeconds,
+          contributingCount,
+          totalCount,
+        },
       });
     }
 

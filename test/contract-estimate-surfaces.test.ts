@@ -440,3 +440,105 @@ describe("the derived numbers reach every read surface", () => {
     expect(payload.timing.activeSeconds).toBe(0); // and zero work to show for it
   });
 });
+
+// --------------------------------------------------------- the recursive plan
+
+describe("the recursive plan reaches every read surface across three levels", () => {
+  /**
+   * STA-192, shaped like the live tree that motivated it: an epic with no
+   * estimate, a middle level with none either, and three leaves at 4h/3h/4h.
+   * Depth-1 alone left the epic blind — its only child had no estimate — while
+   * 11h of planned work sat one level further down.
+   */
+  let epic: string;
+  let mid: string;
+  const ELEVEN_HOURS = 39_600;
+
+  beforeAll(() => {
+    // Identifiers are read back rather than hardcoded: the suites above mint
+    // issues too, and a literal here would depend on test order.
+    const mint = (...args: string[]): string => {
+      const result = cli("new", ...args, "--ws", WS, "--json");
+      expect(result.status, result.stderr).toBe(0);
+      const ref = String((JSON.parse(result.stdout) as { identifier?: string }).identifier);
+      expect(ref).toMatch(/^CON-\d+$/);
+      return ref;
+    };
+    epic = mint("Recursive epic");
+    mid = mint("Middle, unestimated", "--parent", epic);
+    mint("Leaf 4h", "--parent", mid, "--estimate", "4h");
+    mint("Leaf 3h", "--parent", mid, "--estimate", "3h");
+    mint("Leaf 4h again", "--parent", mid, "--estimate", "4h");
+  });
+
+  /** The plan a level with no own estimate inherits from the three leaves. */
+  const inherited = (totalCount: number) => ({
+    estimatedSeconds: ELEVEN_HOURS,
+    source: "descendants",
+    descendantsEstimatedSeconds: ELEVEN_HOURS,
+    contributingCount: 3,
+    totalCount,
+  });
+
+  it("MCP get_task: the middle level reports 11h, and the epic includes it", async () => {
+    const middle = await mcpGet(mid);
+    expect(middle.timing.childrenEstimatedSeconds).toBe(ELEVEN_HOURS); // direct, unchanged
+    expect(middle.timing.subtreePlan).toEqual(inherited(3));
+
+    const top = await mcpGet(epic);
+    // Depth-1 compatibility: the epic's only direct child has no estimate.
+    expect(top.timing.childrenEstimatedSeconds).toBeNull();
+    expect(top.timing.subtreePlan).toEqual(inherited(4));
+    // The per-child map carries the middle level's plan too, so an epic's
+    // table can show where its figure came from.
+    expect(top.childrenTiming[mid].subtreePlan).toEqual(inherited(3));
+  });
+
+  it("HTTP /api/issue carries exactly the same recursive plan", async () => {
+    expect((await httpJson(`/api/issue?ref=${epic}`)).body.timing.subtreePlan).toEqual(inherited(4));
+    expect((await httpJson(`/api/issue?ref=${mid}`)).body.timing.subtreePlan).toEqual(inherited(3));
+  });
+
+  it("CLI show --json carries it too", () => {
+    expect(cliShow(epic).timing.subtreePlan).toEqual(inherited(4));
+    expect(cliShow(mid).timing.subtreePlan).toEqual(inherited(3));
+  });
+
+  it("CLI show renders the inherited plan and its coverage on the human line", () => {
+    expect(cli("show", mid, "--ws", WS).stdout).toContain(
+      "time   children est 11h · plan 11h (from 3 of 3 descendants)",
+    );
+    // No `children est` on the epic — its direct child has none — but a plan.
+    expect(cli("show", epic, "--ws", WS).stdout).toContain(
+      "time   plan 11h (from 3 of 4 descendants)",
+    );
+  });
+
+  it("an estimate on the middle level shadows the leaves for the epic — never both", async () => {
+    expect(cli("status", mid, "backlog", "--ws", WS, "--estimate", "10h").status).toBe(0);
+
+    // The middle level shows both directions…
+    expect((await mcpGet(mid)).timing.subtreePlan).toEqual({
+      estimatedSeconds: 36_000,
+      source: "own",
+      descendantsEstimatedSeconds: ELEVEN_HOURS,
+      contributingCount: 3,
+      totalCount: 3,
+    });
+    // …and the epic counts it ONCE, at 10h, with the leaves shadowed.
+    const top = await mcpGet(epic);
+    expect(top.timing.subtreePlan).toEqual({
+      estimatedSeconds: 36_000,
+      source: "descendants",
+      descendantsEstimatedSeconds: 36_000,
+      contributingCount: 1,
+      totalCount: 4,
+    });
+    // Direct-child compatibility now sees the middle level's own estimate,
+    // exactly as it did before STA-192.
+    expect(top.timing.childrenEstimatedSeconds).toBe(36_000);
+    expect(cli("show", mid, "--ws", WS).stdout).toContain(
+      "time   est 10h · children est 11h · descendants est 11h (3 of 3)",
+    );
+  });
+});

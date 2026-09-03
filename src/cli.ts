@@ -1024,6 +1024,23 @@ function main() {
       if (timing.childrenEstimatedSeconds != null) {
         timingParts.push(`children est ${formatDuration(timing.childrenEstimatedSeconds)}`);
       }
+      /**
+       * The recursive plan (STA-192), one segment per parent. A parent with no
+       * estimate of its own says where its plan came from and how much of the
+       * subtree fed it; one that HAS an estimate keeps `est` as the plan and
+       * shows the bottom-up number beside it, so a disagreement is visible
+       * rather than one side quietly winning. A leaf adds nothing.
+       */
+      const plan = timing.subtreePlan;
+      if (plan.source === "descendants" && plan.estimatedSeconds != null) {
+        timingParts.push(
+          `plan ${formatDuration(plan.estimatedSeconds)} (from ${plan.contributingCount} of ${plan.totalCount} descendants)`,
+        );
+      } else if (plan.source === "own" && plan.descendantsEstimatedSeconds != null) {
+        timingParts.push(
+          `descendants est ${formatDuration(plan.descendantsEstimatedSeconds)} (${plan.contributingCount} of ${plan.totalCount})`,
+        );
+      }
       if (timing.childrenActiveSeconds != null) {
         timingParts.push(`children ran ${formatDuration(timing.childrenActiveSeconds)}`);
       }

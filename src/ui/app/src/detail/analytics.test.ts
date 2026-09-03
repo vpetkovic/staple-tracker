@@ -44,10 +44,11 @@ import {
   headline,
   isAggregated,
   isStillRunning,
+  subtreePlanHint,
   totalsCaveat,
 } from "./analytics";
 import { STALE_CLAIM_SECONDS } from "../lib/claim";
-import type { IssueStatus, IssueTiming } from "../lib/types";
+import type { IssueStatus, IssueTiming, SubtreePlan } from "../lib/types";
 
 const NOW = Date.parse("2026-09-02T12:00:00.000Z");
 const agoIso = (seconds: number) => new Date(NOW - seconds * 1000).toISOString();
@@ -66,6 +67,18 @@ function timing(over: Partial<IssueTiming> = {}): IssueTiming {
     childStatusCounts: {
       backlog: 0, todo: 0, in_progress: 0, in_review: 0, awaiting_approval: 0, done: 0, blocked: 0, cancelled: 0,
     },
+    subtreePlan: plan(),
+    ...over,
+  };
+}
+
+function plan(over: Partial<SubtreePlan> = {}): SubtreePlan {
+  return {
+    estimatedSeconds: null,
+    source: "none",
+    descendantsEstimatedSeconds: null,
+    contributingCount: 0,
+    totalCount: 0,
     ...over,
   };
 }
@@ -559,5 +572,45 @@ describe("the headline is a duration, not a productivity multiplier", () => {
       [],
     );
     expect(headline(totals)).not.toMatch(/x|times|faster/i);
+  });
+});
+
+// ---------------------------------------------------------- the subtree plan
+
+describe("the subtree plan says where its number came from", () => {
+  it("names the coverage when the plan was inherited", () => {
+    // STA-156 over STA-157 over three 4h/3h/4h leaves: nobody typed 11h, so
+    // the figure has to say what it was built from — and over ALL descendants,
+    // not the one direct child the totals row counts.
+    expect(
+      subtreePlanHint(
+        plan({
+          estimatedSeconds: 39_600,
+          source: "descendants",
+          descendantsEstimatedSeconds: 39_600,
+          contributingCount: 3,
+          totalCount: 4,
+        }),
+      ),
+    ).toBe("inherited from 3 of 4 descendants");
+  });
+
+  it("shows the bottom-up number beside an own estimate, so a disagreement is visible", () => {
+    expect(
+      subtreePlanHint(
+        plan({
+          estimatedSeconds: 21_600,
+          source: "own",
+          descendantsEstimatedSeconds: 39_600,
+          contributingCount: 3,
+          totalCount: 3,
+        }),
+      ),
+    ).toBe("own estimate; descendants add up to 11h (3 of 3 descendants)");
+  });
+
+  it("adds nothing under an own estimate with no planned work beneath it, or under no plan at all", () => {
+    expect(subtreePlanHint(plan({ estimatedSeconds: 3600, source: "own" }))).toBeNull();
+    expect(subtreePlanHint(plan({ totalCount: 2 }))).toBeNull();
   });
 });

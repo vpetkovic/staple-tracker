@@ -721,6 +721,14 @@ describe("tool response shapes (23/23)", () => {
           blocked: 0,
           cancelled: 0,
         },
+        // STA-192: one unestimated descendant, so the plan is `none` over 1.
+        subtreePlan: {
+          estimatedSeconds: null,
+          source: "none",
+          descendantsEstimatedSeconds: null,
+          contributingCount: 0,
+          totalCount: 1,
+        },
       }),
       // Keyed by IDENTIFIER, not uuid — which is why this line is readable.
       childrenTiming: { "CON-4": timingGolden() },

@@ -136,6 +136,14 @@ what tells the timeline it was a report rather than a person, and what makes
 the **timing** numbers honest: an interval opened by a derived flip is never
 billed, so an epic has no stopwatch of its own — its actual is its children's.
 
+Estimates roll up the other way round, and to any depth: an issue contributes
+its **own estimate if it has one, otherwise the sum of its children's
+contributions** — never both. That one rule is what lets a middle epic nobody
+estimated pass its children's plan up to its parent while a parent's plan and
+its descendants' are never counted twice in one ancestor total. The depth-1
+`childrenEstimatedSeconds` keeps its meaning beside it; the recursive figure is
+`subtreePlan` (see `docs/cli.md`, "Estimates vs actuals").
+
 The automatic close does not replace the summary. `children_complete` still
 fires when the last child lands (before the close, so the wake is never
 swallowed), and it is the cue to write what shipped.

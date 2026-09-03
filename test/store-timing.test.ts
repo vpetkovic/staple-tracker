@@ -552,6 +552,114 @@ describe("rollups", () => {
     expect(store.timing(mid.id).childrenEstimatedSeconds).toBe(1800);
   });
 
+  /**
+   * STA-192 — the recursive plan, beside the depth-1 field rather than in its
+   * place. The fixture is the live tree that motivated it: STA-156 -> STA-157
+   * (no estimate of its own) -> STA-163/164/165 at 4h/3h/4h. Under depth-1
+   * alone STA-156 saw NOTHING, because its only child had no estimate, while
+   * 11h of planned work sat one level further down.
+   */
+  describe("the subtree plan survives an epic-of-epics without double-counting", () => {
+    const H = 3600;
+    function tree(midEstimate?: number) {
+      const epic = store.createIssue({ title: "STA-156" });
+      const mid = store.createChild(epic.id, { title: "STA-157", estimatedSeconds: midEstimate });
+      const leaves = [4, 3, 4].map((hours, i) =>
+        store.createChild(mid.id, { title: `STA-16${3 + i}`, estimatedSeconds: hours * H }),
+      );
+      return { epic, mid, leaves };
+    }
+
+    it("a parent with no own estimate reports its children's 11h as its plan", () => {
+      const { mid } = tree();
+      const timing = store.timing(mid.id);
+      expect(timing.childrenEstimatedSeconds).toBe(11 * H); // direct, unchanged
+      expect(timing.subtreePlan).toEqual({
+        estimatedSeconds: 11 * H,
+        source: "descendants",
+        descendantsEstimatedSeconds: 11 * H,
+        contributingCount: 3,
+        totalCount: 3,
+      });
+    });
+
+    it("the grandparent includes that 11h even though the middle level has no estimate", () => {
+      const { epic } = tree();
+      const timing = store.timing(epic.id);
+      // Depth-1 compatibility: the only direct child has no estimate, so this
+      // stays null exactly as it always did.
+      expect(timing.childrenEstimatedSeconds).toBeNull();
+      expect(timing.subtreePlan).toEqual({
+        estimatedSeconds: 11 * H,
+        source: "descendants",
+        descendantsEstimatedSeconds: 11 * H,
+        contributingCount: 3,
+        totalCount: 4,
+      });
+    });
+
+    it("never counts a parent's estimate AND its descendants' in one ancestor total", () => {
+      const { epic, mid } = tree(10 * H);
+      // Both directions are visible on the middle level itself…
+      expect(store.timing(mid.id).subtreePlan).toEqual({
+        estimatedSeconds: 10 * H,
+        source: "own",
+        descendantsEstimatedSeconds: 11 * H,
+        contributingCount: 3,
+        totalCount: 3,
+      });
+      // …but the ancestor counts it ONCE, at its own 10h — never 21h.
+      const plan = store.timing(epic.id).subtreePlan;
+      expect(plan.estimatedSeconds).toBe(10 * H);
+      expect(plan.descendantsEstimatedSeconds).toBe(10 * H);
+      // The shadowed leaves are not counted as contributing — and not lost:
+      // they are still on the middle level's own plan above.
+      expect(plan.contributingCount).toBe(1);
+      expect(plan.totalCount).toBe(4);
+    });
+
+    it("own wins on the ancestor too, with the bottom-up number kept beside it", () => {
+      const { epic } = tree();
+      store.updateIssue(epic.id, { estimatedSeconds: 6 * H }, "planner");
+      const plan = store.timing(epic.id).subtreePlan;
+      expect(plan.estimatedSeconds).toBe(6 * H);
+      expect(plan.source).toBe("own");
+      expect(plan.descendantsEstimatedSeconds).toBe(11 * H);
+      expect(plan.contributingCount).toBe(3);
+    });
+
+    it("counts every descendant, and is null with source none when nothing is planned", () => {
+      const top = store.createIssue({ title: "Top" });
+      const mid = store.createChild(top.id, { title: "Mid" });
+      store.createChild(mid.id, { title: "Leaf" });
+      expect(store.timing(top.id).subtreePlan).toEqual({
+        estimatedSeconds: null,
+        source: "none",
+        descendantsEstimatedSeconds: null,
+        contributingCount: 0,
+        totalCount: 2,
+      });
+      expect(store.timing(mid.id).subtreePlan.totalCount).toBe(1);
+    });
+
+    it("leaves the actual rollup exactly as it was", () => {
+      const { epic, mid, leaves } = tree(10 * H);
+      const leaf = leaves[0]!;
+      store.checkoutIssue(leaf.id, "agent-a");
+      store.updateIssue(leaf.id, { status: "done" }, "agent-a");
+      backdateEvents(leaf.id, [900, 800, 200]);
+      // Estimates at two levels change nothing about how actuals cascade: each
+      // level still reports its children's headline, and no stopwatch of its own.
+      for (const id of [mid.id, epic.id]) {
+        const timing = store.timing(id);
+        expect(timing.ownActiveSeconds).toBeNull();
+        expect(timing.activeSeconds).toBe(600);
+        expect(timing.childrenActiveSeconds).toBe(600);
+        expect(timing.approximate).toBe(false);
+      }
+    });
+  });
+
   it("stays null when no child contributed, rather than collapsing to 0", () => {
     const epic = store.createIssue({ title: "Epic" });
     store.createChild(epic.id, { title: "Not started" });
