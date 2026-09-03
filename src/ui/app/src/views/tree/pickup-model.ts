@@ -467,17 +467,19 @@ export function buildPickupGroups(
      */
 
     /**
-     * A ghost is ALWAYS open — a fold on it would take real, ranked rows out of the queue
-     * they belong to. A REAL parent folds, defaulting to open: pickup mode has no
-     * "the backlog stays shut" story, its sections are the folding, and a chevron that does
-     * not toggle is the defect STA-148 raises about ghosts, reproduced on real rows. The
-     * choice is the user's own explicit one, shared with the tree because it is stored per
-     * issue — which is what STA-148 means by the same expansion state in every grouping.
+     * EVERY PARENT FOLDS, GHOST OR REAL, defaulting to open — O8c (STA-151) removing the
+     * `node.ghost ||` O8a left here.
+     *
+     * Pickup mode has no "the backlog stays shut" story: its sections are the folding, and
+     * a row is open unless the user folded it. That default was already right for a ghost,
+     * so this axis needed only the short-circuit taken off. The choice is the user's own
+     * explicit one, keyed by issue id and therefore shared with the tree and the flat view
+     * — which is what STA-148 means by the same expansion state in every grouping, and it
+     * now covers the bracket as well as the row it brackets.
      */
     const lines = walkPlaced(
       roots,
-      (node) =>
-        node.ghost || (node.children.length > 0 && (isExpanded?.(node.row.issue) ?? true)),
+      (node) => node.children.length > 0 && (isExpanded?.(node.row.issue) ?? true),
     );
 
     const waitingOn = new Map<string, string>();
@@ -496,8 +498,13 @@ export function buildPickupGroups(
           depth: line.depth,
           guides: line.guides,
           isLast: line.isLast,
-          hasChildren: true,
-          isExpanded: true,
+          /*
+           * FROM THE WALK, not hard-coded — O8c (STA-151). A ghost folds now, so `true`
+           * here would have been the component being told the opposite of what the model
+           * just decided, and the chevron would have drawn open over a folded subtree.
+           */
+          hasChildren: line.hasChildren,
+          isExpanded: line.isExpanded,
           childCount: line.childCount,
           /*
            * NO ROLLUP ON A PICKUP GHOST — `flatRow`'s `null` stands. No row in this view

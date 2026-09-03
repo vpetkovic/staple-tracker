@@ -680,6 +680,63 @@ describe("grouping arranges; it never decides membership", () => {
       .toEqual([["STA-1", false]]);
   });
 
+  /**
+   * O8c (STA-151). THE GHOST FOLDS HERE TOO, AND BY THE SAME KEY.
+   *
+   * O8a made the chevron on a real pickup parent live and routed it through the SAME
+   * per-issue expansion state the tree uses. A ghost that stayed inert would be the one
+   * remaining row in the app whose chevron does nothing — which is the defect STA-148
+   * raises, surviving in the last place it was allowed to.
+   */
+  it("folds a ghost when the user folds it, and the section's count does not follow", () => {
+    const parent = issue({ id: "p", identifier: "STA-1", title: "The epic" });
+    const rows = [
+      row({ id: "a", identifier: "STA-2", parentId: "p" }),
+      row({ id: "b", identifier: "STA-3", parentId: "p" }),
+    ];
+    const index = buildPickupIndex(inbox([entry({ id: "a" }), entry({ id: "b" })]));
+
+    const group = section(
+      buildPickupGroups(rows, index, {
+        hiddenParents: new Map([
+          ["a", parent],
+          ["b", parent],
+        ]),
+        // The flat view's fold of STA-1, arriving here through the same store.
+        isExpanded: (i) => i.id !== "p",
+      }),
+      "up_next",
+    )!;
+
+    expect(group.rows.map((r) => [r.issue.identifier, r.ghost === true])).toEqual([
+      ["STA-1", true],
+    ]);
+    expect(group.rows[0]!.isExpanded).toBe(false);
+    expect(group.rows[0]!.childCount).toBe(2);
+    // Two tasks are still up next. A fold is a fact about the display, not the queue.
+    expect(group.count).toBe(2);
+  });
+
+  it("keeps a ghost OPEN when the user has expressed no choice", () => {
+    const parent = issue({ id: "p", identifier: "STA-1", title: "The epic" });
+    const child = row({ id: "c", identifier: "STA-2", parentId: "p" });
+    const index = buildPickupIndex(inbox([entry({ id: "c" })]));
+
+    const group = section(
+      buildPickupGroups([child], index, {
+        hiddenParents: new Map([["c", parent]]),
+        isExpanded: () => undefined,
+      }),
+      "up_next",
+    )!;
+
+    expect(group.rows.map((r) => [r.issue.identifier, r.depth, r.ghost === true])).toEqual([
+      ["STA-1", 0, true],
+      ["STA-2", 1, false],
+    ]);
+    expect(group.rows[0]!.isExpanded).toBe(true);
+  });
+
   it("turns the ghost off for a container with no indent, and the chip comes back", () => {
     const parent = issue({ id: "p", identifier: "STA-1", title: "The epic" });
     const child = row({ id: "c", identifier: "STA-2", parentId: "p" });

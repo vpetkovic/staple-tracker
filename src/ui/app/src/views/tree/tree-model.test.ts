@@ -344,6 +344,144 @@ describe("placement", () => {
     expect(inProgress.rows[0]!.breadcrumb).toEqual({ identifier: "STA-1", title: "The epic" });
   });
 
+  /**
+   * O8c (STA-151). THE GHOST FOLDS LIKE ANY ROW.
+   *
+   * O3c refused it: a fold on a ghost would "remove real rows from the group they belong
+   * to". STA-148 answers that a group is a way of DISPLAYING rows, so a fold hides rows
+   * from the display and changes nothing about membership — and `count` is `bucket.length`,
+   * computed before any of this, which is the proof rather than the promise.
+   *
+   * Two ways this could go wrong in opposite directions, so there is a test each way:
+   * the fold could not work at all (O3c's `node.ghost ||` still short-circuiting it), or
+   * it could work TOO well and pick up the status default, folding a backlog epic's ghost
+   * on first sight and leaving the In Progress group looking empty.
+   */
+  it("folds a ghost when the user folds it, and the group's count does not follow", () => {
+    const parent = row({ id: "p", identifier: "STA-1", title: "The epic", status: "backlog" });
+    const rows = [
+      parent,
+      row({ id: "a", identifier: "STA-2", status: "in_progress", parentId: "p" }),
+      row({ id: "b", identifier: "STA-3", status: "in_progress", parentId: "p" }),
+    ];
+
+    const inProgress = buildGroups(rows, { isExpanded: () => false }).find(
+      (g) => g.status === "in_progress",
+    )!;
+
+    // The bracket stays; what it brackets is folded away underneath it.
+    expect(inProgress.rows.map((r) => [r.issue.identifier, r.ghost === true])).toEqual([
+      ["STA-1", true],
+    ]);
+    expect(inProgress.rows[0]!.hasChildren).toBe(true);
+    expect(inProgress.rows[0]!.isExpanded).toBe(false);
+    // `+N` says how much work the fold hides, and it is the same number either way.
+    expect(inProgress.rows[0]!.childCount).toBe(2);
+    // MEMBERSHIP did not move. Two tasks are in progress whether or not the bracket
+    // above them is open — the one thing a fold must never be able to say.
+    expect(inProgress.count).toBe(2);
+  });
+
+  it("keeps a ghost OPEN by default, even when the parent's own status would fold it", () => {
+    // The parent is `backlog`, so the status default would answer "collapsed" — and the
+    // group would draw a dimmed row with nothing under it and a header saying 2. A ghost
+    // exists only to bracket rows, so it is open until somebody folds it.
+    const parent = row({ id: "p", identifier: "STA-1", title: "The epic", status: "backlog" });
+    const rows = [
+      parent,
+      row({ id: "a", identifier: "STA-2", status: "in_progress", parentId: "p" }),
+      row({ id: "b", identifier: "STA-3", status: "in_progress", parentId: "p" }),
+    ];
+
+    // No explicit choice for anything: `isExpanded` answers `undefined` throughout.
+    const inProgress = buildGroups(rows, { isExpanded: () => undefined }).find(
+      (g) => g.status === "in_progress",
+    )!;
+
+    expect(inProgress.rows.map((r) => [r.issue.identifier, r.ghost === true])).toEqual([
+      ["STA-1", true],
+      ["STA-2", false],
+      ["STA-3", false],
+    ]);
+    expect(inProgress.rows[0]!.isExpanded).toBe(true);
+    // And the parent's OWN row, in its own group, still takes the status default — the
+    // ghost's openness is about the bracket, not a new rule for the issue.
+    const backlog = buildGroups(rows, { isExpanded: () => undefined }).find(
+      (g) => g.status === "backlog",
+    )!;
+    expect(backlog.rows[0]!.issue.identifier).toBe("STA-1");
+    expect(backlog.rows[0]!.hasChildren).toBe(false);
+  });
+
+  it("folds a MID-CHAIN ghost and takes the ghost beneath it with it", () => {
+    // O8b's chain: STA-1 (ghost) > STA-2 (ghost) > STA-3. Folding the top bracket has to
+    // remove the whole subtree, exactly as folding a real parent does.
+    const rows = [
+      row({ id: "top", identifier: "STA-1", status: "backlog" }),
+      row({ id: "mid", identifier: "STA-2", status: "backlog", parentId: "top" }),
+      row({ id: "leaf", identifier: "STA-3", status: "in_progress", parentId: "mid" }),
+    ];
+
+    const open = buildGroups(rows, openAll).find((g) => g.status === "in_progress")!;
+    expect(open.rows.map((r) => [r.issue.identifier, r.depth, r.ghost === true])).toEqual([
+      ["STA-1", 0, true],
+      ["STA-2", 1, true],
+      ["STA-3", 2, false],
+    ]);
+
+    const folded = buildGroups(rows, { isExpanded: (i) => i.id !== "top" }).find(
+      (g) => g.status === "in_progress",
+    )!;
+    expect(folded.rows.map((r) => r.issue.identifier)).toEqual(["STA-1"]);
+    expect(folded.rows[0]!.isExpanded).toBe(false);
+    // Ghosts are transparent to `childCount`, so the bracket declares the TASK it hides.
+    expect(folded.rows[0]!.childCount).toBe(1);
+    expect(folded.count).toBe(1);
+  });
+
+  it("keeps a folded ghost's children out of `visibleOrder`, like any fold", () => {
+    const rows = [
+      row({ id: "p", identifier: "STA-1", status: "backlog" }),
+      row({ id: "c", identifier: "STA-2", status: "in_progress", parentId: "p" }),
+    ];
+
+    const shape = buildList(rows, "status", { isExpanded: (i) => i.id !== "p" });
+
+    // The ghost was never in the order; its child has left it because it is not drawn.
+    // What survives is the parent's own REAL row, in the Backlog group where it belongs.
+    expect(visibleOrder(shape, () => false).map((s) => s.ref)).toEqual(["STA-1"]);
+    expect(visibleRows(shape, () => false).map((r) => r.issue.identifier)).toEqual(["STA-1"]);
+  });
+
+  it("folds the SAME epic in every grouping, because the key is the issue id", () => {
+    // The acceptance criterion in one assertion: fold STA-1 in the flat view and the fold
+    // is already made in status, pickup and epic grouping. There is no per-axis state to
+    // keep in step — `EXPANDED_ROWS_KEY` is keyed by `issue.id` and every axis reads it.
+    const rows = [
+      row({ id: "p", identifier: "STA-1", status: "backlog" }),
+      row({ id: "c", identifier: "STA-2", status: "in_progress", parentId: "p" }),
+    ];
+    const folded = { isExpanded: (i: { id: string }) => (i.id === "p" ? false : undefined) };
+
+    // Flat: the real row folds, and STA-2 goes with it.
+    expect(flattenFlat(rows, folded).map((r) => r.issue.identifier)).toEqual(["STA-1"]);
+
+    // Status and pickup: the GHOST of STA-1 folds, on the same entry.
+    for (const axis of ["status", "pickup"] as const) {
+      const shape = buildList(rows, axis, folded);
+      const drawn = visibleRows(shape, () => false);
+      expect(drawn.map((r) => r.issue.identifier)).toEqual(["STA-1"]);
+      const ghost =
+        shape.kind === "grouped"
+          ? shape.groups.flatMap((g) => g.rows).find((r) => r.ghost)
+          : shape.kind === "pickup"
+            ? shape.groups.flatMap((g) => g.rows).find((r) => r.ghost)
+            : undefined;
+      expect(ghost?.issue.identifier).toBe("STA-1");
+      expect(ghost?.isExpanded).toBe(false);
+    }
+  });
+
   it("nests only when parent and child land in the SAME group", () => {
     const parent = row({ id: "p", identifier: "STA-1", status: "in_progress" });
     const child = row({ id: "c", identifier: "STA-2", status: "in_progress", parentId: "p" });
@@ -1236,26 +1374,105 @@ describe("group by epic", () => {
     const groups = byEpic([epic, mid, leaf]);
 
     expect(groups.map((g) => g.status)).toEqual(["id-1"]);
-    expect(groups[0]!.rows.map((r) => r.issue.identifier)).toEqual(["STA-2", "STA-3"]);
+    // O8d (STA-152): the epic is the group's FIRST ROW, and the family hangs off it.
+    expect(groups[0]!.rows.map((r) => r.issue.identifier)).toEqual(["STA-1", "STA-2", "STA-3"]);
     // And the lineage is DRAWN, not flattened: the grandchild is still nested under its own
-    // parent inside the group.
-    expect(groups[0]!.rows.map((r) => r.depth)).toEqual([0, 1]);
+    // parent inside the group, which is now one level deeper because the epic is drawn.
+    expect(groups[0]!.rows.map((r) => r.depth)).toEqual([0, 1, 2]);
   });
 
-  it("promotes the epic to the header and does NOT also render it as a row", () => {
+  /**
+   * ── O8d (STA-152) — THE HEADER IS THE EPIC'S ROW ──────────────────────────────────────
+   *
+   * O3d promoted the epic OUT of its bucket and drew it as a group header with its own
+   * triangle, its own click-to-fold, its own collapsed-groups key and its own label. STA-148
+   * rejects that: a group is a way of DISPLAYING rows, so the thing at the top of an epic's
+   * group is the epic, behaving as it does everywhere else. Four parallel mechanisms are
+   * deleted rather than reconciled — there is nothing left that could disagree with the row.
+   */
+  it("draws the epic as the group's FIRST ROW, not as a header above it", () => {
     const epic = row({ identifier: "STA-1", kind: "epic", title: "Tree ordering" });
     const child = row({ identifier: "STA-2", parentId: "id-1" });
 
     const groups = byEpic([epic, child]);
 
-    expect(groups[0]!.heading).toMatchObject({
-      identifier: "STA-1",
-      label: "Tree ordering",
-      kind: "epic",
+    // Nothing left for a heading to name — the row carries the glyph, the identifier, the
+    // title, the rollup and the claim, and a heading would be a second copy of all five.
+    expect(groups[0]!.heading).toBeNull();
+    expect(groups[0]!.headedByRow).toBe(true);
+    expect(groups[0]!.rows.map((r) => [r.issue.identifier, r.depth, r.ghost])).toEqual([
+      ["STA-1", 0, false],
+      ["STA-2", 1, false],
+    ]);
+    // A REAL row, with everything a real row has: the chevron's inputs and the claim slot's.
+    expect(groups[0]!.rows[0]!.hasChildren).toBe(true);
+    expect(groups[0]!.rows[0]!.childCount).toBe(1);
+    expect(groups[0]!.rows[0]!.rollup).toMatchObject({ total: 1 });
+    // Still ONE issue in ONE place: it is not also in the catch-all.
+    expect(groups.flatMap((g) => g.rows).filter((r) => r.issue.identifier === "STA-1")).toHaveLength(
+      1,
+    );
+  });
+
+  it("keeps the epic OUT of the count and IN `visibleOrder`", () => {
+    // Two questions, two answers. `count` is "how much work is in this group", so the header
+    // never counts the thing it names — O3c's `bucket.length`, computed before the head is
+    // prepended. `visibleOrder` is "what can the drawer's prev/next land on", and the epic
+    // is a real issue drawn as a real row: refusing it would make it the one row on the page
+    // the arrows cannot reach.
+    const epic = row({ identifier: "STA-1", kind: "epic" });
+    const rows = [
+      epic,
+      row({ identifier: "STA-2", parentId: "id-1" }),
+      row({ identifier: "STA-3", parentId: "id-1" }),
+    ];
+
+    const groups = byEpic(rows);
+
+    expect(groups[0]!.count).toBe(2);
+    expect(groups[0]!.rows).toHaveLength(3);
+    expect(visibleOrder(buildList(rows, "parent", opts(rows)), () => false).map((s) => s.ref)).toEqual(
+      ["STA-1", "STA-2", "STA-3"],
+    );
+  });
+
+  it("folds the epic's own row, and the count does not follow", () => {
+    const epic = row({ identifier: "STA-1", kind: "epic" });
+    const rows = [
+      epic,
+      row({ identifier: "STA-2", parentId: "id-1" }),
+      row({ identifier: "STA-3", parentId: "id-1" }),
+    ];
+    const folded = { isExpanded: (i: { id: string }) => (i.id === "id-1" ? false : undefined) };
+
+    const groups = buildParentGroups(rows, {
+      ...folded,
+      showResolved: true,
+      rollupSource: rows,
     });
-    // The whole point. One issue, one place on the page.
-    expect(groups[0]!.rows.map((r) => r.issue.identifier)).toEqual(["STA-2"]);
-    expect(groups.flatMap((g) => g.rows).filter((r) => r.issue.identifier === "STA-1")).toEqual([]);
+
+    expect(groups[0]!.rows.map((r) => r.issue.identifier)).toEqual(["STA-1"]);
+    expect(groups[0]!.rows[0]!.isExpanded).toBe(false);
+    expect(groups[0]!.count).toBe(2);
+    // THE SAME ENTRY FOLDS IT IN THE FLAT VIEW — the acceptance criterion, asserted as the
+    // one fact it actually is: both axes read `EXPANDED_ROWS_KEY`, keyed by the issue id.
+    expect(flattenFlat(rows, folded).map((r) => r.issue.identifier)).toEqual(["STA-1"]);
+  });
+
+  it("never folds an epic group as a GROUP — the row's chevron is the only fold", () => {
+    // Two controls over one set of rows is the defect. A `collapsed-groups` entry written by
+    // an O3d build carries the epic's id, and it must now be inert rather than a second fold
+    // that hides rows the row's own chevron says are open.
+    const epic = row({ identifier: "STA-1", kind: "epic" });
+    const rows = [epic, row({ identifier: "STA-2", parentId: "id-1" })];
+    const shape = buildList(rows, "parent", opts(rows));
+
+    expect(sectionsOf(shape).map((s) => [s.key, s.headedByRow])).toEqual([["id-1", true]]);
+    // The stale key is offered and ignored.
+    expect(visibleOrder(shape, (key) => key === "id-1").map((s) => s.ref)).toEqual([
+      "STA-1",
+      "STA-2",
+    ]);
   });
 
   it("files a root that heads NOTHING under 'No epic' rather than losing it", () => {
@@ -1268,6 +1485,8 @@ describe("group by epic", () => {
     const groups = byEpic([epic, child, loner]);
 
     expect(groups.map((g) => g.status)).toEqual(["id-1", NO_PARENT_GROUP_KEY]);
+    // O8d: "No epic" NAMES NO ISSUE, so there is no row it could be — it keeps the plain
+    // header, and it keeps folding as a group, exactly as every other named bucket does.
     expect(groups[1]!.heading).toMatchObject({
       issue: null,
       label: NO_PARENT_GROUP_LABEL,
@@ -1275,7 +1494,9 @@ describe("group by epic", () => {
       kind: null,
       rollup: null,
     });
+    expect(groups[1]!.headedByRow).toBeFalsy();
     expect(groups[1]!.rows.map((r) => r.issue.identifier)).toEqual(["STA-3"]);
+    expect(groups[0]!.rows.map((r) => r.issue.identifier)).toEqual(["STA-1", "STA-2"]);
   });
 
   it("keeps 'No epic' LAST even when its rows are the most active on the page", () => {
@@ -1298,12 +1519,18 @@ describe("group by epic", () => {
     expect(groups[0]!.count).toBe(2);
   });
 
-  it("lets a FILTERED-OUT epic still name and head its group", () => {
+  it("draws a FILTERED-OUT epic as the group's GHOST head, still heading its group", () => {
     /*
      * The acceptance criterion, and the reason the ancestor map is built from `rollupSource`
      * rather than from `rows`. A done epic is hidden by the default filter; built from the
      * visible rows it would stop being anybody's ancestor and its whole family would land in
      * "No epic" — the status filter silently rewriting the grouping axis.
+     *
+     * O8d (STA-152) changed the SHAPE of the answer, not the answer. The epic used to be a
+     * header, which is a label and could name a row the filter removed without contradiction.
+     * It is a ROW now, and drawing a filtered-away issue as a full row would undo the filter
+     * — so it is a GHOST, which is the mechanism every other axis already uses for exactly
+     * this and which, since STA-151, folds and opens like any row.
      */
     const epic = row({ identifier: "STA-1", kind: "epic", title: "Shipped epic", status: "done" });
     const child = row({ identifier: "STA-2", parentId: "id-1", status: "todo" });
@@ -1315,17 +1542,21 @@ describe("group by epic", () => {
     });
 
     expect(groups.map((g) => g.status)).toEqual(["id-1"]);
-    expect(groups[0]!.heading).toMatchObject({ identifier: "STA-1", label: "Shipped epic" });
-    expect(groups[0]!.rows.map((r) => r.issue.identifier)).toEqual(["STA-2"]);
-    // And NO ghost of it, and no breadcrumb either: the header names the parent more loudly
-    // than a dimmed row would. This is what `headOfGroup` buys.
-    expect(ghosts(groups[0]!.rows)).toEqual([]);
-    expect(groups[0]!.rows[0]!.breadcrumb).toBeNull();
+    expect(groups[0]!.heading).toBeNull();
+    expect(groups[0]!.rows.map((r) => [r.issue.identifier, r.depth, r.ghost])).toEqual([
+      ["STA-1", 0, true],
+      ["STA-2", 1, false],
+    ]);
+    // No chip on the child: the row above it IS the parent, dimmed. And the ghost is still
+    // out of the count and out of `visibleOrder`, which is the existing rule, not a new one.
+    expect(groups[0]!.rows[1]!.breadcrumb).toBeNull();
+    expect(groups[0]!.count).toBe(1);
   });
 
-  it("suppresses the head's ghost even when the filter hid it via hiddenParents", () => {
+  it("draws the head's ghost when the filter hid it via hiddenParents too", () => {
     // The other route to a ghost. `hiddenParents` is keyed by CHILD id and yields the parent
-    // directly, so a suppression that only consulted `presentAnywhere` would still draw one.
+    // directly, so a path that only consulted `presentAnywhere` would leave this group
+    // headless — a bucket of rows whose epic is named nowhere on the page.
     const epic = row({ identifier: "STA-1", kind: "epic", status: "done" });
     const child = row({ identifier: "STA-2", parentId: "id-1", status: "todo" });
 
@@ -1336,8 +1567,8 @@ describe("group by epic", () => {
       hiddenParents: new Map([["id-2", epic.issue]]),
     });
 
-    expect(ghosts(groups[0]!.rows)).toEqual([]);
-    expect(groups[0]!.rows[0]!.breadcrumb).toBeNull();
+    expect(ghosts(groups[0]!.rows).map((r) => r.issue.identifier)).toEqual(["STA-1"]);
+    expect(groups[0]!.rows[1]!.breadcrumb).toBeNull();
   });
 
   it("orders groups by the EPIC's activity rank, including its best descendant", () => {
@@ -1386,9 +1617,12 @@ describe("group by epic", () => {
     expect(byEpic([nine, nineKid, ten, tenKid]).map((g) => g.status)).toEqual(["id-9", "id-10"]);
   });
 
-  it("puts the epic's rollup on the header, counted over the UNFILTERED source", () => {
+  it("puts the epic's rollup on the epic's ROW, counted over the UNFILTERED source", () => {
     // Three of the five descendants are done and hidden by the filter. A rollup read off the
     // bucket would say 0/2, which is not a partial answer but the wrong one.
+    //
+    // O8d: it rides on the ROW now rather than on a heading, which is where every other
+    // parent in the app carries it — one element, one derivation, four axes.
     const epic = row({ identifier: "STA-1", kind: "epic" });
     const all = [
       epic,
@@ -1405,17 +1639,20 @@ describe("group by epic", () => {
       rollupSource: all,
     });
 
-    expect(groups[0]!.heading?.rollup).toMatchObject({ resolved: 3, total: 5 });
+    expect(groups[0]!.rows[0]!.issue.identifier).toBe("STA-1");
+    expect(groups[0]!.rows[0]!.rollup).toMatchObject({ resolved: 3, total: 5 });
     // …while the COUNT is what is actually in the bucket, which is a different number and is
-    // meant to be. Two numbers, two questions; the header renders the rollup.
+    // meant to be. Two numbers, two questions — and the epic is in neither the count nor the
+    // rollup's numerator by accident: the rollup is over its DESCENDANTS.
     expect(groups[0]!.count).toBe(2);
   });
 
   it("counts `bucket.length`, so a ghost cannot reach the count", () => {
     /*
      * O3c's rule, restated on this axis. The MID-LEVEL parent is filtered away, so its child
-     * gets a ghost of it inside the epic's group — three rows drawn, two rows real. The
-     * epic itself never becomes one; that is `headOfGroup`, asserted above.
+     * gets a ghost of it inside the epic's group — four rows drawn, three rows real, two
+     * rows counted. The epic itself is one of the real rows since O8d and is still not one
+     * of the counted ones.
      */
     const epic = row({ identifier: "STA-1", kind: "epic" });
     const mid = row({ identifier: "STA-2", parentId: "id-1", status: "done" });
@@ -1430,13 +1667,19 @@ describe("group by epic", () => {
     });
 
     const drawn = groups[0]!.rows;
-    expect(ghosts(drawn).map((r) => r.issue.identifier)).toEqual(["STA-2"]);
+    // The epic is filtered away too, so BOTH brackets are ghosts and O8b's chain draws them
+    // as one — the epic over the mid-level parent over the leaf.
+    expect(drawn.map((r) => [r.issue.identifier, r.depth, r.ghost])).toEqual([
+      ["STA-1", 0, true],
+      ["STA-2", 1, true],
+      ["STA-3", 2, false],
+      ["STA-4", 1, false],
+    ]);
     // O3c's other rule, still holding here: the ghost sorts as the BEST ROW IT BRACKETS, so
     // the block lands at STA-3's position rather than at the missing parent's, and STA-3
     // precedes STA-4 on the identifier tiebreak exactly as it would have unbracketed.
     expect(real(drawn).map((r) => r.issue.identifier)).toEqual(["STA-3", "STA-4"]);
     expect(groups[0]!.count).toBe(2);
-    expect(ghosts(drawn).map((r) => r.issue.identifier)).not.toContain("STA-1");
   });
 
   it("ranks rows INSIDE a group by activity, unlike the status axis", () => {
@@ -1448,6 +1691,7 @@ describe("group by epic", () => {
     const live = row({ identifier: "STA-3", parentId: "id-1", priority: "low" }, claim());
 
     expect(byEpic([epic, urgent, live])[0]!.rows.map((r) => r.issue.identifier)).toEqual([
+      "STA-1",
       "STA-3",
       "STA-2",
     ]);
@@ -1471,7 +1715,7 @@ describe("group by epic", () => {
       rollupSource: [epic, sub, live],
     });
 
-    expect(groups[0]!.rows.map((r) => r.issue.identifier)).toEqual(["STA-2", "STA-3"]);
+    expect(groups[0]!.rows.map((r) => r.issue.identifier)).toEqual(["STA-1", "STA-2", "STA-3"]);
   });
 
   it("is reachable through buildList and produces the SAME shape as status grouping", () => {
@@ -1486,16 +1730,16 @@ describe("group by epic", () => {
 
     expect(shape.kind).toBe("grouped");
     expect(sectionsOf(shape).map((s) => s.key)).toEqual(["id-1"]);
-    // And the navigation contract follows for free — no header and no ghost in it, and a
-    // collapsed group contributes nothing.
-    expect(visibleOrder(shape, () => false).map((s) => s.ref)).toEqual(["STA-2"]);
-    expect(visibleOrder(shape, (key) => key === "id-1")).toEqual([]);
+    // And the navigation contract follows for free. Since O8d the epic is IN it, because it
+    // is a row; the group fold is gone, so a stale collapsed key changes nothing.
+    expect(visibleOrder(shape, () => false).map((s) => s.ref)).toEqual(["STA-1", "STA-2"]);
   });
 
-  it("keys the fold on the EPIC's id, which no status or section is spelled as", () => {
-    // The three vocabularies share one collapsed-groups set in expansion.ts. This is the
+  it("keys the GROUP on the EPIC's id, which no status or section is spelled as", () => {
+    // The four vocabularies share one collapsed-groups set in expansion.ts. This is the
     // property that lets them, asserted where the keys are MINTED rather than where they
-    // are stored.
+    // are stored. Since O8d an epic key is never WRITTEN to that set — but O3d builds wrote
+    // some, and disjointness is what keeps those inert instead of folding a status group.
     const epic = row({ identifier: "STA-1", kind: "epic" });
     const child = row({ identifier: "STA-2", parentId: "id-1" });
     const loner = row({ identifier: "STA-3" });

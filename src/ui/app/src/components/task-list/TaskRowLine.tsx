@@ -214,16 +214,21 @@ export function TaskRowLine({
    * ── THE GHOST VARIANT — O3c (STA-128) ────────────────────────────────────────────────
    *
    * A parent that is not in this bucket, drawn inside it so the children that ARE can nest
-   * under it. It is CONTEXT, not content: dimmed, skipped by the arrow keys, absent from
-   * the group's count and from `visibleOrder`, and non-interactive except that clicking it
-   * opens the parent — which is what the row's own `onClick` already does.
+   * under it. It is CONTEXT, not content: dimmed, absent from the group's count and from
+   * `visibleOrder`, and it opens the PARENT when clicked — which is what the row's own
+   * `onClick` already does.
    *
-   * Three elements come off, and each for a stated reason rather than for tidiness:
+   * ── WHAT O8c (STA-151) CHANGED ────────────────────────────────────────────────────────
    *
-   *   THE CHEVRON BUTTON, replaced by a static glyph in the open position. A fold on a
-   *   ghost would remove REAL rows from the group they belong to, which is exactly what
-   *   the placement invariant exists to prevent. The glyph stays because the indent under
-   *   it needs an origin and the reader needs to be told those rows are its.
+   * IT FOLDS. O3c replaced the chevron with a static glyph because "a fold on a ghost
+   * would remove real rows from the group they belong to". STA-148 rejects the premise:
+   * a group is a way of DISPLAYING rows, so a fold hides rows from the display and changes
+   * nothing about membership — and the group's `count` is `bucket.length`, which no fold
+   * can reach. The chevron is now the ordinary button, wearing the ordinary label, driven
+   * by the ordinary per-issue expansion state, so folding this bracket and folding the
+   * parent's own row in the flat view are one act recorded once.
+   *
+   * TWO elements still come off, and each for a reason that survived that argument:
    *
    *   THE CHECKBOX. A ghost is not in this bucket, so it cannot be part of a selection
    *   made in it.
@@ -260,15 +265,19 @@ export function TaskRowLine({
         )
       ) : null}
 
+      {/*
+        NO `ghost` BRANCH HERE — O8c (STA-151). O3c drew a static glyph, on the grounds
+        that a fold would take real rows out of the group they belong to. STA-148 answers
+        that a group is a way of DISPLAYING rows: a fold hides rows from the display and
+        changes nothing about membership, and the group's `count` is `bucket.length`,
+        which no fold can reach. So the ghost gets the ordinary chevron, with the ordinary
+        label — one control, not two that look alike and behave differently.
+
+        The `stopPropagation` below is what keeps "the chevron folds, the rest of the row
+        opens the parent" true on a ghost without a second rule for it.
+      */}
       {columns.disclosure ? (
-        ghost ? (
-          /* Static, and in the open position. It is the origin the indent below hangs
-             from and it says "those rows are mine"; it is not a fold, because folding a
-             ghost would take real rows out of the group they belong to. */
-          <span className="staple-row-chevron staple-row-chevron-static" data-expanded="true" aria-hidden="true">
-            <Chevron />
-          </span>
-        ) : hasChildren ? (
+        hasChildren ? (
           <button
             type="button"
             className="staple-row-chevron"
