@@ -29,7 +29,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Background,
   Controls,
-  MarkerType,
   MiniMap,
   ReactFlow,
   ReactFlowProvider,
@@ -42,23 +41,27 @@ import { Button } from "@/components/ui/button";
 import { getGraph } from "@/lib/api";
 import type { AuthError } from "@/lib/api";
 import { applyFilters } from "@/lib/filters";
-import { buildLineageIndex, edgeKey, lineageFrom, type Lineage } from "@/lib/graph-lineage";
+import { buildLineageIndex, lineageFrom, type Lineage } from "@/lib/graph-lineage";
 import { useSession } from "@/lib/session";
 import type { Graph, IssueStatus } from "@/lib/types";
 import { useResource } from "@/lib/useStaple";
 import {
   absorption,
-  boundaryEdges,
   clusterId,
   collapseGraph,
-  containerize,
-  dimContainers,
   isResolved,
   restrictToEpics,
   shouldDefaultCollapse,
   summarizeEpics,
   withDescendantEpics,
 } from "./graph/graph-clusters";
+import {
+  canvasDimmed,
+  canvasFlowEdges,
+  canvasFlowNodes,
+  canvasShape,
+  canvasTicket,
+} from "./graph/graph-canvas";
 import {
   bridgeResolved,
   emphasisFor,
@@ -78,7 +81,6 @@ import {
   compoundLayout,
   connectedNodes,
   fitContainers,
-  graphSignature,
   mergePositions,
   relayout,
   type CompoundNode,
@@ -354,82 +356,31 @@ function GraphCanvas({
   const bridged = useMemo(() => bridgeResolved(canvas.edges, hidden), [canvas.edges, hidden]);
 
   /**
-   * Boxes around the expanded epics — O4c (STA-135).
+   * Boxes around the expanded epics, arrows re-pointed at them, and the two projections
+   * the layout works on — O4c (STA-135), extracted to `graph-canvas.ts` by O2c (STA-155)
+   * so that the Relations tab draws the same picture with the same code rather than a
+   * parallel one that slowly disagrees about what an arrow means.
    *
-   * LAST, AND THAT ORDER IS THE FEATURE'S WHOLE BLAST RADIUS. Everything above this line
-   * — the epic filter, collapsing, the global filter, `bridgeResolved` — still sees the
-   * flat ticket graph it was written against, so none of it had to learn what a container
-   * is. What containment changes is only which box a node is drawn INSIDE and where an
-   * arrow lands, which is exactly what this ticket is.
+   * CONTAINMENT LAST, AND THAT ORDER IS THE FEATURE'S WHOLE BLAST RADIUS. Everything
+   * above this line — the epic filter, collapsing, the global filter, `bridgeResolved` —
+   * still sees the flat ticket graph it was written against, so none of it had to learn
+   * what a container is. What containment changes is only which box a node is drawn
+   * INSIDE and where an arrow lands.
+   *
+   * One memo where there were five, because all five derived from these same four inputs
+   * and only ever changed together. `signature` is still computed over the FINAL lists,
+   * which is how the collapse set, the done mode and containment get folded in without
+   * `graphSignature` growing an argument: each one changes which ids, which parents or
+   * which edge pairs exist, so the signature changes and the layout effect below
+   * re-seeds. Toggling an epic or hiding done work re-runs the arrangement; a poll does
+   * not.
    */
-  const containment = useMemo(
-    () => containerize(visible, epics, collapsed),
-    [visible, epics, collapsed],
+  const shape = useMemo(
+    () => canvasShape(visible, bridged, epics, collapsed),
+    [visible, bridged, epics, collapsed],
   );
   /** The canvas, in render order: every box before the things drawn inside it. */
-  const nodes = containment.nodes;
-
-  const boundary = useMemo(
-    () => boundaryEdges(bridged, containment, collapsed),
-    [bridged, containment, collapsed],
-  );
-
-  /**
-   * The arrows as drawn, with what each one stands for folded back in.
-   *
-   * `boundaryEdges` hands back INDICES rather than edges so that it never had to learn
-   * about `cross`, `count` or bridging; this is where those come back together. The three
-   * rules are the ones `collapseGraph` already established for bundling, restated for a
-   * bundle that formed at a box's edge instead of inside a super-node:
-   *
-   *   `cross` is ALL-of — dashed promises "this crosses workspaces", and one crossing
-   *     contributor in nine must not be allowed to make that promise false.
-   *   `derived` is ALL-of — dotted means "inferred, because what was really here is
-   *     hidden", so a bundle holding one real dependency is drawn as a real one.
-   *   `count` SUMS, over the real dependencies only. A bridged edge has no count: it says
-   *     "there is a path", not "there are n of them".
-   *
-   * For an ordinary unbundled arrow every rule reduces to what it said before O4c, which
-   * is the case that must not change.
-   */
-  const links = useMemo(
-    () =>
-      boundary.map((arrow) => {
-        const sources = arrow.sources.map((index) => bridged[index]!);
-        return {
-          from: arrow.from,
-          to: arrow.to,
-          derived: sources.every((source) => source.derived),
-          cross: sources.every((source) => !source.derived && source.edge.cross),
-          count: sources.reduce((total, s) => total + (s.derived ? 0 : s.edge.count), 0),
-        };
-      }),
-    [boundary, bridged],
-  );
-
-  /** The edge list dagre and the lineage index work on: post-collapse, post-bridge, post-box. */
-  const pairs = useMemo(() => links.map(({ from, to }) => ({ from, to })), [links]);
-
-  /** The canvas as the layout sees it: an id, the box it is in, and whether it is one. */
-  const compound = useMemo<CompoundNode[]>(
-    () =>
-      nodes.map((node) => ({
-        id: node.id,
-        parent: containment.parentOf.get(node.id) ?? null,
-        container: node.kind === "container",
-      })),
-    [nodes, containment],
-  );
-
-  /**
-   * The signature is computed over the FINAL lists — collapsed, then filtered, then
-   * bridged, then boxed — which is how the collapse set, the done mode and containment
-   * all get folded in without `graphSignature` growing an argument: each one changes which
-   * ids, which parents or which edge pairs exist, so the signature changes and the layout
-   * effect below re-seeds. Toggling an epic or hiding done work re-runs the arrangement;
-   * a poll still does not.
-   */
-  const signature = useMemo(() => graphSignature(compound, pairs), [compound, pairs]);
+  const { nodes, containment, links, pairs, compound, signature } = shape;
 
   /**
    * The seeding effect keys on the SHAPE, not on `graph`.
@@ -843,110 +794,25 @@ function GraphCanvas({
     [nodes, compound, positions, sizes, links, faded, showWorkspace, session.mode, session.ws],
   );
 
-  /**
-   * Who is faded back — with boxes given the benefit of the doubt.
-   *
-   * `dimContainers` is the whole rule: React Flow draws a box's members as SIBLINGS of
-   * the box, not inside it, so dimming a box does not dim what it holds. A dimmed outline
-   * around bright cards reads as a rendering fault, so a box is background only when
-   * everything in it is.
-   */
-  const dimmed = useMemo(() => {
-    if (!emphasis) return new Set<string>();
-    const base = new Set(
-      nodes.filter((node) => !emphasis.nodes.has(node.id)).map((node) => node.id),
-    );
-    return dimContainers(nodes, containment.parentOf, base);
-  }, [emphasis, nodes, containment]);
+  /** Who is faded back, boxes included. See `canvasDimmed`. */
+  const dimmed = useMemo(
+    () => canvasDimmed(nodes, containment, emphasis),
+    [nodes, containment, emphasis],
+  );
 
   const flowNodes = useMemo<GraphFlowNode[]>(
     () =>
-      nodes.map((node): GraphFlowNode => {
-        /**
-         * Everything both kinds of box share. The only difference between a ticket and a
-         * collapsed epic on this canvas is which component draws it and what it carries
-         * in `data` — same size, same position source, same dim/focus rules.
-         *
-         * SIZE IS DECLARED RATHER THAN MEASURED, and it has to be declared HERE.
-         *
-         * React Flow normally learns a node's size by measuring the DOM and writing the
-         * result back through an `onNodesChange` "dimensions" event. This component
-         * derives its nodes fresh from `positions` on every render and applies only
-         * position changes, so a measured size would be discarded on the next render —
-         * and anything downstream of size silently gets nothing. The minimap is that
-         * downstream: without this it draws an empty box.
-         *
-         * Stating the size is honest rather than a workaround: both cards ARE fixed at
-         * NODE_W × NODE_H, and dagre already laid the graph out on that assumption. A
-         * container is not fixed but is still DECLARED: `compoundLayout` measured it, and
-         * `extent: "parent"` needs a box to clamp against before React Flow has had a
-         * chance to read one off the DOM.
-         */
-        /*
-         * O4c: `parentId` makes this node a React Flow SUB-FLOW child, which means its
-         * `position` is read relative to that parent — which is exactly what `positions`
-         * holds for it, and why the storage key had to be versioned. `extent: "parent"`
-         * is what keeps a dragged member inside its box; without it the box would be a
-         * decoration a member could be dragged out of, leaving a card that claims to be
-         * in an epic it is visibly outside.
-         */
-        const parentId = containment.parentOf.get(node.id);
-        const measured =
-          node.kind === "container"
-            ? (sizes[node.id] ?? { width: MIN_CONTAINER_W, height: MIN_CONTAINER_H })
-            : { width: NODE_W, height: NODE_H };
-        const shared = {
-          id: node.id,
-          position: positions[node.id] ?? { x: 0, y: 0 },
-          width: measured.width,
-          height: measured.height,
-          parentId,
-          extent: parentId ? ("parent" as const) : undefined,
-          // The card is the drag handle; React Flow adds its own. Nothing is connectable.
-          connectable: false,
-          // `emphasis === null` means nothing was asked, which must dim NOTHING.
-          dim: dimmed.has(node.id),
-          focused: focus === node.id,
-        };
-        const { dim, focused, ...box } = shared;
-        /*
-         * Fade is an inline style rather than a class because it must NOT compete with
-         * the dim/lit vocabulary in app.css — a faded node that is also dimmed should
-         * read as dimmed, and the two are applied to different elements (this wrapper
-         * vs. the card inside), so they multiply instead of fighting.
-         */
-        const style = faded?.has(node.id) && !dim ? { opacity: 0.32 } : undefined;
-
-        if (node.kind === "cluster") {
-          return {
-            ...box,
-            style,
-            type: "cluster" as const,
-            data: { epic: node.epic, showWorkspace, dim, focused, onExpand: expandOne },
-          };
-        }
-        if (node.kind === "container") {
-          return {
-            ...box,
-            style,
-            type: "container" as const,
-            data: {
-              epic: node.epic,
-              showWorkspace,
-              dim,
-              focused,
-              width: measured.width,
-              height: measured.height,
-              onCollapse: collapseOne,
-            },
-          };
-        }
-        return {
-          ...box,
-          style,
-          type: "task" as const,
-          data: { node: node.task, showWorkspace, dim, focused },
-        };
+      canvasFlowNodes({
+        nodes,
+        containment,
+        positions,
+        sizes,
+        dimmed,
+        faded,
+        focus,
+        showWorkspace,
+        onExpand: expandOne,
+        onCollapse: collapseOne,
       }),
     [
       nodes,
@@ -962,62 +828,7 @@ function GraphCanvas({
     ],
   );
 
-  const flowEdges = useMemo<Edge[]>(
-    () =>
-      links.map((link, i) => {
-        const { from, to, derived, cross, count } = link;
-        const lit = emphasis?.edges.has(edgeKey(from, to)) ?? false;
-        const dim = emphasis ? !lit : false;
-        return {
-          // Index is in the id because a duplicated dependency row would otherwise
-          // collide and React Flow would drop one of them silently.
-          id: `${from}->${to}#${i}`,
-          source: from,
-          target: to,
-          type: "smoothstep",
-          // Semantics live in the class; app.css turns them into pixels. `cross` is the
-          // same class name the legend swatches use, so the two cannot drift apart.
-          // A bridged edge is never `cross`: the workspaces it passed through are
-          // precisely the information that was hidden, so claiming either answer would
-          // be making it up.
-          className: [
-            "staple-rf-edge",
-            cross ? "cross" : "",
-            emphasis ? (lit ? "lineage" : "dim") : "",
-          ]
-            .filter(Boolean)
-            .join(" "),
-          /*
-           * A bridged edge is dotted, and inline rather than a class so that no new CSS
-           * has to know about it. It is a DIFFERENT dash pattern from the cross-workspace
-           * dash (5 4) on purpose — two dashed lines meaning different things would be
-           * the graph's third ambiguity, and this one reads as "inferred", not "crosses".
-           *
-           * Not applied when the edge is dimmed: the dim class owns opacity, and an
-           * inline style here would override it and make ignored edges the loudest.
-           */
-          style: derived && !dim ? { strokeDasharray: "1 4", opacity: 0.7 } : undefined,
-          /*
-           * How many real dependencies this one arrow stands for. Only shown when it
-           * stands for more than one — labelling every ordinary edge "×1" would add a
-           * hundred pieces of text to say nothing. A bridged edge carries no count: it
-           * says "there is a path", not "there are n dependencies".
-           */
-          label: !derived && count > 1 ? `×${count}` : undefined,
-          labelShowBg: false,
-          labelStyle: { fill: "var(--muted-foreground)", fontSize: 10 },
-          markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16 },
-          /*
-           * O4c: an edge touching a sub-flow node has to be lifted above the box it
-           * crosses, or React Flow paints the container over the arrow that enters it.
-           * `zIndex` on the EDGE is the library's own answer to this and costs nothing
-           * for the flat case, where no container is drawn to be painted over.
-           */
-          zIndex: 1,
-        };
-      }),
-    [links, emphasis],
-  );
+  const flowEdges = useMemo<Edge[]>(() => canvasFlowEdges(links, emphasis), [links, emphasis]);
 
   /**
    * Every box's size, in one lookup, for the drag clamp below. Through a ref so that
@@ -1081,10 +892,10 @@ function GraphCanvas({
    * ClusterNode), so that "click a node, read the node" survives collapsing.
    */
   const onNodeClick = useCallback<NodeMouseHandler<GraphFlowNode>>(
-    (_event, node) =>
-      node.type === "task"
-        ? session.open(node.data.node.workspace, node.id)
-        : session.open(node.data.epic.workspace, node.data.epic.id),
+    (_event, node) => {
+      const ticket = canvasTicket(node);
+      session.open(ticket.workspace, ticket.id);
+    },
     [session],
   );
 
