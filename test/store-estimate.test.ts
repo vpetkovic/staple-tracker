@@ -312,6 +312,7 @@ describe("rollups sum DIRECT children and nothing else", () => {
       todo: 0,
       in_progress: 1,
       in_review: 0,
+      awaiting_approval: 0,
       done: 0,
       blocked: 0,
       cancelled: 0,
@@ -331,7 +332,7 @@ describe("rollups sum DIRECT children and nothing else", () => {
       childrenEstimatedSeconds: null,
       childrenActiveSeconds: null,
       childStatusCounts: {
-        backlog: 0, todo: 0, in_progress: 0, in_review: 0, done: 0, blocked: 0, cancelled: 0,
+        backlog: 0, todo: 0, in_progress: 0, in_review: 0, awaiting_approval: 0, done: 0, blocked: 0, cancelled: 0,
       },
     });
   });

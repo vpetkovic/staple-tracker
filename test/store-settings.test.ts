@@ -45,6 +45,7 @@ describe("the seeded vocabulary", () => {
       "todo:ready",
       "in_progress:active",
       "in_review:review",
+      "awaiting_approval:gated",
       "done:done",
       "blocked:blocked",
       "cancelled:cancelled",
@@ -92,12 +93,13 @@ describe("the seeded vocabulary", () => {
 describe("editing statuses", () => {
   it("adds a status after a named one without renumbering the rest", () => {
     const before = store.getStatuses().map((s) => s.sortOrder);
-    store.addStatus({ id: "awaiting_approval", category: "gated", after: "in_review" });
+    store.addStatus({ id: "needs_qa", category: "review", after: "in_review" });
     expect(idsOf(store.getStatuses())).toEqual([
       "backlog",
       "todo",
       "in_progress",
       "in_review",
+      "needs_qa",
       "awaiting_approval",
       "done",
       "blocked",
@@ -132,6 +134,7 @@ describe("editing statuses", () => {
     store.reorderStatuses([
       "in_progress",
       "in_review",
+      "awaiting_approval",
       "blocked",
       "todo",
       "backlog",
@@ -141,6 +144,7 @@ describe("editing statuses", () => {
     expect(idsOf(store.getStatuses())).toEqual([
       "in_progress",
       "in_review",
+      "awaiting_approval",
       "blocked",
       "todo",
       "backlog",
@@ -264,16 +268,18 @@ describe("editing kinds", () => {
 describe("batched ops", () => {
   it("applies in order, so a later op sees an earlier one's row", () => {
     const result = store.applyStatusOps([
-      { op: "add", id: "awaiting_approval", category: "gated", after: "in_review" },
-      { op: "rename", id: "awaiting_approval", label: "Waiting on a human" },
+      { op: "add", id: "second_signoff", category: "gated", after: "awaiting_approval" },
+      { op: "rename", id: "second_signoff", label: "Waiting on a second human" },
     ]);
-    expect(result.find((s) => s.id === "awaiting_approval")?.label).toBe("Waiting on a human");
+    expect(result.find((s) => s.id === "second_signoff")?.label).toBe(
+      "Waiting on a second human",
+    );
   });
 
   it("is all-or-nothing: a failing op undoes the ops before it", () => {
     expect(() =>
       store.applyStatusOps([
-        { op: "add", id: "awaiting_approval", category: "gated" },
+        { op: "add", id: "second_signoff", category: "gated" },
         { op: "add", id: "todo", category: "ready" }, // duplicate -> throws
       ]),
     ).toThrowError(/already exists/);
@@ -308,8 +314,8 @@ describe("the settings cache", () => {
 /**
  * The workspace nothing in `store.ts` can have hardcoded: every built-in id is
  * gone, replaced by a same-category status under a different name. If a single
- * guard still compares against `"in_progress"` or `"done"`, everything below
- * fails.
+ * guard still compares against `"in_progress"`, `"done"` or `"awaiting_approval"`,
+ * everything below fails.
  */
 function renamedWorkspace(): WorkspaceStore {
   const s = memStore();
@@ -318,6 +324,7 @@ function renamedWorkspace(): WorkspaceStore {
     { op: "add", id: "queued", category: "ready" },
     { op: "add", id: "doing", category: "active" },
     { op: "add", id: "reviewing", category: "review" },
+    { op: "add", id: "signoff", category: "gated" },
     { op: "add", id: "shipped", category: "done" },
     { op: "add", id: "stuck", category: "blocked" },
     { op: "add", id: "dropped", category: "cancelled" },
@@ -325,10 +332,14 @@ function renamedWorkspace(): WorkspaceStore {
     { op: "remove", id: "todo", migrateTo: "queued" },
     { op: "remove", id: "in_progress", migrateTo: "doing" },
     { op: "remove", id: "in_review", migrateTo: "reviewing" },
+    { op: "remove", id: "awaiting_approval", migrateTo: "signoff" },
     { op: "remove", id: "done", migrateTo: "shipped" },
     { op: "remove", id: "blocked", migrateTo: "stuck" },
     { op: "remove", id: "cancelled", migrateTo: "dropped" },
-    { op: "reorder", ids: ["icebox", "queued", "doing", "reviewing", "shipped", "stuck", "dropped"] },
+    {
+      op: "reorder",
+      ids: ["icebox", "queued", "doing", "reviewing", "signoff", "shipped", "stuck", "dropped"],
+    },
   ]);
   return s;
 }
@@ -424,18 +435,25 @@ describe("every semantic keys off category, not off the built-in ids", () => {
     expect(store.getIssue(other.id).status).toBe("dropped");
   });
 
-  it("partitions the inbox by category, gated included", () => {
-    store.addStatus({ id: "awaiting_approval", category: "gated" });
+  /**
+   * THREE buckets, and the split between the two not-ready ones is a CATEGORY
+   * question (STA-143 x STA-140). `blocked` drains when other WORK lands;
+   * `gated` drains when a PERSON answers, and an agent that cannot tell them
+   * apart either nags a human about a dependency or waits for a human nobody
+   * told. `signoff` is this workspace's gated status — nothing here names
+   * `awaiting_approval`, which is the whole point of the block.
+   */
+  it("partitions the inbox by category: gated to queued, blocked to blocked", () => {
     const ready = store.createIssue({ title: "ready", status: "queued" });
     const parked = store.createIssue({ title: "parked", status: "stuck" });
-    const gated = store.createIssue({ title: "gated", status: "awaiting_approval" });
+    const gated = store.createIssue({ title: "gated", status: "signoff" });
 
     const inbox = store.inbox();
     expect(inbox.ready.map((i) => i.id)).toContain(ready.id);
-    expect(inbox.blocked.map((i) => i.id)).toEqual(
-      expect.arrayContaining([parked.id, gated.id]),
-    );
+    expect(inbox.blocked.map((i) => i.id)).toContain(parked.id);
+    expect(inbox.queued.map((i) => i.id)).toContain(gated.id);
     expect(inbox.ready.map((i) => i.id)).not.toContain(gated.id);
+    expect(inbox.blocked.map((i) => i.id)).not.toContain(gated.id);
   });
 
   it("counts children under the CONFIGURED status keys", () => {
@@ -443,7 +461,7 @@ describe("every semantic keys off category, not off the built-in ids", () => {
     store.createIssue({ title: "child", parent: epic.id, status: "queued" });
     const counts = store.timing(epic.id).childStatusCounts;
     expect(Object.keys(counts).sort()).toEqual(
-      ["doing", "dropped", "icebox", "queued", "reviewing", "shipped", "stuck"].sort(),
+      ["doing", "dropped", "icebox", "queued", "reviewing", "shipped", "signoff", "stuck"].sort(),
     );
     expect(counts.queued).toBe(1);
   });
@@ -475,6 +493,7 @@ describe("configured order drives the list", () => {
       "todo",
       "in_progress",
       "in_review",
+      "awaiting_approval",
       "done",
       "blocked",
       "cancelled",
@@ -483,20 +502,25 @@ describe("configured order drives the list", () => {
   });
 
   it("exposes the pickup and open orders it sorted by", () => {
+    // `gated` is absent from the PICKUP order and present in the OPEN one — the
+    // whole of "a parked parent is open work that nobody may pick up", in two lists.
     expect(store.inboxPickupOrder()).toEqual(["in_progress", "in_review", "todo", "backlog"]);
     expect(store.openStatusOrder()).toEqual([
       "in_progress",
       "in_review",
+      "awaiting_approval",
       "blocked",
       "todo",
       "backlog",
     ]);
-    store.addStatus({ id: "awaiting_approval", category: "gated" });
-    // `gated` sits between review and blocked: parked, but not yet a dependency.
+    store.addStatus({ id: "second_signoff", category: "gated" });
+    // A SECOND gated status joins the same tier, after the one already there:
+    // `gated` sits between review and blocked, parked but not yet a dependency.
     expect(store.openStatusOrder()).toEqual([
       "in_progress",
       "in_review",
       "awaiting_approval",
+      "second_signoff",
       "blocked",
       "todo",
       "backlog",

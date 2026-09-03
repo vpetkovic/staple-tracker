@@ -9,17 +9,22 @@ import {
 import {
   CHECKOUT_EXPECTED_CATEGORY_ORDER,
   type ClaimActivity,
+  DEFAULT_CHECKOUT_EXPECTED,
   DEFAULT_ISSUE_KIND,
+  type GateQueueEntry,
+  type GateState,
   INBOX_PICKUP_CATEGORY_ORDER,
   type Issue,
   type IssueComment,
   type IssueDocumentMeta,
+  type IssueGate,
   type IssueKind,
   type IssuePriority,
   type IssueStatus,
   type IssueTiming,
   LIST_CATEGORY_ORDER,
   MAX_TREE_DEPTH,
+  type QueuedBy,
   REQUIRED_STATUS_CATEGORIES,
   RESOLVED_CATEGORIES,
   StapleError,
@@ -118,6 +123,24 @@ export interface IssueFilters {
   includeResolved?: boolean;
 }
 
+/**
+ * One row of `inbox()`. The issue, plus the three reasons it might not be
+ * pickable, each as its own field so a surface never has to infer one from
+ * another:
+ *
+ *  - `unresolvedBlockers` — waiting on other WORK.
+ *  - `queuedBy`           — waiting on a HUMAN, somewhere above it.
+ *  - `gate`               — the gate this issue itself is holding, if any.
+ *
+ * `queuedBy` and `gate` are additive (STA-143): every field that was on an inbox
+ * entry before is still there, in the same place.
+ */
+export type InboxEntry = Issue & {
+  unresolvedBlockers: string[];
+  queuedBy: QueuedBy | null;
+  gate: IssueGate | null;
+};
+
 interface IssueRow {
   id: string;
   identifier: string;
@@ -144,6 +167,13 @@ interface IssueRow {
   checkout_at: string | null;
   blocked_transition_at: string | null;
   estimated_seconds: number | null;
+  gate_state: string | null;
+  gate_owner: string | null;
+  gate_requested_by: string | null;
+  gate_requested_at: string | null;
+  gate_resolved_by: string | null;
+  gate_resolved_at: string | null;
+  gate_released: number;
   started_at: string | null;
   completed_at: string | null;
   cancelled_at: string | null;
@@ -265,6 +295,80 @@ function defaultLabel(id: string): string {
     .filter(Boolean)
     .map((word) => word[0]!.toUpperCase() + word.slice(1))
     .join(" ");
+}
+
+/**
+ * The gate states that QUEUE the descendants underneath them (STA-143).
+ *
+ * `pending` is obvious. `changes_requested` is VP's explicit decision and the
+ * one rule here somebody will want to re-litigate, so the reasoning is written
+ * down rather than left to be inferred:
+ *
+ * A reviewer who asks for changes has NOT released the work. The parent comes
+ * back to `todo` so whoever picks up the reviewer's comment can act on it, but
+ * the children stay behind the queue, because the alternative — releasing an
+ * entire subtree the reviewer just objected to — is the exact stampede the gate
+ * exists to prevent. The queue therefore ends in exactly two ways: `approve`
+ * (whole or per-child), or a fresh `gate` cycle that supersedes this one.
+ *
+ * `approved` is deliberately NOT here: an approved gate is history, and history
+ * does not hold a queue.
+ */
+const GATE_QUEUEING_STATES: readonly GateState[] = ["pending", "changes_requested"];
+
+/** `gate` and `request-changes` and `approve` all act on a gate that is not yet finished. */
+function isActiveGate(state: string | null): boolean {
+  return state !== null && (GATE_QUEUEING_STATES as readonly string[]).includes(state);
+}
+
+/**
+ * One row as the gate walks need it (STA-143, widened by STA-154).
+ *
+ * `hasChildren` and `hasOpenDescendant` are computed once for the whole
+ * workspace by `gateWalkIndex` rather than queried per row, because the
+ * eligibility rules in `isQueueEligible` need them for EVERY id in a batch and
+ * a per-row `EXISTS (SELECT …)` would put N queries behind one list render.
+ */
+interface GateWalkNode {
+  id: string;
+  parentId: string | null;
+  identifier: string;
+  title: string;
+  status: IssueStatus;
+  gateState: string | null;
+  gateOwner: string;
+  released: boolean;
+  hasChildren: boolean;
+  /** Is any descendant of this row still open? False for a leaf. */
+  hasOpenDescendant: boolean;
+}
+
+interface GateWalkIndex {
+  nodes: Map<string, GateWalkNode>;
+  /** `parent id -> child ids`, in row order, for the pre-order walk in `gateQueueOf`. */
+  children: Map<string, string[]>;
+}
+
+/**
+ * The gate half of a row, or null when no gate was ever requested.
+ *
+ * A SIBLING of the issue rather than fields on it — see `IssueGate` in
+ * core/types.ts. The practical consequence is that `Issue`, `issueShape` in
+ * src/mcp.ts, and every payload pinned against them are untouched by this
+ * feature: `gate` rides beside them exactly as `claim` does.
+ */
+function rowToGate(row: Pick<IssueRow, "gate_state" | "gate_owner" | "gate_requested_by" | "gate_requested_at" | "gate_resolved_by" | "gate_resolved_at">): IssueGate | null {
+  if (!row.gate_state) return null;
+  return {
+    state: row.gate_state as GateState,
+    // Written non-null by `gateIssue`; the fallback exists only so a row
+    // hand-edited into a half-state renders as a string rather than crashing.
+    owner: row.gate_owner ?? "?",
+    requestedBy: row.gate_requested_by,
+    requestedAt: row.gate_requested_at ?? "",
+    resolvedBy: row.gate_resolved_by,
+    resolvedAt: row.gate_resolved_at,
+  };
 }
 
 /** Whole seconds between two ISO-8601 instants, floored at 0 (clocks can skew). */
@@ -1611,6 +1715,16 @@ export class WorkspaceStore {
    * approval nobody has given is not work an agent can pick up, and it is not a
    * reason to demote a parent.
    *
+   * That rung is also where a GATED CHILD lands (STA-143). The approval-gates
+   * branch used to drop `awaiting_approval` children from the list entirely, so
+   * a gate was invisible upward; the category ladder makes that both unnecessary
+   * and unsafe. Unnecessary, because rung 4 exists and says the true thing — an
+   * epic parked behind a review is not pickable, exactly like a blocked one.
+   * Unsafe, because dropping it would empty `open` and hand the parent to rungs
+   * 5/6, which read "nothing open" as FINISHED: a grandparent whose only
+   * remaining child is parked behind a human review would auto-close. A gate is
+   * the one thing that must never be mistaken for a completion.
+   *
    * Rungs 5 and 6 are STA-153, and they REPLACE STA-98's refinement 2 ("resolved
    * never derives upward"). A parent whose every child has landed is finished:
    * leaving it in `in_progress` was the lie the ticket exists to remove. The two
@@ -1747,6 +1861,27 @@ export class WorkspaceStore {
     actor: string | null,
     now: string,
   ): void {
+    /**
+     * A PARKED parent is immune, in both directions (STA-143).
+     *
+     * The gate is a statement by a human about this issue — the strongest kind
+     * of statement in the reversibility law — so derivation may not speak over
+     * it. Concretely: a child that is still in flight when the gate goes up
+     * would otherwise derive the active rung and un-park the parent the moment
+     * it moved, silently discarding the review.
+     *
+     * Stated as a CATEGORY (STA-140), not as the id `awaiting_approval`, so a
+     * workspace that renamed the row or added a second gated status gets the
+     * same immunity with no line changing here. And stated explicitly rather
+     * than left to `isDerivationOwned` returning false — it would, since the
+     * newest status-moving event on a parked parent is a plain `status_changed`
+     * with no `derived` marker, but "only the gate's own transitions may leave
+     * the gated category" is a rule of this feature, not an accident of what the
+     * log happens to hold, and a rule nobody can see is a rule that gets
+     * refactored away.
+     */
+    if (this.categoryOf(ancestor.status) === "gated") return;
+
     const childStatuses = (
       this.db.prepare("SELECT status FROM issues WHERE parent_id = ?").all(ancestor.id) as Array<{
         status: string;
@@ -1754,6 +1889,30 @@ export class WorkspaceStore {
     ).map((row) => row.status);
     const target = this.deriveStatusFromChildren(childStatuses);
     if (target === null) return; // rung 0: no children, so nothing to report
+
+    /**
+     * AN OPEN GATE OUTRANKS THE CLOSING RUNGS (STA-143 x STA-153).
+     *
+     * STA-153 made a parent close itself when its last child lands. STA-143 made
+     * a parent something a human has to sign off. Where those meet, the human
+     * wins: an issue whose gate is `pending` or `changes_requested` may not be
+     * closed by rungs 5/6, because the review IS the remaining work and an
+     * automatic `done` would answer the question the gate was asked to put to a
+     * person.
+     *
+     * `pending` is already covered by the category immunity above — the parent
+     * sits in the gated category while it waits. `changes_requested` is not, and
+     * it is the case that matters: `requestChanges` deliberately moves the parent
+     * back into the workable band so the work can resume, so the parent is in
+     * `todo` with an unanswered gate on it, and the last child landing again
+     * would otherwise close it out from under the reviewer who asked for the
+     * changes. Re-gating is the resubmit loop; auto-closing would skip it.
+     *
+     * Only the CLOSING rungs are refused. Rungs 1-4 still apply, so a parent
+     * with changes requested still reports that work has restarted underneath —
+     * that is a report, and reports are what derivation is for.
+     */
+    if ((target === "done" || target === "cancelled") && isActiveGate(ancestor.gate_state)) return;
 
     /**
      * Everything below is stated in CATEGORIES (STA-140). The band, the
@@ -1934,6 +2093,715 @@ export class WorkspaceStore {
     }
   }
 
+  // ---------- approval gates (STA-143) ----------
+
+  /**
+   * The gate on one issue, or null when none was ever requested.
+   *
+   * A read of stored columns, unlike `queuedBy` below which is a derivation.
+   * Both are siblings of the issue on every surface, which is deliberate: a
+   * caller looking at one row wants "is this parked" and "is this queued" side
+   * by side, and conflating them into one field would lose the distinction
+   * between holding a queue and standing in one.
+   */
+  gate(ref: string): IssueGate | null {
+    return rowToGate(this.requireRow(ref));
+  }
+
+  /** One batched read of `gate` for a whole page. Absent id => absent key. */
+  gateFor(issueIds: readonly string[]): Map<string, IssueGate> {
+    const gates = new Map<string, IssueGate>();
+    if (issueIds.length === 0) return gates;
+    const rows = this.db
+      .prepare(
+        `SELECT id, gate_state, gate_owner, gate_requested_by, gate_requested_at,
+                gate_resolved_by, gate_resolved_at
+           FROM issues
+          WHERE gate_state IS NOT NULL
+            AND id IN (${issueIds.map(() => "?").join(",")})`,
+      )
+      .all(...(issueIds as never[])) as Array<
+      Pick<
+        IssueRow,
+        | "id"
+        | "gate_state"
+        | "gate_owner"
+        | "gate_requested_by"
+        | "gate_requested_at"
+        | "gate_resolved_by"
+        | "gate_resolved_at"
+      >
+    >;
+    for (const row of rows) {
+      const gate = rowToGate(row);
+      if (gate) gates.set(row.id, gate);
+    }
+    return gates;
+  }
+
+  /**
+   * The narrow projection the ancestor walks run against: one scan of the four
+   * facts a gate walk needs, for the whole workspace.
+   *
+   * A recursive CTE per issue would be the textbook answer and is the wrong one
+   * here. `queuedByFor` is called on every list, every inbox and every checkout,
+   * usually for tens to hundreds of ids at once, and the ancestor chains overlap
+   * almost completely — the same epic is the parent of everything on the page.
+   * One narrow scan shared by the whole batch beats N walks through the b-tree,
+   * and it is the same trade `claimActivityFor` and `worklogSummaryFor` already
+   * make.
+   */
+  private gateWalkIndex(): GateWalkIndex {
+    const rows = this.db
+      .prepare(
+        "SELECT id, parent_id, identifier, title, status, gate_state, gate_owner, gate_released FROM issues",
+      )
+      .all() as Array<{
+      id: string;
+      parent_id: string | null;
+      identifier: string;
+      title: string;
+      status: string;
+      gate_state: string | null;
+      gate_owner: string | null;
+      gate_released: number;
+    }>;
+    const nodes = new Map<string, GateWalkNode>(
+      rows.map((row) => [
+        row.id,
+        {
+          id: row.id,
+          parentId: row.parent_id,
+          identifier: row.identifier,
+          title: row.title,
+          status: row.status as IssueStatus,
+          gateState: row.gate_state,
+          gateOwner: row.gate_owner ?? "?",
+          released: row.gate_released === 1,
+          hasChildren: false,
+          hasOpenDescendant: false,
+        },
+      ]),
+    );
+
+    /** Child ids in insertion order, which is `createChild` order — see `gateQueueOf`. */
+    const children = new Map<string, string[]>();
+    for (const row of rows) {
+      if (!row.parent_id) continue;
+      const parent = nodes.get(row.parent_id);
+      if (!parent) continue;
+      parent.hasChildren = true;
+      const siblings = children.get(row.parent_id);
+      if (siblings) siblings.push(row.id);
+      else children.set(row.parent_id, [row.id]);
+    }
+
+    /**
+     * `hasOpenDescendant` for every node, in one pass — NOT one subtree walk per
+     * node.
+     *
+     * Climb from each OPEN row marking its ancestors, and stop the moment an
+     * ancestor is already marked, because everything above it is already true.
+     * Every edge is therefore visited at most twice across the whole index,
+     * which is the budget this method has: `queuedByFor` runs on every list,
+     * every inbox and every checkout.
+     */
+    for (const node of nodes.values()) {
+      if (this.isResolvedStatus(node.status)) continue;
+      let cursor = node.parentId;
+      const seen = new Set<string>([node.id]);
+      let hops = 0;
+      while (cursor && hops < MAX_TREE_DEPTH && !seen.has(cursor)) {
+        seen.add(cursor);
+        const ancestor = nodes.get(cursor);
+        if (!ancestor || ancestor.hasOpenDescendant) break;
+        ancestor.hasOpenDescendant = true;
+        cursor = ancestor.parentId;
+        hops += 1;
+      }
+    }
+
+    return { nodes, children };
+  }
+
+  /**
+   * IS THIS ROW ELIGIBLE TO STAND IN A QUEUE AT ALL — VP's review, STA-154.
+   *
+   * Two rules, both learned from one screen on which neither held:
+   *
+   *  1. **A resolved row is never queued.** A queue is a queue of work still to
+   *     do. Holding back something already finished releases nobody and blocks
+   *     nobody, and a `done` row reading "Queued · awaiting VP on STA-119" is a
+   *     claim the reviewer cannot act on. VP's snapshot had four of them under
+   *     one parent, and they are what made the real queue unreadable.
+   *
+   *  2. **A parent that has children but nothing open underneath is not
+   *     queued.** It has nothing to release, so approving it is a no-op — and a
+   *     reviewer who ticks a no-op, approves it, and finds the row unchanged
+   *     concludes the gate is broken. That was STA-122, exactly.
+   *
+   * The second rule is deliberately scoped to rows that HAVE children. An open
+   * leaf also has an empty subtree, and it is the single most important thing a
+   * gate holds: it IS the work. "Nothing open underneath" is only ever a
+   * statement about a container.
+   */
+  private isQueueEligible(node: GateWalkNode): boolean {
+    if (this.isResolvedStatus(node.status)) return false;
+    if (node.hasChildren && !node.hasOpenDescendant) return false;
+    return true;
+  }
+
+  /**
+   * Which gate, if any, each of `issueIds` is QUEUED BEHIND.
+   *
+   * ## The walk
+   *
+   * Start at the issue and climb. The first ancestor holding an ACTIVE gate
+   * (`GATE_QUEUEING_STATES`) is the answer. The issue's own gate is never the
+   * answer — a parent holding a gate is not standing in its own queue — so the
+   * search starts at `parent_id`.
+   *
+   * ## Release is a property of the SUBTREE, not of one row
+   *
+   * `gate_released` is set on the children a reviewer named, but a released
+   * child's own descendants have to come with it: releasing STA-113 and leaving
+   * its three subtasks queued behind the same gate would release nothing an
+   * agent could actually work.
+   *
+   * So the walk carries a `released` flag upward. Any node on the path from the
+   * issue to the gate — including the issue itself — that is flagged releases
+   * everything below it from the NEXT gate encountered. The flag is then spent
+   * (`released = false`) and the climb continues, because a release granted by
+   * one reviewer says nothing about an OUTER gate somebody else is holding: a
+   * child released from its epic's gate is still queued behind a gate on the
+   * program above it.
+   *
+   * Bounded by `MAX_TREE_DEPTH` with a `seen` set, like every other walk in this
+   * file: a corrupt `parent_id` cycle must not be the thing that hangs a list.
+   */
+  queuedByFor(issueIds: readonly string[]): Map<string, QueuedBy> {
+    const queued = new Map<string, QueuedBy>();
+    if (issueIds.length === 0) return queued;
+    const index = this.gateWalkIndex();
+    for (const id of issueIds) {
+      const answer = this.queuedByIn(index, id);
+      if (answer) queued.set(id, answer);
+    }
+    return queued;
+  }
+
+  /** The walk itself, against an index the caller already built. */
+  private queuedByIn(index: GateWalkIndex, id: string): QueuedBy | null {
+    const self = index.nodes.get(id);
+    if (!self) return null;
+    // Eligibility comes FIRST. A resolved row and an emptied-out parent are not
+    // queued no matter what stands above them — see `isQueueEligible`.
+    if (!this.isQueueEligible(self)) return null;
+    let released = self.released;
+    let cursor = self.parentId;
+    const seen = new Set<string>([id]);
+    let hops = 0;
+    while (cursor && hops < MAX_TREE_DEPTH && !seen.has(cursor)) {
+      seen.add(cursor);
+      const node = index.nodes.get(cursor);
+      if (!node) break;
+      if (isActiveGate(node.gateState)) {
+        if (!released) return { identifier: node.identifier, owner: node.gateOwner };
+        // Released from THIS gate only; keep climbing for an outer one.
+        released = false;
+      } else if (node.released) {
+        released = true;
+      }
+      cursor = node.parentId;
+      hops += 1;
+    }
+    return null;
+  }
+
+  /**
+   * THE QUEUE THIS GATE IS HOLDING — the reviewer's checklist (STA-154).
+   *
+   * `queuedByFor` answers "is this row queued" for a page of rows. This answers
+   * the reviewer's question from the other end: standing at the gate, what am I
+   * actually deciding about? Both go through `queuedByIn`, so the checklist and
+   * every row caption on the page cannot disagree about one ticket — which is
+   * the whole reason this is a store method and not a filter in the browser.
+   *
+   * A row is in the queue when it is a descendant of `ref`, it is eligible
+   * (open, and not a container with nothing open underneath), and the gate it
+   * stands in is THIS one. That last clause is what stops an inner gate's
+   * subtree appearing here: `store.approveGate` would happily release it — it
+   * is a descendant — but the decision belongs to whoever holds the inner gate,
+   * and offering it is offering to overrule them.
+   *
+   * The result is a flat PRE-ORDER list, and `depth` counts the LISTED chain
+   * rather than the real one. A row whose real parent was skipped is re-parented
+   * onto the nearest listed ancestor, because an indent under a row that is not
+   * on screen is a hole, and a hole in a checklist is a decision nobody can
+   * reason about. See `GateQueueEntry`.
+   *
+   * Answers `[]` rather than refusing when there is no active gate: the detail
+   * panel asks this of every issue it renders.
+   */
+  gateQueueOf(ref: string): GateQueueEntry[] {
+    const row = this.requireRow(ref);
+    if (!isActiveGate(row.gate_state)) return [];
+    const index = this.gateWalkIndex();
+
+    const out: GateQueueEntry[] = [];
+    const walk = (parentId: string, depth: number): void => {
+      if (depth > MAX_TREE_DEPTH) return;
+      for (const childId of index.children.get(parentId) ?? []) {
+        const node = index.nodes.get(childId);
+        if (!node) continue;
+        const listed = this.queuedByIn(index, childId)?.identifier === row.identifier;
+        if (listed) {
+          out.push({
+            id: node.id,
+            identifier: node.identifier,
+            title: node.title,
+            status: node.status,
+            parentId: node.parentId,
+            depth,
+          });
+        }
+        // Recurse either way. A skipped row may still have listed work beneath
+        // it (a done parent with an open subtask), and that work is re-parented
+        // onto this level rather than left indented under nothing.
+        walk(childId, listed ? depth + 1 : depth);
+      }
+    };
+    walk(row.id, 1);
+    return out;
+  }
+
+  /** Single-issue `queuedByFor`. Accepts any ref the rest of the store accepts. */
+  queuedBy(ref: string): QueuedBy | null {
+    const row = this.requireRow(ref);
+    return this.queuedByFor([row.id]).get(row.id) ?? null;
+  }
+
+  /** Every descendant id of `rootId`, bounded like every other walk here. */
+  private descendantIds(rootId: string): string[] {
+    const out: string[] = [];
+    let frontier = [rootId];
+    const seen = new Set<string>([rootId]);
+    for (let depth = 0; depth < MAX_TREE_DEPTH && frontier.length > 0; depth += 1) {
+      const rows = this.db
+        .prepare(
+          `SELECT id FROM issues WHERE parent_id IN (${frontier.map(() => "?").join(",")})`,
+        )
+        .all(...(frontier as never[])) as Array<{ id: string }>;
+      frontier = [];
+      for (const row of rows) {
+        if (seen.has(row.id)) continue;
+        seen.add(row.id);
+        out.push(row.id);
+        frontier.push(row.id);
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Park a parent behind a human review gate.
+   *
+   * Refusals, both deliberate:
+   *
+   *  - **No children.** A gate exists to queue the work underneath it. On a leaf
+   *    there is nothing to queue, and the thing the caller actually wants is
+   *    `in_review` — which already means "finished, waiting on a human" and
+   *    already ranks READY in the inbox. Two statuses that mean review with no
+   *    way to tell which one you need is exactly the confusion this refusal
+   *    prevents.
+   *  - **A gate that is still PENDING.** Re-gating would move the owner out
+   *    from under a reviewer who has not answered yet.
+   *
+   * Note which state is NOT refused: `changes_requested`. That is the main loop
+   * of this whole feature — the reviewer said "fix it", somebody fixed it, and
+   * `staple gate` again is how it goes back for a re-read. Refusing it would
+   * leave a subtree queued behind an objection with no way to answer it. An
+   * `approved` gate can be re-gated too; that is simply a new review cycle.
+   *
+   * The claim is cleared. Nobody is working a parked parent by definition, and
+   * leaving `checkout_agent` set would make the epic accrue idle time and show
+   * up as a stale claim somebody should steal — the precise misreading (STA-108
+   * sitting in_progress for 56 minutes while it waited on a human) that this
+   * whole feature exists to end. `assignee` is left alone: who owns the work is
+   * still true while it waits.
+   */
+  gateIssue(
+    ref: string,
+    opts: { owner: string; comment?: string },
+    actor?: string | null,
+  ): Issue {
+    const owner = opts.owner?.trim();
+    if (!owner) {
+      throw new StapleError("validation", "gate requires --owner: name the human who must approve");
+    }
+    return tx(this.db, () => {
+      const row = this.requireRow(ref);
+      if (this.isResolvedStatus(row.status)) {
+        throw new StapleError(
+          "conflict",
+          `Cannot gate ${row.identifier}: it is already ${row.status}.`,
+          { currentStatus: row.status },
+        );
+      }
+      /**
+       * WHERE THE GATE PARKS ITS PARENT IS A CONFIGURATION QUESTION (STA-140).
+       *
+       * The first status in the `gated` category, which on a default workspace
+       * is `awaiting_approval`. Resolved before the write so a workspace that
+       * has no gated status fails HERE, with `primaryStatusFor`'s sentence
+       * naming the command that fixes it, rather than writing an id the
+       * workspace does not have and failing a validation somewhere downstream.
+       */
+      const parkedStatus = this.primaryStatusFor("gated");
+      const children = (
+        this.db.prepare("SELECT id FROM issues WHERE parent_id = ?").all(row.id) as Array<{
+          id: string;
+        }>
+      ).length;
+      if (children === 0) {
+        throw new StapleError(
+          "validation",
+          `Cannot gate ${row.identifier}: it has no children, so there is nothing to queue. Use \`staple status ${row.identifier} in_review\` for a leaf awaiting a human.`,
+        );
+      }
+      if (row.gate_state === "pending") {
+        throw new StapleError(
+          "conflict",
+          `${row.identifier} is already gated, awaiting ${row.gate_owner ?? "?"}. Resolve that gate before opening another.`,
+          { currentStatus: row.status, gateState: row.gate_state, gateOwner: row.gate_owner },
+        );
+      }
+      const now = nowIso();
+      const updated = this.db
+        .prepare(
+          `UPDATE issues SET
+             status = ?,
+             status_version = status_version + 1,
+             gate_state = 'pending',
+             gate_owner = ?,
+             gate_requested_by = ?,
+             gate_requested_at = ?,
+             gate_resolved_by = NULL,
+             gate_resolved_at = NULL,
+             checkout_agent = NULL,
+             checkout_at = NULL,
+             unblock_owner = NULL, unblock_action = NULL, blocked_transition_at = NULL,
+             updated_at = ?
+           WHERE id = ? RETURNING *`,
+        )
+        .get(parkedStatus, owner, actor ?? null, now, now, row.id) as unknown as IssueRow;
+
+      /**
+       * TWO events, and the pairing is load-bearing.
+       *
+       * `status_changed` keeps the timing replay exact: every status-writing
+       * site in this file must emit a kind in `STATUS_MOVING_EVENT_KINDS`, or
+       * the replay silently stops explaining the row and every affected issue
+       * degrades to `approximate` with nothing going red. Emitting the status
+       * move under the kind that already means "status moved" costs nothing and
+       * needs no new case in `statusAfterEvent`.
+       *
+       * `gate_requested` carries the SEMANTICS — who was asked, by whom — which
+       * `status_changed` has no field for and no business inventing one for.
+       */
+      this.emitEvent({
+        kind: "status_changed",
+        issueId: row.id,
+        actor,
+        payload: { identifier: row.identifier, from: row.status, to: parkedStatus },
+      });
+      this.emitEvent({
+        kind: "gate_requested",
+        issueId: row.id,
+        actor,
+        payload: {
+          identifier: row.identifier,
+          owner,
+          previousStatus: row.status,
+          previousHolder: row.checkout_agent,
+        },
+      });
+      if (opts.comment) {
+        this.insertComment(row.id, actor ?? "unknown", actor ? "agent" : "system", opts.comment);
+      }
+      // Transition site 6 of 7: parking a parent changes its status, so its own
+      // ancestors have to be recomputed like any other transition. The gated row
+      // reaches their ladder at rung 4 — an approval nobody has given is not
+      // work anyone can pick up — so a grandparent with nothing else open reads
+      // `blocked`, never `done` (see deriveStatusFromChildren).
+      this.recomputeAncestorStatuses(updated, actor ?? null);
+      return rowToIssue(updated);
+    });
+  }
+
+  /**
+   * Resolve a gate by approving it — wholly, or one named child at a time.
+   *
+   * ## Whole-gate approve
+   *
+   * The gate becomes `approved`, every descendant's `gate_released` is reset to
+   * 0 (the per-child flags have done their job and a stale one would leak into
+   * the NEXT gate cycle), and the parent's status is re-derived from its
+   * children by the ordinary ladder — so an epic whose children are all backlog
+   * comes back as `backlog`, not as whatever it happened to be before it was
+   * parked. With nothing open underneath, it lands in `todo`: the work is
+   * approved and somebody should close it, which is a pickup-able fact.
+   *
+   * ## Per-child approve
+   *
+   * Each named ref must be a DESCENDANT of the gated issue — approving a
+   * stranger's ticket "as part of" this gate is a typo, not an intention, and
+   * refusing it is cheaper than explaining the released row later. The parent
+   * stays parked and the gate stays active, which is the entire point: the
+   * reviewer is letting one thread proceed, not ending the review.
+   *
+   * ## What "an active gate" means here
+   *
+   * Both `pending` and `changes_requested` are accepted. Requesting changes does
+   * not end the review — the children are still queued behind it (see
+   * `GATE_QUEUEING_STATES`) — so approve has to be able to end it, or a reviewer
+   * who asks for changes has trapped the subtree until somebody opens a whole
+   * new gate cycle.
+   */
+  approveGate(
+    ref: string,
+    opts: { children?: readonly string[]; comment?: string } = {},
+    actor?: string | null,
+  ): Issue {
+    return tx(this.db, () => {
+      const row = this.requireRow(ref);
+      if (!isActiveGate(row.gate_state)) {
+        throw new StapleError(
+          "conflict",
+          row.gate_state === "approved"
+            ? `${row.identifier} has no gate awaiting approval — it was already approved${row.gate_resolved_by ? ` by ${row.gate_resolved_by}` : ""}.`
+            : `${row.identifier} has no gate to approve. Park it first with \`staple gate ${row.identifier} --owner <who>\`.`,
+          { currentStatus: row.status, gateState: row.gate_state },
+        );
+      }
+      const now = nowIso();
+
+      if (opts.children && opts.children.length > 0) {
+        const descendants = new Set(this.descendantIds(row.id));
+        const released: string[] = [];
+        for (const childRef of opts.children) {
+          const child = this.requireRow(childRef);
+          if (!descendants.has(child.id)) {
+            throw new StapleError(
+              "validation",
+              `${child.identifier} is not underneath ${row.identifier}, so this gate cannot release it.`,
+              { identifier: child.identifier, gate: row.identifier },
+            );
+          }
+          this.db
+            .prepare("UPDATE issues SET gate_released = 1, updated_at = ? WHERE id = ?")
+            .run(now, child.id);
+          released.push(child.identifier);
+          this.emitEvent({
+            kind: "gate_child_approved",
+            issueId: child.id,
+            actor,
+            payload: { identifier: child.identifier, gate: row.identifier, owner: row.gate_owner },
+          });
+        }
+        if (opts.comment) {
+          this.insertComment(row.id, actor ?? "unknown", actor ? "agent" : "system", opts.comment);
+        }
+        // The parent does not move: partial approval is not resolution. Re-read
+        // so the caller sees the row as it now stands rather than as it was.
+        return rowToIssue(this.requireRow(row.id));
+      }
+
+      // ---- whole-gate approve ----
+      const descendants = this.descendantIds(row.id);
+      if (descendants.length > 0) {
+        this.db
+          .prepare(
+            `UPDATE issues SET gate_released = 0, updated_at = ?
+              WHERE gate_released = 1 AND id IN (${descendants.map(() => "?").join(",")})`,
+          )
+          .run(now, ...(descendants as never[]));
+      }
+
+      const childStatuses = (
+        this.db.prepare("SELECT status FROM issues WHERE parent_id = ?").all(row.id) as Array<{
+          status: string;
+        }>
+      ).map((r) => r.status);
+      const derived = this.deriveStatusFromChildren(childStatuses);
+      /**
+       * WHERE AN APPROVED PARENT LANDS.
+       *
+       * The ladder decides, because "what does this parent's own work look like
+       * now" is exactly the ladder's question and the gate has stopped being the
+       * answer to it. Three cases and each is deliberate:
+       *
+       *  - The ladder declines (rung 0: no children at all). Its "leave it
+       *    alone" answer is not available to us — leaving it alone means leaving
+       *    it parked, which is precisely the state this call exists to clear —
+       *    so the READY status, the same landing request-changes uses. `gate`
+       *    refuses a childless issue, so this is only reachable if the children
+       *    were reparented or deleted while the gate was open.
+       *  - The workable band, which enters at the UNSTARTED status for the same
+       *    reason rung 3 does: an epic is never picked up, its children are.
+       *  - Anything else, including `done` and `cancelled` (STA-153). A gate
+       *    whose whole subtree landed while the reviewer was reading it SHOULD
+       *    close on approval — that is the normal auto-close rule resuming the
+       *    moment the human answers, and the auto-close guard in
+       *    `deriveOneAncestor` is scoped to gates that are still OPEN precisely
+       *    so that this one is not.
+       */
+      const next: IssueStatus =
+        derived === null
+          ? this.primaryStatusFor("ready")
+          : this.primaryStatusFor(derived === "workable" ? "unstarted" : derived);
+      const nextCategory = this.categoryOf(next);
+
+      const updated = this.db
+        .prepare(
+          `UPDATE issues SET
+             status = ?,
+             status_version = status_version + 1,
+             gate_state = 'approved',
+             gate_resolved_by = ?,
+             gate_resolved_at = ?,
+             gate_released = 0,
+             started_at = CASE WHEN ? = 1 THEN COALESCE(started_at, ?) ELSE started_at END,
+             blocked_transition_at = CASE WHEN ? = 1 THEN ? ELSE NULL END,
+             completed_at = CASE WHEN ? = 1 THEN ? ELSE completed_at END,
+             cancelled_at = CASE WHEN ? = 1 THEN ? ELSE cancelled_at END,
+             unblock_owner = NULL, unblock_action = NULL,
+             updated_at = ?
+           WHERE id = ? RETURNING *`,
+        )
+        .get(
+          next,
+          actor ?? null,
+          now,
+          nextCategory === "active" ? 1 : 0,
+          now,
+          nextCategory === "blocked" ? 1 : 0,
+          now,
+          nextCategory === "done" ? 1 : 0,
+          now,
+          nextCategory === "cancelled" ? 1 : 0,
+          now,
+          now,
+          row.id,
+        ) as unknown as IssueRow;
+
+      this.emitEvent({
+        kind: "status_changed",
+        issueId: row.id,
+        actor,
+        payload: { identifier: row.identifier, from: row.status, to: next },
+      });
+      this.emitEvent({
+        kind: "gate_approved",
+        issueId: row.id,
+        actor,
+        payload: {
+          identifier: row.identifier,
+          owner: row.gate_owner,
+          releasedDescendants: descendants.length,
+          to: next,
+        },
+      });
+      if (opts.comment) {
+        this.insertComment(row.id, actor ?? "unknown", actor ? "agent" : "system", opts.comment);
+      }
+      /**
+       * An approval that CLOSES the parent is a resolution like any other, so it
+       * runs the whole hook before the walk, in the order STA-153 established:
+       * dependents of a just-finished epic get woken, and the level above gets
+       * its own `children_complete` before `recomputeAncestorStatuses` closes
+       * it — the reverse order swallows the wake exactly when it matters.
+       */
+      if (this.isResolvedStatus(next)) this.afterResolution(updated);
+      // Transition site 7 of 7 — unparking is a transition like any other.
+      this.recomputeAncestorStatuses(updated, actor ?? null);
+      return rowToIssue(updated);
+    });
+  }
+
+  /**
+   * Resolve a gate by sending it back with a comment.
+   *
+   * The comment is MANDATORY, and it is stored as a real comment rather than
+   * only as event payload. A reviewer's objection is the single most important
+   * thing anyone picking this ticket up next needs to read, and event payloads
+   * are not where anyone reads. It rides in the `gate_changes_requested` event
+   * too, so a timeline can render the objection inline without a second query.
+   *
+   * The parent returns to `todo` — pickable by ANYONE, with no automatic
+   * re-checkout of whoever last held it. Nobody is woken up; the work simply
+   * becomes available again with the reviewer's note attached.
+   *
+   * The children STAY QUEUED. See `GATE_QUEUEING_STATES` for why: "changes
+   * requested" is not "released", and draining the queue on an objection is the
+   * opposite of what the reviewer asked for.
+   */
+  requestChanges(ref: string, opts: { comment: string }, actor?: string | null): Issue {
+    const comment = opts.comment?.trim();
+    if (!comment) {
+      throw new StapleError(
+        "validation",
+        "request-changes requires a comment (-m): say what has to change, or approve instead.",
+      );
+    }
+    return tx(this.db, () => {
+      const row = this.requireRow(ref);
+      if (!isActiveGate(row.gate_state)) {
+        throw new StapleError(
+          "conflict",
+          `${row.identifier} has no gate awaiting a decision. Park it first with \`staple gate ${row.identifier} --owner <who>\`.`,
+          { currentStatus: row.status, gateState: row.gate_state },
+        );
+      }
+      const now = nowIso();
+      // The READY status of this workspace, not the literal `todo` — the same
+      // resolution `release` makes, for the same reason: this row is now
+      // somebody's to pick up.
+      const next = this.primaryStatusFor("ready");
+      const updated = this.db
+        .prepare(
+          `UPDATE issues SET
+             status = ?,
+             status_version = status_version + 1,
+             gate_state = 'changes_requested',
+             gate_resolved_by = ?,
+             gate_resolved_at = ?,
+             checkout_agent = NULL,
+             checkout_at = NULL,
+             unblock_owner = NULL, unblock_action = NULL, blocked_transition_at = NULL,
+             updated_at = ?
+           WHERE id = ? RETURNING *`,
+        )
+        .get(next, actor ?? null, now, now, row.id) as unknown as IssueRow;
+
+      this.emitEvent({
+        kind: "status_changed",
+        issueId: row.id,
+        actor,
+        payload: { identifier: row.identifier, from: row.status, to: next },
+      });
+      this.emitEvent({
+        kind: "gate_changes_requested",
+        issueId: row.id,
+        actor,
+        payload: { identifier: row.identifier, owner: row.gate_owner, comment },
+      });
+      this.insertComment(row.id, actor ?? "unknown", actor ? "agent" : "system", comment);
+      this.recomputeAncestorStatuses(updated, actor ?? null);
+      return rowToIssue(updated);
+    });
+  }
+
   // ---------- update ----------
 
   updateIssue(ref: string, patch: UpdateIssueInput, actor?: string | null): Issue {
@@ -1999,6 +2867,41 @@ export class WorkspaceStore {
       }
 
       if (statusChanging) {
+        /**
+         * THE GATED CATEGORY is reachable and leavable ONLY through the gate
+         * commands (STA-143). Both directions are refused here, and both matter:
+         *
+         *  - INTO it, because a status written without a gate would be a parked
+         *    parent with no owner, no requester and no way to approve it — a
+         *    dead end that looks like a review.
+         *  - OUT OF it, because a parked parent is a promise to a human that
+         *    nothing moves until they answer. `staple status <ref> todo` must
+         *    not be a quieter `approve` that leaves the gate row saying
+         *    `pending` forever while the queue silently drains.
+         *
+         * This includes `done` and `cancelled`: resolve the gate first, then
+         * close the ticket. That is one extra command in exchange for never
+         * having a resolved issue that still carries an unanswered gate.
+         *
+         * Keyed off the CATEGORY (STA-140), so a workspace that renamed
+         * `awaiting_approval`, or added a second gated status of its own, gets
+         * the same protection — and so does a workspace that removed the gated
+         * vocabulary entirely, where the guard simply never fires because no
+         * status can be in a category with no members.
+         */
+        if (categoryAfter === "gated") {
+          throw new StapleError(
+            "validation",
+            `Cannot set "${statusAfter}" directly — park the issue with \`staple gate <ref> --owner <who>\`, which records who must approve it.`,
+          );
+        }
+        if (categoryBefore === "gated") {
+          throw new StapleError(
+            "validation",
+            `${row.identifier} is parked behind a review gate${row.gate_owner ? ` awaiting ${row.gate_owner}` : ""}; resolve it with \`staple approve ${row.identifier}\` or \`staple request-changes ${row.identifier} -m "..."\` before changing its status.`,
+            { currentStatus: row.status, gateOwner: row.gate_owner },
+          );
+        }
         const assigneeAfter =
           patch.assignee !== undefined ? patch.assignee : row.assignee;
         if (categoryAfter === "active") {
@@ -2771,6 +3674,35 @@ export class WorkspaceStore {
       if (this.isActiveStatus(row.status) && row.checkout_agent === agent) {
         return rowToIssue(row); // crash-recovery re-claim
       }
+      /**
+       * The queue guard (STA-143), and its position in this method is the whole
+       * design:
+       *
+       *  - AFTER the crash-recovery re-claim, so an agent already holding a
+       *    ticket when a gate went up above it can still resume after a crash.
+       *    It is mid-flight work, not a fresh pickup, and refusing it would
+       *    orphan the claim it is trying to recover.
+       *  - BEFORE everything else, so `--steal-if-stale` cannot route around it.
+       *    A stale holder and a closed gate are unrelated facts, and a takeover
+       *    is an answer to the first one only. The reviewer's decision does not
+       *    become less binding because some other agent went quiet.
+       *
+       * Its own error code — `gated`, non-retryable — because the instruction it
+       * carries is not "pick a different task right now" but "this one opens
+       * when a human opens it". The message names both the gate and its owner so
+       * an agent reading only the sentence knows exactly who to chase.
+       */
+      const queued = this.queuedByFor([row.id]).get(row.id);
+      if (queued) {
+        throw new StapleError(
+          "gated",
+          `${row.identifier} is queued behind ${queued.identifier}, awaiting approval by ${queued.owner}. Pick a different task — approval is a human action, not a retry.`,
+          {
+            currentStatus: row.status,
+            queuedBy: { identifier: queued.identifier, owner: queued.owner },
+          },
+        );
+      }
       const now = nowIso();
       const placeholders = expected.map(() => "?").join(",");
       const claimed = this.db
@@ -3264,8 +4196,12 @@ export class WorkspaceStore {
     /**
      * The status rank is GENERATED from the workspace's configuration (STA-140)
      * rather than written out, which is what makes "reorder the statuses and the
-     * list reorders" true. For the seeded seven it produces exactly the
-     * hardcoded `CASE` it replaced.
+     * list reorders" true. For the seeded statuses it produces exactly the
+     * hardcoded `CASE` it replaced, with the gated band (STA-143) slotted where
+     * `LIST_CATEGORY_ORDER` puts it — beside `blocked`, above the workable band.
+     * That is the same judgement `blocked` has always had: work that needs
+     * somebody's attention ranks above work that is merely waiting to be picked
+     * up, and a parked parent is the most attention-needing row on the list.
      */
     const sql = `SELECT * FROM issues ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
       ORDER BY
@@ -3282,40 +4218,85 @@ export class WorkspaceStore {
   /**
    * Agent inbox: ready work in pickup order (in_progress -> in_review -> todo
    * -> backlog), dependency-aware — an issue with unresolved blockers is not
-   * ready even if its status says todo. Blocked work is listed separately.
+   * ready even if its status says todo. Blocked work and gate-held work are
+   * listed separately.
+   *
+   * ## Three buckets, and what each one MEANS to an agent
+   *
+   *  - `ready`   — take one of these.
+   *  - `queued`  — real, unclaimed work that a HUMAN has to release. Checkout is
+   *                refused (`gated`), and no amount of waiting or retrying moves
+   *                it: the queue drains when a person approves.
+   *  - `blocked` — waiting on other WORK (a blocker, or a manual block with a
+   *                descriptor). It drains when that work lands.
+   *
+   * The distinction is the reason `queued` is not folded into `blocked`. Both
+   * mean "not now", but they answer "who unsticks this" with different kinds of
+   * answer, and an agent that cannot tell them apart either nags a human about a
+   * dependency or waits patiently for a human who was never told.
+   *
+   * ## Why a parked parent lands in `queued` and not in `blocked`
+   *
+   * An `awaiting_approval` issue has no `queuedBy` — it is not standing in a
+   * queue, it IS the queue — but it is gate-held work all the same, and its
+   * `gate` field names the owner. Putting it in `blocked` would render it as
+   * "? must act", because a parked parent has no unblock descriptor and
+   * deliberately never gets one. Putting it beside the children it is holding
+   * reads correctly on every surface: one QUEUED section, the gate at the top of
+   * it, the work it is holding underneath.
+   *
+   * `ready` therefore excludes both, and that is the whole "gated is never
+   * ready" rule. It is enforced by CATEGORY (STA-140): `gated` is absent from
+   * `INBOX_PICKUP_CATEGORY_ORDER`, so any status an operator files under it
+   * inherits the rule without a line changing here.
    */
   inbox(
     assignee?: string,
     page?: { limit: number; offset: number },
   ): {
-    ready: Array<Issue & { unresolvedBlockers: string[] }>;
-    blocked: Array<Issue & { unresolvedBlockers: string[] }>;
+    ready: Array<InboxEntry>;
+    queued: Array<InboxEntry>;
+    blocked: Array<InboxEntry>;
     hasMore: boolean;
   } {
     const filters: IssueFilters = assignee ? { assignee } : {};
-    // ready/blocked partition ONE window over the open issues, so the page is
-    // over the scan, not over either list.
+    // The three buckets partition ONE window over the open issues, so the page
+    // is over the scan, not over any one list.
     const { items, hasMore } = page
       ? this.listIssuesPage(filters, page)
       : { items: this.listIssues(filters), hasMore: false };
-    const blockersByIssue = this.unresolvedBlockersFor(items.map((i) => i.id));
-    const ready: Array<Issue & { unresolvedBlockers: string[] }> = [];
-    const blocked: Array<Issue & { unresolvedBlockers: string[] }> = [];
+    const ids = items.map((i) => i.id);
+    const blockersByIssue = this.unresolvedBlockersFor(ids);
+    const queuedByIssue = this.queuedByFor(ids);
+    const gatesByIssue = this.gateFor(ids);
+    const ready: InboxEntry[] = [];
+    const queued: InboxEntry[] = [];
+    const blocked: InboxEntry[] = [];
     for (const issue of items) {
       const unresolved = blockersByIssue.get(issue.id) ?? [];
-      const entry = { ...issue, unresolvedBlockers: unresolved };
+      const entry: InboxEntry = {
+        ...issue,
+        unresolvedBlockers: unresolved,
+        queuedBy: queuedByIssue.get(issue.id) ?? null,
+        gate: gatesByIssue.get(issue.id) ?? null,
+      };
       /**
-       * "Not ready" is a CATEGORY question since STA-140: `blocked` and `gated`
+       * "Not ready" is a CATEGORY question since STA-140: `gated` and `blocked`
        * both mean an agent cannot pick this up, and an unresolved dependency
        * means it regardless of what the status says. Everything left is ready,
        * already in `inboxPickupOrder()` because `issuesQuery` sorted it there.
+       *
+       * Which of the two NOT-READY buckets it lands in is the STA-143 question,
+       * and gate first: a queued issue with unresolved blockers is still gated,
+       * and naming the gate is the more actionable of the two facts — the
+       * blocker cannot even be worked until the gate opens.
        */
       const category = this.categoryOf(issue.status);
-      const parked = category === "blocked" || category === "gated";
-      if (parked || unresolved.length > 0) blocked.push(entry);
+      if (entry.queuedBy || category === "gated") queued.push(entry);
+      else if (category === "blocked" || unresolved.length > 0) blocked.push(entry);
       else ready.push(entry);
     }
-    return { ready, blocked, hasMore };
+    return { ready, queued, blocked, hasMore };
   }
 
   /**

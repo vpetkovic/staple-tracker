@@ -156,6 +156,48 @@ describe("the guide teaches the whole protocol", () => {
     expect(guide).toMatch(/worktree/i);
   });
 
+  it("teaches the inbox QUEUED bucket and that a gated checkout is not retryable", () => {
+    // The bucket is not BLOCKED, and the distinction is the whole point: one
+    // waits on work, the other waits on a person.
+    expect(guide).toContain("**QUEUED**");
+    expect(guide).toMatch(/means something different\s+from BLOCKED/i);
+    expect(guide).toContain("awaiting_approval");
+    expect(guide).toContain("exit code 9");
+    expect(guide).toContain("`gated`");
+    // The three non-remedies, named, because each one is a thing an agent tries.
+    expect(guide).toMatch(/will not clear by retrying, by waiting, or by\s+.--steal-if-stale/i);
+  });
+
+  it("teaches the gate step: park the work on a human, do not sit on the claim", () => {
+    expect(guide).toContain("Approval gates");
+    // Every verb rendered with THIS workspace's prefix, copy-pasteable as printed.
+    for (const invocation of [
+      "staple gate DEM-42 --owner VP",
+      "staple approve DEM-42",
+      "staple approve DEM-42 --children DEM-43,DEM-44",
+      "staple request-changes DEM-42 -m",
+    ]) {
+      expect(guide, invocation).toContain(invocation);
+    }
+    // The instruction that replaces the STA-108 failure mode.
+    expect(guide).toMatch(/how a design-first ticket ends\. Not with a held claim/i);
+    expect(guide).toMatch(/looks stealable to the next agent/i);
+    // A gate is refused on a leaf, and the refusal has a destination.
+    expect(guide).toContain("staple status DEM-42 in_review");
+    expect(guide).toMatch(/a gate with nobody to chase never opens/i);
+    // The half everyone gets wrong: request-changes frees the parent only. STA-154
+    // states it as the one sentence the CLI help, the MCP description and the web
+    // UI's "Send back" button all carry, so the guide is pinned to that wording.
+    expect(guide).toMatch(/keeps the queued children\s+parked until somebody approves/i);
+    expect(guide).toMatch(/nobody is re-checked-out/i);
+    // STA-154 eligibility: what a gate does NOT hold is as load-bearing as what it does.
+    expect(guide).toMatch(/only open work is queued/i);
+    expect(guide).toMatch(/nothing open left underneath it/i);
+    // And the way back in.
+    expect(guide).toMatch(/re-gating is how you resubmit/i);
+    expect(guide).toContain("changes_requested");
+  });
+
   it("describes claim liveness exactly as the surfaces report it", () => {
     expect(guide).toContain("held 2h · silent 45m");
     for (const field of ["heldBy", "lastActivityAt", "heldSeconds", "idleSeconds"]) {

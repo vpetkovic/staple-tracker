@@ -40,6 +40,7 @@ import { Button } from "@/components/ui/button";
 import { getDocument } from "@/lib/api";
 import type { AuthError } from "@/lib/api";
 import { blockingDescriptor, needsBorrowedDescriptor } from "@/lib/derived-blocked";
+import { gateCaption, gateRefusalReason, isGateParked } from "@/lib/derived-queued";
 import { Markdown } from "@/lib/markdown";
 import { useSession } from "@/lib/session";
 import type { CrossBlocker, IssueDocumentMeta, IssueRef } from "@/lib/types";
@@ -274,6 +275,36 @@ export function OverviewTab({ detail, workspace, onAuthError }: TabProps) {
       {issue.status === "blocked" && (issue.unblockOwner || issue.unblockAction) ? (
         <p className="mt-3 rounded-md border border-[var(--status-task-blocked)]/40 bg-[var(--status-task-blocked)]/10 px-3 py-2 text-[13px]">
           unblock: {issue.unblockOwner ?? "?"} must {issue.unblockAction ?? "?"}
+        </p>
+      ) : null}
+
+      {/*
+        THE GATE DESCRIPTOR — Q2 (STA-144). Same slot and same shape as the unblock
+        descriptor above, because it answers the identical question — who is this
+        waiting on — and the only difference is that the answer is a decision rather
+        than a dependency.
+
+        MONOCHROME, unlike the two blocked descriptors, and that is the deliberate
+        part. Those borrow `--status-task-blocked` because blocked is a problem. A gate
+        is not a problem: it is the process working. Colouring it red would tell every
+        reader that a healthy review is a fault, which is the exact misreading STA-142
+        exists to end.
+
+        Both directions are stated here rather than only the parent's, because the
+        detail panel is where somebody lands from a queued child's row and asks why
+        they cannot claim it — and `gateRefusalReason` is the sentence that answers it,
+        the same one on the disabled claim button a few pixels above.
+      */}
+      {isGateParked(detail) ? (
+        <p data-gate="parked" className="mt-3 rounded-md border border-dashed px-3 py-2 text-[13px]">
+          {gateCaption(detail.gate!)} — this and everything under it is parked until it is
+          approved
+        </p>
+      ) : null}
+
+      {detail.queuedBy ? (
+        <p data-gate="queued" className="mt-3 rounded-md border border-dashed px-3 py-2 text-[13px]">
+          {gateRefusalReason(detail.queuedBy)}
         </p>
       ) : null}
 

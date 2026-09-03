@@ -372,11 +372,14 @@ describe("help surface", () => {
   it("pins the help section headings a reader navigates by", () => {
     const help = cli("help").stdout;
     const headings = help.split("\n").filter((l) => /^[A-Z][A-Za-z &]*$/.test(l));
-    // "Workspace vocabulary" arrived with STA-140 (staple statuses / kinds).
+    // "Approval gates" arrived with STA-143 and sits with the flow it belongs to;
+    // "Workspace vocabulary" arrived with STA-140 (staple statuses / kinds) and sits
+    // last, after the global flags, because it is configuration rather than work.
     expect(headings).toEqual([
       "Workspace",
       "Tasks",
       "Flow",
+      "Approval gates",
       "Documents & events",
       "UI",
       "Workspace vocabulary",
@@ -393,10 +396,14 @@ describe("help surface", () => {
      *
      * STA-140 made the footer say "built-in seed" out loud, because `staple help`
      * has no workspace in hand and can only ever print the seed — the workspace's
-     * actual set comes from `staple statuses ls`.
+     * actual set comes from `staple statuses ls`. STA-143 added
+     * `awaiting_approval` to that seed, between `in_review` and `done`, which is
+     * where the life of a ticket puts it.
      */
     expect(help).toContain("Statuses (built-in seed;");
-    expect(help).toContain("backlog todo in_progress in_review done blocked cancelled");
+    expect(help).toContain(
+      "backlog todo in_progress in_review awaiting_approval done blocked cancelled",
+    );
   });
 
   /**

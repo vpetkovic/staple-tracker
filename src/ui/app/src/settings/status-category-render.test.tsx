@@ -117,7 +117,8 @@ describe("StatusIcon resolves the glyph from the category", () => {
     expect(gated).toContain("var(--status-task-icon-blocked)");
     expect(blocked).toContain("var(--status-task-icon-blocked)");
     expect(gated).not.toBe(blocked);
-    // Blocked fills the disc (r=7); gated is a ring (r=6) with the same bar.
+    // Blocked fills the disc (r=7); gated is an unfilled ring (r=6) holding an
+    // hourglass, so the pair survives a monochrome print.
     expect(blocked).toContain('r="7"');
     expect(gated).toContain('r="6"');
   });

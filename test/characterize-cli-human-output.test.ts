@@ -164,6 +164,11 @@ describe("read command renderings", () => {
         "",
         "◑ IN_REVIEW (0)",
         "",
+        // STA-143. The board renders ISSUE_STATUSES in order, so a new status
+        // shows up here as a new column in the position the vocabulary gives
+        // it — between review and done, where a gate sits in a ticket's life.
+        "⊙ AWAITING_APPROVAL (0)",
+        "",
         "● DONE (1)",
         "   HUM-5     Epsilon",
         "",

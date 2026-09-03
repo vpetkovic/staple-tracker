@@ -112,6 +112,7 @@ describe("GET /api/settings", () => {
       "todo",
       "in_progress",
       "in_review",
+      "awaiting_approval",
       "done",
       "blocked",
       "cancelled",
@@ -131,13 +132,23 @@ describe("GET /api/settings", () => {
     expect(settings.groupOrder).toEqual([
       "in_progress",
       "in_review",
+      "awaiting_approval",
       "blocked",
       "todo",
       "backlog",
       "done",
       "cancelled",
     ]);
-    expect(settings.openOrder).toEqual(["in_progress", "in_review", "blocked", "todo", "backlog"]);
+    expect(settings.openOrder).toEqual([
+      "in_progress",
+      "in_review",
+      "awaiting_approval",
+      "blocked",
+      "todo",
+      "backlog",
+    ]);
+    // `awaiting_approval` is in both lists above and in NEITHER of the pickup
+    // tiers: open work that no agent may pick up is exactly what a gate is.
     expect(settings.pickupOrder).toEqual(["in_progress", "in_review", "todo", "backlog"]);
     // The configured order and the list rank are DIFFERENT lists, which is the whole
     // reason both are on the wire.

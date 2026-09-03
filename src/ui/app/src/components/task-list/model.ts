@@ -24,6 +24,15 @@ export const STATUS_LABEL: Record<IssueStatus, string> = {
   todo: "Todo",
   in_progress: "In Progress",
   in_review: "In Review",
+  /**
+   * Title Case like its seven neighbours, NOT the "Awaiting approval" the ticket
+   * spelled — Q2 (STA-144). This record's contract is the line above, and it is
+   * read as a set: a status column reading `In Progress · In Review · Awaiting
+   * approval · Done` shows the odd one out as a typo rather than as a decision.
+   * Sentence case is the register of the SECTION labels ("Up next", "Pending
+   * approval") and of the Gate filter's values, and it is used there.
+   */
+  awaiting_approval: "Awaiting Approval",
   done: "Done",
   blocked: "Blocked",
   cancelled: "Cancelled",

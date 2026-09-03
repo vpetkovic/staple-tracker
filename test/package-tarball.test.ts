@@ -325,8 +325,8 @@ describe("the installed binary, run from outside this repository", () => {
 
       const listed = (await rpc("tools/list", {})) as { result?: { tools?: Array<{ name: string }> } };
       const tools = listed.result?.tools ?? [];
-      // The same 20 tools scripts/smoke-mcp.ts exercises against the source tree.
-      expect(tools).toHaveLength(20);
+      // The same 23 tools scripts/smoke-mcp.ts exercises against the source tree.
+      expect(tools).toHaveLength(23);
       expect(tools.map((tool) => tool.name)).toContain("list_tasks");
 
       // A real call, so this proves the workspace path too, not just the handshake.

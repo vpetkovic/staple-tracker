@@ -36,6 +36,19 @@ never expires on its own. Staleness is information plus an affordance you
 invoke when a human says "continue". Blockers still win: a steal is refused
 while dependencies are unresolved, however dead the holder looks.
 
+Gates win too. `--steal-if-stale` cannot route around a review gate above the
+issue — checkout is refused with `gated` (exit 9) however dead the holder
+looks, because a stale holder and a closed gate are unrelated facts. The
+inverse is also true and is why the guard sits *after* the crash-recovery
+re-claim: an agent that was already holding a ticket when a gate went up
+above it can still resume its own work.
+
+A held claim on work that is really waiting on a person is the failure mode
+this whole file exists for, and `staple gate` is the honest way to end it:
+parking a parent **clears its claim**, so it stops accruing time and stops
+reading as live work somebody should steal. See
+[semantics.md](semantics.md#approval-gates).
+
 ## Waking on someone else's completion
 
 ```bash

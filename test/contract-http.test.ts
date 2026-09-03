@@ -259,6 +259,24 @@ describe("read shapes", () => {
       crossBlockers: [],
       // C1: claim liveness rides with the issue, matching MCP get_task.
       claim: claimGolden(),
+      // STA-143: and so does the gate pair, for the same reason — this route is
+      // get_task's context plus a workspace slug, and it must not diverge by a
+      // field.
+      gate: null,
+      queuedBy: null,
+      /**
+       * STA-144: and `childrenQueued`, which is where this route DOES diverge from
+       * get_task — deliberately, and it is the second such field after `workspace`.
+       *
+       * It is the reviewer's checklist. STA-154 changed its SHAPE from a map of
+       * direct children to a flat pre-ordered LIST of the open descendants the gate
+       * still holds, each with a depth, because approving a parent releases its
+       * subtree and a map of direct children cannot show a subtree. An agent has no
+       * checklist to draw and `/api/agent-context` is pinned byte-for-byte against
+       * get_task, so this is a UI affordance and it stays on the UI's own route — the
+       * same line `deps` draws on `/api/issues`. `[]` here because CON-1 has no gate.
+       */
+      childrenQueued: [],
       // STA-81/STA-90: so does the timing pair. CON-1 here is in_progress with
       // no children in this fixture, so it is a LEAF — its own interval IS the
       // headline, and `countedThrough` names where that open interval was

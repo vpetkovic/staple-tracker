@@ -69,6 +69,7 @@
  */
 import { flatRow, type TaskRow } from "@/components/task-list";
 import { waitingLine } from "@/lib/derived-blocked";
+import { isGateParked, isQueuedBehindGate } from "@/lib/derived-queued";
 import { isResolvedStatus } from "@/lib/settings";
 import type { BlockingChild, InboxIssue, InboxRow, Issue, IssueRow } from "@/lib/types";
 /**
@@ -82,7 +83,12 @@ import { placeRows, walkPlaced } from "./nesting";
  * `GROUP_BY_OPTIONS` and `FILTER_DIMENSIONS` play — the header, the count, the empty check
  * and the keyboard sequence all read this, so a fifth section would be one entry here.
  */
-export type PickupSectionId = "up_next" | "in_flight" | "waiting" | "resolved";
+export type PickupSectionId =
+  | "up_next"
+  | "in_flight"
+  | "waiting"
+  | "pending_approval"
+  | "resolved";
 
 export interface PickupSection {
   id: PickupSectionId;
@@ -106,6 +112,24 @@ export const PICKUP_SECTIONS: readonly PickupSection[] = [
     id: "waiting",
     label: "Waiting",
     hint: "blocked by a dependency, or by a child that is itself blocked",
+  },
+  /**
+   * Q2 (STA-144). AFTER Waiting and before the resolved coda.
+   *
+   * Both sections mean "not now", and the ordering follows how much of the page's
+   * attention each deserves. Waiting is the common case and its rows usually unstick
+   * themselves as other work lands. A gate is rarer, is held by a NAMED HUMAN, and
+   * needs somebody to go and ask — so it sits at the bottom of the actionable stack
+   * where it reads as a standing item rather than as noise above the queue.
+   *
+   * It is a section rather than a badge because a gate holds a SET: the parent and
+   * every open thing under it. Scattering that set through Up next with a marker
+   * would be exactly the state STA-142 exists to end.
+   */
+  {
+    id: "pending_approval",
+    label: "Pending approval",
+    hint: "parked behind a human review gate, or queued underneath one — checkout is refused",
   },
   {
     id: "resolved",
@@ -199,6 +223,28 @@ export function buildPickupIndex(payload: readonly InboxRow[]): PickupIndex {
   for (const { inbox } of payload) {
     for (const entry of inbox.ready) take(entry, ready);
   }
+  /**
+   * The gate bucket, indexed FOR RANK ONLY — Q2 (STA-144), and the distinction is
+   * deliberate.
+   *
+   * There is no `isQueued` on this index and there must not be. Membership of the
+   * Pending approval section is decided from the ROW's `gate`/`queuedBy` siblings
+   * through `lib/derived-queued.ts`, which is the one definition and the only one
+   * that works in flat and status modes (that file argues it at length). Adding a
+   * bucket-shaped answer here would give the app a second one to disagree with.
+   *
+   * What the index still owes those rows is their PLACE IN THE QUEUE, which is a
+   * pure ordering fact and is the whole reason this module exists. Ranked between
+   * ready and blocked so the counter stays total: `store.inbox()` puts the gate at
+   * the head of its own bucket, ahead of the work it holds, and that is the order
+   * the section renders in.
+   */
+  for (const { inbox } of payload) {
+    for (const entry of inbox.queued) {
+      ranks.set(entry.id, next);
+      next += 1;
+    }
+  }
   for (const { inbox } of payload) {
     for (const entry of inbox.blocked) {
       take(entry, blocked);
@@ -246,14 +292,35 @@ export function pickupSectionOf(row: IssueRow, index: PickupIndex): PickupSectio
   //    asking the index about them would always miss.
   if (isResolved(issue.status)) return "resolved";
 
-  // 2. Blocked — by a dependency the store resolved, or by a child (STA-98).
+  /**
+   * 2. GATED — Q2 (STA-144), and it outranks everything below it.
+   *
+   * Read off the row's own `gate`/`queuedBy` siblings, never from the index: see
+   * lib/derived-queued.ts for why that is borrowing the store's answer rather than
+   * re-deriving it, and why it is the source that works in every grouping mode.
+   *
+   * ABOVE WAITING, mirroring `store.inbox()`, which decides `queuedBy ||
+   * awaiting_approval` before it looks at `blocked` — in its own words, "a queued
+   * issue with unresolved blockers is still gated, and naming the gate is the more
+   * actionable of the two facts". Two surfaces, one precedence.
+   *
+   * ABOVE IN FLIGHT, on the argument Waiting already wins on one rung down: a
+   * queued row cannot move whoever is holding it, because checkout is refused and
+   * releasing it would only make it unclaimable. This is the exact rung STA-142
+   * exists to add — STA-108 sat in_progress, held, for 56 minutes while what it was
+   * really doing was waiting on a human. The claim badge still renders on the row,
+   * so nothing is hidden; it is filed under the heading that can act on it.
+   */
+  if (isGateParked(row) || isQueuedBehindGate(row)) return "pending_approval";
+
+  // 3. Blocked — by a dependency the store resolved, or by a child (STA-98).
   if (index.isBlocked(issue.id)) return "waiting";
 
-  // 3. Somebody is on it. `claim` is the strong signal; the two working statuses cover a
+  // 4. Somebody is on it. `claim` is the strong signal; the two working statuses cover a
   //    ticket moved by hand without a checkout, which is still not free to take.
   if (claim || issue.status === "in_progress" || issue.status === "in_review") return "in_flight";
 
-  // 4. Ready and free. Also the resting place for a row the inbox has not heard of yet —
+  // 5. Ready and free. Also the resting place for a row the inbox has not heard of yet —
   //    see the fallback note below.
   if (index.isReady(issue.id)) return "up_next";
 
@@ -385,6 +452,32 @@ export function buildPickupGroups(
      * the list twitching under the pointer. Numeric-aware so STA-9 precedes STA-10.
      */
     const ordered = [...bucket].sort((a, b) => {
+      /**
+       * ONE EXCEPTION TO THE STORE'S ORDER, IN ONE SECTION — Q2 (STA-144).
+       *
+       * Inside Pending approval, the GATES sort ahead of the work they are holding.
+       * Everywhere else this comparator is rank and nothing else, and that rule is the
+       * whole point of the module — so this needs a reason, and it is not aesthetics.
+       *
+       * `store.inbox()` returns the queued bucket in plain list order, which puts a
+       * parent wherever its `created_at` happens to fall — in practice, after most of
+       * its own children. The section then reads bottom-up: eighteen rows all saying
+       * "awaiting VP on STA-119", and STA-119 itself at the very end. The heading of a
+       * queue belongs at the top of it.
+       *
+       * Q1 hit this first and made the same call one surface over: the CLI "prints gate
+       * holders first within the section; the store keeps pickup order for its MCP and
+       * HTTP consumers". So this is not a new opinion, it is the SAME opinion, and
+       * writing it here is what keeps `staple inbox` and the tree agreeing about one
+       * ticket. Doing nothing would have been the divergence.
+       *
+       * It is a two-way partition, not a re-sort: rank still decides everything within
+       * each half, so the store's sequence survives intact on both sides of the split.
+       */
+      const ga = a.issue.status === "awaiting_approval" ? 0 : 1;
+      const gb = b.issue.status === "awaiting_approval" ? 0 : 1;
+      if (section.id === "pending_approval" && ga !== gb) return ga - gb;
+
       const ra = index.rank(a.issue.id);
       const rb = index.rank(b.issue.id);
       // COMPARED, not subtracted. `Infinity - 5` is `Infinity` and `Infinity - Infinity` is

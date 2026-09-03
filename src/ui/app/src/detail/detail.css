@@ -201,6 +201,353 @@
 }
 
 /*
+ * ═════════════════════════════════════════════════════════════════════════════════════
+ * THE REVIEW GATE BLOCK — Q4 (STA-147). Component: detail/GateReview.tsx.
+ * ═════════════════════════════════════════════════════════════════════════════════════
+ *
+ * VP rejected Q2's layout: "the list of child items actually overlaps … the task number
+ * split across two rows … the title overflows, requiring a horizontal scroll". The
+ * component's header comment has the full post-mortem; what matters HERE is the two
+ * declarations that make both failures structurally impossible, because they are the two
+ * a later edit is most likely to delete as redundant:
+ *
+ *   1. `.staple-gate-fieldset { min-inline-size: 0 }`. A `<fieldset>` carries a UA
+ *      `min-inline-size: min-content`. It is the ONLY element in CSS with that default,
+ *      it cannot be reached past from a descendant's `min-width: 0`, and it is why the
+ *      drawer scrolled sideways. Remove this line and the horizontal scroll comes back
+ *      at every width, from an element that has no visible border to blame it on.
+ *
+ *   2. `[title] minmax(0, 1fr)` on the row. A bare `1fr` keeps an auto min-content floor
+ *      and the title silently refuses to ellipsize — it pushes the track instead. Same
+ *      clause, same reason, as `.staple-row` in task-list.css.
+ *
+ * NO NEW HUE TOKENS. Every colour below is an existing role: `--border`, `--foreground`,
+ * `--text-tertiary`, `--muted-foreground`, `--surface-hover`, `--ring`. The block is a
+ * quiet card in a panel that spends its only colour on status, and a gate is not a
+ * status — the one saturated thing in it is the StatusIcon on each child, which is the
+ * shared component and brings its own tuned `--status-task-icon-*`.
+ */
+
+/* One card, one hairline. `min-width: 0` so it can be narrower than its longest child —
+   it lives inside a `w-fit max-w-full` strip, and without this the strip would size to
+   the longest title's max-content and take the drawer with it. */
+.staple-gate {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+/*
+ * The header WRAPS rather than truncating, and that is the one place in this block where
+ * an ellipsis would have been wrong. The child rows ellipsize because a title is a label
+ * you can recognise from its first forty characters and the full text is one hover away
+ * in `title=`. The state line is a SENTENCE — "changes requested by ada · 2h — still
+ * awaiting VP" — whose last clause is the actionable half, and clipping it would hide
+ * exactly the name the reader came for. A header has no fixed height to protect, so it
+ * takes the second line.
+ */
+.staple-gate-head {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
+}
+
+.staple-gate-eyebrow {
+  flex: none;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: var(--tracking-eyebrow);
+  text-transform: uppercase;
+}
+
+/* `overflow-wrap: anywhere` for the pathological owner name. A gate owner is a free-text
+   string from the CLI; one 60-character token must break rather than push the card. */
+.staple-gate-state {
+  min-width: 0;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+/* See note 1 at the top of this section. `min-inline-size`, not `min-width`: the UA
+   default is written in the logical property and only the logical property beats it. */
+.staple-gate-fieldset {
+  min-inline-size: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+/* A `<legend>` has a UA `padding-inline: 2px` that would put the caption 2px off the
+   card's text edge — a misalignment small enough to look like a rendering bug. */
+.staple-gate-legend {
+  padding: 0;
+  margin-bottom: 6px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+/*
+ * The list. Hairline top and bottom and nothing else — the same decision
+ * `.staple-task-list` makes and for the same reason: a bordered list inside a bordered
+ * card inside a bordered strip is the boxes-inside-boxes look this design language
+ * spends most of its rules avoiding.
+ */
+.staple-gate-rows {
+  min-width: 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+/*
+ * THE ROW. Four tracks that cannot renegotiate — see note 2 above for the title's.
+ *
+ * The identifier track is `max-content` and NOT `var(--gate-id-w)`, which is a distinction
+ * worth a paragraph because the obvious version is wrong and looks right.
+ *
+ * `--gate-id-w` is set on `.staple-gate-rows` by the component, in `ch`, from the longest
+ * identifier in THIS list. An unregistered custom property substitutes TEXTUALLY, so the
+ * `ch` is resolved wherever it is finally used — and `ch` means "the advance of a 0 in
+ * THIS element's font". Used on the row, it resolves in the panel's sans face and yields
+ * 63.6px for six characters; used on the id span, it resolves in Geist Mono at 11px and
+ * yields 39.6px, which is what six monospace characters actually measure. The first cut
+ * put it in the template and quietly spent 24px of the title's track on nothing.
+ *
+ * So the WIDTH lives on `.staple-gate-row-id`, where the font is right, and the TRACK is
+ * `max-content` — which is that width, because a `max-content` track takes an item's
+ * specified width as its contribution. Every row gets the same number from the same
+ * custom property, so every row's track is identical, and that is what makes the four
+ * columns align down the list without `subgrid`.
+ *
+ * 28px is `--row-height` at `[data-density="compact"]`, the shared task row's own value
+ * for a drawer. Stated as a literal rather than read from that variable because the
+ * variable is set on the task list's root, which is not an ancestor of this block; a
+ * `var()` with no declaration in scope would silently fall back to nothing and collapse
+ * every row to its content height.
+ */
+.staple-gate-row {
+  display: grid;
+  min-width: 0;
+  height: 28px;
+  align-items: center;
+  grid-template-columns:
+    [check] 16px
+    [identifier] max-content
+    [status] 16px
+    [title] minmax(0, 1fr);
+  column-gap: 8px;
+  padding: 0 6px;
+  /*
+   * THE INDENT — Q5 (STA-154). `--gate-depth` is set per row by the component, already
+   * clamped (see `indentSteps`); the fallback keeps a row flush if it is ever missing.
+   *
+   * PADDING, not a grid track and not a margin. A track would have to be added to the
+   * template, which is the layout contract above; a margin would shrink the row's border
+   * box and break the hairline separators' alignment with the card edge. Padding leaves
+   * `[title] minmax(0, 1fr)` to absorb whatever is left, so a deep tree ellipsizes
+   * further rather than pushing the drawer sideways — the failure VP saw in Q2 is still
+   * structurally unreachable at every depth.
+   *
+   * 14px per step, which is one checkbox width: an indented row's checkbox starts where
+   * its parent's identifier does, so the eye follows a column rather than a diagonal.
+   */
+  padding-inline-start: calc(6px + var(--gate-depth, 0) * 14px);
+  cursor: pointer;
+  /* Background ONLY. Never a transform, never a layout property: at 28px with a hairline
+     separator even a 1px shift on hover reads as the whole list twitching. */
+  transition: background-color var(--motion-duration-instant) var(--motion-ease-standard);
+}
+
+/* Touch gets a real target. Mirrors the `(pointer: coarse)` bump the compact task row
+   takes in task-list.css, so the two lists stay the same height on the same device. */
+@media (pointer: coarse) {
+  .staple-gate-row {
+    height: 36px;
+  }
+}
+
+.staple-gate-row + .staple-gate-row {
+  border-top: 1px solid var(--border);
+}
+
+/* `:focus-within` and not only `:hover`, so arrowing through the list with a keyboard
+   lights the same row a pointer would. */
+.staple-gate-row:hover,
+.staple-gate-row:focus-within {
+  background: var(--surface-hover);
+}
+
+/*
+ * THE CHECKBOX — Q2 (STA-144), and it deliberately does NOT reuse `.staple-row-check`.
+ *
+ * That class was the obvious thing to borrow — same 14px box, same accent — and it is
+ * wrong here for a reason that is invisible until you look at the panel: the row's
+ * checkbox is `opacity: 0` until its row is hovered, focused or already checked, and it
+ * is `display: none` below the narrow breakpoint. That is exactly right for a LIST you
+ * are scanning, where a column of empty boxes down the left edge would be furniture
+ * competing with the titles. It is exactly wrong for a CHECKLIST, where the boxes are
+ * the content: they rendered as invisible until moused over, which reads as a list of
+ * children the panel forgot to make selectable.
+ *
+ * So: same 14px geometry and same accent, always painted, at every width — centred in a
+ * 16px track so the column reads as a column rather than as a ragged left edge.
+ */
+.staple-gate-check {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  justify-self: center;
+  accent-color: var(--ring);
+  cursor: pointer;
+}
+
+/* An ENHANCEMENT of the UA ring, not a replacement: the native outline is already
+   correct in both themes, and this only guarantees the offset so the ring is not drawn
+   half-inside a 14px box against `--surface-hover`. */
+.staple-gate-check:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+/*
+ * NEVER WRAPS. This is the element VP watched break across two lines, and the three
+ * declarations that stop it are `white-space: nowrap`, the explicit `width` (which makes
+ * the grid track deterministic rather than content-measured), and `overflow: hidden` for
+ * the case a `MAX_ID_CH` clamp in the component has to bite.
+ */
+.staple-gate-row-id {
+  width: var(--gate-id-w, 6ch);
+  overflow: hidden;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.staple-gate-row-status {
+  flex: none;
+  justify-self: center;
+}
+
+/*
+ * The title cell — Q5 (STA-154). A FLEX inside the `[title] minmax(0, 1fr)` track, not a
+ * fifth track: a track takes its 8px column gap on every row, including the majority that
+ * carry no "+n", and the four-track template is the layout contract this whole block is
+ * built on.
+ *
+ * `min-width: 0` twice over — here and on the title span — because a flex item's
+ * `min-width: auto` floor is the same trap `1fr` sets on a grid track, and either one
+ * left at `auto` puts the horizontal scroll back.
+ */
+.staple-gate-row-main {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 6px;
+}
+
+/* 13px and `--foreground`: the child's title is the content of this list, and it reads at
+   the same size the shared task row gives a title. One line, ellipsis, full text in
+   `title=`. */
+.staple-gate-row-title {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--foreground);
+  font-size: 13px;
+  line-height: 1.2;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/*
+ * "+2" — how many more rows this tick releases. `flex: none`, so the TITLE gives way when
+ * the drawer narrows and the count never does: the title has a `title=` fallback one
+ * hover away and the count has none, and a blast radius that disappears at 420px is a
+ * blast radius the reviewer finds out about afterwards.
+ */
+.staple-gate-row-implies {
+  flex: none;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+/*
+ * A row that is released BY ITS PARENT's tick rather than by its own. Its checkbox is
+ * checked and disabled; this only dims the text to match, so the list reads as "these
+ * came along with the one above" rather than as five separate decisions.
+ *
+ * `cursor: default` because the label is no longer a control — a pointer that still says
+ * "click me" over a disabled checkbox is the row lying about what it does.
+ */
+.staple-gate-row-implied {
+  cursor: default;
+}
+
+.staple-gate-row-implied .staple-gate-row-title,
+.staple-gate-row-implied .staple-gate-row-id {
+  color: var(--text-tertiary);
+}
+
+.staple-gate-empty {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+
+/* Wraps, and the buttons keep their own `white-space: nowrap` from the Button variant —
+   so at 420px the row becomes two lines of whole buttons rather than one line of clipped
+   ones. `min-width: 0` so the flex container itself can be narrower than its content. */
+.staple-gate-actions {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+/* The disclosure. It is BELOW the actions row in the DOM, which is what stops the list
+   above from moving when it opens. */
+.staple-gate-objection {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.staple-gate-objection-label {
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+/*
+ * The Send back contract — Q5 (STA-154). It WRAPS, like the header's state line and for
+ * the same reason: it is a sentence whose three clauses are the three things the reviewer
+ * did not know, and clipping any of them is clipping the fix.
+ *
+ * `--muted-foreground` rather than `--text-tertiary`: this sits one step ABOVE the field
+ * label in importance, because the label names a box and this explains what pressing the
+ * button does.
+ */
+.staple-gate-objection-help {
+  margin: 0;
+  max-width: 52ch;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+/*
  * ── The Relations tab's canvas — O2b (STA-132) ───────────────────────────────────────
  *
  * React Flow MEASURES its container, and the tab body sits inside the panel's scrolling

@@ -132,6 +132,7 @@ describe("exit code contract", () => {
       cycle: 6,
       revision_conflict: 7,
       timeout: 8,
+      gated: 9,
     });
   });
 
@@ -144,6 +145,9 @@ describe("exit code contract", () => {
       "Exit codes: 0 ok · 1 unknown · 2 validation · 3 not_found · 4 conflict",
     );
     expect(help.stdout).toContain("5 duplicate · 6 cycle · 7 revision_conflict · 8 timeout (wait)");
+    expect(help.stdout).toContain(
+      "9 gated (a review gate above this issue is unresolved — a human, not a retry)",
+    );
   });
 
   it("a successful command exits 0 with a clean stderr", () => {

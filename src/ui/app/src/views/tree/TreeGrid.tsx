@@ -39,7 +39,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
-import { CircleDashed, Hourglass, Minus, PlayCircle, CheckCircle2 } from "lucide-react";
+import { CircleDashed, Hourglass, Minus, PlayCircle, CheckCircle2, UserCheck } from "lucide-react";
 import {
   KindGlyph,
   resolveTaskListConfig,
@@ -107,6 +107,14 @@ const PICKUP_ICONS: Record<PickupSectionId, ReactNode> = {
   up_next: <CircleDashed className="staple-group-icon" strokeWidth={PICKUP_ICON_STROKE} aria-hidden />,
   in_flight: <PlayCircle className="staple-group-icon" strokeWidth={PICKUP_ICON_STROKE} aria-hidden />,
   waiting: <Hourglass className="staple-group-icon" strokeWidth={PICKUP_ICON_STROKE} aria-hidden />,
+  /**
+   * A PERSON, not another clock — Q2 (STA-144). Waiting next door already owns the
+   * hourglass, and the difference between the two sections is not how long they have
+   * been stuck but WHO CAN UNSTICK THEM: Waiting resolves itself as other work lands,
+   * a gate resolves only when a named human decides. The tick beside the figure is the
+   * decision; the figure is who owes it.
+   */
+  pending_approval: <UserCheck className="staple-group-icon" strokeWidth={PICKUP_ICON_STROKE} aria-hidden />,
   resolved: <CheckCircle2 className="staple-group-icon" strokeWidth={PICKUP_ICON_STROKE} aria-hidden />,
 };
 
@@ -289,6 +297,7 @@ export function TreeGrid({
   mode,
   groupBy,
   pickup = EMPTY_PICKUP_INDEX,
+  captions,
   currentRef,
   showResolved,
   hiddenParents,
@@ -326,6 +335,26 @@ export function TreeGrid({
    * state and is what the list uses for the instant before the fetch answers.
    */
   pickup?: PickupIndex;
+  /**
+   * `issue.id -> one muted trailing sentence`, for rows that have one REGARDLESS OF
+   * GROUPING — Q2 (STA-144). Today that is the gate pair: "awaiting VP" on a parked
+   * parent, "Queued · awaiting VP on STA-108" on the work it holds.
+   *
+   * It is a separate input from the Waiting section's `waitingOn` because the two are
+   * scoped differently, and the difference is the whole reason this prop exists.
+   * `waitingOn` is a property of a SECTION — pickup order builds it, and flat and
+   * status modes have no equivalent, so a blocked row wears no caption there. A gate
+   * is a property of the ROW: it is true of that ticket in every mode, and the
+   * ticket's own requirement is that it show in pickup-order AND in flat/status
+   * grouping. Folding it into `waitingOn` would have meant teaching two more shapes to
+   * build one, and it would still have said nothing in flat mode.
+   *
+   * The section's caption wins where both exist — a blocked row in Waiting is in that
+   * section BECAUSE of the blocker, so the blocker is the sentence the heading has
+   * promised. In practice they cannot collide: `pickupSectionOf` ranks the gate above
+   * Waiting, so a gated row is never in the Waiting section to begin with.
+   */
+  captions?: ReadonlyMap<string, string>;
   /** Identifier currently open in the detail drawer. */
   currentRef: string | null;
   /** V4 (STA-89) owns the hide-resolved decision; the list only reads it. */
@@ -693,13 +722,19 @@ export function TreeGrid({
    * string rather than a second element, because it has to travel inside the row: the
    * separate caption ROW it replaced gave every waiting item its own hairline and a 53px
    * pitch against the 36px of Up next and In flight.
+   *
+   * The `?? captions` fallback (Q2, STA-144) is what makes the gate caption appear in
+   * FLAT and STATUS modes as well as pickup order: every path into a row goes through
+   * this one function, so there is exactly one place the two sources are reconciled and
+   * no shape can be taught about one and not the other. Section beats row — see the
+   * `captions` prop.
    */
   const renderRow = (row: TaskRow, index: number, caption?: string) => (
     <TaskRowLine
       key={row.issue.id}
       row={row}
       config={config}
-      caption={caption}
+      caption={caption ?? captions?.get(row.issue.id)}
       semantics="grid"
       isExpanded={row.isExpanded}
       isSelected={selected.has(row.issue.id)}

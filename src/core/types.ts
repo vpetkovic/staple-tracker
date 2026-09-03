@@ -8,26 +8,37 @@ import { createHash } from "node:crypto";
  * The BUILT-IN status vocabulary — the SEED, not the law (STA-140).
  *
  * Since O7a a workspace's statuses live in `workspace_statuses` and are read
- * through `WorkspaceStore.getStatuses()`. This array is what migration 004 seeds
- * a database with, and what a surface with no database in hand (the CLI's static
+ * through `WorkspaceStore.getStatuses()`. This array is what a database gets
+ * seeded with, and what a surface with no database in hand (the CLI's static
  * `--help`, a type default) may fall back to. Nothing that has a store should
- * consult it: an operator who added `awaiting_approval` or removed `in_review`
- * is entitled to have every surface agree with them.
+ * consult it: an operator who renamed `in_review` or added `needs_qa` is
+ * entitled to have every surface agree with them.
  *
  * The ORDER is load-bearing and is preserved verbatim by the seed: it is the
  * board's column order, pinned by `characterize-cli-surface.test.ts`.
+ *
+ * `awaiting_approval` (STA-143) is a member like any other, and that is the
+ * whole point of it living here rather than in a hard-coded guard: it means
+ * "this parent is PARKED behind a human review gate, and everything open
+ * underneath it is queued rather than pickable", and it gets that meaning from
+ * its CATEGORY (`gated`), not from its id. The gate commands are the only way in
+ * or out of it, but every guard that reads it — inbox partition, list rank,
+ * derived rungs, resolved-ness — reads the category, exactly as it does for
+ * `blocked` or `in_review`. Placed between `in_review` and `done` because that
+ * is where it sits in the life of a ticket.
  */
 export const ISSUE_STATUSES = [
   "backlog",
   "todo",
   "in_progress",
   "in_review",
+  "awaiting_approval",
   "done",
   "blocked",
   "cancelled",
 ] as const;
 
-/** The seven ids migration 004 seeds. A configured workspace may have others. */
+/** The eight ids staple seeds. A configured workspace may have others. */
 export type BuiltinIssueStatus = (typeof ISSUE_STATUSES)[number];
 
 /**
@@ -58,10 +69,14 @@ export type IssueStatus = string;
  *  - `ready`     — queued for pickup; workable, claimable. `release` lands here.
  *  - `active`    — work is happening. A claim can only ever be held here.
  *  - `review`    — waiting on a reviewer. Not execution: see `IssueTiming.reviewSeconds`.
- *  - `gated`     — parked awaiting an approval that is not a dependency.
- *                  Seeded EMPTY: reserved for the approval-gates epic (STA-142/143),
- *                  which owns the `awaiting_approval` row itself. Behaves like
- *                  `blocked` — open, not workable, not claimable.
+ *  - `gated`     — parked awaiting an approval that is not a dependency (STA-143).
+ *                  Seeded with `awaiting_approval`. Open, not workable, not
+ *                  claimable, and NEVER ready in the inbox — a member of this
+ *                  category is entered and left only by the gate commands
+ *                  (`gate` / `approve` / `request-changes`), never by
+ *                  `updateIssue`, and a parent sitting in it is immune to the
+ *                  derived-parent rungs in BOTH directions. Add your own member
+ *                  and it inherits all of that; nothing keys off the id.
  *  - `blocked`   — waiting on something nameable. Claimable, because taking a
  *                  blocked ticket to unblock it is how work gets unstuck.
  *  - `done`      — resolved, succeeded.
@@ -128,8 +143,15 @@ export const CHECKOUT_EXPECTED_CATEGORY_ORDER: readonly StatusCategory[] = [
  *
  * `release` writes `ready`, `checkout` writes `active`, `done`/`cancel` write
  * theirs, the derivation's rung 4 writes `blocked` and its rung 3 writes
- * `unstarted`. `review` and `gated` are absent on purpose: nothing can enter a
- * category with no members, so emptying them is a coherent configuration.
+ * `unstarted`. `review` is absent on purpose: nothing can enter a category with
+ * no members, so emptying it is a coherent configuration.
+ *
+ * `gated` is absent for the same reason, and it is worth being explicit about
+ * why, since `gate` DOES write into it: `gateIssue` resolves its target status
+ * through the CATEGORY rather than naming `awaiting_approval`, and refuses with
+ * a configuration error when the category is empty. A team that does not review
+ * may remove `awaiting_approval` and lose the gate command; it may not remove it
+ * and keep a gate command that writes a status the workspace does not have.
  */
 export const REQUIRED_STATUS_CATEGORIES: readonly StatusCategory[] = [
   "unstarted",
@@ -140,12 +162,21 @@ export const REQUIRED_STATUS_CATEGORIES: readonly StatusCategory[] = [
   "cancelled",
 ];
 
-/** Built-in status seed rows, in seed order. Migration 004 writes exactly these. */
+/**
+ * Built-in status seed rows, in seed order — what a fresh workspace starts with.
+ *
+ * Migration 004 writes these into the tables it creates, and `schema.ts` writes
+ * them on the consolidated fresh-create path. A database that was already
+ * stamped 4 or 5 before `awaiting_approval` joined this list was seeded WITHOUT
+ * it, which is exactly what migration 006 exists to repair — see
+ * `006-approval-gates.ts`.
+ */
 export const BUILTIN_STATUS_SEED: readonly { id: BuiltinIssueStatus; label: string; category: StatusCategory }[] = [
   { id: "backlog", label: "Backlog", category: "unstarted" },
   { id: "todo", label: "Todo", category: "ready" },
   { id: "in_progress", label: "In Progress", category: "active" },
   { id: "in_review", label: "In Review", category: "review" },
+  { id: "awaiting_approval", label: "Awaiting Approval", category: "gated" },
   { id: "done", label: "Done", category: "done" },
   { id: "blocked", label: "Blocked", category: "blocked" },
   { id: "cancelled", label: "Cancelled", category: "cancelled" },
@@ -223,6 +254,7 @@ export const OPEN_STATUSES: readonly BuiltinIssueStatus[] = [
   "todo",
   "in_progress",
   "in_review",
+  "awaiting_approval",
   "blocked",
 ];
 export const RESOLVED_STATUSES: readonly BuiltinIssueStatus[] = ["done", "cancelled"];
@@ -235,18 +267,108 @@ export const RESOLVED_STATUSES: readonly BuiltinIssueStatus[] = ["done", "cancel
 export const OPEN_STATUS_ORDER: readonly BuiltinIssueStatus[] = [
   "in_progress",
   "in_review",
+  "awaiting_approval",
   "blocked",
   "todo",
   "backlog",
 ];
 
-/** Pickup order for the agent inbox: current work first, then reviews, then queue. */
+/**
+ * Pickup order for the agent inbox: current work first, then reviews, then queue.
+ *
+ * `awaiting_approval` is deliberately ABSENT, and it is absent BY CATEGORY: the
+ * per-workspace answer is `WorkspaceStore.inboxPickupOrder()`, which filters on
+ * `INBOX_PICKUP_CATEGORY_ORDER`, and `gated` is not in it. A parked parent is
+ * never picked up — that is the whole point of parking it — so it has no place
+ * in a pickup order, and `store.inbox()` routes it to the `queued` bucket
+ * instead. Any status an operator files under `gated` inherits that.
+ */
 export const INBOX_PICKUP_ORDER: readonly BuiltinIssueStatus[] = [
   "in_progress",
   "in_review",
   "todo",
   "backlog",
 ];
+
+/**
+ * Where a review gate is in its life (STA-143). `null` on the row means no gate
+ * was ever requested, which is a different fact from `approved`.
+ *
+ * `pending` and `changes_requested` are both ACTIVE — see `GATE_QUEUEING_STATES`
+ * in core/store.ts — and only `pending` parks the parent in `awaiting_approval`.
+ */
+export const GATE_STATES = ["pending", "approved", "changes_requested"] as const;
+export type GateState = (typeof GATE_STATES)[number];
+
+/**
+ * The stored review gate on one issue, exposed as a SIBLING of the issue rather
+ * than as fields on it — the same discipline `ClaimActivity` and
+ * `WorklogSummary` follow, and for a related reason: a gate is a fact about a
+ * conversation with a human, not a property of the work, and every surface that
+ * renders it renders it as its own thing (a banner, a queue reason, a refusal
+ * sentence) rather than as another column on the row.
+ *
+ * Unlike those two it IS stored, so it never goes stale between reads. What it
+ * shares with them is the payload shape: `null` means "no gate", never a
+ * half-populated object a caller has to inspect field by field.
+ */
+export interface IssueGate {
+  state: GateState;
+  /** Who must act. Required at `gate` time; survives approve/request-changes. */
+  owner: string;
+  requestedBy: string | null;
+  requestedAt: string;
+  resolvedBy: string | null;
+  resolvedAt: string | null;
+}
+
+/**
+ * The gate an issue is QUEUED BEHIND — derived, never stored, computed by
+ * walking ancestors (see `WorkspaceStore.queuedByFor`). null means pickable as
+ * far as gates are concerned.
+ *
+ * Two fields and no more on purpose: a queued row has exactly one thing to say
+ * — who is waiting on whom — and every surface says it the same way,
+ * "queued: STA-108/VP".
+ */
+export interface QueuedBy {
+  /** Identifier of the nearest ancestor holding an active gate. */
+  identifier: string;
+  /** That gate's owner — the human who has to act before this becomes pickable. */
+  owner: string;
+}
+
+/**
+ * ONE ROW OF THE QUEUE A GATE IS HOLDING — the reviewer's checklist (STA-154).
+ *
+ * `queuedBy` answers "is THIS row queued" for any row on any page. This answers
+ * the reviewer's question instead: standing at the gate, what am I actually
+ * deciding about? The two are the same derivation read from opposite ends, and
+ * `gateQueueOf` is written on top of `queuedByFor` so they cannot disagree.
+ *
+ * It is a FLAT PRE-ORDER LIST with a depth rather than a nested tree, because
+ * the thing that consumes it is a checklist: a flat list maps one-to-one onto
+ * rows, `depth` is the indent, and "everything under row i" is the run of
+ * following rows with a greater depth. A nested shape would make the client
+ * flatten it again to render it and to count an implied subtree.
+ *
+ * `depth` is measured over the LISTED chain, not over the real tree: a row whose
+ * real parent was skipped (resolved, or a parent with nothing open under it)
+ * takes the depth of the nearest ancestor that IS listed, plus one. An indent
+ * under a row that is not on screen is a hole, and a checklist with a hole in it
+ * is a set of decisions nobody can reason about. A direct child of the gate
+ * holder is depth 1.
+ */
+export interface GateQueueEntry {
+  id: string;
+  identifier: string;
+  title: string;
+  status: IssueStatus;
+  /** The real `parent_id`, for callers that want the true edge. */
+  parentId: string | null;
+  /** Indent level in the LISTED tree. Direct children of the gate holder are 1. */
+  depth: number;
+}
 
 export const ISSUE_PRIORITIES = ["critical", "high", "medium", "low"] as const;
 export type IssuePriority = (typeof ISSUE_PRIORITIES)[number];
@@ -670,7 +792,17 @@ export type StapleErrorCode =
   | "conflict"
   | "cycle"
   | "duplicate"
-  | "revision_conflict";
+  | "revision_conflict"
+  /**
+   * Refused because a review gate above this issue has not been resolved
+   * (STA-143). Its own code rather than a `conflict` because the two tell a
+   * caller to do genuinely different things: a `conflict` means somebody else
+   * got there first and you should pick another task RIGHT NOW, while `gated`
+   * means this work is real, unclaimed, and simply not released yet — the queue
+   * moves when a human moves it, not when another agent finishes. Non-retryable
+   * either way: looping on it burns turns while a person is asleep.
+   */
+  | "gated";
 
 export class StapleError extends Error {
   readonly code: StapleErrorCode;

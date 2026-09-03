@@ -52,17 +52,20 @@ import {
 
 /**
  * The built-in status seed, WITH ITS CATEGORIES — the mirror of `BUILTIN_STATUS_SEED`
- * in src/core/types.ts, which is what migration 004 writes.
+ * in src/core/types.ts, which is what a fresh workspace is seeded with.
  *
  * The categories are the load-bearing half. Without them the fallback could not answer
  * `statusCategory("in_progress")`, and the icon and the chip hue both key off that — so a
- * first paint before the fetch lands would render seven grey glyphs and then repaint.
+ * first paint before the fetch lands would render eight grey glyphs and then repaint.
+ * `awaiting_approval` is `gated` (STA-143), which is how `StatusIcon` knows to draw the
+ * gate rather than borrowing `in_review`'s hue.
  */
 const BUILTIN_STATUS_SEED: readonly { id: string; label: string; category: StatusCategory }[] = [
   { id: "backlog", label: "Backlog", category: "unstarted" },
   { id: "todo", label: "Todo", category: "ready" },
   { id: "in_progress", label: "In Progress", category: "active" },
   { id: "in_review", label: "In Review", category: "review" },
+  { id: "awaiting_approval", label: "Awaiting Approval", category: "gated" },
   { id: "done", label: "Done", category: "done" },
   { id: "blocked", label: "Blocked", category: "blocked" },
   { id: "cancelled", label: "Cancelled", category: "cancelled" },
@@ -110,11 +113,22 @@ const SEED: WorkspaceSettings = {
     sortOrder: index,
     isBuiltin: true,
   })),
-  // The list rank of the seeded seven — identical to what `OPEN_STATUS_ORDER` and
-  // `RESOLVED_STATUSES` in lib/types.ts have always spelled out, because that is exactly
-  // what `store.statusOrder()` produces for a default workspace.
-  groupOrder: ["in_progress", "in_review", "blocked", "todo", "backlog", "done", "cancelled"],
-  openOrder: ["in_progress", "in_review", "blocked", "todo", "backlog"],
+  // The list rank of the seeded statuses — identical to what `OPEN_STATUS_ORDER` and
+  // `RESOLVED_STATUSES` in lib/types.ts spell out, because that is exactly what
+  // `store.statusOrder()` produces for a default workspace. `awaiting_approval` sits
+  // between `in_review` and `blocked` because `gated` sits there in the category tiering,
+  // and it is absent from `pickupOrder` because `gated` is absent from the pickup tiers.
+  groupOrder: [
+    "in_progress",
+    "in_review",
+    "awaiting_approval",
+    "blocked",
+    "todo",
+    "backlog",
+    "done",
+    "cancelled",
+  ],
+  openOrder: ["in_progress", "in_review", "awaiting_approval", "blocked", "todo", "backlog"],
   pickupOrder: ["in_progress", "in_review", "todo", "backlog"],
   categories: [...STATUS_CATEGORIES],
   requiredCategories: ["unstarted", "ready", "active", "blocked", "done", "cancelled"],

@@ -58,6 +58,9 @@ const CATEGORY_HUE: Record<StatusCategory, string> = {
   ready: "todo",
   active: "in_progress",
   review: "in_review",
+  // `gated` borrows `blocked`'s hue rather than minting a ninth token: an approval
+  // you are waiting on and a blocker you are waiting on are the same kind of answer
+  // to "why has this not moved". The GLYPH is what distinguishes them.
   gated: "blocked",
   blocked: "blocked",
   done: "done",
@@ -77,6 +80,15 @@ export function statusIconColour(category: StatusCategory): string {
 const BACKLOG_DASHES = "2.4 2.31";
 
 function Glyph({ category }: { category: StatusCategory }) {
+  /**
+   * The hue comes from the CATEGORY (STA-140) and no glyph mints a token of its
+   * own. That is the constraint the shapes are designed under: the icon language
+   * differentiates by SHAPE — the WCAG 1.4.1 argument at the top of this file —
+   * which is why `done` and `blocked` can both be a filled disc, and why `gated`
+   * can borrow `blocked`'s hue without becoming it. A ninth hue would claim a
+   * distinction the palette has no room to make legibly at 16px, and every hue
+   * added past that point makes the other eight harder to tell apart.
+   */
   const colour = statusIconColour(category);
 
   switch (category) {
@@ -138,13 +150,41 @@ function Glyph({ category }: { category: StatusCategory }) {
       );
 
     case "gated":
-      // Blocked's bar on an unfilled ring. Same hue, same symbol, half the weight —
-      // "waiting on a person" beside "waiting on a thing", told apart by fill so the
-      // pair still survives a monochrome print.
+      /**
+       * AN HOURGLASS IN A RING — Q2 (STA-144).
+       *
+       * It breaks the fill sequence on purpose, exactly as `blocked` and
+       * `cancelled` do: parked is not a stop on the backlog -> done path, and a
+       * partially-filled ring would file it as one. What it says instead is the
+       * one thing that is true of this state and no other — TIME IS PASSING AND
+       * NOBODY HERE CAN MOVE IT. That is the whole of STA-142's origin story
+       * (STA-108 sitting in_progress for 56 minutes while it waited on a human),
+       * so the glyph is the sentence.
+       *
+       * The HUE is `blocked`'s, from `CATEGORY_HUE` and no exception to it. That
+       * is the right pairing: "waiting on a person" beside "waiting on a thing"
+       * are the two answers to "why has this not moved", and the shape is what
+       * tells them apart — blocked fills the disc, gated is an unfilled ring, so
+       * the pair survives a monochrome print. The ring is also `in_review`'s
+       * exact ring, which is the second intended reading: this is the in_review
+       * family, one step further along.
+       *
+       * The hourglass is two triangles meeting at a waist, drawn as a single path
+       * so it stays one mark rather than three at 16px. Sized to sit inside r=6
+       * with the same optical weight as the other inner marks: 4.8px wide, 6.2px
+       * tall, centred on (8, 8).
+       */
       return (
         <>
           <circle cx="8" cy="8" r="6" fill="none" stroke={colour} strokeWidth="1.5" />
-          <rect x="5" y="7.2" width="6" height="1.6" rx="0.8" fill={colour} />
+          {/* Top bulb down to the waist, then back out to the bottom bulb. */}
+          <path
+            d="M5.6 4.9 L10.4 4.9 L8 8 L10.4 11.1 L5.6 11.1 L8 8 Z"
+            fill={colour}
+            stroke={colour}
+            strokeWidth="0.7"
+            strokeLinejoin="round"
+          />
         </>
       );
 

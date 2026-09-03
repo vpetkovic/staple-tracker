@@ -25,6 +25,7 @@
  */
 import { useEffect, useMemo } from "react";
 import { getInbox, type AuthError } from "@/lib/api";
+import { buildGateCaptions } from "@/lib/derived-queued";
 import { applyFilters, hiddenParents } from "@/lib/filters";
 import { useSession } from "@/lib/session";
 import type { InboxRow } from "@/lib/types";
@@ -78,6 +79,19 @@ export function TreeView({ onAuthError }: { onAuthError: (error: AuthError) => v
   );
 
   /**
+   * The gate captions — Q2 (STA-144).
+   *
+   * Built from `rows`, the SAME `/api/issues` payload the list is drawn from, and in
+   * every grouping mode rather than only in pickup order: a parked epic says "awaiting
+   * VP" wherever you meet it. No second fetch — `gate` and `queuedBy` ride on those
+   * rows already.
+   *
+   * Once per fetch rather than once per row per poll, the same bargain
+   * `buildPickupIndex` makes one hook up.
+   */
+  const captions = useMemo(() => buildGateCaptions(rows), [rows]);
+
+  /**
    * Nothing on screen means nothing to navigate. TreeGrid publishes its own order and clears
    * it when it unmounts, but it never mounts at all in the loading and empty states — and
    * those are exactly the states where a stale order would be most confusing, because the
@@ -111,6 +125,7 @@ export function TreeView({ onAuthError }: { onAuthError: (error: AuthError) => v
               mode={mode}
               groupBy={groupBy}
               pickup={pickup}
+              captions={captions}
               currentRef={selection?.ref ?? null}
               /*
                * TRUE, and this is the rewiring the spec asked for rather than a

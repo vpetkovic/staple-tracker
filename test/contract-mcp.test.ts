@@ -196,7 +196,11 @@ beforeAll(async () => {
   await call("list_statuses", "list_statuses", { ws: WS });
   await call("list_kinds", "list_kinds", { ws: WS });
   await call("update_statuses", "update_statuses", {
-    ops: [{ op: "add", id: "awaiting_approval", category: "gated", after: "in_review" }],
+    // `needs_qa`, not `awaiting_approval`: the gated row is SEEDED since the
+    // approval-gates merge, so adding it would capture a duplicate-id refusal
+    // instead of an add. A `review` status is also one `update_task` may write,
+    // which the gated category deliberately is not.
+    ops: [{ op: "add", id: "needs_qa", category: "review", after: "in_review" }],
     ws: WS,
   });
   await call("update_kinds", "update_kinds", {
@@ -224,7 +228,7 @@ describe("tool inventory", () => {
    * moment this ticket is buying. Read-only tools deliberately omit
    * destructiveHint (the MCP spec only defines it when readOnlyHint is false).
    */
-  it("exposes exactly these 20 tools with these annotations and output schemas", async () => {
+  it("exposes exactly these 23 tools with these annotations and output schemas", async () => {
     const tools = await harness.listTools();
     const inventory = tools.map((t) => ({
       name: t.name,
@@ -304,6 +308,57 @@ describe("tool inventory", () => {
           openWorldHint: false,
         },
         hasOutputSchema: false,
+      },
+      /**
+       * The three gate verbs (STA-143), in registration order, sitting between
+       * the claim tools and the comment tools because that is where they sit in
+       * a ticket's life.
+       *
+       * The hints are not uniform, and the split is the interesting part.
+       * `gate_task` and `request_changes` are DESTRUCTIVE: both revoke the
+       * parent's claim, and gating additionally takes a whole subtree out of
+       * circulation — nothing about that is an additive update. `approve_task`
+       * is NOT: approving only ever widens what may be worked on.
+       *
+       * All three are idempotentHint: false. A second gate is refused while one
+       * is pending, and a second whole-gate approve is refused once it is
+       * resolved — refused, not absorbed, so a repeat is not a no-op.
+       */
+      {
+        name: "gate_task",
+        annotations: {
+          title: "Gate task for approval",
+          readOnlyHint: false,
+          destructiveHint: true,
+          idempotentHint: false,
+          openWorldHint: false,
+        },
+        hasOutputSchema: true,
+      },
+      {
+        name: "approve_task",
+        annotations: {
+          title: "Approve gate",
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: false,
+          openWorldHint: false,
+        },
+        hasOutputSchema: true,
+      },
+      {
+        name: "request_changes",
+        annotations: {
+          // STA-154: the human-facing title says what the tool does to the ticket.
+          // The TOOL NAME is unchanged — renaming a shipped verb to fix a label
+          // would break every agent that calls it.
+          title: "Send back with note",
+          readOnlyHint: false,
+          destructiveHint: true,
+          idempotentHint: false,
+          openWorldHint: false,
+        },
+        hasOutputSchema: true,
       },
       {
         name: "add_comment",
@@ -449,7 +504,7 @@ describe("tool inventory", () => {
 
 // ----------------------------------------------------------- success shapes
 
-describe("tool response shapes (20/20)", () => {
+describe("tool response shapes (23/23)", () => {
   it("init", () => {
     // Both fixtures are global workspaces, which get no AGENTS.md — the guide
     // belongs beside a repo's .staple. test/agents-guide.test.ts covers the repo case.
@@ -631,6 +686,14 @@ describe("tool response shapes (20/20)", () => {
       // dead one. CON-1 is held by the contract agent.
       claim: claimGolden(),
       /**
+       * STA-143: the gate pair, siblings of the issue exactly like `claim`.
+       * Both null here — CON-1 has never been gated and has nothing gated above
+       * it — and both PRESENT rather than omitted, so a caller never has to tell
+       * "no gate" from "field missing".
+       */
+      gate: null,
+      queuedBy: null,
+      /**
        * STA-81/STA-90: estimate vs actual, derived at read time. CON-1 has no
        * estimate but IS in_progress with an open interval, so `ownActiveSeconds`
        * is a reading (tokenized, like the claim durations beside it) and
@@ -653,6 +716,7 @@ describe("tool response shapes (20/20)", () => {
           todo: 0,
           in_progress: 0,
           in_review: 0,
+          awaiting_approval: 0,
           done: 0,
           blocked: 0,
           cancelled: 0,
@@ -685,6 +749,8 @@ describe("tool response shapes (20/20)", () => {
           estimatedSeconds: null,
           // C1: the only held row on this page carries its liveness.
           claim: claimGolden(),
+          gate: null,
+          queuedBy: null,
         },
         {
           identifier: "CON-2",
@@ -696,6 +762,8 @@ describe("tool response shapes (20/20)", () => {
           parentId: null,
           estimatedSeconds: null,
           claim: null,
+          gate: null,
+          queuedBy: null,
         },
       ],
       nextCursor: CURSOR,
@@ -714,6 +782,8 @@ describe("tool response shapes (20/20)", () => {
           parentId: null,
           estimatedSeconds: null,
           claim: null,
+          gate: null,
+          queuedBy: null,
         },
         {
           identifier: "CON-4",
@@ -725,6 +795,8 @@ describe("tool response shapes (20/20)", () => {
           parentId: UUID,
           estimatedSeconds: null,
           claim: null,
+          gate: null,
+          queuedBy: null,
         },
       ],
       nextCursor: null,
@@ -750,6 +822,9 @@ describe("tool response shapes (20/20)", () => {
           startedAt: ISO,
           unresolvedBlockers: [],
           claim: claimGolden(),
+          // STA-143: additive, and present-as-null rather than omitted.
+          gate: null,
+          queuedBy: null,
         }),
         issueGolden({
           identifier: "CON-2",
@@ -757,9 +832,12 @@ describe("tool response shapes (20/20)", () => {
           idempotencyKey: "idem-1",
           unresolvedBlockers: [],
           claim: null,
+          gate: null,
+          queuedBy: null,
         }),
       ],
-      // ready+blocked partition ONE page, so a page can be all-ready (H9).
+      // ready+queued+blocked partition ONE page, so a page can be all-ready (H9).
+      queued: [],
       blocked: [],
       nextCursor: CURSOR,
       hasMore: true,
@@ -863,9 +941,14 @@ describe("tool response shapes (20/20)", () => {
 
   /**
    * STA-140. Two things are pinned here beyond the field names: the SEED itself
-   * — a workspace `init` created answers with exactly these seven statuses, in
+   * — a workspace `init` created answers with exactly these eight statuses, in
    * this order, with these categories — and the `sortOrder` spacing of ten that
    * makes `after` an insert rather than a rewrite of the column.
+   *
+   * `awaiting_approval` is the eighth, at 50, in category `gated` and
+   * `isBuiltin: true`: STA-143's approval gate is not a status a caller adds, it
+   * is one staple ships. Its POSITION between `in_review` and `done` is the life
+   * of a ticket, and its CATEGORY is where all of its behaviour comes from.
    */
   it("list_statuses", () => {
     assertGolden("list_statuses", {
@@ -874,9 +957,16 @@ describe("tool response shapes (20/20)", () => {
         { id: "todo", label: "Todo", category: "ready", sortOrder: 20, isBuiltin: true },
         { id: "in_progress", label: "In Progress", category: "active", sortOrder: 30, isBuiltin: true },
         { id: "in_review", label: "In Review", category: "review", sortOrder: 40, isBuiltin: true },
-        { id: "done", label: "Done", category: "done", sortOrder: 50, isBuiltin: true },
-        { id: "blocked", label: "Blocked", category: "blocked", sortOrder: 60, isBuiltin: true },
-        { id: "cancelled", label: "Cancelled", category: "cancelled", sortOrder: 70, isBuiltin: true },
+        {
+          id: "awaiting_approval",
+          label: "Awaiting Approval",
+          category: "gated",
+          sortOrder: 50,
+          isBuiltin: true,
+        },
+        { id: "done", label: "Done", category: "done", sortOrder: 60, isBuiltin: true },
+        { id: "blocked", label: "Blocked", category: "blocked", sortOrder: 70, isBuiltin: true },
+        { id: "cancelled", label: "Cancelled", category: "cancelled", sortOrder: 80, isBuiltin: true },
       ],
     });
   });
@@ -897,8 +987,9 @@ describe("tool response shapes (20/20)", () => {
    * The write tools answer with the FULL new list, not an ack — a reorder or an
    * insert is only verifiable against the whole thing, and a caller that had to
    * make a second `list_statuses` call to see what it did would race anyone else
-   * writing. `awaiting_approval` lands at 45: strictly between `in_review` (40)
-   * and `done` (50), which is `after` doing arithmetic instead of a rewrite.
+   * writing. `needs_qa` lands at 45: strictly between `in_review` (40) and
+   * `awaiting_approval` (50), which is `after` doing arithmetic instead of a
+   * rewrite of the column.
    */
   it("update_statuses", () => {
     assertGolden("update_statuses", {
@@ -908,16 +999,23 @@ describe("tool response shapes (20/20)", () => {
         { id: "in_progress", label: "In Progress", category: "active", sortOrder: 30, isBuiltin: true },
         { id: "in_review", label: "In Review", category: "review", sortOrder: 40, isBuiltin: true },
         {
-          id: "awaiting_approval",
+          id: "needs_qa",
           // No --label was passed: the id is title-cased into one.
-          label: "Awaiting Approval",
-          category: "gated",
+          label: "Needs Qa",
+          category: "review",
           sortOrder: 45,
           isBuiltin: false,
         },
-        { id: "done", label: "Done", category: "done", sortOrder: 50, isBuiltin: true },
-        { id: "blocked", label: "Blocked", category: "blocked", sortOrder: 60, isBuiltin: true },
-        { id: "cancelled", label: "Cancelled", category: "cancelled", sortOrder: 70, isBuiltin: true },
+        {
+          id: "awaiting_approval",
+          label: "Awaiting Approval",
+          category: "gated",
+          sortOrder: 50,
+          isBuiltin: true,
+        },
+        { id: "done", label: "Done", category: "done", sortOrder: 60, isBuiltin: true },
+        { id: "blocked", label: "Blocked", category: "blocked", sortOrder: 70, isBuiltin: true },
+        { id: "cancelled", label: "Cancelled", category: "cancelled", sortOrder: 80, isBuiltin: true },
       ],
     });
   });
@@ -955,6 +1053,9 @@ describe("tool response shapes (20/20)", () => {
       "events_since",
       "cross_link",
       "hub_overview",
+      "gate_task",
+      "approve_task",
+      "request_changes",
       "list_statuses",
       "list_kinds",
       "update_statuses",

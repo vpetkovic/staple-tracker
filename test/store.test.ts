@@ -354,6 +354,22 @@ describe("schema migration against a live database", () => {
       // `estimated_seconds` above: it has to come back off, or 005 fails on
       // "duplicate column name" instead of testing the walk.
       legacyDb.exec("ALTER TABLE issues DROP COLUMN kind");
+      // STA-143 added migration 006: seven more columns and an index. Every one of
+      // them has to come off for the same reason — a file stamped '1' that still
+      // carries v6 columns tests the "duplicate column name" error path and
+      // nothing else.
+      legacyDb.exec("DROP INDEX IF EXISTS issues_gate_state_idx");
+      for (const column of [
+        "gate_state",
+        "gate_owner",
+        "gate_requested_by",
+        "gate_requested_at",
+        "gate_resolved_by",
+        "gate_resolved_at",
+        "gate_released",
+      ]) {
+        legacyDb.exec(`ALTER TABLE issues DROP COLUMN ${column}`);
+      }
       legacyDb.prepare("UPDATE meta SET value = '1' WHERE key = 'schema_version'").run();
       legacyDb.close();
 

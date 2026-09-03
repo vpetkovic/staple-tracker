@@ -339,6 +339,76 @@ export function startUiServer(options: UiOptions): UiHandle {
       .join("|");
   }
 
+  /**
+   * THE DETAIL PAYLOAD — what `/api/issue` returns, and what each `/api/gate/*` write
+   * answers with once it has succeeded.
+   *
+   * Extracted from the route by Q2 (STA-144) so the two cannot drift. A gate action
+   * that answered with `store.gateIssue()`'s bare `Issue` would leave the panel to
+   * refetch, and the refetch would observe a database that another agent may have
+   * moved in between — so the button's own result and the panel's next render could
+   * disagree about the click that produced them. Answering with the whole detail is
+   * one round trip AND one consistent read.
+   *
+   * NOT SHARED WITH `/api/agent-context`, deliberately. That route is pinned
+   * byte-for-byte against the MCP `get_task` tool by test/ui-agent-context.test.ts;
+   * this one carries `workspace` and now `childrenQueued`, neither of which an agent
+   * sees. The divergence is the point, and sharing a builder would erase it.
+   */
+  function issueDetail(handle: ReturnType<typeof handleFor>, ref: string): Record<string, unknown> {
+    const context = handle.store.context(ref);
+    let crossBlockers: unknown[] = [];
+    try {
+      const hub = Hub.open();
+      try {
+        crossBlockers = hub.crossBlockersOf(context.issue.identifier);
+      } finally {
+        hub.close();
+      }
+    } catch {
+      crossBlockers = [];
+    }
+    /**
+     * WHAT THIS GATE IS HOLDING — the detail panel's review checklist (Q2, STA-144;
+     * rewritten by Q5, STA-154).
+     *
+     * Q2 built this as `identifier -> QueuedBy` over the DIRECT CHILDREN, and VP's
+     * review found both halves of that wrong on one screen:
+     *
+     *   - DIRECT CHILDREN ONLY meant a queued grandchild had no row. Approving a
+     *     parent releases its whole subtree, so a checklist that cannot show the
+     *     subtree cannot show what the tick actually does.
+     *   - `queuedByFor` had no notion of eligibility, so done children (STA-137,
+     *     STA-138 on VP's snapshot) were listed, counted, and offered as decisions
+     *     that release nothing.
+     *
+     * It is now `store.gateQueueOf()`: a flat PRE-ORDER ARRAY of the open descendants
+     * this gate still holds, each carrying the `depth` the client indents by. The name
+     * is kept because the field means the same thing it always meant — the work this
+     * gate has queued — and because a shared HTTP golden pins this payload key for
+     * key.
+     *
+     * Still the SERVER's answer and not "my parent is gated", for the reason it always
+     * was: per-child approval sets a release flag the client cannot see, and that flag
+     * is the entire mechanism the checklist exists to drive. And still the same
+     * derivation the tree's captions and the inbox's `queued` bucket read, because
+     * `gateQueueOf` is written on top of the very walk `queuedByFor` runs.
+     */
+    const childrenQueued = handle.store.gateQueueOf(context.issue.id);
+    return {
+      workspace: handle.slug,
+      ...context,
+      crossBlockers,
+      claim: handle.store.claimActivity(context.issue.id),
+      gate: handle.store.gate(context.issue.id),
+      queuedBy: handle.store.queuedBy(context.issue.id),
+      childrenQueued,
+      // Additive: the Analytics tab's whole payload, from the one store
+      // method get_task also spreads, so the two cannot drift.
+      ...handle.store.detailTiming(context.issue.id),
+    };
+  }
+
   async function readBody(req: IncomingMessage): Promise<Record<string, unknown>> {
     const chunks: Buffer[] = [];
     for await (const chunk of req) chunks.push(chunk as Buffer);
@@ -403,14 +473,27 @@ export function startUiServer(options: UiOptions): UiHandle {
           return;
         }
         /**
-         * Every route still pins its method. `/api/settings` (STA-141) is the one
-         * route that reads AND writes on the same path — GET lists the workspace
-         * vocabulary, POST applies an op batch — so `expected` became a LIST rather
-         * than a string. A route not named here is unchanged: GET only, or POST only
-         * for `/api/action`.
+         * WHICH METHODS EACH ROUTE ACCEPTS — and therefore, since every POST is
+         * Origin-checked below, which routes can be WRITTEN at all.
+         *
+         * Two widenings met here and both are load-bearing. Q2 (STA-144) turned a
+         * comparison against one literal into a predicate over the `/api/gate/`
+         * FAMILY, which is a security change rather than a tidying one: written as
+         * `pathname === "/api/action"`, every new POST route would have defaulted
+         * to GET-only, been answered with 405 for the POST it actually is, and —
+         * had anyone "fixed" that by special-casing the method further down —
+         * sailed past the Origin check entirely. On a loopback server that holds
+         * the whole tracker, that is a cross-origin-writable endpoint. O7b
+         * (STA-141) then added `/api/settings`, the one route that READS AND
+         * WRITES on the same path, which is why `expected` is a LIST rather than a
+         * string.
+         *
+         * So the rule is stated once, here, in front of everything, and a route
+         * not named below is unchanged: GET only.
+         * `test/ui-gate-routes.test.ts` pins all three gate refusals.
          */
         const expected =
-          url.pathname === "/api/action"
+          url.pathname === "/api/action" || url.pathname.startsWith("/api/gate/")
             ? ["POST"]
             : url.pathname === "/api/settings"
               ? ["GET", "POST"]
@@ -484,10 +567,22 @@ export function startUiServer(options: UiOptions): UiHandle {
            */
           const blockedBy = h.store.unresolvedBlockersFor(ids);
           const blocks = h.store.openDependentsFor(ids);
+          /**
+           * Q1 (STA-143): the gate pair, batched exactly like everything above it.
+           *
+           * Two SIBLINGS rather than one wrapper, because they are complementary
+           * rather than a pair of a thing: `gate` is "this row holds a queue",
+           * `queuedBy` is "this row stands in one". At most one is ever non-null,
+           * and which one it is changes what the row should say completely.
+           */
+          const gates = h.store.gateFor(ids);
+          const queuedBy = h.store.queuedByFor(ids);
           return issues.map((issue) => ({
             workspace: h.slug,
             issue,
             claim: claims.get(issue.id) ?? null,
+            gate: gates.get(issue.id) ?? null,
+            queuedBy: queuedBy.get(issue.id) ?? null,
             // Absent-from-the-map becomes an explicit null on the wire, exactly as
             // `claim` does, so the page never has to tell "no worklog" from "field
             // missing" — it never invents a fact it was not sent.
@@ -506,7 +601,7 @@ export function startUiServer(options: UiOptions): UiHandle {
         const assignee = url.searchParams.get("assignee") ?? undefined;
         const out = allHandles().map((h) => {
           const inbox = h.store.inbox(assignee || undefined);
-          const entries = [...inbox.ready, ...inbox.blocked];
+          const entries = [...inbox.ready, ...inbox.queued, ...inbox.blocked];
           const claims = h.store.claimActivityFor(entries.map((i) => i.id));
           /**
            * The same worklog summary `/api/issues` carries (STA-113), from the same store
@@ -542,6 +637,17 @@ export function startUiServer(options: UiOptions): UiHandle {
             inbox: {
               ...inbox,
               ready: inbox.ready.map((entry) => ({ ...withClaim(entry), derivedBlockers: [] })),
+              /**
+               * The third bucket (STA-143). `gate` and `queuedBy` already ride on
+               * every entry — `store.inbox()` computes them as part of the
+               * bucketing decision — so the bucket and the fields cannot disagree
+               * about one ticket, and there is nothing to re-derive here.
+               *
+               * `derivedBlockers: []` because a gate is not a blocker: the page
+               * renders the reason from `queuedBy`/`gate`, and borrowing a child's
+               * unblock descriptor would say something untrue about it.
+               */
+              queued: inbox.queued.map((entry) => ({ ...withClaim(entry), derivedBlockers: [] })),
               blocked: inbox.blocked.map((entry) => ({
                 ...withClaim(entry),
                 derivedBlockers: blockingChildren.get(entry.id) ?? [],
@@ -555,28 +661,7 @@ export function startUiServer(options: UiOptions): UiHandle {
 
       if (url.pathname === "/api/issue") {
         const handle = handleFor(url.searchParams.get("ws") ?? undefined);
-        const ref = url.searchParams.get("ref")!;
-        const context = handle.store.context(ref);
-        let crossBlockers: unknown[] = [];
-        try {
-          const hub = Hub.open();
-          try {
-            crossBlockers = hub.crossBlockersOf(context.issue.identifier);
-          } finally {
-            hub.close();
-          }
-        } catch {
-          crossBlockers = [];
-        }
-        json(res, 200, {
-          workspace: handle.slug,
-          ...context,
-          crossBlockers,
-          claim: handle.store.claimActivity(context.issue.id),
-          // Additive: the Analytics tab's whole payload, from the one store
-          // method get_task also spreads, so the two cannot drift.
-          ...handle.store.detailTiming(context.issue.id),
-        });
+        json(res, 200, issueDetail(handle, url.searchParams.get("ref")!));
         return;
       }
 
@@ -629,6 +714,12 @@ export function startUiServer(options: UiOptions): UiHandle {
           ...context,
           crossBlockers,
           claim: handle.store.claimActivity(context.issue.id),
+          // Added here and in the get_task handler in src/mcp.ts in the same
+          // change, deliberately: ui-agent-context.test.ts asserts deep equality
+          // between the two, so one without the other is a red test, which is
+          // exactly the guard that pin exists to be.
+          gate: handle.store.gate(context.issue.id),
+          queuedBy: handle.store.queuedBy(context.issue.id),
           ...handle.store.detailTiming(context.issue.id),
         });
         return;
@@ -748,6 +839,90 @@ export function startUiServer(options: UiOptions): UiHandle {
           return;
         }
         json(res, 200, handle.store.listEvents(Number(url.searchParams.get("since") ?? 0), 100));
+        return;
+      }
+
+      /**
+       * THE GATE FAMILY — Q2 (STA-144). Method and Origin were already enforced above.
+       *
+       * `POST /api/gate/request`         { ref, owner?, comment? }
+       * `POST /api/gate/approve`         { ref, children?, comment? }
+       * `POST /api/gate/request-changes` { ref, comment }
+       *
+       * Each answers `200` with the same payload `/api/issue` sends, or the store's own
+       * refusal through the catch at the bottom of this handler — 409 with the store's
+       * `code`, exactly as every other write on this server does.
+       *
+       * ── WHY THREE ROUTES AND NOT THREE MORE `/api/action` BRANCHES ──────────────────
+       *
+       * `/api/action` is `{ type }` over a flat body, and it has grown to nine branches
+       * that share exactly one thing: they all end in `handle.store.<verb>(ref, …)`.
+       * A gate is not that shape. `approve` takes a LIST of child refs and means
+       * something different with it than without it; `request-changes` has a mandatory
+       * field that no other action has. Folding them in would have meant three more
+       * `body.x as Y` casts inside a chain whose every branch can already see the
+       * others' fields — and the one thing a policy surface must not be is easy to call
+       * by accident with the wrong verb's body.
+       *
+       * Separate paths also give the family its own place in the auth predicate above,
+       * which is what lets "every write is POST + same-Origin" stay one sentence.
+       *
+       * ── THIS FILE DOES NOT DECIDE ANYTHING ─────────────────────────────────────────
+       *
+       * No validation here, and no re-wording. "A leaf has nothing to queue", "a gate
+       * needs an owner", "that child is not underneath this gate", "request-changes
+       * needs a comment" are all guards inside Q1's store methods, with sentences
+       * written to be read by whoever is stuck. Re-checking any of them here would
+       * create a second opinion that can drift; the `?? ""` on `owner` and `comment`
+       * below is not a default but a cast, letting the store's own emptiness check be
+       * the one that speaks.
+       *
+       * `actor` is `body.actor || "ui"`, the same attribution every `/api/action`
+       * branch uses, so a gate opened from the page is attributed rather than
+       * anonymous. It reaches the event log and, for request-changes, the comment.
+       */
+      if (url.pathname.startsWith("/api/gate/")) {
+        const body = await readBody(req);
+        const handle = handleFor((body.ws as string) ?? undefined);
+        const ref = body.ref as string;
+        const actor = (body.actor as string) || "ui";
+
+        switch (url.pathname) {
+          case "/api/gate/request":
+            handle.store.gateIssue(
+              ref,
+              { owner: (body.owner as string) ?? "", comment: (body.comment as string) || undefined },
+              actor,
+            );
+            break;
+          case "/api/gate/approve":
+            handle.store.approveGate(
+              ref,
+              {
+                // Absent and empty mean the same thing to the store — approve the
+                // WHOLE gate — and they must, because a checklist with nothing ticked
+                // is the page's way of saying "all of it", not a request to release
+                // zero children.
+                children: stringList(body.children) ?? undefined,
+                comment: (body.comment as string) || undefined,
+              },
+              actor,
+            );
+            break;
+          case "/api/gate/request-changes":
+            handle.store.requestChanges(ref, { comment: (body.comment as string) ?? "" }, actor);
+            break;
+          default:
+            // An unknown member of the family is a 404, not a gate write. It falls
+            // through to the same not-found the rest of this handler ends in.
+            json(res, 404, { error: "not found" });
+            return;
+        }
+
+        // Re-read rather than returning the store's `Issue`: the panel needs the
+        // children, the comments and the refreshed `childrenQueued` to redraw the
+        // checklist, and one consistent read is better than the client stitching two.
+        json(res, 200, issueDetail(handle, ref));
         return;
       }
 

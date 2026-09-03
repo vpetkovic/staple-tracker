@@ -58,6 +58,23 @@ export const ERROR_CONTRACT = {
   cursorScopeMismatch(): ErrorTriple {
     return { code: "validation", retryable: false };
   },
+  /**
+   * Claiming an issue queued behind an unresolved review gate (STA-143).
+   *
+   * Its own code rather than a `conflict`, and the difference is the whole
+   * point of the triple: a `conflict` says another agent got there first, so go
+   * find other work RIGHT NOW. `gated` says this work is real and unclaimed and
+   * simply not released — the queue moves when a PERSON moves it. Non-retryable
+   * like everything except revision_conflict: looping on it burns turns while a
+   * human is asleep.
+   */
+  checkoutGated(gate: string, owner: string, currentStatus: string): ErrorTriple {
+    return {
+      code: "gated",
+      retryable: false,
+      detail: { currentStatus, queuedBy: { identifier: gate, owner } },
+    };
+  },
 } as const;
 
 /** Reduce any surface's error body to the triple, so surfaces are comparable. */
@@ -79,6 +96,7 @@ export const CLI_EXIT_CODES: Record<string, number> = {
   cycle: 6,
   revision_conflict: 7,
   timeout: 8,
+  gated: 9,
 };
 
 /** src/ui/server.ts maps StapleError -> 404 for not_found, 409 for everything else. */

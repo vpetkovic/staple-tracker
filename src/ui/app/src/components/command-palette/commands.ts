@@ -13,13 +13,29 @@
  */
 import { HANDOFF_RISKS, handoffRiskOf, type HandoffRisk } from "../../lib/filters";
 import { VIEWS, type Selection, type ViewName } from "../../lib/session";
+import { SEED_SETTINGS } from "../../lib/settings";
 import {
-  ISSUE_STATUSES,
   type IssueRow,
   type IssueStatus,
+  type StatusCategory,
   type StatusId,
   type WorkspaceRef,
 } from "../../lib/types";
+
+/**
+ * The fallback vocabulary — the built-in seed, ids doubling as labels.
+ *
+ * A module constant rather than a call, because this file's whole discipline is
+ * that `buildCommands` is a pure function over the data it is handed: reading a
+ * live snapshot here would make its output depend on what some other test last
+ * published. `SEED_SETTINGS` is frozen data, not a snapshot.
+ *
+ * Labels repeat the id, which is what this loop always said before a workspace
+ * vocabulary existed. The CATEGORIES are the new part, and they are why the
+ * gated suppression below still works before `/api/settings` has answered.
+ */
+const SEED_STATUSES: readonly { id: StatusId; label: string; category: StatusCategory }[] =
+  SEED_SETTINGS.statuses.map((row) => ({ id: row.id, label: row.id, category: row.category }));
 
 /** What running a command does. The React layer switches on `type`; nothing else does. */
 export type CommandAction =
@@ -186,7 +202,7 @@ export interface PaletteContext {
    * `buildCommands` that consulted a live snapshot would be a `buildCommands` whose
    * output depends on what some other test happened to publish.
    */
-  statuses?: readonly { id: StatusId; label: string }[];
+  statuses?: readonly { id: StatusId; label: string; category?: StatusCategory }[];
   view: ViewName;
   ws: string;
   assignee: string;
@@ -252,19 +268,45 @@ export function buildCommands(context: PaletteContext): PaletteCommand[] {
   if (context.selection) {
     const ref = context.selection.ref;
     /*
-     * The CONFIGURED statuses, not the frozen seven — O7b (STA-141). A workspace that
+     * The CONFIGURED statuses, not a frozen list — O7b (STA-141). A workspace that
      * added `awaiting_qa` gets a "Set status → Awaiting QA" command with no change here,
      * and one that removed `blocked` stops offering a transition the store would refuse.
      *
      * The LABEL is what the row shows and the ID is what the action carries: renaming a
      * status has to change the words in the palette without changing the write. The
-     * fallback repeats the id in both, which is exactly what this loop said before.
+     * fallback repeats the id in both, which is exactly what this loop said before — it
+     * carries the seed's CATEGORIES too, which is what lets the gated suppression below
+     * work before `/api/settings` has answered.
      */
-    const statuses = context.statuses ?? ISSUE_STATUSES.map((id) => ({ id, label: id }));
+    const statuses = context.statuses ?? SEED_STATUSES;
     for (const status of statuses) {
       // The status it already has is not a command, it is a no-op that would occupy a
       // row and, if run, spend a round trip to be told nothing changed.
       if (context.selectionStatus === status.id) continue;
+      /**
+       * A GATED STATUS IS NOT A STATUS YOU SET — Q2 (STA-144), closing the follow-up
+       * Q1 left here, re-keyed onto the CATEGORY by the O7 merge.
+       *
+       * `store.updateIssue` REFUSES every transition into or out of the `gated`
+       * category, so these entries are commands that could only ever fail. The way in
+       * is `gate`, which takes the one thing a status cannot carry: WHO must approve. A
+       * parked issue with no named owner is a queue with nobody to drain it, which is
+       * why the store makes the owner mandatory and why this loop cannot produce the
+       * status.
+       *
+       * Keyed on the category rather than on `awaiting_approval`, so a workspace that
+       * renamed the row, or added a gated status of its own, does not get an offer the
+       * store will refuse. A caller that hands over statuses WITHOUT categories (the
+       * pure-data test fixtures) simply gets no suppression, which is correct — it has
+       * not told us any of them are gated.
+       *
+       * Suppressed rather than replaced with a gate command. A gate needs an owner, and
+       * this palette has no way to ask for one — `checkout` already routes to a `page`
+       * for exactly that reason, and adding a second page to a ticket whose scope is
+       * "remove the option the store refuses" would be scope this ticket did not buy.
+       * The detail panel's "Request approval" is the affordance, and it can ask.
+       */
+      if (status.category === "gated") continue;
       commands.push({
         id: `status:${status.id}`,
         group: "actions",

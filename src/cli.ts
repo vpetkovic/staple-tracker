@@ -42,7 +42,9 @@ import {
   formatAgo,
   formatDuration,
   type Issue,
+  type IssueGate,
   type IssueStatus,
+  type QueuedBy,
   type StapleEvent,
 } from "./core/types.js";
 import type { WorkspaceStore } from "./core/store.js";
@@ -52,6 +54,10 @@ const STATUS_GLYPHS: Record<string, string> = {
   todo: "○",
   in_progress: "◐",
   in_review: "◑",
+  // A ring with a pause bar: parked, not progressing. Deliberately not another
+  // partial fill — the fill sequence means "how far along", and a gate is not a
+  // stop on that path any more than `blocked` is.
+  awaiting_approval: "⊙",
   done: "●",
   blocked: "⊘",
   cancelled: "✕",
@@ -123,7 +129,27 @@ function kindSuffix(kind: string): string {
 
 function line(issue: Issue, extra = ""): string {
   const assignee = issue.assignee ? ` @${issue.assignee}` : "";
+  // The status column stays 11 wide. `awaiting_approval` is 17 and overflows it,
+  // nudging that one row's title right — accepted deliberately over widening the
+  // column, which would re-flow every line of every list for the sake of the
+  // rarest status in the system. A configured status can be longer still, and
+  // the same answer applies: one row moves, not every row.
   return `${glyph(issue)} ${issue.identifier.padEnd(9)} ${issue.status.padEnd(11)} ${issue.title}${assignee}${kindSuffix(issue.kind)}${extra}`;
+}
+
+/**
+ * The one gate cue every list row uses, so `ls`, `inbox`, `tree` and the child
+ * list under `show` can never describe the same ticket two different ways.
+ *
+ * Two mutually exclusive facts, and the row says at most one of them: this row
+ * HOLDS a queue ("awaiting VP"), or it stands in one ("queued: STA-108/VP").
+ * Empty for everything else, so an unrelated row renders exactly as it always
+ * did.
+ */
+function gateCue(gate: IssueGate | null, queuedBy: QueuedBy | null): string {
+  if (queuedBy) return `  [queued: ${queuedBy.identifier}/${queuedBy.owner}]`;
+  if (gate?.state === "pending") return `  [awaiting ${gate.owner}]`;
+  return "";
 }
 
 function getStore(values: { db?: string; ws?: string }) {
@@ -145,6 +171,13 @@ const EXIT_CODES: Record<string, number> = {
   revision_conflict: 7,
   // `wait` only: a budget outcome, not a store error, so it is not a StapleError code.
   timeout: 8,
+  /**
+   * Refused by a review gate (STA-143). Its own number so CI and shell loops can
+   * branch on "a human has to act" without parsing stderr — the one failure
+   * class where retrying, picking another task, or waiting longer are all
+   * equally useless.
+   */
+  gated: 9,
 };
 
 const SLEEP_LOCK = new Int32Array(new SharedArrayBuffer(4));
@@ -701,7 +734,10 @@ Tasks
   show <ref>                            full context (ancestry, relations, comments, docs)
   tree [ref]                            subtask tree
   board                                 terminal kanban
-  inbox [--assignee A] [--hub]          ready vs blocked (pickup order); --hub = all workspaces
+  inbox [--assignee A] [--hub]          ready vs queued vs blocked (pickup order);
+              QUEUED is work a HUMAN has to release (see Approval gates below) and
+              checkout of it is refused; BLOCKED is work waiting on other WORK;
+              --hub = all workspaces
 
 Flow
   start|checkout <ref> [--agent A] [--steal-if-stale <dur>]
@@ -721,6 +757,22 @@ Flow
               --interval default 500ms, no --timeout means wait forever
   link <blocker> <blocked>              cross-workspace dependency (identifiers, via hub)
   comment <ref> <text> [--author A]
+
+Approval gates
+  gate <ref> --owner O [-m text]        park a PARENT behind a human review: it goes
+              awaiting_approval, its claim is cleared, and every open descendant is
+              QUEUED — listed apart in inbox and refused at checkout (exit 9 / gated).
+              Resolved work is never queued, and neither is a parent with nothing
+              open under it. Refused on a leaf (use in_review) and while a gate is
+              already pending; re-gating after request-changes is how you resubmit
+  approve <ref> [--children R1,R2] [-m text]
+              with no --children: resolve the gate, release the whole subtree and
+              re-derive the parent from its children. With --children: release only
+              those (and everything under them) and leave the parent parked
+  request-changes <ref> -m text         SEND IT BACK. Posts your note as a comment on
+              <ref>, returns it to todo for the next agent, and keeps the queued
+              children parked until you approve. Nobody is re-checked-out and the
+              queue holds until an approve or a fresh gate cycle. The note is required
 
 Documents & events
   doc <ref> <key>                       read (latest)
@@ -771,7 +823,8 @@ Statuses (built-in seed; run "staple statuses ls" for this workspace's actual se
           ${ISSUE_STATUSES.join(" ")}
 
 Exit codes: 0 ok · 1 unknown · 2 validation · 3 not_found · 4 conflict
-            5 duplicate · 6 cycle · 7 revision_conflict · 8 timeout (wait)`;
+            5 duplicate · 6 cycle · 7 revision_conflict · 8 timeout (wait)
+            9 gated (a review gate above this issue is unresolved — a human, not a retry)`;
 
 function main() {
   const [command, ...rest] = process.argv.slice(2);
@@ -877,12 +930,23 @@ function main() {
         q: values.q,
         includeResolved: values.all,
       });
-      // One batched query for the whole list, not one per held row.
-      const claims = store.claimActivityFor(issues.map((i) => i.id));
+      // One batched query per fact for the whole list, never one per row.
+      const ids = issues.map((i) => i.id);
+      const claims = store.claimActivityFor(ids);
+      const gates = store.gateFor(ids);
+      const queued = store.queuedByFor(ids);
       if (values.json) {
         // Additive: every existing issue field is still at the top level, with
-        // `claim` alongside (null unless the row is actually held).
-        outJson(issues.map((i) => ({ ...i, claim: claims.get(i.id) ?? null })));
+        // `claim` alongside (null unless the row is actually held), and `gate` /
+        // `queuedBy` as further siblings on the same principle.
+        outJson(
+          issues.map((i) => ({
+            ...i,
+            claim: claims.get(i.id) ?? null,
+            gate: gates.get(i.id) ?? null,
+            queuedBy: queued.get(i.id) ?? null,
+          })),
+        );
         break;
       }
       if (issues.length === 0) console.log("(no issues)");
@@ -891,9 +955,9 @@ function main() {
         console.log(
           line(
             issue,
-            claim
+            (claim
               ? ` · held ${formatAgo(claim.heldSeconds)} · silent ${formatAgo(claim.idleSeconds)}`
-              : "",
+              : "") + gateCue(gates.get(issue.id) ?? null, queued.get(issue.id) ?? null),
           ),
         );
       }
@@ -905,11 +969,14 @@ function main() {
       const { store } = getStore(values);
       const ctx = store.context(positionals[0]!);
       if (values.json) {
-        // Mirrors MCP get_task: claim and the timing pair ride alongside the
-        // context, from the same store expressions get_task spreads.
+        // Mirrors MCP get_task: claim, the gate pair and the timing pair ride
+        // alongside the context, from the same store expressions get_task
+        // spreads.
         outJson({
           ...ctx,
           claim: store.claimActivity(ctx.issue.id),
+          gate: store.gate(ctx.issue.id),
+          queuedBy: store.queuedBy(ctx.issue.id),
           ...store.detailTiming(ctx.issue.id),
         });
         break;
@@ -978,6 +1045,31 @@ function main() {
       if (i.status === "blocked" && (i.unblockOwner || i.unblockAction)) {
         console.log(`\nunblock: ${i.unblockOwner ?? "?"} must ${i.unblockAction ?? "?"}`);
       }
+      /**
+       * The gate gets its own line rather than a suffix on the status line: it
+       * is the single most consequential fact on a parked ticket — nothing
+       * underneath it can be picked up — and burying it after the priority is
+       * how it gets skimmed past.
+       *
+       * Printed for a RESOLVED gate too, because "VP approved this an hour ago"
+       * is exactly what somebody re-reading the ticket needs, and a gate that
+       * vanishes the moment it is answered leaves no trace of the review at all.
+       */
+      const gate = store.gate(i.id);
+      if (gate) {
+        const resolved = gate.resolvedAt
+          ? ` · ${gate.state} by ${gate.resolvedBy ?? "?"} ${gate.resolvedAt.slice(0, 19)}Z`
+          : "";
+        console.log(
+          `\ngate:  ${gate.state === "pending" ? `awaiting ${gate.owner}` : `${gate.owner}`}${resolved} (requested ${gate.requestedBy ?? "?"} ${gate.requestedAt.slice(0, 19)}Z)`,
+        );
+      }
+      const queuedBy = store.queuedBy(i.id);
+      if (queuedBy) {
+        console.log(
+          `queued: behind ${queuedBy.identifier}, awaiting approval by ${queuedBy.owner} — checkout is refused until then`,
+        );
+      }
       if (ctx.blockedBy.length) {
         console.log(`\nblocked by: ${ctx.blockedBy.map((b) => `${b.identifier}(${b.status})`).join(", ")}`);
       }
@@ -986,7 +1078,16 @@ function main() {
       }
       if (ctx.children.length) {
         console.log("\nchildren:");
-        for (const child of ctx.children) console.log(`  ${line(child)}`);
+        // The same batched pair `ls` uses, so a child reads identically here and
+        // in a list — the cue is the row's, not the surface's.
+        const childIds = ctx.children.map((c) => c.id);
+        const childGates = store.gateFor(childIds);
+        const childQueued = store.queuedByFor(childIds);
+        for (const child of ctx.children) {
+          console.log(
+            `  ${line(child, gateCue(childGates.get(child.id) ?? null, childQueued.get(child.id) ?? null))}`,
+          );
+        }
       }
       if (ctx.documents.length) {
         console.log(`\ndocuments: ${ctx.documents.map((d) => `${d.key}@r${d.currentRevision}`).join(", ")}`);
@@ -1109,6 +1210,97 @@ function main() {
       break;
     }
 
+    /**
+     * The three gate verbs (STA-143).
+     *
+     * Separate commands rather than flags on `status`, because `status` is a
+     * statement about ONE row and each of these is a statement about a subtree:
+     * `gate` queues everything underneath, `approve` releases it, and
+     * `request-changes` sends the parent back while holding the queue. Folding
+     * them into `status` would hide the blast radius behind a status word.
+     */
+    case "gate": {
+      const { values, positionals } = parseArgs({
+        args: rest,
+        allowPositionals: true,
+        options: { ...common, owner: { type: "string" }, message: { type: "string", short: "m" } },
+      });
+      const { store } = getStore(values);
+      const issue = store.gateIssue(
+        positionals[0]!,
+        { owner: values.owner ?? "", comment: values.message },
+        agentName(),
+      );
+      const gate = store.gate(issue.id);
+      if (values.json) {
+        outJson({ ...issue, gate });
+        break;
+      }
+      console.log(line(issue, gateCue(gate, null)));
+      break;
+    }
+
+    case "approve": {
+      const { values, positionals } = parseArgs({
+        args: rest,
+        allowPositionals: true,
+        options: {
+          ...common,
+          children: { type: "string" },
+          message: { type: "string", short: "m" },
+        },
+      });
+      const { store } = getStore(values);
+      const children = (values.children ?? "")
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+      const issue = store.approveGate(
+        positionals[0]!,
+        { children: children.length > 0 ? children : undefined, comment: values.message },
+        agentName(),
+      );
+      const gate = store.gate(issue.id);
+      if (values.json) {
+        outJson({ ...issue, gate, releasedChildren: children });
+        break;
+      }
+      // Naming what was released is the point of the granular form: "approved"
+      // alone cannot say whether one child moved or the whole subtree did.
+      console.log(
+        line(
+          issue,
+          children.length > 0
+            ? `  [released ${children.join(", ")}; still awaiting ${gate?.owner ?? "?"}]`
+            : "  [gate approved]",
+        ),
+      );
+      break;
+    }
+
+    case "request-changes": {
+      const { values, positionals } = parseArgs({
+        args: rest,
+        allowPositionals: true,
+        options: { ...common, message: { type: "string", short: "m" } },
+      });
+      const { store } = getStore(values);
+      const issue = store.requestChanges(
+        positionals[0]!,
+        { comment: values.message ?? "" },
+        agentName(),
+      );
+      const gate = store.gate(issue.id);
+      if (values.json) {
+        outJson({ ...issue, gate });
+        break;
+      }
+      // Says the half that surprises people: the parent is pickable again, the
+      // children are not.
+      console.log(line(issue, "  [changes requested; children stay queued]"));
+      break;
+    }
+
     case "block": {
       const { values, positionals } = parseArgs({
         args: rest,
@@ -1171,13 +1363,26 @@ function main() {
         const issue = store.getIssue(ref);
         const unresolvedBlockers = store.unresolvedBlockersOf(issue.id).map((b) => b.identifier);
         const finished = store.isResolvedStatus(issue.status);
+        /**
+         * A gate is a human gate, so it counts here exactly as `blocked` does
+         * (STA-143). Both halves matter: a PARKED parent is not ready — that is
+         * the `gated` category, which `parked` covers alongside `blocked` — and
+         * an issue QUEUED BEHIND someone else's gate is not ready either, which
+         * no status can tell you because it is a fact about an ancestor.
+         *
+         * `wait` genuinely can return on these — a person approving is a commit
+         * like any other, and the data_version tick wakes the loop — so this is
+         * not "wait forever", it is "do not call a gate ready".
+         */
         const category = store.categoryOf(issue.status);
         const parked = category === "blocked" || category === "gated";
+        const queuedBy = store.queuedBy(issue.id);
         return {
           issue,
           unresolvedBlockers,
+          queuedBy,
           reason: finished ? "finished" : "ready",
-          ready: finished || (!parked && unresolvedBlockers.length === 0),
+          ready: finished || (!parked && queuedBy === null && unresolvedBlockers.length === 0),
         };
       };
       // data_version only moves when another connection commits — an idle tick
@@ -1204,13 +1409,20 @@ function main() {
       const waitedMs = Date.now() - startedAt;
       if (timedOut) {
         const blockers = snapshot.unresolvedBlockers;
+        // Name the gate when there is one: "timed out waiting for STA-113" with
+        // no further explanation is the least useful thing this can say when the
+        // real answer is that a named human never answered.
+        const gateWhy = snapshot.queuedBy
+          ? `; queued behind ${snapshot.queuedBy.identifier}, awaiting approval by ${snapshot.queuedBy.owner}`
+          : "";
         const envelope = {
           code: "timeout",
-          message: `Timed out after ${timeoutMs! / 1000}s waiting for ${snapshot.issue.identifier} (${snapshot.issue.status})${blockers.length ? `; unresolved blockers: ${blockers.join(", ")}` : ""}`,
+          message: `Timed out after ${timeoutMs! / 1000}s waiting for ${snapshot.issue.identifier} (${snapshot.issue.status})${blockers.length ? `; unresolved blockers: ${blockers.join(", ")}` : ""}${gateWhy}`,
           detail: {
             identifier: snapshot.issue.identifier,
             status: snapshot.issue.status,
             unresolvedBlockers: blockers,
+            queuedBy: snapshot.queuedBy,
             waitedMs,
             timeoutSeconds: timeoutMs! / 1000,
           },
@@ -1223,7 +1435,7 @@ function main() {
         break;
       }
       if (values.json) {
-        outJson({ ...snapshot.issue, ready: true, reason: snapshot.reason, waitedMs, unresolvedBlockers: snapshot.unresolvedBlockers });
+        outJson({ ...snapshot.issue, ready: true, reason: snapshot.reason, waitedMs, unresolvedBlockers: snapshot.unresolvedBlockers, queuedBy: snapshot.queuedBy });
         break;
       }
       console.log(line(snapshot.issue, `  [${snapshot.reason} after ${(waitedMs / 1000).toFixed(1)}s]`));
@@ -1341,6 +1553,41 @@ function main() {
       console.log("READY (pickup order):");
       for (const issue of inbox.ready) console.log(`  ${line(issue)}`);
       if (inbox.ready.length === 0) console.log("  (nothing ready)");
+      /**
+       * QUEUED sits between READY and BLOCKED because that is the order an agent
+       * reads them in: take something, or find out a person is holding the rest,
+       * or find out other work is. Printed only when non-empty, so a workspace
+       * with no gates renders exactly as it always did.
+       */
+      if (inbox.queued.length) {
+        console.log("QUEUED (waiting on a human — checkout is refused):");
+        /**
+         * Gate holders first, then the work behind them — a PRESENTATION choice,
+         * made here and not in the store.
+         *
+         * `store.inbox()` returns this bucket in the ordinary pickup rank, where
+         * `awaiting_approval` sorts after `backlog` and the parked parent
+         * therefore lands underneath its own queue. That reads backwards: the
+         * gate is the only row in the section a human can do anything about, and
+         * burying it under the three tickets it is holding hides the one line
+         * that says who to go and ask.
+         *
+         * The store's order is left alone because it is a contract MCP and the
+         * web UI both consume; this is the terminal's business.
+         */
+        const orderedQueue = [
+          ...inbox.queued.filter((i) => !i.queuedBy),
+          ...inbox.queued.filter((i) => i.queuedBy),
+        ];
+        for (const issue of orderedQueue) {
+          // The parked parent says who it is waiting on; the children say who
+          // and behind what. Neither is ever "? must act".
+          const why = issue.queuedBy
+            ? `awaiting ${issue.queuedBy.owner} on ${issue.queuedBy.identifier}`
+            : `awaiting ${issue.gate?.owner ?? "?"}`;
+          console.log(`  ${line(issue, `  [${why}]`)}`);
+        }
+      }
       if (inbox.blocked.length) {
         console.log("BLOCKED:");
         // A parent blocked BY ITS CHILDREN (STA-98) has no descriptor of its own

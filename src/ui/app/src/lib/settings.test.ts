@@ -102,6 +102,7 @@ describe("the seed", () => {
       "todo",
       "in_progress",
       "in_review",
+      "awaiting_approval",
       "done",
       "blocked",
       "cancelled",
@@ -109,9 +110,10 @@ describe("the seed", () => {
     expect(seeded.kinds.map((k) => k.id)).toEqual(["epic", "task", "bug", "chore", "spike"]);
   });
 
-  it("carries the real categories, so the first paint is not seven grey glyphs", () => {
+  it("carries the real categories, so the first paint is not eight grey glyphs", () => {
     expect(statusCategory("in_progress")).toBe("active");
     expect(statusCategory("in_review")).toBe("review");
+    expect(statusCategory("awaiting_approval")).toBe("gated");
     expect(statusCategory("backlog")).toBe("unstarted");
     expect(statusCategory("todo")).toBe("ready");
     expect(statusCategory("blocked")).toBe("blocked");

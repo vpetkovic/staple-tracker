@@ -439,8 +439,12 @@ try {
   ).statuses;
   assert(
     seededStatuses.map((s: any) => s.id).join(",") ===
-      "backlog,todo,in_progress,in_review,done,blocked,cancelled",
-    "list_statuses returns the seeded seven in seed order",
+      "backlog,todo,in_progress,in_review,awaiting_approval,done,blocked,cancelled",
+    "list_statuses returns the seeded eight in seed order",
+  );
+  assert(
+    seededStatuses.find((s: any) => s.id === "awaiting_approval")?.category === "gated",
+    "the seeded approval-gate status is in the gated category, which is where its behaviour lives",
   );
   assert(
     seededStatuses.every((s: any) => typeof s.category === "string" && s.isBuiltin === true),
@@ -545,12 +549,12 @@ try {
     toolText(await rpc("tools/call", {
       name: "update_statuses",
       arguments: {
-        ops: [{ op: "add", id: "awaiting_approval", category: "gated", after: "in_review" }],
+        ops: [{ op: "add", id: "needs_qa", category: "review", after: "in_review" }],
       },
     })),
   ).statuses;
   assert(
-    added.map((s: any) => s.id).indexOf("awaiting_approval") === 4,
+    added.map((s: any) => s.id).indexOf("needs_qa") === 4,
     "update_statuses places an added status exactly after the one named by `after`",
   );
 
@@ -558,18 +562,18 @@ try {
   const parked = JSON.parse(
     toolText(await rpc("tools/call", {
       name: "update_task",
-      arguments: { ref: "SMO-2", status: "awaiting_approval" },
+      arguments: { ref: "SMO-2", status: "needs_qa" },
     })),
   );
   assert(
-    parked.status === "awaiting_approval",
+    parked.status === "needs_qa",
     "a status added at runtime is accepted by update_task like any other",
   );
 
   // Guard 1: a status rows still carry cannot vanish out from under them.
   const refusedRemove = await rpc("tools/call", {
     name: "update_statuses",
-    arguments: { ops: [{ op: "remove", id: "awaiting_approval" }] },
+    arguments: { ops: [{ op: "remove", id: "needs_qa" }] },
   });
   assert(
     refusedRemove.isError && toolError(refusedRemove).code === "conflict",
@@ -590,11 +594,11 @@ try {
   const migratedRemove = JSON.parse(
     toolText(await rpc("tools/call", {
       name: "update_statuses",
-      arguments: { ops: [{ op: "remove", id: "awaiting_approval", migrateTo: "todo" }] },
+      arguments: { ops: [{ op: "remove", id: "needs_qa", migrateTo: "todo" }] },
     })),
   ).statuses;
   assert(
-    !migratedRemove.some((s: any) => s.id === "awaiting_approval"),
+    !migratedRemove.some((s: any) => s.id === "needs_qa"),
     "remove --migrate-to drops the status and the list comes back without it",
   );
   assert(
@@ -644,7 +648,10 @@ try {
   const wsTargetable = coldTools.tools
     .filter((t: any) => t.inputSchema?.properties?.ws)
     .map((t: any) => t.name);
-  assert(wsTargetable.length === 17, `17 workspace tools accept ws targeting (${wsTargetable.length} found)`);
+  // STA-140 added list_statuses / list_kinds / update_statuses / update_kinds and
+  // STA-143 added gate_task / approve_task / request_changes. All seven act on ONE
+  // workspace, so all seven take `ws` like every other workspace tool.
+  assert(wsTargetable.length === 20, `20 workspace tools accept ws targeting (${wsTargetable.length} found)`);
   assert(
     !coldByName.get("cross_link").inputSchema.properties?.ws &&
       !coldByName.get("hub_overview").inputSchema.properties?.ws,
@@ -745,11 +752,18 @@ try {
   assert(
     actorTools.join(",") ===
       [
+        // Sorted, so the three gate verbs (STA-143) land where the alphabet puts
+        // them rather than where they were registered. All three are writes and
+        // all three are attributable — a gate with no requester is exactly the
+        // kind of unattributable decision this assertion exists to prevent.
         "add_comment",
+        "approve_task",
         "checkout_task",
         "create_task",
+        "gate_task",
         "put_document",
         "release_task",
+        "request_changes",
         "set_blocked_by",
         // STA-140: a vocabulary edit is a write and is attributed like one.
         "update_kinds",

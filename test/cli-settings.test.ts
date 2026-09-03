@@ -67,6 +67,7 @@ describe("staple statuses", () => {
       "todo",
       "in_progress",
       "in_review",
+      "awaiting_approval",
       "done",
       "blocked",
       "cancelled",
@@ -84,9 +85,9 @@ describe("staple statuses", () => {
     const { status, stdout } = staple(
       "statuses",
       "add",
-      "awaiting_approval",
+      "needs_qa",
       "--category",
-      "gated",
+      "review",
       "--after",
       "in_review",
       "--json",
@@ -97,6 +98,7 @@ describe("staple statuses", () => {
       "todo",
       "in_progress",
       "in_review",
+      "needs_qa",
       "awaiting_approval",
       "done",
       "blocked",
@@ -122,13 +124,14 @@ describe("staple statuses", () => {
     const reorder = staple(
       "statuses",
       "reorder",
-      "in_progress,in_review,blocked,todo,backlog,done,cancelled",
+      "in_progress,in_review,awaiting_approval,blocked,todo,backlog,done,cancelled",
       "--json",
     );
     expect(reorder.status).toBe(0);
     expect((JSON.parse(reorder.stdout) as Array<{ id: string }>).map((r) => r.id)).toEqual([
       "in_progress",
       "in_review",
+      "awaiting_approval",
       "blocked",
       "todo",
       "backlog",
@@ -200,22 +203,59 @@ describe("staple kinds", () => {
 });
 
 describe("a configured status is a first-class status everywhere", () => {
-  it("is settable, listable, boardable and claimable through the ordinary commands", () => {
-    expect(staple("statuses", "add", "awaiting_approval", "--category", "gated").status).toBe(0);
-    expect(staple("status", "VOC-1", "awaiting_approval").status).toBe(0);
+  it("is settable, listable and boardable through the ordinary commands", () => {
+    expect(staple("statuses", "add", "on_hold", "--category", "blocked").status).toBe(0);
+    expect(staple("status", "VOC-1", "on_hold").status).toBe(0);
 
     // ls prints it, with a glyph chosen by its CATEGORY rather than "?".
     const listed = staple("ls").stdout;
-    expect(listed).toContain("awaiting_approval");
+    expect(listed).toContain("on_hold");
     expect(listed).not.toContain("? ");
 
     // board gives it a column of its own.
-    expect(staple("board").stdout).toContain("AWAITING_APPROVAL (1)");
+    expect(staple("board").stdout).toContain("ON_HOLD (1)");
 
-    // inbox parks it rather than offering it as ready work: `gated` is not workable.
+    // inbox parks it rather than offering it as ready work: `blocked` is not workable.
     const inbox = JSON.parse(staple("inbox", "--json").stdout);
     expect(inbox.blocked.map((i: { identifier: string }) => i.identifier)).toContain("VOC-1");
     expect(inbox.ready).toHaveLength(0);
+  });
+
+  /**
+   * THE GATE FOLLOWS THE VOCABULARY (STA-143 x STA-140).
+   *
+   * `staple gate` writes the FIRST status of the `gated` category, never the
+   * literal `awaiting_approval`. Proved the only way that means anything: rename
+   * the seeded row out of existence first, so a `gate` that still carried a
+   * string literal would write a status this workspace does not have.
+   *
+   * The direct write is refused in the same breath, and for the same reason it
+   * is refused for the built-in id: the boundary is the CATEGORY. A gate carries
+   * WHO must approve, and a status cannot.
+   */
+  it("gates into the workspace's OWN gated status, and still refuses a direct write", () => {
+    expect(staple("statuses", "add", "signoff", "--category", "gated").status).toBe(0);
+    expect(
+      staple("statuses", "rm", "awaiting_approval", "--migrate-to", "signoff").status,
+    ).toBe(0);
+    expect(ids(["statuses", "ls", "--json"])).not.toContain("awaiting_approval");
+
+    // A parent with a child — the shape a gate needs.
+    expect(staple("new", "Child", "--parent", "VOC-1").status).toBe(0);
+    expect(staple("gate", "VOC-1", "--owner", "VP").status).toBe(0);
+
+    const shown = staple("show", "VOC-1", "--json").stdout;
+    expect(JSON.parse(shown).issue.status).toBe("signoff");
+
+    // Queued, not blocked, and never ready.
+    const inbox = JSON.parse(staple("inbox", "--json").stdout);
+    expect(inbox.queued.map((i: { identifier: string }) => i.identifier)).toContain("VOC-1");
+    expect(inbox.ready.map((i: { identifier: string }) => i.identifier)).not.toContain("VOC-1");
+
+    // And the boundary holds for the configured id exactly as for the built-in one.
+    const direct = staple("status", "VOC-2", "signoff");
+    expect(direct.status).toBe(2);
+    expect(direct.stderr).toMatch(/staple gate/);
   });
 
   it("refuses a status the workspace does not configure, naming the ones it has", () => {
