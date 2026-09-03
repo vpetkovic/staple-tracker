@@ -1735,6 +1735,86 @@ describe("group by epic", () => {
     expect(visibleOrder(shape, () => false).map((s) => s.ref)).toEqual(["STA-1", "STA-2"]);
   });
 
+  /**
+   * ── R4d (STA-189) — ONE EXPANSION STATE, pinned on a tracker-shaped list ─────────────
+   *
+   * The bug report: Group by Epic "opens with every epic collapsed" after O8. O8d already
+   * made the epic's own row the group's head, keyed by the issue id like every other row,
+   * so the axis reads the SAME `EXPANDED_ROWS_KEY` the flat view does — and the two fixtures
+   * above prove it one epic at a time. What was never pinned is the whole page at once, on
+   * a list shaped like the tracker's own: a live epic with sub-epics, a blocked epic, a
+   * backlog epic whose only live work is a child, backlog epics with nothing live, and
+   * orphans. Every parent below is asserted to open or fold IDENTICALLY on both axes, with
+   * nobody having clicked anything and again with explicit choices in the map. A default
+   * that diverged on either axis would fail here before anyone opened a browser.
+   */
+  describe("shares the flat hierarchy's expansion state — R4d (STA-189)", () => {
+    const trackerShaped = (): IssueRow[] => [
+      row({ id: "e1", identifier: "STA-1", kind: "epic", status: "in_progress" }),
+      row({ id: "e2", identifier: "STA-2", kind: "epic", status: "in_progress", parentId: "e1" }),
+      row({ id: "t3", identifier: "STA-3", status: "in_progress", parentId: "e2" }, claim()),
+      row({ id: "t4", identifier: "STA-4", status: "backlog", parentId: "e2" }),
+      row({ id: "e5", identifier: "STA-5", kind: "epic", status: "backlog", parentId: "e1" }),
+      row({ id: "t6", identifier: "STA-6", status: "backlog", parentId: "e5" }),
+      row({ id: "e7", identifier: "STA-7", kind: "epic", status: "blocked" }),
+      row({ id: "t8", identifier: "STA-8", status: "blocked", parentId: "e7" }),
+      row({ id: "e9", identifier: "STA-9", kind: "epic", status: "backlog" }),
+      row({ id: "t10", identifier: "STA-10", status: "blocked", parentId: "e9" }),
+      row({ id: "e11", identifier: "STA-11", kind: "epic", status: "backlog" }),
+      row({ id: "t12", identifier: "STA-12", status: "backlog", parentId: "e11" }),
+      row({ id: "t13", identifier: "STA-13", status: "backlog" }),
+    ];
+
+    /** `identifier -> isExpanded` for every REAL parent drawn — the thing a switch must keep. */
+    const parents = (rows: readonly TaskRow[]): Map<string, boolean> =>
+      new Map(real(rows).filter((r) => r.hasChildren).map((r) => [r.issue.identifier, r.isExpanded]));
+
+    it("opens the SAME parents on first visit as the ungrouped view — the documented default", () => {
+      const rows = trackerShaped();
+      const untouched: BuildOptions = { isExpanded: () => undefined, showResolved: true, rollupSource: rows };
+
+      const flat = parents(flattenFlat(rows, untouched));
+      const epic = parents(buildParentGroups(rows, untouched).flatMap((g) => g.rows));
+
+      expect(epic).toEqual(flat);
+      // Every parent is on both pages, so the equality above is not vacuous.
+      expect([...epic.keys()].sort()).toEqual(["STA-1", "STA-11", "STA-2", "STA-5", "STA-7", "STA-9"]);
+      // And the default itself, spelled out: a parent opens when it, or anything beneath
+      // it, is active; otherwise it folds. NOT "every epic collapsed", and not "everything
+      // open" either — the backlog is still not a wall.
+      expect(epic.get("STA-1")).toBe(true); // in progress itself
+      expect(epic.get("STA-7")).toBe(true); // blocked counts as active
+      expect(epic.get("STA-9")).toBe(true); // backlog, but holds a blocked child
+      expect(epic.get("STA-5")).toBe(false); // backlog over backlog
+      expect(epic.get("STA-11")).toBe(false);
+    });
+
+    it("carries every EXPLICIT choice across the switch, in both directions", () => {
+      const rows = trackerShaped();
+      // The user folded the live epic and opened a backlog one in the flat view.
+      const choices = new Map([
+        ["e1", false],
+        ["e11", true],
+      ]);
+      const chosen: BuildOptions = {
+        isExpanded: (issue) => choices.get(issue.id),
+        showResolved: true,
+        rollupSource: rows,
+      };
+
+      const flat = parents(flattenFlat(rows, chosen));
+      const epic = parents(buildParentGroups(rows, chosen).flatMap((g) => g.rows));
+
+      expect(epic).toEqual(flat);
+      expect(epic.get("STA-1")).toBe(false);
+      expect(epic.get("STA-11")).toBe(true);
+      // A folded epic takes its whole family with it on BOTH axes — no sub-epic resurfaces
+      // as a section of its own, because the group is keyed on the TOP-LEVEL ancestor.
+      expect(epic.has("STA-2")).toBe(false);
+      expect(flat.has("STA-2")).toBe(false);
+    });
+  });
+
   it("keys the GROUP on the EPIC's id, which no status or section is spelled as", () => {
     // The four vocabularies share one collapsed-groups set in expansion.ts. This is the
     // property that lets them, asserted where the keys are MINTED rather than where they

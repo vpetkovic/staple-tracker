@@ -12,6 +12,29 @@ Views: subtask tree and dependency graph, plus a detail panel with documents,
 comments, and the agent-payload pane, and a workspace settings dialog for the
 status and kind vocabularies.
 
+## Grouping
+
+The tree is ungrouped by default: one hierarchy, parents over children. The
+"Group" control adds an axis — status, pickup order, epic, or kind — and each
+axis is a way of *displaying* the same rows, never a second copy of them.
+
+**Expansion.** Every parent has one expand/collapse state, keyed by the issue
+and shared by every axis, so an epic folded in the ungrouped view is folded
+under Group by Epic and vice versa; the choice survives the poll, a view switch,
+and a reload. On first visit — before you have clicked anything — a parent is
+**open when it, or anything beneath it, is active** (in progress, in review, or
+blocked) and **folded otherwise**, so live work is on screen and the backlog is
+not a wall. Group by Epic uses exactly that default; the epic's own row is the
+top of its section, its chevron is the only fold, and nothing is collapsed on
+your behalf.
+
+**Epic sections.** Under Group by Epic every row sits under its top-level
+ancestor, with the epic itself as the section's first row (dimmed, when the
+current filter removed it) and "No epic" last for rows that have none. Adjacent
+sections are separated by one rule — 8px of air plus a hairline — whether the
+next section is headed by a real epic, a ghost of one, or the "No epic" header,
+at every width. There is no gap between an epic and its own first task.
+
 ## Auth
 
 Pages served to loopback carry their own token, so the browser never sees a
