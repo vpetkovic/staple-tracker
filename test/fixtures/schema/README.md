@@ -9,6 +9,8 @@ and `test/migrations-concurrency.test.ts`.
 | `workspace-v1.sqlite` | workspace before comment idempotency, stamped `'1'`, with real issues, relations, comments, documents, and events |
 | `workspace-v1-unstamped.sqlite` | same schema, `schema_version` row absent — "tables exist, nobody ever stamped them" |
 | `workspace-v2.sqlite` | current shape, stamped `'2'`, one comment carrying an idempotency key |
+| `workspace-v5.sqlite` | pre-approval-gates shape, stamped `'5'` — what some installed builds still write; the pre-upgrade snapshot tests walk it to 6 |
+| `workspace-v6.sqlite` | the live workspace's shape, stamped `'6'` — a build that understands 3 or 5 must refuse it |
 | `workspace-v99.sqlite` | v2 schema stamped `'99'` — the downgrade guard's target |
 | `hub-v1.sqlite` | the hub exactly as it existed before A4: registry, links, events, and **no `meta` table at all** |
 | `hub-v99.sqlite` | hub stamped `'99'` |

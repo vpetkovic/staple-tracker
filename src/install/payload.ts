@@ -36,8 +36,8 @@ export interface PayloadSource {
   path: string;
 }
 
-/** Read `version` out of the payload's own package.json — A2 generates it. */
-function payloadVersion(root: string): string {
+/** The payload's own package.json, parsed — A2 generates it. */
+function payloadPackageJson(root: string): Record<string, unknown> {
   const path = join(root, "package.json");
   let text: string;
   try {
@@ -54,7 +54,16 @@ function payloadVersion(root: string): string {
   } catch {
     throw new StapleError("validation", `${path} is not valid JSON.`);
   }
-  const version = (parsed as { version?: unknown } | null)?.version;
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new StapleError("validation", `${path} must contain a JSON object.`);
+  }
+  return parsed as Record<string, unknown>;
+}
+
+/** Read `version` out of the payload's own package.json. */
+function payloadVersion(root: string): string {
+  const path = join(root, "package.json");
+  const version = payloadPackageJson(root).version;
   if (typeof version !== "string" || version.length === 0) {
     throw new StapleError("validation", `${path}: "version" must be a non-empty string.`);
   }
@@ -67,6 +76,27 @@ function payloadVersion(root: string): string {
     );
   }
   return version;
+}
+
+/**
+ * The workspace schema version a payload's bundle understands, as
+ * `scripts/build-package.ts` stamps it into `package.json` under
+ * `staple.workspaceSchema`. Null when the payload predates the stamp — an
+ * older artifact is still installable; it just cannot say what it understands.
+ * Read from the version directory too, so status and doctor can answer "which
+ * workspace can the selected runtime open" without executing it.
+ */
+export function payloadWorkspaceSchema(root: string): number | null {
+  let record: Record<string, unknown>;
+  try {
+    record = payloadPackageJson(root);
+  } catch {
+    return null;
+  }
+  const staple = record.staple;
+  if (staple === null || typeof staple !== "object") return null;
+  const schema = (staple as { workspaceSchema?: unknown }).workspaceSchema;
+  return typeof schema === "number" && Number.isInteger(schema) && schema > 0 ? schema : null;
 }
 
 /** Does this directory look like an unpacked staple payload? */
@@ -160,6 +190,8 @@ export interface StagedPayload {
   /** Absolute path of the staged tree, under `<home>/runtime/staging/`. */
   path: string;
   version: string;
+  /** From `staple.workspaceSchema` in the payload's package.json; null if undeclared. */
+  workspaceSchema: number | null;
   manifest: RuntimeManifest;
   manifestHash: string;
   source: PayloadSource;
@@ -224,7 +256,14 @@ export function stagePayload(options: {
       );
     }
 
-    return { path: dir, version, manifest, manifestHash, source };
+    return {
+      path: dir,
+      version,
+      workspaceSchema: payloadWorkspaceSchema(dir),
+      manifest,
+      manifestHash,
+      source,
+    };
   } catch (error) {
     rmSync(dir, { recursive: true, force: true });
     throw error;

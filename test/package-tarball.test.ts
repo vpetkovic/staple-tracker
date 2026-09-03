@@ -22,6 +22,8 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildPackage } from "../scripts/build-package.js";
+import { WORKSPACE_LATEST_VERSION } from "../src/core/migrations/workspace/index.js";
+import { HUB_LATEST_VERSION } from "../src/core/migrations/hub/index.js";
 import { bareEnv, freePort, removeDir, REPO_ROOT, tempDir } from "./fixtures/characterize-support.js";
 
 /** Build + pack + install is a minute of work on a cold cache; do it once. */
@@ -124,6 +126,17 @@ describe("the packed artifact", () => {
     expect(pkg.name).toBe("staple-cli");
     expect(pkg.bin).toEqual({ staple: "staple.mjs" });
     expect(pkg.engines.node).toBe(">=22.5.0");
+  });
+
+  it("declares the workspace schema its bundle understands, from the same migration list", () => {
+    const pkg = JSON.parse(
+      readFileSync(join(prefix, "node_modules", "staple-cli", "package.json"), "utf8"),
+    ) as { staple: { workspaceSchema: number; hubSchema: number } };
+
+    // The installer reads this so `staple install status` and `doctor` can say
+    // which workspace a runtime opens without executing it. It has to be the
+    // number compiled into the bundle, so it is derived, never typed.
+    expect(pkg.staple).toEqual({ workspaceSchema: WORKSPACE_LATEST_VERSION, hubSchema: HUB_LATEST_VERSION });
   });
 
   it("declares no dependencies, so nothing else is installed beside it", () => {

@@ -813,7 +813,12 @@ function checkRuntime(): CheckResult {
     home,
     installed: true,
     version: status.version,
+    // What the selected runtime can open, from its payload's declaration. This
+    // build's own `WORKSPACE_SCHEMA_VERSION` is a different number whenever
+    // doctor runs from a checkout, which is why it is reported and not assumed.
+    workspaceSchema: status.workspaceSchema,
     previousVersion: status.previousVersion,
+    previousVersionPath: status.previousVersionPath,
     entrypoint: status.entrypoint,
     launcher: status.launcher.path,
     verifiedVersions: audit.verifiedVersions,
@@ -833,7 +838,9 @@ function checkRuntime(): CheckResult {
     "Installed runtime",
     "pass",
     `staple ${status.version} verifies; launcher ${status.launcher.path} resolves this home. ` +
-      `Rollback target: ${status.previousVersion ?? "(none)"}.`,
+      `It understands workspace schema ${status.workspaceSchema ?? "(undeclared)"}. ` +
+      `Rollback target: ${status.previousVersion ?? "(none)"}` +
+      `${status.previousVersionPath ? ` at ${status.previousVersionPath}` : ""}.`,
     data,
   );
 }

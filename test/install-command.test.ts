@@ -20,6 +20,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { runInstallCommand } from "../src/install/index.js";
 import { clearHomeOverride } from "../src/config/index.js";
+import { WORKSPACE_LATEST_VERSION } from "../src/core/migrations/workspace/index.js";
 import { StapleError } from "../src/core/types.js";
 import { removeDir, tempDir } from "./fixtures/characterize-support.js";
 import { writeFakePayload } from "./fixtures/install-support.js";
@@ -146,6 +147,25 @@ describe("install", () => {
     expect(stdout.join("\n")).toContain("`staple install --rollback --yes` returns to 1.0.0");
   });
 
+  it("says which workspace schema the installed runtime understands, and where the prior one is retained", () => {
+    install("1.0.0");
+    stdout.length = 0;
+    install("2.0.0");
+
+    const text = stdout.join("\n");
+    expect(text).toContain(`Schema     understands workspace schema ${WORKSPACE_LATEST_VERSION}`);
+    expect(text).toContain(`returns to 1.0.0, retained at ${join(home, "runtime", "versions", "1.0.0")}.`);
+  });
+
+  it("exposes the schema and the retained path under --json", () => {
+    install("1.0.0");
+    install("2.0.0", ["--json"]);
+
+    const payloadJson = lastJson();
+    expect(payloadJson.workspaceSchema).toBe(WORKSPACE_LATEST_VERSION);
+    expect(payloadJson.previousVersionPath).toBe(join(home, "runtime", "versions", "1.0.0"));
+  });
+
   it("throws StapleError — cli.ts's existing catch owns the envelope and exit code", () => {
     let caught: unknown;
     try {
@@ -182,7 +202,8 @@ describe("status", () => {
     run(["status"]);
     const text = stdout.join("\n");
     expect(text).toContain("version    2.0.0");
-    expect(text).toContain("previous   1.0.0");
+    expect(text).toContain(`schema     understands workspace schema ${WORKSPACE_LATEST_VERSION}`);
+    expect(text).toContain(`previous   1.0.0  retained at ${join(home, "runtime", "versions", "1.0.0")}`);
     expect(text).toContain("versions   1.0.0, 2.0.0");
     expect(text).toContain(join(binDir, "staple"));
   });
