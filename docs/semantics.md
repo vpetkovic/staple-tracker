@@ -76,6 +76,57 @@ Issue **kinds** (`epic`, `task`, `bug`, `chore`, `spike`) are the same kind of
 list without the categories: they label what a ticket *is* and carry no
 behaviour.
 
+## A parent's status is derived from its children
+
+**A parent does not have a status of its own to maintain.** An issue with
+children reports what its children are doing, recomputed on every child
+transition, in the same transaction as the transition itself — there is no
+window where a child has moved and its epic still says the old thing.
+
+The ladder, stated in categories (so it survives any renaming):
+
+| # | children | the parent reads |
+|---|----------|------------------|
+| 0 | **no children at all** | nothing — a leaf is untouched by every rule here |
+| 1 | any open child `active` | `active` |
+| 2 | else any open child `review` | `review` |
+| 3 | else any open child `unstarted`/`ready` | the workable band |
+| 4 | else all open children `blocked`/`gated` | `blocked` |
+| 5 | nothing open, **every** child `cancelled` | `cancelled` |
+| 6 | nothing open, at least one child `done` | `done` |
+
+Three consequences worth stating out loud:
+
+- **The last child to land closes the parent**, with `completedAt` stamped, and
+  a child that comes back out of `done` re-opens it to whatever rung its
+  children now imply. Nothing needs to remember to close an epic.
+- **A parent is `in_progress` only while a child genuinely is.** Rung 1 is the
+  only way in, so an epic whose children have all stopped falls back to what is
+  actually true underneath it — review, blocked, workable, or finished.
+- **`blocked` is exclusive** (rung 4 is last of the open rungs): one blocked
+  child beside one workable child is not a blocked parent, because there is
+  still work an agent can pick up. A derived-blocked parent carries no unblock
+  descriptor of its own — the fact belongs to the blocking child, and the UI
+  borrows it from there.
+
+**Derivation may only change what derivation set.** The pre-work band is the
+*absence* of a statement, so derivation writes into it freely; everything else —
+`in_progress`, `in_review`, `blocked`, `done`, `cancelled` — only when the event
+log says derivation itself wrote the current value. So an epic a human closed by
+hand, cancelled, parked in `blocked` with an unblock descriptor, or genuinely
+checked out is immune until that human moves it. `staple done <epic>` therefore
+still works, is idempotent, and sticks.
+
+Every derived transition is a `status_changed` event carrying `derived` (the
+rung that fired) and `derivedFrom` (the child that caused it). That marker is
+what tells the timeline it was a report rather than a person, and what makes
+the **timing** numbers honest: an interval opened by a derived flip is never
+billed, so an epic has no stopwatch of its own — its actual is its children's.
+
+The automatic close does not replace the summary. `children_complete` still
+fires when the last child lands (before the close, so the wake is never
+swallowed), and it is the cue to write what shipped.
+
 ## Atomic checkout and release
 
 A checkout is one statement:
@@ -103,8 +154,14 @@ Release is the inverse and returns the issue to `todo`.
   `sha256(sorted blocker ids + blocked-cycle stamp)`, so the wake fires once
   per (dependent, exact blocker set, blocked cycle). Re-blocking mints a new
   cycle stamp and therefore a new key, which re-arms the wake.
-- Parents get `children_complete` when the last child lands.
-  `blockParentUntilDone` is a real edge in the graph, not a computed view.
+- Parents get `children_complete` when the last child lands — and then close
+  themselves (see the derived ladder above); the wake is the cue to write the
+  summary, not to remember to close anything.
+  `blockParentUntilDone` is a real edge in the graph, not a computed view. It
+  gates *starting* the parent, and if the blocking child is also the parent's
+  last open child the parent finishes rather than becoming startable; a human
+  who has follow-up work of their own says so by giving the parent a status,
+  which derivation then leaves alone.
 - `unblockDescriptor` makes blocked work actionable: it names **who** must act
   and **what** clears it. A blocked ticket with no descriptor is a dead end.
 

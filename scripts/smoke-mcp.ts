@@ -491,6 +491,42 @@ try {
   ).issue.kind;
   assert(fetchedKind === "bug", "get_task returns the kind");
 
+  // ── a parent closes itself when its last child lands (STA-153) ────────────
+  const epic = JSON.parse(
+    toolText(await rpc("tools/call", {
+      name: "create_task",
+      arguments: { title: "Smoke epic", kind: "epic", actor: "smoke-agent" },
+    })),
+  );
+  const onlyChild = JSON.parse(
+    toolText(await rpc("tools/call", {
+      name: "create_task",
+      arguments: { title: "Smoke epic child", parent: epic.identifier, actor: "smoke-agent" },
+    })),
+  );
+  await rpc("tools/call", {
+    name: "update_task",
+    arguments: { ref: onlyChild.identifier, status: "done", actor: "smoke-agent" },
+  });
+  const closedEpic = JSON.parse(
+    toolText(await rpc("tools/call", { name: "get_task", arguments: { ref: epic.identifier } })),
+  ).issue;
+  assert(
+    closedEpic.status === "done" && closedEpic.completedAt,
+    "the last child landing closes the epic on the wire, with completedAt",
+  );
+  const epicEvents = JSON.parse(
+    toolText(await rpc("tools/call", { name: "events_since", arguments: { since: 0 } })),
+  ).filter((e: any) => e.payload?.identifier === epic.identifier);
+  assert(
+    epicEvents.some((e: any) => e.kind === "children_complete"),
+    "children_complete still wakes the epic's owner for the summary",
+  );
+  assert(
+    epicEvents.some((e: any) => e.kind === "status_changed" && e.payload.derived === "children_resolved"),
+    "the automatic close is marked derived on the event log",
+  );
+
   // A kind the code has never heard of, added at runtime — the whole point of
   // the schema being z.string() rather than z.enum.
   await rpc("tools/call", {

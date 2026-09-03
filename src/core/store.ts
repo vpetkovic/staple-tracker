@@ -314,6 +314,8 @@ const DERIVED_MARKERS = {
   review: "child_in_review",
   workable: "children_workable",
   blocked: "children_blocked",
+  done: "children_resolved",
+  cancelled: "children_cancelled",
 } as const satisfies Record<DerivedRung, string>;
 
 /**
@@ -321,8 +323,12 @@ const DERIVED_MARKERS = {
  * (STA-140). `workable` is the two-member band {unstarted, ready}; the others
  * name the category the parent should be moved into. Which concrete status that
  * becomes is the workspace's business — see `primaryStatusFor`.
+ *
+ * `done`/`cancelled` are STA-153's two closing rungs: a parent whose children
+ * have ALL landed is finished, and saying so is the same kind of report as
+ * saying it is in progress.
  */
-type DerivedRung = "active" | "review" | "workable" | "blocked";
+type DerivedRung = "active" | "review" | "workable" | "blocked" | "done" | "cancelled";
 
 /**
  * What the interval replay produces for ONE issue, before rollups: the issue's
@@ -1582,35 +1588,49 @@ export class WorkspaceStore {
   /**
    * The ladder: what a parent's status SHOULD read, given its children.
    *
-   * Computed over OPEN children only — `done` and `cancelled` contribute
-   * nothing, at any rung. Returns null for "no derivation applies", which is a
-   * distinct outcome from any status: it means leave the parent exactly as it is.
+   * The OPEN rungs are computed over open children only — a `done` child
+   * contributes nothing to rungs 1-4. Returns null for "no derivation applies",
+   * which is a distinct outcome from any status: it means leave the parent
+   * exactly as it is.
    *
    * Every rung is stated in CATEGORIES since STA-140, never in status ids, so a
    * renamed, added or reordered status keeps exactly these semantics:
    *
-   *  1. any child `active`            -> `active`
-   *  2. else any `review`             -> `review`
-   *  3. else any `unstarted`/`ready`  -> the WORKABLE BAND
+   *  0. NO CHILDREN AT ALL            -> null
+   *  1. any open child `active`       -> `active`
+   *  2. else any open `review`        -> `review`
+   *  3. else any open `unstarted`/`ready` -> the WORKABLE BAND
    *  4. else (all open blocked/gated) -> `blocked`
-   *  0. no open children at all       -> null
+   *  5. nothing open, every child `cancelled` -> `cancelled`
+   *  6. nothing open, at least one `done`     -> `done`
    *
-   * Rung 4 is why `blocked` is EXCLUSIVE: it is last, so it wins only when it is
-   * all that remains. One blocked child beside one backlog child derives the
-   * workable band, because there is still work an agent can pick up underneath.
-   * `gated` falls into the same rung as `blocked` — an approval nobody has given
-   * is not work an agent can pick up, and it is not a reason to demote a parent.
+   * Rung 4 is why `blocked` is EXCLUSIVE: it is last of the open rungs, so it
+   * wins only when it is all that remains. One blocked child beside one backlog
+   * child derives the workable band, because there is still work an agent can
+   * pick up underneath. `gated` falls into the same rung as `blocked` — an
+   * approval nobody has given is not work an agent can pick up, and it is not a
+   * reason to demote a parent.
    *
-   * Rung 0 is why nothing auto-closes. When every child is resolved the parent
-   * keeps whatever status it had and waits for a deliberate close;
-   * `children_complete` is still the only signal, and it is still only a nudge.
-   * The same rung is why nothing auto-REOPENS either.
+   * Rungs 5 and 6 are STA-153, and they REPLACE STA-98's refinement 2 ("resolved
+   * never derives upward"). A parent whose every child has landed is finished:
+   * leaving it in `in_progress` was the lie the ticket exists to remove. The two
+   * rungs are asymmetric on purpose — `cancelled` needs unanimity, because one
+   * shipped child means the parent shipped something, so any mix of done and
+   * cancelled reads `done`. `children_complete` still fires: it is the wake that
+   * tells the owner to write the summary the automatic close cannot write.
+   *
+   * Rung 0 is now the ONLY "nothing to say" answer, and it is the ticket's
+   * explicit carve-out: a leaf — an issue with no children at all — is untouched
+   * by every rule here, forever.
    */
-  private deriveStatusFromChildren(
-    childStatuses: readonly string[],
-  ): "active" | "review" | "workable" | "blocked" | null {
+  private deriveStatusFromChildren(childStatuses: readonly string[]): DerivedRung | null {
+    if (childStatuses.length === 0) return null; // rung 0: a leaf is nobody's parent
     const open = childStatuses.filter((status) => !this.isResolvedStatus(status));
-    if (open.length === 0) return null;
+    if (open.length === 0) {
+      return childStatuses.every((status) => this.categoryOf(status) === "cancelled")
+        ? "cancelled"
+        : "done";
+    }
     const categories = new Set(open.map((status) => this.categoryOf(status)));
     if (categories.has("active")) return "active";
     if (categories.has("review")) return "review";
@@ -1651,15 +1671,24 @@ export class WorkspaceStore {
    *
    * Derivation may only change what derivation set, so:
    *
-   * - `done`/`cancelled`: never. Resolved is terminal in BOTH directions — no
-   *   auto-close, and equally no auto-reopen.
    * - `backlog`/`todo`: always. This is STA-79's law unchanged: the pre-work band
    *   is the ABSENCE of a statement about the parent, not a statement, so
    *   derivation is free to speak into it.
-   * - `in_progress`/`in_review`/`blocked`: only when `isDerivationOwned` says
-   *   derivation itself wrote it. A manual `blocked` with an unblockOwner, a
-   *   manual `in_review`, a genuinely claimed epic — all immune, permanently,
-   *   until whoever set them moves them.
+   * - EVERYTHING ELSE — `in_progress`, `in_review`, `blocked`, and since STA-153
+   *   `done`/`cancelled` too: only when `isDerivationOwned` says derivation
+   *   itself wrote it. A manual `blocked` with an unblockOwner, a manual
+   *   `in_review`, a genuinely claimed epic, an epic a human closed by hand —
+   *   all immune, permanently, until whoever set them moves them.
+   *
+   * STA-153 deleted the one exception this law used to carry ("resolved is
+   * terminal in both directions") rather than adding a second rule beside it, so
+   * closing and re-opening a parent are governed by the same sentence as every
+   * other rung. What follows from that is the whole of the new behaviour:
+   * a parent the tracker put in `in_progress` closes itself when its last child
+   * lands, and re-opens when a child comes back; a parent a HUMAN closed, or
+   * cancelled, or parked, stays where the human put it. The parents VP saw stuck
+   * in `in_progress` are in the first set by construction — they got there
+   * through STA-79's derivation, never through a human.
    *
    * ## The workable band
    *
@@ -1718,16 +1747,13 @@ export class WorkspaceStore {
     actor: string | null,
     now: string,
   ): void {
-    // Resolved is terminal in both directions — decided before anything is read.
-    if (this.isResolvedStatus(ancestor.status)) return;
-
     const childStatuses = (
       this.db.prepare("SELECT status FROM issues WHERE parent_id = ?").all(ancestor.id) as Array<{
         status: string;
       }>
     ).map((row) => row.status);
     const target = this.deriveStatusFromChildren(childStatuses);
-    if (target === null) return; // rung 0: nothing open underneath, nothing to say
+    if (target === null) return; // rung 0: no children, so nothing to report
 
     /**
      * Everything below is stated in CATEGORIES (STA-140). The band, the
@@ -1765,6 +1791,16 @@ export class WorkspaceStore {
      * descriptor left over from an earlier manual block would be a stale lie, so
      * leaving `blocked` clears all three exactly as `updateIssue` does.
      *
+     * A derived close stamps the SAME timestamp a manual one does —
+     * `completed_at` for the done category, `cancelled_at` for cancelled — so
+     * every consumer that reads "when did this finish" keeps working without
+     * learning that a parent finishes differently from a leaf (STA-153).
+     *
+     * A derived RE-OPEN clears both, for the same reason the blocked descriptor
+     * is cleared on the way out: a row that is open again while still carrying
+     * the instant it completed is a stale lie, and derivation cleans up exactly
+     * what derivation stamped.
+     *
      * Nothing here touches `assignee`, `checkout_agent` or `checkout_at`. That
      * omission is the guard exemption made structural rather than promised.
      */
@@ -1773,6 +1809,17 @@ export class WorkspaceStore {
       updated_at: now,
     };
     if (target === "active") columns.started_at = ancestor.started_at ?? now;
+    const wasResolved = ancestorCategory !== null && RESOLVED_CATEGORIES.includes(ancestorCategory);
+    if (target === "done") {
+      columns.completed_at = now;
+      if (wasResolved) columns.cancelled_at = null;
+    } else if (target === "cancelled") {
+      columns.cancelled_at = now;
+      if (wasResolved) columns.completed_at = null;
+    } else if (wasResolved) {
+      columns.completed_at = null;
+      columns.cancelled_at = null;
+    }
     if (target === "blocked") {
       columns.blocked_transition_at = now;
       columns.unblock_owner = null;
@@ -1787,14 +1834,18 @@ export class WorkspaceStore {
     // event on the write, so an event can never claim a transition that did not
     // land. `status_version` bumps because anyone holding an
     // `expectedStatusVersion` for this epic must be forced to re-read.
+    // `RETURNING *` because a close has to hand the FRESH row to
+    // `afterResolution` below — the row as it now is, not as it was decided from.
     const assignments = Object.keys(columns).map((c) => `${c} = ?`).join(", ");
-    const result = this.db
+    const written = this.db
       .prepare(
         `UPDATE issues SET ${assignments}, status_version = status_version + 1
-          WHERE id = ? AND status = ?`,
+          WHERE id = ? AND status = ? RETURNING *`,
       )
-      .run(...(Object.values(columns) as never[]), ancestor.id, ancestor.status);
-    if (Number(result.changes) === 0) return;
+      .get(...(Object.values(columns) as never[]), ancestor.id, ancestor.status) as unknown as
+      | IssueRow
+      | undefined;
+    if (!written) return;
 
     /**
      * Reuses `status_changed` rather than minting a kind, for a concrete reason:
@@ -1822,9 +1873,29 @@ export class WorkspaceStore {
         derivedFrom: trigger,
       },
     });
+
+    /**
+     * A derived close is a resolution like any other, so it runs the WHOLE
+     * resolution hook rather than a hand-picked half of it (STA-153):
+     *
+     *  - anything `blocks`-dependent on this epic is woken, because "the epic is
+     *    done" is exactly the fact those dependents were waiting for, and an
+     *    automatic close that skipped the wake would strand them;
+     *  - the epic's OWN parent gets `children_complete` when this was its last
+     *    open child, which is what makes the wake transitive up a chain that is
+     *    closing itself level by level.
+     *
+     * It cannot recurse: `afterResolution` only emits events. The walk in
+     * `recomputeAncestorStatuses` is what climbs, and it is bounded.
+     */
+    if (this.isResolvedStatus(next)) this.afterResolution(written);
   }
 
-  /** Fires after an issue reaches done/cancelled: dependency wakes + parent completion. */
+  /**
+   * Fires after an issue reaches done/cancelled: dependency wakes + parent
+   * completion. Called from the manual transition in `updateIssue` and from a
+   * derived close in `deriveOneAncestor` — the two ways an issue can resolve.
+   */
   private afterResolution(row: IssueRow): void {
     for (const dependent of this.dependentsOf(row.id)) {
       this.maybeEmitBlockersResolved(dependent);
@@ -1981,15 +2052,25 @@ export class WorkspaceStore {
           actor,
           payload: { identifier: row.identifier, from: row.status, to: patch.status },
         });
+        /**
+         * The wake goes FIRST, and the order is load-bearing since STA-153.
+         * `afterResolution` asks "is the parent still open?" before it wakes it,
+         * and the parent is exactly what the recompute below is about to close.
+         * Running the recompute first would mean the last child of an epic
+         * silently swallowed the `children_complete` that tells the epic's owner
+         * to go and write the summary. Reading the world as it was when the
+         * child landed, then reacting to it, also makes the log read
+         * cause-then-effect: child moved -> children complete -> epic closed.
+         */
+        if (this.isResolvedStatus(patch.status!)) {
+          this.afterResolution(updated);
+        }
         // Transition site 2 of 5, and the one the generalization widened most:
         // EVERY status change recomputes the ancestors, not only a start.
         // Guarded above like any manual transition; the ancestors it derives
         // from it are not (see the method). Emitted after the child's own event,
         // so the log reads cause-then-effect.
         this.recomputeAncestorStatuses(updated, actor ?? null);
-        if (this.isResolvedStatus(patch.status!)) {
-          this.afterResolution(updated);
-        }
       }
       if (patch.comment) {
         this.insertComment(row.id, actor ?? "unknown", actor ? "agent" : "system", patch.comment);

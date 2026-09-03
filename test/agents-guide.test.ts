@@ -71,6 +71,28 @@ describe("the guide teaches the whole protocol", () => {
     expect(guide).toMatch(/blockers_resolved/);
   });
 
+  /**
+   * STA-153. An agent that believes it must close an epic by hand will either
+   * forget (the bug) or "fix" an epic the tracker already closed. What is pinned
+   * is the fact (parents follow their children), the thing the automatic close
+   * CANNOT do (write the summary), and the escape hatch, so nobody reads
+   * "automatic" as "you may not touch it".
+   */
+  it("teaches that parents close themselves, and what is still owed", () => {
+    expect(guide).toMatch(/epic's status follows its children/i);
+    expect(guide).toMatch(/never have to remember to close\s+one/i);
+    expect(guide).toMatch(/last open child of a parent lands, the parent goes \`done\`/i);
+    expect(guide).toMatch(/cancelled` only if every child was cancelled/i);
+    expect(guide).toMatch(/no children.{0,40}untouched/is);
+    // The summary is the part a close cannot write for you.
+    expect(guide).toMatch(/write the summary/i);
+    expect(guide).toContain("children_complete");
+    // And closing one by hand is still allowed, and still wins afterwards.
+    expect(guide).toMatch(/still allowed/i);
+    expect(guide).toMatch(/idempotent/i);
+    expect(guide).toMatch(/outranks/i);
+  });
+
   it("teaches the identity rule and why a mismatch reads as idle", () => {
     expect(guide).toContain("STAPLE_AGENT");
     expect(guide).toMatch(/same value you claimed with for the entire session/i);
