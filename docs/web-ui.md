@@ -58,6 +58,19 @@ and a per-id count of what still carries it. `POST /api/settings` takes
 envelope, so the page re-derives from one response rather than merging. It is
 the only route that both reads and writes.
 
+The same envelope carries the **settings registry**
+(see [configuration.md](configuration.md#the-settings-registry)): `registry`
+lists every category with its scope and editor and every typed definition;
+`values` holds this workspace's registered values, each with its `source`
+(`default` or `workspace`) and version; `unknownKeys` names stored keys this
+build has no definition for; and `global` is the machine's `config.json` with
+each value's `source` (`default` or `config`) — served read-only, because its
+write path is `staple config set`. `target: "settings"` takes
+`{ op: "set", key, value }` / `{ op: "reset", key }` ops for workspace keys
+and refuses a global one. `lib/settings.ts` exposes `settingCategories()`,
+`settingDefinitions()` and `settingValue()` over the served registry; nothing
+in the browser restates a definition.
+
 ## Stack
 
 The page is a Vite + React + TypeScript app in `src/ui/app/`, shipped inside the

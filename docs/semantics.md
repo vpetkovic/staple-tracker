@@ -20,8 +20,11 @@ automatically as a side effect of the transition, never by a caller.
 
 ## Kinds — declared, never derived
 
-Every issue carries a `kind` (`issues.kind`, NOT NULL, default `task`). Like
-statuses, the vocabulary is data: it lives in `workspace_kinds` and is edited
+Every issue carries a `kind` (`issues.kind`, NOT NULL, default `task`). The
+default is the registered workspace setting `kinds.default` (see
+[configuration.md](configuration.md#the-settings-registry)): `task` until a
+workspace chooses otherwise, and a chosen kind that is later removed resets it.
+Like statuses, the vocabulary is data: it lives in `workspace_kinds` and is edited
 with `staple kinds` or MCP `update_kinds`, so validation asks the workspace what
 it has rather than consulting a compile-time list. That is why adding
 `milestone` needs no code change and why the MCP schemas type `kind` as a string

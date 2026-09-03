@@ -17,9 +17,8 @@ import { runAddCommand } from "./commands/add.js";
 import { runDiscoverCommand } from "./commands/discover.js";
 import { findMigrationRoot, planMigration, runMigration } from "./core/path-migration.js";
 import {
-  BROWSER_PREFERENCES,
-  type BrowserPreference,
   type ConfigPatch,
+  SETTING_KEYS,
   assertUsableHome,
   effectiveConfig,
   homeHasData,
@@ -29,6 +28,7 @@ import {
   stapleHome,
   updateConfig,
 } from "./config/index.js";
+import { coerceSettingInput, settingDefinitionsFor } from "./core/settings-registry.js";
 import { Hub, notifyHubResolvedSafe } from "./core/hub.js";
 import { runInstallCommand } from "./install/index.js";
 import { dataVersion } from "./core/db.js";
@@ -412,41 +412,23 @@ function configLine(key: string, value: string, note: string): string {
   return `${key.padEnd(CONFIG_KEY_WIDTH)}${value}  (${note})`;
 }
 
-/** Coerce a command-line string into the typed value its key expects. */
+/**
+ * Coerce a command-line string into the typed value its key expects — through
+ * the registry's global definitions (R6a), so a new machine preference is
+ * settable the moment it is registered without a new arm here.
+ */
 function configValueFor(key: string, raw: string | undefined): ConfigPatch {
   if (raw === undefined) {
     throw new StapleError("validation", `config set ${key} needs a value`);
   }
-  switch (key) {
-    case "browser": {
-      if (!(BROWSER_PREFERENCES as readonly string[]).includes(raw)) {
-        throw new StapleError(
-          "validation",
-          `browser must be one of ${BROWSER_PREFERENCES.join(", ")}, got "${raw}"`,
-        );
-      }
-      return { browser: raw as BrowserPreference };
-    }
-    case "port": {
-      const port = Number(raw);
-      if (!Number.isInteger(port)) {
-        throw new StapleError("validation", `port must be an integer, got "${raw}"`);
-      }
-      return { port };
-    }
-    case "setupComplete": {
-      const truthy = ["true", "yes", "1", "on"];
-      const falsy = ["false", "no", "0", "off"];
-      if (truthy.includes(raw)) return { setupComplete: true };
-      if (falsy.includes(raw)) return { setupComplete: false };
-      throw new StapleError("validation", `setupComplete must be true or false, got "${raw}"`);
-    }
-    default:
-      throw new StapleError(
-        "validation",
-        `Unknown config key "${key}". Settable keys: browser, port, setupComplete.`,
-      );
+  const definition = settingDefinitionsFor("global").find((d) => d.configKey === key);
+  if (!definition) {
+    throw new StapleError(
+      "validation",
+      `Unknown config key "${key}". Settable keys: ${SETTING_KEYS.join(", ")}.`,
+    );
   }
+  return { [key]: coerceSettingInput(definition, raw, "config set") } as ConfigPatch;
 }
 
 /**

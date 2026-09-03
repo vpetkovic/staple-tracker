@@ -19,7 +19,11 @@ import { StapleError, errorEnvelope, type IssuePriority, type IssueStatus } from
 // O7b (STA-141): the closed category set and the categories the code writes into,
 // both served verbatim on /api/settings so the browser never hand-keeps a copy.
 import { REQUIRED_STATUS_CATEGORIES, STATUS_CATEGORIES } from "../core/types.js";
-import type { UpdateIssueInput, VocabularyOp, WorkspaceStore } from "../core/store.js";
+import type { SettingOp, UpdateIssueInput, VocabularyOp, WorkspaceStore } from "../core/store.js";
+// R6a (STA-176): the settings registry and the global values it defines, served
+// beside the workspace ones so the page can say which scope each setting has.
+import { settingDefinitionsFor, settingRegistryView, settingValueView } from "../core/settings-registry.js";
+import { readConfig, stapleHome } from "../config/index.js";
 
 interface UiOptions {
   port: number;
@@ -324,6 +328,35 @@ export function startUiServer(options: UiOptions): UiHandle {
     if (!origin) return true;
     const port = boundPort();
     return origin === `http://127.0.0.1:${port}` || origin === `http://localhost:${port}`;
+  }
+
+  /**
+   * The machine's global settings with provenance, read fresh per request from
+   * `<home>/config.json` — a file another process may have just rewritten. A
+   * corrupt file surfaces as the config module's own refusal rather than as a
+   * silently-default envelope, matching `staple config`.
+   */
+  function globalSettings(): {
+    path: string;
+    present: boolean;
+    values: Record<string, ReturnType<typeof settingValueView>>;
+  } {
+    const loaded = readConfig(stapleHome());
+    const explicit = new Set(loaded.explicitKeys);
+    const config = loaded.config as unknown as Record<string, unknown>;
+    return {
+      path: loaded.path,
+      present: loaded.present,
+      values: Object.fromEntries(
+        settingDefinitionsFor("global").map((definition) => {
+          const field = definition.configKey!;
+          return [
+            definition.key,
+            settingValueView(definition, config[field], explicit.has(field) ? "config" : "default"),
+          ];
+        }),
+      ),
+    };
   }
 
   function fingerprint(): string {
@@ -985,6 +1018,20 @@ export function startUiServer(options: UiOptions): UiHandle {
               statuses: Object.fromEntries(statuses.map((s) => [s.id, h.store.statusUsageCount(s.id)])),
               kinds: Object.fromEntries(kinds.map((k) => [k.id, h.store.kindUsageCount(k.id)])),
             },
+            /**
+             * THE REGISTRY (R6a, STA-176): every category and every typed setting
+             * definition, so the shell enumerates its navigation from this and a
+             * new setting reaches the page without a client change. `values` are
+             * this workspace's effective values with provenance; `unknownKeys`
+             * are stored keys this build has no definition for — preserved,
+             * reported, never rewritten. `global` is the machine's config.json,
+             * read-only here: it is a different store on purpose, and its write
+             * path is `staple config set`.
+             */
+            registry: settingRegistryView(),
+            values: Object.fromEntries(h.store.settingValues().map((view) => [view.key, view])),
+            unknownKeys: h.store.unknownSettingKeys(),
+            global: globalSettings(),
           };
         };
 
@@ -997,8 +1044,8 @@ export function startUiServer(options: UiOptions): UiHandle {
         const body = await readBody(req);
         const target = body.target;
         const ops = body.ops;
-        if (target !== "statuses" && target !== "kinds") {
-          throw new StapleError("validation", 'settings requires target "statuses" or "kinds"');
+        if (target !== "statuses" && target !== "kinds" && target !== "settings") {
+          throw new StapleError("validation", 'settings requires target "statuses", "kinds" or "settings"');
         }
         if (!Array.isArray(ops) || ops.length === 0) {
           throw new StapleError("validation", "settings requires a non-empty ops array");
@@ -1007,10 +1054,12 @@ export function startUiServer(options: UiOptions): UiHandle {
         const actor = (body.actor as string) || "ui";
         // One ordered, all-or-nothing batch — the same store call `update_statuses`
         // and `update_kinds` make, so the two surfaces cannot disagree about what
-        // an op means or about which of them is refused.
-        const batch = ops as VocabularyOp[];
-        if (target === "statuses") writeHandle.store.applyStatusOps(batch, actor);
-        else writeHandle.store.applyKindOps(batch, actor);
+        // an op means or about which of them is refused. `settings` (R6a) writes
+        // registered WORKSPACE values the same way; a global key is refused by the
+        // store with the sentence that names `staple config set`.
+        if (target === "settings") writeHandle.store.applySettingOps(ops as SettingOp[], actor);
+        else if (target === "statuses") writeHandle.store.applyStatusOps(ops as VocabularyOp[], actor);
+        else writeHandle.store.applyKindOps(ops as VocabularyOp[], actor);
         json(res, 200, envelope(writeHandle));
         return;
       }

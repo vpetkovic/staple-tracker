@@ -141,13 +141,85 @@ const SEED: WorkspaceSettings = {
 /** The seed, for a caller that wants a known-default vocabulary (tests, fixtures). */
 export const SEED_SETTINGS: WorkspaceSettings = SEED;
 
+// ---------------------------------------------------------------- the registry (R6a, STA-176)
+
+/**
+ * The typed settings registry, AS THE SERVER SERVES IT. Mirrors the wire views in
+ * src/core/settings-registry.ts field for field — and mirrors nothing else: the
+ * definitions themselves (defaults, schemas, categories) are not restated here, because
+ * the whole point of a registry is that there is one, and a client-side copy would be the
+ * second one. Before the fetch resolves `registry` is EMPTY, not seeded, for that reason;
+ * every accessor below is total over that.
+ */
+export type SettingScope = "workspace" | "global";
+export type SettingValueSource = "default" | "workspace" | "config";
+export type SettingCategoryEditor = "fields" | "statuses" | "kinds";
+
+export interface SettingCategoryView {
+  id: string;
+  label: string;
+  description: string;
+  scope: SettingScope;
+  editor: SettingCategoryEditor;
+  order: number;
+}
+
+export type SettingSchemaView =
+  | { type: "boolean" }
+  | { type: "integer"; min?: number; max?: number }
+  | { type: "string"; pattern?: string; patternHint?: string }
+  | { type: "enum"; values: string[] };
+
+export interface SettingDefinitionView {
+  key: string;
+  category: string;
+  scope: SettingScope;
+  schema: SettingSchemaView;
+  default: unknown;
+  version: number;
+  sensitivity: "normal" | "sensitive";
+  ui: { label: string; description: string; control: "toggle" | "number" | "text" | "select"; order: number };
+}
+
+/** One effective value with its provenance. `value` is absent when `redacted`. */
+export interface SettingValueView {
+  key: string;
+  scope: SettingScope;
+  value?: unknown;
+  source: SettingValueSource;
+  version: number;
+  redacted?: true;
+}
+
+/** One op in a `putSettings("settings", …)` batch — the mirror of the store's `SettingOp`. */
+export type SettingOp = { op: "set"; key: string; value: unknown } | { op: "reset"; key: string };
+
+/** What `/api/settings` answers: the vocabulary envelope plus the registry and both scopes' values. */
+export interface WorkspaceSettingsEnvelope extends WorkspaceSettings {
+  registry: { categories: SettingCategoryView[]; definitions: SettingDefinitionView[] };
+  /** This workspace's registered values, keyed by setting key. */
+  values: Record<string, SettingValueView>;
+  /** Stored keys this build has no definition for: preserved and reported, never rewritten. */
+  unknownKeys: string[];
+  /** The machine's config.json — a DIFFERENT store, read-only on this route. */
+  global: { path: string; present: boolean; values: Record<string, SettingValueView> };
+}
+
+/** The registry half of the envelope before the fetch: nothing known, nothing invented. */
+const EMPTY_REGISTRY: Pick<WorkspaceSettingsEnvelope, "registry" | "values" | "unknownKeys" | "global"> = {
+  registry: { categories: [], definitions: [] },
+  values: {},
+  unknownKeys: [],
+  global: { path: "", present: false, values: {} },
+};
+
 // ---------------------------------------------------------------- the snapshot
 
-let current: WorkspaceSettings = SEED;
+let current: WorkspaceSettingsEnvelope = { ...SEED, ...EMPTY_REGISTRY };
 const listeners = new Set<() => void>();
 
 /** What the server last said. Never null — see "the seed is not a placeholder" above. */
-export function workspaceSettings(): WorkspaceSettings {
+export function workspaceSettings(): WorkspaceSettingsEnvelope {
   return current;
 }
 
@@ -155,15 +227,45 @@ export function workspaceSettings(): WorkspaceSettings {
  * Publish a fresh answer. Called by `useWorkspaceSettings` after a GET and by the
  * settings editor after a POST — both hand over the SAME envelope, which is why the
  * editor never has to merge a write result into a list it fetched earlier.
+ *
+ * A bare vocabulary envelope (what a fixture that predates the registry builds) is
+ * accepted and completed with the empty registry, so a test about statuses need not
+ * know that settings have definitions.
  */
-export function publishWorkspaceSettings(next: WorkspaceSettings): void {
-  current = next;
+export function publishWorkspaceSettings(next: WorkspaceSettings | WorkspaceSettingsEnvelope): void {
+  current = { ...EMPTY_REGISTRY, ...next };
   for (const listener of [...listeners]) listener();
 }
 
 /** Back to the built-in seed. Exists for tests; nothing in the app calls it. */
 export function resetWorkspaceSettings(): void {
   publishWorkspaceSettings(SEED);
+}
+
+// ---------------------------------------------------------------- registry accessors
+
+/** Registered categories in shell order, optionally one scope's. Empty before the fetch. */
+export function settingCategories(scope?: SettingScope): SettingCategoryView[] {
+  return current.registry.categories.filter((c) => scope === undefined || c.scope === scope);
+}
+
+/** Registered definitions in display order, optionally one category's. */
+export function settingDefinitions(category?: string): SettingDefinitionView[] {
+  return current.registry.definitions.filter((d) => category === undefined || d.category === category);
+}
+
+/**
+ * The effective value of a setting in EITHER scope, with provenance — the workspace
+ * value, the global value, or the definition's default when neither has been stored. An
+ * unknown key answers `undefined` rather than throwing, for the same reason every other
+ * accessor here is total: a render path is the wrong place to discover a key.
+ */
+export function settingValue(key: string): SettingValueView | undefined {
+  const stored = current.values[key] ?? current.global.values[key];
+  if (stored) return stored;
+  const definition = current.registry.definitions.find((d) => d.key === key);
+  if (!definition) return undefined;
+  return { key, scope: definition.scope, value: definition.default, source: "default", version: definition.version };
 }
 
 export function subscribeWorkspaceSettings(listener: () => void): () => void {
@@ -304,7 +406,7 @@ export function usageCount(kind: "statuses" | "kinds", id: string): number | nul
 // ---------------------------------------------------------------- the React window
 
 export interface SettingsResource {
-  settings: WorkspaceSettings;
+  settings: WorkspaceSettingsEnvelope;
   loading: boolean;
   error: Error | undefined;
   reload: () => void;
@@ -332,7 +434,7 @@ export function useWorkspaceSettings(options: {
   onAuthError?: (error: AuthError) => void;
 } = {}): SettingsResource {
   const { ws, version, onAuthError } = options;
-  const [snapshot, setSnapshot] = useState<WorkspaceSettings>(current);
+  const [snapshot, setSnapshot] = useState<WorkspaceSettingsEnvelope>(current);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | undefined>(undefined);
   const [nonce, setNonce] = useState(0);

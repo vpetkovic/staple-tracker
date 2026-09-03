@@ -6,12 +6,14 @@
  * configuration bugs take an afternoon — the same `4400` means something very
  * different depending on whether it came from the file or the defaults.
  */
+import type { SettingValueSource } from "../core/settings-registry.js";
 import type { ConnectorReceipt, SettingKey, StapleConfig } from "./file.js";
 import { readConfig } from "./file.js";
 import { type HomeSource, resolveHome } from "./home.js";
 import { bootstrapLocatorPath, readBootstrapLocator } from "./locator.js";
 
-export type SettingSource = "default" | "config";
+/** The provenance a global value reports: `SettingValueSource` minus the workspace arm. */
+export type SettingSource = Extract<SettingValueSource, "default" | "config">;
 
 export interface SettingView<T> {
   value: T;

@@ -25,10 +25,48 @@ in a 0700 directory. A relative path, a filesystem root, or an unknown
 `schemaVersion` is refused rather than guessed at; an *absent* locator is not an
 error, it just means `~/.staple`.
 
+## The settings registry
+
+Every setting staple has — machine preference or workspace setting — has one
+typed definition in `src/core/settings-registry.ts`: a namespaced key
+(`category.name`), a category, a value schema, a default, a **scope**, a
+version with an optional migrate hook, a sensitivity flag, and the label,
+description and control the UI renders it with. Nothing else carries a second
+copy of a default or a value check; the config file, the workspace store, the
+CLI and `/api/settings` all validate through the registry, on read *and* on
+write, and refuse with a sentence that names the key.
+
+Scope is physical, not a label:
+
+| Scope | Lives in | Written by | Examples |
+|---|---|---|---|
+| `global` | `<home>/config.json`, under the field the definition names | `staple config set` | `machine.browser`, `machine.port`, `machine.setupComplete` |
+| `workspace` | the workspace database (`meta` rows keyed `setting:<key>`) | `POST /api/settings` with `target: "settings"` | `kinds.default` |
+
+A workspace key is refused on the config surface and a global key is refused
+on the workspace surface, each refusal naming the surface that does own it.
+
+Workspace values are stored as `{ "v": <version>, "value": … }`. Reading a
+value written at an **older** version runs the definition's migrate hook
+(deterministic, no clock, no I/O) or falls back to the default when there is
+none; reading one written at a **newer** version is refused rather than
+reinterpreted, exactly as `config.json` refuses a newer `schemaVersion`. A
+`setting:*` row this build has no definition for is preserved byte for byte
+and reported as an unknown key — downgrading never truncates configuration.
+Every change logs a `setting_changed` event with the actor, the previous
+value and the new one.
+
+The registry also lists the workspace's **categories** — Statuses, Kinds,
+This machine — with the editor each one needs, so the settings UI enumerates
+its navigation from the registry rather than hard-coding tabs. Adding a
+setting or a category is a registry entry (plus a field on `StapleConfig`
+for a global one); no shell component changes.
+
 ## `config.json`
 
 `<home>/config.json` holds durable preferences only — never per-project state,
-which belongs in the workspace database.
+which belongs in the workspace database. Its known fields are exactly the
+registry's global definitions.
 
 ```jsonc
 {

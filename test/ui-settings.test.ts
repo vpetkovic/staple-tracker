@@ -41,6 +41,13 @@ interface SettingsEnvelope {
   categories: string[];
   requiredCategories: string[];
   usage: { statuses: Record<string, number>; kinds: Record<string, number> };
+  registry: {
+    categories: { id: string; scope: string; editor: string }[];
+    definitions: { key: string; scope: string; category: string; default: unknown }[];
+  };
+  values: Record<string, { key: string; scope: string; value?: unknown; source: string; version: number }>;
+  unknownKeys: string[];
+  global: { path: string; present: boolean; values: Record<string, { value?: unknown; source: string }> };
 }
 
 let home: string;
@@ -56,7 +63,7 @@ async function read(): Promise<SettingsEnvelope> {
 
 /** Exactly the request lib/api.ts's `putSettings()` makes: same-origin POST, JSON body. */
 async function write(
-  target: "statuses" | "kinds",
+  target: "statuses" | "kinds" | "settings",
   ops: unknown[],
   over: { origin?: string } = {},
 ): Promise<{ status: number; body: Record<string, unknown> }> {
@@ -73,7 +80,7 @@ async function write(
 }
 
 /** A refusal as the dialog would render it — the envelope, through the shared primitive. */
-async function refuse(target: "statuses" | "kinds", ops: unknown[]): Promise<{ http: number; refusal: Refusal }> {
+async function refuse(target: "statuses" | "kinds" | "settings", ops: unknown[]): Promise<{ http: number; refusal: Refusal }> {
   const { status, body } = await write(target, ops);
   return { http: status, refusal: describeRefusal(body) };
 }
@@ -408,5 +415,89 @@ describe("the transport gate the route had to widen", () => {
       body: JSON.stringify({ target: "kinds", ops: [{ op: "rename", id: "task", label: "x" }] }),
     });
     expect(posted.status).toBe(401);
+  });
+});
+
+/**
+ * R6a (STA-176) — the registry and both scopes' values ride the same envelope.
+ *
+ * The page enumerates categories and definitions from `registry`, reads a workspace
+ * value with its provenance from `values`, and sees the machine's config.json under
+ * `global` as a DIFFERENT store — served read-only here, written by `staple config set`.
+ * `target: "settings"` is the write half for workspace values and answers the identical
+ * envelope, so the editor re-derives rather than merges, exactly as the vocabulary does.
+ */
+describe("registered settings on /api/settings", () => {
+  it("serves the registry: every category with its scope and editor, every definition typed", async () => {
+    const settings = await read();
+    expect(settings.registry.categories.map((c) => `${c.id}:${c.scope}:${c.editor}`)).toEqual([
+      "statuses:workspace:statuses",
+      "kinds:workspace:kinds",
+      "machine:global:fields",
+    ]);
+    expect(settings.registry.definitions.map((d) => `${d.key}:${d.scope}`)).toEqual([
+      "kinds.default:workspace",
+      "machine.browser:global",
+      "machine.port:global",
+      "machine.setupComplete:global",
+    ]);
+  });
+
+  it("serves the workspace values with source default until one is stored, and the globals beside them", async () => {
+    const settings = await read();
+    expect(settings.values).toEqual({
+      "kinds.default": { key: "kinds.default", scope: "workspace", value: "task", source: "default", version: 1 },
+    });
+    expect(settings.unknownKeys).toEqual([]);
+    expect(settings.global.path).toBe(join(home, "config.json"));
+    expect(settings.global.present).toBe(false);
+    expect(settings.global.values["machine.port"]).toEqual({
+      key: "machine.port",
+      scope: "global",
+      value: 4400,
+      source: "default",
+      version: 1,
+    });
+  });
+
+  it("writes a workspace value through target settings and answers the same envelope", async () => {
+    const { status, body } = await write("settings", [{ op: "set", key: "kinds.default", value: "bug" }]);
+    expect(status).toBe(200);
+    const posted = body as unknown as SettingsEnvelope;
+    expect(Object.keys(posted).sort()).toEqual(Object.keys(await read()).sort());
+    expect(posted.values["kinds.default"]).toEqual({
+      key: "kinds.default",
+      scope: "workspace",
+      value: "bug",
+      source: "workspace",
+      version: 1,
+    });
+    // And it is what the workspace now does, not just what it says.
+    const detail = await fetch(`${origin}/api/action`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-staple-token": token, origin },
+      body: JSON.stringify({ type: "create", title: "Kindless", actor: "ui" }),
+    });
+    expect(detail.status).toBe(200);
+    expect(((await detail.json()) as { kind: string }).kind).toBe("bug");
+    await write("settings", [{ op: "reset", key: "kinds.default" }]);
+    expect((await read()).values["kinds.default"]!.source).toBe("default");
+  });
+
+  it("refuses with the registry's and the store's own sentences", async () => {
+    const shape = await refuse("settings", [{ op: "set", key: "kinds.default", value: 12 }]);
+    expect(shape.http).toBe(409);
+    expect(shape.refusal.message).toMatch(/"kinds\.default" must be a kind id/);
+    const unknown = await refuse("settings", [{ op: "set", key: "kinds.default", value: "milestone" }]);
+    expect(unknown.refusal.message).toMatch(/Unknown kind "milestone"/);
+    const global = await refuse("settings", [{ op: "set", key: "machine.port", value: 4500 }]);
+    expect(global.refusal.message).toMatch(/global setting, not a workspace one/);
+    expect((await read()).global.values["machine.port"]!.value).toBe(4400);
+  });
+
+  it("names the third target in the refusal for a target it does not know", async () => {
+    const { status, body } = await write("bogus" as never, [{ op: "set" }]);
+    expect(status).toBe(409);
+    expect(body.message).toBe('settings requires target "statuses", "kinds" or "settings"');
   });
 });

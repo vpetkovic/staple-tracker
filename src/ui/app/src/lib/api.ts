@@ -25,8 +25,9 @@ import type {
   Poll,
   StapleEvent,
   VocabularyOp,
-  WorkspaceSettings,
 } from "./types";
+// Type-only, so the cycle with lib/settings.ts (which imports `getSettings`) is erased.
+import type { SettingOp, WorkspaceSettingsEnvelope } from "./settings";
 
 const TOKEN_KEY = "staple:token";
 
@@ -263,7 +264,7 @@ export const requestGateChanges = (target: { ws?: string; ref: string; comment: 
  * workspace has to refetch this and must not refetch that.
  */
 export const getSettings = (params: { ws?: string } = {}) =>
-  request<WorkspaceSettings>(`/api/settings${qs(params)}`);
+  request<WorkspaceSettingsEnvelope>(`/api/settings${qs(params)}`);
 
 /**
  * Apply an ordered batch of vocabulary edits. Same-origin POST for the same reason
@@ -276,13 +277,25 @@ export const getSettings = (params: { ws?: string } = {}) =>
  *
  * The ops apply in order in ONE transaction, so a refusal anywhere leaves nothing behind.
  */
-export const putSettings = (
+export function putSettings(
   target: "statuses" | "kinds",
   ops: readonly VocabularyOp[],
+  params?: { ws?: string; actor?: string },
+): Promise<WorkspaceSettingsEnvelope>;
+/** R6a (STA-176): registered workspace values, same batch contract, same envelope back. */
+export function putSettings(
+  target: "settings",
+  ops: readonly SettingOp[],
+  params?: { ws?: string; actor?: string },
+): Promise<WorkspaceSettingsEnvelope>;
+export function putSettings(
+  target: "statuses" | "kinds" | "settings",
+  ops: readonly (VocabularyOp | SettingOp)[],
   params: { ws?: string; actor?: string } = {},
-) =>
-  request<WorkspaceSettings>("/api/settings", {
+): Promise<WorkspaceSettingsEnvelope> {
+  return request<WorkspaceSettingsEnvelope>("/api/settings", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ actor: "ui", ...params, target, ops }),
   });
+}

@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { openDb } from "../src/core/db.js";
 import { migrateWorkspace } from "../src/core/schema.js";
 import { WorkspaceStore } from "../src/core/store.js";
-import { ISSUE_KINDS, ISSUE_STATUSES } from "../src/core/types.js";
+import { ISSUE_KINDS, ISSUE_STATUSES, StapleError } from "../src/core/types.js";
 
 /**
  * O7a (STA-140) — the workspace vocabulary is DATA.
@@ -525,5 +525,132 @@ describe("configured order drives the list", () => {
       "todo",
       "backlog",
     ]);
+  });
+});
+
+// --------------------------------------------------- registered values (R6a, STA-176)
+
+describe("registered workspace settings", () => {
+  const metaRows = () =>
+    (store.db.prepare("SELECT key, value FROM meta WHERE key LIKE 'setting:%' ORDER BY key").all() as Array<{
+      key: string;
+      value: string;
+    }>);
+
+  it("answers the definition's default with source default until something is stored", () => {
+    expect(store.getSetting("kinds.default")).toBe("task");
+    expect(store.settingValues()).toEqual([
+      { key: "kinds.default", scope: "workspace", value: "task", source: "default", version: 1 },
+    ]);
+    // Nothing is written by a read — the fresh-workspace meta table stays exactly as seeded.
+    expect(metaRows()).toEqual([]);
+  });
+
+  it("persists a set value as one versioned meta row and reports it with source workspace", () => {
+    const view = store.setSetting("kinds.default", "bug", "op");
+    expect(view).toEqual({ key: "kinds.default", scope: "workspace", value: "bug", source: "workspace", version: 1 });
+    expect(metaRows()).toEqual([{ key: "setting:kinds.default", value: JSON.stringify({ v: 1, value: "bug" }) }]);
+    expect(store.getSetting("kinds.default")).toBe("bug");
+  });
+
+  it("is honoured by defaultKind(), so a create with no kind writes the chosen one", () => {
+    store.setSetting("kinds.default", "bug");
+    expect(store.defaultKind()).toBe("bug");
+    expect(store.createIssue({ title: "No kind given" }).kind).toBe("bug");
+  });
+
+  it("validates at the write boundary: shape from the registry, existence from the store", () => {
+    expect(() => store.setSetting("kinds.default", 7)).toThrow(/"kinds\.default" must be a kind id/);
+    expect(() => store.setSetting("kinds.default", "Not-A-Kind")).toThrow(/"kinds\.default" must be a kind id/);
+    expect(() => store.setSetting("kinds.default", "milestone")).toThrow(/Unknown kind "milestone"/);
+    expect(metaRows()).toEqual([]);
+  });
+
+  it("refuses a global key on the workspace surface, pointing at `staple config set`", () => {
+    expect(() => store.setSetting("machine.port", 4500)).toThrow(
+      /"machine\.port" is a global setting, not a workspace one\. Global settings are edited with `staple config set`/,
+    );
+    expect(() => store.getSetting("machine.port")).toThrow(StapleError);
+    expect(() => store.getSetting("nothing.here")).toThrow(/Unknown workspace setting "nothing\.here"/);
+  });
+
+  it("validates at the read boundary: a stored value that no longer fits is refused by key", () => {
+    store.db
+      .prepare("INSERT INTO meta (key, value) VALUES ('setting:kinds.default', ?)")
+      .run(JSON.stringify({ v: 1, value: 42 }));
+    expect(() => store.getSetting("kinds.default")).toThrow(/workspace test: "kinds\.default" must be a kind id/);
+  });
+
+  it("refuses a value written at a newer version rather than reinterpreting it", () => {
+    store.db
+      .prepare("INSERT INTO meta (key, value) VALUES ('setting:kinds.default', ?)")
+      .run(JSON.stringify({ v: 2, value: "bug" }));
+    expect(() => store.settingValues()).toThrow(/"kinds\.default" was written by a newer staple/);
+  });
+
+  it("preserves and reports a stored key it has no definition for, and never rewrites it", () => {
+    store.db
+      .prepare("INSERT INTO meta (key, value) VALUES ('setting:future.flag', ?)")
+      .run(JSON.stringify({ v: 3, value: { anything: true } }));
+    expect(store.unknownSettingKeys()).toEqual(["future.flag"]);
+    expect(store.settingValues().map((v) => v.key)).toEqual(["kinds.default"]);
+    store.setSetting("kinds.default", "bug");
+    store.resetSetting("kinds.default");
+    expect(metaRows()).toEqual([
+      { key: "setting:future.flag", value: JSON.stringify({ v: 3, value: { anything: true } }) },
+    ]);
+  });
+
+  it("reset deletes the row so the default applies again, and is a no-op when nothing is stored", () => {
+    store.setSetting("kinds.default", "bug");
+    expect(store.resetSetting("kinds.default").source).toBe("default");
+    expect(metaRows()).toEqual([]);
+    expect(store.defaultKind()).toBe("task");
+    const before = store.db.prepare("SELECT COUNT(*) AS n FROM events").get() as { n: number };
+    store.resetSetting("kinds.default");
+    expect((store.db.prepare("SELECT COUNT(*) AS n FROM events").get() as { n: number }).n).toBe(before.n);
+  });
+
+  it("records actor, previous value and new value on every change", () => {
+    store.setSetting("kinds.default", "bug", "alice");
+    store.resetSetting("kinds.default", "bob");
+    const rows = store.db
+      .prepare("SELECT actor, payload FROM events WHERE kind = 'setting_changed' ORDER BY seq")
+      .all() as Array<{ actor: string; payload: string }>;
+    expect(rows.map((r) => [r.actor, JSON.parse(r.payload)])).toEqual([
+      ["alice", { action: "set", key: "kinds.default", from: "task", to: "bug" }],
+      ["bob", { action: "reset", key: "kinds.default", from: "bug", to: "task" }],
+    ]);
+  });
+
+  it("bumps the settings revision so another connection's snapshot goes stale", () => {
+    const other = new WorkspaceStore(store.db, "test", "TST");
+    expect(other.getSetting("kinds.default")).toBe("task");
+    store.setSetting("kinds.default", "bug");
+    expect(other.getSetting("kinds.default")).toBe("bug");
+  });
+
+  it("resets a default that names a removed kind in the same transaction", () => {
+    store.setSetting("kinds.default", "bug");
+    store.removeKind("bug");
+    expect(store.getSetting("kinds.default")).toBe("task");
+    expect(metaRows()).toEqual([]);
+    expect(store.defaultKind()).toBe("task");
+  });
+
+  it("applies a batch in order, all or nothing", () => {
+    expect(() =>
+      store.applySettingOps([
+        { op: "set", key: "kinds.default", value: "bug" },
+        { op: "set", key: "kinds.default", value: "nope_not_configured" },
+      ]),
+    ).toThrow(/Unknown kind/);
+    expect(store.getSetting("kinds.default")).toBe("task");
+    expect(store.applySettingOps([{ op: "set", key: "kinds.default", value: "spike" }])).toEqual([
+      { key: "kinds.default", scope: "workspace", value: "spike", source: "workspace", version: 1 },
+    ]);
+    expect(() => store.applySettingOps([{ op: "bogus", key: "kinds.default" } as never])).toThrow(
+      /Unknown setting op "bogus"/,
+    );
   });
 });

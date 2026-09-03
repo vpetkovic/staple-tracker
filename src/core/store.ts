@@ -44,6 +44,18 @@ import {
   nowIso,
 } from "./types.js";
 import { SORT_ORDER_STEP } from "./migrations/workspace/004-workspace-settings.js";
+import {
+  encodeStoredSetting,
+  readStoredSetting,
+  requireSettingDefinition,
+  settingDefinitionsFor,
+  settingKeyFromMetaKey,
+  settingMetaKey,
+  settingValueView,
+  validateSettingValue,
+  WORKSPACE_SETTING_META_PREFIX,
+  type SettingValueView,
+} from "./settings-registry.js";
 
 export interface CreateIssueInput {
   title: string;
@@ -265,6 +277,14 @@ interface SettingsSnapshot {
   blocked: string[];
   checkoutExpected: string[];
   pickupOrder: string[];
+  /**
+   * Registered workspace setting values (R6a, STA-176), keyed by setting key.
+   * Only keys with a definition are here — decoded and validated at this READ
+   * boundary — so a setting the registry does not know can never reach a caller.
+   */
+  values: Map<string, { value: unknown; version: number }>;
+  /** `setting:*` meta rows nobody in this binary has a definition for. Preserved, never read. */
+  unknownSettingKeys: string[];
 }
 
 /** One op in an `update_statuses` / `update_kinds` batch. */
@@ -274,6 +294,9 @@ export type VocabularyOp =
   | { op: "recategorize"; id: string; category: string }
   | { op: "reorder"; ids: string[] }
   | { op: "remove"; id: string; migrateTo?: string | null };
+
+/** One op in a `target: "settings"` batch: set a registered workspace value, or clear it. */
+export type SettingOp = { op: "set"; key: string; value: unknown } | { op: "reset"; key: string };
 
 /**
  * SQL literal list for an `IN (…)` fragment.
@@ -602,10 +625,36 @@ export class WorkspaceStore {
     const inCategories = (categories: readonly StatusCategory[]): string[] =>
       categories.flatMap((category) => byCategory.get(category) ?? []);
 
+    /**
+     * Registered values, decoded through the registry so an unreadable row is
+     * refused HERE with its key in the sentence rather than wherever the value
+     * is first used. Rows for keys with no definition are counted, not parsed.
+     */
+    const values = new Map<string, { value: unknown; version: number }>();
+    const unknownSettingKeys: string[] = [];
+    const stored = new Map(
+      (
+        this.db
+          .prepare("SELECT key, value FROM meta WHERE key LIKE ? ORDER BY key")
+          .all(`${WORKSPACE_SETTING_META_PREFIX}%`) as Array<{ key: string; value: string }>
+      ).map((row) => [settingKeyFromMetaKey(row.key) ?? row.key, row.value]),
+    );
+    const where = `workspace ${this.slug}`;
+    for (const definition of settingDefinitionsFor("workspace")) {
+      const text = stored.get(definition.key);
+      if (text === undefined) continue;
+      const decoded = readStoredSetting(definition, text, where);
+      values.set(definition.key, { value: decoded.value, version: decoded.version });
+      stored.delete(definition.key);
+    }
+    for (const key of stored.keys()) unknownSettingKeys.push(key);
+
     const snapshot: SettingsSnapshot = {
       revision,
       statuses,
       kinds,
+      values,
+      unknownSettingKeys,
       byId,
       byCategory,
       listOrder: inCategories(LIST_CATEGORY_ORDER),
@@ -659,6 +708,14 @@ export class WorkspaceStore {
    */
   defaultKind(): string {
     const kinds = this.settings().kinds;
+    /**
+     * `kinds.default` (R6a) is the operator's choice, and it is honoured only
+     * while it names a configured kind: `removeKind` resets it in the same
+     * transaction, so a stale value here means a hand-edited row, and the seed
+     * rule below is the right answer for that rather than a refusal on create.
+     */
+    const chosen = this.getSetting("kinds.default") as string;
+    if (kinds.some((kind) => kind.id === chosen)) return chosen;
     if (kinds.some((kind) => kind.id === DEFAULT_ISSUE_KIND)) return DEFAULT_ISSUE_KIND;
     const first = kinds[0]?.id;
     if (first === undefined) {
@@ -1128,6 +1185,9 @@ export class WorkspaceStore {
         actor: actor ?? null,
         payload: { action: "remove", id, migrateTo: opts.migrateTo ?? null, migrated },
       });
+      // A default that names a kind which no longer exists is not a setting, it
+      // is a dangling pointer; clear it here so `defaultKind()` never has to guess.
+      if (this.getSetting("kinds.default") === id) this.resetSetting("kinds.default", actor);
       return { migrated };
     });
   }
@@ -1194,6 +1254,101 @@ export class WorkspaceStore {
         }
       }
       return this.getKinds();
+    });
+  }
+
+  // ---------- workspace settings: registered values (R6a, STA-176) ----------
+
+  /**
+   * The effective value of ONE registered workspace setting: the stored value
+   * when there is one, the definition's default otherwise. Refuses a key the
+   * registry does not know or one that is global — a global preference lives in
+   * config.json and asking a workspace for it would be asking the wrong store.
+   */
+  getSetting(key: string): unknown {
+    const definition = requireSettingDefinition(key, "workspace");
+    return this.settings().values.get(key)?.value ?? definition.default;
+  }
+
+  /** Every registered workspace setting with its provenance, in registry order. */
+  settingValues(): SettingValueView[] {
+    const values = this.settings().values;
+    return settingDefinitionsFor("workspace").map((definition) => {
+      const stored = values.get(definition.key);
+      return stored
+        ? settingValueView(definition, stored.value, "workspace")
+        : settingValueView(definition, definition.default, "default");
+    });
+  }
+
+  /** `setting:*` rows this binary has no definition for. Reported, preserved, never rewritten. */
+  unknownSettingKeys(): string[] {
+    return [...this.settings().unknownSettingKeys];
+  }
+
+  /**
+   * Persist a registered workspace value. The WRITE boundary: the registry
+   * validates the shape, and the store adds the one rule only it can check —
+   * `kinds.default` must name a configured kind. Bumps the settings revision so
+   * every other connection's snapshot is stale, and logs actor, previous and
+   * new value as a `setting_changed` event.
+   */
+  setSetting(key: string, value: unknown, actor?: string | null): SettingValueView {
+    const definition = requireSettingDefinition(key, "workspace");
+    const next = validateSettingValue(definition, value, `workspace ${this.slug}`);
+    if (key === "kinds.default") this.assertConfiguredKind(next as string);
+    return this.atomically(() => {
+      const from = this.getSetting(key);
+      this.db
+        .prepare(
+          `INSERT INTO meta (key, value) VALUES (?, ?)
+           ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+        )
+        .run(settingMetaKey(key), encodeStoredSetting(definition, next));
+      this.bumpSettingsRevision();
+      this.emitEvent({
+        kind: "setting_changed",
+        actor: actor ?? null,
+        payload: { action: "set", key, from, to: next },
+      });
+      return settingValueView(definition, next, "workspace");
+    });
+  }
+
+  /** Clear a stored value so the definition's default applies again. A no-op when nothing is stored. */
+  resetSetting(key: string, actor?: string | null): SettingValueView {
+    const definition = requireSettingDefinition(key, "workspace");
+    return this.atomically(() => {
+      const stored = this.settings().values.get(key);
+      if (stored) {
+        this.db.prepare("DELETE FROM meta WHERE key = ?").run(settingMetaKey(key));
+        this.bumpSettingsRevision();
+        this.emitEvent({
+          kind: "setting_changed",
+          actor: actor ?? null,
+          payload: { action: "reset", key, from: stored.value, to: definition.default },
+        });
+      }
+      return settingValueView(definition, definition.default, "default");
+    });
+  }
+
+  /** Apply a batch of setting ops in ONE transaction, in order — the `target: "settings"` twin of `applyStatusOps`. */
+  applySettingOps(ops: readonly SettingOp[], actor?: string | null): SettingValueView[] {
+    return this.atomically(() => {
+      for (const op of ops) {
+        switch (op.op) {
+          case "set":
+            this.setSetting(op.key, op.value, actor);
+            break;
+          case "reset":
+            this.resetSetting(op.key, actor);
+            break;
+          default:
+            throw new StapleError("validation", `Unknown setting op "${(op as { op: string }).op}"`);
+        }
+      }
+      return this.settingValues();
     });
   }
 

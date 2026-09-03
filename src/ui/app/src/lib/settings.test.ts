@@ -29,6 +29,9 @@ import {
   publishWorkspaceSettings,
   requiresMigrateTo,
   resetWorkspaceSettings,
+  settingCategories,
+  settingDefinitions,
+  settingValue,
   statusCategory,
   statusLabel,
   statusRank,
@@ -37,6 +40,7 @@ import {
   workspaceSettings,
 } from "./settings";
 import { OPEN_STATUS_ORDER, RESOLVED_STATUSES, STATUS_CATEGORIES } from "./types";
+import type { SettingDefinitionView, WorkspaceSettingsEnvelope } from "./settings";
 import type { StatusCategory, WorkspaceSettings, WorkspaceStatus } from "./types";
 
 const status = (id: string, category: StatusCategory, label = id): WorkspaceStatus => ({
@@ -307,5 +311,107 @@ describe("usage and the migrate-to requirement", () => {
     publishWorkspaceSettings(settings());
     expect(requiresMigrateTo("statuses", "anything")).toBe(true);
     expect(usageCount("statuses", "anything")).toBeNull();
+  });
+});
+
+// --------------------------------------------------- the registry (R6a, STA-176)
+
+/** A definition as the server would serve one; the test invents the KEY, not the shape. */
+const definition = (key: string, scope: "workspace" | "global", over: Partial<SettingDefinitionView> = {}): SettingDefinitionView => ({
+  key,
+  category: key.split(".")[0]!,
+  scope,
+  schema: { type: "boolean" },
+  default: false,
+  version: 1,
+  sensitivity: "normal",
+  ui: { label: key, description: "", control: "toggle", order: 1 },
+  ...over,
+});
+
+function envelope(over: Partial<WorkspaceSettingsEnvelope> = {}): WorkspaceSettingsEnvelope {
+  return {
+    ...settings(),
+    registry: { categories: [], definitions: [] },
+    values: {},
+    unknownKeys: [],
+    global: { path: "/home/config.json", present: false, values: {} },
+    ...over,
+  };
+}
+
+describe("the registry accessors", () => {
+  it("know nothing before the fetch rather than inventing a client-side copy of the registry", () => {
+    expect(settingCategories()).toEqual([]);
+    expect(settingDefinitions()).toEqual([]);
+    expect(settingValue("kinds.default")).toBeUndefined();
+  });
+
+  it("accept a bare vocabulary envelope from a fixture that predates the registry", () => {
+    publishWorkspaceSettings(settings());
+    expect(workspaceSettings().registry).toEqual({ categories: [], definitions: [] });
+    expect(workspaceSettings().unknownKeys).toEqual([]);
+  });
+
+  it("enumerate categories and definitions from what the server said, per scope and per category", () => {
+    publishWorkspaceSettings(
+      envelope({
+        registry: {
+          categories: [
+            { id: "kinds", label: "Kinds", description: "", scope: "workspace", editor: "kinds", order: 20 },
+            { id: "machine", label: "This machine", description: "", scope: "global", editor: "fields", order: 90 },
+            { id: "features", label: "Features", description: "", scope: "workspace", editor: "fields", order: 30 },
+          ],
+          definitions: [
+            definition("kinds.default", "workspace", { schema: { type: "string" }, default: "task" }),
+            definition("features.darkLaunch", "workspace"),
+            definition("machine.port", "global", { schema: { type: "integer", min: 1, max: 65535 }, default: 4400 }),
+          ],
+        },
+      }),
+    );
+    // A category the client has never heard of is listed — nothing here hard-codes the tabs.
+    expect(settingCategories().map((c) => c.id)).toEqual(["kinds", "machine", "features"]);
+    expect(settingCategories("workspace").map((c) => c.id)).toEqual(["kinds", "features"]);
+    expect(settingDefinitions("features").map((d) => d.key)).toEqual(["features.darkLaunch"]);
+  });
+
+  it("answer a value from the workspace, from the global store, or from the definition's default", () => {
+    publishWorkspaceSettings(
+      envelope({
+        registry: {
+          categories: [],
+          definitions: [
+            definition("kinds.default", "workspace", { schema: { type: "string" }, default: "task" }),
+            definition("features.darkLaunch", "workspace"),
+            definition("machine.port", "global", { schema: { type: "integer" }, default: 4400 }),
+          ],
+        },
+        values: {
+          "kinds.default": { key: "kinds.default", scope: "workspace", value: "bug", source: "workspace", version: 1 },
+        },
+        global: {
+          path: "/home/config.json",
+          present: true,
+          values: { "machine.port": { key: "machine.port", scope: "global", value: 4500, source: "config", version: 1 } },
+        },
+      }),
+    );
+    expect(settingValue("kinds.default")).toEqual({
+      key: "kinds.default",
+      scope: "workspace",
+      value: "bug",
+      source: "workspace",
+      version: 1,
+    });
+    expect(settingValue("machine.port")).toEqual({ key: "machine.port", scope: "global", value: 4500, source: "config", version: 1 });
+    expect(settingValue("features.darkLaunch")).toEqual({
+      key: "features.darkLaunch",
+      scope: "workspace",
+      value: false,
+      source: "default",
+      version: 1,
+    });
+    expect(settingValue("nobody.knows")).toBeUndefined();
   });
 });
