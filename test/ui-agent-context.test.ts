@@ -115,7 +115,17 @@ describe("the pane cannot drift from the tool", () => {
       "comments",
       "crossBlockers",
       "documents",
+      /**
+       * STA-143, and the third instance of the same lockstep story as `claim`
+       * and `timing`: `get_task` grew the gate pair, so this pane grew it in the
+       * same change. The deep-equality tests above kept passing because both
+       * surfaces call the same store methods — this inventory is the assertion
+       * that had to be edited deliberately, which is the review moment it exists
+       * to force.
+       */
+      "gate",
       "issue",
+      "queuedBy",
       // STA-81, and the same lockstep story as `claim`: both surfaces spread the
       // SAME store.detailTiming() call, which is why the deep-equality tests
       // above went on passing while this inventory needed a deliberate edit.

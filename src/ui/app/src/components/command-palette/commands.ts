@@ -228,6 +228,23 @@ export function buildCommands(context: PaletteContext): PaletteCommand[] {
       // The status it already has is not a command, it is a no-op that would occupy a
       // row and, if run, spend a round trip to be told nothing changed.
       if (context.selectionStatus === status) continue;
+      /**
+       * `awaiting_approval` IS NOT A STATUS YOU SET — Q2 (STA-144), closing the
+       * follow-up Q1 left here.
+       *
+       * `store.updateIssue` REFUSES every transition into or out of it, so this entry
+       * was a command that could only ever fail. It is reached through `gate`, which
+       * takes the one thing the status cannot carry: WHO must approve. A parked issue
+       * with no named owner is a queue with nobody to drain it, which is why the store
+       * makes the owner mandatory and why this loop cannot produce the status.
+       *
+       * Suppressed rather than replaced with a gate command. A gate needs an owner, and
+       * this palette has no way to ask for one — `checkout` already routes to a `page`
+       * for exactly that reason, and adding a second page to a ticket whose scope is
+       * "remove the option the store refuses" would be scope this ticket did not buy.
+       * The detail panel's "Request approval" is the affordance, and it can ask.
+       */
+      if (status === "awaiting_approval") continue;
       commands.push({
         id: `status:${status}`,
         group: "actions",

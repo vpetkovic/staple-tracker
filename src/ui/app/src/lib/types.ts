@@ -9,25 +9,80 @@
  * WAVE 2: extend this file. Do not re-declare an issue shape inside a view.
  */
 
+/**
+ * `awaiting_approval` (STA-143) means the issue is PARKED behind a human review
+ * gate: its open descendants are queued, and nothing underneath it can be
+ * claimed until somebody approves. Mirrors src/core/types.ts, including the
+ * position in the list — `board` renders columns in this order.
+ */
 export const ISSUE_STATUSES = [
   "backlog",
   "todo",
   "in_progress",
   "in_review",
+  "awaiting_approval",
   "done",
   "blocked",
   "cancelled",
 ] as const;
 export type IssueStatus = (typeof ISSUE_STATUSES)[number];
 
-/** Column order on the board and the order the old page listed things in. */
+/**
+ * Column order on the board and the order the old page listed things in — and,
+ * through `GROUP_ORDER` and the Status filter, the order statuses are enumerated
+ * in EVERYWHERE.
+ *
+ * `awaiting_approval` sits DIRECTLY AFTER `in_review` (Q2, STA-144), which is
+ * where `ISSUE_STATUSES` puts it and where the lifecycle puts it: in_review is
+ * work a human is reading, awaiting_approval is work a human is deciding on, and
+ * a reader scanning group headers should meet them as the pair they are. Q1
+ * parked it after `blocked` as the least presumptuous placeholder; this is the
+ * considered position, and it makes this list agree with `ISSUE_STATUSES` on the
+ * relative order of every status the two have in common.
+ */
 export const OPEN_STATUS_ORDER: readonly IssueStatus[] = [
   "in_progress",
   "in_review",
+  "awaiting_approval",
   "blocked",
   "todo",
   "backlog",
 ];
+
+/** Where a review gate is in its life. Mirrors `GateState` in src/core/types.ts. */
+export const GATE_STATES = ["pending", "approved", "changes_requested"] as const;
+export type GateState = (typeof GATE_STATES)[number];
+
+/**
+ * The review gate ON an issue (STA-143), mirroring `IssueGate` in
+ * src/core/types.ts. A SIBLING of the issue on the wire for the same reason
+ * `claim` is one.
+ *
+ * `state: "pending"` is the only one that parks the parent and queues the
+ * subtree; the other two are history, kept so a surface can still say who
+ * decided what and when.
+ */
+export interface IssueGate {
+  state: GateState;
+  owner: string;
+  requestedBy: string | null;
+  requestedAt: string;
+  resolvedBy: string | null;
+  resolvedAt: string | null;
+}
+
+/**
+ * The gate an issue is QUEUED BEHIND, mirroring `QueuedBy` in src/core/types.ts.
+ * Derived server-side by walking ancestors; the UI must never recompute it.
+ *
+ * Non-null means checkout is refused. `gate` and `queuedBy` are complementary
+ * and at most one is ever set on a row: one says "holds a queue", the other says
+ * "stands in one".
+ */
+export interface QueuedBy {
+  identifier: string;
+  owner: string;
+}
 
 export const RESOLVED_STATUSES: readonly IssueStatus[] = ["done", "cancelled"];
 
@@ -188,6 +243,16 @@ export interface InboxIssue extends Issue {
   worklog?: WorklogSummary | null;
   /** Blocked open children, when this row is in the blocked bucket. */
   derivedBlockers: BlockingChild[];
+  /**
+   * The gate pair (STA-143). Spread onto the entry beside `claim`, following the
+   * wire like everything else on this type.
+   *
+   * Optional HERE for the reason `worklog` is: fixtures and synthesised rows
+   * have no opinion about gates, and a required field would be a pair of nulls
+   * in every one of them. The SERVER always sends both.
+   */
+  gate?: IssueGate | null;
+  queuedBy?: QueuedBy | null;
 }
 
 export interface IssueComment {
@@ -401,12 +466,28 @@ export interface IssueRow {
    * freezing it into the entity would be a lie waiting to happen.
    */
   pullRequests?: PullRequestRef[];
+  /**
+   * The review gate ON this row, and the gate this row is QUEUED BEHIND
+   * (STA-143). Two SIBLINGS of `issue` rather than one wrapper: they are
+   * complementary facts, at most one is ever non-null, and which one it is
+   * changes what the row should say completely.
+   *
+   * Optional on the TYPE and always present on the WIRE, for the reason `deps`
+   * gives above.
+   */
+  gate?: IssueGate | null;
+  queuedBy?: QueuedBy | null;
 }
 
 /** GET /api/inbox */
 export interface InboxRow {
   workspace: string;
-  inbox: { ready: InboxIssue[]; blocked: InboxIssue[]; hasMore: boolean };
+  /**
+   * `queued` (STA-143) is gate-held work: never `ready`, and checkout of it is
+   * refused. An entry with `queuedBy` is waiting on the gate it names; an entry
+   * with a pending `gate` and no `queuedBy` IS the gate.
+   */
+  inbox: { ready: InboxIssue[]; queued: InboxIssue[]; blocked: InboxIssue[]; hasMore: boolean };
 }
 
 /** GET /api/issue */
@@ -428,6 +509,52 @@ export interface IssueDetail {
    * not by the internal uuid. Joins against `children` on `.identifier`.
    */
   childrenTiming: Record<string, IssueTiming>;
+  /**
+   * The gate pair for THIS issue (STA-143), as siblings — same argument `claim`
+   * makes. At most one is ever non-null: `gate` says this issue holds a queue,
+   * `queuedBy` says it stands in one.
+   */
+  gate: IssueGate | null;
+  queuedBy: QueuedBy | null;
+  /**
+   * WHAT THIS GATE IS HOLDING — the review checklist (Q2/STA-144, rewritten by
+   * Q5/STA-154).
+   *
+   * A flat PRE-ORDER list of the OPEN descendants this issue's gate still holds
+   * and has not released, each carrying the `depth` the checklist indents by. Not
+   * a map of direct children any more: approving a parent releases its whole
+   * subtree, so a list that could not show the subtree could not show what a tick
+   * does. Empty when this issue holds no active gate, which is every issue but
+   * one.
+   *
+   * The SERVER filters it, and that is not an implementation detail: per-child
+   * approval sets a release flag no client can see, and eligibility (open, and
+   * not a container with nothing open underneath) is the store's rule. The
+   * browser renders this list; it does not re-derive it.
+   *
+   * On `/api/issue` only. `/api/agent-context` is pinned byte-for-byte against
+   * the MCP `get_task` tool and this is a UI affordance, so it stays on the UI's
+   * own route — the same line `deps` draws on `/api/issues`.
+   */
+  childrenQueued: GateQueueEntry[];
+}
+
+/**
+ * One row of a gate's queue, mirroring `GateQueueEntry` in src/core/types.ts.
+ *
+ * `depth` counts the LISTED chain, not the real tree: a row whose real parent is
+ * not in the list (it was resolved, or it had nothing open underneath) is
+ * re-parented onto the nearest listed ancestor. So `depth` is always safe to use
+ * directly as an indent — a row is never indented under something that is not on
+ * screen. Direct children of the gate holder are depth 1.
+ */
+export interface GateQueueEntry {
+  id: string;
+  identifier: string;
+  title: string;
+  status: IssueStatus;
+  parentId: string | null;
+  depth: number;
 }
 
 /**
@@ -529,8 +656,12 @@ export type ActionPayload =
   | { type: "assignee"; assignee: string | null }
   /**
    * Restore an old document revision. Rides POST /api/action rather than getting its
-   * own route so the server's method/Origin gate — which pins /api/action to POST and
-   * everything else to GET — did not have to change. `baseRevision` is the revision
+   * own route, because at the time the server's method/Origin gate was a comparison
+   * against that one literal path and a new route would have had to change it. Q2
+   * (STA-144) turned that into an `isWrite` predicate for the `/api/gate` family, so
+   * the constraint is gone — but this action is still one verb over one ref, which is
+   * exactly the shape `/api/action` is for, and moving it would buy nothing.
+   * `baseRevision` is the revision
    * the UI believed was current: if someone else wrote in between, the store answers
    * revision_conflict (409, retryable) instead of silently clobbering their work.
    */

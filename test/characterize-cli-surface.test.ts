@@ -372,7 +372,7 @@ describe("help surface", () => {
   it("pins the help section headings a reader navigates by", () => {
     const help = cli("help").stdout;
     const headings = help.split("\n").filter((l) => /^[A-Z][A-Za-z &]*$/.test(l));
-    expect(headings).toEqual(["Workspace", "Tasks", "Flow", "Documents & events", "UI"]);
+    expect(headings).toEqual(["Workspace", "Tasks", "Flow", "Approval gates", "Documents & events", "UI"]);
   });
 
   it("pins the global-flag and status footer scripts read", () => {
@@ -381,7 +381,7 @@ describe("help surface", () => {
     // ISSUE_STATUSES order, verbatim — `board` renders its columns in exactly
     // this sequence, so `done` sitting BEFORE `blocked` is load-bearing, not a
     // typo in the help text.
-    expect(help).toContain("Statuses: backlog todo in_progress in_review done blocked cancelled");
+    expect(help).toContain("Statuses: backlog todo in_progress in_review awaiting_approval done blocked cancelled");
   });
 
   /**

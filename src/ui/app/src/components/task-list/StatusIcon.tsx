@@ -33,7 +33,29 @@ import { STATUS_LABEL } from "./model";
 const BACKLOG_DASHES = "2.4 2.31";
 
 function Glyph({ status }: { status: IssueStatus }) {
-  const colour = `var(--status-task-icon-${status})`;
+  /**
+   * `awaiting_approval` SHARES `in_review`'s hue, deliberately and permanently —
+   * Q2 (STA-144). No new token is minted.
+   *
+   * Q1 wrote this as a CSS fallback off an undefined custom property, which was
+   * the honest placeholder ("nobody has decided yet") but is the wrong shape for
+   * a decision: a fallback reads as a token that is coming, and the first person
+   * to define `--status-task-icon-awaiting_approval` would silently change the
+   * icon. This points at the real token by name instead.
+   *
+   * SHARING IS CORRECT HERE, not a shortcut. The icon language differentiates by
+   * SHAPE — that is the WCAG 1.4.1 argument at the top of this file, and it is
+   * why `done` and `blocked` can both be a filled disc. in_review and
+   * awaiting_approval are the two "a human is looking at this" states, so one hue
+   * across the pair is the same fact the ring/hourglass split then refines. A
+   * ninth hue would claim a distinction the palette does not have room to make
+   * legibly at 16px, and every hue added past that point makes the other eight
+   * harder to tell apart.
+   */
+  const colour =
+    status === "awaiting_approval"
+      ? "var(--status-task-icon-in_review)"
+      : `var(--status-task-icon-${status})`;
 
   switch (status) {
     case "backlog":
@@ -80,6 +102,41 @@ function Glyph({ status }: { status: IssueStatus }) {
             stroke="var(--card)"
             strokeWidth="1.6"
             strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </>
+      );
+
+    case "awaiting_approval":
+      /**
+       * AN HOURGLASS IN A RING — Q2 (STA-144).
+       *
+       * It breaks the fill sequence on purpose, exactly as `blocked` and
+       * `cancelled` do: parked is not a stop on the backlog -> done path, and a
+       * partially-filled ring would file it as one. What it says instead is the
+       * one thing that is true of this state and no other — TIME IS PASSING AND
+       * NOBODY HERE CAN MOVE IT. That is the whole of STA-142's origin story
+       * (STA-108 sitting in_progress for 56 minutes while it waited on a human),
+       * so the glyph is the sentence.
+       *
+       * The ring is `in_review`'s exact ring, and that is the intended reading:
+       * this is the in_review family, one step further along. The hourglass is
+       * two triangles meeting at a waist, drawn as a single path so it stays one
+       * mark rather than three at 16px, with the caps left as separate 1.4px bars
+       * so the silhouette survives being scaled down or printed.
+       *
+       * Sized to sit inside r=6 with the same optical weight as the pause bars it
+       * replaces: 5px wide, 6.4px tall, centred on (8, 8).
+       */
+      return (
+        <>
+          <circle cx="8" cy="8" r="6" fill="none" stroke={colour} strokeWidth="1.5" />
+          {/* Top bulb down to the waist, then back out to the bottom bulb. */}
+          <path
+            d="M5.6 4.9 L10.4 4.9 L8 8 L10.4 11.1 L5.6 11.1 L8 8 Z"
+            fill={colour}
+            stroke={colour}
+            strokeWidth="0.7"
             strokeLinejoin="round"
           />
         </>

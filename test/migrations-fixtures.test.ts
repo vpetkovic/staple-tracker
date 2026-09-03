@@ -49,19 +49,20 @@ describe.each([
   ["stamped '1'", FIXTURES.workspaceV1],
   ["present but never stamped", FIXTURES.workspaceV1Unstamped],
 ])("a v1 workspace (%s)", (_label, fixture) => {
-  it("is detected as version 1 with migrations 2 and 3 pending", () => {
+  it("is detected as version 1 with migrations 2, 3 and 6 pending", () => {
     withFixture(fixture, (path) => {
       const db = new DatabaseSync(path);
       try {
         const state = describeSchema(db, WORKSPACE_TARGET);
         expect(state.current).toBe(1);
-        expect(state.latest).toBe(3);
+        expect(state.latest).toBe(6);
         // Ordered and complete: a v1 file has to walk BOTH steps, and it has to
         // walk them in this order — 003 assumes 002 already ran. This list
         // grows by one every time a migration is appended, and that is the
         // point: a migration that never reaches an old file is the bug this
         // assertion exists to catch.
-        expect(state.pending).toEqual([2, 3]);
+        //
+        expect(state.pending).toEqual([2, 3, 6]);
       } finally {
         db.close();
       }
@@ -146,7 +147,7 @@ describe.each([
     });
   });
 
-  it("is stamped '3' as TEXT, the representation an old binary can still read", () => {
+  it("is stamped '6' as TEXT, the representation an old binary can still read", () => {
     withFixture(fixture, (path) => {
       const db = openDb(path);
       try {
@@ -157,7 +158,7 @@ describe.each([
         // TEXT is the load-bearing half of this assertion, not the number: an
         // older binary reads the stamp as a string, and an INTEGER here would
         // make it unreadable rather than merely too new.
-        expect(row).toEqual({ t: "text", value: "3" });
+        expect(row).toEqual({ t: "text", value: "6" });
       } finally {
         db.close();
       }
@@ -200,14 +201,14 @@ describe.each([
  * than estimated-at-zero.
  */
 describe("a v2 workspace — the last shape before estimates", () => {
-  it("is detected as version 2 with migration 3 pending", () => {
+  it("is detected as version 2 with migrations 3 and 6 pending", () => {
     withFixture(FIXTURES.workspaceV2, (path) => {
       const db = new DatabaseSync(path);
       try {
         expect(describeSchema(db, WORKSPACE_TARGET)).toEqual({
           current: 2,
-          latest: 3,
-          pending: [3],
+          latest: 6,
+          pending: [3, 6],
           detection: "stamped",
         });
       } finally {
@@ -277,9 +278,15 @@ describe("a v2 workspace — the last shape before estimates", () => {
       } finally {
         db.close();
       }
-      // ADD COLUMN appends to the stored CREATE text; it mints no new
-      // sqlite_master entries, so the object list is untouched.
-      expect(schemaObjects(path)).toEqual(before);
+      /**
+       * ADD COLUMN appends to the stored CREATE text and mints no
+       * sqlite_master entries, so 003 changed this list by nothing at all.
+       * 006 (STA-143) adds seven more columns AND one partial index, so the
+       * list gains exactly one entry and nothing else — which is the real
+       * assertion here: an upgrade must add what its migrations declare and
+       * not one object more.
+       */
+      expect(schemaObjects(path)).toEqual([...before, "index:issues_gate_state_idx"].sort());
     });
   });
 
@@ -320,7 +327,7 @@ describe("a v2 workspace created by the SHIPPED pre-A4 fresh-create path", () =>
         // it walks 003 like any other v2 file — which is the point. A shape the
         // runner "recognises as current" must not become a shape it forgets to
         // migrate the moment a new column is appended.
-        expect(describeSchema(db, WORKSPACE_TARGET).pending).toEqual([3]);
+        expect(describeSchema(db, WORKSPACE_TARGET).pending).toEqual([3, 6]);
         expect(() => migrateWorkspace(db)).not.toThrow();
 
         // The layout really is the old one: idempotency_key sits in the middle.
@@ -340,7 +347,9 @@ describe("a v2 workspace created by the SHIPPED pre-A4 fresh-create path", () =>
       } finally {
         db.close();
       }
-      expect(schemaObjects(path)).toEqual(before);
+      // The legacy layout takes 006's index like any other file; nothing else
+      // about its object list moves.
+      expect(schemaObjects(path)).toEqual([...before, "index:issues_gate_state_idx"].sort());
     });
   });
 

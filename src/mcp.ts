@@ -24,6 +24,7 @@ import type { CrossBlockerState } from "./core/hub.js";
 import {
   COMMENT_AUTHOR_TYPES,
   COMMENT_PAGE_LIMITS,
+  GATE_STATES,
   HUB_EVENT_PAGE_LIMITS,
   ISSUE_PAGE_LIMITS,
   ISSUE_PRIORITIES,
@@ -41,9 +42,11 @@ import type {
   ClaimActivity,
   Issue,
   IssueComment,
+  IssueGate,
   IssueStatus,
   IssueTiming,
   PageLimits,
+  QueuedBy,
 } from "./core/types.js";
 
 /**
@@ -443,10 +446,59 @@ const timingField = {
     .describe("Estimate vs actual per DIRECT child, keyed by child IDENTIFIER (e.g. STA-42)"),
 };
 
+/**
+ * The review gate ON this issue (STA-143). A sibling of the issue for the same
+ * reason `claim` is one — see `IssueGate` in core/types.ts.
+ *
+ * Present on every issue-bearing surface, resolved or not: "VP approved this an
+ * hour ago" is exactly what a caller re-reading a ticket needs, and a gate that
+ * disappeared the moment it was answered would leave no trace of the review.
+ */
+const gateShape = {
+  state: z.enum(GATE_STATES).describe("pending = parked and queueing; approved / changes_requested = resolved"),
+  owner: z.string().describe("The human who must act (or did)"),
+  requestedBy: z.string().nullable(),
+  requestedAt: z.string(),
+  resolvedBy: z.string().nullable(),
+  resolvedAt: z.string().nullable(),
+};
+type _GateShapeMatchesInterface = Expect<Equals<z.infer<z.ZodObject<typeof gateShape>>, IssueGate>>;
+
+/** The gate this issue is QUEUED BEHIND — derived by walking ancestors, never stored. */
+const queuedByShape = {
+  identifier: z.string().describe("The nearest ancestor holding an unresolved gate"),
+  owner: z.string().describe("Who must approve before this becomes pickable"),
+};
+type _QueuedByShapeMatchesInterface = Expect<
+  Equals<z.infer<z.ZodObject<typeof queuedByShape>>, QueuedBy>
+>;
+
+/**
+ * The pair, together, on every surface that carries either.
+ *
+ * They are complementary and a caller needs both to act: `gate` says "this row
+ * is holding a queue", `queuedBy` says "this row is standing in one". At most
+ * one is ever non-null for a given row, but which one it is changes the advice
+ * completely — chase the owner, or wait for the row above you.
+ */
+const gateFields = {
+  gate: z
+    .object(gateShape)
+    .nullable()
+    .describe("The review gate on THIS issue; null when none was ever requested"),
+  queuedBy: z
+    .object(queuedByShape)
+    .nullable()
+    .describe(
+      "The gate this issue is queued behind. NON-NULL means checkout_task will be refused with code `gated` — a human has to approve; retrying and waiting are equally useless.",
+    ),
+};
+
 const inboxEntryShape = {
   ...issueShape,
   unresolvedBlockers: z.array(z.string()),
   ...claimField,
+  ...gateFields,
 };
 
 /** Same drift protection as issueShape, for the comment surface. */
@@ -479,6 +531,10 @@ const taskSummaryShape = {
    */
   estimatedSeconds: z.number().nullable(),
   ...claimField,
+  // On the picking surface for the same reason `claim` is: "can I take this"
+  // is the question list_tasks exists to answer, and a queued row is one an
+  // agent must not even try.
+  ...gateFields,
 };
 
 const issueRefShape = { identifier: z.string(), title: z.string(), status: statusEnum };
@@ -520,7 +576,7 @@ server.registerTool(
   "inbox",
   {
     description:
-      "Ready work in pickup order (in_progress -> in_review -> todo -> backlog), dependency-aware; blocked work listed separately with its unresolved blockers. Start every session here. Paginated: ready+blocked partition ONE page of open issues, so a page can be all-ready or all-blocked.",
+      "Ready work in pickup order (in_progress -> in_review -> todo -> backlog), dependency-aware. Three buckets: `ready` (take one of these), `queued` (a HUMAN must approve a gate above it — checkout_task is refused with code `gated`, and retrying or waiting will not help), and `blocked` (waiting on other WORK, with its unresolved blockers). Start every session here. Paginated: the three buckets partition ONE page of open issues, so a page can be entirely one of them.",
     inputSchema: {
       assignee: z.string().optional().describe("Filter to one assignee (e.g. your agent name)"),
       limit: limitSchema(ISSUE_PAGE_LIMITS),
@@ -529,6 +585,11 @@ server.registerTool(
     },
     outputSchema: {
       ready: z.array(z.object(inboxEntryShape)),
+      queued: z
+        .array(z.object(inboxEntryShape))
+        .describe(
+          "Gate-held work: entries with `queuedBy` are waiting on the gate it names; an entry with a pending `gate` and no `queuedBy` IS the gate. Never ready.",
+        ),
       blocked: z.array(z.object(inboxEntryShape)),
       ...pageTailShape,
     },
@@ -538,16 +599,24 @@ server.registerTool(
     run(() => {
       const window = pageWindow({ t: "inbox", ws, assignee }, { limit, cursor }, ISSUE_PAGE_LIMITS);
       const store = storeFor(ws);
-      const { ready, blocked, hasMore } = store.inbox(assignee, window);
-      const claims = store.claimActivityFor([...ready, ...blocked].map((i) => i.id));
+      const { ready, queued, blocked, hasMore } = store.inbox(assignee, window);
+      const claims = store.claimActivityFor([...ready, ...queued, ...blocked].map((i) => i.id));
+      // `gate`/`queuedBy` already ride on the entries — store.inbox() computes
+      // them as part of the bucketing decision, so there is nothing to re-derive
+      // here and no way for the bucket and the field to disagree.
       const withClaim = <T extends { id: string }>(entry: T) => ({
         ...entry,
         claim: claims.get(entry.id) ?? null,
       });
       return {
         ready: ready.map(withClaim),
+        queued: queued.map(withClaim),
         blocked: blocked.map(withClaim),
-        nextCursor: nextCursorFor(window, ready.length + blocked.length, hasMore),
+        nextCursor: nextCursorFor(
+          window,
+          ready.length + queued.length + blocked.length,
+          hasMore,
+        ),
         hasMore,
       };
     }),
@@ -582,8 +651,11 @@ server.registerTool(
         { status, assignee, q, includeResolved: include_resolved },
         window,
       );
-      // One batched liveness query for the whole page, never one per row.
-      const claims = store.claimActivityFor(items.map((i) => i.id));
+      // One batched query per fact for the whole page, never one per row.
+      const ids = items.map((i) => i.id);
+      const claims = store.claimActivityFor(ids);
+      const gates = store.gateFor(ids);
+      const queued = store.queuedByFor(ids);
       return {
         items: items.map((i) => ({
           identifier: i.identifier,
@@ -594,6 +666,8 @@ server.registerTool(
           parentId: i.parentId,
           estimatedSeconds: i.estimatedSeconds,
           claim: claims.get(i.id) ?? null,
+          gate: gates.get(i.id) ?? null,
+          queuedBy: queued.get(i.id) ?? null,
         })),
         nextCursor: nextCursorFor(window, items.length, hasMore),
         hasMore,
@@ -626,6 +700,7 @@ server.registerTool(
         .array(z.object(crossBlockerShape))
         .describe("Cross-workspace blockers via the hub; [] when the hub is unavailable"),
       ...claimField,
+      ...gateFields,
       ...timingField,
     },
     annotations: { title: "Get task context", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
@@ -638,6 +713,12 @@ server.registerTool(
         ...context,
         crossBlockers: crossBlockersSafe(context.issue.identifier),
         claim: store.claimActivity(context.issue.id),
+        // Expression-for-expression identical to the /api/agent-context handler
+        // in src/ui/server.ts — test/ui-agent-context.test.ts asserts deep
+        // equality between the two, so these two lines must be added in both
+        // places or in neither.
+        gate: store.gate(context.issue.id),
+        queuedBy: store.queuedBy(context.issue.id),
         ...store.detailTiming(context.issue.id),
       };
     }),
@@ -837,6 +918,124 @@ server.registerTool(
         ifIdleSeconds: if_idle_seconds,
       }),
     ),
+);
+
+/**
+ * The three gate verbs (STA-143).
+ *
+ * All three return the PARENT issue plus its gate, rather than a bespoke result
+ * object, so a caller can treat them exactly like `update_task` — one issue in
+ * hand afterwards, no new shape to learn.
+ */
+server.registerTool(
+  "gate_task",
+  {
+    description:
+      "Park a PARENT behind a human review gate. It moves to awaiting_approval, its claim is cleared (nobody is working it), and every open descendant becomes QUEUED: they leave the inbox `ready` bucket and checkout_task on them is refused with code `gated`. Only OPEN work is queued — done and cancelled issues are never queued, and neither is a parent that has nothing open left underneath it, because there is nothing there to release. Refused on an issue with no children (use status in_review for a leaf awaiting a human) and while a gate is already pending. Re-gating after request_changes is how you resubmit for a second read.",
+    inputSchema: {
+      ref: refSchema,
+      owner: z
+        .string()
+        .describe("The human who must approve. Required — a gate with nobody to chase is a dead end."),
+      comment: z.string().optional().describe("Optional note stored as a comment on the issue"),
+      actor: actorSchema,
+      ws: wsSchema,
+    },
+    outputSchema: { ...issueShape, gate: z.object(gateShape).nullable() },
+    /**
+     * destructiveHint: TRUE. Gating clears the parent's claim and takes an
+     * entire subtree out of circulation — the opposite of an additive update,
+     * and exactly the kind of thing a client should be able to confirm first.
+     * idempotentHint: FALSE, because the second call is refused rather than
+     * absorbed: a pending gate belongs to the reviewer reading it.
+     */
+    annotations: {
+      title: "Gate task for approval",
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  ({ ref, owner, comment, actor, ws }) =>
+    run(() => {
+      const store = storeFor(ws);
+      const issue = store.gateIssue(ref, { owner, comment }, requireActor(actor));
+      return { ...issue, gate: store.gate(issue.id) };
+    }),
+);
+
+server.registerTool(
+  "approve_task",
+  {
+    description:
+      "Approve a gate. With no `children`: the gate is resolved, the whole subtree is released, and the parent's status is re-derived from its children. With `children`: only those refs (and everything underneath them) are released, and the parent STAYS parked with the gate still pending — granular approval, for letting one thread proceed without ending the review. Refused when there is no unresolved gate; a `changes_requested` gate can be approved, which is one of the two ways that queue ends.",
+    inputSchema: {
+      ref: refSchema,
+      children: z
+        .array(refSchema)
+        .optional()
+        .describe(
+          "Release ONLY these (must be descendants of ref) and leave the parent parked. Omit to approve the whole gate.",
+        ),
+      comment: z.string().optional().describe("Optional note stored as a comment on the issue"),
+      actor: actorSchema,
+      ws: wsSchema,
+    },
+    outputSchema: { ...issueShape, gate: z.object(gateShape).nullable() },
+    /**
+     * destructiveHint: FALSE — approving only ever widens what may be worked on,
+     * which is as additive as this server gets. idempotentHint: FALSE, since a
+     * second whole-gate approve is refused rather than absorbed.
+     */
+    annotations: {
+      title: "Approve gate",
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  ({ ref, children, comment, actor, ws }) =>
+    run(() => {
+      const store = storeFor(ws);
+      const issue = store.approveGate(ref, { children, comment }, requireActor(actor));
+      return { ...issue, gate: store.gate(issue.id) };
+    }),
+);
+
+server.registerTool(
+  "request_changes",
+  {
+    description:
+      "Send a gated parent back. Posts your note as a comment on `ref`, returns it to todo for the next agent, and keeps the queued children parked until you approve. Pickable by anyone afterwards, with no automatic re-checkout: 'changes requested' is not 'released', so the queue holds until an approve_task or a fresh gate_task cycle. The note is required. (Surfaced to humans as 'Send back'; the tool name is unchanged.)",
+    inputSchema: {
+      ref: refSchema,
+      comment: z
+        .string()
+        .describe(
+          "Your note to the next agent. Stored as a real comment on the issue. Required — approve instead if there is nothing to say.",
+        ),
+      actor: actorSchema,
+      ws: wsSchema,
+    },
+    outputSchema: { ...issueShape, gate: z.object(gateShape).nullable() },
+    // destructiveHint: TRUE — it revokes the parent's claim and keeps a subtree
+    // out of circulation.
+    annotations: {
+      title: "Send back with note",
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  ({ ref, comment, actor, ws }) =>
+    run(() => {
+      const store = storeFor(ws);
+      const issue = store.requestChanges(ref, { comment }, requireActor(actor));
+      return { ...issue, gate: store.gate(issue.id) };
+    }),
 );
 
 server.registerTool(

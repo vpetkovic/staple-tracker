@@ -35,9 +35,17 @@ function entry(over: Partial<InboxIssue> = {}): InboxIssue {
   } as InboxIssue;
 }
 
-/** One workspace's payload. `ready` order IS the store's pickup order — never re-sorted. */
-function inbox(ready: InboxIssue[], blocked: InboxIssue[] = []): InboxRow[] {
-  return [{ workspace: "staple", inbox: { ready, blocked, hasMore: false } }];
+/**
+ * One workspace's payload. `ready` order IS the store's pickup order — never
+ * re-sorted. `queued` (STA-143) defaults to empty: every test here predates
+ * gates and none of them has an opinion about one.
+ */
+function inbox(
+  ready: InboxIssue[],
+  blocked: InboxIssue[] = [],
+  queued: InboxIssue[] = [],
+): InboxRow[] {
+  return [{ workspace: "staple", inbox: { ready, queued, blocked, hasMore: false } }];
 }
 
 const ids = (rows: readonly { issue: { id: string } }[]) => rows.map((r) => r.issue.id);
@@ -45,9 +53,38 @@ const ids = (rows: readonly { issue: { id: string } }[]) => rows.map((r) => r.is
 const section = <T extends { id: string }>(groups: readonly T[], id: string): T | undefined =>
   groups.find((g) => g.id === id);
 
+/** A row parked behind its own review gate — Q2 (STA-144). */
+function parked(id: string, owner = "VP", identifier = "STA-108"): IssueRow {
+  return {
+    ...row({ id, identifier, status: "awaiting_approval" }),
+    gate: {
+      state: "pending",
+      owner,
+      requestedBy: "opus-q1",
+      requestedAt: "2026-09-02T10:00:00.000Z",
+      resolvedBy: null,
+      resolvedAt: null,
+    },
+  };
+}
+
+/** A row standing in someone else's queue — Q2 (STA-144). */
+function queued(id: string, over: Partial<IssueRow["issue"]> = {}, owner = "VP"): IssueRow {
+  return { ...row({ id, ...over }), queuedBy: { identifier: "STA-108", owner } };
+}
+
 describe("the section registry", () => {
   it("orders the sections the way the ticket specifies", () => {
-    expect(PICKUP_SECTION_ORDER).toEqual(["up_next", "in_flight", "waiting", "resolved"]);
+    // `pending_approval` is AFTER `waiting` (STA-144): both are "not now", and the
+    // gate is the rarer, more specific one, so it reads as a coda to Waiting rather
+    // than as competition for Up next's attention.
+    expect(PICKUP_SECTION_ORDER).toEqual([
+      "up_next",
+      "in_flight",
+      "waiting",
+      "pending_approval",
+      "resolved",
+    ]);
   });
 
   it("gives every section a label and a hint, because a derived section must explain itself", () => {
@@ -153,6 +190,143 @@ describe("placement — one row, exactly one section", () => {
     const r = row({ id: "a", status: "blocked" }, claim());
     const index = buildPickupIndex(inbox([], [entry({ id: "a", status: "blocked" })]));
     expect(pickupSectionOf(r, index)).toBe("waiting");
+  });
+
+  /**
+   * Q2 (STA-144). The gate rung sits ABOVE Waiting, mirroring `store.inbox()`, which
+   * decides `queuedBy || awaiting_approval` before it looks at `blocked` — "a queued
+   * issue with unresolved blockers is still gated, and naming the gate is the more
+   * actionable of the two facts".
+   */
+  describe("gates", () => {
+    it("puts the parked parent in Pending approval", () => {
+      const index = buildPickupIndex(inbox([], [], [entry({ id: "a", status: "awaiting_approval" })]));
+      expect(pickupSectionOf(parked("a"), index)).toBe("pending_approval");
+    });
+
+    it("puts a queued child in Pending approval instead of Up next", () => {
+      // The point of the whole ticket: a backlog child of a freshly gated epic must
+      // stop advertising itself as the next thing to grab.
+      const index = buildPickupIndex(inbox([], [], [entry({ id: "a", status: "backlog" })]));
+      expect(pickupSectionOf(queued("a", { status: "backlog" }), index)).toBe("pending_approval");
+    });
+
+    it("beats In flight — a queued row cannot move whoever is holding it", () => {
+      // Same argument Waiting already wins on, and the one STA-142 exists to make:
+      // STA-108 sat in_progress for 56 minutes while it was really waiting on VP.
+      const held: IssueRow = { ...queued("a", { status: "in_progress" }), claim: claim() };
+      expect(pickupSectionOf(held, EMPTY_PICKUP_INDEX)).toBe("pending_approval");
+    });
+
+    it("beats Waiting, exactly as the store's own bucketing does", () => {
+      const alsoBlocked = queued("a", { status: "blocked" });
+      const index = buildPickupIndex(inbox([], [entry({ id: "a", status: "blocked" })]));
+      expect(pickupSectionOf(alsoBlocked, index)).toBe("pending_approval");
+    });
+
+    it("releases a child the moment the server stops sending queuedBy", () => {
+      // "Approve selected" clears the release flag server-side; the row simply arrives
+      // without the field on the next poll and returns to the ordinary rungs.
+      const index = buildPickupIndex(inbox([entry({ id: "a", status: "todo" })]));
+      expect(pickupSectionOf(row({ id: "a", status: "todo" }), index)).toBe("up_next");
+    });
+
+    it("does NOT park a row whose gate has been approved", () => {
+      const approved: IssueRow = {
+        ...parked("a"),
+        issue: { ...parked("a").issue, status: "todo" },
+        gate: { ...parked("a").gate!, state: "approved", resolvedBy: "VP" },
+      };
+      const index = buildPickupIndex(inbox([entry({ id: "a", status: "todo" })]));
+      expect(pickupSectionOf(approved, index)).toBe("up_next");
+    });
+
+    it("keeps the section out of the way entirely when no gate is open", () => {
+      const groups = buildPickupGroups([row({ id: "a", status: "todo" })], EMPTY_PICKUP_INDEX);
+      expect(section(groups, "pending_approval")).toBeUndefined();
+    });
+
+    it("emits Pending approval after Waiting, with the gate and its queue in it", () => {
+      const rows: IssueRow[] = [
+        row({ id: "free", status: "todo" }),
+        row({ id: "stuck", status: "blocked" }),
+        parked("epic"),
+        queued("kid", { status: "backlog" }),
+      ];
+      const index = buildPickupIndex(
+        inbox(
+          [entry({ id: "free", status: "todo" })],
+          [entry({ id: "stuck", status: "blocked" })],
+          [entry({ id: "epic", status: "awaiting_approval" }), entry({ id: "kid", status: "backlog" })],
+        ),
+      );
+
+      const groups = buildPickupGroups(rows, index);
+      // No In flight section: nothing is held, and empty sections do not render.
+      expect(groups.map((g) => g.id)).toEqual(["up_next", "waiting", "pending_approval"]);
+      const gated = section(groups, "pending_approval")!;
+      expect(ids(gated.rows)).toEqual(["epic", "kid"]);
+      expect(gated.count).toBe(2);
+    });
+
+    it("puts the gate at the TOP of the queue it is holding, whatever rank it has", () => {
+      /**
+       * The real database does this: `store.inbox()` returns the queued bucket in plain
+       * list order, so a parent created before its children still lands after most of
+       * them, and the section reads as eighteen rows saying "awaiting VP on STA-119"
+       * with STA-119 last. Q1's CLI already prints gate holders first within the QUEUED
+       * section; this keeps the tree agreeing with it.
+       *
+       * The inbox below hands the epic LAST on purpose — if the partition is dropped,
+       * rank alone puts it last and this test fails.
+       */
+      const rows: IssueRow[] = [queued("k1", { status: "backlog" }), parked("epic"), queued("k2")];
+      const index = buildPickupIndex(
+        inbox(
+          [],
+          [],
+          [
+            entry({ id: "k1", status: "backlog" }),
+            entry({ id: "k2" }),
+            entry({ id: "epic", status: "awaiting_approval" }),
+          ],
+        ),
+      );
+
+      const gated = section(buildPickupGroups(rows, index), "pending_approval")!;
+      expect(ids(gated.rows)).toEqual(["epic", "k1", "k2"]);
+    });
+
+    it("leaves the store's order intact WITHIN each half of that partition", () => {
+      // The exception is a two-way split, not a re-sort. `k2` ranks ahead of `k1` in the
+      // inbox and must still come first among the queued work.
+      const rows: IssueRow[] = [queued("k1", { status: "backlog" }), queued("k2"), parked("epic")];
+      const index = buildPickupIndex(
+        inbox(
+          [],
+          [],
+          [
+            entry({ id: "epic", status: "awaiting_approval" }),
+            entry({ id: "k2" }),
+            entry({ id: "k1", status: "backlog" }),
+          ],
+        ),
+      );
+
+      const gated = section(buildPickupGroups(rows, index), "pending_approval")!;
+      expect(ids(gated.rows)).toEqual(["epic", "k2", "k1"]);
+    });
+
+    it("does not reorder any OTHER section by status", () => {
+      // The partition is scoped to `pending_approval`. Waiting must still be pure rank,
+      // or this would be a global re-sort wearing a local disguise.
+      const rows: IssueRow[] = [row({ id: "w1", status: "blocked" }), row({ id: "w2", status: "blocked" })];
+      const index = buildPickupIndex(
+        inbox([], [entry({ id: "w2", status: "blocked" }), entry({ id: "w1", status: "blocked" })]),
+      );
+      const waiting = section(buildPickupGroups(rows, index), "waiting")!;
+      expect(ids(waiting.rows)).toEqual(["w2", "w1"]);
+    });
   });
 
   it("puts done and cancelled in the resolved section, whatever the inbox says", () => {

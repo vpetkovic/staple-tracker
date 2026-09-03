@@ -212,3 +212,40 @@ export const action = <T = unknown>(target: { ws?: string; ref?: string; actor?:
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ actor: "ui", ...target, ...payload }),
   });
+
+/**
+ * THE REVIEW GATE — Q2 (STA-144). Three writes, one shape.
+ *
+ * Separate from `action()` rather than three more `ActionPayload` members, matching
+ * the server: a gate is a policy surface, `approve` means something different with
+ * `children` than without it, and `request-changes` has a mandatory field no other
+ * action has. Folding them into a nine-branch union whose every member can see the
+ * others' fields is how a gate gets opened with the wrong verb's body.
+ *
+ * Each returns the REFRESHED `IssueDetail` — the same payload `/api/issue` sends —
+ * so the panel redraws from one consistent read of the database rather than from a
+ * follow-up fetch that could observe a different state. Refusals arrive as `ApiError`
+ * with the store's own `code` and sentence, which is what `describeRefusal` renders.
+ */
+const gate = (route: string, body: Record<string, unknown>) =>
+  request<IssueDetail>(`/api/gate/${route}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ actor: "ui", ...body }),
+  });
+
+/** Park a parent behind `owner`'s review; every open descendant becomes queued. */
+export const requestGate = (target: { ws?: string; ref: string; owner: string; comment?: string }) =>
+  gate("request", target);
+
+/**
+ * Approve. NO `children` (or an empty list) approves the WHOLE gate and releases the
+ * subtree; naming children releases only those and leaves the parent parked, which is
+ * granular approval rather than the end of review.
+ */
+export const approveGate = (target: { ws?: string; ref: string; children?: string[]; comment?: string }) =>
+  gate("approve", target);
+
+/** Send it back. The comment is mandatory — the store refuses an empty one. */
+export const requestGateChanges = (target: { ws?: string; ref: string; comment: string }) =>
+  gate("request-changes", target);

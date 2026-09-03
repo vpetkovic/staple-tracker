@@ -52,6 +52,7 @@
  * missing. `hiddenParents` exists so a row can say WHICH parent it lost.
  */
 import { isStaleClaim } from "./claim";
+import { isGateParked, isQueuedBehindGate } from "./derived-queued";
 import { worklogStaleness } from "./worklog";
 import {
   ISSUE_PRIORITIES,
@@ -141,6 +142,7 @@ const STATUS_LABELS: Record<IssueStatus, string> = {
   todo: "To Do",
   in_progress: "In Progress",
   in_review: "In Review",
+  awaiting_approval: "Awaiting Approval",
   done: "Done",
   blocked: "Blocked",
   cancelled: "Cancelled",
@@ -271,6 +273,28 @@ function closedOptions(
   const counts = tally(rows, values, matches);
   return values.map((value) => ({ value, label: label(value), count: counts.get(value) ?? 0 }));
 }
+
+/**
+ * The two halves of a gate, as filter values — Q2 (STA-144). See the `gate` entry in
+ * the registry below for why they are two and not one.
+ */
+export const GATE_FILTER_VALUES = ["awaiting", "queued"] as const;
+export type GateFilterValue = (typeof GATE_FILTER_VALUES)[number];
+
+const GATE_LABELS: Record<string, string> = {
+  // Named for what is TRUE of the row, not for the control. "Awaiting approval" reads
+  // as the state; "Gated" would read as a category the tracker invented.
+  awaiting: "Awaiting approval",
+  queued: "Queued behind a gate",
+};
+
+/**
+ * Both predicates come from `lib/derived-queued.ts` — the same module the tree captions
+ * and the pickup section read, so the filter can never select a row the tree would not
+ * caption, or miss one it would.
+ */
+const matchGate = (row: IssueRow, value: string) =>
+  value === "awaiting" ? isGateParked(row) : value === "queued" && isQueuedBehindGate(row);
 
 const matchStatus = (row: IssueRow, value: string) => row.issue.status === value;
 const matchPriority = (row: IssueRow, value: string) => row.issue.priority === value;
@@ -404,6 +428,52 @@ export const FILTER_DIMENSIONS: readonly FilterDimension[] = [
       closedOptions(rows, HANDOFF_RISKS, (value) => HANDOFF_LABELS[value as HandoffRisk] ?? value, matchHandoff),
     matches: matchHandoff,
     format: (value) => HANDOFF_LABELS[value as HandoffRisk] ?? value,
+  },
+  /**
+   * THE REVIEW GATE — Q2 (STA-144), and LAST for a reason that is not "it is newest".
+   *
+   * Every dimension above it is a property of the TICKET: its status, its owner, its
+   * urgency, its labels, who is holding it, whether the handoff has gone cold. This one
+   * is a property of a REVIEW — a thing that spans a parent and its whole subtree — and
+   * it is the only dimension that can select rows whose own fields say nothing unusual
+   * at all. A `backlog` child of a gated epic is an ordinary-looking row that nobody can
+   * pick up, and there is no other control on this bar that finds it.
+   *
+   * ── WHY TWO VALUES AND NOT ONE ─────────────────────────────────────────────────────
+   *
+   * "Gated" as a single value would collapse the two halves of `store.inbox()`'s queued
+   * bucket, and the halves are what the reviewer and the agent respectively want:
+   *
+   *   `awaiting` — the PARENT. One row per review. This is the human's list: "what is
+   *                waiting on me", and it is the first citizen of the X2 action centre
+   *                (STA-22) the epic points at.
+   *   `queued`   — the WORK. Every open descendant. This is the agent's list: "what
+   *                would I be picking up if this were approved", and the count IS the
+   *                cost of the review sitting there.
+   *
+   * Selecting BOTH is the third useful question — the review and everything it holds, on
+   * one screen — and `applyFilters` ORs alternatives, so it costs nothing extra.
+   *
+   * ── NEITHER VALUE IS RE-DERIVED HERE ───────────────────────────────────────────────
+   *
+   * Both read the row's `gate`/`queuedBy` siblings through `lib/derived-queued.ts`, the
+   * same module the tree captions and the pickup section use. Three surfaces, one
+   * predicate. In particular `awaiting` is `isGateParked`, NOT `status ===
+   * "awaiting_approval"`: the Status dimension already offers that, and the two are
+   * genuinely different questions — a row whose gate has been approved but whose status
+   * has not been re-derived yet answers yes to one and no to the other.
+   *
+   * A CLOSED enum, offered in full even at zero, like Status and Priority above and
+   * unlike Handoff. "Is anything waiting on a human right now?" must be answerable, and
+   * the answer "no" is only reachable if the option is there to select.
+   */
+  {
+    id: "gate",
+    label: "Gate",
+    options: (rows) =>
+      closedOptions(rows, GATE_FILTER_VALUES, (value) => GATE_LABELS[value] ?? value, matchGate),
+    matches: matchGate,
+    format: (value) => GATE_LABELS[value] ?? value,
   },
 ];
 

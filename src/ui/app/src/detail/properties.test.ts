@@ -33,7 +33,7 @@ function timing(): IssueTiming {
     childrenEstimatedSeconds: null,
     childrenActiveSeconds: null,
     childStatusCounts: {
-      backlog: 0, todo: 0, in_progress: 0, in_review: 0, done: 0, blocked: 0, cancelled: 0,
+      backlog: 0, todo: 0, in_progress: 0, in_review: 0, awaiting_approval: 0, done: 0, blocked: 0, cancelled: 0,
     },
   };
 }
@@ -86,6 +86,14 @@ function detail(patch: Partial<IssueDetail> = {}): IssueDetail {
     claim: null,
     timing: timing(),
     childrenTiming: {},
+    // Q2 (STA-144). Required on `IssueDetail` rather than optional, following that
+    // interface's own convention — even `claim` is required there — so the ungated
+    // case has to be stated rather than assumed. These three ARE the ungated case.
+    gate: null,
+    queuedBy: null,
+    // STA-154: a LIST of the open descendants a gate is holding, not a map of direct
+    // children. Empty here for the same reason the two above are null.
+    childrenQueued: [],
     ...patch,
   };
 }

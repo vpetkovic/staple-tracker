@@ -268,6 +268,13 @@ export function IssueDetailPanel({
                   issue={issue}
                   workspace={detail.workspace}
                   claim={detail.claim}
+                  /* Q2 (STA-144). All four already ride on the detail payload, so the
+                     gate controls cost no extra fetch and cannot disagree with the
+                     children listed on the Overview tab below. */
+                  gate={detail.gate}
+                  queuedBy={detail.queuedBy}
+                  children={detail.children}
+                  childrenQueued={detail.childrenQueued}
                   refresh={session.refresh}
                 />
               </div>

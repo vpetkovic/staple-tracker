@@ -130,11 +130,11 @@ describe("a server started with no workspace in reach", () => {
     await client?.close();
   });
 
-  it("still connects and still lists all 16 tools", async () => {
+  it("still connects and still lists all 19 tools", async () => {
     const { tools } = await client.listTools();
     // The inventory does not shrink when there is nowhere to write: a harness
     // configured before the user ever ran `init` sees the full tool set.
-    expect(tools).toHaveLength(16);
+    expect(tools).toHaveLength(19);
   });
 
   it("pins the not_found guidance a read tool returns instead of an empty result", async () => {

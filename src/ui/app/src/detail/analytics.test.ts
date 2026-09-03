@@ -64,7 +64,7 @@ function timing(over: Partial<IssueTiming> = {}): IssueTiming {
     childrenEstimatedSeconds: null,
     childrenActiveSeconds: null,
     childStatusCounts: {
-      backlog: 0, todo: 0, in_progress: 0, in_review: 0, done: 0, blocked: 0, cancelled: 0,
+      backlog: 0, todo: 0, in_progress: 0, in_review: 0, awaiting_approval: 0, done: 0, blocked: 0, cancelled: 0,
     },
     ...over,
   };

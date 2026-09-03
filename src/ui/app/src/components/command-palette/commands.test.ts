@@ -147,6 +147,19 @@ describe("buildCommands", () => {
       .filter((c) => c.action.type === "status")
       .map((c) => (c.action as { status: IssueStatus }).status);
     expect(statuses).not.toContain("todo");
+    /**
+     * BACK TO 6 — Q2 (STA-144) closed Q1's follow-up.
+     *
+     * STA-143 added `awaiting_approval` to `ISSUE_STATUSES`, which this list is built
+     * from, and the palette briefly offered a "set status awaiting_approval" the store
+     * REFUSES: the status is reachable only through `gate`, which records WHO must
+     * approve, and a parked issue with no named owner is a queue nobody drains. The
+     * entry is suppressed; the detail panel's "Request approval" is where it lives now,
+     * because that surface can ask for the owner and this one cannot.
+     *
+     * So the count is 8 statuses, minus the one it already has, minus this one.
+     */
+    expect(statuses).not.toContain("awaiting_approval");
     expect(statuses).toHaveLength(6);
   });
 

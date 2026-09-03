@@ -49,6 +49,15 @@ Read this before you touch the repo. It takes a minute.
 1. \`staple inbox\` — what is ready, in pickup order. Blocked work is listed
    separately with the blocker that must land first. Do not invent work that is
    not a task; make a task.
+
+   The inbox has a third section, **QUEUED**, and it means something different
+   from BLOCKED: a human has parked the parent above those tasks behind an
+   approval gate (\`awaiting_approval\`), so nothing underneath it may be picked
+   up yet. \`staple checkout\` on a queued task is **refused** — exit code 9,
+   \`gated\` — and that refusal will not clear by retrying, by waiting, or by
+   \`--steal-if-stale\`. It clears when the named person runs \`staple approve\`.
+   Take something from READY instead, and if there is nothing, say so rather
+   than working around the gate.
 2. \`staple checkout ${ref}\` — atomic claim, moves it to \`in_progress\`.
    **A conflict means pick a different task. Never retry the same one.** The
    claim is already held; retrying just burns turns. (Exit code 4 / \`conflict\`.)
@@ -128,6 +137,57 @@ staple comment ${ref} "Branch pointer: worktree /path/to/wt on branch feat/${pre
 Without it, the next agent has a perfect description of the work and no idea
 which of six worktrees contains it.
 
+## Approval gates — when the next move is a human's
+
+A **gate** parks a parent on a named person. The parent goes
+\`awaiting_approval\`, **its claim is cleared** — nobody is working a parked
+ticket — and every open task underneath it becomes QUEUED: out of READY, and
+refused at checkout until that person answers.
+
+Use it the moment the next move on your ticket belongs to a human — a design
+that needs a decision, an epic whose plan needs a read before its children
+start:
+
+\`\`\`bash
+staple gate ${ref} --owner VP -m "Schema plus the three CLI verbs — ok to build on this?"
+\`\`\`
+
+**That is how a design-first ticket ends. Not with a held claim.** Sitting in
+\`in_progress\` while you wait on a person is the exact failure this exists to
+stop: the ticket bills time against its estimate, it reads as live work to
+everyone scanning the board, and it looks stealable to the next agent that
+walks past. A gate says the true thing instead — the work stopped, and here is
+who it stopped on.
+
+The rules:
+
+- **A gate needs children, and it needs an owner.** On a leaf there is nothing
+  to queue, and the refusal points you at \`staple status ${ref} in_review\`,
+  which already means "finished, waiting on a human" and still ranks READY.
+  \`--owner\` is mandatory: a gate with nobody to chase never opens.
+- **Never route around one.** \`staple checkout\` on a queued task exits **9**
+  (\`gated\`), and that refusal does not clear by retrying, by waiting, or by
+  \`--steal-if-stale\`. Take something from READY instead.
+- **Only open work is queued.** A \`done\` or \`cancelled\` task under a gated
+  parent is never queued, never listed for approval and never counted — and
+  neither is a parent that has nothing open left underneath it, because there is
+  nothing there to release.
+- **Approving is the reviewer's move, not yours.** \`staple approve ${ref}\`
+  resolves the gate, releases the whole subtree, and re-derives the parent from
+  its children. \`staple approve ${ref} --children ${prefix}-43,${prefix}-44\`
+  releases only those and everything underneath them and leaves the parent
+  parked — one thread proceeds, the review carries on.
+- **Changes requested returns the parent, not the queue.**
+  \`staple request-changes ${ref} -m "…"\` posts the note as a comment on
+  ${ref}, returns it to todo for the next agent, and keeps the queued children
+  parked until somebody approves. Nobody is re-checked-out — if you want it
+  back, check it out like any other task. (The web UI calls this **Send back**;
+  the command name is the same.)
+- **Re-gating is how you resubmit.** Fix what was asked, then run
+  \`staple gate ${ref} --owner VP\` again. A \`changes_requested\` gate is the
+  one state \`gate\` deliberately does not refuse, because that second read is
+  the whole loop.
+
 ## Continuity — resuming someone else's interrupted task
 
 Every \`in_progress\` task shows its claim: \`ls\` and \`show\` print
@@ -170,7 +230,8 @@ claude mcp add staple -e STAPLE_AGENT=your-name -- npx tsx ${mcpEntryPath()}
 
 The MCP tools mirror the CLI: \`inbox\`, \`checkout_task\` (with
 \`steal_if_idle_seconds\`), \`put_document\`, \`add_comment\`, \`update_task\`,
-\`release_task\` (with \`if_idle_seconds\`), \`events_since\`. Writes require an
+\`release_task\` (with \`if_idle_seconds\`), \`events_since\`, and the gate verbs
+\`gate_task\` / \`approve_task\` / \`request_changes\`. Writes require an
 identity — pass \`actor\` or set \`STAPLE_AGENT\`; there is no silent default.
 
 ---

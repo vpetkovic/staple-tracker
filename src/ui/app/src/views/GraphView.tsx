@@ -127,6 +127,8 @@ const MINIMAP_COLORS: Record<IssueStatus, string> = {
   todo: "var(--status-task-todo)",
   in_progress: "var(--status-task-in_progress)",
   in_review: "var(--status-task-in_review)",
+  // STA-143 compile safety: borrows in_review's hue until Q2 mints a token.
+  awaiting_approval: "var(--status-task-in_review)",
   done: "var(--status-task-done)",
   blocked: "var(--status-task-blocked)",
   cancelled: "var(--status-task-cancelled)",

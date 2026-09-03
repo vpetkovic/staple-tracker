@@ -131,7 +131,7 @@ describe("a fresh repo-local `staple init`", () => {
     expect(readFileSync(ignore, "utf8")).toBe("node_modules\n");
   }, 30_000);
 
-  it("pins the workspace meta table: slug, prefix, and schema_version 2 as TEXT", () => {
+  it("pins the workspace meta table: slug, prefix, and schema_version as TEXT", () => {
     const home = scratch("char-layout-home3");
     const root = scratch("char-layout-root3");
     const project = join(root, "metarepo");
@@ -143,9 +143,9 @@ describe("a fresh repo-local `staple init`", () => {
       // WORKSPACE_SCHEMA_VERSION, stored as a STRING. A4's ordered registry has
       // to keep reading (and probably keep writing) this exact representation,
       // or an old binary's `CAST(meta.value AS INTEGER)` guard misbehaves.
-      // Bumped to "3" by STA-81 (003-issue-estimate); the TEXT typing is the
+      // Bumped to "6" by STA-143 (006-approval-gates); the TEXT typing is the
       // characterization, the number just tracks the migration list.
-      { key: "schema_version", value: "3" },
+      { key: "schema_version", value: "6" },
       { key: "slug", value: "metarepo" },
     ]);
   }, 30_000);
@@ -163,6 +163,10 @@ describe("a fresh repo-local `staple init`", () => {
       "index:events_dedup_uq",
       "index:events_issue_idx",
       "index:issues_assignee_status_idx",
+      // STA-143: the partial index 006 creates over active gates — the "what
+      // needs a human" query, indexed only over the handful of rows that ever
+      // hold one.
+      "index:issues_gate_state_idx",
       "index:issues_idempotency_uq",
       "index:issues_live_origin_uq",
       "index:issues_normalized_title_open_idx",
@@ -308,9 +312,9 @@ describe("global workspaces", () => {
     expect(diskTree(home)).toEqual(["hub.db 644", "workspaces/", "workspaces/solo.db 644"]);
     expect(metaRows(join(home, "workspaces", "solo.db"))).toEqual([
       { key: "prefix", value: "SOL" },
-      // WORKSPACE_SCHEMA_VERSION — 3 since STA-81. The hub beside it is still 2;
+      // WORKSPACE_SCHEMA_VERSION — 6 since STA-143. The hub beside it is still 2;
       // the two databases version independently.
-      { key: "schema_version", value: "3" },
+      { key: "schema_version", value: "6" },
       { key: "slug", value: "solo" },
     ]);
   }, 30_000);

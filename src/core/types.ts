@@ -4,11 +4,28 @@
  */
 import { createHash } from "node:crypto";
 
+/**
+ * `awaiting_approval` (STA-143) is a BUILT-IN status with hard-coded semantics,
+ * exactly like every other member of this list today. It means: this parent is
+ * PARKED behind a human review gate, and everything open underneath it is
+ * queued rather than pickable.
+ *
+ * It ships decoupled from O7a (STA-140), which will later seed it in the
+ * settings store with category `gated` — the category distinguishes it from
+ * `review`, which means work is FINISHED and ranks READY in the inbox. Until
+ * that lands, the "never ready" half of the meaning lives in this file and in
+ * `store.inbox()`, not in a category table. When O7a arrives, the seed replaces
+ * the hard-coding; nothing about the status's behaviour needs to change.
+ *
+ * Placed between `in_review` and `done` because that is where it sits in the
+ * life of a ticket, and because `board` renders its columns in this order.
+ */
 export const ISSUE_STATUSES = [
   "backlog",
   "todo",
   "in_progress",
   "in_review",
+  "awaiting_approval",
   "done",
   "blocked",
   "cancelled",
@@ -20,17 +37,104 @@ export const OPEN_STATUSES: readonly IssueStatus[] = [
   "todo",
   "in_progress",
   "in_review",
+  "awaiting_approval",
   "blocked",
 ];
 export const RESOLVED_STATUSES: readonly IssueStatus[] = ["done", "cancelled"];
 
-/** Pickup order for the agent inbox: current work first, then reviews, then queue. */
+/**
+ * Pickup order for the agent inbox: current work first, then reviews, then queue.
+ *
+ * `awaiting_approval` is deliberately ABSENT. A parked parent is never picked
+ * up — that is the whole point of parking it — so it has no place in a pickup
+ * order, and `store.inbox()` routes it to the `queued` bucket instead.
+ */
 export const INBOX_PICKUP_ORDER: readonly IssueStatus[] = [
   "in_progress",
   "in_review",
   "todo",
   "backlog",
 ];
+
+/**
+ * Where a review gate is in its life (STA-143). `null` on the row means no gate
+ * was ever requested, which is a different fact from `approved`.
+ *
+ * `pending` and `changes_requested` are both ACTIVE — see `GATE_QUEUEING_STATES`
+ * in core/store.ts — and only `pending` parks the parent in `awaiting_approval`.
+ */
+export const GATE_STATES = ["pending", "approved", "changes_requested"] as const;
+export type GateState = (typeof GATE_STATES)[number];
+
+/**
+ * The stored review gate on one issue, exposed as a SIBLING of the issue rather
+ * than as fields on it — the same discipline `ClaimActivity` and
+ * `WorklogSummary` follow, and for a related reason: a gate is a fact about a
+ * conversation with a human, not a property of the work, and every surface that
+ * renders it renders it as its own thing (a banner, a queue reason, a refusal
+ * sentence) rather than as another column on the row.
+ *
+ * Unlike those two it IS stored, so it never goes stale between reads. What it
+ * shares with them is the payload shape: `null` means "no gate", never a
+ * half-populated object a caller has to inspect field by field.
+ */
+export interface IssueGate {
+  state: GateState;
+  /** Who must act. Required at `gate` time; survives approve/request-changes. */
+  owner: string;
+  requestedBy: string | null;
+  requestedAt: string;
+  resolvedBy: string | null;
+  resolvedAt: string | null;
+}
+
+/**
+ * The gate an issue is QUEUED BEHIND — derived, never stored, computed by
+ * walking ancestors (see `WorkspaceStore.queuedByFor`). null means pickable as
+ * far as gates are concerned.
+ *
+ * Two fields and no more on purpose: a queued row has exactly one thing to say
+ * — who is waiting on whom — and every surface says it the same way,
+ * "queued: STA-108/VP".
+ */
+export interface QueuedBy {
+  /** Identifier of the nearest ancestor holding an active gate. */
+  identifier: string;
+  /** That gate's owner — the human who has to act before this becomes pickable. */
+  owner: string;
+}
+
+/**
+ * ONE ROW OF THE QUEUE A GATE IS HOLDING — the reviewer's checklist (STA-154).
+ *
+ * `queuedBy` answers "is THIS row queued" for any row on any page. This answers
+ * the reviewer's question instead: standing at the gate, what am I actually
+ * deciding about? The two are the same derivation read from opposite ends, and
+ * `gateQueueOf` is written on top of `queuedByFor` so they cannot disagree.
+ *
+ * It is a FLAT PRE-ORDER LIST with a depth rather than a nested tree, because
+ * the thing that consumes it is a checklist: a flat list maps one-to-one onto
+ * rows, `depth` is the indent, and "everything under row i" is the run of
+ * following rows with a greater depth. A nested shape would make the client
+ * flatten it again to render it and to count an implied subtree.
+ *
+ * `depth` is measured over the LISTED chain, not over the real tree: a row whose
+ * real parent was skipped (resolved, or a parent with nothing open under it)
+ * takes the depth of the nearest ancestor that IS listed, plus one. An indent
+ * under a row that is not on screen is a hole, and a checklist with a hole in it
+ * is a set of decisions nobody can reason about. A direct child of the gate
+ * holder is depth 1.
+ */
+export interface GateQueueEntry {
+  id: string;
+  identifier: string;
+  title: string;
+  status: IssueStatus;
+  /** The real `parent_id`, for callers that want the true edge. */
+  parentId: string | null;
+  /** Indent level in the LISTED tree. Direct children of the gate holder are 1. */
+  depth: number;
+}
 
 export const ISSUE_PRIORITIES = ["critical", "high", "medium", "low"] as const;
 export type IssuePriority = (typeof ISSUE_PRIORITIES)[number];
@@ -430,7 +534,17 @@ export type StapleErrorCode =
   | "conflict"
   | "cycle"
   | "duplicate"
-  | "revision_conflict";
+  | "revision_conflict"
+  /**
+   * Refused because a review gate above this issue has not been resolved
+   * (STA-143). Its own code rather than a `conflict` because the two tell a
+   * caller to do genuinely different things: a `conflict` means somebody else
+   * got there first and you should pick another task RIGHT NOW, while `gated`
+   * means this work is real, unclaimed, and simply not released yet — the queue
+   * moves when a human moves it, not when another agent finishes. Non-retryable
+   * either way: looping on it burns turns while a person is asleep.
+   */
+  | "gated";
 
 export class StapleError extends Error {
   readonly code: StapleErrorCode;

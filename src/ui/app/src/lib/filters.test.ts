@@ -529,9 +529,10 @@ describe("the hidden-parent invariant (STA-97)", () => {
 // ---------- the registry ----------
 
 describe("the dimension registry", () => {
-  it("carries the six menu dimensions (text has its own box)", () => {
+  it("carries the seven menu dimensions (text has its own box)", () => {
     // Order is the menu order AND the chip order. `handoff` sits directly after `claim`
     // because that is the pair it means something in — see the note on the entry.
+    // `gate` (STA-144) is last, for the reason its own entry gives.
     expect(FILTER_DIMENSIONS.map((d) => d.id)).toEqual([
       "status",
       "assignee",
@@ -539,6 +540,7 @@ describe("the dimension registry", () => {
       "label",
       "claim",
       "handoff",
+      "gate",
     ]);
   });
 
@@ -570,6 +572,12 @@ describe("the dimension registry", () => {
     const statuses: IssueStatus[] = [
       "in_progress",
       "in_review",
+      // Q2 (STA-144) moved the parked status here, directly after `in_review`,
+      // where `ISSUE_STATUSES` puts it. It is filterable like any other — "show
+      // me everything waiting on a human" is one of the more useful things this
+      // control can be asked, and it is a DIFFERENT question from the Gate
+      // dimension below, which also catches the queued work underneath.
+      "awaiting_approval",
       "blocked",
       "todo",
       "backlog",
@@ -738,5 +746,83 @@ describe("persistence", () => {
     } as unknown as Storage;
     expect(loadFilters(hostile)).toEqual(emptyFilters());
     expect(() => saveFilters(hostile, emptyFilters())).not.toThrow();
+  });
+});
+
+// ---------- the gate dimension (STA-144) ----------
+
+/** A row parked behind its own review gate. */
+function parkedRow(identifier: string, owner = "VP"): IssueRow {
+  return {
+    ...row({ identifier, status: "awaiting_approval" }),
+    gate: {
+      state: "pending",
+      owner,
+      requestedBy: "opus-q1",
+      requestedAt: "2026-09-02T10:00:00Z",
+      resolvedBy: null,
+      resolvedAt: null,
+    },
+  };
+}
+
+/** A row standing in someone else's queue. */
+function queuedRow(identifier: string, on = "STA-108", owner = "VP"): IssueRow {
+  return { ...row({ identifier }), queuedBy: { identifier: on, owner } };
+}
+
+describe("gate", () => {
+  it("offers both values always, because a closed enum must be selectable when empty", () => {
+    // "Is anything parked?" has to be answerable, and the answer "no" is only reachable
+    // if the option exists to select when the count is zero.
+    const options = dimensionOptions("gate", [row({ identifier: "A" })]);
+    expect(options.map((o) => o.value)).toEqual(["awaiting", "queued"]);
+    expect(options.map((o) => o.count)).toEqual([0, 0]);
+  });
+
+  it("separates the gate from the work it is holding", () => {
+    const rows = [parkedRow("A"), queuedRow("B"), queuedRow("C"), row({ identifier: "D" })];
+
+    const awaiting = applyFilters(rows, { ...emptyFilters(), dims: { gate: ["awaiting"] } });
+    expect(awaiting.map((r) => r.issue.identifier)).toEqual(["A"]);
+
+    const queued = applyFilters(rows, { ...emptyFilters(), dims: { gate: ["queued"] } });
+    expect(queued.map((r) => r.issue.identifier)).toEqual(["B", "C"]);
+  });
+
+  it("ORs the two values into the whole gated set — the parent and its queue", () => {
+    // The combination the dimension exists for: "show me the review and everything it
+    // is holding up", which is one screen and two clicks away from being unblocked.
+    const rows = [parkedRow("A"), queuedRow("B"), row({ identifier: "C" })];
+    const both = applyFilters(rows, { ...emptyFilters(), dims: { gate: ["awaiting", "queued"] } });
+    expect(both.map((r) => r.issue.identifier)).toEqual(["A", "B"]);
+  });
+
+  it("ignores a gate that is no longer active", () => {
+    const base = parkedRow("A");
+    const approved: IssueRow = {
+      ...base,
+      issue: { ...base.issue, status: "todo" },
+      gate: { ...base.gate!, state: "approved", resolvedBy: "VP" },
+    };
+    expect(dimensionOptions("gate", [approved]).map((o) => o.count)).toEqual([0, 0]);
+  });
+
+  it("counts what each value would match, like every other dimension", () => {
+    const byValue = new Map(
+      dimensionOptions("gate", [parkedRow("A"), queuedRow("B"), queuedRow("C")]).map((o) => [
+        o.value,
+        o.count,
+      ]),
+    );
+    expect(byValue.get("awaiting")).toBe(1);
+    expect(byValue.get("queued")).toBe(2);
+  });
+
+  it("prints a chip a reader can act on", () => {
+    const dimension = FILTER_DIMENSIONS.find((d) => d.id === "gate")!;
+    expect(dimension.label).toBe("Gate");
+    expect(dimension.format("awaiting")).toBe("Awaiting approval");
+    expect(dimension.format("queued")).toBe("Queued behind a gate");
   });
 });

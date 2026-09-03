@@ -20,6 +20,10 @@ staple events --follow [--since N] [--max N]        stream events as they land
 
 staple start <ref> --steal-if-stale <30m|2h|3600>   take over a dead agent's claim
 staple release <ref> --if-stale <dur>               free a dead agent's claim
+
+staple gate <ref> --owner O [-m text]               park a PARENT on a human; queue its subtree
+staple approve <ref> [--children R1,R2] [-m text]   release the whole queue, or only what you name
+staple request-changes <ref> -m text                send it back; the children stay queued
 ```
 
 `staple help` has the full option list. `checkout` is an alias for `start`, and
@@ -108,6 +112,145 @@ Every surface takes it: MCP `create_task` / `update_task` via `estimate_seconds`
 scalar `estimatedSeconds` but not the rollup object — those shapes exist to
 make choosing a task cheap.
 
+## Approval gates
+
+A **gate** parks a *parent* on a named human and takes its whole subtree out of
+circulation until that person answers. It is the counterpart of `block`: a
+blocker waits on other work, a gate waits on a person.
+
+```bash
+staple gate <ref> --owner O [-m text]                 park it; every open descendant is queued
+staple approve <ref> [--children R1,R2] [-m text]     release the queue — all of it, or only these
+staple request-changes <ref> -m text                  send it back; children stay queued
+```
+
+- **`gate`** moves the parent to `awaiting_approval` and clears its claim.
+  `--owner` is required. Refused on a leaf (`in_review` is the status for a leaf
+  waiting on a human) and while a gate is already `pending`; re-gating after
+  `request-changes` is allowed, and is how you resubmit.
+- **`approve`** with no `--children` resolves the gate, releases the whole
+  subtree, and re-derives the parent from its children. With `--children` it
+  releases only those refs — which must be descendants — and everything
+  underneath them, leaving the parent parked and the gate active.
+- **`request-changes`** requires `-m`, and does exactly this: *posts your note as
+  a comment on `<ref>`, returns it to todo for the next agent, and keeps the
+  queued children parked until you approve.* No automatic re-checkout; the queue
+  holds until an `approve` or a fresh gate cycle. The web UI calls this action
+  **Send back** and prints that same sentence above the note field. The command
+  name is unchanged — the label was the thing that was unclear, not the verb.
+
+### What is actually queued
+
+Four rules decide what a gate holds, and every surface — `inbox`, the checkout
+guard, the `[queued: …]` cue on `ls`, and the reviewer's checklist in the web UI
+— reads the same answer (STA-154):
+
+- **(a) Only OPEN work is queued.** `done` and `cancelled` issues under a gated
+  parent carry no `queuedBy`, are never listed for approval and are never
+  counted. Finished work is not being held back from anyone.
+- **(b) A parent with nothing open underneath is not queued.** It has nothing to
+  release, so approving it would be a no-op. An open **leaf** is still queued —
+  it *is* the work.
+- **(c) Approving some children releases them and everything under them, at
+  once.** They stop reading queued immediately; you do not re-run anything. The
+  parent stays parked and the gate stays active.
+- **(d) A subtree behind its own inner gate is not yours to release.**
+  `queuedBy` names the *nearest* gate, so that decision belongs to whoever holds
+  it.
+
+Semantics and the tests that pin each rule are in
+[semantics.md](semantics.md#approval-gates).
+
+```console
+$ staple gate STA-142 --owner VP -m "Schema plus the three CLI verbs — ok to build on this?"
+⊙! STA-142   awaiting_approval Q: approval gates — park a parent for VP review …  [awaiting VP]
+
+$ staple approve STA-142 --children STA-145 -m "Q3 docs can proceed."
+⊙! STA-142   awaiting_approval Q: approval gates …  [released STA-145; still awaiting VP]
+
+$ staple request-changes STA-142 -m "Split the queuedBy derivation out."
+○! STA-142   todo        Q: approval gates …  [changes requested; children stay queued]
+
+$ staple approve STA-142
+◐! STA-142   in_progress Q: approval gates …  [gate approved]
+```
+
+`ls` marks both sides of a gate — `[awaiting VP]` on the holder,
+`[queued: STA-142/VP]` on the work behind it — and `show` gives the gate its own
+lines, printed for a resolved gate too, so the review leaves a trace:
+
+```console
+gate:  awaiting VP (requested opus-q3 2026-09-02T22:00:46Z)
+queued: behind STA-142, awaiting approval by VP — checkout is refused until then
+```
+
+### The QUEUED section of the inbox
+
+`staple inbox` grows a third section between READY and BLOCKED, printed only
+when it is non-empty. QUEUED is work a **human** must release; BLOCKED is work
+waiting on other **work**. Gate holders are listed first inside the section —
+the one row a person can act on should not sit under the three tickets it is
+holding — while `--json` and the MCP/HTTP payloads keep the store's ordinary
+pickup order.
+
+```console
+READY (pickup order):
+  ◌! STA-61    backlog     L1: scaffold Docusaurus site (single locale) replacing the POC
+QUEUED (waiting on a human — checkout is refused):
+  ⊙! STA-142   awaiting_approval Q: approval gates — park a parent for VP review …  [awaiting VP]
+  ◐! STA-143   in_progress Q1: gate model in the store … @opus-q1  [awaiting VP on STA-142]
+  ◌! STA-144   backlog     Q2: gates in the web UI …  [awaiting VP on STA-142]
+BLOCKED:
+  ⊘! STA-80    blocked     T: estimates vs actuals …  [waiting on VP: schedule the brainstorm]
+```
+
+`inbox --json` is `{"ready":[…],"queued":[…],"blocked":[…],"hasMore":false}`;
+every entry carries `gate` and `queuedBy` beside `unresolvedBlockers` and
+`claim`. An entry with a `gate` and no `queuedBy` **is** the gate; an entry with
+`queuedBy` is standing behind the one it names. `staple inbox --hub` goes
+through the hub's unified list and carries no gate cue today — checkout is still
+refused, it is just less informative.
+
+### Exit code 9 and the `gated` error
+
+Checkout of a queued issue fails with its own exit code so a shell loop can tell
+"take another task" from "wait for a person":
+
+```console
+$ staple checkout STA-144
+error(gated): STA-144 is queued behind STA-142, awaiting approval by VP. Pick a different task — approval is a human action, not a retry.
+$ echo $?
+9
+```
+
+`--steal-if-stale` does not open it: a stale holder and a closed gate are
+unrelated facts. The only thing that clears it is the owner running `approve`.
+The `--json` form carries the gate in `detail`, identically on the CLI, MCP and
+HTTP surfaces:
+
+```json
+{"code":"gated","message":"STA-144 is queued behind STA-142, awaiting approval by VP. Pick a different task — approval is a human action, not a retry.","detail":{"currentStatus":"backlog","queuedBy":{"identifier":"STA-142","owner":"VP"}},"retryable":false}
+```
+
+The three write commands emit the parent issue plus its `gate` under `--json`,
+so they read like any other write; `approve` adds `releasedChildren`, which is
+what distinguishes a partial approval from a whole one:
+
+```json
+{"identifier":"STA-142","status":"awaiting_approval","…":"…",
+ "gate":{"state":"pending","owner":"VP","requestedBy":"opus-q3",
+         "requestedAt":"2026-09-02T22:00:46.381Z","resolvedBy":null,"resolvedAt":null},
+ "releasedChildren":["STA-144"]}
+```
+
+`gate.state` is `pending | approved | changes_requested`. `ls --json`,
+`show --json` and `inbox --json` carry the same `gate` object plus `queuedBy`
+(`{identifier, owner}`) as siblings of the issue — never fields *on* it, the
+same rule `claim` and `timing` follow. At most one of the pair is ever non-null.
+
+Semantics, and the tests behind each rule, are in
+[semantics.md](semantics.md#approval-gates).
+
 ## Machine-readable output
 
 `--json` is a global flag on every task command (`ls`, `show`, `inbox`, `board`,
@@ -138,3 +281,4 @@ Exit codes let CI branch without parsing stderr:
 | 2 | `validation` | | 6 | `cycle` |
 | 3 | `not_found` | | 7 | `revision_conflict` |
 | | | | 8 | `timeout` (`wait` only) |
+| | | | 9 | `gated` (a review gate above it is unresolved) |
