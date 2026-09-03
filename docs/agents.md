@@ -33,6 +33,10 @@ returns `guidePath` / `guideWritten`.
 
 Source: `src/core/agents-template.ts`.
 
+The pickup queue rule — READY is the effective queue order, containers expand
+to leaf work, and a strict-mode `out_of_order` refusal means stop, not retry —
+is specified in [queue.md](queue.md) and joins this guide when R2e lands.
+
 ## The MCP surface
 
 ```bash

@@ -68,6 +68,10 @@ tree and the board, but can never lift `done` above `in_progress`:
 - list/board rank: `active, review, gated, blocked, ready, unstarted, done, cancelled`
 - inbox pickup: `active, review, ready, unstarted`
 
+The pickup **queue** ([queue.md](queue.md)) will sit in front of the inbox
+order once R2 lands: a human-ordered plan READY is derived from, with these
+tiers ordering only what the plan does not mention.
+
 **Removal is guarded twice.** A status that issues still carry needs
 `--migrate-to <status>`, and every such row moves in the same transaction (as a
 vocabulary rename, not as N status transitions — the event log is history and
@@ -288,7 +292,9 @@ still resume mid-flight work; and *before* everything else, so
 `--steal-if-stale` cannot route around it — a stale holder and a closed gate are
 unrelated facts. The code is non-retryable on purpose: the instruction is not
 "pick a different task right now" but "this one opens when a human opens it".
-`wait` will not call a queued issue ready either. (`store-gates.test.ts` —
+`wait` will not call a queued issue ready either. The pickup queue adds a third
+non-retryable code to this family, `out_of_order` (exit 10) — see
+[queue.md](queue.md#policy-advisory-or-strict). (`store-gates.test.ts` —
 *"refuses with code `gated`, naming the gate and its owner"*, *"is not bypassed
 by --steal-if-stale"*, *"still lets the EXISTING holder re-claim after a
 crash"*, *"lets a released child be claimed while its siblings stay queued"*,

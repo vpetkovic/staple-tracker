@@ -8,6 +8,7 @@ purpose — the content is accurate, the prose is not finished.
 | [semantics.md](semantics.md) | Statuses and guards, atomic claims, the dependency graph, revisioned documents |
 | [agents.md](agents.md) | The protocol `init` writes, the MCP tool surface, harness ergonomics |
 | [continuity.md](continuity.md) | Claims, staleness, takeover, and the takeover drill |
+| [queue.md](queue.md) | The pickup queue: plan vs effective order, the resolver, advisory vs strict, human override, storage — the R2 contract, not yet built |
 | [cli.md](cli.md) | The command surface, estimates vs actuals, `--json`, exit codes |
 | [web-ui.md](web-ui.md) | `staple open`, the stack, the theme, the auth model |
 | [configuration.md](configuration.md) | The staple home, the bootstrap locator, `config.json` |
