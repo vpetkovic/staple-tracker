@@ -469,6 +469,38 @@ const timingShape = {
     .describe(
       "Direct children per status; every CONFIGURED status present, zeros included (see list_statuses)",
     ),
+  /**
+   * STA-192: the recursive plan, BESIDE the depth-1 childrenEstimatedSeconds
+   * rather than instead of it. See `SubtreePlan` in core/types.ts for the one
+   * contribution rule that keeps it from counting anything twice.
+   */
+  subtreePlan: z
+    .object({
+      estimatedSeconds: z
+        .number()
+        .nullable()
+        .describe(
+          "THE EFFECTIVE PLAN an ancestor counts this issue as: the own estimate when recorded, otherwise descendantsEstimatedSeconds; null when neither exists",
+        ),
+      source: z
+        .enum(["own", "descendants", "none"])
+        .describe("Which of the two fed estimatedSeconds; none when it is null"),
+      descendantsEstimatedSeconds: z
+        .number()
+        .nullable()
+        .describe(
+          "BOTTOM-UP: sum of the DIRECT children's effective plans, the recursive counterpart of childrenEstimatedSeconds; null when no descendant at any depth has an estimate. Present even when an own estimate wins, so the two can be compared",
+        ),
+      contributingCount: z
+        .number()
+        .describe(
+          "Descendants at any depth whose own estimate is a term of descendantsEstimatedSeconds; a descendant shadowed by an estimated ancestor beneath this issue is not counted",
+        ),
+      totalCount: z.number().describe("Descendants at any depth, whatever their status; 0 for a leaf"),
+    })
+    .describe(
+      "Recursive, non-double-counting plan for the subtree: an issue contributes its own estimate if it has one, otherwise its children's contributions — never both",
+    ),
 };
 type _TimingShapeMatchesInterface = Expect<
   Equals<z.infer<z.ZodObject<typeof timingShape>>, IssueTiming>

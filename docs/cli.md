@@ -145,7 +145,9 @@ staple show STA-42
   "reviewSeconds":null,"approximate":false,"countedThrough":null,"childCount":3,
   "childrenEstimatedSeconds":12600,"childrenActiveSeconds":15000,
   "childStatusCounts":{"backlog":1,"todo":0,"in_progress":1,"in_review":0,
-                       "done":1,"blocked":0,"cancelled":0}},
+                       "done":1,"blocked":0,"cancelled":0},
+  "subtreePlan":{"estimatedSeconds":14400,"source":"own",
+                 "descendantsEstimatedSeconds":12600,"contributingCount":2,"totalCount":3}},
  "childrenTiming":{"STA-43":{"estimatedSeconds":5400,"activeSeconds":3600,"…":"…"}}}
 ```
 
@@ -153,9 +155,35 @@ Rollups sum **direct children only**, and each child contributes its own
 `activeSeconds` — so a child that is itself a parent contributes its aggregate,
 which is exactly the number its row on screen shows. The table adds up, and an
 epic-of-epics reports its grandchildren's work rather than zero. Estimates stay
-strictly depth-1, because a parent's estimate is a plan for its whole subtree
-and adding it to its children's would double-count the plan. A sum is `null` —
-never `0` — when no child contributed one.
+strictly depth-1 in `childrenEstimatedSeconds`, because a parent's estimate is
+a plan for its whole subtree and adding it to its children's would double-count
+the plan. A sum is `null` — never `0` — when no child contributed one.
+
+**The recursive plan** is `subtreePlan`, beside that field rather than in its
+place, and it survives an epic-of-epics with one rule: an issue contributes its
+**own estimate if it has one, otherwise the sum of its children's
+contributions** — never both. So a parent's plan and its descendants' plans
+cannot both land in one ancestor total, and a middle-level epic nobody
+estimated passes its children's plan straight up. The fields:
+
+- `estimatedSeconds` — the **effective (top-down) plan**, the one number an
+  ancestor counts this issue as: the own estimate when recorded, otherwise
+  `descendantsEstimatedSeconds`, `null` when neither exists.
+- `source` — `own`, `descendants` or `none`: which fed `estimatedSeconds`.
+- `descendantsEstimatedSeconds` — the **bottom-up plan**, the sum of the
+  direct children's effective plans. Kept visible even when an own estimate
+  wins, so the 4h epic above, over 3h30m of planned children, shows the
+  disagreement instead of one side quietly winning.
+- `contributingCount` / `totalCount` — coverage over descendants at **every
+  depth**: how many contributed their own estimate to the bottom-up sum, out
+  of how many exist. A descendant shadowed by an estimated ancestor beneath
+  this issue is not counted — and not lost; it is on its own timing.
+
+A middle epic with no estimate over three leaves at 4h/3h/4h therefore
+reports an 11h plan, and its parent includes that 11h whether or not the
+middle level was estimated. `staple show` adds one segment per parent:
+`plan 11h (from 3 of 3 descendants)` when the plan was inherited, or
+`descendants est 11h (3 of 3)` beside `est` when an own estimate wins.
 
 Every surface takes it: MCP `create_task` / `update_task` via `estimate_seconds`
 (explicit `null` clears, absent leaves alone), HTTP `create` / `update` via
