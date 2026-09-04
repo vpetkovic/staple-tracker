@@ -61,12 +61,13 @@ the same validation envelope when the kind is absent"*.)
 member count — remove the members first, because an issue that is not a
 milestone cannot own them. Re-declaring any issue *as* a milestone is allowed;
 its metadata row appears on first write. `staple kinds rm milestone` is refused
-outright while any milestone has members or a metadata row, exactly as removing
-the last status of a required category is: the refusal names the milestones.
+outright while any milestone has members or dates, exactly as removing the last
+status of a required category is: the refusal names the milestones. `--migrate-to`
+does not buy a way past it — it re-kinds every milestone at once, which is the
+same move the guard above already refuses one at a time.
 (Pinned by `store-milestones.test.ts` — *"refuses to re-kind a milestone that
-still has members"*; the `kinds rm` guard is still to be pinned — *"refuses to
-remove the milestone kind while milestones exist"* — and lands with the guard
-in `removeKind`.)
+still has members"* and *"refuses to remove the milestone kind while milestones
+exist"*.)
 
 ## Metadata: two dates in a table, everything else reused
 

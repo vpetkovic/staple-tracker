@@ -84,6 +84,11 @@ issue that already had children as an `epic` at upgrade time.
 row is a task — so an epic or a bug stands out without a column of noise on
 every other line. `staple show` always names it.
 
+`kinds rm milestone` is the one removal `--migrate-to` cannot force: it is
+refused with exit 2 naming every milestone that still owns members or dates
+(clear them with `staple milestone rm` and `staple milestone set --target none`
+first) — see [milestones.md](milestones.md).
+
 ## Milestones
 
 A milestone is a dated, human-ordered plan that may contain epics and tasks

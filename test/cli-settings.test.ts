@@ -195,6 +195,25 @@ describe("staple kinds", () => {
     expect(ids(["kinds", "ls", "--json"])).not.toContain("milestone");
   });
 
+  /**
+   * The one kind that carries a rule (docs/milestones.md): `rm` is refused outright
+   * while a milestone still owns members or dates, and the refusal names it so the
+   * operator knows what to clear first.
+   */
+  it("refuses to remove the milestone kind while a milestone still owns dates", () => {
+    expect(staple("kinds", "add", "milestone").status).toBe(0);
+    expect(staple("milestone", "new", "October cut", "--target", "2026-10-31").status).toBe(0);
+
+    const refused = staple("kinds", "rm", "milestone", "--migrate-to", "task");
+    expect(refused.status).toBe(2);
+    expect(refused.stderr).toContain("Cannot remove the milestone kind while VOC-2 still has members or dates.");
+    expect(ids(["kinds", "ls", "--json"])).toContain("milestone");
+
+    expect(staple("milestone", "set", "VOC-2", "--target", "none").status).toBe(0);
+    expect(staple("kinds", "rm", "milestone", "--migrate-to", "task").status).toBe(0);
+    expect(ids(["kinds", "ls", "--json"])).not.toContain("milestone");
+  });
+
   it("has no categories, and refuses recategorize instead of ignoring it", () => {
     const { status, stderr } = staple("kinds", "recategorize", "task", "--category", "ready");
     expect(status).toBe(2);
