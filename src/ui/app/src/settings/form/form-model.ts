@@ -164,6 +164,9 @@ export function validateFieldValue(schema: SettingSchemaView, value: unknown): s
       return typeof value === "string" && schema.values.includes(value)
         ? null
         : `Must be one of ${schema.values.join(", ")}.`;
+    case "kindAppearance":
+      // The glyph picker validates against its own contract; the store still refuses.
+      return null;
   }
 }
 
