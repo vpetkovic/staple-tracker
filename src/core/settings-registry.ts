@@ -43,6 +43,7 @@
  * the store -> HTTP -> UI path end to end without inventing a feature.
  */
 import { StapleError, VOCABULARY_ID_PATTERN, DEFAULT_ISSUE_KIND } from "./types.js";
+import { kindAppearanceMapProblem, type KindAppearanceMap } from "./kind-appearance.js";
 
 export type SettingScope = "workspace" | "global";
 
@@ -57,15 +58,20 @@ export type SettingValueSource = "default" | "workspace" | "config";
  */
 export type SettingSensitivity = "normal" | "sensitive";
 
-/** The closed set of value shapes. A new shape is a new arm here, not a `unknown`. */
+/**
+ * The closed set of value shapes. A new shape is a new arm here, not a `unknown`.
+ * `kindAppearance` (R5a, STA-181) is a map of kind id to appearance record,
+ * validated by `core/kind-appearance.ts` — the one structured value so far.
+ */
 export type SettingSchema =
   | { type: "boolean" }
   | { type: "integer"; min?: number; max?: number }
   | { type: "string"; pattern?: RegExp; patternHint?: string }
-  | { type: "enum"; values: readonly string[] };
+  | { type: "enum"; values: readonly string[] }
+  | { type: "kindAppearance" };
 
 /** How the shell renders the setting. Metadata only — the shell decides the widget. */
-export type SettingControl = "toggle" | "number" | "text" | "select";
+export type SettingControl = "toggle" | "number" | "text" | "select" | "glyph";
 
 export interface SettingUiMetadata {
   label: string;
@@ -164,6 +170,22 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
         "The kind a ticket gets when none is given. Must name a configured kind; removing that kind resets this.",
       control: "select",
       order: 10,
+    },
+  },
+  {
+    key: "kinds.appearance",
+    category: "kinds",
+    scope: "workspace",
+    schema: { type: "kindAppearance" },
+    default: Object.freeze({}) as KindAppearanceMap,
+    version: 1,
+    sensitivity: "normal",
+    ui: {
+      label: "Kind glyphs",
+      description:
+        "The icon each kind wears, its accessible label, and the character the terminal prints instead. A kind with no entry uses staple's built-in mark.",
+      control: "glyph",
+      order: 20,
     },
   },
   {
@@ -313,6 +335,11 @@ export function validateSettingValue<T>(
         refuse(`one of ${schema.values.join(", ")}`);
       }
       return value as T;
+    case "kindAppearance": {
+      const problem = kindAppearanceMapProblem(value);
+      if (problem) refuse(problem);
+      return value as T;
+    }
     default:
       throw new StapleError("validation", `Unknown setting schema for "${definition.key}"`);
   }
@@ -416,7 +443,8 @@ export type SettingSchemaView =
   | { type: "boolean" }
   | { type: "integer"; min?: number; max?: number }
   | { type: "string"; pattern?: string; patternHint?: string }
-  | { type: "enum"; values: string[] };
+  | { type: "enum"; values: string[] }
+  | { type: "kindAppearance" };
 
 export function settingDefinitionView(definition: SettingDefinition): SettingDefinitionView {
   const schema = definition.schema;
@@ -431,7 +459,9 @@ export function settingDefinitionView(definition: SettingDefinition): SettingDef
         ? { type: "enum", values: [...schema.values] }
         : schema.type === "integer"
           ? { type: "integer", ...(schema.min !== undefined ? { min: schema.min } : {}), ...(schema.max !== undefined ? { max: schema.max } : {}) }
-          : { type: "boolean" };
+          : schema.type === "kindAppearance"
+            ? { type: "kindAppearance" }
+            : { type: "boolean" };
   return {
     key: definition.key,
     category: definition.category,

@@ -41,7 +41,7 @@ Scope is physical, not a label:
 | Scope | Lives in | Written by | Examples |
 |---|---|---|---|
 | `global` | `<home>/config.json`, under the field the definition names | `staple config set` | `machine.browser`, `machine.port`, `machine.setupComplete` |
-| `workspace` | the workspace database (`meta` rows keyed `setting:<key>`) | `POST /api/settings` with `target: "settings"` | `kinds.default` |
+| `workspace` | the workspace database (`meta` rows keyed `setting:<key>`) | `POST /api/settings` with `target: "settings"` | `kinds.default`, `kinds.appearance` |
 
 A workspace key is refused on the config surface and a global key is refused
 on the workspace surface, each refusal naming the surface that does own it.
@@ -55,6 +55,21 @@ reinterpreted, exactly as `config.json` refuses a newer `schemaVersion`. A
 and reported as an unknown key — downgrading never truncates configuration.
 Every change logs a `setting_changed` event with the actor, the previous
 value and the new one.
+
+`kinds.appearance` is the one structured value so far: a map from kind id to
+`{ source, value, fallback, label? }`, holding only the kinds somebody
+customised. `source` is `lucide` (a canonical key, `triangle-alert`), `emoji`,
+or `none` (an empty value: draw the built-in mark); `svg` is refused until the
+sanitiser lands (R5c). `fallback` is what a terminal prints, one to four
+characters; `label` overrides the kind's own label for assistive tech and may
+be omitted. Any other field — a colour, say — is refused: hue belongs to a
+status category, never to a kind. A key must name a configured kind, and
+`kinds rm` drops the kind's entry in the same transaction. A kind with no
+entry resolves to staple's built-in mark (`epic` → `layers` ◆, `task` →
+`square-check` ◇, `bug` → `bug` ✱, `chore` → `wrench` ↻, `spike` → `zap` ↯,
+`milestone` → `milestone` ⚑) or, for any other id, to a generic `•`; the
+built-in marks are code, not rows, which is why an existing database needs no
+migration to wear them and custom kinds keep their order.
 
 The registry also lists the workspace's **categories** — Statuses, Kinds,
 This machine — with the editor each one needs, so the settings UI enumerates

@@ -183,8 +183,24 @@ it to the page: nothing in the form names a setting.
 
 ## Glyph catalog
 
-Kinds will wear configurable glyphs (R5). The catalog they pick from is not a
-hand-kept list: it is generated from the INSTALLED `lucide-react`, and checked in.
+Every kind wears one **appearance** record — `{ source, value, label, fallback }`
+— resolved by the server and served on each row of `/api/settings` `kinds[]`,
+the same record `staple kinds ls --json` and MCP `list_kinds` answer. The
+operator's choices live in the `kinds.appearance` workspace setting (see
+[configuration.md](configuration.md#the-settings-registry)); a kind with no
+entry wears the built-in mark, and a kind that has none wears a generic one.
+`lib/kind-appearance.ts` mirrors the built-in table so the first paint, before
+the fetch lands, already shows the right marks, and `kindAppearance(id)` in
+`lib/settings.ts` is the accessor every row, group header, form and graph node
+resolves through (the picker and the rendering rewire are R5d and R5e). No
+colour travels in the record: hue is a status-category property, and a kind
+glyph is monochrome by design.
+
+The catalog a `lucide` value names is not a hand-kept list: it is generated
+from the INSTALLED `lucide-react`, and checked in. The server validates only
+that a value is *shaped* like a key (the manifest is browser code); the
+browser's `resolveIcon` decides whether it exists, and an unknown key answers
+`undefined` — the cue to draw the fallback.
 
 ```bash
 npx tsx scripts/gen-lucide-catalog.ts    # after bumping lucide-react, or editing the category table
@@ -220,6 +236,70 @@ module that names every icon is its own chunk (about 140 kB gzipped) and the mai
 view never pays for icons it does not draw. Importing the catalog module costs
 the manifest alone, about 12 kB gzipped.
 
+### Custom glyphs
+
+When the catalog is not enough, a kind can wear an **emoji** or a **custom
+SVG**. Both are validated in core (`src/core/kind-appearance.ts`), and both
+are drawn by one browser primitive, `components/task-list/SafeGlyph.tsx`;
+`KindGlyph` takes an optional `appearance` and delegates an `emoji` or `svg`
+record to it, drawing its own built-in mark for anything else (the glyph
+picker and the rewiring of every surface are R5d and R5e).
+
+An **emoji** value is bounded by grapheme clusters, not bytes: `Intl.Segmenter`
+counts what a person sees as one glyph, so a joined family (`👨‍👩‍👧‍👦`, eleven
+UTF-16 units) or a flag is one, and the bound is 1 to 2 of them with a ceiling
+of 32 units. Whitespace, control characters, lone surrogates and a value with
+no visible code point (a bare zero-width joiner) are refused. The browser draws
+it as text, which is safe by construction.
+
+A **custom SVG** goes through `src/core/svg-sanitize.ts` — pure string work, no
+DOM, no dependency — and only the sanitiser's **canonical output** is ever
+stored, served or drawn. The security model has three walls:
+
+1. **The write boundary.** `kinds.appearance` accepts an `svg` value only if it
+   is exactly the sanitiser's output (a fixed point: sanitising it again
+   returns it unchanged). A raw document is refused with a sentence saying to
+   sanitise it first; a hostile one is refused with the reason. The sanitiser
+   is an allowlist, not a denylist: `svg`, `g`, `path`, `circle`, `ellipse`,
+   `rect`, `line`, `polyline`, `polygon`, `defs`, `clipPath`, `symbol`, `use`
+   and a `title`/`desc`, with the presentation and geometry attributes those
+   take. It **refuses** `<script>`, `<foreignObject>`, `<style>`, `<image>`,
+   `<a>`, animation elements, a nested `<svg>`, every `on*` attribute,
+   `javascript:`/`data:`/`vbscript:` URLs in any attribute (including
+   entity-encoded spellings), `url(` to anything but a local `#id`, an `href`
+   that is not a local `#id`, `@import` or `url(` in a `style`, DOCTYPE and
+   entity declarations (so a billion-laughs document never reaches a parser),
+   CDATA, processing instructions, undeclared entities, control characters,
+   malformed or truncated markup, more than 512 elements or 32 levels, and
+   anything over 8 KiB. It **strips** what an editor leaves behind: the XML
+   declaration, comments, `xmlns:*`, `class`, `data-*`, `style` (when it
+   carries nothing external), unknown attributes, and `width`/`height`/`x`/`y`
+   on the root.
+2. **The canonical form.** The root is rewritten as
+   `<svg xmlns viewBox role="img" aria-label>`: the `viewBox` is normalised
+   (derived from a plain width and height when absent) and bounded to ±4096 with
+   a positive width and height of at most 4096; absolute sizing is gone, so the
+   glyph inherits the caller's box; every `fill` and `stroke` becomes
+   `currentColor` unless it is `none`, so the glyph takes the row's colour like
+   the built-in marks; and exactly one `<title>` carries the accessible name —
+   the document's own root `<title>` if it had one, else the record's `label`,
+   else its `aria-label`, else the document is refused. Attributes are written
+   in one order with escaped values, so equal drawings give equal strings.
+3. **The browser's gate.** `safeGlyph` in `lib/kind-appearance.ts` does not
+   trust the wire: before anything is injected it holds the value to the exact
+   shape the sanitiser writes (that root, only those elements, no handler, no
+   non-local reference) and answers null for everything else. `SafeGlyph`
+   places the canonical body inside an `<svg>` it owns — which sets the size,
+   the recorded `viewBox` and the accessible name — and that body is the only
+   string in the app that ever reaches `dangerouslySetInnerHTML`. Null draws
+   the record's terminal `fallback` as text, so an invalid record costs the row
+   nothing but its custom mark.
+
+The same suites that prove this live in `test/svg-sanitize.test.ts`,
+`test/kind-appearance.test.ts`, `test/store-settings.test.ts` (custom glyphs),
+`test/contract-kind-appearance.test.ts` (a hostile save is refused and no
+surface carries executable markup) and
+`components/task-list/safe-glyph.test.tsx`.
 ## Analytics
 
 The detail panel's Analytics tab is estimate versus actual for one issue, drawn

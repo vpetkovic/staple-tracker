@@ -61,7 +61,7 @@ describe("the registered set", () => {
       ["machine.port", "port"],
       ["machine.setupComplete", "setupComplete"],
     ]);
-    expect(settingDefinitionsFor("workspace").map((d) => d.key)).toEqual(["kinds.default"]);
+    expect(settingDefinitionsFor("workspace").map((d) => d.key)).toEqual(["kinds.default", "kinds.appearance"]);
   });
 
   it("lists statuses and kinds as workspace vocabulary categories the shell can enumerate", () => {
@@ -123,6 +123,20 @@ describe("validation", () => {
     expect(() =>
       validateSettingValue(fake({ schema: { type: "string", pattern: /^[a-z]+$/, patternHint: "letters" } }), "A1", "f"),
     ).toThrow(/must be letters/);
+  });
+
+  it("validates a kindAppearance map through core/kind-appearance, naming the kind and the field", () => {
+    const definition = requireSettingDefinition("kinds.appearance");
+    const ok = { epic: { source: "lucide", value: "layers", fallback: "◆" } };
+    expect(validateSettingValue(definition, ok, "workspace t")).toBe(ok);
+    expect(validateSettingValue(definition, {}, "workspace t")).toEqual({});
+    expect(() => validateSettingValue(definition, { epic: { source: "lucide", value: "Nope", fallback: "◆" } }, "workspace t")).toThrow(
+      /workspace t: "kinds\.appearance" must be a Lucide icon key .* for "epic"/,
+    );
+    expect(() => validateSettingValue(definition, { epic: { ...ok.epic, color: "#f00" } }, "workspace t")).toThrow(
+      /without "color"/,
+    );
+    expect(() => validateSettingValue(definition, "layers", "workspace t")).toThrow(/must be a map of kind id/);
   });
 
   it("reports a global setting under its config.json field name", () => {
@@ -204,6 +218,14 @@ describe("wire views", () => {
     expect(JSON.parse(JSON.stringify(view))).toEqual(view);
   });
 
+  it("serves the kindAppearance schema as its own arm, with an empty map default", () => {
+    const view = settingDefinitionView(requireSettingDefinition("kinds.appearance"));
+    expect(view.schema).toEqual({ type: "kindAppearance" });
+    expect(view.default).toEqual({});
+    expect(view.ui).toEqual(expect.objectContaining({ label: "Kind glyphs", control: "glyph" }));
+    expect(JSON.parse(JSON.stringify(view))).toEqual(view);
+  });
+
   it("carries a value with its scope and provenance", () => {
     expect(settingValueView(requireSettingDefinition("machine.port"), 4500, "config")).toEqual({
       key: "machine.port",
@@ -232,6 +254,7 @@ describe("wire views", () => {
     expect(view.definitions.map((d) => d.key)).toEqual([
       "kinds.default",
       "machine.browser",
+      "kinds.appearance",
       "machine.port",
       "machine.setupComplete",
     ]);

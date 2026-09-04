@@ -195,6 +195,19 @@ describe("staple kinds", () => {
     expect(ids(["kinds", "ls", "--json"])).not.toContain("milestone");
   });
 
+  it("carries each kind's resolved appearance on --json, and leads the human list with its terminal fallback", () => {
+    expect(staple("kinds", "add", "research").status).toBe(0);
+    const rows = JSON.parse(staple("kinds", "ls", "--json").stdout) as Array<{
+      id: string;
+      appearance: { source: string; value: string; label: string; fallback: string };
+    }>;
+    expect(rows.find((k) => k.id === "epic")?.appearance).toEqual({ source: "lucide", value: "layers", label: "Epic", fallback: "◆" });
+    expect(rows.find((k) => k.id === "research")?.appearance).toEqual({ source: "none", value: "", label: "Research", fallback: "•" });
+    const lines = staple("kinds", "ls").stdout.trim().split("\n");
+    expect(lines.find((line) => line.includes(" epic "))).toMatch(/^◆ epic/);
+    expect(lines.find((line) => line.includes(" research "))).toMatch(/^• research.*\(custom\)$/);
+  });
+
   it("has no categories, and refuses recategorize instead of ignoring it", () => {
     const { status, stderr } = staple("kinds", "recategorize", "task", "--category", "ready");
     expect(status).toBe(2);

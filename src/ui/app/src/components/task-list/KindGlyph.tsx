@@ -80,9 +80,11 @@
  * whose `EpicKindMark` placeholder this is meant to replace — gets the right weight from
  * the same paths rather than from a second set tuned by hand.
  */
+import { safeGlyph, type KindAppearance } from "@/lib/kind-appearance";
 import { kindLabel } from "@/lib/settings";
 import type { IssueKind } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { SafeGlyph } from "./SafeGlyph";
 
 /** What the row draws at. Exported so a caller can line something else up with it. */
 export const KIND_GLYPH_SIZE = 12;
@@ -197,17 +199,30 @@ export interface KindGlyphProps {
    * of one fact is worse than none.
    */
   labelled?: boolean;
+  /**
+   * The kind's configured appearance (R5c, STA-183). An `emoji` or a canonical `svg`
+   * record is drawn by `SafeGlyph` in place of the built-in mark; anything else —
+   * absent, `lucide` (STA-185's to wire), `none`, or a value that fails the browser's
+   * gate — draws the mark above, so a bad record never costs the row its glyph.
+   */
+  appearance?: Pick<KindAppearance, "source" | "value" | "label" | "fallback">;
 }
 
-export function KindGlyph({ kind, size = KIND_GLYPH_SIZE, className, labelled = true }: KindGlyphProps) {
+export function KindGlyph({ kind, size = KIND_GLYPH_SIZE, className, labelled = true, appearance }: KindGlyphProps) {
+  const configured = appearance && safeGlyph(appearance) ? appearance : undefined;
   return (
     /* `data-issue-kind` and not `data-kind`: the row already carries `data-kind` on its
        avatars, where it means human-or-agent. Two spellings of one attribute name on one
        row is a query that silently matches the wrong element. */
     <span className={cn("staple-kind-glyph", className)} data-issue-kind={kind} data-testid="kind-glyph">
-      <svg width={size} height={size} viewBox="0 0 16 16" aria-hidden="true" focusable="false">
-        <Mark kind={kind} />
-      </svg>
+      {configured ? (
+        // Decorative here whatever `labelled` says: the kind is named by the span below or by the caller's text.
+        <SafeGlyph appearance={configured} size={size} decorative />
+      ) : (
+        <svg width={size} height={size} viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+          <Mark kind={kind} />
+        </svg>
+      )}
       {/* `kindLabel`, not the raw id: a workspace that renamed `spike` to "Investigation"
           must be heard saying so, and O7b's accessor is the only place that knows. */}
       {labelled ? <span className="sr-only">Kind: {kindLabel(kind)}</span> : null}

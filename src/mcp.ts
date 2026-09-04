@@ -20,6 +20,7 @@ import { initWorkspace, resolveWorkspace } from "./core/workspace.js";
 import type { OpenedWorkspace } from "./core/workspace.js";
 import type { VocabularyOp, WorkspaceStore } from "./core/store.js";
 import { MILESTONE_STATES } from "./core/milestones.js";
+import { KIND_APPEARANCE_SOURCES, type KindWithAppearance } from "./core/kind-appearance.js";
 import { Hub, notifyHubResolvedSafe } from "./core/hub.js";
 import type { CrossBlockerState } from "./core/hub.js";
 import {
@@ -1290,6 +1291,24 @@ type _KindRowMatchesInterface = Expect<
 >;
 
 /**
+ * A kind's resolved appearance (R5a, STA-181), the same record `staple kinds
+ * ls --json` and `/api/settings` serve. No colour field, on purpose: hue is a
+ * status-category property and a kind glyph is monochrome.
+ */
+const kindAppearanceShape = z.object({
+  source: z
+    .enum(KIND_APPEARANCE_SOURCES)
+    .describe('Where the web icon comes from; "none" means the built-in mark'),
+  value: z.string().describe('A canonical Lucide key, an emoji, or "" for none'),
+  label: z.string().describe("Accessible name — the kind label unless the operator set one"),
+  fallback: z.string().describe("What a terminal prints instead of the icon"),
+});
+const kindWithAppearanceShape = { ...kindRowShape, appearance: kindAppearanceShape };
+type _KindWithAppearanceMatchesInterface = Expect<
+  Equals<z.infer<z.ZodObject<typeof kindWithAppearanceShape>>, KindWithAppearance>
+>;
+
+/**
  * One op. A BATCH rather than a tool per verb because "add awaiting_approval and
  * put it after in_review" is a single intention, and splitting it over two calls
  * leaves a window where every board in the workspace is visibly wrong. Applied
@@ -1357,12 +1376,12 @@ server.registerTool(
   "list_kinds",
   {
     description:
-      "This workspace's issue-kind vocabulary (epic, task, bug, chore, spike by default), in configured order. Kinds are a label for what a ticket IS; unlike statuses they carry no behaviour.",
+      "This workspace's issue-kind vocabulary (epic, task, bug, chore, spike by default), in configured order, each with its resolved appearance (icon source and value, accessible label, terminal fallback). Kinds are a label for what a ticket IS; unlike statuses they carry no behaviour.",
     inputSchema: { ws: wsSchema },
-    outputSchema: { kinds: z.array(z.object(kindRowShape)) },
+    outputSchema: { kinds: z.array(z.object(kindWithAppearanceShape)) },
     annotations: { title: "List kinds", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
   },
-  ({ ws }) => run(() => ({ kinds: storeFor(ws).getKinds() })),
+  ({ ws }) => run(() => ({ kinds: storeFor(ws).getKindsWithAppearance() })),
 );
 
 server.registerTool(

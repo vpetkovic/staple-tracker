@@ -94,6 +94,34 @@ issue that already had children as an `epic` at upgrade time.
 row is a task — so an epic or a bug stands out without a column of noise on
 every other line. `staple show` always names it.
 
+Every kind also has an **appearance** — the web icon it wears, its accessible
+label, and the character a terminal prints instead. `staple kinds ls` leads
+each row with that terminal fallback (`◆ epic`, `◇ task`, `✱ bug`, `↻ chore`,
+`↯ spike`, `⚑ milestone`; `•` for a kind nobody has given a mark), and
+`--json` carries the whole record on each row as `appearance:
+{ source, value, label, fallback }` — the same record MCP `list_kinds` and
+`/api/settings` serve. It is stored as the workspace setting
+`kinds.appearance` (see [configuration.md](configuration.md#the-settings-registry));
+the CLI only reads it.
+
+`source` names where the web icon comes from, and each source bounds its
+`value`:
+
+| `source` | `value` | bound |
+| --- | --- | --- |
+| `lucide` | a canonical Lucide key (`triangle-alert`) | lowercase words joined by dashes, at most 64 characters |
+| `emoji` | an emoji or short Unicode glyph (`🚀`, `→→`) | 1 to 2 **grapheme clusters** (a joined family or a flag is one), at most 32 UTF-16 units, no whitespace or control characters, at least one visible code point |
+| `svg` | the sanitiser's **canonical** SVG document | at most 8 KiB, one `<svg>` root with a `viewBox` within ±4096, sanitised as described in [web-ui.md](web-ui.md#custom-glyphs) |
+| `none` | `""` | draw the built-in mark |
+
+An `svg` value is accepted only as the sanitiser's own output — a raw document,
+however clean, is refused with a sentence saying to sanitise it first, and a
+hostile one (a `<script>`, an event handler, an external `href`, an oversized
+document) is refused with the reason. So the database, `kinds ls --json`,
+`list_kinds` and `/api/settings` never carry anything but canonical, inert
+markup, and the human `kinds ls` prints the terminal `fallback`, never the
+document. A stored record that no longer validates — one hand-edited on disk,
+say — is refused at read with the key in the sentence rather than served.
 ## Milestones
 
 A milestone is a dated, human-ordered plan that may contain epics and tasks

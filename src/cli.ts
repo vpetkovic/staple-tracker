@@ -1666,10 +1666,15 @@ function main() {
             );
           }
         } else {
-          const rows = store.getKinds();
+          // Each row carries its resolved appearance (R5a, STA-181); the human
+          // list leads with the terminal fallback, the way statuses lead with
+          // their glyph, so a custom mark is visible here without a browser.
+          const rows = store.getKindsWithAppearance();
           if (values.json) return outJson(rows);
           for (const row of rows) {
-            console.log(`  ${row.id.padEnd(20)} ${row.label}${row.isBuiltin ? "" : "  (custom)"}`);
+            console.log(
+              `${row.appearance.fallback} ${row.id.padEnd(20)} ${row.label}${row.isBuiltin ? "" : "  (custom)"}`,
+            );
           }
         }
       };
