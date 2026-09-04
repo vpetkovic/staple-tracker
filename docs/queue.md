@@ -5,8 +5,9 @@ status, priority and display grouping. This is the contract the R2 tickets
 implement and that R3d (milestones) and R6d (the policy setting) plug into.
 Every rule names the test that pins it, or that will. The STORAGE half (R2b,
 migration 008: the `queue_entries` table, the plan's order and its revision),
-the RESOLVER and the four surfaces (R2c) are built; the visual editor (R2d) and
-the milestone plumbing beyond membership order (R3d) are not. Where this page
+the RESOLVER and the four surfaces (R2c), the visual editor (R2d) and the agent
+protocol, diagnostics and lifecycle regressions (R2e) are built; the milestone
+plumbing beyond membership order (R3d) is not. Where this page
 and [semantics.md](semantics.md) disagree, semantics.md describes today and this
 page the target.
 
@@ -169,7 +170,10 @@ next-item check. `--steal-if-stale` does not route around it: a stale holder
 and a plan are unrelated facts. (Pinned by `queue-concurrency.test.ts` — *"two
 processes cannot both pass strict next-item checkout"*, *"a second process is
 refused out_of_order rather than jumping the head"*, *"a reorder committed
-during a checkout has a deterministic, serializable outcome"*;
+during a checkout has a deterministic, serializable outcome"*, *"a human
+override lands beside a concurrent checkout and records what it stepped over"*,
+*"releasing a stale claim re-derives the effective order for the next
+process"*;
 `store-queue-resolver.test.ts` — *"still lets the existing holder re-claim"*,
 *"is not bypassed by --steal-if-stale"*.)
 
@@ -180,7 +184,11 @@ already takeable. Approve, request-changes, `blockers_resolved` and a release
 change eligibility on the very next read — no queue write happens or is needed.
 (Pinned by `store-queue-resolver.test.ts` — *"rank cannot lift a blocked row"*,
 *"rank cannot lift a gated row"*, *"approve re-derives effective order on the
-next read"*.)
+next read"*; `queue-lifecycle.test.ts` — *"gate, request-changes and approve
+each land on the next read, with no queue write"*, *"a live claim is skipped, a
+steal moves it, and a release hands the head back"* — both of which read the
+order back through the CLI, MCP and HTTP and assert the revision never moved,
+because a re-derivation that needed a queue write would not be one.)
 
 ## Human override
 
@@ -227,7 +235,10 @@ entry still exists resumes at its rank on the next read — nothing to re-queue.
 If the entry was pruned, the reopened issue is unqueued and sits in the
 unqueued band. (Pinned by `store-queue.test.ts` — *"a reopened issue resumes its
 plan position"* — and `store-queue-resolver.test.ts` — *"a reopened issue whose
-entry was pruned lands in the unqueued band"*.)
+entry was pruned lands in the unqueued band"*; both halves end to end, against a
+row created after it, in `queue-lifecycle.test.ts` — *"resumes at its rank, and
+lands in the unqueued band only after prune"*. Plan positions are numbered over
+the entries that REMAIN, so a prune closes the hole rather than leaving one.)
 
 **Duplicate membership.** An issue appears at most once in the plan
 (`PRIMARY KEY (issue_id)`). Enqueueing a present issue with no position is
@@ -372,8 +383,11 @@ $ staple queue
   It stays until `queue prune`.
 - **Container.** STA-66 is never a checkout target. Its children expand in
   place in presentation sort (all `backlog`, so priority then `created_at`:
-  S1, S2, S4, …). `staple checkout STA-66` is refused as it is today — an epic
-  with open children is not claimable work.
+  S1, S2, S4, …). `staple checkout STA-66` is refused — an epic with open
+  children is not claimable work. Under `strict` the ORDER guard is what speaks
+  first, since a container is not an effective row at all and is therefore
+  "later" than its own children; an advisory workspace hears the container
+  refusal instead. Either way nobody ever holds STA-66.
 - **Blocked.** STA-68 sits at effective position 3 and is `blocked` by two
   identifiers, one of them outside the epic. The queue reports it; the queue
   does not move it.
@@ -405,6 +419,47 @@ $ staple queue
   `staple queue add WOR-12` here is refused with `validation` — it belongs to
   the WOR queue.
 
-Those nine transitions are what STA-170's regression suite replays end to end
-(to be pinned by `queue-concurrency.test.ts` — *"replays the STA-31 → STA-66 →
-STA-146 sequence"*).
+Those nine transitions are what STA-170's regression suite replays end to end,
+against a scratch workspace whose prefix really is `STA` — the transitions are
+written about these identifiers, and a replay that renamed them would not be
+one. (Pinned by `queue-lifecycle.test.ts`, describe *"replays the STA-31 →
+STA-66 → STA-146 sequence"*: *"resolves the plan to the doc's listing: resolved
+head, expanded container, blocked children"*, *"hands out STA-67, refuses
+STA-146 out_of_order, then hands the second agent STA-146"*, *"takes STA-146 out
+of turn under an override, on the record, without touching the plan"*, *"gates
+the epic, then approves it, and the whole order re-derives on the next read"*,
+*"treats a cross-workspace blocker as blocked, resolvable or not, and refuses to
+queue it"*, *"derives the epic done when its last child lands, and prune forgets
+both entries"*.)
+
+## Diagnostics
+
+`staple doctor` carries a read-only **`queue`** check over the current
+workspace, reporting the plan's `revision` and entry count and warning about the
+two states nothing else can show: an **orphaned** entry, whose issue no longer
+exists — every ordinary listing JOINs `queue_entries` to `issues`, so such a row
+is in no list, is never picked up, and still holds a rank — and an **exhausted
+rank gap**, two neighbours less than 2 apart, where the next insert renumbers
+the whole plan inside its own transaction. Neither is repairable by `--fix`: a
+rank is renumbered by the next ordinary `queue mv`, and an orphan is only
+reachable by deleting rows with foreign keys off, which is not something doctor
+should silently undo. A workspace older than migration 008 skips the check.
+(Pinned by `doctor.test.ts` — *"reports the revision, the entry count and an
+open plan"*, *"warns about an orphaned entry and an exhausted rank gap, and
+repairs neither"*; the check id list pin moved to make room for it.)
+
+## What agents are told
+
+The protocol the generated `AGENTS.md` teaches ([agents.md](agents.md)) is this
+page reduced to what an agent must not get wrong: READY is the effective queue
+rather than a suggestion, a queued container stands for its leaf work and is
+never a checkout target, `staple queue next` answers before you claim, and
+`conflict` (exit 4), `gated` (exit 9) and `out_of_order` (exit 10) each mean
+STOP and take what the refusal names — never retry, never wait, never escalate
+to `--steal-if-stale`. It also tells an agent not to reorder the plan or send
+`--override`: both work for it, both record it as the actor, and both are a
+human's decision. `staple queue --help` and the MCP `inbox`, `list_queue`,
+`next_task` and `checkout_task` descriptions carry the same distinction between
+raw plan order and effective pickup order. (Pinned by `agents-guide.test.ts` —
+*"teaches that READY is the effective queue, and how the plan expands"*,
+*"teaches that conflict, gated and out_of_order all mean stop, never retry"*.)

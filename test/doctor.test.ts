@@ -115,6 +115,7 @@ describe("the JSON contract", () => {
       "workspace-hub-link",
       "migration-journal",
       "orphan-workspaces",
+      "queue",
       "ui-port",
       "runtime",
       "ui-assets",
@@ -239,7 +240,7 @@ describe("read-only by default", () => {
     expect(workspace.detail).toContain("Ambiguous workspace");
     expect(workspace.data.ambiguous).toBe(true);
     // Every other check still ran — a guard per check, not one try around the run.
-    expect(parsed.checks).toHaveLength(16);
+    expect(parsed.checks).toHaveLength(17);
     expect(parsed.checks.find((c) => c.id === "node-runtime")!.status).toBe("pass");
   }, 60_000);
 });
@@ -483,6 +484,91 @@ describe("the repairs", () => {
     // diagnostic command to change somebody's data.
     expect(FIXABLE_CHECKS).toEqual(["hub-registrations", "migration-journal"]);
   });
+});
+
+// -------------------------------------------------------------- the queue
+
+/**
+ * STA-170 — the read-only `queue` check.
+ *
+ * Two of the three facts it reports are unobservable anywhere else: every
+ * ordinary queue listing JOINs `queue_entries` to `issues`, so an entry whose
+ * issue is gone is in no list, and a rank gap is invisible until the write that
+ * renumbers. The third — revision and entry count — is what a caller compares a
+ * stale `--base N` against. All three are asserted here on one real workspace.
+ */
+describe("the queue check", () => {
+  it("reports the revision, the entry count and an open plan", () => {
+    const dir = join(root, "queuerepo");
+    mkdirSync(dir, { recursive: true });
+    expect(runCliAt(dir, ["init"], { STAPLE_HOME: home }).status).toBe(0);
+
+    // An empty plan is the healthy default, and it says so rather than passing
+    // silently — an empty queue is a fact about the workspace, not an absence.
+    const empty = check("queue", dir);
+    expect(empty.status).toBe("pass");
+    expect(empty.data.entries).toBe(0);
+    expect(empty.data.revision).toBe(0);
+    expect(empty.detail).toContain("unqueued band");
+
+    expect(runCliAt(dir, ["new", "first"], { STAPLE_HOME: home }).status).toBe(0);
+    expect(runCliAt(dir, ["new", "second"], { STAPLE_HOME: home }).status).toBe(0);
+    const prefix = (check("workspace", dir).data.prefix as string);
+    expect(runCliAt(dir, ["queue", "add", `${prefix}-1`], { STAPLE_HOME: home }).status).toBe(0);
+    expect(runCliAt(dir, ["queue", "add", `${prefix}-2`], { STAPLE_HOME: home }).status).toBe(0);
+
+    const filled = check("queue", dir);
+    expect(filled.status).toBe("pass");
+    expect(filled.data.entries).toBe(2);
+    expect(filled.data.revision).toBe(2);
+    expect(filled.data.orphans).toEqual([]);
+    expect(filled.data.exhaustedGaps).toEqual([]);
+  }, 60_000);
+
+  it("warns about an orphaned entry and an exhausted rank gap, and repairs neither", () => {
+    const dir = join(root, "queuebrokenrepo");
+    mkdirSync(dir, { recursive: true });
+    expect(runCliAt(dir, ["init"], { STAPLE_HOME: home }).status).toBe(0);
+    for (const title of ["one", "two"]) {
+      expect(runCliAt(dir, ["new", title], { STAPLE_HOME: home }).status).toBe(0);
+    }
+    const prefix = (check("workspace", dir).data.prefix as string);
+    expect(runCliAt(dir, ["queue", "add", `${prefix}-1`], { STAPLE_HOME: home }).status).toBe(0);
+    expect(runCliAt(dir, ["queue", "add", `${prefix}-2`], { STAPLE_HOME: home }).status).toBe(0);
+
+    // Adjacent ranks one apart: the next insert between them renumbers the whole
+    // plan in its own transaction. Correct, and worth saying out loud.
+    const dbPath = join(dir, ".staple", "staple.db");
+    let db = new DatabaseSync(dbPath);
+    try {
+      db.prepare("UPDATE queue_entries SET rank = 1025 WHERE rank = 2048").run();
+    } finally {
+      db.close();
+    }
+    const gapped = check("queue", dir);
+    expect(gapped.status).toBe("warn");
+    expect(gapped.detail).toContain("rank gap");
+    expect(gapped.data.exhaustedGaps).toEqual([`${prefix}-1 → ${prefix}-2`]);
+
+    // An orphan outranks the gap in the report, because it is the one of the two
+    // that should not be possible: the table cascades on delete, so this needs
+    // foreign keys off — a hand-edited file.
+    db = new DatabaseSync(dbPath);
+    try {
+      db.exec("PRAGMA foreign_keys = OFF");
+      db.prepare("DELETE FROM issues WHERE identifier = ?").run(`${prefix}-2`);
+    } finally {
+      db.close();
+    }
+    const orphaned = check("queue", dir);
+    expect(orphaned.status).toBe("warn");
+    expect(orphaned.detail).toContain("no longer exist");
+    expect((orphaned.data.orphans as string[])).toHaveLength(1);
+    // Read-only: a warning is never a repair, and `queue` is not in --fix's set.
+    expect(orphaned.fix).toBeNull();
+    expect(FIXABLE_CHECKS).not.toContain("queue");
+    expect(check("queue", dir).data.orphans).toEqual(orphaned.data.orphans);
+  }, 60_000);
 });
 
 // ------------------------------------------------------------ human output

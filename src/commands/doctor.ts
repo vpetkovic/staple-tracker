@@ -846,6 +846,108 @@ function checkOrphanWorkspaces(dir: string): CheckResult {
 }
 
 /**
+ * The pickup plan's own health (STA-170, docs/queue.md "Storage").
+ *
+ * Three facts nothing else surfaces, because every ordinary listing JOINs
+ * `queue_entries` to `issues` and so cannot show a row whose issue is gone, and
+ * because rank exhaustion is invisible until the write that renumbers:
+ *
+ *   - the revision and the entry count, which is what a caller compares a stale
+ *     `--base N` against;
+ *   - ORPHANED entries. `queue_entries.issue_id` is `REFERENCES issues(id) ON
+ *     DELETE CASCADE`, so this is only reachable by deleting rows with foreign
+ *     keys disabled — a hand-edited file. Such an entry is in no listing, is
+ *     never picked up, and still holds a rank;
+ *   - EXHAUSTED rank gaps. Two neighbours less than 2 apart mean the next insert
+ *     between them renumbers the whole plan inside its own transaction. That is
+ *     correct and by design; it is worth saying out loud only because it is the
+ *     one write that is O(n) rather than O(1).
+ *
+ * Read-only like every other check: one `SELECT` over a read-only handle, and
+ * no repair — a rank is renumbered by the next ordinary `queue mv`, and an
+ * orphan is not something doctor should silently delete.
+ */
+function checkQueue(dir: string): CheckResult {
+  const id = "queue";
+  const title = "Pickup queue";
+  let found;
+  try {
+    found = findWorkspace(dir);
+  } catch {
+    return result(id, title, "skip", "The current workspace does not resolve.", { dir });
+  }
+  if (!found) return result(id, title, "skip", `No staple workspace at or above ${dir}.`, { dir });
+
+  const { dbPath } = found;
+  const db = readOnlyDb(dbPath);
+  try {
+    const table = db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'queue_entries'")
+      .get() as { name: string } | undefined;
+    if (!table) {
+      // Older than workspace migration 008. The next open adds the table; there
+      // is nothing wrong with a file that predates the feature.
+      return result(id, title, "skip", `${dbPath} predates the queue table; there is no plan to check.`, { dbPath });
+    }
+
+    const revisionRow = db.prepare("SELECT value FROM meta WHERE key = 'queue_revision'").get() as
+      | { value: string }
+      | undefined;
+    const revision = Number(revisionRow?.value ?? 0);
+    const rows = db
+      .prepare(
+        `SELECT q.issue_id AS issueId, q.rank AS rank, i.identifier AS identifier
+           FROM queue_entries q LEFT JOIN issues i ON i.id = q.issue_id
+          ORDER BY q.rank`,
+      )
+      .all() as unknown as Array<{ issueId: string; rank: number; identifier: string | null }>;
+
+    const orphans = rows.filter((row) => row.identifier === null).map((row) => row.issueId);
+    const gaps: string[] = [];
+    for (let index = 1; index < rows.length; index += 1) {
+      if (rows[index]!.rank - rows[index - 1]!.rank < 2) {
+        gaps.push(`${rows[index - 1]!.identifier ?? rows[index - 1]!.issueId} → ${rows[index]!.identifier ?? rows[index]!.issueId}`);
+      }
+    }
+    const data = { dbPath, revision, entries: rows.length, orphans, exhaustedGaps: gaps };
+
+    if (orphans.length > 0) {
+      return result(
+        id,
+        title,
+        "warn",
+        `${orphans.length} queue entr${orphans.length === 1 ? "y references an issue" : "ies reference issues"} that no longer exist ` +
+          `(${orphans.join(", ")}). Nothing lists them and nothing picks them up, but they hold a rank. The table cascades ` +
+          "on delete, so this only happens when rows were deleted with foreign keys off.",
+        data,
+      );
+    }
+    if (gaps.length > 0) {
+      return result(
+        id,
+        title,
+        "warn",
+        `${rows.length} entr${rows.length === 1 ? "y" : "ies"} at revision ${revision}; ${gaps.length} rank gap(s) are ` +
+          `exhausted (${gaps.join(", ")}). The next insert there renumbers the whole plan in the same transaction — ` +
+          "correct, just no longer a single-row write.",
+        data,
+      );
+    }
+    return result(
+      id,
+      title,
+      "pass",
+      rows.length === 0
+        ? `The plan is empty at revision ${revision}; every open issue is in the unqueued band.`
+        : `${rows.length} entr${rows.length === 1 ? "y" : "ies"} at revision ${revision}, every issue present and every rank gap open.`,
+      data,
+    );
+  } finally {
+    db.close();
+  }
+}
+
+/**
  * Can the UI bind its configured port?
  *
  * A child process, because there is no synchronous bind API and this CLI's
@@ -989,6 +1091,7 @@ export function runDiagnostics(options: { dir?: string } = {}): DoctorReport {
     guard("workspace-hub-link", "Hub link", () => checkWorkspaceHubLink(dir)),
     guard("migration-journal", "Migration journal", () => checkMigrationJournal(dir)),
     guard("orphan-workspaces", "Unregistered databases", () => checkOrphanWorkspaces(dir)),
+    guard("queue", "Pickup queue", () => checkQueue(dir)),
     guard("ui-port", "UI port", checkUiPort),
     guard("runtime", "Installed runtime", checkRuntime),
     guard("ui-assets", "UI bundle", checkUiAssets),

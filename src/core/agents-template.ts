@@ -46,7 +46,8 @@ Read this before you touch the repo. It takes a minute.
 
 ## The loop
 
-1. \`staple inbox\` — what is ready, in pickup order. Blocked work is listed
+1. \`staple inbox\` — what is ready, in pickup order. **READY is not a
+   suggestion: it is the effective queue** (see below). Blocked work is listed
    separately with the blocker that must land first. Do not invent work that is
    not a task; make a task.
 
@@ -77,6 +78,69 @@ Read this before you touch the repo. It takes a minute.
    ran, what passed, what you deliberately left.
 6. \`staple events\` — see what your completion unblocked (\`blockers_resolved\`,
    \`children_complete\`). Then go back to \`inbox\`.
+
+## The pickup queue — READY is the order, not a suggestion
+
+A human can write down **an explicit sequence** of what gets picked up next, and
+it is not derived from priority, from \`created_at\`, or from the order statuses
+happen to be configured in. \`staple inbox\`'s READY list is printed in that
+sequence, and so is everything the queue commands answer:
+
+\`\`\`bash
+staple queue                 # PLAN order — the rows a human queued, expansions indented
+staple queue --effective     # EFFECTIVE order — what you actually receive, with eligibility
+staple queue next            # the ONE row to take, and every row it stepped over with why
+\`\`\`
+
+**Two orders, and the difference matters.** *Plan order* is what a human wrote:
+tasks, epics and milestones, in the order they put them. *Effective order* is
+that plan with every **container expanded to its leaf work** — a queued epic is
+never a checkout target, it stands for its open descendants, depth-first, and a
+milestone stands for its members in membership order. So a plan of three rows
+can be fourteen rows of effective order, and a row's \`planPosition\` and its
+effective \`position\` are reported side by side wherever they differ. Work
+nobody queued is not excluded: it follows the plan in the ordinary sort. The
+plan is a prefix, not a filter.
+
+**Run \`staple queue next\` before you claim anything.** It answers the row you
+are allowed to take, and \`skipped\` tells you why it passed over each row above
+it (\`resolved\`, \`gated\`, \`blocked\`, \`claimed\`). Take that row and you will
+never be refused for order.
+
+**A refusal is an instruction, and none of the three is ever retryable:**
+
+| exit | code | what it means | what you do |
+|---|---|---|---|
+| 4 | \`conflict\` | somebody got there first | take a **different** task, now |
+| 9 | \`gated\` | a **person** must act (approval gate above it) | take something from READY; if nothing, say so |
+| 10 | \`out_of_order\` | the plan says something else comes first | take \`detail.expected[0]\` |
+
+Each one names what to take instead. **Stop and take what the refusal names.**
+Do not retry the same ref, do not wait and try again, do not escalate to
+\`--steal-if-stale\` — none of the three clears that way, and all three of them
+are telling you something true about the world rather than reporting a hiccup.
+An \`out_of_order\` in particular is the odd one: the work you asked for is real,
+unclaimed and takeable — just not by you, not yet.
+
+\`\`\`console
+$ staple checkout ${prefix}-146
+error(out_of_order): ${prefix}-146 is later in the queue than ${prefix}-67, which is ready. Take ${prefix}-67, or ask a human to reorder or override.
+$ echo $?
+10
+\`\`\`
+
+Whether the plan BINDS you is the workspace setting \`queue.policy\`
+(\`staple settings get queue.policy\`): \`advisory\` orders and explains and never
+refuses, \`strict\` refuses with \`out_of_order\`. Read it rather than assuming —
+and under either one, the order is what a human meant.
+
+**Do not reorder the plan, and do not override it.** \`staple queue add\`, \`mv\`,
+\`reorder\`, \`rm\` and \`prune\` all work for you and all record you as the actor,
+which is exactly why you must not use them on work you were told to do: the plan
+is the human's statement, not yours. \`staple checkout <ref> --override -m "<why>"\`
+steps over the order on the record — it is the human's affordance for "take this
+out of turn", never yours for making a refusal go away, and it does not bypass a
+blocker, a gate or a live claim anyway.
 
 ## Parents close themselves
 
@@ -312,8 +376,9 @@ comment first. That is what they left you. Leave the same for the next one.
 claude mcp add staple -e STAPLE_AGENT=your-name -- npx tsx ${mcpEntryPath()}
 \`\`\`
 
-The MCP tools mirror the CLI: \`inbox\`, \`checkout_task\` (with
-\`steal_if_idle_seconds\`), \`put_document\`, \`add_comment\`, \`update_task\`,
+The MCP tools mirror the CLI: \`inbox\`, \`next_task\` and \`list_queue\` for the
+pickup queue, \`checkout_task\` (with \`steal_if_idle_seconds\` and
+\`override_reason\`), \`put_document\`, \`add_comment\`, \`update_task\`,
 \`release_task\` (with \`if_idle_seconds\`), \`events_since\`, \`list_statuses\`,
 \`list_kinds\`, \`update_statuses\`, \`update_kinds\`, and the gate verbs
 \`gate_task\` / \`approve_task\` / \`request_changes\`. Writes require an

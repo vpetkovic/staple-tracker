@@ -55,8 +55,12 @@ Two more worth knowing on day one:
 
 ```bash
 staple open                                 # the web UI, foreground, Ctrl-C to stop
+staple queue add STA-42 --at 1              # say what gets picked up next, explicitly
 staple checkout STA-42 --steal-if-stale 1h  # take over a dead agent's claim
 ```
+
+`staple inbox`'s order is the pickup queue: a plan a human writes, with queued
+epics expanding to their leaf work. `staple queue --help` explains it.
 
 That last one is the point of the whole tool: when an agent is killed
 mid-ticket, the next one reads the worklog, takes the claim, and keeps going.

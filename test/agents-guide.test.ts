@@ -72,6 +72,56 @@ describe("the guide teaches the whole protocol", () => {
   });
 
   /**
+   * STA-170. The queue is the first rule in the guide that can REFUSE a
+   * checkout for a reason that is not about the issue itself, so the three
+   * things pinned here are the three an agent gets wrong: that READY is an
+   * enforced order rather than a suggestion, that a queued epic stands for its
+   * leaf work instead of being claimable, and that all three refusal codes mean
+   * "stop and take what I named" rather than "try again".
+   */
+  it("teaches that READY is the effective queue, and how the plan expands", () => {
+    expect(guide).toMatch(/READY is the order, not a suggestion/i);
+    expect(guide).toMatch(/READY is not a\s+suggestion/i);
+    // The two orders, by name, and the rule that separates them.
+    expect(guide).toMatch(/plan order/i);
+    expect(guide).toMatch(/effective order/i);
+    expect(guide).toMatch(/container expanded to its leaf work/i);
+    expect(guide).toMatch(/never a checkout target/i);
+    expect(guide).toMatch(/prefix, not a filter/i);
+    expect(guide).toContain("planPosition");
+    // The commands that print each one, and the one to run before claiming.
+    expect(guide).toContain("staple queue --effective");
+    expect(guide).toContain("staple queue next");
+    expect(guide).toMatch(/before you claim anything/i);
+    // Order is a human's statement, so it is not derived from the usual proxies.
+    expect(guide).toMatch(/not derived from priority/i);
+  });
+
+  it("teaches that conflict, gated and out_of_order all mean stop, never retry", () => {
+    // Each code with its exit status, so an agent reading a shell result knows
+    // which of the three it hit without parsing prose.
+    for (const pin of ["`conflict`", "`gated`", "`out_of_order`"]) {
+      expect(guide, pin).toContain(pin);
+    }
+    expect(guide).toMatch(/exit code 4/i);
+    expect(guide).toContain("| 4 |");
+    expect(guide).toContain("| 9 |");
+    expect(guide).toContain("| 10 |");
+    expect(guide).toContain("detail.expected[0]");
+    expect(guide).toMatch(/stop and take what the refusal names/i);
+    // The three things an agent tries instead, each refused by name.
+    expect(guide).toMatch(/do not retry the same ref/i);
+    expect(guide).toMatch(/do not wait and try again/i);
+    expect(guide).toMatch(/do not escalate to\s+.--steal-if-stale/i);
+    // The policy that decides whether the plan binds, read rather than assumed.
+    expect(guide).toContain("queue.policy");
+    expect(guide).toMatch(/advisory. orders and explains and never\s+refuses/i);
+    // And the two things the plan is NOT the agent's to touch.
+    expect(guide).toMatch(/do not reorder the plan, and do not override it/i);
+    expect(guide).toContain("--override -m");
+  });
+
+  /**
    * STA-153. An agent that believes it must close an epic by hand will either
    * forget (the bug) or "fix" an epic the tracker already closed. What is pinned
    * is the fact (parents follow their children), the thing the automatic close

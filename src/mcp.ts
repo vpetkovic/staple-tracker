@@ -663,7 +663,7 @@ server.registerTool(
   "inbox",
   {
     description:
-      "Ready work in pickup order (in_progress -> in_review -> todo -> backlog), dependency-aware. Three buckets: `ready` (take one of these), `queued` (a HUMAN must approve a gate above it — checkout_task is refused with code `gated`, and retrying or waiting will not help), and `blocked` (waiting on other WORK, with its unresolved blockers). Start every session here. Paginated: the three buckets partition ONE page of open issues, so a page can be entirely one of them.",
+      "Ready work in EFFECTIVE pickup order, dependency-aware. `ready` is not a presentation sort you may re-rank: it is the pickup queue resolved — the plan a human wrote, with every queued container expanded to its open leaf work, then everything unqueued in the ordinary sort (in_progress -> in_review -> todo -> backlog). Each entry carries its effective `position`, and a row the plan reaches carries `planPosition` too; `list_queue` shows the raw plan beside it. Three buckets: `ready` (take the FIRST one, or call next_task), `queued` (a HUMAN must approve a gate above it — checkout_task is refused with code `gated`, and retrying or waiting will not help), and `blocked` (waiting on other WORK, with its unresolved blockers). Start every session here. Paginated: the three buckets partition ONE page of open issues, so a page can be entirely one of them.",
     inputSchema: {
       assignee: z.string().optional().describe("Filter to one assignee (e.g. your agent name)"),
       limit: limitSchema(ISSUE_PAGE_LIMITS),
@@ -939,7 +939,7 @@ server.registerTool(
   "checkout_task",
   {
     description:
-      "Atomically claim an issue (forces in_progress). On conflict, pick a DIFFERENT task — never retry the same one. Re-claiming an issue you already hold is idempotent (crash recovery). Refused while blockers are unresolved. Under queue.policy = strict, claiming a row that is LATER in the pickup queue than an eligible one is refused with `out_of_order` and `detail.expected` names what to take instead — retrying never clears that, taking the named issue does. Use steal_if_idle_seconds ONLY when a human has told you to take over a task whose holder is dead.",
+      "Atomically claim an issue (forces in_progress). Re-claiming an issue you already hold is idempotent (crash recovery). Refused while blockers are unresolved. THREE refusals, none of them retryable, each naming what to do instead: `conflict` — somebody got there first, pick a DIFFERENT task now, never retry the same one; `gated` — a human must approve a gate above it, take something else from inbox `ready`; `out_of_order` — under queue.policy = strict, the plan puts an eligible row earlier, so take `detail.expected[0]`. Waiting clears none of them and steal_if_idle_seconds routes around none of them. Call next_task first and you will not see the third. A queued epic or milestone is not claimable work: it expands to its open leaves, which are what you take. Use steal_if_idle_seconds ONLY when a human has told you to take over a task whose holder is dead.",
     inputSchema: {
       ref: refSchema,
       actor: actorSchema,

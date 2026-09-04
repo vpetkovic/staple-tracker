@@ -286,9 +286,18 @@ staple queue next --actor codex-1            # what to take, and what it stepped
   without `-m` is exit 2. The plan is unchanged, so the displaced row is still
   the head for the next agent.
 
-`--json` on every subcommand prints the one shape MCP and the UI server return:
-`{revision, entries, effective}`, with `queue next` answering
-`{revision, next, skipped}` — see
+- **Diagnostics.** `staple doctor` carries a read-only `queue` check: the plan's
+  revision and entry count, plus a warning for the two states no listing can
+  show — an entry whose issue no longer exists (every listing joins to `issues`,
+  so such a row is invisible and still holds a rank) and an exhausted rank gap,
+  where the next insert renumbers the whole plan in its own transaction. Neither
+  is repairable with `--fix`.
+
+`staple queue --help` prints the same distinction at command level: which of the
+two orders each subcommand shows or edits, the classification ladder, and the
+four refusal codes. `--json` on every subcommand prints the one shape MCP and
+the UI server return: `{revision, entries, effective}`, with `queue next`
+answering `{revision, next, skipped}` — see
 [queue.md](queue.md#operations-by-surface).
 
 ## Estimates vs actuals

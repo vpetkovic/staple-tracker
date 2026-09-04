@@ -21,6 +21,8 @@ It covers:
   every milestone. A checkpoint written *before* the interruption is the
   handoff; one written at the end never survives a kill;
 - the branch pointer to comment at checkout;
+- the **pickup queue rule** — plan order versus effective order, and the three
+  non-retryable refusals (below);
 - **approval gates** — how a design-first ticket ends (`staple gate <ref>
   --owner <who>`, not a held claim), that the inbox's QUEUED section is never
   pickable, and that checkout of it is refused with `gated`;
@@ -33,9 +35,16 @@ returns `guidePath` / `guideWritten`.
 
 Source: `src/core/agents-template.ts`.
 
-The pickup queue rule — READY is the effective queue order, containers expand
-to leaf work, and a strict-mode `out_of_order` refusal means stop, not retry —
-is specified in [queue.md](queue.md) and joins this guide when R2e lands.
+It also teaches **the pickup queue rule** ([queue.md](queue.md)), which is the
+part an agent is most likely to get wrong because every symptom of getting it
+wrong looks like a transient failure: READY is the effective queue rather than a
+presentation sort it may re-rank; a queued epic or milestone stands for its open
+leaf work and is never a checkout target; `staple queue next` answers before you
+claim; and `conflict` (exit 4), `gated` (exit 9) and `out_of_order` (exit 10)
+each mean STOP and take what the refusal names — retrying, waiting and
+`--steal-if-stale` clear none of the three. The guide also tells an agent not to
+reorder the plan and not to send `--override`: both work for it, both record it
+as the actor, and both are a human's decision.
 
 ## The MCP surface
 

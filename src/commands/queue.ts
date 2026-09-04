@@ -31,7 +31,55 @@ import type {
 import { resolveWorkspace } from "../core/workspace.js";
 import { StapleError } from "../core/types.js";
 
-const USAGE = "Use: ls, next, add, rm, mv, reorder, prune";
+const USAGE = "Use: ls, next, add, rm, mv, reorder, prune (staple queue --help)";
+
+/**
+ * `staple queue --help`. The global `staple help` lists the verbs; this says
+ * what the command MEANS — that there are two orders and which one you are
+ * looking at, and which refusal each surface can hand back — because that is
+ * what an agent gets wrong at the moment it is holding a refusal.
+ */
+const HELP = `staple queue — the pickup plan: an explicit, human-ordered sequence of what
+agents take next, independent of status, priority and display grouping.
+
+  queue [ls] [--all] [--effective] [--actor A]
+  queue next [--actor A]
+  queue add <ref> [--before R | --after R | --at N] [--base N] [-m note]
+  queue rm <ref> [--base N]
+  queue mv <ref> (--before R | --after R | --at N) [--base N]
+  queue reorder <r1,r2,...> [--base N]
+  queue prune [--base N]
+
+TWO ORDERS, and the difference is the whole command.
+
+  RAW PLAN ORDER      what a human queued, containers and milestones included,
+                      in the order they put them. This is the default listing
+                      and it is what add/mv/reorder edit. --all keeps the
+                      resolved entries visible.
+  EFFECTIVE ORDER     what an AGENT receives: every container expanded
+                      depth-first to its open leaf work (an epic is never a
+                      checkout target), then every open leaf nobody queued, in
+                      the ordinary presentation sort — the plan is a prefix,
+                      not a filter. --effective prints it with its eligibility
+                      column; the default listing shows it as a "-> n" cue per
+                      leaf, and "queue next" is its first takeable row.
+
+Every row is classified resolved | gated | blocked | claimed | eligible, first
+match wins, and none is ever dropped: rank orders work, it never lifts a
+blocker, a gate, a live claim or a resolved status.
+
+REFUSALS. --base N is the revision a listing printed; a stale one is refused
+with revision_conflict (exit 7), the one retryable code, and the server order
+stands. With queue.policy = strict (staple settings get queue.policy) a
+checkout of a row the plan puts later than an eligible one is refused with
+out_of_order (exit 10), naming what to take instead — it is neither conflict
+(exit 4, somebody got there first) nor gated (exit 9, a human must act), and
+retrying clears none of the three. A human steps over the plan on the record
+with "staple checkout <ref> --override -m <why>".
+
+--json prints {revision, entries, effective} on every subcommand, and
+{revision, next, skipped} for "queue next" — the same shape MCP and the UI
+server answer. Full contract: docs/queue.md.`;
 
 function integerOption(raw: string | undefined, flag: string): number | undefined {
   if (raw === undefined) return undefined;
@@ -93,6 +141,7 @@ export function runQueueCommand(rest: string[]): void {
       db: { type: "string" },
       ws: { type: "string" },
       json: { type: "boolean" },
+      help: { type: "boolean", short: "h" },
       all: { type: "boolean" },
       effective: { type: "boolean" },
       actor: { type: "string" },
@@ -104,6 +153,9 @@ export function runQueueCommand(rest: string[]): void {
     },
   });
   const [sub = "ls", first] = positionals;
+  // Before the workspace is resolved: `queue --help` has to answer in a
+  // directory that has no workspace yet, like every other help does.
+  if (values.help === true || sub === "help") return console.log(HELP);
   const actor = values.actor ?? process.env.STAPLE_AGENT ?? process.env.USER ?? "user";
   const queue = resolveWorkspace({ db: values.db, ws: values.ws }).store.queue();
   const input = {

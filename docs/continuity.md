@@ -49,6 +49,23 @@ parking a parent **clears its claim**, so it stops accruing time and stops
 reading as live work somebody should steal. See
 [semantics.md](semantics.md#approval-gates).
 
+## A claim change is not a plan change
+
+A live claim is a hard constraint on pickup ([queue.md](queue.md)): a row held
+by somebody else is `claimed` in effective order and the next agent is handed
+the row after it. Everything on this page therefore moves what agents take —
+and **none of it writes to the queue**. A steal, a release and a stale-claim
+takeover all change one column on one issue; the effective order is derived on
+every read, so the very next `inbox`, `queue` or `next_task` reflects it with
+nothing re-queued, nothing recomputed in advance and the plan's `revision`
+exactly where it was. Releasing the head hands the head back; stealing it moves
+who may take it, not where it sits. That is also why a stale claim never
+silently promotes later work permanently: the moment it is freed, the human's
+order is back in force. (Pinned by `queue-lifecycle.test.ts` — *"a live claim is
+skipped, a steal moves it, and a release hands the head back"* — and across two
+processes by `queue-concurrency.test.ts` — *"releasing a stale claim re-derives
+the effective order for the next process"*.)
+
 ## Waking on someone else's completion
 
 ```bash
