@@ -234,8 +234,8 @@ export function AppShell({ children }: { children: ReactNode }) {
             <Button
               variant="ghost"
               size="icon"
-              aria-label="Workspace settings"
-              title="Workspace settings — statuses and kinds"
+              aria-label="Work Workspace Settings"
+              title="Work Workspace Settings"
               onClick={openSettings}
             >
               <Settings className="size-4" />
