@@ -7,31 +7,32 @@
  * src/core/settings-registry.ts renders here with no edit to the shell, and a future
  * bespoke editor is one more arm of this switch rather than a conditional in the nav.
  *
- * Statuses and Kinds are the existing `VocabularyList`, unchanged, on the same `applyTo`
- * write path they had before the shell existed. R6c (STA-178) moves them onto the shared
- * form primitives; nothing here anticipates that.
- *
- * `fields` categories are read-only in this pass: the definitions the registry serves,
- * each with its effective value and where that value came from. R6d (STA-179) replaces
- * the value column with controls. Showing the definitions now — rather than an empty
- * pane — is what proves "the shell hosts a category it was not written for".
+ * Every arm is a form built from the primitives in ./form (R6c, STA-178): Statuses and
+ * Kinds are `VocabularyList` on a draft; a `fields` category is `FieldsForm`, which
+ * renders a control per definition from the registry's value schema. All three write
+ * through the dialog's `applyTo` and report their dirty state up through
+ * `onDirtyChange`, which is what lets the shell refuse to close over unsaved edits.
  */
-import type { SettingCategoryView } from "@/lib/settings";
-import { settingDefinitions, settingValue } from "@/lib/settings";
+import type { SettingCategoryView, SettingOp, WorkspaceSettingsEnvelope } from "@/lib/settings";
 import type { Refusal } from "@/lib/refusal";
-import type { VocabularyOp, WorkspaceSettings } from "@/lib/types";
+import type { VocabularyOp } from "@/lib/types";
+import { FieldsForm } from "./FieldsForm";
 import { VocabularyList } from "./VocabularyList";
 import { kindRows, statusRows } from "./settings-ops";
 
-export interface CategoryContentProps {
-  category: SettingCategoryView;
-  settings: WorkspaceSettings;
-  applyTo: (target: "statuses" | "kinds", ops: VocabularyOp[]) => Promise<boolean>;
-  refusal: Refusal | null;
-  busy: boolean;
+export interface ApplyTo {
+  (target: "statuses" | "kinds", ops: VocabularyOp[]): Promise<Refusal | null>;
+  (target: "settings", ops: SettingOp[]): Promise<Refusal | null>;
 }
 
-export function CategoryContent({ category, settings, applyTo, refusal, busy }: CategoryContentProps) {
+export interface CategoryContentProps {
+  category: SettingCategoryView;
+  settings: WorkspaceSettingsEnvelope;
+  applyTo: ApplyTo;
+  onDirtyChange: (dirty: boolean) => void;
+}
+
+export function CategoryContent({ category, settings, applyTo, onDirtyChange }: CategoryContentProps) {
   switch (category.editor) {
     case "statuses":
       return (
@@ -41,9 +42,8 @@ export function CategoryContent({ category, settings, applyTo, refusal, busy }: 
           usage={settings.usage.statuses}
           categories={settings.categories}
           requiredCategories={settings.requiredCategories}
-          apply={(ops) => applyTo("statuses", ops)}
-          refusal={refusal}
-          busy={busy}
+          write={(ops) => applyTo("statuses", ops)}
+          onDirtyChange={onDirtyChange}
         />
       );
     case "kinds":
@@ -52,42 +52,18 @@ export function CategoryContent({ category, settings, applyTo, refusal, busy }: 
           target="kinds"
           rows={kindRows(settings.kinds)}
           usage={settings.usage.kinds}
-          apply={(ops) => applyTo("kinds", ops)}
-          refusal={refusal}
-          busy={busy}
+          write={(ops) => applyTo("kinds", ops)}
+          onDirtyChange={onDirtyChange}
         />
       );
     case "fields":
-      return <FieldsPreview category={category.id} />;
+      return (
+        <FieldsForm
+          definitions={settings.registry.definitions.filter((d) => d.category === category.id)}
+          settings={settings}
+          write={(ops) => applyTo("settings", ops)}
+          onDirtyChange={onDirtyChange}
+        />
+      );
   }
-}
-
-/** The effective value, printed. `redacted` values say so rather than printing nothing. */
-function printValue(key: string): string {
-  const view = settingValue(key);
-  if (!view) return "—";
-  if (view.redacted) return "(hidden)";
-  return `${String(view.value)} · ${view.source}`;
-}
-
-function FieldsPreview({ category }: { category: string }) {
-  const definitions = settingDefinitions(category);
-  if (definitions.length === 0) {
-    return <p className="text-muted-foreground text-sm">Nothing is registered in this category yet.</p>;
-  }
-  return (
-    <dl data-settings-fields className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-4 gap-y-2 text-sm">
-      {definitions.map((definition) => (
-        <div key={definition.key} className="contents">
-          <dt className="min-w-0">
-            <div className="font-medium">{definition.ui.label}</div>
-            <div className="text-muted-foreground text-xs">{definition.ui.description}</div>
-          </dt>
-          <dd className="text-muted-foreground m-0 text-right font-mono text-xs whitespace-nowrap">
-            {printValue(definition.key)}
-          </dd>
-        </div>
-      ))}
-    </dl>
-  );
 }

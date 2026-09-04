@@ -54,9 +54,47 @@ edge to edge and back; it is per open and never persisted, so the shell
 always reopens as a dialog. Esc closes, as every dialog in the app does.
 
 What a category holds is decided by its registry `editor`: `statuses` and
-`kinds` are the two vocabulary editors below; `fields` categories show their
-definitions with each effective value and its source, read-only until R6d
-adds controls.
+`kinds` are the two vocabulary editors below; a `fields` category renders a
+control per registered definition (see *Registry-driven categories*).
+
+### Form primitives
+
+Every category is built from one set of primitives (`settings/form/`), so
+saving, cancelling, dirty state, inline errors and conflicts behave the same
+way everywhere:
+
+- **Field** — a label, a description, the control, an inline error
+  (`role="alert"`, tied to the control with `aria-describedby`) and a scope
+  tag that says *Workspace* or *Global* and where the value came from
+  (`default`, `workspace`, `config`). **Section** groups fields and carries the
+  error that belongs to no single field.
+- **ActionBar** — *Save changes* / *Cancel* / *Reset to defaults*. Nothing is
+  written until Save; Cancel drops the draft; Reset is offered only by forms
+  that have defaults to go back to. While a save is in flight the bar says
+  *Saving…* and every control is disabled; a refused save keeps the draft and
+  puts the store's sentence on the row or field it names, or on the section
+  when it names none. Nothing is paraphrased and nothing is retried.
+- **ReorderList** — drag by the handle, or the per-row *Move up* / *Move down*
+  buttons (always visible), or alt+arrow on the row. After a keyboard move
+  focus stays on the moved row: on the same button, or on the other one when
+  the row reached an end and that button became disabled.
+- **Destructive confirmation** — a removal opens an inline confirmation under
+  the row, with the migrate-to picker when issues still carry it; the
+  confirm button stays disabled until a target is chosen.
+
+**Unsaved changes.** A form with a draft reports it to the shell, and every
+way out — the X, Esc, a click outside, the narrow layout's Back, selecting
+another category, closing the tab — asks first: *Discard changes* or *Keep
+editing*. Nothing leaves a dirty form on a keypress.
+
+**External revisions.** The 1.5s poll republishes the settings envelope while
+the dialog is open. A clean form simply shows the new state. A dirty form
+remembers the served state it started from; when that moves underneath it
+(another tab, an agent through MCP, the CLI) a conflict banner appears and
+Save is held until you choose: *Reload* drops the draft and shows the new
+state, *Keep my changes* keeps the draft and makes the next save a deliberate
+overwrite. The store remains the authority — a batch it refuses after that
+comes back as a refusal on the responsible row.
 
 ### Statuses and kinds
 
@@ -67,8 +105,10 @@ Two lists. Each row has an editable label, a drag handle, and — for statuses �
 a category select; removing a row that issues still carry requires a target to
 migrate them onto. Reorder by dragging, or with the per-row move buttons, which
 are the keyboard path and are always visible rather than revealed on hover.
-Every edit applies immediately; there is no save button, and a refusal is the
-store's own sentence.
+Edits accumulate as a draft — the list shows what Save will produce, with the
+usage count moved along by a migrate-to removal — and Save posts them as one
+ordered, all-or-nothing batch of the same ops the MCP tools take. A refusal
+is the store's own sentence, on the row it names.
 
 Behaviour follows the CATEGORY, never the id. A workspace that adds `pairing` in
 `active` gets a claimable status wearing the in-progress glyph and the
@@ -102,6 +142,21 @@ write path is `staple config set`. `target: "settings"` takes
 and refuses a global one. `lib/settings.ts` exposes `settingCategories()`,
 `settingDefinitions()` and `settingValue()` over the served registry; nothing
 in the browser restates a definition.
+
+### Registry-driven categories
+
+A `fields` category is its definitions, rendered as controls chosen by each
+one's value schema: a boolean is a switch, an integer a number field with the
+schema's bounds, a string a text field whose description carries the pattern
+hint, an enum a select over the registry's values. Each control sits in a
+Field with the definition's label and description, its scope tag and source,
+and its own *Reset* to the default. Values are checked against the schema
+before the round trip; the store still refuses on its own terms, and that
+sentence lands on the field whose key it names. Save posts `target:
+"settings"` ops — `set` per changed key, `reset` for a stored value sent back
+to its default. Global-scope definitions render disabled with the sentence
+naming `staple config set`. Registering a definition is the whole of adding
+it to the page: nothing in the form names a setting.
 
 ## Stack
 

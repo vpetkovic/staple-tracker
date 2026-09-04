@@ -34,8 +34,17 @@
  * Nothing in this dialog decides whether an edit is ALLOWED. The store refuses a duplicate
  * id, a removal that still has rows and no target, and the removal of the last status in a
  * category it writes into — and each refusal arrives as its own sentence through
- * `describeRefusal` and renders in `GuardRefusal`, exactly as every other writing surface
- * in the app does it.
+ * `describeRefusal`. `applyTo` RETURNS it (null on success) rather than holding it, so the
+ * form that posted the batch can put the sentence on the row or field it names (R6c).
+ *
+ * ── LEAVING IS A CHOICE WHILE SOMETHING IS UNSAVED ────────────────────────────────────
+ *
+ * Since R6c the editors hold a draft, and every way out of the shell — the X, Esc, a
+ * click on the overlay, the stacked layout's Back, selecting another category — goes
+ * through one guard: clean, it proceeds; dirty, it asks (`UnsavedChangesDialog`) and
+ * proceeds only on "Discard changes". The forms report their dirty state through
+ * `onDirtyChange`; the dialog does not know what is dirty, only that something is.
+ * `beforeunload` covers the tab itself.
  */
 import { useCallback, useEffect, useState } from "react";
 import { Dialog as DialogPrimitive } from "radix-ui";
@@ -48,12 +57,19 @@ import {
 } from "@/components/ui/dialog";
 import { ApiError, putSettings } from "@/lib/api";
 import { describeRefusal, type Refusal } from "@/lib/refusal";
-import { publishWorkspaceSettings, settingCategories, useWorkspaceSettings } from "@/lib/settings";
+import {
+  publishWorkspaceSettings,
+  settingCategories,
+  useWorkspaceSettings,
+  type SettingOp,
+} from "@/lib/settings";
 import { useSession } from "@/lib/session";
 import type { VocabularyOp } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { ErrorState, LoadingState } from "@/views/ViewChrome";
-import { CategoryContent } from "./CategoryContent";
+import { CategoryContent, type ApplyTo } from "./CategoryContent";
+import { UnsavedChangesDialog } from "./form/ConfirmDialog";
+import { leaveDecision } from "./form/form-model";
 import { SettingsShell } from "./SettingsShell";
 import {
   STACKED_QUERY,
@@ -101,33 +117,56 @@ export function SettingsDialog({
   // thing as an all-workspaces vocabulary; the server then resolves its default handle,
   // which in single-workspace mode is the only one there is.
   const resource = useWorkspaceSettings({ ws: session.ws || undefined, version: session.version });
-  const [refusal, setRefusal] = useState<Refusal | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  const applyTo = useCallback(
-    async (target: "statuses" | "kinds", ops: VocabularyOp[]): Promise<boolean> => {
-      setBusy(true);
-      setRefusal(null);
+  const applyTo = useCallback<ApplyTo>(
+    async (target: "statuses" | "kinds" | "settings", ops: VocabularyOp[] | SettingOp[]): Promise<Refusal | null> => {
       try {
-        const next = await putSettings(target, ops, { ws: session.ws || undefined });
+        const next =
+          target === "settings"
+            ? await putSettings(target, ops as SettingOp[], { ws: session.ws || undefined })
+            : await putSettings(target, ops as VocabularyOp[], { ws: session.ws || undefined });
         publishWorkspaceSettings(next);
         // A migrate-to removal rewrote issue rows. Everything on screen has to refetch,
         // and the fingerprint poll would get there within 1.5s anyway — this only makes
         // the list agree with the dialog in the same frame the dialog updates.
         session.refresh();
-        return true;
+        return null;
       } catch (error) {
         // AuthError is re-broadcast by lib/api and swaps in the token screen; anything
         // else is the store refusing, and the user reads what it said.
-        if (error instanceof ApiError) setRefusal(describeRefusal(error));
-        else if (error instanceof Error) setRefusal(describeRefusal({ message: error.message }));
-        return false;
-      } finally {
-        setBusy(false);
+        if (error instanceof ApiError) return describeRefusal(error);
+        return describeRefusal({ message: error instanceof Error ? error.message : String(error) });
       }
     },
     [session],
   );
+
+  /**
+   * THE UNSAVED-CHANGES GUARD. `dirty` is whatever the open form last reported;
+   * `pendingLeave` is the way out that is waiting on a decision.
+   */
+  const [dirty, setDirty] = useState(false);
+  const [pendingLeave, setPendingLeave] = useState<(() => void) | null>(null);
+  /**
+   * Bumped on "Discard changes" so the form REMOUNTS and its draft is really gone —
+   * the stacked layout's Back only hides the content pane, and a draft that survived
+   * a discard would be dirty again the moment the pane came back.
+   */
+  const [formKey, setFormKey] = useState(0);
+  const guard = useCallback(
+    (leave: () => void) => {
+      if (leaveDecision(dirty) === "confirm") setPendingLeave(() => leave);
+      else leave();
+    },
+    [dirty],
+  );
+  useEffect(() => {
+    if (!dirty || typeof window === "undefined") return;
+    const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [dirty]);
 
   const settings = resource.settings;
   // Re-read on every render: `settings` above is the same snapshot the accessor reads,
@@ -148,19 +187,30 @@ export function SettingsDialog({
 
   const select = useCallback(
     (id: string) => {
-      onCategoryChange(id);
-      setPane("content");
+      if (id === active) {
+        setPane("content");
+        return;
+      }
+      guard(() => {
+        onCategoryChange(id);
+        setPane("content");
+      });
     },
-    [onCategoryChange],
+    [active, guard, onCategoryChange],
   );
-  const back = useCallback(() => setPane("nav"), []);
+  const back = useCallback(() => guard(() => setPane("nav")), [guard]);
   const toggleMode = useCallback(() => setMode((current) => otherShellMode(current)), []);
-  const close = useCallback(() => onOpenChange(false), [onOpenChange]);
+  const close = useCallback(() => guard(() => onOpenChange(false)), [guard, onOpenChange]);
 
   const fallback = resource.error ? <ErrorState error={resource.error} /> : <LoadingState rows={5} />;
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) close();
+      }}
+    >
       <DialogPortal>
         <DialogOverlay />
         <DialogPrimitive.Content
@@ -204,14 +254,25 @@ export function SettingsDialog({
                 <ErrorState error={resource.error} />
               ) : (
                 <CategoryContent
+                  key={`${current.id}:${formKey}`}
                   category={current}
                   settings={settings}
                   applyTo={applyTo}
-                  refusal={refusal}
-                  busy={busy}
+                  onDirtyChange={setDirty}
                 />
               )
             }
+          />
+          <UnsavedChangesDialog
+            open={pendingLeave !== null}
+            onDiscard={() => {
+              const leave = pendingLeave;
+              setPendingLeave(null);
+              setDirty(false);
+              setFormKey((key) => key + 1);
+              leave?.();
+            }}
+            onKeep={() => setPendingLeave(null)}
           />
         </DialogPrimitive.Content>
       </DialogPortal>
