@@ -191,6 +191,45 @@ pre-R4b global filter key holds, so nothing is lost on upgrade. Changing a filte
 statement about your screen: it cannot touch `queue.policy`, the pickup plan, or any
 write path.
 
+## What the view tests prove
+
+Grouping, sorting, filtering and the row cues shipped as four separate tickets and meet
+on one page. The tests that hold that page together are listed here so a change knows
+what it is up against — and so the two things they *cannot* say are written down rather
+than assumed.
+
+All of them are pure functions or `react-dom/server` markup: there is no browser, no
+jsdom and no screenshot harness in this repo. **A "visual check" below means the
+rendered markup at a narrow width (under the 719px two-line breakpoint) and a wide one,
+with class and attribute assertions, plus the `task-list.css` rule that does the rest.**
+
+One board — `views/tree/drift-fixture.ts` — backs all four files: two epics, one open
+and one folded, a gated child, a stale claim, a done child, a custom kind, a milestone
+whose two members sit under different epics, and a `/api/queue` payload covering every
+cue state. Every file below reads it, so a claim proved about the model is a claim about
+the same rows on the screen.
+
+| File | What it pins |
+| --- | --- |
+| `views/tree/view-combinations.test.ts` | every sort mode × every grouping axis keeps section membership, the header counts, the nesting and the published visible order; filter combinations keep the ghosts and agree with the counts the menu and the empty state print; a queued milestone member is cued and ordered consistently; a folded epic keeps its rollup and its cue |
+| `views/tree/polling-stability.test.ts` | the 1.5s poll changes nothing you chose — sort, filters, folds and cues all survive a fresh payload, a new queue payload moves the cues and nothing else, and the rendered page is identical bar the absolute timestamps |
+| `views/tree/view-a11y.test.tsx` | the sort trigger names the mode *and* the direction in all sixteen states; chips and the empty state name the dimension, the value and the count; all six cue words reach a screen reader; `aria-level` and `aria-expanded` on rows and group headers; the controls tab in reading order and the grid has one roving tab stop |
+| `views/tree/view-responsive.test.tsx` | all five groupings at 400px and 1440px draw the same sections, rows, levels and cues; labels degrade to dots; the rolled-up plan yields to a `max-[719px]:hidden` utility; the sheet reflows the row to two lines and never drops either cue |
+
+Alongside them, `lib/sort-modes.test.ts` walks each mode's key and tie-breaks,
+`lib/filter-dimensions.test.ts` and `components/filters/filters-render.test.tsx` walk the
+eleven dimensions, `views/tree/tree-model.test.ts` pins placement and ghosts, and
+`views/tree/group-header.test.tsx` pins the epic-axis rhythm.
+
+**Two gaps these tests record rather than fix.** Under **Group by Pickup order** the
+chosen sort is not applied — that axis always uses the store's own dependency-ordered
+sequence, while the Sort trigger still names your choice. And **Queue position** sorting
+is inert on today's payload: the row cues are joined in the browser against
+`/api/queue`, but the sort reads `queuePosition`/`planPosition` on the rows, which
+`/api/issues` does not send yet — so a row can print `#5` while sorting by queue
+position does nothing. Both are marked `it.todo` in `view-combinations.test.ts` with the
+exact mechanism.
+
 ## Auth
 
 Pages served to loopback carry their own token, so the browser never sees a
