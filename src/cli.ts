@@ -29,7 +29,12 @@ import {
   stapleHome,
   updateConfig,
 } from "./config/index.js";
-import { coerceSettingInput, settingDefinitionsFor } from "./core/settings-registry.js";
+import {
+  coerceSettingInput,
+  requireSettingDefinition,
+  settingDefinitionsFor,
+  type SettingValueView,
+} from "./core/settings-registry.js";
 import { Hub, notifyHubResolvedSafe } from "./core/hub.js";
 import { runInstallCommand } from "./install/index.js";
 import { dataVersion } from "./core/db.js";
@@ -706,6 +711,10 @@ Workspace
   config home <path> --move --yes       relocate ~/.staple, verify, then repoint the
               bootstrap locator; the old home is retained until you delete it
               --home <path> targets a home other than the resolved one
+  settings [ls]                         this WORKSPACE's registered settings, each with
+              its value and where it came from (default | workspace)
+  settings get <key>                    one setting, e.g. queue.policy
+  settings set <key> <value>            write one; queue.policy takes advisory | strict
 
 Tasks
   new <title> [-d text] [-p prio] [--parent REF] [--assignee A]
@@ -1956,6 +1965,55 @@ function main() {
         options: { dir: { type: "string" }, yes: { type: "boolean" }, json: { type: "boolean" } },
       });
       runMigrateCommand({ dir: values.dir, yes: values.yes === true, json: values.json === true });
+      break;
+    }
+
+    /**
+     * `staple settings` — R6d (STA-179). The WORKSPACE twin of `config`: every
+     * registered workspace setting with its effective value and provenance,
+     * one by key, or a write. Reads and writes go through the store, so the
+     * value and `source` printed here are the object `/api/settings` serves and
+     * `get_setting` answers — one shape on every surface, and a global key is
+     * refused with the sentence that names `staple config set`.
+     */
+    case "settings": {
+      const { values, positionals } = parseArgs({ args: rest, allowPositionals: true, options: common });
+      const { store } = getStore(values);
+      const sub = positionals[0] ?? "ls";
+      // A structured value (kinds.appearance is a map) prints as JSON rather
+      // than "[object Object]"; a scalar prints as itself.
+      const shown = (value: unknown) =>
+        typeof value === "object" && value !== null ? JSON.stringify(value) : String(value);
+      const line = (view: SettingValueView) =>
+        console.log(`${view.key} = ${view.redacted ? "<redacted>" : shown(view.value)}  (${view.source})`);
+      switch (sub) {
+        case "ls": {
+          const views = store.settingValues();
+          if (values.json) outJson(views);
+          else for (const view of views) line(view);
+          break;
+        }
+        case "get": {
+          const key = positionals[1];
+          if (!key) throw new StapleError("validation", "usage: staple settings get <key>");
+          const view = store.settingValue(key);
+          if (values.json) outJson(view);
+          else line(view);
+          break;
+        }
+        case "set": {
+          const key = positionals[1];
+          const raw = positionals[2];
+          if (!key || raw === undefined) throw new StapleError("validation", "usage: staple settings set <key> <value>");
+          const definition = requireSettingDefinition(key, "workspace");
+          const view = store.setSetting(key, coerceSettingInput(definition, raw, `workspace ${store.slug}`), agentName());
+          if (values.json) outJson(view);
+          else line(view);
+          break;
+        }
+        default:
+          throw new StapleError("validation", `Unknown subcommand "${sub}". Use: ls, get, set`);
+      }
       break;
     }
 

@@ -8,9 +8,17 @@
  * scope tag and source. A global definition renders disabled with the sentence that
  * names its real write path. Rendered with `react-dom/server`, as the neighbours are.
  */
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { SEED_SETTINGS, type SettingDefinitionView, type WorkspaceSettingsEnvelope } from "@/lib/settings";
+import {
+  SEED_SETTINGS,
+  type SettingCategoryView,
+  type SettingDefinitionView,
+  type WorkspaceSettingsEnvelope,
+} from "@/lib/settings";
+import { CategoryContent } from "./CategoryContent";
 import { FieldsForm } from "./FieldsForm";
 
 /** The first button whose opening tag contains `marker` (an attribute, or the text right after the tag). */
@@ -127,5 +135,75 @@ describe("the form is a Section with an ActionBar", () => {
   it("says so when a category has nothing registered", () => {
     const empty = renderToStaticMarkup(<FieldsForm definitions={[]} settings={envelope} write={async () => null} />);
     expect(empty).toContain("Nothing is registered in this category yet.");
+  });
+});
+
+/**
+ * R6d (STA-179) — the Workflow category, through the shell's one extension point.
+ *
+ * `CategoryContent` is handed the category the registry served and the envelope, and
+ * picks the editor from the category's `editor` alone. The definitions below mirror the
+ * REGISTERED `queue.policy` (test/settings-registry.test.ts pins the registry side; this
+ * pins the render side) plus one fixture toggle in the same category that no build has
+ * ever registered — the ticket's "adding a second toggle requires no shell conditional",
+ * proved twice: both controls render, and none of the shell's files names either key.
+ */
+describe("the Workflow category renders from registry metadata alone", () => {
+  const QUEUE_POLICY: SettingDefinitionView = definition("queue.policy", {
+    category: "queue",
+    schema: { type: "enum", values: ["advisory", "strict"] },
+    default: "advisory",
+    ui: {
+      label: "Queue policy",
+      description:
+        "How the pickup queue binds agents. advisory: the queue orders and explains, and a checkout is never refused for order. " +
+        "strict: an agent's checkout of a later item is refused (out_of_order, exit 10) while an earlier eligible item exists, and the refusal names what to take instead.",
+      control: "select",
+      order: 10,
+    },
+  });
+  const FIXTURE_TOGGLE: SettingDefinitionView = definition("queue.fixtureToggle", {
+    category: "queue",
+    ui: { label: "Fixture toggle", description: "Registered by this test only.", control: "toggle", order: 20 },
+  });
+  const workflow: SettingCategoryView = {
+    id: "queue",
+    label: "Workflow",
+    description: "How agents pick work up from this workspace's queue.",
+    scope: "workspace",
+    editor: "fields",
+    order: 30,
+  };
+  const served: WorkspaceSettingsEnvelope = {
+    ...SEED_SETTINGS,
+    registry: { categories: [workflow], definitions: [QUEUE_POLICY, FIXTURE_TOGGLE] },
+    values: {},
+    unknownKeys: [],
+    global: { path: "/home/vp/.staple/config.json", present: false, values: {} },
+  };
+  const page = renderToStaticMarkup(
+    <CategoryContent category={workflow} settings={served} applyTo={async () => null} onDirtyChange={() => {}} />,
+  );
+
+  it("renders the queue policy as a select with its side effect stated before Save, and the scope beside it", () => {
+    expect(page).toMatch(/<button[^>]*role="combobox"[^>]*id="setting-queue\.policy"/);
+    expect(page).toContain("strict: an agent&#x27;s checkout of a later item is refused (out_of_order, exit 10)");
+    expect(page).toMatch(/data-settings-field="setting-queue\.policy"[\s\S]*?data-scope-tag="workspace"[^>]*>Workspace<span[^>]*> · default<\/span>/);
+    // The description precedes the action bar in the document, so a reader meets it before Save.
+    expect(page.indexOf("strict: an agent")).toBeLessThan(page.indexOf(">Save changes<"));
+  });
+
+  it("renders a second fixture toggle in the same category with no shell change", () => {
+    expect(page).toMatch(/<input[^>]*id="setting-queue\.fixtureToggle"[^>]*type="checkbox"[^>]*role="switch"/);
+    expect(page).toContain("Registered by this test only.");
+  });
+
+  it("none of the shell's files names the setting or its category", () => {
+    for (const file of ["SettingsShell.tsx", "CategoryContent.tsx", "FieldsForm.tsx", "SettingsDialog.tsx", "SettingsMount.tsx"]) {
+      const source = readFileSync(fileURLToPath(new URL(`./${file}`, import.meta.url)), "utf8");
+      // The prose may cite the ticket; the code may not branch on the key or the category id.
+      expect(source, file).not.toMatch(/["'`]queue(\.policy)?["'`]/);
+      expect(source, file).not.toMatch(/advisory|strict/);
+    }
   });
 });

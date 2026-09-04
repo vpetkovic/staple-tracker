@@ -33,14 +33,15 @@
  * alone; `config.json` already preserves its own unknown fields. Downgrading a
  * binary must never truncate configuration.
  *
- * ## What is deliberately NOT here
+ * ## The registered set
  *
- * No queue policy. R2a is still specifying advisory/strict pickup enforcement
- * and R6d owns registering it once that contract exists — a definition whose
- * `strict` did nothing would be a lie with a select box. The registry ships with
- * the three machine preferences that already existed and ONE workspace field
- * setting with real behaviour today (`kinds.default`), which is enough to prove
- * the store -> HTTP -> UI path end to end without inventing a feature.
+ * The three machine preferences that already existed, the two workspace field
+ * settings with behaviour in this module's neighbours (`kinds.default` and the
+ * per-kind glyph map `kinds.appearance`), and — R6d (STA-179) — the
+ * pickup-queue policy `queue.policy`, registered here to
+ * the contract docs/queue.md fixed (R2a) and READ by the checkout resolver R2c
+ * (STA-168) adds. Registering is the whole of this module's part: it defines,
+ * persists and exposes the value on every surface; it enforces nothing.
  */
 import { StapleError, VOCABULARY_ID_PATTERN, DEFAULT_ISSUE_KIND } from "./types.js";
 import { kindAppearanceMapProblem, type KindAppearanceMap } from "./kind-appearance.js";
@@ -121,7 +122,11 @@ export interface SettingDefinition<T = unknown> {
 
 // ---------------------------------------------------------------- the registry
 
-export const SETTING_CATEGORIES: readonly SettingCategory[] = [
+/**
+ * The mutable backing of `SETTING_CATEGORIES`. Private so the only way to grow
+ * it is `registerSettingCategory`, which also grows the index (R6f, STA-243).
+ */
+const categories: SettingCategory[] = [
   {
     id: "statuses",
     label: "Statuses",
@@ -139,6 +144,17 @@ export const SETTING_CATEGORIES: readonly SettingCategory[] = [
     order: 20,
   },
   {
+    // R6d (STA-179): the first `fields` category in workspace scope. Its id is
+    // `queue` because the key docs/queue.md names is `queue.policy` and a key is
+    // namespaced by its category; its label says what the category is FOR.
+    id: "queue",
+    label: "Workflow",
+    description: "How agents pick work up from this workspace's queue.",
+    scope: "workspace",
+    editor: "fields",
+    order: 30,
+  },
+  {
     id: "machine",
     label: "This machine",
     description: "Preferences for staple on this computer. Stored in the home's config.json, not in any workspace.",
@@ -148,10 +164,22 @@ export const SETTING_CATEGORIES: readonly SettingCategory[] = [
   },
 ];
 
+export const SETTING_CATEGORIES: readonly SettingCategory[] = categories;
+
 export const BROWSER_PREFERENCES = ["auto", "always", "never"] as const;
 export type BrowserPreference = (typeof BROWSER_PREFERENCES)[number];
 
-export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
+/**
+ * The pickup-queue policy, exactly as docs/queue.md "Policy: advisory or strict"
+ * defines it (R2a, STA-166). This module REGISTERS the setting; the resolver
+ * that reads it on checkout is R2c's (STA-168), which imports this set rather
+ * than restating it.
+ */
+export const QUEUE_POLICIES = ["advisory", "strict"] as const;
+export type QueuePolicy = (typeof QUEUE_POLICIES)[number];
+
+/** The mutable backing of `SETTING_DEFINITIONS`; grown only by `registerSettingDefinition`. */
+const definitions: SettingDefinition[] = [
   {
     key: "kinds.default",
     category: "kinds",
@@ -186,6 +214,25 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
         "The icon each kind wears, its accessible label, and the character the terminal prints instead. A kind with no entry uses staple's built-in mark.",
       control: "glyph",
       order: 20,
+    },
+  },
+  {
+    key: "queue.policy",
+    category: "queue",
+    scope: "workspace",
+    schema: { type: "enum", values: QUEUE_POLICIES },
+    default: "advisory" satisfies QueuePolicy,
+    version: 1,
+    sensitivity: "normal",
+    ui: {
+      label: "Queue policy",
+      // The side effect, stated before Save: what `strict` changes for agents.
+      description:
+        "How the pickup queue binds agents. advisory: the queue orders and explains, and a checkout is never refused for order. " +
+        "strict: an agent's checkout of a later item is refused (out_of_order, exit 10) while an earlier eligible item exists, and the refusal names what to take instead. " +
+        "Dependencies, gates and claims stay hard constraints under both.",
+      control: "select",
+      order: 10
     },
   },
   {
@@ -238,6 +285,8 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
   },
 ];
 
+export const SETTING_DEFINITIONS: readonly SettingDefinition[] = definitions;
+
 /** Meta-row key prefix for workspace values. Stable: it is on disk. */
 export const WORKSPACE_SETTING_META_PREFIX = "setting:";
 
@@ -254,8 +303,8 @@ export function settingKeyFromMetaKey(metaKey: string): string | null {
 
 // ---------------------------------------------------------------- lookups
 
-const byKey = new Map(SETTING_DEFINITIONS.map((definition) => [definition.key, definition]));
-const categoryById = new Map(SETTING_CATEGORIES.map((category) => [category.id, category]));
+const byKey = new Map(definitions.map((definition) => [definition.key, definition]));
+const categoryById = new Map(categories.map((category) => [category.id, category]));
 
 export function settingDefinition(key: string): SettingDefinition | undefined {
   return byKey.get(key);
@@ -291,6 +340,49 @@ export function settingCategoriesFor(scope?: SettingScope): SettingCategory[] {
 
 export function settingCategory(id: string): SettingCategory | undefined {
   return categoryById.get(id);
+}
+
+// ---------------------------------------------------------------- registration
+
+/**
+ * R6f (STA-243): ADD a category or a definition after module load.
+ *
+ * The registry is two arrays and two indexes over them. Appending to an array
+ * behind the module's back made a definition that every ENUMERATING reader saw
+ * (`settingDefinitionsFor`, `settingRegistryView`, the store's snapshot,
+ * `/api/settings`, the shell) and every SINGLE-KEY reader did not — including
+ * `requireSettingDefinition`, which is the write boundary, so the setting
+ * rendered and then refused its own Save. These two functions are the only way
+ * to grow the arrays, and they grow the indexes in the same step, so the two
+ * halves cannot drift again.
+ *
+ * A new member is judged by the registry's own consistency check BEFORE it is
+ * visible anywhere: a bad key, category, scope or default throws and leaves the
+ * registry exactly as it was.
+ *
+ * Registration is process-local and immediate. Nothing persists it, so every
+ * process that reads or writes the setting must register it — which for a
+ * shipped setting means the entry in `SETTING_DEFINITIONS` above, evaluated at
+ * import in every process. Nothing has to happen before a store is opened: the
+ * store re-reads the definitions on each call.
+ */
+export function registerSettingCategory(category: SettingCategory): SettingCategory {
+  if (categoryById.has(category.id)) {
+    throw new Error(`settings registry: duplicate category "${category.id}"`);
+  }
+  categories.push(category);
+  categoryById.set(category.id, category);
+  return category;
+}
+
+export function registerSettingDefinition(definition: SettingDefinition): SettingDefinition {
+  if (byKey.has(definition.key)) {
+    throw new Error(`settings registry: duplicate key "${definition.key}"`);
+  }
+  assertSettingRegistryConsistent(categories, [definition]);
+  definitions.push(definition);
+  byKey.set(definition.key, definition);
+  return definition;
 }
 
 // ---------------------------------------------------------------- validation

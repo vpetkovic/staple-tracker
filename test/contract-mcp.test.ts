@@ -210,6 +210,10 @@ beforeAll(async () => {
     ],
     ws: WS,
   });
+  // R6d (STA-179): the registered settings — a default read, then the write that
+  // moves the source from default to workspace, captured in that order.
+  await call("get_setting", "get_setting", { key: "queue.policy", ws: WS });
+  await call("set_setting", "set_setting", { key: "queue.policy", value: "strict", ws: WS });
 }, 60_000);
 
 afterAll(async () => {
@@ -228,7 +232,7 @@ describe("tool inventory", () => {
    * moment this ticket is buying. Read-only tools deliberately omit
    * destructiveHint (the MCP spec only defines it when readOnlyHint is false).
    */
-  it("exposes exactly these 31 tools with these annotations and output schemas", async () => {
+  it("exposes exactly these 33 tools with these annotations and output schemas", async () => {
     const tools = await harness.listTools();
     const inventory = tools.map((t) => ({
       name: t.name,
@@ -553,10 +557,29 @@ describe("tool inventory", () => {
         },
         hasOutputSchema: true,
       },
+      // ------ registered workspace settings (R6d, STA-179) ------
+      {
+        name: "get_setting",
+        annotations: { title: "Get setting", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+        hasOutputSchema: true,
+      },
+      {
+        // idempotentHint: the same key and value twice leaves the workspace as it
+        // was. destructiveHint: false — a setting write rewrites no issue.
+        name: "set_setting",
+        annotations: {
+          title: "Set setting",
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
+        hasOutputSchema: true,
+      },
     ]);
   });
 
-  it("marks exactly the eleven read tools readOnlyHint: true", async () => {
+  it("marks exactly the twelve read tools readOnlyHint: true", async () => {
     const tools = await harness.listTools();
     const readOnly = tools.filter((t) => t.annotations?.readOnlyHint === true).map((t) => t.name);
     expect(readOnly).toEqual([
@@ -573,6 +596,8 @@ describe("tool inventory", () => {
       // STA-172: reading a plan is as read-only as reading a task.
       "list_milestones",
       "get_milestone",
+      // R6d (STA-179): so is reading a registered setting.
+      "get_setting",
     ]);
   });
 
@@ -1130,6 +1155,32 @@ describe("tool response shapes (31/31)", () => {
     });
   });
 
+  /**
+   * R6d (STA-179): one shape for a setting on every surface — the store's
+   * `SettingValueView`, which `staple settings get --json` prints and
+   * `/api/settings` serves under `values`. `source` is the provenance: default
+   * until the write, workspace after it.
+   */
+  it("get_setting", () => {
+    assertGolden("get_setting", {
+      key: "queue.policy",
+      scope: "workspace",
+      value: "advisory",
+      source: "default",
+      version: 1,
+    });
+  });
+
+  it("set_setting", () => {
+    assertGolden("set_setting", {
+      key: "queue.policy",
+      scope: "workspace",
+      value: "strict",
+      source: "workspace",
+      version: 1,
+    });
+  });
+
   it("covers every registered tool exactly once", async () => {
     const tools = (await harness.listTools()).map((t) => t.name);
     const covered = new Set([
@@ -1166,6 +1217,8 @@ describe("tool response shapes (31/31)", () => {
       "remove_milestone_member",
       "move_milestone_member",
       "reorder_milestone_members",
+      "get_setting",
+      "set_setting",
     ]);
     expect([...covered].sort()).toEqual([...tools].sort());
   });

@@ -543,6 +543,7 @@ describe("registered workspace settings", () => {
     expect(store.settingValues()).toEqual([
       { key: "kinds.default", scope: "workspace", value: "task", source: "default", version: 1 },
       { key: "kinds.appearance", scope: "workspace", value: {}, source: "default", version: 1 },
+      { key: "queue.policy", scope: "workspace", value: "advisory", source: "default", version: 1 },
     ]);
     // Nothing is written by a read — the fresh-workspace meta table stays exactly as seeded.
     expect(metaRows()).toEqual([]);
@@ -595,7 +596,11 @@ describe("registered workspace settings", () => {
       .prepare("INSERT INTO meta (key, value) VALUES ('setting:future.flag', ?)")
       .run(JSON.stringify({ v: 3, value: { anything: true } }));
     expect(store.unknownSettingKeys()).toEqual(["future.flag"]);
-    expect(store.settingValues().map((v) => v.key)).toEqual(["kinds.default", "kinds.appearance"]);
+    expect(store.settingValues().map((v) => v.key)).toEqual([
+      "kinds.default",
+      "kinds.appearance",
+      "queue.policy",
+    ]);
     store.setSetting("kinds.default", "bug");
     store.resetSetting("kinds.default");
     expect(metaRows()).toEqual([
@@ -625,6 +630,49 @@ describe("registered workspace settings", () => {
     ]);
   });
 
+  /**
+   * R6d (STA-179) — the queue policy through the store, to the contract
+   * docs/queue.md fixed. What is pinned: the default is advisory with nothing
+   * stored (upgrading a workspace changes nothing an agent can observe), a set
+   * value is the same object on the single-key and the list read, a value
+   * outside the contract is refused by name, and the change records actor,
+   * previous and new value. What is NOT here: enforcement — R2c reads this.
+   */
+  it("queue.policy defaults to advisory", () => {
+    expect(store.getSetting("queue.policy")).toBe("advisory");
+    expect(store.settingValue("queue.policy")).toEqual({
+      key: "queue.policy",
+      scope: "workspace",
+      value: "advisory",
+      source: "default",
+      version: 1,
+    });
+    expect(metaRows()).toEqual([]);
+  });
+
+  it("queue.policy accepts strict, answers it identically on the single-key and list reads, and refuses anything else", () => {
+    const view = store.setSetting("queue.policy", "strict", "vp");
+    expect(view).toEqual({ key: "queue.policy", scope: "workspace", value: "strict", source: "workspace", version: 1 });
+    expect(store.settingValue("queue.policy")).toEqual(view);
+    expect(store.settingValues().find((v) => v.key === "queue.policy")).toEqual(view);
+    expect(() => store.setSetting("queue.policy", "lenient")).toThrow(
+      /"queue\.policy" must be one of advisory, strict, got "lenient"/,
+    );
+    expect(() => store.settingValue("machine.port")).toThrow(/global setting, not a workspace one/);
+  });
+
+  it("records actor, previous value and new value when the queue policy changes", () => {
+    store.setSetting("queue.policy", "strict", "vp");
+    store.setSetting("queue.policy", "advisory", "fable-r6d");
+    const rows = store.db
+      .prepare("SELECT actor, payload FROM events WHERE kind = 'setting_changed' ORDER BY seq")
+      .all() as Array<{ actor: string; payload: string }>;
+    expect(rows.map((r) => [r.actor, JSON.parse(r.payload)])).toEqual([
+      ["vp", { action: "set", key: "queue.policy", from: "advisory", to: "strict" }],
+      ["fable-r6d", { action: "set", key: "queue.policy", from: "strict", to: "advisory" }],
+    ]);
+  });
+
   it("bumps the settings revision so another connection's snapshot goes stale", () => {
     const other = new WorkspaceStore(store.db, "test", "TST");
     expect(other.getSetting("kinds.default")).toBe("task");
@@ -651,6 +699,7 @@ describe("registered workspace settings", () => {
     expect(store.applySettingOps([{ op: "set", key: "kinds.default", value: "spike" }])).toEqual([
       { key: "kinds.default", scope: "workspace", value: "spike", source: "workspace", version: 1 },
       { key: "kinds.appearance", scope: "workspace", value: {}, source: "default", version: 1 },
+      { key: "queue.policy", scope: "workspace", value: "advisory", source: "default", version: 1 },
     ]);
     expect(() => store.applySettingOps([{ op: "bogus", key: "kinds.default" } as never])).toThrow(
       /Unknown setting op "bogus"/,

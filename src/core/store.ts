@@ -1306,6 +1306,19 @@ export class WorkspaceStore {
     return this.settings().values.get(key)?.value ?? definition.default;
   }
 
+  /**
+   * ONE registered workspace setting with its provenance — the object every
+   * surface answers for `get`, byte-identical to the matching entry of
+   * `settingValues()`. Refuses an unknown or global key like `getSetting`.
+   */
+  settingValue(key: string): SettingValueView {
+    const definition = requireSettingDefinition(key, "workspace");
+    const stored = this.settings().values.get(key);
+    return stored
+      ? settingValueView(definition, stored.value, "workspace")
+      : settingValueView(definition, definition.default, "default");
+  }
+
   /** Every registered workspace setting with its provenance, in registry order. */
   settingValues(): SettingValueView[] {
     const values = this.settings().values;

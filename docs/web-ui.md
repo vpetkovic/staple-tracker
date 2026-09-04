@@ -181,6 +181,28 @@ to its default. Global-scope definitions render disabled with the sentence
 naming `staple config set`. Registering a definition is the whole of adding
 it to the page: nothing in the form names a setting.
 
+**Workflow** is the first such category in workspace scope, and its first
+control is the queue policy
+([configuration.md](configuration.md#queuepolicy)): a select over `advisory`
+and `strict`, with the registry's description stating before you save what
+`strict` changes for agents, and the scope tag beside it saying *Workspace ·
+default* until a value is stored and *Workspace · workspace* after. The
+category, the control and its explanation all come from the registry entry;
+`fields-form.test.tsx` renders a second fixture toggle beside it and pins
+that none of the shell's files names the setting or the category.
+
+Adding a setting or a category of your own is a registry entry and nothing
+else — the checklist is
+[configuration.md → Adding a setting](configuration.md#adding-a-setting). That
+the claim holds end to end is asserted rather than assumed:
+`test/settings-verification.test.ts` registers a category no build has ever
+had, serves it through the real HTTP server and renders this shell from that
+envelope, then reads the shell's own sources to prove none of them names it;
+`settings/settings-verification.test.tsx` renders every breakpoint with both a
+registry-driven and a vocabulary category, and pins the unsaved-changes guard,
+the conflict banner's two ways out, and the label, scope, error and
+`aria-current` wiring over every field and button on the surface.
+
 ## Glyph catalog
 
 Every kind wears one **appearance** record — `{ source, value, label, fallback }`

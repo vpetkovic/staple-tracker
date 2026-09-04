@@ -41,10 +41,34 @@ Scope is physical, not a label:
 | Scope | Lives in | Written by | Examples |
 |---|---|---|---|
 | `global` | `<home>/config.json`, under the field the definition names | `staple config set` | `machine.browser`, `machine.port`, `machine.setupComplete` |
-| `workspace` | the workspace database (`meta` rows keyed `setting:<key>`) | `POST /api/settings` with `target: "settings"` | `kinds.default`, `kinds.appearance` |
+| `workspace` | the workspace database (`meta` rows keyed `setting:<key>`) | `staple settings set`, `set_setting`, `POST /api/settings` with `target: "settings"` | `kinds.default`, `kinds.appearance`, `queue.policy` |
 
 A workspace key is refused on the config surface and a global key is refused
 on the workspace surface, each refusal naming the surface that does own it.
+
+### `queue.policy`
+
+The first registered feature control, in the **Workflow** category (registry
+id `queue`, because a key is namespaced by its category). It is defined
+exactly as [queue.md](queue.md#policy-advisory-or-strict) names it:
+workspace scope, `advisory | strict`, default `advisory`.
+
+- `advisory` — the queue orders and explains; a checkout is never refused for
+  order. Upgrading a workspace changes nothing an agent can observe until a
+  human sets `strict`.
+- `strict` — an agent's checkout of a later item is refused (`out_of_order`,
+  exit 10) while an earlier eligible item exists, and the refusal names what to
+  take instead. Dependencies, approval gates and live claims stay hard
+  constraints under both values.
+
+The registry defines, stores and exposes the value; the checkout resolver
+that reads it is R2c's (STA-168), which imports `QUEUE_POLICIES` from the
+registry rather than restating the set. The definition's description carries
+the side effect, so every surface can show what `strict` changes *before* a
+save, and every change is a `setting_changed` event with actor, previous and
+new value. The same `{ value, source }` pair is answered by `staple settings
+get queue.policy`, the `get_setting` tool, `/api/settings` `values`, and the
+UI's `settingValue()` — pinned by `test/contract-settings-surfaces.test.ts`.
 
 Workspace values are stored as `{ "v": <version>, "value": … }`. Reading a
 value written at an **older** version runs the definition's migrate hook
@@ -72,10 +96,107 @@ built-in marks are code, not rows, which is why an existing database needs no
 migration to wear them and custom kinds keep their order.
 
 The registry also lists the workspace's **categories** — Statuses, Kinds,
-This machine — with the editor each one needs, so the settings UI enumerates
-its navigation from the registry rather than hard-coding tabs. Adding a
-setting or a category is a registry entry (plus a field on `StapleConfig`
-for a global one); no shell component changes.
+Workflow, This machine — with the editor each one needs, so the settings UI
+enumerates its navigation from the registry rather than hard-coding tabs.
+Adding a setting or a category is a registry entry (plus a field on
+`StapleConfig` for a global one); no shell component changes.
+
+Workspace values have their own commands, the workspace twin of `config`:
+
+```bash
+staple settings                       # every registered workspace setting: key = value  (source)
+staple settings get queue.policy      # one, e.g.  queue.policy = advisory  (default)
+staple settings set queue.policy strict
+staple settings get queue.policy --json
+# {"key":"queue.policy","scope":"workspace","value":"strict","source":"workspace","version":1}
+```
+
+`source` is `default` (nothing stored) or `workspace` (someone set it). The
+value is coerced and validated through the registry — `queue.policy` takes
+only `advisory` or `strict`, exit 2 otherwise — and the write is attributed to
+`STAPLE_AGENT` (or `$USER`). A global key such as `machine.port` is refused
+here with the sentence naming `staple config set`.
+
+## Adding a setting
+
+A setting is added by *registering* it. There is no shell component to edit, no
+tab to add and no client-side copy of the default to keep in step — the
+navigation, the control, the scope tag and every surface's validation are all
+derived from the definition. Registration is process-local, so put the entry in
+`SETTING_DEFINITIONS` — that array is evaluated at import in every process, while
+`registerSettingDefinition()` (the runtime way in, used by tests and embedders)
+registers only the process that calls it, and must be called before that process
+reads or writes the key. Work down this list.
+
+**1. Write the definition** in `src/core/settings-registry.ts`, in
+`SETTING_DEFINITIONS`:
+
+| Field | What to put there |
+|---|---|
+| `key` | `category.name`. **Stable forever** — it is the persistence key. Must be namespaced by an existing category id. |
+| `category` | An id in `SETTING_CATEGORIES`. Add one there if the setting is not about anything that already exists. |
+| `scope` | `workspace` or `global`. See below; it must match the category's scope. |
+| `schema` | One of `boolean`, `integer` (with `min`/`max`), `string` (with `pattern` + `patternHint`), `enum` (with `values`). A new shape is a new arm of `SettingSchema`, never `unknown`. |
+| `default` | The value when nothing is stored. It is validated against its own schema at import, so a bad default fails the process rather than the first user. |
+| `version` | Starts at `1`. Bump only when the persisted value's **meaning** changes. |
+| `migrate` | Optional, and only alongside a `version` bump. Deterministic: same input, same output, no clock, no I/O. |
+| `sensitivity` | `normal`, or `sensitive` for a value that must never leave the process on a read surface (the wire view then carries `redacted: true` and no value). |
+| `ui` | `label`, `description`, `control` (`toggle`/`number`/`text`/`select`) and `order` within the category. The description is the only place a **side effect** can be stated before Save — say what changes, as `queue.policy` does. |
+| `configKey` | Global scope **only**: the top-level `config.json` field the value is stored under. Required for a global setting, forbidden for a workspace one. |
+
+**2. Choose the scope by where the value belongs, not by who edits it.**
+A `workspace` setting is a fact about *this project's work* and travels with the
+database — every clone and every agent sees it. A `global` setting is a
+preference of *this computer* and never leaves it. Ask: would a teammate
+opening the same workspace want this value? Yes → `workspace`. Would it be
+wrong on somebody else's machine (a port, a browser choice) → `global`. A
+global setting also needs its field added to `StapleConfig` in
+`src/config/file.ts`; a workspace setting needs nothing outside the registry.
+
+**3. Versioning, and when a workspace migration is required.**
+
+- **Never**, for a new setting. A key with no stored row simply reads its
+  default, on every existing workspace, at every schema version. Adding a
+  setting is not a schema change: workspace values live in `meta` rows keyed
+  `setting:<key>` that the `meta` table has always been able to hold.
+- **Never**, for changing a default. Only workspaces that *stored* a value keep
+  it; the rest pick the new default up.
+- **A `version` bump plus a `migrate` hook**, when the meaning of an existing
+  stored value changes (an enum member is renamed, a number changes unit). The
+  hook is what reads the old value; without one, an older value is discarded for
+  the default. A stored value written at a *newer* version is refused, never
+  reinterpreted.
+- **A real workspace migration** (`src/core/migrations/workspace/00N-*.ts`),
+  only when the *shape of the database* has to change — a new table or column.
+  Moving a value into or out of `meta` is such a change; adding a setting is not.
+
+**4. Which pinned inventories change.** Each of these deliberately restates the
+whole registered set, so a new entry shows up as a failing test rather than as a
+surprise months later. Update them in the same commit:
+
+- `test/settings-registry.test.ts` — "registers the three machine preferences as
+  global and two workspace field settings", and, for a new category, "lists
+  statuses, kinds and the Workflow category…".
+- `test/store-settings.test.ts` — the workspace list read (`settingValues()`).
+- `test/characterize-cli-surface.test.ts` — the `staple settings` output.
+- `docs/cli.md` and this file, when the setting is one a user is told about.
+
+**5. Which tests to add.** Follow the neighbouring file's style; the harnesses
+already exist.
+
+- The definition itself — `test/settings-registry.test.ts`: schema, default,
+  scope, and the sentence the description owes the user.
+- The value through the store — `test/store-settings.test.ts`: default, set,
+  reset, refusal, and the `setting_changed` event.
+- All four surfaces agreeing — `test/contract-settings-surfaces.test.ts`, if the
+  setting is one agents read.
+- The render — nothing, usually. `src/ui/app/src/settings/fields-form.test.tsx`
+  already proves that each *schema* renders its control, so a new definition of
+  an existing shape needs no UI test. A new `SettingCategoryEditor` does: it is a
+  new arm of `CategoryContent`.
+- The scope guarantee and the shell as a whole are covered once, for every
+  setting, by `test/settings-verification.test.ts` and
+  `src/ui/app/src/settings/settings-verification.test.tsx`.
 
 ## `config.json`
 
