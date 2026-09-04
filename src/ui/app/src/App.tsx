@@ -44,7 +44,16 @@ import {
   type ViewName,
 } from "@/lib/session";
 import { useWorkspaceSettings } from "@/lib/settings";
-import { loadViewPrefs, saveViewPrefs, type GroupBy } from "@/lib/view-prefs";
+import type { SortPref } from "@/lib/sort-modes";
+import {
+  loadViewPrefs,
+  saveViewPrefs,
+  sortForScope,
+  sortScopeKey,
+  withSortForScope,
+  type GroupBy,
+  type ViewPrefs,
+} from "@/lib/view-prefs";
 import { useDataVersion, useResource } from "@/lib/useStaple";
 import { GraphView } from "@/views/GraphView";
 import { MilestonesView } from "@/views/milestones/MilestonesView";
@@ -117,9 +126,39 @@ export function App() {
    */
   const [groupBy, setGroupBy] = useState<GroupBy>(() => loadViewPrefs(window.localStorage).groupBy);
 
+  /**
+   * The sort preference for every scope the user has ever set one in — R4a (STA-186).
+   *
+   * The WHOLE map is held rather than the one value on screen, because the scope changes
+   * under it: switching workspace or view must produce that scope's sort immediately, and a
+   * single `sort` state would have to re-read storage on every switch to do it. Seeded during
+   * the first render for the same reason `groupBy` is — an effect would paint one frame of
+   * the wrong order and then correct itself.
+   */
+  const [sortPrefs, setSortPrefs] = useState<Record<string, SortPref>>(
+    () => loadViewPrefs(window.localStorage).sort,
+  );
+
+  /**
+   * ONE autosave for the whole envelope, because it is one key. Two effects writing
+   * `staple:view:v1` would race on the render where both changed, and the loser would
+   * overwrite the winner with the value it had captured.
+   */
   useEffect(() => {
-    saveViewPrefs(window.localStorage, { groupBy });
-  }, [groupBy]);
+    const prefs: ViewPrefs = { groupBy, sort: sortPrefs };
+    saveViewPrefs(window.localStorage, prefs);
+  }, [groupBy, sortPrefs]);
+
+  /**
+   * WHICH SORT IS ON SCREEN — the workspace and the view, resolved to one preference. An
+   * unset scope is `DEFAULT_SORT`, never the neighbouring scope's choice; see view-prefs.ts.
+   */
+  const sortScope = sortScopeKey(ws, view);
+  const sort = sortForScope(sortPrefs, sortScope);
+  const setSort = useCallback(
+    (next: SortPref) => setSortPrefs((current) => withSortForScope(current, sortScope, next)),
+    [sortScope],
+  );
 
   /**
    * The visible ordered list — published by whichever view is on screen, held here.
@@ -199,6 +238,8 @@ export function App() {
       setFilters,
       groupBy,
       setGroupBy,
+      sort,
+      setSort,
       visibleOrder,
       publishVisibleOrder,
       assignee,
@@ -219,6 +260,8 @@ export function App() {
     issues,
     filters,
     groupBy,
+    sort,
+    setSort,
     visibleOrder,
     publishVisibleOrder,
     assignee,

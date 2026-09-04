@@ -35,6 +35,46 @@ sections are separated by one rule — 8px of air plus a hairline — whether th
 next section is headed by a real epic, a ghost of one, or the "No epic" header,
 at every width. There is no gap between an epic and its own first task.
 
+## Sorting
+
+The "Sort" control sits beside "Group" and names both halves of its own state without
+being opened — "Sort: Activity · Most active first", never an arrow you have to
+decode. Every mode is a real radio in a labelled group, so Tab and Enter operate it.
+The choice is stored **per workspace and per view** under the same
+`staple:view:v1` key as the grouping; a scope you have never set uses the default, and
+setting one back to the default forgets it rather than pinning it.
+
+**Sorting is not the queue.** Ordering the list by queue position is a statement about
+your screen; it cannot move an item in the pickup plan, change checkout eligibility, or
+reorder a dependency. See `docs/queue.md`.
+
+Direction flips the **primary key only** — every tie-break below runs forwards in both
+directions, so two rows that tie never swap and "descending, then ascending" is exactly
+where you started. Under Queue position, unqueued rows come last in both directions.
+Every chain ends in the identifier, which is unique and compared **numerically on the
+number part**, so STA-9 precedes STA-10 and the list cannot reshuffle on the 1.5s poll.
+
+| Mode | Orders by | Tie-break chain, in order | Parent rollup |
+| --- | --- | --- | --- |
+| **Activity** (default) | a live claim first, then the configured status order | priority → newest update → identifier | best activity tier in the subtree |
+| **Queue position** | the pickup plan's position; queued rows before unqueued | activity → priority → newest update → identifier | earliest queue position in the subtree |
+| **Status** | the workspace's configured status order | priority → newest update → identifier | — |
+| **Priority** | critical → high → medium → low | activity → newest update → identifier | — |
+| **Updated** | when anything last moved | priority → identifier | latest update in the subtree |
+| **Created** | when the ticket was filed | priority → identifier | — |
+| **Identifier** | the number, numerically | — (identifiers are unique) | — |
+| **Title** | alphabetically, locale-aware | identifier | — |
+
+Only three modes roll a parent up over its descendants, and each is named above; the
+other five read the row and nothing else. A rollup counts only rows the current filter
+kept, so an order is always accountable from what is on the screen. A status the
+workspace order does not mention ranks last but still ranks.
+
+Sorting orders **siblings**: it never lifts a child out from under its parent, and it
+applies inside a group exactly as it does in the ungrouped view. Under Group by Status
+the activity tier is inert — every row in a status bucket ranks equally on it — so the
+default mode there is priority, then the newest update, then the identifier.
+
 ## Auth
 
 Pages served to loopback carry their own token, so the browser never sees a

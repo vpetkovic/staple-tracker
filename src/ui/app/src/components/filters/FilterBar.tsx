@@ -30,6 +30,7 @@
  */
 import { Eye, EyeOff, ListFilter, Search } from "lucide-react";
 import { GroupByMenu } from "@/components/view-options/GroupByMenu";
+import { SortByMenu } from "@/components/view-options/SortByMenu";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { countActive, withShowDone, withText } from "@/lib/filters";
@@ -53,6 +54,13 @@ export function FilterBar() {
         on the left of this group where the eye reaches it before Search.
       */}
       <GroupByMenu />
+
+      {/*
+        R4a (STA-186). Beside Group by, on its right, because the two are one question asked
+        twice — how are these rows arranged, and in what order — and the ticket's first
+        criterion is that the answer to the second is readable without opening anything.
+      */}
+      <SortByMenu sort={session.sort} onChange={session.setSort} />
 
       {/* Ghost until you point at it — the same register the assignee box used, kept
           because the argument V2 made for it still holds: this row exists for the tabs,

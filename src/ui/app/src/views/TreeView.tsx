@@ -36,7 +36,7 @@ import { EmptyState, NoMatchesState, ViewState } from "./ViewChrome";
 
 export function TreeView({ onAuthError }: { onAuthError: (error: AuthError) => void }) {
   const session = useSession();
-  const { mode, selection, filters, groupBy, publishVisibleOrder } = session;
+  const { mode, selection, filters, groupBy, sort, publishVisibleOrder } = session;
 
   const all = useMemo(() => session.issues.data ?? [], [session.issues.data]);
   const rows = useMemo(() => applyFilters(all, filters), [all, filters]);
@@ -124,6 +124,13 @@ export function TreeView({ onAuthError }: { onAuthError: (error: AuthError) => v
               allRows={all}
               mode={mode}
               groupBy={groupBy}
+              /*
+               * R4a (STA-186). The active sort for THIS workspace and view, resolved by App
+               * from `staple:view:v1`. It reaches the model as `BuildOptions.sort` and does
+               * nothing else — it cannot reach the queue, the inbox, or a write. See
+               * `lib/sort-modes.ts` and docs/queue.md's "Presentation sort is not the queue".
+               */
+              sort={sort}
               pickup={pickup}
               captions={captions}
               currentRef={selection?.ref ?? null}

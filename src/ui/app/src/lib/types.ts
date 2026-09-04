@@ -700,6 +700,29 @@ export interface IssueRow {
    */
   gate?: IssueGate | null;
   queuedBy?: QueuedBy | null;
+  /**
+   * WHERE THIS ROW SITS IN THE PICKUP PLAN — R2's queue, as a READING (STA-186).
+   *
+   * Two fields because R4c (STA-188) has to tell two things apart on the same row and the
+   * queue contract keeps them apart: `queuePosition` is the EFFECTIVE position an actionable
+   * row holds in the pickup queue, `planPosition` is the plan position a CONTAINER carries.
+   * A row can have both, one, or neither.
+   *
+   * SIBLINGS of `issue`, like `claim` and `gate`, and for the same reason: the plan is a
+   * relation on a different clock, and freezing it onto the entity would be a copy that goes
+   * stale the moment somebody reorders the queue.
+   *
+   * OPTIONAL ON THE TYPE and supplied by `/api/issues` — the same discipline `deps` and
+   * `worklog` follow, so a fixture or a synthesised row need not have an opinion and every
+   * consumer is obliged to check rather than assume. `null` means "not in the plan", which is
+   * NOT the same as position 0, and `lib/sort-modes.ts` treats absent and null identically.
+   *
+   * READ ONLY, EVERYWHERE IN THE UI. `docs/queue.md` is explicit that presentation sort is
+   * not the queue: the list may display and order by these numbers and may never set them.
+   * The one write path is the queue's own API.
+   */
+  planPosition?: number | null;
+  queuePosition?: number | null;
 }
 
 /** GET /api/inbox */

@@ -50,6 +50,21 @@ import {
 } from "@/components/task-list";
 import { isStaleClaim } from "@/lib/claim";
 import type { Selection } from "@/lib/session";
+/**
+ * R4a (STA-186). THE ORDER IS THE REGISTRY'S NOW — this module decides WHERE a row goes and
+ * no longer decides what "before" means. `compareRows` used to be the one comparator and is
+ * now one entry (`activity`) among eight, with the same steps in the same order, so the
+ * default mode reproduces this file's previous output byte for byte. What this module still
+ * owns is the ACTIVITY TIER, which is a fact about the tree — the rollup over descendants,
+ * and the deliberate decision to turn it off under status grouping — and it hands that in as
+ * `activityTier` rather than letting a `lib/` module reach into the tree to compute it.
+ */
+import {
+  buildSortContext,
+  compareBySort,
+  DEFAULT_SORT,
+  type SortPref,
+} from "@/lib/sort-modes";
 import type { GroupBy } from "@/lib/view-prefs";
 /**
  * O8a (STA-149). The placement — who nests under whom, where a ghost goes, and what depth,
@@ -76,7 +91,6 @@ import {
   OPEN_STATUS_ORDER,
   RESOLVED_STATUSES,
   type Issue,
-  type IssuePriority,
   type IssueRow,
   type IssueStatus,
   type StatusId,
@@ -131,13 +145,6 @@ export const DEFAULT_EXPANDED_GROUPS: ReadonlySet<IssueStatus> = new Set<IssueSt
   "in_review",
   "blocked",
 ]);
-
-const PRIORITY_RANK: Record<IssuePriority, number> = {
-  critical: 0,
-  high: 1,
-  medium: 2,
-  low: 3,
-};
 
 /**
  * WHAT A HEADER NAMES, when the group is not a status — O3d (STA-129).
@@ -317,6 +324,22 @@ export interface BuildOptions {
    * Defaulted to `true` for the grouped shapes, which is where the ticket lives.
    */
   ghostParents?: boolean;
+  /**
+   * WHICH ORDER, of the eight — R4a (STA-186). See `lib/sort-modes.ts` for the registry and
+   * for the two rules `direction` does not touch.
+   *
+   * Optional and defaulted to `DEFAULT_SORT`, which is `activity` ascending: the tier, then
+   * priority, then the newest update, then the numeric identifier — this file's own
+   * comparator before the ticket, unchanged. So every existing caller, fixture and test that
+   * says nothing gets exactly the list it got, and the criterion "the default reproduces
+   * today's order" is a property of the default rather than of a code path.
+   *
+   * It applies inside every shape, not only the flat one. A reader who has asked for titles
+   * alphabetically has asked about the rows, and the rows are the same rows whether or not
+   * there are headers over them; a sort that silently stopped applying one menu entry away
+   * would be the kind of inconsistency the Group control's own notes keep arguing against.
+   */
+  sort?: SortPref;
 }
 
 /**
@@ -405,23 +428,29 @@ export function subtreeActivityTiers(
 }
 
 /**
- * Sort key within a bucket: activity tier, then priority, then newest update, then
- * identifier.
+ * THE COMPARATOR ONE BUILD USES — R4a (STA-186), replacing this file's private `compareRows`.
  *
- * `IssueRow`-typed since O3a (STA-126), and it had to be: `claim` is a SIBLING of `issue`
- * on the row, so an `Issue` alone literally cannot see whether anybody is holding it.
- *
- * The identifier tiebreak is not cosmetic. The view refetches every 1.5s on the fingerprint
+ * That function was the one sort key in the app: activity tier, then priority, then newest
+ * update, then a numeric-aware identifier. It is now `SORT_MODES`'s `activity` entry, step
+ * for step, and this is the four lines that reach it. The identifier tie-break survives
+ * intact and for the reason it was written: the view refetches every 1.5s on the fingerprint
  * poll, and two rows that compare equal are free to swap on every rebuild — which reads as
- * the list twitching under the pointer. Numeric-aware so STA-9 precedes STA-10.
+ * the list twitching under the pointer. Every mode in the registry terminates in it.
+ *
+ * `rows` is the set the rollups are computed over — the VISIBLE set at every call site
+ * below, per O3a: a parent must never be ranked by a descendant the current filter has taken
+ * off the page. `tierOf` is this module's own activity tier, handed IN, which is what keeps
+ * `buildGroups`'s deliberate `NO_ACTIVITY_TIER` a decision about status grouping rather than
+ * a special case inside the registry.
  */
-function compareRows(a: IssueRow, b: IssueRow, tierOf: (row: IssueRow) => number): number {
-  const byActivity = tierOf(a) - tierOf(b);
-  if (byActivity !== 0) return byActivity;
-  const byPriority = PRIORITY_RANK[a.issue.priority] - PRIORITY_RANK[b.issue.priority];
-  if (byPriority !== 0) return byPriority;
-  if (a.issue.updatedAt !== b.issue.updatedAt) return a.issue.updatedAt < b.issue.updatedAt ? 1 : -1;
-  return a.issue.identifier.localeCompare(b.issue.identifier, undefined, { numeric: true });
+function rowComparator(
+  rows: readonly IssueRow[],
+  options: BuildOptions,
+  statusOrder: readonly StatusId[],
+  tierOf: (row: IssueRow) => number,
+): (a: IssueRow, b: IssueRow) => number {
+  const ctx = buildSortContext(rows, { statusOrder, activityTier: tierOf });
+  return compareBySort(options.sort ?? DEFAULT_SORT, ctx);
 }
 
 /**
@@ -490,7 +519,17 @@ function flatten(
   presentAnywhere: Map<string, Issue>,
   options: BuildOptions,
   defaultExpanded: (issue: Issue) => boolean,
-  tierOf: (row: IssueRow) => number = NO_ACTIVITY_TIER,
+  /**
+   * R4a (STA-186). THE COMPARATOR, not the tier it used to be given.
+   *
+   * `flatten` never needed the tier itself — it needed an answer to "which of these two rows
+   * comes first", and the tier was three quarters of the only answer there was. Taking the
+   * comparator instead is what lets one bucket be ordered by title and another by queue
+   * position without this function learning either word, and it is what keeps the ONE place
+   * that knows the activity tier is off under status grouping at the call site that decides
+   * it. Built once per LIST by `rowComparator` and shared by every bucket.
+   */
+  compare: (a: IssueRow, b: IssueRow) => number,
   /**
    * O3b (STA-127). Built ONCE per list from the unfiltered source and handed down, rather
    * than recomputed per bucket: `buildGroups` calls this up to seven times and every one of
@@ -570,8 +609,7 @@ function flatten(
    * would sink and take that task down with it: acquiring a context line would have
    * reordered real work, which nothing asked for and every reader would notice.
    */
-  const byRow = (a: IssueRow, b: IssueRow) => compareRows(a, b, tierOf);
-  sortPlaced(roots, (a, b) => byRow(rankedRow(a), rankedRow(b)));
+  sortPlaced(roots, (a, b) => compare(rankedRow(a), rankedRow(b)));
 
   /**
    * A GHOST FOLDS LIKE ANY ROW — O8c (STA-151), replacing O3c's "a ghost is always open".
@@ -667,7 +705,7 @@ function flatten(
  * at a ticket the reader cannot see is worse than no chip.
  */
 export function buildGroups(rows: IssueRow[], options: BuildOptions): StatusGroup[] {
-  const { showResolved = false, ghostParents = true } = options;
+  const { showResolved = false, ghostParents = true, statusOrder = configuredGroupOrder() } = options;
 
   const visible = showResolved ? rows : rows.filter((r) => !isResolvedStatus(r.issue.status));
   const presentAnywhere = new Map(rows.map((r) => [r.issue.id, r.issue]));
@@ -684,6 +722,15 @@ export function buildGroups(rows: IssueRow[], options: BuildOptions): StatusGrou
     else buckets.set(r.issue.status, [r]);
   }
 
+  /*
+   * THE TIER IS OFF HERE, AND IT IS STILL OFF — see `NO_ACTIVITY_TIER` above. R4a moved the
+   * comparison into the registry and left that decision exactly where it was: this axis
+   * ranks every row 0 on the activity step, so the `activity` mode falls straight through to
+   * priority, newest update and identifier, which is STA-126's grouped output unchanged. Any
+   * OTHER mode the user picks reads its own key and is unaffected by the tier either way.
+   */
+  const byRow = rowComparator(visible, options, statusOrder, NO_ACTIVITY_TIER);
+
   const out: StatusGroup[] = [];
 
   /*
@@ -693,7 +740,7 @@ export function buildGroups(rows: IssueRow[], options: BuildOptions): StatusGrou
    * per-workspace data that changes while the page is open, and `App.tsx` re-renders the
    * tree when it does.
    */
-  for (const status of options.statusOrder ?? configuredGroupOrder()) {
+  for (const status of statusOrder) {
     const bucket = buckets.get(status);
     // Empty groups do not render. A "Blocked 0" header is permanent furniture announcing
     // a non-event, and furniture stops being read within a day.
@@ -706,7 +753,7 @@ export function buildGroups(rows: IssueRow[], options: BuildOptions): StatusGrou
         presentAnywhere,
         options,
         (issue) => DEFAULT_EXPANDED_GROUPS.has(issue.status),
-        NO_ACTIVITY_TIER,
+        byRow,
         rollups,
         ghostParents,
       ),
@@ -865,13 +912,13 @@ export function buildParentGroups(rows: IssueRow[], options: BuildOptions): Stat
   }
 
   /**
-   * GROUPS ORDER BY THE EPIC'S `activityRank` — O3a (STA-126), through `compareRows` rather
-   * than a bare rank comparison.
+   * GROUPS ORDER BY THE EPIC'S `activityRank` — O3a (STA-126), through the LIST'S OWN
+   * comparator rather than a bare rank comparison.
    *
    * The tier alone leaves ties, and a tie on a list the fingerprint poll rebuilds every
-   * 1.5s is a list that swaps rows under the pointer. `compareRows` is the app's ONE answer
-   * to "these two compare equal, now what" — priority, then newest update, then a
-   * numeric-aware identifier — and reusing it is what keeps the group order and the row
+   * 1.5s is a list that swaps rows under the pointer. The active sort mode is the app's ONE
+   * answer to "these two compare equal, now what" — every chain in `lib/sort-modes.ts` ends
+   * in the numeric identifier — and reusing it is what keeps the group order and the row
    * order from drifting into two different notions of important.
    *
    * Tiers over `visible`, per O3a: an order the reader cannot account for from what is in
@@ -881,6 +928,13 @@ export function buildParentGroups(rows: IssueRow[], options: BuildOptions): Stat
    */
   const subtree = subtreeActivityTiers(visible, statusOrder);
   const tierOf = (row: IssueRow): number => activityRank(row, subtree, statusOrder);
+  /*
+   * R4a (STA-186). ONE comparator for the group order AND the row order, which is the point
+   * the note above makes about `compareRows` and is now enforced by there being one call:
+   * the epics are ranked by it and so is every row inside them, so the two cannot drift into
+   * different notions of important — including when the reader has asked for titles.
+   */
+  const byRow = rowComparator(visible, options, statusOrder, tierOf);
 
   // Computed once for every bucket below, because it is one walk over the same rows.
   const holdsActiveWork = subtreesHoldingActiveWork(visible);
@@ -889,7 +943,7 @@ export function buildParentGroups(rows: IssueRow[], options: BuildOptions): Stat
     .filter((id) => (buckets.get(id)?.length ?? 0) > 0)
     .map((id) => ({ id, row: sourceById.get(id) }))
     .filter((entry): entry is { id: string; row: IssueRow } => entry.row !== undefined)
-    .sort((a, b) => compareRows(a.row, b.row, tierOf));
+    .sort((a, b) => byRow(a.row, b.row));
 
   const out: StatusGroup[] = [];
 
@@ -932,7 +986,7 @@ export function buildParentGroups(rows: IssueRow[], options: BuildOptions): Stat
          * the tier is most obviously right: inside one epic, the child somebody is holding
          * right now belongs at the top of the epic.
          */
-        tierOf,
+        byRow,
         rollups,
         ghostParents,
       ),
@@ -970,7 +1024,7 @@ export function buildParentGroups(rows: IssueRow[], options: BuildOptions): Stat
         presentAnywhere,
         options,
         (issue) => DEFAULT_EXPANDED_GROUPS.has(issue.status) || holdsActiveWork.has(issue.id),
-        tierOf,
+        byRow,
         rollups,
         ghostParents,
       ),
@@ -1094,7 +1148,9 @@ export function buildKindGroups(rows: IssueRow[], options: BuildOptions): Status
     );
 
   const subtree = subtreeActivityTiers(visible, statusOrder);
-  const tierOf = (row: IssueRow): number => activityRank(row, subtree, statusOrder);
+  const byRow = rowComparator(visible, options, statusOrder, (row) =>
+    activityRank(row, subtree, statusOrder),
+  );
   // One walk over the same rows, shared by every bucket below.
   const holdsActiveWork = subtreesHoldingActiveWork(visible);
 
@@ -1110,7 +1166,7 @@ export function buildKindGroups(rows: IssueRow[], options: BuildOptions): Status
         presentAnywhere,
         options,
         (issue) => DEFAULT_EXPANDED_GROUPS.has(issue.status) || holdsActiveWork.has(issue.id),
-        tierOf,
+        byRow,
         rollups,
         ghostParents,
       ),
@@ -1170,7 +1226,7 @@ export function flattenFlat(rows: IssueRow[], options: BuildOptions): TaskRow[] 
     // Flat: this row, or anything beneath it, is active. Anything else stays folded, so the
     // backlog is still not a wall.
     (issue) => DEFAULT_EXPANDED_GROUPS.has(issue.status) || holders.has(issue.id),
-    (row) => activityRank(row, subtree, statusOrder),
+    rowComparator(visible, options, statusOrder, (row) => activityRank(row, subtree, statusOrder)),
     // O3b (STA-127). The unfiltered source, NOT `visible` — the one line where the rollup
     // and the tier above deliberately disagree about which set they read.
     parentRollups(options.rollupSource ?? rows),

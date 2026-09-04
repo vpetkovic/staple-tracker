@@ -8,6 +8,7 @@
 import { createContext, useContext } from "react";
 import type { FilterState } from "./filters";
 import type { IssueRow, UiMode, WorkspaceRef } from "./types";
+import type { SortPref } from "./sort-modes";
 import type { GroupBy } from "./view-prefs";
 import type { Resource } from "./useStaple";
 
@@ -96,6 +97,18 @@ export interface StapleSession {
    */
   groupBy: GroupBy;
   setGroupBy: (next: GroupBy) => void;
+
+  /**
+   * WHAT ORDER THE LIST IS IN — R4a (STA-186). See lib/sort-modes.ts for the registry.
+   *
+   * Beside `groupBy` and not on it: arrangement and order are two questions, and a reader
+   * who has grouped by epic has not asked for the rows inside those epics to be re-ordered.
+   * Unlike `groupBy` this is stored per WORKSPACE and per VIEW — the argument is in
+   * lib/view-prefs.ts — so App resolves the scope and this field is the answer for the scope
+   * currently on screen. Setting it writes to that scope and no other.
+   */
+  sort: SortPref;
+  setSort: (next: SortPref) => void;
 
   /**
    * THE VISIBLE ORDERED LIST — the contract R6 (STA-106) navigates by.
