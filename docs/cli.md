@@ -90,6 +90,25 @@ each row with that terminal fallback (`◆ epic`, `◇ task`, `✱ bug`, `↻ ch
 `kinds.appearance` (see [configuration.md](configuration.md#the-settings-registry));
 the CLI only reads it.
 
+`source` names where the web icon comes from, and each source bounds its
+`value`:
+
+| `source` | `value` | bound |
+| --- | --- | --- |
+| `lucide` | a canonical Lucide key (`triangle-alert`) | lowercase words joined by dashes, at most 64 characters |
+| `emoji` | an emoji or short Unicode glyph (`🚀`, `→→`) | 1 to 2 **grapheme clusters** (a joined family or a flag is one), at most 32 UTF-16 units, no whitespace or control characters, at least one visible code point |
+| `svg` | the sanitiser's **canonical** SVG document | at most 8 KiB, one `<svg>` root with a `viewBox` within ±4096, sanitised as described in [web-ui.md](web-ui.md#custom-glyphs) |
+| `none` | `""` | draw the built-in mark |
+
+An `svg` value is accepted only as the sanitiser's own output — a raw document,
+however clean, is refused with a sentence saying to sanitise it first, and a
+hostile one (a `<script>`, an event handler, an external `href`, an oversized
+document) is refused with the reason. So the database, `kinds ls --json`,
+`list_kinds` and `/api/settings` never carry anything but canonical, inert
+markup, and the human `kinds ls` prints the terminal `fallback`, never the
+document. A stored record that no longer validates — one hand-edited on disk,
+say — is refused at read with the key in the sentence rather than served.
+
 ## Estimates vs actuals
 
 One stored number and a handful of read-time derivations, so you can say what

