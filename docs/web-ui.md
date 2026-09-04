@@ -8,9 +8,9 @@ One command, no daemon: the server runs in the foreground and Ctrl-C closes it
 along with every database handle. `--hub` serves every registered workspace at
 once; the browser behaviour follows `config browser=auto|always|never`.
 
-Views: subtask tree and dependency graph, plus a detail panel with documents,
-comments, and the agent-payload pane, and a workspace settings dialog for the
-status and kind vocabularies.
+Views: subtask tree, dependency graph and milestones, plus a detail panel with
+documents, comments, and the agent-payload pane, and a workspace settings dialog
+for the status and kind vocabularies.
 
 ## Auth
 
@@ -57,6 +57,49 @@ and a per-id count of what still carries it. `POST /api/settings` takes
 `update_statuses` / `update_kinds` MCP tools — and answers with the identical
 envelope, so the page re-derives from one response rather than merging. It is
 the only route that both reads and writes.
+
+## Milestones
+
+The third tab beside Graph — also "Go to milestones" in the command palette —
+is the planning view for [milestones](milestones.md): dated, human-ordered plans
+that contain epics and tasks without moving them. It needs the `milestone` kind
+configured (`staple kinds add milestone --label Milestone`); without it the
+page shows the store's own refusal naming that command.
+
+**Left, the plan.** Every milestone in plan order, then target date, then
+identifier — an unplanned milestone sits below every planned one, and a date
+never reorders a plan. Each row shows the target date, member count, a progress
+bar with `done/countable` and the percent, the derived state, the risk, and the
+queue's answer: `next: STA-67 (#4)` once R3d fills it, a muted "not queued yet"
+until then. Resolved milestones follow the page's "show done" filter.
+
+**Right, one milestone.** Title, start and target dates, owner, plan position;
+rollups (progress, blocked, gated, active, ready); the ordered members drawn
+with the same row as the tree, so kind glyph, status glyph and identifier read
+the same everywhere. A member epic's own children follow it indented, read-only
+— membership never rewrites hierarchy and neither does this list. A member added
+with a note shows the note under its row.
+
+**Editing membership.** Every member has Open, Move up, Move down and Remove
+buttons, always visible, plus alt+arrow on the row; the form under the list adds
+an identifier with an optional note. Each write carries the view's `revision` as
+`baseRevision`, and the store refuses a stale one with `revision_conflict`: the
+page shows "Member order changed elsewhere" with the store's sentence and a
+Reload, rather than a refusal, because the fix is to read again. Any other
+refusal is the store's own sentence. Drag is deliberately absent — the row list
+carries no drag wiring, and the buttons are the keyboard path either way.
+
+**States without colour.** Planned `○`, active `◐`, overdue `!`, done `✓`,
+cancelled `×` — glyph and word together, so no state is told by hue alone; an
+active milestone whose members have all landed says "all members done" beside
+the badge until a human closes it. Blocked and gated are not milestone states
+(they are facts about members) and appear as `⊘ n blocked` / `◇ n gated` in the
+risk line.
+
+**Layout.** Below `md` (48rem) the two panes stack: the list, then the detail
+with a "Back to milestones" button. From `md` up they split. The expand button in
+the detail header gives it the whole content box at any width; press it again to
+return.
 
 ## Stack
 

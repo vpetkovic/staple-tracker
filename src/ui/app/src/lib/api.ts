@@ -22,6 +22,8 @@ import type {
   IssueDetail,
   IssueDocument,
   IssueRow,
+  MilestoneListRow,
+  MilestoneView,
   Poll,
   StapleEvent,
   VocabularyOp,
@@ -286,3 +288,51 @@ export const putSettings = (
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ actor: "ui", ...params, target, ops }),
   });
+
+// ---------- milestones (R3c / STA-173) ----------
+
+/** The store's own code for a stale `baseRevision`; the page shows it as a conflict, not a refusal. */
+export const REVISION_CONFLICT_CODE = "revision_conflict";
+
+export function isRevisionConflict(error: unknown): error is ApiError {
+  return error instanceof ApiError && error.code === REVISION_CONFLICT_CODE;
+}
+
+export const getMilestones = (params: { ws?: string; all?: boolean } = {}) =>
+  request<MilestoneListRow[]>(`/api/milestones${qs({ ws: params.ws, all: params.all ? "1" : undefined })}`);
+
+export const getMilestone = (params: { ws?: string; ref: string }) =>
+  request<MilestoneView>(`/api/milestone${qs(params)}`);
+
+/**
+ * Every write answers with the same `MilestoneView` a read does, and every membership
+ * write carries `baseRevision` — the CAS the store checks before touching the order. A
+ * stale base is `revision_conflict` (409) and the order is untouched.
+ */
+const milestoneWrite = (route: string, body: Record<string, unknown>) =>
+  request<MilestoneView>(`/api/milestone/${route}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ actor: "ui", ...body }),
+  });
+
+export const addMilestoneMember = (target: {
+  ws?: string;
+  milestone: string;
+  ref: string;
+  baseRevision: number;
+  before?: string;
+  after?: string;
+  at?: number;
+  note?: string;
+}) => milestoneWrite("add", target);
+
+export const removeMilestoneMember = (target: { ws?: string; milestone: string; ref: string; baseRevision: number }) =>
+  milestoneWrite("remove", target);
+
+export const reorderMilestoneMembers = (target: {
+  ws?: string;
+  milestone: string;
+  order: readonly string[];
+  baseRevision: number;
+}) => milestoneWrite("reorder", target);

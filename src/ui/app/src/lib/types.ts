@@ -942,3 +942,72 @@ export interface ErrorEnvelope {
   detail?: Record<string, unknown>;
   retryable: boolean;
 }
+
+// ---------- milestones (R3c / STA-173) ----------
+
+/**
+ * The milestone view as every surface prints it — the mirror of `MilestoneView` in
+ * `src/core/milestone-store.ts` and the JSON shape in docs/milestones.md. One shape for
+ * `GET /api/milestone`, and for the result of every `POST /api/milestone/*` write, so the
+ * page redraws from a write result exactly as it does from a read.
+ */
+export const MILESTONE_STATES = ["planned", "active", "overdue", "done", "cancelled"] as const;
+export type MilestoneState = (typeof MILESTONE_STATES)[number];
+
+export interface MilestoneSummary {
+  identifier: string;
+  title: string;
+  status: StatusId;
+  kind: KindId;
+  assignee: string | null;
+  targetDate: string | null;
+  startDate: string | null;
+  /** Derived on every read; never stored. */
+  state: MilestoneState;
+  /** The milestone's row in the pickup plan; null until the queue (R3d) fills it. */
+  planPosition: number | null;
+}
+
+export interface MilestoneProgress {
+  total: number;
+  countable: number;
+  counts: Record<StatusCategory, number>;
+  /** `floor(done · 100 / countable)`; null when nothing is countable. */
+  percent: number | null;
+  complete: boolean;
+}
+
+export interface MilestoneMemberRow {
+  identifier: string;
+  title: string;
+  kind: KindId;
+  status: StatusId;
+  /** 1-based, in rank order. */
+  position: number;
+  rank: number;
+  /** The member's real parent, untouched by membership. */
+  parent: string | null;
+  /** The nearest ancestor that is ALSO a direct member here, so the view can indent. */
+  nestedUnder: string | null;
+  addedBy: string;
+  addedAt: string;
+  note: string | null;
+}
+
+export interface MilestoneNext {
+  identifier: string;
+  position: number;
+}
+
+export interface MilestoneView {
+  milestone: MilestoneSummary;
+  progress: MilestoneProgress;
+  /** The `members_revision` CAS base every write must carry back. */
+  revision: number;
+  members: MilestoneMemberRow[];
+  /** The next eligible row from the queue resolver; null until R3d. */
+  next: MilestoneNext | null;
+}
+
+/** A `GET /api/milestones` row: the view without its members, plus how many there are. */
+export type MilestoneListRow = Omit<MilestoneView, "members"> & { memberCount: number };

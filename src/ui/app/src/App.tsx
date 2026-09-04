@@ -47,6 +47,7 @@ import { useWorkspaceSettings } from "@/lib/settings";
 import { loadViewPrefs, saveViewPrefs, type GroupBy } from "@/lib/view-prefs";
 import { useDataVersion, useResource } from "@/lib/useStaple";
 import { GraphView } from "@/views/GraphView";
+import { MilestonesView } from "@/views/milestones/MilestonesView";
 import { TreeView } from "@/views/TreeView";
 import { ErrorState, LoadingState } from "@/views/ViewChrome";
 
@@ -59,6 +60,7 @@ import { ErrorState, LoadingState } from "@/views/ViewChrome";
 const VIEW_COMPONENTS: Record<ViewName, typeof TreeView> = {
   tree: TreeView,
   graph: GraphView,
+  milestones: MilestonesView,
 };
 
 /**
