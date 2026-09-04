@@ -38,6 +38,8 @@ export function effective(over: Partial<EffectiveQueueRow> & { identifier: strin
     detail: null,
     dueAt: null,
     parent: null,
+    milestonePath: [],
+    epicPath: [],
     ...over,
   };
 }
