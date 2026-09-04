@@ -13,6 +13,7 @@ staple events [--since N]             staple hub [ls|links|events]
 staple open [--port 4400] [--hub]     staple config [show|set|home]
 staple migrate [--yes]                staple doctor [--json] [--fix --only <check>]
 staple install [status|--rollback]    staple add <path> --yes | discover <root>
+staple settings [get <key>|set <key> <value>]       this workspace's registered settings
 
 staple wait <ref> [--timeout s] [--interval ms]     block until ready or finished
 staple events --follow [--since N] [--max N]        stream events as they land
@@ -57,6 +58,28 @@ headers, tree sort — so a reorder changes what everyone in the repo sees.
 `rm` refuses with exit 4 while issues still carry the status (pass
 `--migrate-to`), and with exit 2 when it is the last status of a category staple
 writes into.
+
+## Workspace settings
+
+Registered workspace settings (see
+[configuration.md](configuration.md#the-settings-registry)) have the
+workspace twin of `config`: `settings` reads and writes the values this
+workspace stores, never the machine's `config.json`.
+
+```bash
+staple settings                          # every registered value:  key = value  (source)
+staple settings get queue.policy         # queue.policy = advisory  (default)
+staple settings set queue.policy strict  # queue.policy = strict  (workspace)
+staple settings get queue.policy --json  # {"key":"queue.policy","scope":"workspace","value":"strict","source":"workspace","version":1}
+```
+
+`source` says where the effective value came from — `default` until someone
+sets it, `workspace` after. `--json` prints the same object `/api/settings`
+serves and the `get_setting` tool answers. A value the schema refuses
+(`queue.policy` takes `advisory` or `strict`) exits 2 naming the key; a global
+key exits 2 naming `staple config set`. Every write is attributed to
+`STAPLE_AGENT` and logged as a `setting_changed` event with the previous and
+new value.
 
 ## Kinds
 

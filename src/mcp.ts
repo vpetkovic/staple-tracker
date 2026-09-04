@@ -1289,6 +1289,20 @@ type _KindRowMatchesInterface = Expect<
 >;
 
 /**
+ * One registered workspace setting with its provenance (R6d, STA-179) — the
+ * registry's `SettingValueView`, which `/api/settings` serves under `values`
+ * and `staple settings get` prints, so every surface answers the same object.
+ */
+const settingValueShape = {
+  key: z.string(),
+  scope: z.enum(["workspace", "global"]),
+  value: z.unknown().optional().describe("Absent when redacted"),
+  source: z.enum(["default", "workspace", "config"]).describe("Where the effective value came from"),
+  version: z.number(),
+  redacted: z.literal(true).optional(),
+};
+
+/**
  * One op. A BATCH rather than a tool per verb because "add awaiting_approval and
  * put it after in_review" is a single intention, and splitting it over two calls
  * leaves a window where every board in the workspace is visibly wrong. Applied
@@ -1538,6 +1552,49 @@ server.registerTool(
       resetWorkspaceCache();
       return summary;
     }),
+);
+
+/**
+ * Registered workspace settings (R6d, STA-179). `get_setting` / `set_setting`
+ * are the MCP face of `staple settings get|set` and of `/api/settings` `values`:
+ * all three answer the store's `SettingValueView`, so an agent, a shell and the
+ * page never disagree about a value or where it came from. A global key is
+ * refused by the store with the sentence naming `staple config set`.
+ */
+server.registerTool(
+  "get_setting",
+  {
+    description:
+      "The effective value of ONE registered workspace setting with its provenance: source is default (nothing stored) or workspace (a human or agent set it). Keys are namespaced category.name — queue.policy (advisory | strict, default advisory) says whether the pickup queue is advisory or refuses an out-of-order checkout; kinds.default is the kind a new task gets. A global machine preference is not readable here.",
+    inputSchema: { key: z.string().describe("Setting key, e.g. queue.policy"), ws: wsSchema },
+    outputSchema: settingValueShape,
+    annotations: { title: "Get setting", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+  },
+  ({ key, ws }) => run(() => storeFor(ws).settingValue(key)),
+);
+
+server.registerTool(
+  "set_setting",
+  {
+    description:
+      "Write ONE registered workspace setting. The value is validated against the registry's schema (queue.policy takes advisory or strict) and the change is logged with actor, previous and new value. Answers the new effective value with source workspace. Changing queue.policy to strict changes what every agent's checkout is allowed to do — do it because a human asked.",
+    inputSchema: {
+      key: z.string().describe("Setting key, e.g. queue.policy"),
+      value: z.union([z.string(), z.number(), z.boolean()]).describe("The typed value the setting's schema expects"),
+      actor: z.string().optional(),
+      ws: wsSchema,
+    },
+    outputSchema: settingValueShape,
+    annotations: {
+      title: "Set setting",
+      readOnlyHint: false,
+      destructiveHint: false,
+      // The same key and value twice leaves the workspace as it was.
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  ({ key, value, actor, ws }) => run(() => storeFor(ws).setSetting(key, value, requireActor(actor))),
 );
 
 const transport = new StdioServerTransport();

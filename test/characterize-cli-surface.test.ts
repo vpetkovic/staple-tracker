@@ -136,6 +136,10 @@ const COMMANDS: ReadonlyArray<{
     booleans: ["json", "yes", "all-found", "follow-symlinks", "cross-filesystems"],
     shorts: [],
   },
+  // R6d (STA-179) added `settings`, the WORKSPACE twin of `config`: registered
+  // workspace values (queue.policy first) with their provenance. Only the
+  // common flags — a setting is selected by positional key, never by flag.
+  { name: "settings", strings: ["db", "ws"], booleans: ["json"], shorts: [] },
 ];
 
 /** Every command token in one place, so a removal is a one-line diff. */
@@ -147,18 +151,19 @@ describe("command inventory", () => {
       "init", "new", "ls", "show", "checkout", "start", "done", "cancel",
       "status", "release", "block", "blocked-by", "wait", "link", "comment",
       "tree", "board", "inbox", "doc", "events", "hub", "ui", "open", "config",
-      "migrate", "install", "doctor", "add", "discover",
+      "migrate", "install", "doctor", "add", "discover", "settings",
     ]);
-    // 29 tokens, 26 distinct behaviours: checkout/start, done/cancel and ui/open
+    // 30 tokens, 27 distinct behaviours: checkout/start, done/cancel and ui/open
     // each share a case. Was 22 before A3 (STA-33) added `config`, 23 before A5
     // (STA-35) added `migrate`, 24 before A8 (STA-38) added `install`, 25 before
     // A6 (STA-36) added `open`, 26 before A7 (STA-37) added `doctor`, 27 before
-    // A9 (STA-39) added `add` and `discover`. The rest of the epic still owes
+    // A9 (STA-39) added `add` and `discover`, 29 before R6d (STA-179) added
+    // `settings`. The rest of the epic still owes
     // this list: connect, disconnect (STA-25 / B1-B4), and mcp — which today is
     // handled by the PACKAGED entrypoint (src/package/staple.ts) rather than by
     // this dispatcher. Whoever adds an `mcp` case here must delete that branch
     // in the same change rather than leaving two.
-    expect(COMMAND_NAMES).toHaveLength(29);
+    expect(COMMAND_NAMES).toHaveLength(30);
   });
 
   it.each(COMMANDS.map((c) => c.name))(

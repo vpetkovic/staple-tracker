@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  QUEUE_POLICIES,
   SETTING_CATEGORIES,
   SETTING_DEFINITIONS,
   assertSettingRegistryConsistent,
@@ -8,6 +9,7 @@ import {
   readStoredSetting,
   requireSettingDefinition,
   settingCategoriesFor,
+  settingCategory,
   settingDefinition,
   settingDefinitionView,
   settingDefinitionsFor,
@@ -55,22 +57,49 @@ describe("the registered set", () => {
     }
   });
 
-  it("registers the three machine preferences as global and one workspace field setting", () => {
+  it("registers the three machine preferences as global and two workspace field settings", () => {
     expect(settingDefinitionsFor("global").map((d) => [d.key, d.configKey])).toEqual([
       ["machine.browser", "browser"],
       ["machine.port", "port"],
       ["machine.setupComplete", "setupComplete"],
     ]);
-    expect(settingDefinitionsFor("workspace").map((d) => d.key)).toEqual(["kinds.default"]);
+    expect(settingDefinitionsFor("workspace").map((d) => d.key)).toEqual(["kinds.default", "queue.policy"]);
   });
 
-  it("lists statuses and kinds as workspace vocabulary categories the shell can enumerate", () => {
+  it("lists statuses, kinds and the Workflow category as workspace categories the shell can enumerate", () => {
     expect(SETTING_CATEGORIES.map((c) => `${c.id}:${c.scope}:${c.editor}`)).toEqual([
       "statuses:workspace:statuses",
       "kinds:workspace:kinds",
+      "queue:workspace:fields",
       "machine:global:fields",
     ]);
     expect(settingCategoriesFor("global").map((c) => c.id)).toEqual(["machine"]);
+  });
+
+  /**
+   * R6d (STA-179) — the queue policy is registered EXACTLY as docs/queue.md
+   * "Policy: advisory or strict" names it: key, the two values, the default and
+   * the scope. Everything a surface needs to define, persist and expose it is on
+   * the definition; nothing here enforces it — that is R2c's (STA-168) resolver,
+   * which imports QUEUE_POLICIES rather than restating the set.
+   */
+  it("registers queue.policy to the queue contract: advisory | strict, default advisory, workspace scope", () => {
+    const definition = requireSettingDefinition("queue.policy", "workspace");
+    expect(QUEUE_POLICIES).toEqual(["advisory", "strict"]);
+    expect(definition).toMatchObject({
+      category: "queue",
+      scope: "workspace",
+      schema: { type: "enum", values: QUEUE_POLICIES },
+      default: "advisory",
+      version: 1,
+      sensitivity: "normal",
+      ui: { control: "select", label: "Queue policy" },
+    });
+    expect(definition.configKey).toBeUndefined();
+    // The side effect is on the definition, so every surface can show it BEFORE a save.
+    expect(definition.ui.description).toMatch(/strict: .*checkout of a later item is refused/);
+    expect(definition.ui.description).toMatch(/advisory: .*never refused for order/);
+    expect(settingCategory("queue")).toMatchObject({ label: "Workflow", scope: "workspace", editor: "fields" });
   });
 
   it("refuses a registry whose definition breaks an invariant, naming the key", () => {
@@ -228,10 +257,11 @@ describe("wire views", () => {
 
   it("serves the whole registry in shell order", () => {
     const view = settingRegistryView();
-    expect(view.categories.map((c) => c.id)).toEqual(["statuses", "kinds", "machine"]);
+    expect(view.categories.map((c) => c.id)).toEqual(["statuses", "kinds", "queue", "machine"]);
     expect(view.definitions.map((d) => d.key)).toEqual([
       "kinds.default",
       "machine.browser",
+      "queue.policy",
       "machine.port",
       "machine.setupComplete",
     ]);

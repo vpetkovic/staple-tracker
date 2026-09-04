@@ -158,6 +158,16 @@ to its default. Global-scope definitions render disabled with the sentence
 naming `staple config set`. Registering a definition is the whole of adding
 it to the page: nothing in the form names a setting.
 
+**Workflow** is the first such category in workspace scope, and its first
+control is the queue policy
+([configuration.md](configuration.md#queuepolicy)): a select over `advisory`
+and `strict`, with the registry's description stating before you save what
+`strict` changes for agents, and the scope tag beside it saying *Workspace ·
+default* until a value is stored and *Workspace · workspace* after. The
+category, the control and its explanation all come from the registry entry;
+`fields-form.test.tsx` renders a second fixture toggle beside it and pins
+that none of the shell's files names the setting or the category.
+
 ## Stack
 
 The page is a Vite + React + TypeScript app in `src/ui/app/`, shipped inside the

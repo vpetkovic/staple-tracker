@@ -41,10 +41,34 @@ Scope is physical, not a label:
 | Scope | Lives in | Written by | Examples |
 |---|---|---|---|
 | `global` | `<home>/config.json`, under the field the definition names | `staple config set` | `machine.browser`, `machine.port`, `machine.setupComplete` |
-| `workspace` | the workspace database (`meta` rows keyed `setting:<key>`) | `POST /api/settings` with `target: "settings"` | `kinds.default` |
+| `workspace` | the workspace database (`meta` rows keyed `setting:<key>`) | `staple settings set`, `set_setting`, `POST /api/settings` with `target: "settings"` | `kinds.default`, `queue.policy` |
 
 A workspace key is refused on the config surface and a global key is refused
 on the workspace surface, each refusal naming the surface that does own it.
+
+### `queue.policy`
+
+The first registered feature control, in the **Workflow** category (registry
+id `queue`, because a key is namespaced by its category). It is defined
+exactly as [queue.md](queue.md#policy-advisory-or-strict) names it:
+workspace scope, `advisory | strict`, default `advisory`.
+
+- `advisory` — the queue orders and explains; a checkout is never refused for
+  order. Upgrading a workspace changes nothing an agent can observe until a
+  human sets `strict`.
+- `strict` — an agent's checkout of a later item is refused (`out_of_order`,
+  exit 10) while an earlier eligible item exists, and the refusal names what to
+  take instead. Dependencies, approval gates and live claims stay hard
+  constraints under both values.
+
+The registry defines, stores and exposes the value; the checkout resolver
+that reads it is R2c's (STA-168), which imports `QUEUE_POLICIES` from the
+registry rather than restating the set. The definition's description carries
+the side effect, so every surface can show what `strict` changes *before* a
+save, and every change is a `setting_changed` event with actor, previous and
+new value. The same `{ value, source }` pair is answered by `staple settings
+get queue.policy`, the `get_setting` tool, `/api/settings` `values`, and the
+UI's `settingValue()` — pinned by `test/contract-settings-surfaces.test.ts`.
 
 Workspace values are stored as `{ "v": <version>, "value": … }`. Reading a
 value written at an **older** version runs the definition's migrate hook
@@ -57,10 +81,26 @@ Every change logs a `setting_changed` event with the actor, the previous
 value and the new one.
 
 The registry also lists the workspace's **categories** — Statuses, Kinds,
-This machine — with the editor each one needs, so the settings UI enumerates
-its navigation from the registry rather than hard-coding tabs. Adding a
-setting or a category is a registry entry (plus a field on `StapleConfig`
-for a global one); no shell component changes.
+Workflow, This machine — with the editor each one needs, so the settings UI
+enumerates its navigation from the registry rather than hard-coding tabs.
+Adding a setting or a category is a registry entry (plus a field on
+`StapleConfig` for a global one); no shell component changes.
+
+Workspace values have their own commands, the workspace twin of `config`:
+
+```bash
+staple settings                       # every registered workspace setting: key = value  (source)
+staple settings get queue.policy      # one, e.g.  queue.policy = advisory  (default)
+staple settings set queue.policy strict
+staple settings get queue.policy --json
+# {"key":"queue.policy","scope":"workspace","value":"strict","source":"workspace","version":1}
+```
+
+`source` is `default` (nothing stored) or `workspace` (someone set it). The
+value is coerced and validated through the registry — `queue.policy` takes
+only `advisory` or `strict`, exit 2 otherwise — and the write is attributed to
+`STAPLE_AGENT` (or `$USER`). A global key such as `machine.port` is refused
+here with the sentence naming `staple config set`.
 
 ## `config.json`
 

@@ -109,6 +109,23 @@ The UI server's read routes mirror this exactly, and `/api/agent-context` is
 expression-for-expression identical to `get_task`, so the agent-view pane below
 shows the gate the agent will actually receive.
 
+### Workspace settings
+
+Two tools read and write the registered workspace settings
+([configuration.md](configuration.md#the-settings-registry)). **`get_setting`**
+`{key, ws?}` is read-only and answers one value with its provenance —
+`{key, scope, value, source, version}`, where `source` is `default` until
+someone stores a value and `workspace` after. **`set_setting`**
+`{key, value, actor?, ws?}` validates through the registry, logs a
+`setting_changed` event with actor, previous and new value, and answers the
+same shape with the new value. The first registered control is
+**`queue.policy`** (`advisory | strict`, default `advisory`): whether the
+pickup queue merely orders work or refuses an out-of-order checkout — read it
+before assuming the inbox's order is optional, and change it only because a
+human asked. Both tools answer the exact object `staple settings get --json`
+prints and `/api/settings` serves under `values`, so no surface disagrees
+about a value or where it came from.
+
 ## Harness ergonomics
 
 All in-protocol, so a harness never needs out-of-band setup:

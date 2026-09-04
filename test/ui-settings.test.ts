@@ -433,11 +433,14 @@ describe("registered settings on /api/settings", () => {
     expect(settings.registry.categories.map((c) => `${c.id}:${c.scope}:${c.editor}`)).toEqual([
       "statuses:workspace:statuses",
       "kinds:workspace:kinds",
+      // R6d (STA-179): the Workflow category reaches the page from the registry alone.
+      "queue:workspace:fields",
       "machine:global:fields",
     ]);
     expect(settings.registry.definitions.map((d) => `${d.key}:${d.scope}`)).toEqual([
       "kinds.default:workspace",
       "machine.browser:global",
+      "queue.policy:workspace",
       "machine.port:global",
       "machine.setupComplete:global",
     ]);
@@ -447,6 +450,7 @@ describe("registered settings on /api/settings", () => {
     const settings = await read();
     expect(settings.values).toEqual({
       "kinds.default": { key: "kinds.default", scope: "workspace", value: "task", source: "default", version: 1 },
+      "queue.policy": { key: "queue.policy", scope: "workspace", value: "advisory", source: "default", version: 1 },
     });
     expect(settings.unknownKeys).toEqual([]);
     expect(settings.global.path).toBe(join(home, "config.json"));

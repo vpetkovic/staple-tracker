@@ -33,14 +33,14 @@
  * alone; `config.json` already preserves its own unknown fields. Downgrading a
  * binary must never truncate configuration.
  *
- * ## What is deliberately NOT here
+ * ## The registered set
  *
- * No queue policy. R2a is still specifying advisory/strict pickup enforcement
- * and R6d owns registering it once that contract exists — a definition whose
- * `strict` did nothing would be a lie with a select box. The registry ships with
- * the three machine preferences that already existed and ONE workspace field
- * setting with real behaviour today (`kinds.default`), which is enough to prove
- * the store -> HTTP -> UI path end to end without inventing a feature.
+ * The three machine preferences that already existed, ONE workspace field
+ * setting with behaviour in this module's neighbours (`kinds.default`), and —
+ * R6d (STA-179) — the pickup-queue policy `queue.policy`, registered here to
+ * the contract docs/queue.md fixed (R2a) and READ by the checkout resolver R2c
+ * (STA-168) adds. Registering is the whole of this module's part: it defines,
+ * persists and exposes the value on every surface; it enforces nothing.
  */
 import { StapleError, VOCABULARY_ID_PATTERN, DEFAULT_ISSUE_KIND } from "./types.js";
 
@@ -133,6 +133,17 @@ export const SETTING_CATEGORIES: readonly SettingCategory[] = [
     order: 20,
   },
   {
+    // R6d (STA-179): the first `fields` category in workspace scope. Its id is
+    // `queue` because the key docs/queue.md names is `queue.policy` and a key is
+    // namespaced by its category; its label says what the category is FOR.
+    id: "queue",
+    label: "Workflow",
+    description: "How agents pick work up from this workspace's queue.",
+    scope: "workspace",
+    editor: "fields",
+    order: 30,
+  },
+  {
     id: "machine",
     label: "This machine",
     description: "Preferences for staple on this computer. Stored in the home's config.json, not in any workspace.",
@@ -144,6 +155,15 @@ export const SETTING_CATEGORIES: readonly SettingCategory[] = [
 
 export const BROWSER_PREFERENCES = ["auto", "always", "never"] as const;
 export type BrowserPreference = (typeof BROWSER_PREFERENCES)[number];
+
+/**
+ * The pickup-queue policy, exactly as docs/queue.md "Policy: advisory or strict"
+ * defines it (R2a, STA-166). This module REGISTERS the setting; the resolver
+ * that reads it on checkout is R2c's (STA-168), which imports this set rather
+ * than restating it.
+ */
+export const QUEUE_POLICIES = ["advisory", "strict"] as const;
+export type QueuePolicy = (typeof QUEUE_POLICIES)[number];
 
 export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
   {
@@ -162,6 +182,25 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
       label: "Default kind",
       description:
         "The kind a ticket gets when none is given. Must name a configured kind; removing that kind resets this.",
+      control: "select",
+      order: 10,
+    },
+  },
+  {
+    key: "queue.policy",
+    category: "queue",
+    scope: "workspace",
+    schema: { type: "enum", values: QUEUE_POLICIES },
+    default: "advisory" satisfies QueuePolicy,
+    version: 1,
+    sensitivity: "normal",
+    ui: {
+      label: "Queue policy",
+      // The side effect, stated before Save: what `strict` changes for agents.
+      description:
+        "How the pickup queue binds agents. advisory: the queue orders and explains, and a checkout is never refused for order. " +
+        "strict: an agent's checkout of a later item is refused (out_of_order, exit 10) while an earlier eligible item exists, and the refusal names what to take instead. " +
+        "Dependencies, gates and claims stay hard constraints under both.",
       control: "select",
       order: 10,
     },

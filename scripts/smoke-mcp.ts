@@ -118,7 +118,7 @@ try {
   );
   const readOnly = tools.tools.filter((t: any) => t.annotations?.readOnlyHint === true).map((t: any) => t.name);
   assert(
-    readOnly.length === 9 &&
+    readOnly.length === 10 &&
       [
         "inbox",
         "list_tasks",
@@ -130,8 +130,10 @@ try {
         "list_statuses",
         "list_kinds",
         "hub_overview",
+        // R6d (STA-179): so is reading a registered setting.
+        "get_setting",
       ].every((n) => readOnly.includes(n)),
-    `exactly the 9 read-only tools flagged readOnlyHint (${readOnly.join(", ")})`,
+    `exactly the 10 read-only tools flagged readOnlyHint (${readOnly.join(", ")})`,
   );
   assert(byName.get("checkout_task").annotations.idempotentHint === true, "checkout_task flagged idempotent");
   assert(
@@ -458,6 +460,34 @@ try {
     "list_kinds returns the seeded kind vocabulary",
   );
 
+  // ── registered workspace settings (R6d, STA-179) ──────────────────────────
+  const policyBefore = JSON.parse(
+    toolText(await rpc("tools/call", { name: "get_setting", arguments: { key: "queue.policy" } })),
+  );
+  assert(
+    policyBefore.value === "advisory" && policyBefore.source === "default" && policyBefore.scope === "workspace",
+    "get_setting answers queue.policy = advisory from the default until something is stored",
+  );
+  const policyAfter = JSON.parse(
+    toolText(await rpc("tools/call", {
+      name: "set_setting",
+      arguments: { key: "queue.policy", value: "strict", actor: "smoke-agent" },
+    })),
+  );
+  assert(
+    policyAfter.value === "strict" && policyAfter.source === "workspace",
+    "set_setting answers the new value with source workspace",
+  );
+  const policyRefused = await rpc("tools/call", {
+    name: "set_setting",
+    arguments: { key: "queue.policy", value: "lenient", actor: "smoke-agent" },
+  });
+  assert(
+    policyRefused.isError === true && toolText(policyRefused).includes("must be one of advisory, strict"),
+    "set_setting refuses a value outside the queue contract, naming the two it takes",
+  );
+  await rpc("tools/call", { name: "set_setting", arguments: { key: "queue.policy", value: "advisory", actor: "smoke-agent" } });
+
   // ── issue kinds on the wire (STA-124) ─────────────────────────────────────
   const aBug = JSON.parse(
     toolText(await rpc("tools/call", {
@@ -648,10 +678,11 @@ try {
   const wsTargetable = coldTools.tools
     .filter((t: any) => t.inputSchema?.properties?.ws)
     .map((t: any) => t.name);
-  // STA-140 added list_statuses / list_kinds / update_statuses / update_kinds and
-  // STA-143 added gate_task / approve_task / request_changes. All seven act on ONE
-  // workspace, so all seven take `ws` like every other workspace tool.
-  assert(wsTargetable.length === 20, `20 workspace tools accept ws targeting (${wsTargetable.length} found)`);
+  // STA-140 added list_statuses / list_kinds / update_statuses / update_kinds,
+  // STA-143 added gate_task / approve_task / request_changes, and STA-179 added
+  // get_setting / set_setting. All nine act on ONE workspace, so all nine take
+  // `ws` like every other workspace tool.
+  assert(wsTargetable.length === 22, `22 workspace tools accept ws targeting (${wsTargetable.length} found)`);
   assert(
     !coldByName.get("cross_link").inputSchema.properties?.ws &&
       !coldByName.get("hub_overview").inputSchema.properties?.ws,
@@ -765,6 +796,8 @@ try {
         "release_task",
         "request_changes",
         "set_blocked_by",
+        // STA-179: a setting write is attributed like one too.
+        "set_setting",
         // STA-140: a vocabulary edit is a write and is attributed like one.
         "update_kinds",
         "update_statuses",
