@@ -20,6 +20,7 @@ import { initWorkspace, resolveWorkspace } from "./core/workspace.js";
 import type { OpenedWorkspace } from "./core/workspace.js";
 import type { VocabularyOp, WorkspaceStore } from "./core/store.js";
 import { MILESTONE_STATES } from "./core/milestones.js";
+import { KIND_APPEARANCE_SOURCES, type KindWithAppearance } from "./core/kind-appearance.js";
 import { Hub, notifyHubResolvedSafe } from "./core/hub.js";
 import type { CrossBlockerState } from "./core/hub.js";
 import {
@@ -470,6 +471,38 @@ const timingShape = {
     .describe(
       "Direct children per status; every CONFIGURED status present, zeros included (see list_statuses)",
     ),
+  /**
+   * STA-192: the recursive plan, BESIDE the depth-1 childrenEstimatedSeconds
+   * rather than instead of it. See `SubtreePlan` in core/types.ts for the one
+   * contribution rule that keeps it from counting anything twice.
+   */
+  subtreePlan: z
+    .object({
+      estimatedSeconds: z
+        .number()
+        .nullable()
+        .describe(
+          "THE EFFECTIVE PLAN an ancestor counts this issue as: the own estimate when recorded, otherwise descendantsEstimatedSeconds; null when neither exists",
+        ),
+      source: z
+        .enum(["own", "descendants", "none"])
+        .describe("Which of the two fed estimatedSeconds; none when it is null"),
+      descendantsEstimatedSeconds: z
+        .number()
+        .nullable()
+        .describe(
+          "BOTTOM-UP: sum of the DIRECT children's effective plans, the recursive counterpart of childrenEstimatedSeconds; null when no descendant at any depth has an estimate. Present even when an own estimate wins, so the two can be compared",
+        ),
+      contributingCount: z
+        .number()
+        .describe(
+          "Descendants at any depth whose own estimate is a term of descendantsEstimatedSeconds; a descendant shadowed by an estimated ancestor beneath this issue is not counted",
+        ),
+      totalCount: z.number().describe("Descendants at any depth, whatever their status; 0 for a leaf"),
+    })
+    .describe(
+      "Recursive, non-double-counting plan for the subtree: an issue contributes its own estimate if it has one, otherwise its children's contributions — never both",
+    ),
 };
 type _TimingShapeMatchesInterface = Expect<
   Equals<z.infer<z.ZodObject<typeof timingShape>>, IssueTiming>
@@ -760,6 +793,16 @@ server.registerTool(
         ...context,
         crossBlockers: crossBlockersSafe(context.issue.identifier),
         claim: store.claimActivity(context.issue.id),
+        /*
+         * NO `kindAppearance` HERE, unlike `staple show --json` (R5e, STA-185).
+         *
+         * Not an oversight and not a disagreement about what an agent needs: this
+         * payload is held byte-equal to /api/agent-context by the test below, and the
+         * pane's whole claim is that it shows exactly what an agent receives. A field
+         * added here alone would break that claim, and the appearance an agent would
+         * use it for is already one `list_kinds` call away — a record about the KIND,
+         * fetched once, not repeated on every issue payload.
+         */
         // Expression-for-expression identical to the /api/agent-context handler
         // in src/ui/server.ts — test/ui-agent-context.test.ts asserts deep
         // equality between the two, so these two lines must be added in both
@@ -1258,6 +1301,38 @@ type _KindRowMatchesInterface = Expect<
 >;
 
 /**
+ * A kind's resolved appearance (R5a, STA-181), the same record `staple kinds
+ * ls --json` and `/api/settings` serve. No colour field, on purpose: hue is a
+ * status-category property and a kind glyph is monochrome.
+ */
+const kindAppearanceShape = z.object({
+  source: z
+    .enum(KIND_APPEARANCE_SOURCES)
+    .describe('Where the web icon comes from; "none" means the built-in mark'),
+  value: z.string().describe('A canonical Lucide key, an emoji, or "" for none'),
+  label: z.string().describe("Accessible name — the kind label unless the operator set one"),
+  fallback: z.string().describe("What a terminal prints instead of the icon"),
+});
+const kindWithAppearanceShape = { ...kindRowShape, appearance: kindAppearanceShape };
+type _KindWithAppearanceMatchesInterface = Expect<
+  Equals<z.infer<z.ZodObject<typeof kindWithAppearanceShape>>, KindWithAppearance>
+>;
+
+/**
+ * One registered workspace setting with its provenance (R6d, STA-179) — the
+ * registry's `SettingValueView`, which `/api/settings` serves under `values`
+ * and `staple settings get` prints, so every surface answers the same object.
+ */
+const settingValueShape = {
+  key: z.string(),
+  scope: z.enum(["workspace", "global"]),
+  value: z.unknown().optional().describe("Absent when redacted"),
+  source: z.enum(["default", "workspace", "config"]).describe("Where the effective value came from"),
+  version: z.number(),
+  redacted: z.literal(true).optional(),
+};
+
+/**
  * One op. A BATCH rather than a tool per verb because "add awaiting_approval and
  * put it after in_review" is a single intention, and splitting it over two calls
  * leaves a window where every board in the workspace is visibly wrong. Applied
@@ -1325,12 +1400,12 @@ server.registerTool(
   "list_kinds",
   {
     description:
-      "This workspace's issue-kind vocabulary (epic, task, bug, chore, spike by default), in configured order. Kinds are a label for what a ticket IS; unlike statuses they carry no behaviour.",
+      "This workspace's issue-kind vocabulary (epic, task, bug, chore, spike by default), in configured order, each with its resolved appearance (icon source and value, accessible label, terminal fallback). Kinds are a label for what a ticket IS; unlike statuses they carry no behaviour.",
     inputSchema: { ws: wsSchema },
-    outputSchema: { kinds: z.array(z.object(kindRowShape)) },
+    outputSchema: { kinds: z.array(z.object(kindWithAppearanceShape)) },
     annotations: { title: "List kinds", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
   },
-  ({ ws }) => run(() => ({ kinds: storeFor(ws).getKinds() })),
+  ({ ws }) => run(() => ({ kinds: storeFor(ws).getKindsWithAppearance() })),
 );
 
 server.registerTool(
@@ -1732,6 +1807,49 @@ server.registerTool(
   },
   ({ milestone, order, base_revision, actor, ws }) =>
     run(() => storeFor(ws).milestones().reorderMembers(milestone, order, { baseRevision: base_revision }, requireActor(actor))),
+);
+
+/**
+ * Registered workspace settings (R6d, STA-179). `get_setting` / `set_setting`
+ * are the MCP face of `staple settings get|set` and of `/api/settings` `values`:
+ * all three answer the store's `SettingValueView`, so an agent, a shell and the
+ * page never disagree about a value or where it came from. A global key is
+ * refused by the store with the sentence naming `staple config set`.
+ */
+server.registerTool(
+  "get_setting",
+  {
+    description:
+      "The effective value of ONE registered workspace setting with its provenance: source is default (nothing stored) or workspace (a human or agent set it). Keys are namespaced category.name — queue.policy (advisory | strict, default advisory) says whether the pickup queue is advisory or refuses an out-of-order checkout; kinds.default is the kind a new task gets. A global machine preference is not readable here.",
+    inputSchema: { key: z.string().describe("Setting key, e.g. queue.policy"), ws: wsSchema },
+    outputSchema: settingValueShape,
+    annotations: { title: "Get setting", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+  },
+  ({ key, ws }) => run(() => storeFor(ws).settingValue(key)),
+);
+
+server.registerTool(
+  "set_setting",
+  {
+    description:
+      "Write ONE registered workspace setting. The value is validated against the registry's schema (queue.policy takes advisory or strict) and the change is logged with actor, previous and new value. Answers the new effective value with source workspace. Changing queue.policy to strict changes what every agent's checkout is allowed to do — do it because a human asked.",
+    inputSchema: {
+      key: z.string().describe("Setting key, e.g. queue.policy"),
+      value: z.union([z.string(), z.number(), z.boolean()]).describe("The typed value the setting's schema expects"),
+      actor: z.string().optional(),
+      ws: wsSchema,
+    },
+    outputSchema: settingValueShape,
+    annotations: {
+      title: "Set setting",
+      readOnlyHint: false,
+      destructiveHint: false,
+      // The same key and value twice leaves the workspace as it was.
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  ({ key, value, actor, ws }) => run(() => storeFor(ws).setSetting(key, value, requireActor(actor))),
 );
 
 const transport = new StdioServerTransport();

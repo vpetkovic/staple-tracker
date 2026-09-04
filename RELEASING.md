@@ -5,20 +5,34 @@ laptop; `.github/workflows/release.yml` publishes `dist-package/` to npm with
 provenance via trusted publishing (OIDC). There is no npm token in this repo's
 secrets, and none should ever be added.
 
-## RELEASE BLOCKERS — read before the first real tag
+## Schema contract — read before tagging
 
-- **Schema drift vs. the Workshop prototype.** The tree extracted into this
-  repo is the prototype's committed snapshot at `0aa2ee0` — **workspace schema
-  v2, pre-T-epic**. The parent prototype has in-flight work (schema v3
-  migrations from the T epic, timing fields, and the site retake) that is NOT
-  in this snapshot.
-- **Consequence:** an installed `staple-cli` 0.1.0 built from this snapshot
-  will refuse to open VP's own live hub/workspace databases, which are already
-  migrated to schema v3. Fresh installs and fresh workspaces are unaffected.
-- **Required action:** a deliberate re-sync from the prototype into this repo
-  must happen after VP commits the in-flight prototype work and **before the
-  first real release tag**. Until that re-sync lands, do not tag a release
-  intended for real use.
+- **This repository is canonical.** It carries workspace migrations 001-006
+  (schema 6), which is what the live workspace is stamped with. The Workshop
+  prototype checkout it was extracted from stopped at schema 3 and is retired:
+  it refuses the live database (`error(conflict)`, exit 4) and must stay that
+  way — never run it against the live workspace, and never re-sync from it.
+- **The artifact declares what it understands.** `npm run build:package`
+  stamps `staple.workspaceSchema` and `staple.hubSchema` into
+  `dist-package/package.json` from the migration lists compiled into the
+  bundle; `test/package-tarball.test.ts` pins that the numbers match. A
+  release whose declared schema is lower than the live workspace's stamp
+  installs fine but refuses to open it — that is a release that must not be
+  tagged for real use.
+- **Upgrades snapshot first.** An installed runtime that finds a workspace
+  behind its schema takes a `VACUUM INTO` snapshot beside the database before
+  migrating it, and retains the prior runtime under `<home>/runtime/versions/`
+  for `staple install --rollback --yes`. See `docs/migration.md`.
+- **The schema matrix is a release gate.** `test/install-schema-matrix.test.ts`
+  drives the packed runtime through the real launcher against the schema-3,
+  -5, -6, future-schema and WAL-backed fixtures, an interrupted install, and
+  the commands `docs/migration.md` prints. It needs `dist-package/` and skips
+  without it, so a full `npm test` in which it skipped is not a passing gate.
+  Before tagging, run it against the artifact you are about to publish:
+
+  ```bash
+  npm run build:package && npx vitest run test/install-schema-matrix.test.ts
+  ```
 
 ## One-time npm setup (VP only, before the first release)
 
@@ -60,7 +74,7 @@ subsequent release is just the tag flow below.
 
 4. The `Release` workflow runs automatically:
    - gates: `npm test`, `npm run typecheck`, `npm run smoke:mcp`,
-     `npm run drill:npx`;
+     `npm run drill:npx` (the schema matrix above must have RUN, not skipped);
    - guard: the tag must equal the version in BOTH `package.json` and the
      freshly built `dist-package/package.json`, or the job fails before
      publishing;

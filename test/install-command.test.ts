@@ -16,13 +16,16 @@
  * `~/.local/bin`, or shell profile.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { runInstallCommand } from "../src/install/index.js";
 import { clearHomeOverride } from "../src/config/index.js";
+import { WORKSPACE_LATEST_VERSION } from "../src/core/migrations/workspace/index.js";
 import { StapleError } from "../src/core/types.js";
 import { removeDir, tempDir } from "./fixtures/characterize-support.js";
 import { writeFakePayload } from "./fixtures/install-support.js";
+import { FIXTURES, fixturePath, rawMeta } from "./fixtures/schema/support.js";
 
 let scratch: string;
 let home: string;
@@ -146,6 +149,25 @@ describe("install", () => {
     expect(stdout.join("\n")).toContain("`staple install --rollback --yes` returns to 1.0.0");
   });
 
+  it("says which workspace schema the installed runtime understands, and where the prior one is retained", () => {
+    install("1.0.0");
+    stdout.length = 0;
+    install("2.0.0");
+
+    const text = stdout.join("\n");
+    expect(text).toContain(`Schema     understands workspace schema ${WORKSPACE_LATEST_VERSION}`);
+    expect(text).toContain(`returns to 1.0.0, retained at ${join(home, "runtime", "versions", "1.0.0")}.`);
+  });
+
+  it("exposes the schema and the retained path under --json", () => {
+    install("1.0.0");
+    install("2.0.0", ["--json"]);
+
+    const payloadJson = lastJson();
+    expect(payloadJson.workspaceSchema).toBe(WORKSPACE_LATEST_VERSION);
+    expect(payloadJson.previousVersionPath).toBe(join(home, "runtime", "versions", "1.0.0"));
+  });
+
   it("throws StapleError — cli.ts's existing catch owns the envelope and exit code", () => {
     let caught: unknown;
     try {
@@ -182,7 +204,8 @@ describe("status", () => {
     run(["status"]);
     const text = stdout.join("\n");
     expect(text).toContain("version    2.0.0");
-    expect(text).toContain("previous   1.0.0");
+    expect(text).toContain(`schema     understands workspace schema ${WORKSPACE_LATEST_VERSION}`);
+    expect(text).toContain(`previous   1.0.0  retained at ${join(home, "runtime", "versions", "1.0.0")}`);
     expect(text).toContain("versions   1.0.0, 2.0.0");
     expect(text).toContain(join(binDir, "staple"));
   });
@@ -223,6 +246,32 @@ describe("rollback", () => {
 
     run(["--rollback", "--yes", "--json"]);
     expect(lastJson().to).toBe("1.0.0");
+  });
+
+  /**
+   * STA-164: a rollback switches the runtime selection and nothing else. The
+   * case that matters is a workspace the newer runtime already migrated — it
+   * stays at the newer schema, byte for byte, and the output says so, so nobody
+   * reads "rolled back" as "un-migrated".
+   */
+  it("restores the runtime selection without touching a workspace the newer runtime already upgraded", () => {
+    install("1.0.0");
+    install("2.0.0");
+    const workspace = join(scratch, "ws", ".staple");
+    mkdirSync(workspace, { recursive: true });
+    const dbPath = join(workspace, "staple.db");
+    copyFileSync(fixturePath(FIXTURES.workspaceV99), dbPath);
+    const before = createHash("sha256").update(readFileSync(dbPath)).digest("hex");
+    stdout.length = 0;
+
+    run(["--rollback", "--yes"]);
+
+    expect(stdout.join("\n")).toContain("Rolled back to staple 1.0.0 (from 2.0.0)");
+    expect(stdout.join("\n")).toContain("Workspaces no database was changed");
+    expect(stdout.join("\n")).toContain("refused read-only until you roll forward again");
+    expect(readFileSync(join(home, "runtime", "current.json"), "utf8")).toContain('"version": "1.0.0"');
+    expect(createHash("sha256").update(readFileSync(dbPath)).digest("hex")).toBe(before);
+    expect(rawMeta(dbPath, "schema_version")).toBe("99");
   });
 });
 

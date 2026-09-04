@@ -343,3 +343,79 @@ describe("parentRollups", () => {
     expect(parentRollups(onScreen).get("id-1")).toMatchObject({ resolved: 0, total: 2 });
   });
 });
+
+/**
+ * ── THE ROLLED-UP PLAN — R7c (STA-194) ───────────────────────────────────────────────
+ *
+ * The list payload carries no `timing`, so `parentRollups` re-derives a folded parent's
+ * plan in the browser — with the ONE rule of `SubtreePlan` in core/types.ts: an issue
+ * contributes its own estimate if it has one, otherwise its children's contributions, never
+ * both. Pinned on the shape that started the epic — STA-156 over an unestimated STA-157
+ * over three planned tasks — so the row can never disagree with the Analytics headline.
+ */
+describe("parentRollups: the plan", () => {
+  const planned = (identifier: string, parentId: string | null, estimatedSeconds: number | null) =>
+    row({ identifier, parentId, status: "todo", estimatedSeconds });
+
+  /** STA-1 ⊃ STA-2 (neither estimated) ⊃ 4h, 3h, 4h. */
+  const nested = () => [
+    planned("STA-1", null, null),
+    planned("STA-2", "id-1", null),
+    planned("STA-3", "id-2", 14_400),
+    planned("STA-4", "id-2", 10_800),
+    planned("STA-5", "id-2", 14_400),
+  ];
+
+  it("carries 11h up through an unestimated middle epic — the STA-156 complaint", () => {
+    const rollups = parentRollups(nested());
+    expect(rollups.get("id-2")!.plan).toEqual({ estimatedSeconds: 39_600, source: "descendants" });
+    expect(rollups.get("id-1")!.plan).toEqual({ estimatedSeconds: 39_600, source: "descendants" });
+  });
+
+  it("lets an own estimate shadow everything beneath it, and never adds the two", () => {
+    const rows = nested();
+    rows[1] = planned("STA-2", "id-1", 21_600);
+    const rollups = parentRollups(rows);
+    expect(rollups.get("id-2")!.plan).toEqual({ estimatedSeconds: 21_600, source: "own" });
+    // Not 39_600 (the grandchildren) and not 61_200 (both): the middle epic's own 6h is
+    // its whole term in its parent's sum.
+    expect(rollups.get("id-1")!.plan).toEqual({ estimatedSeconds: 21_600, source: "descendants" });
+  });
+
+  it("is null, not zero, when nobody estimated anything", () => {
+    const rollups = parentRollups([planned("STA-1", null, null), planned("STA-2", "id-1", null)]);
+    expect(rollups.get("id-1")!.plan).toEqual({ estimatedSeconds: null, source: "none" });
+  });
+
+  it("sums the partial coverage it has — one planned child of three is that child's figure", () => {
+    const rollups = parentRollups([
+      planned("STA-1", null, null),
+      planned("STA-2", "id-1", 3600),
+      planned("STA-3", "id-1", null),
+      planned("STA-4", "id-1", null),
+    ]);
+    expect(rollups.get("id-1")!.plan).toEqual({ estimatedSeconds: 3600, source: "descendants" });
+  });
+
+  it("makes a parent's plan exactly the sum of its direct children's plans", () => {
+    // Own and inherited side by side: STA-2 typed 6h over a 4h leaf, STA-3 inherits 3h
+    // from its leaf, STA-4 is a bare leaf. The parent's figure is what its children show.
+    const rows = [
+      planned("STA-1", null, null),
+      planned("STA-2", "id-1", 21_600),
+      planned("STA-6", "id-2", 14_400),
+      planned("STA-3", "id-1", null),
+      planned("STA-7", "id-3", 10_800),
+      planned("STA-4", "id-1", null),
+    ];
+    const rollups = parentRollups(rows);
+    const shown = rows
+      .filter((r) => r.issue.parentId === "id-1")
+      .reduce(
+        (sum, r) => sum + (rollups.get(r.issue.id)?.plan.estimatedSeconds ?? r.issue.estimatedSeconds ?? 0),
+        0,
+      );
+    expect(shown).toBe(32_400);
+    expect(rollups.get("id-1")!.plan.estimatedSeconds).toBe(shown);
+  });
+});

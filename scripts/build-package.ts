@@ -36,6 +36,8 @@ import {
 } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { WORKSPACE_LATEST_VERSION } from "../src/core/migrations/workspace/index.js";
+import { HUB_LATEST_VERSION } from "../src/core/migrations/hub/index.js";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const outDir = join(repoRoot, "dist-package");
@@ -153,6 +155,11 @@ function writeArtifactManifest(bundledPackages: string[]): void {
         // both land here, per STA-24's key decision.
         bin: { staple: "staple.mjs" },
         engines: sourcePkg.engines,
+        // The schema versions compiled into this bundle, read from the same migration
+        // lists the bundle carries. The installer records them so `staple install
+        // status` and `doctor` can say which workspace a runtime understands without
+        // executing it; a workspace stamped higher is refused by that runtime.
+        staple: { workspaceSchema: WORKSPACE_LATEST_VERSION, hubSchema: HUB_LATEST_VERSION },
         // Nothing is left to install: the bundle carries its dependencies inside it.
         dependencies: {},
         files: ["staple.mjs", "assets/", "README.md", "LICENSE", "THIRD-PARTY-NOTICES.md"],

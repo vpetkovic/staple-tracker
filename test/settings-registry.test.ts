@@ -1,0 +1,359 @@
+import { describe, expect, it } from "vitest";
+import {
+  QUEUE_POLICIES,
+  SETTING_CATEGORIES,
+  SETTING_DEFINITIONS,
+  assertSettingRegistryConsistent,
+  coerceSettingInput,
+  encodeStoredSetting,
+  readStoredSetting,
+  registerSettingCategory,
+  registerSettingDefinition,
+  requireSettingDefinition,
+  settingCategoriesFor,
+  settingCategory,
+  settingDefinition,
+  settingDefinitionView,
+  settingDefinitionsFor,
+  settingKeyFromMetaKey,
+  settingMetaKey,
+  settingRegistryView,
+  settingValueView,
+  validateSettingValue,
+  type SettingCategory,
+  type SettingDefinition,
+} from "../src/core/settings-registry.js";
+import { StapleError } from "../src/core/types.js";
+
+/**
+ * R6a (STA-176) — the settings registry, as a pure module.
+ *
+ * What is under test is the CONTRACT every persistence surface leans on:
+ * one definition per key with an explicit scope, validation that refuses at
+ * both boundaries with a sentence naming the key, versioned values whose
+ * upgrade is deterministic, and wire views that carry everything a shell
+ * renders from and nothing a shell must not see. The store and the config file
+ * are exercised in their own suites; this one never touches a database or a
+ * file, which is the property that makes the registry a registry.
+ */
+
+/** A definition built for a test, so the version/migrate path can be driven without a real one. */
+function fake(over: Partial<SettingDefinition> = {}): SettingDefinition {
+  return {
+    key: "kinds.fixture",
+    category: "kinds",
+    scope: "workspace",
+    schema: { type: "integer", min: 0, max: 10 },
+    default: 3,
+    version: 1,
+    sensitivity: "normal",
+    ui: { label: "Fixture", description: "", control: "number", order: 1 },
+    ...over,
+  };
+}
+
+describe("the registered set", () => {
+  it("is internally consistent at load: unique namespaced keys, known categories, matching scopes", () => {
+    expect(() => assertSettingRegistryConsistent()).not.toThrow();
+    for (const definition of SETTING_DEFINITIONS) {
+      expect(definition.key.startsWith(`${definition.category}.`)).toBe(true);
+    }
+  });
+
+  it("registers the three machine preferences as global and three workspace field settings", () => {
+    expect(settingDefinitionsFor("global").map((d) => [d.key, d.configKey])).toEqual([
+      ["machine.browser", "browser"],
+      ["machine.port", "port"],
+      ["machine.setupComplete", "setupComplete"],
+    ]);
+    expect(settingDefinitionsFor("workspace").map((d) => d.key)).toEqual([
+      "kinds.default",
+      "kinds.appearance",
+      "queue.policy",
+    ]);
+  });
+
+  it("lists statuses, kinds and the Workflow category as workspace categories the shell can enumerate", () => {
+    expect(SETTING_CATEGORIES.map((c) => `${c.id}:${c.scope}:${c.editor}`)).toEqual([
+      "statuses:workspace:statuses",
+      "kinds:workspace:kinds",
+      "queue:workspace:fields",
+      "machine:global:fields",
+    ]);
+    expect(settingCategoriesFor("global").map((c) => c.id)).toEqual(["machine"]);
+  });
+
+  /**
+   * R6d (STA-179) — the queue policy is registered EXACTLY as docs/queue.md
+   * "Policy: advisory or strict" names it: key, the two values, the default and
+   * the scope. Everything a surface needs to define, persist and expose it is on
+   * the definition; nothing here enforces it — that is R2c's (STA-168) resolver,
+   * which imports QUEUE_POLICIES rather than restating the set.
+   */
+  it("registers queue.policy to the queue contract: advisory | strict, default advisory, workspace scope", () => {
+    const definition = requireSettingDefinition("queue.policy", "workspace");
+    expect(QUEUE_POLICIES).toEqual(["advisory", "strict"]);
+    expect(definition).toMatchObject({
+      category: "queue",
+      scope: "workspace",
+      schema: { type: "enum", values: QUEUE_POLICIES },
+      default: "advisory",
+      version: 1,
+      sensitivity: "normal",
+      ui: { control: "select", label: "Queue policy" },
+    });
+    expect(definition.configKey).toBeUndefined();
+    // The side effect is on the definition, so every surface can show it BEFORE a save.
+    expect(definition.ui.description).toMatch(/strict: .*checkout of a later item is refused/);
+    expect(definition.ui.description).toMatch(/advisory: .*never refused for order/);
+    expect(settingCategory("queue")).toMatchObject({ label: "Workflow", scope: "workspace", editor: "fields" });
+  });
+
+  it("refuses a registry whose definition breaks an invariant, naming the key", () => {
+    const dup = [fake({ key: "kinds.a" }), fake({ key: "kinds.a" })];
+    expect(() => assertSettingRegistryConsistent(SETTING_CATEGORIES, dup)).toThrow(/duplicate key "kinds.a"/);
+    expect(() => assertSettingRegistryConsistent(SETTING_CATEGORIES, [fake({ key: "nope.a", category: "nope" })])).toThrow(
+      /unknown category "nope"/,
+    );
+    expect(() => assertSettingRegistryConsistent(SETTING_CATEGORIES, [fake({ key: "machine.a" })])).toThrow(
+      /must be namespaced as "kinds\.<name>"/,
+    );
+    expect(() =>
+      assertSettingRegistryConsistent(SETTING_CATEGORIES, [fake({ key: "machine.a", category: "machine" })]),
+    ).toThrow(/is workspace but category "machine" is global/);
+    expect(() => assertSettingRegistryConsistent(SETTING_CATEGORIES, [fake({ default: 99 })])).toThrow(StapleError);
+    expect(() => assertSettingRegistryConsistent(SETTING_CATEGORIES, [fake({ configKey: "x" })])).toThrow(
+      /must not carry a configKey/,
+    );
+  });
+
+  it("looks a definition up by key and refuses an unknown or wrong-scope key with the known keys", () => {
+    expect(settingDefinition("kinds.default")?.scope).toBe("workspace");
+    expect(settingDefinition("nothing")).toBeUndefined();
+    expect(() => requireSettingDefinition("nothing", "workspace")).toThrow(
+      /Unknown workspace setting "nothing"\. Known: kinds\.default/,
+    );
+    expect(() => requireSettingDefinition("machine.port", "workspace")).toThrow(
+      /"machine\.port" is a global setting, not a workspace one\. Global settings are edited with `staple config set`/,
+    );
+  });
+
+  it("maps a key to its meta row and back", () => {
+    expect(settingMetaKey("kinds.default")).toBe("setting:kinds.default");
+    expect(settingKeyFromMetaKey("setting:kinds.default")).toBe("kinds.default");
+    expect(settingKeyFromMetaKey("settings_revision")).toBeNull();
+  });
+});
+
+describe("validation", () => {
+  it("accepts a value that fits the schema and refuses one that does not, naming where and what", () => {
+    expect(validateSettingValue(fake(), 7, "workspace t")).toBe(7);
+    expect(() => validateSettingValue(fake(), 11, "workspace t")).toThrow(
+      '"kinds.fixture" must be an integer between 0 and 10, got 11',
+    );
+    expect(() => validateSettingValue(fake(), "7", "workspace t")).toThrow(/workspace t: /);
+    expect(() => validateSettingValue(fake({ schema: { type: "boolean" } }), "yes", "f")).toThrow(/must be true or false/);
+    expect(() =>
+      validateSettingValue(fake({ schema: { type: "enum", values: ["a", "b"] } }), "c", "f"),
+    ).toThrow(/must be one of a, b, got "c"/);
+    expect(() =>
+      validateSettingValue(fake({ schema: { type: "string", pattern: /^[a-z]+$/, patternHint: "letters" } }), "A1", "f"),
+    ).toThrow(/must be letters/);
+  });
+
+  it("validates a kindAppearance map through core/kind-appearance, naming the kind and the field", () => {
+    const definition = requireSettingDefinition("kinds.appearance");
+    const ok = { epic: { source: "lucide", value: "layers", fallback: "◆" } };
+    expect(validateSettingValue(definition, ok, "workspace t")).toBe(ok);
+    expect(validateSettingValue(definition, {}, "workspace t")).toEqual({});
+    expect(() => validateSettingValue(definition, { epic: { source: "lucide", value: "Nope", fallback: "◆" } }, "workspace t")).toThrow(
+      /workspace t: "kinds\.appearance" must be a Lucide icon key .* for "epic"/,
+    );
+    expect(() => validateSettingValue(definition, { epic: { ...ok.epic, color: "#f00" } }, "workspace t")).toThrow(
+      /without "color"/,
+    );
+    expect(() => validateSettingValue(definition, "layers", "workspace t")).toThrow(/must be a map of kind id/);
+  });
+
+  it("reports a global setting under its config.json field name", () => {
+    expect(() => validateSettingValue(requireSettingDefinition("machine.port"), 0, "cfg", "port")).toThrow(
+      'cfg: "port" must be an integer between 1 and 65535, got 0',
+    );
+  });
+
+  it("coerces a command-line word by schema and refuses a non-integer by name", () => {
+    expect(coerceSettingInput(requireSettingDefinition("machine.port"), "4500", "set")).toBe(4500);
+    expect(coerceSettingInput(requireSettingDefinition("machine.setupComplete"), "yes", "set")).toBe(true);
+    expect(coerceSettingInput(requireSettingDefinition("machine.setupComplete"), "off", "set")).toBe(false);
+    expect(() => coerceSettingInput(requireSettingDefinition("machine.setupComplete"), "maybe", "set")).toThrow(
+      /"setupComplete" must be true or false/,
+    );
+    expect(() => coerceSettingInput(requireSettingDefinition("machine.port"), "abc", "set")).toThrow(
+      'port must be an integer, got "abc"',
+    );
+    expect(() => coerceSettingInput(requireSettingDefinition("machine.browser"), "sometimes", "set")).toThrow(
+      /"browser" must be one of auto, always, never/,
+    );
+  });
+});
+
+describe("versioned persistence", () => {
+  it("round-trips a value through the {v, value} envelope at the definition's version", () => {
+    const text = encodeStoredSetting(fake(), 5);
+    expect(JSON.parse(text)).toEqual({ v: 1, value: 5 });
+    expect(readStoredSetting(fake(), text, "w")).toEqual({ value: 5, version: 1, migrated: false });
+  });
+
+  it("validates at the READ boundary: a stored value that no longer fits is refused, not returned", () => {
+    expect(() => readStoredSetting(fake(), JSON.stringify({ v: 1, value: 42 }), "w")).toThrow(
+      /"kinds\.fixture" must be an integer between 0 and 10/,
+    );
+    expect(() => readStoredSetting(fake(), "not json", "w")).toThrow(/not valid JSON/);
+    expect(() => readStoredSetting(fake(), "[1]", "w")).toThrow(/not a \{v, value\} envelope/);
+    expect(() => readStoredSetting(fake(), JSON.stringify({ value: 1 }), "w")).toThrow(/no valid version/);
+  });
+
+  it("migrates an OLDER value deterministically through the hook, and defaults without one", () => {
+    const stored = JSON.stringify({ v: 1, value: 4 });
+    const doubled = fake({ version: 2, migrate: (value, from) => (from === 1 ? (value as number) * 2 : value) });
+    expect(readStoredSetting(doubled, stored, "w")).toEqual({ value: 8, version: 1, migrated: true });
+    expect(readStoredSetting(doubled, stored, "w")).toEqual(readStoredSetting(doubled, stored, "w"));
+    expect(readStoredSetting(fake({ version: 2 }), stored, "w")).toEqual({ value: 3, version: 1, migrated: true });
+  });
+
+  it("validates a migrated value like any other, so a bad hook cannot smuggle a shape in", () => {
+    const bad = fake({ version: 2, migrate: () => "eight" });
+    expect(() => readStoredSetting(bad, JSON.stringify({ v: 1, value: 4 }), "w")).toThrow(StapleError);
+  });
+
+  it("refuses a NEWER value rather than reinterpreting it", () => {
+    expect(() => readStoredSetting(fake(), JSON.stringify({ v: 2, value: 4 }), "w")).toThrow(
+      /"kinds\.fixture" was written by a newer staple \(version 2; this one understands 1\)/,
+    );
+  });
+});
+
+describe("wire views", () => {
+  it("serves a definition without its code and with the RegExp as source text", () => {
+    const view = settingDefinitionView(requireSettingDefinition("kinds.default"));
+    expect(view).toEqual({
+      key: "kinds.default",
+      category: "kinds",
+      scope: "workspace",
+      schema: {
+        type: "string",
+        pattern: "^[a-z][a-z0-9_]{0,31}$",
+        patternHint: "a kind id: lowercase letters, digits and underscores, starting with a letter",
+      },
+      default: "task",
+      version: 1,
+      sensitivity: "normal",
+      ui: expect.objectContaining({ label: "Default kind", control: "select" }),
+    });
+    expect("migrate" in view).toBe(false);
+    expect(JSON.parse(JSON.stringify(view))).toEqual(view);
+  });
+
+  it("serves the kindAppearance schema as its own arm, with an empty map default", () => {
+    const view = settingDefinitionView(requireSettingDefinition("kinds.appearance"));
+    expect(view.schema).toEqual({ type: "kindAppearance" });
+    expect(view.default).toEqual({});
+    expect(view.ui).toEqual(expect.objectContaining({ label: "Kind glyphs", control: "glyph" }));
+    expect(JSON.parse(JSON.stringify(view))).toEqual(view);
+  });
+
+  it("carries a value with its scope and provenance", () => {
+    expect(settingValueView(requireSettingDefinition("machine.port"), 4500, "config")).toEqual({
+      key: "machine.port",
+      scope: "global",
+      value: 4500,
+      source: "config",
+      version: 1,
+    });
+  });
+
+  it("redacts a sensitive value and its default on every read surface", () => {
+    const secret = fake({ schema: { type: "string" }, default: "s3", sensitivity: "sensitive" });
+    expect(settingValueView(secret, "hunter2", "workspace")).toEqual({
+      key: "kinds.fixture",
+      scope: "workspace",
+      source: "workspace",
+      version: 1,
+      redacted: true,
+    });
+    expect(settingDefinitionView(secret).default).toBeNull();
+  });
+
+  it("serves the whole registry in shell order", () => {
+    const view = settingRegistryView();
+    expect(view.categories.map((c) => c.id)).toEqual(["statuses", "kinds", "queue", "machine"]);
+    expect(view.definitions.map((d) => d.key)).toEqual([
+      "kinds.default",
+      "machine.browser",
+      "queue.policy",
+      "kinds.appearance",
+      "machine.port",
+      "machine.setupComplete",
+    ]);
+  });
+});
+
+/**
+ * R6f (STA-243) — REGISTERING AFTER LOAD.
+ *
+ * The registry kept its single-key indexes as snapshots taken at module load, so
+ * a definition appended to `SETTING_DEFINITIONS` afterwards was enumerated —
+ * served, rendered, listed — but unknown to `settingDefinition`,
+ * `settingCategory` and `requireSettingDefinition`, which is the boundary every
+ * WRITE goes through. `registerSettingDefinition` closes that by appending and
+ * indexing in one step, and by judging the new member first, so a bad definition
+ * cannot become half-registered.
+ *
+ * These tests are LAST IN THE FILE ON PURPOSE: the happy path grows the process's
+ * registry, and the inventories pinned above ("registers the three machine
+ * preferences…", "serves the whole registry in shell order") deliberately restate
+ * the whole registered set. Anything added after this block would see the fixture.
+ */
+/** A category no build has: registering it is the point of the test below. */
+const FIXTURE_CATEGORY: SettingCategory = {
+  id: "fixture",
+  label: "Fixture",
+  description: "Registered by this suite and by nothing else.",
+  scope: "workspace",
+  editor: "fields",
+  order: 99,
+};
+
+describe("registering a category and a definition after module load", () => {
+  it("refuses a duplicate, and an invalid definition, without registering either", () => {
+    const before = SETTING_DEFINITIONS.length;
+    expect(() => registerSettingCategory({ ...FIXTURE_CATEGORY, id: "kinds" })).toThrow(
+      /duplicate category "kinds"/,
+    );
+    expect(() => registerSettingDefinition(fake({ key: "kinds.default" }))).toThrow(
+      /duplicate key "kinds\.default"/,
+    );
+    // Judged before it is visible: a definition naming a category that is not
+    // there leaves the arrays and the indexes exactly as they were.
+    expect(() => registerSettingDefinition(fake({ key: "nope.a", category: "nope" }))).toThrow(
+      /unknown category "nope"/,
+    );
+    expect(() => registerSettingDefinition(fake({ key: "kinds.bad", default: 99 }))).toThrow(StapleError);
+    expect(SETTING_DEFINITIONS.length).toBe(before);
+    expect(settingDefinition("kinds.bad")).toBeUndefined();
+  });
+
+  it("reaches the single-key lookups and the enumerations in the same step", () => {
+    registerSettingCategory(FIXTURE_CATEGORY);
+    const definition = registerSettingDefinition(fake({ key: "fixture.count", category: "fixture" }));
+
+    // The write boundary — the half that used to miss it.
+    expect(settingDefinition("fixture.count")).toBe(definition);
+    expect(requireSettingDefinition("fixture.count", "workspace")).toBe(definition);
+    expect(settingCategory("fixture")).toBe(FIXTURE_CATEGORY);
+    // …and the enumerations, which always did.
+    expect(settingDefinitionsFor("workspace").map((d) => d.key)).toContain("fixture.count");
+    expect(settingCategoriesFor("workspace").map((c) => c.id)).toContain("fixture");
+    expect(settingRegistryView().definitions.map((d) => d.key)).toContain("fixture.count");
+  });
+});

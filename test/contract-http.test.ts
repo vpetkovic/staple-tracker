@@ -332,6 +332,11 @@ describe("KNOWN: logical errors this surface cannot project", () => {
     // slash and a `case` so those literals — and the three gate routes that were
     // invisible to the old pattern — are derived too rather than hidden behind
     // the family.
+    //
+    // R5d (STA-184) added `/api/glyph/sanitize`, a POST that WRITES NOTHING: it
+    // runs core's SVG sanitiser over the body so the picker can store the
+    // canonical document and never the raw one. `test/ui-glyph-sanitize.test.ts`
+    // pins it.
     const source = readFileSync(join(REPO_ROOT, "src/ui/server.ts"), "utf8");
     const routes = [...new Set([...source.matchAll(/(?:url\.pathname === |case )"(\/api\/[a-z/-]+)"/g)].map((m) => m[1]!))];
     expect(routes.sort()).toEqual([
@@ -343,6 +348,7 @@ describe("KNOWN: logical errors this surface cannot project", () => {
       "/api/gate/approve",
       "/api/gate/request",
       "/api/gate/request-changes",
+      "/api/glyph/sanitize",
       "/api/graph",
       "/api/inbox",
       "/api/issue",

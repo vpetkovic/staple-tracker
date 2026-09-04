@@ -39,6 +39,7 @@ import { readCurrent, writeCurrent } from "./current.js";
 import {
   assertPayloadOutsideHome,
   cleanStaging,
+  payloadWorkspaceSchema,
   resolvePayloadSource,
   stagePayload,
   type PayloadSource,
@@ -62,7 +63,11 @@ import {
 export interface InstallResult {
   home: string;
   version: string;
+  /** The workspace schema the installed runtime understands; null if its payload did not say. */
+  workspaceSchema: number | null;
   previousVersion: string | null;
+  /** Where the previous runtime is retained for `--rollback`; null when there is none. */
+  previousVersionPath: string | null;
   /** True when this install replaced an identical version in place. */
   reinstalled: boolean;
   versionPath: string;
@@ -206,7 +211,9 @@ export function installRuntime(options: InstallOptions): InstallResult {
   return {
     home,
     version: staged.version,
+    workspaceSchema: staged.workspaceSchema,
     previousVersion,
+    previousVersionPath: previousVersion === null ? null : versionDir(home, previousVersion),
     reinstalled,
     versionPath,
     entrypoint: current.entrypoint,
@@ -223,7 +230,11 @@ export interface RollbackResult {
   home: string;
   from: string;
   to: string;
+  /** What the runtime rolled back TO understands; null if its payload did not say. */
+  workspaceSchema: number | null;
   previousVersion: string | null;
+  /** Where the runtime rolled back FROM is retained, so the rollback is reversible. */
+  previousVersionPath: string | null;
   versionPath: string;
   current: CurrentRuntime;
   launcherTarget: LauncherVerification;
@@ -295,7 +306,9 @@ export function rollbackRuntime(
     home,
     from: current.version,
     to: target,
+    workspaceSchema: payloadWorkspaceSchema(targetPath),
     previousVersion: current.version,
+    previousVersionPath: versionDir(home, current.version),
     versionPath: targetPath,
     current: next,
     launcherTarget: verifyLauncherTarget({
@@ -313,7 +326,11 @@ export interface InstallStatus {
   runtimeDir: string;
   installed: boolean;
   version: string | null;
+  /** The workspace schema the ACTIVE runtime understands; null if unknown or nothing installed. */
+  workspaceSchema: number | null;
   previousVersion: string | null;
+  /** Where the rollback target is retained; null when there is none. */
+  previousVersionPath: string | null;
   entrypoint: string | null;
   installedAt: string | null;
   versions: string[];
@@ -348,7 +365,10 @@ export function installStatus(
     runtimeDir: runtimeDir(home),
     installed: current !== null,
     version: current?.version ?? null,
+    workspaceSchema: current === null ? null : payloadWorkspaceSchema(versionDir(home, current.version)),
     previousVersion: current?.previousVersion ?? null,
+    previousVersionPath:
+      current?.previousVersion == null ? null : versionDir(home, current.previousVersion),
     entrypoint: current?.entrypoint ?? null,
     installedAt: current?.installedAt ?? null,
     versions: listInstalledVersions(home),

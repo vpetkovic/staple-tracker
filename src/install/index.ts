@@ -51,6 +51,7 @@ export {
   cleanStaging,
   defaultPayloadSource,
   looksLikePayload,
+  payloadWorkspaceSchema,
   resolvePayloadSource,
   stagePayload,
   type PayloadSource,
@@ -92,11 +93,35 @@ export {
   verifyRuntimeAfterHomeMove,
   type RuntimeHomeMoveVerification,
 } from "./home-move.js";
+export {
+  INSTALL_FROM_PLACEHOLDER,
+  ROLLBACK_COMMAND,
+  describeConfigSchema,
+  describeRunningRuntime,
+  describeSelectedRuntime,
+  inspectSchemaFacts,
+  planSchemaRepair,
+  schemaRepairGuidance,
+  type ConfigSchema,
+  type RunningRuntime,
+  type RuntimeSourceKind,
+  type SchemaFacts,
+  type SchemaMismatchCode,
+  type SchemaRepairPlan,
+  type SelectedRuntime,
+} from "./schema-repair.js";
 
 function out(payload: unknown, json: boolean | undefined): boolean {
   if (!json) return false;
   console.log(JSON.stringify(payload));
   return true;
+}
+
+/** "understands workspace schema 6", or the honest alternative for an older payload. */
+function schemaLine(workspaceSchema: number | null): string {
+  return workspaceSchema === null
+    ? "workspace schema not declared by this payload (built before it was recorded)"
+    : `understands workspace schema ${workspaceSchema}`;
 }
 
 const USAGE = [
@@ -146,7 +171,12 @@ export function runInstallCommand(argv: string[]): void {
       return;
     }
     console.log(`version    ${status.version}${status.verification?.ok ? "" : "  (FAILS VERIFICATION)"}`);
-    console.log(`previous   ${status.previousVersion ?? "(none)"}`);
+    console.log(`schema     ${schemaLine(status.workspaceSchema)}`);
+    console.log(
+      `previous   ${status.previousVersion ?? "(none)"}${
+        status.previousVersionPath ? `  retained at ${status.previousVersionPath}` : ""
+      }`,
+    );
     console.log(`runtime    ${status.runtimeDir}`);
     console.log(`entrypoint ${status.entrypoint}`);
     console.log(`installed  ${status.installedAt || "(unknown)"}`);
@@ -172,7 +202,19 @@ export function runInstallCommand(argv: string[]): void {
     if (out(result, values.json)) return;
     console.log(`Rolled back to staple ${result.to} (from ${result.from}).`);
     console.log(`Runtime    ${result.versionPath}`);
-    console.log(`Rollback   \`staple install --rollback --yes\` now returns to ${result.previousVersion}.`);
+    console.log(`Schema     ${schemaLine(result.workspaceSchema)}`);
+    console.log(
+      `Rollback   \`staple install --rollback --yes\` now returns to ${result.previousVersion}, ` +
+        `retained at ${result.previousVersionPath}.`,
+    );
+    // Plan §6 switches the runtime, not the data: a workspace the newer runtime
+    // already migrated is still at the newer schema, and this runtime refuses
+    // it read-only rather than touching it. Said here so nobody expects a
+    // rollback to undo a migration.
+    console.log(
+      "Workspaces no database was changed; one already upgraded past this runtime's schema is refused " +
+        "read-only until you roll forward again.",
+    );
     return;
   }
 
@@ -231,9 +273,13 @@ export function runInstallCommand(argv: string[]): void {
   console.log(
     `Installed staple ${result.version} to ${result.versionPath}${result.reinstalled ? " (replaced)" : ""}.`,
   );
+  console.log(`Schema     ${schemaLine(result.workspaceSchema)}`);
   console.log(`Launcher   ${result.launcher.path}${result.launcher.created ? " (new)" : " (refreshed)"}`);
   if (result.previousVersion) {
-    console.log(`Rollback   \`staple install --rollback --yes\` returns to ${result.previousVersion}.`);
+    console.log(
+      `Rollback   \`staple install --rollback --yes\` returns to ${result.previousVersion}, ` +
+        `retained at ${result.previousVersionPath}.`,
+    );
   }
 
   if (pathResult?.changed) {

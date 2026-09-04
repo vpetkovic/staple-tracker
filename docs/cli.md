@@ -13,6 +13,7 @@ staple events [--since N]             staple hub [ls|links|events]
 staple open [--port 4400] [--hub]     staple config [show|set|home]
 staple migrate [--yes]                staple doctor [--json] [--fix --only <check>]
 staple install [status|--rollback]    staple add <path> --yes | discover <root>
+staple settings [get <key>|set <key> <value>]       this workspace's registered settings
 
 staple wait <ref> [--timeout s] [--interval ms]     block until ready or finished
 staple events --follow [--since N] [--max N]        stream events as they land
@@ -32,6 +33,16 @@ staple milestone add|rm <milestone> <ref> [--base N] | mv <ref> --to M | reorder
 
 `staple help` has the full option list. `checkout` is an alias for `start`, and
 `staple ui` is a compatibility alias for `staple open`.
+
+`staple doctor` is read-only. Its `schema` check names the database schema, the
+running build's schema (and whether that build is a checkout, a bundle or an
+installed runtime), the launcher's selected runtime, and the config schema; on a
+mismatch it prints ONE repair command under `REPAIRS`, derived from what
+`staple install` accepts, and previews whether the next open migrates the
+database and where the snapshot goes. Under `--json` the reason is
+`data.code` (`database_newer_than_runtime`, `config_newer_than_runtime`,
+`selected_runtime_older_than_database`, `migration_pending`, or `null`). See
+`docs/migration.md`.
 
 ## Workspace vocabulary
 
@@ -62,6 +73,28 @@ headers, tree sort — so a reorder changes what everyone in the repo sees.
 `--migrate-to`), and with exit 2 when it is the last status of a category staple
 writes into.
 
+## Workspace settings
+
+Registered workspace settings (see
+[configuration.md](configuration.md#the-settings-registry)) have the
+workspace twin of `config`: `settings` reads and writes the values this
+workspace stores, never the machine's `config.json`.
+
+```bash
+staple settings                          # every registered value:  key = value  (source)
+staple settings get queue.policy         # queue.policy = advisory  (default)
+staple settings set queue.policy strict  # queue.policy = strict  (workspace)
+staple settings get queue.policy --json  # {"key":"queue.policy","scope":"workspace","value":"strict","source":"workspace","version":1}
+```
+
+`source` says where the effective value came from — `default` until someone
+sets it, `workspace` after. `--json` prints the same object `/api/settings`
+serves and the `get_setting` tool answers. A value the schema refuses
+(`queue.policy` takes `advisory` or `strict`) exits 2 naming the key; a global
+key exits 2 naming `staple config set`. Every write is attributed to
+`STAPLE_AGENT` and logged as a `setting_changed` event with the previous and
+new value.
+
 ## Kinds
 
 Every issue declares a **kind** — `epic`, `task`, `bug`, `chore` or `spike` out
@@ -83,6 +116,53 @@ issue that already had children as an `epic` at upgrade time.
 `ls`, `tree` and `inbox` print the kind only when it is *not* `task` — a bare
 row is a task — so an epic or a bug stands out without a column of noise on
 every other line. `staple show` always names it.
+
+Every kind also has an **appearance** — the web icon it wears, its accessible
+label, and the character a terminal prints instead. `ls`, `tree` and `show`
+**lead each row with that terminal fallback**, one character then a space, so a
+kind is legible without colour and `staple ls | grep '^◆'` is the epic filter:
+
+```
+◆ ◌  STA-31    backlog     Q3 billing rework · epic
+  ◇ ◌! STA-66  backlog     Split the invoice job
+✱ ⊘  STA-72    blocked     Login 500s on retry · bug
+```
+
+`show` leads its header line and its child rows the same way. The confirmation
+lines of the write commands (`new`, `done`, `status`, `checkout`, `release`,
+`block`) and the `inbox`/`board` sections are deliberately left bare: they
+render one known ticket, not a list to scan, and their column offsets are a
+de-facto contract. `staple kinds ls` leads
+each row with that terminal fallback (`◆ epic`, `◇ task`, `✱ bug`, `↻ chore`,
+`↯ spike`, `⚑ milestone`; `•` for a kind nobody has given a mark), and
+`--json` carries the whole record on each row as `appearance:
+{ source, value, label, fallback }` — the same record MCP `list_kinds` and
+`/api/settings` serve. It is stored as the workspace setting
+`kinds.appearance` (see [configuration.md](configuration.md#the-settings-registry));
+the CLI only reads it. `staple show --json` carries the resolved record for the
+issue's own kind as `kindAppearance`, beside the string `kind` — the same record,
+joined once, so a consumer that draws a ticket need not fetch the vocabulary to
+do it. List rows do not repeat it: an appearance belongs to the kind, not to the
+issue.
+
+`source` names where the web icon comes from, and each source bounds its
+`value`:
+
+| `source` | `value` | bound |
+| --- | --- | --- |
+| `lucide` | a canonical Lucide key (`triangle-alert`) | lowercase words joined by dashes, at most 64 characters |
+| `emoji` | an emoji or short Unicode glyph (`🚀`, `→→`) | 1 to 2 **grapheme clusters** (a joined family or a flag is one), at most 32 UTF-16 units, no whitespace or control characters, at least one visible code point |
+| `svg` | the sanitiser's **canonical** SVG document | at most 8 KiB, one `<svg>` root with a `viewBox` within ±4096, sanitised as described in [web-ui.md](web-ui.md#custom-glyphs) |
+| `none` | `""` | draw the built-in mark |
+
+An `svg` value is accepted only as the sanitiser's own output — a raw document,
+however clean, is refused with a sentence saying to sanitise it first, and a
+hostile one (a `<script>`, an event handler, an external `href`, an oversized
+document) is refused with the reason. So the database, `kinds ls --json`,
+`list_kinds` and `/api/settings` never carry anything but canonical, inert
+markup, and the human `kinds ls` prints the terminal `fallback`, never the
+document. A stored record that no longer validates — one hand-edited on disk,
+say — is refused at read with the key in the sentence rather than served.
 
 `kinds rm milestone` is the one removal `--migrate-to` cannot force: it is
 refused with exit 2 naming every milestone that still owns members or dates
@@ -209,7 +289,9 @@ staple show STA-42
   "reviewSeconds":null,"approximate":false,"countedThrough":null,"childCount":3,
   "childrenEstimatedSeconds":12600,"childrenActiveSeconds":15000,
   "childStatusCounts":{"backlog":1,"todo":0,"in_progress":1,"in_review":0,
-                       "done":1,"blocked":0,"cancelled":0}},
+                       "done":1,"blocked":0,"cancelled":0},
+  "subtreePlan":{"estimatedSeconds":14400,"source":"own",
+                 "descendantsEstimatedSeconds":12600,"contributingCount":2,"totalCount":3}},
  "childrenTiming":{"STA-43":{"estimatedSeconds":5400,"activeSeconds":3600,"…":"…"}}}
 ```
 
@@ -217,9 +299,35 @@ Rollups sum **direct children only**, and each child contributes its own
 `activeSeconds` — so a child that is itself a parent contributes its aggregate,
 which is exactly the number its row on screen shows. The table adds up, and an
 epic-of-epics reports its grandchildren's work rather than zero. Estimates stay
-strictly depth-1, because a parent's estimate is a plan for its whole subtree
-and adding it to its children's would double-count the plan. A sum is `null` —
-never `0` — when no child contributed one.
+strictly depth-1 in `childrenEstimatedSeconds`, because a parent's estimate is
+a plan for its whole subtree and adding it to its children's would double-count
+the plan. A sum is `null` — never `0` — when no child contributed one.
+
+**The recursive plan** is `subtreePlan`, beside that field rather than in its
+place, and it survives an epic-of-epics with one rule: an issue contributes its
+**own estimate if it has one, otherwise the sum of its children's
+contributions** — never both. So a parent's plan and its descendants' plans
+cannot both land in one ancestor total, and a middle-level epic nobody
+estimated passes its children's plan straight up. The fields:
+
+- `estimatedSeconds` — the **effective (top-down) plan**, the one number an
+  ancestor counts this issue as: the own estimate when recorded, otherwise
+  `descendantsEstimatedSeconds`, `null` when neither exists.
+- `source` — `own`, `descendants` or `none`: which fed `estimatedSeconds`.
+- `descendantsEstimatedSeconds` — the **bottom-up plan**, the sum of the
+  direct children's effective plans. Kept visible even when an own estimate
+  wins, so the 4h epic above, over 3h30m of planned children, shows the
+  disagreement instead of one side quietly winning.
+- `contributingCount` / `totalCount` — coverage over descendants at **every
+  depth**: how many contributed their own estimate to the bottom-up sum, out
+  of how many exist. A descendant shadowed by an estimated ancestor beneath
+  this issue is not counted — and not lost; it is on its own timing.
+
+A middle epic with no estimate over three leaves at 4h/3h/4h therefore
+reports an 11h plan, and its parent includes that 11h whether or not the
+middle level was estimated. `staple show` adds one segment per parent:
+`plan 11h (from 3 of 3 descendants)` when the plan was inherited, or
+`descendants est 11h (3 of 3)` beside `est` when an own estimate wins.
 
 Every surface takes it: MCP `create_task` / `update_task` via `estimate_seconds`
 (explicit `null` clears, absent leaves alone), HTTP `create` / `update` via

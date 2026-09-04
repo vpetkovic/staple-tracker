@@ -758,6 +758,136 @@ describe("parent rollup", () => {
 });
 
 /**
+ * ── THE ROLLED-UP PLAN BESIDE THE BAR — R7c (STA-194) ────────────────────────────────
+ *
+ * "Without increasing row height" is a CSS fact no string render can measure, so what is
+ * pinned is the argument the component makes for it: the plan is an inline `<span>` wearing
+ * the count's own class and nothing else — no new class, no style attribute, no block
+ * element — inside the rollup O3b already proved fits the row. Break any of those and this
+ * fails before a browser is needed to watch the row grow. No screenshot harness exists in
+ * this suite and none is added.
+ */
+describe("parent rollup plan", () => {
+  function renderPlanned(
+    over: {
+      expanded?: boolean;
+      density?: "comfortable" | "compact";
+      parentEstimate?: number | null;
+      estimates?: (number | null)[];
+    } = {},
+  ): string {
+    const {
+      expanded = false,
+      density = "comfortable",
+      parentEstimate = null,
+      estimates = [14_400, 10_800, 14_400],
+    } = over;
+
+    const all = [
+      row({ identifier: "STA-1", status: "in_progress", estimatedSeconds: parentEstimate }),
+      ...estimates.map((estimatedSeconds, index) =>
+        row({ identifier: `STA-${index + 2}`, parentId: "id-1", status: "todo", estimatedSeconds }),
+      ),
+    ];
+
+    const built = flattenFlat(all, {
+      isExpanded: () => expanded,
+      showResolved: false,
+      rollupSource: all,
+    })[0]!;
+
+    return renderToStaticMarkup(
+      <TaskRowLine
+        row={built}
+        config={resolveTaskListConfig("tree", { density, labelMax: 2 })}
+        semantics="grid"
+        isExpanded={expanded}
+        now={NOW}
+      />,
+    );
+  }
+
+  /** The whole element, attribute by attribute, so a stray one cannot slip in. */
+  const PLAN =
+    /<span class="staple-rollup-count max-\[719px\]:hidden" data-testid="parent-rollup-plan" data-plan-source="(\w+)" aria-label="([^"]+)" title="([^"]+)">est ([^<]+)<\/span>/;
+
+  it("shows the rolled-up 11h beside the bar when folded, in the O3 slot", () => {
+    const markup = renderPlanned();
+    const match = PLAN.exec(markup);
+
+    expect(match).not.toBeNull();
+    expect(match![4]).toBe("11h");
+    expect(match![1]).toBe("descendants");
+    expect(match![2]).toBe("planned 11h, rolled up from descendants");
+    expect(match![3]).toBe(match![2]);
+    // Inside the rollup, after the bar, and in the title cell before the meta cluster —
+    // the same place the count and the live dot already live.
+    const rollup = markup.indexOf('data-testid="parent-rollup"');
+    const bar = markup.indexOf('data-testid="parent-rollup-bar"');
+    const plan = markup.indexOf('data-testid="parent-rollup-plan"');
+    expect(rollup).toBeLessThan(bar);
+    expect(bar).toBeLessThan(plan);
+    expect(plan).toBeLessThan(markup.indexOf("staple-row-meta"));
+  });
+
+  it("adds no height: an inline span in the count's own class, no style, no new rule", () => {
+    const markup = renderPlanned();
+    const plan = PLAN.exec(markup)![0];
+
+    expect(plan.startsWith("<span ")).toBe(true);
+    expect(plan).not.toContain("style=");
+    expect(plan).not.toContain("<div");
+    // The class list is the count's class plus the narrow-width utility — nothing that
+    // task-list.css does not already size at 11px, nowrap, inline.
+    expect(plan).toContain('class="staple-rollup-count max-[719px]:hidden"');
+    expect(markup).not.toContain("staple-rollup-plan");
+  });
+
+  it("names its source: a parent's own estimate is `own`, and shadows the children", () => {
+    const match = PLAN.exec(renderPlanned({ parentEstimate: 21_600 }))!;
+
+    expect(match[4]).toBe("6h");
+    expect(match[1]).toBe("own");
+    expect(match[2]).toBe("planned 6h, own estimate");
+  });
+
+  it("renders NOTHING when the subtree has no plan — no `est —`", () => {
+    const markup = renderPlanned({ estimates: [null, null, null] });
+
+    expect(markup).not.toContain('data-testid="parent-rollup-plan"');
+    expect(markup).not.toContain("est —");
+    // The count and the bar are unaffected — progress and plan are different facts.
+    expect(markup).toContain('data-testid="parent-rollup-bar"');
+    expect(markup).toContain("0/3");
+  });
+
+  it("sums the partial coverage it has — one planned child of three is that child's figure", () => {
+    expect(PLAN.exec(renderPlanned({ estimates: [3600, null, null] }))![4]).toBe("1h");
+  });
+
+  it("goes with the bar when the parent is expanded — the children say it themselves", () => {
+    const markup = renderPlanned({ expanded: true });
+
+    expect(markup).not.toContain('data-testid="parent-rollup-plan"');
+    expect(markup).toContain('data-testid="parent-rollup"');
+    expect(markup).toContain("0/3");
+  });
+
+  it("stays out of compact density — the row decides; the component never reads the config", () => {
+    const markup = renderPlanned({ density: "compact" });
+
+    expect(markup).not.toContain('data-testid="parent-rollup-plan"');
+    expect(markup).toContain('data-testid="parent-rollup-bar"');
+  });
+
+  it("hides below the two-line breakpoint with a utility class, not a new rule in the sheet", () => {
+    // Below 720px §14 gives the title track the whole row width and there is no room for an
+    // aside; the plan yields there and the count and the bar stay.
+    expect(PLAN.exec(renderPlanned())![0]).toContain("max-[719px]:hidden");
+  });
+});
+
+/**
  * ── THE GHOST PARENT CONTEXT ROW — O3c (STA-128) ──────────────────────────────────────
  *
  * A parent that is NOT in this bucket, drawn inside it so the children that ARE can nest

@@ -18,13 +18,23 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { StapleError } from "../core/types.js";
+import {
+  BROWSER_PREFERENCES,
+  settingDefinitionsFor,
+  validateSettingValue,
+  type BrowserPreference,
+  type SettingDefinition,
+} from "../core/settings-registry.js";
 import { writeFileAtomic } from "./atomic.js";
 
 export const CONFIG_SCHEMA_VERSION = 1;
 export const CONFIG_FILENAME = "config.json";
 
-export const BROWSER_PREFERENCES = ["auto", "always", "never"] as const;
-export type BrowserPreference = (typeof BROWSER_PREFERENCES)[number];
+/**
+ * The browser preference's closed set lives on its registry definition
+ * (`machine.browser`, R6a); re-exported so `config/index.ts` callers keep one import.
+ */
+export { BROWSER_PREFERENCES, type BrowserPreference };
 
 /** What a connector (A8/B1-B4) records so it can be diagnosed and safely removed. */
 export type ConnectorReceipt = Record<string, unknown>;
@@ -37,20 +47,36 @@ export interface StapleConfig {
   connectors: Record<string, ConnectorReceipt>;
 }
 
-/** Matches the plan's Quick setup defaults table. */
-export const DEFAULT_CONFIG: StapleConfig = Object.freeze({
-  schemaVersion: CONFIG_SCHEMA_VERSION,
-  browser: "auto" as BrowserPreference,
-  port: 4400,
-  setupComplete: false,
-  connectors: {},
+/**
+ * THE GLOBAL SETTINGS, as the registry defines them (R6a, STA-176). Each one
+ * names the top-level `config.json` field it is stored under; this file owns no
+ * key list, default or value check of its own — adding a machine preference is a
+ * registry entry plus a field on `StapleConfig`, and nothing here changes.
+ */
+const GLOBAL_SETTINGS: ReadonlyArray<SettingDefinition & { configKey: string }> = settingDefinitionsFor(
+  "global",
+).map((definition) => {
+  // `assertSettingRegistryConsistent` already refused a global without one.
+  if (!definition.configKey) throw new Error(`global setting "${definition.key}" has no configKey`);
+  return { ...definition, configKey: definition.configKey };
 });
 
-const KNOWN_KEYS = new Set(["schemaVersion", "browser", "port", "setupComplete", "connectors"]);
-
 /** Keys a caller may report a source for. `schemaVersion` is not a preference. */
-export const SETTING_KEYS = ["browser", "port", "setupComplete"] as const;
+export const SETTING_KEYS = GLOBAL_SETTINGS.map((definition) => definition.configKey) as unknown as readonly [
+  "browser",
+  "port",
+  "setupComplete",
+];
 export type SettingKey = (typeof SETTING_KEYS)[number];
+
+const KNOWN_KEYS = new Set(["schemaVersion", "connectors", ...SETTING_KEYS]);
+
+/** The plan's Quick setup defaults table — each default read off its registry definition. */
+export const DEFAULT_CONFIG: StapleConfig = Object.freeze({
+  schemaVersion: CONFIG_SCHEMA_VERSION,
+  ...Object.fromEntries(GLOBAL_SETTINGS.map((definition) => [definition.configKey, definition.default])),
+  connectors: {},
+} as StapleConfig);
 
 export interface LoadedConfig {
   config: StapleConfig;
@@ -70,36 +96,6 @@ export function configPath(home: string): string {
 
 function freshDefaults(): StapleConfig {
   return { ...DEFAULT_CONFIG, connectors: {} };
-}
-
-function assertBrowser(value: unknown, where: string): BrowserPreference {
-  if (typeof value !== "string" || !(BROWSER_PREFERENCES as readonly string[]).includes(value)) {
-    throw new StapleError(
-      "validation",
-      `${where}: "browser" must be one of ${BROWSER_PREFERENCES.join(", ")}, got ${JSON.stringify(value)}`,
-    );
-  }
-  return value as BrowserPreference;
-}
-
-function assertPort(value: unknown, where: string): number {
-  if (typeof value !== "number" || !Number.isInteger(value) || value < 1 || value > 65_535) {
-    throw new StapleError(
-      "validation",
-      `${where}: "port" must be an integer between 1 and 65535, got ${JSON.stringify(value)}`,
-    );
-  }
-  return value;
-}
-
-function assertBoolean(value: unknown, where: string, key: string): boolean {
-  if (typeof value !== "boolean") {
-    throw new StapleError(
-      "validation",
-      `${where}: "${key}" must be true or false, got ${JSON.stringify(value)}`,
-    );
-  }
-  return value;
 }
 
 function assertConnectors(value: unknown, where: string): Record<string, ConnectorReceipt> {
@@ -160,17 +156,18 @@ export function readConfig(home: string): LoadedConfig {
 
   const config = freshDefaults();
   const explicitKeys: string[] = [];
-  if (record.browser !== undefined) {
-    config.browser = assertBrowser(record.browser, path);
-    explicitKeys.push("browser");
-  }
-  if (record.port !== undefined) {
-    config.port = assertPort(record.port, path);
-    explicitKeys.push("port");
-  }
-  if (record.setupComplete !== undefined) {
-    config.setupComplete = assertBoolean(record.setupComplete, path, "setupComplete");
-    explicitKeys.push("setupComplete");
+  // Validated at the READ boundary, through the registry: a field this binary
+  // owns but cannot interpret is refused here, before anything could rewrite it.
+  for (const definition of GLOBAL_SETTINGS) {
+    const raw = record[definition.configKey];
+    if (raw === undefined) continue;
+    (config as unknown as Record<string, unknown>)[definition.configKey] = validateSettingValue(
+      definition,
+      raw,
+      path,
+      definition.configKey,
+    );
+    explicitKeys.push(definition.configKey);
   }
   if (record.connectors !== undefined) {
     config.connectors = assertConnectors(record.connectors, path);
@@ -217,17 +214,17 @@ export function updateConfig(home: string, patch: ConfigPatch): StapleConfig {
   const next: StapleConfig = { ...loaded.config, connectors: { ...loaded.config.connectors } };
   const chosen = new Set(loaded.explicitKeys);
 
-  if (patch.browser !== undefined) {
-    next.browser = assertBrowser(patch.browser, where);
-    chosen.add("browser");
-  }
-  if (patch.port !== undefined) {
-    next.port = assertPort(patch.port, where);
-    chosen.add("port");
-  }
-  if (patch.setupComplete !== undefined) {
-    next.setupComplete = assertBoolean(patch.setupComplete, where, "setupComplete");
-    chosen.add("setupComplete");
+  // The WRITE boundary, through the same registry check the read used.
+  for (const definition of GLOBAL_SETTINGS) {
+    const raw = (patch as Record<string, unknown>)[definition.configKey];
+    if (raw === undefined) continue;
+    (next as unknown as Record<string, unknown>)[definition.configKey] = validateSettingValue(
+      definition,
+      raw,
+      where,
+      definition.configKey,
+    );
+    chosen.add(definition.configKey);
   }
   if (patch.connectors !== undefined) {
     next.connectors = { ...next.connectors, ...assertConnectors(patch.connectors, where) };
@@ -237,7 +234,7 @@ export function updateConfig(home: string, patch: ConfigPatch): StapleConfig {
 
   // Unknown keys first so a future field cannot shadow one this binary owns.
   const body: Record<string, unknown> = { ...loaded.unknown, schemaVersion: CONFIG_SCHEMA_VERSION };
-  for (const key of ["browser", "port", "setupComplete", "connectors"] as const) {
+  for (const key of [...SETTING_KEYS, "connectors"] as const) {
     if (chosen.has(key)) body[key] = next[key];
   }
   writeFileAtomic(where, `${JSON.stringify(body, null, 2)}\n`, { mode: 0o600, dirMode: 0o700 });

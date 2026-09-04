@@ -68,18 +68,28 @@ afterAll(() => {
  * Pinned as exact strings, including the trailing space that a medium-priority
  * row produces (PRIORITY_MARKS.medium is " ", so the glyph column is always two
  * characters wide and a medium row reads "◌  " with two spaces).
+ *
+ * R5e (STA-185) added a LEADING kind glyph — the kind's resolved terminal
+ * `fallback`, one character then a space — to the three LIST surfaces only:
+ * `ls`, `tree`, and the children under `show`. `new`, `done`, `status`,
+ * `release`, `checkout`, `block`, `blocked-by`, `wait`, `inbox` and `board` go
+ * on rendering `line()` bare, and their goldens further down are unchanged,
+ * which is the whole reason the glyph is a wrapper (`kindLine()`) rather than a
+ * sixth field of `line()` itself.
  */
 describe("the shared issue line", () => {
   it("pins glyph, priority mark, both column widths, and the priority ordering", () => {
     const out = cli("ls").stdout;
     // Rows come back critical -> high -> medium -> low, NOT in identifier order.
     // A script that assumes `ls` is chronological is already wrong today.
+    // Every fixture row is a `task`, so every row leads with `◇` — the seeded
+    // task fallback from src/core/kind-appearance.ts.
     expect(out).toBe(
       [
-        "⊘!! HUM-3     blocked     Gamma @someone",
-        "◌! HUM-1     backlog     Alpha",
-        "◌  HUM-2     backlog     Beta",
-        "◌· HUM-4     backlog     Delta",
+        "◇ ⊘!! HUM-3     blocked     Gamma @someone",
+        "◇ ◌! HUM-1     backlog     Alpha",
+        "◇ ◌  HUM-2     backlog     Beta",
+        "◇ ◌· HUM-4     backlog     Delta",
         "",
       ].join("\n"),
     );
@@ -119,7 +129,9 @@ describe("read command renderings", () => {
     const out = cli("show", "HUM-1").stdout;
     expect(out).toBe(
       [
-        "HUM-1 · Alpha",
+        // R5e (STA-185): the header leads with the kind glyph, like the child
+        // rows below it — `◇` is the seeded `task` fallback.
+        "◇ HUM-1 · Alpha",
         // STA-124 put `kind` on this line, unconditionally — `show` is the
         // detail surface, so it names the kind even when it is the default.
         // `ls`/`tree`/`inbox` rows deliberately do NOT: `line()` suppresses the
@@ -135,7 +147,7 @@ describe("read command renderings", () => {
         "blocks:     HUM-2(backlog)",
         "",
         "children:",
-        "  ◌· HUM-4     backlog     Delta",
+        "  ◇ ◌· HUM-4     backlog     Delta",
         "",
         "documents: plan@r1",
         "",
@@ -181,7 +193,7 @@ describe("read command renderings", () => {
 
   it("pins the `tree` two-space indent per level", () => {
     expect(cli("tree", "HUM-1").stdout).toBe(
-      ["◌! HUM-1     backlog     Alpha", "  ◌· HUM-4     backlog     Delta", ""].join("\n"),
+      ["◇ ◌! HUM-1     backlog     Alpha", "  ◇ ◌· HUM-4     backlog     Delta", ""].join("\n"),
     );
   });
 

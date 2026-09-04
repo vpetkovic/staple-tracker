@@ -383,6 +383,29 @@ export interface IssueTiming {
   childrenActiveSeconds: number | null;
   /** Direct children per status; every status present, zeros included. */
   childStatusCounts: Record<IssueStatus, number>;
+  /** The recursive plan for the subtree, beside the depth-1 fields above. */
+  subtreePlan: SubtreePlan;
+}
+
+/** Where a `SubtreePlan.estimatedSeconds` came from. */
+export type PlanSource = "own" | "descendants" | "none";
+
+/**
+ * The estimate rollup that survives an epic-of-epics, mirroring `SubtreePlan`
+ * in src/core/types.ts. One rule keeps it from counting anything twice: an
+ * issue contributes its own estimate if it has one, otherwise the sum of its
+ * children's contributions — never both.
+ */
+export interface SubtreePlan {
+  /** The effective (top-down) plan: own estimate if recorded, else `descendantsEstimatedSeconds`. */
+  estimatedSeconds: number | null;
+  source: PlanSource;
+  /** The bottom-up plan: sum of the direct children's effective plans; null when no descendant has one. */
+  descendantsEstimatedSeconds: number | null;
+  /** Descendants at any depth whose own estimate is a term of the bottom-up sum. */
+  contributingCount: number;
+  /** Descendants at any depth. 0 for a leaf. */
+  totalCount: number;
 }
 
 /**

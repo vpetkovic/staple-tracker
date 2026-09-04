@@ -44,7 +44,25 @@ import {
   nowIso,
 } from "./types.js";
 import { SORT_ORDER_STEP } from "./migrations/workspace/004-workspace-settings.js";
+import {
+  encodeStoredSetting,
+  readStoredSetting,
+  requireSettingDefinition,
+  settingDefinitionsFor,
+  settingKeyFromMetaKey,
+  settingMetaKey,
+  settingValueView,
+  validateSettingValue,
+  WORKSPACE_SETTING_META_PREFIX,
+  type SettingValueView,
+} from "./settings-registry.js";
 import { MilestoneStore, assertRekindAllowed } from "./milestone-store.js";
+import {
+  resolveKindAppearance,
+  type KindAppearance,
+  type KindAppearanceMap,
+  type KindWithAppearance,
+} from "./kind-appearance.js";
 import { MILESTONE_KIND } from "./milestones.js";
 import { QueueStore } from "./queue-store.js";
 
@@ -268,6 +286,14 @@ interface SettingsSnapshot {
   blocked: string[];
   checkoutExpected: string[];
   pickupOrder: string[];
+  /**
+   * Registered workspace setting values (R6a, STA-176), keyed by setting key.
+   * Only keys with a definition are here — decoded and validated at this READ
+   * boundary — so a setting the registry does not know can never reach a caller.
+   */
+  values: Map<string, { value: unknown; version: number }>;
+  /** `setting:*` meta rows nobody in this binary has a definition for. Preserved, never read. */
+  unknownSettingKeys: string[];
 }
 
 /** One op in an `update_statuses` / `update_kinds` batch. */
@@ -277,6 +303,9 @@ export type VocabularyOp =
   | { op: "recategorize"; id: string; category: string }
   | { op: "reorder"; ids: string[] }
   | { op: "remove"; id: string; migrateTo?: string | null };
+
+/** One op in a `target: "settings"` batch: set a registered workspace value, or clear it. */
+export type SettingOp = { op: "set"; key: string; value: unknown } | { op: "reset"; key: string };
 
 /**
  * SQL literal list for an `IN (…)` fragment.
@@ -605,10 +634,36 @@ export class WorkspaceStore {
     const inCategories = (categories: readonly StatusCategory[]): string[] =>
       categories.flatMap((category) => byCategory.get(category) ?? []);
 
+    /**
+     * Registered values, decoded through the registry so an unreadable row is
+     * refused HERE with its key in the sentence rather than wherever the value
+     * is first used. Rows for keys with no definition are counted, not parsed.
+     */
+    const values = new Map<string, { value: unknown; version: number }>();
+    const unknownSettingKeys: string[] = [];
+    const stored = new Map(
+      (
+        this.db
+          .prepare("SELECT key, value FROM meta WHERE key LIKE ? ORDER BY key")
+          .all(`${WORKSPACE_SETTING_META_PREFIX}%`) as Array<{ key: string; value: string }>
+      ).map((row) => [settingKeyFromMetaKey(row.key) ?? row.key, row.value]),
+    );
+    const where = `workspace ${this.slug}`;
+    for (const definition of settingDefinitionsFor("workspace")) {
+      const text = stored.get(definition.key);
+      if (text === undefined) continue;
+      const decoded = readStoredSetting(definition, text, where);
+      values.set(definition.key, { value: decoded.value, version: decoded.version });
+      stored.delete(definition.key);
+    }
+    for (const key of stored.keys()) unknownSettingKeys.push(key);
+
     const snapshot: SettingsSnapshot = {
       revision,
       statuses,
       kinds,
+      values,
+      unknownSettingKeys,
       byId,
       byCategory,
       listOrder: inCategories(LIST_CATEGORY_ORDER),
@@ -633,6 +688,28 @@ export class WorkspaceStore {
   /** The workspace's kind vocabulary, in configured order. O1a reads this. */
   getKinds(): WorkspaceKind[] {
     return this.settings().kinds.map((kind) => ({ ...kind }));
+  }
+
+  /** The operator's stored glyph choices (R5a, STA-181), keyed by kind id. Empty until one is set. */
+  private kindAppearanceMap(): KindAppearanceMap {
+    return this.getSetting("kinds.appearance") as KindAppearanceMap;
+  }
+
+  /**
+   * One kind's resolved appearance (R5a, STA-181): the stored record, the
+   * built-in mark for a seeded id, or the generic mark. Total — an id this
+   * workspace has not configured still gets an answer, with a title-cased label,
+   * because a render path is the wrong place to discover a kind.
+   */
+  kindAppearance(id: string): KindAppearance {
+    const kind = this.settings().kinds.find((row) => row.id === id) ?? { id, label: defaultLabel(id) };
+    return resolveKindAppearance(kind, this.kindAppearanceMap()[id]);
+  }
+
+  /** `getKinds()` with each row's resolved appearance — what `kinds ls --json`, `list_kinds` and `/api/settings` serve. */
+  getKindsWithAppearance(): KindWithAppearance[] {
+    const stored = this.kindAppearanceMap();
+    return this.settings().kinds.map((kind) => ({ ...kind, appearance: resolveKindAppearance(kind, stored[kind.id]) }));
   }
 
   /**
@@ -662,6 +739,14 @@ export class WorkspaceStore {
    */
   defaultKind(): string {
     const kinds = this.settings().kinds;
+    /**
+     * `kinds.default` (R6a) is the operator's choice, and it is honoured only
+     * while it names a configured kind: `removeKind` resets it in the same
+     * transaction, so a stale value here means a hand-edited row, and the seed
+     * rule below is the right answer for that rather than a refusal on create.
+     */
+    const chosen = this.getSetting("kinds.default") as string;
+    if (kinds.some((kind) => kind.id === chosen)) return chosen;
     if (kinds.some((kind) => kind.id === DEFAULT_ISSUE_KIND)) return DEFAULT_ISSUE_KIND;
     const first = kinds[0]?.id;
     if (first === undefined) {
@@ -1159,6 +1244,16 @@ export class WorkspaceStore {
         actor: actor ?? null,
         payload: { action: "remove", id, migrateTo: opts.migrateTo ?? null, migrated },
       });
+      // A default that names a kind which no longer exists is not a setting, it
+      // is a dangling pointer; clear it here so `defaultKind()` never has to guess.
+      if (this.getSetting("kinds.default") === id) this.resetSetting("kinds.default", actor);
+      // And its glyph entry, for the same reason: `kinds.appearance` may only name configured kinds.
+      const appearance = this.kindAppearanceMap();
+      if (id in appearance) {
+        const rest = Object.fromEntries(Object.entries(appearance).filter(([kind]) => kind !== id));
+        if (Object.keys(rest).length > 0) this.setSetting("kinds.appearance", rest, actor);
+        else this.resetSetting("kinds.appearance", actor);
+      }
       return { migrated };
     });
   }
@@ -1225,6 +1320,116 @@ export class WorkspaceStore {
         }
       }
       return this.getKinds();
+    });
+  }
+
+  // ---------- workspace settings: registered values (R6a, STA-176) ----------
+
+  /**
+   * The effective value of ONE registered workspace setting: the stored value
+   * when there is one, the definition's default otherwise. Refuses a key the
+   * registry does not know or one that is global — a global preference lives in
+   * config.json and asking a workspace for it would be asking the wrong store.
+   */
+  getSetting(key: string): unknown {
+    const definition = requireSettingDefinition(key, "workspace");
+    return this.settings().values.get(key)?.value ?? definition.default;
+  }
+
+  /**
+   * ONE registered workspace setting with its provenance — the object every
+   * surface answers for `get`, byte-identical to the matching entry of
+   * `settingValues()`. Refuses an unknown or global key like `getSetting`.
+   */
+  settingValue(key: string): SettingValueView {
+    const definition = requireSettingDefinition(key, "workspace");
+    const stored = this.settings().values.get(key);
+    return stored
+      ? settingValueView(definition, stored.value, "workspace")
+      : settingValueView(definition, definition.default, "default");
+  }
+
+  /** Every registered workspace setting with its provenance, in registry order. */
+  settingValues(): SettingValueView[] {
+    const values = this.settings().values;
+    return settingDefinitionsFor("workspace").map((definition) => {
+      const stored = values.get(definition.key);
+      return stored
+        ? settingValueView(definition, stored.value, "workspace")
+        : settingValueView(definition, definition.default, "default");
+    });
+  }
+
+  /** `setting:*` rows this binary has no definition for. Reported, preserved, never rewritten. */
+  unknownSettingKeys(): string[] {
+    return [...this.settings().unknownSettingKeys];
+  }
+
+  /**
+   * Persist a registered workspace value. The WRITE boundary: the registry
+   * validates the shape, and the store adds the one rule only it can check —
+   * `kinds.default` must name a configured kind. Bumps the settings revision so
+   * every other connection's snapshot is stale, and logs actor, previous and
+   * new value as a `setting_changed` event.
+   */
+  setSetting(key: string, value: unknown, actor?: string | null): SettingValueView {
+    const definition = requireSettingDefinition(key, "workspace");
+    const next = validateSettingValue(definition, value, `workspace ${this.slug}`);
+    if (key === "kinds.default") this.assertConfiguredKind(next as string);
+    // Same rule for the glyph map: an entry for a kind that does not exist is a dangling pointer.
+    if (key === "kinds.appearance") for (const id of Object.keys(next as KindAppearanceMap)) this.assertConfiguredKind(id);
+    return this.atomically(() => {
+      const from = this.getSetting(key);
+      this.db
+        .prepare(
+          `INSERT INTO meta (key, value) VALUES (?, ?)
+           ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+        )
+        .run(settingMetaKey(key), encodeStoredSetting(definition, next));
+      this.bumpSettingsRevision();
+      this.emitEvent({
+        kind: "setting_changed",
+        actor: actor ?? null,
+        payload: { action: "set", key, from, to: next },
+      });
+      return settingValueView(definition, next, "workspace");
+    });
+  }
+
+  /** Clear a stored value so the definition's default applies again. A no-op when nothing is stored. */
+  resetSetting(key: string, actor?: string | null): SettingValueView {
+    const definition = requireSettingDefinition(key, "workspace");
+    return this.atomically(() => {
+      const stored = this.settings().values.get(key);
+      if (stored) {
+        this.db.prepare("DELETE FROM meta WHERE key = ?").run(settingMetaKey(key));
+        this.bumpSettingsRevision();
+        this.emitEvent({
+          kind: "setting_changed",
+          actor: actor ?? null,
+          payload: { action: "reset", key, from: stored.value, to: definition.default },
+        });
+      }
+      return settingValueView(definition, definition.default, "default");
+    });
+  }
+
+  /** Apply a batch of setting ops in ONE transaction, in order — the `target: "settings"` twin of `applyStatusOps`. */
+  applySettingOps(ops: readonly SettingOp[], actor?: string | null): SettingValueView[] {
+    return this.atomically(() => {
+      for (const op of ops) {
+        switch (op.op) {
+          case "set":
+            this.setSetting(op.key, op.value, actor);
+            break;
+          case "reset":
+            this.resetSetting(op.key, actor);
+            break;
+          default:
+            throw new StapleError("validation", `Unknown setting op "${(op as { op: string }).op}"`);
+        }
+      }
+      return this.settingValues();
     });
   }
 
@@ -3406,6 +3611,13 @@ export class WorkspaceStore {
       childrenEstimatedSeconds: null,
       childrenActiveSeconds: null,
       childStatusCounts: this.zeroStatusCounts(),
+      subtreePlan: {
+        estimatedSeconds: null,
+        source: "none",
+        descendantsEstimatedSeconds: null,
+        contributingCount: 0,
+        totalCount: 0,
+      },
     };
   }
 
@@ -3458,6 +3670,12 @@ export class WorkspaceStore {
    * 3. Estimates do NOT cascade that way: `childrenEstimatedSeconds` sums the
    *    children's own estimates only. A parent's estimate is a plan for its whole
    *    subtree, so folding it together with its children's would double-count it.
+   * 4. The RECURSIVE plan (STA-192) lives beside it as `subtreePlan`, and gets
+   *    through the same double-count problem with one rule: an issue contributes
+   *    its own estimate if it has one, otherwise its children's contributions.
+   *    Own wins, so the estimates under an estimated parent are shadowed for
+   *    every ancestor rather than added — and a parent with no estimate passes
+   *    its children's plan straight up. See `SubtreePlan` in core/types.ts.
    *
    * That recursion is why this resolves a bounded DESCENDANT CLOSURE up front
    * (one recursive CTE, capped at MAX_TREE_DEPTH) and then rolls up deepest-first
@@ -3580,6 +3798,11 @@ export class WorkspaceStore {
       let childrenEstimatedSeconds: number | null = null;
       let childrenActiveSeconds: number | null = null;
       let childApproximate = false;
+      // The recursive plan (STA-192), accumulated from each child's already-final
+      // `subtreePlan` — the same deepest-first order the actuals rely on.
+      let descendantsEstimatedSeconds: number | null = null;
+      let contributingCount = 0;
+      let totalCount = 0;
       for (const child of children) {
         // Only configured statuses get a bucket; an orphaned id is counted
         // nowhere rather than inventing a key no consumer's schema knows about.
@@ -3593,10 +3816,24 @@ export class WorkspaceStore {
           childrenActiveSeconds = (childrenActiveSeconds ?? 0) + childTiming.activeSeconds;
         }
         if (childTiming?.approximate) childApproximate = true;
+        const childPlan = childTiming?.subtreePlan;
+        if (childPlan) {
+          // The child's EFFECTIVE plan is its contribution — own if it has one,
+          // else what flowed up through it. Never both, which is the whole rule.
+          if (childPlan.estimatedSeconds != null) {
+            descendantsEstimatedSeconds =
+              (descendantsEstimatedSeconds ?? 0) + childPlan.estimatedSeconds;
+          }
+          // A child that contributed its own estimate is ONE contributing item,
+          // and shadows whatever its subtree counted; otherwise its count flows up.
+          contributingCount += childPlan.source === "own" ? 1 : childPlan.contributingCount;
+          totalCount += 1 + childPlan.totalCount;
+        }
       }
       const hasChildren = children.length > 0;
+      const ownEstimate = row.estimated_seconds ?? null;
       timings.set(row.id, {
-        estimatedSeconds: row.estimated_seconds ?? null,
+        estimatedSeconds: ownEstimate,
         ownActiveSeconds: own.ownActiveSeconds,
         // The headline. `cancelled` declines to report an actual at all — see
         // IssueTiming — and a parent reports its aggregation, never a stopwatch.
@@ -3615,6 +3852,15 @@ export class WorkspaceStore {
         childrenEstimatedSeconds,
         childrenActiveSeconds,
         childStatusCounts,
+        subtreePlan: {
+          // Own wins; otherwise the children's plan flows up unchanged.
+          estimatedSeconds: ownEstimate ?? descendantsEstimatedSeconds,
+          source:
+            ownEstimate != null ? "own" : descendantsEstimatedSeconds != null ? "descendants" : "none",
+          descendantsEstimatedSeconds,
+          contributingCount,
+          totalCount,
+        },
       });
     }
 
