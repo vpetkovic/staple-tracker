@@ -33,7 +33,14 @@ import {
   type FilterContext,
 } from "@/lib/filter-dimensions";
 import { emptyFilters, hiddenParents, type FilterState } from "@/lib/filters";
-import { DEFAULT_SORT, SORT_MODES, type SortPref } from "@/lib/sort-modes";
+import {
+  DEFAULT_SORT,
+  effectiveQueuePosition,
+  ownQueuePosition,
+  SORT_MODES,
+  subtreeQueuePositions,
+  type SortPref,
+} from "@/lib/sort-modes";
 import type { GroupBy } from "@/lib/view-prefs";
 import type { IssueRow } from "@/lib/types";
 import {
@@ -46,7 +53,6 @@ import {
   EXPECTED_CUES,
   MILESTONE,
   withGate,
-  withQueueFields,
 } from "./drift-fixture";
 import { buildPickupIndex } from "./pickup-model";
 import { buildList, sectionsOf, visibleOrder, type BuildOptions, type ListShape } from "./tree-model";
@@ -260,27 +266,63 @@ describe("every sort mode, on every group axis", () => {
   });
 
   /**
-   * DEFECT (reported, not fixed — this ticket touches no `src/**` production code).
+   * R4f (STA-246), the first of the three defects R4e recorded.
    *
-   * `BuildOptions.sort` in tree-model.ts says: "It applies inside every shape, not only the
-   * flat one … a sort that silently stopped applying one menu entry away would be the kind
-   * of inconsistency the Group control's own notes keep arguing against."
+   * `BuildOptions.sort` says: "It applies inside every shape, not only the flat one … a sort
+   * that silently stopped applying one menu entry away would be the kind of inconsistency the
+   * Group control's own notes keep arguing against." It stopped one menu entry away:
+   * `buildList` forwarded four options to `buildPickupGroups` and not `sort`.
    *
-   * It stops applying one menu entry away. `buildList`'s `"pickup"` case forwards
-   * `showResolved`, `hiddenParents`, `ghostParents` and `isExpanded` to `buildPickupGroups`
-   * and NOT `sort`, and `PickupBuildOptions` has no `sort` field to receive it, so the
-   * pickup axis always orders by the inbox rank. Choosing "Sort: Title · A to Z" and then
-   * grouping by Pickup order silently reverts to the store's order with the trigger still
-   * reading "Title".
+   * THE PRODUCT CALL, now made and pinned here. The store's rank is what this axis hands the
+   * registry as its ACTIVITY TIER, so:
    *
-   * Either behaviour is defensible — the pickup axis IS an order, and overriding it with a
-   * title sort is arguably wrong — but the code and its own documentation disagree, and one
-   * of the two has to move. Left as a todo because deciding which is a product call and the
-   * fix is a `src/**` edit.
+   *   - the default mode still renders the store's dependency-ordered sequence, unchanged;
+   *   - `activity · desc` renders the back of that sequence first, a reading it never had;
+   *   - every other mode is a key the reader named, and the sections order by it.
    */
-  it.todo(
-    "applies the chosen sort inside the pickup axis too — buildList drops `sort` for `buildPickupGroups`, contradicting BuildOptions.sort's own note",
-  );
+  it("applies the chosen sort inside the pickup axis too, and its default IS the store's order", () => {
+    const section = (over: Partial<BuildOptions>) => {
+      const shape = buildList(BOARD, "pickup", opts({ isExpanded: () => true, ...over }), PICKUP);
+      return identifiers(sectionsOf(shape).find((s) => s.key === "up_next")!.rows);
+    };
+
+    /*
+     * THE DEFAULT IS THE RANK. `driftInbox`'s ready bucket is the loner, the research task,
+     * then the two in-progress rows — the store's order, which no client-side tier would
+     * reproduce — and asking for `activity` explicitly gives back exactly what asking for
+     * nothing does. That is what makes "the sort now reaches this axis" cost the queue nothing.
+     */
+    const unsorted = section({});
+    expect(unsorted).toEqual(section({ sort: DEFAULT_SORT }));
+    expect(unsorted.filter((id) => ["STA-7", "STA-8"].includes(id))).toEqual(["STA-8", "STA-7"]);
+
+    /*
+     * A KEY THE READER NAMED, and the direction with it. Alphabetically the cold epic leads
+     * and the loner is last; descending, siblings swap at EVERY depth while a parent still
+     * precedes its own children — which is the same thing sorting means in the flat view, and
+     * is why the axis had to take the comparator rather than a reversal of its own.
+     */
+    expect(section({ sort: { mode: "title", direction: "asc" } })).toEqual([
+      "STA-5",
+      "STA-6",
+      "STA-7",
+      "STA-8",
+    ]);
+    expect(section({ sort: { mode: "title", direction: "desc" } })).toEqual([
+      "STA-8",
+      "STA-5",
+      "STA-7",
+      "STA-6",
+    ]);
+
+    // AND ON THE DEFAULT MODE, direction now reads the queue backwards: the store's first
+    // ready row goes last, which is a reading this axis simply did not have before.
+    expect(
+      section({ sort: { mode: "activity", direction: "desc" } }).filter((id) =>
+        ["STA-7", "STA-8"].includes(id),
+      ),
+    ).toEqual(["STA-7", "STA-8"]);
+  });
 });
 
 /**
@@ -428,6 +470,16 @@ describe("a queued milestone member, cued and sorted", () => {
   const CUED = attachRowCues(BOARD, buildRowCueIndex(driftQueue(), driftMilestoneTitles()));
   const cueOf = (identifier: string) => CUED.find((r) => r.issue.identifier === identifier)!.cues;
 
+  /** R4f (STA-246). The two directions of the mode under test, named once. */
+  const QUEUE_ASC: SortPref = { mode: "queue", direction: "asc" };
+  const QUEUE_DESC: SortPref = { mode: "queue", direction: "desc" };
+
+  /** The flat page, expanded, in one order — the cold epic's children have to be on it. */
+  const queueOrder = (rows: IssueRow[], sort: SortPref): string[] => {
+    const shape = buildList(rows, "none", opts({ isExpanded: () => true, sort }));
+    return identifiers(shape.kind === "flat" ? shape.rows : []);
+  };
+
   it("gives every row on the board the state the queue actually published", () => {
     for (const [identifier, expected] of Object.entries(EXPECTED_CUES)) {
       const cue = cueOf(identifier)?.pickup;
@@ -489,15 +541,15 @@ describe("a queued milestone member, cued and sorted", () => {
       ?.position).toBe(5);
   });
 
-  it("sorts by the very numbers it prints, once the row carries them", () => {
+  it("sorts by the very numbers it prints, on today's payload", () => {
     /*
-     * The cue's number and the `queue` sort's number are the SAME number said twice, and the
-     * only way to check that is to hand the sort the positions the queue published. See
-     * `withQueueFields` — and see the todo below for why the live app cannot do this yet.
+     * R4f (STA-246). The cue's number and the `queue` sort's number are the SAME number said
+     * twice — `attachRowCues` stamps `queuePosition` off the cue it just built — so this
+     * reads `CUED` itself rather than a fixture that pretends `/api/issues` grew a field.
+     * Nothing about the payload changed; the join did.
      */
-    const served = withQueueFields(CUED);
     const shape = buildList(
-      served,
+      CUED,
       "none",
       // Expanded, so the cold epic's two children are on the page to be compared.
       opts({ isExpanded: () => true, sort: { mode: "queue", direction: "asc" } }),
@@ -522,58 +574,83 @@ describe("a queued milestone member, cued and sorted", () => {
       "STA-7",
       "STA-6",
     ]);
-    /*
-     * ACROSS SCOPES it does not, and this is the assertion recording that — see the second
-     * todo below. The cold epic carries PLAN #3 and the loner carries EFFECTIVE #4, the sort
-     * compares the two numbers directly, and the epic wins even though the only queued work
-     * beneath it is effective #5 — one place behind the row it was sorted above.
-     */
-    expect(identifiers(rows).filter((id) => ["STA-1", "STA-5", "STA-8"].includes(id))).toEqual([
-      "STA-1",
-      "STA-5",
-      "STA-8",
-    ]);
     expect(cueOf("STA-7")!.pickup!.state).toBe("queued");
     expect(cueOf("STA-6")!.pickup!.state).toBe("unqueued");
   });
 
   /**
-   * DEFECT (reported, not fixed — no `src/**` edit in this ticket).
+   * R4f (STA-246), the second of the three defects R4e recorded — the mode was INERT.
    *
-   * On TODAY'S payload the "Queue position" sort mode is inert while the cues beside it are
-   * fully populated, so the list can print "#5" on a row and then refuse to order by it.
+   * `row-cues.ts` joined `GET /api/queue` in the browser because `/api/issues` does not send
+   * `queuePosition`; `lib/sort-modes.ts` read only that unsent field. So every row looked
+   * unqueued, the partition kept them all in the trailing band, and the order fell through to
+   * the tie-break chain with the trigger still reading "Sort: Queue position".
    *
-   * The two halves read different sources. `row-cues.ts` joins `GET /api/queue` in the
-   * browser precisely because `/api/issues` does not send `queuePosition`/`planPosition`
-   * yet; `lib/sort-modes.ts`'s `ownQueuePosition` reads only those two unsent fields. So
-   * `queue` sort sees every row as unqueued, the partition step keeps them all in the
-   * trailing band, and the order falls through to the tie-break chain — with the trigger
-   * still reading "Sort: Queue position · Front of the queue first".
-   *
-   * The test above proves the two agree the moment the fields are served. The fix is one of
-   * two `src/**` edits — serve the fields from `/api/issues`, or let the sort read the same
-   * `RowCueIndex` the cues read — and both belong to a ticket that owns production code.
+   * ONE SOURCE, not two that agree today: the join stamps the field off the cue it just
+   * built. The proof is a difference — the same board, the same options, joined and not.
    */
-  it.todo(
-    "orders by the queue on today's payload — `queue` sort reads the unserved queuePosition/planPosition while the cue beside it reads GET /api/queue, so sorting by it does nothing",
-  );
+  it("orders by the queue on today's payload, and orders by nothing without the join", () => {
+    /*
+     * UNJOINED, the mode cannot see the queue at all, so its own tie-break chain decides and
+     * the answer is the `activity` order — which is precisely the silence being fixed: the
+     * list is in an order, it is just not the one the trigger names.
+     */
+    const blind = queueOrder(BOARD, QUEUE_ASC);
+    const joined = queueOrder(CUED, QUEUE_ASC);
+    expect(blind).not.toEqual(joined);
+
+    // JOINED, the top of the list is the front of the plan: the row the resolver would hand
+    // out next (#4), then the epic holding #5, then the rows the queue has no number for.
+    expect(joined.filter((id) => ["STA-1", "STA-5", "STA-8"].includes(id))).toEqual([
+      "STA-8",
+      "STA-5",
+      "STA-1",
+    ]);
+    // And direction reaches it: "back of the queue first" is a different list, not the same
+    // one, which is what an inert mode would have produced in both directions.
+    expect(queueOrder(CUED, QUEUE_DESC)).not.toEqual(joined);
+  });
 
   /**
-   * DEFECT (latent, reported, not fixed — reachable the day the fields above are served).
+   * R4f (STA-246), the third defect — ONE SCALE, and it is the effective one.
    *
    * `rowCueShort` prints `plan #2` rather than a bare `#2` because "a container's number and
    * a leaf's number are different numbers, and a reader who cannot tell which one they are
-   * looking at cannot use either". The `queue` SORT does exactly what that sentence forbids:
-   * `ownQueuePosition` is `queuePosition ?? planPosition`, so a container's PLAN index and a
-   * leaf's EFFECTIVE index land in one comparison as if they were the same sequence.
+   * looking at cannot use either". `ownQueuePosition` was `queuePosition ?? planPosition`,
+   * which did exactly what that sentence forbids, and plan indices are always the smaller
+   * numbers — so containers rode to the top of every queue sort, systematically.
    *
-   * The assertion above is the demonstration: the cold epic (plan #3, holding effective #5)
-   * sorts ABOVE the loner (effective #4). Plan indices are always the smaller numbers, so
-   * the bias is systematic — containers ride to the top of a queue sort.
+   * The scale now: a row sorts by the EFFECTIVE position its own cue prints, a container by
+   * the earliest effective position among the rows it holds, and a row the queue has no
+   * number for sorts last in both directions.
    */
-  it.todo(
-    "keeps plan positions and effective positions in separate scales when sorting — ownQueuePosition compares a container's plan index against a leaf's effective index",
-  );
+  it("ranks a container by the earliest EFFECTIVE position beneath it, never by its plan index", () => {
+    const cold = CUED.find((r) => r.issue.identifier === "STA-5")!;
+    const loner = CUED.find((r) => r.issue.identifier === "STA-8")!;
+
+    // What the two rows PRINT: two different rulers, and the epic's is the smaller number.
+    expect(cold.cues!.pickup).toMatchObject({ scope: "plan", position: 3 });
+    expect(loner.cues!.pickup).toMatchObject({ scope: "effective", position: 4 });
+
+    // What they SORT by: the plan index is not read at all, and the epic takes the earliest
+    // effective position beneath it — STA-7's #5, one place BEHIND the loner it used to
+    // outrank on the strength of a number from another sequence.
+    expect(ownQueuePosition(cold)).toBeNull();
+    expect(ownQueuePosition(loner)).toBe(4);
+    const subtree = subtreeQueuePositions(CUED);
+    expect(effectiveQueuePosition(cold, subtree)).toBe(5);
+
+    const order = queueOrder(CUED, QUEUE_ASC);
+    expect(order.indexOf("STA-8")).toBeLessThan(order.indexOf("STA-5"));
+
+    /*
+     * The order epic holds three rows the queue has no number for — claimed, gated, claimed —
+     * so nothing beneath it is takeable and it joins the trailing band, PLAN #1 and all. That
+     * is the honest reading of one scale: a plan position is not a place in the sequence.
+     */
+    expect(effectiveQueuePosition(CUED.find((r) => r.issue.identifier === "STA-1")!, subtree))
+      .toBeNull();
+  });
 });
 
 /**

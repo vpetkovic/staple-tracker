@@ -242,12 +242,26 @@ describe("queue position — presentation only", () => {
     expect(order(rows, "queue", "desc")).toEqual(["STA-2", "STA-3", "STA-1"]);
   });
 
-  it("reads the effective position ahead of the plan position, and absent as null", () => {
+  /**
+   * R4f (STA-246). ONE SCALE, and the plan scale is not it.
+   *
+   * `ownQueuePosition` used to be `queuePosition ?? planPosition`, which put a container's
+   * PLAN index and a leaf's EFFECTIVE index in one comparison — the exact reading
+   * `rowCueShort` spells `plan #2` to prevent. Plan indices are the coarser and therefore
+   * the smaller, so containers rode to the top of every queue sort. A container's answer is
+   * the rollup in the test below, not a number off a different ruler.
+   */
+  it("reads the EFFECTIVE position only — a plan position is a different scale", () => {
     const both = { ...row({ identifier: "STA-1" }), queuePosition: 2, planPosition: 9 };
     const planOnly = { ...row({ identifier: "STA-2" }), planPosition: 5 };
     expect(ownQueuePosition(both)).toBe(2);
-    expect(ownQueuePosition(planOnly)).toBe(5);
+    expect(ownQueuePosition(planOnly)).toBeNull();
     expect(ownQueuePosition(row({ identifier: "STA-3" }))).toBeNull();
+
+    // And the sort agrees: the plan-only row is a row the queue has no position for, so it
+    // sorts in the trailing band rather than ahead of the leaf at 2.
+    expect(order([planOnly, both], "queue", "asc")).toEqual(["STA-1", "STA-2"]);
+    expect(order([planOnly, both], "queue", "desc")).toEqual(["STA-1", "STA-2"]);
   });
 
   it("gives a parent the EARLIEST position beneath it, so an epic follows its queued task", () => {

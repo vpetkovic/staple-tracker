@@ -332,9 +332,50 @@ describe("silence, and the identity of the array", () => {
 
     expect(joined[0]!.cues?.pickup?.state).toBe("pickable");
     expect(joined[0]!.issue).toBe(rows[0]!.issue);
-    // The wire's own fields stay reserved and untouched — see lib/types.ts.
+    /*
+     * `pickupState` and `pickupReason` stay reserved and untouched — see lib/types.ts, and
+     * `filter-dimensions.ts` on why `queued` must stay unreachable from the browser until
+     * the resolver itself sends the word.
+     */
     expect(joined[0]!.pickupState).toBeUndefined();
-    expect(joined[0]!.queuePosition).toBeUndefined();
+    expect(joined[0]!.pickupReason).toBeUndefined();
+  });
+
+  /**
+   * R4f (STA-246). THE SORT'S NUMBER IS THE CUE'S NUMBER, taken off the same join.
+   *
+   * `lib/sort-modes.ts` ranks by `IssueRow.queuePosition` and `/api/issues` does not send it,
+   * so before this stamping the list could print `#5` on a row and order by nothing at all.
+   */
+  it("stamps the EFFECTIVE position it printed, and never the plan one", () => {
+    const queue = view({
+      entries: [entry({ identifier: "STA-1" })],
+      effective: [
+        effective({ identifier: "STA-2", position: 1, via: "STA-1", eligibility: "claimed" }),
+        effective({ identifier: "STA-3", position: 2, via: "STA-1" }),
+      ],
+    });
+    const rows = [row({ identifier: "STA-1" }), row({ identifier: "STA-2" }), row({ identifier: "STA-3" })];
+    const joined = attachRowCues(rows, buildRowCueIndex(queue));
+    const at = (identifier: string) => joined.find((r) => r.issue.identifier === identifier)!;
+
+    // The leaf: the number beside its identifier is the number it sorts by.
+    expect(at("STA-3").cues?.pickup?.position).toBe(2);
+    expect(at("STA-3").queuePosition).toBe(2);
+
+    /*
+     * The container prints `plan #1` — a place in the PLAN, not in the sequence an agent
+     * receives — so it stamps nothing. A sort that read it would be comparing two rulers,
+     * which is what `plan #` is spelled out to prevent; the container's answer comes from
+     * `subtreeQueuePositions` instead, on the effective scale, from the rows beneath it.
+     */
+    expect(at("STA-1").cues?.pickup?.scope).toBe("plan");
+    expect(at("STA-1").queuePosition).toBeNull();
+    expect(at("STA-1").planPosition).toBeUndefined();
+
+    // And a row the queue has no number for — held, gated, waiting — has none to sort by.
+    expect(at("STA-2").cues?.pickup?.state).toBe("in_flight");
+    expect(at("STA-2").queuePosition).toBeNull();
   });
 });
 

@@ -427,27 +427,3 @@ export function withGate(rows: IssueRow[]): IssueRow[] {
       : r,
   );
 }
-
-/**
- * THE BOARD AS `/api/issues` WILL SEND IT ONCE R2c'S FIELDS LAND — and not before.
- *
- * `lib/types.ts` reserves `queuePosition` and `planPosition` on `IssueRow`; the list route
- * does not populate them today, which is exactly why R4c joins the cues in the browser
- * instead. `lib/sort-modes.ts`'s `queue` mode reads those two RESERVED fields and nothing
- * else, so on today's payload it has nothing to order by.
- *
- * This applies the numbers the queue already published — the same table `EXPECTED_CUES`
- * states — so a test can ask the one question that is otherwise unaskable: when the row
- * carries the position it is CAPTIONED with, does the `queue` sort put the rows in the
- * order the captions read? Containers take their plan position, actionable rows their
- * effective one, exactly as `ownQueuePosition` documents the precedence.
- */
-export function withQueueFields(rows: IssueRow[]): IssueRow[] {
-  return rows.map((r) => {
-    const cue = EXPECTED_CUES[r.issue.identifier];
-    if (!cue || cue.position === null) return r;
-    return cue.scope === "plan"
-      ? { ...r, planPosition: cue.position }
-      : { ...r, queuePosition: cue.position };
-  });
-}

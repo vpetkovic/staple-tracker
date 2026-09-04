@@ -59,10 +59,15 @@
  * So O8a (STA-149) hands the placement to `nesting.ts` — the same call `flatten` makes —
  * and this file keeps exactly the two things that are its own:
  *
- *   THE ORDER. The store's, never re-sorted. A parent sits at its OWN rank; its children
- *   keep the store's order among themselves; a ghost still lands at its best-ranked
- *   orphan's position. Nothing moves ahead of a row it ranks behind except to join the
- *   family it belongs to.
+ *   THE ORDER. The store's by default. A parent sits at its OWN rank; its children keep the
+ *   store's order among themselves; a ghost still lands at its best-ranked orphan's
+ *   position. Nothing moves ahead of a row it ranks behind except to join the family it
+ *   belongs to.
+ *
+ *   R4f (STA-246) made "by default" load-bearing: the Sort menu now reaches this axis, as
+ *   `BuildOptions.sort` always said it did. It is not a second order bolted beside the
+ *   store's — the store's rank IS what this axis hands the registry as its activity tier,
+ *   so the default mode is the sequence above, unchanged. See `PickupBuildOptions.sort`.
  *
  *   THE LINE. What a rendered row looks like — the chip where there is no indent to draw,
  *   the waiting caption, and no rollup on anything.
@@ -70,8 +75,9 @@
 import { flatRow, type TaskRow } from "@/components/task-list";
 import { waitingLine } from "@/lib/derived-blocked";
 import { isGateParked, isQueuedBehindGate } from "@/lib/derived-queued";
-import { isResolvedStatus } from "@/lib/settings";
-import type { BlockingChild, InboxIssue, InboxRow, Issue, IssueRow } from "@/lib/types";
+import { configuredGroupOrder, isResolvedStatus } from "@/lib/settings";
+import { buildSortContext, compareBySort, type SortPref } from "@/lib/sort-modes";
+import type { BlockingChild, InboxIssue, InboxRow, Issue, IssueRow, StatusId } from "@/lib/types";
 /**
  * O8a (STA-149). The placement, shared with `tree-model.ts` rather than reimplemented flat
  * here — which is what let the two axes disagree about the same parent/child pair.
@@ -406,6 +412,29 @@ export interface PickupBuildOptions {
    * chevron that does not toggle is exactly the defect STA-148 raises against ghost rows.
    */
   isExpanded?: (issue: Issue) => boolean | undefined;
+  /**
+   * WHICH ORDER, INSIDE A SECTION — R4f (STA-246), and the one place this module lets an
+   * outside comparator in.
+   *
+   * `BuildOptions.sort` says the chosen sort "applies inside every shape, not only the flat
+   * one", and `buildList` did not forward it here, so this axis quietly ignored the menu.
+   * Forwarding it raises the question the file header has always answered one way — the
+   * store's order, never re-sorted — so the answer is spelled out where the comparator is
+   * built, in `buildPickupGroups`: THE STORE'S RANK IS THE ACTIVITY TIER. The default mode
+   * therefore still renders the store's sequence, and every other mode is a key the reader
+   * named and this section orders by.
+   *
+   * ABSENT MEANS THE RANK COMPARATOR, unchanged, byte for byte — which is what every direct
+   * caller and every fixture in this module's tests gets, and what makes "the order is the
+   * store's" a property of this file's own default rather than of a code path.
+   */
+  sort?: SortPref;
+  /**
+   * The workspace's configured status order, for the `status` mode — `BuildOptions.
+   * statusOrder`, passed through by `buildList`. Absent, the live per-workspace order, the
+   * same default `tree-model.ts` takes. Unread when `sort` is absent.
+   */
+  statusOrder?: readonly StatusId[];
 }
 
 /**
@@ -421,9 +450,52 @@ export function buildPickupGroups(
   index: PickupIndex,
   options: PickupBuildOptions = {},
 ): PickupGroup[] {
-  const { showResolved = false, hiddenParents, ghostParents = true, isExpanded } = options;
+  const {
+    showResolved = false,
+    hiddenParents,
+    ghostParents = true,
+    isExpanded,
+    sort,
+    statusOrder = configuredGroupOrder(),
+  } = options;
 
   const visible = showResolved ? rows : rows.filter((r) => !isResolved(r.issue.status));
+
+  /**
+   * ── THE STORE'S RANK, AS THE ACTIVITY TIER — R4f (STA-246) ────────────────────────────
+   *
+   * `SortContext.activityTier` is an ARGUMENT rather than an import for exactly this reason:
+   * the registry cannot know what "how active is this row" means on a given surface, so each
+   * caller answers for itself. `flattenFlat` hands the tree's own tier; `buildGroups` hands a
+   * flat zero and means it; this axis hands the RANK `/api/inbox` published.
+   *
+   * That is not a trick to preserve today's list — it is what the word means here. `activity`
+   * is "what is happening now", the pickup queue is the store's own dependency-aware answer
+   * to that question, and it knows things the client tier cannot (a `todo` row with an
+   * unresolved blocker is not next, however live its status looks). So under the DEFAULT mode
+   * this axis still renders the store's sequence, which is the thing `/api/inbox` was called
+   * for; under `desc` it renders the back of that sequence first, a reading the axis never
+   * had; and under any other mode the reader has named a key and gets it.
+   *
+   * FINITE, NEVER `Infinity`. `index.rank` answers `Infinity` for a row the inbox never
+   * mentioned — the resolved section, and anything caught by the race fallback — and the
+   * `activity` step SUBTRACTS its two tiers, so `Infinity - Infinity` would hand the sort a
+   * `NaN` and a comparator that is not self-consistent. `index.size` is one past the last
+   * real rank, so those rows still sort last and still break their ties down the chain.
+   */
+  const rankTier = (row: IssueRow): number => {
+    const rank = index.rank(row.issue.id);
+    return Number.isFinite(rank) ? rank : index.size;
+  };
+
+  /**
+   * Built ONCE for the whole list rather than once per section, so the two upward walks
+   * inside `buildSortContext` are two passes over the rows and not two per bucket — and so a
+   * rollup is taken over the same visible set on every axis, per O3a.
+   */
+  const bySort = sort
+    ? compareBySort(sort, buildSortContext(visible, { statusOrder, activityTier: rankTier }))
+    : null;
   const presentAnywhere = new Map(rows.map((r) => [r.issue.id, r.issue]));
 
   const buckets = new Map<PickupSectionId, IssueRow[]>();
@@ -443,7 +515,7 @@ export function buildPickupGroups(
     if (!bucket || bucket.length === 0) continue;
 
     /**
-     * THE STORE'S ORDER, with one tiebreak.
+     * THE STORE'S ORDER, with one tiebreak — or the chosen sort, when there is one (R4f).
      *
      * Rank alone would be enough for everything the inbox knows about. The identifier
      * tiebreak is for the rows it does not — the resolved section, and anything caught by
@@ -477,6 +549,14 @@ export function buildPickupGroups(
       const ga = a.issue.status === "awaiting_approval" ? 0 : 1;
       const gb = b.issue.status === "awaiting_approval" ? 0 : 1;
       if (section.id === "pending_approval" && ga !== gb) return ga - gb;
+
+      /*
+       * R4f (STA-246). The chosen sort decides the rest, and the gate partition above still
+       * runs first — it is a fact about what HEADS a section ("the heading of a queue belongs
+       * at the top of it"), not a key the reader picked, so no sort mode may reorder past it.
+       * Q1 made the same call for `staple inbox` and this keeps the two agreeing.
+       */
+      if (bySort) return bySort(a, b);
 
       const ra = index.rank(a.issue.id);
       const rb = index.rank(b.issue.id);
@@ -552,11 +632,12 @@ export function buildPickupGroups(
     });
 
     /**
-     * NO SORT AFTER THE PLACEMENT, and that is the whole of "children keep the store's
-     * pickup order among themselves". `placeRows` preserves encounter order, `ordered` is
-     * the store's rank, and a sibling list is a subsequence of it. The tree sorts here
-     * because it has a comparator; the queue has an answer already and re-sorting it would
-     * throw away the only thing `/api/inbox` was called for.
+     * NO SORT AFTER THE PLACEMENT, and that is the whole of "children keep the order among
+     * themselves". `placeRows` preserves encounter order and `ordered` is already in the
+     * chosen order — the store's rank, or the reader's key — so a sibling list is a
+     * subsequence of it and needs no second pass. The tree sorts after placement because it
+     * ranks a ghost by the best row it brackets; this axis puts a ghost at its best-ranked
+     * orphan's position instead, which `placeRows` does for free from an ordered input.
      */
 
     /**

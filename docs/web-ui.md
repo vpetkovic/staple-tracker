@@ -82,13 +82,17 @@ it goes.
 
 **Where the numbers come from.** One read of `GET /api/queue` per poll, joined
 onto the list in the browser by identifier, memoised, refreshed by the same 1.5s
-fingerprint as everything else. The list *displays* these numbers and can never
-set them — presentation sort is not the queue.
+fingerprint as everything else. That one join feeds both halves — the number a row
+prints and the number **Queue position** sorting orders it by are the same value,
+so the list can never sort by anything other than what it shows. The list
+*displays* these numbers and can never set them — presentation sort is not the
+queue.
 
 **Ungrouped only.** The grouped axes are unchanged, element for element, and the
-queue is not fetched while one of them is active. In hub mode the cues appear
-once a workspace is selected: a plan is a per-workspace sequence, and there is no
-cross-workspace order to show.
+queue is not fetched while one of them is active — so the plan, both as a cue and
+as an order, is an affordance of the view that shows it. In hub mode the cues
+appear once a workspace is selected: a plan is a per-workspace sequence, and there
+is no cross-workspace order to show.
 
 ## Sorting
 
@@ -112,7 +116,7 @@ number part**, so STA-9 precedes STA-10 and the list cannot reshuffle on the 1.5
 | Mode | Orders by | Tie-break chain, in order | Parent rollup |
 | --- | --- | --- | --- |
 | **Activity** (default) | a live claim first, then the configured status order | priority → newest update → identifier | best activity tier in the subtree |
-| **Queue position** | the pickup plan's position; queued rows before unqueued | activity → priority → newest update → identifier | earliest queue position in the subtree |
+| **Queue position** | the effective queue position; rows with one before rows without | activity → priority → newest update → identifier | earliest effective position in the subtree |
 | **Status** | the workspace's configured status order | priority → newest update → identifier | — |
 | **Priority** | critical → high → medium → low | activity → newest update → identifier | — |
 | **Updated** | when anything last moved | priority → identifier | latest update in the subtree |
@@ -125,10 +129,24 @@ other five read the row and nothing else. A rollup counts only rows the current 
 kept, so an order is always accountable from what is on the screen. A status the
 workspace order does not mention ranks last but still ranks.
 
+**Queue position has one scale, and it is the effective one.** A row sorts by the
+position its own cue prints — the place in the sequence an agent receives. A **container**
+never has one (the resolver expands it in place), so it sorts by the *earliest effective
+position among the rows it holds*; its `plan #2` caption is a place in the plan, a
+different ruler, and the sort never reads it. Anything the queue has no position for —
+waiting, gated, in flight, unqueued, resolved — sorts after everything that has one, in
+both directions. The numbers come from the same browser-side join as the cues, so the list
+always sorts by exactly what it prints.
+
 Sorting orders **siblings**: it never lifts a child out from under its parent, and it
 applies inside a group exactly as it does in the ungrouped view. Under Group by Status
 the activity tier is inert — every row in a status bucket ranks equally on it — so the
-default mode there is priority, then the newest update, then the identifier.
+default mode there is priority, then the newest update, then the identifier. Under
+**Group by Pickup order** the store's own dependency-ordered rank *is* the activity tier,
+so Activity — the default — renders the queue exactly as `/api/inbox` published it,
+"Least active first" renders the back of it, and every other mode reorders inside each
+section by the key you named. Gate holders still head Pending approval whatever you sort
+by: that is what the section is, not an order you chose.
 
 ## Filtering
 
@@ -221,14 +239,9 @@ Alongside them, `lib/sort-modes.test.ts` walks each mode's key and tie-breaks,
 eleven dimensions, `views/tree/tree-model.test.ts` pins placement and ghosts, and
 `views/tree/group-header.test.tsx` pins the epic-axis rhythm.
 
-**Two gaps these tests record rather than fix.** Under **Group by Pickup order** the
-chosen sort is not applied — that axis always uses the store's own dependency-ordered
-sequence, while the Sort trigger still names your choice. And **Queue position** sorting
-is inert on today's payload: the row cues are joined in the browser against
-`/api/queue`, but the sort reads `queuePosition`/`planPosition` on the rows, which
-`/api/issues` does not send yet — so a row can print `#5` while sorting by queue
-position does nothing. Both are marked `it.todo` in `view-combinations.test.ts` with the
-exact mechanism.
+`view-combinations.test.ts` also pins the three things that used to be gaps: the chosen
+sort reaches **Group by Pickup order**, **Queue position** orders by the numbers the cues
+print, and a container is ranked on the effective scale rather than on its plan index.
 
 ## Auth
 
