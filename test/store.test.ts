@@ -375,6 +375,8 @@ describe("schema migration against a live database", () => {
       // "table already exists" instead of testing the walk.
       legacyDb.exec("DROP TABLE IF EXISTS milestone_members");
       legacyDb.exec("DROP TABLE IF EXISTS milestone_meta");
+      // STA-167 added migration 008, one more table — same rule again.
+      legacyDb.exec("DROP TABLE IF EXISTS queue_entries");
       legacyDb.prepare("UPDATE meta SET value = '1' WHERE key = 'schema_version'").run();
       legacyDb.close();
 

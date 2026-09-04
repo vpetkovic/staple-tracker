@@ -144,9 +144,10 @@ describe("a fresh repo-local `staple init`", () => {
       // to keep reading (and probably keep writing) this exact representation,
       // or an old binary's `CAST(meta.value AS INTEGER)` guard misbehaves.
       // Bumped to "6" by STA-143 (006-approval-gates), after STA-140's 004 and
-      // STA-124's 005, and to "7" by STA-172 (007-milestones); the TEXT typing is
+      // STA-124's 005, to "7" by STA-172 (007-milestones) and to "8" by STA-167
+      // (008-queue-entries); the TEXT typing is
       // the characterization, the number just tracks the migration list.
-      { key: "schema_version", value: "7" },
+      { key: "schema_version", value: "8" },
       { key: "slug", value: "metarepo" },
     ]);
   }, 30_000);
@@ -188,6 +189,10 @@ describe("a fresh repo-local `staple init`", () => {
       "index:sqlite_autoindex_milestone_members_1",
       "index:sqlite_autoindex_milestone_members_2",
       "index:sqlite_autoindex_milestone_meta_1",
+      // STA-167 (008-queue-entries): the one queue table, its `issue_id`
+      // primary key and its `UNIQUE (rank)`.
+      "index:sqlite_autoindex_queue_entries_1",
+      "index:sqlite_autoindex_queue_entries_2",
       "index:sqlite_autoindex_relations_1",
       // STA-140 (004-workspace-settings): the statuses and kinds a workspace
       // configures are rows now, so the vocabulary is part of the pinned shape.
@@ -203,6 +208,7 @@ describe("a fresh repo-local `staple init`", () => {
       "table:meta",
       "table:milestone_members",
       "table:milestone_meta",
+      "table:queue_entries",
       "table:relations",
       "table:sqlite_sequence",
       "table:workspace_kinds",
@@ -329,9 +335,9 @@ describe("global workspaces", () => {
     expect(diskTree(home)).toEqual(["hub.db 644", "workspaces/", "workspaces/solo.db 644"]);
     expect(metaRows(join(home, "workspaces", "solo.db"))).toEqual([
       { key: "prefix", value: "SOL" },
-      // WORKSPACE_SCHEMA_VERSION — 7 since STA-172. The hub beside it is still 2;
+      // WORKSPACE_SCHEMA_VERSION — 8 since STA-167. The hub beside it is still 2;
       // the two databases version independently.
-      { key: "schema_version", value: "7" },
+      { key: "schema_version", value: "8" },
       { key: "slug", value: "solo" },
     ]);
   }, 30_000);

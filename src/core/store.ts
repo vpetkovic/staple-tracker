@@ -46,6 +46,7 @@ import {
 import { SORT_ORDER_STEP } from "./migrations/workspace/004-workspace-settings.js";
 import { MilestoneStore, assertRekindAllowed } from "./milestone-store.js";
 import { MILESTONE_KIND } from "./milestones.js";
+import { QueueStore } from "./queue-store.js";
 
 export interface CreateIssueInput {
   title: string;
@@ -4428,5 +4429,14 @@ export class WorkspaceStore {
   /** The milestone service over this store: dates, ordered membership, progress. Built on first use. */
   milestones(): MilestoneStore {
     return (this.milestoneStore ??= new MilestoneStore(this));
+  }
+
+  // ---------- the pickup queue (docs/queue.md) ----------
+
+  private queueStore: QueueStore | null = null;
+
+  /** The queue service over this store: the ordered plan and its revision. Built on first use. */
+  queue(): QueueStore {
+    return (this.queueStore ??= new QueueStore(this));
   }
 }

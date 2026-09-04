@@ -3,7 +3,7 @@
  * Regenerate with: npx tsx scripts/regen-migration-snapshots.ts
  *
  * The `sqlite_master` dump of a workspace database that walked migrations
- * 001, 002, 003, 004, 005, 006, 007. Executed verbatim by the runner when — and only when —
+ * 001, 002, 003, 004, 005, 006, 007, 008. Executed verbatim by the runner when — and only when —
  * version detection proved the file has no tables at all.
  *
  * No `IF NOT EXISTS` anywhere, deliberately: reaching this text with tables
@@ -173,4 +173,12 @@ CREATE TABLE milestone_members (
        );
 
 CREATE INDEX milestone_members_milestone_idx ON milestone_members(milestone_id, rank);
+
+CREATE TABLE queue_entries (
+         issue_id TEXT    PRIMARY KEY REFERENCES issues(id) ON DELETE CASCADE,
+         rank     INTEGER NOT NULL UNIQUE,
+         added_by TEXT    NOT NULL,
+         added_at TEXT    NOT NULL,
+         note     TEXT
+       );
 `;

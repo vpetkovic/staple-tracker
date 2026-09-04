@@ -3,7 +3,9 @@
 An explicit, human-ordered plan of what agents pick up next, separate from
 status, priority and display grouping. This is the contract the R2 tickets
 implement and that R3d (milestones) and R6d (the policy setting) plug into.
-Every rule names the test that will pin it. Nothing here is built yet; where
+Every rule names the test that pins it, or that will. The STORAGE half is
+built — the `queue_entries` table, the plan's order and its revision (R2b,
+migration 008) — and the resolver, the surfaces and the editor are not; where
 this page and [semantics.md](semantics.md) disagree, semantics.md describes
 today and this page the target.
 
@@ -18,7 +20,7 @@ fields that mean other things — a priority is a judgement about importance,
 statement that *this comes before that*. The queue is that statement, and it is
 its own data: nothing about it is derived from priority, `created_at` or the
 configured status order, and reordering statuses never reorders the queue.
-(To be pinned by `store-queue.test.ts` — *"plan order ignores priority,
+(Pinned by `store-queue.test.ts` — *"plan order ignores priority,
 created_at and configured status order"*.)
 
 Two orders therefore exist and both are shown. **Plan order** is the rows a
@@ -41,8 +43,8 @@ status categories; local `blocks` edges and hub `cross_links`; gates
 milestone membership order (R3); the workspace policy; and the calling actor.
 Same inputs, same output, on every surface and after a restart. (To be pinned
 by `contract-queue.test.ts` — *"CLI, MCP, HTTP and inbox return the same
-revision and the same order"*; `store-queue.test.ts` — *"survives restart with
-a stable total order"*.)
+revision and the same order"*; pinned by `store-queue.test.ts` — *"survives
+restart with a stable total order"*.)
 
 **Step 1 — expand.** Walk the plan in rank order. A leaf is emitted as one
 effective row. A **container** — an issue with at least one open child — is
@@ -192,26 +194,28 @@ the default `queue` listing (`--all` shows it). Nothing removes it
 automatically, because the plan is also the record of what was planned, and
 because of the next rule. `staple queue prune` removes every resolved entry in
 one transaction and emits one `queue_dequeued` per row with `reason: "pruned"`.
-(To be pinned by `store-queue.test.ts` — *"a resolved entry is kept, hidden
-and skipped"*, *"prune removes only resolved entries and emits per-row
-events"*.)
+(Pinned by `store-queue.test.ts` — *"a resolved entry is kept and
+hidden"*, *"prune removes only resolved entries and emits per-row events"*;
+being SKIPPED is the resolver's half and arrives with R2c.)
 
 **Reopen restores position.** An issue that comes back out of `done` while its
 entry still exists resumes at its rank on the next read — nothing to re-queue.
 If the entry was pruned, the reopened issue is unqueued and sits in the
-unqueued band. (To be pinned by *"a reopened issue resumes its plan position"*,
-*"a reopened issue whose entry was pruned lands in the unqueued band"*.)
+unqueued band. (Pinned by *"a reopened issue resumes its plan position"*; the
+unqueued band is the resolver's, so *"a reopened issue whose entry was pruned
+lands in the unqueued band"* is still to be pinned, with R2c.)
 
 **Duplicate membership.** An issue appears at most once in the plan
 (`PRIMARY KEY (issue_id)`). Enqueueing a present issue with no position is
 idempotent — the existing entry, `replayed: true`, no event; with a position it
 is a move. A container and its descendant may both be queued; the descendant is
-emitted at whichever comes first. (To be pinned by *"enqueue of a present issue
-is a no-op replay"*, *"enqueue with a position of a present issue is a move"*.)
+emitted at whichever comes first. (Pinned by *"enqueue of a present issue
+is a no-op replay"*, *"enqueue with a position of a present issue is a move"*,
+*"a container and its descendant may both be queued"*.)
 
 **Deleted issues** cascade out of the table. **Renames, status changes and
 re-parenting** do not touch the entry: it references `issues.id`, never the
-identifier, title or parent. (To be pinned by *"an entry survives rename,
+identifier, title or parent. (Pinned by *"an entry survives rename,
 status change and re-parent"*, *"deleting an issue deletes its entry"*.)
 
 **Cross-workspace items.** A queue belongs to one workspace file and references
@@ -222,9 +226,9 @@ constraints as today — a blocker whose file is not on this machine is
 `unresolvable` and reads as blocked. `inbox --hub` concatenates each
 workspace's effective order in hub registration order; strict enforcement is
 per workspace, since a checkout consults the queue of the file the issue lives
-in. (To be pinned by `store-queue.test.ts` — *"refuses a foreign identifier and
-names its workspace"*; `hub.test.ts` — *"hub inbox concatenates per-workspace
-effective orders"*.)
+in. (Pinned by `store-queue.test.ts` — *"refuses a foreign identifier and
+names its workspace"*; to be pinned by `hub.test.ts` — *"hub inbox concatenates
+per-workspace effective orders"*.)
 
 ## Concurrent reorder: revision and CAS
 
@@ -236,19 +240,19 @@ does not match — the same rule revisioned documents follow. A refused reorder
 changes nothing: the server order stands, the caller re-reads it and decides
 again. The web editor always sends the base; the CLI sends it with `--base N`
 and otherwise writes blind, which is the human's own risk to take. Bulk reorder
-is one call, one transaction, one revision bump. (To be pinned by
+is one call, one transaction, one revision bump. (Pinned by
 `store-queue.test.ts` — *"a stale baseRevision is refused with
 revision_conflict and leaves the order unchanged"*, *"bulk reorder is atomic
-and bumps the revision once"*; `ui-queue-editor.test.ts` — *"a stale reorder
-keeps the server order and offers a retry"*.) Checkout does not bump the
-revision — it changes eligibility, not the plan — so two reads of one revision
-may still differ in eligibility if a claim landed between them.
+and bumps the revision once"*; to be pinned by `ui-queue-editor.test.ts` — *"a
+stale reorder keeps the server order and offers a retry"*.) Checkout does not
+bump the revision — it changes eligibility, not the plan — so two reads of one
+revision may still differ in eligibility if a claim landed between them.
 
 ## Storage
 
-One table, added by the next free workspace migration (007 at the time of
-writing; R2b takes whatever number is next at merge, per the rule in
-`src/core/migrations/workspace/index.ts`):
+One table, added by workspace migration **008** (this page said 007 when it was
+written, before R3b's milestones took that number; R2b took the next one free at
+merge, per the rule in `src/core/migrations/workspace/index.ts`):
 
 ```sql
 CREATE TABLE queue_entries (
@@ -262,9 +266,9 @@ CREATE TABLE queue_entries (
 
 The migration creates the table and seeds nothing: every existing issue is
 preserved untouched and the initial queue is empty. Milestone membership (R3)
-gets its own table; the queue references the milestone issue only. (To be
-pinned by `migrations-fixtures.test.ts` — *"the queue migration preserves every
-issue and leaves the queue empty"*.)
+gets its own table; the queue references the milestone issue only. (Pinned by
+`migrations-fixtures.test.ts` — *"the queue migration preserves every issue and
+leaves the queue empty"*.)
 
 **Rank encoding: sparse integers.** The first entry takes `1024`; an append
 takes `max + 1024`; an insert between neighbours `a` and `b` takes
@@ -275,10 +279,11 @@ This is the `sort_order` / `SORT_ORDER_STEP` approach migration 004 already uses
 for statuses and kinds, with a wider step; fractional-index strings were
 rejected because integers compare natively and the renumber keeps every rank
 small and readable. `UNIQUE (rank)` plus a midpoint computed inside an immediate
-transaction is what makes concurrent inserts unable to collide. (To be pinned by `store-queue.test.ts` — *"insert
+transaction is what makes concurrent inserts unable to collide. (Pinned by `store-queue.test.ts` — *"insert
 between neighbours takes the midpoint"*, *"renumbers when the gap is exhausted,
-in one transaction"*; `queue-concurrency.test.ts` — *"concurrent inserts never
-produce duplicate ranks"*.)
+in one transaction"*, and *"concurrent inserts never produce duplicate ranks"* —
+which lives with the encoding it is about, two real processes racing one file,
+rather than waiting for `queue-concurrency.test.ts`.)
 
 **Events**, all carrying `actor` and the resulting `revision`:
 
@@ -289,6 +294,9 @@ produce duplicate ranks"*.)
 - `queue_overridden` — on the issue, as above
 
 None moves an issue's status, so none joins `STATUS_MOVING_EVENT_KINDS`.
+`queue_reordered` is the one with no `issue_id`: it is a fact about the plan
+rather than about any one row. (Pinned by `store-queue.test.ts` — *"every
+mutation carries the actor and the resulting revision"*.)
 
 ## Operations, by surface
 
