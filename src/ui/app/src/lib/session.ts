@@ -29,7 +29,7 @@ import type { Resource } from "./useStaple";
  *     asks. Its useful half (`transitionWarnings`) is nine lines and is recoverable from
  *     history if a status control ever wants pre-write hints.
  */
-export const VIEWS = ["tree", "graph", "milestones"] as const;
+export const VIEWS = ["tree", "graph", "milestones", "queue"] as const;
 export type ViewName = (typeof VIEWS)[number];
 
 /**

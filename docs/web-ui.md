@@ -8,7 +8,7 @@ One command, no daemon: the server runs in the foreground and Ctrl-C closes it
 along with every database handle. `--hub` serves every registered workspace at
 once; the browser behaviour follows `config browser=auto|always|never`.
 
-Views: subtask tree, dependency graph and milestones, plus a detail panel with documents,
+Views: subtask tree, dependency graph, milestones and the pickup queue, plus a detail panel with documents,
 comments, and the agent-payload pane, and the Work Workspace Settings dialog for
 the status and kind vocabularies and the settings registry.
 
@@ -512,6 +512,86 @@ risk line.
 with a "Back to milestones" button. From `md` up they split. The expand button in
 the detail header gives it the whole content box at any width; press it again to
 return.
+
+## Queue
+
+The fourth tab — also "Go to queue" in the command palette — is the visual
+editor for the [pickup queue](queue.md). Two panes over one payload: the **plan**
+a human writes, and the **effective order** an agent is handed. Both come from a
+single `GET /api/queue`, so the preview can never be one poll behind the list it
+is previewing.
+
+**Left, the plan.** `entries` in plan order — the rows somebody put there,
+containers included — drawn with the same task row as the tree, so kind glyph,
+status glyph and identifier read the same everywhere. The header says how many
+entries there are and which `revision` the next write will send. An entry added
+with a note shows the note under its row, and a plan row that is not itself
+pickable carries the store's sentence for why (`✓ STA-31 is done`).
+
+**Two numbers, side by side only where they differ.** The plan position is an
+editable field on every row; the effective position sits beside it as
+`pickup #5` when the two disagree, and is silent when they agree — a column of
+`#3 · pickup #3` would teach a reader that the distinction does not matter. A
+container has no effective position of its own (the resolver never emits one as
+a row) so it shows `expands to 3` instead, or `no pickup row` when nothing is
+open underneath it.
+
+**Containers expand inline.** Under a queued epic or milestone, the effective
+rows it expanded to, in the order an agent will meet them, each with its pickup
+number, its eligibility and its reason. Capped at five with `and n more under
+STA-66` — a plan of five epics is otherwise sixty rows of somebody else's
+problem.
+
+**One atomic reorder.** Drag (`@dnd-kit/core`, the same reorder list the
+settings vocabulary editors use), Move up / Move down buttons, alt+arrow on the
+row, alt+Home / alt+End for the ends, and typing a new number into the position
+field all end in ONE `POST /api/queue/reorder` carrying the view's `revision` as
+`baseRevision`. There is deliberately no second write path: `move` and
+`enqueue --at` exist on the wire and would each be a different idea of what a
+move is. A typed position out of range is clamped rather than refused — 99 in a
+plan of eleven means "last" — and a move that would change nothing is never
+sent. `alt` is required on the arrows and on Home/End because a bare Home
+belongs to the caret in the position field.
+
+**Adding and removing.** The search box matches issues, epics and milestones by
+identifier or title over the page's own issue list, offers eight, and never
+offers something already in the plan; a match adds on click, and the raw text
+adds on Enter so an identifier you already know needs no search. Every entry has
+a Remove, and the header offers `Prune n resolved` when the plan has resolved
+rows in it.
+
+**Right, the effective order.** `effective`, in two bands. *From the plan* is
+every row the plan produced, never capped — the plan is shown whole, so a human
+can see what their order is waiting on. *Unqueued, and therefore later* is every
+other open leaf in presentation sort, capped at ten with the remainder counted.
+The header names the row an agent asking right now would be given:
+`next: STA-67 (#2)`, or "nothing is pickable right now". That row is the first
+`eligible` row of the list already on screen, which is exactly what the resolver
+answers for an actorless read — a second `GET /api/queue/next` on the poll would
+be a second source of truth that could disagree with the list under it.
+
+**Eligibility without colour.** Eligible `○`, claimed `◐`, blocked `⊘`, gated
+`◇`, resolved `✓` — glyph and word together on every row, with the store's own
+sentence underneath when it is not pickable ("blocked by STA-35, STA-67",
+"queued behind STA-66's review", "held by codex-1, idle 4m"). A milestone target
+date rides along as `due 2026-10-31`: it explains urgency and never reorders
+anything.
+
+**A stale reorder.** Every mutation carries `baseRevision` and the store refuses
+a stale one with `revision_conflict`, changing nothing — so the server's order is
+still the truth. The page drops what it was showing, re-reads, and puts up "The
+plan changed elsewhere — nothing was written" with the store's sentence and TWO
+deliberate ways out: **Reload**, which abandons the move, and **Retry my order**,
+which re-applies the intent at the new revision — keeping whatever the other
+writer added and dropping whatever they removed, so a retry never silently
+undoes them. Neither happens on its own. Any other refusal is the store's own
+sentence in the shared refusal panel.
+
+**Layout.** Below `md` (48rem) the queue is a drawer: one pane at a time, with
+"Effective order" at the foot of the plan and "Back to the plan" at the head of
+the preview. From `md` up they split, plan left and preview right. Each pane's
+header carries an expand button that gives it the whole content box at either
+width; press it again to return.
 
 ## Stack
 
