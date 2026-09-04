@@ -16,7 +16,8 @@
  * `~/.local/bin`, or shell profile.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { runInstallCommand } from "../src/install/index.js";
 import { clearHomeOverride } from "../src/config/index.js";
@@ -24,6 +25,7 @@ import { WORKSPACE_LATEST_VERSION } from "../src/core/migrations/workspace/index
 import { StapleError } from "../src/core/types.js";
 import { removeDir, tempDir } from "./fixtures/characterize-support.js";
 import { writeFakePayload } from "./fixtures/install-support.js";
+import { FIXTURES, fixturePath, rawMeta } from "./fixtures/schema/support.js";
 
 let scratch: string;
 let home: string;
@@ -244,6 +246,32 @@ describe("rollback", () => {
 
     run(["--rollback", "--yes", "--json"]);
     expect(lastJson().to).toBe("1.0.0");
+  });
+
+  /**
+   * STA-164: a rollback switches the runtime selection and nothing else. The
+   * case that matters is a workspace the newer runtime already migrated — it
+   * stays at the newer schema, byte for byte, and the output says so, so nobody
+   * reads "rolled back" as "un-migrated".
+   */
+  it("restores the runtime selection without touching a workspace the newer runtime already upgraded", () => {
+    install("1.0.0");
+    install("2.0.0");
+    const workspace = join(scratch, "ws", ".staple");
+    mkdirSync(workspace, { recursive: true });
+    const dbPath = join(workspace, "staple.db");
+    copyFileSync(fixturePath(FIXTURES.workspaceV99), dbPath);
+    const before = createHash("sha256").update(readFileSync(dbPath)).digest("hex");
+    stdout.length = 0;
+
+    run(["--rollback", "--yes"]);
+
+    expect(stdout.join("\n")).toContain("Rolled back to staple 1.0.0 (from 2.0.0)");
+    expect(stdout.join("\n")).toContain("Workspaces no database was changed");
+    expect(stdout.join("\n")).toContain("refused read-only until you roll forward again");
+    expect(readFileSync(join(home, "runtime", "current.json"), "utf8")).toContain('"version": "1.0.0"');
+    expect(createHash("sha256").update(readFileSync(dbPath)).digest("hex")).toBe(before);
+    expect(rawMeta(dbPath, "schema_version")).toBe("99");
   });
 });
 

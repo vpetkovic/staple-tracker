@@ -50,10 +50,16 @@ import {
 } from "../core/path-migration.js";
 import { hubSchemaState, workspaceSchemaState } from "../core/schema.js";
 import { findWorkspace } from "../core/workspace.js";
-import { readMeta } from "../core/open.js";
+import { readMeta, snapshotPathFor } from "../core/open.js";
 import { WorkspaceStore } from "../core/store.js";
 import { StapleError } from "../core/types.js";
-import { defaultBinDir, installStatus, verifyRuntimeAfterHomeMove } from "../install/index.js";
+import {
+  defaultBinDir,
+  inspectSchemaFacts,
+  installStatus,
+  planSchemaRepair,
+  verifyRuntimeAfterHomeMove,
+} from "../install/index.js";
 import { uiBundleExists, UI_DIST_DIR } from "../ui/server.js";
 
 export type CheckStatus = "pass" | "warn" | "fail" | "skip";
@@ -502,6 +508,99 @@ function checkWorkspace(dir: string): CheckResult {
   }
 }
 
+/**
+ * Database schema vs runtime schema vs config schema, and the one command that
+ * reconciles them (STA-164).
+ *
+ * The `workspace` check above says a newer file cannot be opened; this one says
+ * BY WHICH runtime, names the other runtimes on the machine, and previews what
+ * the next open would do to the file. The verdict and the command come from
+ * `planSchemaRepair`, the same function the open refusal appends, so doctor
+ * and the error a user just hit agree. `data.code` is the stable, machine-
+ * readable reason; `data.repair` is the preview.
+ */
+function checkSchema(dir: string): CheckResult {
+  let found;
+  try {
+    found = findWorkspace(dir);
+  } catch {
+    return result("schema", "Schema compatibility", "skip", "The current workspace does not resolve.", { dir });
+  }
+  if (!found) {
+    return result("schema", "Schema compatibility", "skip", `No staple workspace at or above ${dir}.`, { dir });
+  }
+
+  const { dbPath } = found;
+  const home = resolveHome().path;
+  const facts = inspectSchemaFacts({ dbPath, home, binDir: defaultBinDir() });
+  const plan = planSchemaRepair(facts);
+  const { database, running, selected, config } = facts;
+  // The real path carries the open's own timestamp and pid; this one shows the
+  // directory and the naming, from the same function, so nothing is duplicated.
+  const snapshotPath = plan.migration ? snapshotPathFor(dbPath, plan.migration.from, new Date()) : null;
+
+  const data = {
+    dbPath,
+    database: { schema: database.current, detection: database.detection },
+    running,
+    selected,
+    config,
+    code: plan.code,
+    repair: {
+      command: plan.command,
+      changesDatabase: plan.changesDatabase,
+      migration: plan.migration,
+      snapshotPath,
+      rollback: plan.rollback,
+    },
+  };
+
+  const lines = [
+    `database  ${dbPath} is at schema ${database.current}`,
+    `running   ${running.source} at ${running.path}${running.version ? ` (staple ${running.version})` : ""} ` +
+      `understands ${running.workspaceSchema}`,
+    selected
+      ? `selected  staple ${selected.version} at ${selected.path} understands ` +
+        `${selected.workspaceSchema ?? "(undeclared)"}; launcher ${selected.launcher}`
+      : "selected  no installed runtime; the launcher selects nothing",
+    `config    ${config.present ? `${config.path} is at schema ${config.schema ?? "(unstamped)"}` : `no ${config.path}`}` +
+      `; this build understands ${config.understands}`,
+    plan.migration
+      ? `next open by the running build migrates ${plan.migration.from} -> ${plan.migration.to} after a ` +
+        `verified snapshot to ${snapshotPath}`
+      : "next open by the running build changes nothing in the database",
+    plan.rollback
+      ? `${plan.rollback} restores staple ${selected!.previousVersion} at ${selected!.previousVersionPath} ` +
+        "without touching any database"
+      : "no previous runtime is retained, so there is nothing to roll back to",
+  ];
+  const verdict = {
+    database_newer_than_runtime: "This build cannot open the database.",
+    config_newer_than_runtime: "This build cannot read the configuration without rewriting it.",
+    selected_runtime_older_than_database: "The launcher's runtime cannot open the database this build can.",
+    migration_pending: "A migration is pending.",
+  };
+  const status = plan.code === null ? "pass" : plan.code.endsWith("_newer_than_runtime") ? "fail" : "warn";
+  const detail = [plan.code ? verdict[plan.code] : "Every schema agrees.", ...lines.map((l) => `    ${l}`)].join(
+    "\n",
+  );
+
+  return result(
+    "schema",
+    "Schema compatibility",
+    status,
+    detail,
+    data,
+    plan.command
+      ? {
+          id: "schema",
+          description: `Not a doctor fix — ${plan.description}`,
+          command: plan.command,
+        }
+      : null,
+  );
+}
+
 /** Does the hub agree with the workspace the current directory actually resolves to? */
 function checkWorkspaceHubLink(dir: string): CheckResult {
   let found;
@@ -886,6 +985,7 @@ export function runDiagnostics(options: { dir?: string } = {}): DoctorReport {
     guard("hub-database", "Hub database", checkHubDatabase),
     guard("hub-registrations", "Hub registrations", checkHubRegistrations),
     guard("workspace", "Current workspace", () => checkWorkspace(dir)),
+    guard("schema", "Schema compatibility", () => checkSchema(dir)),
     guard("workspace-hub-link", "Hub link", () => checkWorkspaceHubLink(dir)),
     guard("migration-journal", "Migration journal", () => checkMigrationJournal(dir)),
     guard("orphan-workspaces", "Unregistered databases", () => checkOrphanWorkspaces(dir)),

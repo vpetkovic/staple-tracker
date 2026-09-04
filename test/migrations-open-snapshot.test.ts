@@ -1,13 +1,16 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { clearHomeOverride, setHomeOverride } from "../src/config/index.js";
 import { openDb } from "../src/core/db.js";
 import { SNAPSHOT_DIRNAME, openWorkspace } from "../src/core/open.js";
 import { inspectWorkspaceSchema } from "../src/core/schema.js";
 import { StapleError } from "../src/core/types.js";
 import { WORKSPACE_LATEST_VERSION } from "../src/core/migrations/workspace/index.js";
+import { INSTALL_FROM_PLACEHOLDER } from "../src/install/index.js";
+import { removeDir, tempDir } from "./fixtures/characterize-support.js";
 import { FIXTURES, rawMeta, withFixture } from "./fixtures/schema/support.js";
 
 /**
@@ -48,6 +51,55 @@ function issueCount(path: string): number {
 
 afterEach(() => {
   vi.restoreAllMocks();
+});
+
+/**
+ * STA-164: the refusal also names the repair. The guidance reads the home for
+ * an installed runtime, so it is pinned against an empty scratch home — the
+ * developer's real `~/.staple` must not decide what this test sees.
+ */
+describe("the newer-schema refusal names the repair", () => {
+  let home: string;
+
+  beforeEach(() => {
+    home = tempDir("r1b-open-home");
+    setHomeOverride(home);
+  });
+
+  afterEach(() => {
+    clearHomeOverride();
+    removeDir(home);
+  });
+
+  it("keeps the runner's sentence and appends one exact command plus the doctor pointer", () => {
+    withFixture(FIXTURES.workspaceV99, (path) => {
+      const before = sha256(path);
+
+      let thrown: unknown;
+      try {
+        openWorkspace(path);
+      } catch (error) {
+        thrown = error;
+      }
+
+      const message = (thrown as StapleError).message;
+      expect((thrown as StapleError).code).toBe("conflict");
+      // The pinned refusal, verbatim, still leads.
+      expect(message).toContain(
+        `This workspace database (${path}) was created by a newer version of staple ` +
+          `(schema version 99; this build understands ${WORKSPACE_LATEST_VERSION}). ` +
+          "Upgrade staple to open it — an older build must not write to it.",
+      );
+      // …followed by the same command doctor names for an empty home — the
+      // command only; the explanation is doctor's, and the CLI envelope test
+      // (`migrations-downgrade-guard`) reads any "at " in stderr as a stack frame.
+      expect(message).toContain(`Repair: ${INSTALL_FROM_PLACEHOLDER} — \`staple doctor\` explains the mismatch in full.`);
+      expect(message).not.toContain("at ");
+      // Still read-only.
+      expect(sha256(path)).toBe(before);
+      expect(sidecars(path)).toEqual([]);
+    });
+  });
 });
 
 describe("inspection precedes the writable open", () => {

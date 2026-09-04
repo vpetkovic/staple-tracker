@@ -1,6 +1,9 @@
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { resolveHome } from "../config/index.js";
+import { defaultBinDir } from "../install/launcher.js";
+import { schemaRepairGuidance } from "../install/schema-repair.js";
 import { openDb } from "./db.js";
 import { assertNotNewer, describeSchema } from "./migrations/runner.js";
 import type { SchemaState } from "./migrations/types.js";
@@ -44,7 +47,7 @@ export function writeMeta(store: WorkspaceStore, key: string, value: string): vo
 }
 
 /** `<dir>/snapshots/<file>.schema-<from>.<utc-stamp>-<pid>.db` — unique per process and instant. */
-function snapshotPathFor(dbPath: string, from: number, now: Date): string {
+export function snapshotPathFor(dbPath: string, from: number, now: Date): string {
   const stamp = now.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
   return join(
     dirname(dbPath),
@@ -151,7 +154,24 @@ export function openWorkspace(dbPath: string): OpenedWorkspace {
   }
 
   const inspected = inspectWorkspaceSchema(dbPath);
-  assertNotNewer(inspected, WORKSPACE_TARGET, dbPath);
+  try {
+    assertNotNewer(inspected, WORKSPACE_TARGET, dbPath);
+  } catch (error) {
+    // The refusal sentence stays exactly as the runner words it; what follows
+    // is the same repair `staple doctor` would name, so the user is not left
+    // with "upgrade staple" and no command (STA-164).
+    if (!(error instanceof StapleError)) throw error;
+    throw new StapleError(
+      error.code,
+      `${error.message} ${schemaRepairGuidance({
+        dbPath,
+        database: inspected,
+        home: resolveHome().path,
+        binDir: defaultBinDir(),
+      })}`,
+      error.detail,
+    );
+  }
 
   let upgrade: WorkspaceUpgrade | undefined;
   // An empty file has nothing to protect; it takes the fresh-create path.

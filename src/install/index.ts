@@ -93,6 +93,23 @@ export {
   verifyRuntimeAfterHomeMove,
   type RuntimeHomeMoveVerification,
 } from "./home-move.js";
+export {
+  INSTALL_FROM_PLACEHOLDER,
+  ROLLBACK_COMMAND,
+  describeConfigSchema,
+  describeRunningRuntime,
+  describeSelectedRuntime,
+  inspectSchemaFacts,
+  planSchemaRepair,
+  schemaRepairGuidance,
+  type ConfigSchema,
+  type RunningRuntime,
+  type RuntimeSourceKind,
+  type SchemaFacts,
+  type SchemaMismatchCode,
+  type SchemaRepairPlan,
+  type SelectedRuntime,
+} from "./schema-repair.js";
 
 function out(payload: unknown, json: boolean | undefined): boolean {
   if (!json) return false;
@@ -189,6 +206,14 @@ export function runInstallCommand(argv: string[]): void {
     console.log(
       `Rollback   \`staple install --rollback --yes\` now returns to ${result.previousVersion}, ` +
         `retained at ${result.previousVersionPath}.`,
+    );
+    // Plan §6 switches the runtime, not the data: a workspace the newer runtime
+    // already migrated is still at the newer schema, and this runtime refuses
+    // it read-only rather than touching it. Said here so nobody expects a
+    // rollback to undo a migration.
+    console.log(
+      "Workspaces no database was changed; one already upgraded past this runtime's schema is refused " +
+        "read-only until you roll forward again.",
     );
     return;
   }
