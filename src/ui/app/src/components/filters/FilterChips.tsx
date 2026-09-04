@@ -30,8 +30,15 @@
  */
 import { X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { activeChips, clearFilters, isFiltering } from "@/lib/filters";
+import {
+  activeFilterChips,
+  EMPTY_FILTER_CONTEXT,
+  isFilteringNow,
+  type FilterContext,
+} from "@/lib/filter-dimensions";
+import { clearFilters, type FilterState } from "@/lib/filters";
 import { useSession } from "@/lib/session";
+import type { IssueRow } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { FilterMenu } from "./FilterMenu";
 
@@ -52,12 +59,45 @@ const CHIP_CLASS = cn(
 
 export function FilterChips() {
   const session = useSession();
-  const { filters, setFilters } = session;
-  const rows = session.issues.data ?? [];
+  return (
+    <FilterChipStrip
+      rows={session.issues.data ?? []}
+      state={session.filters}
+      context={session.filterContext}
+      onChange={session.setFilters}
+    />
+  );
+}
 
-  if (!isFiltering(filters)) return null;
+export interface FilterChipStripProps {
+  /** The rows the menus derive their options from — the unfiltered page. */
+  rows: readonly IssueRow[];
+  state: FilterState;
+  context?: FilterContext;
+  onChange: (next: FilterState) => void;
+}
 
-  const chips = activeChips(filters);
+/**
+ * The strip itself, taking everything as props and reading no context — the split
+ * `views/milestones/MilestonesView.tsx` makes for the same reason: a component that reads
+ * the session cannot be rendered to a string without standing up a whole session, and every
+ * claim worth pinning here is about which chips exist and what they say.
+ */
+export function FilterChipStrip({
+  rows,
+  state: filters,
+  context = EMPTY_FILTER_CONTEXT,
+  onChange: setFilters,
+}: FilterChipStripProps) {
+  /*
+   * R4b (STA-187). Both of these come from lib/filter-dimensions.ts rather than from
+   * lib/filters.ts, and it is not a preference: `isFiltering` and `activeChips` there iterate
+   * their own eight dimensions only, so a page filtered by milestone alone would render NO
+   * strip and offer no way to remove the constraint that emptied it.
+   */
+  if (!isFilteringNow(filters)) return null;
+
+  const chips = activeFilterChips(filters, context);
 
   return (
     <div
@@ -97,7 +137,13 @@ export function FilterChips() {
             data-filter-chip={chip.dimension}
             className={CHIP_CLASS}
           >
-            <FilterMenu rows={rows} state={filters} onChange={setFilters} openAt={chip.dimension}>
+            <FilterMenu
+              rows={rows}
+              state={filters}
+              context={context}
+              onChange={setFilters}
+              openAt={chip.dimension}
+            >
               <button
                 type="button"
                 aria-label={`Edit ${chip.dimensionLabel} filter`}

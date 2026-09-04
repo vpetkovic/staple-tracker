@@ -33,7 +33,8 @@ import { GroupByMenu } from "@/components/view-options/GroupByMenu";
 import { SortByMenu } from "@/components/view-options/SortByMenu";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { countActive, withShowDone, withText } from "@/lib/filters";
+import { countActiveFilters } from "@/lib/filter-dimensions";
+import { withShowDone, withText } from "@/lib/filters";
 import { useSession } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { FilterMenu } from "./FilterMenu";
@@ -42,7 +43,8 @@ export function FilterBar() {
   const session = useSession();
   const { filters, setFilters } = session;
   const rows = session.issues.data ?? [];
-  const active = countActive(filters);
+  /* R4b: counts BOTH registries, so the badge does not go quiet on a milestone filter. */
+  const active = countActiveFilters(filters);
 
   return (
     <div className="ml-auto flex shrink-0 items-center gap-1.5">
@@ -92,7 +94,7 @@ export function FilterBar() {
         />
       </div>
 
-      <FilterMenu rows={rows} state={filters} onChange={setFilters}>
+      <FilterMenu rows={rows} state={filters} context={session.filterContext} onChange={setFilters}>
         <Button
           variant="ghost"
           size="sm"

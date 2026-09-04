@@ -6,7 +6,8 @@ import type { ReactNode } from "react";
 import { FilterX } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { clearFilters, countActive } from "@/lib/filters";
+import { clearFilters } from "@/lib/filters";
+import { countActiveFilters } from "@/lib/filter-dimensions";
 import { useSession } from "@/lib/session";
 import { cn } from "@/lib/utils";
 
@@ -39,14 +40,14 @@ export function EmptyState({ children }: { children: ReactNode }) {
  * empty page that says "no open issues", and concludes the tracker lost their work. This
  * says what happened, how many constraints did it, and offers the one-click way out.
  *
- * The count comes from the same `countActive` the Filter button's badge uses, so the two
+ * The count comes from the same `countActiveFilters` the Filter button's badge uses, so the two
  * numbers cannot disagree. Clearing goes through `clearFilters`, so this button and
  * "Clear all" in the chip strip land in the same place — including re-hiding done, which
  * is part of the shipped default rather than an extra thing this button does.
  */
 export function NoMatchesState({ noun = "tasks" }: { noun?: string }) {
   const session = useSession();
-  const active = countActive(session.filters);
+  const active = countActiveFilters(session.filters);
   return (
     <div
       data-filter-empty

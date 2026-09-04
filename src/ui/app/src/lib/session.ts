@@ -6,6 +6,7 @@
  * owning it.
  */
 import { createContext, useContext } from "react";
+import type { FilterContext } from "./filter-dimensions";
 import type { FilterState } from "./filters";
 import type { IssueRow, UiMode, WorkspaceRef } from "./types";
 import type { SortPref } from "./sort-modes";
@@ -77,6 +78,17 @@ export interface StapleSession {
    */
   filters: FilterState;
   setFilters: (next: FilterState) => void;
+
+  /**
+   * THE SERVED FACTS THE FILTER NEEDS BEYOND THE ROWS — R4b (STA-187).
+   *
+   * Milestone membership comes from `/api/milestones`, and a row's epic is a property of the
+   * whole list rather than of the row. Both live here for the reason `issues` does: the menu,
+   * the chip strip and the view must agree about them, and three surfaces deriving them
+   * separately would be three chances for the menu to offer a milestone the list has never
+   * heard of. Built by App with `buildFilterContext`; see lib/filter-dimensions.ts.
+   */
+  filterContext: FilterContext;
 
   /**
    * The assignee filter as a single string — a DERIVED view over `filters.dims.assignee`,

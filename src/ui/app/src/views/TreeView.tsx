@@ -26,22 +26,41 @@
 import { useEffect, useMemo } from "react";
 import { getInbox, type AuthError } from "@/lib/api";
 import { buildGateCaptions } from "@/lib/derived-queued";
-import { applyFilters, hiddenParents } from "@/lib/filters";
+import { FilterEmptyState } from "@/components/filters/FilterEmptyState";
+import { applyFilterDimensions } from "@/lib/filter-dimensions";
+import { hiddenParents } from "@/lib/filters";
 import { useSession } from "@/lib/session";
 import type { InboxRow } from "@/lib/types";
 import { useResource } from "@/lib/useStaple";
 import { buildPickupIndex, EMPTY_PICKUP_INDEX } from "./tree/pickup-model";
 import { TreeGrid } from "./tree/TreeGrid";
-import { EmptyState, NoMatchesState, ViewState } from "./ViewChrome";
+import { EmptyState, ViewState } from "./ViewChrome";
 
 export function TreeView({ onAuthError }: { onAuthError: (error: AuthError) => void }) {
   const session = useSession();
-  const { mode, selection, filters, groupBy, sort, publishVisibleOrder } = session;
+  const { mode, selection, filters, filterContext, groupBy, sort, publishVisibleOrder } = session;
 
   const all = useMemo(() => session.issues.data ?? [], [session.issues.data]);
-  const rows = useMemo(() => applyFilters(all, filters), [all, filters]);
+  /*
+   * R4b (STA-187). `applyFilterDimensions` is `applyFilters` plus the three dimensions that
+   * need served facts the row does not carry — pickup state, milestone membership, epic. It
+   * runs the V4 predicate first and narrows what survived, so nothing V4 argued changes and
+   * the two registries never have to know about each other.
+   */
+  const rows = useMemo(
+    () => applyFilterDimensions(all, filters, filterContext),
+    [all, filters, filterContext],
+  );
 
-  /** Children whose parent a filter removed — V4's seam for V5's breadcrumb chip. */
+  /**
+   * Children whose parent a filter removed — V4's seam for V5's breadcrumb chip, and the
+   * input to O8's ghosts.
+   *
+   * Computed from the FULLY filtered `rows`, which is what keeps the ghost rules true for
+   * the new dimensions for free: an epic removed by a milestone filter is a parent that is
+   * in `all` and not in `rows`, which is the only thing this function and `buildGroups` ever
+   * ask about a missing parent.
+   */
   const orphanedBy = useMemo(() => hiddenParents(rows, all), [rows, all]);
 
   /**
@@ -106,7 +125,14 @@ export function TreeView({ onAuthError }: { onAuthError: (error: AuthError) => v
       <ViewState resource={session.issues} empty="no open issues">
         {(loaded) => {
           if (loaded.length === 0) return <EmptyState>no issues yet</EmptyState>;
-          if (rows.length === 0) return <NoMatchesState />;
+          /*
+           * R4b (STA-187). The standard empty state, plus a sentence naming the dimensions
+           * responsible — including the combinations that cannot match anything at all. See
+           * components/filters/FilterEmptyState.tsx.
+           */
+          if (rows.length === 0) {
+            return <FilterEmptyState rows={all} state={filters} context={filterContext} />;
+          }
           return (
             <TreeGrid
               rows={rows}

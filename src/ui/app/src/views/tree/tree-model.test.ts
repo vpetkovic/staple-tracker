@@ -31,6 +31,12 @@ import {
   type IssueStatus,
 } from "@/lib/types";
 import { STALE_CLAIM_SECONDS } from "@/lib/claim";
+import {
+  applyFilterDimensions,
+  buildFilterContext,
+  type FilterContext,
+} from "@/lib/filter-dimensions";
+import { emptyFilters, hiddenParents } from "@/lib/filters";
 import { DEFAULT_SORT, SORT_MODES } from "@/lib/sort-modes";
 import { guideX, indentPx, MAX_INDENT_DEPTH, type TaskRow } from "@/components/task-list";
 import { claim, issue, row } from "@/components/task-list/fixtures";
@@ -2263,5 +2269,53 @@ describe("the sort mode reaches the model — R4a (STA-186)", () => {
         expect(groups.map((g) => g.count).reduce((a, b) => a + b, 0)).toBe(3);
       }
     }
+  });
+});
+
+/**
+ * R4b (STA-187) — THE GHOST RULE HOLDS FOR THE NEW DIMENSIONS TOO.
+ *
+ * O3c/O8 draw a filtered-away parent as a ghost so the hierarchy survives the filter, and
+ * the mechanism is `hiddenParents(visible, all)` — a parent that is in the unfiltered list
+ * and not in the visible one. `applyFilterDimensions` narrows the visible list and nothing
+ * else, so the rule needs no new code to keep working; what it needs is a test that says so,
+ * because the failure mode is silent (children re-rooted at depth 0 with no epic above them).
+ *
+ * This is the milestone case specifically, and it is the one worth pinning: milestone
+ * membership does NOT follow the tree, so a child can be a member while its own parent is
+ * not — the exact shape that produces an orphaned child under a filter.
+ */
+describe("R4b filter dimensions and the ghost rule", () => {
+  it("ghosts a parent that milestone membership removed, keeping the child's context", () => {
+    const parent = row({ id: "p", identifier: "STA-1", title: "The epic", status: "backlog" });
+    const child = row({ id: "c", identifier: "STA-2", status: "in_progress", parentId: "p" });
+    const all = [parent, child];
+
+    const context: FilterContext = {
+      ...buildFilterContext(all),
+      // The child is a member; its parent is not. Membership is not the tree.
+      milestones: [{ identifier: "M-1", title: "Release 1.0", memberCount: 1, members: ["STA-2"] }],
+    };
+    const visible = applyFilterDimensions(
+      all,
+      { ...emptyFilters(), dims: { milestone: ["M-1"] } },
+      context,
+    );
+    expect(visible.map((r) => r.issue.identifier)).toEqual(["STA-2"]);
+
+    const groups = buildGroups(visible, {
+      ...openAll,
+      hiddenParents: hiddenParents(visible, all),
+    });
+    const inProgress = groups.find((g) => g.status === "in_progress")!;
+
+    // The epic is back as a GHOST — dimmed context, not a row the filter let through — and
+    // the child is nested under it exactly as it would be with no filter on.
+    expect(inProgress.rows.map((r) => [r.issue.identifier, r.depth, r.ghost === true])).toEqual([
+      ["STA-1", 0, true],
+      ["STA-2", 1, false],
+    ]);
+    // A ghost is a bracket around rows, not a row: it is not in the count.
+    expect(inProgress.count).toBe(1);
   });
 });

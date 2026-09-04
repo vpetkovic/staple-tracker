@@ -650,6 +650,21 @@ export interface IssueDeps {
   blocks: string[];
 }
 
+/**
+ * WHETHER AN AGENT COULD TAKE THIS ROW RIGHT NOW — R4b (STA-187), docs/queue.md "Policy".
+ *
+ * Five words, one per row, first match wins, mirroring the resolver's eligibility ladder:
+ * `gated` and `blocked` are the hard constraints it names before anything else, `claimed`
+ * is somebody else already inside the work, and what is left is takeable. `queued` is the
+ * one the browser cannot derive on its own — it means "eligible, but the plan puts another
+ * row first", and order is the resolver's knowledge.
+ *
+ * A resolved row has NO pickup state (`null`): finished work is not waiting for anything and
+ * saying it is "not pickable" would file it beside work that is stuck.
+ */
+export const PICKUP_STATES = ["pickable", "queued", "waiting", "gated", "in_flight"] as const;
+export type PickupState = (typeof PICKUP_STATES)[number];
+
 export interface IssueRow {
   workspace: string;
   issue: Issue;
@@ -723,6 +738,23 @@ export interface IssueRow {
    */
   planPosition?: number | null;
   queuePosition?: number | null;
+  /**
+   * WHETHER THIS ROW CAN BE PICKED UP, AND WHY NOT — R4b (STA-187).
+   *
+   * The queue resolver's own answer, as one word. It is a SIBLING of `issue` for the reason
+   * `planPosition` is one: eligibility is re-derived against the store's clock on every read
+   * (a claim taken a second ago changes it), so freezing it onto the entity would be a copy
+   * that is wrong within a poll.
+   *
+   * OPTIONAL AND ABSENT UNTIL R2c SERVES IT, which is why every reader must treat absence as
+   * "unknown" rather than as "not pickable". `lib/filter-dimensions.ts` does: it prefers this
+   * field and falls back to deriving four of the five states from the gate, the blockers, the
+   * claim and the status when it is missing. `pickupReason` is the resolver's `detail`
+   * rendered as a sentence — the blocker identifiers, the gate owner, the holder — and is
+   * null whenever there is nothing to explain.
+   */
+  pickupState?: PickupState | null;
+  pickupReason?: string | null;
 }
 
 /** GET /api/inbox */

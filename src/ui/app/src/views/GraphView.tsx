@@ -40,7 +40,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { getGraph } from "@/lib/api";
 import type { AuthError } from "@/lib/api";
-import { applyFilters } from "@/lib/filters";
+import { applyFilterDimensions } from "@/lib/filter-dimensions";
 import { buildLineageIndex, lineageFrom, type Lineage } from "@/lib/graph-lineage";
 import { useSession } from "@/lib/session";
 import type { Graph, IssueStatus } from "@/lib/types";
@@ -1006,7 +1006,7 @@ export function GraphView({ onAuthError }: { onAuthError: (error: AuthError) => 
    * `/api/graph` carries id, workspace, title, status and parent. It does not carry
    * assignee, priority or labels, so the filter cannot be evaluated against a node. It
    * CAN be evaluated against the issue the node stands for, and the node id IS the
-   * identifier, so the join is exact: run the same `applyFilters` the tree runs, and
+   * identifier, so the join is exact: run the same `applyFilterDimensions` the tree runs, and
    * hide the nodes whose issue did not survive.
    *
    * TWO DELIBERATE CHOICES IN HERE:
@@ -1026,7 +1026,7 @@ export function GraphView({ onAuthError }: { onAuthError: (error: AuthError) => 
     if (!rows || !graph || rows.length === 0) return new Set<string>();
     const known = new Set(rows.map((row) => row.issue.identifier));
     const survives = new Set(
-      applyFilters(rows, { ...session.filters, showDone: true }).map((row) => row.issue.identifier),
+      applyFilterDimensions(rows, { ...session.filters, showDone: true }, session.filterContext).map((row) => row.issue.identifier),
     );
     return new Set(
       graph.nodes

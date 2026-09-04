@@ -3,12 +3,14 @@
  * wrong in a way nobody notices until a user loses their layout.
  */
 import { describe, expect, it } from "vitest";
+import { emptyFilters, toggleValue, withShowDone, type FilterState } from "./filters";
 import { DEFAULT_SORT, type SortPref } from "./sort-modes";
 import {
   decodeViewPrefs,
   defaultViewPrefs,
   DEFAULT_GROUP_BY,
   encodeViewPrefs,
+  filtersForScope,
   GROUP_BY_OPTIONS,
   groupByLabel,
   loadViewPrefs,
@@ -16,6 +18,7 @@ import {
   sortForScope,
   sortScopeKey,
   VIEW_PREFS_STORAGE_KEY,
+  withFiltersForScope,
   withSortForScope,
   type GroupBy,
   type ViewPrefs,
@@ -38,7 +41,7 @@ function memoryStorage(over: Partial<Storage> = {}): Storage {
 }
 
 /** The envelope with only a grouping set — what every pre-R4a test in this file meant. */
-const grouped = (groupBy: GroupBy): ViewPrefs => ({ groupBy, sort: {} });
+const grouped = (groupBy: GroupBy): ViewPrefs => ({ groupBy, sort: {}, filters: {} });
 
 describe("the default", () => {
   it("is FLAT — this is the whole ticket", () => {
@@ -99,11 +102,13 @@ describe("persistence", () => {
 
   it("stamps a version inside, so a small change can migrate in place", () => {
     // R4a (STA-186) is exactly such a change: `sort` arrived beside `groupBy` under the SAME
-    // key and the number inside went to 2. See the migration test at the end of this file.
+    // key and the number inside went to 2. R4b (STA-187) added `filters` the same way and
+    // took it to 3. See the two migration tests at the end of this file.
     expect(JSON.parse(encodeViewPrefs(grouped("status")))).toEqual({
-      version: 2,
+      version: 3,
       groupBy: "status",
       sort: {},
+      filters: {},
     });
   });
 
@@ -221,7 +226,7 @@ describe("the sort preference", () => {
   it("round-trips one scope through the same key, beside the grouping", () => {
     const storage = memoryStorage();
     const chosen: SortPref = { mode: "queue", direction: "asc" };
-    saveViewPrefs(storage, { groupBy: "parent", sort: { [tree]: chosen } });
+    saveViewPrefs(storage, { groupBy: "parent", sort: { [tree]: chosen }, filters: {} });
 
     const back = loadViewPrefs(storage);
     expect(back.groupBy).toBe("parent");
@@ -277,5 +282,104 @@ describe("the sort preference", () => {
   it("ignores a `sort` that is not a map at all, rather than throwing", () => {
     expect(decodeViewPrefs('{"version":2,"groupBy":"none","sort":42}').sort).toEqual({});
     expect(decodeViewPrefs('{"version":2,"groupBy":"none","sort":[1,2]}').sort).toEqual({});
+  });
+});
+
+/**
+ * R4b (STA-187) — the FILTER preference, scoped exactly as the sort is.
+ *
+ * The two things worth pinning are the two that lose somebody's work when they break: the
+ * migration (a payload written before this ticket must not open to an empty filter set) and
+ * the scoping (a filter set in one workspace must not follow you into the next one).
+ */
+describe("the filter preference", () => {
+  const tree = sortScopeKey("staple", "tree");
+  const graph = sortScopeKey("staple", "graph");
+  const other = sortScopeKey("other", "tree");
+
+  const gated: FilterState = toggleValue(emptyFilters(), "pickup", "gated");
+
+  it("MIGRATES a pre-R4b payload: no `filters` means every scope takes the legacy state", () => {
+    const prefs = decodeViewPrefs('{"version":2,"groupBy":"status","sort":{}}');
+    expect(prefs.filters).toEqual({});
+    // The legacy `staple:filters:v1` state is what App passes as the fallback, so the user
+    // opens this build with the filter they had before it.
+    expect(filtersForScope(prefs.filters, tree, gated)).toEqual(gated);
+    expect(defaultViewPrefs().filters).toEqual({});
+    // And with nothing to fall back to, it is the shipped default rather than undefined.
+    expect(filtersForScope({}, tree)).toEqual(emptyFilters());
+  });
+
+  it("round-trips one scope through the same key, beside the grouping and the sort", () => {
+    const storage = memoryStorage();
+    saveViewPrefs(storage, {
+      groupBy: "kind",
+      sort: { [tree]: { mode: "queue", direction: "asc" } },
+      filters: { [tree]: gated },
+    });
+
+    const back = loadViewPrefs(storage);
+    expect(filtersForScope(back.filters, tree)).toEqual(gated);
+    expect(back.groupBy).toBe("kind");
+    // STILL ONE KEY. Filters did not become a second envelope to keep in step.
+    expect(storage.length).toBe(1);
+  });
+
+  it("keeps workspaces and views apart — an unset scope never inherits a neighbour's", () => {
+    const filters = withFiltersForScope({}, tree, gated);
+    expect(filtersForScope(filters, tree)).toEqual(gated);
+    expect(filtersForScope(filters, graph)).toEqual(emptyFilters());
+    expect(filtersForScope(filters, other)).toEqual(emptyFilters());
+  });
+
+  it("RECORDS a scope cleared back to the default instead of deleting the entry", () => {
+    // The asymmetry with `withSortForScope` is deliberate: an absent filter scope falls back
+    // to the legacy state, so deleting the entry would make "Clear all" undo itself.
+    const cleared = withFiltersForScope(withFiltersForScope({}, tree, gated), tree, emptyFilters());
+    expect(Object.keys(cleared)).toEqual([tree]);
+    expect(filtersForScope(cleared, tree, gated)).toEqual(emptyFilters());
+  });
+
+  it("leaves every other scope untouched, and never mutates the map it is given", () => {
+    const a = withFiltersForScope({}, tree, gated);
+    const b = withFiltersForScope(a, graph, withShowDone(emptyFilters(), true));
+    expect(filtersForScope(b, tree)).toEqual(gated);
+    expect(a[graph]).toBeUndefined();
+  });
+
+  it("keeps an UNKNOWN dimension verbatim, exactly as the filter envelope does", () => {
+    const raw = JSON.stringify({
+      version: 3,
+      groupBy: "none",
+      sort: {},
+      filters: { [tree]: { dims: { sprint: ["s-12"] }, text: "", showDone: false } },
+    });
+    expect(decodeViewPrefs(raw).filters[tree]!.dims).toEqual({ sprint: ["s-12"] });
+  });
+
+  it("repairs a corrupt entry rather than losing the map, and never lifts `showDone` by accident", () => {
+    const raw = JSON.stringify({
+      version: 3,
+      groupBy: "none",
+      sort: {},
+      filters: {
+        [tree]: { dims: { status: ["todo", 7], junk: "nope" }, text: 42, showDone: "yes" },
+        [graph]: "not an object",
+      },
+    });
+    const prefs = decodeViewPrefs(raw);
+    expect(prefs.filters[tree]).toEqual({ dims: { status: ["todo"] }, text: "", showDone: false });
+    expect(prefs.filters[graph]).toBeUndefined();
+  });
+
+  it("ignores a `filters` that is not a map at all, rather than throwing", () => {
+    expect(decodeViewPrefs('{"version":3,"groupBy":"none","filters":42}').filters).toEqual({});
+    expect(decodeViewPrefs('{"version":3,"groupBy":"none","filters":[1]}').filters).toEqual({});
+  });
+
+  it("stamps version 3, so a pre-R4b reader ignores the field instead of misreading it", () => {
+    const raw = encodeViewPrefs({ groupBy: "none", sort: {}, filters: { [tree]: gated } });
+    expect(JSON.parse(raw).version).toBe(3);
+    expect(JSON.parse(raw).filters[tree].dims).toEqual({ pickup: ["gated"] });
   });
 });

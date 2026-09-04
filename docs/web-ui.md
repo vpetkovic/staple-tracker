@@ -75,6 +75,67 @@ applies inside a group exactly as it does in the ungrouped view. Under Group by 
 the activity tier is inert — every row in a status bucket ranks equally on it — so the
 default mode there is priority, then the newest update, then the identifier.
 
+## Filtering
+
+The "Filter" button opens a two-page menu: pick a dimension, then pick values inside
+it. **Alternatives inside one dimension are ORed, dimensions are ANDed** — "gated or
+waiting, and in Release 1.0" is one question — and an empty selection is the *absence*
+of a constraint rather than "match nothing". Every option is enumerated from data the
+server sent: statuses and kinds from the workspace vocabulary, assignees and labels
+from the rows on the page, milestones from `/api/milestones`, epics from the rows' own
+ancestry. Nothing in the menu is a value this build invented.
+
+| Dimension | Values | Read from |
+| --- | --- | --- |
+| **Status** | the workspace's configured statuses | the issue |
+| **Kind** | the kinds present, in the configured order | the issue |
+| **Assignee** | the names on the page, plus Unassigned | the issue |
+| **Priority** | Urgent, High, Medium, Low | the issue |
+| **Label** | the labels on the page | the issue |
+| **Claim** | Working now, Stale claim, Held, Unclaimed | the claim reading |
+| **Handoff** | Stale worklog, No worklog | the worklog summary |
+| **Gate** | Awaiting approval, Queued behind a gate | the gate siblings |
+| **Pickup state** | Pickable, Queued, Waiting, Gated, In flight | the queue resolver |
+| **Milestone** | every milestone, by title | milestone **membership** |
+| **Epic** | the top-level ancestors present | the row's ancestry |
+
+**Pickup state** is the resolver's own word for the row when the server sends one
+(`docs/queue.md`, step 3). When it does not, four of the five are derived locally in the
+resolver's order — gated (its own gate, or the gate it stands behind), waiting (an
+unresolved blocker or a blocked status), in flight (a claim, a checkout, or a working
+status), pickable (everything else) — and a resolved row has no pickup state at all.
+*Queued* is the one the browser never derives: it means "eligible, but the plan puts an
+earlier row first", and order is the resolver's knowledge, not the page's.
+
+**Milestone is membership, never the tree.** A milestone contains epics and tasks
+without reparenting them, so filtering by one selects its members — which may include a
+row whose own parent is not a member, and exclude a child of one that is.
+
+**Epic** is the top-level ancestor, and a top-level row is its own epic, so selecting one
+keeps the epic and everything under it.
+
+**Chips.** Every active value gets a chip naming its dimension and its value —
+"Pickup state: Gated", never a bare "Gated", because a label, an assignee and a
+milestone can all be called the same thing. Clicking a chip reopens its own menu, the
+`×` removes that one value, and "Clear all" resets to the shipped default (which
+re-hides done work).
+
+**Hierarchy survives a filter.** A parent the filter removed is still drawn above its
+surviving children, dimmed, as a ghost — it is a bracket around rows rather than a row,
+so it is not in any count and it folds like the real one would.
+
+**An empty page says why.** With nothing left, the view names the dimensions
+responsible: either the one whose removal would bring rows back and how many
+("Removing Priority (4) would bring rows back"), or that they exclude every row only in
+combination, or — for a selection that could not match anything whatever the data said,
+such as *done* plus *pickable* — that the two cannot both be true and one has to go.
+
+**Filters persist per workspace and per view**, under the same `staple:view:v1` key as
+the sort and the grouping. A scope you have never filtered in opens with whatever the
+pre-R4b global filter key holds, so nothing is lost on upgrade. Changing a filter is a
+statement about your screen: it cannot touch `queue.policy`, the pickup plan, or any
+write path.
+
 ## Auth
 
 Pages served to loopback carry their own token, so the browser never sees a
