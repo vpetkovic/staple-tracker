@@ -980,13 +980,16 @@ describe("tool response shapes (23/23)", () => {
   });
 
   it("list_kinds", () => {
+    // Each row carries its resolved appearance (R5a, STA-181): the built-in
+    // Lucide key and terminal fallback, labelled with the configured label.
+    const mark = (value: string, label: string, fallback: string) => ({ source: "lucide", value, label, fallback });
     assertGolden("list_kinds", {
       kinds: [
-        { id: "epic", label: "Epic", sortOrder: 10, isBuiltin: true },
-        { id: "task", label: "Task", sortOrder: 20, isBuiltin: true },
-        { id: "bug", label: "Bug", sortOrder: 30, isBuiltin: true },
-        { id: "chore", label: "Chore", sortOrder: 40, isBuiltin: true },
-        { id: "spike", label: "Spike", sortOrder: 50, isBuiltin: true },
+        { id: "epic", label: "Epic", sortOrder: 10, isBuiltin: true, appearance: mark("layers", "Epic", "◆") },
+        { id: "task", label: "Task", sortOrder: 20, isBuiltin: true, appearance: mark("square-check", "Task", "◇") },
+        { id: "bug", label: "Bug", sortOrder: 30, isBuiltin: true, appearance: mark("bug", "Bug", "✱") },
+        { id: "chore", label: "Chore", sortOrder: 40, isBuiltin: true, appearance: mark("wrench", "Chore", "↻") },
+        { id: "spike", label: "Spike", sortOrder: 50, isBuiltin: true, appearance: mark("zap", "Spike", "↯") },
       ],
     });
   });

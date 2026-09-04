@@ -541,6 +541,7 @@ describe("registered workspace settings", () => {
     expect(store.getSetting("kinds.default")).toBe("task");
     expect(store.settingValues()).toEqual([
       { key: "kinds.default", scope: "workspace", value: "task", source: "default", version: 1 },
+      { key: "kinds.appearance", scope: "workspace", value: {}, source: "default", version: 1 },
     ]);
     // Nothing is written by a read — the fresh-workspace meta table stays exactly as seeded.
     expect(metaRows()).toEqual([]);
@@ -593,7 +594,7 @@ describe("registered workspace settings", () => {
       .prepare("INSERT INTO meta (key, value) VALUES ('setting:future.flag', ?)")
       .run(JSON.stringify({ v: 3, value: { anything: true } }));
     expect(store.unknownSettingKeys()).toEqual(["future.flag"]);
-    expect(store.settingValues().map((v) => v.key)).toEqual(["kinds.default"]);
+    expect(store.settingValues().map((v) => v.key)).toEqual(["kinds.default", "kinds.appearance"]);
     store.setSetting("kinds.default", "bug");
     store.resetSetting("kinds.default");
     expect(metaRows()).toEqual([
@@ -648,9 +649,105 @@ describe("registered workspace settings", () => {
     expect(store.getSetting("kinds.default")).toBe("task");
     expect(store.applySettingOps([{ op: "set", key: "kinds.default", value: "spike" }])).toEqual([
       { key: "kinds.default", scope: "workspace", value: "spike", source: "workspace", version: 1 },
+      { key: "kinds.appearance", scope: "workspace", value: {}, source: "default", version: 1 },
     ]);
     expect(() => store.applySettingOps([{ op: "bogus", key: "kinds.default" } as never])).toThrow(
       /Unknown setting op "bogus"/,
     );
+  });
+});
+
+// ------------------------------------------------------- kind appearance (R5a, STA-181)
+
+describe("kind appearance", () => {
+  const metaRows = () =>
+    (store.db.prepare("SELECT key, value FROM meta WHERE key LIKE 'setting:%' ORDER BY key").all() as Array<{
+      key: string;
+      value: string;
+    }>);
+  const flask = { source: "lucide", value: "flask-conical", fallback: "⚗" } as const;
+
+  it("resolves every seeded kind to its built-in mark with the configured label, storing nothing", () => {
+    const rows = store.getKindsWithAppearance();
+    expect(rows.map((k) => k.id)).toEqual(idsOf(store.getKinds()));
+    expect(rows.map((k) => `${k.id}:${k.appearance.source}:${k.appearance.value}:${k.appearance.fallback}`)).toEqual([
+      "epic:lucide:layers:◆",
+      "task:lucide:square-check:◇",
+      "bug:lucide:bug:✱",
+      "chore:lucide:wrench:↻",
+      "spike:lucide:zap:↯",
+    ]);
+    expect(rows.map((k) => k.appearance.label)).toEqual(["Epic", "Task", "Bug", "Chore", "Spike"]);
+    expect(store.kindAppearance("epic")).toEqual(rows[0]!.appearance);
+    expect(metaRows()).toEqual([]);
+    expect(store.settingValues().find((v) => v.key === "kinds.appearance")).toEqual({
+      key: "kinds.appearance",
+      scope: "workspace",
+      value: {},
+      source: "default",
+      version: 1,
+    });
+  });
+
+  it("gives a custom kind the generic mark until it is given one, and a renamed kind its new label", () => {
+    store.addKind({ id: "research" });
+    expect(store.kindAppearance("research")).toEqual({ source: "none", value: "", label: "Research", fallback: "•" });
+    store.renameKind("spike", "Investigation");
+    expect(store.kindAppearance("spike")).toEqual({ source: "lucide", value: "zap", label: "Investigation", fallback: "↯" });
+    // Total: an id nobody configured still answers, with a title-cased label.
+    expect(store.kindAppearance("not_here")).toEqual({ source: "none", value: "", label: "Not Here", fallback: "•" });
+  });
+
+  it("persists a stored choice as one versioned meta row and resolves it on every read", () => {
+    store.addKind({ id: "research" });
+    store.setSetting("kinds.appearance", { research: flask }, "op");
+    expect(metaRows()).toEqual([
+      { key: "setting:kinds.appearance", value: JSON.stringify({ v: 1, value: { research: flask } }) },
+    ]);
+    expect(store.kindAppearance("research")).toEqual({ ...flask, label: "Research" });
+    expect(store.getKindsWithAppearance().find((k) => k.id === "research")!.appearance).toEqual({ ...flask, label: "Research" });
+    // Everything else keeps its built-in mark.
+    expect(store.kindAppearance("bug").value).toBe("bug");
+  });
+
+  it("uses a stored label when there is one, and the kind's own label when it is empty", () => {
+    store.setSetting("kinds.appearance", { epic: { source: "emoji", value: "🚀", fallback: "E", label: "Initiative" } });
+    expect(store.kindAppearance("epic")).toEqual({ source: "emoji", value: "🚀", label: "Initiative", fallback: "E" });
+    store.setSetting("kinds.appearance", { epic: { source: "emoji", value: "🚀", fallback: "E", label: "" } });
+    expect(store.kindAppearance("epic").label).toBe("Epic");
+    store.renameKind("epic", "Programme");
+    expect(store.kindAppearance("epic").label).toBe("Programme");
+  });
+
+  it("refuses at the write boundary: a colour, custom SVG, a bad key, and an unconfigured kind", () => {
+    expect(() => store.setSetting("kinds.appearance", { epic: { ...flask, color: "#f00" } })).toThrow(
+      /"kinds\.appearance" must be an appearance record without "color"/,
+    );
+    expect(() => store.setSetting("kinds.appearance", { epic: { source: "svg", value: "<svg/>", fallback: "s" } })).toThrow(
+      /sanitiser/,
+    );
+    expect(() => store.setSetting("kinds.appearance", { epic: { ...flask, value: "Not A Key" } })).toThrow(
+      /Lucide icon key .* for "epic"/,
+    );
+    expect(() => store.setSetting("kinds.appearance", { milestone: flask })).toThrow(/Unknown kind "milestone"/);
+    expect(() => store.setSetting("kinds.appearance", [])).toThrow(/a map of kind id/);
+    expect(metaRows()).toEqual([]);
+  });
+
+  it("prunes a removed kind's entry in the same transaction, and clears the row when it was the last", () => {
+    store.addKind({ id: "research" });
+    store.setSetting("kinds.appearance", { research: flask, spike: { source: "none", value: "", fallback: "s" } });
+    store.removeKind("research");
+    expect(store.getSetting("kinds.appearance")).toEqual({ spike: { source: "none", value: "", fallback: "s" } });
+    store.removeKind("spike");
+    expect(store.getSetting("kinds.appearance")).toEqual({});
+    expect(metaRows()).toEqual([]);
+  });
+
+  it("is validated at the read boundary like every registered value", () => {
+    store.db
+      .prepare("INSERT INTO meta (key, value) VALUES ('setting:kinds.appearance', ?)")
+      .run(JSON.stringify({ v: 1, value: { epic: { source: "lucide" } } }));
+    expect(() => store.getKindsWithAppearance()).toThrow(/workspace test: "kinds\.appearance" must be/);
   });
 });

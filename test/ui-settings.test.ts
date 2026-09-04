@@ -438,6 +438,7 @@ describe("registered settings on /api/settings", () => {
     expect(settings.registry.definitions.map((d) => `${d.key}:${d.scope}`)).toEqual([
       "kinds.default:workspace",
       "machine.browser:global",
+      "kinds.appearance:workspace",
       "machine.port:global",
       "machine.setupComplete:global",
     ]);
@@ -447,6 +448,7 @@ describe("registered settings on /api/settings", () => {
     const settings = await read();
     expect(settings.values).toEqual({
       "kinds.default": { key: "kinds.default", scope: "workspace", value: "task", source: "default", version: 1 },
+      "kinds.appearance": { key: "kinds.appearance", scope: "workspace", value: {}, source: "default", version: 1 },
     });
     expect(settings.unknownKeys).toEqual([]);
     expect(settings.global.path).toBe(join(home, "config.json"));

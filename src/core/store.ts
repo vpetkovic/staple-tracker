@@ -56,6 +56,12 @@ import {
   WORKSPACE_SETTING_META_PREFIX,
   type SettingValueView,
 } from "./settings-registry.js";
+import {
+  resolveKindAppearance,
+  type KindAppearance,
+  type KindAppearanceMap,
+  type KindWithAppearance,
+} from "./kind-appearance.js";
 
 export interface CreateIssueInput {
   title: string;
@@ -681,6 +687,28 @@ export class WorkspaceStore {
     return this.settings().kinds.map((kind) => ({ ...kind }));
   }
 
+  /** The operator's stored glyph choices (R5a, STA-181), keyed by kind id. Empty until one is set. */
+  private kindAppearanceMap(): KindAppearanceMap {
+    return this.getSetting("kinds.appearance") as KindAppearanceMap;
+  }
+
+  /**
+   * One kind's resolved appearance (R5a, STA-181): the stored record, the
+   * built-in mark for a seeded id, or the generic mark. Total — an id this
+   * workspace has not configured still gets an answer, with a title-cased label,
+   * because a render path is the wrong place to discover a kind.
+   */
+  kindAppearance(id: string): KindAppearance {
+    const kind = this.settings().kinds.find((row) => row.id === id) ?? { id, label: defaultLabel(id) };
+    return resolveKindAppearance(kind, this.kindAppearanceMap()[id]);
+  }
+
+  /** `getKinds()` with each row's resolved appearance — what `kinds ls --json`, `list_kinds` and `/api/settings` serve. */
+  getKindsWithAppearance(): KindWithAppearance[] {
+    const stored = this.kindAppearanceMap();
+    return this.settings().kinds.map((kind) => ({ ...kind, appearance: resolveKindAppearance(kind, stored[kind.id]) }));
+  }
+
   /**
    * The configured kind ids in configured order — `KIND_RANK` for THIS
    * workspace, where the rank of a kind is simply its index (STA-124).
@@ -1188,6 +1216,13 @@ export class WorkspaceStore {
       // A default that names a kind which no longer exists is not a setting, it
       // is a dangling pointer; clear it here so `defaultKind()` never has to guess.
       if (this.getSetting("kinds.default") === id) this.resetSetting("kinds.default", actor);
+      // And its glyph entry, for the same reason: `kinds.appearance` may only name configured kinds.
+      const appearance = this.kindAppearanceMap();
+      if (id in appearance) {
+        const rest = Object.fromEntries(Object.entries(appearance).filter(([kind]) => kind !== id));
+        if (Object.keys(rest).length > 0) this.setSetting("kinds.appearance", rest, actor);
+        else this.resetSetting("kinds.appearance", actor);
+      }
       return { migrated };
     });
   }
@@ -1297,6 +1332,8 @@ export class WorkspaceStore {
     const definition = requireSettingDefinition(key, "workspace");
     const next = validateSettingValue(definition, value, `workspace ${this.slug}`);
     if (key === "kinds.default") this.assertConfiguredKind(next as string);
+    // Same rule for the glyph map: an entry for a kind that does not exist is a dangling pointer.
+    if (key === "kinds.appearance") for (const id of Object.keys(next as KindAppearanceMap)) this.assertConfiguredKind(id);
     return this.atomically(() => {
       const from = this.getSetting(key);
       this.db

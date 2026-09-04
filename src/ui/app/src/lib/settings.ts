@@ -36,6 +36,7 @@
  * path is the worst possible place to discover that.
  */
 import { AuthError, getSettings } from "./api";
+import { fallbackKindAppearance, type KindAppearance, type KindRow } from "./kind-appearance";
 import { useCallback, useEffect, useState } from "react";
 import {
   ISSUE_KINDS,
@@ -45,7 +46,6 @@ import {
   VOCABULARY_ID_PATTERN,
   type StatusCategory,
   type StatusId,
-  type WorkspaceKind,
   type WorkspaceSettings,
   type WorkspaceStatus,
 } from "./types";
@@ -112,6 +112,9 @@ const SEED: WorkspaceSettings = {
     label: row.label,
     sortOrder: index,
     isBuiltin: true,
+    // The built-in mark (R5a, STA-181), so the first paint wears the right glyphs
+    // rather than six generic dots that repaint when the fetch lands.
+    appearance: fallbackKindAppearance(row),
   })),
   // The list rank of the seeded statuses — identical to what `OPEN_STATUS_ORDER` and
   // `RESOLVED_STATUSES` in lib/types.ts spell out, because that is exactly what
@@ -168,7 +171,10 @@ export type SettingSchemaView =
   | { type: "boolean" }
   | { type: "integer"; min?: number; max?: number }
   | { type: "string"; pattern?: string; patternHint?: string }
-  | { type: "enum"; values: string[] };
+  | { type: "enum"; values: string[] }
+  | { type: "kindAppearance" };
+
+export type SettingControl = "toggle" | "number" | "text" | "select" | "glyph";
 
 export interface SettingDefinitionView {
   key: string;
@@ -178,7 +184,7 @@ export interface SettingDefinitionView {
   default: unknown;
   version: number;
   sensitivity: "normal" | "sensitive";
-  ui: { label: string; description: string; control: "toggle" | "number" | "text" | "select"; order: number };
+  ui: { label: string; description: string; control: SettingControl; order: number };
 }
 
 /** One effective value with its provenance. `value` is absent when `redacted`. */
@@ -196,6 +202,8 @@ export type SettingOp = { op: "set"; key: string; value: unknown } | { op: "rese
 
 /** What `/api/settings` answers: the vocabulary envelope plus the registry and both scopes' values. */
 export interface WorkspaceSettingsEnvelope extends WorkspaceSettings {
+  /** Each row with its resolved appearance (R5a, STA-181); see `kindAppearance()`. */
+  kinds: KindRow[];
   registry: { categories: SettingCategoryView[]; definitions: SettingDefinitionView[] };
   /** This workspace's registered values, keyed by setting key. */
   values: Record<string, SettingValueView>;
@@ -279,8 +287,21 @@ function statusById(id: StatusId): WorkspaceStatus | undefined {
   return current.statuses.find((status) => status.id === id);
 }
 
-function kindById(id: string): WorkspaceKind | undefined {
+function kindById(id: string): KindRow | undefined {
   return current.kinds.find((kind) => kind.id === id);
+}
+
+/**
+ * THE APPEARANCE RESOLVER (R5a, STA-181) — what every surface that draws a kind
+ * asks, and the accessor STA-185 wires the list, the groups, the forms and the
+ * graph through. The server resolved it (stored choice, built-in mark, or the
+ * generic one); this only falls back for a row an older server served without
+ * one, and for an id nobody has configured, which gets the generic mark with a
+ * title-cased label. Total, like every accessor here.
+ */
+export function kindAppearance(id: string): KindAppearance {
+  const kind = kindById(id);
+  return kind?.appearance ?? fallbackKindAppearance(kind ?? { id, label: titleCaseId(id) });
 }
 
 /**

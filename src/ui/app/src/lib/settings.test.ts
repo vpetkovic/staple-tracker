@@ -25,6 +25,7 @@ import {
   configuredOpenStatuses,
   configuredStatusOrder,
   isResolvedStatus,
+  kindAppearance,
   kindLabel,
   publishWorkspaceSettings,
   requiresMigrateTo,
@@ -220,6 +221,32 @@ describe("the two orders, and which one groups", () => {
     );
     expect(configuredKindOrder()).toEqual(["research", "task"]);
     expect(kindLabel("research")).toBe("Research");
+  });
+});
+
+describe("kind appearance (R5a, STA-181)", () => {
+  it("wears the built-in marks on the seed, so the first paint is right before the fetch", () => {
+    expect(kindAppearance("epic")).toEqual({ source: "lucide", value: "layers", label: "Epic", fallback: "◆" });
+    expect(kindAppearance("spike")).toEqual({ source: "lucide", value: "zap", label: "Spike", fallback: "↯" });
+  });
+
+  it("answers what the server resolved, verbatim, and falls back for a row served without one", () => {
+    publishWorkspaceSettings(
+      settings({
+        kinds: [
+          { id: "epic", label: "Initiative", sortOrder: 0, isBuiltin: true, appearance: { source: "emoji", value: "🚀", label: "Initiative", fallback: "E" } },
+          { id: "research", label: "Research", sortOrder: 1, isBuiltin: false },
+          { id: "milestone", label: "Milestone", sortOrder: 2, isBuiltin: false },
+        ] as WorkspaceSettings["kinds"],
+      }),
+    );
+    expect(kindAppearance("epic")).toEqual({ source: "emoji", value: "🚀", label: "Initiative", fallback: "E" });
+    expect(kindAppearance("research")).toEqual({ source: "none", value: "", label: "Research", fallback: "•" });
+    expect(kindAppearance("milestone")).toEqual({ source: "lucide", value: "milestone", label: "Milestone", fallback: "⚑" });
+  });
+
+  it("is total: an id nobody configured gets the generic mark and a title-cased label", () => {
+    expect(kindAppearance("not_here")).toEqual({ source: "none", value: "", label: "Not Here", fallback: "•" });
   });
 });
 

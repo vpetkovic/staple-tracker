@@ -73,8 +73,24 @@ in the browser restates a definition.
 
 ## Glyph catalog
 
-Kinds will wear configurable glyphs (R5). The catalog they pick from is not a
-hand-kept list: it is generated from the INSTALLED `lucide-react`, and checked in.
+Every kind wears one **appearance** record — `{ source, value, label, fallback }`
+— resolved by the server and served on each row of `/api/settings` `kinds[]`,
+the same record `staple kinds ls --json` and MCP `list_kinds` answer. The
+operator's choices live in the `kinds.appearance` workspace setting (see
+[configuration.md](configuration.md#the-settings-registry)); a kind with no
+entry wears the built-in mark, and a kind that has none wears a generic one.
+`lib/kind-appearance.ts` mirrors the built-in table so the first paint, before
+the fetch lands, already shows the right marks, and `kindAppearance(id)` in
+`lib/settings.ts` is the accessor every row, group header, form and graph node
+resolves through (the picker and the rendering rewire are R5d and R5e). No
+colour travels in the record: hue is a status-category property, and a kind
+glyph is monochrome by design.
+
+The catalog a `lucide` value names is not a hand-kept list: it is generated
+from the INSTALLED `lucide-react`, and checked in. The server validates only
+that a value is *shaped* like a key (the manifest is browser code); the
+browser's `resolveIcon` decides whether it exists, and an unknown key answers
+`undefined` — the cue to draw the fallback.
 
 ```bash
 npx tsx scripts/gen-lucide-catalog.ts    # after bumping lucide-react, or editing the category table

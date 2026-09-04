@@ -984,7 +984,9 @@ export function startUiServer(options: UiOptions): UiHandle {
         /** The whole vocabulary, plus what a removal would have to move. */
         const envelope = (h: StoreHandle) => {
           const statuses = h.store.getStatuses();
-          const kinds = h.store.getKinds();
+          // Each kind row carries its resolved appearance (R5a, STA-181) — the
+          // same record `list_kinds` and `staple kinds ls --json` serve.
+          const kinds = h.store.getKindsWithAppearance();
           return {
             workspace: h.slug,
             statuses,

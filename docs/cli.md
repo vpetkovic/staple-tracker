@@ -80,6 +80,16 @@ issue that already had children as an `epic` at upgrade time.
 row is a task — so an epic or a bug stands out without a column of noise on
 every other line. `staple show` always names it.
 
+Every kind also has an **appearance** — the web icon it wears, its accessible
+label, and the character a terminal prints instead. `staple kinds ls` leads
+each row with that terminal fallback (`◆ epic`, `◇ task`, `✱ bug`, `↻ chore`,
+`↯ spike`, `⚑ milestone`; `•` for a kind nobody has given a mark), and
+`--json` carries the whole record on each row as `appearance:
+{ source, value, label, fallback }` — the same record MCP `list_kinds` and
+`/api/settings` serve. It is stored as the workspace setting
+`kinds.appearance` (see [configuration.md](configuration.md#the-settings-registry));
+the CLI only reads it.
+
 ## Estimates vs actuals
 
 One stored number and a handful of read-time derivations, so you can say what
