@@ -1,5 +1,6 @@
 /**
- * WORKSPACE SETTINGS — the status set and the kind vocabulary, editable — O7b (STA-141).
+ * WORK WORKSPACE SETTINGS — the dialog that hosts the shell. O7b (STA-141) built the
+ * first panel; R6b (STA-177) replaced its two tabs with a registry-driven shell.
  *
  * ── WHY A DIALOG AND NOT A VIEW ───────────────────────────────────────────────────────
  *
@@ -9,19 +10,24 @@
  * Settings is not a place you look at work from; it is a thing you do to the workspace and
  * then leave. That is a dialog, mounted above the shell beside the palette and the create
  * form, reached the same two ways every other shell verb is — a visible control and the
- * command palette.
+ * command palette — and, since R6b, by URL (`?settings=<category>`, see SettingsMount).
+ *
+ * ── WHAT THIS FILE OWNS, AND WHAT IT HANDS DOWN ───────────────────────────────────────
+ *
+ * Three things: the fetch (`useWorkspaceSettings`), the write path (`applyTo`), and the
+ * dialog's FRAME — which of the shell's arrangements applies, from the viewport width and
+ * the full-screen toggle. The shell (`SettingsShell`) draws the nav and the panes from
+ * `settingCategories()` and asks `CategoryContent` what goes in the selected one. The URL
+ * belongs to the mount, which passes the requested category in and takes selections out.
  *
  * ── ONE WRITE PATH ────────────────────────────────────────────────────────────────────
  *
- * `apply` is the only function in this file that talks to the server, and both tabs share
- * it. It POSTs one ordered batch, publishes the WHOLE returned envelope to lib/settings.ts,
- * and bumps the session's data version so the tree and the graph refetch — because a
- * removal with a migrate-to has just rewritten the status of every issue that carried it,
- * and a list still showing the old one is a list that is wrong rather than merely stale.
- *
- * That is the "re-derives from served settings without a reload" criterion in three lines:
- * nothing here merges, nothing patches a list in place, and every surface that renders a
- * status reads through the accessors rather than holding its own copy.
+ * `applyTo` is the only function in this file that talks to the server, and every editor
+ * shares it. It POSTs one ordered batch, publishes the WHOLE returned envelope to
+ * lib/settings.ts, and bumps the session's data version so the tree and the graph refetch —
+ * because a removal with a migrate-to has just rewritten the status of every issue that
+ * carried it, and a list still showing the old one is a list that is wrong rather than
+ * merely stale.
  *
  * ── REFUSALS ARE THE STORE'S SENTENCE ─────────────────────────────────────────────────
  *
@@ -29,32 +35,65 @@
  * id, a removal that still has rows and no target, and the removal of the last status in a
  * category it writes into — and each refusal arrives as its own sentence through
  * `describeRefusal` and renders in `GuardRefusal`, exactly as every other writing surface
- * in the app does it. The one thing checked locally is the id CHARACTER SET, and only so
- * the form can say it before the round trip; the store still checks it independently.
+ * in the app does it.
  */
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { Dialog as DialogPrimitive } from "radix-ui";
 import {
   Dialog,
-  DialogContent,
   DialogDescription,
-  DialogHeader,
+  DialogOverlay,
+  DialogPortal,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ApiError, putSettings } from "@/lib/api";
 import { describeRefusal, type Refusal } from "@/lib/refusal";
-import { publishWorkspaceSettings, useWorkspaceSettings } from "@/lib/settings";
+import { publishWorkspaceSettings, settingCategories, useWorkspaceSettings } from "@/lib/settings";
 import { useSession } from "@/lib/session";
 import type { VocabularyOp } from "@/lib/types";
+import { cn } from "@/lib/utils";
 import { ErrorState, LoadingState } from "@/views/ViewChrome";
-import { VocabularyList } from "./VocabularyList";
-import { kindRows, statusRows } from "./settings-ops";
+import { CategoryContent } from "./CategoryContent";
+import { SettingsShell } from "./SettingsShell";
+import {
+  STACKED_QUERY,
+  otherShellMode,
+  resolveCategory,
+  scopeSummaryOf,
+  settingsFrameClass,
+  type ShellMode,
+  type ShellPane,
+} from "./settings-shell";
+
+/**
+ * Is the viewport too narrow for two panes? Read once at mount and then subscribed, so
+ * rotating a tablet re-arranges the open dialog rather than leaving it in the wrong one.
+ * `false` where there is no `matchMedia` (a string render), which is the two-pane layout.
+ */
+function useStacked(): boolean {
+  const [stacked, setStacked] = useState(
+    () => typeof window !== "undefined" && !!window.matchMedia && window.matchMedia(STACKED_QUERY).matches,
+  );
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return;
+    const query = window.matchMedia(STACKED_QUERY);
+    const onChange = () => setStacked(query.matches);
+    query.addEventListener("change", onChange);
+    return () => query.removeEventListener("change", onChange);
+  }, []);
+  return stacked;
+}
 
 export function SettingsDialog({
   open,
+  category,
+  onCategoryChange,
   onOpenChange,
 }: {
   open: boolean;
+  /** The category the URL asked for; `""` for "whichever is first". */
+  category: string;
+  onCategoryChange: (category: string) => void;
   onOpenChange: (open: boolean) => void;
 }) {
   const session = useSession();
@@ -91,56 +130,91 @@ export function SettingsDialog({
   );
 
   const settings = resource.settings;
+  // Re-read on every render: `settings` above is the same snapshot the accessor reads,
+  // so this is the served registry, in shell order, with no list of its own.
+  const categories = settingCategories();
+  const active = resolveCategory(categories, category);
+
+  const stacked = useStacked();
+  const layout = stacked ? "stacked" : "two-pane";
+  /**
+   * Which pane a narrow shell opens on: the content when the URL named a category (a
+   * deep link means "show me this"), the nav when it did not (the gear means "show me
+   * what there is"). Selecting drills in; Back comes out. Neither touches the URL's
+   * category, so Back in the shell and Back in the browser stay two different things.
+   */
+  const [pane, setPane] = useState<ShellPane>(() => (category ? "content" : "nav"));
+  const [mode, setMode] = useState<ShellMode>("drawer");
+
+  const select = useCallback(
+    (id: string) => {
+      onCategoryChange(id);
+      setPane("content");
+    },
+    [onCategoryChange],
+  );
+  const back = useCallback(() => setPane("nav"), []);
+  const toggleMode = useCallback(() => setMode((current) => otherShellMode(current)), []);
+  const close = useCallback(() => onOpenChange(false), [onOpenChange]);
+
+  const fallback = resource.error ? <ErrorState error={resource.error} /> : <LoadingState rows={5} />;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent data-settings-dialog className="sm:max-w-3xl">
-        <DialogHeader>
-          <DialogTitle>Workspace settings</DialogTitle>
-          <DialogDescription>
-            The status set and the kind vocabulary are this workspace's, not staple's.
-            Behaviour follows the category; order sorts within it. Every edit applies
-            immediately — there is no save button.
-          </DialogDescription>
-        </DialogHeader>
-
-        {resource.error ? (
-          <ErrorState error={resource.error} />
-        ) : resource.loading && settings.workspace === "" ? (
-          <LoadingState rows={5} />
-        ) : (
-          <Tabs defaultValue="statuses">
-            <TabsList>
-              <TabsTrigger value="statuses">Statuses</TabsTrigger>
-              <TabsTrigger value="kinds">Kinds</TabsTrigger>
-            </TabsList>
-
-            <TabsContent value="statuses" className="mt-3 max-h-[60vh] overflow-y-auto pr-1">
-              <VocabularyList
-                target="statuses"
-                rows={statusRows(settings.statuses)}
-                usage={settings.usage.statuses}
-                categories={settings.categories}
-                requiredCategories={settings.requiredCategories}
-                apply={(ops) => applyTo("statuses", ops)}
-                refusal={refusal}
-                busy={busy}
-              />
-            </TabsContent>
-
-            <TabsContent value="kinds" className="mt-3 max-h-[60vh] overflow-y-auto pr-1">
-              <VocabularyList
-                target="kinds"
-                rows={kindRows(settings.kinds)}
-                usage={settings.usage.kinds}
-                apply={(ops) => applyTo("kinds", ops)}
-                refusal={refusal}
-                busy={busy}
-              />
-            </TabsContent>
-          </Tabs>
-        )}
-      </DialogContent>
+      <DialogPortal>
+        <DialogOverlay />
+        <DialogPrimitive.Content
+          data-settings-dialog
+          data-mode={mode}
+          data-layout={layout}
+          className={cn(
+            "bg-popover text-foreground fixed z-50 flex flex-col overflow-hidden shadow-lg outline-none",
+            settingsFrameClass(mode, layout),
+          )}
+          /**
+           * Radix would focus the first tabbable control, which is a header button. The
+           * selected category's nav entry is the thing you came here to act on, so focus
+           * starts there and the arrow keys walk the nav; on a narrow screen showing the
+           * content pane the shell itself moves focus to the category heading.
+           */
+          onOpenAutoFocus={(event) => {
+            const root = event.currentTarget as HTMLElement | null;
+            const button = root?.querySelector<HTMLButtonElement>(`[data-settings-category="${active ?? ""}"]`);
+            if (!button) return;
+            event.preventDefault();
+            button.focus({ preventScroll: true });
+          }}
+        >
+          <SettingsShell
+            categories={categories}
+            active={active}
+            layout={layout}
+            pane={pane}
+            mode={mode}
+            scope={scopeSummaryOf(settings)}
+            onSelect={select}
+            onBack={back}
+            onToggleMode={toggleMode}
+            onClose={close}
+            TitleTag={DialogTitle}
+            DescriptionTag={DialogDescription}
+            fallback={fallback}
+            renderCategory={(current) =>
+              resource.error ? (
+                <ErrorState error={resource.error} />
+              ) : (
+                <CategoryContent
+                  category={current}
+                  settings={settings}
+                  applyTo={applyTo}
+                  refusal={refusal}
+                  busy={busy}
+                />
+              )
+            }
+          />
+        </DialogPrimitive.Content>
+      </DialogPortal>
     </Dialog>
   );
 }

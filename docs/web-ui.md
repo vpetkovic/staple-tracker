@@ -9,8 +9,8 @@ along with every database handle. `--hub` serves every registered workspace at
 once; the browser behaviour follows `config browser=auto|always|never`.
 
 Views: subtask tree and dependency graph, plus a detail panel with documents,
-comments, and the agent-payload pane, and a workspace settings dialog for the
-status and kind vocabularies.
+comments, and the agent-payload pane, and the Work Workspace Settings dialog for
+the status and kind vocabularies and the settings registry.
 
 ## Auth
 
@@ -25,11 +25,43 @@ The app reads the token out of its own URL once, keeps it in `sessionStorage`,
 and strips it from the address bar. Arriving without a valid token renders an
 explanation, not a blank page.
 
-## Workspace settings
+## Work Workspace Settings
+
+The settings surface is titled exactly that. It opens from the gear in the
+header, from the command palette, or by URL: `?settings` opens it on its first
+category and `?settings=kinds` focuses one. Opening from the gear pushes one
+history entry, so Back closes it and lands on the page you were on; moving
+between categories replaces that entry rather than adding to it; Forward
+reopens it. A deep-link arrival pushed nothing, so closing strips the
+parameter in place.
+
+**Two panes.** Left, the categories, exactly as the registry serves them —
+grouped under *Workspace* and *Global*, in registry order, with no list of
+their own in the browser: registering a category in
+`src/core/settings-registry.ts` is the whole of adding it to the nav. Right,
+the selected category, with its scope named beside its heading. Under the
+title a scope line says which workspace is being edited and where global
+preferences live (the `global.path` the envelope reports). Scroll position is
+kept per category, and selecting one does not move focus off the nav.
+
+**Narrow screens** (below 768px) stack the panes: the category list first,
+then the category, with a Back button in the header that returns to the list
+and puts focus back on the category you were in. The stacked frame is the
+whole viewport, so no form is clipped by a centred dialog.
+
+**Full screen.** On wide displays a toggle in the header takes the dialog
+edge to edge and back; it is per open and never persisted, so the shell
+always reopens as a dialog. Esc closes, as every dialog in the app does.
+
+What a category holds is decided by its registry `editor`: `statuses` and
+`kinds` are the two vocabulary editors below; `fields` categories show their
+definitions with each effective value and its source, read-only until R6d
+adds controls.
+
+### Statuses and kinds
 
 The status set and the kind vocabulary are workspace data, not staple's
-(see [semantics.md](semantics.md)). The page edits them from a gear in the
-header, or from the command palette — "Workspace settings".
+(see [semantics.md](semantics.md)).
 
 Two lists. Each row has an editable label, a drag handle, and — for statuses —
 a category select; removing a row that issues still carry requires a target to
