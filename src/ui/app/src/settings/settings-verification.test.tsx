@@ -334,9 +334,16 @@ describe("nothing the user typed is lost without them choosing to lose it", () =
     const hook = source("form/useDraft.ts");
     expect(hook).toMatch(/const keep = useCallback\(\(\) => setBaseline\(signature\), \[signature\]\);/);
     expect(hook.match(/setDraft\(null\)/g)).toHaveLength(2); // cancel, and a successful save
-    for (const file of ["FieldsForm.tsx", "VocabularyList.tsx"]) {
-      expect(source(file), file).toMatch(/<ConflictBanner[\s\S]*?onReload=\{draft\.cancel\}[\s\S]*?onKeep=\{draft\.keep\}/);
-    }
+    expect(source("FieldsForm.tsx")).toMatch(
+      /<ConflictBanner[\s\S]*?onReload=\{draft\.cancel\}[\s\S]*?onKeep=\{draft\.keep\}/,
+    );
+    // R5d gave the Kinds editor a SECOND draft (the glyph map), so its banner
+    // hands off to a fan-out rather than to one draft — still exactly cancel and
+    // keep, on both halves, and still nothing that reloads on its own.
+    const vocabulary = source("VocabularyList.tsx");
+    expect(vocabulary).toMatch(/<ConflictBanner[\s\S]*?onReload=\{cancelAll\}[\s\S]*?onKeep=\{keepAll\}/);
+    expect(vocabulary).toMatch(/const cancelAll = useCallback\(\(\) => \{\s*draft\.cancel\(\);\s*glyphDraft\.cancel\(\);\s*\}/);
+    expect(vocabulary).toMatch(/const keepAll = useCallback\(\(\) => \{\s*draft\.keep\(\);\s*glyphDraft\.keep\(\);\s*\}/);
   });
 
   /**
