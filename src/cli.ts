@@ -15,6 +15,7 @@ import { runBareCommand } from "./commands/bare.js";
 import { runDoctorCommand } from "./commands/doctor.js";
 import { runAddCommand } from "./commands/add.js";
 import { runDiscoverCommand } from "./commands/discover.js";
+import { runMilestoneCommand } from "./commands/milestone.js";
 import { findMigrationRoot, planMigration, runMigration } from "./core/path-migration.js";
 import {
   BROWSER_PREFERENCES,
@@ -773,6 +774,26 @@ Approval gates
               <ref>, returns it to todo for the next agent, and keeps the queued
               children parked until you approve. Nobody is re-checked-out and the
               queue holds until an approve or a fresh gate cycle. The note is required
+
+Milestones
+  milestone ls [--all]                  dated, human-ordered plans (issues of the reserved
+              "milestone" kind — run "staple kinds add milestone" once to enable);
+              --all includes done and cancelled ones
+  milestone show <ref>                  dates, derived state, progress, ordered members
+  milestone new <title> [--target D] [--start D] [--from-epic <ref>] [--preview]
+              --from-epic adds the epic as the ONE member (its children come along
+              by descent, nothing is re-parented); --preview prints the exact plan
+              and writes nothing; D is a UTC calendar day, YYYY-MM-DD
+  milestone set <ref> [--target D|none] [--start D|none]
+              only the dates; title, description, assignee and status are edited
+              with the ordinary commands
+  milestone add <milestone> <ref> [--before R|--after R|--at N] [--base N] [-m note]
+  milestone rm <milestone> <ref> [--base N]
+  milestone mv <ref> (--before R|--after R|--at N|--to <milestone>) [--base N]
+  milestone reorder <milestone> <r1,r2,...> [--base N]
+              --base N is the members revision "show" printed; a stale base is
+              refused (exit 7) and the order stands. Membership never changes an
+              issue's parent, blockers, status or claim
 
 Documents & events
   doc <ref> <key>                       read (latest)
@@ -1917,6 +1938,11 @@ function main() {
 
     case "discover": {
       runDiscoverCommand(rest);
+      break;
+    }
+
+    case "milestone": {
+      runMilestoneCommand(rest);
       break;
     }
 

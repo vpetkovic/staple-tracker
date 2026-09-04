@@ -119,11 +119,12 @@ describe("version detection", () => {
   it("reports the real targets at their current latest versions", () => {
     // The two targets version INDEPENDENTLY and are expected to diverge — the
     // workspace gained 003-issue-estimate (STA-81), 004-workspace-settings
-    // (STA-140), 005-issue-kind (STA-124) and 006-approval-gates (STA-143) while
+    // (STA-140), 005-issue-kind (STA-124), 006-approval-gates (STA-143) and
+    // 007-milestones (STA-172) while
     // the hub gained none of them. Pinned as two separate numbers precisely so a
     // migration added to one target cannot be silently assumed to have been added
     // to both.
-    expect(latestVersion(WORKSPACE_TARGET)).toBe(6);
+    expect(latestVersion(WORKSPACE_TARGET)).toBe(7);
     expect(latestVersion(HUB_TARGET)).toBe(2);
   });
 });

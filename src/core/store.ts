@@ -44,6 +44,7 @@ import {
   nowIso,
 } from "./types.js";
 import { SORT_ORDER_STEP } from "./migrations/workspace/004-workspace-settings.js";
+import { MilestoneStore, assertRekindAllowed } from "./milestone-store.js";
 
 export interface CreateIssueInput {
   title: string;
@@ -2832,7 +2833,10 @@ export class WorkspaceStore {
       if (patch.description !== undefined) next.description = patch.description;
       // Two-state: absent leaves it alone, a string sets it. Re-declaring the
       // kind is a plain field write with no guard of its own — unlike status, a
-      // kind carries no category and therefore no behaviour to violate.
+      // kind carries no category and therefore no behaviour to violate. The one
+      // documented exception (docs/milestones.md): a milestone that still owns
+      // members or dates cannot stop being one.
+      if (patch.kind !== undefined && patch.kind !== row.kind) assertRekindAllowed(this.db, row, patch.kind);
       if (patch.kind !== undefined) next.kind = patch.kind;
       if (patch.priority !== undefined) next.priority = patch.priority;
       if (patch.assignee !== undefined) next.assignee = patch.assignee;
@@ -4386,5 +4390,14 @@ export class WorkspaceStore {
       )
       .all() as Array<{ blocker: string; blocked: string }>;
     return rows;
+  }
+
+  // ---------- milestones (docs/milestones.md) ----------
+
+  private milestoneStore: MilestoneStore | null = null;
+
+  /** The milestone service over this store: dates, ordered membership, progress. Built on first use. */
+  milestones(): MilestoneStore {
+    return (this.milestoneStore ??= new MilestoneStore(this));
   }
 }

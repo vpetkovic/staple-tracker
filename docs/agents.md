@@ -33,6 +33,10 @@ returns `guidePath` / `guideWritten`.
 
 Source: `src/core/agents-template.ts`.
 
+The pickup queue rule — READY is the effective queue order, containers expand
+to leaf work, and a strict-mode `out_of_order` refusal means stop, not retry —
+is specified in [queue.md](queue.md) and joins this guide when R2e lands.
+
 ## The MCP surface
 
 ```bash
@@ -43,12 +47,45 @@ Any MCP client can launch `npx -y staple-cli mcp` the same way, with
 `STAPLE_AGENT` naming the agent. There is no separate MCP binary — `staple mcp`
 is the same entrypoint as the CLI.
 
-Nineteen stdio tools. The loop they exist for:
+Thirty-one stdio tools. The loop they exist for:
 
 `inbox` → `checkout_task` (a conflict means pick another, never retry) →
 `put_document` the plan → work, `add_comment` progress → `update_task` done →
 `events_since` to see what your completion unblocked. `cross_link` +
 `hub_overview` cover cross-repository dependencies.
+
+### The milestone tools
+
+Eight tools over dated, human-ordered plans ([milestones.md](milestones.md)),
+usable only in a workspace whose vocabulary has the reserved `milestone` kind —
+otherwise every one refuses with `validation` naming `staple kinds add
+milestone`. All of them return **one shape**, the same object `staple milestone
+show --json` prints and `GET /api/milestone` answers:
+`{milestone: {identifier, title, status, kind, assignee, targetDate, startDate,
+state, planPosition}, progress: {total, countable, counts, percent, complete},
+revision, members: [{identifier, title, kind, status, position, rank, parent,
+nestedUnder, addedBy, addedAt, note}], next}`.
+
+- **`list_milestones`** `{all?}` and **`get_milestone`** `{ref}` — read-only.
+  A non-milestone `ref` is `validation` naming its kind; unknown is `not_found`.
+- **`create_milestone`** `{title?, description?, target_date?, start_date?,
+  from_epic?, preview?}`. With `from_epic` the epic becomes the ONE member and
+  its children come along by descent — nothing is re-parented. `preview: true`
+  writes nothing and returns `{preview: true, milestone: {title, targetDate,
+  startDate}, members: [{identifier, position}], hierarchyChanges: []}`; the
+  commit returns the view plus `hierarchyChanges: []`, naming the same changes.
+- **`update_milestone`** `{ref, target_date?, start_date?}` — the two dates
+  only (`YYYY-MM-DD`, UTC calendar days; `null` clears one). Everything else is
+  `update_task`.
+- **`add_milestone_member`** `{milestone, ref, before? | after? | at?,
+  base_revision?, note?}`, **`remove_milestone_member`** `{milestone, ref,
+  base_revision?}`, **`move_milestone_member`** `{ref, before? | after? | at? |
+  to?, base_revision?}`, **`reorder_milestone_members`** `{milestone, order,
+  base_revision?}`. Membership never changes an issue's parent, blockers,
+  status or claim. Pass `base_revision` from your last read: a stale one is
+  `revision_conflict` (`retryable: true`, `detail.currentRevision`) and the
+  order stands. Adding a present member with no position is a replay
+  (`replayed: true`, no event); with a position it is a move.
 
 ### The gate verbs
 
@@ -123,7 +160,7 @@ All in-protocol, so a harness never needs out-of-band setup:
   polluting the audit trail with anonymous writes.
 - **Replay is explicit.** `add_comment` takes an `idempotency_key`; replayed
   creates and comments come back with `replayed: true`.
-- **Tools declare annotations** — 7 read-only, `checkout_task` idempotent — and
+- **Tools declare annotations** — 11 read-only, `checkout_task` idempotent — and
   return `structuredContent` (arrays wrap as `{items}`).
 - **List tools paginate**: `{items, nextCursor, hasMore}` with opaque cursors.
 - `get_task` includes cross-workspace blockers and can inline document bodies
