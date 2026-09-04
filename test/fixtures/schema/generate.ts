@@ -23,11 +23,12 @@
  * file while several agents are working in this tree.
  */
 import { DatabaseSync } from "node:sqlite";
-import { mkdirSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { MigrationTarget } from "../../../src/core/migrations/types.js";
-import { WORKSPACE_TARGET } from "../../../src/core/migrations/workspace/index.js";
+import { WORKSPACE_LATEST_VERSION, WORKSPACE_TARGET } from "../../../src/core/migrations/workspace/index.js";
 import { HUB_TARGET } from "../../../src/core/migrations/hub/index.js";
 
 export const FIXTURE_DIR = dirname(fileURLToPath(import.meta.url));
@@ -47,15 +48,22 @@ export const FIXTURES = {
    */
   workspaceV2LegacyDdl: "workspace-v2-legacy-ddl.sqlite",
   /**
+   * Stamped '3', with real content — what the retired prototype checkout
+   * wrote, three migrations behind the live workspace. The package-level
+   * matrix walks it to the latest version through the packed runtime.
+   */
+  workspaceV3: "workspace-v3.sqlite",
+  /**
    * Stamped '5', with real content — the last shape before approval gates, and
    * the shape some installed builds still write. The pre-upgrade snapshot
    * tests walk THIS forward.
    */
   workspaceV5: "workspace-v5.sqlite",
   /**
-   * Stamped '6', with real content — what the live workspace looks like today.
-   * A build that understands 3 or 5 must refuse it; this build opens it with
-   * nothing pending.
+   * Stamped '6', with real content — the live workspace's shape at the time
+   * approval gates shipped. A build that understands 3 or 5 must refuse it;
+   * this build walks it forward by whatever came after 006. There is no
+   * checked-in fixture for "current": see `writeCurrentWorkspace`.
    */
   workspaceV6: "workspace-v6.sqlite",
   /** Stamped '99' — the downgrade guard's target. */
@@ -71,17 +79,29 @@ export function fixturePath(name: string): string {
 }
 
 /**
- * Build a database by walking migrations up to and including `throughVersion`.
- * Journal mode stays `delete` so the finished fixture is one self-contained
- * file with no `-wal` sidecar to check in or forget.
+ * `npx tsx generate.ts workspace-v3.sqlite` regenerates only the named files.
+ * A fixture added later must not rewrite the ones already checked in: the
+ * SQLite library stamps its own version into the file header, so a full
+ * regeneration under a newer Node changes bytes in files whose whole value is
+ * that they were left alone.
  */
-function build(
+const only = new Set(process.argv.slice(2));
+
+function wanted(file: string): boolean {
+  return only.size === 0 || only.has(file);
+}
+
+/**
+ * Write a database at `path` by walking migrations up to and including
+ * `throughVersion`. Journal mode stays `delete` so the finished file is one
+ * self-contained file with no `-wal` sidecar to check in or forget.
+ */
+export function writeFixture(
   target: MigrationTarget,
-  file: string,
+  path: string,
   throughVersion: number,
   seed?: (db: DatabaseSync) => void,
 ): void {
-  const path = fixturePath(file);
   for (const suffix of ["", "-wal", "-shm"]) rmSync(`${path}${suffix}`, { force: true });
 
   const db = new DatabaseSync(path);
@@ -93,6 +113,17 @@ function build(
   }
   seed?.(db);
   db.close();
+}
+
+/** `writeFixture` into this directory, for the checked-in files `main` regenerates. */
+function build(
+  target: MigrationTarget,
+  file: string,
+  throughVersion: number,
+  seed?: (db: DatabaseSync) => void,
+): void {
+  if (!wanted(file)) return;
+  writeFixture(target, fixturePath(file), throughVersion, seed);
   process.stdout.write(`wrote ${file}\n`);
 }
 
@@ -153,6 +184,37 @@ function seedWorkspaceRows(db: DatabaseSync, opts: { idempotencyKey: boolean }):
     `INSERT INTO events (kind, issue_id, actor, payload, created_at)
      VALUES ('issue.created', 'iss-legacy-1', 'vlad', '{}', ?)`,
   ).run(now);
+}
+
+/**
+ * A workspace at THIS build's latest version — seeded like the checked-in
+ * workspace fixtures, stamped `WORKSPACE_LATEST_VERSION`, written to `path`
+ * (a `.db` in a scratch directory, normally). Returns `path`.
+ *
+ * There is deliberately no `workspace-v<latest>.sqlite` in `FIXTURES`. A
+ * checked-in file is only "current" until the next migration lands; then every
+ * test that read it as current breaks and someone regenerates it — the drift
+ * the README warns about, from the other side. So "current" is built at test
+ * time from the migration list and is by construction whatever
+ * `WORKSPACE_LATEST_VERSION` says, while the files on disk are only ever OLDER
+ * shapes that a test walks forward.
+ */
+export function writeCurrentWorkspace(path: string): string {
+  writeFixture(WORKSPACE_TARGET, path, WORKSPACE_LATEST_VERSION, (db) => {
+    seedWorkspaceRows(db, { idempotencyKey: true });
+    stampRaw(db, String(WORKSPACE_LATEST_VERSION));
+  });
+  return path;
+}
+
+/** `support.withFixture` for the generated current workspace: scratch directory, removed afterwards. */
+export function withCurrentWorkspace<T>(fn: (path: string) => T): T {
+  const dir = mkdtempSync(join(tmpdir(), "staple-fixture-"));
+  try {
+    return fn(writeCurrentWorkspace(join(dir, "workspace-current.db")));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 function seedHubRows(db: DatabaseSync): void {
@@ -299,6 +361,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS comments_idempotency_uq
 
 /** Build a fixture from raw DDL rather than from the migration list. */
 function buildRaw(file: string, ddl: string, seed: (db: DatabaseSync) => void): void {
+  if (!wanted(file)) return;
   const path = fixturePath(file);
   for (const suffix of ["", "-wal", "-shm"]) rmSync(`${path}${suffix}`, { force: true });
   const db = new DatabaseSync(path);
@@ -332,6 +395,11 @@ function main(): void {
   buildRaw(FIXTURES.workspaceV2LegacyDdl, LEGACY_V2_DDL, (db) => {
     seedWorkspaceRows(db, { idempotencyKey: true });
     stampRaw(db, "2");
+  });
+
+  build(WORKSPACE_TARGET, FIXTURES.workspaceV3, 3, (db) => {
+    seedWorkspaceRows(db, { idempotencyKey: true });
+    stampRaw(db, "3");
   });
 
   build(WORKSPACE_TARGET, FIXTURES.workspaceV5, 5, (db) => {

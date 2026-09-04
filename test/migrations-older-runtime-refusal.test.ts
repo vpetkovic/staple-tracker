@@ -8,6 +8,7 @@ import { normalizedSchema } from "../src/core/migrations/dump.js";
 import type { MigrationTarget } from "../src/core/migrations/types.js";
 import { WORKSPACE_LATEST_VERSION, WORKSPACE_TARGET } from "../src/core/migrations/workspace/index.js";
 import { StapleError } from "../src/core/types.js";
+import { withCurrentWorkspace } from "./fixtures/schema/generate.js";
 import { FIXTURES, rawMeta, withFixture } from "./fixtures/schema/support.js";
 
 /**
@@ -24,6 +25,11 @@ import { FIXTURES, rawMeta, withFixture } from "./fixtures/schema/support.js";
  * prefix of today's list IS yesterday's list. The refusal is `runner.ts`'s
  * `assertNotNewer`, and this file pins that it fires for the specific versions
  * that exist on real machines, not only for the 99 the downgrade guard uses.
+ *
+ * "This build" is never a number here. The current workspace is generated at
+ * test time (`withCurrentWorkspace`), the checked-in 5 and 6 are OLDER shapes
+ * it walks forward, and every expected version is arithmetic on
+ * `WORKSPACE_LATEST_VERSION` — so landing a migration changes nothing below.
  */
 
 /** The workspace migration list as a checkout that stopped at `through` shipped it. */
@@ -91,13 +97,18 @@ describe.each([
   });
 });
 
+/** The versions a workspace stamped `stamped` still lacks — (stamped, latest], by arithmetic alone. */
+function pendingAfter(stamped: number): number[] {
+  return Array.from({ length: WORKSPACE_LATEST_VERSION - stamped }, (_, i) => stamped + 1 + i);
+}
+
 describe("this build", () => {
-  it("opens the schema-6 fixture with nothing pending", () => {
-    withFixture(FIXTURES.workspaceV6, (path) => {
+  it("opens a current workspace with nothing pending", () => {
+    withCurrentWorkspace((path) => {
       const db = openDb(path);
       try {
         expect(describeSchema(db, WORKSPACE_TARGET)).toEqual({
-          current: 6,
+          current: WORKSPACE_LATEST_VERSION,
           latest: WORKSPACE_LATEST_VERSION,
           pending: [],
           detection: "stamped",
@@ -106,15 +117,18 @@ describe("this build", () => {
       } finally {
         db.close();
       }
-      expect(rawMeta(path, "schema_version")).toBe("6");
+      expect(rawMeta(path, "schema_version")).toBe(String(WORKSPACE_LATEST_VERSION));
     });
   });
 
-  it("walks the schema-5 fixture forward by exactly the one migration it lacks", () => {
-    withFixture(FIXTURES.workspaceV5, (path) => {
+  it.each([
+    [5, FIXTURES.workspaceV5],
+    [6, FIXTURES.workspaceV6],
+  ])("walks the schema-%i fixture forward by exactly the migrations it lacks", (stamped, fixture) => {
+    withFixture(fixture, (path) => {
       const db = openDb(path);
       try {
-        expect(describeSchema(db, WORKSPACE_TARGET).pending).toEqual([6]);
+        expect(describeSchema(db, WORKSPACE_TARGET).pending).toEqual(pendingAfter(stamped));
         runMigrations(db, WORKSPACE_TARGET);
         expect(describeSchema(db, WORKSPACE_TARGET).pending).toEqual([]);
       } finally {
