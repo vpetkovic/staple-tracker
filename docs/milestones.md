@@ -7,8 +7,11 @@ Milestones view beside Graph) and R3d (milestones in the pickup queue). The
 pure types and helpers it names live in `src/core/milestones.ts` and are
 pinned today by `test/milestones.test.ts`; what needs a database is pinned by
 `test/store-milestones.test.ts` and `test/contract-milestones.test.ts` (R3b),
-what needs the queue by `test/store-queue-resolver.test.ts` (R3d), and what is
-still "to be pinned by" a test that does not exist yet is named in place.
+what needs the queue by `test/store-queue-resolver.test.ts` (R3d), and what
+needs the whole system at once by `test/milestones-e2e.test.ts` and
+`src/ui/app/src/views/milestones/milestones-e2e.test.tsx` (R3e) — see
+[What the tests prove](#what-the-tests-prove) at the end, which also records the
+two places where the shipped behaviour and this page still disagree.
 Where this page and [semantics.md](semantics.md) disagree, semantics.md describes today
 and this page the target. The queue it plugs into is [queue.md](queue.md).
 
@@ -295,8 +298,8 @@ are not in conflict. The web editor always sends the base; the CLI sends it
 with `--base N` and otherwise writes blind. (Pinned by
 `store-milestones.test.ts` — *"a stale baseRevision is refused and the order
 stands"*, *"bulk reorder is atomic and bumps the revision once"*;
-`ui-milestones.test.ts` — *"a stale reorder keeps the server order and offers a
-retry"*.)
+`views/milestones/milestones-e2e.test.tsx` — *"shows a genuinely stale reorder as
+a conflict, in the store's own words, with the order untouched"*.)
 
 ## Progress: count each leaf once
 
@@ -353,8 +356,9 @@ interface MilestoneProgress {
 The categories are read from the workspace's configured statuses at read time,
 never from the status ids, so a renamed `done` still counts. (Pinned by
 `store-milestones.test.ts` — *"progress reads categories, not status ids"*;
-the fixture case in `milestone-fixture.test.ts` (R3e) — *"progress avoids
-double counting nested members"*.)
+the fixture case in `milestones-e2e.test.ts` (R3e) — *"counts a member epic's
+child that is also a direct member once, and drops the cancelled leaf from the
+denominator"*.)
 
 ## Lifecycle
 
@@ -554,6 +558,97 @@ $ staple queue add STA-190
   `staple done STA-190`; its queue row then reads `resolved` and `queue prune`
   removes it. The members stay in `milestone_members` as the record.
 
-Those transitions are what R3e replays end to end (to be pinned by
-`milestone-fixture.test.ts` — *"creates a milestone from an epic and preserves
-the epic hierarchy"*, *"milestone order controls effective pickup order"*).
+Those transitions are what R3e replays end to end, on its own fixture, in
+`test/milestones-e2e.test.ts` — *"commits exactly the previewed plan and leaves
+the epic's hierarchy byte-identical"*, *"a reorder changes the next read and does
+not touch the plan revision"*.
+
+## What the tests prove
+
+R3a–R3d each pin one rule on the smallest workspace that rule needs. R3e adds
+one realistic workspace — `test/fixtures/milestones-scenario.ts` — and replays
+the whole feature over it through the real surfaces, so that the places where
+the rules MEET are covered and not merely implied.
+
+**The fixture.** A programme epic over three child epics (`Q`, `M`, `S`), two
+loose tasks, an approval gate on `M` owned by a human, a blocker inside `Q`, one
+done leaf, one cancelled leaf, and two dated milestones that OVERLAP: October
+owns the epic `Q` while November owns `Q`'s own child. Nothing in it is a
+special case invented for a test; it is the shape a real quarter has. It is
+written in-process into the database `staple init --global` makes, so the CLI,
+the MCP server and the HTTP server all open one file.
+
+**`test/milestones-e2e.test.ts`** — a real HTTP server, a real MCP server over
+stdio, and the real CLI in child processes. Every milestone and queue read that
+carries a claim goes through all three at once.
+
+- *Conversion.* `--preview` over the browser's own route returns one membership,
+  `hierarchyChanges: []`, and writes nothing — no milestone, no membership, not
+  even an identifier. The commit then makes exactly that plan, and the epic's
+  subtree — identifier, parent, depth, kind, status and unresolved blockers for
+  every descendant — is compared as one value before and after and is unchanged.
+- *Cross-epic membership.* A task whose epic is in October and which is itself in
+  November reports November: self beats ancestor. Adding it to a second milestone
+  is refused naming the first and naming the `mv --to` that is the move; the move
+  keeps its note and does not touch its parent.
+- *Progress.* October reaches five leaves, not six: the member that is also a
+  member epic's child is counted once. The cancelled leaf leaves the denominator
+  (`countable` 4 of `total` 5) and the done leaf is the numerator. Landing a leaf
+  moves only the numerator; reopening it moves it back, with no membership write.
+- *Order.* A reorder under `--base` changes the effective pickup order on the very
+  next read while `queue.revision` does not move — the plan still says what it
+  said. A stale base is refused with `revision_conflict` on all three surfaces,
+  and the order stands. Rank never lifts a blocker.
+- *Expansion.* Milestone, then member, then descendant, with an issue reachable
+  twice emitted once at its first occurrence — proved on two such issues.
+- *Dates.* A boundary table over month end, year end, a leap day, the day before
+  a leap day, and two `now`s written in zones whose local calendar date disagrees
+  with UTC's: the turnover is the UTC midnight after the target, every time. A
+  target edit moves `dueAt` on every row the milestone reaches and reorders
+  nothing; `none` clears a date; an impossible day and a start after the target
+  are refused identically everywhere.
+- *Gates, claims and landing.* Gated members stay visible at the head of the plan
+  and are never takeable; `request-changes` keeps them there and `approve`
+  releases them, both on the next read with no queue write. A live claim is
+  skipped for everyone but its holder. A plan whose work has all landed reads
+  `complete` and stays open until a human closes it; closing it takes it out of
+  `milestone ls`, `queue prune` forgets its plan row, and its members keep their
+  ranks as the record.
+
+**`src/ui/app/src/views/milestones/milestones-e2e.test.tsx`** — the same server,
+serving the same fixture, into the real view components rendered with
+`react-dom/server`. No jsdom, no screenshot harness, no new dependency: a
+"browser test" here is the real HTTP routes plus the real markup. It pins the
+list and the detail drawn entirely from the wire; the three layouts at real
+widths; the accessible row order equalling the server's member order; a name on
+every reorder control with only the true edges disabled; each state legible as a
+glyph AND a word with the glyph hidden from a screen reader; and the conflict
+banner after a genuinely stale `baseRevision`, showing the store's sentence
+verbatim while the server keeps the other writer's order.
+
+### Where this page and the code still disagree
+
+Two divergences the R3e pass found. Both are pinned as `it.todo` with the exact
+fix, and the current behaviour is asserted as it ships so that fixing it is a
+visible diff rather than a silent one.
+
+1. **`dueAt` is the bare calendar day, not the inclusive bound.** "Dates" above,
+   and the worked example, say a queue row carries `dueAt: 2026-10-31T23:59:59.999Z`
+   — the `endsAt` bound — so that comparing it to `now` honours the inclusive day.
+   The resolver emits the milestone's `target_date` verbatim (`2026-10-31`), so a
+   consumer doing `new Date(row.dueAt) < now` calls the row overdue a whole day
+   early. The fix is to pass the target through `milestoneDateBounds(target).endsAt`
+   where `EffectiveQueueRow.dueAt` is built in `src/core/queue-store.ts`.
+   (`milestones-e2e.test.ts` — *"emits dueAt as the inclusive endsAt bound, not the
+   bare calendar day"*.)
+2. **The view's blocked/gated risk counts read status categories, not eligibility.**
+   "State is derived, never stored" says blocked and gated are facts about members
+   "which the view shows per row from the queue's eligibility". The view instead
+   reads `progress.counts.blocked` and `progress.counts.gated`, which count leaves
+   whose STATUS is in those categories — and staple moves no status for either: a
+   blocker lives in the blocker table and a gate queues descendants through
+   `queuedBy`. On the R3e fixture one leaf is genuinely blocked and two are
+   genuinely gated, and both risk lines read zero. The fix is to count the queue's
+   `eligibility` over the rows whose `milestonePath` names the milestone.
+   (`views/milestones/milestones-e2e.test.tsx` — *"counts blocked and gated members
+   from the queue's eligibility, not from status categories"*.)

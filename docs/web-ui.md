@@ -514,6 +514,22 @@ with a "Back to milestones" button. From `md` up they split. The expand button i
 the detail header gives it the whole content box at any width; press it again to
 return.
 
+**How this section is verified.** `views/milestones/milestones-e2e.test.tsx`
+(R3e) starts the real HTTP server over the scenario workspace, fetches
+`/api/milestones`, `/api/milestone` and `/api/issues`, and renders the real
+`MilestoneListPane`, `MilestoneDetailPane` and `MilestonesLayout` from those
+payloads with `react-dom/server` — no jsdom, no screenshots, no new dependency,
+and no hand-written view fixture. It pins the three layouts at real widths
+through `layoutFor`, that the accessible row order equals the server's member
+order (the epic's child indented immediately under it, nothing drawn twice), that
+every reorder control carries its member's identifier and only the true edges are
+disabled, that each state is a glyph AND a word with the glyph `aria-hidden` so a
+screen reader hears the word, and that a genuinely stale `baseRevision` — a real
+409 from the real route — renders the conflict banner with the store's sentence
+verbatim while the server keeps the other writer's order. The one thing it does
+not render is `MilestonesView` itself, which reads `window.innerWidth` and the
+session; it composes the same three exported pieces the same way.
+
 ## Queue
 
 The fourth tab — also "Go to queue" in the command palette — is the visual
