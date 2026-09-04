@@ -11,6 +11,7 @@ import { StapleError } from "../src/core/types.js";
 import { WORKSPACE_LATEST_VERSION } from "../src/core/migrations/workspace/index.js";
 import { INSTALL_FROM_PLACEHOLDER } from "../src/install/index.js";
 import { removeDir, tempDir } from "./fixtures/characterize-support.js";
+import { withCurrentWorkspace } from "./fixtures/schema/generate.js";
 import { FIXTURES, rawMeta, withFixture } from "./fixtures/schema/support.js";
 
 /**
@@ -24,7 +25,9 @@ import { FIXTURES, rawMeta, withFixture } from "./fixtures/schema/support.js";
  * that only ever lived in another connection's write-ahead log.
  *
  * The fixtures are real old-format files (see `fixtures/schema/README.md`),
- * copied to a temp directory before every open.
+ * copied to a temp directory before every open; the one CURRENT workspace is
+ * generated at test time (`withCurrentWorkspace`), so no migration can make
+ * it stale.
  */
 
 function sha256(path: string): string {
@@ -127,13 +130,13 @@ describe("inspection precedes the writable open", () => {
   });
 
   it("reads the schema state through a read-only handle", () => {
-    withFixture(FIXTURES.workspaceV6, (path) => {
+    withCurrentWorkspace((path) => {
       const before = sha256(path);
 
       const state = inspectWorkspaceSchema(path);
 
       expect(state).toEqual({
-        current: 6,
+        current: WORKSPACE_LATEST_VERSION,
         latest: WORKSPACE_LATEST_VERSION,
         pending: [],
         detection: "stamped",
@@ -144,7 +147,7 @@ describe("inspection precedes the writable open", () => {
   });
 
   it("opens an already-current workspace with no snapshot and no snapshot directory", () => {
-    withFixture(FIXTURES.workspaceV6, (path) => {
+    withCurrentWorkspace((path) => {
       const opened = openWorkspace(path);
       try {
         expect(opened.upgrade).toBeUndefined();

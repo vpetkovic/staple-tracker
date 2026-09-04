@@ -34,6 +34,7 @@ import {
 } from "../src/install/index.js";
 import { WORKSPACE_LATEST_VERSION } from "../src/core/migrations/workspace/index.js";
 import { removeDir, tempDir } from "./fixtures/characterize-support.js";
+import { writeCurrentWorkspace } from "./fixtures/schema/generate.js";
 import { FIXTURES, fixturePath } from "./fixtures/schema/support.js";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -105,7 +106,7 @@ describe.skipIf(!built)("installing the built dist-package/", () => {
     expect(run.stdout.trim()).toBe(packageVersion);
   });
 
-  it("the installed launcher selects a runtime that understands workspace schema 6 (STA-163)", () => {
+  it("the installed launcher selects a runtime that understands the current workspace schema (STA-163)", () => {
     const result = install(distPackage);
 
     // Declared by the artifact, from the migration list compiled into it…
@@ -118,10 +119,10 @@ describe.skipIf(!built)("installing the built dist-package/", () => {
     expect(status.launcher.workspaceSchema).toBe(WORKSPACE_LATEST_VERSION);
 
     // …and true in practice: through the launcher, the real runtime opens a
-    // schema-6 workspace with nothing pending and no snapshot taken.
-    const repo = join(scratch, "repo-v6");
+    // current-schema workspace with nothing pending and no snapshot taken.
+    const repo = join(scratch, "repo-current");
     mkdirSync(join(repo, ".staple"), { recursive: true });
-    copyFileSync(fixturePath(FIXTURES.workspaceV6), join(repo, ".staple", "staple.db"));
+    writeCurrentWorkspace(join(repo, ".staple", "staple.db"));
     const run = spawnSync(join(binDir, "staple"), ["ls", "--all", "--json"], {
       cwd: repo,
       encoding: "utf8",

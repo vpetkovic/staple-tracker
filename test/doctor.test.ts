@@ -20,6 +20,7 @@ import { DatabaseSync } from "node:sqlite";
 import { createHash } from "node:crypto";
 import { diskTree, removeDir, runCliAt, tempDir } from "./fixtures/characterize-support.js";
 import { writeFakePayload } from "./fixtures/install-support.js";
+import { writeCurrentWorkspace } from "./fixtures/schema/generate.js";
 import { FIXTURES, fixturePath } from "./fixtures/schema/support.js";
 import { FIXABLE_CHECKS, type CheckResult, type DoctorReport } from "../src/commands/doctor.js";
 import { clearHomeOverride } from "../src/config/index.js";
@@ -534,9 +535,10 @@ describe("the guide file is what a fresh clone gets", () => {
  * `workspace` check above only says "upgrade staple". This check says which
  * of the three is behind and names the one command that reconciles them,
  * derived from what `staple install` actually accepts. Every scenario here is
- * a real fixture file (v5, v6, v99) in a scratch home with fake installed
- * runtimes, and doctor runs as a subprocess from the checkout, so "running"
- * is always the checkout that understands `WORKSPACE_LATEST_VERSION`.
+ * a real fixture file (v5, v6, v99) or a current workspace generated at test
+ * time, in a scratch home with fake installed runtimes, and doctor runs as a
+ * subprocess from the checkout, so "running" is always the checkout that
+ * understands `WORKSPACE_LATEST_VERSION`.
  */
 describe("schema compatibility", () => {
   let schemaHomes: string[];
@@ -553,17 +555,27 @@ describe("schema compatibility", () => {
     return createHash("sha256").update(readFileSync(path)).digest("hex");
   }
 
-  /** A registered repo whose database is the named fixture. */
-  function fixtureRepo(fixture: string): { hubHome: string; dir: string; dbPath: string } {
+  /** A registered repo whose database `populate` writes in place of the one `init` made. */
+  function repoWith(populate: (dbPath: string) => void): { hubHome: string; dir: string; dbPath: string } {
     const hubHome = tempDir("r1b-schema-home");
     schemaHomes.push(hubHome);
     const dir = join(root, `schema-${Math.random().toString(36).slice(2, 8)}`);
     mkdirSync(dir, { recursive: true });
     expect(runCliAt(dir, ["init"], { STAPLE_HOME: hubHome }).status).toBe(0);
     const dbPath = join(dir, ".staple", "staple.db");
-    copyFileSync(fixturePath(fixture), dbPath);
+    populate(dbPath);
     for (const suffix of ["-wal", "-shm"]) rmSync(`${dbPath}${suffix}`, { force: true });
     return { hubHome, dir, dbPath };
+  }
+
+  /** A registered repo whose database is the named (older) fixture. */
+  function fixtureRepo(fixture: string): { hubHome: string; dir: string; dbPath: string } {
+    return repoWith((dbPath) => copyFileSync(fixturePath(fixture), dbPath));
+  }
+
+  /** A registered repo whose database is at this build's latest schema. */
+  function currentRepo(): { hubHome: string; dir: string; dbPath: string } {
+    return repoWith(writeCurrentWorkspace);
   }
 
   /** `staple install --from <fake payload> --yes` into the scratch home, in-process and silently. */
@@ -616,7 +628,7 @@ describe("schema compatibility", () => {
   }
 
   it("passes when the database, the running build and the config agree, and names all three", () => {
-    const { hubHome, dir, dbPath } = fixtureRepo(FIXTURES.workspaceV6);
+    const { hubHome, dir, dbPath } = currentRepo();
     const found = schemaCheck(dir, hubHome);
 
     expect(found.status).toBe("pass");
@@ -624,7 +636,7 @@ describe("schema compatibility", () => {
     expect(found.data.code).toBeNull();
     expect(found.fix).toBeNull();
     expect(found.data.dbPath).toBe(dbPath);
-    expect(found.data.database).toEqual({ schema: 6, detection: "stamped" });
+    expect(found.data.database).toEqual({ schema: WORKSPACE_LATEST_VERSION, detection: "stamped" });
     // Doctor ran from this checkout under tsx: the running build IS the repository.
     const running = found.data.running as { source: string; path: string; workspaceSchema: number };
     expect(running.source).toBe("checkout");
@@ -641,7 +653,7 @@ describe("schema compatibility", () => {
     });
     // The human detail carries the three schemas by name.
     expect(found.detail).toContain("Every schema agrees.");
-    expect(found.detail).toContain(`database  ${dbPath} is at schema 6`);
+    expect(found.detail).toContain(`database  ${dbPath} is at schema ${WORKSPACE_LATEST_VERSION}`);
     expect(found.detail).toContain(`running   checkout at ${running.path}`);
     expect(found.detail).toContain("selected  no installed runtime");
     expect(found.detail).toContain("config    ");
@@ -743,7 +755,7 @@ describe("schema compatibility", () => {
   }, 120_000);
 
   it("warns when the selected runtime is older than the database this build can open, and names the checkout's payload", () => {
-    const { hubHome, dir } = fixtureRepo(FIXTURES.workspaceV6);
+    const { hubHome, dir } = currentRepo();
     installRuntime(hubHome, "5.0.0", 5);
 
     const found = schemaCheck(dir, hubHome);

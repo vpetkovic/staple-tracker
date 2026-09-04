@@ -23,11 +23,12 @@
  * file while several agents are working in this tree.
  */
 import { DatabaseSync } from "node:sqlite";
-import { mkdirSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { MigrationTarget } from "../../../src/core/migrations/types.js";
-import { WORKSPACE_TARGET } from "../../../src/core/migrations/workspace/index.js";
+import { WORKSPACE_LATEST_VERSION, WORKSPACE_TARGET } from "../../../src/core/migrations/workspace/index.js";
 import { HUB_TARGET } from "../../../src/core/migrations/hub/index.js";
 
 export const FIXTURE_DIR = dirname(fileURLToPath(import.meta.url));
@@ -59,9 +60,10 @@ export const FIXTURES = {
    */
   workspaceV5: "workspace-v5.sqlite",
   /**
-   * Stamped '6', with real content — what the live workspace looks like today.
-   * A build that understands 3 or 5 must refuse it; this build opens it with
-   * nothing pending.
+   * Stamped '6', with real content — the live workspace's shape at the time
+   * approval gates shipped. A build that understands 3 or 5 must refuse it;
+   * this build walks it forward by whatever came after 006. There is no
+   * checked-in fixture for "current": see `writeCurrentWorkspace`.
    */
   workspaceV6: "workspace-v6.sqlite",
   /** Stamped '99' — the downgrade guard's target. */
@@ -90,18 +92,16 @@ function wanted(file: string): boolean {
 }
 
 /**
- * Build a database by walking migrations up to and including `throughVersion`.
- * Journal mode stays `delete` so the finished fixture is one self-contained
- * file with no `-wal` sidecar to check in or forget.
+ * Write a database at `path` by walking migrations up to and including
+ * `throughVersion`. Journal mode stays `delete` so the finished file is one
+ * self-contained file with no `-wal` sidecar to check in or forget.
  */
-function build(
+export function writeFixture(
   target: MigrationTarget,
-  file: string,
+  path: string,
   throughVersion: number,
   seed?: (db: DatabaseSync) => void,
 ): void {
-  if (!wanted(file)) return;
-  const path = fixturePath(file);
   for (const suffix of ["", "-wal", "-shm"]) rmSync(`${path}${suffix}`, { force: true });
 
   const db = new DatabaseSync(path);
@@ -113,6 +113,17 @@ function build(
   }
   seed?.(db);
   db.close();
+}
+
+/** `writeFixture` into this directory, for the checked-in files `main` regenerates. */
+function build(
+  target: MigrationTarget,
+  file: string,
+  throughVersion: number,
+  seed?: (db: DatabaseSync) => void,
+): void {
+  if (!wanted(file)) return;
+  writeFixture(target, fixturePath(file), throughVersion, seed);
   process.stdout.write(`wrote ${file}\n`);
 }
 
@@ -173,6 +184,37 @@ function seedWorkspaceRows(db: DatabaseSync, opts: { idempotencyKey: boolean }):
     `INSERT INTO events (kind, issue_id, actor, payload, created_at)
      VALUES ('issue.created', 'iss-legacy-1', 'vlad', '{}', ?)`,
   ).run(now);
+}
+
+/**
+ * A workspace at THIS build's latest version — seeded like the checked-in
+ * workspace fixtures, stamped `WORKSPACE_LATEST_VERSION`, written to `path`
+ * (a `.db` in a scratch directory, normally). Returns `path`.
+ *
+ * There is deliberately no `workspace-v<latest>.sqlite` in `FIXTURES`. A
+ * checked-in file is only "current" until the next migration lands; then every
+ * test that read it as current breaks and someone regenerates it — the drift
+ * the README warns about, from the other side. So "current" is built at test
+ * time from the migration list and is by construction whatever
+ * `WORKSPACE_LATEST_VERSION` says, while the files on disk are only ever OLDER
+ * shapes that a test walks forward.
+ */
+export function writeCurrentWorkspace(path: string): string {
+  writeFixture(WORKSPACE_TARGET, path, WORKSPACE_LATEST_VERSION, (db) => {
+    seedWorkspaceRows(db, { idempotencyKey: true });
+    stampRaw(db, String(WORKSPACE_LATEST_VERSION));
+  });
+  return path;
+}
+
+/** `support.withFixture` for the generated current workspace: scratch directory, removed afterwards. */
+export function withCurrentWorkspace<T>(fn: (path: string) => T): T {
+  const dir = mkdtempSync(join(tmpdir(), "staple-fixture-"));
+  try {
+    return fn(writeCurrentWorkspace(join(dir, "workspace-current.db")));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 function seedHubRows(db: DatabaseSync): void {

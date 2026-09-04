@@ -13,7 +13,7 @@
  *
  * The matrix, one `describe` each:
  *
- *   schema 6   opened, nothing pending, preserved byte-for-byte in content
+ *   current    opened, nothing pending, preserved byte-for-byte in content
  *   schema 5   upgraded exactly once, one snapshot, every row intact
  *   schema 3   the retired prototype's shape, walked three migrations forward
  *   schema 99  refused before any write: same bytes, no sidecars, no snapshot
@@ -65,6 +65,7 @@ import {
 } from "../src/install/index.js";
 import { REPO_ROOT, TSX_CLI, bareEnv, removeDir, tempDir } from "./fixtures/characterize-support.js";
 import { writeFakePayload } from "./fixtures/install-support.js";
+import { writeCurrentWorkspace } from "./fixtures/schema/generate.js";
 import { FIXTURES, fixturePath, rawMeta } from "./fixtures/schema/support.js";
 
 const distPackage = join(REPO_ROOT, "dist-package");
@@ -159,12 +160,22 @@ function contentSha(dbPath: string): string {
 }
 
 /** A repository directory holding a disposable copy of one fixture. */
-function fixtureRepo(name: string, label = name.replace(/\.sqlite$/, "")): { repo: string; db: string } {
+function repoWith(label: string, populate: (db: string) => void): { repo: string; db: string } {
   const repo = join(scratch, `repo-${label}`);
   mkdirSync(join(repo, ".staple"), { recursive: true });
   const db = join(repo, ".staple", "staple.db");
-  copyFileSync(fixturePath(name), db);
+  populate(db);
   return { repo, db };
+}
+
+/** A repo whose database is the named (older) fixture. */
+function fixtureRepo(name: string, label = name.replace(/\.sqlite$/, "")): { repo: string; db: string } {
+  return repoWith(label, (db) => copyFileSync(fixturePath(name), db));
+}
+
+/** A repo whose database is at this build's latest schema, generated rather than checked in. */
+function currentRepo(label = "current"): { repo: string; db: string } {
+  return repoWith(label, writeCurrentWorkspace);
 }
 
 /** Run the installed launcher the way a shell would. */
@@ -286,10 +297,10 @@ describe.skipIf(!built)("the packed runtime against every workspace schema on di
     removeDir(scratch);
   });
 
-  describe("a schema-6 workspace is opened and preserved", () => {
+  describe("a current-schema workspace is opened and preserved", () => {
     it("opens with nothing pending, no snapshot, and the same content afterwards", () => {
       installPacked();
-      const { repo, db } = fixtureRepo(FIXTURES.workspaceV6);
+      const { repo, db } = currentRepo();
       const columns = columnsOf(db);
       const before = { content: contentSha(db), rows: contentOver(db, columns) };
 
@@ -298,8 +309,7 @@ describe.skipIf(!built)("the packed runtime against every workspace schema on di
       expect(run.stderr).toBe("");
       expect(run.status).toBe(0);
       expect(identifiers(run.stdout)).toEqual(["LEG-1", "LEG-2"]);
-      expect(stamp(db)).toBe("6");
-      expect(WORKSPACE_LATEST_VERSION).toBe(6);
+      expect(stamp(db)).toBe(String(WORKSPACE_LATEST_VERSION));
       expect(contentSha(db)).toBe(before.content);
       expect(contentOver(db, columns)).toEqual(before.rows);
       expect(snapshotsBeside(db)).toEqual([]);
@@ -314,7 +324,7 @@ describe.skipIf(!built)("the packed runtime against every workspace schema on di
   });
 
   describe("a schema-5 workspace is upgraded exactly once", () => {
-    it("stamps 5 -> 6 with one snapshot, keeps every row, and the second open takes no second snapshot", () => {
+    it("stamps 5 -> latest with one snapshot, keeps every row, and the second open takes no second snapshot", () => {
       installPacked();
       const { repo, db } = fixtureRepo(FIXTURES.workspaceV5);
       const columns = columnsOf(db);
@@ -347,7 +357,7 @@ describe.skipIf(!built)("the packed runtime against every workspace schema on di
   });
 
   describe("a schema-3 workspace — the retired prototype's shape — is walked all the way forward", () => {
-    it("upgrades 3 -> 6 in one open, snapshotting the schema-3 file first, with every row intact", () => {
+    it("upgrades 3 -> latest in one open, snapshotting the schema-3 file first, with every row intact", () => {
       // `generate.ts` builds fixtures by migration prefix, so `workspace-v3.sqlite`
       // was written the same way the others were: migrations 001-003 and nothing
       // later, then real rows, then stamped '3'.
@@ -454,7 +464,7 @@ describe.skipIf(!built)("the packed runtime against every workspace schema on di
   describe("an installation interrupted between stage and switch", () => {
     /**
      * Exactly one runtime is selected, it verifies, the launcher execs THAT
-     * directory, and what it execs opens schema 6. The bundle under both
+     * directory, and what it execs opens a current workspace. The bundle under both
      * labels is the same build, so `--version` cannot tell them apart; the
      * running build's own report of the path it was started from can.
      */
@@ -466,7 +476,7 @@ describe.skipIf(!built)("the packed runtime against every workspace schema on di
       expect(status.launcher.target).toBe(join(versionDir(home, version), "staple.mjs"));
       expect(launcher(["--version"]).stdout.trim()).toBe(packageVersion);
 
-      const { repo, db } = fixtureRepo(FIXTURES.workspaceV6, `v6-${process.hrtime.bigint()}`);
+      const { repo, db } = currentRepo(`current-${process.hrtime.bigint()}`);
       const run = launcher(["ls", "--all", "--json"], repo);
       expect(run.stderr).toBe("");
       expect(identifiers(run.stdout)).toEqual(["LEG-1", "LEG-2"]);
@@ -596,7 +606,7 @@ describe.skipIf(!built)("the packed runtime against every workspace schema on di
       expect(sha256(db)).toBe(migratedSha);
 
       // The hazard the restore procedure exists for: a process that died
-      // mid-session left a `-wal` holding a row committed against schema 6.
+      // mid-session left a `-wal` holding a row committed against the migrated schema.
       const orphan = spawnSync(process.execPath, [TSX_CLI, WAL_ORPHAN_WORKER, db, "LEG-9"], {
         encoding: "utf8",
         env: bareEnv(),
