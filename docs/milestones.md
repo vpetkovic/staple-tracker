@@ -7,9 +7,9 @@ Milestones view beside Graph) and R3d (milestones in the pickup queue). The
 pure types and helpers it names live in `src/core/milestones.ts` and are
 pinned today by `test/milestones.test.ts`; what needs a database is pinned by
 `test/store-milestones.test.ts` and `test/contract-milestones.test.ts` (R3b),
-and what needs the queue or the view is "to be pinned by" a test that does not
-exist yet, named in place. Where this
-page and [semantics.md](semantics.md) disagree, semantics.md describes today
+what needs the queue by `test/store-queue-resolver.test.ts` (R3d), and what is
+still "to be pinned by" a test that does not exist yet is named in place.
+Where this page and [semantics.md](semantics.md) disagree, semantics.md describes today
 and this page the target. The queue it plugs into is [queue.md](queue.md).
 
 ## Identity: an issue of the `milestone` kind
@@ -409,23 +409,32 @@ children — if it has any — by the same tree rule. An issue reached twice —
 as a direct member and through a member epic, or through two rows — is emitted
 once, at its first occurrence. A milestone with no members and no children
 expands to nothing and is simply a plan row with no effective rows under it.
-Every effective row reached through a milestone reports it as `milestone` in
-its path, beside the epic it came through. (To be pinned by
-`store-queue.test.ts` — *"expands a milestone in membership order, then each
-member by the tree rule"*, *"a milestone's own children follow its members"*,
-*"emits a doubly-reached issue once, at its first occurrence"*, *"reports the
-milestone and epic path for every effective row"*.)
+Every effective row carries `milestonePath` — the milestone it belongs to, by
+its own membership or its nearest ancestor's — beside `epicPath`, the ancestor
+epics it came through; both are arrays of identifiers, outermost first, and both
+are `[]` rather than null when there is nothing to say
+([queue.md](queue.md#the-resolver--one-deterministic-next-item-algorithm)
+step 4). (Pinned by `store-queue-resolver.test.ts` — *"expands a milestone in
+membership order, then each member by the tree rule"*, *"a milestone's own
+children follow its members"*, *"emits a doubly-reached issue once, at its first
+occurrence"*, *"reports the milestone and epic path for every effective row"*.)
 
 Reordering members **is** reordering the effective queue: the resolver reads
 `milestone_members` on every call, so a `milestone mv` is visible on the next
-`queue next` with no queue write. A date change is not: it changes `dueAt` on
-the rows and nothing else. Eligibility is untouched by all of this — a member
-that is blocked, gated, claimed or resolved is classified exactly as
+`queue next` with no queue write — and therefore with **no queue revision
+bump**. The revision that moves is the milestone's own `members_revision`; the
+plan still says exactly what it said. A caller that watches `queue.revision` for
+"did the order change" is watching the PLAN, not the effective order. A date
+change moves neither: it changes `dueAt` on the rows and nothing else, so
+swapping two milestones' target dates leaves an explicit plan byte-identical.
+Eligibility is untouched by all of this — a member that is blocked, gated,
+claimed or resolved is classified exactly as
 [queue.md](queue.md#the-resolver--one-deterministic-next-item-algorithm)
-says, and is shown rather than dropped. (To be pinned by `store-queue.test.ts`
-— *"reordering membership updates effective order on the next read"*, *"a
-milestone date changes dueAt and nothing else"*, *"a blocked member stays
-visible under its milestone"*.)
+says, and is shown rather than dropped. (Pinned by
+`store-queue-resolver.test.ts` — *"reordering membership updates effective order
+on the next read"*, *"a milestone date changes dueAt and nothing else"*,
+*"changing milestone dates never reorders an explicit plan"*, *"a blocked or
+gated member stays visible under its milestone"*.)
 
 ## Events
 
@@ -478,9 +487,19 @@ the next eligible row from the resolver; `--all` includes resolved milestones.
 ```
 
 Each member row also carries `title`, `addedBy`, `addedAt` and `note`, which
-the view (R3c) renders. `planPosition` and `next` are part of the shape today
-and are `null` until the queue (R2b/R3d) fills them; `ls` returns the same
-object without `members`, plus `memberCount`. The service behind every surface
+the view (R3c) renders. `planPosition` and `next` are the QUEUE's two fields on
+this shape and the resolver fills them (R3d): `planPosition` is the milestone's
+own row in the pickup plan, `null` when it is not queued, and `next` is the
+first `eligible` effective row that reports this milestone in its
+`milestonePath` — the real next work under this plan, in the position an agent
+sees it at, and `null` when nothing under the milestone is takeable. A milestone
+that is not queued still has next work: its members are in the unqueued band and
+are still work, just later. `ls` returns the same object without `members`, plus
+`memberCount`, sorted by plan position first. (Pinned by
+`store-milestones.test.ts` — *"fills planPosition and next from the resolver"*,
+*"sorts the list by plan position first, then by date"*;
+`contract-milestones.test.ts` — *"a queued milestone reports its plan position
+and its next eligible row everywhere"*.) The service behind every surface
 is `src/core/milestone-store.ts` (`store.milestones()`), and every membership
 mutation returns this same view, so a writer redraws from its result exactly
 as a reader does.

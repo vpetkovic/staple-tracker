@@ -158,7 +158,11 @@ display grouping.
 containers and milestones included — and `effective` is what you actually
 receive, with every container expanded depth-first to its open leaf work, the
 unqueued band after it in presentation sort, and every row classified
-`resolved | gated | blocked | claimed | eligible` with a reason.
+`resolved | gated | blocked | claimed | eligible` with a reason. Every row also
+says where it is PLANNED — `milestonePath` (the milestone it belongs to) and
+`epicPath` (its ancestor epics), both outermost first and both `[]` when there
+is nothing to say — so you can report what you are working towards without a
+second lookup.
 **`next_task`** `{actor?, ws?}` answers `{revision, next, skipped}`: the one row
 you should take and everything it stepped over. Call it before `checkout_task`
 and you will never see `out_of_order`.

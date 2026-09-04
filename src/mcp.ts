@@ -1606,7 +1606,9 @@ server.registerTool(
  * `--json` and the UI server answers: the milestone half (its issue fields plus
  * dates and derived state), the count-each-leaf-once progress, the members
  * revision (the CAS base), and the members in rank order. `planPosition` and
- * `next` are null until the pickup queue (R3d) fills them.
+ * `next` are the queue's two fields on it and R3d (STA-174) fills them: the
+ * milestone's own row in the pickup plan, and the first eligible effective row
+ * that reports the milestone in its `milestonePath`.
  */
 const milestoneSummaryShape = {
   identifier: z.string(),
@@ -1617,7 +1619,7 @@ const milestoneSummaryShape = {
   targetDate: z.string().nullable().describe("YYYY-MM-DD, due by the END of that UTC day"),
   startDate: z.string().nullable(),
   state: z.enum(MILESTONE_STATES).describe("Derived on every read: done | cancelled | overdue | active | planned"),
-  planPosition: z.number().nullable().describe("The milestone's row in the pickup plan; null until queued"),
+  planPosition: z.number().nullable().describe("The milestone's own row in the pickup plan; null when it is not queued"),
 };
 const milestoneMemberShape = {
   identifier: z.string(),
@@ -1644,7 +1646,10 @@ const milestoneViewShape = {
   progress: z.object(milestoneProgressShape),
   revision: z.number().describe("The members revision; pass it back as base_revision to reorder safely"),
   members: z.array(z.object(milestoneMemberShape)),
-  next: z.object({ identifier: z.string(), position: z.number() }).nullable(),
+  next: z
+    .object({ identifier: z.string(), position: z.number() })
+    .nullable()
+    .describe("The first eligible row of the effective queue planned under this milestone; null when nothing under it is takeable"),
 };
 const milestoneRefSchema = z.string().describe("The milestone's reference (an issue of the `milestone` kind)");
 const dateSchema = z
@@ -1909,6 +1914,10 @@ const effectiveRowShape = {
   reason: z.string().nullable(),
   detail: z.record(z.string(), z.unknown()).nullable(),
   dueAt: z.string().nullable().describe("The milestone target date this row inherits; explains urgency, never reorders"),
+  milestonePath: z
+    .array(z.string())
+    .describe("The milestone this row is planned under — its own membership, else the nearest ancestor's; empty when none"),
+  epicPath: z.array(z.string()).describe("The row's ancestor epics, outermost first; empty for a top-level row"),
   parent: z.string().nullable(),
 };
 

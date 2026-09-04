@@ -482,8 +482,9 @@ page shows the store's own refusal naming that command.
 identifier — an unplanned milestone sits below every planned one, and a date
 never reorders a plan. Each row shows the target date, member count, a progress
 bar with `done/countable` and the percent, the derived state, the risk, and the
-queue's answer: `next: STA-67 (#4)` once R3d fills it, a muted "not queued yet"
-until then. Resolved milestones follow the page's "show done" filter.
+queue's answer: `next: STA-67 (#4)` — the first eligible row of the effective
+queue planned under this milestone (R3d) — or a muted "not queued yet" when
+nothing under it is takeable. Resolved milestones follow the page's "show done" filter.
 
 **Right, one milestone.** Title, start and target dates, owner, plan position;
 rollups (progress, blocked, gated, active, ready); the ordered members drawn

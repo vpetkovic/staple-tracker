@@ -146,7 +146,10 @@ describe("every operation has the same shape and refusal on every surface", () =
           note: null,
         },
       ],
-      next: null,
+      // CON-5 is not in the plan, so it has no `planPosition`; its one member is
+      // still real work in the unqueued band, so `next` names it and the
+      // position an agent would see it at (R3d).
+      next: { identifier: "CON-4", position: 2 },
     });
     expect(fromMcp).toEqual(fromCli);
     expect(fromHttp).toEqual(fromCli);
@@ -157,7 +160,12 @@ describe("every operation has the same shape and refusal on every surface", () =
     const fromMcp = normalize(await mcpJson("list_milestones", {}), [home]);
     const fromHttp = normalize(await httpJson(`/api/milestones?ws=${WS}`), [home]);
     expect(fromCli).toEqual([
-      expect.objectContaining({ milestone: expect.objectContaining({ identifier: "CON-5" }), revision: 1, memberCount: 1, next: null }),
+      expect.objectContaining({
+        milestone: expect.objectContaining({ identifier: "CON-5" }),
+        revision: 1,
+        memberCount: 1,
+        next: { identifier: "CON-4", position: 2 },
+      }),
     ]);
     // The MCP text block is the bare array (structuredContent wraps it as {items}).
     expect(fromMcp).toEqual(fromCli);
@@ -223,6 +231,46 @@ describe("every operation has the same shape and refusal on every surface", () =
     expect(body.error).toBe(body.message);
     // Nothing moved: the stale add and the bad remove left the order standing.
     expect((await mcpJson("get_milestone", { ref: "CON-5" }) as { revision: number }).revision).toBe(1);
+  });
+});
+
+/**
+ * STA-174 (R3d) — the two fields the QUEUE owns on the milestone view. Every
+ * surface reads one resolver, so a milestone queued over one of them reports the
+ * same plan position and the same next work on all three.
+ */
+describe("the queue fills planPosition and next on every surface", () => {
+  it("a queued milestone reports its plan position and its next eligible row everywhere", async () => {
+    expect(cli("queue", "add", "CON-5", "--ws", WS).status).toBe(0);
+    const fromCli = normalize(cliJson("milestone", "show", "CON-5", "--ws", WS), [home]) as {
+      milestone: { planPosition: number | null };
+      next: { identifier: string; position: number } | null;
+    };
+    // The milestone is plan row 1 and expands to its one member, which is then
+    // the head of the effective order and the milestone's next work.
+    expect(fromCli.milestone.planPosition).toBe(1);
+    expect(fromCli.next).toEqual({ identifier: "CON-4", position: 1 });
+    expect(normalize(await mcpJson("get_milestone", { ref: "CON-5" }), [home])).toEqual(fromCli);
+    expect(normalize(await httpJson(`/api/milestone?ref=CON-5&ws=${WS}`), [home])).toEqual(fromCli);
+    // `ls` answers the same two numbers, and so does a WRITE's result.
+    const listed = (await mcpJson("list_milestones", {})) as Array<{
+      milestone: { identifier: string; planPosition: number | null };
+      next: unknown;
+    }>;
+    expect(listed.find((row) => row.milestone.identifier === "CON-5")).toMatchObject({
+      milestone: { planPosition: 1 },
+      next: { identifier: "CON-4", position: 1 },
+    });
+    // The effective rows the queue itself answers carry the milestone in their path.
+    const queue = (await httpJson(`/api/queue?ws=${WS}`)) as {
+      effective: Array<{ identifier: string; milestonePath: string[]; epicPath: string[] }>;
+    };
+    expect(queue.effective[0]).toMatchObject({ identifier: "CON-4", milestonePath: ["CON-5"], epicPath: [] });
+    expect(cli("queue", "rm", "CON-5", "--ws", WS).status).toBe(0);
+    expect(
+      ((await mcpJson("get_milestone", { ref: "CON-5" })) as { milestone: { planPosition: number | null } }).milestone
+        .planPosition,
+    ).toBeNull();
   });
 });
 

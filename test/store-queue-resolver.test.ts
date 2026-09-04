@@ -137,6 +137,101 @@ describe("container expansion", () => {
     expect(rows.map((row) => row.via)).toEqual([milestone, milestone]);
   });
 
+  it("a milestone's own children follow its members", () => {
+    store.addKind({ id: MILESTONE_KIND, label: "Milestone" }, "vp");
+    const milestone = store.createIssue({ title: "October", kind: MILESTONE_KIND }).identifier;
+    // Nothing is ever re-parented INTO a milestone, but a human may parent an
+    // issue under one; membership order comes first, then the tree rule.
+    const own = issue("own child", { parent: milestone });
+    const member = issue("member");
+    store.milestones().addMember(milestone, member, {}, "vp");
+    queue.enqueue(milestone, {}, "vp");
+
+    expect(identifiers()).toEqual([member, own]);
+    expect(queue.effectiveQueue().rows.map((row) => row.via)).toEqual([milestone, milestone]);
+  });
+
+  it("reordering membership updates effective order on the next read", () => {
+    store.addKind({ id: MILESTONE_KIND, label: "Milestone" }, "vp");
+    const milestone = store.createIssue({ title: "October", kind: MILESTONE_KIND }).identifier;
+    const first = issue("first");
+    const second = issue("second");
+    const milestones = store.milestones();
+    milestones.addMember(milestone, first, {}, "vp");
+    milestones.addMember(milestone, second, {}, "vp");
+    queue.enqueue(milestone, {}, "vp");
+    expect(identifiers()).toEqual([first, second]);
+
+    const queueRevision = queue.revision();
+    const membersRevision = milestones.get(milestone).revision;
+    const reordered = milestones.reorderMembers(milestone, [second, first], {}, "vp");
+    // The effective order is DERIVED, so a membership reorder is visible on the
+    // very next read with no queue write: the milestone's own members_revision
+    // moves and the queue's does not.
+    expect(identifiers()).toEqual([second, first]);
+    expect(queue.revision()).toBe(queueRevision);
+    expect(reordered.revision).toBe(membersRevision + 1);
+  });
+
+  it("a blocked or gated member stays visible under its milestone", () => {
+    store.addKind({ id: MILESTONE_KIND, label: "Milestone" }, "vp");
+    const milestone = store.createIssue({ title: "October", kind: MILESTONE_KIND }).identifier;
+    const blocked = issue("blocked member");
+    const epic = issue("gated member", { kind: "epic" });
+    const gatedChild = issue("under the gate", { parent: epic });
+    const free = issue("free member");
+    const upstream = issue("upstream");
+    store.setBlockedBy(blocked, [upstream], "vp");
+    const milestones = store.milestones();
+    milestones.addMember(milestone, blocked, {}, "vp");
+    milestones.addMember(milestone, epic, {}, "vp");
+    milestones.addMember(milestone, free, {}, "vp");
+    store.gateIssue(epic, { owner: "vp" }, "vp");
+    queue.enqueue(milestone, {}, "vp");
+
+    // Both keep the place their milestone gave them and say why; the resolver
+    // advances past them by the ladder rather than dropping or reordering them.
+    expect(effective()).toEqual([
+      `${blocked}:blocked`,
+      `${gatedChild}:gated`,
+      `${free}:eligible`,
+      `${upstream}:eligible`,
+    ]);
+    const rows = queue.effectiveQueue().rows;
+    expect(rows[0]!.reason).toContain(upstream);
+    expect(rows[1]!.reason).toContain(epic);
+    expect(rows.slice(0, 3).map((row) => row.milestonePath)).toEqual([
+      [milestone],
+      [milestone],
+      [milestone],
+    ]);
+    expect(queue.effectiveQueue().next!.identifier).toBe(free);
+  });
+
+  it("reports the milestone and epic path for every effective row", () => {
+    store.addKind({ id: MILESTONE_KIND, label: "Milestone" }, "vp");
+    const milestone = store.createIssue({ title: "October", kind: MILESTONE_KIND }).identifier;
+    const programme = issue("R programme", { kind: "epic" });
+    const epic = issue("S epic", { kind: "epic", parent: programme });
+    const leaf = issue("S1", { parent: epic });
+    const loose = issue("loose");
+    store.milestones().addMember(milestone, epic, {}, "vp");
+    queue.enqueue(milestone, {}, "vp");
+
+    const rows = queue.effectiveQueue().rows;
+    const pathOf = (identifier: string) => {
+      const row = rows.find((candidate) => candidate.identifier === identifier)!;
+      return { milestonePath: row.milestonePath, epicPath: row.epicPath };
+    };
+    // The milestone is the epic's, inherited by the leaf underneath it; the epic
+    // path is the ANCESTORS, outermost first, and never the row itself.
+    expect(pathOf(leaf)).toEqual({ milestonePath: [milestone], epicPath: [programme, epic] });
+    // Unqueued work reports its path too — it is a fact about the tree, not
+    // about the plan.
+    expect(pathOf(loose)).toEqual({ milestonePath: [], epicPath: [] });
+    expect(rows.every((row) => Array.isArray(row.milestonePath) && Array.isArray(row.epicPath))).toBe(true);
+  });
+
   it("a milestone date changes dueAt and nothing else", () => {
     store.addKind({ id: MILESTONE_KIND, label: "Milestone" }, "vp");
     const milestone = store.createIssue({ title: "October", kind: MILESTONE_KIND }).identifier;
@@ -154,6 +249,36 @@ describe("container expansion", () => {
     // A date explains urgency; it never reorders a plan somebody wrote by hand.
     expect(identifiers()[0]).toBe(late);
     expect(queue.effectiveQueue().rows.find((r) => r.identifier === early)!.dueAt).toBeNull();
+  });
+
+  it("changing milestone dates never reorders an explicit plan", () => {
+    store.addKind({ id: MILESTONE_KIND, label: "Milestone" }, "vp");
+    const milestones = store.milestones();
+    const later = store.createIssue({ title: "November", kind: MILESTONE_KIND }).identifier;
+    const sooner = store.createIssue({ title: "October", kind: MILESTONE_KIND }).identifier;
+    const laterWork = issue("ship the November thing");
+    const soonerWork = issue("ship the October thing");
+    milestones.addMember(later, laterWork, {}, "vp");
+    milestones.addMember(sooner, soonerWork, {}, "vp");
+    // A human put November first. The dates say the opposite.
+    queue.enqueue(later, {}, "vp");
+    queue.enqueue(sooner, {}, "vp");
+    milestones.update(later, { targetDate: "2026-11-30" }, "vp");
+    milestones.update(sooner, { targetDate: "2026-10-31" }, "vp");
+    const before = JSON.stringify(queue.effectiveQueue().rows);
+
+    // Swap the dates, twice over, and clear one entirely.
+    milestones.update(later, { targetDate: "2026-01-01" }, "vp");
+    milestones.update(sooner, { targetDate: "2026-12-31", startDate: "2026-01-01" }, "vp");
+    expect(identifiers()).toEqual([laterWork, soonerWork]);
+    milestones.update(later, { targetDate: null }, "vp");
+    expect(identifiers()).toEqual([laterWork, soonerWork]);
+
+    // Restore the dates and the whole effective answer is byte-identical: the
+    // only thing a date was ever allowed to touch is `dueAt`.
+    milestones.update(later, { targetDate: "2026-11-30" }, "vp");
+    milestones.update(sooner, { targetDate: "2026-10-31", startDate: null }, "vp");
+    expect(JSON.stringify(queue.effectiveQueue().rows)).toBe(before);
   });
 });
 
