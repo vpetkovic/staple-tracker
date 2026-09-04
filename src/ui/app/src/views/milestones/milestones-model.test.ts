@@ -81,10 +81,10 @@ describe("labels", () => {
     expect(progressLabel(progress())).toBe("nothing to count yet");
   });
 
-  it("renders the queue's answer, and says 'not queued yet' while R3d has not filled it", () => {
+  it("renders the queue's answer, and says 'no eligible work' when the resolver has none", () => {
     expect(nextWorkLabel({ identifier: "STA-67", position: 4 })).toBe("next: STA-67 (#4)");
     expect(nextWorkLabel(null)).toBe(NOT_QUEUED_LABEL);
-    expect(NOT_QUEUED_LABEL).toBe("not queued yet");
+    expect(NOT_QUEUED_LABEL).toBe("no eligible work");
   });
 });
 

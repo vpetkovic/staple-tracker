@@ -29,6 +29,11 @@ staple request-changes <ref> -m text                send it back; the children s
 staple milestone ls | show <ref>                    dated, ordered plans (needs the `milestone` kind)
 staple milestone new <title> [--target D] [--from-epic R] [--preview]
 staple milestone add|rm <milestone> <ref> [--base N] | mv <ref> --to M | reorder M <r1,r2>
+
+staple queue [--all] [--effective]                  the plan, and the order agents receive
+staple queue next [--actor A]                       the one row to take, and what it skipped
+staple queue add|rm <ref> [--at N] [--base N] | mv <ref> --at N | reorder <r1,r2> | prune
+staple checkout <ref> --override -m <why>           take a row out of turn, on the record
 ```
 
 `staple help` has the full option list. `checkout` is an alias for `start`, and
@@ -223,6 +228,70 @@ staple milestone show STA-190
 `--json` on every subcommand prints the one shape MCP and the UI server
 return: `{milestone, progress, revision, members, next}` — see
 [milestones.md](milestones.md#operations-by-surface).
+
+## The pickup queue
+
+An explicit, human-ordered plan of what agents pick up next, separate from
+status, priority and display grouping — the full contract is
+[queue.md](queue.md). Nothing is seeded and nothing changes until somebody
+queues something: an empty plan leaves `inbox` exactly as it was.
+
+```bash
+staple queue add STA-66                      # appended; an epic or a milestone is fine
+staple queue add STA-146 --before STA-66     # also --after R, --at N (1-based plan position)
+staple queue mv STA-146 --at 1 --base 4
+staple queue reorder STA-31,STA-66,STA-146 --base 5
+staple queue rm STA-31
+staple queue prune                           # drop the done and cancelled entries
+staple queue                                 # PLAN order, expansions indented
+staple queue --effective                     # EFFECTIVE order, with the eligibility column
+staple queue next --actor codex-1            # what to take, and what it stepped over
+```
+
+- **Two orders, both shown.** `queue` prints PLAN order — the rows a human put
+  there — with each queued container's expansion indented under it and a
+  `→ n eligibility` cue giving every leaf its effective position. `--effective`
+  prints the order an AGENT receives. A container is never a row an agent can
+  take: a queued epic expands depth-first to its open leaf work, and a
+  milestone expands to its members in membership order. `--effective` adds a
+  `path` column — the milestone the row is planned under, then its ancestor
+  epics — which `--json` carries as `milestonePath` and `epicPath` on every row.
+- **The plan is a prefix, not a filter.** Everything not queued follows the plan
+  in the ordinary presentation sort, so unqueued work is still work — just
+  later. `--all` keeps resolved entries visible; by default they are hidden and
+  `prune` removes them.
+- **Every row is classified, and none is dropped**: `resolved`, `gated`,
+  `blocked`, `claimed`, else `eligible` — the first that matches, with a reason.
+  A blocker, a gate, a live claim and a resolved status refuse exactly as they
+  always have; rank cannot lift any of them.
+- **Order is durable and independent** — nothing about it derives from priority,
+  `created_at` or the configured status order. `queue` prints the revision;
+  `--base N` on any mutation refuses a stale one with exit 7
+  (`revision_conflict`, retryable) and leaves the order standing. Without
+  `--base` the CLI writes blind, which is the human's own risk to take.
+- **`queue.policy` decides whether the plan BINDS agents.** `advisory` (the
+  default, `staple settings get queue.policy`) orders and explains and never
+  refuses. Under `strict`, an agent claiming a row later than an eligible one is
+  refused with exit 10 and `out_of_order`, and the refusal names what to take:
+
+  ```json
+  {"code":"out_of_order","message":"STA-146 is later in the queue than STA-67, which is ready. Take STA-67, or ask a human to reorder or override.","detail":{"policy":"strict","expected":["STA-67"],"position":14,"expectedPosition":2},"retryable":false}
+  ```
+
+  It is not a `conflict` (somebody got there first — pick another *now*) and not
+  `gated` (a person must act) but a third instruction: *the plan says something
+  else comes first*. Retrying never clears it; taking `expected[0]` does.
+- **A human may step over the plan, on the record.** `staple checkout <ref>
+  --override -m "<why>"` skips ONLY the order check — blockers, gates and live
+  claims still refuse — and writes a `queue_overridden` event with the actor,
+  the reason and the rows it displaced. The reason is mandatory: `--override`
+  without `-m` is exit 2. The plan is unchanged, so the displaced row is still
+  the head for the next agent.
+
+`--json` on every subcommand prints the one shape MCP and the UI server return:
+`{revision, entries, effective}`, with `queue next` answering
+`{revision, next, skipped}` — see
+[queue.md](queue.md#operations-by-surface).
 
 ## Estimates vs actuals
 
@@ -505,3 +574,4 @@ Exit codes let CI branch without parsing stderr:
 | 3 | `not_found` | | 7 | `revision_conflict` |
 | | | | 8 | `timeout` (`wait` only) |
 | | | | 9 | `gated` (a review gate above it is unresolved) |
+| | | | 10 | `out_of_order` (the plan says something else comes first) |

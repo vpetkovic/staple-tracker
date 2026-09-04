@@ -476,6 +476,16 @@ export interface InboxIssue extends Issue {
    */
   gate?: IssueGate | null;
   queuedBy?: QueuedBy | null;
+  /**
+   * The pickup queue's two numbers (STA-168), following the wire like everything
+   * else on this type. `position` is EFFECTIVE order — what checkout enforces
+   * under `strict` — and is null for a container, which is never a pickup
+   * target; `planPosition` is where a human put it, or the queued container it
+   * came from. Optional for the same reason `gate` is: a fixture has no opinion
+   * about the queue, and the server always sends both.
+   */
+  position?: number | null;
+  planPosition?: number | null;
 }
 
 export interface IssueComment {
@@ -932,7 +942,7 @@ export type ActionPayload =
    * clock at write time, so a holder who wakes up between the render and the click keeps
    * their work and the page shows the refusal.
    */
-  | { type: "checkout"; stealIfIdleSeconds?: number }
+  | { type: "checkout"; stealIfIdleSeconds?: number; overrideReason?: string }
   /**
    * Give a claim back. `ifIdleSeconds` (C3) lets a caller who is NOT the holder free a
    * claim whose holder has gone silent at least that long. Absent, only the holder may
@@ -1042,7 +1052,7 @@ export interface MilestoneSummary {
   startDate: string | null;
   /** Derived on every read; never stored. */
   state: MilestoneState;
-  /** The milestone's row in the pickup plan; null until the queue (R3d) fills it. */
+  /** The milestone's own row in the pickup plan; null when it is not queued. */
   planPosition: number | null;
 }
 
@@ -1083,9 +1093,90 @@ export interface MilestoneView {
   /** The `members_revision` CAS base every write must carry back. */
   revision: number;
   members: MilestoneMemberRow[];
-  /** The next eligible row from the queue resolver; null until R3d. */
+  /** The first eligible row of the effective queue planned under this milestone. */
   next: MilestoneNext | null;
 }
 
 /** A `GET /api/milestones` row: the view without its members, plus how many there are. */
 export type MilestoneListRow = Omit<MilestoneView, "members"> & { memberCount: number };
+
+// ---------- the pickup queue (R2c / STA-168) ----------
+
+/**
+ * The queue as every surface prints it — the mirror of `QueueView` in
+ * `src/core/queue-store.ts` and the JSON shape in docs/queue.md. ONE shape for
+ * `GET /api/queue` and for the result of every `POST /api/queue/*` write, so the
+ * editor (R2d) redraws from a write result exactly as it does from a read.
+ *
+ * TWO ORDERS and both are here on purpose. `entries` is PLAN order: the rows a
+ * human put in the queue, containers included, in the order they put them —
+ * what the editor edits. `effective` is the plan with every container expanded
+ * to leaf work and every row classified — what agents receive, and what the
+ * READY list derives its order from.
+ */
+export const QUEUE_ELIGIBILITIES = ["resolved", "gated", "blocked", "claimed", "eligible"] as const;
+export type QueueEligibility = (typeof QUEUE_ELIGIBILITIES)[number];
+
+export interface QueueEntry {
+  issueId: string;
+  identifier: string;
+  title: string;
+  kind: IssueKind;
+  status: IssueStatus;
+  /** 1-based position in the WHOLE plan, resolved rows included. */
+  planPosition: number;
+  /** The sparse encoding behind `planPosition`; an implementation detail nobody types. */
+  rank: number;
+  parent: string | null;
+  resolved: boolean;
+  addedBy: string;
+  addedAt: string;
+  note: string | null;
+}
+
+export interface EffectiveQueueRow {
+  issueId: string;
+  identifier: string;
+  title: string;
+  kind: IssueKind;
+  status: IssueStatus;
+  /** 1-based position in EFFECTIVE order — the number a strict refusal speaks. */
+  position: number;
+  /** The plan row this came from, or the container's; null in the unqueued band. */
+  planPosition: number | null;
+  /** The queued container this row was expanded out of. */
+  via: string | null;
+  /** True for a row after the last plan row: still work, just later. */
+  unqueued: boolean;
+  eligibility: QueueEligibility;
+  /** A sentence for a human; null when the row is eligible. */
+  reason: string | null;
+  detail: Record<string, unknown> | null;
+  /** The milestone target date this row inherits. Explains urgency; never reorders. */
+  dueAt: string | null;
+  /**
+   * The milestone this row is planned under — its own membership, else the
+   * nearest ancestor's — outermost first. At most one element, because a
+   * milestone cannot be a member of a milestone; empty when there is none.
+   */
+  milestonePath: string[];
+  /** The row's ANCESTOR epics, outermost first; empty for a top-level row. */
+  epicPath: string[];
+  parent: string | null;
+}
+
+export interface QueueView {
+  /** The CAS base every mutation is checked against. */
+  revision: number;
+  entries: QueueEntry[];
+  effective: EffectiveQueueRow[];
+  /** Only on an enqueue: the issue was already in the plan and nothing was written. */
+  replayed?: boolean;
+}
+
+/** `GET /api/queue/next`: the one row an agent should take, and what it stepped over. */
+export interface QueueNext {
+  revision: number;
+  next: EffectiveQueueRow | null;
+  skipped: EffectiveQueueRow[];
+}

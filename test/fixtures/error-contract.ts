@@ -75,6 +75,30 @@ export const ERROR_CONTRACT = {
       detail: { currentStatus, queuedBy: { identifier: gate, owner } },
     };
   },
+  /**
+   * Claiming a row the pickup plan puts LATER than an eligible one, under
+   * `queue.policy = strict` (STA-168).
+   *
+   * The third instruction in the family, and the reason it is not folded into
+   * either of the other two: `conflict` says somebody got there first, so find
+   * other work RIGHT NOW; `gated` says a person must act; `out_of_order` says
+   * the work is real, unclaimed and takeable — just not by you, not yet. That is
+   * the only one of the three that names a SPECIFIC next action, which is why
+   * `expected` is part of the contract rather than prose in the message.
+   * Non-retryable: retrying never clears it, taking `expected[0]` does.
+   */
+  checkoutOutOfOrder(
+    expected: string[],
+    position: number,
+    expectedPosition: number,
+    policy = "strict",
+  ): ErrorTriple {
+    return {
+      code: "out_of_order",
+      retryable: false,
+      detail: { policy, expected, position, expectedPosition },
+    };
+  },
 } as const;
 
 /** Reduce any surface's error body to the triple, so surfaces are comparable. */
@@ -97,6 +121,7 @@ export const CLI_EXIT_CODES: Record<string, number> = {
   revision_conflict: 7,
   timeout: 8,
   gated: 9,
+  out_of_order: 10,
 };
 
 /** src/ui/server.ts maps StapleError -> 404 for not_found, 409 for everything else. */

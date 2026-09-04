@@ -3,11 +3,13 @@
 An explicit, human-ordered plan of what agents pick up next, separate from
 status, priority and display grouping. This is the contract the R2 tickets
 implement and that R3d (milestones) and R6d (the policy setting) plug into.
-Every rule names the test that pins it, or that will. The STORAGE half is
-built — the `queue_entries` table, the plan's order and its revision (R2b,
-migration 008) — and the resolver, the surfaces and the editor are not; where
-this page and [semantics.md](semantics.md) disagree, semantics.md describes
-today and this page the target.
+Every rule names the test that pins it, or that will. The STORAGE half (R2b,
+migration 008: the `queue_entries` table, the plan's order and its revision),
+the RESOLVER and the four surfaces (R2c) and the milestone plumbing — expansion
+order, the path fields, and the two queue fields on the milestone view (R3d) —
+are built; the visual editor (R2d) is not. Where this page
+and [semantics.md](semantics.md) disagree, semantics.md describes today and this
+page the target.
 
 ## Presentation sort is not the queue
 
@@ -28,45 +30,64 @@ human put in the queue, containers included, in the order they put them — what
 the editor edits. **Effective order** is the plan with every container expanded
 to leaf work and every row annotated with whether an agent may take it — what
 agents receive, and what READY derives from. A row's `planPosition` and its
-effective `position` are reported side by side wherever they differ. (To be
-pinned by `queue-surfaces.test.ts` — *"reports plan position and effective
-position separately"*.)
+effective `position` are reported side by side wherever they differ. (Pinned by
+`queue-surfaces.test.ts` — *"reports plan position and effective position
+separately"*.)
 
 ## The resolver — one deterministic next-item algorithm
 
-One function, `store.effectiveQueue(actor?)`, is the only thing that computes
+One function, `store.queue().effectiveQueue({actor?})`, is the only thing that computes
 the effective order, and every surface — `inbox`, `queue`, `queue next`, the
 checkout guard, MCP, HTTP and the editor's preview — reads it. Its inputs are
 exactly: the `queue_entries` table; the issue tree (`parent_id`, sibling order);
 status categories; local `blocks` edges and hub `cross_links`; gates
 (`queuedByFor`); live claims (`checkout_agent` on an active-category row);
 milestone membership order (R3); the workspace policy; and the calling actor.
-Same inputs, same output, on every surface and after a restart. (To be pinned
-by `contract-queue.test.ts` — *"CLI, MCP, HTTP and inbox return the same
-revision and the same order"*; pinned by `store-queue.test.ts` — *"survives
-restart with a stable total order"*.)
+Cross-workspace blockers are the one input the resolver takes INJECTED rather
+than fetched — they live in the hub, and `Hub.crossBlockersOf` opens a workspace
+file per link, which is not a cost an inbox can pay per row — so a caller that
+already has a hub open hands them in. Same inputs, same output, on every surface
+and after a restart. (Pinned by `queue-surfaces.test.ts` — *"CLI, MCP, HTTP and
+inbox return the same revision and the same order"*; `store-queue.test.ts` —
+*"survives restart with a stable total order"*.)
 
 **Step 1 — expand.** Walk the plan in rank order. A leaf is emitted as one
 effective row. A **container** — an issue with at least one open child — is
-never emitted as itself; it is expanded in place, depth-first, to its open leaf
-descendants (the same "nothing open underneath" test gates use, so a parent a
-human gave a status to after its children finished is a leaf). A milestone
-expands to its members in membership order (R3d), and each member expands by
-this rule — what a milestone is and how its membership is ordered is
-[milestones.md](milestones.md). Siblings inside a container expand in **presentation sort**, so a
-queued epic behaves exactly like today's inbox restricted to that epic; a human
-who wants a different order inside it queues the child explicitly. An issue
-reached twice — queued directly and via a container, or via two containers —
-is emitted once, at its **first** occurrence. (To be pinned by
-`store-queue.test.ts` — *"expands a container to open leaves, depth-first"*,
-*"never emits a container as a row"*, *"emits a doubly-reached issue once, at
-its first occurrence"*, *"expands a milestone in membership order, then each
-member by the tree rule"*.)
+never emitted as itself; it is expanded in place, depth-first, to its open
+leaf descendants (the same "nothing open underneath" test gates use, so a
+parent a human gave a status to after its children finished is a leaf). A
+**milestone** is a container over its MEMBERSHIP rather than over its
+children, so one queued milestone reserves one plan position and expands **in
+membership order first, then in hierarchy order**: each direct member in rank
+order, each member expanded by this rule, then the milestone's own open
+children (if a human parented anything under it) by this rule again — what a
+milestone is and how its membership is ordered is
+[milestones.md](milestones.md). It is never emitted as a row itself, in the
+plan or in the unqueued band, because nobody checks out a milestone.
+Membership is read on every call and nothing is cached, so a `milestone mv` is
+visible on the very next read and no queue write happens or is needed.
+Siblings inside a container expand in **presentation sort**, so a queued epic
+behaves exactly like today's inbox restricted to that epic; a human who wants
+a different order inside it queues the child explicitly. An issue reached
+twice — queued directly and via a container, or via two containers — is
+emitted once, at its **first** occurrence. (Pinned by
+`store-queue-resolver.test.ts` — *"expands a container to open leaves,
+depth-first"*, *"never emits a container as a row"*, *"treats a parent
+resolved after its children as a leaf, not a container"*, *"emits a
+doubly-reached issue once, at its first occurrence"*, *"expands a milestone in
+membership order, then each member by the tree rule"*, *"a milestone's own
+children follow its members"*, *"reordering membership updates effective order
+on the next read"*.)
 
-**Step 2 — the unqueued band.** After the last plan row, every open issue not
+**Step 2 — the unqueued band.** After the last plan row, every open LEAF not
 reached by step 1 follows in presentation sort. The queue is a prefix, not a
-filter: unqueued work is still work, it is just later. (To be pinned by
-*"appends unqueued work after the plan in presentation sort"*.)
+filter: unqueued work is still work, it is just later. Containers stay out of the
+band for the same reason they stay out of step 1 — "never emits a container as a
+row" is absolute, and a row here is something an agent may be TOLD to take. The
+inbox still LISTS containers; it takes only its order from here. (Pinned by
+`store-queue-resolver.test.ts` — *"appends unqueued work after the plan in
+presentation sort"*, *"a reopened issue whose entry was pruned lands in the
+unqueued band"*.)
 
 **Step 3 — classify.** Each effective row gets one `eligibility`, the first
 rule that matches; the ladder is hard constraints only, and rank is not on it:
@@ -82,28 +103,54 @@ rule that matches; the ladder is hard constraints only, and rank is not on it:
 Every non-eligible row carries a `detail` saying why (`queuedBy`, the blocker
 identifiers, the holder and their `idleSeconds`). Rows are **never dropped** for
 being ineligible — the plan is shown whole, so a human can see what their order
-is waiting on. Milestone target dates appear as `dueAt` on the row and are not
-an input to order or eligibility: a date explains urgency, it never reorders a
-plan somebody wrote by hand. Assignee is deliberately not an input either.
-(To be pinned by `store-queue.test.ts` — *"classifies by the ladder, first
+is waiting on, and a blocked or gated member of a milestone stays where its
+milestone put it while the resolver advances past it by the ladder. Milestone
+target dates appear as `dueAt` on the row and are not an input to order or
+eligibility: a date explains urgency, it never reorders a plan somebody wrote by
+hand — change every date in the workspace and the effective answer is
+byte-identical but for `dueAt`. Assignee is deliberately not an input either.
+(Pinned by `store-queue-resolver.test.ts` — *"classifies by the ladder, first
 match wins"*, *"names the gate before the blocker"*, *"treats an unresolvable
-cross-workspace blocker as blocked"*, *"a milestone date changes dueAt and
-nothing else"*.)
+cross-workspace blocker as blocked"*, *"never drops an ineligible row"*, *"a
+blocked or gated member stays visible under its milestone"*, *"a milestone date
+changes dueAt and nothing else"*, *"changing milestone dates never reorders an
+explicit plan"*.)
+
+**Step 4 — say where the row is planned.** Every effective row also carries
+two paths, both arrays of identifiers, outermost first, and both `[]` rather
+than null when there is nothing to say. **`milestonePath`** is the milestone
+the row belongs to — its own membership, else the nearest ancestor's — so a
+row reached THROUGH a queued milestone and a row that merely belongs to one
+report the same thing, and `via` stays the field that says which container
+this row was expanded out of. It holds at most one element today, because a
+milestone cannot be a member of a milestone. **`epicPath`** is the row's
+ANCESTOR epics; a row is never in its own path. Both are facts about the tree
+rather than about the plan, so the unqueued band carries them too, and neither
+is an input to order or eligibility. `staple queue --effective` prints them as
+one `path` column. (Pinned by `store-queue-resolver.test.ts` — *"reports the
+milestone and epic path for every effective row"*; `queue-surfaces.test.ts` —
+*"reports the milestone and epic path for every effective row on every
+surface"*.)
 
 **Next item** is the first `eligible` row for the actor; the rows before it are
 returned as `skipped`, each with its eligibility and detail. With no actor,
 `claimed` rows are reported as claimed and the next item is the first row
-nobody holds. (To be pinned by *"next is the first eligible row and lists what
-it skipped"*.)
+nobody holds. (Pinned by `store-queue-resolver.test.ts` — *"next is the first
+eligible row and lists what it skipped"*, *"has no eligible row, and no next,
+when everything is held"*.)
 
 **READY takes its order from the resolver and keeps its membership.** The three
 inbox buckets partition open work exactly as today (`gated` and `queuedBy` →
 QUEUED; `blocked` and unresolved blockers → BLOCKED; the rest → READY); what
 changes is that READY is printed in effective order rather than presentation
 sort, with each row's `position`, and QUEUED/BLOCKED rows that are in the plan
-carry their `planPosition` as a cue. (To be pinned by `queue-surfaces.test.ts`
-— *"READY is in effective order and carries positions"*, *"a queued-but-gated
-row stays in QUEUED with its plan position"*.)
+carry their `planPosition` as a cue. A container is in READY but is not an
+effective row, so it has no `position` of its own and ranks where its earliest
+plan-band descendant does; with an EMPTY queue nothing is in the plan band and
+the list is byte-identical to what it always was. (Pinned by
+`queue-surfaces.test.ts` — *"READY is in effective order and carries
+positions"*, *"a queued-but-gated row stays in QUEUED with its plan
+position"*.)
 
 ## Policy: advisory or strict
 
@@ -111,9 +158,9 @@ row stays in QUEUED with its plan position"*.)
 the R6 settings registry (STA-179) and read by the resolver on every checkout.
 **`advisory`** is the default: the queue orders and explains, and checkout is
 never refused for order. Upgrading a workspace changes nothing an agent can
-observe until a human sets `strict`. (To be pinned by `store-settings.test.ts`
-— *"queue.policy defaults to advisory"*; `store-queue.test.ts` — *"advisory
-never refuses a checkout for order"*.)
+observe until a human sets `strict`. (Pinned by `store-settings.test.ts` —
+*"queue.policy defaults to advisory"*; `store-queue-resolver.test.ts` —
+*"advisory never refuses a checkout for order"*.)
 
 **`strict`** refuses a checkout of issue X when an `eligible` row for the actor
 exists **earlier** in effective order — earlier meaning a smaller position, or
@@ -131,12 +178,15 @@ the agent should take instead:
 It is not `conflict` (somebody else got there first — pick another *now*) and
 not `gated` (a person must act) but a third instruction: *the plan says
 something else comes first*. Retrying does not clear it; taking the expected
-item does. (To be pinned by `store-queue.test.ts` — *"strict refuses a later
-checkout with out_of_order, naming the earlier eligible rows"*, *"strict allows
-the head row"*, *"strict allows a later row once every earlier row is
-ineligible"*, *"strict refuses unqueued work while any plan row is eligible"*,
-*"strict is a no-op on an empty queue"*; `queue-surfaces.test.ts` — *"exits 10
-with the out_of_order triple"* and the MCP twin.)
+item does. "Earlier" is measured against the PLAN BAND only: the unqueued band
+is ordered, but it is not a human's statement that this comes before that, which
+is why an empty queue refuses nothing. (Pinned by
+`store-queue-resolver.test.ts` — *"strict refuses a later checkout with
+out_of_order, naming the earlier eligible rows"*, *"strict allows the head
+row"*, *"strict allows a later row once every earlier row is ineligible"*,
+*"strict refuses unqueued work while any plan row is eligible"*, *"strict is a
+no-op on an empty queue"*; `queue-surfaces.test.ts` — *"exits 10 with the
+out_of_order triple"*, *"refuses the same way on MCP and HTTP"*.)
 
 **Where the guard sits.** In `checkoutIssue`, the order check runs after the
 crash-recovery re-claim (an agent resuming its own held ticket is mid-flight
@@ -146,18 +196,19 @@ placement is what makes strict serializable: two agents racing for the head
 row are the ordinary `conflict` case, and the loser's next read sees the row as
 `claimed` and gets the second row — so two agents never both pass the same
 next-item check. `--steal-if-stale` does not route around it: a stale holder
-and a plan are unrelated facts. (To be pinned by `queue-concurrency.test.ts` —
-*"two processes cannot both pass strict next-item checkout"*, *"a reorder
-committed during a checkout has a deterministic, serializable outcome"*;
-`store-queue.test.ts` — *"still lets the existing holder re-claim"*, *"is not
-bypassed by --steal-if-stale"*.)
+and a plan are unrelated facts. (Pinned by `queue-concurrency.test.ts` — *"two
+processes cannot both pass strict next-item checkout"*, *"a second process is
+refused out_of_order rather than jumping the head"*, *"a reorder committed
+during a checkout has a deterministic, serializable outcome"*;
+`store-queue-resolver.test.ts` — *"still lets the existing holder re-claim"*,
+*"is not bypassed by --steal-if-stale"*.)
 
 **Hard constraints are never bypassed by rank, in either mode.** A blocker, a
 pending or `changes_requested` gate, a live claim and a resolved status all
 refuse or skip exactly as they do today; the queue can only order what is
 already takeable. Approve, request-changes, `blockers_resolved` and a release
 change eligibility on the very next read — no queue write happens or is needed.
-(To be pinned by `store-queue.test.ts` — *"rank cannot lift a blocked row"*,
+(Pinned by `store-queue-resolver.test.ts` — *"rank cannot lift a blocked row"*,
 *"rank cannot lift a gated row"*, *"approve re-derives effective order on the
 next read"*.)
 
@@ -169,7 +220,7 @@ is the distinction. `staple checkout <ref> --override -m "<reason>"` (MCP
 UI: a confirm dialog with a reason field) skips **only** the `out_of_order`
 check. The reason is mandatory, as it is for `request-changes`. Blockers, gates
 and conflicts still refuse — an override is "take this out of turn", never
-"take this regardless". (To be pinned by `store-queue.test.ts` — *"override
+"take this regardless". (Pinned by `store-queue-resolver.test.ts` — *"override
 takes a later row and records why"*, *"override requires a reason"*, *"override
 does not bypass a gate, a blocker or a live claim"*.)
 
@@ -181,9 +232,11 @@ rows keep their positions and the next agent still gets them first. In
 else differs — the audit trail is the point, not the refusal. Queue mutations
 themselves need no override: they are actor-attributed events, so an agent that
 reorders is visible rather than forbidden, and the agent guide (STA-170) tells
-it not to. (To be pinned by *"emits queue_overridden with actor, reason and the
-displaced rows"*, *"an override does not reorder the plan"*;
-`queue-surfaces.test.ts` — *"--override without -m is refused"*.)
+it not to. (Pinned by `store-queue-resolver.test.ts` — *"emits queue_overridden
+with actor, reason and the displaced rows"*, *"writes the event under advisory
+too, where nothing was refused"*, *"an override does not reorder the plan"*;
+`queue-surfaces.test.ts` — *"--override without -m is refused"*, *"an override
+with a reason succeeds on every surface and is recorded"*.)
 
 ## Lifecycle of an entry
 
@@ -194,16 +247,17 @@ the default `queue` listing (`--all` shows it). Nothing removes it
 automatically, because the plan is also the record of what was planned, and
 because of the next rule. `staple queue prune` removes every resolved entry in
 one transaction and emits one `queue_dequeued` per row with `reason: "pruned"`.
-(Pinned by `store-queue.test.ts` — *"a resolved entry is kept and
-hidden"*, *"prune removes only resolved entries and emits per-row events"*;
-being SKIPPED is the resolver's half and arrives with R2c.)
+(Pinned by `store-queue.test.ts` — *"a resolved entry is kept and hidden"*,
+*"prune removes only resolved entries and emits per-row events"*, and being
+SKIPPED by `store-queue-resolver.test.ts` — *"classifies by the ladder, first
+match wins"*.)
 
 **Reopen restores position.** An issue that comes back out of `done` while its
 entry still exists resumes at its rank on the next read — nothing to re-queue.
 If the entry was pruned, the reopened issue is unqueued and sits in the
-unqueued band. (Pinned by *"a reopened issue resumes its plan position"*; the
-unqueued band is the resolver's, so *"a reopened issue whose entry was pruned
-lands in the unqueued band"* is still to be pinned, with R2c.)
+unqueued band. (Pinned by `store-queue.test.ts` — *"a reopened issue resumes its
+plan position"* — and `store-queue-resolver.test.ts` — *"a reopened issue whose
+entry was pruned lands in the unqueued band"*.)
 
 **Duplicate membership.** An issue appears at most once in the plan
 (`PRIMARY KEY (issue_id)`). Enqueueing a present issue with no position is
@@ -244,9 +298,22 @@ is one call, one transaction, one revision bump. (Pinned by
 `store-queue.test.ts` — *"a stale baseRevision is refused with
 revision_conflict and leaves the order unchanged"*, *"bulk reorder is atomic
 and bumps the revision once"*; to be pinned by `ui-queue-editor.test.ts` — *"a
-stale reorder keeps the server order and offers a retry"*.) Checkout does not
+stale reorder keeps the server order and offers a retry"*; pinned by
+`queue-surfaces.test.ts` — *"a stale base is the same revision_conflict triple
+on every surface"*.) Checkout does not
 bump the revision — it changes eligibility, not the plan — so two reads of one
 revision may still differ in eligibility if a claim landed between them.
+
+**A membership reorder does not bump it either.** Effective order is DERIVED
+from the plan and the tree on every call, and reordering a milestone's members
+writes `milestone_members`, not `queue_entries`: the plan still says exactly
+what it said (this milestone, at this position). The revision that moves is
+the milestone's own `members_revision`, which is the CAS base a member reorder
+is checked against ([milestones.md](milestones.md)). So a queue revision is a
+promise about the PLAN, not about the effective order, and any caller that
+diffs effective order must compare the order itself. (Pinned by
+`store-queue-resolver.test.ts` — *"reordering membership updates effective
+order on the next read"*.)
 
 ## Storage
 
@@ -313,10 +380,16 @@ mutation carries the actor and the resulting revision"*.)
 
 `queue` prints plan order with the expansion indented under each container and
 a `→ n` effective cue per leaf; `--effective` prints effective order with its
-eligibility column. Every listing returns `{revision, entries, effective}` under
-`--json`, identically on MCP and HTTP; `--at N` is a 1-based plan position and
-`rm` of an absent issue is `not_found`. (To be pinned by `contract-queue.test.ts`
-— *"every mutation has the same shape and refusal on every surface"*.)
+eligibility column and a `path` column (the milestone the row is planned
+under, then its ancestor epics). Every listing returns `{revision, entries,
+effective}` under `--json`, identically on MCP and HTTP; `--at N` is a 1-based
+plan position and `rm` of an absent issue is `not_found`. Every mutation on
+every surface goes through ONE method, `QueueStore.mutate(verb, input,
+actor)`, so the verb set and the refusals cannot drift between them. The two
+reads are GET-only: they share a prefix with five POST routes and are still
+not writable. (Pinned by `queue-surfaces.test.ts` — *"enqueue, move, reorder,
+dequeue and prune agree on all three"*, *"next is one shape on CLI, MCP and
+HTTP"*, *"the reads are not writable and the verbs are not readable"*.)
 
 ## Worked example: STA-31 → STA-66 → STA-146
 

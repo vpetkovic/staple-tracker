@@ -18,8 +18,12 @@
  *
  * One shape everywhere. `get`, every mutation, and every surface (CLI `--json`,
  * MCP, HTTP) return the same `MilestoneView`, so the Milestones page (R3c) and
- * the queue (R3d) consume one structure. `planPosition` and `next` are part of
- * that shape and are `null` until the queue lands: they are the queue's to fill.
+ * the queue (R3d) consume one structure. `planPosition` and `next` are the
+ * QUEUE's two fields on it and R3d (STA-174) fills them from
+ * `store.queue()`: the milestone's own row in the plan, and the first eligible
+ * effective row that reports it in its `milestonePath`. The traffic runs both
+ * ways and does not loop — `queueSeam()` is the one thing the resolver reads
+ * here, and it builds no view.
  */
 import type { DatabaseSync } from "node:sqlite";
 import { tx } from "./db.js";
@@ -52,7 +56,7 @@ export interface MilestoneSummary {
   startDate: string | null;
   /** Derived on every read; never stored. */
   state: MilestoneState;
-  /** The milestone's row in the pickup plan; null until the queue (R3d) fills it. */
+  /** The milestone's own row in the pickup plan; null when it is not queued. */
   planPosition: number | null;
 }
 
@@ -81,8 +85,43 @@ export interface MilestoneView {
   /** The `members_revision` CAS base. */
   revision: number;
   members: MilestoneMemberRow[];
-  /** The next eligible row from the queue resolver; null until R3d. */
+  /**
+   * The first `eligible` row of the effective queue that reports this milestone
+   * in its `milestonePath` — the real next work under this plan, in the position
+   * an agent sees it at. Null when nothing under the milestone is takeable.
+   */
   next: { identifier: string; position: number } | null;
+}
+
+/**
+ * The whole milestone side of the pickup queue, in two queries (R3d, STA-174).
+ *
+ * The resolver needs three facts and needs them for the WHOLE workspace at once:
+ * what a queued milestone expands to, the date those rows inherit, and which
+ * milestone any given issue belongs to. It deliberately does NOT read
+ * `MilestoneView` for them — the view is what the resolver FILLS (`planPosition`
+ * and `next`), so building it from the resolver would recur — and it deliberately
+ * does not ask per milestone, because a resolver call would then cost one query
+ * per plan row.
+ */
+export interface MilestoneQueueSeam {
+  /** Milestone issue id → its DIRECT members' issue ids, in rank order. */
+  membersOf: ReadonlyMap<string, readonly string[]>;
+  /** Milestone issue id → its target date: the `dueAt` every row it reaches inherits. */
+  targetDateOf: ReadonlyMap<string, string | null>;
+  /** Issue id → the milestone it is a direct member of; the input to `nearestMilestone`. */
+  milestoneOf: ReadonlyMap<string, string>;
+}
+
+/**
+ * The queue's answer, read ONCE and shared by every view a `list` builds: the
+ * plan positions of the milestones in it, and each milestone's next eligible row.
+ */
+interface QueueFacts {
+  /** Milestone issue id → its 1-based row in the plan; absent when it is not queued. */
+  planPositionOf: ReadonlyMap<string, number>;
+  /** Milestone identifier → the first eligible effective row that names it. */
+  nextOf: ReadonlyMap<string, { identifier: string; position: number }>;
 }
 
 /** A `milestone ls` row: the view without its members, plus how many there are. */
@@ -418,7 +457,55 @@ export class MilestoneStore {
     return this.store.categoryOf(status) ?? "unstarted";
   }
 
-  private view(id: string): MilestoneView {
+  /**
+   * Everything the queue resolver needs from milestones, for the whole
+   * workspace, in two queries — see `MilestoneQueueSeam`. This is the ONLY
+   * method the resolver calls here.
+   */
+  queueSeam(): MilestoneQueueSeam {
+    const rows = this.db
+      .prepare("SELECT milestone_id, issue_id FROM milestone_members ORDER BY milestone_id, rank")
+      .all() as Array<{ milestone_id: string; issue_id: string }>;
+    const membersOf = new Map<string, string[]>();
+    const milestoneOf = new Map<string, string>();
+    for (const row of rows) {
+      const members = membersOf.get(row.milestone_id) ?? [];
+      members.push(row.issue_id);
+      membersOf.set(row.milestone_id, members);
+      milestoneOf.set(row.issue_id, row.milestone_id);
+    }
+    const dates = this.db.prepare("SELECT issue_id, target_date FROM milestone_meta").all() as Array<{
+      issue_id: string;
+      target_date: string | null;
+    }>;
+    return {
+      membersOf,
+      targetDateOf: new Map(dates.map((row) => [row.issue_id, row.target_date])),
+      milestoneOf,
+    };
+  }
+
+  /**
+   * The queue's half of the view (R3d). One `queue().view()` read answers both
+   * numbers for every milestone at once, which is why `list` builds it once and
+   * hands it to each row rather than resolving the queue per milestone.
+   */
+  private queueFacts(): QueueFacts {
+    const view = this.store.queue().view({ all: true });
+    const nextOf = new Map<string, { identifier: string; position: number }>();
+    for (const row of view.effective) {
+      if (row.eligibility !== "eligible") continue;
+      for (const milestone of row.milestonePath) {
+        if (!nextOf.has(milestone)) nextOf.set(milestone, { identifier: row.identifier, position: row.position });
+      }
+    }
+    return {
+      planPositionOf: new Map(view.entries.map((entry) => [entry.issueId, entry.planPosition])),
+      nextOf,
+    };
+  }
+
+  private view(id: string, facts: QueueFacts = this.queueFacts()): MilestoneView {
     const issue = this.store.getIssue(id);
     const meta = this.meta(id);
     const rows = this.memberRows(id);
@@ -468,12 +555,12 @@ export class MilestoneStore {
         targetDate,
         startDate,
         state: milestoneState({ category: this.category(issue.status), targetDate, startDate }, progress, nowIso()),
-        planPosition: null,
+        planPosition: facts.planPositionOf.get(id) ?? null,
       },
       progress,
       revision: meta?.members_revision ?? 0,
       members,
-      next: null,
+      next: facts.nextOf.get(issue.identifier) ?? null,
     };
   }
 
@@ -485,18 +572,20 @@ export class MilestoneStore {
 
   /**
    * Every milestone, open ones unless `all`, sorted by plan position (null last —
-   * every row, until the queue lands), then target date (null last), then
-   * identifier.
+   * an unqueued milestone follows every queued one), then target date (null
+   * last), then identifier.
    */
   list(options: { all?: boolean } = {}): MilestoneListRow[] {
     this.assertKindConfigured();
     const rows = this.db
       .prepare("SELECT id, status FROM issues WHERE kind = ?")
       .all(MILESTONE_KIND) as Array<{ id: string; status: string }>;
+    // One resolver read for the whole list, not one per milestone.
+    const facts = this.queueFacts();
     const views = rows
       .filter((row) => options.all === true || !this.store.isResolvedStatus(row.status))
       .map((row) => {
-        const { members, ...rest } = this.view(row.id);
+        const { members, ...rest } = this.view(row.id, facts);
         return { ...rest, memberCount: members.length };
       });
     const nullsLast = (a: number | string | null, b: number | string | null): number => {

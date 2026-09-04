@@ -14,7 +14,7 @@
  * is a reading of the view, not a second derivation that could disagree with it.
  *
  * `next` is the queue resolver's answer and is null until R3d fills it; the view renders
- * the null as "not queued yet" rather than guessing.
+ * the null as "no eligible work" rather than guessing.
  */
 import { flatRow, type TaskRow } from "@/components/task-list";
 import type {
@@ -103,7 +103,7 @@ export function progressLabel(progress: MilestoneView["progress"]): string {
 }
 
 /** What the list and the detail say about the queue's answer. */
-export const NOT_QUEUED_LABEL = "not queued yet";
+export const NOT_QUEUED_LABEL = "no eligible work";
 
 export function nextWorkLabel(next: MilestoneNext | null): string {
   return next ? `next: ${next.identifier} (#${next.position})` : NOT_QUEUED_LABEL;

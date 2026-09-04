@@ -149,6 +149,16 @@ const COMMANDS: ReadonlyArray<{
   // workspace values (queue.policy first) with their provenance. Only the
   // common flags — a setting is selected by positional key, never by flag.
   { name: "settings", strings: ["db", "ws"], booleans: ["json"], shorts: [] },
+  // R2c (STA-168) added `queue`, one dispatcher token with seven subcommands
+  // (ls, next, add, rm, mv, reorder, prune) sharing one parseArgs table, the way
+  // `milestone` does. `-m` is the entry note on `add`; `--effective` switches
+  // the listing from PLAN order to the order agents actually receive.
+  {
+    name: "queue",
+    strings: ["db", "ws", "actor", "before", "after", "at", "base", "note"],
+    booleans: ["json", "all", "effective"],
+    shorts: ["m"],
+  },
 ];
 
 /** Every command token in one place, so a removal is a one-line diff. */
@@ -161,19 +171,21 @@ describe("command inventory", () => {
       "status", "release", "block", "blocked-by", "wait", "link", "comment",
       "tree", "board", "inbox", "doc", "events", "hub", "ui", "open", "config",
       "migrate", "install", "doctor", "add", "discover", "milestone", "settings",
+      "queue",
     ]);
-    // 31 tokens, 28 distinct behaviours: checkout/start, done/cancel and ui/open
+    // 32 tokens, 29 distinct behaviours: checkout/start, done/cancel and ui/open
     // each share a case. Was 22 before A3 (STA-33) added `config`, 23 before A5
     // (STA-35) added `migrate`, 24 before A8 (STA-38) added `install`, 25 before
     // A6 (STA-36) added `open`, 26 before A7 (STA-37) added `doctor`, 27 before
     // A9 (STA-39) added `add` and `discover`, 29 before R3b (STA-172) added
-    // `milestone` and 30 before R6d (STA-179) added `settings`. The rest of the
+    // `milestone`, 30 before R6d (STA-179) added `settings` and 31 before R2c
+    // (STA-168) added `queue`. The rest of the
     // epic still owes
     // this list: connect, disconnect (STA-25 / B1-B4), and mcp — which today is
     // handled by the PACKAGED entrypoint (src/package/staple.ts) rather than by
     // this dispatcher. Whoever adds an `mcp` case here must delete that branch
     // in the same change rather than leaving two.
-    expect(COMMAND_NAMES).toHaveLength(31);
+    expect(COMMAND_NAMES).toHaveLength(32);
   });
 
   it.each(COMMANDS.map((c) => c.name))(
@@ -397,6 +409,10 @@ describe("help surface", () => {
       "Flow",
       "Approval gates",
       "Milestones",
+      // R2c (STA-168) put the queue between the plans it orders and the log that
+      // records them: a reader who has just learned what a milestone is meets
+      // the thing that decides what comes out of one next.
+      "The pickup queue",
       "Documents & events",
       "UI",
       "Workspace vocabulary",

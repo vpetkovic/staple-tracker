@@ -863,7 +863,16 @@ export type StapleErrorCode =
    * moves when a human moves it, not when another agent finishes. Non-retryable
    * either way: looping on it burns turns while a person is asleep.
    */
-  | "gated";
+  | "gated"
+  /**
+   * Refused because the pickup plan says something else comes first (STA-168,
+   * `queue.policy = strict`). The third instruction in the family: `conflict`
+   * means somebody beat you to it, `gated` means a person must act, and
+   * `out_of_order` means the work is takeable but not YOURS TO TAKE YET —
+   * `detail.expected` names what to take instead. Retrying never clears it;
+   * taking the expected item does, which is why it is not retryable.
+   */
+  | "out_of_order";
 
 export class StapleError extends Error {
   readonly code: StapleErrorCode;
