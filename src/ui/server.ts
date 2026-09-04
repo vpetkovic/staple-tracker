@@ -20,6 +20,7 @@ import { StapleError, errorEnvelope, type IssuePriority, type IssueStatus } from
 // both served verbatim on /api/settings so the browser never hand-keeps a copy.
 import { REQUIRED_STATUS_CATEGORIES, STATUS_CATEGORIES } from "../core/types.js";
 import type { SettingOp, UpdateIssueInput, VocabularyOp, WorkspaceStore } from "../core/store.js";
+import type { QueueVerb } from "../core/queue-store.js";
 // R6a (STA-176): the settings registry and the global values it defines, served
 // beside the workspace ones so the page can say which scope each setting has.
 import { settingDefinitionsFor, settingRegistryView, settingValueView } from "../core/settings-registry.js";
@@ -106,6 +107,20 @@ const UNBUILT_PAGE = `<!doctype html>
   <p>Then reload this page. The API is already running and already authenticated &mdash;
      only the page itself is missing.</p>
 </main></body></html>`;
+
+/**
+ * The queue's write routes (STA-168), one per mutating verb, spelled the same as
+ * the CLI subcommands and the MCP tools. A set rather than a prefix test because
+ * `/api/queue` and `/api/queue/next` share that prefix and are reads.
+ */
+const QUEUE_VERBS: Record<string, QueueVerb> = {
+  "/api/queue/enqueue": "add",
+  "/api/queue/remove": "rm",
+  "/api/queue/move": "mv",
+  "/api/queue/reorder": "reorder",
+  "/api/queue/prune": "prune",
+};
+const QUEUE_WRITE_PATHS = new Set(Object.keys(QUEUE_VERBS));
 
 /**
  * How many events GET /api/events?issue= returns — the newest N, oldest first.
@@ -530,7 +545,14 @@ export function startUiServer(options: UiOptions): UiHandle {
           url.pathname === "/api/action" ||
           url.pathname === "/api/glyph/sanitize" ||
           url.pathname.startsWith("/api/gate/") ||
-          url.pathname.startsWith("/api/milestone/")
+          url.pathname.startsWith("/api/milestone/") ||
+          /**
+           * The queue's mutating verbs (STA-168). `/api/queue` and
+           * `/api/queue/next` are READS and are deliberately NOT in this list, so
+           * naming the family by prefix the way the gate routes do would have
+           * made two reads cross-origin-writable. The verbs are therefore named.
+           */
+          QUEUE_WRITE_PATHS.has(url.pathname)
             ? ["POST"]
             : url.pathname === "/api/settings"
               ? ["GET", "POST"]
@@ -1110,6 +1132,13 @@ export function startUiServer(options: UiOptions): UiHandle {
           // Additive: absent stealIfIdleSeconds is exactly the old behaviour.
           result = handle.store.checkoutIssue(ref, actor, undefined, {
             stealIfIdleSeconds: optionalSeconds(body.stealIfIdleSeconds, "stealIfIdleSeconds"),
+            /**
+             * The human override (STA-168) — the UI's confirm-with-a-reason
+             * dialog. Absent is exactly the old behaviour; present and blank is
+             * refused by the store, so the "a reason is mandatory" rule has one
+             * implementation for all three surfaces.
+             */
+            overrideReason: body.overrideReason === undefined ? undefined : String(body.overrideReason),
           });
         } else if (type === "release") {
           result = handle.store.releaseIssue(ref, actor, {
@@ -1443,6 +1472,61 @@ export function startUiServer(options: UiOptions): UiHandle {
             return;
         }
         json(res, 200, payload);
+        return;
+      }
+
+      /**
+       * The pickup queue — R2c (STA-168), docs/queue.md "Operations, by surface".
+       * Two reads and a POST family, the milestone routes' shape: every answer is
+       * the ONE `{revision, entries, effective}` view the CLI prints under
+       * `--json` and the MCP tools return, so the queue editor (R2d) redraws from
+       * a write result exactly as it does from a read. Every mutation goes
+       * through `QueueStore.mutate`, the same method the other two surfaces call.
+       */
+      if (url.pathname === "/api/queue") {
+        const handle = handleFor(url.searchParams.get("ws") ?? undefined);
+        json(
+          res,
+          200,
+          handle.store.queue().view({
+            all: url.searchParams.get("all") === "1",
+            actor: url.searchParams.get("actor") ?? undefined,
+          }),
+        );
+        return;
+      }
+
+      if (url.pathname === "/api/queue/next") {
+        const handle = handleFor(url.searchParams.get("ws") ?? undefined);
+        const { revision, next, skipped } = handle.store
+          .queue()
+          .effectiveQueue({ actor: url.searchParams.get("actor") ?? undefined });
+        json(res, 200, { revision, next, skipped });
+        return;
+      }
+
+      if (QUEUE_WRITE_PATHS.has(url.pathname)) {
+        const body = await readBody(req);
+        const handle = handleFor((body.ws as string) ?? undefined);
+        const verb = QUEUE_VERBS[url.pathname]!;
+        json(
+          res,
+          200,
+          handle.store.queue().mutate(
+            verb,
+            {
+              ref: body.ref as string | undefined,
+              order: stringList(body.order) ?? undefined,
+              before: body.before as string | undefined,
+              after: body.after as string | undefined,
+              at: body.at as number | undefined,
+              baseRevision: body.baseRevision as number | undefined,
+              note: (body.note as string | undefined) ?? null,
+              all: body.all === true,
+            },
+            (body.actor as string) || "ui",
+          ),
+        );
         return;
       }
 

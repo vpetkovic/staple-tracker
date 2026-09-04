@@ -133,6 +133,10 @@ describe("exit code contract", () => {
       revision_conflict: 7,
       timeout: 8,
       gated: 9,
+      // R2c (STA-168). Its own number for the same reason `gated` has one: a
+      // shell loop must be able to tell "take the named issue instead" from
+      // "pick anything else" without parsing stderr.
+      out_of_order: 10,
     });
   });
 
@@ -147,6 +151,9 @@ describe("exit code contract", () => {
     expect(help.stdout).toContain("5 duplicate · 6 cycle · 7 revision_conflict · 8 timeout (wait)");
     expect(help.stdout).toContain(
       "9 gated (a review gate above this issue is unresolved — a human, not a retry)",
+    );
+    expect(help.stdout).toContain(
+      "10 out_of_order (the pickup plan says something else comes first — take detail.expected[0])",
     );
   });
 

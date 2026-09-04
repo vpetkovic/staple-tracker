@@ -338,7 +338,18 @@ describe("KNOWN: logical errors this surface cannot project", () => {
     // canonical document and never the raw one. `test/ui-glyph-sanitize.test.ts`
     // pins it.
     const source = readFileSync(join(REPO_ROOT, "src/ui/server.ts"), "utf8");
-    const routes = [...new Set([...source.matchAll(/(?:url\.pathname === |case )"(\/api\/[a-z/-]+)"/g)].map((m) => m[1]!))];
+    // R2c (STA-168) added a third way to spell a route: `/api/queue/*`'s verbs
+    // live in a `Record<path, QueueVerb>` so the path -> verb mapping is stated
+    // once rather than in a `switch` the method gate would then have to repeat.
+    // The pattern learns that spelling rather than the queue restating its
+    // routes here — derived, still, which is the whole point of this golden.
+    const routes = [
+      ...new Set(
+        [...source.matchAll(/(?:url\.pathname === |case )"(\/api\/[a-z/-]+)"|"(\/api\/[a-z/-]+)": "/g)].map(
+          (m) => (m[1] ?? m[2])!,
+        ),
+      ),
+    ];
     expect(routes.sort()).toEqual([
       "/api/action",
       "/api/agent-context",
@@ -362,6 +373,16 @@ describe("KNOWN: logical errors this surface cannot project", () => {
       "/api/milestone/update",
       "/api/milestones",
       "/api/poll",
+      // R2c (STA-168): two reads and one POST per mutating verb. The reads are
+      // deliberately NOT under a writable prefix — `test/queue-surfaces.test.ts`
+      // pins that `/api/queue` and `/api/queue/next` refuse a POST.
+      "/api/queue",
+      "/api/queue/enqueue",
+      "/api/queue/move",
+      "/api/queue/next",
+      "/api/queue/prune",
+      "/api/queue/remove",
+      "/api/queue/reorder",
       "/api/revisions",
       "/api/settings",
     ]);

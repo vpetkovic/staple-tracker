@@ -1,19 +1,22 @@
 /**
- * The pickup queue in the store — the storage half of `docs/queue.md` (STA-167, R2b).
+ * The pickup queue in the store — `docs/queue.md` (STA-167 R2b, STA-168 R2c).
  *
- * The queue is an explicit, human-ordered PLAN: the rows a person put in it, in
- * the order they put them. Nothing here is derived from priority, `created_at`
- * or the configured status order, and nothing here reads the issue tree — this
- * service owns exactly the one table migration 008 added (`queue_entries`) and
- * the plan's `meta.queue_revision`, and it answers exactly two questions: what
- * is in the plan, and in what order.
+ * TWO HALVES, in this order and deliberately not mixed.
  *
- * What is deliberately NOT here: the resolver (`effectiveQueue`), eligibility,
- * container expansion, the unqueued band, `strict` enforcement and the human
- * override. Those are R2c's (STA-168) and read this table; R3d (STA-174) reads
- * it for queued milestones. Keeping the ordering data and the ordering POLICY
- * apart is why a plan can be reordered without re-deriving anything, and why a
- * checkout can change eligibility without touching the plan.
+ * The PLAN (R2b, everything up to `prune`) is an explicit, human-ordered list:
+ * the rows a person put in it, in the order they put them. Nothing in it is
+ * derived from priority, `created_at` or the configured status order, and
+ * nothing in it reads the issue tree — it owns exactly the one table migration
+ * 008 added (`queue_entries`) and the plan's `meta.queue_revision`, and it
+ * answers exactly two questions: what is in the plan, and in what order.
+ *
+ * The RESOLVER (R2c, from `effectiveQueue` down) turns that plan into what an
+ * AGENT sees: containers expanded to leaf work, the eligibility ladder, the
+ * unqueued band. It READS the plan and never writes it, which is why a plan can
+ * be reordered without re-deriving anything and why a checkout can change
+ * eligibility without touching the plan. `strict` enforcement and the human
+ * override live where the claim happens — `store.checkoutIssue` — and call in
+ * here for the order.
  *
  * The rank encoding is the one `milestones.ts` already implements — sparse
  * integers with a step of 1024, a midpoint insert, and a whole-table renumber in
@@ -28,9 +31,9 @@
 import type { DatabaseSync } from "node:sqlite";
 import { tx } from "./db.js";
 import { parseIdentifier } from "./ids.js";
-import { rankBetween, renumberedRanks } from "./milestones.js";
+import { MILESTONE_KIND, rankBetween, renumberedRanks } from "./milestones.js";
 import type { WorkspaceStore } from "./store.js";
-import { type Issue, StapleError, nowIso } from "./types.js";
+import { type Issue, MAX_TREE_DEPTH, StapleError, nowIso } from "./types.js";
 
 /**
  * One row of the plan, as every surface prints it.
@@ -529,4 +532,383 @@ export class QueueStore {
       return this.plan();
     });
   }
+
+  // ---------- the resolver (docs/queue.md "The resolver") ----------
+
+  /** Every issue in the file, keyed by id: the tree the expansion walks. */
+  private nodes(): Map<string, IssueNode> {
+    const rows = this.db
+      .prepare("SELECT id, identifier, title, kind, status, parent_id, checkout_agent FROM issues")
+      .all() as unknown as IssueNode[];
+    return new Map(rows.map((row) => [row.id, row]));
+  }
+
+  /**
+   * `store.queue().effectiveQueue()` — the ONE deterministic next-item
+   * algorithm, and the only thing in the codebase that computes effective order.
+   *
+   * Inputs are exactly the ones docs/queue.md names: the `queue_entries` table,
+   * the issue tree, status categories, local `blocks` edges and (injected) hub
+   * cross links, gates, live claims, milestone membership order and the calling
+   * actor. Same inputs, same output, on every surface and after a restart —
+   * there is no clock, no random tiebreak and no per-surface fallback in here.
+   */
+  effectiveQueue(options: EffectiveQueueOptions | string | null = {}): EffectiveQueue {
+    const opts: EffectiveQueueOptions =
+      typeof options === "string" || options === null ? { actor: options } : options;
+    const actor = opts.actor ?? null;
+    const nodes = this.nodes();
+    const byIdentifier = new Map([...nodes.values()].map((node) => [node.identifier, node]));
+
+    /**
+     * PRESENTATION SORT, borrowed whole rather than restated: `listIssues` is
+     * what the inbox and the list already order by, so "siblings inside a
+     * container expand in presentation sort" and "the unqueued band is in
+     * presentation sort" are the SAME sort by construction, not by agreement.
+     */
+    const presentation = this.store.listIssues({});
+    const presentationIndex = new Map(presentation.map((issue, index) => [issue.id, index]));
+    const openChildren = new Map<string, IssueNode[]>();
+    for (const node of nodes.values()) {
+      if (node.parent_id === null || this.store.isResolvedStatus(node.status)) continue;
+      const siblings = openChildren.get(node.parent_id) ?? [];
+      siblings.push(node);
+      openChildren.set(node.parent_id, siblings);
+    }
+    for (const siblings of openChildren.values()) {
+      siblings.sort(
+        (a, b) =>
+          (presentationIndex.get(a.id) ?? Number.MAX_SAFE_INTEGER) -
+          (presentationIndex.get(b.id) ?? Number.MAX_SAFE_INTEGER),
+      );
+    }
+
+    interface Raw {
+      node: IssueNode;
+      planPosition: number | null;
+      via: string | null;
+      dueAt: string | null;
+      unqueued: boolean;
+    }
+    const emitted = new Set<string>();
+    const raw: Raw[] = [];
+
+    /**
+     * STEP 1 — EXPAND. A leaf is one effective row. A container (an issue with
+     * at least one OPEN child — the same "nothing open underneath" test gates
+     * use, so a parent a human resolved after its children finished is a leaf)
+     * is never emitted as itself; it expands in place, depth-first, to its open
+     * leaf descendants. An issue reached twice is emitted once, at its FIRST
+     * occurrence, which is what `emitted` enforces.
+     */
+    const expand = (
+      node: IssueNode,
+      planPosition: number | null,
+      via: string | null,
+      dueAt: string | null,
+      depth: number,
+    ): void => {
+      if (emitted.has(node.id) || depth > MAX_TREE_DEPTH) return;
+      /**
+       * A milestone is a container over its MEMBERSHIP rather than over its
+       * children — nothing is ever re-parented into one — so it expands in
+       * membership order and each member then expands by the tree rule (R3d,
+       * STA-174 owns the milestone side of this). Its target date rides along as
+       * `dueAt`: an explanation of urgency, never an input to order.
+       */
+      if (node.kind === MILESTONE_KIND) {
+        const view = this.store.milestones().get(node.identifier);
+        for (const member of view.members) {
+          const memberNode = byIdentifier.get(member.identifier);
+          if (memberNode) {
+            expand(memberNode, planPosition, via ?? node.identifier, view.milestone.targetDate, depth + 1);
+          }
+        }
+        return;
+      }
+      const children = openChildren.get(node.id) ?? [];
+      if (children.length > 0) {
+        for (const child of children) expand(child, planPosition, via ?? node.identifier, dueAt, depth + 1);
+        return;
+      }
+      emitted.add(node.id);
+      raw.push({ node, planPosition, via, dueAt, unqueued: false });
+    };
+
+    const planEntries = this.entries({ all: true });
+    for (const entry of planEntries) {
+      const node = nodes.get(entry.issueId);
+      if (node) expand(node, entry.planPosition, null, null, 0);
+    }
+
+    /**
+     * STEP 2 — THE UNQUEUED BAND. Every open leaf not reached by step 1 follows,
+     * in presentation sort. The queue is a PREFIX, not a filter: unqueued work is
+     * still work, it is just later. Containers stay out of it for the same reason
+     * they stay out of step 1 — a row here is a thing an agent may be told to
+     * take, and an epic with open children is not one.
+     */
+    for (const issue of presentation) {
+      if (emitted.has(issue.id)) continue;
+      if ((openChildren.get(issue.id) ?? []).length > 0) continue;
+      // A milestone is a container over its MEMBERSHIP rather than over its
+      // children, so "has no open child" does not make it a leaf. Nobody checks
+      // out a milestone; its members are what an agent takes.
+      if (issue.kind === MILESTONE_KIND) continue;
+      const node = nodes.get(issue.id);
+      if (!node) continue;
+      emitted.add(node.id);
+      raw.push({ node, planPosition: null, via: null, dueAt: null, unqueued: true });
+    }
+
+    /**
+     * STEP 3 — CLASSIFY. Hard constraints only, first match wins, and rank is
+     * NOT on the ladder: the queue can only order what is already takeable. Rows
+     * are never dropped for being ineligible — the plan is shown whole, so a
+     * human can see what their order is waiting on.
+     */
+    const ids = raw.map((row) => row.node.id);
+    const blockers = this.store.unresolvedBlockersFor(ids);
+    const gates = this.store.queuedByFor(ids);
+    const claims = this.store.claimActivityFor(ids);
+    const rows: EffectiveQueueRow[] = raw.map((row, index) => {
+      const node = row.node;
+      const category = this.store.categoryOf(node.status);
+      const local = blockers.get(node.id) ?? [];
+      const cross = (opts.crossBlockers?.get(node.identifier) ?? []).filter(
+        (blocker) => !blocker.resolved || blocker.unresolvable,
+      );
+      const gate = gates.get(node.id) ?? null;
+      const claim = claims.get(node.id) ?? null;
+      let eligibility: QueueEligibility = "eligible";
+      let reason: string | null = null;
+      let detail: Record<string, unknown> | null = null;
+      if (this.store.isResolvedStatus(node.status)) {
+        eligibility = "resolved";
+        reason = `${node.identifier} is ${node.status}.`;
+        detail = { status: node.status };
+      } else if (gate !== null || category === "gated") {
+        // The gate is named BEFORE the blocker, as the inbox does: a blocker
+        // cannot even be worked until a human opens the gate above it.
+        eligibility = "gated";
+        reason = gate
+          ? `${node.identifier} is queued behind ${gate.identifier}, awaiting approval by ${gate.owner}.`
+          : `${node.identifier} is awaiting approval.`;
+        detail = gate ? { queuedBy: { identifier: gate.identifier, owner: gate.owner } } : { status: node.status };
+      } else if (local.length > 0 || cross.length > 0 || category === "blocked") {
+        eligibility = "blocked";
+        const named = [...local, ...cross.map((blocker) => blocker.identifier)];
+        reason =
+          named.length > 0
+            ? `${node.identifier} is blocked by ${named.join(", ")}.`
+            : `${node.identifier} is blocked.`;
+        detail = {
+          blockers: local,
+          crossBlockers: cross.map((blocker) => ({
+            identifier: blocker.identifier,
+            unresolvable: blocker.unresolvable,
+          })),
+        };
+      } else if (category === "active" && node.checkout_agent !== null && node.checkout_agent !== actor) {
+        eligibility = "claimed";
+        reason = `${node.identifier} is held by ${node.checkout_agent}.`;
+        detail = { heldBy: node.checkout_agent, idleSeconds: claim?.idleSeconds ?? null };
+      }
+      return {
+        issueId: node.id,
+        identifier: node.identifier,
+        title: node.title,
+        kind: node.kind,
+        status: node.status,
+        position: index + 1,
+        planPosition: row.planPosition,
+        via: row.via,
+        unqueued: row.unqueued,
+        eligibility,
+        reason,
+        detail,
+        dueAt: row.dueAt,
+        parent: row.node.parent_id === null ? null : (nodes.get(row.node.parent_id)?.identifier ?? null),
+      };
+    });
+
+    const nextIndex = rows.findIndex((row) => row.eligibility === "eligible");
+    return {
+      revision: this.revision(),
+      rows,
+      next: nextIndex < 0 ? null : rows[nextIndex]!,
+      skipped: nextIndex < 0 ? rows : rows.slice(0, nextIndex),
+    };
+  }
+
+  /**
+   * THE listing every surface answers — `{revision, entries, effective}` — so a
+   * script reading the CLI's `--json`, a tool call and an HTTP GET parse the
+   * same object. `all` shows resolved plan rows; `actor` is whose eligibility
+   * the effective half is computed for.
+   */
+  view(options: { all?: boolean } & EffectiveQueueOptions = {}): QueueView {
+    const effective = this.effectiveQueue(options);
+    return {
+      revision: effective.revision,
+      entries: this.entries({ all: options.all }),
+      effective: effective.rows,
+    };
+  }
+
+  /**
+   * ONE entry point for every mutation, on every surface. CLI, MCP and HTTP each
+   * parse their own arguments into `QueueMutationInput` and hand them here, so
+   * the verb set, the refusals and the answer shape cannot drift between them —
+   * a cross-surface contract test is then checking one code path from three
+   * directions rather than three implementations against each other.
+   */
+  mutate(verb: QueueVerb, input: QueueMutationInput = {}, actor: string | null = null): QueueView {
+    const position: QueuePosition = { before: input.before, after: input.after, at: input.at };
+    const ref = (): string => {
+      if (!input.ref?.trim()) {
+        throw new StapleError("validation", `staple queue ${verb} needs an issue reference.`);
+      }
+      return input.ref;
+    };
+    const baseRevision = input.baseRevision;
+    let replayed = false;
+    switch (verb) {
+      case "add":
+        replayed = this.enqueue(ref(), { ...position, baseRevision, note: input.note }, actor).replayed;
+        break;
+      case "rm":
+        this.dequeue(ref(), { baseRevision }, actor);
+        break;
+      case "mv":
+        this.move(ref(), { ...position, baseRevision }, actor);
+        break;
+      case "reorder":
+        this.reorder(input.order ?? [], { baseRevision }, actor);
+        break;
+      case "prune":
+        this.prune({ baseRevision }, actor);
+        break;
+      default:
+        throw new StapleError("validation", `Unknown queue verb "${verb as string}". Use: ls, add, rm, mv, reorder, next, prune`);
+    }
+    const view = this.view({ all: input.all, actor });
+    return verb === "add" ? { ...view, replayed } : view;
+  }
+}
+
+/**
+ * ────────────────────────────────────────────────────────────────────────────
+ * THE RESOLVER — R2c (STA-168), docs/queue.md "The resolver".
+ *
+ * Everything above this line is the PLAN: rows a human put in a table, in the
+ * order they put them. Everything below is the one deterministic function that
+ * turns that plan into what an AGENT sees — containers expanded to leaf work,
+ * every row classified by the eligibility ladder, and the unqueued band after
+ * the plan. `inbox`, `queue`, `queue next`, the strict checkout guard, MCP,
+ * HTTP and the editor's preview all read THIS and nothing else, which is what
+ * makes "the same revision and the same order on every surface" structural
+ * rather than aspirational.
+ * ────────────────────────────────────────────────────────────────────────────
+ */
+
+/** The eligibility ladder, in order. The first rule that matches wins. */
+export type QueueEligibility = "resolved" | "gated" | "blocked" | "claimed" | "eligible";
+
+/** One row of the effective order — what an agent receives. */
+export interface EffectiveQueueRow {
+  issueId: string;
+  identifier: string;
+  title: string;
+  kind: string;
+  status: string;
+  /** 1-based position in EFFECTIVE order — the number `next` and `out_of_order` speak. */
+  position: number;
+  /**
+   * The PLAN row this came from: its own entry, or the container's. Null in the
+   * unqueued band. Reported beside `position` wherever the two differ, because
+   * they answer different questions — what a human wrote, and what an agent gets.
+   */
+  planPosition: number | null;
+  /** The queued container this row was expanded out of; null when queued directly or unqueued. */
+  via: string | null;
+  /** True for a row after the last plan row: still work, just later. */
+  unqueued: boolean;
+  eligibility: QueueEligibility;
+  /** A sentence for a human; null when the row is eligible. */
+  reason: string | null;
+  /** The machine-readable half of `reason`; null when the row is eligible. */
+  detail: Record<string, unknown> | null;
+  /**
+   * The target date of the milestone this row was reached through. It explains
+   * urgency and is NEVER an input to order or eligibility — a date does not get
+   * to reorder a plan somebody wrote by hand.
+   */
+  dueAt: string | null;
+  parent: string | null;
+}
+
+/** What `effectiveQueue` answers: the whole order, plus the pickup decision. */
+export interface EffectiveQueue {
+  revision: number;
+  rows: EffectiveQueueRow[];
+  /** The first `eligible` row for the actor, or null when nothing is takeable. */
+  next: EffectiveQueueRow | null;
+  /** The rows before `next`, each carrying why it was passed over. */
+  skipped: EffectiveQueueRow[];
+}
+
+/**
+ * THE one shape every surface answers, for a read and for a mutation alike:
+ * the plan, the effective order, and the revision both were computed at.
+ */
+export interface QueueView {
+  revision: number;
+  entries: QueueEntry[];
+  effective: EffectiveQueueRow[];
+  /** Only on `add`: the issue was already in the plan and nothing was written. */
+  replayed?: boolean;
+}
+
+/** The mutating verbs, spelled the same on every surface. */
+export type QueueVerb = "add" | "rm" | "mv" | "reorder" | "prune";
+
+/** Everything any verb can take. Each surface parses its own arguments into this. */
+export interface QueueMutationInput extends QueuePosition {
+  ref?: string;
+  order?: readonly string[];
+  baseRevision?: number;
+  note?: string | null;
+  /** Passed through to the view: show resolved entries too. */
+  all?: boolean;
+}
+
+/**
+ * A cross-workspace blocker as the hub reports it. The resolver takes these
+ * INJECTED rather than fetching them: `cross_links` live in the hub database,
+ * and `Hub.crossBlockersOf` opens one workspace file per link, which is not a
+ * cost the inbox can pay per row. `unresolvable` (the blocker's file is not on
+ * this machine) reads as blocked, exactly as it does everywhere else.
+ */
+export interface CrossBlockerLite {
+  identifier: string;
+  resolved: boolean;
+  unresolvable: boolean;
+}
+
+export interface EffectiveQueueOptions {
+  /** Whose view this is. A row held by somebody ELSE is `claimed`; a row held by the actor is not. */
+  actor?: string | null;
+  /** Cross-workspace blockers by issue identifier; absent means none are known. */
+  crossBlockers?: ReadonlyMap<string, readonly CrossBlockerLite[]>;
+}
+
+interface IssueNode {
+  id: string;
+  identifier: string;
+  title: string;
+  kind: string;
+  status: string;
+  parent_id: string | null;
+  checkout_agent: string | null;
 }

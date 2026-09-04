@@ -118,7 +118,7 @@ try {
   );
   const readOnly = tools.tools.filter((t: any) => t.annotations?.readOnlyHint === true).map((t: any) => t.name);
   assert(
-    readOnly.length === 12 &&
+    readOnly.length === 14 &&
       [
         "inbox",
         "list_tasks",
@@ -135,8 +135,12 @@ try {
         "get_milestone",
         // R6d (STA-179): so is reading a registered setting.
         "get_setting",
+        // R2c (STA-168): reading the plan, and asking what to take next, write
+        // nothing — next_task resolves the order, it never claims anything.
+        "list_queue",
+        "next_task",
       ].every((n) => readOnly.includes(n)),
-    `exactly the 12 read-only tools flagged readOnlyHint (${readOnly.join(", ")})`,
+    `exactly the 14 read-only tools flagged readOnlyHint (${readOnly.join(", ")})`,
   );
   assert(byName.get("checkout_task").annotations.idempotentHint === true, "checkout_task flagged idempotent");
   assert(
@@ -491,6 +495,49 @@ try {
   );
   await rpc("tools/call", { name: "set_setting", arguments: { key: "queue.policy", value: "advisory", actor: "smoke-agent" } });
 
+  // ── the pickup queue (R2c, STA-168) ───────────────────────────────────────
+  const emptyQueue = JSON.parse(toolText(await rpc("tools/call", { name: "list_queue", arguments: {} })));
+  assert(
+    emptyQueue.revision === 0 && emptyQueue.entries.length === 0 && Array.isArray(emptyQueue.effective),
+    "list_queue answers an empty plan at revision 0 with the unqueued band already resolved",
+  );
+  const enqueued = JSON.parse(
+    toolText(await rpc("tools/call", { name: "enqueue_task", arguments: { ref: "SMO-1", all: true, actor: "smoke-agent" } })),
+  );
+  assert(
+    enqueued.revision === 1 && enqueued.entries[0].identifier === "SMO-1" && enqueued.replayed === false,
+    "enqueue_task puts SMO-1 in the plan and bumps the revision once",
+  );
+  const replayed = JSON.parse(
+    toolText(await rpc("tools/call", { name: "enqueue_task", arguments: { ref: "SMO-1", all: true, actor: "smoke-agent" } })),
+  );
+  assert(
+    replayed.replayed === true && replayed.revision === 1,
+    "enqueueing a present issue with no position is an idempotent replay, not a second entry",
+  );
+  const nextRow = JSON.parse(
+    toolText(await rpc("tools/call", { name: "next_task", arguments: { actor: "smoke-agent" } })),
+  );
+  assert(
+    nextRow.revision === 1 && (nextRow.next === null || typeof nextRow.next.position === "number"),
+    "next_task answers the plan revision and a positioned row (or nothing eligible)",
+  );
+  const staleQueue = await rpc("tools/call", {
+    name: "dequeue_task",
+    arguments: { ref: "SMO-1", base_revision: 0, actor: "smoke-agent" },
+  });
+  assert(
+    staleQueue.isError === true && toolError(staleQueue).code === "revision_conflict" && toolError(staleQueue).retryable === true,
+    "a stale base_revision is the one retryable refusal, and the order stands",
+  );
+  const dequeued = JSON.parse(
+    toolText(await rpc("tools/call", { name: "dequeue_task", arguments: { ref: "SMO-1", all: true, actor: "smoke-agent" } })),
+  );
+  assert(
+    dequeued.entries.length === 0 && dequeued.revision === 2,
+    "dequeue_task empties the plan and bumps the revision",
+  );
+
   // ── issue kinds on the wire (STA-124) ─────────────────────────────────────
   const aBug = JSON.parse(
     toolText(await rpc("tools/call", {
@@ -683,9 +730,11 @@ try {
     .map((t: any) => t.name);
   // STA-140 added list_statuses / list_kinds / update_statuses / update_kinds,
   // STA-143 added gate_task / approve_task / request_changes, STA-172 the eight
-  // milestone tools, and STA-179 get_setting / set_setting. All seventeen act on
-  // ONE workspace, so all seventeen take `ws` like every other workspace tool.
-  assert(wsTargetable.length === 30, `30 workspace tools accept ws targeting (${wsTargetable.length} found)`);
+  // milestone tools, STA-179 get_setting / set_setting and STA-168 the seven
+  // queue tools. All of them act on ONE workspace — a queue belongs to one
+  // workspace file and references only its own issues — so all of them take `ws`
+  // like every other workspace tool.
+  assert(wsTargetable.length === 37, `37 workspace tools accept ws targeting (${wsTargetable.length} found)`);
   assert(
     !coldByName.get("cross_link").inputSchema.properties?.ws &&
       !coldByName.get("hub_overview").inputSchema.properties?.ws,
@@ -779,8 +828,15 @@ try {
     `server starts and lists ${anonTools.tools.length} tools with no STAPLE_AGENT`,
   );
   const anonByName = new Map<string, any>(anonTools.tools.map((t: any) => [t.name, t]));
+  /**
+   * R2c (STA-168): `list_queue` and `next_task` also take an `actor`, and they
+   * are READS. It is not an attribution there but a POINT OF VIEW — whose claims
+   * count as somebody else's — so they are excluded here rather than added to
+   * the write list, and the assertion below keeps saying what it always said.
+   */
+  const QUEUE_POINT_OF_VIEW_READS = ["list_queue", "next_task"];
   const actorTools = anonTools.tools
-    .filter((t: any) => t.inputSchema?.properties?.actor)
+    .filter((t: any) => t.inputSchema?.properties?.actor && !QUEUE_POINT_OF_VIEW_READS.includes(t.name))
     .map((t: any) => t.name)
     .sort();
   assert(
@@ -798,12 +854,19 @@ try {
         "checkout_task",
         "create_milestone",
         "create_task",
+        // STA-168: a queue mutation is an actor-attributed event, which is what
+        // makes an agent that reorders VISIBLE rather than forbidden.
+        "dequeue_task",
+        "enqueue_task",
         "gate_task",
         "move_milestone_member",
+        "move_queue_entry",
+        "prune_queue",
         "put_document",
         "release_task",
         "remove_milestone_member",
         "reorder_milestone_members",
+        "reorder_queue",
         "request_changes",
         "set_blocked_by",
         // STA-179: a setting write is attributed like one too.

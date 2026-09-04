@@ -16,6 +16,7 @@ import { runDoctorCommand } from "./commands/doctor.js";
 import { runAddCommand } from "./commands/add.js";
 import { runDiscoverCommand } from "./commands/discover.js";
 import { runMilestoneCommand } from "./commands/milestone.js";
+import { runQueueCommand } from "./commands/queue.js";
 import { findMigrationRoot, planMigration, runMigration } from "./core/path-migration.js";
 import {
   type ConfigPatch,
@@ -236,6 +237,15 @@ const EXIT_CODES: Record<string, number> = {
    * equally useless.
    */
   gated: 9,
+  /**
+   * Refused by the pickup plan (STA-168, `queue.policy = strict`). Its own
+   * number for the same reason `gated` has one: this is a THIRD instruction, not
+   * a shade of conflict. Retrying is useless, picking any other task is useless,
+   * and the one useful move — take the identifier in `detail.expected` — is
+   * something a shell loop can only act on if it can tell this case apart
+   * without parsing stderr.
+   */
+  out_of_order: 10,
 };
 
 const SLEEP_LOCK = new Int32Array(new SharedArrayBuffer(4));
@@ -784,9 +794,12 @@ Tasks
               --hub = all workspaces
 
 Flow
-  start|checkout <ref> [--agent A] [--steal-if-stale <dur>]
+  start|checkout <ref> [--agent A] [--steal-if-stale <dur>] [--override -m <why>]
               atomic checkout -> in_progress; --steal-if-stale ALSO takes over an
-              issue held by another agent that has been silent at least <dur>
+              issue held by another agent that has been silent at least <dur>;
+              --override takes a row out of turn under queue.policy = strict and
+              records who did it and why (the reason is mandatory). It never
+              bypasses a blocker, a gate or a live claim
   done <ref> [-m comment]               complete (+ cross-workspace fan-out)
   cancel <ref> [-m comment]
   status <ref> <status> [--estimate <dur>|--no-estimate]
@@ -838,6 +851,26 @@ Milestones
               refused (exit 7) and the order stands. Membership never changes an
               issue's parent, blockers, status or claim
 
+The pickup queue
+  queue [--all] [--effective]           the PLAN (what a human ordered), with each
+              queued container's expansion indented under it and a "-> n" cue giving
+              each leaf's EFFECTIVE position; --effective prints effective order with
+              its eligibility column; --all keeps resolved entries visible
+  queue next [--actor A]                the one row an agent should take, and every
+              row it stepped over with why (resolved, gated, blocked, claimed)
+  queue add <ref> [--before R|--after R|--at N] [--base N] [-m note]
+              queue a task, an epic or a milestone; a container is never picked up
+              itself, it expands to its open leaf work
+  queue rm <ref> [--base N]
+  queue mv <ref> (--before R|--after R|--at N) [--base N]
+  queue reorder <r1,r2,...> [--base N]  every entry, once, in the new order, atomically
+  queue prune [--base N]                drop the done and cancelled entries
+              --base N is the queue revision a listing printed; a stale base is
+              refused (exit 7) and the order stands. With queue.policy = strict
+              (see "staple settings"), an agent claiming a later row is refused
+              out_of_order (exit 10) naming what to take; a human may step over the
+              plan with "checkout <ref> --override -m <why>", which is recorded
+
 Documents & events
   doc <ref> <key>                       read (latest)
   doc <ref> <key> --put <file|->        write (--base N for optimistic concurrency)
@@ -888,7 +921,8 @@ Statuses (built-in seed; run "staple statuses ls" for this workspace's actual se
 
 Exit codes: 0 ok · 1 unknown · 2 validation · 3 not_found · 4 conflict
             5 duplicate · 6 cycle · 7 revision_conflict · 8 timeout (wait)
-            9 gated (a review gate above this issue is unresolved — a human, not a retry)`;
+            9 gated (a review gate above this issue is unresolved — a human, not a retry)
+            10 out_of_order (the pickup plan says something else comes first — take detail.expected[0])`;
 
 function main() {
   const [command, ...rest] = process.argv.slice(2);
@@ -1213,6 +1247,8 @@ function main() {
           ...common,
           agent: { type: "string" },
           "steal-if-stale": { type: "string" },
+          override: { type: "boolean" },
+          message: { type: "string", short: "m" },
         },
       });
       const { store } = getStore(values);
@@ -1221,6 +1257,13 @@ function main() {
       const issue = store.checkoutIssue(positionals[0]!, agentName(values.agent), undefined, {
         stealIfIdleSeconds:
           stale === undefined ? undefined : parseDuration(stale, "steal-if-stale"),
+        /**
+         * The human override (docs/queue.md). `--override` alone reaches the
+         * store as an EMPTY reason and is refused there rather than here, so the
+         * "a reason is mandatory" rule has exactly one implementation and MCP,
+         * HTTP and the CLI cannot disagree about it.
+         */
+        overrideReason: values.override === true ? (values.message ?? "") : undefined,
       });
       if (values.json) {
         outJson(issue);
@@ -2030,6 +2073,16 @@ function main() {
 
     case "milestone": {
       runMilestoneCommand(rest);
+      break;
+    }
+
+    /**
+     * `staple queue` — R2c (STA-168). One dispatcher token over the plan and the
+     * resolver; every mutation goes through the same `QueueStore.mutate` MCP and
+     * HTTP call, so the three surfaces cannot drift.
+     */
+    case "queue": {
+      runQueueCommand(rest);
       break;
     }
 

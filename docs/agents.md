@@ -47,12 +47,13 @@ Any MCP client can launch `npx -y staple-cli mcp` the same way, with
 `STAPLE_AGENT` naming the agent. There is no separate MCP binary — `staple mcp`
 is the same entrypoint as the CLI.
 
-Thirty-one stdio tools. The loop they exist for:
+Forty stdio tools. The loop they exist for:
 
-`inbox` → `checkout_task` (a conflict means pick another, never retry) →
-`put_document` the plan → work, `add_comment` progress → `update_task` done →
-`events_since` to see what your completion unblocked. `cross_link` +
-`hub_overview` cover cross-repository dependencies.
+`inbox` (or `next_task`) → `checkout_task` (a conflict means pick another, never
+retry; `out_of_order` means take the one it names) → `put_document` the plan →
+work, `add_comment` progress → `update_task` done → `events_since` to see what
+your completion unblocked. `cross_link` + `hub_overview` cover cross-repository
+dependencies.
 
 ### The milestone tools
 
@@ -146,6 +147,55 @@ The UI server's read routes mirror this exactly, and `/api/agent-context` is
 expression-for-expression identical to `get_task`, so the agent-view pane below
 shows the gate the agent will actually receive.
 
+### The queue tools
+
+Seven tools over the pickup plan ([queue.md](queue.md)) — an explicit,
+human-ordered sequence of what to take next, separate from status, priority and
+display grouping.
+
+**Two reads.** **`list_queue`** `{all?, actor?, ws?}` answers
+`{revision, entries, effective}`: `entries` is PLAN order — what a human queued,
+containers and milestones included — and `effective` is what you actually
+receive, with every container expanded depth-first to its open leaf work, the
+unqueued band after it in presentation sort, and every row classified
+`resolved | gated | blocked | claimed | eligible` with a reason.
+**`next_task`** `{actor?, ws?}` answers `{revision, next, skipped}`: the one row
+you should take and everything it stepped over. Call it before `checkout_task`
+and you will never see `out_of_order`.
+
+**Five verbs**, all attributed and all answering the same view:
+**`enqueue_task`** `{ref, before?|after?|at?, base_revision?, note?}`,
+**`dequeue_task`** `{ref}`, **`move_queue_entry`** `{ref, before?|after?|at?}`,
+**`reorder_queue`** `{order}` (every entry, once, atomically) and
+**`prune_queue`** (drop the resolved entries). A stale `base_revision` is
+refused with `revision_conflict` — the one retryable code — and the server order
+stands. **Reordering the plan is a human's job**: a queue mutation is an
+actor-attributed event, so an agent that reorders is visible rather than
+forbidden, and you should not reorder work you were told to do.
+
+**`out_of_order` is a THIRD instruction.** With `queue.policy = strict`,
+`checkout_task` refuses a row the plan puts later than an eligible one:
+
+```json
+{"code":"out_of_order",
+ "message":"STA-146 is later in the queue than STA-67, which is ready. Take STA-67, or ask a human to reorder or override.",
+ "detail":{"policy":"strict","expected":["STA-67"],"position":14,"expectedPosition":2},
+ "retryable":false}
+```
+
+A `conflict` means somebody got there first, so pick a different task RIGHT NOW.
+A `gated` means a person must act. An `out_of_order` means the work is real,
+unclaimed and takeable — just not by you, not yet. **Take
+`detail.expected[0]`.** Retrying never clears it; nor does waiting; nor does
+`steal_if_idle_seconds`. `checkout_task`'s `override_reason` exists for the
+human who decides to step over the plan and is recorded as a `queue_overridden`
+event — do not send it on your own initiative, and never to make a refusal go
+away.
+
+`inbox`'s READY list is derived from the same resolver, so its order already IS
+the effective queue: every entry carries its `position`, and a row the plan
+reaches carries `planPosition` too.
+
 ### Workspace settings
 
 Two tools read and write the registered workspace settings
@@ -177,7 +227,7 @@ All in-protocol, so a harness never needs out-of-band setup:
   polluting the audit trail with anonymous writes.
 - **Replay is explicit.** `add_comment` takes an `idempotency_key`; replayed
   creates and comments come back with `replayed: true`.
-- **Tools declare annotations** — 11 read-only, `checkout_task` idempotent — and
+- **Tools declare annotations** — 14 read-only, `checkout_task` idempotent — and
   return `structuredContent` (arrays wrap as `{items}`).
 - **List tools paginate**: `{items, nextCursor, hasMore}` with opaque cursors.
 - `get_task` includes cross-workspace blockers and can inline document bodies

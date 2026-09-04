@@ -54,6 +54,7 @@ import {
   settingValueView,
   validateSettingValue,
   WORKSPACE_SETTING_META_PREFIX,
+  type QueuePolicy,
   type SettingValueView,
 } from "./settings-registry.js";
 import { MilestoneStore, assertRekindAllowed } from "./milestone-store.js";
@@ -160,6 +161,20 @@ export type InboxEntry = Issue & {
   unresolvedBlockers: string[];
   queuedBy: QueuedBy | null;
   gate: IssueGate | null;
+  /**
+   * Where this row sits in the EFFECTIVE pickup order (R2c, STA-168) — the
+   * number `queue next` and an `out_of_order` refusal speak. Null for a row the
+   * resolver does not emit, which is exactly the containers: an epic with open
+   * children is in the inbox but is not a thing an agent may be told to take.
+   */
+  position: number | null;
+  /**
+   * Where the human put it in the PLAN — its own entry, or the queued container
+   * it was expanded out of. Null for unqueued work. Reported beside `position`
+   * because the two answer different questions, and a QUEUED or BLOCKED row
+   * carries it as a cue that the plan is waiting on this.
+   */
+  planPosition: number | null;
 };
 
 interface IssueRow {
@@ -3921,6 +3936,37 @@ export class WorkspaceStore {
   // ---------- checkout / release ----------
 
   /**
+   * What the plan says about claiming ONE issue, for ONE actor: the eligible
+   * plan rows that come before it, its own effective position, and theirs.
+   *
+   * "Earlier" is measured against the PLAN BAND only. Rows in the unqueued band
+   * are ordered — they are still printed in presentation sort — but they are not
+   * a human's statement that this comes before that, so they never refuse
+   * anything. That single restriction is what makes `strict` a no-op on an empty
+   * queue and what makes "refuses unqueued work while any plan row is eligible"
+   * true, out of the same expression.
+   */
+  private queueOrderCheck(
+    issueId: string,
+    actor: string,
+  ): { expected: string[]; position: number | null; expectedPosition: number | null } {
+    const { rows } = this.queue().effectiveQueue({ actor });
+    const target = rows.find((row) => row.issueId === issueId) ?? null;
+    const earlier = rows.filter(
+      (row) =>
+        !row.unqueued &&
+        row.eligibility === "eligible" &&
+        row.issueId !== issueId &&
+        (target === null || target.unqueued || row.position < target.position),
+    );
+    return {
+      expected: earlier.map((row) => row.identifier),
+      position: target?.position ?? null,
+      expectedPosition: earlier[0]?.position ?? null,
+    };
+  }
+
+  /**
    * Atomic claim: wins iff status is in expectedStatuses
    * AND no unresolved blockers — otherwise a conflict that callers must treat
    * as "pick a different task", never retry. Idempotent when the same agent
@@ -3942,9 +3988,22 @@ export class WorkspaceStore {
      * explicit list are validated against the workspace's own vocabulary.
      */
     expectedStatuses?: readonly IssueStatus[],
-    opts: { stealIfIdleSeconds?: number } = {},
+    opts: { stealIfIdleSeconds?: number; overrideReason?: string } = {},
   ): Issue {
     if (!agent?.trim()) throw new StapleError("validation", "agent is required for checkout");
+    /**
+     * The human override (docs/queue.md "Human override"). The store cannot tell
+     * a human from an agent and does not try — THE FLAG IS THE DISTINCTION, and
+     * the reason is mandatory exactly as it is for `request-changes`, so an
+     * override can never be triggered by adding one boolean to a script.
+     */
+    const overrideReason = opts.overrideReason === undefined ? undefined : opts.overrideReason.trim();
+    if (overrideReason !== undefined && overrideReason.length === 0) {
+      throw new StapleError(
+        "validation",
+        "An override needs a reason. Pass a non-empty reason (CLI `--override -m \"<why>\"`, MCP `override_reason`, HTTP `overrideReason`).",
+      );
+    }
     const expected = expectedStatuses ?? this.checkoutExpectedStatuses();
     for (const status of expected) this.assertConfiguredStatus(status);
     const activeStatus = this.primaryStatusFor("active");
@@ -3983,6 +4042,65 @@ export class WorkspaceStore {
           },
         );
       }
+      /**
+       * THE ORDER GUARD (STA-168), and its position is the whole design, exactly
+       * as the gate guard's above is:
+       *
+       *  - AFTER the crash-recovery re-claim: an agent resuming its own held
+       *    ticket is mid-flight work, not a pickup, and the plan has nothing to
+       *    say about it.
+       *  - AFTER the `gated` guard: a gate is the more binding fact, and an
+       *    agent told "this is out of order" when the truth is "a human must
+       *    approve it" would chase the wrong person.
+       *  - INSIDE the same immediate transaction as the claiming UPDATE below,
+       *    which is what makes `strict` serializable: two agents racing for the
+       *    head row are the ordinary `conflict` case, and the loser's next read
+       *    sees that row as `claimed` and is handed the second one. Two agents
+       *    therefore never both pass the same next-item check.
+       *
+       * `--steal-if-stale` does not route around it either: a stale holder and a
+       * plan are unrelated facts.
+       */
+      const policy = this.getSetting("queue.policy") as QueuePolicy;
+      const order =
+        policy === "strict" || overrideReason !== undefined
+          ? this.queueOrderCheck(row.id, agent)
+          : null;
+      if (policy === "strict" && overrideReason === undefined && order !== null && order.expected.length > 0) {
+        const first = order.expected[0]!;
+        throw new StapleError(
+          "out_of_order",
+          `${row.identifier} is later in the queue than ${first}, which is ready. Take ${first}, or ask a human to reorder or override.`,
+          {
+            policy,
+            expected: order.expected,
+            position: order.position,
+            expectedPosition: order.expectedPosition,
+          },
+        );
+      }
+      /**
+       * Written on EVERY successful override, in both policies: under `advisory`
+       * nothing was refused, but the audit trail is the point of the flag, not
+       * the refusal. It does not modify the plan — the displaced rows keep their
+       * positions and the next agent still gets them first.
+       */
+      const emitOverride = (): void => {
+        if (overrideReason === undefined) return;
+        this.emitEvent({
+          kind: "queue_overridden",
+          issueId: row.id,
+          actor: agent,
+          payload: {
+            identifier: row.identifier,
+            reason: overrideReason,
+            policy,
+            expected: order?.expected ?? [],
+            position: order?.position ?? null,
+            expectedPosition: order?.expectedPosition ?? null,
+          },
+        });
+      };
       const now = nowIso();
       const placeholders = expected.map(() => "?").join(",");
       const claimed = this.db
@@ -4058,6 +4176,7 @@ export class WorkspaceStore {
                     stealIfIdleSeconds,
                   },
                 });
+                emitOverride();
                 // Transition site 4 of 5. A takeover is a fresh start by a new
                 // agent; if the epic went quiet in the meantime it must light up
                 // again, attributed to whoever took over.
@@ -4093,6 +4212,7 @@ export class WorkspaceStore {
         actor: agent,
         payload: { identifier: row.identifier },
       });
+      emitOverride();
       // Transition site 3 of 5, and the one that matters most in practice: a
       // plain `staple checkout` IS how work starts, and its UPDATE above sets
       // status = 'in_progress' directly. Hooking only `updateIssue` would have
@@ -4549,16 +4669,63 @@ export class WorkspaceStore {
     const blockersByIssue = this.unresolvedBlockersFor(ids);
     const queuedByIssue = this.queuedByFor(ids);
     const gatesByIssue = this.gateFor(ids);
+    /**
+     * READY TAKES ITS ORDER FROM THE RESOLVER AND KEEPS ITS MEMBERSHIP (R2c,
+     * STA-168). The three buckets still partition open work exactly as they did;
+     * what changed is that READY is printed in EFFECTIVE order rather than in
+     * presentation sort, and every row carries its `position` and, when the plan
+     * reaches it, its `planPosition`.
+     *
+     * The sort key is (plan-band rank, presentation index), which is why an
+     * empty queue leaves this list byte-identical to what it was: nothing is in
+     * the plan band, every rank is the same sentinel, and the stable fallback is
+     * the presentation index the query already produced. "The queue is a prefix,
+     * not a filter" is that sentence expressed as a comparator.
+     *
+     * A CONTAINER is not an effective row — the resolver never emits one — but it
+     * IS in this list, so it ranks at the earliest plan-band position among its
+     * descendants: a queued epic and the child that made it urgent stay together
+     * instead of the parent sinking to the bottom.
+     */
+    const effective = this.queue().effectiveQueue({ actor: assignee ?? null });
+    const effectiveByIssue = new Map(effective.rows.map((row) => [row.issueId, row]));
+    const planPositions = new Map(
+      this.queue().entries({ all: true }).map((entry) => [entry.issueId, entry.planPosition]),
+    );
+    const parentOf = new Map(
+      (
+        this.db.prepare("SELECT id, parent_id FROM issues").all() as Array<{
+          id: string;
+          parent_id: string | null;
+        }>
+      ).map((row) => [row.id, row.parent_id]),
+    );
+    const NOT_IN_PLAN = Number.MAX_SAFE_INTEGER;
+    const planRank = new Map<string, number>();
+    for (const row of effective.rows) {
+      if (row.unqueued) continue;
+      let cursor: string | null = row.issueId;
+      for (let hops = 0; cursor !== null && hops < MAX_TREE_DEPTH; hops += 1) {
+        const seen = planRank.get(cursor);
+        // An ancestor already ranked earlier ranks its own ancestors earlier too.
+        if (seen !== undefined && seen <= row.position) break;
+        planRank.set(cursor, row.position);
+        cursor = parentOf.get(cursor) ?? null;
+      }
+    }
     const ready: InboxEntry[] = [];
     const queued: InboxEntry[] = [];
     const blocked: InboxEntry[] = [];
     for (const issue of items) {
       const unresolved = blockersByIssue.get(issue.id) ?? [];
+      const row = effectiveByIssue.get(issue.id) ?? null;
       const entry: InboxEntry = {
         ...issue,
         unresolvedBlockers: unresolved,
         queuedBy: queuedByIssue.get(issue.id) ?? null,
         gate: gatesByIssue.get(issue.id) ?? null,
+        position: row?.position ?? null,
+        planPosition: planPositions.get(issue.id) ?? row?.planPosition ?? null,
       };
       /**
        * "Not ready" is a CATEGORY question since STA-140: `gated` and `blocked`
@@ -4576,7 +4743,17 @@ export class WorkspaceStore {
       else if (category === "blocked" || unresolved.length > 0) blocked.push(entry);
       else ready.push(entry);
     }
-    return { ready, queued, blocked, hasMore };
+    // Stable by construction: equal ranks fall back to the index `issuesQuery`
+    // already put them in, which IS presentation sort.
+    const ordered = ready
+      .map((entry, index) => ({ entry, index }))
+      .sort(
+        (a, b) =>
+          (planRank.get(a.entry.id) ?? NOT_IN_PLAN) - (planRank.get(b.entry.id) ?? NOT_IN_PLAN) ||
+          a.index - b.index,
+      )
+      .map((row) => row.entry);
+    return { ready: ordered, queued, blocked, hasMore };
   }
 
   /**

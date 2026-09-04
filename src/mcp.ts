@@ -576,6 +576,15 @@ const inboxEntryShape = {
   unresolvedBlockers: z.array(z.string()),
   ...claimField,
   ...gateFields,
+  /**
+   * The pickup queue's two numbers (STA-168). `position` is where the shared
+   * resolver put this row in EFFECTIVE order — the number `next_task` and an
+   * `out_of_order` refusal speak — and is null for a container, which is never a
+   * pickup target. `planPosition` is where a human put it in the plan, or the
+   * queued container it came from; null for unqueued work.
+   */
+  position: z.number().nullable(),
+  planPosition: z.number().nullable(),
 };
 
 /** Same drift protection as issueShape, for the comment surface. */
@@ -930,7 +939,7 @@ server.registerTool(
   "checkout_task",
   {
     description:
-      "Atomically claim an issue (forces in_progress). On conflict, pick a DIFFERENT task — never retry the same one. Re-claiming an issue you already hold is idempotent (crash recovery). Refused while blockers are unresolved. Use steal_if_idle_seconds ONLY when a human has told you to take over a task whose holder is dead.",
+      "Atomically claim an issue (forces in_progress). On conflict, pick a DIFFERENT task — never retry the same one. Re-claiming an issue you already hold is idempotent (crash recovery). Refused while blockers are unresolved. Under queue.policy = strict, claiming a row that is LATER in the pickup queue than an eligible one is refused with `out_of_order` and `detail.expected` names what to take instead — retrying never clears that, taking the named issue does. Use steal_if_idle_seconds ONLY when a human has told you to take over a task whose holder is dead.",
     inputSchema: {
       ref: refSchema,
       actor: actorSchema,
@@ -942,6 +951,12 @@ server.registerTool(
         .optional()
         .describe(
           "Explicit takeover: also claim an issue held by ANOTHER agent when that holder's last activity (get_task/inbox `claim.idleSeconds`) is at least this old. Nothing expires claims on its own — this is the only path, and it exists for resuming work after an agent died mid-task. Refused if the holder is fresher than this, naming them and their last activity.",
+        ),
+      override_reason: z
+        .string()
+        .optional()
+        .describe(
+          "HUMAN OVERRIDE — do not send this on your own initiative. Takes a row out of turn under queue.policy = strict, recording who did it and why in a `queue_overridden` event. The reason is mandatory (an empty one is refused), it skips ONLY the out_of_order check, and it never bypasses a blocker, a gate or a live claim. If you hit out_of_order, take `detail.expected[0]` instead and let a human decide to override.",
         ),
       ws: wsSchema,
     },
@@ -967,13 +982,13 @@ server.registerTool(
       openWorldHint: false,
     },
   },
-  ({ ref, actor, agent, expected_statuses, steal_if_idle_seconds, ws }) =>
+  ({ ref, actor, agent, expected_statuses, steal_if_idle_seconds, override_reason, ws }) =>
     run(() =>
       storeFor(ws).checkoutIssue(
         ref,
         requireActor(actor, agent),
         expected_statuses as IssueStatus[] | undefined,
-        { stealIfIdleSeconds: steal_if_idle_seconds },
+        { stealIfIdleSeconds: steal_if_idle_seconds, overrideReason: override_reason },
       ),
     ),
 );
@@ -1850,6 +1865,194 @@ server.registerTool(
     },
   },
   ({ key, value, actor, ws }) => run(() => storeFor(ws).setSetting(key, value, requireActor(actor))),
+);
+
+/**
+ * ────────────────────────────────────────────────────────────────────────────
+ * THE PICKUP QUEUE — R2c (STA-168), docs/queue.md "Operations, by surface".
+ *
+ * Seven tools over ONE service. Every mutation calls `QueueStore.mutate`, the
+ * same method `staple queue` and `/api/queue/*` call, and every one of them
+ * answers the SAME `{revision, entries, effective}` the CLI prints under
+ * `--json` — so an agent, a shell and the page can never disagree about the
+ * plan or about the order it resolves to.
+ * ────────────────────────────────────────────────────────────────────────────
+ */
+const queueEntryShape = {
+  issueId: z.string(),
+  identifier: z.string(),
+  title: z.string(),
+  kind: kindSchema,
+  status: statusEnum,
+  planPosition: z.number().describe("1-based position in the plan, resolved rows included"),
+  rank: z.number(),
+  parent: z.string().nullable(),
+  resolved: z.boolean(),
+  addedBy: z.string(),
+  addedAt: z.string(),
+  note: z.string().nullable(),
+};
+
+const effectiveRowShape = {
+  issueId: z.string(),
+  identifier: z.string(),
+  title: z.string(),
+  kind: kindSchema,
+  status: statusEnum,
+  position: z.number().describe("1-based position in EFFECTIVE order — what checkout enforces under strict"),
+  planPosition: z.number().nullable().describe("The plan row this came from; null in the unqueued band"),
+  via: z.string().nullable().describe("The queued container this row was expanded out of"),
+  unqueued: z.boolean().describe("True for a row after the last plan row: still work, just later"),
+  eligibility: z
+    .enum(["resolved", "gated", "blocked", "claimed", "eligible"])
+    .describe("First rule that matches: resolved, gated, blocked, claimed, else eligible. Only `eligible` is takeable."),
+  reason: z.string().nullable(),
+  detail: z.record(z.string(), z.unknown()).nullable(),
+  dueAt: z.string().nullable().describe("The milestone target date this row inherits; explains urgency, never reorders"),
+  parent: z.string().nullable(),
+};
+
+const queueViewShape = {
+  revision: z.number().describe("The `base_revision` a mutation is checked against"),
+  entries: z.array(z.object(queueEntryShape)).describe("PLAN order: what a human wrote, containers included"),
+  effective: z.array(z.object(effectiveRowShape)).describe("EFFECTIVE order: what an agent receives"),
+};
+
+const queueWriteAnnotations = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: false,
+  openWorldHint: false,
+} as const;
+
+server.registerTool(
+  "list_queue",
+  {
+    description:
+      "The pickup plan and the effective agent order it resolves to, at one revision. `entries` is PLAN order — what a human queued, containers and milestones included. `effective` is what agents actually receive: every container expanded depth-first to its open leaf work, then the unqueued band in presentation sort, every row classified resolved | gated | blocked | claimed | eligible with a reason. Resolved entries are hidden unless `all`.",
+    inputSchema: {
+      all: z.boolean().optional().describe("Include done and cancelled plan entries"),
+      actor: z.string().optional().describe("Whose view: a row held by somebody ELSE is `claimed`"),
+      ws: wsSchema,
+    },
+    outputSchema: queueViewShape,
+    annotations: { title: "List queue", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+  },
+  ({ all, actor, ws }) => run(() => storeFor(ws).queue().view({ all, actor })),
+);
+
+server.registerTool(
+  "next_task",
+  {
+    description:
+      "The ONE row you should take next and everything it stepped over. `next` is the first eligible row in effective order for you; `skipped` lists what came before it with why (resolved, gated, blocked, claimed). Under queue.policy = strict this is exactly what checkout_task will let you claim — call it before claiming and you will never see out_of_order.",
+    inputSchema: { actor: z.string().optional().describe("Whose view (defaults to unattributed)"), ws: wsSchema },
+    outputSchema: {
+      revision: z.number(),
+      next: z.object(effectiveRowShape).nullable(),
+      skipped: z.array(z.object(effectiveRowShape)),
+    },
+    annotations: { title: "Next task", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+  },
+  ({ actor, ws }) =>
+    run(() => {
+      const { revision, next, skipped } = storeFor(ws).queue().effectiveQueue({ actor });
+      return { revision, next, skipped };
+    }),
+);
+
+server.registerTool(
+  "enqueue_task",
+  {
+    description:
+      "Put an issue in the plan at a position, or append it. Queueing an epic or a milestone is how a human says \"this whole thing next\" — a container is never picked up itself, it expands to its open leaf work. An issue already in the plan with no position is an idempotent replay (`replayed: true`, nothing written); with a position it is a move. A foreign workspace's identifier is refused with validation. Reordering the plan is a HUMAN's job — do not reorder work you were told to do.",
+    inputSchema: {
+      ref: refSchema,
+      ...memberPositionShape,
+      base_revision: baseRevisionSchema,
+      note: z.string().optional(),
+      all: z.boolean().optional(),
+      actor: actorSchema,
+      ws: wsSchema,
+    },
+    outputSchema: { ...queueViewShape, replayed: z.boolean() },
+    annotations: { title: "Enqueue task", ...queueWriteAnnotations, idempotentHint: true },
+  },
+  ({ ref, before, after, at, base_revision, note, all, actor, ws }) =>
+    run(() =>
+      storeFor(ws)
+        .queue()
+        .mutate("add", { ref, before, after, at, baseRevision: base_revision, note, all }, requireActor(actor)),
+    ),
+);
+
+server.registerTool(
+  "dequeue_task",
+  {
+    description:
+      "Take an issue out of the plan. The issue itself is untouched and the other entries keep their positions; an issue that is not in the plan is not_found. Removing a resolved entry is what `prune_queue` does in bulk.",
+    inputSchema: { ref: refSchema, base_revision: baseRevisionSchema, all: z.boolean().optional(), actor: actorSchema, ws: wsSchema },
+    outputSchema: queueViewShape,
+    annotations: { title: "Dequeue task", ...queueWriteAnnotations },
+  },
+  ({ ref, base_revision, all, actor, ws }) =>
+    run(() => storeFor(ws).queue().mutate("rm", { ref, baseRevision: base_revision, all }, requireActor(actor))),
+);
+
+server.registerTool(
+  "move_queue_entry",
+  {
+    description:
+      "Move one entry to a new plan position (before/after another entry, or at a 1-based position). Exactly one of before/after/at is required. The entry keeps its original attribution — moving a row does not make you its author.",
+    inputSchema: {
+      ref: refSchema,
+      ...memberPositionShape,
+      base_revision: baseRevisionSchema,
+      all: z.boolean().optional(),
+      actor: actorSchema,
+      ws: wsSchema,
+    },
+    outputSchema: queueViewShape,
+    annotations: { title: "Move queue entry", ...queueWriteAnnotations },
+  },
+  ({ ref, before, after, at, base_revision, all, actor, ws }) =>
+    run(() =>
+      storeFor(ws)
+        .queue()
+        .mutate("mv", { ref, before, after, at, baseRevision: base_revision, all }, requireActor(actor)),
+    ),
+);
+
+server.registerTool(
+  "reorder_queue",
+  {
+    description:
+      "Replace the whole plan order with the given list — every entry, once, in the new order — atomically, bumping the revision once. A partial list is refused by name rather than interpreted. Pass base_revision from your last read so a concurrent edit is refused rather than overwritten.",
+    inputSchema: {
+      order: z.array(refSchema).describe("Every queue entry, in the new order"),
+      base_revision: baseRevisionSchema,
+      all: z.boolean().optional(),
+      actor: actorSchema,
+      ws: wsSchema,
+    },
+    outputSchema: queueViewShape,
+    annotations: { title: "Reorder queue", ...queueWriteAnnotations },
+  },
+  ({ order, base_revision, all, actor, ws }) =>
+    run(() => storeFor(ws).queue().mutate("reorder", { order, baseRevision: base_revision, all }, requireActor(actor))),
+);
+
+server.registerTool(
+  "prune_queue",
+  {
+    description:
+      "Drop every done or cancelled entry from the plan in one transaction, emitting one dequeue event per row. Until this runs, a reopened issue resumes its old plan position; after it runs that issue is unqueued. Pruning an already-clean plan changes nothing.",
+    inputSchema: { base_revision: baseRevisionSchema, all: z.boolean().optional(), actor: actorSchema, ws: wsSchema },
+    outputSchema: queueViewShape,
+    annotations: { title: "Prune queue", ...queueWriteAnnotations, idempotentHint: true },
+  },
+  ({ base_revision, all, actor, ws }) =>
+    run(() => storeFor(ws).queue().mutate("prune", { baseRevision: base_revision, all }, requireActor(actor))),
 );
 
 const transport = new StdioServerTransport();

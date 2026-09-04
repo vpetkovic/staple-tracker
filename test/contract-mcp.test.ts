@@ -232,7 +232,7 @@ describe("tool inventory", () => {
    * moment this ticket is buying. Read-only tools deliberately omit
    * destructiveHint (the MCP spec only defines it when readOnlyHint is false).
    */
-  it("exposes exactly these 33 tools with these annotations and output schemas", async () => {
+  it("exposes exactly these 40 tools with these annotations and output schemas", async () => {
     const tools = await harness.listTools();
     const inventory = tools.map((t) => ({
       name: t.name,
@@ -576,10 +576,80 @@ describe("tool inventory", () => {
         },
         hasOutputSchema: true,
       },
+      // ------ the pickup queue (R2c, STA-168) ------
+      // Two reads and five verbs over ONE service. `enqueue_task` and
+      // `prune_queue` are idempotent and the other three are not, which is the
+      // honest reading: enqueueing a present issue with no position is a replay
+      // and pruning a clean plan is a no-op, while a second `mv` moves again.
+      {
+        name: "list_queue",
+        annotations: { title: "List queue", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+        hasOutputSchema: true,
+      },
+      {
+        name: "next_task",
+        annotations: { title: "Next task", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+        hasOutputSchema: true,
+      },
+      {
+        name: "enqueue_task",
+        annotations: {
+          title: "Enqueue task",
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
+        hasOutputSchema: true,
+      },
+      {
+        name: "dequeue_task",
+        annotations: {
+          title: "Dequeue task",
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: false,
+          openWorldHint: false,
+        },
+        hasOutputSchema: true,
+      },
+      {
+        name: "move_queue_entry",
+        annotations: {
+          title: "Move queue entry",
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: false,
+          openWorldHint: false,
+        },
+        hasOutputSchema: true,
+      },
+      {
+        name: "reorder_queue",
+        annotations: {
+          title: "Reorder queue",
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: false,
+          openWorldHint: false,
+        },
+        hasOutputSchema: true,
+      },
+      {
+        name: "prune_queue",
+        annotations: {
+          title: "Prune queue",
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
+        hasOutputSchema: true,
+      },
     ]);
   });
 
-  it("marks exactly the twelve read tools readOnlyHint: true", async () => {
+  it("marks exactly the fourteen read tools readOnlyHint: true", async () => {
     const tools = await harness.listTools();
     const readOnly = tools.filter((t) => t.annotations?.readOnlyHint === true).map((t) => t.name);
     expect(readOnly).toEqual([
@@ -598,6 +668,10 @@ describe("tool inventory", () => {
       "get_milestone",
       // R6d (STA-179): so is reading a registered setting.
       "get_setting",
+      // R2c (STA-168): reading the plan, and asking what to take next, write
+      // nothing — `next_task` resolves the order, it does not claim anything.
+      "list_queue",
+      "next_task",
     ]);
   });
 
@@ -943,6 +1017,16 @@ describe("tool response shapes (31/31)", () => {
           // STA-143: additive, and present-as-null rather than omitted.
           gate: null,
           queuedBy: null,
+          /**
+           * STA-168, additive and present-as-null for the same reason. `position`
+           * is null because CON-1 HAS OPEN CHILDREN: the resolver never emits a
+           * container as an effective row, so an epic is in the inbox but is
+           * never something an agent can be told to take. `planPosition` is null
+           * because this fixture's queue is empty — which is also why every row
+           * here is still in exactly its old presentation order.
+           */
+          position: null,
+          planPosition: null,
         }),
         issueGolden({
           identifier: "CON-2",
@@ -952,6 +1036,9 @@ describe("tool response shapes (31/31)", () => {
           claim: null,
           gate: null,
           queuedBy: null,
+          // A leaf, so it IS an effective row: first in the unqueued band.
+          position: 1,
+          planPosition: null,
         }),
       ],
       // ready+queued+blocked partition ONE page, so a page can be all-ready (H9).
@@ -1219,6 +1306,15 @@ describe("tool response shapes (31/31)", () => {
       "reorder_milestone_members",
       "get_setting",
       "set_setting",
+      // STA-168: the seven queue tools are pinned in test/queue-surfaces.test.ts,
+      // against the CLI and HTTP projections of the same shape.
+      "list_queue",
+      "next_task",
+      "enqueue_task",
+      "dequeue_task",
+      "move_queue_entry",
+      "reorder_queue",
+      "prune_queue",
     ]);
     expect([...covered].sort()).toEqual([...tools].sort());
   });
