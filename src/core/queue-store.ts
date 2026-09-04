@@ -31,9 +31,16 @@
 import type { DatabaseSync } from "node:sqlite";
 import { tx } from "./db.js";
 import { parseIdentifier } from "./ids.js";
-import { MILESTONE_KIND, rankBetween, renumberedRanks } from "./milestones.js";
+import { MILESTONE_KIND, nearestMilestone, rankBetween, renumberedRanks } from "./milestones.js";
 import type { WorkspaceStore } from "./store.js";
-import { type Issue, MAX_TREE_DEPTH, StapleError, nowIso } from "./types.js";
+import { type BuiltinIssueKind, type Issue, MAX_TREE_DEPTH, StapleError, nowIso } from "./types.js";
+
+/**
+ * The kind an `epicPath` names. `epic` is the SEEDED id (`BUILTIN_KIND_SEED`),
+ * typed against that vocabulary so a typo fails the build; a workspace whose
+ * operator removed it simply reports an empty epic path for every row.
+ */
+const EPIC_KIND: BuiltinIssueKind = "epic";
 
 /**
  * One row of the plan, as every surface prints it.
@@ -558,7 +565,13 @@ export class QueueStore {
       typeof options === "string" || options === null ? { actor: options } : options;
     const actor = opts.actor ?? null;
     const nodes = this.nodes();
-    const byIdentifier = new Map([...nodes.values()].map((node) => [node.identifier, node]));
+    /**
+     * The milestone side, for the whole workspace, in two queries (R3d,
+     * STA-174): what a queued milestone expands to, the date those rows inherit,
+     * and which milestone an issue belongs to. Deliberately not `milestones().get()`
+     * — that view's `planPosition` and `next` are computed from THIS function.
+     */
+    const seam = this.store.milestones().queueSeam();
 
     /**
      * PRESENTATION SORT, borrowed whole rather than restated: `listIssues` is
@@ -612,17 +625,21 @@ export class QueueStore {
       /**
        * A milestone is a container over its MEMBERSHIP rather than over its
        * children — nothing is ever re-parented into one — so it expands in
-       * membership order and each member then expands by the tree rule (R3d,
-       * STA-174 owns the milestone side of this). Its target date rides along as
-       * `dueAt`: an explanation of urgency, never an input to order.
+       * MEMBERSHIP ORDER FIRST, THEN HIERARCHY ORDER: each direct member in rank
+       * order, each member expanded by the tree rule below, then the milestone's
+       * own open children (if a human ever parented anything under it) by that
+       * same rule. Membership is read on every call, so a `milestone mv` is
+       * visible on the next read with no queue write. Its target date rides
+       * along as `dueAt`: an explanation of urgency, never an input to order.
        */
       if (node.kind === MILESTONE_KIND) {
-        const view = this.store.milestones().get(node.identifier);
-        for (const member of view.members) {
-          const memberNode = byIdentifier.get(member.identifier);
-          if (memberNode) {
-            expand(memberNode, planPosition, via ?? node.identifier, view.milestone.targetDate, depth + 1);
-          }
+        const target = seam.targetDateOf.get(node.id) ?? null;
+        for (const memberId of seam.membersOf.get(node.id) ?? []) {
+          const memberNode = nodes.get(memberId);
+          if (memberNode) expand(memberNode, planPosition, via ?? node.identifier, target, depth + 1);
+        }
+        for (const child of openChildren.get(node.id) ?? []) {
+          expand(child, planPosition, via ?? node.identifier, target, depth + 1);
         }
         return;
       }
@@ -671,8 +688,37 @@ export class QueueStore {
     const blockers = this.store.unresolvedBlockersFor(ids);
     const gates = this.store.queuedByFor(ids);
     const claims = this.store.claimActivityFor(ids);
+
+    /** The row's own id first, then its parent, then the grandparent — one walk, two paths. */
+    const chainOf = (id: string): string[] => {
+      const chain = [id];
+      let current = nodes.get(id)?.parent_id ?? null;
+      for (let depth = 0; depth < MAX_TREE_DEPTH && current !== null; depth += 1) {
+        if (chain.includes(current)) break;
+        chain.push(current);
+        current = nodes.get(current)?.parent_id ?? null;
+      }
+      return chain;
+    };
+
     const rows: EffectiveQueueRow[] = raw.map((row, index) => {
       const node = row.node;
+      /**
+       * WHERE THIS ROW SITS IN THE PLAN, both ways (R3d). The milestone path is
+       * MEMBERSHIP-derived — the nearest milestone the row or an ancestor is a
+       * member of — so a row reached through a queued milestone and a row that
+       * merely belongs to one report the same thing, and `via` stays the field
+       * that says which container it was expanded out of. The epic path is the
+       * ANCESTOR epics, outermost first; the row itself is never in its own path.
+       */
+      const chain = chainOf(node.id);
+      const milestoneId = nearestMilestone(chain, seam.milestoneOf);
+      const milestonePath = milestoneId === null ? [] : [nodes.get(milestoneId)?.identifier ?? milestoneId];
+      const epicPath = chain
+        .slice(1)
+        .filter((id) => nodes.get(id)?.kind === EPIC_KIND)
+        .map((id) => nodes.get(id)!.identifier)
+        .reverse();
       const category = this.store.categoryOf(node.status);
       const local = blockers.get(node.id) ?? [];
       const cross = (opts.crossBlockers?.get(node.identifier) ?? []).filter(
@@ -728,6 +774,8 @@ export class QueueStore {
         reason,
         detail,
         dueAt: row.dueAt,
+        milestonePath,
+        epicPath,
         parent: row.node.parent_id === null ? null : (nodes.get(row.node.parent_id)?.identifier ?? null),
       };
     });
@@ -845,6 +893,15 @@ export interface EffectiveQueueRow {
    * to reorder a plan somebody wrote by hand.
    */
   dueAt: string | null;
+  /**
+   * The milestone this row belongs to — its own membership, else the nearest
+   * ancestor's — as identifiers, outermost first. At most one element today,
+   * because a milestone cannot be a member of a milestone; an array because it
+   * is a path, and because `epicPath` beside it is genuinely a path.
+   */
+  milestonePath: string[];
+  /** The row's ANCESTOR epics, outermost first. The row itself is never in it. */
+  epicPath: string[];
   parent: string | null;
 }
 

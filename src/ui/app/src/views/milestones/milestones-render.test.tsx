@@ -72,7 +72,7 @@ describe("the milestone list", () => {
     // The second row: nothing planned yet, and the queue has no answer.
     expect(html).toContain("target no date");
     expect(html).toContain('data-milestone-next="none"');
-    expect(html).toContain("not queued yet");
+    expect(html).toContain("no eligible work");
   });
 
   it("is honest when there are no milestones", () => {
@@ -129,7 +129,7 @@ describe("the milestone detail", () => {
     expect(html).toContain("data-milestone-rollups");
     expect(html).toContain("1/3 done · 33%");
     expect(html).toContain("⊘ 1");
-    expect(html).toContain("not queued yet");
+    expect(html).toContain("no eligible work");
   });
 
   it("draws members with the shared row and an epic's children indented, read-only", () => {

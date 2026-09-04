@@ -253,7 +253,9 @@ staple queue next --actor codex-1            # what to take, and what it stepped
   `→ n eligibility` cue giving every leaf its effective position. `--effective`
   prints the order an AGENT receives. A container is never a row an agent can
   take: a queued epic expands depth-first to its open leaf work, and a
-  milestone expands to its members in membership order.
+  milestone expands to its members in membership order. `--effective` adds a
+  `path` column — the milestone the row is planned under, then its ancestor
+  epics — which `--json` carries as `milestonePath` and `epicPath` on every row.
 - **The plan is a prefix, not a filter.** Everything not queued follows the plan
   in the ordinary presentation sort, so unqueued work is still work — just
   later. `--all` keeps resolved entries visible; by default they are hidden and

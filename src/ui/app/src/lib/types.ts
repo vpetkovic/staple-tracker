@@ -997,7 +997,7 @@ export interface MilestoneSummary {
   startDate: string | null;
   /** Derived on every read; never stored. */
   state: MilestoneState;
-  /** The milestone's row in the pickup plan; null until the queue (R3d) fills it. */
+  /** The milestone's own row in the pickup plan; null when it is not queued. */
   planPosition: number | null;
 }
 
@@ -1038,7 +1038,7 @@ export interface MilestoneView {
   /** The `members_revision` CAS base every write must carry back. */
   revision: number;
   members: MilestoneMemberRow[];
-  /** The next eligible row from the queue resolver; null until R3d. */
+  /** The first eligible row of the effective queue planned under this milestone. */
   next: MilestoneNext | null;
 }
 
@@ -1099,6 +1099,14 @@ export interface EffectiveQueueRow {
   detail: Record<string, unknown> | null;
   /** The milestone target date this row inherits. Explains urgency; never reorders. */
   dueAt: string | null;
+  /**
+   * The milestone this row is planned under — its own membership, else the
+   * nearest ancestor's — outermost first. At most one element, because a
+   * milestone cannot be a member of a milestone; empty when there is none.
+   */
+  milestonePath: string[];
+  /** The row's ANCESTOR epics, outermost first; empty for a top-level row. */
+  epicPath: string[];
   parent: string | null;
 }
 

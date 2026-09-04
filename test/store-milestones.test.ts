@@ -556,3 +556,42 @@ describe("lifecycle", () => {
     expect(rows[0]).not.toHaveProperty("members");
   });
 });
+
+/**
+ * STA-174 (R3d) — the two fields the QUEUE owns on the view. The resolver's own
+ * rules are pinned in `store-queue-resolver.test.ts`; what is pinned here is
+ * that the view reports them, and that the plan is what `list` sorts by.
+ */
+describe("the queue's two fields on the view", () => {
+  it("fills planPosition and next from the resolver", () => {
+    const m = newMilestone();
+    const epic = store.createIssue({ title: "S", kind: "epic" }).identifier;
+    const leaf = store.createIssue({ title: "S1", parent: epic }).identifier;
+    milestones.addMember(m, epic, {}, "vp");
+    // Not queued: no plan row, but the member work is real and is the next work.
+    expect(milestones.get(m).milestone.planPosition).toBeNull();
+    expect(milestones.get(m).next).toEqual({ identifier: leaf, position: 1 });
+
+    store.queue().enqueue(m, {}, "vp");
+    expect(milestones.get(m).milestone.planPosition).toBe(1);
+    expect(milestones.get(m).next).toEqual({ identifier: leaf, position: 1 });
+    // A milestone whose only work is done has no next: `next` is the resolver's
+    // first ELIGIBLE row, not simply its first row.
+    store.updateIssue(leaf, { status: "done" }, "vp");
+    expect(milestones.get(m).next).toBeNull();
+  });
+
+  it("sorts the list by plan position first, then by date", () => {
+    const early = newMilestone("early");
+    const late = newMilestone("late");
+    milestones.update(early, { targetDate: "2026-10-31" }, "vp");
+    milestones.update(late, { targetDate: "2026-12-31" }, "vp");
+    // The plan is the human's statement and outranks the calendar: `late` is
+    // queued, `early` is not.
+    store.queue().enqueue(late, {}, "vp");
+    expect(milestones.list().map((r) => [r.milestone.identifier, r.milestone.planPosition])).toEqual([
+      [late, 1],
+      [early, null],
+    ]);
+  });
+});

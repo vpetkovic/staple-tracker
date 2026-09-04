@@ -348,3 +348,40 @@ describe("the inbox is derived from the shared resolver", () => {
     expect(cli("approve", "QUE-1", "--ws", WS).status).toBe(0);
   });
 });
+
+/**
+ * STA-174 (R3d) — the two path fields, last on purpose: this suite adds the
+ * `milestone` kind and a milestone to the fixture, and every describe above it
+ * pins an exact issue list.
+ */
+describe("the milestone and epic path ride on every effective row", () => {
+  it("reports the milestone and epic path for every effective row on every surface", async () => {
+    // QUE-1 is the epic over QUE-2/QUE-3; a milestone holds it, so both leaves
+    // inherit the milestone and name the epic they came through. (R3d, STA-174.)
+    expect(cli("kinds", "add", "milestone", "--label", "Milestone", "--ws", WS).status).toBe(0);
+    expect(cli("milestone", "new", "October cut", "--ws", WS).status).toBe(0);
+    expect(cli("milestone", "add", "QUE-6", "QUE-1", "--ws", WS).status).toBe(0);
+
+    const paths = (view: Record<string, unknown>): Array<[string, string[], string[]]> =>
+      (view.effective as Array<{ identifier: string; milestonePath: string[]; epicPath: string[] }>).map((row) => [
+        row.identifier,
+        row.milestonePath,
+        row.epicPath,
+      ]);
+    const fromCli = paths(cliJson("queue", "--ws", WS));
+    expect(fromCli).toEqual([
+      ["QUE-2", ["QUE-6"], ["QUE-1"]],
+      ["QUE-3", ["QUE-6"], ["QUE-1"]],
+      // Work outside every epic and every milestone carries two empty paths
+      // rather than nulls: the fields are always there to read.
+      ["QUE-4", [], []],
+      ["QUE-5", [], []],
+    ]);
+    expect(paths(await mcpJson("list_queue", {}))).toEqual(fromCli);
+    expect(paths(await httpJson(`/api/queue?ws=${WS}`))).toEqual(fromCli);
+    // `next` is the same row on the same shape, path fields included.
+    expect(((await mcpJson("next_task", {})).next as { milestonePath: string[] }).milestonePath).toEqual(["QUE-6"]);
+    // The milestone is a container: it is never itself an effective row.
+    expect(fromCli.map(([identifier]) => identifier)).not.toContain("QUE-6");
+  });
+});

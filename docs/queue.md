@@ -5,9 +5,10 @@ status, priority and display grouping. This is the contract the R2 tickets
 implement and that R3d (milestones) and R6d (the policy setting) plug into.
 Every rule names the test that pins it, or that will. The STORAGE half (R2b,
 migration 008: the `queue_entries` table, the plan's order and its revision),
-the RESOLVER and the four surfaces (R2c), the visual editor (R2d) and the agent
-protocol, diagnostics and lifecycle regressions (R2e) are built; the milestone
-plumbing beyond membership order (R3d) is not. Where this page
+the RESOLVER and the four surfaces (R2c), the visual editor (R2d), the agent
+protocol, diagnostics and lifecycle regressions (R2e), and the milestone plumbing —
+expansion order, the path fields, and the two queue fields on the milestone view
+(R3d) — are built. Where this page
 and [semantics.md](semantics.md) disagree, semantics.md describes today and this
 page the target.
 
@@ -53,23 +54,31 @@ inbox return the same revision and the same order"*; `store-queue.test.ts` —
 
 **Step 1 — expand.** Walk the plan in rank order. A leaf is emitted as one
 effective row. A **container** — an issue with at least one open child — is
-never emitted as itself; it is expanded in place, depth-first, to its open leaf
-descendants (the same "nothing open underneath" test gates use, so a parent a
-human gave a status to after its children finished is a leaf). A milestone
-expands to its members in membership order (R3d), and each member expands by
-this rule — what a milestone is and how its membership is ordered is
-[milestones.md](milestones.md); it is never emitted as a row itself, in the plan
-or in the unqueued band, because nobody checks out a milestone. Siblings inside
-a container expand in **presentation sort**, so a queued epic behaves exactly
-like today's inbox restricted to that epic; a human
-who wants a different order inside it queues the child explicitly. An issue
-reached twice — queued directly and via a container, or via two containers —
-is emitted once, at its **first** occurrence. (Pinned by
+never emitted as itself; it is expanded in place, depth-first, to its open
+leaf descendants (the same "nothing open underneath" test gates use, so a
+parent a human gave a status to after its children finished is a leaf). A
+**milestone** is a container over its MEMBERSHIP rather than over its
+children, so one queued milestone reserves one plan position and expands **in
+membership order first, then in hierarchy order**: each direct member in rank
+order, each member expanded by this rule, then the milestone's own open
+children (if a human parented anything under it) by this rule again — what a
+milestone is and how its membership is ordered is
+[milestones.md](milestones.md). It is never emitted as a row itself, in the
+plan or in the unqueued band, because nobody checks out a milestone.
+Membership is read on every call and nothing is cached, so a `milestone mv` is
+visible on the very next read and no queue write happens or is needed.
+Siblings inside a container expand in **presentation sort**, so a queued epic
+behaves exactly like today's inbox restricted to that epic; a human who wants
+a different order inside it queues the child explicitly. An issue reached
+twice — queued directly and via a container, or via two containers — is
+emitted once, at its **first** occurrence. (Pinned by
 `store-queue-resolver.test.ts` — *"expands a container to open leaves,
-depth-first"*, *"never emits a container as a row"*, *"treats a parent resolved
-after its children as a leaf, not a container"*, *"emits a doubly-reached issue
-once, at its first occurrence"*, *"expands a milestone in membership order, then
-each member by the tree rule"*.)
+depth-first"*, *"never emits a container as a row"*, *"treats a parent
+resolved after its children as a leaf, not a container"*, *"emits a
+doubly-reached issue once, at its first occurrence"*, *"expands a milestone in
+membership order, then each member by the tree rule"*, *"a milestone's own
+children follow its members"*, *"reordering membership updates effective order
+on the next read"*.)
 
 **Step 2 — the unqueued band.** After the last plan row, every open LEAF not
 reached by step 1 follows in presentation sort. The queue is a prefix, not a
@@ -95,13 +104,34 @@ rule that matches; the ladder is hard constraints only, and rank is not on it:
 Every non-eligible row carries a `detail` saying why (`queuedBy`, the blocker
 identifiers, the holder and their `idleSeconds`). Rows are **never dropped** for
 being ineligible — the plan is shown whole, so a human can see what their order
-is waiting on. Milestone target dates appear as `dueAt` on the row and are not
-an input to order or eligibility: a date explains urgency, it never reorders a
-plan somebody wrote by hand. Assignee is deliberately not an input either.
+is waiting on, and a blocked or gated member of a milestone stays where its
+milestone put it while the resolver advances past it by the ladder. Milestone
+target dates appear as `dueAt` on the row and are not an input to order or
+eligibility: a date explains urgency, it never reorders a plan somebody wrote by
+hand — change every date in the workspace and the effective answer is
+byte-identical but for `dueAt`. Assignee is deliberately not an input either.
 (Pinned by `store-queue-resolver.test.ts` — *"classifies by the ladder, first
 match wins"*, *"names the gate before the blocker"*, *"treats an unresolvable
 cross-workspace blocker as blocked"*, *"never drops an ineligible row"*, *"a
-milestone date changes dueAt and nothing else"*.)
+blocked or gated member stays visible under its milestone"*, *"a milestone date
+changes dueAt and nothing else"*, *"changing milestone dates never reorders an
+explicit plan"*.)
+
+**Step 4 — say where the row is planned.** Every effective row also carries
+two paths, both arrays of identifiers, outermost first, and both `[]` rather
+than null when there is nothing to say. **`milestonePath`** is the milestone
+the row belongs to — its own membership, else the nearest ancestor's — so a
+row reached THROUGH a queued milestone and a row that merely belongs to one
+report the same thing, and `via` stays the field that says which container
+this row was expanded out of. It holds at most one element today, because a
+milestone cannot be a member of a milestone. **`epicPath`** is the row's
+ANCESTOR epics; a row is never in its own path. Both are facts about the tree
+rather than about the plan, so the unqueued band carries them too, and neither
+is an input to order or eligibility. `staple queue --effective` prints them as
+one `path` column. (Pinned by `store-queue-resolver.test.ts` — *"reports the
+milestone and epic path for every effective row"*; `queue-surfaces.test.ts` —
+*"reports the milestone and epic path for every effective row on every
+surface"*.)
 
 **Next item** is the first `eligible` row for the actor; the rows before it are
 returned as `skipped`, each with its eligibility and detail. With no actor,
@@ -285,6 +315,17 @@ on every surface"*.) Checkout does not
 bump the revision — it changes eligibility, not the plan — so two reads of one
 revision may still differ in eligibility if a claim landed between them.
 
+**A membership reorder does not bump it either.** Effective order is DERIVED
+from the plan and the tree on every call, and reordering a milestone's members
+writes `milestone_members`, not `queue_entries`: the plan still says exactly
+what it said (this milestone, at this position). The revision that moves is
+the milestone's own `members_revision`, which is the CAS base a member reorder
+is checked against ([milestones.md](milestones.md)). So a queue revision is a
+promise about the PLAN, not about the effective order, and any caller that
+diffs effective order must compare the order itself. (Pinned by
+`store-queue-resolver.test.ts` — *"reordering membership updates effective
+order on the next read"*.)
+
 ## Storage
 
 One table, added by workspace migration **008** (this page said 007 when it was
@@ -350,15 +391,16 @@ mutation carries the actor and the resulting revision"*.)
 
 `queue` prints plan order with the expansion indented under each container and
 a `→ n` effective cue per leaf; `--effective` prints effective order with its
-eligibility column. Every listing returns `{revision, entries, effective}` under
-`--json`, identically on MCP and HTTP; `--at N` is a 1-based plan position and
-`rm` of an absent issue is `not_found`. Every mutation on every surface goes
-through ONE method, `QueueStore.mutate(verb, input, actor)`, so the verb set and
-the refusals cannot drift between them. The two reads are GET-only: they share a
-prefix with five POST routes and are still not writable. (Pinned by
-`queue-surfaces.test.ts` — *"enqueue, move, reorder, dequeue and prune agree on
-all three"*, *"next is one shape on CLI, MCP and HTTP"*, *"the reads are not
-writable and the verbs are not readable"*.)
+eligibility column and a `path` column (the milestone the row is planned
+under, then its ancestor epics). Every listing returns `{revision, entries,
+effective}` under `--json`, identically on MCP and HTTP; `--at N` is a 1-based
+plan position and `rm` of an absent issue is `not_found`. Every mutation on
+every surface goes through ONE method, `QueueStore.mutate(verb, input,
+actor)`, so the verb set and the refusals cannot drift between them. The two
+reads are GET-only: they share a prefix with five POST routes and are still
+not writable. (Pinned by `queue-surfaces.test.ts` — *"enqueue, move, reorder,
+dequeue and prune agree on all three"*, *"next is one shape on CLI, MCP and
+HTTP"*, *"the reads are not writable and the verbs are not readable"*.)
 
 ## Worked example: STA-31 → STA-66 → STA-146
 
