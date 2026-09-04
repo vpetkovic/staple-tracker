@@ -14,6 +14,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { claim, issue, row } from "@/components/task-list/fixtures";
+import { DEFAULT_SORT } from "@/lib/sort-modes";
 import type { InboxIssue, InboxRow, IssueRow } from "@/lib/types";
 import {
   buildPickupGroups,
@@ -401,6 +402,84 @@ describe("order inside a section is the store's, not a re-sort", () => {
     const groups = buildPickupGroups(rows, index);
     // Identifier order would put STA-1 first; the store's ranking must win.
     expect(ids(section(groups, "up_next")!.rows)).toEqual(["known", "ghost"]);
+  });
+});
+
+/**
+ * ── THE SORT MENU REACHES THIS AXIS — R4f (STA-246) ───────────────────────────────────
+ *
+ * `BuildOptions.sort` always claimed to apply "inside every shape, not only the flat one",
+ * and `buildList` did not forward it here, so choosing a mode and then grouping by Pickup
+ * order silently reverted to the store's sequence with the trigger still naming the choice.
+ *
+ * The resolution is the one this file can live with: the store's rank is what this axis hands
+ * the registry as its ACTIVITY TIER. So the default mode is the sequence the describe block
+ * above pins, byte for byte, and nothing here is a second order competing with the queue.
+ */
+describe("the chosen sort, inside a section", () => {
+  it("is the store's rank under the default mode, exactly as an absent sort is", () => {
+    const rows = [
+      row({ id: "low", identifier: "STA-3", priority: "low" }),
+      row({ id: "crit", identifier: "STA-1", priority: "critical" }),
+    ];
+    const index = buildPickupIndex(inbox([entry({ id: "low" }), entry({ id: "crit" })]));
+
+    const unsorted = ids(section(buildPickupGroups(rows, index), "up_next")!.rows);
+    const defaulted = ids(
+      section(buildPickupGroups(rows, index, { sort: DEFAULT_SORT }), "up_next")!.rows,
+    );
+    // The store says the low-priority row is next, and asking for the default says so too.
+    expect(unsorted).toEqual(["low", "crit"]);
+    expect(defaulted).toEqual(unsorted);
+
+    // And "least active first" now reads the queue backwards — a direction this axis had no
+    // way to express while it ordered by rank alone.
+    const reversed = buildPickupGroups(rows, index, {
+      sort: { mode: "activity", direction: "desc" },
+    });
+    expect(ids(section(reversed, "up_next")!.rows)).toEqual(["crit", "low"]);
+  });
+
+  it("orders by the key the reader named, when they named one", () => {
+    const rows = [
+      row({ id: "low", identifier: "STA-3", priority: "low" }),
+      row({ id: "crit", identifier: "STA-1", priority: "critical" }),
+    ];
+    const index = buildPickupIndex(inbox([entry({ id: "low" }), entry({ id: "crit" })]));
+    const groups = buildPickupGroups(rows, index, {
+      sort: { mode: "priority", direction: "asc" },
+    });
+    // Rank puts `low` first; the reader asked for critical first and gets it.
+    expect(ids(section(groups, "up_next")!.rows)).toEqual(["crit", "low"]);
+  });
+
+  it("still heads Pending approval with the gate holder, whatever the sort says", () => {
+    /*
+     * Q2 (STA-144): "the heading of a queue belongs at the top of it", and the CLI makes the
+     * same call for `staple inbox`. That is a fact about what the section IS, not a key the
+     * reader picked, so no mode may reorder past it — here the epic sorts LAST by identifier
+     * and must still lead.
+     */
+    const rows: IssueRow[] = [
+      queued("k1", { identifier: "STA-1", status: "backlog" }),
+      queued("k2", { identifier: "STA-2" }),
+      parked("epic", "VP", "STA-9"),
+    ];
+    const index = buildPickupIndex(
+      inbox(
+        [],
+        [],
+        [
+          entry({ id: "k1", status: "backlog" }),
+          entry({ id: "k2" }),
+          entry({ id: "epic", status: "awaiting_approval" }),
+        ],
+      ),
+    );
+    const groups = buildPickupGroups(rows, index, {
+      sort: { mode: "identifier", direction: "asc" },
+    });
+    expect(ids(section(groups, "pending_approval")!.rows)).toEqual(["epic", "k1", "k2"]);
   });
 });
 

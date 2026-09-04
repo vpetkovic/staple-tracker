@@ -82,13 +82,17 @@ it goes.
 
 **Where the numbers come from.** One read of `GET /api/queue` per poll, joined
 onto the list in the browser by identifier, memoised, refreshed by the same 1.5s
-fingerprint as everything else. The list *displays* these numbers and can never
-set them — presentation sort is not the queue.
+fingerprint as everything else. That one join feeds both halves — the number a row
+prints and the number **Queue position** sorting orders it by are the same value,
+so the list can never sort by anything other than what it shows. The list
+*displays* these numbers and can never set them — presentation sort is not the
+queue.
 
 **Ungrouped only.** The grouped axes are unchanged, element for element, and the
-queue is not fetched while one of them is active. In hub mode the cues appear
-once a workspace is selected: a plan is a per-workspace sequence, and there is no
-cross-workspace order to show.
+queue is not fetched while one of them is active — so the plan, both as a cue and
+as an order, is an affordance of the view that shows it. In hub mode the cues
+appear once a workspace is selected: a plan is a per-workspace sequence, and there
+is no cross-workspace order to show.
 
 ## Sorting
 
@@ -112,7 +116,7 @@ number part**, so STA-9 precedes STA-10 and the list cannot reshuffle on the 1.5
 | Mode | Orders by | Tie-break chain, in order | Parent rollup |
 | --- | --- | --- | --- |
 | **Activity** (default) | a live claim first, then the configured status order | priority → newest update → identifier | best activity tier in the subtree |
-| **Queue position** | the pickup plan's position; queued rows before unqueued | activity → priority → newest update → identifier | earliest queue position in the subtree |
+| **Queue position** | the effective queue position; rows with one before rows without | activity → priority → newest update → identifier | earliest effective position in the subtree |
 | **Status** | the workspace's configured status order | priority → newest update → identifier | — |
 | **Priority** | critical → high → medium → low | activity → newest update → identifier | — |
 | **Updated** | when anything last moved | priority → identifier | latest update in the subtree |
@@ -125,10 +129,24 @@ other five read the row and nothing else. A rollup counts only rows the current 
 kept, so an order is always accountable from what is on the screen. A status the
 workspace order does not mention ranks last but still ranks.
 
+**Queue position has one scale, and it is the effective one.** A row sorts by the
+position its own cue prints — the place in the sequence an agent receives. A **container**
+never has one (the resolver expands it in place), so it sorts by the *earliest effective
+position among the rows it holds*; its `plan #2` caption is a place in the plan, a
+different ruler, and the sort never reads it. Anything the queue has no position for —
+waiting, gated, in flight, unqueued, resolved — sorts after everything that has one, in
+both directions. The numbers come from the same browser-side join as the cues, so the list
+always sorts by exactly what it prints.
+
 Sorting orders **siblings**: it never lifts a child out from under its parent, and it
 applies inside a group exactly as it does in the ungrouped view. Under Group by Status
 the activity tier is inert — every row in a status bucket ranks equally on it — so the
-default mode there is priority, then the newest update, then the identifier.
+default mode there is priority, then the newest update, then the identifier. Under
+**Group by Pickup order** the store's own dependency-ordered rank *is* the activity tier,
+so Activity — the default — renders the queue exactly as `/api/inbox` published it,
+"Least active first" renders the back of it, and every other mode reorders inside each
+section by the key you named. Gate holders still head Pending approval whatever you sort
+by: that is what the section is, not an order you chose.
 
 ## Filtering
 
@@ -190,6 +208,40 @@ the sort and the grouping. A scope you have never filtered in opens with whateve
 pre-R4b global filter key holds, so nothing is lost on upgrade. Changing a filter is a
 statement about your screen: it cannot touch `queue.policy`, the pickup plan, or any
 write path.
+
+## What the view tests prove
+
+Grouping, sorting, filtering and the row cues shipped as four separate tickets and meet
+on one page. The tests that hold that page together are listed here so a change knows
+what it is up against — and so the two things they *cannot* say are written down rather
+than assumed.
+
+All of them are pure functions or `react-dom/server` markup: there is no browser, no
+jsdom and no screenshot harness in this repo. **A "visual check" below means the
+rendered markup at a narrow width (under the 719px two-line breakpoint) and a wide one,
+with class and attribute assertions, plus the `task-list.css` rule that does the rest.**
+
+One board — `views/tree/drift-fixture.ts` — backs all four files: two epics, one open
+and one folded, a gated child, a stale claim, a done child, a custom kind, a milestone
+whose two members sit under different epics, and a `/api/queue` payload covering every
+cue state. Every file below reads it, so a claim proved about the model is a claim about
+the same rows on the screen.
+
+| File | What it pins |
+| --- | --- |
+| `views/tree/view-combinations.test.ts` | every sort mode × every grouping axis keeps section membership, the header counts, the nesting and the published visible order; filter combinations keep the ghosts and agree with the counts the menu and the empty state print; a queued milestone member is cued and ordered consistently; a folded epic keeps its rollup and its cue |
+| `views/tree/polling-stability.test.ts` | the 1.5s poll changes nothing you chose — sort, filters, folds and cues all survive a fresh payload, a new queue payload moves the cues and nothing else, and the rendered page is identical bar the absolute timestamps |
+| `views/tree/view-a11y.test.tsx` | the sort trigger names the mode *and* the direction in all sixteen states; chips and the empty state name the dimension, the value and the count; all six cue words reach a screen reader; `aria-level` and `aria-expanded` on rows and group headers; the controls tab in reading order and the grid has one roving tab stop |
+| `views/tree/view-responsive.test.tsx` | all five groupings at 400px and 1440px draw the same sections, rows, levels and cues; labels degrade to dots; the rolled-up plan yields to a `max-[719px]:hidden` utility; the sheet reflows the row to two lines and never drops either cue |
+
+Alongside them, `lib/sort-modes.test.ts` walks each mode's key and tie-breaks,
+`lib/filter-dimensions.test.ts` and `components/filters/filters-render.test.tsx` walk the
+eleven dimensions, `views/tree/tree-model.test.ts` pins placement and ghosts, and
+`views/tree/group-header.test.tsx` pins the epic-axis rhythm.
+
+`view-combinations.test.ts` also pins the three things that used to be gaps: the chosen
+sort reaches **Group by Pickup order**, **Queue position** orders by the numbers the cues
+print, and a container is ranked on the effective scale rather than on its plan index.
 
 ## Auth
 

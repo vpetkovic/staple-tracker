@@ -32,13 +32,13 @@
  *
  * ── PRESENTATION ONLY. THIS FILE CANNOT REACH THE QUEUE ───────────────────────────────
  *
- * `docs/queue.md` is explicit that presentation sort is not the queue: plan position is a
+ * `docs/queue.md` is explicit that presentation sort is not the queue: queue position is a
  * thing the list may DISPLAY and order by, and never a thing it may set. Nothing here
- * writes: the module exports pure comparators over `readonly` rows, it reads
- * `queuePosition`/`planPosition` off the row payload and reads nothing else about the queue,
- * and `sort-modes.test.ts` sorts a fixture through every mode and asserts the queue,
- * eligibility and dependency fields on every row come out identical. Choosing a sort is a
- * statement about the reader's screen, not about what an agent picks up next.
+ * writes: the module exports pure comparators over `readonly` rows, it reads `queuePosition`
+ * off the row payload and reads nothing else about the queue, and `sort-modes.test.ts` sorts
+ * a fixture through every mode and asserts the queue, eligibility and dependency fields on
+ * every row come out identical. Choosing a sort is a statement about the reader's screen, not
+ * about what an agent picks up next.
  */
 import type { IssuePriority, IssueRow, StatusId } from "./types";
 
@@ -114,18 +114,33 @@ const PRIORITY_RANK: Record<IssuePriority, number> = {
 };
 
 /**
- * THE ROW'S OWN PLAN POSITION, before any rollup — R2c's payload, read and never written.
+ * THE ROW'S OWN PLACE IN THE SEQUENCE, before any rollup — R2c's payload, read and never
+ * written, and ONE SCALE ONLY (R4f, STA-246).
  *
- * `queuePosition` before `planPosition` because they answer different questions and R4c
- * (STA-188) spells out which is which: `queuePosition` is the EFFECTIVE position an
- * actionable row holds in the pickup queue, `planPosition` is the plan position a container
- * carries. A row that has both is an actionable row whose container position is a coarser
- * answer to the same question, so the effective one wins. Absent and null are the same
- * answer — "not in the plan" — because the field is optional on the type precisely so that
- * fixtures and synthesised rows need not have an opinion.
+ * That scale is the EFFECTIVE queue position: the place an actionable row holds in the order
+ * an agent is actually handed, and the number the row's own cue prints beside its identifier.
+ *
+ * `planPosition` is deliberately not read here, and this used to be `queuePosition ??
+ * planPosition`, which is the bug. R4c (STA-188) spells the two apart on the screen for a
+ * reason — a container's cue says `plan #2` rather than `#2` because "a container's number
+ * and a leaf's number are different numbers, and a reader who cannot tell which one they are
+ * looking at cannot use either" — and the old fallback then compared exactly those two
+ * numbers as if they were one sequence. Plan indices are the coarser and therefore always the
+ * smaller, so the effect was systematic rather than occasional: containers rode to the top of
+ * every queue sort, each one landing above leaves it actually sits behind.
+ *
+ * A CONTAINER IS NOT LEFT WITHOUT AN ANSWER. It takes the earliest EFFECTIVE position among
+ * the rows it holds — `subtreeQueuePositions` below, folded in by `effectiveQueuePosition` —
+ * which is a number on the same scale as every other row's and is the honest one: an epic is
+ * reached when the first of its work is reached. So the whole mode compares like with like.
+ *
+ * Absent and null are the same answer — "the queue has no position for this row" — because
+ * the field is optional on the type precisely so that fixtures and synthesised rows need not
+ * have an opinion, and because the queue genuinely has no position for a row it calls gated,
+ * waiting, in flight, resolved or unqueued. Those sort in the trailing band, rule 2 above.
  */
 export function ownQueuePosition(row: IssueRow): number | null {
-  return row.queuePosition ?? row.planPosition ?? null;
+  return row.queuePosition ?? null;
 }
 
 /**
@@ -372,7 +387,7 @@ export const SORT_MODES: readonly SortMode[] = [
     tieBreak: ["activity", "priority", "updatedRecent", "identifier"],
     directions: { asc: "Front of the queue first", desc: "Back of the queue first" },
     defaultDirection: "asc",
-    rollup: "a parent takes the earliest queue position in its subtree; unqueued rows sort last in both directions",
+    rollup: "a parent takes the earliest effective queue position in its subtree; rows the queue has no position for sort last in both directions",
   },
   {
     id: "status",

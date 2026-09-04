@@ -14,9 +14,14 @@
  * `lib/types.ts` reserves `pickupState`, `pickupReason`, `queuePosition` and `planPosition`
  * on `IssueRow` for the day `/api/issues` sends them. It does not send them today. So the
  * cues are joined here against `GET /api/queue` — the ONE view R2c already publishes, the
- * same `{revision, entries, effective}` the CLI prints and the MCP tools return — and the
- * four served fields are left untouched, so nothing has to be unpicked when the list route
- * catches up.
+ * same `{revision, entries, effective}` the CLI prints and the MCP tools return.
+ *
+ * R4f (STA-246) then made this join the source for the `queue` SORT as well, by stamping the
+ * one field that sort reads — `queuePosition` — off the cue that prints it. See
+ * `attachRowCues`. The other three are still left untouched, and `pickupState` deliberately
+ * so: `filter-dimensions.ts` argues at length that `queued` must stay unreachable from the
+ * browser until the resolver itself sends the word, and serving it from here would quietly
+ * decide that for it.
  *
  * ONE JOIN, MEMOISED, ON THE EXISTING POLL. `/api/queue` is one request per fingerprint
  * change, the bargain `/api/settings` and `/api/milestones` already make, and it is fetched
@@ -265,12 +270,40 @@ export function buildRowCueIndex(
 }
 
 /**
+ * THE NUMBER THE SORT READS, TAKEN OFF THE CUE THAT PRINTS IT — R4f (STA-246).
+ *
+ * `lib/sort-modes.ts`'s `queue` mode ranks a row by `IssueRow.queuePosition`, and until this
+ * line existed nothing in the app ever wrote that field: `/api/issues` reserves it and does
+ * not send it, so choosing "Sort: Queue position" ordered by nothing at all while the row
+ * beside the trigger printed `#5`.
+ *
+ * Only the EFFECTIVE scope is a position. A container's cue carries a `plan` number, which is
+ * a place in the plan rather than a place in the sequence an agent receives — `rowCueShort`
+ * spells it `plan #2` precisely so the two can never be read as one scale, and a sort that
+ * compared them would be doing what that spelling forbids. A container is ranked instead by
+ * the earliest effective position beneath it, which is `subtreeQueuePositions`' job and needs
+ * no field on the row. So `planPosition` is deliberately left unstamped: nothing reads it.
+ */
+function effectivePositionOf(cues: RowCues | null): number | null {
+  const pickup = cues?.pickup;
+  return pickup && pickup.scope === "effective" ? pickup.position : null;
+}
+
+/**
  * The one wiring call: the list, with the plan joined onto it.
  *
  * Returns the SAME array when there is nothing to join, so an empty index cannot cost a
  * re-render of every downstream memo on a 1.5s poll.
+ *
+ * ONE `cuesFor` CALL PER ROW, feeding both the cue and the sortable position. They are the
+ * same fact said twice — once to the reader, once to the comparator — and deriving the second
+ * from the first is what makes "the list sorts by the numbers it prints" true by construction
+ * rather than by two lookups that agree today.
  */
 export function attachRowCues(rows: readonly IssueRow[], index: RowCueIndex): IssueRow[] {
   if (index.size === 0) return rows as IssueRow[];
-  return rows.map((row) => ({ ...row, cues: index.cuesFor(row) }));
+  return rows.map((row) => {
+    const cues = index.cuesFor(row);
+    return { ...row, cues, queuePosition: effectivePositionOf(cues) };
+  });
 }

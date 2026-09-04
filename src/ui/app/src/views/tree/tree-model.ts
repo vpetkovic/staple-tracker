@@ -1379,6 +1379,22 @@ export function buildList(
            * the model building it, which is why `buildPickupGroups` supplies its own.
            */
           isExpanded: options.isExpanded,
+          /*
+           * R4f (STA-246). THE SORT REACHES THIS AXIS TOO, and until it did `BuildOptions.
+           * sort` above was making a promise one menu entry away from being false: "it
+           * applies inside every shape, not only the flat one".
+           *
+           * It was not forwarded, so choosing "Sort: Title · A to Z" and then grouping by
+           * Pickup order silently reverted to the store's sequence with the trigger still
+           * reading "Title" — the same class of inconsistency the ghost switch above is
+           * passed down to avoid.
+           *
+           * `statusOrder` rides with it because a comparator that cannot see the configured
+           * order cannot honour the `status` mode, and this is the one option `buildList`
+           * passes to a model that does not otherwise take it.
+           */
+          sort: options.sort,
+          statusOrder: options.statusOrder,
         }),
       };
     default:
