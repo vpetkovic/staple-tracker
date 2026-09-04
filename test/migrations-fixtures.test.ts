@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import { DatabaseSync } from "node:sqlite";
 import { openDb } from "../src/core/db.js";
 import { migrateHub, migrateWorkspace } from "../src/core/schema.js";
-import { describeSchema } from "../src/core/migrations/runner.js";
+import { describeSchema, runMigrations } from "../src/core/migrations/runner.js";
+import type { MigrationTarget } from "../src/core/migrations/types.js";
 import { normalizedSchema } from "../src/core/migrations/dump.js";
 import { WORKSPACE_TARGET } from "../src/core/migrations/workspace/index.js";
 import { HUB_TARGET } from "../src/core/migrations/hub/index.js";
@@ -41,6 +42,20 @@ const SETTINGS_SCHEMA_OBJECTS = [
   "table:workspace_statuses",
 ];
 
+/**
+ * Everything migration 007 (STA-172, milestones) adds: two tables, their TEXT
+ * primary keys, the `(milestone_id, rank)` uniqueness and the member-order index.
+ * Spelled out for the same reason the settings list is.
+ */
+const MILESTONE_SCHEMA_OBJECTS = [
+  "index:milestone_members_milestone_idx",
+  "index:sqlite_autoindex_milestone_members_1",
+  "index:sqlite_autoindex_milestone_members_2",
+  "index:sqlite_autoindex_milestone_meta_1",
+  "table:milestone_members",
+  "table:milestone_meta",
+];
+
 /** The schema a database created today has — the target every upgrade converges on. */
 function freshWorkspaceSchema(): string {
   const db = new DatabaseSync(":memory:");
@@ -66,19 +81,19 @@ describe.each([
   ["stamped '1'", FIXTURES.workspaceV1],
   ["present but never stamped", FIXTURES.workspaceV1Unstamped],
 ])("a v1 workspace (%s)", (_label, fixture) => {
-  it("is detected as version 1 with migrations 2 through 6 pending", () => {
+  it("is detected as version 1 with migrations 2 through 7 pending", () => {
     withFixture(fixture, (path) => {
       const db = new DatabaseSync(path);
       try {
         const state = describeSchema(db, WORKSPACE_TARGET);
         expect(state.current).toBe(1);
-        expect(state.latest).toBe(6);
+        expect(state.latest).toBe(7);
         // Ordered and complete: a v1 file has to walk BOTH steps, and it has to
         // walk them in this order — 003 assumes 002 already ran. This list
         // grows by one every time a migration is appended, and that is the
         // point: a migration that never reaches an old file is the bug this
         // assertion exists to catch.
-        expect(state.pending).toEqual([2, 3, 4, 5, 6]);
+        expect(state.pending).toEqual([2, 3, 4, 5, 6, 7]);
       } finally {
         db.close();
       }
@@ -163,7 +178,7 @@ describe.each([
     });
   });
 
-  it("is stamped '6' as TEXT, the representation an old binary can still read", () => {
+  it("is stamped '7' as TEXT, the representation an old binary can still read", () => {
     withFixture(fixture, (path) => {
       const db = openDb(path);
       try {
@@ -174,7 +189,7 @@ describe.each([
         // TEXT is the load-bearing half of this assertion, not the number: an
         // older binary reads the stamp as a string, and an INTEGER here would
         // make it unreadable rather than merely too new.
-        expect(row).toEqual({ t: "text", value: "6" });
+        expect(row).toEqual({ t: "text", value: "7" });
       } finally {
         db.close();
       }
@@ -217,14 +232,14 @@ describe.each([
  * than estimated-at-zero.
  */
 describe("a v2 workspace — the last shape before estimates", () => {
-  it("is detected as version 2 with migrations 3 through 6 pending", () => {
+  it("is detected as version 2 with migrations 3 through 7 pending", () => {
     withFixture(FIXTURES.workspaceV2, (path) => {
       const db = new DatabaseSync(path);
       try {
         expect(describeSchema(db, WORKSPACE_TARGET)).toEqual({
           current: 2,
-          latest: 6,
-          pending: [3, 4, 5, 6],
+          latest: 7,
+          pending: [3, 4, 5, 6, 7],
           detection: "stamped",
         });
       } finally {
@@ -302,10 +317,11 @@ describe("a v2 workspace — the last shape before estimates", () => {
        * AND one partial index, so it contributes exactly that index. The list
        * grows by those objects and by NOTHING else, which is the real assertion:
        * an upgrade must add what its migrations declare and not one object more —
-       * a migration that quietly rebuilt `issues` would show up right here.
+       * a migration that quietly rebuilt `issues` would show up right here. 007
+       * (STA-172) creates the two milestone tables and their indexes, and nothing else.
        */
       expect(schemaObjects(path)).toEqual(
-        [...before, ...SETTINGS_SCHEMA_OBJECTS, "index:issues_gate_state_idx"].sort(),
+        [...before, ...SETTINGS_SCHEMA_OBJECTS, "index:issues_gate_state_idx", ...MILESTONE_SCHEMA_OBJECTS].sort(),
       );
     });
   });
@@ -347,7 +363,7 @@ describe("a v2 workspace created by the SHIPPED pre-A4 fresh-create path", () =>
         // it walks 003 like any other v2 file — which is the point. A shape the
         // runner "recognises as current" must not become a shape it forgets to
         // migrate the moment a new column is appended.
-        expect(describeSchema(db, WORKSPACE_TARGET).pending).toEqual([3, 4, 5, 6]);
+        expect(describeSchema(db, WORKSPACE_TARGET).pending).toEqual([3, 4, 5, 6, 7]);
         expect(() => migrateWorkspace(db)).not.toThrow();
 
         // The layout really is the old one: idempotency_key sits in the middle.
@@ -370,7 +386,7 @@ describe("a v2 workspace created by the SHIPPED pre-A4 fresh-create path", () =>
       // Same as above: 004's two tables and 006's index arrive; the legacy layout
       // is otherwise untouched.
       expect(schemaObjects(path)).toEqual(
-        [...before, ...SETTINGS_SCHEMA_OBJECTS, "index:issues_gate_state_idx"].sort(),
+        [...before, ...SETTINGS_SCHEMA_OBJECTS, "index:issues_gate_state_idx", ...MILESTONE_SCHEMA_OBJECTS].sort(),
       );
     });
   });
@@ -402,6 +418,53 @@ describe("a v2 workspace created by the SHIPPED pre-A4 fresh-create path", () =>
       withFixture(FIXTURES.workspaceV2, (walked) => {
         expect(schemaObjects(legacy)).toEqual(schemaObjects(walked));
       });
+    });
+  });
+});
+
+describe("a v6 workspace — the last shape before milestones", () => {
+  /**
+   * There is no checked-in v6 fixture: 006 added only columns and a partial
+   * index, so a v2 fixture walked to exactly 6 IS a v6 file, and it carries the
+   * rows the fixture was written with. The kind and the milestone-kinded issue
+   * are added at v6, before 007 has run, so that what 007 preserves is data it
+   * did not create.
+   */
+  const THROUGH_006: MigrationTarget = {
+    ...WORKSPACE_TARGET,
+    migrations: WORKSPACE_TARGET.migrations.filter((m) => m.version <= 6),
+  };
+
+  it("the milestone migration preserves every issue and every configured kind and creates no rows", () => {
+    withFixture(FIXTURES.workspaceV2, (path) => {
+      const db = openDb(path);
+      try {
+        runMigrations(db, THROUGH_006);
+        expect(describeSchema(db, WORKSPACE_TARGET)).toMatchObject({ current: 6, pending: [7] });
+        const store = new WorkspaceStore(db, "legacyrepo", "LEG");
+        store.addKind({ id: "milestone", label: "Milestone" }, "vlad");
+        store.addKind({ id: "initiative", label: "Initiative", after: "epic" }, "vlad");
+        // Re-kind rather than create: the fixture predates the issue-number
+        // counter, so a create would mint LEG-1 again. The point is the same —
+        // a milestone-kinded row exists BEFORE 007 runs.
+        store.updateIssue("LEG-1", { kind: "milestone" }, "vlad");
+        const kindsBefore = store.getKinds();
+        const issuesBefore = db.prepare("SELECT * FROM issues ORDER BY identifier").all();
+        expect(kindsBefore.map((k) => k.id)).toContain("milestone");
+
+        migrateWorkspace(db);
+        expect(describeSchema(db, WORKSPACE_TARGET)).toMatchObject({ current: 7, pending: [] });
+        expect(store.getKinds()).toEqual(kindsBefore);
+        expect(db.prepare("SELECT * FROM issues ORDER BY identifier").all()).toEqual(issuesBefore);
+        expect(db.prepare("SELECT COUNT(*) AS n FROM milestone_meta").get()).toEqual({ n: 0 });
+        expect(db.prepare("SELECT COUNT(*) AS n FROM milestone_members").get()).toEqual({ n: 0 });
+        // The pre-existing milestone-kinded issue is a milestone now, with nothing seeded for it.
+        expect(store.milestones().get("LEG-1")).toMatchObject({ revision: 0, members: [] });
+        expect(store.milestones().get("LEG-1").milestone).toMatchObject({ targetDate: null, startDate: null, state: "planned" });
+      } finally {
+        db.close();
+      }
+      expect(schemaObjects(path)).toEqual(expect.arrayContaining(MILESTONE_SCHEMA_OBJECTS));
     });
   });
 });

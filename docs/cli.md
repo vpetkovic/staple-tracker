@@ -24,6 +24,10 @@ staple release <ref> --if-stale <dur>               free a dead agent's claim
 staple gate <ref> --owner O [-m text]               park a PARENT on a human; queue its subtree
 staple approve <ref> [--children R1,R2] [-m text]   release the whole queue, or only what you name
 staple request-changes <ref> -m text                send it back; the children stay queued
+
+staple milestone ls | show <ref>                    dated, ordered plans (needs the `milestone` kind)
+staple milestone new <title> [--target D] [--from-epic R] [--preview]
+staple milestone add|rm <milestone> <ref> [--base N] | mv <ref> --to M | reorder M <r1,r2>
 ```
 
 `staple help` has the full option list. `checkout` is an alias for `start`, and
@@ -79,6 +83,61 @@ issue that already had children as an `epic` at upgrade time.
 `ls`, `tree` and `inbox` print the kind only when it is *not* `task` — a bare
 row is a task — so an epic or a bug stands out without a column of noise on
 every other line. `staple show` always names it.
+
+## Milestones
+
+A milestone is a dated, human-ordered plan that may contain epics and tasks
+from anywhere in the tree **without moving them** — the full contract is
+[milestones.md](milestones.md). It is an ordinary issue of the reserved
+`milestone` kind, which is not seeded: run `staple kinds add milestone --label
+Milestone` once per workspace, or every command below is refused with exit 2
+naming that command.
+
+```bash
+staple milestone new "October cut" --target 2026-10-31 --from-epic STA-66 --preview
+staple milestone new "October cut" --target 2026-10-31 --from-epic STA-66
+staple milestone add STA-190 STA-146                 # appended
+staple milestone add STA-190 STA-68 --before STA-66  # pulled forward; also --after R, --at N
+staple milestone mv STA-68 --after STA-146           # or --to <milestone> to move it out
+staple milestone reorder STA-190 STA-68,STA-66,STA-146 --base 3
+staple milestone rm STA-190 STA-146
+staple milestone set STA-190 --start 2026-10-01 --target none
+staple milestone ls [--all]                          # --all includes done and cancelled
+staple milestone show STA-190
+```
+
+- **`--from-epic` adds the epic as the one member.** Its children come along
+  by descent — through progress and through the queue — and are never copied
+  in, so the epic's hierarchy is the milestone's structure and nothing is
+  re-parented. `--preview` prints the exact plan (`+ member STA-66 at 1`,
+  `hierarchy changes: none`) and writes nothing; the commit makes exactly those
+  changes. The title defaults to the epic's.
+- **Membership is not hierarchy.** `add` changes nothing about the member —
+  parent, depth, blockers, status, claim, gate — and `staple tree` is
+  unchanged. An issue is a direct member of at most one milestone; adding it to
+  a second is refused naming the first, and `mv --to` is the move. A milestone
+  cannot be a member.
+- **Dates are UTC calendar days**, `YYYY-MM-DD`, inclusive: a target of
+  `2026-10-31` is due by the end of that day and overdue from the next UTC
+  midnight. `none` clears one. `set` takes only the dates; title, description,
+  assignee and status are edited with the ordinary commands.
+- **Order is durable and independent** — a column, not a sort; priority,
+  creation time and tree position never reorder it. `show` prints the members
+  revision; `--base N` on `add`/`rm`/`mv`/`reorder` refuses a stale one with
+  exit 7 (`revision_conflict`, retryable) and leaves the order standing. Without
+  `--base` the CLI writes blind.
+- **Progress counts each leaf once**: `done/countable percent` over the leaves
+  reachable from the members, a parent never counted, a task reached through
+  its epic and as a direct member counted once, cancelled leaves out of the
+  denominator. `state` is derived — `done`, `cancelled`, `overdue`, `active`,
+  `planned` — never stored.
+- A non-milestone given where a milestone is expected is exit 2 naming its
+  kind (`STA-66 is an epic, not a milestone.`); an unknown reference is exit 3;
+  `rm` of a non-member is exit 3.
+
+`--json` on every subcommand prints the one shape MCP and the UI server
+return: `{milestone, progress, revision, members, next}` — see
+[milestones.md](milestones.md#operations-by-surface).
 
 ## Estimates vs actuals
 

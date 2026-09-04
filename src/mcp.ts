@@ -19,6 +19,7 @@ import { z } from "zod";
 import { initWorkspace, resolveWorkspace } from "./core/workspace.js";
 import type { OpenedWorkspace } from "./core/workspace.js";
 import type { VocabularyOp, WorkspaceStore } from "./core/store.js";
+import { MILESTONE_STATES } from "./core/milestones.js";
 import { Hub, notifyHubResolvedSafe } from "./core/hub.js";
 import type { CrossBlockerState } from "./core/hub.js";
 import {
@@ -1506,6 +1507,231 @@ server.registerTool(
       resetWorkspaceCache();
       return summary;
     }),
+);
+
+// ---------- milestones (docs/milestones.md, STA-172) ----------
+
+/**
+ * One shape for every milestone tool, and the same one the CLI prints under
+ * `--json` and the UI server answers: the milestone half (its issue fields plus
+ * dates and derived state), the count-each-leaf-once progress, the members
+ * revision (the CAS base), and the members in rank order. `planPosition` and
+ * `next` are null until the pickup queue (R3d) fills them.
+ */
+const milestoneSummaryShape = {
+  identifier: z.string(),
+  title: z.string(),
+  status: statusEnum,
+  kind: kindSchema,
+  assignee: z.string().nullable(),
+  targetDate: z.string().nullable().describe("YYYY-MM-DD, due by the END of that UTC day"),
+  startDate: z.string().nullable(),
+  state: z.enum(MILESTONE_STATES).describe("Derived on every read: done | cancelled | overdue | active | planned"),
+  planPosition: z.number().nullable().describe("The milestone's row in the pickup plan; null until queued"),
+};
+const milestoneMemberShape = {
+  identifier: z.string(),
+  title: z.string(),
+  kind: kindSchema,
+  status: statusEnum,
+  position: z.number().describe("1-based, in rank order"),
+  rank: z.number().describe("The sparse encoding behind position; never type it"),
+  parent: z.string().nullable().describe("The member's real parent, untouched by membership"),
+  nestedUnder: z.string().nullable().describe("The nearest ancestor that is also a direct member here"),
+  addedBy: z.string(),
+  addedAt: z.string(),
+  note: z.string().nullable(),
+};
+const milestoneProgressShape = {
+  total: z.number(),
+  countable: z.number().describe("total minus cancelled leaves — the denominator"),
+  counts: z.record(z.string(), z.number()),
+  percent: z.number().nullable().describe("floor(done·100/countable); null when nothing is countable"),
+  complete: z.boolean(),
+};
+const milestoneViewShape = {
+  milestone: z.object(milestoneSummaryShape),
+  progress: z.object(milestoneProgressShape),
+  revision: z.number().describe("The members revision; pass it back as base_revision to reorder safely"),
+  members: z.array(z.object(milestoneMemberShape)),
+  next: z.object({ identifier: z.string(), position: z.number() }).nullable(),
+};
+const milestoneRefSchema = z.string().describe("The milestone's reference (an issue of the `milestone` kind)");
+const dateSchema = z
+  .string()
+  .nullable()
+  .optional()
+  .describe("YYYY-MM-DD (a UTC calendar day); null clears it; omit to leave it alone");
+const memberPositionShape = {
+  before: refSchema.optional().describe("Place it before this member"),
+  after: refSchema.optional().describe("Place it after this member"),
+  at: z.number().int().min(1).optional().describe("1-based position"),
+};
+const baseRevisionSchema = z
+  .number()
+  .int()
+  .optional()
+  .describe("The `revision` you last read; a stale base is refused with revision_conflict and the order stands");
+const milestoneWriteAnnotations = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: false,
+  openWorldHint: false,
+};
+
+server.registerTool(
+  "list_milestones",
+  {
+    description:
+      "Every open milestone with its dates, derived state, progress and members revision, sorted by plan position, then target date, then identifier. Milestones are issues of the reserved `milestone` kind; a workspace without that kind refuses with validation naming the `kinds add` that enables it.",
+    inputSchema: {
+      all: z.boolean().optional().describe("Include done and cancelled milestones"),
+      ws: wsSchema,
+    },
+    outputSchema: {
+      items: z.array(
+        z.object({
+          milestone: z.object(milestoneSummaryShape),
+          progress: z.object(milestoneProgressShape),
+          revision: z.number(),
+          memberCount: z.number(),
+          next: z.object({ identifier: z.string(), position: z.number() }).nullable(),
+        }),
+      ),
+    },
+    annotations: { title: "List milestones", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+  },
+  ({ all, ws }) => run(() => storeFor(ws).milestones().list({ all })),
+);
+
+server.registerTool(
+  "get_milestone",
+  {
+    description:
+      "One milestone: dates, derived state, count-each-leaf-once progress, the members revision and every member in rank order with its real parent and `nestedUnder`. A non-milestone reference is refused with validation naming its kind; an unknown one is not_found.",
+    inputSchema: { ref: milestoneRefSchema, ws: wsSchema },
+    outputSchema: milestoneViewShape,
+    annotations: { title: "Get milestone", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+  },
+  ({ ref, ws }) => run(() => storeFor(ws).milestones().get(ref)),
+);
+
+server.registerTool(
+  "create_milestone",
+  {
+    description:
+      "Create a milestone, optionally from an epic: the epic becomes the ONE member and its children come along by descent — nothing is re-parented, ever. With preview: true nothing is written and the exact plan comes back as {preview, milestone: {title, targetDate, startDate}, members: [{identifier, position}], hierarchyChanges: []}; the commit returns the same milestone view every other milestone tool does, plus hierarchyChanges: []. Title defaults to the epic's.",
+    inputSchema: {
+      title: z.string().optional(),
+      description: z.string().optional(),
+      target_date: dateSchema,
+      start_date: dateSchema,
+      from_epic: refSchema.optional().describe("The epic to plan; it becomes the one member"),
+      preview: z.boolean().optional().describe("Return the plan and write nothing"),
+      actor: actorSchema,
+      ws: wsSchema,
+    },
+    annotations: { title: "Create milestone", ...milestoneWriteAnnotations },
+  },
+  ({ title, description, target_date, start_date, from_epic, preview, actor, ws }) =>
+    run(() =>
+      storeFor(ws)
+        .milestones()
+        .create(
+          { title, description, targetDate: target_date, startDate: start_date, fromEpic: from_epic, preview },
+          requireActor(actor),
+        ),
+    ),
+);
+
+server.registerTool(
+  "update_milestone",
+  {
+    description:
+      "Set a milestone's target and/or start date (YYYY-MM-DD, UTC calendar days; null clears one). The start may not be after the target. Title, description, assignee and status are edited with update_task like any issue.",
+    inputSchema: { ref: milestoneRefSchema, target_date: dateSchema, start_date: dateSchema, actor: actorSchema, ws: wsSchema },
+    outputSchema: milestoneViewShape,
+    annotations: { title: "Update milestone dates", readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  ({ ref, target_date, start_date, actor, ws }) =>
+    run(() => storeFor(ws).milestones().update(ref, { targetDate: target_date, startDate: start_date }, requireActor(actor))),
+);
+
+server.registerTool(
+  "add_milestone_member",
+  {
+    description:
+      "Add an epic or task to a milestone at a position (before/after another member, at a 1-based position, or appended). Membership never changes the issue's parent, blockers, status or claim. An issue is a direct member of at most one milestone: adding it to a second is refused naming the first (use move_milestone_member). A present member with no position is an idempotent replay (`replayed: true`); with a position it is a move.",
+    inputSchema: {
+      milestone: milestoneRefSchema,
+      ref: refSchema,
+      ...memberPositionShape,
+      base_revision: baseRevisionSchema,
+      note: z.string().optional(),
+      actor: actorSchema,
+      ws: wsSchema,
+    },
+    outputSchema: { ...milestoneViewShape, replayed: z.boolean() },
+    annotations: { title: "Add milestone member", ...milestoneWriteAnnotations },
+  },
+  ({ milestone, ref, before, after, at, base_revision, note, actor, ws }) =>
+    run(() =>
+      storeFor(ws)
+        .milestones()
+        .addMember(milestone, ref, { before, after, at, baseRevision: base_revision, note }, requireActor(actor)),
+    ),
+);
+
+server.registerTool(
+  "remove_milestone_member",
+  {
+    description:
+      "Remove a member from a milestone. The member itself is untouched; the other members keep their ranks. A non-member is not_found.",
+    inputSchema: { milestone: milestoneRefSchema, ref: refSchema, base_revision: baseRevisionSchema, actor: actorSchema, ws: wsSchema },
+    outputSchema: milestoneViewShape,
+    annotations: { title: "Remove milestone member", ...milestoneWriteAnnotations },
+  },
+  ({ milestone, ref, base_revision, actor, ws }) =>
+    run(() => storeFor(ws).milestones().removeMember(milestone, ref, { baseRevision: base_revision }, requireActor(actor))),
+);
+
+server.registerTool(
+  "move_milestone_member",
+  {
+    description:
+      "Move a member within its milestone (before/after/at) or to another milestone (`to`, optionally positioned). Returns the milestone it ended up in. base_revision is checked against the destination for `to`, else the member's own milestone.",
+    inputSchema: {
+      ref: refSchema,
+      ...memberPositionShape,
+      to: milestoneRefSchema.optional().describe("Move it into this milestone instead"),
+      base_revision: baseRevisionSchema,
+      actor: actorSchema,
+      ws: wsSchema,
+    },
+    outputSchema: milestoneViewShape,
+    annotations: { title: "Move milestone member", ...milestoneWriteAnnotations },
+  },
+  ({ ref, before, after, at, to, base_revision, actor, ws }) =>
+    run(() => storeFor(ws).milestones().moveMember(ref, { before, after, at, to, baseRevision: base_revision }, requireActor(actor))),
+);
+
+server.registerTool(
+  "reorder_milestone_members",
+  {
+    description:
+      "Replace a milestone's member order with the given list — every member, once, in the new order — atomically, bumping the revision once. Pass base_revision from your last read so a concurrent edit is refused rather than overwritten.",
+    inputSchema: {
+      milestone: milestoneRefSchema,
+      order: z.array(refSchema).describe("Every member, in the new order"),
+      base_revision: baseRevisionSchema,
+      actor: actorSchema,
+      ws: wsSchema,
+    },
+    outputSchema: milestoneViewShape,
+    annotations: { title: "Reorder milestone members", ...milestoneWriteAnnotations },
+  },
+  ({ milestone, order, base_revision, actor, ws }) =>
+    run(() => storeFor(ws).milestones().reorderMembers(milestone, order, { baseRevision: base_revision }, requireActor(actor))),
 );
 
 const transport = new StdioServerTransport();

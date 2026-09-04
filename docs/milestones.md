@@ -5,8 +5,10 @@ from anywhere in the tree **without moving them**. This page is the contract
 the R3 tickets implement: R3b (store, migration, CLI, MCP, HTTP), R3c (the
 Milestones view beside Graph) and R3d (milestones in the pickup queue). The
 pure types and helpers it names live in `src/core/milestones.ts` and are
-pinned today by `test/milestones.test.ts`; everything that needs a database is
-"to be pinned by" a test that does not exist yet, named in place. Where this
+pinned today by `test/milestones.test.ts`; what needs a database is pinned by
+`test/store-milestones.test.ts` and `test/contract-milestones.test.ts` (R3b),
+and what needs the queue or the view is "to be pinned by" a test that does not
+exist yet, named in place. Where this
 page and [semantics.md](semantics.md) disagree, semantics.md describes today
 and this page the target. The queue it plugs into is [queue.md](queue.md).
 
@@ -18,7 +20,7 @@ one, and every guard an issue has. What makes it a milestone is its `kind`:
 the reserved id **`milestone`** (`MILESTONE_KIND` in `src/core/milestones.ts`).
 Nothing else marks it; there is no flag column and no second table of
 milestones. `staple milestone show STA-159` and `staple show STA-159` describe
-the same row. (To be pinned by `store-milestones.test.ts` — *"a milestone is
+the same row. (Pinned by `store-milestones.test.ts` — *"a milestone is
 an ordinary issue with an ordinary history"*.)
 
 **Why a reserved id and not a kind flag.** Kinds are a vocabulary without
@@ -51,7 +53,7 @@ No `milestone` kind is configured in this workspace. Run
 Nothing is created on its behalf: a vocabulary the operator did not write is
 not theirs. (Pinned by `milestones.test.ts` —
 *"assertMilestoneKindConfigured names the kinds add that enables the feature"*;
-to be pinned by `contract-milestones.test.ts` — *"every surface refuses with
+pinned by `contract-milestones.test.ts` — *"every surface refuses with
 the same validation envelope when the kind is absent"*.)
 
 **Kind changes are guarded in both directions.** Re-declaring a milestone as a
@@ -61,9 +63,10 @@ milestone cannot own them. Re-declaring any issue *as* a milestone is allowed;
 its metadata row appears on first write. `staple kinds rm milestone` is refused
 outright while any milestone has members or a metadata row, exactly as removing
 the last status of a required category is: the refusal names the milestones.
-(To be pinned by `store-milestones.test.ts` — *"refuses to re-kind a milestone
-that still has members"*, *"refuses to remove the milestone kind while
-milestones exist"*.)
+(Pinned by `store-milestones.test.ts` — *"refuses to re-kind a milestone that
+still has members"*; the `kinds rm` guard is still to be pinned — *"refuses to
+remove the milestone kind while milestones exist"* — and lands with the guard
+in `removeKind`.)
 
 ## Metadata: two dates in a table, everything else reused
 
@@ -98,10 +101,10 @@ keeps the exception where the exception is, and `ON DELETE CASCADE` gives
 deletion its semantics for free. The row is created lazily — on the first
 `milestone set`, `milestone add`, or `create-from-epic` — so a milestone with
 no dates and no members is just an issue of the `milestone` kind, and
-`milestone ls` still lists it. R3b adds the table in the next free workspace
-migration (008 if the queue's 007 merges first; whichever merges second
-renumbers, per `src/core/migrations/workspace/index.ts`); the migration
-creates the two tables and seeds nothing. (To be pinned by
+`milestone ls` still lists it. R3b added the tables in workspace migration
+**007** (`007-milestones.ts`; if the queue's migration merges first, whichever
+merges second renumbers, per `src/core/migrations/workspace/index.ts`); the
+migration creates the two tables and seeds nothing. (Pinned by
 `migrations-fixtures.test.ts` — *"the milestone migration preserves every issue
 and every configured kind and creates no rows"*.)
 
@@ -131,7 +134,7 @@ walks `parent_id`, and membership is not `parent_id`. A milestone with
 hierarchical children derives from *them* as any parent does; its members
 change its progress, never its status. Two ladders writing one column would be
 two answers to "why is this `in_progress`", and the timing replay reads that
-column. (To be pinned by `store-milestones.test.ts` — *"a member landing does
+column. (Pinned by `store-milestones.test.ts` — *"a member landing does
 not move the milestone's status"*.)
 
 ## Dates: calendar days, UTC, inclusive
@@ -195,7 +198,7 @@ CREATE TABLE milestone_members (
 CREATE INDEX milestone_members_milestone_idx ON milestone_members(milestone_id, rank);
 ```
 
-(To be pinned by `store-milestones.test.ts` — *"adding a member leaves its
+(Pinned by `store-milestones.test.ts` — *"adding a member leaves its
 parent, depth, blockers and status untouched"*.)
 
 **One direct milestone per issue.** `PRIMARY KEY (issue_id)` says an issue is a
@@ -212,7 +215,7 @@ direct milestone and names the first"*.)
 
 **Duplicate membership.** Adding a present member with no position is an
 idempotent replay — the existing row, `replayed: true`, no event. With a
-position it is a move. This is the queue's rule, verbatim. (To be pinned by
+position it is a move. This is the queue's rule, verbatim. (Pinned by
 `store-milestones.test.ts` — *"add of a present member is a no-op replay"*,
 *"add with a position of a present member is a move"*.)
 
@@ -222,7 +225,7 @@ a human pulls one child forward in the plan without queueing the whole epic
 first. Progress counts the descendant once (below); the queue emits it once, at
 whichever occurrence comes first ([queue.md](queue.md#the-resolver--one-deterministic-next-item-algorithm)).
 `milestone show` lists both rows and marks the descendant `nestedUnder:
-<epic>` so the view can indent it. (To be pinned by `store-milestones.test.ts`
+<epic>` so the view can indent it. (Pinned by `store-milestones.test.ts`
 — *"an epic and its child may both be members, and the child is marked
 nestedUnder"*.)
 
@@ -241,7 +244,7 @@ foreign identifier is refused with `validation` naming its workspace, as the
 queue refuses it. Any other kind is fine: epics and tasks are the point, and a
 `bug` or a `spike` is just as much work. (Pinned by `milestones.test.ts` —
 *"assertMembershipAllowed refuses a milestone as a member and a self-member"*;
-to be pinned by `store-milestones.test.ts` — *"refuses a foreign identifier and
+pinned by `store-milestones.test.ts` — *"refuses a foreign identifier and
 names its workspace"*.)
 
 **Create from an epic.** `staple milestone new --from-epic <epic>` creates a
@@ -259,7 +262,7 @@ milestone's structure and re-parenting is impossible by construction.
 
 `hierarchyChanges` is always empty and is returned anyway, so that the test —
 and the human reading the preview — can see the promise rather than infer it.
-(To be pinned by `store-milestones.test.ts` — *"create-from-epic previews one
+(Pinned by `store-milestones.test.ts` — *"create-from-epic previews one
 membership and no hierarchy change, and writes nothing"*;
 `contract-milestones.test.ts` — *"the preview and the commit name the same
 changes on every surface"*.)
@@ -277,7 +280,7 @@ an immediate transaction is what makes concurrent inserts unable to collide.
 Order is **durable** — it is a column, not a sort — and **independent**: it is
 not derived from priority, `created_at`, status order, or the members' tree
 positions, and none of those reorder it. (Pinned by `milestones.test.ts` —
-*"rankBetween: first, append, midpoint, exhausted"*; to be pinned by
+*"rankBetween: first, append, midpoint, exhausted"*; pinned by
 `store-milestones.test.ts` — *"member order ignores priority, created_at and
 tree order"*, *"renumbers when the gap is exhausted, in one transaction"*.)
 
@@ -288,7 +291,7 @@ Every read of the members returns it; every mutation accepts an optional
 when it does not match, leaving the order untouched. Per-milestone rather than
 the queue's single global counter because two humans reordering two milestones
 are not in conflict. The web editor always sends the base; the CLI sends it
-with `--base N` and otherwise writes blind. (To be pinned by
+with `--base N` and otherwise writes blind. (Pinned by
 `store-milestones.test.ts` — *"a stale baseRevision is refused and the order
 stands"*, *"bulk reorder is atomic and bumps the revision once"*;
 `ui-milestones.test.ts` — *"a stale reorder keeps the server order and offers a
@@ -347,7 +350,7 @@ interface MilestoneProgress {
   reserved for `complete`. (*"percent rounds down"*.)
 
 The categories are read from the workspace's configured statuses at read time,
-never from the status ids, so a renamed `done` still counts. (To be pinned by
+never from the status ids, so a renamed `done` still counts. (Pinned by
 `store-milestones.test.ts` — *"progress reads categories, not status ids"*;
 the fixture case in `milestone-fixture.test.ts` (R3e) — *"progress avoids
 double counting nested members"*.)
@@ -357,7 +360,7 @@ double counting nested members"*.)
 **Deleting a milestone** is deleting an issue: `ON DELETE CASCADE` removes its
 metadata row and every membership row; the members themselves are untouched —
 parent, blockers, status, claim, queue entry. Its own queue entry cascades out
-with it, as any issue's does. (To be pinned by `store-milestones.test.ts` —
+with it, as any issue's does. (Pinned by `store-milestones.test.ts` —
 *"deleting a milestone frees its members and changes nothing about them"*.)
 
 **Deleting a member** cascades its membership row out; the other members keep
@@ -473,12 +476,20 @@ the next eligible row from the resolver; `--all` includes resolved milestones.
  "next": {"identifier": "STA-67", "position": 4}}
 ```
 
+Each member row also carries `title`, `addedBy`, `addedAt` and `note`, which
+the view (R3c) renders. `planPosition` and `next` are part of the shape today
+and are `null` until the queue (R2b/R3d) fills them; `ls` returns the same
+object without `members`, plus `memberCount`. The service behind every surface
+is `src/core/milestone-store.ts` (`store.milestones()`), and every membership
+mutation returns this same view, so a writer redraws from its result exactly
+as a reader does.
+
 Title, description, assignee and status are edited with the ordinary issue
 commands; `set` takes only what is milestone-specific. A non-milestone
 identifier given where a milestone is expected is refused with `validation`
 naming its kind (`STA-66 is an epic, not a milestone`); an unknown identifier
 is `not_found`; `--at N` is a 1-based position; `rm` of a non-member is
-`not_found`. (To be pinned by `contract-milestones.test.ts` — *"every operation
+`not_found`. (Pinned by `contract-milestones.test.ts` — *"every operation
 has the same shape and refusal on every surface"*, *"round-trips dates, order
 and removal"*.)
 

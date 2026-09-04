@@ -327,18 +327,34 @@ describe("KNOWN: logical errors this surface cannot project", () => {
     // The gate now pins a LIST of methods per path rather than a single one, and
     // `test/ui-settings.test.ts` asserts that every other route kept exactly the
     // pin it had (bootstrap GET-only, action POST-only).
+    // R3b (STA-172) added the `/api/milestone/*` family, the gate routes' shape:
+    // a `switch` over literal paths under one `startsWith`. The pattern admits a
+    // slash and a `case` so those literals — and the three gate routes that were
+    // invisible to the old pattern — are derived too rather than hidden behind
+    // the family.
     const source = readFileSync(join(REPO_ROOT, "src/ui/server.ts"), "utf8");
-    const routes = [...new Set([...source.matchAll(/url\.pathname === "(\/api\/[a-z-]+)"/g)].map((m) => m[1]!))];
+    const routes = [...new Set([...source.matchAll(/(?:url\.pathname === |case )"(\/api\/[a-z/-]+)"/g)].map((m) => m[1]!))];
     expect(routes.sort()).toEqual([
       "/api/action",
       "/api/agent-context",
       "/api/bootstrap",
       "/api/document",
       "/api/events",
+      "/api/gate/approve",
+      "/api/gate/request",
+      "/api/gate/request-changes",
       "/api/graph",
       "/api/inbox",
       "/api/issue",
       "/api/issues",
+      "/api/milestone",
+      "/api/milestone/add",
+      "/api/milestone/create",
+      "/api/milestone/move",
+      "/api/milestone/remove",
+      "/api/milestone/reorder",
+      "/api/milestone/update",
+      "/api/milestones",
       "/api/poll",
       "/api/revisions",
       "/api/settings",

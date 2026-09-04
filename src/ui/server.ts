@@ -493,7 +493,9 @@ export function startUiServer(options: UiOptions): UiHandle {
          * `test/ui-gate-routes.test.ts` pins all three gate refusals.
          */
         const expected =
-          url.pathname === "/api/action" || url.pathname.startsWith("/api/gate/")
+          url.pathname === "/api/action" ||
+          url.pathname.startsWith("/api/gate/") ||
+          url.pathname.startsWith("/api/milestone/")
             ? ["POST"]
             : url.pathname === "/api/settings"
               ? ["GET", "POST"]
@@ -1279,6 +1281,93 @@ export function startUiServer(options: UiOptions): UiHandle {
           throw new StapleError("validation", `Unknown action "${type}"`);
         }
         json(res, 200, result);
+        return;
+      }
+
+      /**
+       * Milestones — R3b (STA-172), docs/milestones.md. Two reads and a POST
+       * family, the gate routes' shape: every answer is the ONE milestone view
+       * the CLI prints under `--json` and the MCP tools return, so the
+       * Milestones page (R3c) redraws from a write result exactly as it does
+       * from a read. `create` with `preview: true` writes nothing and returns
+       * the plan; a stale `baseRevision` is the store's own revision_conflict.
+       */
+      if (url.pathname === "/api/milestones") {
+        const handle = handleFor(url.searchParams.get("ws") ?? undefined);
+        json(res, 200, handle.store.milestones().list({ all: url.searchParams.get("all") === "1" }));
+        return;
+      }
+
+      if (url.pathname === "/api/milestone") {
+        const handle = handleFor(url.searchParams.get("ws") ?? undefined);
+        json(res, 200, handle.store.milestones().get(url.searchParams.get("ref") ?? ""));
+        return;
+      }
+
+      if (url.pathname.startsWith("/api/milestone/")) {
+        const body = await readBody(req);
+        const handle = handleFor((body.ws as string) ?? undefined);
+        const milestones = handle.store.milestones();
+        const actor = (body.actor as string) || "ui";
+        const ref = body.ref as string;
+        const position = {
+          before: body.before as string | undefined,
+          after: body.after as string | undefined,
+          at: body.at as number | undefined,
+        };
+        const baseRevision = body.baseRevision as number | undefined;
+        let payload: unknown;
+        switch (url.pathname) {
+          case "/api/milestone/create":
+            payload = milestones.create(
+              {
+                title: body.title as string | undefined,
+                description: body.description as string | null | undefined,
+                targetDate: body.targetDate as string | null | undefined,
+                startDate: body.startDate as string | null | undefined,
+                fromEpic: body.fromEpic as string | null | undefined,
+                preview: body.preview === true,
+              },
+              actor,
+            );
+            break;
+          case "/api/milestone/update":
+            payload = milestones.update(
+              ref,
+              {
+                targetDate: body.targetDate as string | null | undefined,
+                startDate: body.startDate as string | null | undefined,
+              },
+              actor,
+            );
+            break;
+          case "/api/milestone/add":
+            payload = milestones.addMember(
+              body.milestone as string,
+              ref,
+              { ...position, baseRevision, note: (body.note as string | undefined) ?? null },
+              actor,
+            );
+            break;
+          case "/api/milestone/remove":
+            payload = milestones.removeMember(body.milestone as string, ref, { baseRevision }, actor);
+            break;
+          case "/api/milestone/move":
+            payload = milestones.moveMember(ref, { ...position, to: body.to as string | undefined, baseRevision }, actor);
+            break;
+          case "/api/milestone/reorder":
+            payload = milestones.reorderMembers(
+              body.milestone as string,
+              stringList(body.order) ?? [],
+              { baseRevision },
+              actor,
+            );
+            break;
+          default:
+            json(res, 404, { error: "not found" });
+            return;
+        }
+        json(res, 200, payload);
         return;
       }
 
