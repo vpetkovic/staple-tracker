@@ -80,8 +80,9 @@ describe("the CLI gate verbs", () => {
     // Matched on the IDENTIFIER COLUMN, not on `includes`: a queued child's line
     // mentions its gate's identifier in the cue, so a substring search finds the
     // wrong row — which is the sort of thing that makes a green test lie.
+    // Column 2, not 1: R5e (STA-185) leads an `ls` row with the kind glyph.
     const rowFor = (ref: string) =>
-      out.split("\n").find((l) => l.trim().split(/\s+/)[1] === ref)!;
+      out.split("\n").find((l) => l.trim().split(/\s+/)[2] === ref)!;
     const parentLine = rowFor(epic);
     const childLine = rowFor(a);
     expect(parentLine).toContain("[awaiting VP]");

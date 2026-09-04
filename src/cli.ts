@@ -29,6 +29,7 @@ import {
   updateConfig,
 } from "./config/index.js";
 import { coerceSettingInput, settingDefinitionsFor } from "./core/settings-registry.js";
+import { GENERIC_KIND_FALLBACK } from "./core/kind-appearance.js";
 import { Hub, notifyHubResolvedSafe } from "./core/hub.js";
 import { runInstallCommand } from "./install/index.js";
 import { dataVersion } from "./core/db.js";
@@ -90,6 +91,22 @@ const CATEGORY_GLYPHS: Record<StatusCategory, string> = {
  */
 const statusCategories = new Map<string, StatusCategory>();
 
+/**
+ * Kind id -> its resolved TERMINAL FALLBACK (R5e, STA-185).
+ *
+ * The same process-scoped device as `statusCategories` above and populated in
+ * the same place, for the same reason: the row renderers are shared and a
+ * terminal has no business being handed a store to look up one character.
+ *
+ * The value is the `fallback` field of the kind's resolved appearance — the ONE
+ * field of that record a terminal can draw. `source`/`value` name a Lucide icon,
+ * an emoji or an SVG document, none of which a pipe can render, and the emoji in
+ * particular is double-width in most terminals and would break the column the
+ * characterisation suite pins. `fallback` is validated as 1 to 4 code points of
+ * printable text, so it is exactly as safe as the status glyph beside it.
+ */
+const kindFallbacks = new Map<string, string>();
+
 const PRIORITY_MARKS: Record<string, string> = {
   critical: "!!",
   high: "!",
@@ -127,6 +144,37 @@ function kindSuffix(kind: string): string {
   return kind === DEFAULT_ISSUE_KIND ? "" : ` · ${kind}`;
 }
 
+/**
+ * The kind's terminal glyph. A kind this process has not been told about — an
+ * older server, or a vocabulary changed after the store was opened — gets the
+ * same generic mark the resolver would have given it, never a blank, because a
+ * missing leading character would shift that one row's columns.
+ */
+function kindGlyph(kind: string): string {
+  return kindFallbacks.get(kind) ?? GENERIC_KIND_FALLBACK;
+}
+
+/**
+ * `line()` LED BY THE KIND GLYPH — the list surfaces (`ls`, `tree`, and the
+ * children under `show`), R5e (STA-185).
+ *
+ * Deliberately NOT folded into `line()` itself. `line()` is shared by twelve
+ * commands and `characterize-cli-human-output` pins each of them by byte offset;
+ * a leading column there would re-flow `new`, `done`, `checkout`, `release`,
+ * `block`, `inbox`, `board` and `wait` for the sake of a criterion that names
+ * three commands. So the glyph is a wrapper the three list surfaces opt into,
+ * and every other row renders exactly as it always did.
+ *
+ * It LEADS rather than sits between the status glyph and the identifier because
+ * the kind is the coarsest fact on the row: `staple ls | grep '^◆'` is the epic
+ * filter, and it only works at the start of the line. `kindSuffix` still spells
+ * the non-default kind out in words at the far end — the glyph is for scanning,
+ * the word is for grepping, and neither reads as the other.
+ */
+function kindLine(issue: Issue, extra = ""): string {
+  return `${kindGlyph(issue.kind)} ${line(issue, extra)}`;
+}
+
 function line(issue: Issue, extra = ""): string {
   const assignee = issue.assignee ? ` @${issue.assignee}` : "";
   // The status column stays 11 wide. `awaiting_approval` is 17 and overflows it,
@@ -158,6 +206,10 @@ function getStore(values: { db?: string; ws?: string }) {
   // (STA-140) without being handed the store just to look up a glyph.
   statusCategories.clear();
   for (const status of opened.store.getStatuses()) statusCategories.set(status.id, status.category);
+  // Same batch, same reason (STA-185): one resolved read of the vocabulary, so
+  // `ls` never asks the store for an appearance per row.
+  kindFallbacks.clear();
+  for (const kind of opened.store.getKindsWithAppearance()) kindFallbacks.set(kind.id, kind.appearance.fallback);
   return opened;
 }
 
@@ -935,7 +987,7 @@ function main() {
       for (const issue of issues) {
         const claim = claims.get(issue.id);
         console.log(
-          line(
+          kindLine(
             issue,
             (claim
               ? ` · held ${formatAgo(claim.heldSeconds)} · silent ${formatAgo(claim.idleSeconds)}`
@@ -953,10 +1005,29 @@ function main() {
       if (values.json) {
         // Mirrors MCP get_task: claim, the gate pair and the timing pair ride
         // alongside the context, from the same store expressions get_task
-        // spreads.
+        // spreads. `kindAppearance` is the one field this surface carries that
+        // get_task does not — see the note on it, and src/mcp.ts's get_task.
         outJson({
           ...ctx,
           claim: store.claimActivity(ctx.issue.id),
+          /**
+           * The CANONICAL appearance of this issue's kind (R5e, STA-185).
+           *
+           * `issue.kind` is a string id, so a consumer that wants to draw the
+           * ticket had to fetch `kinds ls --json` and join by hand. This is that
+           * join, done once, on the detail surface — the same record
+           * `store.kindAppearance()` serves to `/api/settings` and `list_kinds`,
+           * so the terminal, the web app and an MCP client all read one answer.
+           *
+           * Beside `kind` rather than replacing it: `kind` is a documented string
+           * in every payload of this tool, and turning it into an object here
+           * would be a breaking change on the one surface scripts read most.
+           * Deliberately NOT added to `ls --json` rows either — appearance is a
+           * property of the KIND, not of the issue, and repeating it on every row
+           * of a thousand-issue list is a payload that says the same six things
+           * over and over.
+           */
+          kindAppearance: store.kindAppearance(ctx.issue.kind),
           gate: store.gate(ctx.issue.id),
           queuedBy: store.queuedBy(ctx.issue.id),
           ...store.detailTiming(ctx.issue.id),
@@ -966,7 +1037,10 @@ function main() {
       const i = ctx.issue;
       const claim = store.claimActivity(i.id);
       const timing = store.timing(i.id);
-      console.log(`${i.identifier} · ${i.title}`);
+      // Led by the kind glyph, like the rows below it (STA-185): the detail header is
+      // the one line of this surface a reader scans, and it should carry the same mark
+      // the list carried for the same ticket.
+      console.log(`${kindGlyph(i.kind)} ${i.identifier} · ${i.title}`);
       // `kind` is unconditional here — unlike `line()`, which suppresses the
       // default. This is the detail surface: "it is a task" is a fact somebody
       // asked for by name, and leaving it out would make its absence ambiguous
@@ -1084,7 +1158,7 @@ function main() {
         const childQueued = store.queuedByFor(childIds);
         for (const child of ctx.children) {
           console.log(
-            `  ${line(child, gateCue(childGates.get(child.id) ?? null, childQueued.get(child.id) ?? null))}`,
+            `  ${kindLine(child, gateCue(childGates.get(child.id) ?? null, childQueued.get(child.id) ?? null))}`,
           );
         }
       }
@@ -1483,7 +1557,7 @@ function main() {
       }
       const print = (nodes: ReturnType<WorkspaceStore["tree"]>, indent: string) => {
         for (const node of nodes) {
-          console.log(`${indent}${line(node.issue)}`);
+          console.log(`${indent}${kindLine(node.issue)}`);
           print(node.children as never, `${indent}  `);
         }
       };

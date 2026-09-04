@@ -81,14 +81,32 @@ row is a task — so an epic or a bug stands out without a column of noise on
 every other line. `staple show` always names it.
 
 Every kind also has an **appearance** — the web icon it wears, its accessible
-label, and the character a terminal prints instead. `staple kinds ls` leads
+label, and the character a terminal prints instead. `ls`, `tree` and `show`
+**lead each row with that terminal fallback**, one character then a space, so a
+kind is legible without colour and `staple ls | grep '^◆'` is the epic filter:
+
+```
+◆ ◌  STA-31    backlog     Q3 billing rework · epic
+  ◇ ◌! STA-66  backlog     Split the invoice job
+✱ ⊘  STA-72    blocked     Login 500s on retry · bug
+```
+
+`show` leads its header line and its child rows the same way. The confirmation
+lines of the write commands (`new`, `done`, `status`, `checkout`, `release`,
+`block`) and the `inbox`/`board` sections are deliberately left bare: they
+render one known ticket, not a list to scan, and their column offsets are a
+de-facto contract. `staple kinds ls` leads
 each row with that terminal fallback (`◆ epic`, `◇ task`, `✱ bug`, `↻ chore`,
 `↯ spike`, `⚑ milestone`; `•` for a kind nobody has given a mark), and
 `--json` carries the whole record on each row as `appearance:
 { source, value, label, fallback }` — the same record MCP `list_kinds` and
 `/api/settings` serve. It is stored as the workspace setting
 `kinds.appearance` (see [configuration.md](configuration.md#the-settings-registry));
-the CLI only reads it.
+the CLI only reads it. `staple show --json` carries the resolved record for the
+issue's own kind as `kindAppearance`, beside the string `kind` — the same record,
+joined once, so a consumer that draws a ticket need not fetch the vocabulary to
+do it. List rows do not repeat it: an appearance belongs to the kind, not to the
+issue.
 
 `source` names where the web icon comes from, and each source bounds its
 `value`:

@@ -44,8 +44,10 @@ let globalDb: string;
 /** A directory with no workspace at or above it that staple can reach. */
 let orphan: string;
 
-const REPO_ROW = "◌  OUT-1     backlog     repo task\n";
-const GLOBAL_ROW = "◌  GWS-1     backlog     global task\n";
+// R5e (STA-185) put the kind's terminal fallback at the head of every `ls` row;
+// `◇` is the seeded `task` mark. The columns after it are unchanged.
+const REPO_ROW = "◇ ◌  OUT-1     backlog     repo task\n";
+const GLOBAL_ROW = "◇ ◌  GWS-1     backlog     global task\n";
 
 beforeAll(() => {
   home = tempDir("char-env-home");

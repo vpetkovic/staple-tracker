@@ -37,7 +37,7 @@
  */
 import { AuthError, getSettings } from "./api";
 import { fallbackKindAppearance, type KindAppearance, type KindRow } from "./kind-appearance";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import {
   ISSUE_KINDS,
   ISSUE_STATUSES,
@@ -307,6 +307,27 @@ function kindById(id: string): KindRow | undefined {
 export function kindAppearance(id: string): KindAppearance {
   const kind = kindById(id);
   return kind?.appearance ?? fallbackKindAppearance(kind ?? { id, label: titleCaseId(id) });
+}
+
+/**
+ * `kindAppearance` FOR A COMPONENT — R5e (STA-185), and the reason changing a glyph in
+ * settings repaints the whole app without a reload.
+ *
+ * `kindAppearance()` is a plain read of the module snapshot: correct at the moment it is
+ * called, and invisible to React afterwards. A row that called it directly would keep the
+ * mark it first rendered until something else happened to re-render it — which for a list
+ * that is not otherwise changing is "never", i.e. "until reload".
+ *
+ * So this subscribes. `useSyncExternalStore` over the snapshot getter is exactly the
+ * shape the module already has (`subscribeWorkspaceSettings` + a stable `current`
+ * object), and the envelope's identity changes on every `publishWorkspaceSettings` — the
+ * GET on the 1.5s fingerprint poll AND the settings editor's POST both go through it —
+ * so one save re-renders every mounted glyph. The server snapshot is the same getter,
+ * because these components are rendered to a string in tests.
+ */
+export function useKindAppearance(id: string): KindAppearance {
+  useSyncExternalStore(subscribeWorkspaceSettings, workspaceSettings, workspaceSettings);
+  return kindAppearance(id);
 }
 
 /**

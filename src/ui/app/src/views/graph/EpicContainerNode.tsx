@@ -39,7 +39,8 @@
  */
 import { memo } from "react";
 import { Handle, Position, type NodeProps, type Node } from "@xyflow/react";
-import { ChevronDown, Layers } from "lucide-react";
+import { ChevronDown } from "lucide-react";
+import { KindGlyph } from "@/components/task-list";
 import { cn } from "@/lib/utils";
 import type { IssueKind } from "@/lib/types";
 import type { EpicSummary } from "./graph-clusters";
@@ -63,23 +64,26 @@ export interface EpicContainerNodeData extends Record<string, unknown> {
 export type EpicContainerFlowNode = Node<EpicContainerNodeData, "container">;
 
 /**
- * The kind mark, still a placeholder, still in exactly one component per surface.
+ * The kind mark — the SHARED glyph since R5e (STA-185), as O4c's placeholder asked.
  *
- * Same reasoning as O4b's `EpicKindMark` in EpicPicker.tsx: `components/task-list` exports
- * no shared `KindGlyph` yet (that is O1b), and inventing a second vocabulary of kind icons
- * in the graph is how an app ends up with two. One monochrome mark, the real kind on the
- * element as `data-epic-kind`, and when the shared glyph lands this becomes
- * `<KindGlyph kind={kind} />` in both places and nothing else moves.
+ * This was a hard-coded `Layers` with a note saying it should become `<KindGlyph/>` the
+ * moment one existed, for the reason the note gave: a second vocabulary of kind icons in
+ * the graph is how a canvas and a list start disagreeing about what an epic looks like.
+ * It now resolves the workspace's CONFIGURED appearance, like every other surface, so a
+ * glyph changed in settings changes here too — and `EpicPicker`'s mark beside it is the
+ * same component at the same 14px, which is why the popover and the canvas agree.
+ *
+ * `size={14}` is `EpicPicker`'s graph size, not the row's 12: this bar is 10px mono type
+ * and sits beside a 6px status dot. `data-epic-kind` survives as its own attribute — the
+ * shared glyph spells its seam `data-issue-kind`, and the canvas tests query this one.
  *
  * `kind: undefined` means an older server omitted the field, never "no kind".
  */
 function EpicKindMark({ kind }: { kind?: IssueKind }) {
   return (
-    <Layers
-      className="size-3 shrink-0 text-muted-foreground"
-      aria-hidden
-      data-epic-kind={kind ?? "epic"}
-    />
+    <span className="inline-flex shrink-0 text-muted-foreground" data-epic-kind={kind ?? "epic"}>
+      <KindGlyph kind={kind ?? "epic"} size={14} labelled={false} />
+    </span>
   );
 }
 
