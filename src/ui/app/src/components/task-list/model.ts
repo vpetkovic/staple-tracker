@@ -16,6 +16,7 @@ import type {
   IssueStatus,
   PlanSource,
   PullRequestRef,
+  RowCues,
   WorklogSummary,
 } from "@/lib/types";
 
@@ -187,6 +188,18 @@ export interface TaskRow {
    * which is what every existing caller means.
    */
   ghost?: boolean;
+  /**
+   * WHERE THIS ROW SITS IN THE PICKUP PLAN, AND WHAT IT WAS COMMITTED TO — R4c (STA-188).
+   *
+   * A SIBLING of `issue`, carried from `IssueRow` unchanged, and OPTIONAL for the reason
+   * `rollup`, `worklog` and `deps` are: a caller with nothing to say passes nothing, so a
+   * surface that has never joined the queue CHECKS the field rather than inheriting a
+   * default it did not choose. Absent and `null` both mean SILENCE — no cue is drawn —
+   * which is not the same as "unqueued", a state the queue itself has to assert.
+   *
+   * Only the ungrouped tree supplies it. See views/TreeView.tsx and row-cues.ts.
+   */
+  cues?: RowCues | null;
 }
 
 /**
@@ -533,6 +546,7 @@ export interface TaskSource {
   pullRequests?: PullRequestRef[];
   worklog?: WorklogSummary | null;
   deps?: IssueDeps;
+  cues?: RowCues | null;
 }
 
 /**
@@ -551,6 +565,9 @@ export function flatRow(source: TaskSource, over: Partial<TaskRow> = {}): TaskRo
     pullRequests: source.pullRequests,
     worklog: source.worklog,
     deps: source.deps,
+    // R4c (STA-188). A row built outside the ungrouped tree has no join behind it, so it
+    // says nothing about the plan. Explicit for the same reason `rollup` and `ghost` are.
+    cues: source.cues ?? null,
     depth: 0,
     hasChildren: false,
     isExpanded: false,

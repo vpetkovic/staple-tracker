@@ -304,6 +304,7 @@ export function TreeGrid({
   showResolved,
   hiddenParents,
   onOpen,
+  onOpenMilestone,
   onCloseDrawer,
   onVisibleOrder,
 }: {
@@ -371,6 +372,12 @@ export function TreeGrid({
   /** V4's `hiddenParents()` — breadcrumbs for children whose parent a filter removed. */
   hiddenParents?: ReadonlyMap<string, Issue>;
   onOpen: (workspace: string, identifier: string) => void;
+  /**
+   * R4c (STA-188). What the milestone marker does: switch to the Milestones view with that
+   * milestone focused. Optional, because a container without a view to route to still wants
+   * the marker — the tooltip names the milestone either way.
+   */
+  onOpenMilestone?: (identifier: string) => void;
   onCloseDrawer: () => void;
   /** R6's contract (STA-106): the visible rows, in screen order. See lib/session.ts. */
   onVisibleOrder: (order: readonly Selection[]) => void;
@@ -756,6 +763,7 @@ export function TreeGrid({
       now={now}
       onOpen={() => openIssue(row)}
       onOpenParent={(identifier) => onOpen(row.workspace, identifier)}
+      onOpenMilestone={onOpenMilestone}
       onToggleExpand={() => expansion.toggleRow(row.issue, row.isExpanded)}
       onToggleSelect={() => toggleSelect(row.issue.id)}
       onFocus={() => focus.set(navKeyOf(row))}

@@ -35,6 +35,61 @@ sections are separated by one rule — 8px of air plus a hairline — whether th
 next section is headed by a real epic, a ghost of one, or the "No epic" header,
 at every width. There is no gap between an epic and its own first task.
 
+### Row cues
+
+Ungrouped is the normal working view, not the absence of information. Every row
+in it carries four readings, and none of them adds a pixel of height: the row is
+`--row-height` in every density preset — 36px, 28px compact, 44px on a coarse
+pointer — exactly as it was before the cues existed.
+
+- **Status** — the existing status icon, unchanged, in its own column.
+- **Kind** — the glyph the workspace configured for that kind (see *Glyph
+  catalog*), leading the identifier on every row.
+- **Pickup** — one glyph, and a number when there is one, immediately right of
+  the identifier.
+- **Milestone** — a `◇` marker when the row is planned under a milestone. It is
+  a button: it opens the Milestones view with that milestone focused.
+
+**The pickup cue speaks the queue's vocabulary** (see `docs/queue.md`), one word
+per row, first match wins:
+
+| Cue | Glyph | Prints | Means |
+| --- | --- | --- | --- |
+| Pickable | `▸` | `next` | the one row the resolver would hand an agent right now |
+| Queued | `#` | `#5` | eligible, but the plan puts an earlier row first — the **effective** position |
+| Queued (container) | `#` | `plan #2` | an epic or milestone the plan holds — the **plan** position |
+| Waiting | `⋯` | — | an unresolved blocker, or a blocked status |
+| Gated | `⚑` | — | a human review gate holds it, or it stands behind one |
+| In flight | `◐` | — | somebody is holding it, or it is already being worked |
+| Unqueued | `·` | — | not in the pickup plan — still work, just later |
+
+A **resolved** row has no pickup cue at all: finished work is not waiting for
+anything, and saying it is "not pickable" would file it beside work that is stuck.
+
+**Two numbers, and they are not interchangeable.** An actionable row prints its
+position in the *effective* order — the sequence an agent receives — and a
+container prints the position of the *plan* row it sits at, spelled out as
+`plan #2` so the two can never be read as one scale. A container is never in the
+effective order (the resolver expands it in place), so it never gets an
+effective number, and a leaf never borrows its container's plan number.
+
+**Glyph and word, never colour alone.** No cue carries a hue. Every one of them
+has a `title` tooltip and screen-reader text saying the same sentence — the word
+first, then what it means, then the position, then the queue resolver's own
+reason where there is one ("STA-3 is queued behind STA-9, awaiting approval by
+VP"). The milestone marker's accessible name names the milestone and says where
+it goes.
+
+**Where the numbers come from.** One read of `GET /api/queue` per poll, joined
+onto the list in the browser by identifier, memoised, refreshed by the same 1.5s
+fingerprint as everything else. The list *displays* these numbers and can never
+set them — presentation sort is not the queue.
+
+**Ungrouped only.** The grouped axes are unchanged, element for element, and the
+queue is not fetched while one of them is active. In hub mode the cues appear
+once a workspace is selected: a plan is a per-workspace sequence, and there is no
+cross-workspace order to show.
+
 ## Sorting
 
 The "Sort" control sits beside "Group" and names both halves of its own state without

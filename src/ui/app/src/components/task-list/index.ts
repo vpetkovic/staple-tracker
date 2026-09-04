@@ -59,3 +59,20 @@ export {
   type TaskRow,
   type TaskSource,
 } from "./model";
+/**
+ * R4c (STA-188). The ungrouped row's plan cues: the vocabulary and the browser-side join
+ * against `GET /api/queue`. Exported because the WIRING lives outside this module — the
+ * tree fetches the queue and attaches the result — while the derivation and the words
+ * belong here with the row that renders them.
+ */
+export {
+  attachRowCues,
+  buildRowCueIndex,
+  EMPTY_ROW_CUE_INDEX,
+  MILESTONE_CUE_GLYPH,
+  milestoneCueSentence,
+  ROW_CUE_PRESENTATION,
+  rowCueSentence,
+  rowCueShort,
+  type RowCueIndex,
+} from "./row-cues";

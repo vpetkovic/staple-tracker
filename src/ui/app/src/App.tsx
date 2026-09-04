@@ -102,6 +102,11 @@ export function App() {
   }, [onAuthError]);
 
   const [view, setView] = useState<ViewName>(DEFAULT_VIEW);
+  /**
+   * R4c (STA-188). Which milestone the page was pointed at, and by what. Beside `view`
+   * because it is the second half of one navigation act; see lib/session.ts.
+   */
+  const [milestoneFocus, setMilestoneFocus] = useState<string | null>(null);
   const [ws, setWs] = useState("");
   const [selection, setSelection] = useState<Selection | null>(null);
 
@@ -308,6 +313,21 @@ export function App() {
     [filters, setFilters],
   );
 
+  /**
+   * Switching to any view by hand drops the focus: it was a request to look at ONE
+   * milestone, and a request that outlived the trip would silently re-point the plan the
+   * next time somebody clicked the tab.
+   */
+  const goToView = useCallback((next: ViewName) => {
+    setMilestoneFocus(null);
+    setView(next);
+  }, []);
+
+  const focusMilestone = useCallback((ref: string) => {
+    setMilestoneFocus(ref);
+    setView("milestones");
+  }, []);
+
   const open = useCallback((workspace: string, ref: string) => setSelection({ workspace, ref }), []);
   const close = useCallback(() => setSelection(null), []);
 
@@ -319,7 +339,9 @@ export function App() {
       mode: bootstrap.data.mode,
       workspaces: bootstrap.data.workspaces,
       view,
-      setView,
+      setView: goToView,
+      milestoneFocus,
+      focusMilestone,
       ws,
       setWs,
       issues,
@@ -346,6 +368,9 @@ export function App() {
     // rebuilds it and every view re-renders against the new statuses. See above.
     settingsSnapshot,
     view,
+    goToView,
+    milestoneFocus,
+    focusMilestone,
     ws,
     issues,
     filters,

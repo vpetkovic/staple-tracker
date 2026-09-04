@@ -662,6 +662,16 @@ function flatten(
       // threw away a reading the server had batched a query to produce.
       worklog: r.worklog,
       deps: r.deps,
+      /*
+       * R4c (STA-188). Carried, never derived. The join against `GET /api/queue` happens
+       * once per fetch in views/TreeView.tsx; this pass only has to not drop it, which is
+       * the same reminder `worklog` above already carries and for the same reason.
+       *
+       * A GHOST has none: `nesting.ts` builds its row from `{issue, claim, workspace}`, so
+       * `r.cues` is undefined and this writes `null`. That is correct — a bracket around
+       * rows is not a row an agent could take.
+       */
+      cues: r.cues ?? null,
       depth: line.depth,
       hasChildren: line.hasChildren,
       isExpanded: line.isExpanded,

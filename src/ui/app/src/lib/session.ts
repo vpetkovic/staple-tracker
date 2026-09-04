@@ -53,6 +53,21 @@ export interface StapleSession {
   view: ViewName;
   setView: (view: ViewName) => void;
 
+  /**
+   * THE MILESTONE THE PAGE IS POINTED AT — R4c (STA-188).
+   *
+   * `focusMilestone` is one navigation primitive, exactly like `open` below: it switches to
+   * the Milestones view AND records which milestone the reader asked for, so a row's
+   * milestone marker can send somebody to the plan it names rather than to whichever
+   * milestone happened to sort first.
+   *
+   * It lives here for the reason `view` does — the row that dispatches it, the header tabs
+   * and the palette must all drive navigation without any one of them owning it. Cleared to
+   * `null` on any other view switch, so a stale focus cannot outlive the trip.
+   */
+  milestoneFocus: string | null;
+  focusMilestone: (ref: string) => void;
+
   /** "" means every workspace, and is only reachable in hub mode. */
   ws: string;
   setWs: (ws: string) => void;
