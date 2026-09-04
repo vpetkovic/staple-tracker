@@ -7,6 +7,8 @@ import {
   coerceSettingInput,
   encodeStoredSetting,
   readStoredSetting,
+  registerSettingCategory,
+  registerSettingDefinition,
   requireSettingDefinition,
   settingCategoriesFor,
   settingCategory,
@@ -18,6 +20,7 @@ import {
   settingRegistryView,
   settingValueView,
   validateSettingValue,
+  type SettingCategory,
   type SettingDefinition,
 } from "../src/core/settings-registry.js";
 import { StapleError } from "../src/core/types.js";
@@ -265,5 +268,65 @@ describe("wire views", () => {
       "machine.port",
       "machine.setupComplete",
     ]);
+  });
+});
+
+/**
+ * R6f (STA-243) — REGISTERING AFTER LOAD.
+ *
+ * The registry kept its single-key indexes as snapshots taken at module load, so
+ * a definition appended to `SETTING_DEFINITIONS` afterwards was enumerated —
+ * served, rendered, listed — but unknown to `settingDefinition`,
+ * `settingCategory` and `requireSettingDefinition`, which is the boundary every
+ * WRITE goes through. `registerSettingDefinition` closes that by appending and
+ * indexing in one step, and by judging the new member first, so a bad definition
+ * cannot become half-registered.
+ *
+ * These tests are LAST IN THE FILE ON PURPOSE: the happy path grows the process's
+ * registry, and the inventories pinned above ("registers the three machine
+ * preferences…", "serves the whole registry in shell order") deliberately restate
+ * the whole registered set. Anything added after this block would see the fixture.
+ */
+/** A category no build has: registering it is the point of the test below. */
+const FIXTURE_CATEGORY: SettingCategory = {
+  id: "fixture",
+  label: "Fixture",
+  description: "Registered by this suite and by nothing else.",
+  scope: "workspace",
+  editor: "fields",
+  order: 99,
+};
+
+describe("registering a category and a definition after module load", () => {
+  it("refuses a duplicate, and an invalid definition, without registering either", () => {
+    const before = SETTING_DEFINITIONS.length;
+    expect(() => registerSettingCategory({ ...FIXTURE_CATEGORY, id: "kinds" })).toThrow(
+      /duplicate category "kinds"/,
+    );
+    expect(() => registerSettingDefinition(fake({ key: "kinds.default" }))).toThrow(
+      /duplicate key "kinds\.default"/,
+    );
+    // Judged before it is visible: a definition naming a category that is not
+    // there leaves the arrays and the indexes exactly as they were.
+    expect(() => registerSettingDefinition(fake({ key: "nope.a", category: "nope" }))).toThrow(
+      /unknown category "nope"/,
+    );
+    expect(() => registerSettingDefinition(fake({ key: "kinds.bad", default: 99 }))).toThrow(StapleError);
+    expect(SETTING_DEFINITIONS.length).toBe(before);
+    expect(settingDefinition("kinds.bad")).toBeUndefined();
+  });
+
+  it("reaches the single-key lookups and the enumerations in the same step", () => {
+    registerSettingCategory(FIXTURE_CATEGORY);
+    const definition = registerSettingDefinition(fake({ key: "fixture.count", category: "fixture" }));
+
+    // The write boundary — the half that used to miss it.
+    expect(settingDefinition("fixture.count")).toBe(definition);
+    expect(requireSettingDefinition("fixture.count", "workspace")).toBe(definition);
+    expect(settingCategory("fixture")).toBe(FIXTURE_CATEGORY);
+    // …and the enumerations, which always did.
+    expect(settingDefinitionsFor("workspace").map((d) => d.key)).toContain("fixture.count");
+    expect(settingCategoriesFor("workspace").map((c) => c.id)).toContain("fixture");
+    expect(settingRegistryView().definitions.map((d) => d.key)).toContain("fixture.count");
   });
 });

@@ -115,7 +115,11 @@ export interface SettingDefinition<T = unknown> {
 
 // ---------------------------------------------------------------- the registry
 
-export const SETTING_CATEGORIES: readonly SettingCategory[] = [
+/**
+ * The mutable backing of `SETTING_CATEGORIES`. Private so the only way to grow
+ * it is `registerSettingCategory`, which also grows the index (R6f, STA-243).
+ */
+const categories: SettingCategory[] = [
   {
     id: "statuses",
     label: "Statuses",
@@ -153,6 +157,8 @@ export const SETTING_CATEGORIES: readonly SettingCategory[] = [
   },
 ];
 
+export const SETTING_CATEGORIES: readonly SettingCategory[] = categories;
+
 export const BROWSER_PREFERENCES = ["auto", "always", "never"] as const;
 export type BrowserPreference = (typeof BROWSER_PREFERENCES)[number];
 
@@ -165,7 +171,8 @@ export type BrowserPreference = (typeof BROWSER_PREFERENCES)[number];
 export const QUEUE_POLICIES = ["advisory", "strict"] as const;
 export type QueuePolicy = (typeof QUEUE_POLICIES)[number];
 
-export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
+/** The mutable backing of `SETTING_DEFINITIONS`; grown only by `registerSettingDefinition`. */
+const definitions: SettingDefinition[] = [
   {
     key: "kinds.default",
     category: "kinds",
@@ -255,6 +262,8 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
   },
 ];
 
+export const SETTING_DEFINITIONS: readonly SettingDefinition[] = definitions;
+
 /** Meta-row key prefix for workspace values. Stable: it is on disk. */
 export const WORKSPACE_SETTING_META_PREFIX = "setting:";
 
@@ -271,8 +280,8 @@ export function settingKeyFromMetaKey(metaKey: string): string | null {
 
 // ---------------------------------------------------------------- lookups
 
-const byKey = new Map(SETTING_DEFINITIONS.map((definition) => [definition.key, definition]));
-const categoryById = new Map(SETTING_CATEGORIES.map((category) => [category.id, category]));
+const byKey = new Map(definitions.map((definition) => [definition.key, definition]));
+const categoryById = new Map(categories.map((category) => [category.id, category]));
 
 export function settingDefinition(key: string): SettingDefinition | undefined {
   return byKey.get(key);
@@ -308,6 +317,49 @@ export function settingCategoriesFor(scope?: SettingScope): SettingCategory[] {
 
 export function settingCategory(id: string): SettingCategory | undefined {
   return categoryById.get(id);
+}
+
+// ---------------------------------------------------------------- registration
+
+/**
+ * R6f (STA-243): ADD a category or a definition after module load.
+ *
+ * The registry is two arrays and two indexes over them. Appending to an array
+ * behind the module's back made a definition that every ENUMERATING reader saw
+ * (`settingDefinitionsFor`, `settingRegistryView`, the store's snapshot,
+ * `/api/settings`, the shell) and every SINGLE-KEY reader did not — including
+ * `requireSettingDefinition`, which is the write boundary, so the setting
+ * rendered and then refused its own Save. These two functions are the only way
+ * to grow the arrays, and they grow the indexes in the same step, so the two
+ * halves cannot drift again.
+ *
+ * A new member is judged by the registry's own consistency check BEFORE it is
+ * visible anywhere: a bad key, category, scope or default throws and leaves the
+ * registry exactly as it was.
+ *
+ * Registration is process-local and immediate. Nothing persists it, so every
+ * process that reads or writes the setting must register it — which for a
+ * shipped setting means the entry in `SETTING_DEFINITIONS` above, evaluated at
+ * import in every process. Nothing has to happen before a store is opened: the
+ * store re-reads the definitions on each call.
+ */
+export function registerSettingCategory(category: SettingCategory): SettingCategory {
+  if (categoryById.has(category.id)) {
+    throw new Error(`settings registry: duplicate category "${category.id}"`);
+  }
+  categories.push(category);
+  categoryById.set(category.id, category);
+  return category;
+}
+
+export function registerSettingDefinition(definition: SettingDefinition): SettingDefinition {
+  if (byKey.has(definition.key)) {
+    throw new Error(`settings registry: duplicate key "${definition.key}"`);
+  }
+  assertSettingRegistryConsistent(categories, [definition]);
+  definitions.push(definition);
+  byKey.set(definition.key, definition);
+  return definition;
 }
 
 // ---------------------------------------------------------------- validation

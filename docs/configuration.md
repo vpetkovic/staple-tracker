@@ -107,7 +107,11 @@ here with the sentence naming `staple config set`.
 A setting is added by *registering* it. There is no shell component to edit, no
 tab to add and no client-side copy of the default to keep in step — the
 navigation, the control, the scope tag and every surface's validation are all
-derived from the definition. Work down this list.
+derived from the definition. Registration is process-local, so put the entry in
+`SETTING_DEFINITIONS` — that array is evaluated at import in every process, while
+`registerSettingDefinition()` (the runtime way in, used by tests and embedders)
+registers only the process that calls it, and must be called before that process
+reads or writes the key. Work down this list.
 
 **1. Write the definition** in `src/core/settings-registry.ts`, in
 `SETTING_DEFINITIONS`:

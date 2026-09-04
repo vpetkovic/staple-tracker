@@ -40,17 +40,20 @@ import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { configPath } from "../src/config/index.js";
 import {
-  SETTING_CATEGORIES,
   SETTING_DEFINITIONS,
-  assertSettingRegistryConsistent,
+  requireSettingDefinition,
+  settingCategory,
   settingDefinition,
-  type SettingCategory,
-  type SettingDefinition,
 } from "../src/core/settings-registry.js";
 import { openWorkspace } from "../src/core/open.js";
 import type { WorkspaceStore } from "../src/core/store.js";
 import { startUiServer, type UiHandle } from "../src/ui/server.js";
-import { runCli } from "./fixtures/contract-support.js";
+import { runCli, startMcpClient, toolPayload, type McpHarness } from "./fixtures/contract-support.js";
+import {
+  FIXTURE_CATEGORY,
+  FIXTURE_DEFINITION,
+  REGISTER_FIXTURE_NODE_OPTIONS,
+} from "./fixtures/verification-setting.js";
 
 const ALPHA = "verifyalpha";
 const BETA = "verifybeta";
@@ -91,9 +94,23 @@ let origin: string;
 let token: string;
 let alpha: WorkspaceStore;
 let beta: WorkspaceStore;
+let mcp: McpHarness;
 
 function cli(...args: string[]) {
   return runCli(args, { STAPLE_HOME: home, STAPLE_AGENT: "r6e-verify" });
+}
+
+/**
+ * The same real CLI, in a child process that has registered the registry-only
+ * fixture — the child's equivalent of the `SETTING_DEFINITIONS` entry a shipped
+ * setting would have. Opt-in, so every other call above still runs a stock CLI.
+ */
+function cliWithFixture(...args: string[]) {
+  return runCli(args, {
+    STAPLE_HOME: home,
+    STAPLE_AGENT: "r6e-verify",
+    NODE_OPTIONS: REGISTER_FIXTURE_NODE_OPTIONS,
+  });
 }
 
 async function envelopeOf(ws: string): Promise<Envelope> {
@@ -145,9 +162,21 @@ beforeAll(async () => {
   await once(ui.server, "listening");
   token = ui.token;
   origin = `http://127.0.0.1:${(ui.server.address() as AddressInfo).port}`;
+
+  // `startMcpClient` builds the child's env from this process's, so the fixture
+  // preload is staged for exactly as long as the spawn takes and then removed.
+  const outerNodeOptions = process.env.NODE_OPTIONS;
+  process.env.NODE_OPTIONS = REGISTER_FIXTURE_NODE_OPTIONS;
+  try {
+    mcp = await startMcpClient({ home, cwd: home, agent: "r6e-verify" });
+  } finally {
+    if (outerNodeOptions === undefined) delete process.env.NODE_OPTIONS;
+    else process.env.NODE_OPTIONS = outerNodeOptions;
+  }
 }, 60_000);
 
-afterAll(() => {
+afterAll(async () => {
+  await mcp?.close();
   ui?.close();
   alpha?.db.close();
   beta?.db.close();
@@ -251,35 +280,15 @@ describe("two workspaces and one machine config never share a value", () => {
 // ---------------------------------------------------------------- 2. registry-only extension
 
 /**
- * A category and a definition this build has never had, appended to the registry
- * in-process and validated by the registry's OWN consistency check — which is the
- * only registration surface the module exposes, and the one that would refuse a
- * definition whose key, scope or default did not fit its category.
+ * The category and the definition this build has never had live in
+ * `./fixtures/verification-setting.ts`, which registers them through
+ * `registerSettingCategory` / `registerSettingDefinition` — the registry's own
+ * surface, which validates the new member with the same consistency check it
+ * runs at import and would refuse a key, scope or default that did not fit its
+ * category. They are in their own module so the CLI and MCP child processes can
+ * preload it and register the same fixture (see `REGISTER_FIXTURE_NODE_OPTIONS`).
  */
-const FIXTURE_CATEGORY: SettingCategory = {
-  id: "verification",
-  label: "Verification",
-  description: "Registered by test/settings-verification.test.ts and by nothing else.",
-  scope: "workspace",
-  editor: "fields",
-  order: 40,
-};
-
-const FIXTURE_DEFINITION: SettingDefinition = {
-  key: "verification.enabled",
-  category: "verification",
-  scope: "workspace",
-  schema: { type: "boolean" },
-  default: false,
-  version: 1,
-  sensitivity: "normal",
-  ui: {
-    label: "Fixture switch",
-    description: "Exists only while this suite runs. No shell file has ever heard of it.",
-    control: "toggle",
-    order: 10,
-  },
-};
+const FIXTURE_KEY = FIXTURE_DEFINITION.key;
 
 /**
  * The browser modules, as specifiers rather than literals, so `tsc` does not resolve
@@ -307,11 +316,6 @@ describe("a category nothing was written for reaches the page by being registere
   let markup: string;
 
   beforeAll(async () => {
-    (SETTING_CATEGORIES as SettingCategory[]).push(FIXTURE_CATEGORY);
-    (SETTING_DEFINITIONS as SettingDefinition[]).push(FIXTURE_DEFINITION);
-    // The registry judges its own new member, exactly as it does at import.
-    assertSettingRegistryConsistent();
-
     served = await envelopeOf(ALPHA);
 
     // The REAL shell, over the REAL envelope. Loaded through variables so the
@@ -397,43 +401,84 @@ describe("a category nothing was written for reaches the page by being registere
   });
 
   /**
-   * THE ONE HALF THAT DOES NOT WORK, AND WHY.
+   * R6f (STA-243) — THE HALF THAT USED TO BE MISSING.
    *
-   * `settings-registry.ts` builds its `byKey` lookup ONCE, at module load:
-   *
-   *     const byKey = new Map(SETTING_DEFINITIONS.map((d) => [d.key, d]));
-   *
-   * Every ENUMERATING reader re-filters the array on each call and therefore sees
-   * a definition appended after load — `settingDefinitionsFor`,
-   * `settingCategoriesFor`, `settingRegistryView`, the store's snapshot, and so
-   * the whole `/api/settings` envelope the two tests above assert. Every
-   * SINGLE-KEY reader goes through the frozen map and does not — and
-   * `requireSettingDefinition` is the WRITE boundary (`store.setSetting`, the CLI's
-   * `settings set`, MCP's `set_setting`). So the fixture appears and reads, and a
-   * save is refused with `Unknown workspace setting "verification.enabled"`.
-   *
-   * The assertion below records the split as it is today. Making the save work is a
-   * production change (a `registerSetting()` that appends AND indexes, or lookups
-   * that re-derive) and this ticket may not touch src/**, so the round-trip is left
-   * as a `todo` rather than a green test that proves less than it claims.
+   * The registry kept its single-key lookups in maps built once at module load,
+   * so a definition registered afterwards was enumerated (and therefore served
+   * and rendered, as the two tests above show) but invisible to
+   * `requireSettingDefinition` — the WRITE boundary behind `store.setSetting`,
+   * `staple settings set` and MCP `set_setting`. The fixture appeared on the page
+   * and then refused its own Save with `Unknown workspace setting`. Registration
+   * now appends and indexes in one step, so this asserts the whole loop instead:
+   * the same fixture key is read and written on all four surfaces, and the value
+   * a child process wrote is the value this process reads back.
    */
-  it("registering does not reach the write boundary: the lookup map is a load-time snapshot", async () => {
-    expect(SETTING_DEFINITIONS.some((d) => d.key === "verification.enabled")).toBe(true);
-    expect(settingDefinition("verification.enabled")).toBeUndefined();
-
-    const refused = await post({
-      ws: ALPHA,
-      target: "settings",
-      ops: [{ op: "set", key: "verification.enabled", value: true }],
-    });
-    // 409, the status this route gives every store refusal (src/ui/server.ts).
-    expect(refused.status).toBe(409);
-    expect((refused.body as unknown as { error: string }).error).toContain(
-      'Unknown workspace setting "verification.enabled"',
-    );
+  it("resolves the fixture at the write boundary, not only in the enumerations", () => {
+    expect(SETTING_DEFINITIONS.some((d) => d.key === FIXTURE_KEY)).toBe(true);
+    expect(settingDefinition(FIXTURE_KEY)).toBe(FIXTURE_DEFINITION);
+    expect(requireSettingDefinition(FIXTURE_KEY, "workspace")).toBe(FIXTURE_DEFINITION);
+    expect(settingCategory(FIXTURE_CATEGORY.id)).toBe(FIXTURE_CATEGORY);
   });
 
-  it.todo(
-    "saves a registry-only fixture value round-trip — blocked: settings-registry.ts indexes SETTING_DEFINITIONS into `byKey` at module load, so requireSettingDefinition (the write boundary) cannot see a definition registered in-process",
-  );
+  /**
+   * One value, followed through every surface that can write it, each write read
+   * back somewhere else. HTTP writes and the store reads; the CLI writes and MCP
+   * reads; MCP writes and the store reads — so no surface is ever asserted only
+   * against itself. BETA stays at the default throughout: registering a setting
+   * does not give it a value.
+   */
+  it("saves a registry-only fixture value round-trip on the store, HTTP, the CLI and MCP", async () => {
+    const stored = (value: boolean) => ({
+      key: FIXTURE_KEY,
+      scope: "workspace",
+      value,
+      source: "workspace",
+      version: 1,
+    });
+
+    // 1. The shell's Save, over the real server: 200, not the 409 this used to be.
+    const saved = await post({ ws: ALPHA, target: "settings", ops: [{ op: "set", key: FIXTURE_KEY, value: true }] });
+    expect(saved.status).toBe(200);
+    expect(saved.body.values[FIXTURE_KEY]).toEqual(stored(true));
+
+    // …read back from the database itself, with no server in the way.
+    expect(storeValue(alpha, FIXTURE_KEY)).toEqual(stored(true));
+    // The row is a KNOWN setting now, not an unreadable one preserved for a newer build.
+    expect(alpha.unknownSettingKeys()).toEqual([]);
+    expect(storeValue(beta, FIXTURE_KEY)).toEqual({
+      key: FIXTURE_KEY,
+      scope: "workspace",
+      value: false,
+      source: "default",
+      version: 1,
+    });
+
+    // 2. The CLI — a separate process, which registers the same fixture at import.
+    expect(JSON.parse(cliWithFixture("settings", "get", FIXTURE_KEY, "--ws", ALPHA, "--json").stdout)).toEqual(
+      stored(true),
+    );
+    const cliSet = cliWithFixture("settings", "set", FIXTURE_KEY, "false", "--ws", ALPHA, "--json");
+    expect(cliSet.status, cliSet.stderr).toBe(0);
+    expect(storeValue(alpha, FIXTURE_KEY)).toEqual(stored(false));
+
+    // 3. MCP — another separate process. It reads what the CLI wrote…
+    expect(toolPayload(await mcp.call("get_setting", { key: FIXTURE_KEY, ws: ALPHA }))).toEqual(stored(false));
+    // …and its own write comes back on the store and over HTTP.
+    expect(toolPayload(await mcp.call("set_setting", { key: FIXTURE_KEY, value: true, ws: ALPHA }))).toEqual(
+      stored(true),
+    );
+    expect(storeValue(alpha, FIXTURE_KEY)).toEqual(stored(true));
+    expect((await envelopeOf(ALPHA)).values[FIXTURE_KEY]).toEqual(stored(true));
+
+    // 4. And back to the default, on the surface the shell uses to reset.
+    const reset = await post({ ws: ALPHA, target: "settings", ops: [{ op: "reset", key: FIXTURE_KEY }] });
+    expect(reset.status).toBe(200);
+    expect(reset.body.values[FIXTURE_KEY]).toEqual({
+      key: FIXTURE_KEY,
+      scope: "workspace",
+      value: false,
+      source: "default",
+      version: 1,
+    });
+  });
 });
