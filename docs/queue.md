@@ -106,9 +106,11 @@ identifiers, the holder and their `idleSeconds`). Rows are **never dropped** for
 being ineligible — the plan is shown whole, so a human can see what their order
 is waiting on, and a blocked or gated member of a milestone stays where its
 milestone put it while the resolver advances past it by the ladder. Milestone
-target dates appear as `dueAt` on the row and are not an input to order or
-eligibility: a date explains urgency, it never reorders a plan somebody wrote by
-hand — change every date in the workspace and the effective answer is
+target dates appear as `dueAt` on the row — the day's inclusive `endsAt` bound
+(`2026-10-31T23:59:59.999Z`), never the bare day, so comparing it to `now` honours
+the whole target day ([milestones.md](milestones.md#dates-calendar-days-utc-inclusive)) —
+and are not an input to order or eligibility: a date explains urgency, it never
+reorders a plan somebody wrote by hand — change every date in the workspace and the effective answer is
 byte-identical but for `dueAt`. Assignee is deliberately not an input either.
 (Pinned by `store-queue-resolver.test.ts` — *"classifies by the ladder, first
 match wins"*, *"names the gate before the blocker"*, *"treats an unresolvable

@@ -618,16 +618,13 @@ describe("dates are UTC calendar days, inclusive of their whole extent", () => {
 
   it("a date edit moves dueAt on every row the milestone reaches and reorders nothing", { timeout: 30_000 }, async () => {
     const before = await queueHttp();
-    // TODAY dueAt is the raw calendar day, not the inclusive `endsAt` bound the
-    // contract names; the divergence has its own `it.todo` below and this line
-    // pins what actually ships so the fix is a visible diff.
-    expect(rowFor(before, SCENARIO.q1).dueAt).toBe(OCTOBER_TARGET);
+    expect(rowFor(before, SCENARIO.q1).dueAt).toBe(milestoneDateBounds(OCTOBER_TARGET).endsAt);
 
     // Push October past November's date — the plan must not notice.
     ok("milestone", "set", SCENARIO.october, "--target", "2028-02-29");
     const after = await queueHttp();
     for (const identifier of [SCENARIO.q1, SCENARIO.q2, SCENARIO.spike, SCENARIO.flake]) {
-      expect(rowFor(after, identifier).dueAt, identifier).toBe("2028-02-29");
+      expect(rowFor(after, identifier).dueAt, identifier).toBe("2028-02-29T23:59:59.999Z");
     }
     expect(after.effective).toEqual(before.effective);
     expect(after.revision).toBe(before.revision);
@@ -641,29 +638,48 @@ describe("dates are UTC calendar days, inclusive of their whole extent", () => {
     // `milestonePath` names the milestone it BELONGS to. MSC-5 is reached through
     // November and belongs to November, so both say November — and MSC-4, reached
     // through October and a member of October, says October's new date.
-    expect(rowFor(after, SCENARIO.q3).dueAt).toBe(NOVEMBER_TARGET);
+    expect(rowFor(after, SCENARIO.q3).dueAt).toBe(milestoneDateBounds(NOVEMBER_TARGET).endsAt);
 
     ok("milestone", "set", SCENARIO.october, "--target", OCTOBER_TARGET);
-    expect(rowFor(await queueHttp(), SCENARIO.q1).dueAt).toBe(OCTOBER_TARGET);
+    expect(rowFor(await queueHttp(), SCENARIO.q1).dueAt).toBe(milestoneDateBounds(OCTOBER_TARGET).endsAt);
   });
 
   /**
-   * DEFECT, found by this suite and not fixable here (R3e touches no `src/**`).
+   * docs/milestones.md, "Dates": "On the queue, a target date surfaces as `dueAt` — the
+   * `endsAt` bound, so that sorting by `dueAt` and comparing to `now` both honour the
+   * inclusive day", and the worked example spells the value out as
+   * `dueAt: 2026-10-31T23:59:59.999Z`.
    *
-   * docs/milestones.md, "Dates", says: "On the queue, a target date surfaces as
-   * `dueAt` — the `endsAt` bound, so that sorting by `dueAt` and comparing to
-   * `now` both honour the inclusive day", and the worked example spells the value
-   * out as `dueAt: 2026-10-31T23:59:59.999Z`. What the resolver actually emits is
-   * `seam.targetDateOf.get(node.id)` verbatim — the bare `2026-10-31` — so a
-   * consumer that does `new Date(row.dueAt) < now` treats the row as overdue from
-   * the target's own 00:00Z, a whole day early, which is exactly the bug the
-   * inclusive-day contract exists to prevent.
-   *
-   * The one-line fix belongs in `EffectiveQueueRow`'s producer in
-   * `src/core/queue-store.ts`: pass the milestone's target through
-   * `milestoneDateBounds(target).endsAt` when building `dueAt` (leaving null null).
+   * The claim that matters is the one a consumer makes: `new Date(dueAt) < now` must be
+   * false all through the target day and true only after it, which is what a bare
+   * `2026-10-31` (parsed as that day's 00:00Z) would get wrong by a whole day. So this
+   * asserts the value AND the comparison, at both edges, over the real wire payload.
    */
-  it.todo("emits dueAt as the inclusive endsAt bound, not the bare calendar day");
+  it("emits dueAt as the inclusive endsAt bound, not the bare calendar day", { timeout: 30_000 }, async () => {
+    const queue = await queueHttp();
+    const due = rowFor(queue, SCENARIO.q1).dueAt!;
+    expect(due).toBe(`${OCTOBER_TARGET}T23:59:59.999Z`);
+    expect(due).toBe(milestoneDateBounds(OCTOBER_TARGET).endsAt);
+
+    // The last instant of the target day is still on time; the first of the next is not.
+    // `isOverdue` — the store's own answer — agrees at both edges, which is the point:
+    // one date, one meaning, whether you ask the store or compare the row yourself.
+    const lastOnTime = new Date(`${OCTOBER_TARGET}T23:59:59.999Z`);
+    const firstOverdue = new Date("2026-11-01T00:00:00.000Z");
+    expect(new Date(due) < lastOnTime).toBe(false);
+    expect(new Date(due) < firstOverdue).toBe(true);
+    expect(isOverdue(OCTOBER_TARGET, lastOnTime.toISOString())).toBe(false);
+    expect(isOverdue(OCTOBER_TARGET, firstOverdue.toISOString())).toBe(true);
+
+    // Every dated row carries the bound, and an undated one still carries null.
+    for (const identifier of [SCENARIO.q1, SCENARIO.q2, SCENARIO.spike, SCENARIO.flake]) {
+      expect(rowFor(queue, identifier).dueAt, identifier).toBe(milestoneDateBounds(OCTOBER_TARGET).endsAt);
+    }
+    for (const identifier of [SCENARIO.m1, SCENARIO.m2, SCENARIO.q3]) {
+      expect(rowFor(queue, identifier).dueAt, identifier).toBe(milestoneDateBounds(NOVEMBER_TARGET).endsAt);
+    }
+    expect(rowFor(queue, SCENARIO.s1).dueAt).toBeNull();
+  });
 
   it("clears a date with `none`, and refuses an impossible day and a start after the target on every surface", { timeout: 30_000 }, async () => {
     const cleared = cliJson<MilestoneView>("milestone", "set", SCENARIO.october, "--start", "none");

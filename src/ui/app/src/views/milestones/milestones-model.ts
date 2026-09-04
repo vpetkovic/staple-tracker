@@ -10,14 +10,16 @@
  * The milestone STATE (planned/active/overdue/done/cancelled) is derived by the store on
  * every read and arrives on the view; this module never re-derives it. Blocked and gated
  * are not milestone states — docs/milestones.md says so — they are facts about members,
- * and the store already counts them per status category in `progress.counts`. So "risk"
- * is a reading of the view, not a second derivation that could disagree with it.
+ * and the one place staple states them is the queue resolver's `eligibility`. So "risk"
+ * is a reading of the view plus a reading of the queue, not a third derivation that could
+ * disagree with either.
  *
  * `next` is the queue resolver's answer and is null until R3d fills it; the view renders
  * the null as "no eligible work" rather than guessing.
  */
 import { flatRow, type TaskRow } from "@/components/task-list";
 import type {
+  EffectiveQueueRow,
   Issue,
   IssueRow,
   MilestoneListRow,
@@ -73,18 +75,36 @@ export const STATE_PRESENTATION: Readonly<Record<MilestoneState, { glyph: string
 
 export interface MilestoneRisk {
   overdue: boolean;
-  /** Counted leaves in the `blocked` category. */
+  /** Queue rows under this milestone the resolver classified `blocked`. */
   blocked: number;
-  /** Counted leaves in the `gated` category. */
+  /** Queue rows under this milestone the resolver classified `gated`. */
   gated: number;
 }
 
-export function milestoneRisk(row: Pick<MilestoneView, "milestone" | "progress">): MilestoneRisk {
-  return {
-    overdue: row.milestone.state === "overdue",
-    blocked: row.progress.counts.blocked,
-    gated: row.progress.counts.gated,
-  };
+/**
+ * Overdue comes off the milestone's own state. Blocked and gated come off the QUEUE, not
+ * off `progress.counts`: those count leaves whose STATUS is in the blocked or gated
+ * category, and staple moves no status for either — a blocker lives in the blocker table
+ * and an approval gate queues its descendants through `queuedBy`, both leaving the status
+ * alone. `effective` rows carry the resolver's verdict per row, and `milestonePath` names
+ * the milestone each one is planned under, which is exactly the set to count over
+ * (docs/milestones.md, "State is derived, never stored").
+ *
+ * `effective` empty — the queue has not loaded, or failed — reads as no risk rather than
+ * as an invented one.
+ */
+export function milestoneRisk(
+  row: Pick<MilestoneView, "milestone">,
+  effective: readonly EffectiveQueueRow[] = [],
+): MilestoneRisk {
+  let blocked = 0;
+  let gated = 0;
+  for (const queueRow of effective) {
+    if (!queueRow.milestonePath.includes(row.milestone.identifier)) continue;
+    if (queueRow.eligibility === "blocked") blocked += 1;
+    else if (queueRow.eligibility === "gated") gated += 1;
+  }
+  return { overdue: row.milestone.state === "overdue", blocked, gated };
 }
 
 /** The risk as words, each with its own glyph. Empty when there is nothing to warn about. */

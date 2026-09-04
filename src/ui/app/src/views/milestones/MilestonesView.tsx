@@ -36,6 +36,7 @@ import {
   addMilestoneMember,
   getMilestone,
   getMilestones,
+  getQueue,
   isRevisionConflict,
   removeMilestoneMember,
   reorderMilestoneMembers,
@@ -43,7 +44,12 @@ import {
 } from "@/lib/api";
 import { describeRefusal, type Refusal } from "@/lib/refusal";
 import { useSession } from "@/lib/session";
-import type { MilestoneListRow, MilestoneState, MilestoneView as MilestoneViewData } from "@/lib/types";
+import type {
+  EffectiveQueueRow,
+  MilestoneListRow,
+  MilestoneState,
+  MilestoneView as MilestoneViewData,
+} from "@/lib/types";
 import { useResource } from "@/lib/useStaple";
 import { cn } from "@/lib/utils";
 import { EmptyState, ErrorState, LoadingState, SectionHeading } from "@/views/ViewChrome";
@@ -81,8 +87,14 @@ export function StateBadge({ state, complete = false }: { state: MilestoneState;
   );
 }
 
-function RiskLine({ row }: { row: Pick<MilestoneViewData, "milestone" | "progress"> }) {
-  const labels = riskLabels(milestoneRisk(row));
+function RiskLine({
+  row,
+  effective,
+}: {
+  row: Pick<MilestoneViewData, "milestone">;
+  effective: readonly EffectiveQueueRow[];
+}) {
+  const labels = riskLabels(milestoneRisk(row, effective));
   if (labels.length === 0) return null;
   return (
     <span data-milestone-risk className="flex flex-wrap gap-x-2 text-[11px] font-medium">
@@ -125,10 +137,13 @@ function NextWork({ next }: { next: MilestoneViewData["next"] }) {
 
 export function MilestoneListPane({
   rows,
+  effective = [],
   selectedRef,
   onSelect,
 }: {
   rows: readonly MilestoneListRow[];
+  /** The queue's effective rows, which is where blocked and gated are counted from. */
+  effective?: readonly EffectiveQueueRow[];
   selectedRef: string | null;
   onSelect: (identifier: string) => void;
 }) {
@@ -165,7 +180,7 @@ export function MilestoneListPane({
                 {row.milestone.planPosition !== null ? <span>plan #{row.milestone.planPosition}</span> : null}
               </span>
               <ProgressBar row={row} />
-              <RiskLine row={row} />
+              <RiskLine row={row} effective={effective} />
               <NextWork next={row.next} />
             </button>
           </li>
@@ -278,12 +293,14 @@ function MemberRow({
   );
 }
 
-function Rollups({ view }: { view: MilestoneViewData }) {
+function Rollups({ view, effective }: { view: MilestoneViewData; effective: readonly EffectiveQueueRow[] }) {
   const { counts } = view.progress;
+  // Blocked and gated are the QUEUE's verdict, not a status category — see `milestoneRisk`.
+  const risk = milestoneRisk(view, effective);
   const cells: Array<[string, string]> = [
     ["progress", progressLabel(view.progress)],
-    ["blocked", `⊘ ${counts.blocked}`],
-    ["gated", `◇ ${counts.gated}`],
+    ["blocked", `⊘ ${risk.blocked}`],
+    ["gated", `◇ ${risk.gated}`],
     ["active", `◐ ${counts.active + counts.review}`],
     ["ready", `○ ${counts.ready + counts.unstarted}`],
   ];
@@ -301,6 +318,7 @@ function Rollups({ view }: { view: MilestoneViewData }) {
 
 export function MilestoneDetailPane({
   view,
+  effective = [],
   members,
   now,
   busy,
@@ -315,6 +333,8 @@ export function MilestoneDetailPane({
   onDismissFailure,
 }: {
   view: MilestoneViewData;
+  /** The queue's effective rows, which is where blocked and gated are counted from. */
+  effective?: readonly EffectiveQueueRow[];
   members: readonly MemberListRow[];
   now: Date;
   busy: boolean;
@@ -378,9 +398,9 @@ export function MilestoneDetailPane({
 
       <section>
         <SectionHeading>Rollups</SectionHeading>
-        <Rollups view={view} />
+        <Rollups view={view} effective={effective} />
         <div className="mt-2 flex flex-wrap gap-x-3">
-          <RiskLine row={view} />
+          <RiskLine row={view} effective={effective} />
           <NextWork next={view.next} />
         </div>
       </section>
@@ -532,6 +552,14 @@ export function MilestonesView({ onAuthError }: { onAuthError: (error: AuthError
   const list = useResource(loadList, [ws, session.filters.showDone, session.version], onAuthError);
   const sorted = useMemo(() => (list.data ? sortMilestones(list.data) : []), [list.data]);
 
+  // Blocked and gated are the resolver's verdict, not a status category, so the page reads
+  // the queue alongside the plan and counts them off `effective` (see `milestoneRisk`). A
+  // queue that has not loaded leaves the risk lines silent rather than wrong; a queue that
+  // fails is not this page's error state, so it is deliberately not surfaced.
+  const loadQueue = useCallback(() => getQueue({ ws }), [ws]);
+  const queue = useResource(loadQueue, [ws, session.version], onAuthError);
+  const effective = queue.data?.effective ?? [];
+
   // Nothing selected, or the selection left the list: fall to the first row on a split
   // layout, where an empty right pane would be a page saying nothing.
   useEffect(() => {
@@ -632,7 +660,7 @@ export function MilestonesView({ onAuthError }: { onAuthError: (error: AuthError
   ) : list.data === undefined ? (
     <LoadingState />
   ) : (
-    <MilestoneListPane rows={sorted} selectedRef={selectedRef} onSelect={setSelectedRef} />
+    <MilestoneListPane rows={sorted} effective={effective} selectedRef={selectedRef} onSelect={setSelectedRef} />
   );
 
   const detailPane = !selectedRef ? (
@@ -644,6 +672,7 @@ export function MilestonesView({ onAuthError }: { onAuthError: (error: AuthError
   ) : (
     <MilestoneDetailPane
       view={view}
+      effective={effective}
       members={members}
       now={now}
       busy={busy}

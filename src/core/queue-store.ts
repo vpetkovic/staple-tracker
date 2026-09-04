@@ -31,7 +31,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { tx } from "./db.js";
 import { parseIdentifier } from "./ids.js";
-import { MILESTONE_KIND, nearestMilestone, rankBetween, renumberedRanks } from "./milestones.js";
+import { milestoneDateBounds, MILESTONE_KIND, nearestMilestone, rankBetween, renumberedRanks } from "./milestones.js";
 import type { WorkspaceStore } from "./store.js";
 import { type BuiltinIssueKind, type Issue, MAX_TREE_DEPTH, StapleError, nowIso } from "./types.js";
 
@@ -631,15 +631,19 @@ export class QueueStore {
        * same rule. Membership is read on every call, so a `milestone mv` is
        * visible on the next read with no queue write. Its target date rides
        * along as `dueAt`: an explanation of urgency, never an input to order.
+       * It rides as the day's INCLUSIVE END (`milestoneDateBounds(target).endsAt`,
+       * docs/milestones.md "Dates"), so a consumer comparing `dueAt` to `now` is
+       * on time all through the target day instead of overdue from its 00:00Z.
        */
       if (node.kind === MILESTONE_KIND) {
         const target = seam.targetDateOf.get(node.id) ?? null;
+        const due = target === null ? null : milestoneDateBounds(target).endsAt;
         for (const memberId of seam.membersOf.get(node.id) ?? []) {
           const memberNode = nodes.get(memberId);
-          if (memberNode) expand(memberNode, planPosition, via ?? node.identifier, target, depth + 1);
+          if (memberNode) expand(memberNode, planPosition, via ?? node.identifier, due, depth + 1);
         }
         for (const child of openChildren.get(node.id) ?? []) {
-          expand(child, planPosition, via ?? node.identifier, target, depth + 1);
+          expand(child, planPosition, via ?? node.identifier, due, depth + 1);
         }
         return;
       }
@@ -888,9 +892,10 @@ export interface EffectiveQueueRow {
   /** The machine-readable half of `reason`; null when the row is eligible. */
   detail: Record<string, unknown> | null;
   /**
-   * The target date of the milestone this row was reached through. It explains
-   * urgency and is NEVER an input to order or eligibility — a date does not get
-   * to reorder a plan somebody wrote by hand.
+   * The target date of the milestone this row was reached through, as the
+   * inclusive END of that day (`2026-10-31T23:59:59.999Z`). It explains urgency
+   * and is NEVER an input to order or eligibility — a date does not get to
+   * reorder a plan somebody wrote by hand.
    */
   dueAt: string | null;
   /**

@@ -5,6 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { issue, row } from "@/components/task-list/fixtures";
+import { effective } from "@/views/queue/fixtures";
 import { listRow, member, progress, view } from "./fixtures";
 import {
   layoutFor,
@@ -59,18 +60,44 @@ describe("state presentation", () => {
 });
 
 describe("milestoneRisk", () => {
-  it("reads overdue from the state and blocked/gated from the progress counts", () => {
-    const risky = view({
-      milestone: { state: "overdue" },
-      progress: progress({ counts: { blocked: 2, gated: 1, done: 1 } }),
-    });
-    expect(milestoneRisk(risky)).toEqual({ overdue: true, blocked: 2, gated: 1 });
-    expect(riskLabels(milestoneRisk(risky))).toEqual(["! overdue", "⊘ 2 blocked", "◇ 1 gated"]);
+  /** October's rows plus one of somebody else's, which must never be counted here. */
+  const queueRows = [
+    effective({ identifier: "STA-1", milestonePath: ["STA-190"], eligibility: "blocked" }),
+    effective({ identifier: "STA-2", milestonePath: ["STA-190"], eligibility: "blocked" }),
+    effective({ identifier: "STA-3", milestonePath: ["STA-190"], eligibility: "gated" }),
+    effective({ identifier: "STA-4", milestonePath: ["STA-190"], eligibility: "eligible" }),
+    effective({ identifier: "STA-5", milestonePath: ["STA-190"], eligibility: "claimed" }),
+    effective({ identifier: "STA-6", milestonePath: ["STA-190"], eligibility: "resolved" }),
+    effective({ identifier: "STA-7", milestonePath: ["STA-191"], eligibility: "blocked" }),
+    effective({ identifier: "STA-8", milestonePath: [], eligibility: "gated" }),
+  ];
+
+  it("reads overdue from the state and blocked/gated from the queue's eligibility", () => {
+    const risky = view({ milestone: { identifier: "STA-190", state: "overdue" } });
+    expect(milestoneRisk(risky, queueRows)).toEqual({ overdue: true, blocked: 2, gated: 1 });
+    expect(riskLabels(milestoneRisk(risky, queueRows))).toEqual(["! overdue", "⊘ 2 blocked", "◇ 1 gated"]);
+  });
+
+  /**
+   * The counts staple actually keeps for blocked and gated are STATUS-category counts, and
+   * staple moves no status for either — a blocker lives in the blocker table, a gate queues
+   * descendants through `queuedBy`. So `progress.counts` must not be what risk reads, and
+   * these two milestones with identical progress and opposite queues prove it is not.
+   */
+  it("ignores the status-category counts, which are zero for genuinely blocked work", () => {
+    const counted = progress({ counts: { blocked: 9, gated: 9, ready: 3 } });
+    const fromQueue = view({ milestone: { identifier: "STA-190", state: "active" }, progress: counted });
+    expect(milestoneRisk(fromQueue, queueRows)).toEqual({ overdue: false, blocked: 2, gated: 1 });
+    expect(milestoneRisk(fromQueue, [])).toEqual({ overdue: false, blocked: 0, gated: 0 });
   });
 
   it("is silent when there is nothing to warn about", () => {
-    const calm = view({ milestone: { state: "planned" }, progress: progress({ counts: { ready: 3 } }) });
-    expect(milestoneRisk(calm)).toEqual({ overdue: false, blocked: 0, gated: 0 });
+    const calm = view({ milestone: { identifier: "STA-190", state: "planned" } });
+    expect(milestoneRisk(calm, [effective({ identifier: "STA-4", milestonePath: ["STA-190"] })])).toEqual({
+      overdue: false,
+      blocked: 0,
+      gated: 0,
+    });
     expect(riskLabels(milestoneRisk(calm))).toEqual([]);
   });
 });

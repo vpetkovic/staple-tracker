@@ -10,8 +10,7 @@ pinned today by `test/milestones.test.ts`; what needs a database is pinned by
 what needs the queue by `test/store-queue-resolver.test.ts` (R3d), and what
 needs the whole system at once by `test/milestones-e2e.test.ts` and
 `src/ui/app/src/views/milestones/milestones-e2e.test.tsx` (R3e) — see
-[What the tests prove](#what-the-tests-prove) at the end, which also records the
-two places where the shipped behaviour and this page still disagree.
+[What the tests prove](#what-the-tests-prove) at the end.
 Where this page and [semantics.md](semantics.md) disagree, semantics.md describes today
 and this page the target. The queue it plugs into is [queue.md](queue.md).
 
@@ -128,9 +127,15 @@ match wins:
 A milestone whose members have all landed but that nobody closed is `active`
 with `progress.complete: true`; the view says so and a human runs
 `staple done`. Blocked and gated are not milestone states — they are facts
-about members, which the view shows per row from the queue's eligibility.
-(Pinned by `milestones.test.ts` — *"milestoneState: resolved first, then
-overdue, then active, then planned"*.)
+about members, which the view shows per row from the queue's eligibility —
+never from a status category, because staple moves no status for either: a
+blocker lives in the blocker table and a gate queues descendants through
+`queuedBy`. (Pinned by `milestones.test.ts` — *"milestoneState: resolved first,
+then overdue, then active, then planned"*; by
+`views/milestones/milestones-model.test.ts` — *"reads overdue from the state and
+blocked/gated from the queue's eligibility"*; and end to end by
+`views/milestones/milestones-e2e.test.tsx` — *"counts blocked and gated members
+from the queue's eligibility, not from status categories"*.)
 
 **Milestone status is not derived from members.** The derived ladder in
 [semantics.md](semantics.md#a-parents-status-is-derived-from-its-children)
@@ -176,9 +181,12 @@ listing can `ORDER BY target_date`. (Pinned by `milestones.test.ts` —
 the UTC midnight after the target"*, *"daysUntil is 0 on the day, negative
 after"*, *"assertMilestoneDates refuses a start after the target"*.)
 
-On the queue, a target date surfaces as `dueAt` — the `endsAt` bound, so that
-sorting by `dueAt` and comparing to `now` both honour the inclusive day — and
-is not an input to order or eligibility ([queue.md](queue.md#the-resolver--one-deterministic-next-item-algorithm)).
+On the queue, a target date surfaces as `dueAt` — the `endsAt` bound
+(`2026-10-31T23:59:59.999Z`, not the bare day), so that sorting by `dueAt` and
+comparing to `now` both honour the inclusive day — and is not an input to order
+or eligibility ([queue.md](queue.md#the-resolver--one-deterministic-next-item-algorithm)).
+(Pinned by `milestones-e2e.test.ts` — *"emits dueAt as the inclusive endsAt
+bound, not the bare calendar day"*.)
 
 ## Membership: a relation, not a hierarchy
 
@@ -603,10 +611,12 @@ carries a claim goes through all three at once.
   twice emitted once at its first occurrence — proved on two such issues.
 - *Dates.* A boundary table over month end, year end, a leap day, the day before
   a leap day, and two `now`s written in zones whose local calendar date disagrees
-  with UTC's: the turnover is the UTC midnight after the target, every time. A
-  target edit moves `dueAt` on every row the milestone reaches and reorders
-  nothing; `none` clears a date; an impossible day and a start after the target
-  are refused identically everywhere.
+  with UTC's: the turnover is the UTC midnight after the target, every time. Every
+  dated queue row carries the day's inclusive `endsAt` bound as `dueAt`, and an
+  undated one carries null, so a consumer's own `new Date(dueAt) < now` turns over
+  at the same instant `isOverdue` does. A target edit moves `dueAt` on every row
+  the milestone reaches and reorders nothing; `none` clears a date; an impossible
+  day and a start after the target are refused identically everywhere.
 - *Gates, claims and landing.* Gated members stay visible at the head of the plan
   and are never takeable; `request-changes` keeps them there and `approve`
   releases them, both on the next read with no queue write. A live claim is
@@ -622,33 +632,8 @@ serving the same fixture, into the real view components rendered with
 list and the detail drawn entirely from the wire; the three layouts at real
 widths; the accessible row order equalling the server's member order; a name on
 every reorder control with only the true edges disabled; each state legible as a
-glyph AND a word with the glyph hidden from a screen reader; and the conflict
-banner after a genuinely stale `baseRevision`, showing the store's sentence
-verbatim while the server keeps the other writer's order.
-
-### Where this page and the code still disagree
-
-Two divergences the R3e pass found. Both are pinned as `it.todo` with the exact
-fix, and the current behaviour is asserted as it ships so that fixing it is a
-visible diff rather than a silent one.
-
-1. **`dueAt` is the bare calendar day, not the inclusive bound.** "Dates" above,
-   and the worked example, say a queue row carries `dueAt: 2026-10-31T23:59:59.999Z`
-   — the `endsAt` bound — so that comparing it to `now` honours the inclusive day.
-   The resolver emits the milestone's `target_date` verbatim (`2026-10-31`), so a
-   consumer doing `new Date(row.dueAt) < now` calls the row overdue a whole day
-   early. The fix is to pass the target through `milestoneDateBounds(target).endsAt`
-   where `EffectiveQueueRow.dueAt` is built in `src/core/queue-store.ts`.
-   (`milestones-e2e.test.ts` — *"emits dueAt as the inclusive endsAt bound, not the
-   bare calendar day"*.)
-2. **The view's blocked/gated risk counts read status categories, not eligibility.**
-   "State is derived, never stored" says blocked and gated are facts about members
-   "which the view shows per row from the queue's eligibility". The view instead
-   reads `progress.counts.blocked` and `progress.counts.gated`, which count leaves
-   whose STATUS is in those categories — and staple moves no status for either: a
-   blocker lives in the blocker table and a gate queues descendants through
-   `queuedBy`. On the R3e fixture one leaf is genuinely blocked and two are
-   genuinely gated, and both risk lines read zero. The fix is to count the queue's
-   `eligibility` over the rows whose `milestonePath` names the milestone.
-   (`views/milestones/milestones-e2e.test.tsx` — *"counts blocked and gated members
-   from the queue's eligibility, not from status categories"*.)
+glyph AND a word with the glyph hidden from a screen reader; the conflict banner
+after a genuinely stale `baseRevision`, showing the store's sentence verbatim
+while the server keeps the other writer's order; and the risk lines and rollups
+counting the fixture's one genuinely blocked leaf and two genuinely gated ones
+off `GET /api/queue`'s `eligibility`, where the status categories read zero.

@@ -9,7 +9,6 @@ import {
 import {
   CHECKOUT_EXPECTED_CATEGORY_ORDER,
   type ClaimActivity,
-  DEFAULT_CHECKOUT_EXPECTED,
   DEFAULT_ISSUE_KIND,
   type GateQueueEntry,
   type GateState,

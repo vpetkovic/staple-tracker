@@ -141,7 +141,7 @@ export function EffectiveLine({
       ) : null}
       {row.dueAt ? (
         <span data-queue-due className="pl-2 text-[11px] text-text-tertiary">
-          due {row.dueAt}
+          due {row.dueAt.slice(0, 10)}
         </span>
       ) : null}
     </li>

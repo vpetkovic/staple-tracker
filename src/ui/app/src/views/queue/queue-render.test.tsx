@@ -310,7 +310,7 @@ describe("the effective preview", () => {
 
   it("carries a milestone's date as a cue, never as an order", () => {
     const dated = renderPreview(
-      queue({ effective: [effective({ identifier: "STA-9", dueAt: "2026-10-31" })] }),
+      queue({ effective: [effective({ identifier: "STA-9", dueAt: "2026-10-31T23:59:59.999Z" })] }),
     );
     expect(dated).toContain("data-queue-due");
     expect(dated).toContain("due 2026-10-31");

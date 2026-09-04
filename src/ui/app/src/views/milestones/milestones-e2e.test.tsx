@@ -18,11 +18,12 @@
  * `MilestonesView`'s own `useLayout` calls. Everything the component owns above that is
  * fetch plumbing, and this file does that plumbing against the real routes.
  *
- * WHY THE TWO DYNAMIC IMPORTS. The Node-side modules (the server, the fixture builder)
- * are compiled by the ROOT tsconfig; pulling them into the browser app's program with a
- * static import would typecheck `src/core/**` under the app's stricter options and fail
- * on code this ticket does not own. A dynamic `import()` of an absolute URL keeps them
- * out of the app's program and still runs the real thing.
+ * WHY THE NODE-SIDE IMPORTS ARE STATIC. The server and the fixture builder are compiled
+ * by the ROOT tsconfig, so importing them here typechecks `src/core/**` under the app's
+ * stricter options too. R3e had to reach them through a dynamic absolute-URL `import()`
+ * because one such option — `noUnusedLocals` — failed on an unused import in
+ * `src/core/store.ts`; that import is gone (R3g), so the plain static import works and
+ * the test gets its types back.
  *
  * WHAT IT PINS: the list and the detail drawn from the wire at narrow, split and
  * full-screen; the accessible row order matching the server's member order; a name on
@@ -39,7 +40,14 @@ import { join } from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { describeRefusal } from "@/lib/refusal";
-import type { IssueRow, MilestoneListRow, MilestoneState, MilestoneView } from "@/lib/types";
+import type {
+  EffectiveQueueRow,
+  IssueRow,
+  MilestoneListRow,
+  MilestoneState,
+  MilestoneView,
+  QueueView,
+} from "@/lib/types";
 import {
   MilestoneDetailPane,
   MilestoneListPane,
@@ -47,6 +55,8 @@ import {
   StateBadge,
   type MemberWriteFailure,
 } from "./MilestonesView";
+import { SCENARIO, SCENARIO_WS, seedScenarioWorkspace } from "../../../../../../test/fixtures/milestones-scenario.ts";
+import { startUiServer } from "../../../../server.ts";
 import {
   layoutFor,
   memberListRows,
@@ -55,9 +65,6 @@ import {
   SPLIT_MIN_WIDTH_PX,
   STATE_PRESENTATION,
 } from "./milestones-model";
-
-/** Load a module the ROOT tsconfig owns, without dragging it into this program. */
-const nodeSide = async (path: string): Promise<any> => import(/* @vite-ignore */ new URL(path, import.meta.url).href);
 
 /** The store's own code for a stale base; `lib/api.ts` names it REVISION_CONFLICT_CODE. */
 const REVISION_CONFLICT = "revision_conflict";
@@ -123,9 +130,9 @@ function renderDetail(view: MilestoneView, over: Partial<Parameters<typeof Miles
   );
 }
 
-function renderList(selected: string | null): string {
+function renderList(selected: string | null, effective: EffectiveQueueRow[] = []): string {
   return renderToStaticMarkup(
-    <MilestoneListPane rows={sortMilestones(list)} selectedRef={selected} onSelect={noop} />,
+    <MilestoneListPane rows={sortMilestones(list)} effective={effective} selectedRef={selected} onSelect={noop} />,
   );
 }
 
@@ -168,11 +175,9 @@ beforeAll(async () => {
   process.env.STAPLE_HOME = home;
   process.env.NODE_NO_WARNINGS = "1";
 
-  const scenario = await nodeSide("../../../../../../test/fixtures/milestones-scenario.ts");
-  const { startUiServer } = await nodeSide("../../../../server.ts");
-  scenario.seedScenarioWorkspace(home);
-  ws = scenario.SCENARIO_WS;
-  refs = scenario.SCENARIO;
+  seedScenarioWorkspace(home);
+  ws = SCENARIO_WS;
+  refs = SCENARIO;
 
   ui = startUiServer({ port: 0, hub: true });
   await once(ui.server, "listening");
@@ -430,22 +435,40 @@ describe("reordering members", () => {
   });
 
   /**
-   * DEFECT, recorded rather than fixed (R3e touches no `src/**`).
-   *
-   * `milestoneRisk` reads `progress.counts.blocked` and `progress.counts.gated`, which
-   * are STATUS-CATEGORY counts of the milestone's leaves. But staple does not move a
-   * status when work is blocked or gated: a blocker lives in the blocker table and an
-   * approval gate queues the descendants through `queuedBy`, leaving both at whatever
-   * status they had. On this fixture October has one genuinely blocked leaf and November
-   * has two genuinely gated ones, and both risk lines read zero — so the rollups and the
-   * "⊘ n blocked / ◇ n gated" cues are silent exactly when they matter.
-   *
-   * docs/milestones.md already says the right answer: "Blocked and gated are not
-   * milestone states — they are facts about members, which the view shows per row FROM
-   * THE QUEUE'S ELIGIBILITY." The fix is to count the queue's `eligibility` over the
-   * rows whose `milestonePath` names this milestone, rather than the status categories.
+   * The counts staple keeps in `progress.counts` are STATUS-CATEGORY counts, and staple
+   * moves no status when work is blocked or gated: a blocker lives in the blocker table
+   * and an approval gate queues descendants through `queuedBy`, both leaving the status
+   * where it was. So the risk lines and the rollups read the QUEUE instead, exactly as
+   * docs/milestones.md says: "facts about members, which the view shows per row from the
+   * queue's eligibility". On this fixture October has one genuinely blocked leaf (MSC-4,
+   * blocked by MSC-3) and November two genuinely gated ones (MSC-7 and MSC-8, behind
+   * VP's gate on MSC-6) — and every number below came off the wire.
    */
-  it.todo("counts blocked and gated members from the queue's eligibility, not from status categories");
+  it("counts blocked and gated members from the queue's eligibility, not from status categories", async () => {
+    const { effective } = await get<QueueView>(`/api/queue?ws=${ws}`);
+
+    // The status counts the view used to read are zero for both, which is the bug.
+    expect(october.progress.counts).toMatchObject({ blocked: 0, gated: 0 });
+    expect(november.progress.counts).toMatchObject({ blocked: 0, gated: 0 });
+
+    // What the resolver actually says, per milestone the row is planned under.
+    const under = (milestone: string, verdict: string) =>
+      effective.filter((row) => row.milestonePath.includes(milestone) && row.eligibility === verdict).map((row) => row.identifier);
+    expect(under(refs.october!, "blocked")).toEqual([refs.q2]);
+    expect(under(refs.november!, "gated")).toEqual([refs.m1, refs.m2]);
+
+    // And that is what the page draws — on the list rows and in the detail's rollups.
+    const html = renderList(refs.october!, effective);
+    expect(html).toContain("⊘ 1 blocked");
+    expect(html).toContain("◇ 2 gated");
+
+    const detail = renderDetail(november, { effective });
+    expect(detail).toContain("◇ 2");
+    expect(detail).toContain("◇ 2 gated");
+    // November's blocked line stays silent: MSC-4 is October's, not November's.
+    expect(detail).not.toContain("⊘ 1");
+    expect(renderDetail(october, { effective })).toContain("⊘ 1 blocked");
+  });
 });
 
 /** The list rows in the order the markup puts them. */

@@ -7,6 +7,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { issue, row } from "@/components/task-list/fixtures";
+import { effective } from "@/views/queue/fixtures";
 import { listRow, member, progress, view } from "./fixtures";
 import { memberListRows } from "./milestones-model";
 import { MilestoneDetailPane, MilestoneListPane, MilestonesLayout, StateBadge } from "./MilestonesView";
@@ -46,11 +47,17 @@ describe("the milestone list", () => {
         rows={[
           listRow({
             milestone: { identifier: "STA-190", title: "October cut", targetDate: "2026-10-31", state: "overdue" },
-            progress: progress({ counts: { done: 5, ready: 4, blocked: 1, gated: 1 } }),
+            progress: progress({ counts: { done: 5, ready: 6 } }),
             memberCount: 3,
             next: { identifier: "STA-67", position: 4 },
           }),
           listRow({ milestone: { identifier: "STA-191", title: "November", targetDate: null, state: "planned" }, next: null }),
+        ]}
+        effective={[
+          effective({ identifier: "STA-68", milestonePath: ["STA-190"], eligibility: "blocked" }),
+          effective({ identifier: "STA-69", milestonePath: ["STA-190"], eligibility: "gated" }),
+          // November's own blocked row must not leak into October's line.
+          effective({ identifier: "STA-70", milestonePath: ["STA-191"], eligibility: "blocked" }),
         ]}
         selectedRef="STA-190"
         onSelect={noop}
@@ -69,7 +76,9 @@ describe("the milestone list", () => {
     expect(html).toContain("◇ 1 gated");
     expect(html).toContain('data-milestone-next="queued"');
     expect(html).toContain("next: STA-67 (#4)");
-    // The second row: nothing planned yet, and the queue has no answer.
+    // The second row: nothing planned yet, and the queue has no answer. Its one blocked
+    // row is counted against it and not against October's.
+    expect(html.match(/⊘ 1 blocked/g)).toHaveLength(2);
     expect(html).toContain("target no date");
     expect(html).toContain('data-milestone-next="none"');
     expect(html).toContain("no eligible work");
@@ -112,7 +121,7 @@ describe("the milestone detail", () => {
   const issues = [epic, child].map((i) => ({ ...row(), issue: i }));
   const data = view({
     milestone: { identifier: "STA-190", title: "October cut", startDate: "2026-09-01", targetDate: "2026-10-31", assignee: "VP" },
-    progress: progress({ counts: { done: 1, active: 1, blocked: 1 } }),
+    progress: progress({ counts: { done: 1, active: 1, ready: 1 } }),
     members: [
       member({ identifier: "STA-146", position: 1, note: "the flake, no epic" }),
       member({ identifier: "STA-66", kind: "epic", position: 2 }),
@@ -120,7 +129,11 @@ describe("the milestone detail", () => {
   });
 
   it("shows title, dates, owner, rollups and next work", () => {
-    const html = renderDetail(data, {}, issues);
+    const html = renderDetail(
+      data,
+      { effective: [effective({ identifier: "STA-67", milestonePath: ["STA-190"], eligibility: "blocked" })] },
+      issues,
+    );
     expect(html).toContain('data-milestone-detail="STA-190"');
     expect(html).toContain("October cut");
     expect(html).toContain("start 2026-09-01");
@@ -128,7 +141,10 @@ describe("the milestone detail", () => {
     expect(html).toContain("owner VP");
     expect(html).toContain("data-milestone-rollups");
     expect(html).toContain("1/3 done · 33%");
+    // The rollup and the risk line both count the queue's one blocked row, not the
+    // status-category count — which is zero here, as it is for real blocked work.
     expect(html).toContain("⊘ 1");
+    expect(html).toContain("⊘ 1 blocked");
     expect(html).toContain("no eligible work");
   });
 

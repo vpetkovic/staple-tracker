@@ -245,7 +245,9 @@ describe("container expansion", () => {
     store.milestones().update(milestone, { targetDate: "2026-01-01" }, "vp");
     expect(identifiers()).toEqual(before);
     const row = queue.effectiveQueue().rows.find((r) => r.identifier === late)!;
-    expect(row.dueAt).toBe("2026-01-01");
+    // The INCLUSIVE end of the target day, so `new Date(dueAt) < now` is overdue only
+    // once the day is over — docs/milestones.md, "Dates".
+    expect(row.dueAt).toBe("2026-01-01T23:59:59.999Z");
     // A date explains urgency; it never reorders a plan somebody wrote by hand.
     expect(identifiers()[0]).toBe(late);
     expect(queue.effectiveQueue().rows.find((r) => r.identifier === early)!.dueAt).toBeNull();
