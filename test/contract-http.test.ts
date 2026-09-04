@@ -327,14 +327,20 @@ describe("KNOWN: logical errors this surface cannot project", () => {
     // The gate now pins a LIST of methods per path rather than a single one, and
     // `test/ui-settings.test.ts` asserts that every other route kept exactly the
     // pin it had (bootstrap GET-only, action POST-only).
+    //
+    // R5d (STA-184) added `/api/glyph/sanitize`, a POST that WRITES NOTHING: it
+    // runs core's SVG sanitiser over the body so the picker can store the
+    // canonical document and never the raw one. `test/ui-glyph-sanitize.test.ts`
+    // pins it.
     const source = readFileSync(join(REPO_ROOT, "src/ui/server.ts"), "utf8");
-    const routes = [...new Set([...source.matchAll(/url\.pathname === "(\/api\/[a-z-]+)"/g)].map((m) => m[1]!))];
+    const routes = [...new Set([...source.matchAll(/url\.pathname === "(\/api\/[a-z/-]+)"/g)].map((m) => m[1]!))];
     expect(routes.sort()).toEqual([
       "/api/action",
       "/api/agent-context",
       "/api/bootstrap",
       "/api/document",
       "/api/events",
+      "/api/glyph/sanitize",
       "/api/graph",
       "/api/inbox",
       "/api/issue",

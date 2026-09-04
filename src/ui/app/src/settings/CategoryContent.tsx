@@ -12,12 +12,19 @@
  * renders a control per definition from the registry's value schema. All three write
  * through the dialog's `applyTo` and report their dirty state up through
  * `onDirtyChange`, which is what lets the shell refuse to close over unsaved edits.
+ *
+ * The Kinds arm passes ONE thing more (R5d, STA-184): the `kinds.appearance` map and the
+ * two functions that write it. That setting is registered in the `kinds` category, but
+ * the category's editor is the vocabulary list rather than `FieldsForm` — so the row's
+ * glyph picker is its control, and this is where the two are joined.
  */
 import type { SettingCategoryView, SettingOp, WorkspaceSettingsEnvelope } from "@/lib/settings";
 import type { Refusal } from "@/lib/refusal";
 import type { VocabularyOp } from "@/lib/types";
 import { FieldsForm } from "./FieldsForm";
 import { VocabularyList } from "./VocabularyList";
+import { servedGlyphMap } from "./glyph-picker/glyph-picker-model";
+import { sanitizeThroughServer } from "./glyph-picker/sanitize";
 import { kindRows, statusRows } from "./settings-ops";
 
 export interface ApplyTo {
@@ -53,6 +60,11 @@ export function CategoryContent({ category, settings, applyTo, onDirtyChange }: 
           rows={kindRows(settings.kinds)}
           usage={settings.usage.kinds}
           write={(ops) => applyTo("kinds", ops)}
+          glyphs={{
+            served: servedGlyphMap(settings),
+            write: (ops) => applyTo("settings", ops),
+            sanitize: sanitizeThroughServer,
+          }}
           onDirtyChange={onDirtyChange}
         />
       );

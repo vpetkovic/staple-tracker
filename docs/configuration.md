@@ -59,8 +59,10 @@ value and the new one.
 `kinds.appearance` is the one structured value so far: a map from kind id to
 `{ source, value, fallback, label? }`, holding only the kinds somebody
 customised. `source` is `lucide` (a canonical key, `triangle-alert`), `emoji`,
-or `none` (an empty value: draw the built-in mark); `svg` is refused until the
-sanitiser lands (R5c). `fallback` is what a terminal prints, one to four
+or `none` (an empty value: draw the built-in mark); `svg` is accepted only as
+the sanitiser's canonical output — the exact string `sanitizeSvg` writes, which
+the settings page obtains from `POST /api/glyph/sanitize` and stores verbatim,
+never the raw document somebody pasted. `fallback` is what a terminal prints, one to four
 characters; `label` overrides the kind's own label for assistive tech and may
 be omitted. Any other field — a colour, say — is refused: hue belongs to a
 status category, never to a kind. A key must name a configured kind, and

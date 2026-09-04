@@ -299,3 +299,20 @@ export function putSettings(
     body: JSON.stringify({ actor: "ui", ...params, target, ops }),
   });
 }
+
+// ---------- the glyph sanitiser (R5d / STA-184) ----------
+
+/**
+ * Sanitise a custom SVG glyph. The store accepts an `svg` appearance ONLY as the
+ * sanitiser's canonical output, and the sanitiser is core code the browser cannot
+ * import — so the raw document goes here first, and what comes back is the only
+ * thing the picker ever offers as a choice. A refusal is the sanitiser's own sentence
+ * through the usual envelope, which `describeRefusal` renders. Same-origin POST, like
+ * every write, although it writes nothing: it is a pure function over the body.
+ */
+export const sanitizeGlyphSvg = (input: { svg: string; label?: string }) =>
+  request<{ svg: string; viewBox: string; label: string }>("/api/glyph/sanitize", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
