@@ -137,6 +137,35 @@ describe("identity", () => {
     expect(store.updateIssue(m, { kind: MILESTONE_KIND }, "vp").kind).toBe(MILESTONE_KIND);
   });
 
+  /**
+   * The bulk half of the guard above: `kinds rm milestone --migrate-to task` would
+   * re-kind every milestone in one statement, so it is refused by the same rule and
+   * names every milestone that still owns something.
+   */
+  it("refuses to remove the milestone kind while milestones exist", () => {
+    const m = newMilestone();
+    const t = store.createIssue({ title: "t" }).identifier;
+    milestones.addMember(m, t, {}, "vp");
+    const error = refused(() => store.removeKind(MILESTONE_KIND, { migrateTo: "task" }, "vp"), "validation");
+    expect(error.message).toBe(`Cannot remove the milestone kind while ${m} still has members or dates.`);
+    expect(error.detail).toEqual({ milestones: [m] });
+
+    // Dates alone are enough, and the refusal names every milestone that owns anything.
+    const dated = newMilestone("November cut");
+    milestones.update(dated, { targetDate: "2026-11-30" }, "vp");
+    expect(refused(() => store.removeKind(MILESTONE_KIND, { migrateTo: "task" }, "vp"), "validation").detail).toEqual({
+      milestones: [m, dated],
+    });
+
+    // Cleared of members and dates they are ordinary issues again, so the kind goes
+    // and they migrate like any other row would.
+    milestones.removeMember(m, t, {}, "vp");
+    milestones.update(dated, { targetDate: null }, "vp");
+    expect(store.removeKind(MILESTONE_KIND, { migrateTo: "task" }, "vp")).toEqual({ migrated: 2 });
+    expect(store.getKinds().map((k) => k.id)).not.toContain(MILESTONE_KIND);
+    expect(store.getIssue(m).kind).toBe("task");
+  });
+
   it("a member landing does not move the milestone's status", () => {
     const m = newMilestone();
     const t = store.createIssue({ title: "t" }).identifier;

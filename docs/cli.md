@@ -163,6 +163,12 @@ document) is refused with the reason. So the database, `kinds ls --json`,
 markup, and the human `kinds ls` prints the terminal `fallback`, never the
 document. A stored record that no longer validates — one hand-edited on disk,
 say — is refused at read with the key in the sentence rather than served.
+
+`kinds rm milestone` is the one removal `--migrate-to` cannot force: it is
+refused with exit 2 naming every milestone that still owns members or dates
+(clear them with `staple milestone rm` and `staple milestone set --target none`
+first) — see [milestones.md](milestones.md).
+
 ## Milestones
 
 A milestone is a dated, human-ordered plan that may contain epics and tasks

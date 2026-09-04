@@ -340,6 +340,26 @@ describe("removal, migrate-to, and the store's own refusals", () => {
     expect(refusal.message.length).toBeGreaterThan(0);
   });
 
+  /**
+   * The kinds half of "the refusals are the store's": `removeKind`'s milestone guard
+   * reaches the dialog through the same envelope, so a milestone that still owns dates
+   * stops the removal here exactly as it does in the store.
+   */
+  it("refuses to remove the milestone kind while a milestone still owns dates", async () => {
+    expect((await write("kinds", [{ op: "add", id: "milestone", label: "Milestone" }])).status).toBe(200);
+    const created = await fetch(`${origin}/api/milestone/create`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-staple-token": token, origin },
+      body: JSON.stringify({ actor: "ui", title: "October cut", targetDate: "2026-10-31" }),
+    });
+    expect(created.status).toBe(200);
+
+    const { http, refusal } = await refuse("kinds", [{ op: "remove", id: "milestone", migrateTo: "task" }]);
+    expect(http).toBe(409);
+    expect(refusal.message).toContain("Cannot remove the milestone kind");
+    expect((await read()).kinds.map((k) => k.id)).toContain("milestone");
+  });
+
   it("refuses a body with no target, or with no ops", async () => {
     expect((await write("statuses", [])).status).toBe(409);
     const res = await fetch(`${origin}/api/settings`, {

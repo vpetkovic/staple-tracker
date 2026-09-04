@@ -63,6 +63,7 @@ import {
   type KindAppearanceMap,
   type KindWithAppearance,
 } from "./kind-appearance.js";
+import { MILESTONE_KIND } from "./milestones.js";
 
 export interface CreateIssueInput {
   title: string;
@@ -1185,6 +1186,34 @@ export class WorkspaceStore {
   removeKind(id: string, opts: { migrateTo?: string | null } = {}, actor?: string | null): { migrated: number } {
     return this.atomically(() => {
       this.requireKindRow(id);
+      /**
+       * The bulk half of `assertRekindAllowed` (docs/milestones.md): `--migrate-to`
+       * re-kinds every milestone at once, so the same rule applies at once — an issue
+       * that is not a milestone cannot own members or dates. Refused outright rather
+       * than migrated, and the refusal names the milestones so the operator knows
+       * which `staple milestone rm`/`set --target none` to run first.
+       */
+      if (id === MILESTONE_KIND) {
+        const owning = this.db
+          .prepare(
+            `SELECT i.identifier FROM issues i
+               WHERE i.kind = ?
+                 AND (EXISTS (SELECT 1 FROM milestone_members m WHERE m.milestone_id = i.id)
+                   OR EXISTS (SELECT 1 FROM milestone_meta t
+                                WHERE t.issue_id = i.id
+                                  AND (t.target_date IS NOT NULL OR t.start_date IS NOT NULL)))`,
+          )
+          .all(id)
+          .map((row) => (row as { identifier: string }).identifier);
+        if (owning.length > 0) {
+          throw new StapleError(
+            "validation",
+            `Cannot remove the milestone kind while ${owning.join(", ")} still ` +
+              `${owning.length === 1 ? "has" : "have"} members or dates.`,
+            { milestones: owning },
+          );
+        }
+      }
       if (this.settings().kinds.length === 1) {
         throw new StapleError("validation", `"${id}" is the only kind left; a workspace needs at least one.`);
       }
