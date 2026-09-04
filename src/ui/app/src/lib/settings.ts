@@ -269,9 +269,14 @@ export function settingDefinitions(category?: string): SettingDefinitionView[] {
  * accessor here is total: a render path is the wrong place to discover a key.
  */
 export function settingValue(key: string): SettingValueView | undefined {
-  const stored = current.values[key] ?? current.global.values[key];
+  return settingValueIn(current, key);
+}
+
+/** `settingValue` over a given envelope, for a form that holds the snapshot it renders (R6c). */
+export function settingValueIn(envelope: WorkspaceSettingsEnvelope, key: string): SettingValueView | undefined {
+  const stored = envelope.values[key] ?? envelope.global.values[key];
   if (stored) return stored;
-  const definition = current.registry.definitions.find((d) => d.key === key);
+  const definition = envelope.registry.definitions.find((d) => d.key === key);
   if (!definition) return undefined;
   return { key, scope: definition.scope, value: definition.default, source: "default", version: definition.version };
 }
