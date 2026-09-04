@@ -47,6 +47,12 @@ export const FIXTURES = {
    */
   workspaceV2LegacyDdl: "workspace-v2-legacy-ddl.sqlite",
   /**
+   * Stamped '3', with real content — what the retired prototype checkout
+   * wrote, three migrations behind the live workspace. The package-level
+   * matrix walks it to the latest version through the packed runtime.
+   */
+  workspaceV3: "workspace-v3.sqlite",
+  /**
    * Stamped '5', with real content — the last shape before approval gates, and
    * the shape some installed builds still write. The pre-upgrade snapshot
    * tests walk THIS forward.
@@ -71,6 +77,19 @@ export function fixturePath(name: string): string {
 }
 
 /**
+ * `npx tsx generate.ts workspace-v3.sqlite` regenerates only the named files.
+ * A fixture added later must not rewrite the ones already checked in: the
+ * SQLite library stamps its own version into the file header, so a full
+ * regeneration under a newer Node changes bytes in files whose whole value is
+ * that they were left alone.
+ */
+const only = new Set(process.argv.slice(2));
+
+function wanted(file: string): boolean {
+  return only.size === 0 || only.has(file);
+}
+
+/**
  * Build a database by walking migrations up to and including `throughVersion`.
  * Journal mode stays `delete` so the finished fixture is one self-contained
  * file with no `-wal` sidecar to check in or forget.
@@ -81,6 +100,7 @@ function build(
   throughVersion: number,
   seed?: (db: DatabaseSync) => void,
 ): void {
+  if (!wanted(file)) return;
   const path = fixturePath(file);
   for (const suffix of ["", "-wal", "-shm"]) rmSync(`${path}${suffix}`, { force: true });
 
@@ -299,6 +319,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS comments_idempotency_uq
 
 /** Build a fixture from raw DDL rather than from the migration list. */
 function buildRaw(file: string, ddl: string, seed: (db: DatabaseSync) => void): void {
+  if (!wanted(file)) return;
   const path = fixturePath(file);
   for (const suffix of ["", "-wal", "-shm"]) rmSync(`${path}${suffix}`, { force: true });
   const db = new DatabaseSync(path);
@@ -332,6 +353,11 @@ function main(): void {
   buildRaw(FIXTURES.workspaceV2LegacyDdl, LEGACY_V2_DDL, (db) => {
     seedWorkspaceRows(db, { idempotencyKey: true });
     stampRaw(db, "2");
+  });
+
+  build(WORKSPACE_TARGET, FIXTURES.workspaceV3, 3, (db) => {
+    seedWorkspaceRows(db, { idempotencyKey: true });
+    stampRaw(db, "3");
   });
 
   build(WORKSPACE_TARGET, FIXTURES.workspaceV5, 5, (db) => {

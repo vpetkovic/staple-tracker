@@ -9,6 +9,7 @@ and `test/migrations-concurrency.test.ts`.
 | `workspace-v1.sqlite` | workspace before comment idempotency, stamped `'1'`, with real issues, relations, comments, documents, and events |
 | `workspace-v1-unstamped.sqlite` | same schema, `schema_version` row absent — "tables exist, nobody ever stamped them" |
 | `workspace-v2.sqlite` | current shape, stamped `'2'`, one comment carrying an idempotency key |
+| `workspace-v3.sqlite` | the retired prototype checkout's shape, stamped `'3'` — `test/install-schema-matrix.test.ts` walks it to the latest version through the packed runtime |
 | `workspace-v5.sqlite` | pre-approval-gates shape, stamped `'5'` — what some installed builds still write; the pre-upgrade snapshot tests walk it to 6 |
 | `workspace-v6.sqlite` | the live workspace's shape, stamped `'6'` — a build that understands 3 or 5 must refuse it |
 | `workspace-v99.sqlite` | v2 schema stamped `'99'` — the downgrade guard's target |
@@ -42,8 +43,13 @@ with no sidecars to commit or forget.
 ## Regenerating
 
 ```
-npx tsx test/fixtures/schema/generate.ts
+npx tsx test/fixtures/schema/generate.ts                      # every fixture
+npx tsx test/fixtures/schema/generate.ts workspace-v3.sqlite  # only the named ones
 ```
+
+Name the files when adding a fixture: the SQLite library stamps its own
+version into the header, so a full regeneration under a newer Node rewrites
+files whose whole value is that they were left alone.
 
 Regenerate only when you have deliberately changed what an *old* database
 looked like — which should be never. Adding a new migration does not change

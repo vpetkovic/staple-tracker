@@ -23,6 +23,16 @@ secrets, and none should ever be added.
   behind its schema takes a `VACUUM INTO` snapshot beside the database before
   migrating it, and retains the prior runtime under `<home>/runtime/versions/`
   for `staple install --rollback --yes`. See `docs/migration.md`.
+- **The schema matrix is a release gate.** `test/install-schema-matrix.test.ts`
+  drives the packed runtime through the real launcher against the schema-3,
+  -5, -6, future-schema and WAL-backed fixtures, an interrupted install, and
+  the commands `docs/migration.md` prints. It needs `dist-package/` and skips
+  without it, so a full `npm test` in which it skipped is not a passing gate.
+  Before tagging, run it against the artifact you are about to publish:
+
+  ```bash
+  npm run build:package && npx vitest run test/install-schema-matrix.test.ts
+  ```
 
 ## One-time npm setup (VP only, before the first release)
 
@@ -64,7 +74,7 @@ subsequent release is just the tag flow below.
 
 4. The `Release` workflow runs automatically:
    - gates: `npm test`, `npm run typecheck`, `npm run smoke:mcp`,
-     `npm run drill:npx`;
+     `npm run drill:npx` (the schema matrix above must have RUN, not skipped);
    - guard: the tag must equal the version in BOTH `package.json` and the
      freshly built `dist-package/package.json`, or the job fails before
      publishing;
