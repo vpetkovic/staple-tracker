@@ -19,6 +19,7 @@ import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { issue } from "@/components/task-list/fixtures";
 import type { Issue, IssueDetail, IssueTiming, SubtreePlan } from "@/lib/types";
+import { formatDuration } from "./analytics";
 import { AnalyticsTab } from "./tabs/AnalyticsTab";
 
 const NOW = Date.now();
@@ -163,8 +164,9 @@ describe("a parent leads with the rolled-up plan", () => {
     expect(html).toContain(figure("11h"));
     expect(html).toContain("inherited from 3 of 3 descendants");
     expect(html).not.toContain("no estimate recorded");
-    // The 11h is the FIRST figure on the page.
-    expect(html.indexOf(figure("11h"))).toBeLessThan(html.indexOf("aggregated from 3 children"));
+    // The 11h is the FIRST figure on the page (the spoken sentence before it is
+    // `sr-only` text, not a figure — see "the headline is spoken" below).
+    expect(html.indexOf(figure("11h"))).toBeLessThan(html.indexOf(">actual<"));
   });
 
   it("STA-156 leads with the recursive descendant plan, not with '0 of 6 estimated'", () => {
@@ -381,5 +383,180 @@ describe("the reading order is the same in every layout", () => {
     expect(at(">This issue<")).toBeLessThan(at(">Children<"));
     expect(at(">Children<")).toBeLessThan(at('aria-label="Per child"'));
     expect(at('aria-label="Per child"')).toBeLessThan(at("STA-165"));
+  });
+});
+
+// ------------------------------------------------- the child's effective plan (R7c)
+
+/**
+ * R7c (STA-194). What "visual regression coverage" means in a suite with no
+ * screenshot harness and no browser: a DOM stand-in for each state the ticket
+ * names — nested estimates, no estimate, not started, partial coverage, narrow
+ * width — pinned as structure, text and class lists. Pixels are not claimed;
+ * there is no harness to claim them with, and none is added for this.
+ */
+
+/** Every child's `est` figure, in document order: `4h`, `—`, ... */
+const childPlans = (html: string): string[] =>
+  [...html.matchAll(/data-testid="child-plan">est ([^<]+)</g)].map((match) => match[1]!);
+
+/** The reverse of `formatDuration` for the two units the fixtures use. */
+const seconds = (text: string): number => {
+  const hours = /(\d+)h/.exec(text);
+  const minutes = /(\d+)m/.exec(text);
+  return (hours ? Number(hours[1]) * 3600 : 0) + (minutes ? Number(minutes[1]) * 60 : 0);
+};
+
+/** The markup from the Per child heading down. */
+const perChild = (html: string): string => html.slice(html.indexOf('aria-label="Per child"'));
+
+describe("a child shows the plan its parent counts it as", () => {
+  it("STA-157 under STA-156 reads est 11h, not an em dash", () => {
+    const html = render(STA_156);
+    const list = perChild(html);
+    const sta157 = list.slice(list.indexOf("STA-157"), list.indexOf("STA-158"));
+    expect(sta157).toContain('data-testid="child-plan">est 11h<');
+    expect(sta157).not.toContain("est —");
+    // The other five have nothing anywhere beneath them and say so.
+    expect(childPlans(html)).toEqual(["11h", "—", "—", "—", "—", "—"]);
+  });
+
+  it("puts the provenance in a tooltip, never a third line", () => {
+    const list = perChild(render(STA_156));
+    expect(list).toContain('title="inherited from 3 of 3 descendants" data-testid="child-plan"');
+    // Not as text: nothing between the tags says "inherited".
+    expect(list).not.toMatch(/>[^<]*inherited/);
+    // Two lines per child, six children — twelve `ChildLine` divs, and not one more. (The
+    // identifier and status badge share a span with the same classes INSIDE line one.)
+    expect((list.match(/<div class="flex items-center gap-2">/g) ?? []).length).toBe(12);
+  });
+
+  it("names an own estimate as own, so a typed 4h and a flowed-up 11h are told apart", () => {
+    const list = perChild(render(STA_157));
+    expect((list.match(/title="own estimate" data-testid="child-plan"/g) ?? []).length).toBe(3);
+  });
+});
+
+describe("the parent total is the sum of the visible child plans", () => {
+  it("STA-157: the 4h, 3h and 4h on the child lines add to the 11h headline", () => {
+    const html = render(STA_157);
+    const plans = childPlans(html);
+    expect(plans).toEqual(["4h", "3h", "4h"]);
+    const sum = plans.reduce((total, text) => total + seconds(text), 0);
+    expect(sum).toBe(39_600);
+    expect(html).toContain(figure(formatDuration(sum)));
+  });
+
+  it("STA-156: one inheriting child and five empty ones add to the same 11h", () => {
+    const html = render(STA_156);
+    const sum = childPlans(html)
+      .filter((text) => text !== "—")
+      .reduce((total, text) => total + seconds(text), 0);
+    expect(sum).toBe(39_600);
+    expect(html).toContain(figure(formatDuration(sum)));
+  });
+});
+
+describe("the headline is spoken as one sentence in a fixed order", () => {
+  const worked = {
+    ...STA_156,
+    timing: { ...STA_156.timing, activeSeconds: 18_000, childrenActiveSeconds: 18_000 },
+  };
+
+  it("says planned, actual, difference, coverage, source — before the figures", () => {
+    const html = render(worked);
+    const start = html.indexOf('<p class="sr-only" data-testid="summary-sentence">');
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(start).toBeLessThan(html.indexOf(figure("11h")));
+    const sentence = html.slice(start, html.indexOf("</p>", start));
+    expect(sentence).toMatch(
+      /Planned 11h\. Actual 5h[^.]*\. Difference 6h under \(55%\)\. Coverage 3 of 9 descendants planned\. Source inherited from descendants\./,
+    );
+    const at = (word: string) => {
+      const index = sentence.indexOf(word);
+      expect(index, word).toBeGreaterThanOrEqual(0);
+      return index;
+    };
+    expect(at("Planned ")).toBeLessThan(at("Actual "));
+    expect(at("Actual ")).toBeLessThan(at("Difference "));
+    expect(at("Difference ")).toBeLessThan(at("Coverage "));
+    expect(at("Coverage ")).toBeLessThan(at("Source "));
+  });
+
+  it("hides the figure row from the accessibility tree, so the facts are heard once", () => {
+    const html = render(STA_157);
+    expect(html).toMatch(/<div class="flex flex-wrap items-end[^"]*" aria-hidden="true">/);
+    expect((html.match(/data-testid="summary-sentence"/g) ?? []).length).toBe(1);
+  });
+
+  it("speaks the same absences the figures draw", () => {
+    const html = render(detail({ identifier: "STA-1" }, timing()));
+    expect(html).toContain(
+      "Planned No estimate. Actual No work recorded. Difference No comparison. Coverage no descendants. Source no plan.",
+    );
+  });
+});
+
+describe("regression stand-ins for the five screenshot states", () => {
+  it("nested estimates: STA-156 over STA-157 — headline 11h, one line est 11h, five lines est —", () => {
+    const html = render(STA_156);
+    expect(html).toContain(figure("11h"));
+    expect(childPlans(html)).toEqual(["11h", "—", "—", "—", "—", "—"]);
+    expect(html).toContain("5 of 6 children have no plan");
+  });
+
+  it("no estimate: a bare issue names the absence small and muted, with no child slot at all", () => {
+    const html = render(detail({ identifier: "STA-1" }, timing()));
+    expect(html).toContain(placeholder("No estimate"));
+    expect(html).not.toContain('data-testid="child-plan"');
+    expect(html).not.toContain("est —");
+  });
+
+  it("not started: three planned tasks each read `ran —`, and the actual is a named absence", () => {
+    const html = render(STA_157);
+    expect(html).toContain(placeholder("No work recorded"));
+    expect((perChild(html).match(/ · ran —/g) ?? []).length).toBe(3);
+    expect(html).not.toContain(figure("0s"));
+  });
+
+  it("partial coverage: one planned child of three, and the caveat agrees with the column", () => {
+    const html = render(
+      detail(
+        { identifier: "STA-9", kind: "epic" },
+        timing({
+          childCount: 3,
+          childrenEstimatedSeconds: 3600,
+          subtreePlan: plan({
+            estimatedSeconds: 3600,
+            source: "descendants",
+            descendantsEstimatedSeconds: 3600,
+            contributingCount: 1,
+            totalCount: 3,
+          }),
+        }),
+        [
+          issue({ identifier: "STA-10", estimatedSeconds: 3600 }),
+          issue({ identifier: "STA-11" }),
+          issue({ identifier: "STA-12" }),
+        ],
+        { "STA-10": timing({ estimatedSeconds: 3600, subtreePlan: plan({ estimatedSeconds: 3600, source: "own" }) }) },
+      ),
+    );
+    expect(childPlans(html)).toEqual(["1h", "—", "—"]);
+    expect(html).toContain(figure("1h"));
+    expect(html).toContain("2 of 3 children have no plan");
+    expect(html).toContain("Coverage 1 of 3 descendants planned.");
+  });
+
+  it("narrow width: child lines truncate the title and pin the figures; the headline wraps", () => {
+    // The 440px drawer is a CSS fact. What the DOM can promise is the shape that survives
+    // it — a `truncate` title in a `flex-1` cell with a `shrink-0` figure beside it, a
+    // `flex-wrap` headline, and no fixed-width table anywhere for the figures to fall off.
+    const html = render(STA_156);
+    const list = perChild(html);
+    expect(list).toContain('class="min-w-0 flex-1 truncate');
+    expect(list).toContain('class="shrink-0 font-mono tabular-nums');
+    expect(html).toContain("flex flex-wrap items-end");
+    expect(html).not.toContain("<table");
   });
 });

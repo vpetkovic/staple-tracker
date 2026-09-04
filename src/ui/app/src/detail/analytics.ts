@@ -255,8 +255,20 @@ export interface ChildRow {
    * an unestimated middle epic over three planned leaves HAS a plan.
    */
   plannedSeconds: number | null;
+  /**
+   * Where `plannedSeconds` came from, in words, for the tooltip on the child's
+   * `est` figure — see `childPlanHint`. Null when there is no plan to explain.
+   * A tooltip rather than a line, because R7c's brief is one concise line per
+   * child: the provenance is secondary and must not become a permanent third row.
+   */
+  planHint: string | null;
   /** The child's HEADLINE actual, so a child that is itself a parent shows its aggregate. */
   actualSeconds: number | null;
+  /**
+   * Computed on `plannedSeconds`, not on the own estimate — so the delta on the
+   * row is the same delta the child's own Analytics headline shows, and an
+   * inheriting epic can have one at all.
+   */
   delta: Delta | null;
   /** True while the task is unfinished — the delta is a snapshot, not a verdict. */
   running: boolean;
@@ -294,14 +306,17 @@ export function buildChildRows(
     // Prefer the timing echo, fall back to the entity's own stored field.
     const estimatedSeconds = timing?.estimatedSeconds ?? child.estimatedSeconds;
     const actualSeconds = timing?.activeSeconds ?? null;
+    const plannedSeconds = timing?.subtreePlan.estimatedSeconds ?? estimatedSeconds;
     return {
       identifier: child.identifier,
       title: child.title,
       status: child.status,
       estimatedSeconds,
-      plannedSeconds: timing?.subtreePlan.estimatedSeconds ?? estimatedSeconds,
+      plannedSeconds,
+      // No timing entry means no subtree to speak of: the fallback plan IS the own estimate.
+      planHint: timing ? childPlanHint(timing.subtreePlan) : plannedSeconds === null ? null : OWN_PLAN,
       actualSeconds,
-      delta: computeDelta(estimatedSeconds, actualSeconds),
+      delta: computeDelta(plannedSeconds, actualSeconds),
       running: isStillRunning(child.status),
       activity: activityState(timing?.countedThrough ?? null, nowMs),
       approximate: timing?.approximate ?? false,
@@ -381,12 +396,66 @@ export function computeTotals(timing: IssueTiming, rows: readonly ChildRow[]): T
  * actually drawn from.
  */
 export function subtreePlanHint(plan: SubtreePlan): string | null {
-  const coverage = `${plan.contributingCount} of ${plan.totalCount} descendants`;
+  const coverage = planCoverage(plan);
   if (plan.source === "descendants") return `inherited from ${coverage}`;
   if (plan.source === "own" && plan.descendantsEstimatedSeconds !== null) {
     return `own estimate; descendants add up to ${formatDuration(plan.descendantsEstimatedSeconds)} (${coverage})`;
   }
   return null;
+}
+
+/** The provenance a leaf's plan gets when there is nothing beneath it to compare against. */
+const OWN_PLAN = "own estimate";
+
+/**
+ * The provenance of a CHILD's `est` figure (R7c, STA-194), for its tooltip.
+ *
+ * `subtreePlanHint` says nothing over a plain own estimate because the headline
+ * beneath it already reads "planned"; on a child row the figure is one of six in
+ * a column, some own and some inherited, and every one of them has to say which
+ * it is or the reader cannot tell an 11h somebody typed from an 11h that flowed
+ * up. Null only when there is no plan at all, which the row already spells out.
+ */
+export function childPlanHint(plan: SubtreePlan): string | null {
+  if (plan.source === "none") return null;
+  return subtreePlanHint(plan) ?? OWN_PLAN;
+}
+
+/** `3 of 9 descendants` — the population the recursive sum was drawn from. */
+function planCoverage(plan: SubtreePlan): string {
+  return `${plan.contributingCount} of ${plan.totalCount} descendants`;
+}
+
+// ---------------------------------------------------------- the spoken headline
+
+/**
+ * The headline as ONE sentence for a screen reader (R7c, STA-194): planned,
+ * actual, difference, coverage, source — in that order, every time.
+ *
+ * The visible headline is three figures in a flex row with a hint under each,
+ * which a screen reader walks as "planned, 11h, inherited from 3 of 9 descendants,
+ * actual, ..." — the source arrives before the actual, and the coverage is buried
+ * in the middle of the source. This sentence is the same facts in the order the
+ * ticket names, and it is built from the same `Summary` and `SubtreePlan` the
+ * figures are, so it cannot say a different number. The hints that qualify a
+ * figure (`still running`, `provisional`) ride beside the figure they qualify.
+ */
+export function summarySentence(
+  summary: Summary,
+  plan: SubtreePlan,
+  hints: { actual?: string | null; difference?: string | null } = {},
+): string {
+  const qualify = (text: string, hint: string | null | undefined) => (hint ? `${text} (${hint})` : text);
+  const coverage = plan.totalCount === 0 ? "no descendants" : `${planCoverage(plan)} planned`;
+  const source =
+    plan.source === "own" ? OWN_PLAN : plan.source === "descendants" ? "inherited from descendants" : "no plan";
+  return [
+    `Planned ${formatOptionalDuration(summary.plannedSeconds, NO_ESTIMATE)}.`,
+    `Actual ${qualify(formatOptionalDuration(summary.actualSeconds, NOT_STARTED), hints.actual)}.`,
+    `Difference ${qualify(summary.delta ? summary.delta.label : "No comparison", hints.difference)}.`,
+    `Coverage ${coverage}.`,
+    `Source ${source}.`,
+  ].join(" ");
 }
 
 /**

@@ -95,6 +95,21 @@ fed and `‡` once it has gone idle, and the same distinction is spelled out in
 the caveat line. The reading order — headline, breakdown, per child — is the
 same in the drawer and on the full-screen page.
 
+**Rolled-up plans in the rows.** The per-child `est` is the child's *effective*
+plan — the same figure its parent counts it as — so under STA-156 the STA-157
+line reads `est 11h`, not a dash, and the parent's planned headline is exactly
+the sum of what the child lines show. Where each figure came from (`own
+estimate`, `inherited from 3 of 3 descendants`) is the tooltip on the figure,
+never a third line per child, and the child's delta is measured against that
+same plan. The headline is also written once as a single sentence for screen
+readers — planned, actual, difference, coverage, source, in that order — with
+the visible figures hidden from the accessibility tree so nothing is heard
+twice. In the task list, a folded parent in comfortable density shows the same
+rolled-up plan as `est 11h` beside its progress bar, in the existing rollup slot
+at the count's own size, so the row does not grow; it is absent rather than
+`est —` when nothing beneath is estimated, and hidden below the two-line
+breakpoint where the title has the whole row.
+
 ## Stack
 
 The page is a Vite + React + TypeScript app in `src/ui/app/`, shipped inside the

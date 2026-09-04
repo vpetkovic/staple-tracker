@@ -51,6 +51,7 @@ import {
   formatOptionalDuration,
   isAggregated,
   isStillRunning,
+  summarySentence,
   totalsCaveat,
   type Delta,
 } from "../analytics";
@@ -190,9 +191,23 @@ function ChildLine({
   );
 }
 
-/** `est 3h · ran 1h50m`, with absences named rather than drawn as zeros. */
-function pair(estimate: number | null, actual: number | null): string {
-  return `est ${formatOptionalDuration(estimate, "—")} · ran ${formatOptionalDuration(actual, "—")}`;
+/**
+ * `est 3h · ran 1h50m`, with absences named rather than drawn as zeros.
+ *
+ * `est` is the child's EFFECTIVE plan (R7c, STA-194): STA-157 under STA-156 reads
+ * `est 11h`, the figure its parent counts it as, not the `—` of its own empty
+ * field. Where that plan came from is the `title` on the figure — a tooltip, not
+ * a third line, so a child stays two lines whatever its provenance.
+ */
+function Pair({ planned, planHint, actual }: { planned: number | null; planHint: string | null; actual: number | null }) {
+  return (
+    <>
+      <span title={planHint ?? undefined} data-testid="child-plan">
+        est {formatOptionalDuration(planned, "—")}
+      </span>
+      {` · ran ${formatOptionalDuration(actual, "—")}`}
+    </>
+  );
 }
 
 export function AnalyticsTab({ detail }: TabProps) {
@@ -229,32 +244,41 @@ export function AnalyticsTab({ detail }: TabProps) {
     caveats.push(`${formatDuration(timing.reviewSeconds)} in review, not counted as active time.`);
   }
 
+  /**
+   * Three different sentences, and never "still running" over a frozen
+   * number: a parent says where its figure came from, a live leaf says
+   * it is moving, a stalled leaf says how long ago it stopped.
+   */
+  const actualHint = aggregated ? aggregationHint(timing.childCount) : activityHint(activity);
+  const differenceHint = summary.delta && running ? "provisional — not finished" : null;
+
   return (
     <div className="space-y-4 text-sm">
       {/* ----------------------------------------------------------- headline */}
       <section aria-label="Summary">
-        <div className="flex flex-wrap items-end gap-x-8 gap-y-3 rounded-md border bg-muted/40 px-4 py-3">
+        {/*
+          R7c (STA-194). The spoken headline: planned, actual, difference, coverage,
+          source — one sentence, in that order, from the same numbers the figures
+          show. The figure row beneath is `aria-hidden` so a screen reader hears
+          the facts once and in this order rather than walking three cells whose
+          hints put the source before the actual. Sighted readers see the figures;
+          nothing is said here that is not also drawn.
+        */}
+        <p className="sr-only" data-testid="summary-sentence">
+          {summarySentence(summary, timing.subtreePlan, { actual: actualHint, difference: differenceHint })}
+        </p>
+        <div
+          className="flex flex-wrap items-end gap-x-8 gap-y-3 rounded-md border bg-muted/40 px-4 py-3"
+          aria-hidden="true"
+        >
           <Figure
             label="planned"
             seconds={summary.plannedSeconds}
             absent={NO_ESTIMATE}
             hint={summary.planHint}
           />
-          <Figure
-            label="actual"
-            seconds={summary.actualSeconds}
-            absent={NOT_STARTED}
-            /**
-             * Three different sentences, and never "still running" over a frozen
-             * number: a parent says where its figure came from, a live leaf says
-             * it is moving, a stalled leaf says how long ago it stopped.
-             */
-            hint={aggregated ? aggregationHint(timing.childCount) : activityHint(activity)}
-          />
-          <DeltaFigure
-            delta={summary.delta}
-            hint={summary.delta && running ? "provisional — not finished" : null}
-          />
+          <Figure label="actual" seconds={summary.actualSeconds} absent={NOT_STARTED} hint={actualHint} />
+          <DeltaFigure delta={summary.delta} hint={differenceHint} />
         </div>
         {caveats.length > 0 ? (
           <p className="mt-1.5 text-[11px] text-muted-foreground">{caveats.join(" ")}</p>
@@ -331,7 +355,7 @@ export function AnalyticsTab({ detail }: TabProps) {
                 <ChildLine
                   muted
                   left={<span title={row.title}>{row.title}</span>}
-                  right={pair(row.estimatedSeconds, row.actualSeconds)}
+                  right={<Pair planned={row.plannedSeconds} planHint={row.planHint} actual={row.actualSeconds} />}
                   rightTone="text-muted-foreground"
                 />
               </div>

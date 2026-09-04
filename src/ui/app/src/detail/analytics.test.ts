@@ -37,6 +37,7 @@ import {
   aggregationHint,
   buildBreakdown,
   buildChildRows,
+  childPlanHint,
   computeDelta,
   computeSummary,
   computeTotals,
@@ -46,6 +47,7 @@ import {
   isAggregated,
   isStillRunning,
   subtreePlanHint,
+  summarySentence,
   totalsCaveat,
 } from "./analytics";
 import { STALE_CLAIM_SECONDS } from "../lib/claim";
@@ -755,5 +757,190 @@ describe("the subtree plan says where its number came from", () => {
   it("adds nothing under an own estimate with no planned work beneath it, or under no plan at all", () => {
     expect(subtreePlanHint(plan({ estimatedSeconds: 3600, source: "own" }))).toBeNull();
     expect(subtreePlanHint(plan({ totalCount: 2 }))).toBeNull();
+  });
+});
+
+// ------------------------------------------------ the child's effective plan (R7c)
+
+/**
+ * R7c (STA-194). A child's `est` is its EFFECTIVE plan — the figure its parent
+ * counts it as — with the provenance in words for a tooltip, and the arithmetic
+ * the ticket asks for: the parent's planned headline is exactly the sum of what
+ * the child rows show.
+ */
+
+/** STA-157 as its parent sees it: nothing typed, 11h flowed up from three tasks. */
+const INHERITED_11H = plan({
+  estimatedSeconds: 39_600,
+  source: "descendants",
+  descendantsEstimatedSeconds: 39_600,
+  contributingCount: 3,
+  totalCount: 3,
+});
+
+describe("child rows carry the effective plan and say where it came from", () => {
+  it("STA-157 under STA-156 plans 11h with no own estimate, and the hint says so", () => {
+    const rows = buildChildRows([child("STA-157")], {
+      "STA-157": timing({ childCount: 3, childrenEstimatedSeconds: 39_600, subtreePlan: INHERITED_11H }),
+    });
+    expect(rows[0]!.estimatedSeconds).toBeNull();
+    expect(rows[0]!.plannedSeconds).toBe(39_600);
+    expect(rows[0]!.planHint).toBe("inherited from 3 of 3 descendants");
+  });
+
+  it("names a plain own estimate as own — the column mixes typed and flowed-up figures", () => {
+    const rows = buildChildRows([child("STA-1", { estimatedSeconds: 3600 })], {
+      "STA-1": timing({ estimatedSeconds: 3600, subtreePlan: plan({ estimatedSeconds: 3600, source: "own" }) }),
+    });
+    expect(rows[0]!.plannedSeconds).toBe(3600);
+    expect(rows[0]!.planHint).toBe("own estimate");
+  });
+
+  it("keeps the descendants' disagreement in the hint when the own estimate wins", () => {
+    const rows = buildChildRows([child("STA-1", { estimatedSeconds: 21_600 })], {
+      "STA-1": timing({
+        estimatedSeconds: 21_600,
+        childCount: 3,
+        subtreePlan: plan({
+          estimatedSeconds: 21_600,
+          source: "own",
+          descendantsEstimatedSeconds: 39_600,
+          contributingCount: 3,
+          totalCount: 3,
+        }),
+      }),
+    });
+    expect(rows[0]!.plannedSeconds).toBe(21_600);
+    expect(rows[0]!.planHint).toBe("own estimate; descendants add up to 11h (3 of 3 descendants)");
+  });
+
+  it("has no hint when there is no plan to explain", () => {
+    const rows = buildChildRows([child("STA-1")], { "STA-1": timing() });
+    expect(rows[0]!.plannedSeconds).toBeNull();
+    expect(rows[0]!.planHint).toBeNull();
+  });
+
+  it("falls back to the own field, and calls it own, when the timing entry is missing", () => {
+    const [planned] = buildChildRows([child("STA-9", { estimatedSeconds: 600 })], {});
+    expect(planned!.plannedSeconds).toBe(600);
+    expect(planned!.planHint).toBe("own estimate");
+    const [bare] = buildChildRows([child("STA-9")], {});
+    expect(bare!.planHint).toBeNull();
+  });
+
+  it("computes the delta on the effective plan, so an inheriting epic has one at all", () => {
+    const rows = buildChildRows([child("STA-157", { status: "in_progress" })], {
+      "STA-157": timing({ activeSeconds: 18_000, childCount: 3, subtreePlan: INHERITED_11H }),
+    });
+    // Against the own estimate this would be null — there is none — and the row would
+    // say `—` beside an 11h plan the headline had just compared.
+    expect(rows[0]!.delta!.label).toBe("6h under (55%)");
+  });
+
+  it("childPlanHint: own says own, inherited says inherited, none says nothing", () => {
+    expect(childPlanHint(plan({ estimatedSeconds: 3600, source: "own" }))).toBe("own estimate");
+    expect(childPlanHint(INHERITED_11H)).toBe("inherited from 3 of 3 descendants");
+    expect(childPlanHint(plan({ totalCount: 2 }))).toBeNull();
+  });
+});
+
+describe("the parent's headline is the sum of the child rows' plans", () => {
+  // STA-156 as the server hands it over: six direct children, one of them (STA-157)
+  // inheriting 11h from grandchildren, the other five with nothing anywhere beneath.
+  const STA_156 = timing({
+    childCount: 6,
+    childrenEstimatedSeconds: null,
+    subtreePlan: plan({
+      estimatedSeconds: 39_600,
+      source: "descendants",
+      descendantsEstimatedSeconds: 39_600,
+      contributingCount: 3,
+      totalCount: 9,
+    }),
+  });
+  const rows = buildChildRows(
+    ["STA-157", "STA-158", "STA-159", "STA-160", "STA-161", "STA-162"].map((id) => child(id)),
+    { "STA-157": timing({ childCount: 3, childrenEstimatedSeconds: 39_600, subtreePlan: INHERITED_11H }) },
+  );
+
+  it("adds the visible child contributions to exactly the planned headline", () => {
+    const visible = rows.reduce((sum, row) => sum + (row.plannedSeconds ?? 0), 0);
+    expect(visible).toBe(39_600);
+    expect(visible).toBe(computeSummary(STA_156).plannedSeconds);
+    // ...and to the Children row of the breakdown — the same number under another label.
+    expect(visible).toBe(buildBreakdown(STA_156).find((row) => row.label === "Children")!.plannedSeconds);
+  });
+
+  it("counts the inheriting child as planned, so the coverage caveat agrees with the sum", () => {
+    expect(computeTotals(STA_156, rows).plannedCount).toBe(1);
+    expect(totalsCaveat(computeTotals(STA_156, rows))).toMatch(/5 of 6 children have no plan/);
+  });
+
+  it("is the same arithmetic as the spoken sentence", () => {
+    expect(summarySentence(computeSummary(STA_156), STA_156.subtreePlan)).toMatch(/^Planned 11h\./);
+  });
+});
+
+// ------------------------------------------------------ the spoken headline (R7c)
+
+describe("the spoken headline says planned, actual, difference, coverage, source — in that order", () => {
+  const STA_156 = timing({
+    childCount: 6,
+    activeSeconds: 18_000,
+    childrenActiveSeconds: 18_000,
+    subtreePlan: plan({
+      estimatedSeconds: 39_600,
+      source: "descendants",
+      descendantsEstimatedSeconds: 39_600,
+      contributingCount: 3,
+      totalCount: 9,
+    }),
+  });
+
+  it("reads the STA-156 headline as one sentence", () => {
+    expect(summarySentence(computeSummary(STA_156), STA_156.subtreePlan)).toBe(
+      "Planned 11h. Actual 5h. Difference 6h under (55%). Coverage 3 of 9 descendants planned. Source inherited from descendants.",
+    );
+  });
+
+  it("names every absence in words, never as a dash", () => {
+    const empty = timing();
+    expect(summarySentence(computeSummary(empty), empty.subtreePlan)).toBe(
+      "Planned No estimate. Actual No work recorded. Difference No comparison. Coverage no descendants. Source no plan.",
+    );
+  });
+
+  it("keeps the order whatever the figures are", () => {
+    const leaf = timing({
+      estimatedSeconds: 7200,
+      ownActiveSeconds: 3600,
+      activeSeconds: 3600,
+      subtreePlan: plan({ estimatedSeconds: 7200, source: "own" }),
+    });
+    const sentence = summarySentence(computeSummary(leaf), leaf.subtreePlan);
+    const at = (word: string) => {
+      const index = sentence.indexOf(word);
+      expect(index, word).toBeGreaterThanOrEqual(0);
+      return index;
+    };
+    expect(at("Planned ")).toBeLessThan(at("Actual "));
+    expect(at("Actual ")).toBeLessThan(at("Difference "));
+    expect(at("Difference ")).toBeLessThan(at("Coverage "));
+    expect(at("Coverage ")).toBeLessThan(at("Source "));
+    expect(sentence).toMatch(/Source own estimate\.$/);
+  });
+
+  it("rides a qualifying hint beside the figure it qualifies, not at the end", () => {
+    const live = timing({
+      estimatedSeconds: 7200,
+      activeSeconds: 1800,
+      subtreePlan: plan({ estimatedSeconds: 7200, source: "own" }),
+    });
+    const sentence = summarySentence(computeSummary(live), live.subtreePlan, {
+      actual: "still running",
+      difference: "provisional — not finished",
+    });
+    expect(sentence).toContain("Actual 30m (still running).");
+    expect(sentence).toContain("Difference 1h30m under (75%) (provisional — not finished).");
   });
 });
