@@ -68,8 +68,14 @@ export function formatOptionalDuration(seconds: number | null, absent: string): 
   return seconds === null ? absent : formatDuration(seconds);
 }
 
-export const NO_ESTIMATE = "no estimate recorded";
-export const NOT_STARTED = "not started";
+/**
+ * The two placeholders, as WORDS the tab sets in the normal interface face —
+ * never as a figure. R7b's complaint was these two strings rendered at the size
+ * and in the typeface reserved for durations, so "no estimate recorded" read as
+ * the biggest number on the page.
+ */
+export const NO_ESTIMATE = "No estimate";
+export const NOT_STARTED = "No work recorded";
 
 // ------------------------------------------------------------------- the delta
 
@@ -242,8 +248,27 @@ export interface ChildRow {
   title: string;
   status: IssueStatus;
   estimatedSeconds: number | null;
+  /**
+   * The child's EFFECTIVE plan — `subtreePlan.estimatedSeconds`: its own estimate
+   * when it has one, otherwise its descendants'. This is the number a child is
+   * counted as by its parent's headline, so it is what coverage is measured on:
+   * an unestimated middle epic over three planned leaves HAS a plan.
+   */
+  plannedSeconds: number | null;
+  /**
+   * Where `plannedSeconds` came from, in words, for the tooltip on the child's
+   * `est` figure — see `childPlanHint`. Null when there is no plan to explain.
+   * A tooltip rather than a line, because R7c's brief is one concise line per
+   * child: the provenance is secondary and must not become a permanent third row.
+   */
+  planHint: string | null;
   /** The child's HEADLINE actual, so a child that is itself a parent shows its aggregate. */
   actualSeconds: number | null;
+  /**
+   * Computed on `plannedSeconds`, not on the own estimate — so the delta on the
+   * row is the same delta the child's own Analytics headline shows, and an
+   * inheriting epic can have one at all.
+   */
   delta: Delta | null;
   /** True while the task is unfinished — the delta is a snapshot, not a verdict. */
   running: boolean;
@@ -281,13 +306,17 @@ export function buildChildRows(
     // Prefer the timing echo, fall back to the entity's own stored field.
     const estimatedSeconds = timing?.estimatedSeconds ?? child.estimatedSeconds;
     const actualSeconds = timing?.activeSeconds ?? null;
+    const plannedSeconds = timing?.subtreePlan.estimatedSeconds ?? estimatedSeconds;
     return {
       identifier: child.identifier,
       title: child.title,
       status: child.status,
       estimatedSeconds,
+      plannedSeconds,
+      // No timing entry means no subtree to speak of: the fallback plan IS the own estimate.
+      planHint: timing ? childPlanHint(timing.subtreePlan) : plannedSeconds === null ? null : OWN_PLAN,
       actualSeconds,
-      delta: computeDelta(estimatedSeconds, actualSeconds),
+      delta: computeDelta(plannedSeconds, actualSeconds),
       running: isStillRunning(child.status),
       activity: activityState(timing?.countedThrough ?? null, nowMs),
       approximate: timing?.approximate ?? false,
@@ -301,8 +330,14 @@ export interface Totals {
   estimatedSeconds: number | null;
   actualSeconds: number | null;
   delta: Delta | null;
-  /** How many children carry an estimate, and how many exist at all. */
-  estimatedCount: number;
+  /**
+   * How many children carry a PLAN (own or inherited — see `ChildRow.plannedSeconds`),
+   * and how many exist at all. Counted on the effective plan rather than the own
+   * estimate because the headline is: under an 11h plan inherited from
+   * grandchildren, "6 of 6 children have no estimate" would contradict the
+   * figure above it — which is the STA-156 complaint this tab is for.
+   */
+  plannedCount: number;
   childCount: number;
   /**
    * How many children are ACTUALLY accumulating time right now — a fed clock,
@@ -339,7 +374,7 @@ export function computeTotals(timing: IssueTiming, rows: readonly ChildRow[]): T
     estimatedSeconds,
     actualSeconds,
     delta: computeDelta(estimatedSeconds, actualSeconds),
-    estimatedCount: rows.filter((row) => row.estimatedSeconds !== null).length,
+    plannedCount: rows.filter((row) => row.plannedSeconds !== null).length,
     childCount: rows.length,
     runningCount: rows.filter((row) => row.activity.kind === "running").length,
     idleCount: rows.filter((row) => row.running && row.activity.kind !== "running").length,
@@ -361,12 +396,66 @@ export function computeTotals(timing: IssueTiming, rows: readonly ChildRow[]): T
  * actually drawn from.
  */
 export function subtreePlanHint(plan: SubtreePlan): string | null {
-  const coverage = `${plan.contributingCount} of ${plan.totalCount} descendants`;
+  const coverage = planCoverage(plan);
   if (plan.source === "descendants") return `inherited from ${coverage}`;
   if (plan.source === "own" && plan.descendantsEstimatedSeconds !== null) {
     return `own estimate; descendants add up to ${formatDuration(plan.descendantsEstimatedSeconds)} (${coverage})`;
   }
   return null;
+}
+
+/** The provenance a leaf's plan gets when there is nothing beneath it to compare against. */
+const OWN_PLAN = "own estimate";
+
+/**
+ * The provenance of a CHILD's `est` figure (R7c, STA-194), for its tooltip.
+ *
+ * `subtreePlanHint` says nothing over a plain own estimate because the headline
+ * beneath it already reads "planned"; on a child row the figure is one of six in
+ * a column, some own and some inherited, and every one of them has to say which
+ * it is or the reader cannot tell an 11h somebody typed from an 11h that flowed
+ * up. Null only when there is no plan at all, which the row already spells out.
+ */
+export function childPlanHint(plan: SubtreePlan): string | null {
+  if (plan.source === "none") return null;
+  return subtreePlanHint(plan) ?? OWN_PLAN;
+}
+
+/** `3 of 9 descendants` — the population the recursive sum was drawn from. */
+function planCoverage(plan: SubtreePlan): string {
+  return `${plan.contributingCount} of ${plan.totalCount} descendants`;
+}
+
+// ---------------------------------------------------------- the spoken headline
+
+/**
+ * The headline as ONE sentence for a screen reader (R7c, STA-194): planned,
+ * actual, difference, coverage, source — in that order, every time.
+ *
+ * The visible headline is three figures in a flex row with a hint under each,
+ * which a screen reader walks as "planned, 11h, inherited from 3 of 9 descendants,
+ * actual, ..." — the source arrives before the actual, and the coverage is buried
+ * in the middle of the source. This sentence is the same facts in the order the
+ * ticket names, and it is built from the same `Summary` and `SubtreePlan` the
+ * figures are, so it cannot say a different number. The hints that qualify a
+ * figure (`still running`, `provisional`) ride beside the figure they qualify.
+ */
+export function summarySentence(
+  summary: Summary,
+  plan: SubtreePlan,
+  hints: { actual?: string | null; difference?: string | null } = {},
+): string {
+  const qualify = (text: string, hint: string | null | undefined) => (hint ? `${text} (${hint})` : text);
+  const coverage = plan.totalCount === 0 ? "no descendants" : `${planCoverage(plan)} planned`;
+  const source =
+    plan.source === "own" ? OWN_PLAN : plan.source === "descendants" ? "inherited from descendants" : "no plan";
+  return [
+    `Planned ${formatOptionalDuration(summary.plannedSeconds, NO_ESTIMATE)}.`,
+    `Actual ${qualify(formatOptionalDuration(summary.actualSeconds, NOT_STARTED), hints.actual)}.`,
+    `Difference ${qualify(summary.delta ? summary.delta.label : "No comparison", hints.difference)}.`,
+    `Coverage ${coverage}.`,
+    `Source ${source}.`,
+  ].join(" ");
 }
 
 /**
@@ -390,13 +479,18 @@ export function subtreePlanHint(plan: SubtreePlan): string | null {
  */
 export function totalsCaveat(totals: Totals): string | null {
   const notes: string[] = [];
-  if (totals.estimatedCount === 0 && totals.childCount > 0) {
-    return "No child has an estimate, so there is no plan to compare against.";
+  // Coverage is over PLANS, not own estimates: a child that inherited its plan
+  // from its own children is covered. The no-plan-at-all case is a short
+  // statement rather than "nothing to compare against", because the headline
+  // may still hold this issue's OWN estimate — explainMissingDelta says the
+  // rest when it does not.
+  if (totals.plannedCount === 0 && totals.childCount > 0) {
+    return `None of the ${totals.childCount} ${totals.childCount === 1 ? "child" : "children"} has a plan.`;
   }
-  if (totals.estimatedCount < totals.childCount) {
-    const missing = totals.childCount - totals.estimatedCount;
+  if (totals.plannedCount < totals.childCount) {
+    const missing = totals.childCount - totals.plannedCount;
     notes.push(
-      `${missing} of ${totals.childCount} ${missing === 1 ? "child has" : "children have"} no estimate, so the totals cover different work on each side.`,
+      `${missing} of ${totals.childCount} ${missing === 1 ? "child has" : "children have"} no plan, so the plan and the actual cover different work.`,
     );
   }
   if (totals.runningCount > 0) {
@@ -415,20 +509,92 @@ export function totalsCaveat(totals: Totals): string | null {
   return notes.length > 0 ? notes.join(" ") : null;
 }
 
+// ------------------------------------------------------------------ the summary
+
 /**
- * The headline sentence: what the plan said, what it cost, and the gap.
+ * The ONE headline: what the plan says, what it has cost, and the gap.
  *
- * Framed as saved/extra TIME rather than as a productivity multiplier. A
- * multiplier reads as a claim about people; a duration reads as a measurement,
- * which is all this data can honestly support. Richer framings (dollar figures,
- * comparisons across epics) are STA-83's brainstorm, deliberately not invented
- * here.
+ * The delta's label IS the sentence ("7h40m under (70%)"); the prose headline
+ * that used to repeat it under the totals card went with the card, because two
+ * statements of one number were the "competing summaries" R7b removes. It stays
+ * a duration rather than a productivity multiplier: a multiplier reads as a
+ * claim about people, a duration as a measurement, which is all this data can
+ * honestly support.
+ *
+ * Planned is the recursive `subtreePlan.estimatedSeconds`, which for a leaf IS
+ * its own estimate (source `own`, or `none`) — so a leaf and a parent share one
+ * shape, and the parent leads with the number that survives an epic-of-epics
+ * rather than the depth-1 sum that lost STA-157's 11h on the way up to STA-156.
+ * Actual is the headline `activeSeconds`, already the children's aggregate for a
+ * parent. Neither number is computed here; both came off the server.
  */
-export function headline(totals: Totals): string {
-  if (!totals.delta) return explainMissingDelta(totals.estimatedSeconds, totals.actualSeconds);
-  if (totals.delta.direction === "on") return "Execution matched the plan exactly.";
-  const amount = formatDuration(Math.abs(totals.delta.differenceSeconds));
-  return totals.delta.direction === "under"
-    ? `${amount} less than planned.`
-    : `${amount} more than planned.`;
+export interface Summary {
+  plannedSeconds: number | null;
+  actualSeconds: number | null;
+  delta: Delta | null;
+  /** Where the plan came from, when that needs saying — see `subtreePlanHint`. */
+  planHint: string | null;
+}
+
+export function computeSummary(timing: IssueTiming): Summary {
+  const plannedSeconds = timing.subtreePlan.estimatedSeconds;
+  const actualSeconds = timing.activeSeconds;
+  return {
+    plannedSeconds,
+    actualSeconds,
+    delta: computeDelta(plannedSeconds, actualSeconds),
+    planHint: subtreePlanHint(timing.subtreePlan),
+  };
+}
+
+// ---------------------------------------------------------------- the breakdown
+
+/**
+ * One line of the parent-only "own versus children" block.
+ *
+ * Every figure names its source in words beside it, because the two plans are
+ * NOT addends: "This issue" is the top-down estimate somebody typed on the
+ * parent, "Children" is the bottom-up sum of what its subtree planned, and the
+ * headline takes the first when it exists, otherwise the second. Showing them
+ * side by side is how a disagreement between the two becomes visible; labelling
+ * their provenance is how a reader is stopped from adding them.
+ */
+export interface BreakdownRow {
+  label: string;
+  plannedSeconds: number | null;
+  planSource: string;
+  actualSeconds: number | null;
+  actualSource: string;
+}
+
+/** Empty for a leaf: a leaf has one summary and nothing to break it down into. */
+export function buildBreakdown(timing: IssueTiming): BreakdownRow[] {
+  if (!isAggregated(timing)) return [];
+  const plan = timing.subtreePlan;
+  const descendants = `${plan.contributingCount} of ${plan.totalCount} descendants`;
+  return [
+    {
+      label: "This issue",
+      plannedSeconds: timing.estimatedSeconds,
+      planSource:
+        timing.estimatedSeconds === null
+          ? "no estimate set on this issue"
+          : "top-down, set on this issue",
+      actualSeconds: timing.ownActiveSeconds,
+      actualSource:
+        timing.ownActiveSeconds === null
+          ? "never worked directly"
+          : "worked directly — not in the headline",
+    },
+    {
+      label: "Children",
+      plannedSeconds: plan.descendantsEstimatedSeconds,
+      planSource:
+        plan.descendantsEstimatedSeconds === null
+          ? `no estimate among ${plan.totalCount} descendants`
+          : `bottom-up, from ${descendants}`,
+      actualSeconds: timing.childrenActiveSeconds,
+      actualSource: aggregationHint(timing.childCount),
+    },
+  ];
 }

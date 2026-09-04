@@ -54,6 +54,7 @@
  * and this lives inside the title's `minmax(0, 1fr)` track — so it can only ever take space
  * the title was going to have, and can never push or collide with the meta cluster.
  */
+import { formatDuration } from "@/detail/analytics";
 import { cn } from "@/lib/utils";
 import { initials } from "./avatar";
 import { ROLLUP_SEGMENTS, type ParentRollup as Rollup, type RollupSegment } from "./model";
@@ -77,11 +78,17 @@ const SEGMENT_LABEL: Record<RollupSegment, string> = {
 export function ParentRollupBar({
   rollup,
   collapsed,
+  showPlan = false,
   className,
 }: {
   rollup: Rollup;
   /** Folded parents get the bar and the live dot; expanded ones get only the count. */
   collapsed: boolean;
+  /**
+   * R7c (STA-194): whether density permits the rolled-up plan beside the bar. The row
+   * decides (comfortable density only); this component never reads the config.
+   */
+  showPlan?: boolean;
   className?: string;
 }) {
   // Nothing beneath this row that the rollup counts — which is not the same as no children
@@ -101,10 +108,48 @@ export function ParentRollupBar({
         {rollup.resolved}/{rollup.total}
       </span>
       {collapsed ? <Segments rollup={rollup} /> : null}
+      {collapsed && showPlan ? <Plan plan={rollup.plan} /> : null}
       {collapsed && rollup.live ? <ChildLive rollup={rollup} /> : null}
     </span>
   );
 }
+
+/**
+ * "And it was planned at 11h" — R7c (STA-194), beside the bar, collapsed only.
+ *
+ * It wears `.staple-rollup-count` — the SAME class as the count to its left, not a new
+ * one — so it is the same 11px nowrap inline text, and the argument at the top of this
+ * file about height holds for it unchanged: nothing here sets a height, a padding or a
+ * line box, and the row stays `var(--row-height)`. Below the §14 two-line breakpoint the
+ * title track is the whole row width and there is no room for an aside, so a utility
+ * class hides it there rather than a new rule in the sheet.
+ *
+ * Absent — not `est —` — when the subtree has no plan: a dash in a numeric slot reads as
+ * zero, and "no plan" is already what silence says.
+ */
+function Plan({ plan }: { plan: Rollup["plan"] }) {
+  if (plan.estimatedSeconds === null) return null;
+  const figure = formatDuration(plan.estimatedSeconds);
+  const sentence = `planned ${figure}, ${PLAN_SOURCE[plan.source]}`;
+  return (
+    <span
+      className="staple-rollup-count max-[719px]:hidden"
+      data-testid="parent-rollup-plan"
+      data-plan-source={plan.source}
+      aria-label={sentence}
+      title={sentence}
+    >
+      est {figure}
+    </span>
+  );
+}
+
+/** What the plan's `source` is called out loud. `none` never renders, but the map is total. */
+const PLAN_SOURCE: Record<Rollup["plan"]["source"], string> = {
+  own: "own estimate",
+  descendants: "rolled up from descendants",
+  none: "no plan",
+};
 
 /**
  * The bar itself — four flex children sized by `flexGrow`, so the four counts turn into four
