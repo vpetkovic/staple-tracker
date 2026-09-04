@@ -20,8 +20,11 @@ automatically as a side effect of the transition, never by a caller.
 
 ## Kinds — declared, never derived
 
-Every issue carries a `kind` (`issues.kind`, NOT NULL, default `task`). Like
-statuses, the vocabulary is data: it lives in `workspace_kinds` and is edited
+Every issue carries a `kind` (`issues.kind`, NOT NULL, default `task`). The
+default is the registered workspace setting `kinds.default` (see
+[configuration.md](configuration.md#the-settings-registry)): `task` until a
+workspace chooses otherwise, and a chosen kind that is later removed resets it.
+Like statuses, the vocabulary is data: it lives in `workspace_kinds` and is edited
 with `staple kinds` or MCP `update_kinds`, so validation asks the workspace what
 it has rather than consulting a compile-time list. That is why adding
 `milestone` needs no code change and why the MCP schemas type `kind` as a string
@@ -139,6 +142,14 @@ rung that fired) and `derivedFrom` (the child that caused it). That marker is
 what tells the timeline it was a report rather than a person, and what makes
 the **timing** numbers honest: an interval opened by a derived flip is never
 billed, so an epic has no stopwatch of its own — its actual is its children's.
+
+Estimates roll up the other way round, and to any depth: an issue contributes
+its **own estimate if it has one, otherwise the sum of its children's
+contributions** — never both. That one rule is what lets a middle epic nobody
+estimated pass its children's plan up to its parent while a parent's plan and
+its descendants' are never counted twice in one ancestor total. The depth-1
+`childrenEstimatedSeconds` keeps its meaning beside it; the recursive figure is
+`subtreePlan` (see `docs/cli.md`, "Estimates vs actuals").
 
 The automatic close does not replace the summary. `children_complete` still
 fires when the last child lands (before the close, so the wake is never

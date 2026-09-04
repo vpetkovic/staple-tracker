@@ -27,8 +27,9 @@ import type {
   Poll,
   StapleEvent,
   VocabularyOp,
-  WorkspaceSettings,
 } from "./types";
+// Type-only, so the cycle with lib/settings.ts (which imports `getSettings`) is erased.
+import type { SettingOp, WorkspaceSettingsEnvelope } from "./settings";
 
 const TOKEN_KEY = "staple:token";
 
@@ -265,7 +266,7 @@ export const requestGateChanges = (target: { ws?: string; ref: string; comment: 
  * workspace has to refetch this and must not refetch that.
  */
 export const getSettings = (params: { ws?: string } = {}) =>
-  request<WorkspaceSettings>(`/api/settings${qs(params)}`);
+  request<WorkspaceSettingsEnvelope>(`/api/settings${qs(params)}`);
 
 /**
  * Apply an ordered batch of vocabulary edits. Same-origin POST for the same reason
@@ -278,16 +279,28 @@ export const getSettings = (params: { ws?: string } = {}) =>
  *
  * The ops apply in order in ONE transaction, so a refusal anywhere leaves nothing behind.
  */
-export const putSettings = (
+export function putSettings(
   target: "statuses" | "kinds",
   ops: readonly VocabularyOp[],
+  params?: { ws?: string; actor?: string },
+): Promise<WorkspaceSettingsEnvelope>;
+/** R6a (STA-176): registered workspace values, same batch contract, same envelope back. */
+export function putSettings(
+  target: "settings",
+  ops: readonly SettingOp[],
+  params?: { ws?: string; actor?: string },
+): Promise<WorkspaceSettingsEnvelope>;
+export function putSettings(
+  target: "statuses" | "kinds" | "settings",
+  ops: readonly (VocabularyOp | SettingOp)[],
   params: { ws?: string; actor?: string } = {},
-) =>
-  request<WorkspaceSettings>("/api/settings", {
+): Promise<WorkspaceSettingsEnvelope> {
+  return request<WorkspaceSettingsEnvelope>("/api/settings", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ actor: "ui", ...params, target, ops }),
   });
+}
 
 // ---------- milestones (R3c / STA-173) ----------
 
@@ -336,3 +349,20 @@ export const reorderMilestoneMembers = (target: {
   order: readonly string[];
   baseRevision: number;
 }) => milestoneWrite("reorder", target);
+
+// ---------- the glyph sanitiser (R5d / STA-184) ----------
+
+/**
+ * Sanitise a custom SVG glyph. The store accepts an `svg` appearance ONLY as the
+ * sanitiser's canonical output, and the sanitiser is core code the browser cannot
+ * import — so the raw document goes here first, and what comes back is the only
+ * thing the picker ever offers as a choice. A refusal is the sanitiser's own sentence
+ * through the usual envelope, which `describeRefusal` renders. Same-origin POST, like
+ * every write, although it writes nothing: it is a pure function over the body.
+ */
+export const sanitizeGlyphSvg = (input: { svg: string; label?: string }) =>
+  request<{ svg: string; viewBox: string; label: string }>("/api/glyph/sanitize", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });

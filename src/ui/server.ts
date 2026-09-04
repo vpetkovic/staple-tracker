@@ -19,7 +19,12 @@ import { StapleError, errorEnvelope, type IssuePriority, type IssueStatus } from
 // O7b (STA-141): the closed category set and the categories the code writes into,
 // both served verbatim on /api/settings so the browser never hand-keeps a copy.
 import { REQUIRED_STATUS_CATEGORIES, STATUS_CATEGORIES } from "../core/types.js";
-import type { UpdateIssueInput, VocabularyOp, WorkspaceStore } from "../core/store.js";
+import type { SettingOp, UpdateIssueInput, VocabularyOp, WorkspaceStore } from "../core/store.js";
+// R6a (STA-176): the settings registry and the global values it defines, served
+// beside the workspace ones so the page can say which scope each setting has.
+import { settingDefinitionsFor, settingRegistryView, settingValueView } from "../core/settings-registry.js";
+import { sanitizeSvg } from "../core/svg-sanitize.js";
+import { readConfig, stapleHome } from "../config/index.js";
 
 interface UiOptions {
   port: number;
@@ -326,6 +331,35 @@ export function startUiServer(options: UiOptions): UiHandle {
     return origin === `http://127.0.0.1:${port}` || origin === `http://localhost:${port}`;
   }
 
+  /**
+   * The machine's global settings with provenance, read fresh per request from
+   * `<home>/config.json` — a file another process may have just rewritten. A
+   * corrupt file surfaces as the config module's own refusal rather than as a
+   * silently-default envelope, matching `staple config`.
+   */
+  function globalSettings(): {
+    path: string;
+    present: boolean;
+    values: Record<string, ReturnType<typeof settingValueView>>;
+  } {
+    const loaded = readConfig(stapleHome());
+    const explicit = new Set(loaded.explicitKeys);
+    const config = loaded.config as unknown as Record<string, unknown>;
+    return {
+      path: loaded.path,
+      present: loaded.present,
+      values: Object.fromEntries(
+        settingDefinitionsFor("global").map((definition) => {
+          const field = definition.configKey!;
+          return [
+            definition.key,
+            settingValueView(definition, config[field], explicit.has(field) ? "config" : "default"),
+          ];
+        }),
+      ),
+    };
+  }
+
   function fingerprint(): string {
     return allHandles()
       .map((h) => {
@@ -494,6 +528,7 @@ export function startUiServer(options: UiOptions): UiHandle {
          */
         const expected =
           url.pathname === "/api/action" ||
+          url.pathname === "/api/glyph/sanitize" ||
           url.pathname.startsWith("/api/gate/") ||
           url.pathname.startsWith("/api/milestone/")
             ? ["POST"]
@@ -929,6 +964,28 @@ export function startUiServer(options: UiOptions): UiHandle {
       }
 
       /**
+       * The SVG sanitiser over HTTP — R5d (STA-184). `POST /api/glyph/sanitize`
+       * `{ svg, label? }` answers `{ svg, viewBox, label }`, the canonical document
+       * `src/core/svg-sanitize.ts` writes, or the sanitiser's refusal as a 409
+       * through the catch below, the way every other refusal reaches the page.
+       *
+       * It exists because the store accepts an `svg` appearance ONLY as the
+       * sanitiser's own output and the sanitiser is core code the browser cannot
+       * import: the picker sends the raw document here and stores nothing but the
+       * answer. Nothing is written — no workspace handle is resolved, no event is
+       * logged; it is a pure function over the body. POST all the same, and so
+       * Origin-checked, because the body is markup somebody pasted, and a route
+       * that reflects it must not be reachable from another origin's page.
+       */
+      if (url.pathname === "/api/glyph/sanitize") {
+        const body = await readBody(req);
+        const result = sanitizeSvg(body.svg, { label: typeof body.label === "string" ? body.label : undefined });
+        if (!result.ok) throw new StapleError("validation", `Custom SVG must be ${result.problem}`);
+        json(res, 200, { svg: result.svg, viewBox: result.viewBox, label: result.label });
+        return;
+      }
+
+      /**
        * The workspace vocabulary — O7b (STA-141). The ONE route that both reads
        * and writes, which is why the method pin above became a list.
        *
@@ -953,7 +1010,9 @@ export function startUiServer(options: UiOptions): UiHandle {
         /** The whole vocabulary, plus what a removal would have to move. */
         const envelope = (h: StoreHandle) => {
           const statuses = h.store.getStatuses();
-          const kinds = h.store.getKinds();
+          // Each kind row carries its resolved appearance (R5a, STA-181) — the
+          // same record `list_kinds` and `staple kinds ls --json` serve.
+          const kinds = h.store.getKindsWithAppearance();
           return {
             workspace: h.slug,
             statuses,
@@ -987,6 +1046,20 @@ export function startUiServer(options: UiOptions): UiHandle {
               statuses: Object.fromEntries(statuses.map((s) => [s.id, h.store.statusUsageCount(s.id)])),
               kinds: Object.fromEntries(kinds.map((k) => [k.id, h.store.kindUsageCount(k.id)])),
             },
+            /**
+             * THE REGISTRY (R6a, STA-176): every category and every typed setting
+             * definition, so the shell enumerates its navigation from this and a
+             * new setting reaches the page without a client change. `values` are
+             * this workspace's effective values with provenance; `unknownKeys`
+             * are stored keys this build has no definition for — preserved,
+             * reported, never rewritten. `global` is the machine's config.json,
+             * read-only here: it is a different store on purpose, and its write
+             * path is `staple config set`.
+             */
+            registry: settingRegistryView(),
+            values: Object.fromEntries(h.store.settingValues().map((view) => [view.key, view])),
+            unknownKeys: h.store.unknownSettingKeys(),
+            global: globalSettings(),
           };
         };
 
@@ -999,8 +1072,8 @@ export function startUiServer(options: UiOptions): UiHandle {
         const body = await readBody(req);
         const target = body.target;
         const ops = body.ops;
-        if (target !== "statuses" && target !== "kinds") {
-          throw new StapleError("validation", 'settings requires target "statuses" or "kinds"');
+        if (target !== "statuses" && target !== "kinds" && target !== "settings") {
+          throw new StapleError("validation", 'settings requires target "statuses", "kinds" or "settings"');
         }
         if (!Array.isArray(ops) || ops.length === 0) {
           throw new StapleError("validation", "settings requires a non-empty ops array");
@@ -1009,10 +1082,12 @@ export function startUiServer(options: UiOptions): UiHandle {
         const actor = (body.actor as string) || "ui";
         // One ordered, all-or-nothing batch — the same store call `update_statuses`
         // and `update_kinds` make, so the two surfaces cannot disagree about what
-        // an op means or about which of them is refused.
-        const batch = ops as VocabularyOp[];
-        if (target === "statuses") writeHandle.store.applyStatusOps(batch, actor);
-        else writeHandle.store.applyKindOps(batch, actor);
+        // an op means or about which of them is refused. `settings` (R6a) writes
+        // registered WORKSPACE values the same way; a global key is refused by the
+        // store with the sentence that names `staple config set`.
+        if (target === "settings") writeHandle.store.applySettingOps(ops as SettingOp[], actor);
+        else if (target === "statuses") writeHandle.store.applyStatusOps(ops as VocabularyOp[], actor);
+        else writeHandle.store.applyKindOps(ops as VocabularyOp[], actor);
         json(res, 200, envelope(writeHandle));
         return;
       }

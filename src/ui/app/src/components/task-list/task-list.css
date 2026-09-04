@@ -200,7 +200,7 @@
 }
 
 /*
- * ── The group separator, group-by-epic — O8d (STA-152) ────────────────────────────────
+ * ── The group separator, group-by-epic — O8d (STA-152), R4d (STA-189) ─────────────────
  *
  * The epic's own ROW is the top of its group now, so there is no sticky header to say where
  * one epic ends and the next begins. Rows are already hairline-separated from each other, so
@@ -210,8 +210,19 @@
  * A rule on the rowgroup rather than an element between rowgroups: a `<div>` there is a node
  * the accessibility tree inside `role="treegrid"` has to explain, and it is one more thing
  * that could fall out of step with the fold. `+` so the first group has no leading gap.
+ *
+ * KEYED ON THE AXIS, NOT ON THE HEAD. O8d wrote this as
+ * `.staple-group + .staple-group[data-headed-by-row="true"]`, which separates a section
+ * whose head is a row from whatever precedes it — and only that. So epic followed epic
+ * with air between them, and "No epic", whose head is a header, ran straight on from the
+ * last epic's task rows: two rhythms on one page, decided by which kind of head the NEXT
+ * section had. Every pair of adjacent sections on this axis gets the same separator now —
+ * a real epic row, a ghost of a filtered-out epic, the catch-all — and the other axes,
+ * whose sticky headers already do this job, are untouched because the rule is scoped to
+ * the container's `data-group-by`. Declared once, at the top level, so no width re-decides
+ * it; group-header.test.tsx pins both facts.
  */
-.staple-group + .staple-group[data-headed-by-row="true"] {
+.staple-tree[data-group-by="parent"] .staple-group + .staple-group {
   margin-top: 8px;
   border-top: 1px solid var(--border);
 }

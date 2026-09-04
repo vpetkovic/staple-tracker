@@ -102,6 +102,12 @@ Neither dev path touches the static bundle. `npm run build:ui` is what refreshes
 the bundle the real `:4400` page serves, and `npm run dev` rebuilds it and
 serves it — that is the "what ships" check, not the edit loop.
 
+Adding a setting to *Work Workspace Settings* needs no change to the app: the
+navigation, the control and the validation all come from the registry entry.
+The checklist — definition fields, choosing the scope, when a workspace
+migration is required, which pinned inventories move, which tests to add — is
+[docs/configuration.md → Adding a setting](docs/configuration.md#adding-a-setting).
+
 ## Building and drilling the package
 
 ```bash

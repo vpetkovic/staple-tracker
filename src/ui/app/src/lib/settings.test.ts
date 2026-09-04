@@ -25,10 +25,14 @@ import {
   configuredOpenStatuses,
   configuredStatusOrder,
   isResolvedStatus,
+  kindAppearance,
   kindLabel,
   publishWorkspaceSettings,
   requiresMigrateTo,
   resetWorkspaceSettings,
+  settingCategories,
+  settingDefinitions,
+  settingValue,
   statusCategory,
   statusLabel,
   statusRank,
@@ -37,6 +41,7 @@ import {
   workspaceSettings,
 } from "./settings";
 import { OPEN_STATUS_ORDER, RESOLVED_STATUSES, STATUS_CATEGORIES } from "./types";
+import type { SettingDefinitionView, WorkspaceSettingsEnvelope } from "./settings";
 import type { StatusCategory, WorkspaceSettings, WorkspaceStatus } from "./types";
 
 const status = (id: string, category: StatusCategory, label = id): WorkspaceStatus => ({
@@ -219,6 +224,32 @@ describe("the two orders, and which one groups", () => {
   });
 });
 
+describe("kind appearance (R5a, STA-181)", () => {
+  it("wears the built-in marks on the seed, so the first paint is right before the fetch", () => {
+    expect(kindAppearance("epic")).toEqual({ source: "lucide", value: "layers", label: "Epic", fallback: "◆" });
+    expect(kindAppearance("spike")).toEqual({ source: "lucide", value: "zap", label: "Spike", fallback: "↯" });
+  });
+
+  it("answers what the server resolved, verbatim, and falls back for a row served without one", () => {
+    publishWorkspaceSettings(
+      settings({
+        kinds: [
+          { id: "epic", label: "Initiative", sortOrder: 0, isBuiltin: true, appearance: { source: "emoji", value: "🚀", label: "Initiative", fallback: "E" } },
+          { id: "research", label: "Research", sortOrder: 1, isBuiltin: false },
+          { id: "milestone", label: "Milestone", sortOrder: 2, isBuiltin: false },
+        ] as WorkspaceSettings["kinds"],
+      }),
+    );
+    expect(kindAppearance("epic")).toEqual({ source: "emoji", value: "🚀", label: "Initiative", fallback: "E" });
+    expect(kindAppearance("research")).toEqual({ source: "none", value: "", label: "Research", fallback: "•" });
+    expect(kindAppearance("milestone")).toEqual({ source: "lucide", value: "milestone", label: "Milestone", fallback: "⚑" });
+  });
+
+  it("is total: an id nobody configured gets the generic mark and a title-cased label", () => {
+    expect(kindAppearance("not_here")).toEqual({ source: "none", value: "", label: "Not Here", fallback: "•" });
+  });
+});
+
 describe("behaviour keys off the category, never off the id", () => {
   /**
    * The test that actually proves it. Every built-in id is renamed away, so any guard
@@ -307,5 +338,107 @@ describe("usage and the migrate-to requirement", () => {
     publishWorkspaceSettings(settings());
     expect(requiresMigrateTo("statuses", "anything")).toBe(true);
     expect(usageCount("statuses", "anything")).toBeNull();
+  });
+});
+
+// --------------------------------------------------- the registry (R6a, STA-176)
+
+/** A definition as the server would serve one; the test invents the KEY, not the shape. */
+const definition = (key: string, scope: "workspace" | "global", over: Partial<SettingDefinitionView> = {}): SettingDefinitionView => ({
+  key,
+  category: key.split(".")[0]!,
+  scope,
+  schema: { type: "boolean" },
+  default: false,
+  version: 1,
+  sensitivity: "normal",
+  ui: { label: key, description: "", control: "toggle", order: 1 },
+  ...over,
+});
+
+function envelope(over: Partial<WorkspaceSettingsEnvelope> = {}): WorkspaceSettingsEnvelope {
+  return {
+    ...settings(),
+    registry: { categories: [], definitions: [] },
+    values: {},
+    unknownKeys: [],
+    global: { path: "/home/config.json", present: false, values: {} },
+    ...over,
+  };
+}
+
+describe("the registry accessors", () => {
+  it("know nothing before the fetch rather than inventing a client-side copy of the registry", () => {
+    expect(settingCategories()).toEqual([]);
+    expect(settingDefinitions()).toEqual([]);
+    expect(settingValue("kinds.default")).toBeUndefined();
+  });
+
+  it("accept a bare vocabulary envelope from a fixture that predates the registry", () => {
+    publishWorkspaceSettings(settings());
+    expect(workspaceSettings().registry).toEqual({ categories: [], definitions: [] });
+    expect(workspaceSettings().unknownKeys).toEqual([]);
+  });
+
+  it("enumerate categories and definitions from what the server said, per scope and per category", () => {
+    publishWorkspaceSettings(
+      envelope({
+        registry: {
+          categories: [
+            { id: "kinds", label: "Kinds", description: "", scope: "workspace", editor: "kinds", order: 20 },
+            { id: "machine", label: "This machine", description: "", scope: "global", editor: "fields", order: 90 },
+            { id: "features", label: "Features", description: "", scope: "workspace", editor: "fields", order: 30 },
+          ],
+          definitions: [
+            definition("kinds.default", "workspace", { schema: { type: "string" }, default: "task" }),
+            definition("features.darkLaunch", "workspace"),
+            definition("machine.port", "global", { schema: { type: "integer", min: 1, max: 65535 }, default: 4400 }),
+          ],
+        },
+      }),
+    );
+    // A category the client has never heard of is listed — nothing here hard-codes the tabs.
+    expect(settingCategories().map((c) => c.id)).toEqual(["kinds", "machine", "features"]);
+    expect(settingCategories("workspace").map((c) => c.id)).toEqual(["kinds", "features"]);
+    expect(settingDefinitions("features").map((d) => d.key)).toEqual(["features.darkLaunch"]);
+  });
+
+  it("answer a value from the workspace, from the global store, or from the definition's default", () => {
+    publishWorkspaceSettings(
+      envelope({
+        registry: {
+          categories: [],
+          definitions: [
+            definition("kinds.default", "workspace", { schema: { type: "string" }, default: "task" }),
+            definition("features.darkLaunch", "workspace"),
+            definition("machine.port", "global", { schema: { type: "integer" }, default: 4400 }),
+          ],
+        },
+        values: {
+          "kinds.default": { key: "kinds.default", scope: "workspace", value: "bug", source: "workspace", version: 1 },
+        },
+        global: {
+          path: "/home/config.json",
+          present: true,
+          values: { "machine.port": { key: "machine.port", scope: "global", value: 4500, source: "config", version: 1 } },
+        },
+      }),
+    );
+    expect(settingValue("kinds.default")).toEqual({
+      key: "kinds.default",
+      scope: "workspace",
+      value: "bug",
+      source: "workspace",
+      version: 1,
+    });
+    expect(settingValue("machine.port")).toEqual({ key: "machine.port", scope: "global", value: 4500, source: "config", version: 1 });
+    expect(settingValue("features.darkLaunch")).toEqual({
+      key: "features.darkLaunch",
+      scope: "workspace",
+      value: false,
+      source: "default",
+      version: 1,
+    });
+    expect(settingValue("nobody.knows")).toBeUndefined();
   });
 });

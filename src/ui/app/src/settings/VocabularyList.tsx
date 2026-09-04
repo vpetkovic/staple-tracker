@@ -1,76 +1,106 @@
 /**
- * ONE editable, reorderable list — used for Statuses and for Kinds — O7b (STA-141).
+ * ONE editable, reorderable list — used for Statuses and for Kinds. O7b (STA-141)
+ * built it; R6c (STA-178) moved it onto the shared form primitives and a draft.
  *
  * ── WHY ONE COMPONENT AND NOT TWO ─────────────────────────────────────────────────────
  *
  * Statuses and kinds differ in exactly one column (the category select) and in nothing
- * else: same rename-on-blur, same drag, same keyboard move, same remove-with-migrate-to,
- * same refusal surface. Two components that are ninety per cent identical drift, and they
- * drift in the half nobody opened recently — which here would mean a keyboard reorder that
- * works for statuses and silently does nothing for kinds. The category column is a prop.
+ * else: same rename, same drag, same keyboard move, same remove-with-migrate-to, same
+ * refusal surface. Two components that are ninety per cent identical drift, and they
+ * drift in the half nobody opened recently. The category column is a prop.
  *
- * ── REORDER: DRAG, PLUS A REAL KEYBOARD PATH ──────────────────────────────────────────
+ * ── A DRAFT, SAVED AS ONE BATCH ───────────────────────────────────────────────────────
  *
- * The drag is `@dnd-kit/core`. `@dnd-kit/sortable` is NOT installed and this ticket may
- * not add a dependency, so each row is its own droppable and the drop target is whichever
- * row the pointer is over — which for a single-column list is exactly what sortable would
- * have computed anyway.
+ * Every operation this list ever had is still here — add, rename, recategorize,
+ * reorder (drag, buttons, alt+arrow), remove with a migrate-to target — and each one is
+ * still the op settings-ops.ts builds for it. What changed is WHEN it is posted: ops now
+ * accumulate in a `VocabularyDraft` (form/vocabulary-draft.ts), the list paints the
+ * draft, and Save posts the ordered batch through the dialog's `applyTo` — the same
+ * all-or-nothing store call the MCP tools make. The response is the whole envelope, so
+ * a successful save snaps the list to exactly what the store holds; nothing merges.
  *
- * The keyboard path is a pair of VISIBLE, LABELLED buttons on every row, plus alt+arrow on
- * the row itself. It is deliberately not dnd-kit's keyboard sensor. A sensor is a mode you
- * have to know exists, entered from a control that reads as a drag handle and announces
- * nothing until you are already in it; two buttons that say "Move Todo up" are
- * discoverable, are what a screen reader lists when it enumerates the row's controls, and
- * are testable without a DOM event simulator. Both paths produce the same single
- * `{ op: "reorder", ids }`, so there is no second write path to keep honest.
+ * Cancel drops the draft. A refusal keeps it, and the store's sentence lands
+ * on the row it names (`attributeRefusal`) or on the section when it names none.
+ * While a draft is dirty, the served vocabulary moving underneath — another tab, an
+ * agent through MCP, the CLI — is a conflict banner, never a silent overwrite.
  *
- * ── EVERY WRITE IS ONE BATCH, AND THE ANSWER IS THE WHOLE LIST ────────────────────────
+ * ── THE KINDS EDITOR ALSO EDITS `kinds.appearance` (R5d, STA-184) ─────────────────────
  *
- * No local "draft" that is saved later. Each edit is a batch of one op, POSTed as the user
- * commits it, and the response is the entire new settings envelope, which is published to
- * lib/settings.ts. That is what makes "the UI re-derives from the served settings without a
- * reload" true rather than approximately true: nothing merges, nothing is patched in place,
- * and a workspace another agent edited underneath us corrects itself on the next write.
+ * A kind's row carries its glyph, and "Change" opens the `GlyphPicker` under it. That
+ * choice is a SECOND draft — the `kinds.appearance` map, a registered setting, posted to
+ * `target: "settings"` — held beside the vocabulary ops rather than inside them, because
+ * the store lets that map name only CONFIGURED kinds: a glyph for a kind the same draft
+ * is adding can only be written after the kinds batch lands. Save therefore posts the
+ * ops first and the map second, and a refusal on the second cannot re-post the first.
  *
- * The one exception is the reorder, which paints optimistically. A list that does not move
- * under the pointer until a round trip completes reads as a broken control; the server's
- * answer replaces the optimistic order a moment later, and a refusal restores it.
+ * The user sees ONE form all the same: one dirty state (the union), one ActionBar whose
+ * summary counts both, one Cancel that drops both, one guard, and one conflict banner
+ * for either half moving underneath.
  */
-import { useCallback, useMemo, useState } from "react";
-import {
-  DndContext,
-  PointerSensor,
-  closestCenter,
-  useDraggable,
-  useDroppable,
-  useSensor,
-  useSensors,
-  type DragEndEvent,
-} from "@dnd-kit/core";
-import { ChevronDown, ChevronUp, GripVertical, Plus, Trash2 } from "lucide-react";
-import { GuardRefusal } from "@/components/GuardRefusal";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Plus, Trash2 } from "lucide-react";
 import { StatusIcon } from "@/components/task-list/StatusIcon";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import type { KindAppearance } from "@/lib/kind-appearance";
 import type { Refusal } from "@/lib/refusal";
-import { titleCaseId } from "@/lib/settings";
-import { cn } from "@/lib/utils";
+import { titleCaseId, type SettingOp } from "@/lib/settings";
 import type { StatusCategory, VocabularyOp } from "@/lib/types";
+import { actionBarState, attributeRefusal, snapshotSignature } from "./form/form-model";
+import { GlyphPicker, type SanitizeSvg } from "./glyph-picker/GlyphPicker";
+import { GlyphPreview, PREVIEW_SIZES } from "./glyph-picker/GlyphPreview";
+import {
+  changedGlyphs,
+  draftAppearance,
+  glyphMapOps,
+  isGlyphMapDirty,
+  NO_GLYPHS,
+  toStoredGlyph,
+  withGlyph,
+  type GlyphMap,
+} from "./glyph-picker/glyph-picker-model";
+import {
+  ActionBar,
+  ConflictBanner,
+  DestructiveConfirm,
+  Field,
+  InlineError,
+  Section,
+} from "./form/primitives";
+import { ReorderList } from "./form/ReorderList";
+import { useDraft } from "./form/useDraft";
+import {
+  applyDraftOp,
+  draftRefusalTargets,
+  emptyDraft,
+  isDraftDirty,
+  moveDraftRow,
+  type VocabularyDraft,
+} from "./form/vocabulary-draft";
 import {
   addOp,
   labelChanged,
   migrateCandidates,
-  moveId,
-  moveIndex,
   recategorizeOp,
   removeOp,
   renameOp,
-  reorderOp,
   validateVocabularyId,
   type VocabularyRow,
 } from "./settings-ops";
+
+/**
+ * The Kinds editor's second half — R5d (STA-184). Absent for Statuses, which have no
+ * appearance to configure, so the whole picker is one optional prop and one arm.
+ */
+export interface GlyphEditing {
+  /** The served `kinds.appearance` map. `servedGlyphMap(envelope)` produces it. */
+  served: GlyphMap;
+  /** Post the map's op to `target: "settings"`. Same `applyTo` as every other write. */
+  write: (ops: SettingOp[]) => Promise<Refusal | null>;
+  /** `POST /api/glyph/sanitize`, injected so a test needs no fetch. */
+  sanitize: SanitizeSvg;
+}
 
 export interface VocabularyListProps {
   /** Which list this is — also the POST target and the `usage` bucket key. */
@@ -82,236 +112,172 @@ export interface VocabularyListProps {
   categories?: readonly StatusCategory[];
   /** Categories the store writes into, named in the removal warning. */
   requiredCategories?: readonly string[];
-  /** Apply an ordered batch. Resolves true when the store accepted it. */
-  apply: (ops: VocabularyOp[]) => Promise<boolean>;
-  /** The last refusal, rendered once above the list rather than per row. */
-  refusal: Refusal | null;
-  busy: boolean;
+  /** Post the ordered batch. Resolves null when the store accepted it, else its refusal. */
+  write: (ops: VocabularyOp[]) => Promise<Refusal | null>;
+  /** Kinds only: the glyph half of this editor. Without it no row shows a picker. */
+  glyphs?: GlyphEditing;
+  /** The shell's unsaved-changes guard listens here. */
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
 const NO_MIGRATE = "__none__";
 
-/**
- * One row. Draggable by its handle only — a row that is draggable by its whole surface
- * cannot also contain a text field you are allowed to select inside.
- */
-function Row({
+/** The editable middle of a row: glyph, id, label field, category select, usage count. */
+function RowFields({
   row,
-  index,
-  count,
   target,
   categories,
-  needsMigrate,
   usageCount,
-  candidates,
-  busy,
+  disabled,
+  glyph,
   onRename,
   onRecategorize,
-  onMove,
-  onRemove,
 }: {
   row: VocabularyRow;
-  index: number;
-  count: number;
   target: "statuses" | "kinds";
   categories?: readonly StatusCategory[];
-  needsMigrate: boolean;
   usageCount: number | null;
-  candidates: VocabularyRow[];
-  busy: boolean;
+  disabled: boolean;
+  /** Kinds only (R5d): what this kind wears under the draft, and the control that opens the picker. */
+  glyph?: { appearance: KindAppearance; open: boolean; panelId: string; onToggle: () => void };
   onRename: (id: string, label: string) => void;
   onRecategorize: (id: string, category: StatusCategory) => void;
-  onMove: (from: number, to: number) => void;
-  onRemove: (id: string, migrateTo: string | null) => void;
 }) {
+  // Holds what the user is typing; the row is re-keyed on its label (see the list), so a
+  // committed rename, a Cancel or a Reload re-seeds it without fighting the caret.
   const [label, setLabel] = useState(row.label);
-  const [confirming, setConfirming] = useState(false);
-  const [migrateTo, setMigrateTo] = useState<string>(NO_MIGRATE);
-
-  const draggable = useDraggable({ id: row.id, disabled: busy });
-  const droppable = useDroppable({ id: row.id, disabled: busy });
-
-  // The label field is uncontrolled-by-the-server between edits: it holds what the user is
-  // typing. `key={row.label}` on the input would fight the caret, so instead the local
-  // state is re-seeded only when the row identity changes — see the `key` on this Row in
-  // the list below, which is the id, not the label.
   const commit = useCallback(() => {
     if (labelChanged(row, label)) onRename(row.id, label);
     else setLabel(row.label);
   }, [label, onRename, row]);
 
   return (
-    <div
-      ref={droppable.setNodeRef}
-      data-vocabulary-row={row.id}
-      // alt+arrow, not bare arrow: bare arrows belong to whatever field has focus, and a
-      // list that stole them would make the label field unnavigable.
-      onKeyDown={(event) => {
-        if (!event.altKey || busy) return;
-        if (event.key === "ArrowUp") {
-          event.preventDefault();
-          onMove(index, index - 1);
-        } else if (event.key === "ArrowDown") {
-          event.preventDefault();
-          onMove(index, index + 1);
-        }
-      }}
-      className={cn(
-        "flex flex-col gap-2 rounded-md border px-2 py-1.5",
-        droppable.isOver && !draggable.isDragging ? "border-ring bg-surface-hover" : "border-transparent",
-        draggable.isDragging && "opacity-50",
-      )}
-    >
-      <div className="flex items-center gap-2">
-        <button
-          type="button"
-          ref={draggable.setNodeRef}
-          {...draggable.listeners}
-          {...draggable.attributes}
-          aria-label={`Drag ${row.label} to reorder`}
-          title="Drag to reorder"
-          className="shrink-0 cursor-grab rounded p-1 text-text-tertiary hover:bg-surface-hover hover:text-foreground active:cursor-grabbing"
-        >
-          <GripVertical className="size-3.5" aria-hidden />
-        </button>
-
-        {target === "statuses" && row.category ? (
-          <StatusIcon status={row.id} category={row.category} className="shrink-0" />
-        ) : null}
-
-        <span className="w-36 shrink-0 truncate font-mono text-[11px] text-text-tertiary" title={row.id}>
-          {row.id}
-        </span>
-
-        <Input
-          value={label}
-          aria-label={`Label for ${row.id}`}
-          disabled={busy}
-          onChange={(event) => setLabel(event.target.value)}
-          onBlur={commit}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") {
-              event.preventDefault();
-              event.currentTarget.blur();
-            } else if (event.key === "Escape") {
-              event.preventDefault();
-              setLabel(row.label);
-            }
-          }}
-          className="h-7 min-w-0 flex-1 text-[13px]"
-        />
-
-        {target === "statuses" && categories ? (
-          <Select
-            value={row.category}
-            disabled={busy}
-            onValueChange={(value) => onRecategorize(row.id, value as StatusCategory)}
-          >
-            <SelectTrigger size="sm" aria-label={`Category for ${row.id}`} className="w-[8.5rem] shrink-0 text-[12px]">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {categories.map((category) => (
-                <SelectItem key={category} value={category}>
-                  {category}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        ) : null}
-
-        <span className="w-16 shrink-0 text-right font-mono text-[11px] text-text-tertiary">
-          {usageCount === null ? "" : `${usageCount}`}
-        </span>
-
-        {/*
-          THE KEYBOARD ALTERNATIVE. Two ordinary buttons, always present, never a
-          hover-reveal: an affordance that only exists once you have already pointed at
-          the row is not an alternative to pointing at the row.
-        */}
-        <div className="flex shrink-0 items-center">
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label={`Move ${row.label} up`}
-            disabled={busy || index === 0}
-            onClick={() => onMove(index, index - 1)}
-          >
-            <ChevronUp className="size-3.5" aria-hidden />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label={`Move ${row.label} down`}
-            disabled={busy || index === count - 1}
-            onClick={() => onMove(index, index + 1)}
-          >
-            <ChevronDown className="size-3.5" aria-hidden />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label={`Remove ${row.label}`}
-            disabled={busy}
-            onClick={() => {
-              setConfirming((open) => !open);
-              setMigrateTo(NO_MIGRATE);
-            }}
-          >
-            <Trash2 className="size-3.5" aria-hidden />
-          </Button>
-        </div>
-      </div>
-
-      {confirming ? (
-        /*
-         * The migrate-to picker. REQUIRED when anything still carries this row, and the
-         * confirm button stays disabled until a target is chosen — the store refuses
-         * without one, and a form that lets you submit into a known refusal is a form that
-         * teaches you to ignore it.
-         *
-         * When nothing carries it the picker is absent entirely rather than present-and-
-         * optional. "Move 0 rows onto something" is not a decision worth offering.
-         */
-        <div className="flex flex-wrap items-center gap-2 rounded-md border border-dashed px-2 py-2">
-          <span className="text-[12px] text-muted-foreground">
-            {needsMigrate
-              ? `${usageCount === null ? "Some" : usageCount} ${usageCount === 1 ? "issue" : "issues"} still carry "${row.label}". Move them to:`
-              : `Remove "${row.label}"?`}
-          </span>
-          {needsMigrate ? (
-            <Select value={migrateTo} onValueChange={setMigrateTo} disabled={busy}>
-              <SelectTrigger size="sm" aria-label={`Migrate ${row.id} to`} className="w-[11rem] text-[12px]">
-                <SelectValue placeholder="Choose a target…" />
-              </SelectTrigger>
-              <SelectContent>
-                {candidates.map((candidate) => (
-                  <SelectItem key={candidate.id} value={candidate.id}>
-                    {candidate.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          ) : null}
-          <div className="ml-auto flex items-center gap-1.5">
-            <Button variant="ghost" size="sm" onClick={() => setConfirming(false)} disabled={busy}>
-              Cancel
-            </Button>
-            <Button
-              variant="destructive"
-              size="sm"
-              disabled={busy || (needsMigrate && migrateTo === NO_MIGRATE)}
-              onClick={() => {
-                onRemove(row.id, migrateTo === NO_MIGRATE ? null : migrateTo);
-                setConfirming(false);
-              }}
-            >
-              Remove
-            </Button>
-          </div>
-        </div>
+    <>
+      {target === "statuses" && row.category ? (
+        <StatusIcon status={row.id} category={row.category} className="shrink-0" />
       ) : null}
-    </div>
+
+      {/*
+        The kind's glyph IS the control that changes it — the thing you want to change is
+        the thing you press, and the row already has more chrome than columns. `Change` is
+        the accessible name because the picture cannot be one, and `aria-expanded` says
+        the panel below this row is what the press opens.
+      */}
+      {glyph ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          data-glyph-change={row.id}
+          aria-label={`Change glyph for ${row.label}`}
+          aria-expanded={glyph.open}
+          aria-controls={glyph.panelId}
+          disabled={disabled}
+          onClick={glyph.onToggle}
+          className="shrink-0"
+        >
+          <GlyphPreview kind={row.id} appearance={glyph.appearance} size={PREVIEW_SIZES.row} />
+        </Button>
+      ) : null}
+
+      <span className="w-36 shrink-0 truncate font-mono text-[11px] text-text-tertiary" title={row.id}>
+        {row.id}
+      </span>
+
+      <Input
+        value={label}
+        aria-label={`Label for ${row.id}`}
+        disabled={disabled}
+        onChange={(event) => setLabel(event.target.value)}
+        onBlur={commit}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            commit();
+          } else if (event.key === "Escape") {
+            event.preventDefault();
+            setLabel(row.label);
+          }
+        }}
+        className="h-7 min-w-0 flex-1 text-[13px]"
+      />
+
+      {target === "statuses" && categories ? (
+        <Select
+          value={row.category}
+          disabled={disabled}
+          onValueChange={(value) => onRecategorize(row.id, value as StatusCategory)}
+        >
+          <SelectTrigger size="sm" aria-label={`Category for ${row.id}`} className="w-[8.5rem] shrink-0 text-[12px]">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {categories.map((category) => (
+              <SelectItem key={category} value={category}>
+                {category}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      ) : null}
+
+      <span className="w-16 shrink-0 text-right font-mono text-[11px] text-text-tertiary">
+        {usageCount === null ? "" : `${usageCount}`}
+      </span>
+    </>
+  );
+}
+
+/**
+ * The migrate-to picker. REQUIRED when anything still carries this row; absent entirely
+ * when nothing does — "move 0 rows onto something" is not a decision worth offering.
+ */
+function RemoveConfirm({
+  row,
+  needsMigrate,
+  usageCount,
+  candidates,
+  disabled,
+  onRemove,
+  onCancel,
+}: {
+  row: VocabularyRow;
+  needsMigrate: boolean;
+  usageCount: number | null;
+  candidates: VocabularyRow[];
+  disabled: boolean;
+  onRemove: (id: string, migrateTo: string | null) => void;
+  onCancel: () => void;
+}) {
+  const [migrateTo, setMigrateTo] = useState<string>(NO_MIGRATE);
+  return (
+    <DestructiveConfirm
+      message={
+        needsMigrate
+          ? `${usageCount === null ? "Some" : usageCount} ${usageCount === 1 ? "issue" : "issues"} still carry "${row.label}". Move them to:`
+          : `Remove "${row.label}"?`
+      }
+      confirmLabel="Remove"
+      confirmDisabled={needsMigrate && migrateTo === NO_MIGRATE}
+      disabled={disabled}
+      onConfirm={() => onRemove(row.id, migrateTo === NO_MIGRATE ? null : migrateTo)}
+      onCancel={onCancel}
+    >
+      {needsMigrate ? (
+        <Select value={migrateTo} onValueChange={setMigrateTo} disabled={disabled}>
+          <SelectTrigger size="sm" aria-label={`Migrate ${row.id} to`} className="w-[11rem] text-[12px]">
+            <SelectValue placeholder="Choose a target…" />
+          </SelectTrigger>
+          <SelectContent>
+            {candidates.map((candidate) => (
+              <SelectItem key={candidate.id} value={candidate.id}>
+                {candidate.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      ) : null}
+    </DestructiveConfirm>
   );
 }
 
@@ -321,72 +287,106 @@ export function VocabularyList({
   usage,
   categories,
   requiredCategories,
-  apply,
-  refusal,
-  busy,
+  write,
+  glyphs,
+  onDirtyChange,
 }: VocabularyListProps) {
-  /**
-   * The order actually painted. Normally `rows` verbatim; briefly the optimistic order
-   * between a drop and the server's answer. It is reset to `rows` on every render where
-   * the served ids differ from the ones we are holding, which is what makes a refusal
-   * put the list back without any explicit rollback.
-   */
-  const [pending, setPending] = useState<VocabularyRow[] | null>(null);
-  const painted = pending ?? rows;
+  const served = useMemo(() => emptyDraft(rows, usage), [rows, usage]);
+  const draft = useDraft<VocabularyDraft>({
+    served,
+    signature: snapshotSignature(rows),
+    isDirty: isDraftDirty,
+    write: (next) => write(next.ops),
+  });
+  const { value, dirty, status, refusal, conflict } = draft;
+  const painted = value.rows;
 
+  // The glyph half (R5d). Always a hook — hooks cannot be conditional — but with no
+  // `glyphs` prop it is a draft over an empty map that nothing can ever make dirty.
+  const glyphServed = glyphs?.served ?? NO_GLYPHS;
+  const glyphWrite = glyphs?.write;
+  const glyphDraft = useDraft<GlyphMap>({
+    served: glyphServed,
+    signature: snapshotSignature([glyphServed]),
+    isDirty: (next) => isGlyphMapDirty(next, glyphServed),
+    write: async (next) => {
+      const ops = glyphMapOps(glyphServed, next, painted.map((row) => row.id));
+      // A draft that came back to what the server holds posts nothing: the store refuses
+      // an empty batch, and it would be right to.
+      return ops.length === 0 || !glyphWrite ? null : glyphWrite(ops);
+    },
+  });
+
+  const disabled = status === "pending" || glyphDraft.status === "pending";
+  const anyDirty = dirty || glyphDraft.dirty;
+  const anyConflict = conflict || glyphDraft.conflict;
+
+  // ONE dirty state reaches the shell's guard, because the user made one form's worth of
+  // changes. `useDraft`'s own reporting is left unused for exactly that reason.
+  useEffect(() => {
+    onDirtyChange?.(anyDirty);
+  }, [anyDirty, onDirtyChange]);
+  useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
+
+  const edit = useCallback((op: VocabularyOp) => draft.set(applyDraftOp(draft.value, op)), [draft]);
+  const onMove = useCallback((from: number, to: number) => draft.set(moveDraftRow(draft.value, from, to)), [draft]);
+
+  /** Kinds ops first, then the appearance map: the store lets the map name only configured kinds. */
+  const saveAll = useCallback(async () => {
+    if (dirty && !(await draft.save())) return;
+    if (glyphDraft.dirty) await glyphDraft.save();
+  }, [dirty, draft, glyphDraft]);
+
+  const cancelAll = useCallback(() => {
+    draft.cancel();
+    glyphDraft.cancel();
+  }, [draft, glyphDraft]);
+
+  const keepAll = useCallback(() => {
+    draft.keep();
+    glyphDraft.keep();
+  }, [draft, glyphDraft]);
+
+  const [picking, setPicking] = useState<string | null>(null);
+  const glyphPanelId = (id: string) => `glyph-panel-row-${id}`;
+
+  /**
+   * The row the store's refusal is about, or null when it is about the batch. Either
+   * half can refuse — a duplicate id, or a glyph the store's own validator rejected —
+   * and both sentences are attributed the same way, to the same rows.
+   */
+  const refused = refusal ?? glyphDraft.refusal;
+  const refusedRow = refused ? attributeRefusal(refused.message, draftRefusalTargets(value)) : null;
+  const rowErrors: Record<string, string> = refused && refusedRow ? { [refusedRow]: refused.message } : {};
+  const sectionError = refused && !refusedRow ? refused.message : null;
+
+  const [confirming, setConfirming] = useState<string | null>(null);
   const [newId, setNewId] = useState("");
   const [newLabel, setNewLabel] = useState("");
   const [newCategory, setNewCategory] = useState<StatusCategory>("unstarted");
-
   const idError = useMemo(
-    () => (newId.trim() === "" ? null : validateVocabularyId(newId, rows)),
-    [newId, rows],
-  );
-
-  const sensors = useSensors(
-    // 4px so a click on the handle is still a click; without it every press starts a drag
-    // and the button's own focus ring never appears.
-    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
-  );
-
-  const commitOrder = useCallback(
-    async (next: VocabularyRow[]) => {
-      setPending(next);
-      const ok = await apply([reorderOp(next)]);
-      // Either way, stop painting the optimistic list: on success the served order is
-      // already identical, and on refusal it is the one the user should be looking at.
-      setPending(null);
-      return ok;
-    },
-    [apply],
-  );
-
-  const onDragEnd = useCallback(
-    (event: DragEndEvent) => {
-      const over = event.over?.id;
-      if (!over || over === event.active.id) return;
-      void commitOrder(moveId(painted, String(event.active.id), String(over)));
-    },
-    [commitOrder, painted],
-  );
-
-  const onMove = useCallback(
-    (from: number, to: number) => {
-      if (to < 0 || to >= painted.length) return;
-      void commitOrder(moveIndex(painted, from, to));
-    },
-    [commitOrder, painted],
+    () => (newId.trim() === "" ? null : validateVocabularyId(newId, painted)),
+    [newId, painted],
   );
 
   const noun = target === "statuses" ? "status" : "kind";
+  const changes = value.ops.length + (glyphs ? changedGlyphs(glyphServed, glyphDraft.value) : 0);
+  const bar = actionBarState({
+    dirty: anyDirty,
+    status: status === "idle" ? glyphDraft.status : status,
+    blocked: anyConflict,
+  });
 
   return (
-    <div className="space-y-3">
-      {refusal ? <GuardRefusal refusal={refusal} /> : null}
+    <Section error={sectionError}>
+      {anyConflict ? (
+        <ConflictBanner what={`${noun} list`} onReload={cancelAll} onKeep={keepAll} />
+      ) : null}
 
       <div className="flex items-center gap-2 px-2 text-[11px] tracking-[var(--tracking-eyebrow)] text-text-tertiary uppercase">
         <span className="w-[1.6rem] shrink-0" />
         {target === "statuses" ? <span className="w-4 shrink-0" /> : null}
+        {glyphs ? <span className="w-8 shrink-0">glyph</span> : null}
         <span className="w-36 shrink-0">id</span>
         <span className="flex-1">label</span>
         {target === "statuses" ? <span className="w-[8.5rem] shrink-0">category</span> : null}
@@ -394,86 +394,141 @@ export function VocabularyList({
         <span className="w-[6.5rem] shrink-0" />
       </div>
 
-      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
-        <div role="list" className="space-y-0.5">
-          {painted.map((row, index) => (
-            <Row
-              key={row.id}
-              row={row}
-              index={index}
-              count={painted.length}
-              target={target}
-              categories={categories}
-              // Not known -> ask anyway. See `requiresMigrateTo` in lib/settings.ts.
-              needsMigrate={(usage[row.id] ?? 1) > 0}
-              usageCount={usage[row.id] ?? null}
-              candidates={migrateCandidates(painted, row.id)}
-              busy={busy}
-              onRename={(id, label) => void apply([renameOp(id, label)])}
-              onRecategorize={(id, category) => void apply([recategorizeOp(id, category)])}
-              onMove={onMove}
-              onRemove={(id, migrateTo) => void apply([removeOp(id, migrateTo)])}
-            />
-          ))}
-        </div>
-      </DndContext>
+      <ReorderList
+        items={painted}
+        getId={(row) => row.id}
+        getLabel={(row) => row.label}
+        disabled={disabled}
+        onMove={onMove}
+        rowState={(row) => ({ invalid: row.id in rowErrors })}
+        renderItem={(row) => (
+          <RowFields
+            // The label, not just the id: a committed rename, Cancel and Reload each
+            // re-seed the field without a controlled input fighting the caret.
+            key={`${row.id}:${row.label}`}
+            row={row}
+            target={target}
+            categories={categories}
+            usageCount={value.usage[row.id] ?? null}
+            disabled={disabled}
+            glyph={
+              glyphs
+                ? {
+                    appearance: draftAppearance(glyphDraft.value, row),
+                    open: picking === row.id,
+                    panelId: glyphPanelId(row.id),
+                    onToggle: () => setPicking((open) => (open === row.id ? null : row.id)),
+                  }
+                : undefined
+            }
+            onRename={(id, label) => edit(renameOp(id, label))}
+            onRecategorize={(id, category) => edit(recategorizeOp(id, category))}
+          />
+        )}
+        renderActions={(row) => (
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label={`Remove ${row.label}`}
+            disabled={disabled}
+            onClick={() => setConfirming((open) => (open === row.id ? null : row.id))}
+          >
+            <Trash2 className="size-3.5" aria-hidden />
+          </Button>
+        )}
+        renderBelow={(row) => (
+          <>
+            {rowErrors[row.id] ? <InlineError>{rowErrors[row.id]}</InlineError> : null}
+            {glyphs && picking === row.id ? (
+              <div id={glyphPanelId(row.id)} className="pt-2">
+                <GlyphPicker
+                  kind={row}
+                  appearance={draftAppearance(glyphDraft.value, row)}
+                  isDefault={glyphDraft.value[row.id] === undefined}
+                  disabled={disabled}
+                  sanitize={glyphs.sanitize}
+                  onChoose={(choice) =>
+                    glyphDraft.set(withGlyph(glyphDraft.value, row.id, toStoredGlyph(choice, row.label)))
+                  }
+                  onReset={() => glyphDraft.set(withGlyph(glyphDraft.value, row.id, null))}
+                  onClose={() => setPicking(null)}
+                />
+              </div>
+            ) : null}
+            {confirming === row.id ? (
+              <RemoveConfirm
+                row={row}
+                // Not known -> ask anyway. See `requiresMigrateTo` in lib/settings.ts.
+                needsMigrate={(value.usage[row.id] ?? 1) > 0}
+                usageCount={value.usage[row.id] ?? null}
+                candidates={migrateCandidates(painted, row.id)}
+                disabled={disabled}
+                onRemove={(id, migrateTo) => {
+                  edit(removeOp(id, migrateTo));
+                  setConfirming(null);
+                }}
+                onCancel={() => setConfirming(null)}
+              />
+            ) : null}
+          </>
+        )}
+      />
 
       {/*
         Add. The label is OPTIONAL and its placeholder previews what the store will derive
-        from the id, so the common case is one field and a button. `after` is the last row,
-        so a new entry appears where the user is looking rather than at a position they
-        then have to go and find.
+        from the id. `after` is the last row, so a new entry appears where the user is
+        looking rather than at a position they then have to go and find.
       */}
       <form
         className="flex flex-wrap items-end gap-2 border-t pt-3"
         onSubmit={(event) => {
           event.preventDefault();
           if (idError || newId.trim() === "") return;
-          void apply([
+          edit(
             addOp({
               id: newId,
               label: newLabel,
               category: target === "statuses" ? newCategory : undefined,
               after: painted.at(-1)?.id ?? null,
             }),
-          ]).then((ok) => {
-            if (!ok) return;
-            setNewId("");
-            setNewLabel("");
-          });
+          );
+          setNewId("");
+          setNewLabel("");
         }}
       >
-        <div className="space-y-1">
-          <Label htmlFor={`new-${target}-id`} className="text-[11px] text-text-tertiary">
-            New {noun} id
-          </Label>
-          <Input
-            id={`new-${target}-id`}
-            value={newId}
-            onChange={(event) => setNewId(event.target.value)}
-            placeholder={target === "statuses" ? "awaiting_qa" : "research"}
-            disabled={busy}
-            className="h-7 w-44 font-mono text-[12px]"
-          />
-        </div>
-        <div className="space-y-1">
-          <Label htmlFor={`new-${target}-label`} className="text-[11px] text-text-tertiary">
-            Label
-          </Label>
-          <Input
-            id={`new-${target}-label`}
-            value={newLabel}
-            onChange={(event) => setNewLabel(event.target.value)}
-            placeholder={newId.trim() ? titleCaseId(newId.trim()) : "derived from the id"}
-            disabled={busy}
-            className="h-7 w-44 text-[13px]"
-          />
-        </div>
+        <Field id={`new-${target}-id`} label={`New ${noun} id`} error={idError} className="md:grid-cols-1 md:gap-x-0">
+          {(aria) => (
+            <Input
+              {...aria}
+              value={newId}
+              onChange={(event) => setNewId(event.target.value)}
+              placeholder={target === "statuses" ? "awaiting_qa" : "research"}
+              disabled={disabled}
+              className="h-7 w-44 font-mono text-[12px]"
+            />
+          )}
+        </Field>
+        <Field id={`new-${target}-label`} label="Label" className="md:grid-cols-1 md:gap-x-0">
+          {(aria) => (
+            <Input
+              {...aria}
+              value={newLabel}
+              onChange={(event) => setNewLabel(event.target.value)}
+              placeholder={newId.trim() ? titleCaseId(newId.trim()) : "derived from the id"}
+              disabled={disabled}
+              className="h-7 w-44 text-[13px]"
+            />
+          )}
+        </Field>
         {target === "statuses" && categories ? (
-          <div className="space-y-1">
-            <Label className="text-[11px] text-text-tertiary">Category</Label>
-            <Select value={newCategory} onValueChange={(v) => setNewCategory(v as StatusCategory)} disabled={busy}>
-              <SelectTrigger size="sm" aria-label="Category for the new status" className="w-[8.5rem] text-[12px]">
+          <Field id={`new-${target}-category`} label="Category" className="md:grid-cols-1 md:gap-x-0">
+            <Select value={newCategory} onValueChange={(v) => setNewCategory(v as StatusCategory)} disabled={disabled}>
+              <SelectTrigger
+                id={`new-${target}-category`}
+                size="sm"
+                aria-label="Category for the new status"
+                className="w-[8.5rem] text-[12px]"
+              >
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -484,18 +539,20 @@ export function VocabularyList({
                 ))}
               </SelectContent>
             </Select>
-          </div>
+          </Field>
         ) : null}
-        <Button type="submit" size="sm" disabled={busy || newId.trim() === "" || idError !== null}>
+        <Button type="submit" size="sm" variant="outline" disabled={disabled || newId.trim() === "" || idError !== null}>
           <Plus className="size-3.5" aria-hidden />
           Add {noun}
         </Button>
-        {idError ? (
-          <p role="alert" className="basis-full text-[12px] text-[var(--status-task-icon-blocked)]">
-            {idError}
-          </p>
-        ) : null}
       </form>
+
+      <ActionBar
+        state={bar}
+        onSave={() => void saveAll()}
+        onCancel={cancelAll}
+        summary={anyDirty ? `${changes} unsaved ${changes === 1 ? "change" : "changes"}` : undefined}
+      />
 
       {target === "statuses" && requiredCategories ? (
         <p className="text-[12px] leading-relaxed text-muted-foreground">
@@ -508,6 +565,6 @@ export function VocabularyList({
           be removed.
         </p>
       ) : null}
-    </div>
+    </Section>
   );
 }

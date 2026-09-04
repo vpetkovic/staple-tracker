@@ -68,9 +68,11 @@ export function describeSchema(db: DatabaseSync, target: MigrationTarget): Schem
  * `conflict` (exit 4) rather than `validation` (exit 2): nothing the caller
  * typed is wrong — the state on disk is ahead of the code. Refusal has to
  * happen before any write, which is why this runs on the cheap read outside
- * the transaction as well as on the authoritative read inside it.
+ * the transaction as well as on the authoritative read inside it — and why
+ * `openWorkspace` runs it once more on a read-only handle before `openDb` has
+ * even switched the file to WAL.
  */
-function assertNotNewer(state: SchemaState, target: MigrationTarget, path: string): void {
+export function assertNotNewer(state: SchemaState, target: MigrationTarget, path: string): void {
   if (state.current <= state.latest) return;
   throw new StapleError(
     "conflict",

@@ -334,6 +334,14 @@ describe("rollups sum DIRECT children and nothing else", () => {
       childStatusCounts: {
         backlog: 0, todo: 0, in_progress: 0, in_review: 0, awaiting_approval: 0, done: 0, blocked: 0, cancelled: 0,
       },
+      // STA-192: a leaf's plan is its own or nothing, and it has no descendants to count.
+      subtreePlan: {
+        estimatedSeconds: 600,
+        source: "own",
+        descendantsEstimatedSeconds: null,
+        contributingCount: 0,
+        totalCount: 0,
+      },
     });
   });
 

@@ -14,6 +14,7 @@ import type {
   Issue,
   IssueDeps,
   IssueStatus,
+  PlanSource,
   PullRequestRef,
   WorklogSummary,
 } from "@/lib/types";
@@ -308,11 +309,31 @@ export interface ParentRollup {
   segments: Readonly<Record<RollupSegment, number>>;
   /** The most recently active LIVE descendant claim, or null. */
   live: RollupLive | null;
+  /** The subtree's rolled-up plan — R7c (STA-194). See `RollupPlan`. */
+  plan: RollupPlan;
+}
+
+/**
+ * WHAT THE FOLD IS HIDING IN HOURS — R7c (STA-194).
+ *
+ * The list payload carries no `timing`, so this is the one place in the browser that
+ * re-derives a plan — and it does so with the exact rule of `SubtreePlan` in
+ * core/types.ts, nothing looser: an issue CONTRIBUTES its own estimate if it has one,
+ * otherwise its children's contributions, never both. An estimated epic shadows every
+ * estimate beneath it for its own ancestors; an unestimated one passes its children's
+ * plan straight up, which is how STA-156 still reads 11h off STA-157's three tasks.
+ *
+ * `estimatedSeconds` is the effective plan (own, else descendants'); `source` says which,
+ * so the row can name it. Null is null, not zero — a subtree nobody estimated has no plan.
+ */
+export interface RollupPlan {
+  estimatedSeconds: number | null;
+  source: PlanSource;
 }
 
 /** The minimum a row has to be for the rollup to place it. `TaskRow` and `IssueRow` both fit. */
 export interface RollupInput {
-  issue: Pick<Issue, "id" | "parentId" | "identifier" | "status">;
+  issue: Pick<Issue, "id" | "parentId" | "identifier" | "status" | "estimatedSeconds">;
   claim: ClaimActivity | null;
 }
 
@@ -390,9 +411,31 @@ export function parentRollups(
     }
   });
 
+  /**
+   * R7c (STA-194). The bottom-up plan, on a second walk that STOPS at the first estimated
+   * ancestor: that ancestor's own estimate is a plan for its whole subtree, so the rows
+   * beneath it are its terms and nobody else's. An unestimated row contributes nothing
+   * of its own and is walked through — its children's plans reach the ancestors above
+   * it, which is the whole rule and the whole reason a middle epic keeps its 11h.
+   */
+  const ownEstimate = new Map(rows.map((r) => [r.issue.id, r.issue.estimatedSeconds]));
+  const descendantsPlan = new Map<string, number>();
+  forEachAncestor(rows, (row, ancestorId) => {
+    const own = row.issue.estimatedSeconds;
+    if (own === null) return false;
+    descendantsPlan.set(ancestorId, (descendantsPlan.get(ancestorId) ?? 0) + own);
+    return ownEstimate.get(ancestorId) == null;
+  });
+
   const out = new Map<string, ParentRollup>();
   for (const [id, { total, resolved, segments, live }] of acc) {
-    out.set(id, { total, resolved, segments, live });
+    const own = ownEstimate.get(id) ?? null;
+    const descendants = descendantsPlan.get(id) ?? null;
+    const plan: RollupPlan = {
+      estimatedSeconds: own ?? descendants,
+      source: own !== null ? "own" : descendants !== null ? "descendants" : "none",
+    };
+    out.set(id, { total, resolved, segments, live, plan });
   }
   return out;
 }
@@ -450,7 +493,8 @@ function beatsIncumbent(idleSeconds: number, identifier: string, into: Accumulat
  */
 export function forEachAncestor<T extends { issue: Pick<Issue, "id" | "parentId"> }>(
   rows: readonly T[],
-  visit: (row: T, ancestorId: string) => void,
+  /** Returning `false` stops this row's climb — R7c's plan walk needs to; nobody else does. */
+  visit: (row: T, ancestorId: string) => void | boolean,
 ): void {
   const parentOf = new Map(rows.map((r) => [r.issue.id, r.issue.parentId]));
 
@@ -459,7 +503,7 @@ export function forEachAncestor<T extends { issue: Pick<Issue, "id" | "parentId"
     let parentId = parentOf.get(r.issue.id) ?? null;
     while (parentId && parentOf.has(parentId) && !seen.has(parentId)) {
       seen.add(parentId);
-      visit(r, parentId);
+      if (visit(r, parentId) === false) break;
       parentId = parentOf.get(parentId) ?? null;
     }
   }

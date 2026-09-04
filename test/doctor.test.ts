@@ -13,12 +13,20 @@
  * failing before and passing after repair" — which is the shape of both cases in
  * `the repairs`.
  */
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { createHash } from "node:crypto";
 import { diskTree, removeDir, runCliAt, tempDir } from "./fixtures/characterize-support.js";
+import { writeFakePayload } from "./fixtures/install-support.js";
+import { writeCurrentWorkspace } from "./fixtures/schema/generate.js";
+import { FIXTURES, fixturePath } from "./fixtures/schema/support.js";
 import { FIXABLE_CHECKS, type CheckResult, type DoctorReport } from "../src/commands/doctor.js";
+import { clearHomeOverride } from "../src/config/index.js";
+import { WORKSPACE_LATEST_VERSION } from "../src/core/migrations/workspace/index.js";
+import { SNAPSHOT_DIRNAME } from "../src/core/open.js";
+import { INSTALL_FROM_PLACEHOLDER, ROLLBACK_COMMAND, runInstallCommand } from "../src/install/index.js";
 
 let home: string;
 let root: string;
@@ -103,6 +111,7 @@ describe("the JSON contract", () => {
       "hub-database",
       "hub-registrations",
       "workspace",
+      "schema",
       "workspace-hub-link",
       "migration-journal",
       "orphan-workspaces",
@@ -230,7 +239,7 @@ describe("read-only by default", () => {
     expect(workspace.detail).toContain("Ambiguous workspace");
     expect(workspace.data.ambiguous).toBe(true);
     // Every other check still ran — a guard per check, not one try around the run.
-    expect(parsed.checks).toHaveLength(15);
+    expect(parsed.checks).toHaveLength(16);
     expect(parsed.checks.find((c) => c.id === "node-runtime")!.status).toBe("pass");
   }, 60_000);
 });
@@ -514,4 +523,284 @@ describe("the guide file is what a fresh clone gets", () => {
     expect(body).toContain("!AGENTS.md");
     expect(existsSync(join(repo, ".staple", "AGENTS.md"))).toBe(true);
   });
+});
+
+// ------------------------------------------------------ schema compatibility
+
+/**
+ * STA-164 — the `schema` check.
+ *
+ * Three numbers can disagree — the database's stamp, what the RUNNING build
+ * understands, what the launcher's SELECTED runtime understands — and the
+ * `workspace` check above only says "upgrade staple". This check says which
+ * of the three is behind and names the one command that reconciles them,
+ * derived from what `staple install` actually accepts. Every scenario here is
+ * a real fixture file (v5, v6, v99) or a current workspace generated at test
+ * time, in a scratch home with fake installed runtimes, and doctor runs as a
+ * subprocess from the checkout, so "running" is always the checkout that
+ * understands `WORKSPACE_LATEST_VERSION`.
+ */
+describe("schema compatibility", () => {
+  let schemaHomes: string[];
+
+  beforeAll(() => {
+    schemaHomes = [];
+  });
+
+  afterAll(() => {
+    for (const dir of schemaHomes) removeDir(dir);
+  });
+
+  function sha256(path: string): string {
+    return createHash("sha256").update(readFileSync(path)).digest("hex");
+  }
+
+  /** A registered repo whose database `populate` writes in place of the one `init` made. */
+  function repoWith(populate: (dbPath: string) => void): { hubHome: string; dir: string; dbPath: string } {
+    const hubHome = tempDir("r1b-schema-home");
+    schemaHomes.push(hubHome);
+    const dir = join(root, `schema-${Math.random().toString(36).slice(2, 8)}`);
+    mkdirSync(dir, { recursive: true });
+    expect(runCliAt(dir, ["init"], { STAPLE_HOME: hubHome }).status).toBe(0);
+    const dbPath = join(dir, ".staple", "staple.db");
+    populate(dbPath);
+    for (const suffix of ["-wal", "-shm"]) rmSync(`${dbPath}${suffix}`, { force: true });
+    return { hubHome, dir, dbPath };
+  }
+
+  /** A registered repo whose database is the named (older) fixture. */
+  function fixtureRepo(fixture: string): { hubHome: string; dir: string; dbPath: string } {
+    return repoWith((dbPath) => copyFileSync(fixturePath(fixture), dbPath));
+  }
+
+  /** A registered repo whose database is at this build's latest schema. */
+  function currentRepo(): { hubHome: string; dir: string; dbPath: string } {
+    return repoWith(writeCurrentWorkspace);
+  }
+
+  /** `staple install --from <fake payload> --yes` into the scratch home, in-process and silently. */
+  function installRuntime(hubHome: string, version: string, workspaceSchema: number | null): void {
+    const payload = writeFakePayload(join(hubHome, "payloads", version), version, { workspaceSchema });
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      runInstallCommand(["--home", hubHome, "--bin-dir", join(hubHome, "bin"), "--from", payload, "--yes"]);
+    } finally {
+      log.mockRestore();
+      clearHomeOverride();
+    }
+  }
+
+  function rollbackRuntime(hubHome: string): void {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      runInstallCommand(["--home", hubHome, "--bin-dir", join(hubHome, "bin"), "--rollback", "--yes"]);
+    } finally {
+      log.mockRestore();
+      clearHomeOverride();
+    }
+  }
+
+  function schemaCheck(dir: string, hubHome: string): CheckResult {
+    return check("schema", dir, hubHome);
+  }
+
+  /** "JSON output exposes stable fields" — the exact key set, on every outcome. */
+  function expectStableShape(found: CheckResult): void {
+    expect(Object.keys(found.data).sort()).toEqual([
+      "code",
+      "config",
+      "database",
+      "dbPath",
+      "repair",
+      "running",
+      "selected",
+    ]);
+    expect(Object.keys(found.data.repair as object).sort()).toEqual([
+      "changesDatabase",
+      "command",
+      "migration",
+      "rollback",
+      "snapshotPath",
+    ]);
+    expect(Object.keys(found.data.running as object).sort()).toEqual(["path", "source", "version", "workspaceSchema"]);
+    expect(Object.keys(found.data.config as object).sort()).toEqual(["path", "present", "schema", "understands"]);
+    expect(Object.keys(found.data.database as object).sort()).toEqual(["detection", "schema"]);
+  }
+
+  it("passes when the database, the running build and the config agree, and names all three", () => {
+    const { hubHome, dir, dbPath } = currentRepo();
+    const found = schemaCheck(dir, hubHome);
+
+    expect(found.status).toBe("pass");
+    expectStableShape(found);
+    expect(found.data.code).toBeNull();
+    expect(found.fix).toBeNull();
+    expect(found.data.dbPath).toBe(dbPath);
+    expect(found.data.database).toEqual({ schema: WORKSPACE_LATEST_VERSION, detection: "stamped" });
+    // Doctor ran from this checkout under tsx: the running build IS the repository.
+    const running = found.data.running as { source: string; path: string; workspaceSchema: number };
+    expect(running.source).toBe("checkout");
+    expect(running.workspaceSchema).toBe(WORKSPACE_LATEST_VERSION);
+    expect(existsSync(join(running.path, "package.json"))).toBe(true);
+    expect(found.data.selected).toBeNull();
+    expect((found.data.config as { understands: number }).understands).toBe(1);
+    expect(found.data.repair).toEqual({
+      command: null,
+      changesDatabase: false,
+      migration: null,
+      snapshotPath: null,
+      rollback: null,
+    });
+    // The human detail carries the three schemas by name.
+    expect(found.detail).toContain("Every schema agrees.");
+    expect(found.detail).toContain(`database  ${dbPath} is at schema ${WORKSPACE_LATEST_VERSION}`);
+    expect(found.detail).toContain(`running   checkout at ${running.path}`);
+    expect(found.detail).toContain("selected  no installed runtime");
+    expect(found.detail).toContain("config    ");
+    expect(found.detail).toContain("changes nothing in the database");
+  }, 60_000);
+
+  it("previews a pending migration: from -> to, and the snapshot beside the database", () => {
+    const { hubHome, dir, dbPath } = fixtureRepo(FIXTURES.workspaceV5);
+    const before = sha256(dbPath);
+    const found = schemaCheck(dir, hubHome);
+
+    expect(found.status).toBe("warn");
+    expectStableShape(found);
+    expect(found.data.code).toBe("migration_pending");
+    // Nothing to run: the next open by this build does the upgrade itself.
+    expect(found.fix).toBeNull();
+    const repair = found.data.repair as { changesDatabase: boolean; migration: unknown; snapshotPath: string };
+    expect(repair.changesDatabase).toBe(true);
+    expect(repair.migration).toEqual({ from: 5, to: WORKSPACE_LATEST_VERSION });
+    // The same function `openWorkspace` names its snapshot with (R1a).
+    expect(repair.snapshotPath).toMatch(
+      new RegExp(`^${join(dir, ".staple", SNAPSHOT_DIRNAME)}/staple\\.db\\.schema-5\\.\\d{8}T\\d{6}Z-\\d+\\.db$`),
+    );
+    expect(found.detail).toContain(`migrates 5 -> ${WORKSPACE_LATEST_VERSION} after a verified snapshot to `);
+    // A preview, not the upgrade: the file is untouched and no snapshot exists.
+    expect(sha256(dbPath)).toBe(before);
+    expect(existsSync(join(dir, ".staple", SNAPSHOT_DIRNAME))).toBe(false);
+  }, 60_000);
+
+  it("fails on a newer database with the install placeholder when no runtime on the machine can open it", () => {
+    const { hubHome, dir, dbPath } = fixtureRepo(FIXTURES.workspaceV99);
+    const before = sha256(dbPath);
+
+    const found = schemaCheck(dir, hubHome);
+    expect(found.status).toBe("fail");
+    expectStableShape(found);
+    expect(found.data.code).toBe("database_newer_than_runtime");
+    expect(found.data.database).toEqual({ schema: 99, detection: "stamped" });
+    expect(found.fix).toEqual({
+      id: "schema",
+      description: expect.stringContaining("No runtime on this machine understands schema 99"),
+      command: INSTALL_FROM_PLACEHOLDER,
+    });
+    expect((found.data.repair as { changesDatabase: boolean }).changesDatabase).toBe(false);
+    expect(found.detail).toContain("This build cannot open the database.");
+
+    // Human output: the exact command under REPAIRS, exit 1, and no write.
+    const human = doctor([], dir, hubHome);
+    expect(human.status).toBe(1);
+    expect(human.stdout).toContain("\nREPAIRS\n");
+    expect(human.stdout).toContain(INSTALL_FROM_PLACEHOLDER);
+    expect(sha256(dbPath)).toBe(before);
+  }, 60_000);
+
+  it("points at the launcher when the SELECTED runtime understands the database and the running build does not", () => {
+    const { hubHome, dir } = fixtureRepo(FIXTURES.workspaceV99);
+    installRuntime(hubHome, "99.0.0", 99);
+
+    const found = schemaCheck(dir, hubHome);
+    expect(found.status).toBe("fail");
+    expect(found.data.code).toBe("database_newer_than_runtime");
+    const selected = found.data.selected as { version: string; workspaceSchema: number; launcher: string };
+    expect(selected.version).toBe("99.0.0");
+    expect(selected.workspaceSchema).toBe(99);
+    expect(found.fix!.command).toBe(`${selected.launcher} doctor`);
+    expect(found.fix!.description).toContain("Use the launcher instead of this checkout");
+    expect(found.detail).toContain(`selected  staple 99.0.0 at ${join(hubHome, "runtime", "versions", "99.0.0")} understands 99`);
+  }, 90_000);
+
+  /**
+   * AC5: "Rollback command restores runtime selection without discarding the
+   * newer database." Manufactured the way it happens: a runtime that opened
+   * the workspace at 99 is still retained after a newer install that does not.
+   * Doctor names the rollback; running it changes the pointer, not the file.
+   */
+  it("names `install --rollback` when the RETAINED runtime understands the database, and proves it leaves the database alone", () => {
+    const { hubHome, dir, dbPath } = fixtureRepo(FIXTURES.workspaceV99);
+    installRuntime(hubHome, "99.0.0", 99);
+    installRuntime(hubHome, "100.0.0", WORKSPACE_LATEST_VERSION);
+    const before = sha256(dbPath);
+
+    const found = schemaCheck(dir, hubHome);
+    expect(found.status).toBe("fail");
+    expect(found.data.code).toBe("database_newer_than_runtime");
+    expect(found.fix!.command).toBe(ROLLBACK_COMMAND);
+    expect(found.fix!.description).toContain("retained previous runtime staple 99.0.0");
+    expect(found.fix!.description).toContain("changes no database");
+    expect((found.data.repair as { rollback: string }).rollback).toBe(ROLLBACK_COMMAND);
+    expect(found.detail).toContain(`${ROLLBACK_COMMAND} restores staple 99.0.0 at ${join(hubHome, "runtime", "versions", "99.0.0")} without touching any database`);
+
+    rollbackRuntime(hubHome);
+
+    // Byte-identical, still at 99, and doctor now sends the user to the launcher.
+    expect(sha256(dbPath)).toBe(before);
+    const after = schemaCheck(dir, hubHome);
+    expect((after.data.selected as { version: string }).version).toBe("99.0.0");
+    expect(after.data.database).toEqual({ schema: 99, detection: "stamped" });
+    expect(after.fix!.command).toBe(`${(after.data.selected as { launcher: string }).launcher} doctor`);
+  }, 120_000);
+
+  it("warns when the selected runtime is older than the database this build can open, and names the checkout's payload", () => {
+    const { hubHome, dir } = currentRepo();
+    installRuntime(hubHome, "5.0.0", 5);
+
+    const found = schemaCheck(dir, hubHome);
+    expect(found.status).toBe("warn");
+    expect(found.data.code).toBe("selected_runtime_older_than_database");
+    const running = found.data.running as { path: string };
+    expect(found.fix!.command).toBe(`staple install --from ${join(running.path, "dist-package")} --yes`);
+    expect(found.fix!.description).toContain(`understands schema ${WORKSPACE_LATEST_VERSION}`);
+    expect(found.data.repair).toMatchObject({ changesDatabase: false, migration: null, rollback: null });
+    expect(found.detail).toContain("The launcher's runtime cannot open the database this build can.");
+  }, 90_000);
+
+  it("says the install will be followed by a migration when the database is behind BOTH runtimes", () => {
+    const { hubHome, dir } = fixtureRepo(FIXTURES.workspaceV5);
+    installRuntime(hubHome, "5.0.0", 5);
+
+    const found = schemaCheck(dir, hubHome);
+    expect(found.status).toBe("warn");
+    expect(found.data.code).toBe("selected_runtime_older_than_database");
+    expect(found.fix!.command).toMatch(/^staple install --from .*dist-package --yes$/);
+    const repair = found.data.repair as { changesDatabase: boolean; migration: unknown; snapshotPath: string };
+    expect(repair.changesDatabase).toBe(true);
+    expect(repair.migration).toEqual({ from: 5, to: WORKSPACE_LATEST_VERSION });
+    expect(repair.snapshotPath).toContain(`/${SNAPSHOT_DIRNAME}/staple.db.schema-5.`);
+  }, 90_000);
+
+  it("fails on a config file stamped newer than this build, and does not rewrite it", () => {
+    const { hubHome, dir } = fixtureRepo(FIXTURES.workspaceV6);
+    const configFile = join(hubHome, "config.json");
+    const newer = `${JSON.stringify({ schemaVersion: 999, fromTheFuture: true }, null, 2)}\n`;
+    writeFileSync(configFile, newer);
+
+    const found = schemaCheck(dir, hubHome);
+    expect(found.status).toBe("fail");
+    expect(found.data.code).toBe("config_newer_than_runtime");
+    expect(found.data.config).toEqual({ path: configFile, present: true, schema: 999, understands: 1 });
+    expect(found.fix!.command).toBe(INSTALL_FROM_PLACEHOLDER);
+    expect(found.fix!.description).toContain("config schema 999");
+    expect(readFileSync(configFile, "utf8")).toBe(newer);
+  }, 60_000);
+
+  it("is a report, not a repair: --fix --only schema is refused", () => {
+    const { hubHome, dir } = fixtureRepo(FIXTURES.workspaceV99);
+    const result = doctor(["--fix", "--only", "schema", "--yes"], dir, hubHome);
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("is not a repairable check");
+  }, 60_000);
 });

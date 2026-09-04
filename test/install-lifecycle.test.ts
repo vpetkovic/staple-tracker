@@ -32,12 +32,15 @@ import {
   installRuntime,
   installStatus,
   listInstalledVersions,
+  payloadWorkspaceSchema,
   readCurrent,
   rollbackRuntime,
   stagePayload,
+  verifyLauncherTarget,
   verifyRuntimeTree,
 } from "../src/install/index.js";
 import { writeBootstrapLocator } from "../src/config/index.js";
+import { WORKSPACE_LATEST_VERSION } from "../src/core/migrations/workspace/index.js";
 import { StapleError } from "../src/core/types.js";
 import { removeDir, tempDir } from "./fixtures/characterize-support.js";
 import { writeFakePayload } from "./fixtures/install-support.js";
@@ -441,6 +444,65 @@ describe("status", () => {
     expect(broken.launcher.ok).toBe(false);
     expect(broken.ok).toBe(false);
     expect(broken.launcher.problems.join("\n")).toMatch(/no launcher installed/);
+  });
+});
+
+describe("the selected runtime says which workspace schema it understands (STA-163)", () => {
+  it("reports the payload's declared workspace schema through install, status and the launcher", () => {
+    const result = install("1.0.0");
+
+    expect(result.workspaceSchema).toBe(WORKSPACE_LATEST_VERSION);
+    expect(status().workspaceSchema).toBe(WORKSPACE_LATEST_VERSION);
+    // The launcher's verification answers for the entrypoint it would exec —
+    // the same bytes `staple` on PATH runs — not for the build running the check.
+    const launcher = verifyLauncherTarget({ binDir, expectHome: home, locatorPath, env: launcherEnv() });
+    expect(launcher.target).toBe(join(home, "runtime", "versions", "1.0.0", "staple.mjs"));
+    expect(launcher.workspaceSchema).toBe(WORKSPACE_LATEST_VERSION);
+  });
+
+  it("follows the pointer: after an upgrade the launcher reports the NEW runtime's schema", () => {
+    install("1.0.0", { workspaceSchema: 5 });
+    expect(status().workspaceSchema).toBe(5);
+
+    install("2.0.0", { workspaceSchema: 6 });
+
+    expect(status().workspaceSchema).toBe(6);
+    expect(verifyLauncherTarget({ binDir, expectHome: home, locatorPath, env: launcherEnv() }).workspaceSchema).toBe(6);
+    expect(payloadWorkspaceSchema(join(home, "runtime", "versions", "1.0.0"))).toBe(5);
+  });
+
+  it("installs a payload built before the schema was recorded, and says it does not know", () => {
+    const result = install("0.9.0", { workspaceSchema: null });
+
+    expect(result.workspaceSchema).toBeNull();
+    expect(status().workspaceSchema).toBeNull();
+    expect(runLauncher(["--version"]).stdout.trim()).toBe("0.9.0");
+  });
+});
+
+describe("the prior runtime is retained at an explicit path (STA-163)", () => {
+  it("names where the rollback target lives, and it is still there", () => {
+    const first = install("1.0.0");
+    expect(first.previousVersionPath).toBeNull();
+
+    const second = install("2.0.0");
+
+    expect(second.previousVersion).toBe("1.0.0");
+    expect(second.previousVersionPath).toBe(first.versionPath);
+    expect(existsSync(join(second.previousVersionPath!, "staple.mjs"))).toBe(true);
+    expect(status().previousVersionPath).toBe(first.versionPath);
+  });
+
+  it("rollback names where the runtime it left is retained, so it is reversible", () => {
+    install("1.0.0");
+    const second = install("2.0.0");
+
+    const rolled = rollbackRuntime({ home, binDir, locatorPath });
+
+    expect(rolled.previousVersion).toBe("2.0.0");
+    expect(rolled.previousVersionPath).toBe(second.versionPath);
+    expect(existsSync(join(rolled.previousVersionPath!, "staple.mjs"))).toBe(true);
+    expect(rolled.workspaceSchema).toBe(WORKSPACE_LATEST_VERSION);
   });
 });
 

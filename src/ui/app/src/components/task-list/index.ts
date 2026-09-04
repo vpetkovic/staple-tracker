@@ -54,6 +54,7 @@ export {
   type RollupInput,
   type RollupLive,
   type RollupOptions,
+  type RollupPlan,
   type RollupSegment,
   type TaskRow,
   type TaskSource,

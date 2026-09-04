@@ -2,7 +2,8 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { openDb } from "../src/core/db.js";
 import { migrateWorkspace } from "../src/core/schema.js";
 import { WorkspaceStore } from "../src/core/store.js";
-import { ISSUE_KINDS, ISSUE_STATUSES } from "../src/core/types.js";
+import { sanitizeSvg } from "../src/core/svg-sanitize.js";
+import { ISSUE_KINDS, ISSUE_STATUSES, StapleError } from "../src/core/types.js";
 
 /**
  * O7a (STA-140) — the workspace vocabulary is DATA.
@@ -525,5 +526,339 @@ describe("configured order drives the list", () => {
       "todo",
       "backlog",
     ]);
+  });
+});
+
+// --------------------------------------------------- registered values (R6a, STA-176)
+
+describe("registered workspace settings", () => {
+  const metaRows = () =>
+    (store.db.prepare("SELECT key, value FROM meta WHERE key LIKE 'setting:%' ORDER BY key").all() as Array<{
+      key: string;
+      value: string;
+    }>);
+
+  it("answers the definition's default with source default until something is stored", () => {
+    expect(store.getSetting("kinds.default")).toBe("task");
+    expect(store.settingValues()).toEqual([
+      { key: "kinds.default", scope: "workspace", value: "task", source: "default", version: 1 },
+      { key: "kinds.appearance", scope: "workspace", value: {}, source: "default", version: 1 },
+      { key: "queue.policy", scope: "workspace", value: "advisory", source: "default", version: 1 },
+    ]);
+    // Nothing is written by a read — the fresh-workspace meta table stays exactly as seeded.
+    expect(metaRows()).toEqual([]);
+  });
+
+  it("persists a set value as one versioned meta row and reports it with source workspace", () => {
+    const view = store.setSetting("kinds.default", "bug", "op");
+    expect(view).toEqual({ key: "kinds.default", scope: "workspace", value: "bug", source: "workspace", version: 1 });
+    expect(metaRows()).toEqual([{ key: "setting:kinds.default", value: JSON.stringify({ v: 1, value: "bug" }) }]);
+    expect(store.getSetting("kinds.default")).toBe("bug");
+  });
+
+  it("is honoured by defaultKind(), so a create with no kind writes the chosen one", () => {
+    store.setSetting("kinds.default", "bug");
+    expect(store.defaultKind()).toBe("bug");
+    expect(store.createIssue({ title: "No kind given" }).kind).toBe("bug");
+  });
+
+  it("validates at the write boundary: shape from the registry, existence from the store", () => {
+    expect(() => store.setSetting("kinds.default", 7)).toThrow(/"kinds\.default" must be a kind id/);
+    expect(() => store.setSetting("kinds.default", "Not-A-Kind")).toThrow(/"kinds\.default" must be a kind id/);
+    expect(() => store.setSetting("kinds.default", "milestone")).toThrow(/Unknown kind "milestone"/);
+    expect(metaRows()).toEqual([]);
+  });
+
+  it("refuses a global key on the workspace surface, pointing at `staple config set`", () => {
+    expect(() => store.setSetting("machine.port", 4500)).toThrow(
+      /"machine\.port" is a global setting, not a workspace one\. Global settings are edited with `staple config set`/,
+    );
+    expect(() => store.getSetting("machine.port")).toThrow(StapleError);
+    expect(() => store.getSetting("nothing.here")).toThrow(/Unknown workspace setting "nothing\.here"/);
+  });
+
+  it("validates at the read boundary: a stored value that no longer fits is refused by key", () => {
+    store.db
+      .prepare("INSERT INTO meta (key, value) VALUES ('setting:kinds.default', ?)")
+      .run(JSON.stringify({ v: 1, value: 42 }));
+    expect(() => store.getSetting("kinds.default")).toThrow(/workspace test: "kinds\.default" must be a kind id/);
+  });
+
+  it("refuses a value written at a newer version rather than reinterpreting it", () => {
+    store.db
+      .prepare("INSERT INTO meta (key, value) VALUES ('setting:kinds.default', ?)")
+      .run(JSON.stringify({ v: 2, value: "bug" }));
+    expect(() => store.settingValues()).toThrow(/"kinds\.default" was written by a newer staple/);
+  });
+
+  it("preserves and reports a stored key it has no definition for, and never rewrites it", () => {
+    store.db
+      .prepare("INSERT INTO meta (key, value) VALUES ('setting:future.flag', ?)")
+      .run(JSON.stringify({ v: 3, value: { anything: true } }));
+    expect(store.unknownSettingKeys()).toEqual(["future.flag"]);
+    expect(store.settingValues().map((v) => v.key)).toEqual([
+      "kinds.default",
+      "kinds.appearance",
+      "queue.policy",
+    ]);
+    store.setSetting("kinds.default", "bug");
+    store.resetSetting("kinds.default");
+    expect(metaRows()).toEqual([
+      { key: "setting:future.flag", value: JSON.stringify({ v: 3, value: { anything: true } }) },
+    ]);
+  });
+
+  it("reset deletes the row so the default applies again, and is a no-op when nothing is stored", () => {
+    store.setSetting("kinds.default", "bug");
+    expect(store.resetSetting("kinds.default").source).toBe("default");
+    expect(metaRows()).toEqual([]);
+    expect(store.defaultKind()).toBe("task");
+    const before = store.db.prepare("SELECT COUNT(*) AS n FROM events").get() as { n: number };
+    store.resetSetting("kinds.default");
+    expect((store.db.prepare("SELECT COUNT(*) AS n FROM events").get() as { n: number }).n).toBe(before.n);
+  });
+
+  it("records actor, previous value and new value on every change", () => {
+    store.setSetting("kinds.default", "bug", "alice");
+    store.resetSetting("kinds.default", "bob");
+    const rows = store.db
+      .prepare("SELECT actor, payload FROM events WHERE kind = 'setting_changed' ORDER BY seq")
+      .all() as Array<{ actor: string; payload: string }>;
+    expect(rows.map((r) => [r.actor, JSON.parse(r.payload)])).toEqual([
+      ["alice", { action: "set", key: "kinds.default", from: "task", to: "bug" }],
+      ["bob", { action: "reset", key: "kinds.default", from: "bug", to: "task" }],
+    ]);
+  });
+
+  /**
+   * R6d (STA-179) — the queue policy through the store, to the contract
+   * docs/queue.md fixed. What is pinned: the default is advisory with nothing
+   * stored (upgrading a workspace changes nothing an agent can observe), a set
+   * value is the same object on the single-key and the list read, a value
+   * outside the contract is refused by name, and the change records actor,
+   * previous and new value. What is NOT here: enforcement — R2c reads this.
+   */
+  it("queue.policy defaults to advisory", () => {
+    expect(store.getSetting("queue.policy")).toBe("advisory");
+    expect(store.settingValue("queue.policy")).toEqual({
+      key: "queue.policy",
+      scope: "workspace",
+      value: "advisory",
+      source: "default",
+      version: 1,
+    });
+    expect(metaRows()).toEqual([]);
+  });
+
+  it("queue.policy accepts strict, answers it identically on the single-key and list reads, and refuses anything else", () => {
+    const view = store.setSetting("queue.policy", "strict", "vp");
+    expect(view).toEqual({ key: "queue.policy", scope: "workspace", value: "strict", source: "workspace", version: 1 });
+    expect(store.settingValue("queue.policy")).toEqual(view);
+    expect(store.settingValues().find((v) => v.key === "queue.policy")).toEqual(view);
+    expect(() => store.setSetting("queue.policy", "lenient")).toThrow(
+      /"queue\.policy" must be one of advisory, strict, got "lenient"/,
+    );
+    expect(() => store.settingValue("machine.port")).toThrow(/global setting, not a workspace one/);
+  });
+
+  it("records actor, previous value and new value when the queue policy changes", () => {
+    store.setSetting("queue.policy", "strict", "vp");
+    store.setSetting("queue.policy", "advisory", "fable-r6d");
+    const rows = store.db
+      .prepare("SELECT actor, payload FROM events WHERE kind = 'setting_changed' ORDER BY seq")
+      .all() as Array<{ actor: string; payload: string }>;
+    expect(rows.map((r) => [r.actor, JSON.parse(r.payload)])).toEqual([
+      ["vp", { action: "set", key: "queue.policy", from: "advisory", to: "strict" }],
+      ["fable-r6d", { action: "set", key: "queue.policy", from: "strict", to: "advisory" }],
+    ]);
+  });
+
+  it("bumps the settings revision so another connection's snapshot goes stale", () => {
+    const other = new WorkspaceStore(store.db, "test", "TST");
+    expect(other.getSetting("kinds.default")).toBe("task");
+    store.setSetting("kinds.default", "bug");
+    expect(other.getSetting("kinds.default")).toBe("bug");
+  });
+
+  it("resets a default that names a removed kind in the same transaction", () => {
+    store.setSetting("kinds.default", "bug");
+    store.removeKind("bug");
+    expect(store.getSetting("kinds.default")).toBe("task");
+    expect(metaRows()).toEqual([]);
+    expect(store.defaultKind()).toBe("task");
+  });
+
+  it("applies a batch in order, all or nothing", () => {
+    expect(() =>
+      store.applySettingOps([
+        { op: "set", key: "kinds.default", value: "bug" },
+        { op: "set", key: "kinds.default", value: "nope_not_configured" },
+      ]),
+    ).toThrow(/Unknown kind/);
+    expect(store.getSetting("kinds.default")).toBe("task");
+    expect(store.applySettingOps([{ op: "set", key: "kinds.default", value: "spike" }])).toEqual([
+      { key: "kinds.default", scope: "workspace", value: "spike", source: "workspace", version: 1 },
+      { key: "kinds.appearance", scope: "workspace", value: {}, source: "default", version: 1 },
+      { key: "queue.policy", scope: "workspace", value: "advisory", source: "default", version: 1 },
+    ]);
+    expect(() => store.applySettingOps([{ op: "bogus", key: "kinds.default" } as never])).toThrow(
+      /Unknown setting op "bogus"/,
+    );
+  });
+});
+
+// ------------------------------------------------------- kind appearance (R5a, STA-181)
+
+describe("kind appearance", () => {
+  const metaRows = () =>
+    (store.db.prepare("SELECT key, value FROM meta WHERE key LIKE 'setting:%' ORDER BY key").all() as Array<{
+      key: string;
+      value: string;
+    }>);
+  const flask = { source: "lucide", value: "flask-conical", fallback: "⚗" } as const;
+
+  it("resolves every seeded kind to its built-in mark with the configured label, storing nothing", () => {
+    const rows = store.getKindsWithAppearance();
+    expect(rows.map((k) => k.id)).toEqual(idsOf(store.getKinds()));
+    expect(rows.map((k) => `${k.id}:${k.appearance.source}:${k.appearance.value}:${k.appearance.fallback}`)).toEqual([
+      "epic:lucide:layers:◆",
+      "task:lucide:square-check:◇",
+      "bug:lucide:bug:✱",
+      "chore:lucide:wrench:↻",
+      "spike:lucide:zap:↯",
+    ]);
+    expect(rows.map((k) => k.appearance.label)).toEqual(["Epic", "Task", "Bug", "Chore", "Spike"]);
+    expect(store.kindAppearance("epic")).toEqual(rows[0]!.appearance);
+    expect(metaRows()).toEqual([]);
+    expect(store.settingValues().find((v) => v.key === "kinds.appearance")).toEqual({
+      key: "kinds.appearance",
+      scope: "workspace",
+      value: {},
+      source: "default",
+      version: 1,
+    });
+  });
+
+  it("gives a custom kind the generic mark until it is given one, and a renamed kind its new label", () => {
+    store.addKind({ id: "research" });
+    expect(store.kindAppearance("research")).toEqual({ source: "none", value: "", label: "Research", fallback: "•" });
+    store.renameKind("spike", "Investigation");
+    expect(store.kindAppearance("spike")).toEqual({ source: "lucide", value: "zap", label: "Investigation", fallback: "↯" });
+    // Total: an id nobody configured still answers, with a title-cased label.
+    expect(store.kindAppearance("not_here")).toEqual({ source: "none", value: "", label: "Not Here", fallback: "•" });
+  });
+
+  it("persists a stored choice as one versioned meta row and resolves it on every read", () => {
+    store.addKind({ id: "research" });
+    store.setSetting("kinds.appearance", { research: flask }, "op");
+    expect(metaRows()).toEqual([
+      { key: "setting:kinds.appearance", value: JSON.stringify({ v: 1, value: { research: flask } }) },
+    ]);
+    expect(store.kindAppearance("research")).toEqual({ ...flask, label: "Research" });
+    expect(store.getKindsWithAppearance().find((k) => k.id === "research")!.appearance).toEqual({ ...flask, label: "Research" });
+    // Everything else keeps its built-in mark.
+    expect(store.kindAppearance("bug").value).toBe("bug");
+  });
+
+  it("uses a stored label when there is one, and the kind's own label when it is empty", () => {
+    store.setSetting("kinds.appearance", { epic: { source: "emoji", value: "🚀", fallback: "E", label: "Initiative" } });
+    expect(store.kindAppearance("epic")).toEqual({ source: "emoji", value: "🚀", label: "Initiative", fallback: "E" });
+    store.setSetting("kinds.appearance", { epic: { source: "emoji", value: "🚀", fallback: "E", label: "" } });
+    expect(store.kindAppearance("epic").label).toBe("Epic");
+    store.renameKind("epic", "Programme");
+    expect(store.kindAppearance("epic").label).toBe("Programme");
+  });
+
+  it("refuses at the write boundary: a colour, custom SVG, a bad key, and an unconfigured kind", () => {
+    expect(() => store.setSetting("kinds.appearance", { epic: { ...flask, color: "#f00" } })).toThrow(
+      /"kinds\.appearance" must be an appearance record without "color"/,
+    );
+    expect(() => store.setSetting("kinds.appearance", { epic: { source: "svg", value: "<svg/>", fallback: "s" } })).toThrow(
+      /viewBox/,
+    );
+    expect(() => store.setSetting("kinds.appearance", { epic: { ...flask, value: "Not A Key" } })).toThrow(
+      /Lucide icon key .* for "epic"/,
+    );
+    expect(() => store.setSetting("kinds.appearance", { milestone: flask })).toThrow(/Unknown kind "milestone"/);
+    expect(() => store.setSetting("kinds.appearance", [])).toThrow(/a map of kind id/);
+    expect(metaRows()).toEqual([]);
+  });
+
+  it("prunes a removed kind's entry in the same transaction, and clears the row when it was the last", () => {
+    store.addKind({ id: "research" });
+    store.setSetting("kinds.appearance", { research: flask, spike: { source: "none", value: "", fallback: "s" } });
+    store.removeKind("research");
+    expect(store.getSetting("kinds.appearance")).toEqual({ spike: { source: "none", value: "", fallback: "s" } });
+    store.removeKind("spike");
+    expect(store.getSetting("kinds.appearance")).toEqual({});
+    expect(metaRows()).toEqual([]);
+  });
+
+  it("is validated at the read boundary like every registered value", () => {
+    store.db
+      .prepare("INSERT INTO meta (key, value) VALUES ('setting:kinds.appearance', ?)")
+      .run(JSON.stringify({ v: 1, value: { epic: { source: "lucide" } } }));
+    expect(() => store.getKindsWithAppearance()).toThrow(/workspace test: "kinds\.appearance" must be/);
+  });
+});
+
+// ------------------------------------------------------- custom glyphs (R5c, STA-183)
+
+describe("custom glyphs", () => {
+  const metaRows = () =>
+    (store.db.prepare("SELECT value FROM meta WHERE key = 'setting:kinds.appearance'").all() as Array<{ value: string }>).map(
+      (row) => row.value,
+    );
+  const raw = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path d="M4 2h16v20H4z" fill="#f00"/></svg>';
+  const hostile = '<svg viewBox="0 0 24 24" onload="alert(1)"><script>fetch("https://evil.example")</script><path d="M0 0"/></svg>';
+  const canonical = () => {
+    const result = sanitizeSvg(raw, { label: "Box" });
+    if (!result.ok) throw new Error(result.problem);
+    return result.svg;
+  };
+
+  it("stores the sanitiser's canonical output and resolves it on every read, never the raw document", () => {
+    store.setSetting("kinds.appearance", { epic: { source: "svg", value: canonical(), fallback: "▣" } }, "op");
+    expect(store.kindAppearance("epic")).toEqual({ source: "svg", value: canonical(), label: "Epic", fallback: "▣" });
+    expect(store.getKindsWithAppearance().find((k) => k.id === "epic")!.appearance.value).toBe(canonical());
+    // What sits on disk is the canonical string: no width/height, currentColor, one title.
+    const onDisk = (JSON.parse(metaRows()[0]!) as { value: { epic: { value: string } } }).value.epic.value;
+    expect(onDisk).toBe(canonical());
+    expect(onDisk).toContain('fill="currentColor"');
+    expect(onDisk).not.toMatch(/width=|#f00/);
+    expect(onDisk).toContain("<title>Box</title>");
+  });
+
+  it("refuses a raw or hostile document at the write boundary, and no markup reaches disk", () => {
+    expect(() => store.setSetting("kinds.appearance", { epic: { source: "svg", value: raw, fallback: "s", label: "Box" } })).toThrow(
+      /"kinds\.appearance" must be the sanitiser's canonical SVG for value .* for "epic"/,
+    );
+    expect(() => store.setSetting("kinds.appearance", { epic: { source: "svg", value: hostile, fallback: "s" } })).toThrow(
+      /must be an SVG without <script> elements for value/,
+    );
+    expect(() => store.setSetting("kinds.appearance", { epic: { source: "svg", value: "<svg>" + "a".repeat(1024 * 1024), fallback: "s" } })).toThrow(
+      /at most 8192 bytes/,
+    );
+    expect(() => store.setSetting("kinds.appearance", { epic: { source: "emoji", value: "🚀🚀🚀", fallback: "e" } })).toThrow(
+      /1 to 2 visible characters/,
+    );
+    expect(metaRows()).toEqual([]);
+    expect(store.kindAppearance("epic").value).toBe("layers");
+  });
+
+  it("accepts an emoji by grapheme count: a joined family is one glyph", () => {
+    store.setSetting("kinds.appearance", { epic: { source: "emoji", value: "👨‍👩‍👧‍👦", fallback: "F" } });
+    expect(store.kindAppearance("epic")).toEqual({ source: "emoji", value: "👨‍👩‍👧‍👦", label: "Epic", fallback: "F" });
+  });
+
+  it("never serves a stored row that was tampered into hostile markup: the read refuses with the key in the sentence", () => {
+    // The registry validates at the read boundary (R5a), so a hand-edited row cannot be served as
+    // markup by any surface. The resolver's own fallback for a record it is handed is proven in
+    // test/kind-appearance.test.ts; the browser's is in SafeGlyph's tests.
+    store.db
+      .prepare("INSERT INTO meta (key, value) VALUES ('setting:kinds.appearance', ?)")
+      .run(JSON.stringify({ v: 1, value: { epic: { source: "svg", value: hostile, fallback: "s" } } }));
+    expect(() => store.getKindsWithAppearance()).toThrow(/"kinds\.appearance" must be an SVG without <script> elements/);
+    expect(() => store.kindAppearance("epic")).toThrow(/<script>/);
   });
 });

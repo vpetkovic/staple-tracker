@@ -35,6 +35,13 @@ function timing(): IssueTiming {
     childStatusCounts: {
       backlog: 0, todo: 0, in_progress: 0, in_review: 0, awaiting_approval: 0, done: 0, blocked: 0, cancelled: 0,
     },
+    subtreePlan: {
+      estimatedSeconds: null,
+      source: "none",
+      descendantsEstimatedSeconds: null,
+      contributingCount: 0,
+      totalCount: 0,
+    },
   };
 }
 

@@ -625,6 +625,67 @@ export interface IssueTiming {
    * rather than a fixed seven, which is why the type is an open record.
    */
   childStatusCounts: Record<string, number>;
+  /**
+   * The RECURSIVE plan for this issue's subtree (STA-192), beside — never
+   * instead of — the depth-1 `childrenEstimatedSeconds` above. See `SubtreePlan`.
+   */
+  subtreePlan: SubtreePlan;
+}
+
+/** Where a `SubtreePlan.estimatedSeconds` came from. */
+export type PlanSource = "own" | "descendants" | "none";
+
+/**
+ * The estimate rollup that survives an epic-of-epics, the way `activeSeconds`
+ * already does (STA-192).
+ *
+ * ## The one contribution rule
+ *
+ * An issue CONTRIBUTES its own estimate if it recorded one, otherwise the sum
+ * of its children's contributions. That is the whole rule, and it is what
+ * keeps an ancestor total from counting anything twice: a parent's estimate is
+ * a plan for its whole subtree, so once it has one, the estimates beneath it
+ * are SHADOWED for every ancestor — they are not added on top. Where a parent
+ * has none, its children's plans flow up through it unchanged, which is how a
+ * mid-level epic nobody estimated still reports its children's 11h and passes
+ * that 11h to its own parent.
+ *
+ * Both directions are exposed, because a reader who set 6h on an epic whose
+ * children add up to 11h wants to see the disagreement, not have one number
+ * silently win: `estimatedSeconds` is the top-down (effective) plan and
+ * `descendantsEstimatedSeconds` is the bottom-up one.
+ *
+ * ## Null is not zero, here too
+ *
+ * A sum is null when NOTHING contributed, never 0 — the same convention as
+ * every other nullable number on `IssueTiming`.
+ */
+export interface SubtreePlan {
+  /**
+   * THE EFFECTIVE PLAN: the one number an ancestor counts this issue as.
+   * `Issue.estimatedSeconds` when recorded, otherwise
+   * `descendantsEstimatedSeconds`, null when neither exists.
+   */
+  estimatedSeconds: number | null;
+  /** Which of the two fed `estimatedSeconds`; `none` when it is null. */
+  source: PlanSource;
+  /**
+   * BOTTOM-UP: the sum of the DIRECT children's effective plans — the recursive
+   * counterpart of `childrenEstimatedSeconds`, and equal to it whenever every
+   * child carries its own estimate. Null when no descendant at any depth does.
+   * Present even when `source` is `own`, so a top-down plan and the work
+   * beneath it can be compared.
+   */
+  descendantsEstimatedSeconds: number | null;
+  /**
+   * Descendants at ANY depth whose own estimate is a term of
+   * `descendantsEstimatedSeconds`. A descendant shadowed by an estimated
+   * ancestor below this issue is not counted here — and not lost: it is still
+   * on that issue's own timing. Coverage is this over `totalCount`.
+   */
+  contributingCount: number;
+  /** Descendants at any depth, whatever their status. 0 for a leaf. */
+  totalCount: number;
 }
 
 /**

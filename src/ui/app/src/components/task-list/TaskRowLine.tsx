@@ -409,7 +409,13 @@ export function TaskRowLine({
           at the top of this file.
         */}
         {columns.disclosure && hasChildren && rollup ? (
-          <ParentRollupBar rollup={rollup} collapsed={collapsedParent} />
+          <ParentRollupBar
+            rollup={rollup}
+            collapsed={collapsedParent}
+            // R7c (STA-194): the rolled-up plan rides beside the bar only where density
+            // permits — the comfortable preset. Compact rows keep the count and the bar.
+            showPlan={config.density === "comfortable"}
+          />
         ) : null}
         {/* Last in the cell, so it reads as an aside on the title and never as part of it —
             and so it is the element the flexbox squeezes first when the title is long. */}

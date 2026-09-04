@@ -75,3 +75,174 @@ blocks mutation; the legacy copy is still there and still readable.
 new path, realpath-normalised (macOS stores the same file as both `/var/…` and
 `/private/var/…`). Nothing else in the registry is touched, and a registry
 conflict is a warning, not a failed migration — the data is already safe by then.
+
+## Schema upgrades on open
+
+Numbered schema migrations (`src/core/migrations/workspace/`) run when a
+workspace is opened, not through a separate command. The live workspace is at
+schema 6; the retired prototype checkout understands 3 and some installed
+builds understand 5. What every open does, in order:
+
+1. **Inspect through a read-only handle.** The schema version is read with
+   SQLite's read-only mode, before the ordinary open — whose
+   `PRAGMA journal_mode=WAL` rewrites the file header and creates the
+   `-wal`/`-shm` sidecars. A refusal therefore leaves the file byte-identical.
+2. **Refuse a newer file.** A workspace stamped higher than the runtime
+   understands exits 4 with `error(conflict)`, naming the file, both versions,
+   and `Upgrade staple`. An older runtime never writes to a newer workspace.
+3. **Snapshot before migrating.** If migrations are pending, the file is copied
+   with `VACUUM INTO` from that same read-only handle — a SQLite-consistent
+   copy that reads *through* the write-ahead log, so rows another process
+   committed and never checkpointed are in it. It is never a file copy. The
+   copy gets `integrity_check` and must be stamped with the old version; if it
+   cannot be taken or does not verify, the workspace is not opened and nothing
+   in it changes.
+4. **Open and migrate.** Only now is a writable handle opened; the migrations
+   run under `BEGIN IMMEDIATE` as before.
+
+The snapshot lives beside the database and is named for what it holds:
+
+```text
+.staple/snapshots/staple.db.schema-5.20260903T231500Z-48213.db
+```
+
+The open prints one line to stderr naming it —
+`staple: upgrading workspace <db> from schema 5 to 6; pre-upgrade snapshot
+retained at <path>` — before the migration runs, so the path is on your
+terminal even if the migration fails. Snapshots are never deleted by staple.
+
+**Rolling back a schema upgrade.** Roll the runtime back first, then, with
+nothing using the workspace, move the migrated database aside and copy the
+snapshot to the database path. With `<db>` the workspace file and `<snapshot>`
+the path the upgrade printed:
+
+```bash
+staple install status              # the `previous` line names the retained runtime and its path
+staple install --rollback --yes    # switch the launcher back to it; no database is touched
+mv <db> <db>.migrated              # the migrated file...
+mv <db>-wal <db>-wal.migrated      # ...and its -wal / -shm sidecars, if present: they belong to the newer schema
+mv <db>-shm <db>-shm.migrated
+cp <snapshot> <db>                 # the older runtime opens this: it is stamped with the version it understands
+```
+
+The sidecar lines are not optional when the files exist. A process that died
+mid-session leaves a `-wal` holding frames committed against the newer schema;
+restored beside a schema-5 file, SQLite would replay them into it. Do not
+restore over a live database for the same reason. Rolling back again returns
+to the newer runtime, which upgrades the restored file afresh — with a new
+snapshot — on its next open.
+
+## When the schemas disagree: `staple doctor`
+
+Three things carry a schema version, and any two can disagree:
+
+- the **database** — what the workspace file is stamped with;
+- the **runtime** — what a build understands. Two runtimes are worth naming:
+  the one *running* the command (a repository checkout under `tsx`, a bundle
+  run directly, or an installed version directory) and the one the `staple`
+  launcher *selects* through `<home>/runtime/current.json`. From a checkout
+  they differ, and a user who has just built the project is exactly the
+  person who needs to know which of the two is behind;
+- the **config** — `config.json`'s own `schemaVersion`.
+
+`staple doctor` has a `schema` check that names all three and the one command
+that reconciles them. From the error message, the path is two commands:
+
+```bash
+staple doctor                                # names the mismatch and the one repair command
+staple install --from <dir|tarball> --yes    # select a runtime whose payload declares the workspace schema
+```
+
+What doctor prints for a workspace no runtime on the machine understands:
+
+```text
+  ✗ schema               This build cannot open the database.
+    database  /work/repo/.staple/staple.db is at schema 99
+    running   checkout at /work/staple-tracker (staple 0.1.0) understands 6
+    selected  staple 0.1.0 at ~/.staple/runtime/versions/0.1.0 understands 6; launcher ~/.local/bin/staple
+    config    ~/.staple/config.json is at schema 1; this build understands 1
+    next open by the running build changes nothing in the database
+    no previous runtime is retained, so there is nothing to roll back to
+
+REPAIRS
+  Not a doctor fix — No runtime on this machine understands schema 99. Install a payload that declares
+  workspace schema 99 or newer — a newer checkout's `npm run build:package` output (<repo>/dist-package) or a packed tarball.
+    staple install --from <dir|tarball> --yes
+```
+
+The command is derived from what `staple install` accepts — `--from
+<dir|tarball> --yes`, `--rollback --yes`, or the launcher itself — never from
+a flag that does not exist. Which one you get:
+
+| situation | `--json` `data.code` | command |
+|---|---|---|
+| database newer than the running build; the **selected** runtime understands it | `database_newer_than_runtime` | `<launcher> doctor` — use the installed runtime, not this checkout |
+| database newer than the running build; the **retained previous** runtime understands it | `database_newer_than_runtime` | `staple install --rollback --yes` |
+| database newer than every runtime on the machine | `database_newer_than_runtime` | `staple install --from <dir|tarball> --yes`, with a payload that declares the schema |
+| `config.json` newer than this build | `config_newer_than_runtime` | `staple install --from <dir|tarball> --yes` |
+| the selected runtime is older than the database this build opens | `selected_runtime_older_than_database` | `staple install --from <checkout>/dist-package --yes` |
+| the database is behind the running build | `migration_pending` | none — the next open upgrades it |
+| everything agrees | `null` | none |
+
+The first two rows fail; the next two warn. The check is a report, not a
+repair: `doctor --fix --only schema` is refused.
+
+**Repair preview.** The last two detail lines say what the next open by the
+running build does — whether the database changes (`migrates 5 -> 6`) and
+where the pre-upgrade snapshot goes, from the same naming function the open
+uses — and what `install --rollback` would restore. Under `--json` they are
+`data.repair`: `{ command, changesDatabase, migration: { from, to } | null,
+snapshotPath, rollback }`, beside `data.database`, `data.running` (with its
+`source`: `checkout`, `bundle` or `installed`), `data.selected` (null when
+nothing is installed) and `data.config`. Doctor writes nothing: the preview
+does not create the snapshot directory, and a newer config file is read raw
+rather than rewritten.
+
+**The open refusal names the same command.** A command that opens a newer
+workspace still exits 4 with the pinned sentence — `… was created by a newer
+version of staple (schema version 99; this build understands 6). Upgrade
+staple to open it — an older build must not write to it.` — and then appends
+only the command doctor would name: `Repair: staple install --from
+<dir|tarball> --yes — `staple doctor` explains the mismatch in full.` The
+explanation stays in doctor; the error stays one line. They agree because
+they run the same planner.
+
+**Rollback switches the runtime, not the data.** `staple install --rollback
+--yes` rewrites `current.json` and the launcher only; no workspace file is
+opened. A workspace the newer runtime already migrated stays at the newer
+schema, byte for byte, and the rolled-back runtime refuses it read-only until
+you roll forward again — the output says so. Restoring the *database* to its
+old schema is the separate, manual snapshot procedure above.
+
+## What the tests prove
+
+`test/install-schema-matrix.test.ts` drives the packed runtime — the bundle
+`npm run build:package` produces, through the launcher `staple install`
+writes — against disposable copies of the fixtures under
+`test/fixtures/schema/`. It is the release gate for this page
+(see `RELEASING.md`). Each case is one claim above:
+
+- **Schema 6 is opened and preserved.** Nothing pending, no snapshot
+  directory, and a `VACUUM INTO` copy of the content hashes the same before
+  and after the open.
+- **Schema 5 is upgraded exactly once.** The stamp goes 5 to 6, one snapshot
+  stamped 5 appears beside the database, every row and value of every table
+  survives, and the next open takes no second snapshot.
+- **Schema 3 walks all the way forward.** The retired prototype's shape
+  (`workspace-v3.sqlite`) reaches 6 in one open with one schema-3 snapshot.
+- **A future schema is refused before any write.** Exit 4, both versions and
+  the repair named, and the file byte-identical with no `-wal`/`-shm` and no
+  snapshot — for a read and for a write command alike.
+- **WAL-only rows are in the snapshot.** A row another connection committed
+  only to the write-ahead log is in the snapshot, and the snapshot restores
+  as a complete workspace with that row.
+- **An interrupted install leaves one usable runtime.** An install that fails
+  after staging, and one that dies after promoting, both leave the previous
+  runtime selected, verifying, and opening schema 6; the next install
+  completes from that state and is itself a rollback target.
+- **The commands on this page are the commands.** The fenced `bash` blocks
+  above are parsed by the test and run verbatim — placeholders filled, in
+  order — so the repair, `install status`, the rollback, and the restore
+  cannot drift from what the runtime does. The restore runs against a
+  database a dead process left a `-wal` beside, and the restored file must
+  not contain that process's row.

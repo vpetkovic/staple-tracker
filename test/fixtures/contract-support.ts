@@ -201,6 +201,14 @@ export function timingGolden(over: Record<string, unknown> = {}): Record<string,
       blocked: 0,
       cancelled: 0,
     },
+    // STA-192: the recursive plan of an issue with no estimate anywhere beneath it.
+    subtreePlan: {
+      estimatedSeconds: null,
+      source: "none",
+      descendantsEstimatedSeconds: null,
+      contributingCount: 0,
+      totalCount: 0,
+    },
     ...over,
   };
 }

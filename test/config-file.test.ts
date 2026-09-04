@@ -17,10 +17,12 @@ import { join } from "node:path";
 import {
   CONFIG_SCHEMA_VERSION,
   DEFAULT_CONFIG,
+  SETTING_KEYS,
   configPath,
   readConfig,
   updateConfig,
 } from "../src/config/file.js";
+import { settingDefinitionsFor } from "../src/core/settings-registry.js";
 import { writeFileAtomic } from "../src/config/atomic.js";
 import { StapleError } from "../src/core/types.js";
 import { removeDir, tempDir } from "./fixtures/characterize-support.js";
@@ -168,6 +170,27 @@ describe("preserving unknown future fields", () => {
   it("reports no unknown keys for a config this binary fully understands", () => {
     updateConfig(home, { browser: "always" });
     expect(readConfig(home).unknownKeys).toEqual([]);
+  });
+
+  /**
+   * R6a (STA-176): the known keys, defaults and value checks come from the
+   * registry's GLOBAL definitions, so a machine preference has one definition
+   * and this file carries no list of its own. The refusal sentence names the
+   * config.json field, not the registry key, because that is what the user sees.
+   */
+  it("derives its known keys and defaults from the registry's global definitions", () => {
+    const globals = settingDefinitionsFor("global");
+    expect([...SETTING_KEYS]).toEqual(globals.map((d) => d.configKey));
+    for (const definition of globals) {
+      expect((DEFAULT_CONFIG as unknown as Record<string, unknown>)[definition.configKey!]).toEqual(
+        definition.default,
+      );
+    }
+    expect(settingDefinitionsFor("workspace").every((d) => d.configKey === undefined)).toBe(true);
+    mkdirSync(home, { recursive: true });
+    writeFileSync(configPath(home), JSON.stringify({ schemaVersion: CONFIG_SCHEMA_VERSION, port: "4400" }));
+    expect(() => readConfig(home)).toThrow(/"port" must be an integer between 1 and 65535, got "4400"/);
+    expect(() => readConfig(home)).toThrow(configPath(home));
   });
 
   it("always stamps the current schemaVersion on write", () => {
