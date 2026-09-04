@@ -29,6 +29,16 @@ staple request-changes <ref> -m text                send it back; the children s
 `staple help` has the full option list. `checkout` is an alias for `start`, and
 `staple ui` is a compatibility alias for `staple open`.
 
+`staple doctor` is read-only. Its `schema` check names the database schema, the
+running build's schema (and whether that build is a checkout, a bundle or an
+installed runtime), the launcher's selected runtime, and the config schema; on a
+mismatch it prints ONE repair command under `REPAIRS`, derived from what
+`staple install` accepts, and previews whether the next open migrates the
+database and where the snapshot goes. Under `--json` the reason is
+`data.code` (`database_newer_than_runtime`, `config_newer_than_runtime`,
+`selected_runtime_older_than_database`, `migration_pending`, or `null`). See
+`docs/migration.md`.
+
 ## Workspace vocabulary
 
 Statuses and kinds are per-workspace configuration, not constants. Every
