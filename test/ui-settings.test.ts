@@ -514,8 +514,9 @@ describe("registered settings on /api/settings", () => {
     const shape = await refuse("settings", [{ op: "set", key: "kinds.default", value: 12 }]);
     expect(shape.http).toBe(409);
     expect(shape.refusal.message).toMatch(/"kinds\.default" must be a kind id/);
-    const unknown = await refuse("settings", [{ op: "set", key: "kinds.default", value: "milestone" }]);
-    expect(unknown.refusal.message).toMatch(/Unknown kind "milestone"/);
+    // `milestone` is a seeded kind once the milestone lane lands, so refuse on a kind no workspace ships.
+    const unknown = await refuse("settings", [{ op: "set", key: "kinds.default", value: "unicorn" }]);
+    expect(unknown.refusal.message).toMatch(/Unknown kind "unicorn"/);
     const global = await refuse("settings", [{ op: "set", key: "machine.port", value: 4500 }]);
     expect(global.refusal.message).toMatch(/global setting, not a workspace one/);
     expect((await read()).global.values["machine.port"]!.value).toBe(4400);
