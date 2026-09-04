@@ -79,9 +79,39 @@
  * is StatusIcon's register. So a caller that wants the bigger mark — the graph canvas,
  * whose `EpicKindMark` placeholder this is meant to replace — gets the right weight from
  * the same paths rather than from a second set tuned by hand.
+ *
+ * ── THE ONE RESOLVER — R5e (STA-185) ──────────────────────────────────────────────────
+ *
+ * Everything above describes the BUILT-IN marks, and they are now the floor rather than
+ * the whole story. A workspace configures what each kind looks like (R5a), and this
+ * component is the single place in the browser that turns that record into pixels:
+ *
+ *   emoji / svg   `SafeGlyph`, which holds the value to the sanitiser's exact output.
+ *   lucide        the catalog icon, once its chunk has landed (see below).
+ *   none          the mark above.
+ *
+ * A caller passes NO `appearance` and gets the served one, resolved through
+ * `useKindAppearance` — so a list row, a group header, a graph node, a select item and
+ * the settings preview cannot disagree about what an epic looks like, and a save in
+ * settings repaints all of them without a reload (the hook subscribes to the snapshot;
+ * the editor republishes it after the POST). The prop survives for the one caller that
+ * is drawing something NOT yet saved: the picker's preview.
+ *
+ * ── WHY THE LUCIDE ARM IS ASYNCHRONOUS ────────────────────────────────────────────────
+ *
+ * The catalog is ~1600 icons and `lib/icon-catalog.ts` deliberately hides them behind an
+ * `import()` so the main view does not carry them. That is worth keeping, so this
+ * component never blocks on it: it renders the BUILT-IN MARK synchronously and swaps in
+ * the catalog icon when the chunk resolves. The map is cached in this module, so only
+ * the first glyph on a page waits — every later mount is synchronous — and a key the
+ * catalog does not know simply keeps the mark forever, which is the same answer a bad
+ * emoji or a rejected SVG gets. Nothing ever renders an empty slot.
  */
+import { useEffect, useState } from "react";
+import type { LucideIcon } from "lucide-react";
+import { loadIconComponents, resolveIcon } from "@/lib/icon-catalog";
 import { safeGlyph, type KindAppearance } from "@/lib/kind-appearance";
-import { kindLabel } from "@/lib/settings";
+import { kindLabel, useKindAppearance } from "@/lib/settings";
 import type { IssueKind } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { SafeGlyph } from "./SafeGlyph";
@@ -180,6 +210,47 @@ function Mark({ kind }: { kind: IssueKind }) {
   }
 }
 
+// ---------------------------------------------------------------- the catalog chunk
+
+/** The catalog's key → component map, once loaded. `undefined` means "not yet". */
+let icons: Readonly<Record<string, LucideIcon>> | undefined;
+let loading: Promise<void> | undefined;
+/** Every glyph currently waiting for the chunk, so one load repaints all of them. */
+const waiting = new Set<() => void>();
+
+/**
+ * Load the catalog chunk once, resolving when `icons` is populated.
+ *
+ * Exported because a test renders to a STRING (`react-dom/server`), where effects never
+ * run, so awaiting this is the only way to assert the resolved icon rather than the
+ * fallback mark. The app itself never calls it: mounting a glyph is what kicks it off.
+ */
+export function loadKindIcons(): Promise<void> {
+  loading ??= loadIconComponents().then((map) => {
+    icons = map;
+    for (const repaint of [...waiting]) repaint();
+    waiting.clear();
+  });
+  return loading;
+}
+
+/** The catalog icon for a key — synchronously once the chunk has landed, `undefined` before. */
+function useKindIcon(key: string | null): LucideIcon | undefined {
+  const [, repaint] = useState(0);
+  useEffect(() => {
+    if (key === null || icons !== undefined) return;
+    const bump = () => repaint((n) => n + 1);
+    waiting.add(bump);
+    void loadKindIcons();
+    return () => {
+      waiting.delete(bump);
+    };
+  }, [key]);
+  if (key === null || icons === undefined) return undefined;
+  const entry = resolveIcon(key);
+  return entry === undefined ? undefined : icons[entry.key];
+}
+
 export interface KindGlyphProps {
   kind: IssueKind;
   /** Rendered size in px. 12 is the identifier cluster; 16 matches StatusIcon. */
@@ -200,24 +271,39 @@ export interface KindGlyphProps {
    */
   labelled?: boolean;
   /**
-   * The kind's configured appearance (R5c, STA-183). An `emoji` or a canonical `svg`
-   * record is drawn by `SafeGlyph` in place of the built-in mark; anything else —
-   * absent, `lucide` (STA-185's to wire), `none`, or a value that fails the browser's
-   * gate — draws the mark above, so a bad record never costs the row its glyph.
+   * An appearance to draw INSTEAD of the served one (R5c, STA-183).
+   *
+   * Omit it and the glyph resolves the kind's configured appearance itself, which is
+   * what every surface in the app does — see "the one resolver" above. The prop exists
+   * for the settings preview, which has to draw a choice that is not saved yet.
+   *
+   * Whatever it holds, a record that cannot be drawn (a rejected emoji, an SVG that is
+   * not the sanitiser's output, a Lucide key the catalog does not know) falls back to
+   * the built-in mark, so a bad record never costs the row its glyph.
    */
   appearance?: Pick<KindAppearance, "source" | "value" | "label" | "fallback">;
 }
 
 export function KindGlyph({ kind, size = KIND_GLYPH_SIZE, className, labelled = true, appearance }: KindGlyphProps) {
-  const configured = appearance && safeGlyph(appearance) ? appearance : undefined;
+  // The served record is resolved unconditionally — hooks cannot be skipped, and the
+  // read is a lookup in an array of six.
+  const served = useKindAppearance(kind);
+  const resolved = appearance ?? served;
+  const drawable = safeGlyph(resolved) ? resolved : undefined;
+  const Icon = useKindIcon(drawable === undefined && resolved.source === "lucide" ? resolved.value : null);
   return (
     /* `data-issue-kind` and not `data-kind`: the row already carries `data-kind` on its
        avatars, where it means human-or-agent. Two spellings of one attribute name on one
        row is a query that silently matches the wrong element. */
     <span className={cn("staple-kind-glyph", className)} data-issue-kind={kind} data-testid="kind-glyph">
-      {configured ? (
+      {drawable ? (
         // Decorative here whatever `labelled` says: the kind is named by the span below or by the caller's text.
-        <SafeGlyph appearance={configured} size={size} decorative />
+        <SafeGlyph appearance={drawable} size={size} decorative />
+      ) : Icon ? (
+        /* `data-glyph-source` on the icon itself, the way `SafeGlyph` marks its two arms:
+           the seam belongs to the thing that was drawn, and putting it on the wrapper
+           instead would move it for every existing caller. */
+        <Icon size={size} data-glyph-source="lucide" aria-hidden="true" focusable="false" />
       ) : (
         <svg width={size} height={size} viewBox="0 0 16 16" aria-hidden="true" focusable="false">
           <Mark kind={kind} />

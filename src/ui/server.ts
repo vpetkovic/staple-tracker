@@ -23,6 +23,7 @@ import type { SettingOp, UpdateIssueInput, VocabularyOp, WorkspaceStore } from "
 // R6a (STA-176): the settings registry and the global values it defines, served
 // beside the workspace ones so the page can say which scope each setting has.
 import { settingDefinitionsFor, settingRegistryView, settingValueView } from "../core/settings-registry.js";
+import { sanitizeSvg } from "../core/svg-sanitize.js";
 import { readConfig, stapleHome } from "../config/index.js";
 
 interface UiOptions {
@@ -527,6 +528,7 @@ export function startUiServer(options: UiOptions): UiHandle {
          */
         const expected =
           url.pathname === "/api/action" ||
+          url.pathname === "/api/glyph/sanitize" ||
           url.pathname.startsWith("/api/gate/") ||
           url.pathname.startsWith("/api/milestone/")
             ? ["POST"]
@@ -958,6 +960,28 @@ export function startUiServer(options: UiOptions): UiHandle {
         // children, the comments and the refreshed `childrenQueued` to redraw the
         // checklist, and one consistent read is better than the client stitching two.
         json(res, 200, issueDetail(handle, ref));
+        return;
+      }
+
+      /**
+       * The SVG sanitiser over HTTP — R5d (STA-184). `POST /api/glyph/sanitize`
+       * `{ svg, label? }` answers `{ svg, viewBox, label }`, the canonical document
+       * `src/core/svg-sanitize.ts` writes, or the sanitiser's refusal as a 409
+       * through the catch below, the way every other refusal reaches the page.
+       *
+       * It exists because the store accepts an `svg` appearance ONLY as the
+       * sanitiser's own output and the sanitiser is core code the browser cannot
+       * import: the picker sends the raw document here and stores nothing but the
+       * answer. Nothing is written — no workspace handle is resolved, no event is
+       * logged; it is a pure function over the body. POST all the same, and so
+       * Origin-checked, because the body is markup somebody pasted, and a route
+       * that reflects it must not be reachable from another origin's page.
+       */
+      if (url.pathname === "/api/glyph/sanitize") {
+        const body = await readBody(req);
+        const result = sanitizeSvg(body.svg, { label: typeof body.label === "string" ? body.label : undefined });
+        if (!result.ok) throw new StapleError("validation", `Custom SVG must be ${result.problem}`);
+        json(res, 200, { svg: result.svg, viewBox: result.viewBox, label: result.label });
         return;
       }
 

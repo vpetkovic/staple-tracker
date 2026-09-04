@@ -793,6 +793,16 @@ server.registerTool(
         ...context,
         crossBlockers: crossBlockersSafe(context.issue.identifier),
         claim: store.claimActivity(context.issue.id),
+        /*
+         * NO `kindAppearance` HERE, unlike `staple show --json` (R5e, STA-185).
+         *
+         * Not an oversight and not a disagreement about what an agent needs: this
+         * payload is held byte-equal to /api/agent-context by the test below, and the
+         * pane's whole claim is that it shows exactly what an agent receives. A field
+         * added here alone would break that claim, and the appearance an agent would
+         * use it for is already one `list_kinds` call away — a record about the KIND,
+         * fetched once, not repeated on every issue payload.
+         */
         // Expression-for-expression identical to the /api/agent-context handler
         // in src/ui/server.ts — test/ui-agent-context.test.ts asserts deep
         // equality between the two, so these two lines must be added in both

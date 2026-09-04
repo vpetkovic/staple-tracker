@@ -23,17 +23,43 @@
  * on the row it names (`attributeRefusal`) or on the section when it names none.
  * While a draft is dirty, the served vocabulary moving underneath — another tab, an
  * agent through MCP, the CLI — is a conflict banner, never a silent overwrite.
+ *
+ * ── THE KINDS EDITOR ALSO EDITS `kinds.appearance` (R5d, STA-184) ─────────────────────
+ *
+ * A kind's row carries its glyph, and "Change" opens the `GlyphPicker` under it. That
+ * choice is a SECOND draft — the `kinds.appearance` map, a registered setting, posted to
+ * `target: "settings"` — held beside the vocabulary ops rather than inside them, because
+ * the store lets that map name only CONFIGURED kinds: a glyph for a kind the same draft
+ * is adding can only be written after the kinds batch lands. Save therefore posts the
+ * ops first and the map second, and a refusal on the second cannot re-post the first.
+ *
+ * The user sees ONE form all the same: one dirty state (the union), one ActionBar whose
+ * summary counts both, one Cancel that drops both, one guard, and one conflict banner
+ * for either half moving underneath.
  */
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Plus, Trash2 } from "lucide-react";
 import { StatusIcon } from "@/components/task-list/StatusIcon";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import type { KindAppearance } from "@/lib/kind-appearance";
 import type { Refusal } from "@/lib/refusal";
-import { titleCaseId } from "@/lib/settings";
+import { titleCaseId, type SettingOp } from "@/lib/settings";
 import type { StatusCategory, VocabularyOp } from "@/lib/types";
 import { actionBarState, attributeRefusal, snapshotSignature } from "./form/form-model";
+import { GlyphPicker, type SanitizeSvg } from "./glyph-picker/GlyphPicker";
+import { GlyphPreview, PREVIEW_SIZES } from "./glyph-picker/GlyphPreview";
+import {
+  changedGlyphs,
+  draftAppearance,
+  glyphMapOps,
+  isGlyphMapDirty,
+  NO_GLYPHS,
+  toStoredGlyph,
+  withGlyph,
+  type GlyphMap,
+} from "./glyph-picker/glyph-picker-model";
 import {
   ActionBar,
   ConflictBanner,
@@ -63,6 +89,19 @@ import {
   type VocabularyRow,
 } from "./settings-ops";
 
+/**
+ * The Kinds editor's second half — R5d (STA-184). Absent for Statuses, which have no
+ * appearance to configure, so the whole picker is one optional prop and one arm.
+ */
+export interface GlyphEditing {
+  /** The served `kinds.appearance` map. `servedGlyphMap(envelope)` produces it. */
+  served: GlyphMap;
+  /** Post the map's op to `target: "settings"`. Same `applyTo` as every other write. */
+  write: (ops: SettingOp[]) => Promise<Refusal | null>;
+  /** `POST /api/glyph/sanitize`, injected so a test needs no fetch. */
+  sanitize: SanitizeSvg;
+}
+
 export interface VocabularyListProps {
   /** Which list this is — also the POST target and the `usage` bucket key. */
   target: "statuses" | "kinds";
@@ -75,6 +114,8 @@ export interface VocabularyListProps {
   requiredCategories?: readonly string[];
   /** Post the ordered batch. Resolves null when the store accepted it, else its refusal. */
   write: (ops: VocabularyOp[]) => Promise<Refusal | null>;
+  /** Kinds only: the glyph half of this editor. Without it no row shows a picker. */
+  glyphs?: GlyphEditing;
   /** The shell's unsaved-changes guard listens here. */
   onDirtyChange?: (dirty: boolean) => void;
 }
@@ -88,6 +129,7 @@ function RowFields({
   categories,
   usageCount,
   disabled,
+  glyph,
   onRename,
   onRecategorize,
 }: {
@@ -96,6 +138,8 @@ function RowFields({
   categories?: readonly StatusCategory[];
   usageCount: number | null;
   disabled: boolean;
+  /** Kinds only (R5d): what this kind wears under the draft, and the control that opens the picker. */
+  glyph?: { appearance: KindAppearance; open: boolean; panelId: string; onToggle: () => void };
   onRename: (id: string, label: string) => void;
   onRecategorize: (id: string, category: StatusCategory) => void;
 }) {
@@ -111,6 +155,29 @@ function RowFields({
     <>
       {target === "statuses" && row.category ? (
         <StatusIcon status={row.id} category={row.category} className="shrink-0" />
+      ) : null}
+
+      {/*
+        The kind's glyph IS the control that changes it — the thing you want to change is
+        the thing you press, and the row already has more chrome than columns. `Change` is
+        the accessible name because the picture cannot be one, and `aria-expanded` says
+        the panel below this row is what the press opens.
+      */}
+      {glyph ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          data-glyph-change={row.id}
+          aria-label={`Change glyph for ${row.label}`}
+          aria-expanded={glyph.open}
+          aria-controls={glyph.panelId}
+          disabled={disabled}
+          onClick={glyph.onToggle}
+          className="shrink-0"
+        >
+          <GlyphPreview kind={row.id} appearance={glyph.appearance} size={PREVIEW_SIZES.row} />
+        </Button>
       ) : null}
 
       <span className="w-36 shrink-0 truncate font-mono text-[11px] text-text-tertiary" title={row.id}>
@@ -221,6 +288,7 @@ export function VocabularyList({
   categories,
   requiredCategories,
   write,
+  glyphs,
   onDirtyChange,
 }: VocabularyListProps) {
   const served = useMemo(() => emptyDraft(rows, usage), [rows, usage]);
@@ -229,19 +297,68 @@ export function VocabularyList({
     signature: snapshotSignature(rows),
     isDirty: isDraftDirty,
     write: (next) => write(next.ops),
-    onDirtyChange,
   });
   const { value, dirty, status, refusal, conflict } = draft;
-  const disabled = status === "pending";
   const painted = value.rows;
+
+  // The glyph half (R5d). Always a hook — hooks cannot be conditional — but with no
+  // `glyphs` prop it is a draft over an empty map that nothing can ever make dirty.
+  const glyphServed = glyphs?.served ?? NO_GLYPHS;
+  const glyphWrite = glyphs?.write;
+  const glyphDraft = useDraft<GlyphMap>({
+    served: glyphServed,
+    signature: snapshotSignature([glyphServed]),
+    isDirty: (next) => isGlyphMapDirty(next, glyphServed),
+    write: async (next) => {
+      const ops = glyphMapOps(glyphServed, next, painted.map((row) => row.id));
+      // A draft that came back to what the server holds posts nothing: the store refuses
+      // an empty batch, and it would be right to.
+      return ops.length === 0 || !glyphWrite ? null : glyphWrite(ops);
+    },
+  });
+
+  const disabled = status === "pending" || glyphDraft.status === "pending";
+  const anyDirty = dirty || glyphDraft.dirty;
+  const anyConflict = conflict || glyphDraft.conflict;
+
+  // ONE dirty state reaches the shell's guard, because the user made one form's worth of
+  // changes. `useDraft`'s own reporting is left unused for exactly that reason.
+  useEffect(() => {
+    onDirtyChange?.(anyDirty);
+  }, [anyDirty, onDirtyChange]);
+  useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
 
   const edit = useCallback((op: VocabularyOp) => draft.set(applyDraftOp(draft.value, op)), [draft]);
   const onMove = useCallback((from: number, to: number) => draft.set(moveDraftRow(draft.value, from, to)), [draft]);
 
-  /** The row the store's refusal is about, or null when it is about the batch. */
-  const refusedRow = refusal ? attributeRefusal(refusal.message, draftRefusalTargets(value)) : null;
-  const rowErrors: Record<string, string> = refusal && refusedRow ? { [refusedRow]: refusal.message } : {};
-  const sectionError = refusal && !refusedRow ? refusal.message : null;
+  /** Kinds ops first, then the appearance map: the store lets the map name only configured kinds. */
+  const saveAll = useCallback(async () => {
+    if (dirty && !(await draft.save())) return;
+    if (glyphDraft.dirty) await glyphDraft.save();
+  }, [dirty, draft, glyphDraft]);
+
+  const cancelAll = useCallback(() => {
+    draft.cancel();
+    glyphDraft.cancel();
+  }, [draft, glyphDraft]);
+
+  const keepAll = useCallback(() => {
+    draft.keep();
+    glyphDraft.keep();
+  }, [draft, glyphDraft]);
+
+  const [picking, setPicking] = useState<string | null>(null);
+  const glyphPanelId = (id: string) => `glyph-panel-row-${id}`;
+
+  /**
+   * The row the store's refusal is about, or null when it is about the batch. Either
+   * half can refuse — a duplicate id, or a glyph the store's own validator rejected —
+   * and both sentences are attributed the same way, to the same rows.
+   */
+  const refused = refusal ?? glyphDraft.refusal;
+  const refusedRow = refused ? attributeRefusal(refused.message, draftRefusalTargets(value)) : null;
+  const rowErrors: Record<string, string> = refused && refusedRow ? { [refusedRow]: refused.message } : {};
+  const sectionError = refused && !refusedRow ? refused.message : null;
 
   const [confirming, setConfirming] = useState<string | null>(null);
   const [newId, setNewId] = useState("");
@@ -253,17 +370,23 @@ export function VocabularyList({
   );
 
   const noun = target === "statuses" ? "status" : "kind";
-  const bar = actionBarState({ dirty, status, blocked: conflict });
+  const changes = value.ops.length + (glyphs ? changedGlyphs(glyphServed, glyphDraft.value) : 0);
+  const bar = actionBarState({
+    dirty: anyDirty,
+    status: status === "idle" ? glyphDraft.status : status,
+    blocked: anyConflict,
+  });
 
   return (
     <Section error={sectionError}>
-      {conflict ? (
-        <ConflictBanner what={`${noun} list`} onReload={draft.cancel} onKeep={draft.keep} />
+      {anyConflict ? (
+        <ConflictBanner what={`${noun} list`} onReload={cancelAll} onKeep={keepAll} />
       ) : null}
 
       <div className="flex items-center gap-2 px-2 text-[11px] tracking-[var(--tracking-eyebrow)] text-text-tertiary uppercase">
         <span className="w-[1.6rem] shrink-0" />
         {target === "statuses" ? <span className="w-4 shrink-0" /> : null}
+        {glyphs ? <span className="w-8 shrink-0">glyph</span> : null}
         <span className="w-36 shrink-0">id</span>
         <span className="flex-1">label</span>
         {target === "statuses" ? <span className="w-[8.5rem] shrink-0">category</span> : null}
@@ -288,6 +411,16 @@ export function VocabularyList({
             categories={categories}
             usageCount={value.usage[row.id] ?? null}
             disabled={disabled}
+            glyph={
+              glyphs
+                ? {
+                    appearance: draftAppearance(glyphDraft.value, row),
+                    open: picking === row.id,
+                    panelId: glyphPanelId(row.id),
+                    onToggle: () => setPicking((open) => (open === row.id ? null : row.id)),
+                  }
+                : undefined
+            }
             onRename={(id, label) => edit(renameOp(id, label))}
             onRecategorize={(id, category) => edit(recategorizeOp(id, category))}
           />
@@ -306,6 +439,22 @@ export function VocabularyList({
         renderBelow={(row) => (
           <>
             {rowErrors[row.id] ? <InlineError>{rowErrors[row.id]}</InlineError> : null}
+            {glyphs && picking === row.id ? (
+              <div id={glyphPanelId(row.id)} className="pt-2">
+                <GlyphPicker
+                  kind={row}
+                  appearance={draftAppearance(glyphDraft.value, row)}
+                  isDefault={glyphDraft.value[row.id] === undefined}
+                  disabled={disabled}
+                  sanitize={glyphs.sanitize}
+                  onChoose={(choice) =>
+                    glyphDraft.set(withGlyph(glyphDraft.value, row.id, toStoredGlyph(choice, row.label)))
+                  }
+                  onReset={() => glyphDraft.set(withGlyph(glyphDraft.value, row.id, null))}
+                  onClose={() => setPicking(null)}
+                />
+              </div>
+            ) : null}
             {confirming === row.id ? (
               <RemoveConfirm
                 row={row}
@@ -400,9 +549,9 @@ export function VocabularyList({
 
       <ActionBar
         state={bar}
-        onSave={() => void draft.save()}
-        onCancel={draft.cancel}
-        summary={dirty ? `${value.ops.length} unsaved ${value.ops.length === 1 ? "change" : "changes"}` : undefined}
+        onSave={() => void saveAll()}
+        onCancel={cancelAll}
+        summary={anyDirty ? `${changes} unsaved ${changes === 1 ? "change" : "changes"}` : undefined}
       />
 
       {target === "statuses" && requiredCategories ? (

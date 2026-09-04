@@ -131,7 +131,9 @@ are the keyboard path and are always visible rather than revealed on hover.
 Edits accumulate as a draft — the list shows what Save will produce, with the
 usage count moved along by a migrate-to removal — and Save posts them as one
 ordered, all-or-nothing batch of the same ops the MCP tools take. A refusal
-is the store's own sentence, on the row it names.
+is the store's own sentence, on the row it names. A kind row carries one thing
+more: its glyph, which is also the control that changes it (see
+[Glyph picker](#glyph-picker)).
 
 Behaviour follows the CATEGORY, never the id. A workspace that adds `pairing` in
 `active` gets a claimable status wearing the in-progress glyph and the
@@ -214,9 +216,34 @@ entry wears the built-in mark, and a kind that has none wears a generic one.
 `lib/kind-appearance.ts` mirrors the built-in table so the first paint, before
 the fetch lands, already shows the right marks, and `kindAppearance(id)` in
 `lib/settings.ts` is the accessor every row, group header, form and graph node
-resolves through (the picker and the rendering rewire are R5d and R5e). No
+resolves through. No
 colour travels in the record: hue is a status-category property, and a kind
 glyph is monochrome by design.
+
+### One resolver
+
+There is exactly one component in the browser that turns an appearance record
+into pixels: `components/task-list/KindGlyph.tsx`. Given no `appearance` prop it
+resolves the served record itself through `useKindAppearance(id)` — the
+`kindAppearance` accessor wrapped in a `useSyncExternalStore` subscription to the
+settings snapshot — and then draws the arm the record names: `emoji` and `svg`
+through `SafeGlyph`, `lucide` through the catalog chunk, `none` (and anything
+that fails validation, including a Lucide key the catalog does not know) through
+its own hand-drawn mark, so a slot is never empty. Because the resolution happens
+inside the glyph, every surface gets it by drawing `<KindGlyph kind={…}/>` and
+nothing else: ungrouped and grouped rows and the epic-headed sections
+(`TaskRowLine`), kind group headers (`views/tree/TreeGrid.tsx`), graph nodes and
+the epic picker (`views/graph/`), the create dialog and the detail panel's kind
+editor, and the settings preview. And because the subscription is to the same
+snapshot the settings editor republishes after its POST — and the 1.5 s
+fingerprint poll refetches — **changing a kind's glyph repaints every one of them
+without a reload**. The `appearance` prop survives for the one caller drawing
+something not saved yet: the picker's preview. The `lucide` arm is asynchronous
+(the catalog is its own chunk); the built-in mark is the synchronous fallback
+while it loads, cached module-wide so only the first glyph on a page waits.
+`components/task-list/kind-glyph.test.tsx` renders all six seeded kinds and one
+custom kind at the row, header, graph-node, picker and form sites, and swaps the
+published envelope to prove the re-render.
 
 The catalog a `lucide` value names is not a hand-kept list: it is generated
 from the INSTALLED `lucide-react`, and checked in. The server validates only
@@ -262,10 +289,10 @@ the manifest alone, about 12 kB gzipped.
 
 When the catalog is not enough, a kind can wear an **emoji** or a **custom
 SVG**. Both are validated in core (`src/core/kind-appearance.ts`), and both
-are drawn by one browser primitive, `components/task-list/SafeGlyph.tsx`;
-`KindGlyph` takes an optional `appearance` and delegates an `emoji` or `svg`
-record to it, drawing its own built-in mark for anything else (the glyph
-picker and the rewiring of every surface are R5d and R5e).
+are drawn by one browser primitive, `components/task-list/SafeGlyph.tsx`, which
+`KindGlyph` delegates an `emoji` or `svg` record to, drawing its own built-in
+mark for anything else. The **glyph picker** below is how an operator chooses
+one.
 
 An **emoji** value is bounded by grapheme clusters, not bytes: `Intl.Segmenter`
 counts what a person sees as one glyph, so a joined family (`👨‍👩‍👧‍👦`, eleven
@@ -322,6 +349,75 @@ The same suites that prove this live in `test/svg-sanitize.test.ts`,
 `test/contract-kind-appearance.test.ts` (a hostile save is refused and no
 surface carries executable markup) and
 `components/task-list/safe-glyph.test.tsx`.
+
+### Glyph picker
+
+Every row of the Kinds editor carries its glyph, and the glyph *is* the control:
+pressing it (*Change glyph for Epic*) opens the picker under that row. Three
+tabs, one preview, and one form contract — `{ source, value, label, fallback }`
+— whichever tab produced the choice. `settings/glyph-picker/` holds it:
+`glyph-picker-model.ts` is every decision as a function, `GlyphPicker.tsx` the
+wiring, `GlyphPreview.tsx` the preview.
+
+**The catalog tab** is a search field over names and Lucide's own aliases
+(`alert-triangle` finds `triangle-alert`), a category filter over
+`ICON_CATEGORIES`, and a live count. The grid is a `listbox` that takes focus
+itself and names its active cell through `aria-activedescendant` — which is
+what makes a WINDOWED grid navigable at all, since the cell holding the
+"focus" need not be in the DOM until the arrow key that reaches it scrolls it
+into the window. Arrows step a cell or a row, Home and End jump, Enter or
+Space chooses, Escape closes; the index is clamped rather than wrapped. Only a
+viewport's worth of cells plus two overscan rows exist at a time and two
+spacers stand in for the rest, so scrolling ~1,800 icons costs the DOM a few
+dozen nodes. Each cell is a `role="option"` with the icon's label as its
+accessible name.
+
+The icon COMPONENTS arrive through `loadIconComponents()` — the `import()`
+that makes `icon-previews.generated.ts` its own chunk — and only once the
+catalog tab is open, so a page that never opens the picker never fetches them.
+Until they land a cell is a placeholder box, and the search, the keyboard and
+the choice all work without them. The main bundle therefore carries the
+manifest (data only, ~11 kB gzipped — `resolveIcon` answers synchronously) and
+never the 142 kB gzipped of icon code.
+
+**The emoji tab** is one field, held to the same grapheme rule core states
+(`isEmojiGlyph`). **The custom SVG tab** posts the raw document to
+`POST /api/glyph/sanitize` — core's `sanitizeSvg`, over the wire, writing
+nothing; the route exists because the store accepts an `svg` value only as
+that function's canonical output and the sanitiser is Node-only code the
+browser cannot import. Only the answer becomes a choice; the raw text never
+enters the draft, and a refusal is the sanitiser's own sentence.
+
+A **recents** strip remembers the last twelve choices in `localStorage`
+(`staple:glyph-recents`). An `svg` is not remembered: a canonical document is
+up to 8 KiB, and twelve of those is not what a recents strip is for.
+
+**The preview** is not a second renderer. It hands the appearance the draft
+currently holds to the same `KindGlyph` a list row draws, at the row's 12 px
+and the graph node's 14 px, so what the picker shows is what those surfaces
+will show by construction — every source, `lucide` included, since the glyph
+resolves all of them itself. Beside it are the accessible name and the terminal
+fallback, both bounded exactly as core bounds them, and *Reset to default* —
+offered only when this kind has an entry to drop. The picker sits beside the
+chooser when the shell is two-pane or full screen and below it when the shell
+is stacked, from the same `STACKED_QUERY` the dialog uses, so the two never
+disagree about how wide the world is.
+
+**Nothing here writes.** A choice enters a SECOND draft — the
+`kinds.appearance` map, posted to `target: "settings"` — held beside the
+vocabulary ops rather than inside them, because the store lets that map name
+only CONFIGURED kinds: a glyph for a kind the same draft is adding can only be
+written after the kinds batch lands. Save therefore posts the ops first and the
+map second (one `set` of the whole map, or `reset` when nothing is customised
+any more), and a refusal on the second cannot re-post the first. The user sees
+ONE form all the same: one dirty state, one ActionBar whose summary counts
+both halves, one Cancel that drops both, one unsaved-changes guard, and one
+conflict banner for either half moving underneath.
+
+`settings/glyph-picker/glyph-picker-model.test.ts` pins the arithmetic,
+`glyph-picker.test.tsx` the markup, and `test/ui-glyph-sanitize.test.ts` the
+route.
+
 ## Analytics
 
 The detail panel's Analytics tab is estimate versus actual for one issue, drawn

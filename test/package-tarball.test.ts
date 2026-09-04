@@ -169,16 +169,23 @@ describe("the packed artifact", () => {
       "staple.mjs",
     ]);
     expect(hashed.length).toBeGreaterThan(0);
-    // Two shapes, and only two. The bundle pair (index-<hash>.js/css), and the
+    // Three shapes, and only three. The bundle pair (index-<hash>.js/css); the
     // two Geist variable fonts vendored by the design layer (STA-86) — which are
-    // emitted by Vite as content-hashed assets exactly like the bundle is.
+    // emitted by Vite as content-hashed assets exactly like the bundle is; and
+    // `icon-previews.generated-<hash>.js`, the LAZY chunk R5d (STA-184) split the
+    // Lucide components into so the glyph picker can preview the whole catalog
+    // without the main view carrying ~140 kB gzipped of icons it never draws
+    // (docs/web-ui.md, "Glyph picker"). It ships because the picker fetches it at
+    // runtime; a build that folded it back into the bundle is the regression.
     // Anything else appearing under assets/ is a payload regression, which is the
     // whole point of matching by shape instead of counting files.
     for (const entry of hashed) {
       expect(entry).toMatch(
-        /^assets\/assets\/(index-[\w-]+\.(js|css)|Geist(Mono)?-Variable-[\w-]+\.woff2)$/,
+        /^assets\/assets\/(index-[\w-]+\.(js|css)|icon-previews\.generated-[\w-]+\.js|Geist(Mono)?-Variable-[\w-]+\.woff2)$/,
       );
     }
+    // The lazy chunk is exactly one file, and it is separate from the bundle.
+    expect(hashed.filter((entry) => entry.includes("icon-previews.generated-"))).toHaveLength(1);
     // Named explicitly so a font silently failing to bundle — which degrades the
     // whole app to a fallback typeface without breaking anything — fails here.
     expect(hashed.filter((entry) => entry.endsWith(".woff2"))).toHaveLength(2);
