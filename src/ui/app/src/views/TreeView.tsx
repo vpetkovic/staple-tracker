@@ -24,24 +24,104 @@
  * prev/next arrows would keep paging a list that is no longer on the page.
  */
 import { useEffect, useMemo } from "react";
-import { getInbox, type AuthError } from "@/lib/api";
+import { getInbox, getQueue, type AuthError } from "@/lib/api";
+import { attachRowCues, buildRowCueIndex, EMPTY_ROW_CUE_INDEX } from "@/components/task-list";
 import { buildGateCaptions } from "@/lib/derived-queued";
-import { applyFilters, hiddenParents } from "@/lib/filters";
+import { FilterEmptyState } from "@/components/filters/FilterEmptyState";
+import { applyFilterDimensions } from "@/lib/filter-dimensions";
+import { hiddenParents } from "@/lib/filters";
 import { useSession } from "@/lib/session";
-import type { InboxRow } from "@/lib/types";
+import type { InboxRow, QueueView } from "@/lib/types";
 import { useResource } from "@/lib/useStaple";
 import { buildPickupIndex, EMPTY_PICKUP_INDEX } from "./tree/pickup-model";
 import { TreeGrid } from "./tree/TreeGrid";
-import { EmptyState, NoMatchesState, ViewState } from "./ViewChrome";
+import { EmptyState, ViewState } from "./ViewChrome";
 
 export function TreeView({ onAuthError }: { onAuthError: (error: AuthError) => void }) {
   const session = useSession();
-  const { mode, selection, filters, groupBy, publishVisibleOrder } = session;
+  const { mode, selection, filters, filterContext, groupBy, sort, publishVisibleOrder } = session;
 
-  const all = useMemo(() => session.issues.data ?? [], [session.issues.data]);
-  const rows = useMemo(() => applyFilters(all, filters), [all, filters]);
+  /**
+   * THE PICKUP PLAN, JOINED ONTO THE ROWS — R4c (STA-188).
+   *
+   * `/api/issues` reserves `pickupState`, `queuePosition` and `planPosition` and does not
+   * send them, so the cues are joined in the browser against `GET /api/queue` — the one
+   * view R2c publishes. THREE CHOICES, the same three `/api/inbox` above makes:
+   *
+   *  1. FETCHED ONLY IN THE UNGROUPED SHAPE. The cues are an ungrouped-view affordance
+   *     (STA-188 is explicit, and STA-160's criterion says "ungrouped rows"), so the loader
+   *     short-circuits to `null` everywhere else and the grouped views cost nothing and
+   *     change not one element.
+   *  2. FETCHED UNFILTERED. The queue is an ORDER-AND-ELIGIBILITY ORACLE; membership stays
+   *     `applyFilterDimensions`. Narrowing both would let a row survive the filter and then
+   *     be missing from the oracle.
+   *  3. REFETCHED ON `session.version` — the existing 1.5s fingerprint, so a reorder or a
+   *     claim taken by another agent moves the number within a poll rather than on reload.
+   *
+   * `all: true` because the LIST may be showing resolved work: a done row must be able to
+   * say the queue calls it resolved rather than fall through to "unqueued".
+   *
+   * ONE WORKSPACE AT A TIME. `/api/queue` answers for a single workspace — a plan is a
+   * per-workspace sequence and there is no cross-workspace order to ask for — while
+   * `/api/issues` in hub mode returns every workspace at once. So the cues are off in hub
+   * mode until a workspace is chosen: the alternative is joining one workspace's plan onto
+   * another's rows and captioning all of them "unqueued", which is not a partial answer but
+   * the wrong one.
+   */
+  const wantCues = groupBy === "none" && (mode !== "hub" || session.ws !== "");
+  const queue = useResource<QueueView | null>(
+    () => (wantCues ? getQueue({ ws: session.ws || undefined, all: true }) : Promise.resolve(null)),
+    [wantCues, session.ws, session.version],
+    onAuthError,
+  );
 
-  /** Children whose parent a filter removed — V4's seam for V5's breadcrumb chip. */
+  /**
+   * Milestone TITLES, from the list App already fetches for the filter menu (`filterContext`).
+   * No second request: the marker needs a name for its tooltip and `/api/milestones` is
+   * already on the page once per poll.
+   */
+  const milestoneTitles = useMemo(
+    () => new Map(filterContext.milestones.map((milestone) => [milestone.identifier, milestone.title])),
+    [filterContext.milestones],
+  );
+
+  const cueIndex = useMemo(
+    () => (wantCues && queue.data ? buildRowCueIndex(queue.data, milestoneTitles) : EMPTY_ROW_CUE_INDEX),
+    [wantCues, queue.data, milestoneTitles],
+  );
+
+  /**
+   * The join, ONCE, over the UNFILTERED list — before `applyFilterDimensions` rather than
+   * after, so the rollup source and the filtered rows carry the same cues and a ghost's real
+   * row cannot disagree with the copy of itself drawn in another bucket.
+   *
+   * `attachRowCues` returns the SAME array when the index is empty, so a grouped view (or a
+   * page whose queue has not landed) pays nothing and re-renders nothing.
+   */
+  const all = useMemo(
+    () => attachRowCues(session.issues.data ?? [], cueIndex),
+    [session.issues.data, cueIndex],
+  );
+  /*
+   * R4b (STA-187). `applyFilterDimensions` is `applyFilters` plus the three dimensions that
+   * need served facts the row does not carry — pickup state, milestone membership, epic. It
+   * runs the V4 predicate first and narrows what survived, so nothing V4 argued changes and
+   * the two registries never have to know about each other.
+   */
+  const rows = useMemo(
+    () => applyFilterDimensions(all, filters, filterContext),
+    [all, filters, filterContext],
+  );
+
+  /**
+   * Children whose parent a filter removed — V4's seam for V5's breadcrumb chip, and the
+   * input to O8's ghosts.
+   *
+   * Computed from the FULLY filtered `rows`, which is what keeps the ghost rules true for
+   * the new dimensions for free: an epic removed by a milestone filter is a parent that is
+   * in `all` and not in `rows`, which is the only thing this function and `buildGroups` ever
+   * ask about a missing parent.
+   */
   const orphanedBy = useMemo(() => hiddenParents(rows, all), [rows, all]);
 
   /**
@@ -106,7 +186,14 @@ export function TreeView({ onAuthError }: { onAuthError: (error: AuthError) => v
       <ViewState resource={session.issues} empty="no open issues">
         {(loaded) => {
           if (loaded.length === 0) return <EmptyState>no issues yet</EmptyState>;
-          if (rows.length === 0) return <NoMatchesState />;
+          /*
+           * R4b (STA-187). The standard empty state, plus a sentence naming the dimensions
+           * responsible — including the combinations that cannot match anything at all. See
+           * components/filters/FilterEmptyState.tsx.
+           */
+          if (rows.length === 0) {
+            return <FilterEmptyState rows={all} state={filters} context={filterContext} />;
+          }
           return (
             <TreeGrid
               rows={rows}
@@ -124,6 +211,13 @@ export function TreeView({ onAuthError }: { onAuthError: (error: AuthError) => v
               allRows={all}
               mode={mode}
               groupBy={groupBy}
+              /*
+               * R4a (STA-186). The active sort for THIS workspace and view, resolved by App
+               * from `staple:view:v1`. It reaches the model as `BuildOptions.sort` and does
+               * nothing else — it cannot reach the queue, the inbox, or a write. See
+               * `lib/sort-modes.ts` and docs/queue.md's "Presentation sort is not the queue".
+               */
+              sort={sort}
               pickup={pickup}
               captions={captions}
               currentRef={selection?.ref ?? null}
@@ -138,6 +232,13 @@ export function TreeView({ onAuthError }: { onAuthError: (error: AuthError) => v
               showResolved
               hiddenParents={orphanedBy}
               onOpen={session.open}
+              /*
+               * R4c (STA-188). The milestone marker's destination — the Milestones view,
+               * with that milestone focused. The routing is the session's, the same one the
+               * header tabs and the palette's "Go to …" commands use; the row knows only
+               * that it has somewhere to send a click.
+               */
+              onOpenMilestone={session.focusMilestone}
               onCloseDrawer={session.close}
               onVisibleOrder={publishVisibleOrder}
             />

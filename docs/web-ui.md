@@ -35,6 +35,162 @@ sections are separated by one rule — 8px of air plus a hairline — whether th
 next section is headed by a real epic, a ghost of one, or the "No epic" header,
 at every width. There is no gap between an epic and its own first task.
 
+### Row cues
+
+Ungrouped is the normal working view, not the absence of information. Every row
+in it carries four readings, and none of them adds a pixel of height: the row is
+`--row-height` in every density preset — 36px, 28px compact, 44px on a coarse
+pointer — exactly as it was before the cues existed.
+
+- **Status** — the existing status icon, unchanged, in its own column.
+- **Kind** — the glyph the workspace configured for that kind (see *Glyph
+  catalog*), leading the identifier on every row.
+- **Pickup** — one glyph, and a number when there is one, immediately right of
+  the identifier.
+- **Milestone** — a `◇` marker when the row is planned under a milestone. It is
+  a button: it opens the Milestones view with that milestone focused.
+
+**The pickup cue speaks the queue's vocabulary** (see `docs/queue.md`), one word
+per row, first match wins:
+
+| Cue | Glyph | Prints | Means |
+| --- | --- | --- | --- |
+| Pickable | `▸` | `next` | the one row the resolver would hand an agent right now |
+| Queued | `#` | `#5` | eligible, but the plan puts an earlier row first — the **effective** position |
+| Queued (container) | `#` | `plan #2` | an epic or milestone the plan holds — the **plan** position |
+| Waiting | `⋯` | — | an unresolved blocker, or a blocked status |
+| Gated | `⚑` | — | a human review gate holds it, or it stands behind one |
+| In flight | `◐` | — | somebody is holding it, or it is already being worked |
+| Unqueued | `·` | — | not in the pickup plan — still work, just later |
+
+A **resolved** row has no pickup cue at all: finished work is not waiting for
+anything, and saying it is "not pickable" would file it beside work that is stuck.
+
+**Two numbers, and they are not interchangeable.** An actionable row prints its
+position in the *effective* order — the sequence an agent receives — and a
+container prints the position of the *plan* row it sits at, spelled out as
+`plan #2` so the two can never be read as one scale. A container is never in the
+effective order (the resolver expands it in place), so it never gets an
+effective number, and a leaf never borrows its container's plan number.
+
+**Glyph and word, never colour alone.** No cue carries a hue. Every one of them
+has a `title` tooltip and screen-reader text saying the same sentence — the word
+first, then what it means, then the position, then the queue resolver's own
+reason where there is one ("STA-3 is queued behind STA-9, awaiting approval by
+VP"). The milestone marker's accessible name names the milestone and says where
+it goes.
+
+**Where the numbers come from.** One read of `GET /api/queue` per poll, joined
+onto the list in the browser by identifier, memoised, refreshed by the same 1.5s
+fingerprint as everything else. The list *displays* these numbers and can never
+set them — presentation sort is not the queue.
+
+**Ungrouped only.** The grouped axes are unchanged, element for element, and the
+queue is not fetched while one of them is active. In hub mode the cues appear
+once a workspace is selected: a plan is a per-workspace sequence, and there is no
+cross-workspace order to show.
+
+## Sorting
+
+The "Sort" control sits beside "Group" and names both halves of its own state without
+being opened — "Sort: Activity · Most active first", never an arrow you have to
+decode. Every mode is a real radio in a labelled group, so Tab and Enter operate it.
+The choice is stored **per workspace and per view** under the same
+`staple:view:v1` key as the grouping; a scope you have never set uses the default, and
+setting one back to the default forgets it rather than pinning it.
+
+**Sorting is not the queue.** Ordering the list by queue position is a statement about
+your screen; it cannot move an item in the pickup plan, change checkout eligibility, or
+reorder a dependency. See `docs/queue.md`.
+
+Direction flips the **primary key only** — every tie-break below runs forwards in both
+directions, so two rows that tie never swap and "descending, then ascending" is exactly
+where you started. Under Queue position, unqueued rows come last in both directions.
+Every chain ends in the identifier, which is unique and compared **numerically on the
+number part**, so STA-9 precedes STA-10 and the list cannot reshuffle on the 1.5s poll.
+
+| Mode | Orders by | Tie-break chain, in order | Parent rollup |
+| --- | --- | --- | --- |
+| **Activity** (default) | a live claim first, then the configured status order | priority → newest update → identifier | best activity tier in the subtree |
+| **Queue position** | the pickup plan's position; queued rows before unqueued | activity → priority → newest update → identifier | earliest queue position in the subtree |
+| **Status** | the workspace's configured status order | priority → newest update → identifier | — |
+| **Priority** | critical → high → medium → low | activity → newest update → identifier | — |
+| **Updated** | when anything last moved | priority → identifier | latest update in the subtree |
+| **Created** | when the ticket was filed | priority → identifier | — |
+| **Identifier** | the number, numerically | — (identifiers are unique) | — |
+| **Title** | alphabetically, locale-aware | identifier | — |
+
+Only three modes roll a parent up over its descendants, and each is named above; the
+other five read the row and nothing else. A rollup counts only rows the current filter
+kept, so an order is always accountable from what is on the screen. A status the
+workspace order does not mention ranks last but still ranks.
+
+Sorting orders **siblings**: it never lifts a child out from under its parent, and it
+applies inside a group exactly as it does in the ungrouped view. Under Group by Status
+the activity tier is inert — every row in a status bucket ranks equally on it — so the
+default mode there is priority, then the newest update, then the identifier.
+
+## Filtering
+
+The "Filter" button opens a two-page menu: pick a dimension, then pick values inside
+it. **Alternatives inside one dimension are ORed, dimensions are ANDed** — "gated or
+waiting, and in Release 1.0" is one question — and an empty selection is the *absence*
+of a constraint rather than "match nothing". Every option is enumerated from data the
+server sent: statuses and kinds from the workspace vocabulary, assignees and labels
+from the rows on the page, milestones from `/api/milestones`, epics from the rows' own
+ancestry. Nothing in the menu is a value this build invented.
+
+| Dimension | Values | Read from |
+| --- | --- | --- |
+| **Status** | the workspace's configured statuses | the issue |
+| **Kind** | the kinds present, in the configured order | the issue |
+| **Assignee** | the names on the page, plus Unassigned | the issue |
+| **Priority** | Urgent, High, Medium, Low | the issue |
+| **Label** | the labels on the page | the issue |
+| **Claim** | Working now, Stale claim, Held, Unclaimed | the claim reading |
+| **Handoff** | Stale worklog, No worklog | the worklog summary |
+| **Gate** | Awaiting approval, Queued behind a gate | the gate siblings |
+| **Pickup state** | Pickable, Queued, Waiting, Gated, In flight | the queue resolver |
+| **Milestone** | every milestone, by title | milestone **membership** |
+| **Epic** | the top-level ancestors present | the row's ancestry |
+
+**Pickup state** is the resolver's own word for the row when the server sends one
+(`docs/queue.md`, step 3). When it does not, four of the five are derived locally in the
+resolver's order — gated (its own gate, or the gate it stands behind), waiting (an
+unresolved blocker or a blocked status), in flight (a claim, a checkout, or a working
+status), pickable (everything else) — and a resolved row has no pickup state at all.
+*Queued* is the one the browser never derives: it means "eligible, but the plan puts an
+earlier row first", and order is the resolver's knowledge, not the page's.
+
+**Milestone is membership, never the tree.** A milestone contains epics and tasks
+without reparenting them, so filtering by one selects its members — which may include a
+row whose own parent is not a member, and exclude a child of one that is.
+
+**Epic** is the top-level ancestor, and a top-level row is its own epic, so selecting one
+keeps the epic and everything under it.
+
+**Chips.** Every active value gets a chip naming its dimension and its value —
+"Pickup state: Gated", never a bare "Gated", because a label, an assignee and a
+milestone can all be called the same thing. Clicking a chip reopens its own menu, the
+`×` removes that one value, and "Clear all" resets to the shipped default (which
+re-hides done work).
+
+**Hierarchy survives a filter.** A parent the filter removed is still drawn above its
+surviving children, dimmed, as a ghost — it is a bracket around rows rather than a row,
+so it is not in any count and it folds like the real one would.
+
+**An empty page says why.** With nothing left, the view names the dimensions
+responsible: either the one whose removal would bring rows back and how many
+("Removing Priority (4) would bring rows back"), or that they exclude every row only in
+combination, or — for a selection that could not match anything whatever the data said,
+such as *done* plus *pickable* — that the two cannot both be true and one has to go.
+
+**Filters persist per workspace and per view**, under the same `staple:view:v1` key as
+the sort and the grouping. A scope you have never filtered in opens with whatever the
+pre-R4b global filter key holds, so nothing is lost on upgrade. Changing a filter is a
+statement about your screen: it cannot touch `queue.policy`, the pickup plan, or any
+write path.
+
 ## Auth
 
 Pages served to loopback carry their own token, so the browser never sees a

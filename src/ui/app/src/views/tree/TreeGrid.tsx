@@ -55,6 +55,7 @@ import type { Issue, IssueRow, UiMode } from "@/lib/types";
 import type { GroupBy } from "@/lib/view-prefs";
 import { useTreeExpansion } from "./expansion";
 import { EMPTY_PICKUP_INDEX, type PickupIndex, type PickupSectionId } from "./pickup-model";
+import { DEFAULT_SORT, type SortPref } from "@/lib/sort-modes";
 import { buildList, sectionsOf, visibleOrder, type GroupKey, type ListShape } from "./tree-model";
 
 /**
@@ -296,12 +297,14 @@ export function TreeGrid({
   allRows,
   mode,
   groupBy,
+  sort = DEFAULT_SORT,
   pickup = EMPTY_PICKUP_INDEX,
   captions,
   currentRef,
   showResolved,
   hiddenParents,
   onOpen,
+  onOpenMilestone,
   onCloseDrawer,
   onVisibleOrder,
 }: {
@@ -329,6 +332,13 @@ export function TreeGrid({
   mode: UiMode;
   /** R1 (STA-100). `"none"` is the default and renders no headers at all. */
   groupBy: GroupBy;
+  /**
+   * R4a (STA-186). WHICH ORDER, of the eight in `lib/sort-modes.ts`. Defaulted to
+   * `DEFAULT_SORT` — the activity order this view had before the control existed — so a
+   * surface that has no sort preference (the palette, a test, a panel preset) renders the
+   * list it always rendered.
+   */
+  sort?: SortPref;
   /**
    * V5 (STA-111). `/api/inbox`, indexed — the ONE definition of ready, borrowed rather than
    * re-derived. Only consulted when `groupBy` is `"pickup"`; the empty index is a valid
@@ -362,6 +372,12 @@ export function TreeGrid({
   /** V4's `hiddenParents()` — breadcrumbs for children whose parent a filter removed. */
   hiddenParents?: ReadonlyMap<string, Issue>;
   onOpen: (workspace: string, identifier: string) => void;
+  /**
+   * R4c (STA-188). What the milestone marker does: switch to the Milestones view with that
+   * milestone focused. Optional, because a container without a view to route to still wants
+   * the marker — the tooltip names the milestone either way.
+   */
+  onOpenMilestone?: (identifier: string) => void;
   onCloseDrawer: () => void;
   /** R6's contract (STA-106): the visible rows, in screen order. See lib/session.ts. */
   onVisibleOrder: (order: readonly Selection[]) => void;
@@ -392,6 +408,9 @@ export function TreeGrid({
       showResolved,
       hiddenParents,
       rollupSource: allRows,
+      // R4a (STA-186). The active order, straight through to the model — which applies it in
+      // every shape, not only the flat one. See `BuildOptions.sort`.
+      sort,
       /**
        * O3c (STA-128). A ghost needs an INDENT to be legible, and `columns.disclosure` is
        * the existing switch that means "this container has one" — the `panel` and `popup`
@@ -402,7 +421,7 @@ export function TreeGrid({
        */
       ghostParents: config.columns.disclosure,
     }),
-    [expansion.explicit, showResolved, hiddenParents, allRows, config.columns.disclosure],
+    [expansion.explicit, showResolved, hiddenParents, allRows, sort, config.columns.disclosure],
   );
 
   /**
@@ -744,6 +763,7 @@ export function TreeGrid({
       now={now}
       onOpen={() => openIssue(row)}
       onOpenParent={(identifier) => onOpen(row.workspace, identifier)}
+      onOpenMilestone={onOpenMilestone}
       onToggleExpand={() => expansion.toggleRow(row.issue, row.isExpanded)}
       onToggleSelect={() => toggleSelect(row.issue.id)}
       onFocus={() => focus.set(navKeyOf(row))}

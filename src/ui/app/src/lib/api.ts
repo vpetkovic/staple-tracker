@@ -312,6 +312,18 @@ export function isRevisionConflict(error: unknown): error is ApiError {
   return error instanceof ApiError && error.code === REVISION_CONFLICT_CODE;
 }
 
+/**
+ * The pickup plan — R2c's `{revision, entries, effective}`, READ ONLY.
+ *
+ * There is no write here on purpose. `docs/queue.md` is explicit that presentation sort is
+ * not the queue: the list may display these numbers and may never set them, and the only
+ * way to be sure of that is that the function that would do it does not exist in the client
+ * the list imports. R4c (STA-188) is the first caller — it joins `effective` onto the rows
+ * to draw each row's pickup cue.
+ */
+export const getQueue = (params: { ws?: string; all?: boolean } = {}) =>
+  request<QueueView>(`/api/queue${qs({ ws: params.ws, all: params.all ? "1" : undefined })}`);
+
 export const getMilestones = (params: { ws?: string; all?: boolean } = {}) =>
   request<MilestoneListRow[]>(`/api/milestones${qs({ ws: params.ws, all: params.all ? "1" : undefined })}`);
 

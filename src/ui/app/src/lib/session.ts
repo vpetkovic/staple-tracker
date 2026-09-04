@@ -6,8 +6,10 @@
  * owning it.
  */
 import { createContext, useContext } from "react";
+import type { FilterContext } from "./filter-dimensions";
 import type { FilterState } from "./filters";
 import type { IssueRow, UiMode, WorkspaceRef } from "./types";
+import type { SortPref } from "./sort-modes";
 import type { GroupBy } from "./view-prefs";
 import type { Resource } from "./useStaple";
 
@@ -51,6 +53,21 @@ export interface StapleSession {
   view: ViewName;
   setView: (view: ViewName) => void;
 
+  /**
+   * THE MILESTONE THE PAGE IS POINTED AT — R4c (STA-188).
+   *
+   * `focusMilestone` is one navigation primitive, exactly like `open` below: it switches to
+   * the Milestones view AND records which milestone the reader asked for, so a row's
+   * milestone marker can send somebody to the plan it names rather than to whichever
+   * milestone happened to sort first.
+   *
+   * It lives here for the reason `view` does — the row that dispatches it, the header tabs
+   * and the palette must all drive navigation without any one of them owning it. Cleared to
+   * `null` on any other view switch, so a stale focus cannot outlive the trip.
+   */
+  milestoneFocus: string | null;
+  focusMilestone: (ref: string) => void;
+
   /** "" means every workspace, and is only reachable in hub mode. */
   ws: string;
   setWs: (ws: string) => void;
@@ -78,6 +95,17 @@ export interface StapleSession {
   setFilters: (next: FilterState) => void;
 
   /**
+   * THE SERVED FACTS THE FILTER NEEDS BEYOND THE ROWS — R4b (STA-187).
+   *
+   * Milestone membership comes from `/api/milestones`, and a row's epic is a property of the
+   * whole list rather than of the row. Both live here for the reason `issues` does: the menu,
+   * the chip strip and the view must agree about them, and three surfaces deriving them
+   * separately would be three chances for the menu to offer a milestone the list has never
+   * heard of. Built by App with `buildFilterContext`; see lib/filter-dimensions.ts.
+   */
+  filterContext: FilterContext;
+
+  /**
    * The assignee filter as a single string — a DERIVED view over `filters.dims.assignee`,
    * kept because the command palette speaks in these terms ("Filter by assignee…", "Clear
    * the assignee filter") and there is no reason for it to learn about dimensions. Reading
@@ -96,6 +124,18 @@ export interface StapleSession {
    */
   groupBy: GroupBy;
   setGroupBy: (next: GroupBy) => void;
+
+  /**
+   * WHAT ORDER THE LIST IS IN — R4a (STA-186). See lib/sort-modes.ts for the registry.
+   *
+   * Beside `groupBy` and not on it: arrangement and order are two questions, and a reader
+   * who has grouped by epic has not asked for the rows inside those epics to be re-ordered.
+   * Unlike `groupBy` this is stored per WORKSPACE and per VIEW — the argument is in
+   * lib/view-prefs.ts — so App resolves the scope and this field is the answer for the scope
+   * currently on screen. Setting it writes to that scope and no other.
+   */
+  sort: SortPref;
+  setSort: (next: SortPref) => void;
 
   /**
    * THE VISIBLE ORDERED LIST — the contract R6 (STA-106) navigates by.

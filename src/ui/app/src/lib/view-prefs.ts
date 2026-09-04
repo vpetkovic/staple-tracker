@@ -63,6 +63,14 @@
  * Unlike `parent`, the id and the label agree here: the axis reads `issue.kind` and the
  * header says "Kind". There was no common case to name it after and no lie available.
  */
+import { emptyFilters, type FilterState } from "./filters";
+import {
+  DEFAULT_SORT,
+  isSortDirection,
+  isSortModeId,
+  type SortPref,
+} from "./sort-modes";
+
 export type GroupBy = "none" | "status" | "pickup" | "parent" | "kind";
 
 /**
@@ -129,12 +137,133 @@ export const DEFAULT_GROUP_BY: GroupBy = "none";
 
 export const VIEW_PREFS_STORAGE_KEY = "staple:view:v1";
 
+/**
+ * ── WHY SORT IS SCOPED AND GROUPING IS NOT — R4a (STA-186) ────────────────────────────
+ *
+ * `groupBy` is one value for the whole app and stays that way: it is a claim about how you
+ * read a list, it is the same claim in every workspace, and re-choosing it per workspace
+ * would be a preference the user has to set five times to mean one thing.
+ *
+ * Sort is not that. "Queue position" is the right order for the workspace you are actively
+ * pulling work from and the wrong one for the archive next door; "Updated" is right in the
+ * tree and meaningless in the milestones view, which has its own plan order. So the sort
+ * preference is stored per WORKSPACE and per VIEW, keyed by `sortScopeKey`, and every scope
+ * that has never been set resolves to `DEFAULT_SORT` rather than inheriting a neighbour's.
+ *
+ * THE KEY IS UNCHANGED and the change is additive. `:v1` in the STORAGE KEY names the
+ * envelope shape — an incompatible one becomes `:v2` and the old key is ignored rather than
+ * misread — and `version` INSIDE is for changes small enough to migrate in place. This is
+ * one of those: a v1 payload has no `sort`, decodes to an empty map, and every scope
+ * resolves to the default, which is byte-for-byte the order that payload was written under.
+ * Nobody loses a layout and nothing has to be reset.
+ */
+/**
+ * ── WHY FILTERS ARE SCOPED HERE TOO, AFTER V4 ARGUED THEY SHOULD NOT BE — R4b (STA-187) ─
+ *
+ * The note at the top of this file says a filter is a CONSTRAINT and a grouping is a LAYOUT,
+ * and that folding one into the other breaks `countActive`, `clearFilters` and saved sets.
+ * All three of those arguments are about the SHAPE of `FilterState`, and none of them is
+ * touched here: a filter state is still a `FilterState`, still cleared by `clearFilters()`,
+ * still counted by the filter's own counter. What changes is only WHERE THE ACTIVE ONE IS
+ * KEPT — per workspace and per view, exactly as R4a scoped the sort, and for the same
+ * reason: "everything gated" is the right question in the workspace you are pulling work
+ * from and noise in the archive next door, and a filter you have to re-clear in every
+ * workspace is a filter that has escaped its scope.
+ *
+ * `staple:filters:v1` is untouched and still written by App on every change. It is the
+ * MIGRATION SOURCE and the fallback: a payload written before this ticket has no `filters`
+ * map, every scope resolves to the state that key holds, and nobody opens the app to a
+ * filter set they never chose. See `filtersForScope`.
+ */
 export interface ViewPrefs {
   groupBy: GroupBy;
+  /** Sort preference per `sortScopeKey`. Absent scopes are `DEFAULT_SORT`. */
+  sort: Record<string, SortPref>;
+  /** Filter state per `sortScopeKey`. Absent scopes take the caller's fallback. */
+  filters: Record<string, FilterState>;
+}
+
+/**
+ * WHICH SORT THIS IS THE SORT FOR — the workspace and the view, in one string.
+ *
+ * `""` is a real workspace value: it means hub mode, every workspace at once, and it is a
+ * genuinely different reading from any single workspace's, so it gets its own scope rather
+ * than being folded into one. Spelled `*` in the key so the string is never empty on one
+ * side of the separator and a stored key stays readable in devtools.
+ */
+export function sortScopeKey(workspace: string, view: string): string {
+  return `${workspace || "*"}::${view}`;
 }
 
 export function defaultViewPrefs(): ViewPrefs {
-  return { groupBy: DEFAULT_GROUP_BY };
+  return { groupBy: DEFAULT_GROUP_BY, sort: {}, filters: {} };
+}
+
+/**
+ * The sort for one scope — the default until the user has chosen one there.
+ *
+ * Takes the MAP rather than the whole `ViewPrefs`, and so does `withSortForScope` below,
+ * because both callers hold the map: `App.tsx` keeps it in its own state so that switching
+ * workspace resolves a new scope without re-reading storage, and the setter only ever has the
+ * map in hand. A `ViewPrefs`-shaped signature would have made both of them assemble an
+ * envelope, including a `groupBy` neither is changing.
+ */
+export function sortForScope(sort: Readonly<Record<string, SortPref>>, scope: string): SortPref {
+  return sort[scope] ?? DEFAULT_SORT;
+}
+
+/**
+ * One scope changed, the rest untouched — and a scope set back to the default is REMOVED
+ * rather than stored. A stored default is indistinguishable from a chosen one, so the day
+ * `DEFAULT_SORT` changes, every workspace anybody ever opened would be pinned to the old
+ * default by a preference they never made.
+ */
+export function withSortForScope(
+  sort: Readonly<Record<string, SortPref>>,
+  scope: string,
+  next: SortPref,
+): Record<string, SortPref> {
+  const out = { ...sort };
+  if (next.mode === DEFAULT_SORT.mode && next.direction === DEFAULT_SORT.direction) {
+    delete out[scope];
+  } else {
+    out[scope] = next;
+  }
+  return out;
+}
+
+/**
+ * THE FILTER FOR ONE SCOPE, or the fallback the caller holds.
+ *
+ * The fallback IS the migration. App passes the legacy `staple:filters:v1` state it read
+ * once at startup, so a user who had a filter on before this ticket finds it exactly where
+ * they left it, in whatever workspace they open first — and a scope they have never filtered
+ * in never inherits a neighbouring workspace's constraints, because once anything is written
+ * here the map answers and the legacy key stops being consulted for that scope.
+ */
+export function filtersForScope(
+  filters: Readonly<Record<string, FilterState>>,
+  scope: string,
+  fallback: FilterState = emptyFilters(),
+): FilterState {
+  return filters[scope] ?? fallback;
+}
+
+/**
+ * One scope changed, the rest untouched.
+ *
+ * Unlike `withSortForScope` a scope set back to the shipped default is KEPT rather than
+ * removed, and the asymmetry is deliberate: an unset sort scope resolves to `DEFAULT_SORT`,
+ * but an unset FILTER scope resolves to the legacy fallback above, which may be a filter the
+ * user just cleared. Deleting the entry would make "Clear all" undo itself on the next
+ * render — the clearing has to be recorded to be believed.
+ */
+export function withFiltersForScope(
+  filters: Readonly<Record<string, FilterState>>,
+  scope: string,
+  next: FilterState,
+): Record<string, FilterState> {
+  return { ...filters, [scope]: next };
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -161,11 +290,79 @@ export function decodeViewPrefs(raw: string | null): ViewPrefs {
     return defaultViewPrefs();
   }
   if (!isRecord(parsed)) return defaultViewPrefs();
-  return { groupBy: isGroupBy(parsed.groupBy) ? parsed.groupBy : DEFAULT_GROUP_BY };
+  return {
+    groupBy: isGroupBy(parsed.groupBy) ? parsed.groupBy : DEFAULT_GROUP_BY,
+    /**
+     * THE MIGRATION, and it is the whole of it: a v1 payload has no `sort`, so this reads
+     * `undefined` and every scope falls back to `DEFAULT_SORT` — which is the order that
+     * payload was written under. Repair rather than reject applies per SCOPE too, so one
+     * hand-edited entry costs the user that one view's sort and not the map.
+     */
+    sort: decodeSortMap(parsed.sort),
+    /**
+     * THE R4b MIGRATION, and it is the same shape as R4a's: a payload written before this
+     * ticket has no `filters`, so this reads `undefined`, the map is empty, and every scope
+     * falls back to the legacy `staple:filters:v1` state the caller passes to
+     * `filtersForScope`. Nobody loses a filter and nothing has to be reset.
+     */
+    filters: decodeFilterMap(parsed.filters),
+  };
 }
 
+/**
+ * Repair rather than reject, per SCOPE, exactly as `decodeSortMap` does.
+ *
+ * An UNKNOWN dimension inside a stored filter is kept verbatim rather than dropped — the
+ * rule `lib/filters.ts` states for its own envelope, and it has to be the same rule here or
+ * moving the storage would silently change what an older tab round-trips. `showDone` is
+ * strictly `true` for the same reason it is there: a stored "yes" is not an opt-in.
+ */
+function decodeFilterMap(raw: unknown): Record<string, FilterState> {
+  if (!isRecord(raw)) return {};
+  const out: Record<string, FilterState> = {};
+  for (const [scope, value] of Object.entries(raw)) {
+    if (!isRecord(value)) continue;
+    const dims: Record<string, string[]> = {};
+    if (isRecord(value.dims)) {
+      for (const [id, selected] of Object.entries(value.dims)) {
+        if (!Array.isArray(selected)) continue;
+        const values = selected.filter((entry): entry is string => typeof entry === "string");
+        if (values.length > 0) dims[id] = values;
+      }
+    }
+    out[scope] = {
+      dims,
+      text: typeof value.text === "string" ? value.text : "",
+      showDone: value.showDone === true,
+    };
+  }
+  return out;
+}
+
+function decodeSortMap(raw: unknown): Record<string, SortPref> {
+  if (!isRecord(raw)) return {};
+  const out: Record<string, SortPref> = {};
+  for (const [scope, value] of Object.entries(raw)) {
+    if (!isRecord(value)) continue;
+    if (!isSortModeId(value.mode) || !isSortDirection(value.direction)) continue;
+    out[scope] = { mode: value.mode, direction: value.direction };
+  }
+  return out;
+}
+
+/**
+ * `version: 3` — R4a added `sort` beside `groupBy`, R4b added `filters` beside both. In
+ * place, per the note on the key above: a build that predates either reads the payload,
+ * finds the `groupBy` it understands, and ignores fields it has never heard of, which is
+ * exactly the behaviour a v1 reader has.
+ */
 export function encodeViewPrefs(prefs: ViewPrefs): string {
-  return JSON.stringify({ version: 1, groupBy: prefs.groupBy });
+  return JSON.stringify({
+    version: 3,
+    groupBy: prefs.groupBy,
+    sort: prefs.sort,
+    filters: prefs.filters,
+  });
 }
 
 /**

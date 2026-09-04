@@ -582,6 +582,55 @@
 }
 
 /*
+ * ── The two ungrouped row cues — R4c (STA-188) ────────────────────────────────────────
+ *
+ * NOTHING HERE HAS A HEIGHT, and that is O3b's criterion applied unchanged one element to
+ * the left. Both are inline 11px/1.2 boxes — shorter than the 13px title already in this
+ * cell — so the tallest line box in `.staple-row-title-cell` does not move and
+ * `.staple-row`'s `height: var(--row-height)` still decides the row in every density preset
+ * (36px, 28px compact, 44px coarse-pointer) and at every §14 breakpoint. No padding, no
+ * border, no min-height: a capsule around a one-character glyph would be the badge wall the
+ * ticket exists to avoid, and it would be the one element in the cell tall enough to matter.
+ *
+ * NO COLOUR RULE BEYOND `--text-tertiary`, which is the identifier's own register. The state
+ * is carried by the GLYPH and by the word in `title` and the `sr-only` span; a hue per state
+ * would be a sixth colour system for a fact WCAG 1.4.1 forbids encoding in colour anyway.
+ * `data-pickup-cue` is what a stylesheet or a test keys on if one ever needs to.
+ *
+ * `flex-shrink: 0` on both: they are one glyph and at most `plan #12`, and a cue squeezed to
+ * an ellipsis is a cue that says nothing. The title beside them still shrinks first, exactly
+ * as it does for the breadcrumb chip above.
+ */
+.staple-row-cue {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.staple-row-milestone {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+/* The same hover the breadcrumb chip makes, and for the same reason: this one goes
+   somewhere. Colour only — this row does not move when the pointer crosses it. */
+.staple-row-milestone:hover {
+  color: var(--muted-foreground);
+}
+
+/*
  * ── The collapsed-parent rollup — O3b (STA-127) ───────────────────────────────────────
  *
  * NOTHING HERE HAS A HEIGHT, and that is the acceptance criterion made structural rather

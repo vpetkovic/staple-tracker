@@ -22,9 +22,15 @@
  *     own dimension, because a chip that reads "In Progress" and then asks you which
  *     dimension you meant has forgotten what it is.
  *
- * This component is generic over `FILTER_DIMENSIONS` — it names no dimension anywhere.
- * That is the whole point of the registry in lib/filters.ts: dimension six lands as one
- * entry there and appears here, in the chips, and in the predicate, with no edit.
+ * This component is generic over the registry — it names no dimension anywhere. That is the
+ * whole point of the registry in lib/filters.ts: dimension six lands as one entry there and
+ * appears here, in the chips, and in the predicate, with no edit.
+ *
+ * R4b (STA-187) is the proof: pickup state, milestone and epic arrived as three entries in
+ * `CONTEXT_FILTER_DIMENSIONS` and this file changed only where it had to — it now reads
+ * `ALL_FILTER_DIMENSIONS` (the eight in lib/filters.ts plus those three) and threads the
+ * `FilterContext` those three need through to `options`, `matches` and `format`. A dimension
+ * that does not need the context never sees it.
  */
 import { useEffect, useState, type ReactNode } from "react";
 import { Check, ChevronLeft, ChevronRight } from "lucide-react";
@@ -37,7 +43,14 @@ import {
   CommandList,
 } from "@/components/ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { FILTER_DIMENSIONS, dimensionOptions, findDimension, toggleValue } from "@/lib/filters";
+import {
+  ALL_FILTER_DIMENSIONS,
+  EMPTY_FILTER_CONTEXT,
+  filterDimensionOptions,
+  findFilterDimension,
+  type FilterContext,
+} from "@/lib/filter-dimensions";
+import { toggleValue } from "@/lib/filters";
 import type { FilterState } from "@/lib/filters";
 import type { IssueRow } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -46,6 +59,8 @@ export interface FilterMenuProps {
   /** The rows the options are derived from — the unfiltered page, not the visible one. */
   rows: readonly IssueRow[];
   state: FilterState;
+  /** The served facts the milestone and epic dimensions need. See lib/filter-dimensions.ts. */
+  context?: FilterContext;
   onChange: (next: FilterState) => void;
   /** Open straight onto this dimension instead of the picker. */
   openAt?: string;
@@ -53,7 +68,14 @@ export interface FilterMenuProps {
   children: ReactNode;
 }
 
-export function FilterMenu({ rows, state, onChange, openAt, children }: FilterMenuProps) {
+export function FilterMenu({
+  rows,
+  state,
+  context = EMPTY_FILTER_CONTEXT,
+  onChange,
+  openAt,
+  children,
+}: FilterMenuProps) {
   const [open, setOpen] = useState(false);
   const [page, setPage] = useState<string | null>(openAt ?? null);
 
@@ -64,33 +86,74 @@ export function FilterMenu({ rows, state, onChange, openAt, children }: FilterMe
     if (open) setPage(openAt ?? null);
   }, [open, openAt]);
 
-  // `?? null` collapses "no page chosen" and "a page naming a dimension this build does
-  // not have" into one state — the picker. An `openAt` from a chip written by a newer
-  // build lands there rather than rendering an empty menu with no way out.
-  const dimension = page === null ? null : (findDimension(page) ?? null);
-
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>{children}</PopoverTrigger>
-      <PopoverContent
-        align="end"
-        sideOffset={6}
-        className="w-64 p-0"
-        data-filter-menu={dimension ? dimension.id : "root"}
-      >
+      <PopoverContent align="end" sideOffset={6} className="w-64 p-0">
+        <FilterMenuBody
+          rows={rows}
+          state={state}
+          context={context}
+          onChange={onChange}
+          page={page}
+          onPage={setPage}
+          pinned={openAt !== undefined}
+        />
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+export interface FilterMenuBodyProps {
+  rows: readonly IssueRow[];
+  state: FilterState;
+  context?: FilterContext;
+  onChange: (next: FilterState) => void;
+  /** The dimension being drilled into, or null for the picker. */
+  page: string | null;
+  onPage: (page: string | null) => void;
+  /** Opened straight onto a dimension: no back arrow, because there is nothing behind it. */
+  pinned?: boolean;
+}
+
+/**
+ * THE POPOVER'S CONTENTS, as a component of its own — R4b (STA-187).
+ *
+ * Split out for the reason `SortByOptions` is: Radix renders popover content through a
+ * portal and only while open, so a closed popover has no markup for a server render to look
+ * at, and forcing one open would be testing Radix rather than this ticket. Everything worth
+ * asserting — which dimensions are offered, which options, which are checked, what the
+ * counts say — lives here and takes props.
+ */
+export function FilterMenuBody({
+  rows,
+  state,
+  context = EMPTY_FILTER_CONTEXT,
+  onChange,
+  page,
+  onPage,
+  pinned = false,
+}: FilterMenuBodyProps) {
+  // `?? null` collapses "no page chosen" and "a page naming a dimension this build does
+  // not have" into one state — the picker. An `openAt` from a chip written by a newer
+  // build lands there rather than rendering an empty menu with no way out.
+  const dimension = page === null ? null : (findFilterDimension(page) ?? null);
+
+  return (
+      <div data-filter-menu={dimension ? dimension.id : "root"}>
         {dimension === null ? (
           <Command>
             <CommandInput placeholder="Filter by…" />
             <CommandList>
               <CommandEmpty>no such filter</CommandEmpty>
               <CommandGroup>
-                {FILTER_DIMENSIONS.map((entry) => {
+                {ALL_FILTER_DIMENSIONS.map((entry) => {
                   const selected = state.dims[entry.id]?.length ?? 0;
                   return (
                     <CommandItem
                       key={entry.id}
                       value={entry.label}
-                      onSelect={() => setPage(entry.id)}
+                      onSelect={() => onPage(entry.id)}
                       data-filter-dimension={entry.id}
                     >
                       <span className="flex-1">{entry.label}</span>
@@ -113,10 +176,12 @@ export function FilterMenu({ rows, state, onChange, openAt, children }: FilterMe
             {/* No back arrow when the menu was opened straight onto a dimension: there is
                 nothing behind it to go back to, and an arrow that navigates somewhere the
                 user never was is a trapdoor. */}
-            {openAt === undefined ? (
+            {pinned ? (
+              <div className="border-b px-2.5 py-2 text-[13px] font-medium">{dimension.label}</div>
+            ) : (
               <button
                 type="button"
-                onClick={() => setPage(null)}
+                onClick={() => onPage(null)}
                 className={cn(
                   "flex w-full items-center gap-1.5 border-b px-2.5 py-2 text-left text-[13px]",
                   "text-muted-foreground transition-colors hover:bg-surface-hover hover:text-foreground",
@@ -126,14 +191,12 @@ export function FilterMenu({ rows, state, onChange, openAt, children }: FilterMe
                 <ChevronLeft className="size-3.5" aria-hidden />
                 {dimension.label}
               </button>
-            ) : (
-              <div className="border-b px-2.5 py-2 text-[13px] font-medium">{dimension.label}</div>
             )}
             <CommandInput placeholder={`Search ${dimension.label.toLowerCase()}…`} />
             <CommandList>
               <CommandEmpty>nothing to filter by</CommandEmpty>
               <CommandGroup>
-                {dimensionOptions(dimension.id, rows).map((option) => {
+                {filterDimensionOptions(dimension.id, rows, context).map((option) => {
                   const checked = (state.dims[dimension.id] ?? []).includes(option.value);
                   return (
                     <CommandItem
@@ -142,6 +205,9 @@ export function FilterMenu({ rows, state, onChange, openAt, children }: FilterMe
                       onSelect={() => onChange(toggleValue(state, dimension.id, option.value))}
                       data-filter-option={option.value}
                       data-checked={checked ? "" : undefined}
+                      /* R4b: the five pickup states carry one. Read generically off the
+                         option, so this still names no dimension. */
+                      title={option.hint}
                     >
                       {/* A real box rather than a trailing tick: multi-select has to LOOK
                           multi-select before the first click, or the menu reads as radio
@@ -168,7 +234,6 @@ export function FilterMenu({ rows, state, onChange, openAt, children }: FilterMe
             </CommandList>
           </Command>
         )}
-      </PopoverContent>
-    </Popover>
+      </div>
   );
 }

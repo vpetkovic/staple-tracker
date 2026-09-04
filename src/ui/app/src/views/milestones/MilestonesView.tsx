@@ -538,7 +538,7 @@ function useLayout(): LayoutName {
 export function MilestonesView({ onAuthError }: { onAuthError: (error: AuthError) => void }) {
   const session = useSession();
   const layout = useLayout();
-  const [selectedRef, setSelectedRef] = useState<string | null>(null);
+  const [selectedRef, setSelectedRef] = useState<string | null>(session.milestoneFocus);
   const [fullScreen, setFullScreen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<MemberWriteFailure | null>(null);
@@ -565,8 +565,14 @@ export function MilestonesView({ onAuthError }: { onAuthError: (error: AuthError
   useEffect(() => {
     if (sorted.length === 0) return;
     if (selectedRef && sorted.some((row) => row.milestone.identifier === selectedRef)) return;
+    // A row cue that opened this view names the milestone to focus; honour it before falling to the first row.
+    const focus = session.milestoneFocus;
+    if (focus && sorted.some((row) => row.milestone.identifier === focus)) {
+      setSelectedRef(focus);
+      return;
+    }
     if (layout === "split" || fullScreen) setSelectedRef(sorted[0]!.milestone.identifier);
-  }, [sorted, selectedRef, layout, fullScreen]);
+  }, [sorted, selectedRef, layout, fullScreen, session.milestoneFocus]);
 
   const loadDetail = useCallback(
     () => (selectedRef ? getMilestone({ ws, ref: selectedRef }) : Promise.resolve(null)),

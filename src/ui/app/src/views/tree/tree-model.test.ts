@@ -31,6 +31,13 @@ import {
   type IssueStatus,
 } from "@/lib/types";
 import { STALE_CLAIM_SECONDS } from "@/lib/claim";
+import {
+  applyFilterDimensions,
+  buildFilterContext,
+  type FilterContext,
+} from "@/lib/filter-dimensions";
+import { emptyFilters, hiddenParents } from "@/lib/filters";
+import { DEFAULT_SORT, SORT_MODES } from "@/lib/sort-modes";
 import { guideX, indentPx, MAX_INDENT_DEPTH, type TaskRow } from "@/components/task-list";
 import { claim, issue, row } from "@/components/task-list/fixtures";
 import {
@@ -2116,5 +2123,199 @@ describe("topLevelAncestors", () => {
     ];
 
     expect(() => topLevelAncestors(rows)).not.toThrow();
+  });
+});
+
+/**
+ * R4a (STA-186) — the ordering is `lib/sort-modes.ts`'s now, and this is what pins the
+ * substitution honest.
+ *
+ * The whole risk of moving one comparator into a registry is that the DEFAULT quietly stops
+ * being what it was: `compareRows` decided every list in the product, so a difference of one
+ * step is a difference the reader meets on the first screen and cannot name. So the first
+ * block re-runs the fixtures the three tests above use and asserts the same answers come out
+ * of the new path, and the rest is what the registry buys.
+ */
+describe("the sort mode reaches the model — R4a (STA-186)", () => {
+  const flatOf = (rows: IssueRow[], options: BuildOptions) =>
+    flattenFlat(rows, options).map((r) => r.issue.identifier);
+
+  it("DEFAULTS to the order this file had before the registry — priority, update, identifier", () => {
+    // The fixture from "orders by priority, then newest update, then identifier" above,
+    // asserted through the path that now has a sort mode in it and says nothing about one.
+    const rows = [
+      row({ id: "low", identifier: "STA-4", status: "todo", priority: "low" }),
+      row({ id: "crit", identifier: "STA-3", status: "todo", priority: "critical" }),
+      row({ id: "hi", identifier: "STA-2", status: "todo", priority: "high" }),
+      row({ id: "med", identifier: "STA-1", status: "todo", priority: "medium" }),
+    ];
+    const implicit = buildGroups(rows, openAll)[0]!.rows.map((r) => r.issue.id);
+    const explicit = buildGroups(rows, { ...openAll, sort: DEFAULT_SORT })[0]!.rows.map(
+      (r) => r.issue.id,
+    );
+
+    expect(implicit).toEqual(["crit", "hi", "med", "low"]);
+    // Saying nothing and saying "the default" are the same thing, in every shape.
+    expect(explicit).toEqual(implicit);
+    expect(flatOf(rows, openAll)).toEqual(flatOf(rows, { ...openAll, sort: DEFAULT_SORT }));
+  });
+
+  it("keeps the numeric identifier tiebreak, which is the anti-jitter property", () => {
+    // Identical titles, so the TITLE mode is decided entirely by its tie-break — which is
+    // the identifier, and must be numeric there exactly as it is under the default.
+    const rows = [
+      row({ id: "b", identifier: "STA-10", status: "todo", title: "same" }),
+      row({ id: "a", identifier: "STA-9", status: "todo", title: "same" }),
+      row({ id: "c", identifier: "STA-11", status: "todo", title: "same" }),
+    ];
+    expect(flatOf(rows, openAll)).toEqual(["STA-9", "STA-10", "STA-11"]);
+    for (const direction of ["asc", "desc"] as const) {
+      expect(flatOf(rows, { ...openAll, sort: { mode: "title", direction } })).toEqual([
+        "STA-9",
+        "STA-10",
+        "STA-11",
+      ]);
+    }
+  });
+
+  it("re-orders the FLAT list when the mode changes", () => {
+    const rows = [
+      row({ identifier: "STA-1", status: "todo", priority: "critical", title: "zulu" }),
+      row({ identifier: "STA-2", status: "todo", priority: "low", title: "alpha" }),
+    ];
+    expect(flatOf(rows, openAll)).toEqual(["STA-1", "STA-2"]);
+    expect(flatOf(rows, { ...openAll, sort: { mode: "title", direction: "asc" } })).toEqual([
+      "STA-2",
+      "STA-1",
+    ]);
+    expect(flatOf(rows, { ...openAll, sort: { mode: "title", direction: "desc" } })).toEqual([
+      "STA-1",
+      "STA-2",
+    ]);
+  });
+
+  it("re-orders INSIDE a status group too — one menu entry away is not another rulebook", () => {
+    const rows = [
+      row({ identifier: "STA-1", status: "todo", priority: "critical", title: "zulu" }),
+      row({ identifier: "STA-2", status: "todo", priority: "low", title: "alpha" }),
+    ];
+    const titled = buildGroups(rows, { ...openAll, sort: { mode: "title", direction: "asc" } });
+    expect(titled[0]!.rows.map((r) => r.issue.identifier)).toEqual(["STA-2", "STA-1"]);
+  });
+
+  it("ranks EPIC groups by the same comparator the rows inside them use", () => {
+    const rows = [
+      row({ id: "z", identifier: "STA-1", status: "todo", title: "zulu" }),
+      row({ id: "a", identifier: "STA-2", status: "todo", title: "alpha" }),
+      row({ identifier: "STA-3", status: "todo", parentId: "z", title: "nested" }),
+      row({ identifier: "STA-4", status: "todo", parentId: "a", title: "nested" }),
+    ];
+    const groups = buildParentGroups(rows, { ...openAll, sort: { mode: "title", direction: "asc" } });
+    expect(groups.map((g) => g.status)).toEqual(["a", "z"]);
+  });
+
+  it("keeps a CHILD nested under its parent whatever the sort says about the two", () => {
+    // Sorting orders SIBLINGS. A title sort that pulled a child out to sit beside its parent
+    // would be a different tree, not a different order — and it is the one thing the ordering
+    // hook must not be able to do.
+    const rows = [
+      row({ id: "epic", identifier: "STA-1", status: "todo", title: "zulu" }),
+      row({ id: "kid", identifier: "STA-2", status: "todo", parentId: "epic", title: "alpha" }),
+    ];
+    const flat = flattenFlat(rows, { ...openAll, sort: { mode: "title", direction: "asc" } });
+    expect(flat.map((r) => r.issue.identifier)).toEqual(["STA-1", "STA-2"]);
+    expect(flat[1]!.depth).toBe(1);
+  });
+
+  it("orders by QUEUE POSITION without the queue reaching the model — presentation only", () => {
+    const queued = (identifier: string, position: number | null): IssueRow => ({
+      ...row({ identifier, status: "todo", priority: "critical" }),
+      queuePosition: position,
+    });
+    const rows = [queued("STA-1", null), queued("STA-2", 2), queued("STA-3", 1)];
+    const before = JSON.stringify(rows);
+
+    expect(flatOf(rows, { ...openAll, sort: { mode: "queue", direction: "asc" } })).toEqual([
+      "STA-3",
+      "STA-2",
+      "STA-1",
+    ]);
+    // Unqueued last in BOTH directions — a null is the absence of a position, not a big one.
+    expect(flatOf(rows, { ...openAll, sort: { mode: "queue", direction: "desc" } })).toEqual([
+      "STA-2",
+      "STA-3",
+      "STA-1",
+    ]);
+    // And the rows the model was handed are byte-identical afterwards.
+    expect(JSON.stringify(rows)).toBe(before);
+  });
+
+  it("changes NOTHING about membership, counts or the visible order's contents", () => {
+    const rows = [
+      row({ identifier: "STA-1", status: "todo", title: "zulu" }),
+      row({ identifier: "STA-2", status: "todo", title: "alpha" }),
+      row({ identifier: "STA-3", status: "in_progress", title: "mike" }),
+    ];
+    const ids = (options: BuildOptions) =>
+      visibleOrder(buildList(rows, "status", options), () => false)
+        .map((s) => s.ref)
+        .sort();
+
+    for (const mode of SORT_MODES) {
+      for (const direction of ["asc", "desc"] as const) {
+        const options = { ...openAll, sort: { mode: mode.id, direction } };
+        expect(ids(options), `${mode.id}/${direction}`).toEqual(["STA-1", "STA-2", "STA-3"]);
+        const groups = buildGroups(rows, options);
+        expect(groups.map((g) => g.count).reduce((a, b) => a + b, 0)).toBe(3);
+      }
+    }
+  });
+});
+
+/**
+ * R4b (STA-187) — THE GHOST RULE HOLDS FOR THE NEW DIMENSIONS TOO.
+ *
+ * O3c/O8 draw a filtered-away parent as a ghost so the hierarchy survives the filter, and
+ * the mechanism is `hiddenParents(visible, all)` — a parent that is in the unfiltered list
+ * and not in the visible one. `applyFilterDimensions` narrows the visible list and nothing
+ * else, so the rule needs no new code to keep working; what it needs is a test that says so,
+ * because the failure mode is silent (children re-rooted at depth 0 with no epic above them).
+ *
+ * This is the milestone case specifically, and it is the one worth pinning: milestone
+ * membership does NOT follow the tree, so a child can be a member while its own parent is
+ * not — the exact shape that produces an orphaned child under a filter.
+ */
+describe("R4b filter dimensions and the ghost rule", () => {
+  it("ghosts a parent that milestone membership removed, keeping the child's context", () => {
+    const parent = row({ id: "p", identifier: "STA-1", title: "The epic", status: "backlog" });
+    const child = row({ id: "c", identifier: "STA-2", status: "in_progress", parentId: "p" });
+    const all = [parent, child];
+
+    const context: FilterContext = {
+      ...buildFilterContext(all),
+      // The child is a member; its parent is not. Membership is not the tree.
+      milestones: [{ identifier: "M-1", title: "Release 1.0", memberCount: 1, members: ["STA-2"] }],
+    };
+    const visible = applyFilterDimensions(
+      all,
+      { ...emptyFilters(), dims: { milestone: ["M-1"] } },
+      context,
+    );
+    expect(visible.map((r) => r.issue.identifier)).toEqual(["STA-2"]);
+
+    const groups = buildGroups(visible, {
+      ...openAll,
+      hiddenParents: hiddenParents(visible, all),
+    });
+    const inProgress = groups.find((g) => g.status === "in_progress")!;
+
+    // The epic is back as a GHOST — dimmed context, not a row the filter let through — and
+    // the child is nested under it exactly as it would be with no filter on.
+    expect(inProgress.rows.map((r) => [r.issue.identifier, r.depth, r.ghost === true])).toEqual([
+      ["STA-1", 0, true],
+      ["STA-2", 1, false],
+    ]);
+    // A ghost is a bracket around rows, not a row: it is not in the count.
+    expect(inProgress.count).toBe(1);
   });
 });

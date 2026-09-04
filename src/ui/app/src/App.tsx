@@ -29,7 +29,8 @@ import { CreateIssueMount } from "@/components/CreateIssueMount";
 import { TokenGate } from "@/components/TokenGate";
 import { IssueDetailMount } from "@/detail/IssueDetailMount";
 import { SettingsMount } from "@/settings/SettingsMount";
-import { AuthError, getBootstrap, getIssues, hasToken } from "@/lib/api";
+import { AuthError, getBootstrap, getIssues, getMilestone, getMilestones, hasToken } from "@/lib/api";
+import { buildFilterContext, type MilestoneFacts } from "@/lib/filter-dimensions";
 import {
   loadFilters,
   saveFilters,
@@ -44,7 +45,19 @@ import {
   type ViewName,
 } from "@/lib/session";
 import { useWorkspaceSettings } from "@/lib/settings";
-import { loadViewPrefs, saveViewPrefs, type GroupBy } from "@/lib/view-prefs";
+import type { SortPref } from "@/lib/sort-modes";
+import type { MilestoneListRow, MilestoneView } from "@/lib/types";
+import {
+  filtersForScope,
+  loadViewPrefs,
+  saveViewPrefs,
+  sortForScope,
+  sortScopeKey,
+  withFiltersForScope,
+  withSortForScope,
+  type GroupBy,
+  type ViewPrefs,
+} from "@/lib/view-prefs";
 import { useDataVersion, useResource } from "@/lib/useStaple";
 import { GraphView } from "@/views/GraphView";
 import { MilestonesView } from "@/views/milestones/MilestonesView";
@@ -91,26 +104,30 @@ export function App() {
   }, [onAuthError]);
 
   const [view, setView] = useState<ViewName>(DEFAULT_VIEW);
+  /**
+   * R4c (STA-188). Which milestone the page was pointed at, and by what. Beside `view`
+   * because it is the second half of one navigation act; see lib/session.ts.
+   */
+  const [milestoneFocus, setMilestoneFocus] = useState<string | null>(null);
   const [ws, setWs] = useState("");
   const [selection, setSelection] = useState<Selection | null>(null);
 
   /**
-   * The filter state — V4 (STA-89). Seeded from localStorage during the FIRST render, not
-   * in an effect: an effect would paint one frame of the unfiltered list before correcting
-   * itself, and the frame it would paint is the one containing all the done tasks this
-   * ticket exists to hide.
+   * The filter state — V4 (STA-89), SCOPED PER WORKSPACE AND VIEW by R4b (STA-187).
+   *
+   * Both halves are seeded from localStorage during the FIRST render, not in an effect: an
+   * effect would paint one frame of the unfiltered list before correcting itself, and the
+   * frame it would paint is the one containing all the done tasks V4 exists to hide.
+   *
+   * `legacyFilters` is the MIGRATION, read once and never written back into: it is the old
+   * global `staple:filters:v1` state, and it answers for every scope the user has not
+   * filtered in yet, so nobody opens this build to a filter set they never chose. See
+   * `filtersForScope` in lib/view-prefs.ts.
    */
-  const [filters, setFilters] = useState<FilterState>(() => loadFilters(window.localStorage));
-
-  /**
-   * Autosave. Every change, no save button, no debounce — the value is a few hundred bytes
-   * and the write is synchronous and idempotent, so the honest implementation is the naive
-   * one. This also fires once on mount with the value it just loaded, which is a no-op and
-   * costs less than the branch it would take to avoid it.
-   */
-  useEffect(() => {
-    saveFilters(window.localStorage, filters);
-  }, [filters]);
+  const [legacyFilters] = useState<FilterState>(() => loadFilters(window.localStorage));
+  const [filterPrefs, setFilterPrefs] = useState<Record<string, FilterState>>(
+    () => loadViewPrefs(window.localStorage).filters,
+  );
 
   /**
    * How the list is arranged — R1 (STA-100). Seeded during the FIRST render for the same
@@ -119,9 +136,56 @@ export function App() {
    */
   const [groupBy, setGroupBy] = useState<GroupBy>(() => loadViewPrefs(window.localStorage).groupBy);
 
+  /**
+   * The sort preference for every scope the user has ever set one in — R4a (STA-186).
+   *
+   * The WHOLE map is held rather than the one value on screen, because the scope changes
+   * under it: switching workspace or view must produce that scope's sort immediately, and a
+   * single `sort` state would have to re-read storage on every switch to do it. Seeded during
+   * the first render for the same reason `groupBy` is — an effect would paint one frame of
+   * the wrong order and then correct itself.
+   */
+  const [sortPrefs, setSortPrefs] = useState<Record<string, SortPref>>(
+    () => loadViewPrefs(window.localStorage).sort,
+  );
+
+  /**
+   * ONE autosave for the whole envelope, because it is one key. Two effects writing
+   * `staple:view:v1` would race on the render where both changed, and the loser would
+   * overwrite the winner with the value it had captured.
+   */
   useEffect(() => {
-    saveViewPrefs(window.localStorage, { groupBy });
-  }, [groupBy]);
+    const prefs: ViewPrefs = { groupBy, sort: sortPrefs, filters: filterPrefs };
+    saveViewPrefs(window.localStorage, prefs);
+  }, [groupBy, sortPrefs, filterPrefs]);
+
+  /**
+   * WHICH SORT AND WHICH FILTER ARE ON SCREEN — the workspace and the view, resolved to one
+   * preference each. An unset sort scope is `DEFAULT_SORT`, never the neighbouring scope's
+   * choice; an unset FILTER scope is the legacy global state above. See view-prefs.ts.
+   */
+  const viewScope = sortScopeKey(ws, view);
+  const sort = sortForScope(sortPrefs, viewScope);
+  const setSort = useCallback(
+    (next: SortPref) => setSortPrefs((current) => withSortForScope(current, viewScope, next)),
+    [viewScope],
+  );
+
+  const filters = filtersForScope(filterPrefs, viewScope, legacyFilters);
+  const setFilters = useCallback(
+    (next: FilterState) => setFilterPrefs((current) => withFiltersForScope(current, viewScope, next)),
+    [viewScope],
+  );
+
+  /**
+   * The old key stays written, with the set that is on screen. It costs one synchronous
+   * write per change and it is what makes this migration reversible: a build that predates
+   * R4b, or a tab still running one, reads the filter the user last used rather than the one
+   * they had before the upgrade.
+   */
+  useEffect(() => {
+    saveFilters(window.localStorage, filters);
+  }, [filters]);
 
   /**
    * The visible ordered list — published by whichever view is on screen, held here.
@@ -174,13 +238,97 @@ export function App() {
    */
   const settings = useWorkspaceSettings({ ws: ws || undefined, version, onAuthError });
 
+  /**
+   * THE MILESTONES, FOR THE FILTER — R4b (STA-187).
+   *
+   * Two reads, and the split is the whole cost argument. `/api/milestones` is ONE request per
+   * poll — the same bargain `/api/settings` above already makes — and it is what the menu
+   * needs to offer a milestone at all: its identifier, its title, and how many members it
+   * has. It carries no members, by design.
+   *
+   * Membership itself is fetched only for the milestones the user has actually SELECTED,
+   * which is almost always one and never the whole list. Filtering by membership without it
+   * is impossible; fetching every milestone's members on every poll to answer a question
+   * nobody asked would be the same mistake `/api/inbox` is deliberately not making one file
+   * over in TreeView.tsx.
+   *
+   * `all` follows the done toggle, so a finished milestone appears in the menu exactly when
+   * finished work is on the page — the same default, asked once.
+   */
+  const showDone = filters.showDone;
+  const loadMilestoneList = useCallback(() => getMilestones({ ws, all: showDone }), [ws, showDone]);
+  const milestoneList = useResource<MilestoneListRow[]>(
+    loadMilestoneList,
+    [ws, showDone, version],
+    onAuthError,
+  );
+
+  const selectedMilestones = (filters.dims.milestone ?? []).join(",");
+  const loadMilestoneMembers = useCallback(
+    () =>
+      Promise.all(
+        (selectedMilestones ? selectedMilestones.split(",") : []).map((ref) =>
+          getMilestone({ ws, ref }),
+        ),
+      ),
+    [ws, selectedMilestones],
+  );
+  const milestoneMembers = useResource<MilestoneView[]>(
+    loadMilestoneMembers,
+    [ws, selectedMilestones, version],
+    onAuthError,
+  );
+
+  /**
+   * The two reads, joined into what the predicates take. `members: null` — not `[]` — for a
+   * milestone nobody has opened: "I have not looked" and "it is empty" are different facts
+   * and lib/filter-dimensions.ts refuses to confuse them.
+   */
+  const milestoneFacts = useMemo<MilestoneFacts[]>(() => {
+    const loaded = new Map(
+      (milestoneMembers.data ?? []).map((view) => [
+        view.milestone.identifier,
+        view.members.map((member) => member.identifier),
+      ]),
+    );
+    return (milestoneList.data ?? []).map((row) => ({
+      identifier: row.milestone.identifier,
+      title: row.milestone.title,
+      memberCount: row.memberCount,
+      members: loaded.get(row.milestone.identifier) ?? null,
+    }));
+  }, [milestoneList.data, milestoneMembers.data]);
+
+  /**
+   * The filter context — built from the UNFILTERED rows, which is what makes a filtered-away
+   * epic still name its children's epic. See lib/filter-dimensions.ts.
+   */
+  const filterContext = useMemo(
+    () => buildFilterContext(issues.data ?? [], milestoneFacts),
+    [issues.data, milestoneFacts],
+  );
+
   /** The palette's single-assignee view over the assignee dimension. See session.ts. */
   const assignee = filters.dims.assignee?.[0] ?? "";
   const setAssignee = useCallback(
-    (who: string) =>
-      setFilters((current) => withDimension(current, "assignee", who ? [who] : [])),
-    [],
+    (who: string) => setFilters(withDimension(filters, "assignee", who ? [who] : [])),
+    [filters, setFilters],
   );
+
+  /**
+   * Switching to any view by hand drops the focus: it was a request to look at ONE
+   * milestone, and a request that outlived the trip would silently re-point the plan the
+   * next time somebody clicked the tab.
+   */
+  const goToView = useCallback((next: ViewName) => {
+    setMilestoneFocus(null);
+    setView(next);
+  }, []);
+
+  const focusMilestone = useCallback((ref: string) => {
+    setMilestoneFocus(ref);
+    setView("milestones");
+  }, []);
 
   const open = useCallback((workspace: string, ref: string) => setSelection({ workspace, ref }), []);
   const close = useCallback(() => setSelection(null), []);
@@ -193,14 +341,19 @@ export function App() {
       mode: bootstrap.data.mode,
       workspaces: bootstrap.data.workspaces,
       view,
-      setView,
+      setView: goToView,
+      milestoneFocus,
+      focusMilestone,
       ws,
       setWs,
       issues,
       filters,
       setFilters,
+      filterContext,
       groupBy,
       setGroupBy,
+      sort,
+      setSort,
       visibleOrder,
       publishVisibleOrder,
       assignee,
@@ -217,10 +370,17 @@ export function App() {
     // rebuilds it and every view re-renders against the new statuses. See above.
     settingsSnapshot,
     view,
+    goToView,
+    milestoneFocus,
+    focusMilestone,
     ws,
     issues,
     filters,
+    setFilters,
+    filterContext,
     groupBy,
+    sort,
+    setSort,
     visibleOrder,
     publishVisibleOrder,
     assignee,

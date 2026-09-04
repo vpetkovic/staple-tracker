@@ -50,6 +50,7 @@ import { LabelPills } from "./LabelPills";
 import { ParentRollupBar } from "./ParentRollup";
 import { PrBadge } from "./PrBadge";
 import { PrioritySignal } from "./PrioritySignal";
+import { MilestoneCue, PickupCue } from "./RowCues";
 import { StatusIcon } from "./StatusIcon";
 import { Avatar, RowClaimSlot } from "./WorkingPill";
 import { WorklogCue } from "./WorklogCue";
@@ -180,6 +181,12 @@ export interface TaskRowLineProps {
   caption?: string;
   onOpen?: () => void;
   onOpenParent?: (identifier: string) => void;
+  /**
+   * R4c (STA-188). Open the Milestones view with this milestone focused. Absent on every
+   * surface that has no view to route to — the marker still renders and still names the
+   * milestone in its tooltip; only the navigation is missing, which is honest.
+   */
+  onOpenMilestone?: (identifier: string) => void;
   onToggleExpand?: () => void;
   onToggleSelect?: () => void;
   onFocus?: () => void;
@@ -200,6 +207,7 @@ export function TaskRowLine({
   caption,
   onOpen,
   onOpenParent,
+  onOpenMilestone,
   onToggleExpand,
   onToggleSelect,
   onFocus,
@@ -207,6 +215,13 @@ export function TaskRowLine({
   registerRef,
 }: TaskRowLineProps) {
   const { issue, claim, depth, hasChildren, childCount, guides, breadcrumb, rollup } = row;
+  /**
+   * R4c (STA-188). Absent on every surface that has not joined the pickup queue — the
+   * palette, the detail panel, a fixture — so the cues are gated on the DATA rather than on
+   * a column switch. A container that has nothing to say draws nothing, per the column rule
+   * at the top of this file.
+   */
+  const cues = row.cues ?? null;
   const { columns, labelMax } = config;
   const collapsedParent = columns.disclosure && hasChildren && !isExpanded;
   const bare = semantics === "bare";
@@ -366,6 +381,14 @@ export function TaskRowLine({
       {columns.status ? <StatusIcon status={issue.status} className="staple-row-status" /> : null}
 
       <span className="staple-row-title-cell">
+        {/*
+          THE TWO CUES — R4c (STA-188). First in the title cell, so they sit immediately
+          right of the identifier and status cluster, which is where the ticket asks for
+          them and the only place they can go without a new grid track. They cost no
+          height: see RowCues.tsx.
+        */}
+        {cues?.pickup ? <PickupCue cue={cues.pickup} /> : null}
+        {cues?.milestone ? <MilestoneCue cue={cues.milestone} onOpen={onOpenMilestone} /> : null}
         {columns.workspace ? (
           <span className="staple-row-workspace" data-testid="workspace-pill" title={`Workspace: ${row.workspace}`}>
             {row.workspace}

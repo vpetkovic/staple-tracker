@@ -660,6 +660,21 @@ export interface IssueDeps {
   blocks: string[];
 }
 
+/**
+ * WHETHER AN AGENT COULD TAKE THIS ROW RIGHT NOW — R4b (STA-187), docs/queue.md "Policy".
+ *
+ * Five words, one per row, first match wins, mirroring the resolver's eligibility ladder:
+ * `gated` and `blocked` are the hard constraints it names before anything else, `claimed`
+ * is somebody else already inside the work, and what is left is takeable. `queued` is the
+ * one the browser cannot derive on its own — it means "eligible, but the plan puts another
+ * row first", and order is the resolver's knowledge.
+ *
+ * A resolved row has NO pickup state (`null`): finished work is not waiting for anything and
+ * saying it is "not pickable" would file it beside work that is stuck.
+ */
+export const PICKUP_STATES = ["pickable", "queued", "waiting", "gated", "in_flight"] as const;
+export type PickupState = (typeof PICKUP_STATES)[number];
+
 export interface IssueRow {
   workspace: string;
   issue: Issue;
@@ -710,6 +725,110 @@ export interface IssueRow {
    */
   gate?: IssueGate | null;
   queuedBy?: QueuedBy | null;
+  /**
+   * WHERE THIS ROW SITS IN THE PICKUP PLAN — R2's queue, as a READING (STA-186).
+   *
+   * Two fields because R4c (STA-188) has to tell two things apart on the same row and the
+   * queue contract keeps them apart: `queuePosition` is the EFFECTIVE position an actionable
+   * row holds in the pickup queue, `planPosition` is the plan position a CONTAINER carries.
+   * A row can have both, one, or neither.
+   *
+   * SIBLINGS of `issue`, like `claim` and `gate`, and for the same reason: the plan is a
+   * relation on a different clock, and freezing it onto the entity would be a copy that goes
+   * stale the moment somebody reorders the queue.
+   *
+   * OPTIONAL ON THE TYPE and supplied by `/api/issues` — the same discipline `deps` and
+   * `worklog` follow, so a fixture or a synthesised row need not have an opinion and every
+   * consumer is obliged to check rather than assume. `null` means "not in the plan", which is
+   * NOT the same as position 0, and `lib/sort-modes.ts` treats absent and null identically.
+   *
+   * READ ONLY, EVERYWHERE IN THE UI. `docs/queue.md` is explicit that presentation sort is
+   * not the queue: the list may display and order by these numbers and may never set them.
+   * The one write path is the queue's own API.
+   */
+  planPosition?: number | null;
+  queuePosition?: number | null;
+  /**
+   * WHETHER THIS ROW CAN BE PICKED UP, AND WHY NOT — R4b (STA-187).
+   *
+   * The queue resolver's own answer, as one word. It is a SIBLING of `issue` for the reason
+   * `planPosition` is one: eligibility is re-derived against the store's clock on every read
+   * (a claim taken a second ago changes it), so freezing it onto the entity would be a copy
+   * that is wrong within a poll.
+   *
+   * OPTIONAL AND ABSENT UNTIL R2c SERVES IT, which is why every reader must treat absence as
+   * "unknown" rather than as "not pickable". `lib/filter-dimensions.ts` does: it prefers this
+   * field and falls back to deriving four of the five states from the gate, the blockers, the
+   * claim and the status when it is missing. `pickupReason` is the resolver's `detail`
+   * rendered as a sentence — the blocker identifiers, the gate owner, the holder — and is
+   * null whenever there is nothing to explain.
+   */
+  pickupState?: PickupState | null;
+  pickupReason?: string | null;
+  /**
+   * WHAT THE UNGROUPED ROW SAYS ABOUT THE PLAN — R4c (STA-188).
+   *
+   * A SIBLING of `issue` like every field above it, and OPTIONAL for the reason `deps` and
+   * `worklog` are: three other places build an `IssueRow` and none of them has an opinion
+   * about the queue. Absent means "nobody joined the plan onto this row", which the row
+   * renders as silence rather than as "unqueued" — see `components/task-list/row-cues.ts`.
+   *
+   * NOT SERVED. It is DERIVED in the browser by joining the list against `GET /api/queue`,
+   * which is why it is not `pickupState`/`queuePosition` above: those two are the wire's
+   * own fields and stay reserved for the day the list route sends them.
+   */
+  cues?: RowCues | null;
+}
+
+/**
+ * WHAT AN UNGROUPED ROW DISCLOSES ABOUT THE PICKUP PLAN — R4c (STA-188).
+ *
+ * Six words, one per row. Five of them are `PICKUP_STATES` above, unchanged and meaning
+ * exactly what docs/queue.md says they mean; the sixth, `unqueued`, is the queue's own
+ * sixth answer — `EffectiveQueueRow.unqueued`, "a row after the last plan row: still work,
+ * just later". It is a state rather than the absence of one because "nothing is stopping
+ * this and nobody planned it" is a different fact from "this is next", and a reader who
+ * cannot tell them apart cannot trust the plan.
+ *
+ * A resolved row has no cue at all. Finished work is not waiting for anything.
+ */
+export const ROW_CUE_STATES = [
+  "pickable",
+  "queued",
+  "waiting",
+  "gated",
+  "in_flight",
+  "unqueued",
+] as const;
+export type RowCueState = (typeof ROW_CUE_STATES)[number];
+
+export interface RowPickupCue {
+  state: RowCueState;
+  /**
+   * The number the cue prints, or null when the state has no number.
+   *
+   * `scope` says WHICH number it is, and the pair is the whole point of the field: an
+   * actionable row carries its EFFECTIVE position (`scope: "effective"`), a container
+   * carries the PLAN position it sits at (`scope: "plan"`). The queue contract keeps those
+   * apart and so does this — printing one under the other's name would be a lie about where
+   * an agent would actually start.
+   */
+  position: number | null;
+  scope: "effective" | "plan";
+  /** The resolver's own sentence for why, or null when there is nothing to explain. */
+  reason: string | null;
+}
+
+/** The milestone a row is planned under — its own membership, else its nearest ancestor's. */
+export interface RowMilestoneCue {
+  identifier: string;
+  /** From `/api/milestones`; null when the page has not listed that milestone. */
+  title: string | null;
+}
+
+export interface RowCues {
+  pickup: RowPickupCue | null;
+  milestone: RowMilestoneCue | null;
 }
 
 /** GET /api/inbox */

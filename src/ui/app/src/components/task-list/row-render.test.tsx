@@ -18,6 +18,8 @@
  *      the hit areas differently.
  *   4. Label pills cap at two plus an overflow whose tooltip names what it hid.
  */
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ReactElement } from "react";
@@ -30,7 +32,15 @@ import { TaskRowLine } from "./TaskRowLine";
 import { resolveTaskListConfig } from "./config";
 import { flatRow } from "./model";
 import { claim, row, worklog } from "./fixtures";
-import type { Issue, ClaimActivity, WorklogSummary, IssueDeps } from "@/lib/types";
+import type { Issue, ClaimActivity, WorklogSummary, IssueDeps, QueueView } from "@/lib/types";
+import { ROW_CUE_STATES } from "@/lib/types";
+import { PickupCue } from "./RowCues";
+import {
+  attachRowCues,
+  buildRowCueIndex,
+  MILESTONE_CUE_GLYPH,
+  ROW_CUE_PRESENTATION,
+} from "./row-cues";
 
 const NOW = new Date("2026-09-02T12:00:00.000Z");
 
@@ -1257,5 +1267,218 @@ describe("kind glyph on a ghost parent", () => {
   it("still reads its kind before the note that it is only context", () => {
     const markup = ghostMarkup();
     expect(markup.indexOf("Kind: Epic")).toBeLessThan(markup.indexOf("parent shown for context"));
+  });
+});
+
+/**
+ * R4c (STA-188) — the two cues, in the DOM.
+ *
+ * The derivation is argued in `row-cues.test.ts`; what is left for the markup is the half of
+ * the ticket that is about the ROW rather than about the queue:
+ *
+ *   1. Every cue carries a `title` AND screen-reader text, and both say the same sentence.
+ *      A tooltip alone is a cue only a mouse can read.
+ *   2. The state is legible without colour: a distinct glyph per state, and the WORD leading
+ *      the sentence. Nothing here paints.
+ *   3. THE ROW DOES NOT GROW. Two inline 11px spans in the title track, no `style`, no
+ *      `<div>`, and `--row-height` unchanged in every density preset — the same structural
+ *      proof R7c's "adds no height" makes one element to the right.
+ *   4. The GROUPED shapes are untouched: a row that was never joined against the queue
+ *      renders no cue at all, which is what the ungrouped-only fetch in TreeView buys.
+ */
+describe("row cues", () => {
+  const QUEUE: QueueView = {
+    revision: 3,
+    entries: [
+      { issueId: "epic", identifier: "STA-9", title: "The epic", kind: "epic", status: "todo", planPosition: 2, rank: 2000, parent: null, resolved: false, addedBy: "VP", addedAt: "2026-09-01T00:00:00.000Z", note: null },
+    ],
+    effective: [
+      { issueId: "a", identifier: "STA-1", title: "first", kind: "task", status: "todo", position: 1, planPosition: 1, via: null, unqueued: false, eligibility: "eligible", reason: null, detail: null, dueAt: null, milestonePath: ["STA-50"], epicPath: [], parent: null },
+      { issueId: "b", identifier: "STA-2", title: "second", kind: "task", status: "todo", position: 2, planPosition: 2, via: "STA-9", unqueued: false, eligibility: "eligible", reason: null, detail: null, dueAt: null, milestonePath: [], epicPath: ["STA-9"], parent: "epic" },
+      { issueId: "c", identifier: "STA-3", title: "third", kind: "task", status: "todo", position: 3, planPosition: null, via: null, unqueued: false, eligibility: "blocked", reason: "STA-3 is blocked by STA-1.", detail: null, dueAt: null, milestonePath: [], epicPath: [], parent: null },
+    ],
+  };
+  const TITLES = new Map([["STA-50", "Q4 launch"]]);
+
+  /** One ungrouped row, joined against the queue exactly as TreeView joins it. */
+  function renderCued(
+    identifier: string,
+    over: Partial<Issue> = {},
+    density: "comfortable" | "compact" = "comfortable",
+  ): string {
+    const sources = attachRowCues(
+      [row({ id: "epic", identifier: "STA-9", kind: "epic" }), row({ identifier, ...over })],
+      buildRowCueIndex(QUEUE, TITLES),
+    );
+    const built = flattenFlat(sources, { isExpanded: () => true, showResolved: true }).find(
+      (line) => line.issue.identifier === identifier,
+    )!;
+
+    return renderToStaticMarkup(
+      <TaskRowLine
+        row={built}
+        config={resolveTaskListConfig("tree", { density, labelMax: 2 })}
+        semantics="grid"
+        isExpanded
+        now={NOW}
+        onOpen={() => {}}
+        onOpenMilestone={() => {}}
+      />,
+    );
+  }
+
+  it("puts the pickup cue and the milestone marker at the head of the title cell", () => {
+    const markup = renderCued("STA-1");
+    const status = markup.indexOf("staple-row-status");
+    const pickup = markup.indexOf('data-testid="row-pickup-cue"');
+    const milestone = markup.indexOf('data-testid="row-milestone-cue"');
+    const title = markup.indexOf('class="staple-row-title"');
+
+    // Immediately right of the identifier and status cluster — "near the identifier", in
+    // the one track that can take an aside without a new grid column.
+    expect(status).toBeLessThan(pickup);
+    expect(pickup).toBeLessThan(milestone);
+    expect(milestone).toBeLessThan(title);
+    expect(markup.indexOf("staple-row-title-cell")).toBeLessThan(pickup);
+    expect(pickup).toBeLessThan(markup.indexOf("staple-row-meta"));
+  });
+
+  it("says `next` on the one row the resolver would hand out, with the word in both places", () => {
+    const markup = renderCued("STA-1");
+    const sentence = `Pickable — ${ROW_CUE_PRESENTATION.pickable.hint} Queue position 1.`;
+
+    expect(markup).toContain('data-pickup-cue="pickable"');
+    expect(markup).toContain(`title="${sentence}"`);
+    expect(markup).toContain(`<span class="sr-only">${sentence}</span>`);
+    expect(markup).toContain(ROW_CUE_PRESENTATION.pickable.glyph);
+    expect(markup).toContain("next");
+  });
+
+  it("gives a queued actionable row its effective number and a blocked row its reason", () => {
+    const queued = renderCued("STA-2");
+    expect(queued).toContain('data-pickup-cue="queued"');
+    expect(queued).toContain('data-cue-position="2"');
+    expect(queued).toContain('data-cue-scope="effective"');
+    expect(queued).toContain("#2");
+
+    const blocked = renderCued("STA-3");
+    expect(blocked).toContain('data-pickup-cue="waiting"');
+    // The resolver's own sentence, not a second derivation in the browser.
+    expect(blocked).toContain("STA-3 is blocked by STA-1.");
+    // No number: a blocked row's place in the order is not what a reader needs from it.
+    expect(blocked).not.toContain("data-cue-position");
+  });
+
+  it("gives a queued CONTAINER the plan number, spelled out so it cannot be misread", () => {
+    const markup = renderCued("STA-9", { id: "epic", kind: "epic" });
+
+    expect(markup).toContain('data-pickup-cue="queued"');
+    expect(markup).toContain('data-cue-scope="plan"');
+    expect(markup).toContain("plan #2");
+    expect(markup).toContain("Plan position 2.");
+  });
+
+  it("is distinguishable by glyph and word, never by colour", () => {
+    // Every state renders its own glyph, and the sentence LEADS with the word — the two
+    // channels WCAG 1.4.1 allows. Nothing in the markup carries a hue.
+    for (const state of ROW_CUE_STATES) {
+      const cue = { state, position: null, scope: "effective" as const, reason: null };
+      const markup = renderToStaticMarkup(<PickupCue cue={cue} />);
+
+      expect(markup, state).toContain(ROW_CUE_PRESENTATION[state].glyph);
+      expect(markup, state).toContain(`${ROW_CUE_PRESENTATION[state].label} —`);
+      expect(markup, state).toContain(`data-pickup-cue="${state}"`);
+      expect(markup, state).not.toContain("color");
+      expect(markup, state).not.toContain("style=");
+    }
+  });
+
+  it("makes the milestone marker a real control that names where it goes", () => {
+    const markup = renderCued("STA-1");
+    const sentence = "Planned under milestone STA-50: Q4 launch — open the milestone plan";
+
+    expect(markup).toContain('data-milestone="STA-50"');
+    expect(markup).toContain(`aria-label="${sentence}"`);
+    expect(markup).toContain(`title="${sentence}"`);
+    // A button, so it is reachable by keyboard; the pickup cue is a span, because the list
+    // reads the queue and may never write it.
+    expect(markup).toContain('<button type="button" class="staple-row-milestone"');
+    expect(markup).toContain(MILESTONE_CUE_GLYPH);
+  });
+
+  it("adds no height: two inline spans in the title track, no style, no block box", () => {
+    for (const density of ["comfortable", "compact"] as const) {
+      const markup = renderCued("STA-1", {}, density);
+      const cue = /<span class="staple-row-cue"[\s\S]*?<\/span><\/span>/.exec(markup)![0];
+
+      expect(cue.startsWith("<span "), density).toBe(true);
+      expect(cue, density).not.toContain("style=");
+      expect(cue, density).not.toContain("<div");
+      // The density preset is unchanged by the presence of the cue — the row's height is
+      // `.staple-row`'s and nothing here touches it.
+      expect(markup, density).toContain(`data-density="${density}"`);
+    }
+  });
+
+  it("leaves every density preset's row height exactly where it was", () => {
+    // The structural half of "all density presets keep the existing row height". The three
+    // declarations are the default, the coarse-pointer target and the compact preset (plus
+    // its own coarse-pointer value) — the same four the sheet shipped with before R4c, and
+    // no cue rule adds a fifth.
+    const CSS = readFileSync(
+      fileURLToPath(new URL("./task-list.css", import.meta.url)),
+      "utf8",
+    ).replace(/\/\*[\s\S]*?\*\//g, "");
+
+    expect(CSS.match(/--row-height:\s*[^;]+;/g)).toEqual([
+      "--row-height: 36px;",
+      "--row-height: 44px;",
+      "--row-height: 28px;",
+      "--row-height: 36px;",
+    ]);
+    // And no cue rule sets a box that could grow the line beyond the 13px title beside it.
+    const cueRules = CSS.split("}")
+      .filter((rule) => /\.staple-row-(cue|milestone)\b/.test(rule.split("{")[0] ?? ""))
+      .join("}");
+    expect(cueRules).not.toMatch(/(^|[^-])height:/);
+    expect(cueRules).not.toMatch(/padding/);
+    expect(cueRules).not.toMatch(/border/);
+    expect(cueRules).toContain("font-size: 11px");
+  });
+
+  it("leaves the grouped shapes untouched — no join, no cue", () => {
+    // TreeView fetches the queue only in the ungrouped shape, so a grouped row is built
+    // from sources that were never joined. This is what that produces.
+    const rows = [
+      row({ id: "epic", identifier: "STA-9", kind: "epic", status: "backlog" }),
+      row({ id: "a", identifier: "STA-1", status: "in_progress", parentId: "epic" }),
+    ];
+    const group = buildGroups(rows, { isExpanded: () => true, rollupSource: rows }).find(
+      (g) => g.status === "in_progress",
+    )!;
+
+    for (const built of group.rows) {
+      const markup = renderToStaticMarkup(
+        <TaskRowLine row={built} config={resolveTaskListConfig("tree", { labelMax: 2 })} semantics="grid" isExpanded now={NOW} />,
+      );
+      expect(markup).not.toContain("row-pickup-cue");
+      expect(markup).not.toContain("row-milestone-cue");
+    }
+  });
+
+  it("gives a ghost no cue — a bracket around rows is not a row an agent could take", () => {
+    const rows = attachRowCues(
+      [
+        row({ id: "epic", identifier: "STA-9", kind: "epic", status: "backlog" }),
+        row({ id: "b", identifier: "STA-2", status: "in_progress", parentId: "epic" }),
+      ],
+      buildRowCueIndex(QUEUE, TITLES),
+    );
+    const group = buildGroups(rows, { isExpanded: () => true, rollupSource: rows }).find(
+      (g) => g.status === "in_progress",
+    )!;
+    const ghost = group.rows.find((line) => line.ghost)!;
+
+    expect(ghost.cues).toBeNull();
   });
 });
