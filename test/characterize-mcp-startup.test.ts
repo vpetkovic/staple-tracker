@@ -130,13 +130,13 @@ describe("a server started with no workspace in reach", () => {
     await client?.close();
   });
 
-  it("still connects and still lists all 23 tools", async () => {
+  it("still connects and still lists all 31 tools", async () => {
     const { tools } = await client.listTools();
     // The inventory does not shrink when there is nowhere to write: a harness
     // configured before the user ever ran `init` sees the full tool set.
-    // 16 before this merge, plus STA-140's four vocabulary tools and STA-143's
-    // three gate verbs.
-    expect(tools).toHaveLength(23);
+    // 16 before this merge, plus STA-140's four vocabulary tools, STA-143's
+    // three gate verbs and STA-172's eight milestone tools.
+    expect(tools).toHaveLength(31);
   });
 
   it("pins the not_found guidance a read tool returns instead of an empty result", async () => {

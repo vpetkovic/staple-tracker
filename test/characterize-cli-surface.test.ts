@@ -136,6 +136,15 @@ const COMMANDS: ReadonlyArray<{
     booleans: ["json", "yes", "all-found", "follow-symlinks", "cross-filesystems"],
     shorts: [],
   },
+  // R3b (STA-172) added `milestone`, one dispatcher token with eight subcommands
+  // (ls, show, new, set, add, rm, mv, reorder) sharing one parseArgs table, the
+  // way `statuses`/`kinds` do. `-m` is the member note on `add`.
+  {
+    name: "milestone",
+    strings: ["db", "ws", "target", "start", "from-epic", "before", "after", "at", "to", "base", "note"],
+    booleans: ["json", "all", "preview"],
+    shorts: ["m"],
+  },
 ];
 
 /** Every command token in one place, so a removal is a one-line diff. */
@@ -147,18 +156,19 @@ describe("command inventory", () => {
       "init", "new", "ls", "show", "checkout", "start", "done", "cancel",
       "status", "release", "block", "blocked-by", "wait", "link", "comment",
       "tree", "board", "inbox", "doc", "events", "hub", "ui", "open", "config",
-      "migrate", "install", "doctor", "add", "discover",
+      "migrate", "install", "doctor", "add", "discover", "milestone",
     ]);
-    // 29 tokens, 26 distinct behaviours: checkout/start, done/cancel and ui/open
+    // 30 tokens, 27 distinct behaviours: checkout/start, done/cancel and ui/open
     // each share a case. Was 22 before A3 (STA-33) added `config`, 23 before A5
     // (STA-35) added `migrate`, 24 before A8 (STA-38) added `install`, 25 before
     // A6 (STA-36) added `open`, 26 before A7 (STA-37) added `doctor`, 27 before
-    // A9 (STA-39) added `add` and `discover`. The rest of the epic still owes
+    // A9 (STA-39) added `add` and `discover`, 29 before R3b (STA-172) added
+    // `milestone`. The rest of the epic still owes
     // this list: connect, disconnect (STA-25 / B1-B4), and mcp — which today is
     // handled by the PACKAGED entrypoint (src/package/staple.ts) rather than by
     // this dispatcher. Whoever adds an `mcp` case here must delete that branch
     // in the same change rather than leaving two.
-    expect(COMMAND_NAMES).toHaveLength(29);
+    expect(COMMAND_NAMES).toHaveLength(30);
   });
 
   it.each(COMMANDS.map((c) => c.name))(
@@ -373,6 +383,7 @@ describe("help surface", () => {
     const help = cli("help").stdout;
     const headings = help.split("\n").filter((l) => /^[A-Z][A-Za-z &]*$/.test(l));
     // "Approval gates" arrived with STA-143 and sits with the flow it belongs to;
+    // "Milestones" (STA-172) follows it, planning beside the flow it orders;
     // "Workspace vocabulary" arrived with STA-140 (staple statuses / kinds) and sits
     // last, after the global flags, because it is configuration rather than work.
     expect(headings).toEqual([
@@ -380,6 +391,7 @@ describe("help surface", () => {
       "Tasks",
       "Flow",
       "Approval gates",
+      "Milestones",
       "Documents & events",
       "UI",
       "Workspace vocabulary",

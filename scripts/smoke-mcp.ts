@@ -118,7 +118,7 @@ try {
   );
   const readOnly = tools.tools.filter((t: any) => t.annotations?.readOnlyHint === true).map((t: any) => t.name);
   assert(
-    readOnly.length === 9 &&
+    readOnly.length === 11 &&
       [
         "inbox",
         "list_tasks",
@@ -130,8 +130,11 @@ try {
         "list_statuses",
         "list_kinds",
         "hub_overview",
+        // STA-172: reading a plan is as read-only as reading a task.
+        "list_milestones",
+        "get_milestone",
       ].every((n) => readOnly.includes(n)),
-    `exactly the 9 read-only tools flagged readOnlyHint (${readOnly.join(", ")})`,
+    `exactly the 11 read-only tools flagged readOnlyHint (${readOnly.join(", ")})`,
   );
   assert(byName.get("checkout_task").annotations.idempotentHint === true, "checkout_task flagged idempotent");
   assert(
@@ -649,9 +652,10 @@ try {
     .filter((t: any) => t.inputSchema?.properties?.ws)
     .map((t: any) => t.name);
   // STA-140 added list_statuses / list_kinds / update_statuses / update_kinds and
-  // STA-143 added gate_task / approve_task / request_changes. All seven act on ONE
-  // workspace, so all seven take `ws` like every other workspace tool.
-  assert(wsTargetable.length === 20, `20 workspace tools accept ws targeting (${wsTargetable.length} found)`);
+  // STA-143 added gate_task / approve_task / request_changes, and STA-172 the
+  // eight milestone tools. All fifteen act on ONE workspace, so all fifteen take
+  // `ws` like every other workspace tool.
+  assert(wsTargetable.length === 28, `28 workspace tools accept ws targeting (${wsTargetable.length} found)`);
   assert(
     !coldByName.get("cross_link").inputSchema.properties?.ws &&
       !coldByName.get("hub_overview").inputSchema.properties?.ws,
@@ -757,16 +761,24 @@ try {
         // all three are attributable — a gate with no requester is exactly the
         // kind of unattributable decision this assertion exists to prevent.
         "add_comment",
+        // STA-172: every milestone write is attributed — membership events carry
+        // the actor, and a plan nobody signed is not a plan.
+        "add_milestone_member",
         "approve_task",
         "checkout_task",
+        "create_milestone",
         "create_task",
         "gate_task",
+        "move_milestone_member",
         "put_document",
         "release_task",
+        "remove_milestone_member",
+        "reorder_milestone_members",
         "request_changes",
         "set_blocked_by",
         // STA-140: a vocabulary edit is a write and is attributed like one.
         "update_kinds",
+        "update_milestone",
         "update_statuses",
         "update_task",
       ].join(","),

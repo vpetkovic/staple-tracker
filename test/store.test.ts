@@ -370,6 +370,11 @@ describe("schema migration against a live database", () => {
       ]) {
         legacyDb.exec(`ALTER TABLE issues DROP COLUMN ${column}`);
       }
+      // STA-172 added migration 007, two tables — the 004 rule again: a synthetic
+      // v1 built out of a current database has to lose them, or 007 fails on
+      // "table already exists" instead of testing the walk.
+      legacyDb.exec("DROP TABLE IF EXISTS milestone_members");
+      legacyDb.exec("DROP TABLE IF EXISTS milestone_meta");
       legacyDb.prepare("UPDATE meta SET value = '1' WHERE key = 'schema_version'").run();
       legacyDb.close();
 

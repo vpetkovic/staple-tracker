@@ -50,7 +50,8 @@ never emitted as itself; it is expanded in place, depth-first, to its open leaf
 descendants (the same "nothing open underneath" test gates use, so a parent a
 human gave a status to after its children finished is a leaf). A milestone
 expands to its members in membership order (R3d), and each member expands by
-this rule. Siblings inside a container expand in **presentation sort**, so a
+this rule — what a milestone is and how its membership is ordered is
+[milestones.md](milestones.md). Siblings inside a container expand in **presentation sort**, so a
 queued epic behaves exactly like today's inbox restricted to that epic; a human
 who wants a different order inside it queues the child explicitly. An issue
 reached twice — queued directly and via a container, or via two containers —

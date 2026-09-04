@@ -228,7 +228,7 @@ describe("tool inventory", () => {
    * moment this ticket is buying. Read-only tools deliberately omit
    * destructiveHint (the MCP spec only defines it when readOnlyHint is false).
    */
-  it("exposes exactly these 23 tools with these annotations and output schemas", async () => {
+  it("exposes exactly these 31 tools with these annotations and output schemas", async () => {
     const tools = await harness.listTools();
     const inventory = tools.map((t) => ({
       name: t.name,
@@ -471,10 +471,92 @@ describe("tool inventory", () => {
         },
         hasOutputSchema: true,
       },
+      // ------ milestones (STA-172) ------
+      {
+        name: "list_milestones",
+        annotations: { title: "List milestones", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+        hasOutputSchema: true,
+      },
+      {
+        name: "get_milestone",
+        annotations: { title: "Get milestone", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+        hasOutputSchema: true,
+      },
+      {
+        // No output schema: a preview and a commit are two shapes on purpose,
+        // and the SDK validates structuredContent against one.
+        name: "create_milestone",
+        annotations: {
+          title: "Create milestone",
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: false,
+          openWorldHint: false,
+        },
+        hasOutputSchema: false,
+      },
+      {
+        // idempotentHint: setting the same dates twice is the same state.
+        name: "update_milestone",
+        annotations: {
+          title: "Update milestone dates",
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
+        hasOutputSchema: true,
+      },
+      {
+        // Never destructive: membership touches nothing about the member, and a
+        // member is only ever removed by a human naming it.
+        name: "add_milestone_member",
+        annotations: {
+          title: "Add milestone member",
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: false,
+          openWorldHint: false,
+        },
+        hasOutputSchema: true,
+      },
+      {
+        name: "remove_milestone_member",
+        annotations: {
+          title: "Remove milestone member",
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: false,
+          openWorldHint: false,
+        },
+        hasOutputSchema: true,
+      },
+      {
+        name: "move_milestone_member",
+        annotations: {
+          title: "Move milestone member",
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: false,
+          openWorldHint: false,
+        },
+        hasOutputSchema: true,
+      },
+      {
+        name: "reorder_milestone_members",
+        annotations: {
+          title: "Reorder milestone members",
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: false,
+          openWorldHint: false,
+        },
+        hasOutputSchema: true,
+      },
     ]);
   });
 
-  it("marks exactly the nine read tools readOnlyHint: true", async () => {
+  it("marks exactly the eleven read tools readOnlyHint: true", async () => {
     const tools = await harness.listTools();
     const readOnly = tools.filter((t) => t.annotations?.readOnlyHint === true).map((t) => t.name);
     expect(readOnly).toEqual([
@@ -488,6 +570,9 @@ describe("tool inventory", () => {
       "list_statuses",
       "list_kinds",
       "hub_overview",
+      // STA-172: reading a plan is as read-only as reading a task.
+      "list_milestones",
+      "get_milestone",
     ]);
   });
 
@@ -504,7 +589,7 @@ describe("tool inventory", () => {
 
 // ----------------------------------------------------------- success shapes
 
-describe("tool response shapes (23/23)", () => {
+describe("tool response shapes (31/31)", () => {
   it("init", () => {
     // Both fixtures are global workspaces, which get no AGENTS.md — the guide
     // belongs beside a repo's .staple. test/agents-guide.test.ts covers the repo case.
@@ -1068,6 +1153,16 @@ describe("tool response shapes (23/23)", () => {
       "list_kinds",
       "update_statuses",
       "update_kinds",
+      // STA-172: the eight milestone tools are pinned in contract-milestones.test.ts,
+      // against the CLI and HTTP projections of the same shape.
+      "list_milestones",
+      "get_milestone",
+      "create_milestone",
+      "update_milestone",
+      "add_milestone_member",
+      "remove_milestone_member",
+      "move_milestone_member",
+      "reorder_milestone_members",
     ]);
     expect([...covered].sort()).toEqual([...tools].sort());
   });
