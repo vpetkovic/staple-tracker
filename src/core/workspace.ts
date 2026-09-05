@@ -8,6 +8,7 @@ import { Hub } from "./hub.js";
 import { type OpenedWorkspace, openWorkspace, readMeta, writeMeta } from "./open.js";
 import { writeAgentsGuide } from "./agents-template.js";
 import { writeWorkspaceGitignore } from "./workspace-gitignore.js";
+import { reconcileRepositoryIdentity, type RepositoryIdentityReport } from "./repo-identity.js";
 import { repairHubRegistration } from "./hub-repair.js";
 import {
   assertResolvable,
@@ -153,6 +154,13 @@ export function initWorkspace(options: {
   gitignorePath: string | null;
   /** false when the ignore file already existed and was kept as-is. */
   gitignoreWritten: boolean;
+  /**
+   * Repository identity as reconciled on this init; null for global workspaces,
+   * which have no repository to identify. `status: "manifest_mismatch"` means
+   * the database was copied out of another repository or the manifest was
+   * hand-edited — reported, never repaired here.
+   */
+  repository: RepositoryIdentityReport | null;
   /** Which layout this workspace stores its state in. */
   layout: WorkspaceLayout;
 } {
@@ -209,6 +217,27 @@ export function initWorkspace(options: {
     const ignore =
       kind === "repo" && options.gitignore !== false ? writeWorkspaceGitignore(dirname(dbPath)) : null;
 
+    /**
+     * The repository manifest, third of the three files init drops beside the
+     * database, and the only one that is load-bearing for a CLONE rather than
+     * for the person reading the directory.
+     *
+     * ADOPTS rather than mints when one is already there. That is the whole
+     * point: a fresh clone carries `.staple/repository.json` out of git and no
+     * database at all, `staple init` is the first command anybody runs in it,
+     * and an init that minted its own id here would fork the repository at
+     * precisely the moment the manifest exists to prevent that.
+     *
+     * Repo workspaces only, like the guide and the ignore file. A global
+     * workspace lives under the machine home with no repository around it, so
+     * there is nothing to identify and nowhere for a manifest to be checked in.
+     *
+     * This is local file and local row work: it makes no network call, and it is
+     * not `connect`. A workspace carrying an identity has not consented to
+     * anything — see docs/sync.md, "Three consents".
+     */
+    const repository = kind === "repo" ? reconcileRepositoryIdentity(db, dirname(dbPath)) : null;
+
     return {
       store: new WorkspaceStore(db, storedSlug, prefix),
       dbPath,
@@ -217,6 +246,7 @@ export function initWorkspace(options: {
       guideWritten: guide?.written ?? false,
       gitignorePath: ignore?.path ?? null,
       gitignoreWritten: ignore?.written ?? false,
+      repository,
       layout,
     };
   } finally {

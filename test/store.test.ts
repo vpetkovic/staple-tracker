@@ -383,6 +383,23 @@ describe("schema migration against a live database", () => {
       legacyDb.exec("DROP INDEX IF EXISTS issues_project_idx");
       legacyDb.exec("ALTER TABLE issues DROP COLUMN project_id");
       legacyDb.exec("DROP TABLE IF EXISTS projects");
+      // Migration 010 (the local sync tables) is the 004 rule at its largest:
+      // eight tables and two indexes, no column on any existing table. Dropping
+      // the tables takes their partial indexes with them, so the indexes are not
+      // named separately — unlike 006 and 009 above, where the index sat on
+      // `issues` and had to come off before the column could.
+      for (const table of [
+        "sync_entity_versions",
+        "sync_outbox",
+        "sync_applied",
+        "sync_tombstones",
+        "sync_conflicts",
+        "sync_leases",
+        "sync_devices",
+        "sync_state",
+      ]) {
+        legacyDb.exec(`DROP TABLE IF EXISTS ${table}`);
+      }
       legacyDb.prepare("UPDATE meta SET value = '1' WHERE key = 'schema_version'").run();
       legacyDb.close();
 

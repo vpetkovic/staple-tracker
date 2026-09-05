@@ -53,6 +53,14 @@ export const WORKSPACE_GITIGNORE_FILENAME = ".gitignore";
  * rather than left implicit — a future editor who broadens the first rule to
  * `*` needs to trip over the exception rather than discover it by losing the
  * guide on the next clone.
+ *
+ * `!repository.json` (STA-68) is there for exactly the same reason and matters
+ * more. None of the three patterns above match it, so the negation changes no
+ * behaviour today — it is stated so that the broadening-to-`*` editor trips over
+ * it too. Losing the guide on a clone costs an onboarding surface; losing the
+ * repository manifest on a clone costs the repository's sync identity, which the
+ * clone cannot recover from anywhere else because the database is ignored by the
+ * rule directly above.
  */
 export const WORKSPACE_GITIGNORE_BODY = `# Staple keeps this repository's task state here.
 #
@@ -63,10 +71,15 @@ export const WORKSPACE_GITIGNORE_BODY = `# Staple keeps this repository's task s
 # AGENTS.md is NOT ignored. It is the working protocol for this repository and
 # it is meant to travel with the repo, so a fresh clone (and any agent that
 # lands in one) has the protocol before anyone runs \`staple init\`.
+#
+# repository.json is NOT ignored either. It holds this repository's sync identity
+# — a UUID and a format number, nothing secret — and it has to travel with the
+# repo, because a fresh clone has no database to recover it from.
 *.db
 *.db-wal
 *.db-shm
 !AGENTS.md
+!repository.json
 `;
 
 export interface WorkspaceGitignoreResult {
