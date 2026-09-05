@@ -144,10 +144,10 @@ describe("a fresh repo-local `staple init`", () => {
       // to keep reading (and probably keep writing) this exact representation,
       // or an old binary's `CAST(meta.value AS INTEGER)` guard misbehaves.
       // Bumped to "6" by STA-143 (006-approval-gates), after STA-140's 004 and
-      // STA-124's 005, to "7" by STA-172 (007-milestones) and to "8" by STA-167
-      // (008-queue-entries); the TEXT typing is
+      // STA-124's 005, to "7" by STA-172 (007-milestones), to "8" by STA-167
+      // (008-queue-entries) and to "9" by 009-projects; the TEXT typing is
       // the characterization, the number just tracks the migration list.
-      { key: "schema_version", value: "8" },
+      { key: "schema_version", value: "9" },
       { key: "slug", value: "metarepo" },
     ]);
   }, 30_000);
@@ -173,6 +173,9 @@ describe("a fresh repo-local `staple init`", () => {
       "index:issues_live_origin_uq",
       "index:issues_normalized_title_open_idx",
       "index:issues_parent_idx",
+      // 009-projects: the partial index over `issues.project_id`, indexed only
+      // over the rows that carry a project.
+      "index:issues_project_idx",
       "index:issues_status_idx",
       "index:issues_updated_idx",
       // STA-172 (007-milestones): the two milestone tables, their primary keys,
@@ -189,6 +192,9 @@ describe("a fresh repo-local `staple init`", () => {
       "index:sqlite_autoindex_milestone_members_1",
       "index:sqlite_autoindex_milestone_members_2",
       "index:sqlite_autoindex_milestone_meta_1",
+      // 009-projects: the projects table's `id` primary key and its `UNIQUE (slug)`.
+      "index:sqlite_autoindex_projects_1",
+      "index:sqlite_autoindex_projects_2",
       // STA-167 (008-queue-entries): the one queue table, its `issue_id`
       // primary key and its `UNIQUE (rank)`.
       "index:sqlite_autoindex_queue_entries_1",
@@ -208,6 +214,7 @@ describe("a fresh repo-local `staple init`", () => {
       "table:meta",
       "table:milestone_members",
       "table:milestone_meta",
+      "table:projects",
       "table:queue_entries",
       "table:relations",
       "table:sqlite_sequence",
@@ -335,9 +342,9 @@ describe("global workspaces", () => {
     expect(diskTree(home)).toEqual(["hub.db 644", "workspaces/", "workspaces/solo.db 644"]);
     expect(metaRows(join(home, "workspaces", "solo.db"))).toEqual([
       { key: "prefix", value: "SOL" },
-      // WORKSPACE_SCHEMA_VERSION — 8 since STA-167. The hub beside it is still 2;
+      // WORKSPACE_SCHEMA_VERSION — 9 since 009-projects. The hub beside it is still 2;
       // the two databases version independently.
-      { key: "schema_version", value: "8" },
+      { key: "schema_version", value: "9" },
       { key: "slug", value: "solo" },
     ]);
   }, 30_000);

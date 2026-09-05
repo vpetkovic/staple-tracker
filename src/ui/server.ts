@@ -15,7 +15,14 @@ import { dirname, join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Hub, notifyHubResolvedSafe } from "../core/hub.js";
 import { openWorkspace, resolveWorkspace } from "../core/workspace.js";
-import { StapleError, errorEnvelope, type IssuePriority, type IssueStatus } from "../core/types.js";
+import {
+  StapleError,
+  errorEnvelope,
+  type IssuePriority,
+  type IssueStatus,
+  type ProjectKind,
+  type ProjectSourceKind,
+} from "../core/types.js";
 // O7b (STA-141): the closed category set and the categories the code writes into,
 // both served verbatim on /api/settings so the browser never hand-keeps a copy.
 import { REQUIRED_STATUS_CATEGORIES, STATUS_CATEGORIES } from "../core/types.js";
@@ -546,6 +553,11 @@ export function startUiServer(options: UiOptions): UiHandle {
           url.pathname === "/api/glyph/sanitize" ||
           url.pathname.startsWith("/api/gate/") ||
           url.pathname.startsWith("/api/milestone/") ||
+          /**
+           * The project writes. `/api/projects` (plural) is the read and does not
+           * share this prefix, so the family test admits no read.
+           */
+          url.pathname.startsWith("/api/project/") ||
           /**
            * The queue's mutating verbs (STA-168). `/api/queue` and
            * `/api/queue/next` are READS and are deliberately NOT in this list, so
@@ -1258,6 +1270,9 @@ export function startUiServer(options: UiOptions): UiHandle {
               labels: stringList(body.labels),
               blockedBy: blockedBy.local,
               estimatedSeconds: optionalEstimate(body.estimateSeconds),
+              // Absent or empty means "no project"; an unknown one is the project
+              // store's `not_found`, in its own words, before an issue number is spent.
+              project: (body.project as string) || null,
               createdBy: actor,
             });
 
@@ -1473,6 +1488,66 @@ export function startUiServer(options: UiOptions): UiHandle {
         }
         json(res, 200, payload);
         return;
+      }
+
+      /**
+       * Projects — migration 009, docs/web-ui.md "Projects". One read and a POST
+       * family, the milestone routes' shape.
+       *
+       * The read answers `{ workspace, project }` rows rather than bare projects,
+       * and in hub mode with no `ws` it answers for EVERY workspace at once — the
+       * same bargain `/api/issues` makes, and for the same reason: the rail lists
+       * projects across workspaces when the page is on "all workspaces", and two
+       * projects called `docs` in two workspaces have to be tellable apart.
+       *
+       * `assign` answers the refreshed `/api/issue` payload, as the gate routes
+       * do, so the detail panel redraws from one consistent read.
+       */
+      if (url.pathname === "/api/projects") {
+        const wanted = url.searchParams.get("ws") ?? undefined;
+        const targets = options.hub && !wanted ? allHandles() : [handleFor(wanted)];
+        json(
+          res,
+          200,
+          targets.flatMap((h) => h.store.projects().list().map((project) => ({ workspace: h.slug, project }))),
+        );
+        return;
+      }
+
+      if (url.pathname.startsWith("/api/project/")) {
+        const body = await readBody(req);
+        const handle = handleFor((body.ws as string) ?? undefined);
+        const projects = handle.store.projects();
+        const actor = (body.actor as string) || "ui";
+        const ref = body.ref as string;
+        const fields = {
+          name: body.name as string | null | undefined,
+          kind: body.kind as ProjectKind | null | undefined,
+          sourceKind: body.sourceKind as ProjectSourceKind | null | undefined,
+          source: body.source as string | null | undefined,
+        };
+        switch (url.pathname) {
+          case "/api/project/create":
+            json(res, 200, { workspace: handle.slug, project: projects.create(fields, actor) });
+            return;
+          case "/api/project/update":
+            json(res, 200, { workspace: handle.slug, project: projects.update(ref, fields, actor) });
+            return;
+          case "/api/project/delete": {
+            const removal = projects.remove(ref, actor);
+            json(res, 200, { workspace: handle.slug, ...removal });
+            return;
+          }
+          case "/api/project/assign": {
+            const project = body.project === undefined || body.project === null ? null : String(body.project);
+            projects.assign(ref, project, actor);
+            json(res, 200, issueDetail(handle, ref));
+            return;
+          }
+          default:
+            json(res, 404, { error: "not found" });
+            return;
+        }
       }
 
       /**

@@ -25,6 +25,10 @@ import type {
   MilestoneListRow,
   MilestoneView,
   Poll,
+  ProjectKind,
+  ProjectRemoval,
+  ProjectRow,
+  ProjectSourceKind,
   QueueView,
   StapleEvent,
   VocabularyOp,
@@ -422,3 +426,45 @@ export const reorderQueue = (target: { ws?: string; order: readonly string[]; ba
 
 /** Drop every resolved entry. `all` is not a thing here: prune takes the whole plan. */
 export const pruneQueue = (target: { ws?: string; baseRevision: number }) => queueWrite("prune", target);
+
+// ---------- projects (migration 009) ----------
+
+/**
+ * Every project, as workspace-labelled rows. With no `ws` in hub mode the server
+ * answers for every workspace at once, which is what the rail lists on "all
+ * workspaces"; with one, that workspace's projects only.
+ */
+export const getProjects = (params: { ws?: string } = {}) =>
+  request<ProjectRow[]>(`/api/projects${qs(params)}`);
+
+/** What a create or an update says about a project. Absent fields keep their value on update. */
+export interface ProjectFieldsInput {
+  name?: string | null;
+  kind?: ProjectKind | null;
+  sourceKind?: ProjectSourceKind | null;
+  source?: string | null;
+}
+
+const projectWrite = <T>(route: string, body: Record<string, unknown>) =>
+  request<T>(`/api/project/${route}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ actor: "ui", ...body }),
+  });
+
+export const createProject = (target: { ws?: string } & ProjectFieldsInput) =>
+  projectWrite<ProjectRow>("create", { ...target });
+
+export const updateProject = (target: { ws?: string; ref: string } & ProjectFieldsInput) =>
+  projectWrite<ProjectRow>("update", { ...target });
+
+/** Delete the project; every issue filed under it is let go, not deleted. */
+export const deleteProject = (target: { ws?: string; ref: string }) =>
+  projectWrite<ProjectRemoval>("delete", target);
+
+/**
+ * File an issue under a project (`project` is an id or a slug), or take it out
+ * (`project: null`). Answers the refreshed `IssueDetail`, as the gate routes do.
+ */
+export const assignProject = (target: { ws?: string; ref: string; project: string | null }) =>
+  projectWrite<IssueDetail>("assign", target);

@@ -64,6 +64,7 @@ import {
   type KindWithAppearance,
 } from "./kind-appearance.js";
 import { MILESTONE_KIND } from "./milestones.js";
+import { ProjectStore } from "./project-store.js";
 import { QueueStore } from "./queue-store.js";
 
 export interface CreateIssueInput {
@@ -88,6 +89,8 @@ export interface CreateIssueInput {
   allowDuplicate?: boolean;
   /** Plan-time estimate in whole seconds; omit or null for none. */
   estimatedSeconds?: number | null;
+  /** The project to file it under — an id or a slug; omit or null for none. */
+  project?: string | null;
 }
 
 export interface UpdateIssueInput {
@@ -202,6 +205,7 @@ interface IssueRow {
   checkout_at: string | null;
   blocked_transition_at: string | null;
   estimated_seconds: number | null;
+  project_id: string | null;
   gate_state: string | null;
   gate_owner: string | null;
   gate_requested_by: string | null;
@@ -245,6 +249,7 @@ function rowToIssue(row: IssueRow): Issue {
     blockedTransitionAt: row.blocked_transition_at,
     // SQLite hands back whatever was stored; a legacy row is NULL, never 0.
     estimatedSeconds: row.estimated_seconds ?? null,
+    projectId: row.project_id ?? null,
     startedAt: row.started_at,
     completedAt: row.completed_at,
     cancelledAt: row.cancelled_at,
@@ -1547,6 +1552,9 @@ export class WorkspaceStore {
     // consumed an issue number.
     const estimatedSeconds =
       input.estimatedSeconds == null ? null : assertEstimateSeconds(input.estimatedSeconds);
+    // Resolved BEFORE the transaction like everything above it: an unknown project is
+    // `not_found` in the project store's own words, before an issue number is spent.
+    const project = input.project ? this.projects().get(input.project) : null;
 
     /**
      * Default status: the workspace's READY status when the issue is assigned,
@@ -1609,8 +1617,8 @@ export class WorkspaceStore {
              parent_id, depth, assignee, created_by, labels, acceptance_criteria,
              block_parent_until_done, unblock_owner, unblock_action, origin_kind, origin_id,
              idempotency_key, blocked_transition_at, estimated_seconds, started_at,
-             created_at, updated_at
-           ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+             project_id, created_at, updated_at
+           ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
            RETURNING *`,
         )
         .get(
@@ -1637,6 +1645,7 @@ export class WorkspaceStore {
           statusCategory === "blocked" ? now : null,
           estimatedSeconds,
           statusCategory === "active" ? now : null,
+          project?.id ?? null,
           now,
           now,
         ) as unknown as IssueRow;
@@ -4860,5 +4869,14 @@ export class WorkspaceStore {
   /** The queue service over this store: the ordered plan and its revision. Built on first use. */
   queue(): QueueStore {
     return (this.queueStore ??= new QueueStore(this));
+  }
+
+  // ---------- projects (migration 009) ----------
+
+  private projectStore: ProjectStore | null = null;
+
+  /** The project service over this store: the named containers issues file under. Built on first use. */
+  projects(): ProjectStore {
+    return (this.projectStore ??= new ProjectStore(this));
   }
 }

@@ -163,6 +163,8 @@ export function issueGolden(over: Record<string, unknown> = {}): Record<string, 
     // STA-81. NULL is the create-time default and the honest one: an issue
     // created without an estimate has none, which is not the same fact as zero.
     estimatedSeconds: null,
+    // Migration 009. NULL is the create-time default: an issue filed under no project.
+    projectId: null,
     startedAt: null,
     completedAt: null,
     cancelledAt: null,
