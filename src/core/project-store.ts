@@ -15,7 +15,8 @@
  * a title edit.
  */
 import type { DatabaseSync } from "node:sqlite";
-import { tx } from "./db.js";
+import { insertEvent } from "./event-log.js";
+import type { Journal } from "./journal.js";
 import { newId } from "./ids.js";
 import { normalizeProjectInput, slugifyProjectName, type ProjectInput } from "./projects.js";
 import type { WorkspaceStore } from "./store.js";
@@ -65,6 +66,16 @@ export class ProjectStore {
 
   private get db(): DatabaseSync {
     return this.store.db;
+  }
+
+  /** The connection's one journal seam. Shared with every other store. */
+  private get journal(): Journal {
+    return this.store.journal;
+  }
+
+  /** One logical mutation: one transaction, one journal scope. Re-entrant. */
+  private journaled<T>(fn: () => T): T {
+    return this.store.journaled(fn);
   }
 
   // ---------- reads ----------
@@ -134,7 +145,7 @@ export class ProjectStore {
 
   create(input: ProjectInput, actor: string | null): Project {
     const fields = normalizeProjectInput(input);
-    return tx(this.db, () => {
+    return this.journaled(() => {
       const now = nowIso();
       const row = this.db
         .prepare(
@@ -157,6 +168,30 @@ export class ProjectStore {
         kind: project.kind,
         sourceKind: project.sourceKind,
       });
+      /**
+       * `source` is carried, and redacting it is NOT this seam's job.
+       *
+       * It is the one column in the schema that can hold an absolute filesystem
+       * path — and so the device's directory layout and, on macOS and Linux, the
+       * account name — but only when `sourceKind` is `local`; a `github` source
+       * is a public URL and is useful to replicate. That makes it a per-row,
+       * column-level redaction decided from a sibling column, which belongs in
+       * the transport where the privacy contract is enforced and testable, not
+       * scattered across every site that happens to write a project.
+       */
+      this.journal.record({
+        entity: "project",
+        entityId: project.id,
+        verb: "create",
+        payload: {
+          slug: project.slug,
+          name: project.name,
+          kind: project.kind,
+          sourceKind: project.sourceKind,
+          source: project.source,
+        },
+        actor,
+      });
       return project;
     });
   }
@@ -173,7 +208,7 @@ export class ProjectStore {
    * source. `sourceKind` and `source` ARE nullable, and null there is the clear.
    */
   update(ref: string, patch: ProjectInput, actor: string | null): Project {
-    return tx(this.db, () => {
+    return this.journaled(() => {
       const current = rowToProject(this.requireRow(ref));
       const fields = normalizeProjectInput({
         name: patch.name ?? current.name,
@@ -194,6 +229,15 @@ export class ProjectStore {
         .get(fields.name, fields.kind, fields.sourceKind, fields.source, now, current.id) as unknown as ProjectRow;
       const project = rowToProject(row);
       this.emit("project_updated", actor, { project: project.slug, changed });
+      // Only the fields that actually moved: `changed` is already exactly that
+      // set, and the no-op case returned above without reaching here.
+      this.journal.record({
+        entity: "project",
+        entityId: project.id,
+        verb: "update",
+        payload: Object.fromEntries(changed.map((key) => [key, fields[key]])),
+        actor,
+      });
       return project;
     });
   }
@@ -208,7 +252,7 @@ export class ProjectStore {
    * explains the transition; the one `project_deleted` says why it happened.
    */
   remove(ref: string, actor: string | null): ProjectRemoval {
-    return tx(this.db, () => {
+    return this.journaled(() => {
       const project = rowToProject(this.requireRow(ref));
       const now = nowIso();
       const filed = this.db
@@ -225,6 +269,28 @@ export class ProjectStore {
         );
       }
       this.emit("project_deleted", actor, { project: project.slug, unassigned: filed.length });
+      /**
+       * The delete, plus one `issue.update` per unfiled issue. The cascade is
+       * real state on other rows — `project_id` became null — and a receiver
+       * that applied only the delete would keep every one of those issues
+       * pointing at a project it no longer has.
+       */
+      this.journal.record({
+        entity: "project",
+        entityId: project.id,
+        verb: "delete",
+        payload: {},
+        actor,
+      });
+      for (const issue of filed) {
+        this.journal.record({
+          entity: "issue",
+          entityId: issue.id,
+          verb: "update",
+          payload: { projectId: null },
+          actor,
+        });
+      }
       return { project, unassigned: filed.length };
     });
   }
@@ -234,7 +300,7 @@ export class ProjectStore {
    * to `issues.project_id` after creation; the event names both ends of the move.
    */
   assign(issueRef: string, project: string | null, actor: string | null): Issue {
-    return tx(this.db, () => {
+    return this.journaled(() => {
       const issue = this.store.getIssue(issueRef);
       const target = project === null || project.trim() === "" ? null : rowToProject(this.requireRow(project));
       const nextId = target?.id ?? null;
@@ -248,18 +314,28 @@ export class ProjectStore {
         { identifier: issue.identifier, project: target?.slug ?? null, previous },
         issue.id,
       );
+      // The ISSUE changed, not the project: `assign` writes `issues.project_id`
+      // and nothing in `projects`. Declared after the no-op guard above, so
+      // re-filing an issue where it already is journals nothing.
+      this.journal.record({
+        entity: "issue",
+        entityId: issue.id,
+        verb: "update",
+        payload: { projectId: nextId },
+        actor,
+      });
       return this.store.getIssue(issue.identifier);
     });
   }
 
   // ---------- events ----------
 
+  /**
+   * One of the four emitters, now delegating to the single writer. It used to
+   * hardcode `NULL` for the dedup key; `insertEvent` derives one from the
+   * enclosing mutation instead.
+   */
   private emit(kind: string, actor: string | null, payload: Record<string, unknown>, issueId: string | null = null): void {
-    this.db
-      .prepare(
-        `INSERT INTO events (kind, issue_id, actor, payload, dedup_key, created_at)
-         VALUES (?, ?, ?, ?, NULL, ?)`,
-      )
-      .run(kind, issueId, actor, JSON.stringify(payload), nowIso());
+    insertEvent(this.db, { kind, issueId, actor, payload });
   }
 }

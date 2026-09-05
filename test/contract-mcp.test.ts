@@ -1062,7 +1062,7 @@ describe("tool response shapes (31/31)", () => {
           issueId: UUID,
           actor: CONTRACT_AGENT,
           payload: { identifier: "CON-1", title: "Contract root task", status: "backlog" },
-          dedupKey: null,
+          dedupKey: "<dedup-key>",
           createdAt: ISO,
         },
         {
@@ -1071,7 +1071,7 @@ describe("tool response shapes (31/31)", () => {
           issueId: UUID,
           actor: CONTRACT_AGENT,
           payload: { identifier: "CON-2", title: "Contract idempotent", status: "backlog" },
-          dedupKey: null,
+          dedupKey: "<dedup-key>",
           createdAt: ISO,
         },
         {
@@ -1080,7 +1080,7 @@ describe("tool response shapes (31/31)", () => {
           issueId: UUID,
           actor: CONTRACT_AGENT,
           payload: { identifier: "CON-3", title: "Contract blocker", status: "backlog" },
-          dedupKey: null,
+          dedupKey: "<dedup-key>",
           createdAt: ISO,
         },
         {
@@ -1089,7 +1089,7 @@ describe("tool response shapes (31/31)", () => {
           issueId: UUID,
           actor: CONTRACT_AGENT,
           payload: { identifier: "CON-4", title: "Contract child", status: "backlog" },
-          dedupKey: null,
+          dedupKey: "<dedup-key>",
           createdAt: ISO,
         },
       ],
