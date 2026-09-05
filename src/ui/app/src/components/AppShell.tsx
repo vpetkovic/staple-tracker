@@ -109,8 +109,12 @@ export function AppShell({ children }: { children: ReactNode }) {
       if (action === "close-overlay") setOverlayOpen(false);
       else toggleRail();
     };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    // CAPTURE phase, like the palette's cmd-K listener: Radix dismisses a dialog on a
+    // document-capture keydown and React has unmounted it by the time a bubble listener
+    // runs, so "is a dialog open" would already answer no and Escape would close the
+    // sheet behind the dialog it just closed. Window capture runs before document capture.
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
   }, [overlayOpen, toggleRail]);
 
   /**
