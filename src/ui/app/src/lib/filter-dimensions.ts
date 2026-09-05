@@ -91,13 +91,27 @@ export interface FilterContext {
   epicOf: ReadonlyMap<string, string>;
   /** Epic identifier -> its title, for the menu and the chip. */
   epicTitle: ReadonlyMap<string, string>;
+  /** The tracked projects on the page — `/api/projects`, one row per project per workspace. */
+  projects: readonly ProjectFacts[];
 }
 
-/** No milestones, no ancestry: every context-bearing dimension offers nothing and matches nothing. */
+/**
+ * One project, as the filter needs it. The value a row carries is the project's ID
+ * (`issue.projectId`), which is unique across workspaces; the name is for the menu and
+ * the chip, and the workspace is what tells two same-named projects apart in hub mode.
+ */
+export interface ProjectFacts {
+  id: string;
+  name: string;
+  workspace: string;
+}
+
+/** No milestones, no ancestry, no projects: every context-bearing dimension offers nothing and matches nothing. */
 export const EMPTY_FILTER_CONTEXT: FilterContext = {
   milestones: [],
   epicOf: new Map(),
   epicTitle: new Map(),
+  projects: [],
 };
 
 /**
@@ -111,6 +125,7 @@ export const EMPTY_FILTER_CONTEXT: FilterContext = {
 export function buildFilterContext(
   rows: readonly IssueRow[],
   milestones: readonly MilestoneFacts[] = [],
+  projects: readonly ProjectFacts[] = [],
 ): FilterContext {
   const byId = new Map<string, Issue>(rows.map((row) => [row.issue.id, row.issue]));
   const epicOf = new Map<string, string>();
@@ -125,7 +140,7 @@ export function buildFilterContext(
     epicOf.set(issue.id, top.identifier);
     epicTitle.set(top.identifier, top.title);
   }
-  return { milestones, epicOf, epicTitle };
+  return { milestones, epicOf, epicTitle, projects };
 }
 
 // ---------------------------------------------------------------- pickup state
@@ -248,6 +263,24 @@ const matchMilestone = (row: IssueRow, value: string, context: FilterContext) =>
 const matchEpic = (row: IssueRow, value: string, context: FilterContext) =>
   context.epicOf.get(row.issue.id) === value;
 
+const matchProject = (row: IssueRow, value: string) => (row.issue.projectId ?? null) === value;
+
+const projectFor = (context: FilterContext, id: string) =>
+  context.projects.find((project) => project.id === id);
+
+/**
+ * "Docs", or "Docs · pinecone" when the projects on hand span more than one workspace —
+ * the one case two projects can share a name, and the caption is what tells them apart.
+ */
+export function projectLabel(context: FilterContext, id: string): string {
+  const project = projectFor(context, id);
+  // An id the page cannot name is a project that no longer exists — App prunes such
+  // selections on the next poll, and until then the chip says so rather than printing a uuid.
+  if (!project) return "Removed project";
+  const workspaces = new Set(context.projects.map((entry) => entry.workspace));
+  return workspaces.size > 1 ? `${project.name} · ${project.workspace}` : project.name;
+}
+
 /** Count matches for a value list in one pass, the context-bearing twin of filters.ts's `tally`. */
 function tally(
   rows: readonly IssueRow[],
@@ -351,9 +384,33 @@ export const CONTEXT_FILTER_DIMENSIONS: readonly ContextFilterDimension[] = [
     matches: matchEpic,
     format: (value, context) => context.epicTitle.get(value) ?? value,
   },
+  {
+    id: "project",
+    label: "Project",
+    /**
+     * Every tracked project on the page, by name, offered even at zero — a project with
+     * nothing in it yet is still a place to look. The value is the project's ID, so the
+     * rail's click is `withDimension(filters, "project", [project.id])` and a saved
+     * filter survives a rename. A row that predates projects carries null and matches
+     * no project.
+     */
+    options: (rows, context) => {
+      const values = [...context.projects]
+        .sort((a, b) => a.name.localeCompare(b.name) || a.workspace.localeCompare(b.workspace))
+        .map((project) => project.id);
+      const counts = tally(rows, values, context, matchProject);
+      return values.map((value) => ({
+        value,
+        label: projectLabel(context, value),
+        count: counts.get(value) ?? 0,
+      }));
+    },
+    matches: matchProject,
+    format: (value, context) => projectLabel(context, value),
+  },
 ];
 
-/** Every dimension the menu offers: the eight from lib/filters.ts, then the three above. */
+/** Every dimension the menu offers: the eight from lib/filters.ts, then the four above. */
 export const ALL_FILTER_DIMENSIONS: readonly ContextFilterDimension[] = [
   ...FILTER_DIMENSIONS.map(adapt),
   ...CONTEXT_FILTER_DIMENSIONS,

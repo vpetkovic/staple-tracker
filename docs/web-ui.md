@@ -8,9 +8,46 @@ One command, no daemon: the server runs in the foreground and Ctrl-C closes it
 along with every database handle. `--hub` serves every registered workspace at
 once; the browser behaviour follows `config browser=auto|always|never`.
 
-Views: subtask tree, dependency graph, milestones and the pickup queue, plus a detail panel with documents,
-comments, and the agent-payload pane, and the Work Workspace Settings dialog for
-the status and kind vocabularies and the settings registry.
+Views: Tasks (the subtask tree), the pickup queue, the dependency graph and
+milestones, plus a detail panel with documents, comments, and the agent-payload
+pane, and the Work Workspace Settings dialog for the status and kind
+vocabularies and the settings registry.
+
+## Layout
+
+Navigation on the left, content on the right — Linear's shape.
+
+**The rail** (232px) reads top to bottom: the **workspace switcher** (the
+workspace's name and prefix; in `--hub` mode a menu of *All workspaces* and
+every registered workspace), **New task** as the first row — a filled primary
+button, the same `c` shortcut — then **Search** (the command palette, `⌘K`),
+then the views in named groups. The first group is **Workspace**: *Tasks*,
+*Queue*, *Graph*, *Milestones*. The groups are data
+(`components/nav/nav-model.ts`, an array of groups of items), so moving a view
+between groups is an edit to that array and not to the rail. The active view
+carries `aria-current="page"`; a group header is a real disclosure button. At
+the foot of the rail sit **Settings** (the Work Workspace Settings dialog) and
+the theme toggle.
+
+**Projects hang off Tasks.** The Tasks row carries a `+` — visible on hover and
+focus, always in the tab order — that opens the project dialog to create one,
+and lists every tracked project beneath itself as a sub-row (see *Projects*
+below). Clicking a project switches to Tasks and narrows it to that project's
+issues, and nothing else; the row then carries `aria-current="true"` for as
+long as Tasks is filtered to exactly it. Each sub-row has a gear that opens the
+same dialog on that project. On *All workspaces* in hub mode the rows are
+captioned with their workspace, which is what tells two projects with one name
+apart.
+
+The rail collapses with `[` or `⌘\` and remembers that it did; a *Show
+navigation* button then leads the content header. Below 768px the rail is a
+sheet opened from that same button and closed by a row, the scrim or Escape, so
+the list keeps its width on a narrow window.
+
+**The content header** at the top of the pane names the view on the left and,
+on the right, holds the group, sort, search, filter and done controls; the
+active-filter chips sit directly beneath it and take no space when no filter is
+on. The Tasks view keeps every filter, sort and group control it had.
 
 ## Grouping
 
@@ -171,6 +208,7 @@ ancestry. Nothing in the menu is a value this build invented.
 | **Pickup state** | Pickable, Queued, Waiting, Gated, In flight | the queue resolver |
 | **Milestone** | every milestone, by title | milestone **membership** |
 | **Epic** | the top-level ancestors present | the row's ancestry |
+| **Project** | every tracked project, by name (captioned with its workspace when the page spans several) | the issue's `projectId` |
 
 **Pickup state** is the resolver's own word for the row when the server sends one
 (`docs/queue.md`, step 3). When it does not, four of the five are derived locally in the
@@ -236,7 +274,7 @@ the same rows on the screen.
 
 Alongside them, `lib/sort-modes.test.ts` walks each mode's key and tie-breaks,
 `lib/filter-dimensions.test.ts` and `components/filters/filters-render.test.tsx` walk the
-eleven dimensions, `views/tree/tree-model.test.ts` pins placement and ghosts, and
+twelve dimensions, `views/tree/tree-model.test.ts` pins placement and ghosts, and
 `views/tree/group-header.test.tsx` pins the epic-axis rhythm.
 
 `view-combinations.test.ts` also pins the three things that used to be gaps: the chosen
@@ -258,9 +296,10 @@ explanation, not a blank page.
 
 ## Work Workspace Settings
 
-The settings surface is titled exactly that. It opens from the gear in the
-header, from the command palette, or by URL: `?settings` opens it on its first
-category and `?settings=kinds` focuses one. Opening from the gear pushes one
+The settings surface is titled exactly that. It opens from the Settings row at
+the foot of the navigation rail, from the command palette, or by URL: `?settings`
+opens it on its first category and `?settings=kinds` focuses one. Opening from
+the rail pushes one
 history entry, so Back closes it and lands on the page you were on; moving
 between categories replaces that entry rather than adding to it; Forward
 reopens it. A deep-link arrival pushed nothing, so closing strips the
@@ -817,6 +856,74 @@ sentence in the shared refusal panel.
 the preview. From `md` up they split, plan left and preview right. Each pane's
 header carries an expand button that gives it the whole content box at either
 width; press it again to return.
+
+## Projects
+
+A project is a named container an issue can be filed under — the thing the rail
+lists under Tasks and the thing the Project filter narrows by. It is workspace
+data: workspace migration **009** adds a `projects` table and a nullable
+`issues.project_id`, alongside milestones and the queue.
+
+**Two kinds.** An **unmanaged** project is a name and nothing else. A
+**managed** project points at a source, and the source's kind is stored
+explicitly rather than inferred from the shape of a string: `github` (a
+repository URL like `https://github.com/owner/repo`) or `local` (a folder path).
+The record is `{ id, slug, name, kind, sourceKind, source, createdAt, updatedAt }`;
+`sourceKind` and `source` are null exactly when the kind is `unmanaged`. The
+settings a project grows later — initiating a tracker in it, repointing it —
+hang off this distinction and are not modelled yet.
+
+**Rules.** The name is required. A managed project needs both a source kind and
+a source; a GitHub source must look like a repository URL; a local path is any
+non-empty string — nothing probes the network or the filesystem. An unmanaged
+project may not carry a source: sending one is refused rather than dropped. The
+rules are pure (`src/core/projects.ts`) and pinned in `test/projects.test.ts`.
+
+**Slug and id.** The slug is derived from the name once, at create time
+(`My Project (v2)` → `my-project-v2`, numbered `-2`, `-3` when taken), and a
+rename leaves it alone. Every lookup answers to the id or the slug. An issue
+points at a project by `projectId` — at most one, exactly like `parentId`, and
+null for every issue that predates the migration. Deleting a project lets its
+issues go (their `projectId` becomes null in the same transaction) and touches
+nothing else about them.
+
+**The dialog.** One dialog creates and edits: a *General* section (name, kind
+— and, on a create in hub mode with several workspaces, which one) and a
+*Source* section that appears for a managed project (source kind, then the URL
+or the path, labelled by kind). Errors sit beside their field once a save has
+been tried, in the form's own words; a store refusal renders the store's
+sentence unchanged. An edit starts on the served values, saves only when
+something changed, and offers *Delete project* behind a confirm that says what
+deleting does — the issues stay, unfiled. The draft is a discriminated union on
+kind (`components/projects/projectForm.ts`, pinned without a DOM), switching
+kind keeps the name and drops or seeds the source, and the sections are a list
+the next project setting slots into.
+
+**Where a project shows up.** The page fetches every workspace's projects once
+per poll and narrows them where they are used, so an issue opened from another
+workspace still sees its own workspace's projects. The rail lists them under
+Tasks; the **Project** filter dimension offers them by name (captioned with the
+workspace when the page spans several) and matches on the id, so a saved filter
+survives a rename — and a deleted project's id is dropped from every saved
+scope on the next poll, so no chip outlives its project; the
+New task dialog has a *Project* select (no project by default, narrowed to the
+target workspace); and the detail panel's property block has a *Project* row
+that is an editor, like Kind, writing through `/api/project/assign`.
+
+**Routes.** `GET /api/projects` answers `{ workspace, project }` rows — for one
+workspace with `?ws=`, and in `--hub` mode with no `ws` for every workspace at
+once, so two projects called `docs` in two workspaces are tellable apart. The
+writes are POST-only and Origin-checked, the milestone family's shape:
+`/api/project/create`, `/api/project/update` (absent fields keep their value;
+changing the kind means changing the source in the same call),
+`/api/project/delete` (answers how many issues it let go of) and
+`/api/project/assign` (`{ ref, project }`, where `project` is an id, a slug, or
+null to take the issue out; answers the refreshed `/api/issue` payload). A task
+created through `/api/action` may name a `project`. `/api/issues` rows and the
+detail payload carry `issue.projectId`. `test/contract-projects.test.ts` pins the
+gate, the refusals and the row shape; `test/store-projects.test.ts` pins the
+store. CLI and MCP have no project verbs — `projectId` simply rides along on the
+issue shape they already print.
 
 ## Stack
 

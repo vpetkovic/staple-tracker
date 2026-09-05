@@ -14,6 +14,7 @@ import {
   GROUP_BY_OPTIONS,
   groupByLabel,
   loadViewPrefs,
+  pruneFilterScopes,
   saveViewPrefs,
   sortForScope,
   sortScopeKey,
@@ -292,6 +293,30 @@ describe("the sort preference", () => {
  * migration (a payload written before this ticket must not open to an empty filter set) and
  * the scoping (a filter set in one workspace must not follow you into the next one).
  */
+describe("pruning a dimension across every saved scope", () => {
+  const allowed = new Set(["p-docs"]);
+  const on = (values: string[]): FilterState => ({ ...emptyFilters(), dims: { project: values } });
+
+  it("drops the vanished values in every scope and leaves the other scopes' objects alone", () => {
+    const prefs = {
+      "staple::tree": on(["p-gone", "p-docs"]),
+      "staple::graph": on(["p-docs"]),
+      "pinecone::tree": on(["p-gone"]),
+    };
+    const pruned = pruneFilterScopes(prefs, "project", allowed);
+    expect(pruned["staple::tree"]!.dims.project).toEqual(["p-docs"]);
+    expect(pruned["pinecone::tree"]!.dims).toEqual({});
+    // Untouched scope, same object — nothing downstream of it re-renders.
+    expect(pruned["staple::graph"]).toBe(prefs["staple::graph"]);
+  });
+
+  it("returns the same map when no scope changed", () => {
+    const prefs = { "staple::tree": on(["p-docs"]), "staple::queue": emptyFilters() };
+    expect(pruneFilterScopes(prefs, "project", allowed)).toBe(prefs);
+    expect(pruneFilterScopes({}, "project", allowed)).toEqual({});
+  });
+});
+
 describe("the filter preference", () => {
   const tree = sortScopeKey("staple", "tree");
   const graph = sortScopeKey("staple", "graph");

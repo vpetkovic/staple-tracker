@@ -370,6 +370,7 @@ const issueShape = {
     .number()
     .nullable()
     .describe("Plan-time estimate in seconds; null when none was recorded (NOT zero)"),
+  projectId: z.string().nullable().describe("The project this issue is filed under; null for none"),
   startedAt: z.string().nullable(),
   completedAt: z.string().nullable(),
   cancelledAt: z.string().nullable(),

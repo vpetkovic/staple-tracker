@@ -3,7 +3,7 @@
  * Regenerate with: npx tsx scripts/regen-migration-snapshots.ts
  *
  * The `sqlite_master` dump of a workspace database that walked migrations
- * 001, 002, 003, 004, 005, 006, 007, 008. Executed verbatim by the runner when — and only when —
+ * 001, 002, 003, 004, 005, 006, 007, 008, 009. Executed verbatim by the runner when — and only when —
  * version detection proved the file has no tables at all.
  *
  * No `IF NOT EXISTS` anywhere, deliberately: reaching this text with tables
@@ -47,7 +47,7 @@ CREATE TABLE issues (
   cancelled_at TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
-, estimated_seconds INTEGER, kind TEXT NOT NULL DEFAULT 'task', gate_state TEXT, gate_owner TEXT, gate_requested_by TEXT, gate_requested_at TEXT, gate_resolved_by TEXT, gate_resolved_at TEXT, gate_released INTEGER NOT NULL DEFAULT 0);
+, estimated_seconds INTEGER, kind TEXT NOT NULL DEFAULT 'task', gate_state TEXT, gate_owner TEXT, gate_requested_by TEXT, gate_requested_at TEXT, gate_resolved_by TEXT, gate_resolved_at TEXT, gate_released INTEGER NOT NULL DEFAULT 0, project_id TEXT);
 
 CREATE UNIQUE INDEX issues_idempotency_uq
   ON issues(idempotency_key) WHERE idempotency_key IS NOT NULL;
@@ -181,4 +181,17 @@ CREATE TABLE queue_entries (
          added_at TEXT    NOT NULL,
          note     TEXT
        );
+
+CREATE TABLE projects (
+         id          TEXT PRIMARY KEY,
+         slug        TEXT NOT NULL UNIQUE,
+         name        TEXT NOT NULL,
+         kind        TEXT NOT NULL DEFAULT 'unmanaged',
+         source_kind TEXT,
+         source      TEXT,
+         created_at  TEXT NOT NULL,
+         updated_at  TEXT NOT NULL
+       );
+
+CREATE INDEX issues_project_idx ON issues(project_id) WHERE project_id IS NOT NULL;
 `;

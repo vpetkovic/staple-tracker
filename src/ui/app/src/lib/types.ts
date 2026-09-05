@@ -323,6 +323,13 @@ export interface Issue {
    * rendering this must say the first thing rather than draw the second.
    */
   estimatedSeconds: number | null;
+  /**
+   * The project this issue is filed under — a `Project.id` — or null for none
+   * (migration 009). Optional on the TYPE and always present on the WIRE, the
+   * discipline `IssueRow.deps` follows: a fixture that has no opinion about
+   * projects passes nothing, and every reader treats absent as null.
+   */
+  projectId?: string | null;
   startedAt: string | null;
   completedAt: string | null;
   cancelledAt: string | null;
@@ -1068,6 +1075,8 @@ export type ActionPayload =
        * rather than a second action type.
        */
       blocking?: string[];
+      /** The project to file it under — an id or a slug (migration 009). Absent is none. */
+      project?: string;
     }
   /**
    * Inline property editing (U5). A partial patch: a key that is absent is left
@@ -1243,4 +1252,49 @@ export interface QueueNext {
   revision: number;
   next: EffectiveQueueRow | null;
   skipped: EffectiveQueueRow[];
+}
+
+// ---------- projects (migration 009) ----------
+
+/** Mirrors `PROJECT_KINDS` / `PROJECT_SOURCE_KINDS` in src/core/types.ts. */
+export const PROJECT_KINDS = ["unmanaged", "managed"] as const;
+export type ProjectKind = (typeof PROJECT_KINDS)[number];
+export const PROJECT_SOURCE_KINDS = ["github", "local"] as const;
+export type ProjectSourceKind = (typeof PROJECT_SOURCE_KINDS)[number];
+
+/** Mirrors `Project` in src/core/types.ts. */
+export interface Project {
+  id: string;
+  slug: string;
+  name: string;
+  kind: ProjectKind;
+  /** Null exactly when `kind` is `unmanaged`. */
+  sourceKind: ProjectSourceKind | null;
+  /** The GitHub URL or the local path; null exactly when `kind` is `unmanaged`. */
+  source: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * One `/api/projects` row. Labelled with its workspace for the reason `IssueRow`
+ * is: in hub mode the read answers every workspace at once, and two projects
+ * called `docs` in two workspaces have to be tellable apart.
+ */
+export interface ProjectRow {
+  workspace: string;
+  project: Project;
+}
+
+/** What `/api/project/delete` answers: the row that went, and how many issues it let go of. */
+export interface ProjectRemoval extends ProjectRow {
+  unassigned: number;
+}
+
+/** What a create or an update says about a project. Absent fields keep their value on update. */
+export interface ProjectFieldsInput {
+  name?: string | null;
+  kind?: ProjectKind | null;
+  sourceKind?: ProjectSourceKind | null;
+  source?: string | null;
 }

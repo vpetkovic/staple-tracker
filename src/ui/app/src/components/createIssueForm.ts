@@ -48,6 +48,11 @@ export interface CreateFormState {
    * read-modify-write lives on the server so it cannot straddle a round trip.
    */
   blocking: string[];
+  /**
+   * The project to file it under — a `Project.id`, or "" for none. Single-select for the
+   * reason `parent` is: an issue is in one project or none.
+   */
+  project: string;
 }
 
 /** Medium is the store's own create-time default, so an untouched form agrees with it. */
@@ -63,6 +68,7 @@ export const EMPTY_CREATE_FORM: CreateFormState = {
   labels: [],
   blockedBy: [],
   blocking: [],
+  project: "",
 };
 
 /**
@@ -122,6 +128,17 @@ export function splitRefs(raw: string): string[] {
   return tidy(raw.split(/[\s,]+/));
 }
 
+/**
+ * What survives a change of target workspace. The parent cannot: a parent in the old
+ * workspace has nowhere to be stored in the new one. Neither can the project: it is a
+ * row of the old workspace, the select would show "No project" while the payload still
+ * carried its id, and the server would refuse with not_found. The relations DO survive —
+ * a blocker chosen before the switch is still a real task, just a cross-workspace one now.
+ */
+export function forWorkspaceSwitch(state: CreateFormState): CreateFormState {
+  return { ...state, parent: "", project: "" };
+}
+
 /** The payload the dialog POSTs. Empty optional fields are omitted, not emptied. */
 export function buildCreatePayload(state: CreateFormState): Extract<ActionPayload, { type: "create" }> {
   const payload: Extract<ActionPayload, { type: "create" }> = {
@@ -158,6 +175,11 @@ export function buildCreatePayload(state: CreateFormState): Extract<ActionPayloa
 
   const blocking = tidy(state.blocking);
   if (blocking.length > 0) payload.blocking = blocking;
+
+  // Omitted when untouched, for rule 1: an absent project is "none", and sending "" would
+  // ask the server to look up a project called nothing.
+  const project = state.project.trim();
+  if (project) payload.project = project;
 
   return payload;
 }
