@@ -96,6 +96,44 @@ export function isRailToggleKey(event: KeyLike): boolean {
   return false;
 }
 
+/** What the shell knows when a key arrives, as booleans so the decision needs no DOM. */
+export interface RailKeyContext {
+  /** The narrow-viewport sheet is open. */
+  overlayOpen: boolean;
+  /** A dialog, menu, listbox or popover is open and owns the keyboard. */
+  surfaceOpen: boolean;
+  /** The event came out of a text field. */
+  typing: boolean;
+}
+
+export type RailKeyAction = "close-overlay" | "toggle" | null;
+
+/**
+ * What the shell does with a keystroke — ONE decision, in order:
+ *
+ *   1. An open floating surface owns the keyboard. Escape closes THAT (Radix does it),
+ *      not the sheet behind it; `[` does not collapse the rail under an open menu.
+ *   2. Escape closes the sheet when it is open, and is nobody's otherwise.
+ *   3. The toggle shortcut — except a bare `[` typed into a text field, which is text.
+ */
+export function railKeyAction(event: KeyLike, context: RailKeyContext): RailKeyAction {
+  if (context.surfaceOpen) return null;
+  if (event.key === "Escape") return context.overlayOpen ? "close-overlay" : null;
+  if (!isRailToggleKey(event)) return null;
+  if (event.key === "[" && context.typing) return null;
+  return "toggle";
+}
+
+/**
+ * Where focus goes when the sheet's open state changes. Opening: into the rail, so the
+ * keyboard lands inside it rather than behind it. Closing: back to the "Show navigation"
+ * button that opened it, rather than dropping to `<body>`. Nothing when nothing changed.
+ */
+export function overlayFocusTarget(previouslyOpen: boolean, open: boolean): "rail" | "show-navigation" | null {
+  if (previouslyOpen === open) return null;
+  return open ? "rail" : "show-navigation";
+}
+
 // ---------------------------------------------------------------- persistence
 
 export const RAIL_STORAGE_KEY = "staple:rail:v1";
