@@ -1,0 +1,57 @@
+# staple-sync-dev — COMMITTED CONFIGURATION.
+#
+# This file contains NO real identifiers. The repository is public.
+#
+#   account_id  is intentionally absent. Wrangler reads CLOUDFLARE_ACCOUNT_ID from the
+#               environment, which is where it belongs.
+#   database_id is a required field with no environment-variable equivalent, and
+#               Wrangler supports NO ${VAR} interpolation anywhere in its config. So
+#               the committed value is a zero placeholder and every --remote operation
+#               is run against the gitignored wrangler.local.toml with `-c`.
+#
+# The placeholder is not merely harmless, it is useful: Miniflare keys its local SQLite
+# file by the database id, so `wrangler dev --local`, the vitest integration, and
+# `wrangler types` all work off THIS file with no secrets present anywhere.
+#
+# See worker/README.md for the deploy recipe.
+
+name = "staple-sync-dev"
+main = "src/index.ts"
+compatibility_date = "2026-09-01"
+compatibility_flags = ["nodejs_compat"]
+
+[vars]
+# Selects the advertised batch ceiling: "free" -> 25 operations per push, "paid" -> 200.
+# A push costs N+4 D1 statements against a queries-per-invocation ceiling of 50 on the
+# free plan and 1,000 on paid. Not a secret; getting it wrong costs throughput, never
+# correctness, because the server enforces exactly what it advertises.
+PLAN = "free"
+
+[observability]
+enabled = true
+head_sampling_rate = 1
+
+[observability.logs]
+# OFF, deliberately. An invocation log's message is `<Method> <URL>` plus request and
+# response metadata that nothing in this Worker chose to emit. Everything this service
+# wants logged goes through the single allowlisting helper in src/log.ts.
+invocation_logs = false
+
+[[d1_databases]]
+binding = "DB"
+database_name = "staple-sync-dev"
+database_id = "00000000-0000-0000-0000-000000000000"  # PLACEHOLDER — real id lives in wrangler.local.toml
+migrations_dir = "migrations"
+
+[[ratelimits]]
+name = "SYNC_LIMITER"
+namespace_id = "1001"
+
+  [ratelimits.simple]
+  # 120 per 60s, keyed on `${repoId}:${deviceId}`. `period` must be exactly 10 or 60;
+  # no other value is accepted. Limits are per-Cloudflare-location and eventually
+  # consistent, so two devices in different colos can see up to twice this. That is
+  # fine: this is abuse control, and the platform documents it as "intentionally
+  # designed to not be used as an accurate accounting system".
+  limit = 120
+  period = 60
