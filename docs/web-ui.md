@@ -846,6 +846,51 @@ the preview. From `md` up they split, plan left and preview right. Each pane's
 header carries an expand button that gives it the whole content box at either
 width; press it again to return.
 
+## Projects
+
+A project is a named container an issue can be filed under — the thing the rail
+lists under Tasks and the thing the Project filter narrows by. It is workspace
+data: workspace migration **009** adds a `projects` table and a nullable
+`issues.project_id`, alongside milestones and the queue.
+
+**Two kinds.** An **unmanaged** project is a name and nothing else. A
+**managed** project points at a source, and the source's kind is stored
+explicitly rather than inferred from the shape of a string: `github` (a
+repository URL like `https://github.com/owner/repo`) or `local` (a folder path).
+The record is `{ id, slug, name, kind, sourceKind, source, createdAt, updatedAt }`;
+`sourceKind` and `source` are null exactly when the kind is `unmanaged`. The
+settings a project grows later — initiating a tracker in it, repointing it —
+hang off this distinction and are not modelled yet.
+
+**Rules.** The name is required. A managed project needs both a source kind and
+a source; a GitHub source must look like a repository URL; a local path is any
+non-empty string — nothing probes the network or the filesystem. An unmanaged
+project may not carry a source: sending one is refused rather than dropped. The
+rules are pure (`src/core/projects.ts`) and pinned in `test/projects.test.ts`.
+
+**Slug and id.** The slug is derived from the name once, at create time
+(`My Project (v2)` → `my-project-v2`, numbered `-2`, `-3` when taken), and a
+rename leaves it alone. Every lookup answers to the id or the slug. An issue
+points at a project by `projectId` — at most one, exactly like `parentId`, and
+null for every issue that predates the migration. Deleting a project lets its
+issues go (their `projectId` becomes null in the same transaction) and touches
+nothing else about them.
+
+**Routes.** `GET /api/projects` answers `{ workspace, project }` rows — for one
+workspace with `?ws=`, and in `--hub` mode with no `ws` for every workspace at
+once, so two projects called `docs` in two workspaces are tellable apart. The
+writes are POST-only and Origin-checked, the milestone family's shape:
+`/api/project/create`, `/api/project/update` (absent fields keep their value;
+changing the kind means changing the source in the same call),
+`/api/project/delete` (answers how many issues it let go of) and
+`/api/project/assign` (`{ ref, project }`, where `project` is an id, a slug, or
+null to take the issue out; answers the refreshed `/api/issue` payload). A task
+created through `/api/action` may name a `project`. `/api/issues` rows and the
+detail payload carry `issue.projectId`. `test/contract-projects.test.ts` pins the
+gate, the refusals and the row shape; `test/store-projects.test.ts` pins the
+store. CLI and MCP have no project verbs — `projectId` simply rides along on the
+issue shape they already print.
+
 ## Stack
 
 The page is a Vite + React + TypeScript app in `src/ui/app/`, shipped inside the
