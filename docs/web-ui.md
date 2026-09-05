@@ -56,10 +56,18 @@ navigation* button then leads the content header. Below 768px the rail is a
 sheet opened from that same button and closed by a row, the scrim or Escape, so
 the list keeps its width on a narrow window.
 
-**The content header** at the top of the pane names the view on the left and,
-on the right, holds the group, sort, search, filter and done controls; the
-active-filter chips sit directly beneath it and take no space when no filter is
-on. The Tasks view keeps every filter, sort and group control it had.
+**The content header** is one 40px row: the view's name on the left and, on
+the right, **Group**, **Sort**, **Filter**, **Done** and last the **search**
+field, every one the same ghost button (28px, 13px, a 16px icon). The sort
+trigger says "Sort: Activity" with a small arrow for the direction; the
+direction's full reading ("Most active first") is its accessible name, its
+tooltip and the menu's direction rows. Filter carries its count as a badge.
+Below 768px the words drop and the controls become icon buttons with tooltips,
+and the search folds into an icon that expands on click and stays open while
+it holds text; below 640px the list's date column hides (its tooltip keeps the
+stamp). The active-filter chips sit directly beneath the row and take no space
+when no filter is on. The Tasks view keeps every filter, sort and group control
+it had.
 
 ## Grouping
 
@@ -146,7 +154,8 @@ is no cross-workspace order to show.
 ## Sorting
 
 The "Sort" control sits beside "Group" and names both halves of its own state without
-being opened — "Sort: Activity · Most active first", never an arrow you have to
+being opened — "Sort: Activity" with a direction arrow on the trigger, and the whole
+reading, "Sort: Activity · Most active first", as its accessible name and tooltip, never an arrow you have to
 decode. Every mode is a real radio in a labelled group, so Tab and Enter operate it.
 The choice is stored **per workspace and per view** under the same
 `staple:view:v1` key as the grouping; a scope you have never set uses the default, and
