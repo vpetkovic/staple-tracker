@@ -20,10 +20,29 @@
  * names say — and it keeps the suite dependency-free and fast.
  */
 import { fileURLToPath } from "node:url";
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
 
 export default defineConfig({
   resolve: {
     alias: { "@": fileURLToPath(new URL("./src/ui/app/src", import.meta.url)) },
+  },
+  test: {
+    /**
+     * `worker/` is a SEPARATE PACKAGE with its own runner, and this suite must not
+     * collect it.
+     *
+     * The Cloudflare Workers Vitest integration requires vitest 4.1+; this repository
+     * is on vitest 3 across 173 test files. So worker/ carries its own package.json,
+     * its own lockfile and its own vitest 4, and its tests import `cloudflare:test` —
+     * a module that only exists inside that runner. Without this exclusion the default
+     * glob collects them and they fail on an unresolvable import.
+     *
+     * Run them with `npm run test:worker`, which delegates into the package.
+     *
+     * `configDefaults.exclude` is spread rather than replaced: it carries
+     * node_modules, dist and the rest, and dropping those would change what this suite
+     * collects.
+     */
+    exclude: [...configDefaults.exclude, "worker/**"],
   },
 });
