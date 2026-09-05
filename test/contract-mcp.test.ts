@@ -232,7 +232,7 @@ describe("tool inventory", () => {
    * moment this ticket is buying. Read-only tools deliberately omit
    * destructiveHint (the MCP spec only defines it when readOnlyHint is false).
    */
-  it("exposes exactly these 40 tools with these annotations and output schemas", async () => {
+  it("exposes exactly these 43 tools with these annotations and output schemas", async () => {
     const tools = await harness.listTools();
     const inventory = tools.map((t) => ({
       name: t.name,
@@ -462,6 +462,43 @@ describe("tool inventory", () => {
       {
         name: "hub_overview",
         annotations: { title: "Hub overview", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+        hasOutputSchema: false,
+      },
+      // ------ registry cleanup (STA-249) ------
+      // `hub_prune` is NOT readOnlyHint even though a bare call writes nothing:
+      // the same tool with apply:true deletes rows, and an annotation that
+      // depends on an argument is worse than no annotation.
+      {
+        name: "hub_unregister",
+        annotations: {
+          title: "Unregister workspace",
+          readOnlyHint: false,
+          destructiveHint: true,
+          idempotentHint: false,
+          openWorldHint: false,
+        },
+        hasOutputSchema: false,
+      },
+      {
+        name: "hub_prune",
+        annotations: {
+          title: "Prune hub registry",
+          readOnlyHint: false,
+          destructiveHint: true,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
+        hasOutputSchema: false,
+      },
+      {
+        name: "cross_unlink",
+        annotations: {
+          title: "Remove cross-workspace link",
+          readOnlyHint: false,
+          destructiveHint: true,
+          idempotentHint: false,
+          openWorldHint: false,
+        },
         hasOutputSchema: false,
       },
       {
@@ -1287,6 +1324,12 @@ describe("tool response shapes (31/31)", () => {
       "events_since",
       "cross_link",
       "hub_overview",
+      // STA-249: the three registry-cleanup tools are pinned in
+      // test/hub-unregister-surfaces.test.ts, against the CLI projection of the
+      // same hub rows.
+      "hub_unregister",
+      "hub_prune",
+      "cross_unlink",
       "gate_task",
       "approve_task",
       "request_changes",

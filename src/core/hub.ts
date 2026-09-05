@@ -50,6 +50,130 @@ export interface CrossBlockerState {
   unresolvable: boolean;
 }
 
+/** What {@link Hub.unregister} would do, without doing it. */
+export interface UnregisterPreview {
+  entry: WorkspaceEntry;
+  /** Every cross-link naming this workspace on either side. */
+  crossLinks: CrossLink[];
+}
+
+export interface UnregisterResult {
+  workspace: WorkspaceEntry;
+  /** Empty unless the caller asked for the cascade. */
+  removedCrossLinks: CrossLink[];
+  /** The prefix this row was holding, now available to {@link Hub.allocatePrefix}. */
+  prefixReleased: string;
+}
+
+/** A dead row prune found, and whether anything stands in the way of removing it. */
+export interface PruneCandidate extends UnregisterPreview {
+  /** `"cross_links"` when the row can only be removed with the cascade enabled. */
+  blockedBy: "cross_links" | null;
+}
+
+export interface PruneResult {
+  /** Rows removed — or, when `dryRun`, the rows that WOULD be removed. */
+  removed: UnregisterResult[];
+  /** Dead rows left in place, with the reason. */
+  skipped: PruneCandidate[];
+  dryRun: boolean;
+}
+
+function crossLinkRowsFor(db: DatabaseSync, slug: string): CrossLink[] {
+  const rows = db
+    .prepare(
+      "SELECT * FROM cross_links WHERE blocker_ws = ? OR blocked_ws = ? ORDER BY id",
+    )
+    .all(slug, slug) as Array<{
+    blocker_ws: string;
+    blocker_identifier: string;
+    blocked_ws: string;
+    blocked_identifier: string;
+  }>;
+  return rows.map((r) => ({
+    blockerWs: r.blocker_ws,
+    blockerIdentifier: r.blocker_identifier,
+    blockedWs: r.blocked_ws,
+    blockedIdentifier: r.blocked_identifier,
+    type: "blocks" as const,
+  }));
+}
+
+/**
+ * The entire write side of unregistration — deliberately a free function, and
+ * deliberately this narrow.
+ *
+ * STA-249's hard requirement is that removing a registration "must never delete,
+ * move, or open-for-write the workspace database or any file in the workspace
+ * directory", and that this be structurally true rather than merely intended.
+ * The structure is the signature: this function is handed a database connection
+ * and a NAME. It receives no path, no `fs` module and no workspace opener, so it
+ * has nothing to reach a workspace file WITH. Making it capable of damage would
+ * require widening these parameters first, which is a visible diff in review.
+ *
+ * (`Hub` itself cannot make that promise: it imports `openWorkspace` for
+ * `addCrossLink`, `crossBlockersOf`, `unifiedIssues` and `graph`. Hoisting the
+ * removal out of the class is what buys the guarantee.)
+ *
+ * One transaction, so a refused cascade cannot leave the row gone and its links
+ * behind — which is precisely the dangling state the refusal exists to prevent.
+ */
+export function deleteHubRegistration(
+  db: DatabaseSync,
+  slug: string,
+  options: { withLinks: boolean } = { withLinks: false },
+): CrossLink[] {
+  return tx(db, () => {
+    const links = crossLinkRowsFor(db, slug);
+    if (links.length > 0 && !options.withLinks) {
+      throw new StapleError("conflict", crossLinkRefusal(slug, links));
+    }
+    if (links.length > 0) {
+      db.prepare("DELETE FROM cross_links WHERE blocker_ws = ? OR blocked_ws = ?").run(slug, slug);
+    }
+    const outcome = db.prepare("DELETE FROM workspaces WHERE slug = ?").run(slug);
+    if (outcome.changes === 0) {
+      throw new StapleError("not_found", unknownWorkspaceMessage(slug));
+    }
+    return links;
+  });
+}
+
+function unknownWorkspaceMessage(slugOrPrefix: string): string {
+  return (
+    `No workspace "${slugOrPrefix}" is registered in the hub. ` +
+    "Run `staple hub ls` to see the registered slugs and prefixes."
+  );
+}
+
+/**
+ * Why a link is a refusal rather than a silent cascade.
+ *
+ * A workspace database survives unregistration untouched and `init` re-registers
+ * it, so removing a row is recoverable. A cross-link is not: `cross_links` lives
+ * only in the hub, so a cascaded delete is the end of that edge. The operator
+ * asked to remove a registry row; taking edges with it is a larger action than
+ * the one requested, and it is taken only when asked for by name.
+ *
+ * Leaving them behind is not the alternative. `crossBlockersOf` reports a
+ * blocker whose workspace is gone as unresolvable, and the readiness rule reads
+ * unresolvable as BLOCKED — so a dangling edge wedges a live issue in a
+ * still-registered workspace, permanently, with no surface that says why.
+ */
+function crossLinkRefusal(slug: string, links: CrossLink[]): string {
+  const listed = links
+    .map((l) => `${l.blockerIdentifier} blocks ${l.blockedIdentifier}`)
+    .join("; ");
+  const count = links.length === 1 ? "1 cross-workspace link" : `${links.length} cross-workspace links`;
+  return (
+    `Workspace "${slug}" is named by ${count} (${listed}). ` +
+    "Removing the registration without them would leave every listed edge pointing at an " +
+    "unregistered workspace, which reads as an unresolvable blocker and silently blocks the " +
+    "issue on the other side. Remove them one at a time with `staple hub unlink <blocker> " +
+    "<blocked>`, or pass --with-links to remove them along with the registration."
+  );
+}
+
 /**
  * The hub: registry of workspaces, unique identifier prefixes, and the edges
  * that span workspace files. Derived + linking state only — issues always live
@@ -250,6 +374,106 @@ export class Hub {
     );
   }
 
+  /** Every cross-link naming this workspace, on either side of the edge. */
+  crossLinksFor(slug: string): CrossLink[] {
+    return crossLinkRowsFor(this.db, slug);
+  }
+
+  /**
+   * What {@link unregister} would do to `slugOrPrefix`, as a pure read.
+   *
+   * Resolution goes through {@link get}, so a slug and either case of a prefix
+   * are the same address — an agent that copied a prefix out of a `hub ls` line
+   * does not have to know which column it was looking at.
+   */
+  previewUnregister(slugOrPrefix: string): UnregisterPreview {
+    const entry = this.get(slugOrPrefix);
+    if (!entry) {
+      throw new StapleError("not_found", unknownWorkspaceMessage(slugOrPrefix));
+    }
+    return { entry, crossLinks: this.crossLinksFor(entry.slug) };
+  }
+
+  /**
+   * Remove ONE registration named by slug or prefix.
+   *
+   * This deletes a hub row and nothing else. The workspace database is left
+   * exactly as it was — see {@link deleteHubRegistration} for why that is a
+   * property of the code's shape rather than a promise.
+   *
+   * It is not a blacklist, and should not be: the hub is derived state, the
+   * authoritative slug and prefix live in the workspace file, and
+   * `repairHubRegistration` re-registers a missing row on the next walk-up
+   * resolution inside that repository. Unregistering a workspace whose directory
+   * still exists therefore lasts until someone runs a command in it, which is
+   * the correct behaviour for a registry. For the rows this exists to clean —
+   * ones whose path is gone — there is nothing left to re-register.
+   */
+  unregister(slugOrPrefix: string, options: { withLinks?: boolean } = {}): UnregisterResult {
+    const { entry } = this.previewUnregister(slugOrPrefix);
+    const removedCrossLinks = deleteHubRegistration(this.db, entry.slug, {
+      withLinks: options.withLinks === true,
+    });
+    return { workspace: entry, removedCrossLinks, prefixReleased: entry.prefix };
+  }
+
+  /**
+   * Rows whose recorded path is not on this machine.
+   *
+   * `available` is `existsSync(path)` and nothing more, which is the whole test
+   * — and the reason prune must NOT normalise the path first. This hub holds
+   * rows spelled `/var/...` for files whose realpath is `/private/var/...`
+   * (`findRepointableRows` exists because of it), so comparing path STRINGS says
+   * "stale" about a perfectly live workspace. `existsSync` follows symlinks, so
+   * both spellings answer yes to the only question prune asks. Spelling is
+   * repair's problem, because repair compares paths; prune just asks the
+   * filesystem whether the file is there.
+   */
+  pruneCandidates(options: { withLinks?: boolean } = {}): PruneCandidate[] {
+    return this.list()
+      .filter((entry) => !entry.available)
+      .map((entry) => {
+        const crossLinks = this.crossLinksFor(entry.slug);
+        const encumbered = crossLinks.length > 0 && options.withLinks !== true;
+        return { entry, crossLinks, blockedBy: encumbered ? ("cross_links" as const) : null };
+      });
+  }
+
+  /**
+   * Sweep every dead row. Previews by default; `apply` performs it.
+   *
+   * A separate verb from {@link unregister} because the two are different
+   * operations: unregister names a row the operator has already looked at, while
+   * prune acts on a set they have NOT seen — which is why it shows the set first
+   * and needs an explicit yes. It is also partial-tolerant where unregister is
+   * all-or-nothing: one encumbered row must not block the cleanup of every other
+   * row, so each removal is its own transaction and the refusals come back as
+   * `skipped` rather than as a thrown error.
+   */
+  prune(options: { apply?: boolean; withLinks?: boolean } = {}): PruneResult {
+    const dryRun = options.apply !== true;
+    const removed: UnregisterResult[] = [];
+    const skipped: PruneCandidate[] = [];
+    for (const candidate of this.pruneCandidates({ withLinks: options.withLinks })) {
+      if (candidate.blockedBy !== null) {
+        skipped.push(candidate);
+        continue;
+      }
+      const result: UnregisterResult = {
+        workspace: candidate.entry,
+        removedCrossLinks: candidate.crossLinks,
+        prefixReleased: candidate.entry.prefix,
+      };
+      if (!dryRun) {
+        deleteHubRegistration(this.db, candidate.entry.slug, {
+          withLinks: options.withLinks === true,
+        });
+      }
+      removed.push(result);
+    }
+    return { removed, skipped, dryRun };
+  }
+
   /** Resolve an identifier like GAR-42 to its owning workspace entry. */
   resolveIdentifier(identifier: string): { entry: WorkspaceEntry; identifier: string } {
     const parsed = parseIdentifier(identifier);
@@ -331,12 +555,39 @@ export class Hub {
     }
   }
 
-  removeCrossLink(blockerIdentifier: string, blockedIdentifier: string): void {
-    this.db
-      .prepare(
-        "DELETE FROM cross_links WHERE blocker_identifier = ? AND blocked_identifier = ?",
-      )
-      .run(blockerIdentifier.toUpperCase(), blockedIdentifier.toUpperCase());
+  /**
+   * Drop one hub edge. Returns the link it removed, or undefined if there was
+   * none — a distinction STA-249 needs rather than merely likes.
+   *
+   * This is the non-destructive way out of the refusal `unregister` raises while
+   * a workspace is still linked, so it is the command an operator reaches for
+   * with two identifiers they typed by hand. A version that returned void would
+   * report success for a typo, leaving them to wonder why the unregister they
+   * were unblocking still refuses. The caller turns undefined into not_found.
+   *
+   * (Until this ticket the method had no caller on any surface at all.)
+   */
+  removeCrossLink(blockerIdentifier: string, blockedIdentifier: string): CrossLink | undefined {
+    const blocker = blockerIdentifier.toUpperCase();
+    const blocked = blockedIdentifier.toUpperCase();
+    return tx(this.db, () => {
+      const row = this.db
+        .prepare("SELECT * FROM cross_links WHERE blocker_identifier = ? AND blocked_identifier = ?")
+        .get(blocker, blocked) as
+        | { blocker_ws: string; blocker_identifier: string; blocked_ws: string; blocked_identifier: string }
+        | undefined;
+      if (!row) return undefined;
+      this.db
+        .prepare("DELETE FROM cross_links WHERE blocker_identifier = ? AND blocked_identifier = ?")
+        .run(blocker, blocked);
+      return {
+        blockerWs: row.blocker_ws,
+        blockerIdentifier: row.blocker_identifier,
+        blockedWs: row.blocked_ws,
+        blockedIdentifier: row.blocked_identifier,
+        type: "blocks" as const,
+      };
+    });
   }
 
   listCrossLinks(): CrossLink[] {

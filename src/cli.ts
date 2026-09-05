@@ -762,6 +762,15 @@ Workspace
               registers ONLY hub rows, only for what you select; never registers
               an ambiguous directory and never initializes anything
   hub [ls|links|events]                 registry, cross-links, cross-workspace events
+  hub unregister <slug|prefix> [--with-links]
+              drop ONE registry row and release its prefix; the workspace database
+              and every file beside it are left untouched, so staple init there
+              registers it again; refuses while cross-workspace links name it
+              unless --with-links removes those too
+  hub prune [--yes] [--with-links]      drop every row whose recorded path is gone;
+              previews and writes nothing without --yes; a dead row named by
+              cross-links is kept and reported unless --with-links
+  hub unlink <blocker> <blocked>        remove ONE cross-workspace link
   doctor [--json] [--dir p] [--home p]  read-only diagnosis of home, config, hub, workspace,
               schema, migration journals, UI port, runtime and assets; exits 1
               when a check fails and prints the exact repair commands
@@ -1999,7 +2008,20 @@ function main() {
     }
 
     case "hub": {
-      const sub = rest.filter((arg) => !arg.startsWith("--"))[0] ?? "ls";
+      /**
+       * `hub` still does not call parseArgs, and that is on purpose here.
+       *
+       * The tolerant split is a quirk pinned by characterize-cli-surface.test.ts
+       * ("`hub` swallows unknown flags"); unifying the flag surface is somebody
+       * else's ticket. What matters for the write verbs STA-249 adds is which
+       * way the tolerance fails, and it fails safe in both directions: a
+       * mistyped `--yess` leaves prune in its preview mode, and a mistyped
+       * `--with-linkz` leaves the cross-link cascade off. Every typo does LESS,
+       * never more.
+       */
+      const words = rest.filter((arg) => !arg.startsWith("--"));
+      const flag = (name: string): boolean => rest.includes(`--${name}`);
+      const sub = words[0] ?? "ls";
       const hub = Hub.open();
       try {
         if (sub === "ls") {
@@ -2028,8 +2050,91 @@ function main() {
           for (const event of hub.listHubEvents()) {
             console.log(`${String(event.seq).padStart(4)}  ${event.createdAt.slice(0, 19)}  ${event.kind}  ${JSON.stringify(event.payload)}`);
           }
+        } else if (sub === "unregister") {
+          const target = words[1];
+          if (!target) {
+            throw new StapleError(
+              "validation",
+              "usage: staple hub unregister <slug|prefix> [--with-links]",
+            );
+          }
+          const result = hub.unregister(target, { withLinks: flag("with-links") });
+          if (jsonMode) {
+            outJson(result);
+            break;
+          }
+          const ws = result.workspace;
+          console.log(`Unregistered ${ws.prefix} ${ws.slug} (${ws.path})`);
+          for (const link of result.removedCrossLinks) {
+            console.log(`  removed cross-link ${link.blockerIdentifier} blocks ${link.blockedIdentifier}`);
+          }
+          console.log(`Prefix ${result.prefixReleased} is free again. The workspace database was not touched.`);
+          if (ws.available) {
+            // Honesty about the one thing that surprises people: the hub is
+            // DERIVED state, so a workspace that is still on disk re-registers
+            // itself from the prefix stamped in its own database the next time
+            // anyone runs a command inside it.
+            console.log("Its file is still on disk, so a staple command run in that workspace will register it again.");
+          }
+        } else if (sub === "prune") {
+          const apply = flag("yes");
+          const withLinks = flag("with-links");
+          const result = hub.prune({ apply, withLinks });
+          if (jsonMode) {
+            outJson(result);
+            break;
+          }
+          if (result.removed.length === 0 && result.skipped.length === 0) {
+            console.log("Nothing to prune — every registered workspace is present on this machine.");
+            break;
+          }
+          for (const entry of result.removed.map((r) => r.workspace)) {
+            console.log(
+              `${apply ? "removed     " : "would remove"} ${entry.prefix.padEnd(6)} ${entry.slug.padEnd(20)} ${entry.path}`,
+            );
+          }
+          for (const skip of result.skipped) {
+            console.log(
+              `kept        ${skip.entry.prefix.padEnd(6)} ${skip.entry.slug.padEnd(20)} ${skip.entry.path}`,
+            );
+            for (const link of skip.crossLinks) {
+              console.log(`  cross-link ${link.blockerIdentifier} blocks ${link.blockedIdentifier}`);
+            }
+            console.log("  named by cross-workspace links; re-run with --with-links to remove them too");
+          }
+          if (!apply) {
+            // The `discover` contract: a preview writes nothing, exits 0, and
+            // hands back the exact command that would perform it.
+            console.log("");
+            console.log(`${result.removed.length} row(s) can be pruned. Nothing has been written.`);
+            console.log(`  staple hub prune --yes${withLinks ? " --with-links" : ""}`);
+          }
+        } else if (sub === "unlink") {
+          const blocker = words[1];
+          const blocked = words[2];
+          if (!blocker || !blocked) {
+            throw new StapleError(
+              "validation",
+              "usage: staple hub unlink <blocker-identifier> <blocked-identifier>",
+            );
+          }
+          const removed = hub.removeCrossLink(blocker, blocked);
+          if (!removed) {
+            throw new StapleError(
+              "not_found",
+              `No cross-workspace link where ${blocker.toUpperCase()} blocks ${blocked.toUpperCase()}. ` +
+                "Run `staple hub links` to see the ones that exist.",
+            );
+          }
+          if (jsonMode) {
+            outJson(removed);
+            break;
+          }
+          console.log(
+            `Removed cross-link ${removed.blockerIdentifier} blocks ${removed.blockedIdentifier}  (${removed.blockerWs} → ${removed.blockedWs})`,
+          );
         } else {
-          console.log("usage: staple hub [ls|links|events]");
+          console.log("usage: staple hub [ls|links|events|unregister|prune|unlink]");
         }
       } finally {
         hub.close();
