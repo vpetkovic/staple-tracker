@@ -63,7 +63,7 @@
  * Unlike `parent`, the id and the label agree here: the axis reads `issue.kind` and the
  * header says "Kind". There was no common case to name it after and no lie available.
  */
-import { emptyFilters, type FilterState } from "./filters";
+import { emptyFilters, retainDimensionValues, type FilterState } from "./filters";
 import {
   DEFAULT_SORT,
   isSortDirection,
@@ -264,6 +264,28 @@ export function withFiltersForScope(
   next: FilterState,
 ): Record<string, FilterState> {
   return { ...filters, [scope]: next };
+}
+
+/**
+ * `retainDimensionValues` over EVERY saved scope at once. A project deleted today is still
+ * selected in the Tasks scope of a workspace the user last filtered a week ago, and that
+ * scope must not greet them with a chip for a project that no longer exists. The same
+ * map comes back when no scope changed, for the same reason the single-state version
+ * returns the same state.
+ */
+export function pruneFilterScopes(
+  filters: Readonly<Record<string, FilterState>>,
+  dimension: string,
+  allowed: ReadonlySet<string>,
+): Record<string, FilterState> {
+  let changed = false;
+  const next: Record<string, FilterState> = {};
+  for (const [scope, state] of Object.entries(filters)) {
+    const pruned = retainDimensionValues(state, dimension, allowed);
+    if (pruned !== state) changed = true;
+    next[scope] = pruned;
+  }
+  return changed ? next : (filters as Record<string, FilterState>);
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>

@@ -377,6 +377,12 @@ describe("schema migration against a live database", () => {
       legacyDb.exec("DROP TABLE IF EXISTS milestone_meta");
       // STA-167 added migration 008, one more table — same rule again.
       legacyDb.exec("DROP TABLE IF EXISTS queue_entries");
+      // Migration 009 added a table, a column and a partial index over it. The index
+      // comes off first — SQLite refuses to drop an indexed column — and the column
+      // carries no foreign key precisely so that this rewind stays possible.
+      legacyDb.exec("DROP INDEX IF EXISTS issues_project_idx");
+      legacyDb.exec("ALTER TABLE issues DROP COLUMN project_id");
+      legacyDb.exec("DROP TABLE IF EXISTS projects");
       legacyDb.prepare("UPDATE meta SET value = '1' WHERE key = 'schema_version'").run();
       legacyDb.close();
 

@@ -438,9 +438,45 @@ export interface Issue {
    * plan is missing rather than invent a 0 and report an infinite overrun.
    */
   estimatedSeconds: number | null;
+  /**
+   * The project this issue belongs to — a `Project.id` — or null for none,
+   * which is what every issue that predates migration 009 reads as. At most one,
+   * exactly like `parentId`; set through `ProjectStore.assign`, at create time
+   * through `CreateIssueInput.project`, and cleared when the project is deleted.
+   */
+  projectId: string | null;
   startedAt: string | null;
   completedAt: string | null;
   cancelledAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// ---------- projects (migration 009) ----------
+
+/**
+ * A project is either UNMANAGED (a name and nothing else) or MANAGED, in which
+ * case it points at a source: a GitHub repository link or a folder on disk.
+ * The distinction is stored explicitly rather than inferred from the shape of a
+ * string, because the settings a project grows later hang off it.
+ */
+export const PROJECT_KINDS = ["unmanaged", "managed"] as const;
+export type ProjectKind = (typeof PROJECT_KINDS)[number];
+
+export const PROJECT_SOURCE_KINDS = ["github", "local"] as const;
+export type ProjectSourceKind = (typeof PROJECT_SOURCE_KINDS)[number];
+
+export interface Project {
+  /** Stable machine key; what `Issue.projectId` points at. */
+  id: string;
+  /** Stable human handle, derived from the name at create time and never re-derived. */
+  slug: string;
+  name: string;
+  kind: ProjectKind;
+  /** Null exactly when `kind` is `unmanaged`. */
+  sourceKind: ProjectSourceKind | null;
+  /** The GitHub URL or the local path; null exactly when `kind` is `unmanaged`. */
+  source: string | null;
   createdAt: string;
   updatedAt: string;
 }

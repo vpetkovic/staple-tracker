@@ -100,7 +100,7 @@ const menu = (page: string | null, filters = emptyFilters()) =>
   );
 
 describe("the filter menu lists every dimension", () => {
-  it("offers all eleven, including the three this ticket adds", () => {
+  it("offers all twelve, including the three this ticket adds and the project dimension", () => {
     const markup = menu(null);
     for (const id of [
       "status",
@@ -114,6 +114,7 @@ describe("the filter menu lists every dimension", () => {
       "pickup",
       "milestone",
       "epic",
+      "project",
     ]) {
       expect(markup).toContain(`data-filter-dimension="${id}"`);
     }

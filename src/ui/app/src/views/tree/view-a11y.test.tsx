@@ -78,6 +78,8 @@ function session(over: Partial<StapleSession> = {}): StapleSession {
     setView: noop,
     milestoneFocus: null,
     focusMilestone: noop,
+    projects: { data: [], error: undefined, loading: false, reload: noop },
+    focusProject: noop,
     ws: "staple",
     setWs: noop,
     issues: { data: BOARD, error: undefined, loading: false, reload: noop },

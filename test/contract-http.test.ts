@@ -373,6 +373,13 @@ describe("KNOWN: logical errors this surface cannot project", () => {
       "/api/milestone/update",
       "/api/milestones",
       "/api/poll",
+      // Migration 009: one read (plural, GET-only) and four writes under the
+      // singular prefix, the milestone family's shape.
+      "/api/project/assign",
+      "/api/project/create",
+      "/api/project/delete",
+      "/api/project/update",
+      "/api/projects",
       // R2c (STA-168): two reads and one POST per mutating verb. The reads are
       // deliberately NOT under a writable prefix — `test/queue-surfaces.test.ts`
       // pins that `/api/queue` and `/api/queue/next` refuse a POST.

@@ -17,6 +17,8 @@
  * rather than a new one.
  */
 
+import type { ProjectRow } from "./types";
+
 const CREATE_ISSUE = "staple:open-create-issue";
 const COMMAND_PALETTE = "staple:open-command-palette";
 /** O7b (STA-141) — the workspace vocabulary editor. Third verb, same idiom. */
@@ -51,4 +53,25 @@ export function openSettings(): void {
 export function onOpenSettings(handler: () => void): () => void {
   window.addEventListener(SETTINGS, handler);
   return () => window.removeEventListener(SETTINGS, handler);
+}
+
+/**
+ * The project dialog — the fourth verb, and the first that carries a payload. The rail's
+ * `+` on the Tasks row opens it to create; the gear on a project row opens it on that
+ * project. Same idiom: the mount owns the open flag and the dialog owns the form.
+ */
+const PROJECT_DIALOG = "staple:open-project-dialog";
+
+export type ProjectDialogRequest =
+  | { mode: "create"; workspace?: string }
+  | { mode: "edit"; row: ProjectRow };
+
+export function openProjectDialog(request: ProjectDialogRequest): void {
+  window.dispatchEvent(new CustomEvent<ProjectDialogRequest>(PROJECT_DIALOG, { detail: request }));
+}
+
+export function onOpenProjectDialog(handler: (request: ProjectDialogRequest) => void): () => void {
+  const listener = (event: Event) => handler((event as CustomEvent<ProjectDialogRequest>).detail);
+  window.addEventListener(PROJECT_DIALOG, listener);
+  return () => window.removeEventListener(PROJECT_DIALOG, listener);
 }

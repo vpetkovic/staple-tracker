@@ -1,287 +1,198 @@
 /**
  * The chrome. Everything true of the page regardless of which view is showing.
  *
- * V2 (STA-87) REBUILT THE STRUCTURE. V1 restyled this header without moving anything,
- * because the shape was this ticket's to decide. Here is the decision.
+ * ── A rail on the left, the view on the right ─────────────────────────────────────────
  *
- * ── One row became two, and that is the whole idea ────────────────────────────────────
+ * The shell used to be a two-tier header: identity and global actions on one row, the
+ * view tabs and the filter controls on a second, and a note here saying "no sidebar, per
+ * VP" because with two views a rail had nothing to hold. There are four views now, with
+ * projects arriving underneath one of them, and VP asked for Linear's layout instead. So
+ * the split is by DIRECTION rather than by altitude:
  *
- * The old header put brand, mode, four view tabs, a workspace select, an assignee box
- * and a theme toggle on ONE line with `flex-wrap`. Six unrelated jobs at one altitude:
- * "which app am I in", "which view", and "which subset of the data" all read as siblings,
- * so none of them read as anything. At a narrow width it wrapped into two rows chosen by
- * the layout engine rather than by meaning.
+ *   THE RAIL (232px, left) — `components/nav/NavRail.tsx`. Where you are and what you
+ *     can do from anywhere: the workspace switcher, New task, search, the views in named
+ *     groups, and at the foot the settings and the theme. Nothing in it changes what the
+ *     view below shows. It collapses (`[`, or cmd-\) and remembers that it did.
+ *   THE CONTENT HEADER (44px, top of the pane) — what the view IS and how much of it.
+ *     The view's name on the left; on the right the group, sort, search, filter and
+ *     done controls that used to live on tier 2. Everything on this row scopes the thing
+ *     underneath it, which is why it sits directly on top of it. `FilterChips` stays
+ *     directly below it, as before, and still renders nothing when no filter is on.
  *
- * Now the split is by what the control changes, which is the split Vercel's own dashboard
- * uses and the reason its header survives having a lot in it:
+ * ── The rail is in-flow on a wide viewport and an overlay on a narrow one ─────────────
  *
- *   Tier 1 (48px) — IDENTITY AND GLOBAL ACTIONS. Who you are looking at (brand, then the
- *     workspace as a breadcrumb segment) and the things that are true everywhere (new
- *     task, search, theme). Nothing here changes what the view below shows.
- *   Tier 2 (44px) — WHAT THE VIEW IS. The view tabs on the left, and on the right the
- *     controls that narrow the data. Everything on this row scopes the thing underneath
- *     it, which is why it sits directly on top of it with no border between.
+ * Below 768px a permanent 232px column is 232px the list does not get, so the rail
+ * becomes a sheet opened from the menu button in the content header and closed by a
+ * row, the scrim or Escape. The two states are held separately: `collapsed` is the
+ * persisted desktop preference, `overlayOpen` is transient. A narrow window never
+ * writes to the preference, so opening the sheet on a phone does not un-collapse the
+ * rail on the desk.
  *
- * That second row is also the seam V4 (STA-89) needs: a real filter system lands on the
- * right of tier 2 beside — or in place of — the assignee box, and it will not have to
- * negotiate for space with the brand.
+ * ── Why the view rows are buttons and not the Tabs primitive ──────────────────────────
  *
- * V4 TOOK THAT SEAM, in place of rather than beside: `FilterBar` replaced the assignee
- * input outright, and the active-filter chips landed as a strip BELOW the header instead
- * of as a third tier — see the note on `<FilterChips />` further down, and the longer
- * argument in components/filters/FilterChips.tsx. The prediction that a filter system
- * would not have to negotiate with the brand held; nothing in tier 1 moved.
- *
- * ── The workspace switcher is now the breadcrumb ──────────────────────────────────────
- *
- * It used to be a bare select floating at the far right, while a separate mono line next
- * to the brand said "hub · 2 workspaces". Those were one fact said twice, forty rem apart.
- * The select now sits where it belongs — immediately after the brand, behind Vercel's
- * slanted slash — and says the same thing by being what it is. In single-workspace mode
- * there is nothing to switch, so it degrades to static text rather than a one-item menu.
- *
- * ── Why the tabs are a nav and not the Tabs primitive ─────────────────────────────────
- *
- * These switch what the whole page is, and they control no `TabsContent` — App.tsx swaps
- * the view. Radix Tabs would have meant fighting V1's pill styling on a primitive the
- * detail drawer also uses, to end up with `role="tab"` that lies about the relationship.
- * A nav with `aria-current` is what this actually is.
- *
- * ── No sidebar ───────────────────────────────────────────────────────────────────────
- *
- * Per VP. With two views there is nothing a rail would hold that the tab row does not,
- * and 240px of permanent left margin is 240px the list does not get. If a nav rail comes
- * back it replaces tier 2, not tier 1.
+ * They switch what the whole page is, and they control no `TabsContent` — App.tsx swaps
+ * the view. `aria-current="page"` on a button is what this actually is.
  */
-import { Moon, Search, Settings, Sun } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
+import { PanelLeft } from "lucide-react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { FilterBar } from "@/components/filters/FilterBar";
 import { FilterChips } from "@/components/filters/FilterChips";
-import { Button } from "@/components/ui/button";
+import { NavRail } from "@/components/nav/NavRail";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { openCommandPalette, openCreateIssue, openSettings } from "@/lib/shell-events";
-import { VIEWS, useSession } from "@/lib/session";
-import { cn } from "@/lib/utils";
+  loadRailCollapsed,
+  overlayFocusTarget,
+  railKeyAction,
+  saveRailCollapsed,
+} from "@/components/nav/nav-model";
+import { Button } from "@/components/ui/button";
+import { floatingSurfaceIsOpen, isTyping } from "@/lib/keyboard";
+import { useSession, viewLabel } from "@/lib/session";
 
-const THEME_KEY = "staple:theme";
-/** Sentinel for the "all workspaces" option — Radix Select forbids an empty value. */
-const ALL_WORKSPACES = "__all__";
+/** Above this the rail is a column; below it, a sheet. */
+const WIDE_QUERY = "(min-width: 768px)";
 
-/** Vercel's breadcrumb divider: a hairline leaned over, not a slash glyph. */
-function Divider() {
-  return <span aria-hidden className="h-4 w-px shrink-0 rotate-[18deg] bg-border" />;
+function subscribeWide(onChange: () => void): () => void {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") return () => {};
+  const query = window.matchMedia(WIDE_QUERY);
+  query.addEventListener?.("change", onChange);
+  return () => query.removeEventListener?.("change", onChange);
 }
 
-function ThemeToggle() {
-  const [dark, setDark] = useState(() => document.documentElement.classList.contains("dark"));
-  useEffect(() => {
-    document.documentElement.classList.toggle("dark", dark);
-    try {
-      localStorage.setItem(THEME_KEY, dark ? "dark" : "light");
-    } catch {
-      /* private mode: the choice lasts for this page load */
-    }
-  }, [dark]);
-  return (
-    <Button
-      variant="ghost"
-      size="icon"
-      aria-label={dark ? "Switch to light theme" : "Switch to dark theme"}
-      onClick={() => setDark((d) => !d)}
-    >
-      {dark ? <Sun className="size-4" /> : <Moon className="size-4" />}
-    </Button>
-  );
+function readWide(): boolean {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") return true;
+  return window.matchMedia(WIDE_QUERY).matches;
 }
 
-/**
- * The palette had no visible affordance at all — it was cmd-K or nothing, which means it
- * did not exist for anyone who had not read the source. This is the smallest honest fix:
- * it shows the shortcut rather than replacing it.
- */
-function CommandTrigger() {
-  return (
-    <Button
-      variant="ghost"
-      size="sm"
-      aria-label="Open the command palette"
-      title="Search and commands (cmd K)"
-      onClick={openCommandPalette}
-      className="text-text-tertiary hover:text-foreground"
-    >
-      <Search className="size-3.5" aria-hidden />
-      <kbd className="pointer-events-none font-sans text-[11px] tracking-[var(--tracking-label)]">
-        &#8984;K
-      </kbd>
-    </Button>
-  );
+/** Is the viewport wide enough for the rail to be a column? True where nothing can answer. */
+function useWideViewport(): boolean {
+  return useSyncExternalStore(subscribeWide, readWide, () => true);
 }
 
-function ViewTabs() {
-  const session = useSession();
-  return (
-    // `-ml-3` cancels the button's px-1 and the label's px-2, so the tab text starts on
-    // the same 16px gutter as the brand above it and the rows below it. Without it the
-    // labels sat 12px inboard of both — the kind of misalignment nobody consciously sees
-    // and nobody stops noticing.
-    <nav aria-label="Views" className="-ml-3 flex h-full items-center gap-0.5">
-      {VIEWS.map((view) => {
-        const active = session.view === view;
-        return (
-          <button
-            key={view}
-            type="button"
-            onClick={() => session.setView(view)}
-            aria-current={active ? "page" : undefined}
-            className="group relative flex h-full items-center px-1 outline-none"
-          >
-            <span
-              className={cn(
-                "rounded-md px-2 py-1 text-[13px] capitalize transition-colors",
-                "group-hover:bg-surface-hover",
-                "group-focus-visible:outline-2 group-focus-visible:outline-offset-1 group-focus-visible:outline-ring",
-                active ? "font-medium text-foreground" : "text-muted-foreground",
-              )}
-            >
-              {view}
-            </span>
-            {/* The underline sits on the header's own bottom border, which is why the
-                tier has no border of its own and this element is 2px of foreground
-                rather than a coloured accent — the accent in this language means focus. */}
-            <span
-              aria-hidden
-              className={cn(
-                "absolute inset-x-1 -bottom-px h-0.5 rounded-full bg-foreground transition-opacity",
-                active ? "opacity-100" : "opacity-0",
-              )}
-            />
-          </button>
-        );
-      })}
-    </nav>
-  );
-}
+const storage = () => (typeof localStorage === "undefined" ? undefined : localStorage);
 
 export function AppShell({ children }: { children: ReactNode }) {
   const session = useSession();
-  const first = session.workspaces[0];
+  const wide = useWideViewport();
+
+  const [collapsed, setCollapsed] = useState(() => loadRailCollapsed(storage()));
+  const [overlayOpen, setOverlayOpen] = useState(false);
+  useEffect(() => saveRailCollapsed(storage(), collapsed), [collapsed]);
+
+  const railVisible = wide ? !collapsed : overlayOpen;
+  const toggleRail = useCallback(() => {
+    if (wide) setCollapsed((current) => !current);
+    else setOverlayOpen((current) => !current);
+  }, [wide]);
+  const closeOverlay = useCallback(() => setOverlayOpen(false), []);
+
+  // A sheet left open while the window grows would become a second rail beside the first.
+  useEffect(() => {
+    if (wide) setOverlayOpen(false);
+  }, [wide]);
+
+  /**
+   * The keyboard, decided in `railKeyAction` (nav-model.ts) from three facts this
+   * listener reads off the DOM: an open dialog, menu or listbox owns the key — so Escape
+   * in a dialog closes the dialog and not the sheet behind it, and `[` cannot collapse
+   * the rail under the open workspace switcher; Escape closes the sheet; the shortcut
+   * toggles, unless `[` was typed into a field.
+   */
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const action = railKeyAction(event, {
+        overlayOpen,
+        surfaceOpen: floatingSurfaceIsOpen(),
+        typing: isTyping(event.target),
+      });
+      if (action === null) return;
+      event.preventDefault();
+      if (action === "close-overlay") setOverlayOpen(false);
+      else toggleRail();
+    };
+    // CAPTURE phase, like the palette's cmd-K listener: Radix dismisses a dialog on a
+    // document-capture keydown and React has unmounted it by the time a bubble listener
+    // runs, so "is a dialog open" would already answer no and Escape would close the
+    // sheet behind the dialog it just closed. Window capture runs before document capture.
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [overlayOpen, toggleRail]);
+
+  /**
+   * Focus follows the sheet: into the rail when it opens, so the keyboard lands inside
+   * it rather than behind it; back to the "Show navigation" button when it closes —
+   * by Escape, the scrim or a row — rather than dropping to `<body>`. The button is
+   * absent when the sheet closed because the window grew, and then there is nothing to
+   * return to and nothing is done.
+   */
+  const wasOverlayOpen = useRef(false);
+  useEffect(() => {
+    const target = overlayFocusTarget(wasOverlayOpen.current, overlayOpen);
+    wasOverlayOpen.current = overlayOpen;
+    if (target === "rail") document.querySelector<HTMLElement>("[data-nav-rail] button")?.focus();
+    if (target === "show-navigation") document.querySelector<HTMLElement>("[data-nav-show]")?.focus();
+  }, [overlayOpen]);
+
+  const title = viewLabel(session.view);
+  useEffect(() => {
+    document.title = `${title} · staple`;
+  }, [title]);
 
   return (
-    <div className="flex h-full flex-col bg-background text-foreground">
-      {/* One border for both tiers, at the bottom. Two bars separated by a rule would
-          read as two pieces of chrome; they are one, split by altitude. */}
-      <header className="shrink-0 border-b">
-        {/* ── tier 1: identity and global actions ── */}
-        <div className="flex h-12 items-center gap-2 px-4">
-          <span className="flex shrink-0 items-baseline gap-1.5 text-[15px] font-semibold tracking-[var(--tracking-heading)]">
-            {/* The one place the accent is spent on brand rather than on focus (V1). */}
-            <span aria-hidden className="text-[var(--status-task-in_progress)]">
-              &#9680;
-            </span>
-            staple
-          </span>
+    <div className="flex h-full bg-background text-foreground">
+      {wide && railVisible ? <NavRail onHide={toggleRail} /> : null}
 
-          <Divider />
-
-          {session.mode === "hub" ? (
-            <Select
-              value={session.ws === "" ? ALL_WORKSPACES : session.ws}
-              onValueChange={(value) => session.setWs(value === ALL_WORKSPACES ? "" : value)}
-            >
-              {/* Stripped to a breadcrumb segment: no field surface, no shadow, no
-                  border until you point at it. It is a place in a path that happens
-                  to be changeable, not an input to be filled in. */}
-              <SelectTrigger
-                size="sm"
-                aria-label="Workspace"
-                className="w-auto max-w-[14rem] border-transparent bg-transparent px-2 text-[13px] shadow-none hover:border-transparent hover:bg-surface-hover"
-              >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value={ALL_WORKSPACES}>all workspaces</SelectItem>
-                {session.workspaces.map((ws) => (
-                  <SelectItem key={ws.slug} value={ws.slug}>
-                    {ws.slug}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          ) : (
-            <span className="truncate text-[13px]">
-              {first ? first.slug : "no workspace"}
-              {first ? (
-                <span className="ml-1.5 font-mono text-[11px] text-text-tertiary">{first.prefix}</span>
-              ) : null}
-            </span>
-          )}
-
-          <div className="ml-auto flex shrink-0 items-center gap-1">
-            <CommandTrigger />
-            {/*
-              The gear — O7b (STA-141). In tier 1 because the status set and the kind
-              vocabulary are properties of the WORKSPACE, not of the view: reordering
-              statuses changes what every view shows, so the control cannot live on the
-              row that scopes one of them. Next to the theme toggle, which is the other
-              thing here that changes the whole page and belongs to nothing on it.
-            */}
-            <Button
-              variant="ghost"
-              size="icon"
-              aria-label="Work Workspace Settings"
-              title="Work Workspace Settings"
-              onClick={openSettings}
-            >
-              <Settings className="size-4" />
-            </Button>
-            <ThemeToggle />
-            <Button
-              size="sm"
-              onClick={openCreateIssue}
-              title="New task (c)"
-              className="ml-1"
-            >
-              New task
-            </Button>
+      {!wide && overlayOpen ? (
+        <div className="fixed inset-0 z-40 flex" data-nav-overlay>
+          <div
+            aria-hidden
+            className="absolute inset-0 bg-black/35 backdrop-blur-[2px]"
+            onClick={closeOverlay}
+          />
+          <div className="relative h-full shadow-lg">
+            <NavRail onHide={closeOverlay} onNavigate={closeOverlay} />
           </div>
         </div>
+      ) : null}
 
-        {/* ── tier 2: what the view is, and how much of it ── */}
-        <div className="flex h-11 items-center gap-3 px-4">
-          <ViewTabs />
-          {/*
-            V4 (STA-89) took the seam this row was built to leave open. The ghost assignee
-            input that stood here is gone — assignee is now one of five dimensions behind
-            the Filter button, which is what it always was. `FilterBar` owns its own
-            `ml-auto`, so this row still says nothing about what sits on its right.
-          */}
-          <FilterBar />
-        </div>
-      </header>
+      <div className="flex min-w-0 flex-1 flex-col">
+        {/* ── the content header: what the view is, and how much of it ── */}
+        <header className="shrink-0 border-b">
+          <div className="flex h-11 items-center gap-2 px-4">
+            {railVisible ? null : (
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label="Show navigation"
+                title="Show navigation ([)"
+                data-nav-show
+                onClick={toggleRail}
+                className="-ml-2 text-text-tertiary hover:text-foreground"
+              >
+                <PanelLeft className="size-4" />
+              </Button>
+            )}
+            <h1 className="truncate text-[13px] font-medium">{title}</h1>
+            {/* `FilterBar` owns its own `ml-auto`, so this row says nothing about its right. */}
+            <FilterBar />
+          </div>
+        </header>
 
-      {/*
-        The active-filter strip. A SIBLING of the header rather than a third tier inside
-        it, because the tab underline above draws itself on the header's bottom border and
-        a row inserted between the two would strand it. Renders nothing — no border, no
-        height — when no filter is on, which is the app's usual state. See FilterChips.
-      */}
-      <FilterChips />
+        {/*
+          The active-filter strip, directly under the header. Renders nothing — no border,
+          no height — when no filter is on, which is the app's usual state. See FilterChips.
+        */}
+        <FilterChips />
 
-      {/*
-        `relative` so anything that wants to anchor to the content area rather than the
-        viewport has something to anchor to. `overflow-hidden` and NOT `overflow-y-auto`:
-        the shell no longer scrolls its child. Each view owns its own scroll container,
-        which is what lets the tree put sticky group headers at the top of the list
-        (V5/STA-97 §6) and lets the graph canvas fill the box instead of computing its
-        height from the viewport minus a hard-coded guess at this header's size.
-      */}
-      <main className="relative min-h-0 flex-1 overflow-hidden">{children}</main>
+        {/*
+          `relative` so anything that wants to anchor to the content area rather than the
+          viewport has something to anchor to. `overflow-hidden` and NOT `overflow-y-auto`:
+          the shell does not scroll its child. Each view owns its own scroll container,
+          which is what lets the tree put sticky group headers at the top of the list and
+          lets the graph canvas fill the box instead of computing its height from the
+          viewport minus a guess at this header's size.
+        */}
+        <main className="relative min-h-0 flex-1 overflow-hidden">{children}</main>
+      </div>
     </div>
   );
 }

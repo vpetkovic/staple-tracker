@@ -9,6 +9,7 @@ import { migration as m005 } from "./005-issue-kind.js";
 import { migration as m006 } from "./006-approval-gates.js";
 import { migration as m007 } from "./007-milestones.js";
 import { migration as m008 } from "./008-queue-entries.js";
+import { migration as m009 } from "./009-projects.js";
 
 /**
  * The workspace database — the per-repo (or global) task store.
@@ -30,13 +31,14 @@ import { migration as m008 } from "./008-queue-entries.js";
  * approval-gates branch renumbered to 006 because it merged second. 001..006
  * with no hole, which is what every database on disk needs in order to reach the
  * latest version by walking. 007 (milestones, STA-172) followed as latest+1,
- * and 008 (the pickup queue, STA-167) after it.
+ * 008 (the pickup queue, STA-167) after it, and 009 (tracked projects) after
+ * that.
  */
 export const WORKSPACE_TARGET: MigrationTarget = {
   label: "workspace database",
   // `issues` has existed since version 1, so its absence means an empty file.
   sentinelTable: "issues",
-  migrations: [m001, m002, m003, m004, m005, m006, m007, m008],
+  migrations: [m001, m002, m003, m004, m005, m006, m007, m008, m009],
   consolidated: CONSOLIDATED_DDL,
 };
 

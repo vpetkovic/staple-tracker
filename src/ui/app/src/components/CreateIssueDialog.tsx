@@ -46,6 +46,7 @@ import { SearchableSelect } from "@/components/ui/searchable-select";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { action, getIssues } from "@/lib/api";
+import { projectsForWorkspace } from "@/lib/projects";
 import { describeRefusal, type Refusal } from "@/lib/refusal";
 import { useSession } from "@/lib/session";
 import { configuredKindOrder, kindLabel } from "@/lib/settings";
@@ -54,6 +55,7 @@ import {
   EMPTY_CREATE_FORM,
   buildCreatePayload,
   createFormDefaultKind,
+  forWorkspaceSwitch,
   labelOptions,
   parentOptions,
   relationOptions,
@@ -74,6 +76,9 @@ const PARENT_NOTE = "A parent lives in the same workspace.";
  * cross-workspace is the normal case in a hub, it just lands in a different table.
  */
 const CROSS_WORKSPACE_NOTE = "Picks from another workspace become hub links.";
+
+/** Radix Select forbids an empty item value; this stands for "no project". */
+const NO_PROJECT = "__none__";
 
 export function CreateIssueDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const session = useSession();
@@ -174,6 +179,13 @@ export function CreateIssueDialog({ open, onOpenChange }: { open: boolean; onOpe
   const parents = parentOptions(rows, ws);
   const relations = relationOptions(rows, ws);
   const labels = labelOptions(rows);
+  /**
+   * The page's own project list (migration 009) — every workspace's, since App fetches it
+   * unscoped — narrowed to the target workspace: a project elsewhere is not a place this
+   * task can go. No fetch of its own, so the dialog and the rail cannot disagree.
+   */
+  const projects = projectsForWorkspace(session.projects.data ?? [], ws);
+  const projectValue = projects.some((row) => row.project.id === form.project) ? form.project : NO_PROJECT;
   // Neither relation may offer what the other already holds: the same ref on both
   // sides is a two-node cycle, and the store can only refuse it once the task exists.
   // See withoutValues() — the deeper cycles are still the store's to catch.
@@ -305,6 +317,31 @@ export function CreateIssueDialog({ open, onOpenChange }: { open: boolean; onOpe
                 note={PARENT_NOTE}
               />
             </div>
+
+            <div className="grid gap-1.5">
+              <Label htmlFor="create-project">Project</Label>
+              {/*
+                Where the task is filed (migration 009). A short pick from a closed list
+                like Kind, and optional like Parent: "No project" is the default and a real
+                answer. The value is the project's ID, which is what `/api/action` resolves.
+              */}
+              <Select
+                value={projectValue}
+                onValueChange={(value) => set("project", value === NO_PROJECT ? "" : value)}
+              >
+                <SelectTrigger id="create-project" data-create-project className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent position="popper" align="start">
+                  <SelectItem value={NO_PROJECT}>No project</SelectItem>
+                  {projects.map((row) => (
+                    <SelectItem key={row.project.id} value={row.project.id}>
+                      {row.project.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
           </div>
 
           <div className="grid gap-1.5">
@@ -377,13 +414,12 @@ export function CreateIssueDialog({ open, onOpenChange }: { open: boolean; onOpe
                 value={ws}
                 onValueChange={(next) => {
                   setWs(next);
-                  // ONLY the parent goes. R7 cleared the relations too, which was right
-                  // while they were workspace-locked and is wrong now: a blocker chosen
-                  // before the switch is still a real task, and after the switch it is
-                  // simply a cross-workspace one — the server routes it to a hub link
-                  // instead of a local edge. The parent still cannot survive, because a
-                  // parent in the old workspace has nowhere to be stored in the new one.
-                  setForm((current) => ({ ...current, parent: "" }));
+                  // The parent and the project go; the relations stay. R7 cleared the
+                  // relations too, which was right while they were workspace-locked and
+                  // is wrong now: a blocker chosen before the switch is still a real task,
+                  // just a cross-workspace one. The parent and the project cannot survive —
+                  // both are rows of the old workspace. See forWorkspaceSwitch().
+                  setForm(forWorkspaceSwitch);
                 }}
               >
                 <SelectTrigger id="create-workspace" className="w-full">

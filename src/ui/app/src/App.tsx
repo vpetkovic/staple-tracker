@@ -29,14 +29,25 @@ import { CreateIssueMount } from "@/components/CreateIssueMount";
 import { TokenGate } from "@/components/TokenGate";
 import { IssueDetailMount } from "@/detail/IssueDetailMount";
 import { SettingsMount } from "@/settings/SettingsMount";
-import { AuthError, getBootstrap, getIssues, getMilestone, getMilestones, hasToken } from "@/lib/api";
-import { buildFilterContext, type MilestoneFacts } from "@/lib/filter-dimensions";
+import { ProjectDialogMount } from "@/components/projects/ProjectDialogMount";
+import {
+  AuthError,
+  getBootstrap,
+  getIssues,
+  getMilestone,
+  getMilestones,
+  getProjects,
+  hasToken,
+} from "@/lib/api";
+import { buildFilterContext, type MilestoneFacts, type ProjectFacts } from "@/lib/filter-dimensions";
 import {
   loadFilters,
+  retainDimensionValues,
   saveFilters,
   withDimension,
   type FilterState,
 } from "@/lib/filters";
+import { projectsForWorkspace } from "@/lib/projects";
 import {
   DEFAULT_VIEW,
   SessionContext,
@@ -46,10 +57,11 @@ import {
 } from "@/lib/session";
 import { useWorkspaceSettings } from "@/lib/settings";
 import type { SortPref } from "@/lib/sort-modes";
-import type { MilestoneListRow, MilestoneView } from "@/lib/types";
+import type { MilestoneListRow, MilestoneView, ProjectRow } from "@/lib/types";
 import {
   filtersForScope,
   loadViewPrefs,
+  pruneFilterScopes,
   saveViewPrefs,
   sortForScope,
   sortScopeKey,
@@ -124,7 +136,7 @@ export function App() {
    * filtered in yet, so nobody opens this build to a filter set they never chose. See
    * `filtersForScope` in lib/view-prefs.ts.
    */
-  const [legacyFilters] = useState<FilterState>(() => loadFilters(window.localStorage));
+  const [legacyFilters, setLegacyFilters] = useState<FilterState>(() => loadFilters(window.localStorage));
   const [filterPrefs, setFilterPrefs] = useState<Record<string, FilterState>>(
     () => loadViewPrefs(window.localStorage).filters,
   );
@@ -300,12 +312,46 @@ export function App() {
   }, [milestoneList.data, milestoneMembers.data]);
 
   /**
+   * THE TRACKED PROJECTS (migration 009). One read per poll, UNSCOPED — every workspace's
+   * in hub mode — because the detail panel can hold an issue from a workspace the page is
+   * not on (a cross-workspace blocker opened from the drawer) and its Project row must
+   * offer that workspace's projects, not this one's. The rail, the filter context, the
+   * create dialog and the detail row each narrow the list with `projectsForWorkspace`.
+   */
+  const loadProjects = useCallback(() => getProjects({}), []);
+  const projects = useResource<ProjectRow[]>(loadProjects, [version], onAuthError);
+  const projectFacts = useMemo<ProjectFacts[]>(
+    () =>
+      projectsForWorkspace(projects.data ?? [], ws).map((row) => ({
+        id: row.project.id,
+        name: row.project.name,
+        workspace: row.workspace,
+      })),
+    [projects.data, ws],
+  );
+
+  /**
+   * A DELETED PROJECT LEAVES NO FILTER BEHIND. Its id may still be selected in any saved
+   * scope — a Tasks scope last filtered a week ago, the legacy fallback — and would greet
+   * the reader with a chip over an empty list. Once the served list has arrived (never on
+   * a failed or pending read, which knows nothing), every scope drops the ids it no
+   * longer names. The helpers hand back the same object when nothing changed, so the
+   * usual poll costs no render.
+   */
+  useEffect(() => {
+    if (!projects.data) return;
+    const known = new Set(projects.data.map((row) => row.project.id));
+    setFilterPrefs((current) => pruneFilterScopes(current, "project", known));
+    setLegacyFilters((current) => retainDimensionValues(current, "project", known));
+  }, [projects.data]);
+
+  /**
    * The filter context — built from the UNFILTERED rows, which is what makes a filtered-away
    * epic still name its children's epic. See lib/filter-dimensions.ts.
    */
   const filterContext = useMemo(
-    () => buildFilterContext(issues.data ?? [], milestoneFacts),
-    [issues.data, milestoneFacts],
+    () => buildFilterContext(issues.data ?? [], milestoneFacts, projectFacts),
+    [issues.data, milestoneFacts, projectFacts],
   );
 
   /** The palette's single-assignee view over the assignee dimension. See session.ts. */
@@ -330,6 +376,29 @@ export function App() {
     setView("milestones");
   }, []);
 
+  /**
+   * The rail's project click: Tasks, narrowed to one project. The filter is written into
+   * the TASKS scope for this workspace explicitly rather than through `setFilters`, which
+   * writes to whichever scope is on screen — from the graph that would have filtered the
+   * graph and then left it. Replaces the project selection rather than toggling it, for
+   * the reason the palette's dimension command gives: a click is an absolute request.
+   */
+  const focusProject = useCallback(
+    (projectId: string) => {
+      const scope = sortScopeKey(ws, "tree");
+      setFilterPrefs((current) =>
+        withFiltersForScope(
+          current,
+          scope,
+          withDimension(filtersForScope(current, scope, legacyFilters), "project", [projectId]),
+        ),
+      );
+      setMilestoneFocus(null);
+      setView("tree");
+    },
+    [ws, legacyFilters],
+  );
+
   const open = useCallback((workspace: string, ref: string) => setSelection({ workspace, ref }), []);
   const close = useCallback(() => setSelection(null), []);
 
@@ -344,6 +413,8 @@ export function App() {
       setView: goToView,
       milestoneFocus,
       focusMilestone,
+      projects,
+      focusProject,
       ws,
       setWs,
       issues,
@@ -373,6 +444,8 @@ export function App() {
     goToView,
     milestoneFocus,
     focusMilestone,
+    projects,
+    focusProject,
     ws,
     issues,
     filters,
@@ -431,6 +504,8 @@ export function App() {
         palette without either owning its open flag, and it must survive a view switch.
       */}
       <SettingsMount />
+      {/* The project dialog (migration 009): opened from the rail's `+` and each project's gear. */}
+      <ProjectDialogMount />
 
       <AppShell>
         <View onAuthError={onAuthError} />

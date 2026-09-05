@@ -178,7 +178,17 @@ describe("buildCommands", () => {
      * meaning "every view switch". The action type is what this test was always about.
      */
     const views = buildCommands(context({ view: "tree" })).filter((c) => c.action.type === "view");
-    expect(views.map((c) => c.id)).toEqual(["view:graph", "view:milestones", "view:queue"]);
+    expect(views.map((c) => c.id)).toEqual(["view:queue", "view:graph", "view:milestones"]);
+  });
+
+  it("names the views as the rail does, and still answers to the internal value", () => {
+    const commands = buildCommands(context({ view: "graph" }));
+    const tasks = commands.find((c) => c.id === "view:tree");
+    expect(tasks?.label).toBe("Go to Tasks");
+    expect(tasks?.action).toEqual({ type: "view", view: "tree" });
+    // "tree" is nowhere on the label, but a reader who types it is not left with nothing.
+    expect(filterCommands(commands, "tree").map((c) => c.id)).toContain("view:tree");
+    expect(filterCommands(commands, "tasks").map((c) => c.id)).toContain("view:tree");
   });
 
   /**

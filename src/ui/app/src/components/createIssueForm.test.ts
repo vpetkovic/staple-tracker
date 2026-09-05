@@ -21,6 +21,7 @@ import {
   EMPTY_CREATE_FORM,
   buildCreatePayload,
   createFormDefaultKind,
+  forWorkspaceSwitch,
   labelOptions,
   parentOptions,
   relationOptions,
@@ -416,5 +417,25 @@ describe("labelOptions", () => {
 
   it("is empty when nothing is labelled", () => {
     expect(labelOptions([row("staple", { labels: [] })])).toEqual([]);
+  });
+});
+
+describe("project on the create form", () => {
+  it("starts on no project, and omits the key rather than sending an empty string", () => {
+    expect(EMPTY_CREATE_FORM.project).toBe("");
+    expect(buildCreatePayload(form({ title: "t" }))).not.toHaveProperty("project");
+    expect(buildCreatePayload(form({ title: "t", project: "  " }))).not.toHaveProperty("project");
+  });
+
+  it("sends the chosen project's id", () => {
+    expect(buildCreatePayload(form({ title: "t", project: "p-docs" })).project).toBe("p-docs");
+  });
+
+  it("is dropped with the parent when the target workspace changes, while the relations survive", () => {
+    const before = form({ title: "t", parent: "STA-1", project: "p-docs", blockedBy: ["STA-2"], blocking: ["STA-3"], labels: ["ui"] });
+    const after = forWorkspaceSwitch(before);
+    expect(after).toEqual({ ...before, parent: "", project: "" });
+    expect(buildCreatePayload(after)).not.toHaveProperty("project");
+    expect(buildCreatePayload(after).blockedBy).toEqual(["STA-2"]);
   });
 });
