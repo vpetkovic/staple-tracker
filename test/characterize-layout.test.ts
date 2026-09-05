@@ -80,7 +80,13 @@ describe("a fresh repo-local `staple init`", () => {
   // plan §5's premise — that a guide inside `.staple/` would be invisible —
   // stops being true, so its prohibition no longer applies. Nothing is written
   // outside `.staple/`, which is stricter than the plan's wording, not looser.
-  it("writes exactly three files, all 0644, under a single .staple directory", () => {
+  //
+  // STA-68 adds the FOURTH file, `.staple/repository.json`, on the same logic
+  // one step further: the ignore rule that makes the database uncommittable also
+  // makes it useless as a home for anything a CLONE needs, and the repository's
+  // sync identity is exactly that. So it is a tracked file, and the ignore rule
+  // above spares it explicitly.
+  it("writes exactly four files, all 0644, under a single .staple directory", () => {
     const home = scratch("char-layout-home");
     const root = scratch("char-layout-root");
     const project = join(root, "layoutrepo");
@@ -93,6 +99,11 @@ describe("a fresh repo-local `staple init`", () => {
       "layoutrepo/.staple/",
       "layoutrepo/.staple/.gitignore 644",
       "layoutrepo/.staple/AGENTS.md 644",
+      // STA-68: the repository manifest. 0644 and non-secret by construction —
+      // a UUID and a format number — because unlike the database beside it, this
+      // file is MEANT to be committed. It is the only copy of the repository's
+      // sync identity a fresh clone gets.
+      "layoutrepo/.staple/repository.json 644",
       "layoutrepo/.staple/staple.db 644",
     ]);
 
@@ -103,7 +114,7 @@ describe("a fresh repo-local `staple init`", () => {
     // the complete steady state, not a snapshot mid-transaction.
   }, 60_000);
 
-  it("`--no-gitignore` goes back to exactly the two files A5 pinned", () => {
+  it("`--no-gitignore` drops the ignore file and keeps the manifest", () => {
     const home = scratch("char-layout-home-noignore");
     const root = scratch("char-layout-root-noignore");
     const project = join(root, "layoutrepo");
@@ -111,10 +122,16 @@ describe("a fresh repo-local `staple init`", () => {
 
     expect(runCliAt(project, ["init", "--no-gitignore"], { STAPLE_HOME: home }).status).toBe(0);
 
+    // STA-68: `--no-gitignore` declines the IGNORE file and nothing else. The
+    // manifest is not gated on it, deliberately — the two answer opposite
+    // questions ("keep the database out of git" versus "keep the identity in
+    // it"), and a repository that opted out of the ignore rule still needs its
+    // identity to survive a clone.
     expect(diskTree(root)).toEqual([
       "layoutrepo/",
       "layoutrepo/.staple/",
       "layoutrepo/.staple/AGENTS.md 644",
+      "layoutrepo/.staple/repository.json 644",
       "layoutrepo/.staple/staple.db 644",
     ]);
   }, 60_000);
@@ -145,9 +162,10 @@ describe("a fresh repo-local `staple init`", () => {
       // or an old binary's `CAST(meta.value AS INTEGER)` guard misbehaves.
       // Bumped to "6" by STA-143 (006-approval-gates), after STA-140's 004 and
       // STA-124's 005, to "7" by STA-172 (007-milestones), to "8" by STA-167
-      // (008-queue-entries) and to "9" by 009-projects; the TEXT typing is
-      // the characterization, the number just tracks the migration list.
-      { key: "schema_version", value: "9" },
+      // (008-queue-entries), to "9" by 009-projects and to "10" by
+      // 010-sync-metadata; the TEXT typing is the characterization, the number
+      // just tracks the migration list.
+      { key: "schema_version", value: "10" },
       { key: "slug", value: "metarepo" },
     ]);
   }, 30_000);
@@ -200,10 +218,26 @@ describe("a fresh repo-local `staple init`", () => {
       "index:sqlite_autoindex_queue_entries_1",
       "index:sqlite_autoindex_queue_entries_2",
       "index:sqlite_autoindex_relations_1",
+      // 010-sync-metadata: the primary keys of the eight local sync tables, plus
+      // `sync_outbox`'s `UNIQUE (client_seq)`. `sync_state` is absent from this
+      // group deliberately — its `id INTEGER PRIMARY KEY` is a rowid alias and
+      // mints no autoindex.
+      "index:sqlite_autoindex_sync_applied_1",
+      "index:sqlite_autoindex_sync_conflicts_1",
+      "index:sqlite_autoindex_sync_devices_1",
+      "index:sqlite_autoindex_sync_entity_versions_1",
+      "index:sqlite_autoindex_sync_leases_1",
+      "index:sqlite_autoindex_sync_outbox_1",
+      "index:sqlite_autoindex_sync_outbox_2",
+      "index:sqlite_autoindex_sync_tombstones_1",
       // STA-140 (004-workspace-settings): the statuses and kinds a workspace
       // configures are rows now, so the vocabulary is part of the pinned shape.
       "index:sqlite_autoindex_workspace_kinds_1",
       "index:sqlite_autoindex_workspace_statuses_1",
+      // 010-sync-metadata: the two partial indexes — the unacknowledged outbox in
+      // allocation order, and the unresolved conflicts.
+      "index:sync_conflicts_open_idx",
+      "index:sync_outbox_pending_idx",
       "index:workspace_kinds_order_idx",
       "index:workspace_statuses_order_idx",
       "table:comments",
@@ -218,6 +252,17 @@ describe("a fresh repo-local `staple init`", () => {
       "table:queue_entries",
       "table:relations",
       "table:sqlite_sequence",
+      // 010-sync-metadata: this device's record of its relationship to a shared
+      // log. Created empty by every `init` and read by nothing until a
+      // repository is connected, which is a separate explicit consent.
+      "table:sync_applied",
+      "table:sync_conflicts",
+      "table:sync_devices",
+      "table:sync_entity_versions",
+      "table:sync_leases",
+      "table:sync_outbox",
+      "table:sync_state",
+      "table:sync_tombstones",
       "table:workspace_kinds",
       "table:workspace_statuses",
     ]);
@@ -342,9 +387,9 @@ describe("global workspaces", () => {
     expect(diskTree(home)).toEqual(["hub.db 644", "workspaces/", "workspaces/solo.db 644"]);
     expect(metaRows(join(home, "workspaces", "solo.db"))).toEqual([
       { key: "prefix", value: "SOL" },
-      // WORKSPACE_SCHEMA_VERSION — 9 since 009-projects. The hub beside it is still 2;
-      // the two databases version independently.
-      { key: "schema_version", value: "9" },
+      // WORKSPACE_SCHEMA_VERSION — 10 since 010-sync-metadata. The hub beside it
+      // is still 2; the two databases version independently.
+      { key: "schema_version", value: "10" },
       { key: "slug", value: "solo" },
     ]);
   }, 30_000);

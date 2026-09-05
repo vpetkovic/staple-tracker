@@ -3,7 +3,7 @@
  * Regenerate with: npx tsx scripts/regen-migration-snapshots.ts
  *
  * The `sqlite_master` dump of a workspace database that walked migrations
- * 001, 002, 003, 004, 005, 006, 007, 008, 009. Executed verbatim by the runner when — and only when —
+ * 001, 002, 003, 004, 005, 006, 007, 008, 009, 010. Executed verbatim by the runner when — and only when —
  * version detection proved the file has no tables at all.
  *
  * No `IF NOT EXISTS` anywhere, deliberately: reaching this text with tables
@@ -194,4 +194,91 @@ CREATE TABLE projects (
        );
 
 CREATE INDEX issues_project_idx ON issues(project_id) WHERE project_id IS NOT NULL;
+
+CREATE TABLE sync_entity_versions (
+         entity    TEXT    NOT NULL,
+         entity_id TEXT    NOT NULL,
+         version   INTEGER NOT NULL DEFAULT 0,
+         PRIMARY KEY (entity, entity_id)
+       );
+
+CREATE TABLE sync_outbox (
+         op_id            TEXT    PRIMARY KEY,
+         client_seq       INTEGER NOT NULL UNIQUE,
+         entity           TEXT    NOT NULL,
+         entity_id        TEXT    NOT NULL,
+         verb             TEXT    NOT NULL,
+         base_version     INTEGER,
+         payload          TEXT    NOT NULL,
+         actor            TEXT,
+         created_at       TEXT    NOT NULL,
+         acknowledged_seq INTEGER
+       );
+
+CREATE INDEX sync_outbox_pending_idx ON sync_outbox(client_seq) WHERE acknowledged_seq IS NULL;
+
+CREATE TABLE sync_applied (
+         op_id      TEXT    PRIMARY KEY,
+         seq        INTEGER NOT NULL,
+         applied_at TEXT    NOT NULL
+       );
+
+CREATE TABLE sync_tombstones (
+         entity     TEXT NOT NULL,
+         entity_id  TEXT NOT NULL,
+         deleted_at TEXT NOT NULL,
+         device_id  TEXT,
+         op_id      TEXT,
+         PRIMARY KEY (entity, entity_id)
+       );
+
+CREATE TABLE sync_conflicts (
+         id               TEXT PRIMARY KEY,
+         entity           TEXT NOT NULL,
+         entity_id        TEXT NOT NULL,
+         field            TEXT NOT NULL,
+         base_value       TEXT,
+         local_value      TEXT,
+         remote_value     TEXT,
+         local_op_id      TEXT,
+         remote_op_id     TEXT,
+         local_device_id  TEXT,
+         remote_device_id TEXT,
+         local_at         TEXT,
+         remote_at        TEXT,
+         detected_at      TEXT NOT NULL,
+         resolved_at      TEXT,
+         resolved_by      TEXT,
+         resolution       TEXT
+       );
+
+CREATE INDEX sync_conflicts_open_idx ON sync_conflicts(detected_at) WHERE resolved_at IS NULL;
+
+CREATE TABLE sync_leases (
+         entity_id         TEXT    PRIMARY KEY,
+         fencing_token     INTEGER NOT NULL,
+         holder            TEXT    NOT NULL,
+         device_id         TEXT,
+         server_expires_at TEXT    NOT NULL,
+         acquired_at       TEXT    NOT NULL,
+         renewed_at        TEXT
+       );
+
+CREATE TABLE sync_devices (
+         device_id    TEXT PRIMARY KEY,
+         label        TEXT,
+         last_seen_at TEXT,
+         revoked_at   TEXT
+       );
+
+CREATE TABLE sync_state (
+         id                    INTEGER PRIMARY KEY CHECK (id = 1),
+         repository_id         TEXT,
+         epoch                 INTEGER NOT NULL DEFAULT 0,
+         cursor                TEXT,
+         head_seq              INTEGER NOT NULL DEFAULT 0,
+         client_seq_high_water INTEGER NOT NULL DEFAULT 0,
+         last_sync_at          TEXT,
+         bootstrap_cursor      TEXT
+       );
 `;
