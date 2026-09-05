@@ -21,3 +21,24 @@ export function dialogIsOpen(): boolean {
   if (typeof document === "undefined") return false;
   return document.querySelector("[data-slot='dialog-content'], [role='dialog']") !== null;
 }
+
+/**
+ * Is ANY floating surface open — a dialog, or a menu, a select's list or a popover? The
+ * rail's shortcuts ask this rather than `dialogIsOpen`: `[` while the workspace
+ * switcher's menu is up would collapse the rail out from under it, and Escape while a
+ * select is open belongs to the select.
+ *
+ * Keyed on the vendored primitives' own `data-slot`s and on `role="menu"`, NOT on
+ * `role="listbox"`: the task list is a listbox at rest (components/task-list), so that
+ * role would say "open" on every visit to Tasks. Radix mounts these contents only while
+ * open, so presence is the state.
+ */
+export function floatingSurfaceIsOpen(): boolean {
+  if (typeof document === "undefined") return false;
+  return (
+    dialogIsOpen() ||
+    document.querySelector(
+      "[role='menu'], [data-slot='dropdown-menu-content'], [data-slot='select-content'], [data-slot='popover-content']",
+    ) !== null
+  );
+}

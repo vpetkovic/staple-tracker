@@ -166,13 +166,18 @@ export class ProjectStore {
    * and the merged result must satisfy every rule a create must — so switching a
    * managed project to `unmanaged` has to clear its source in the same call, and
    * switching to `managed` has to supply one.
+   *
+   * `name` and `kind` have no null state (the columns are NOT NULL), so a null
+   * there means "unchanged" exactly as absent does — it must not read as "reset
+   * to the default kind", which would refuse a managed project that kept its
+   * source. `sourceKind` and `source` ARE nullable, and null there is the clear.
    */
   update(ref: string, patch: ProjectInput, actor: string | null): Project {
     return tx(this.db, () => {
       const current = rowToProject(this.requireRow(ref));
       const fields = normalizeProjectInput({
-        name: patch.name === undefined ? current.name : patch.name,
-        kind: patch.kind === undefined ? current.kind : patch.kind,
+        name: patch.name ?? current.name,
+        kind: patch.kind ?? current.kind,
         sourceKind: patch.sourceKind === undefined ? current.sourceKind : patch.sourceKind,
         source: patch.source === undefined ? current.source : patch.source,
       });
@@ -197,17 +202,30 @@ export class ProjectStore {
    * Delete the project and let its issues go: every `project_id` that pointed at
    * it becomes null in the same transaction. The issues themselves are untouched
    * otherwise — a project is a label on work, not the work.
+   *
+   * Every unfiled issue gets its own `issue_project_changed` (project -> null),
+   * exactly the event `assign` would have written, so the issue's own activity
+   * explains the transition; the one `project_deleted` says why it happened.
    */
   remove(ref: string, actor: string | null): ProjectRemoval {
     return tx(this.db, () => {
       const project = rowToProject(this.requireRow(ref));
       const now = nowIso();
-      const unassigned = this.db
-        .prepare("UPDATE issues SET project_id = NULL, updated_at = ? WHERE project_id = ?")
-        .run(now, project.id).changes;
+      const filed = this.db
+        .prepare("SELECT id, identifier FROM issues WHERE project_id = ? ORDER BY identifier")
+        .all(project.id) as Array<{ id: string; identifier: string }>;
+      this.db.prepare("UPDATE issues SET project_id = NULL, updated_at = ? WHERE project_id = ?").run(now, project.id);
       this.db.prepare("DELETE FROM projects WHERE id = ?").run(project.id);
-      this.emit("project_deleted", actor, { project: project.slug, unassigned: Number(unassigned) });
-      return { project, unassigned: Number(unassigned) };
+      for (const issue of filed) {
+        this.emit(
+          "issue_project_changed",
+          actor,
+          { identifier: issue.identifier, project: null, previous: project.slug },
+          issue.id,
+        );
+      }
+      this.emit("project_deleted", actor, { project: project.slug, unassigned: filed.length });
+      return { project, unassigned: filed.length };
     });
   }
 

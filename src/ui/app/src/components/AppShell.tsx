@@ -34,13 +34,18 @@
  * the view. `aria-current="page"` on a button is what this actually is.
  */
 import { PanelLeft } from "lucide-react";
-import { useCallback, useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { FilterBar } from "@/components/filters/FilterBar";
 import { FilterChips } from "@/components/filters/FilterChips";
 import { NavRail } from "@/components/nav/NavRail";
-import { isRailToggleKey, loadRailCollapsed, saveRailCollapsed } from "@/components/nav/nav-model";
+import {
+  loadRailCollapsed,
+  overlayFocusTarget,
+  railKeyAction,
+  saveRailCollapsed,
+} from "@/components/nav/nav-model";
 import { Button } from "@/components/ui/button";
-import { dialogIsOpen, isTyping } from "@/lib/keyboard";
+import { floatingSurfaceIsOpen, isTyping } from "@/lib/keyboard";
 import { useSession, viewLabel } from "@/lib/session";
 
 /** Above this the rail is a column; below it, a sheet. */
@@ -85,29 +90,42 @@ export function AppShell({ children }: { children: ReactNode }) {
     if (wide) setOverlayOpen(false);
   }, [wide]);
 
+  /**
+   * The keyboard, decided in `railKeyAction` (nav-model.ts) from three facts this
+   * listener reads off the DOM: an open dialog, menu or listbox owns the key — so Escape
+   * in a dialog closes the dialog and not the sheet behind it, and `[` cannot collapse
+   * the rail under the open workspace switcher; Escape closes the sheet; the shortcut
+   * toggles, unless `[` was typed into a field.
+   */
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && overlayOpen) {
-        event.preventDefault();
-        setOverlayOpen(false);
-        return;
-      }
-      if (!isRailToggleKey(event)) return;
-      // `[` is a bare letter and must not fire out of a text box; cmd-\ can afford to.
-      if (event.key === "[" && isTyping(event.target)) return;
-      if (dialogIsOpen()) return;
+      const action = railKeyAction(event, {
+        overlayOpen,
+        surfaceOpen: floatingSurfaceIsOpen(),
+        typing: isTyping(event.target),
+      });
+      if (action === null) return;
       event.preventDefault();
-      toggleRail();
+      if (action === "close-overlay") setOverlayOpen(false);
+      else toggleRail();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [overlayOpen, toggleRail]);
 
-  // The sheet takes focus when it opens so the keyboard lands inside it, not behind it.
+  /**
+   * Focus follows the sheet: into the rail when it opens, so the keyboard lands inside
+   * it rather than behind it; back to the "Show navigation" button when it closes —
+   * by Escape, the scrim or a row — rather than dropping to `<body>`. The button is
+   * absent when the sheet closed because the window grew, and then there is nothing to
+   * return to and nothing is done.
+   */
+  const wasOverlayOpen = useRef(false);
   useEffect(() => {
-    if (!overlayOpen) return;
-    const first = document.querySelector<HTMLElement>("[data-nav-rail] button");
-    first?.focus();
+    const target = overlayFocusTarget(wasOverlayOpen.current, overlayOpen);
+    wasOverlayOpen.current = overlayOpen;
+    if (target === "rail") document.querySelector<HTMLElement>("[data-nav-rail] button")?.focus();
+    if (target === "show-navigation") document.querySelector<HTMLElement>("[data-nav-show]")?.focus();
   }, [overlayOpen]);
 
   const title = viewLabel(session.view);

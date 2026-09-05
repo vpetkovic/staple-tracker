@@ -44,6 +44,7 @@
 import { useCallback, useMemo, useState } from "react";
 import { Dialog as DialogPrimitive, VisuallyHidden } from "radix-ui";
 import type { AuthError } from "@/lib/api";
+import { isTyping } from "@/lib/keyboard";
 import { useSession } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { loadMode, otherMode, panelClass, saveMode, type DetailMode } from "./drawer";
@@ -61,17 +62,13 @@ function safeStorage(): Storage | undefined {
 }
 
 /**
- * Is this event coming out of somewhere the user is TYPING?
- *
- * Shared by the Escape handler and the prev/next hotkeys because they are the same
- * question and must never answer it differently. The panel contains an inline title
- * editor, a label composer and a comment box; a hotkey that fires while one of them
- * has the caret is not a hotkey, it is data loss with a keyboard shortcut.
+ * "Is this event coming out of somewhere the user is TYPING?" is `isTyping` from
+ * lib/keyboard.ts — the same answer the create shortcut and the rail's shortcuts use,
+ * so no two surfaces can disagree about it (it counts a SELECT, which a local copy here
+ * once did not). The panel contains an inline title editor, a label composer and a
+ * comment box; a hotkey that fires while one of them has the caret is not a hotkey, it
+ * is data loss with a keyboard shortcut.
  */
-function isEditingTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) return false;
-  return target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable;
-}
 
 export function IssueDetailMount() {
   const session = useSession();
@@ -190,7 +187,7 @@ export function IssueDetailMount() {
            * its descendants are editors.
            */
           onEscapeKeyDown={(event) => {
-            if (isEditingTarget(event.target)) event.preventDefault();
+            if (isTyping(event.target)) event.preventDefault();
           }}
           /**
            * PREV/NEXT FROM THE KEYBOARD (R6 / STA-106).
@@ -216,7 +213,7 @@ export function IssueDetailMount() {
            */
           onKeyDown={(event) => {
             if (event.metaKey || event.ctrlKey) return;
-            if (isEditingTarget(event.target)) return;
+            if (isTyping(event.target)) return;
 
             const alt = event.altKey;
             const key = event.key;

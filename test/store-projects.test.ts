@@ -139,6 +139,24 @@ describe("updating", () => {
     ]);
   });
 
+  it("reads a null name or kind as unchanged, since neither has a null state", () => {
+    const managed = projects.create(
+      { name: "Tracker", kind: "managed", sourceKind: "github", source: "https://github.com/vpetkovic/staple-tracker" },
+      "vp",
+    );
+    // A body that spells "leave the kind alone" as null must not reset it to unmanaged
+    // and then refuse the source the project still has.
+    const renamed = projects.update(managed.id, { name: "Tracker 2", kind: null }, "vp");
+    expect(renamed).toMatchObject({ name: "Tracker 2", kind: "managed", sourceKind: "github", source: managed.source });
+    expect(projects.update(managed.id, { name: null, kind: null }, "vp")).toEqual(renamed);
+    // Null on the nullable pair is still the clear, and needs the kind to go with it.
+    refused(() => projects.update(managed.id, { sourceKind: null, source: null }, "vp"), "validation");
+    expect(projects.update(managed.id, { kind: "unmanaged", sourceKind: null, source: null }, "vp")).toMatchObject({
+      kind: "unmanaged",
+      source: null,
+    });
+  });
+
   it("is a no-op, with no event, when nothing would change", () => {
     const created = projects.create({ name: "Docs" }, "vp");
     expect(projects.update(created.id, { name: "Docs" }, "vp")).toEqual(created);
@@ -224,6 +242,13 @@ describe("deleting", () => {
     expect(events("project_deleted")).toEqual([
       expect.objectContaining({ actor: "vp", payload: { project: "docs", unassigned: 2 } }),
     ]);
+    // Each unfiled issue's own activity says it left the project — the event `assign`
+    // would have written — and the untouched issue has none.
+    expect(events("issue_project_changed").map((e) => [e.issueId, e.actor, e.payload])).toEqual([
+      [a.id, "vp", { identifier: "TST-1", project: null, previous: "docs" }],
+      [b.id, "vp", { identifier: "TST-2", project: null, previous: "docs" }],
+    ]);
+    expect(events("issue_project_changed").some((e) => e.issueId === loose.id)).toBe(false);
   });
 
   it("is not_found for a project that is not there, and writes nothing", () => {
