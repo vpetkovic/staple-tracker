@@ -665,6 +665,20 @@ export function withDimension(state: FilterState, id: string, values: readonly s
   return { ...state, dims };
 }
 
+/**
+ * Drop every selected value of one dimension that is not in `allowed`. Returns the SAME
+ * state when nothing is dropped, so a caller holding it in React state can set it back
+ * without a re-render. The seam for a value that stopped existing — a deleted project —
+ * whose chip would otherwise print an id over an empty list until somebody cleared it.
+ */
+export function retainDimensionValues(state: FilterState, id: string, allowed: ReadonlySet<string>): FilterState {
+  const current = state.dims[id];
+  if (!current || current.length === 0) return state;
+  const kept = current.filter((value) => allowed.has(value));
+  if (kept.length === current.length) return state;
+  return withDimension(state, id, kept);
+}
+
 /** Check-box semantics for one value in one dimension. */
 export function toggleValue(state: FilterState, id: string, value: string): FilterState {
   const current = state.dims[id] ?? [];

@@ -26,6 +26,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
 import { action, assignProject } from "@/lib/api";
+import { projectsForWorkspace } from "@/lib/projects";
 import { describeRefusal, type Refusal } from "@/lib/refusal";
 import { useSession } from "@/lib/session";
 import { configuredKindOrder, kindLabel } from "@/lib/settings";
@@ -256,7 +257,8 @@ export function InlineProject({ issue, workspace, refresh }: EditorProps) {
   const session = useSession();
   const [refusal, setRefusal] = useState<Refusal | null>(null);
   const [busy, setBusy] = useState(false);
-  const rows = (session.projects.data ?? []).filter((row) => row.workspace === workspace);
+  // The page's list is every workspace's; this issue can only go into its own workspace's.
+  const rows = projectsForWorkspace(session.projects.data ?? [], workspace);
   const current = rows.find((row) => row.project.id === issue.projectId);
 
   const assign = async (project: string | null) => {

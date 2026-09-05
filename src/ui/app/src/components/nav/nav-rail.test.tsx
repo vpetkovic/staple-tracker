@@ -7,6 +7,8 @@
  * below are about: the rail's rows come in the order the model says, the active view is
  * the one `aria-current` marks, and the New task row is unmistakably a button.
  */
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ReactElement } from "react";
@@ -231,6 +233,42 @@ describe("projects under Tasks", () => {
       view: "graph",
     });
     expect(elsewhere).not.toMatch(/data-nav-project="p-site" aria-current/);
+  });
+
+  it("shows only the chosen workspace's projects when one is chosen, and every workspace's on all", () => {
+    const many: ProjectRow[] = [
+      ...rows,
+      { workspace: "pinecone", project: project({ id: "p-pine", slug: "pine", name: "Pine" }) },
+    ];
+    const hub: Partial<StapleSession> = {
+      mode: "hub",
+      workspaces: [
+        { slug: "staple", prefix: "STA" },
+        { slug: "pinecone", prefix: "PIN" },
+      ],
+      projects: { data: many, error: undefined, loading: false, reload: noop },
+    };
+    const one = rail({ ...hub, ws: "pinecone" });
+    expect(one).toContain('data-nav-project="p-pine"');
+    expect(one).not.toContain('data-nav-project="p-docs"');
+    const all = rail({ ...hub, ws: "" });
+    expect(all).toContain('data-nav-project="p-pine"');
+    expect(all).toContain('data-nav-project="p-docs"');
+  });
+
+  it("closes the sheet before it opens the dialog, from the + and from every gear", () => {
+    /*
+     * A dialog stacked on the open sheet would make Escape ambiguous. The click handlers
+     * cannot be exercised without a DOM, so what is pinned is the source: every call
+     * that opens the project dialog is immediately preceded by the navigate callback.
+     */
+    const text = readFileSync(fileURLToPath(new URL("./NavRail.tsx", import.meta.url)), "utf8").replace(
+      /\/\/[^\n]*|\/\*[\s\S]*?\*\//g,
+      "",
+    );
+    const opens = text.match(/openProjectDialog\(/g) ?? [];
+    expect(opens.length).toBeGreaterThanOrEqual(2);
+    expect((text.match(/onNavigate\?\.\(\);\s*openProjectDialog\(/g) ?? []).length).toBe(opens.length);
   });
 
   it("captions a project with its workspace only when the rows span several", () => {

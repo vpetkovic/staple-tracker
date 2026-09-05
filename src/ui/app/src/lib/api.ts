@@ -25,10 +25,9 @@ import type {
   MilestoneListRow,
   MilestoneView,
   Poll,
-  ProjectKind,
+  ProjectFieldsInput,
   ProjectRemoval,
   ProjectRow,
-  ProjectSourceKind,
   QueueView,
   StapleEvent,
   VocabularyOp,
@@ -436,14 +435,6 @@ export const pruneQueue = (target: { ws?: string; baseRevision: number }) => que
  */
 export const getProjects = (params: { ws?: string } = {}) =>
   request<ProjectRow[]>(`/api/projects${qs(params)}`);
-
-/** What a create or an update says about a project. Absent fields keep their value on update. */
-export interface ProjectFieldsInput {
-  name?: string | null;
-  kind?: ProjectKind | null;
-  sourceKind?: ProjectSourceKind | null;
-  source?: string | null;
-}
 
 const projectWrite = <T>(route: string, body: Record<string, unknown>) =>
   request<T>(`/api/project/${route}`, {

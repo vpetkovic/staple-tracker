@@ -366,8 +366,8 @@ describe("project", () => {
       "Docs · staple",
       "Site · staple",
     ]);
-    // An id the context cannot name is printed as itself rather than blank.
-    expect(activeFilterChips(state({ dims: { project: ["p-gone"] } }), one)[0]?.label).toBe("p-gone");
+    // An id the context cannot name is a deleted project: readable, never a raw uuid.
+    expect(activeFilterChips(state({ dims: { project: ["p-gone"] } }), one)[0]?.label).toBe("Removed project");
   });
 
   it("counts toward the badge and clears with everything else", () => {

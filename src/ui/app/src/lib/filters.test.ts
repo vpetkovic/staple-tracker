@@ -61,6 +61,7 @@ import {
   saveFilters,
   handoffRiskOf,
   toggleValue,
+  retainDimensionValues,
   withDimension,
 } from "./filters.ts";
 import type { FilterState } from "./filters.ts";
@@ -558,6 +559,28 @@ describe("handoff risk", () => {
     expect(ids(applyFilters(table(), both))).toEqual(["BUSY_BEHIND", "SILENT_UNWRITTEN"]);
     const nobody = state({ dims: { handoff: [...HANDOFF_RISKS], assignee: ["kim"] } });
     expect(applyFilters(table(), nobody)).toEqual([]);
+  });
+});
+
+describe("retainDimensionValues", () => {
+  const allowed = new Set(["p-docs", "p-site"]);
+
+  it("drops the values that are no longer allowed and keeps the rest in order", () => {
+    const state = withDimension(emptyFilters(), "project", ["p-gone", "p-docs", "p-old", "p-site"]);
+    expect(retainDimensionValues(state, "project", allowed).dims.project).toEqual(["p-docs", "p-site"]);
+  });
+
+  it("removes the dimension outright when nothing survives, so no empty constraint lingers", () => {
+    const state = withDimension(emptyFilters(), "project", ["p-gone"]);
+    expect(retainDimensionValues(state, "project", allowed).dims).toEqual({});
+  });
+
+  it("returns the same state object when nothing changes, and touches no other dimension", () => {
+    const state = withDimension(withDimension(emptyFilters(), "project", ["p-docs"]), "status", ["todo"]);
+    expect(retainDimensionValues(state, "project", allowed)).toBe(state);
+    expect(retainDimensionValues(emptyFilters(), "project", allowed).dims).toEqual({});
+    const pruned = retainDimensionValues(withDimension(state, "project", ["p-gone"]), "project", allowed);
+    expect(pruned.dims.status).toEqual(["todo"]);
   });
 });
 

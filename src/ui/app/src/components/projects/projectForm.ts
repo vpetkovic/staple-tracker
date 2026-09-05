@@ -24,8 +24,17 @@
  * is the list the dialog renders, so a new section is an entry here and a component,
  * not a rearrangement of the form.
  */
-import type { ProjectFieldsInput } from "@/lib/api";
-import type { Project, ProjectKind, ProjectRow, ProjectSourceKind } from "@/lib/types";
+// Relative, with an extension, rather than "@/…", and from the leaf types module only:
+// test/projects-mirror.test.ts imports this module from the repo root, where the app's
+// alias does not exist, module resolution is node16, and a browser module (lib/api.ts)
+// would not compile — the same reason the palette's commands.ts imports relatively.
+import type {
+  Project,
+  ProjectFieldsInput,
+  ProjectKind,
+  ProjectRow,
+  ProjectSourceKind,
+} from "../../lib/types.js";
 
 export type ProjectDraft =
   | { kind: "unmanaged"; name: string }

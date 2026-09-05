@@ -45,22 +45,17 @@ import { Label } from "@/components/ui/label";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { action, getIssues, getProjects } from "@/lib/api";
+import { action, getIssues } from "@/lib/api";
+import { projectsForWorkspace } from "@/lib/projects";
 import { describeRefusal, type Refusal } from "@/lib/refusal";
 import { useSession } from "@/lib/session";
 import { configuredKindOrder, kindLabel } from "@/lib/settings";
-import {
-  ISSUE_PRIORITIES,
-  type Issue,
-  type IssueKind,
-  type IssuePriority,
-  type IssueRow,
-  type ProjectRow,
-} from "@/lib/types";
+import { ISSUE_PRIORITIES, type Issue, type IssueKind, type IssuePriority, type IssueRow } from "@/lib/types";
 import {
   EMPTY_CREATE_FORM,
   buildCreatePayload,
   createFormDefaultKind,
+  forWorkspaceSwitch,
   labelOptions,
   parentOptions,
   relationOptions,
@@ -116,12 +111,6 @@ export function CreateIssueDialog({ open, onOpenChange }: { open: boolean; onOpe
    * is creating a task with no relations at all.
    */
   const [rows, setRows] = useState<IssueRow[]>([]);
-  /**
-   * The projects, on the same terms (migration 009): every workspace's, fetched per open,
-   * narrowed to the target workspace below — a project in another workspace is not a
-   * place this task can go, and the workspace select can change after the fetch.
-   */
-  const [projectRows, setProjectRows] = useState<ProjectRow[]>([]);
   useEffect(() => {
     if (!open) return;
     let live = true;
@@ -134,11 +123,6 @@ export function CreateIssueDialog({ open, onOpenChange }: { open: boolean; onOpe
       // Deliberately silent. A failed option fetch degrades the dropdowns to empty; it
       // is not a refusal of anything the user asked for, and putting it in the refusal
       // panel would put a fetch error where store guards are supposed to speak.
-      .catch(() => {});
-    getProjects({})
-      .then((next) => {
-        if (live) setProjectRows(next);
-      })
       .catch(() => {});
     return () => {
       live = false;
@@ -195,9 +179,12 @@ export function CreateIssueDialog({ open, onOpenChange }: { open: boolean; onOpe
   const parents = parentOptions(rows, ws);
   const relations = relationOptions(rows, ws);
   const labels = labelOptions(rows);
-  const projects = projectRows.filter((row) => row.workspace === ws);
-  // A project chosen for one workspace is not offered in another; the select shows
-  // "No project" rather than holding a value it cannot list.
+  /**
+   * The page's own project list (migration 009) — every workspace's, since App fetches it
+   * unscoped — narrowed to the target workspace: a project elsewhere is not a place this
+   * task can go. No fetch of its own, so the dialog and the rail cannot disagree.
+   */
+  const projects = projectsForWorkspace(session.projects.data ?? [], ws);
   const projectValue = projects.some((row) => row.project.id === form.project) ? form.project : NO_PROJECT;
   // Neither relation may offer what the other already holds: the same ref on both
   // sides is a two-node cycle, and the store can only refuse it once the task exists.
@@ -427,13 +414,12 @@ export function CreateIssueDialog({ open, onOpenChange }: { open: boolean; onOpe
                 value={ws}
                 onValueChange={(next) => {
                   setWs(next);
-                  // ONLY the parent goes. R7 cleared the relations too, which was right
-                  // while they were workspace-locked and is wrong now: a blocker chosen
-                  // before the switch is still a real task, and after the switch it is
-                  // simply a cross-workspace one — the server routes it to a hub link
-                  // instead of a local edge. The parent still cannot survive, because a
-                  // parent in the old workspace has nowhere to be stored in the new one.
-                  setForm((current) => ({ ...current, parent: "" }));
+                  // The parent and the project go; the relations stay. R7 cleared the
+                  // relations too, which was right while they were workspace-locked and
+                  // is wrong now: a blocker chosen before the switch is still a real task,
+                  // just a cross-workspace one. The parent and the project cannot survive —
+                  // both are rows of the old workspace. See forWorkspaceSwitch().
+                  setForm(forWorkspaceSwitch);
                 }}
               >
                 <SelectTrigger id="create-workspace" className="w-full">

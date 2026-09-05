@@ -128,6 +128,17 @@ export function splitRefs(raw: string): string[] {
   return tidy(raw.split(/[\s,]+/));
 }
 
+/**
+ * What survives a change of target workspace. The parent cannot: a parent in the old
+ * workspace has nowhere to be stored in the new one. Neither can the project: it is a
+ * row of the old workspace, the select would show "No project" while the payload still
+ * carried its id, and the server would refuse with not_found. The relations DO survive —
+ * a blocker chosen before the switch is still a real task, just a cross-workspace one now.
+ */
+export function forWorkspaceSwitch(state: CreateFormState): CreateFormState {
+  return { ...state, parent: "", project: "" };
+}
+
 /** The payload the dialog POSTs. Empty optional fields are omitted, not emptied. */
 export function buildCreatePayload(state: CreateFormState): Extract<ActionPayload, { type: "create" }> {
   const payload: Extract<ActionPayload, { type: "create" }> = {

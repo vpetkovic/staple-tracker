@@ -274,7 +274,9 @@ const projectFor = (context: FilterContext, id: string) =>
  */
 export function projectLabel(context: FilterContext, id: string): string {
   const project = projectFor(context, id);
-  if (!project) return id;
+  // An id the page cannot name is a project that no longer exists — App prunes such
+  // selections on the next poll, and until then the chip says so rather than printing a uuid.
+  if (!project) return "Removed project";
   const workspaces = new Set(context.projects.map((entry) => entry.workspace));
   return workspaces.size > 1 ? `${project.name} · ${project.workspace}` : project.name;
 }

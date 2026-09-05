@@ -42,10 +42,12 @@ import {
 import { buildFilterContext, type MilestoneFacts, type ProjectFacts } from "@/lib/filter-dimensions";
 import {
   loadFilters,
+  retainDimensionValues,
   saveFilters,
   withDimension,
   type FilterState,
 } from "@/lib/filters";
+import { projectsForWorkspace } from "@/lib/projects";
 import {
   DEFAULT_VIEW,
   SessionContext,
@@ -59,6 +61,7 @@ import type { MilestoneListRow, MilestoneView, ProjectRow } from "@/lib/types";
 import {
   filtersForScope,
   loadViewPrefs,
+  pruneFilterScopes,
   saveViewPrefs,
   sortForScope,
   sortScopeKey,
@@ -133,7 +136,7 @@ export function App() {
    * filtered in yet, so nobody opens this build to a filter set they never chose. See
    * `filtersForScope` in lib/view-prefs.ts.
    */
-  const [legacyFilters] = useState<FilterState>(() => loadFilters(window.localStorage));
+  const [legacyFilters, setLegacyFilters] = useState<FilterState>(() => loadFilters(window.localStorage));
   const [filterPrefs, setFilterPrefs] = useState<Record<string, FilterState>>(
     () => loadViewPrefs(window.localStorage).filters,
   );
@@ -309,21 +312,38 @@ export function App() {
   }, [milestoneList.data, milestoneMembers.data]);
 
   /**
-   * THE TRACKED PROJECTS (migration 009). One read per poll, scoped like `issues`: the
-   * rail lists them, the Project filter offers them, and the create dialog and the detail
-   * panel pick from them, so they live here where all four agree about the list.
+   * THE TRACKED PROJECTS (migration 009). One read per poll, UNSCOPED — every workspace's
+   * in hub mode — because the detail panel can hold an issue from a workspace the page is
+   * not on (a cross-workspace blocker opened from the drawer) and its Project row must
+   * offer that workspace's projects, not this one's. The rail, the filter context, the
+   * create dialog and the detail row each narrow the list with `projectsForWorkspace`.
    */
-  const loadProjects = useCallback(() => getProjects({ ws }), [ws]);
-  const projects = useResource<ProjectRow[]>(loadProjects, [ws, version], onAuthError);
+  const loadProjects = useCallback(() => getProjects({}), []);
+  const projects = useResource<ProjectRow[]>(loadProjects, [version], onAuthError);
   const projectFacts = useMemo<ProjectFacts[]>(
     () =>
-      (projects.data ?? []).map((row) => ({
+      projectsForWorkspace(projects.data ?? [], ws).map((row) => ({
         id: row.project.id,
         name: row.project.name,
         workspace: row.workspace,
       })),
-    [projects.data],
+    [projects.data, ws],
   );
+
+  /**
+   * A DELETED PROJECT LEAVES NO FILTER BEHIND. Its id may still be selected in any saved
+   * scope — a Tasks scope last filtered a week ago, the legacy fallback — and would greet
+   * the reader with a chip over an empty list. Once the served list has arrived (never on
+   * a failed or pending read, which knows nothing), every scope drops the ids it no
+   * longer names. The helpers hand back the same object when nothing changed, so the
+   * usual poll costs no render.
+   */
+  useEffect(() => {
+    if (!projects.data) return;
+    const known = new Set(projects.data.map((row) => row.project.id));
+    setFilterPrefs((current) => pruneFilterScopes(current, "project", known));
+    setLegacyFilters((current) => retainDimensionValues(current, "project", known));
+  }, [projects.data]);
 
   /**
    * The filter context — built from the UNFILTERED rows, which is what makes a filtered-away

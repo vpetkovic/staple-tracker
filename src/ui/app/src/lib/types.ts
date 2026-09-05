@@ -1290,3 +1290,11 @@ export interface ProjectRow {
 export interface ProjectRemoval extends ProjectRow {
   unassigned: number;
 }
+
+/** What a create or an update says about a project. Absent fields keep their value on update. */
+export interface ProjectFieldsInput {
+  name?: string | null;
+  kind?: ProjectKind | null;
+  sourceKind?: ProjectSourceKind | null;
+  source?: string | null;
+}

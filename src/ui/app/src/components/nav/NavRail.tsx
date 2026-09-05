@@ -27,6 +27,7 @@
 import { ChevronDown, Cog, Moon, PanelLeftClose, Plus, Search, Settings, Sun } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
+import { projectsForWorkspace } from "@/lib/projects";
 import { openCommandPalette, openCreateIssue, openProjectDialog, openSettings } from "@/lib/shell-events";
 import { useSession, type ViewName } from "@/lib/session";
 import { cn } from "@/lib/utils";
@@ -102,7 +103,9 @@ function Kbd({ children }: { children: ReactNode }) {
  */
 function ProjectSubItems({ onNavigate }: { onNavigate?: () => void }) {
   const session = useSession();
-  const rows = session.projects.data ?? [];
+  // The page's list is every workspace's (see lib/projects.ts); the rail shows the ones
+  // the page is on — all of them on "All workspaces", one workspace's otherwise.
+  const rows = useMemo(() => projectsForWorkspace(session.projects.data ?? [], session.ws), [session.projects.data, session.ws]);
   const workspaces = useMemo(() => new Set(rows.map((row) => row.workspace)), [rows]);
   const selected = session.filters.dims.project ?? [];
   const activeId = session.view === "tree" && selected.length === 1 ? selected[0] : null;
@@ -135,7 +138,12 @@ function ProjectSubItems({ onNavigate }: { onNavigate?: () => void }) {
               aria-label={`Project settings: ${project.name}`}
               title="Project settings"
               data-nav-project-settings={project.id}
-              onClick={() => openProjectDialog({ mode: "edit", row })}
+              onClick={() => {
+                // The sheet closes BEFORE the dialog opens, so a dialog never stacks on
+                // it and Escape in the dialog closes the dialog alone.
+                onNavigate?.();
+                openProjectDialog({ mode: "edit", row });
+              }}
               className={ROW_ACTION_CLASS}
             >
               <Cog className="size-3.5" aria-hidden />
@@ -180,7 +188,11 @@ function NavItemRow({
             aria-label={entry.action.label}
             title={entry.action.label}
             data-nav-action={entry.action.id}
-            onClick={() => openProjectDialog({ mode: "create", workspace: session.ws || undefined })}
+            onClick={() => {
+              // Sheet first, dialog second — see the gear below for why.
+              onNavigate?.();
+              openProjectDialog({ mode: "create", workspace: session.ws || undefined });
+            }}
             className={ROW_ACTION_CLASS}
           >
             <Plus className="size-3.5" aria-hidden />

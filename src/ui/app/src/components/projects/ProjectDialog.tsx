@@ -9,6 +9,10 @@
  * mount owns the open flag; the form owns the draft; the store owns every rule — a
  * refusal renders the store's own sentence through `GuardRefusal`, never a paraphrase.
  *
+ * The fields are the settings forms' `Field` (settings/form/primitives.tsx): one label,
+ * one description, one inline error wired by `aria-describedby` and `aria-invalid`, so a
+ * project's settings read and announce exactly like the workspace's.
+ *
  * REFETCH ON SUCCESS, not optimistic: `session.refresh()` bumps the version the rail and
  * the filter menu already refetch projects on, so what is listed a moment after a save
  * is what the store holds.
@@ -26,7 +30,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { createProject, deleteProject, updateProject } from "@/lib/api";
 import { describeRefusal, type Refusal } from "@/lib/refusal";
@@ -34,6 +37,7 @@ import { useSession } from "@/lib/session";
 import type { ProjectDialogRequest } from "@/lib/shell-events";
 import { PROJECT_KINDS, PROJECT_SOURCE_KINDS, type ProjectKind, type ProjectSourceKind } from "@/lib/types";
 import { ConfirmDialog } from "@/settings/form/ConfirmDialog";
+import { Field } from "@/settings/form/primitives";
 import {
   KIND_HINTS,
   KIND_LABELS,
@@ -42,6 +46,7 @@ import {
   draftFromProject,
   emptyProjectDraft,
   isProjectDraftDirty,
+  isProjectDraftValid,
   projectDraftPayload,
   projectFormCopy,
   projectFormSections,
@@ -62,14 +67,8 @@ function SectionTitle({ children }: { children: string }) {
   );
 }
 
-function FieldError({ id, children }: { id: string; children: string | undefined }) {
-  if (!children) return null;
-  return (
-    <p id={id} role="alert" className="text-[12px] text-[var(--status-task-blocked)]">
-      {children}
-    </p>
-  );
-}
+/** The settings `Field`, stacked: a dialog this narrow has no room for its two-column form. */
+const FIELD_CLASS = "md:grid-cols-1 md:gap-x-0";
 
 /**
  * The form. `onDone` is called after a successful create, save or delete; `onCancel`
@@ -99,11 +98,13 @@ export function ProjectForm({
   const dirty = mode.mode === "create" || isProjectDraftDirty(draft, baseline);
   // Only a create in hub mode, with more than one workspace, has to ask where.
   const askWorkspace = mode.mode === "create" && session.mode === "hub" && session.workspaces.length > 1;
+  // The managed half of the union, or null: what the Source section is drawn from.
+  const managed = draft.kind === "managed" ? draft : null;
 
   const submit = async () => {
     if (busy) return;
     setTried(true);
-    if (Object.keys(validateProjectDraft(draft)).length > 0) return;
+    if (!isProjectDraftValid(draft)) return;
     setBusy(true);
     setRefusal(null);
     try {
@@ -151,94 +152,95 @@ export function ProjectForm({
           {section.id === "general" ? (
             <>
               {askWorkspace ? (
-                <div className="grid gap-1.5">
-                  <Label htmlFor="project-workspace">Workspace</Label>
-                  <Select value={ws} onValueChange={setWs}>
-                    <SelectTrigger id="project-workspace" data-project-workspace className="w-full">
+                <Field id="project-workspace" label="Workspace" className={FIELD_CLASS}>
+                  {(aria) => (
+                    <Select value={ws} onValueChange={setWs}>
+                      <SelectTrigger {...aria} data-project-workspace className="w-full">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent position="popper" align="start">
+                        {session.workspaces.map((workspace) => (
+                          <SelectItem key={workspace.slug} value={workspace.slug}>
+                            {workspace.slug}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                </Field>
+              ) : null}
+
+              <Field id="project-name" label="Name" error={errors.name} className={FIELD_CLASS}>
+                {(aria) => (
+                  <Input
+                    {...aria}
+                    data-project-name
+                    autoFocus
+                    value={draft.name}
+                    placeholder="What is this project called?"
+                    onChange={(event) => setDraft(withName(draft, event.target.value))}
+                  />
+                )}
+              </Field>
+
+              <Field id="project-kind" label="Kind" description={KIND_HINTS[draft.kind]} className={FIELD_CLASS}>
+                {(aria) => (
+                  <Select value={draft.kind} onValueChange={(value) => setDraft(withKind(draft, value as ProjectKind))}>
+                    <SelectTrigger {...aria} data-project-kind className="w-full">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent position="popper" align="start">
-                      {session.workspaces.map((workspace) => (
-                        <SelectItem key={workspace.slug} value={workspace.slug}>
-                          {workspace.slug}
+                      {PROJECT_KINDS.map((kind) => (
+                        <SelectItem key={kind} value={kind}>
+                          {KIND_LABELS[kind]}
                         </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
-                </div>
-              ) : null}
-
-              <div className="grid gap-1.5">
-                <Label htmlFor="project-name">Name</Label>
-                <Input
-                  id="project-name"
-                  data-project-name
-                  autoFocus
-                  value={draft.name}
-                  placeholder="What is this project called?"
-                  aria-invalid={errors.name ? true : undefined}
-                  aria-describedby={errors.name ? "project-name-error" : undefined}
-                  onChange={(event) => setDraft(withName(draft, event.target.value))}
-                />
-                <FieldError id="project-name-error">{errors.name}</FieldError>
-              </div>
-
-              <div className="grid gap-1.5">
-                <Label htmlFor="project-kind">Kind</Label>
-                <Select value={draft.kind} onValueChange={(value) => setDraft(withKind(draft, value as ProjectKind))}>
-                  <SelectTrigger id="project-kind" data-project-kind className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent position="popper" align="start">
-                    {PROJECT_KINDS.map((kind) => (
-                      <SelectItem key={kind} value={kind}>
-                        {KIND_LABELS[kind]}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <p className="text-[12px] text-muted-foreground">{KIND_HINTS[draft.kind]}</p>
-              </div>
+                )}
+              </Field>
             </>
           ) : null}
 
-          {section.id === "source" && draft.kind === "managed" ? (
+          {section.id === "source" && managed ? (
             <>
-              <div className="grid gap-1.5">
-                <Label htmlFor="project-source-kind">Source kind</Label>
-                <Select
-                  value={draft.sourceKind}
-                  onValueChange={(value) => setDraft(withSourceKind(draft, value as ProjectSourceKind))}
-                >
-                  <SelectTrigger id="project-source-kind" data-project-source-kind className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent position="popper" align="start">
-                    {PROJECT_SOURCE_KINDS.map((kind) => (
-                      <SelectItem key={kind} value={kind}>
-                        {SOURCE_KIND_LABELS[kind]}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="grid gap-1.5">
-                <Label htmlFor="project-source">
-                  {draft.sourceKind === "github" ? "Repository URL" : "Folder path"}
-                </Label>
-                <Input
-                  id="project-source"
-                  data-project-source
-                  value={draft.source}
-                  placeholder={SOURCE_PLACEHOLDERS[draft.sourceKind]}
-                  spellCheck={false}
-                  className="font-mono text-[13px]"
-                  aria-invalid={errors.source ? true : undefined}
-                  aria-describedby={errors.source ? "project-source-error" : undefined}
-                  onChange={(event) => setDraft(withSource(draft, event.target.value))}
-                />
-                <FieldError id="project-source-error">{errors.source}</FieldError>
-              </div>
+              <Field id="project-source-kind" label="Source kind" className={FIELD_CLASS}>
+                {(aria) => (
+                  <Select
+                    value={managed.sourceKind}
+                    onValueChange={(value) => setDraft(withSourceKind(managed, value as ProjectSourceKind))}
+                  >
+                    <SelectTrigger {...aria} data-project-source-kind className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent position="popper" align="start">
+                      {PROJECT_SOURCE_KINDS.map((kind) => (
+                        <SelectItem key={kind} value={kind}>
+                          {SOURCE_KIND_LABELS[kind]}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              </Field>
+              <Field
+                id="project-source"
+                label={managed.sourceKind === "github" ? "Repository URL" : "Folder path"}
+                error={errors.source}
+                className={FIELD_CLASS}
+              >
+                {(aria) => (
+                  <Input
+                    {...aria}
+                    data-project-source
+                    value={managed.source}
+                    placeholder={SOURCE_PLACEHOLDERS[managed.sourceKind]}
+                    spellCheck={false}
+                    className="font-mono text-[13px]"
+                    onChange={(event) => setDraft(withSource(managed, event.target.value))}
+                  />
+                )}
+              </Field>
             </>
           ) : null}
         </section>
