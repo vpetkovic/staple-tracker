@@ -138,7 +138,14 @@ export function AppShell({ children }: { children: ReactNode }) {
   }, [title]);
 
   return (
-    <div className="flex h-full bg-background text-foreground">
+    /*
+      THE FRAME. The whole page is the sidebar tint; the rail sits on it with no border
+      of its own, and the content is an inset CARD — one hairline, an 8px gutter on
+      top, right and bottom, a rounded top-left corner where it meets the rail — so the
+      pane reads as a sheet laid on the desk rather than a region ruled off it. Below
+      768px the gutter and the radius go: a sheet-mode phone has no desk to show.
+    */
+    <div className="flex h-full bg-sidebar text-foreground">
       {wide && railVisible ? <NavRail onHide={toggleRail} /> : null}
 
       {!wide && overlayOpen ? (
@@ -154,10 +161,13 @@ export function AppShell({ children }: { children: ReactNode }) {
         </div>
       ) : null}
 
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div
+        data-content-frame
+        className="flex min-w-0 flex-1 flex-col overflow-hidden bg-card md:mt-2 md:mr-2 md:mb-2 md:rounded-tl-lg md:border"
+      >
         {/* ── the content header: what the view is, and how much of it ── */}
         <header className="shrink-0 border-b">
-          <div className="flex h-11 items-center gap-2 px-4">
+          <div className="flex h-10 items-center gap-2 px-4">
             {railVisible ? null : (
               <Button
                 variant="ghost"

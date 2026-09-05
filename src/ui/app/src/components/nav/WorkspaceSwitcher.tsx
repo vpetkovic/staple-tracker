@@ -35,11 +35,9 @@ export function WorkspaceSwitcher() {
   const current = hub ? session.workspaces.find((ws) => ws.slug === session.ws) : first;
 
   const name = hub ? (current?.slug ?? "All workspaces") : (first?.slug ?? "No workspace");
-  const caption = hub
-    ? current
-      ? current.prefix
-      : `${session.workspaces.length} workspace${session.workspaces.length === 1 ? "" : "s"}`
-    : (first?.prefix ?? "");
+  // The trigger says the NAME and nothing else; the prefix stays on the menu rows. The
+  // one caption that survives is the count on "All workspaces", which is not a prefix.
+  const caption = hub && !current ? `${session.workspaces.length} workspace${session.workspaces.length === 1 ? "" : "s"}` : "";
   const value = hub ? (session.ws === "" ? ALL_WORKSPACES : session.ws) : (first?.slug ?? "");
 
   return (
@@ -50,7 +48,7 @@ export function WorkspaceSwitcher() {
           aria-label="Workspace"
           title={hub ? "Switch workspace" : "Workspace"}
           data-workspace-switcher
-          className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-md px-1.5 text-left outline-none hover:bg-surface-hover focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring data-[state=open]:bg-surface-active"
+          className="flex h-7 min-w-0 flex-1 items-center gap-2 rounded-md px-1.5 text-left outline-none hover:bg-surface-hover focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring data-[state=open]:bg-surface-selected"
         >
           {/* The one place the accent is spent on brand rather than on focus. */}
           <span
@@ -63,9 +61,7 @@ export function WorkspaceSwitcher() {
             <span className="truncate text-[13px] font-semibold tracking-[var(--tracking-heading)]">
               {name}
             </span>
-            {caption ? (
-              <span className="shrink-0 font-mono text-[11px] text-text-tertiary">{caption}</span>
-            ) : null}
+            {caption ? <span className="shrink-0 text-[11px] text-text-tertiary">{caption}</span> : null}
           </span>
           <ChevronDown aria-hidden className="size-3.5 shrink-0 text-text-tertiary" />
         </button>

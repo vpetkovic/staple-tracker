@@ -17,9 +17,9 @@ import { buildFilterContext } from "@/lib/filter-dimensions";
 import { emptyFilters } from "@/lib/filters";
 import { SessionContext, type StapleSession } from "@/lib/session";
 import { DEFAULT_SORT } from "@/lib/sort-modes";
-import type { Project, ProjectRow } from "@/lib/types";
+import type { IssueRow, IssueStatus, Project, ProjectRow } from "@/lib/types";
 import { NAV_GROUPS } from "./nav-model";
-import { NavRail } from "./NavRail";
+import { NavRail, RAIL_ROW_CLASS } from "./NavRail";
 
 const noop = () => {};
 
@@ -121,6 +121,18 @@ describe("the shell", () => {
   it("offers no 'show navigation' button while the rail is on screen", () => {
     expect(shell()).not.toContain("data-nav-show");
   });
+
+  it("lays the content in an inset card on the sidebar tint, with the inset dropped below md", () => {
+    const markup = shell();
+    expect(markup).toMatch(/<div class="flex h-full bg-sidebar/);
+    const tag = /<div[^>]*data-content-frame[^>]*>/.exec(markup)?.[0] ?? "";
+    const frame = /class="([^"]*)"/.exec(tag)?.[1] ?? "";
+    for (const cls of ["bg-card", "md:mt-2", "md:mr-2", "md:mb-2", "md:rounded-tl-lg", "md:border"]) {
+      expect(frame).toContain(cls);
+    }
+    // The rail carries no border of its own; the card's hairline is the only edge.
+    expect(markup).not.toMatch(/<nav aria-label="Primary"[^>]*border-r/);
+  });
 });
 
 describe("the rail", () => {
@@ -138,10 +150,35 @@ describe("the rail", () => {
           'data-nav-item="view:graph"',
           'data-nav-item="view:milestones"',
           'aria-label="Work Workspace Settings"',
-          'aria-label="Switch to dark theme"',
+          "data-nav-theme",
         ]),
       ),
     ).toBe(true);
+  });
+
+  it("sets every row at 28px with a fill-only active state and icons that follow the row", () => {
+    expect(RAIL_ROW_CLASS).toContain("h-7");
+    expect(RAIL_ROW_CLASS).toContain("rounded-md");
+    expect(RAIL_ROW_CLASS).toContain("px-2");
+    expect(RAIL_ROW_CLASS).toContain("text-[13px]");
+    expect(RAIL_ROW_CLASS).toContain("aria-[current]:bg-surface-selected");
+    expect(RAIL_ROW_CLASS).toContain("[&_svg]:size-4");
+    expect(RAIL_ROW_CLASS).not.toContain("font-medium");
+  });
+
+  it("labels the group in sentence case, muted, with no letter spacing", () => {
+    const label = /<button[^>]*data-nav-group-label[^>]*>/.exec(rail())?.[0] ?? "";
+    expect(label).toContain("text-[12px]");
+    expect(label).toContain("text-muted-foreground");
+    expect(label).not.toContain("uppercase");
+    expect(label).not.toContain("tracking-");
+    expect(rail()).toMatch(/data-nav-group-label[^>]*>Workspace</);
+  });
+
+  it("offers Settings and a Dark mode switch as ordinary rows at the foot", () => {
+    const markup = rail();
+    expect(markup).toMatch(/<button[^>]*aria-label="Work Workspace Settings"[^>]*>[\s\S]*?Settings<\/button>/);
+    expect(markup).toMatch(/<button[^>]*role="switch"[^>]*aria-checked="false"[^>]*data-nav-theme[^>]*>[\s\S]*?Dark mode<\/button>/);
   });
 
   it("draws every group in the model with its label as a disclosure, and every item as a button", () => {
@@ -166,13 +203,18 @@ describe("the rail", () => {
     expect(graph).toMatch(/data-nav-item="view:graph" aria-current="page"/);
   });
 
-  it("makes New task the first row after the switcher, and a filled primary button", () => {
+  it("puts a bordered New task button beside a bordered search button on one row, shortcuts in tooltips", () => {
     const markup = rail();
     const newTask = /<button[^>]*data-nav-new-task[^>]*>/.exec(markup)?.[0] ?? "";
-    expect(newTask).toContain('data-variant="cta"');
-    expect(newTask).toContain('title="New task (c)"');
-    // Every other rail control is a quiet row; only this one is filled.
-    expect(markup.match(/data-variant="cta"/g)).toHaveLength(1);
+    expect(newTask).toContain('data-variant="outline"');
+    expect(newTask).toContain("h-7");
+    const search = /<button[^>]*data-nav-search[^>]*>/.exec(markup)?.[0] ?? "";
+    expect(search).toContain('data-variant="outline"');
+    expect(search).toContain('aria-label="Open the command palette"');
+    // Nothing is filled, and no shortcut chip sits beside a word: the tooltips carry them.
+    expect(markup).not.toContain('data-variant="cta"');
+    expect(markup).not.toContain("<kbd");
+    expect(markup.indexOf("data-nav-new-task")).toBeLessThan(markup.indexOf("data-nav-search"));
   });
 
   it("puts nothing in the tab order out of sequence", () => {
@@ -214,6 +256,62 @@ describe("projects under Tasks", () => {
       ),
     ).toBe(true);
     expect(markup).toContain('data-nav-project-settings="p-docs"');
+  });
+
+  it("draws each project with a glyph one step in and its open-task count from the rows on hand", () => {
+    const issue = (identifier: string, projectId: string | null, status: IssueStatus = "todo"): IssueRow =>
+      ({
+        workspace: "staple",
+        claim: null,
+        issue: {
+          id: identifier,
+          identifier,
+          title: identifier,
+          description: null,
+          status,
+          statusVersion: 0,
+          kind: "task",
+          priority: "medium",
+          parentId: null,
+          depth: 0,
+          assignee: null,
+          createdBy: null,
+          labels: [],
+          acceptanceCriteria: null,
+          blockParentUntilDone: false,
+          unblockOwner: null,
+          unblockAction: null,
+          originKind: "manual",
+          originId: null,
+          idempotencyKey: null,
+          checkoutAgent: null,
+          checkoutAt: null,
+          blockedTransitionAt: null,
+          estimatedSeconds: null,
+          projectId,
+          startedAt: null,
+          completedAt: null,
+          cancelledAt: null,
+          createdAt: "2026-09-05T00:00:00.000Z",
+          updatedAt: "2026-09-05T00:00:00.000Z",
+        },
+      });
+    const markup = rail({
+      projects: { data: rows, error: undefined, loading: false, reload: noop },
+      issues: {
+        data: [issue("A", "p-docs"), issue("B", "p-docs"), issue("C", "p-docs", "done"), issue("D", null)],
+        error: undefined,
+        loading: false,
+        reload: noop,
+      },
+    });
+    const docs = /<button[^>]*data-nav-project="p-docs"[^>]*>[\s\S]*?<\/button>/.exec(markup)?.[0] ?? "";
+    expect(docs).toContain("pl-6");
+    expect(docs).toContain("lucide-folder-kanban");
+    // Two open, one done: the count is open work only.
+    expect(docs).toMatch(/data-nav-project-count[^>]*aria-label="2 open"[^>]*>2</);
+    const site = /<button[^>]*data-nav-project="p-site"[^>]*>[\s\S]*?<\/button>/.exec(markup)?.[0] ?? "";
+    expect(site).toMatch(/data-nav-project-count[^>]*>0</);
   });
 
   it("draws nothing under Tasks while there are no projects", () => {
@@ -293,12 +391,12 @@ describe("projects under Tasks", () => {
 });
 
 describe("the workspace switcher", () => {
-  it("names the one workspace, with its prefix, outside hub mode", () => {
+  it("names the one workspace outside hub mode, and keeps the prefix off the trigger", () => {
     const markup = rail();
     const trigger = /<button[^>]*data-workspace-switcher[^>]*>[\s\S]*?<\/button>/.exec(markup)?.[0] ?? "";
     expect(trigger).toContain('aria-label="Workspace"');
     expect(trigger).toContain(">staple</span>");
-    expect(trigger).toContain(">STA</span>");
+    expect(trigger).not.toContain(">STA<");
   });
 
   it("says All workspaces in hub mode until one is chosen, then names it", () => {
@@ -317,6 +415,6 @@ describe("the workspace switcher", () => {
       rail({ ...hub, ws: "pinecone" }),
     )?.[0];
     expect(one).toContain(">pinecone</span>");
-    expect(one).toContain(">PIN</span>");
+    expect(one).not.toContain(">PIN<");
   });
 });

@@ -154,11 +154,12 @@
 
 /* ── Raw scale · dark ────────────────────────────────────────────────────────
  *
- * Vercel's dashboard and Linear both sit at near-black rather than true black,
- * and the reason is structural: on pure #000 a 1px border is either invisible or
- * a hard line, with nothing in between. #0a0a0a for the page and #111 for
- * anything raised gives the border somewhere to live, and gives a card an edge
- * you can see without drawing one brighter than the text.
+ * The scale itself is Vercel's. Where the SURFACES sit on it moved in the polish
+ * pass: the page and the card used to be #0a0a0a and #111, below the bottom of
+ * this ramp, and VP's verdict against Linear was "near-black, not charcoal".
+ * They now sit ON the ramp — page at 100, card at 200, menus at 300 — which is
+ * Linear's register, and the foreground drops one step to 900 so white text no
+ * longer glares against it. See the surface block further down.
  */
 .dark {
   color-scheme: dark;
@@ -299,24 +300,56 @@
 }
 
 .dark {
-  --background: #0a0a0a; /* page */
-  --card: #111111; /* anything raised: rows, panels, the header, menus */
-  --popover: #111111;
-  --primary-foreground: #0a0a0a;
+  /* CHARCOAL, on the ramp. Page 100, card 200, menus 300: each surface one step
+     above the one it sits on, so a border has somewhere to live without being
+     drawn brighter than the text. */
+  --background: var(--ds-gray-100); /* #1a1a1a — the page, the rail, the frame */
+  --card: var(--ds-gray-200); /* #1f1f1f — the content pane, rows, panels */
+  --popover: var(--ds-gray-300); /* #262626 — menus float one more step up */
+  /* The foreground drops to 900. Pure white on charcoal glares; #ededed on
+     #1f1f1f is 14:1 and reads as ink rather than light. */
+  --foreground: var(--ds-gray-900);
+  --card-foreground: var(--ds-gray-900);
+  --popover-foreground: var(--ds-gray-900);
+  --primary: var(--ds-gray-900);
+  --primary-foreground: var(--ds-gray-100);
   /* A field sits BELOW its surface in dark mode — inset rather than raised —
      which is how Vercel's inputs read against a panel. */
-  --field: #0a0a0a;
+  --field: var(--ds-gray-100);
 
-  --segment-track: var(--ds-gray-100); /* #1a1a1a */
-  --segment-thumb: var(--ds-gray-300); /* #262626 — one step UP from the track */
+  /* The neutral surfaces the primitives tint with (`--muted`, `--accent`,
+     `--secondary`) were gray-100, which is now the PAGE and would sit below the
+     card they are drawn on. One step above the card instead. */
+  --muted: var(--ds-gray-300);
+  --accent: var(--ds-gray-300);
+  --secondary: var(--ds-gray-300);
+  --secondary-foreground: var(--ds-gray-900);
+  --accent-foreground: var(--ds-gray-900);
+
+  /* With the card at gray-200 a gray-300 hairline is one step away and reads
+     as a smudge; borders move one step up each. */
+  --border: var(--ds-gray-400);
+  --border-strong: var(--ds-gray-500);
+  --input: var(--ds-gray-500);
+
+  /* The alpha surfaces need a little more on a lighter ground to stay visible. */
+  --surface-hover: rgb(255 255 255 / 0.06);
+  --surface-selected: rgb(255 255 255 / 0.09);
+  --surface-active: rgb(255 255 255 / 0.14);
+
+  --segment-track: var(--ds-gray-300); /* #262626 */
+  --segment-thumb: var(--ds-gray-400); /* #333333 — one step UP from the track */
 }
 
 /* ── Sidebar family ──────────────────────────────────────────────────────────
- * Unused by staple today (there is no sidebar yet), re-pointed anyway so that
- * whichever wave adds one inherits this language rather than the theme sheet's.
+ *
+ * The rail and the frame around the content card. `--sidebar` is ONE STEP OFF the
+ * card on the ramp and never equal to it: that step is what makes the inset card
+ * read as a card. Light: the 100 gray under a white card. Dark: the page (100)
+ * under a 200 card — see the dark surface block.
  */
 :root {
-  --sidebar: var(--card);
+  --sidebar: var(--ds-gray-100);
   --sidebar-foreground: var(--foreground);
   --sidebar-primary: var(--primary);
   --sidebar-primary-foreground: var(--primary-foreground);
@@ -373,7 +406,9 @@
 }
 
 .dark {
-  --text-tertiary: var(--ds-gray-700);
+  /* gray-700 (#7d7d7d) was 4.9:1 on the old #0a0a0a page and is 3.9:1 on the
+     charcoal card; #8b8b8b is 4.6:1 there and 4.9:1 on the page. */
+  --text-tertiary: #8b8b8b;
   --status-task-icon-todo: var(--ds-amber-700);
   --status-task-icon-done: var(--ds-green-700);
   --status-task-icon-backlog: var(--ds-gray-700);
