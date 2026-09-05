@@ -21,6 +21,10 @@ import type { OpenedWorkspace } from "./core/workspace.js";
 import type { VocabularyOp, WorkspaceStore } from "./core/store.js";
 import { MILESTONE_STATES } from "./core/milestones.js";
 import { KIND_APPEARANCE_SOURCES, type KindWithAppearance } from "./core/kind-appearance.js";
+import { dirname } from "node:path";
+import { stapleHome } from "./config/home.js";
+import { readRepositoryManifest } from "./core/repo-identity.js";
+import { describeState, localCloudStatus } from "./core/cloud/status.js";
 import { Hub, notifyHubResolvedSafe } from "./core/hub.js";
 import type { CrossBlockerState } from "./core/hub.js";
 import {
@@ -2181,6 +2185,80 @@ server.registerTool(
   },
   ({ base_revision, all, actor, ws }) =>
     run(() => storeFor(ws).queue().mutate("prune", { baseRevision: base_revision, all }, requireActor(actor))),
+);
+
+/**
+ * `cloud_status` — and, deliberately, NOTHING ELSE from `staple cloud`.
+ *
+ * Connect, disconnect, revoke and purge are not exposed over MCP, and that is a
+ * decision rather than an omission. `docs/sync.md` makes the connect preview the
+ * consent mechanism: the command shows the endpoint, the repository id and where
+ * the credential will be stored, and *then* asks a human. An MCP tool has no
+ * human to show it to. A `cloud_connect` tool would either skip the preview —
+ * which is the whole privacy claim — or render it into a transcript nobody reads
+ * before the model answers yes on the operator's behalf. Neither is consent.
+ *
+ * Purge is worse again: an irreversible remote deletion, reachable by a model,
+ * behind a confirmation string the model can read off the disclosure it was just
+ * handed. The typed confirmation exists precisely to require a person.
+ *
+ * So an agent can find out whether this repository is connected, and everything
+ * that changes that answer requires a person at a terminal.
+ *
+ * Read-only and network-free: `localCloudStatus` reads files. There is no
+ * `refresh` parameter, because "let the agent probe the endpoint" is how a
+ * silent tracker acquires a heartbeat.
+ */
+server.registerTool(
+  "cloud_status",
+  {
+    description:
+      "Whether THIS MACHINE has connected this repository to a sync service, and in what mode. States: disconnected (no credential, no endpoint, no cloud state here), manual (connected; nothing syncs until a human runs `staple cloud sync`), automatic (this device consented to background sync), offline, revoked, auth_failed. Reads local files only — it makes no network request and cannot be made to. Connecting, disconnecting, revoking a device and purging remote state are deliberately NOT available as tools: each is a human consent decision whose preview and typed confirmation only mean something to a person at a terminal.",
+    inputSchema: { ws: wsSchema },
+    outputSchema: {
+      state: z.enum(["disconnected", "manual", "automatic", "offline", "revoked", "auth_failed"]),
+      repositoryId: z.string().nullable(),
+      endpoint: z.string().nullable(),
+      deviceId: z.string().nullable(),
+      auto: z.boolean(),
+      backup: z.boolean(),
+      credentialPresent: z.boolean(),
+      warnings: z.array(z.string()),
+      detail: z.string(),
+    },
+    annotations: { title: "Cloud status", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+  },
+  ({ ws }) =>
+    run(() => {
+      const workspaceDir = dirname(workspaceFor(ws).dbPath);
+      const manifest = readRepositoryManifest(workspaceDir);
+      if (!manifest) {
+        return {
+          state: "disconnected" as const,
+          repositoryId: null,
+          endpoint: null,
+          deviceId: null,
+          auto: false,
+          backup: false,
+          credentialPresent: false,
+          warnings: [],
+          detail:
+            "This workspace has no repository.json, so it has no sync identity and cannot be connected.",
+        };
+      }
+      const status = localCloudStatus(stapleHome(), manifest.repositoryId);
+      return {
+        state: status.state,
+        repositoryId: status.repositoryId,
+        endpoint: status.endpoint,
+        deviceId: status.deviceId,
+        auto: status.auto,
+        backup: status.backup,
+        credentialPresent: status.credentialPresent,
+        warnings: [...status.warnings],
+        detail: describeState(status),
+      };
+    }),
 );
 
 const transport = new StdioServerTransport();

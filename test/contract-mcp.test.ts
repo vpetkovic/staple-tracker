@@ -683,10 +683,25 @@ describe("tool inventory", () => {
         },
         hasOutputSchema: true,
       },
+      /**
+       * STA-71: the ONE cloud tool, and deliberately the only one.
+       *
+       * Connect, disconnect, revoke and purge are not exposed over MCP. Each is
+       * a human consent decision whose preview or typed confirmation only means
+       * something to a person at a terminal — `docs/sync.md` makes the connect
+       * preview the consent mechanism, and an MCP tool has no human to show it
+       * to. So an agent can ask whether this repository is connected, and
+       * everything that changes that answer needs a person.
+       */
+      {
+        name: "cloud_status",
+        annotations: { title: "Cloud status", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+        hasOutputSchema: true,
+      },
     ]);
   });
 
-  it("marks exactly the fourteen read tools readOnlyHint: true", async () => {
+  it("marks exactly the fifteen read tools readOnlyHint: true", async () => {
     const tools = await harness.listTools();
     const readOnly = tools.filter((t) => t.annotations?.readOnlyHint === true).map((t) => t.name);
     expect(readOnly).toEqual([
@@ -709,6 +724,9 @@ describe("tool inventory", () => {
       // nothing — `next_task` resolves the order, it does not claim anything.
       "list_queue",
       "next_task",
+      // STA-71: reading whether this MACHINE has connected the repository is as
+      // read-only as reading a task, and it makes no network request either.
+      "cloud_status",
     ]);
   });
 
@@ -1358,6 +1376,9 @@ describe("tool response shapes (31/31)", () => {
       "move_queue_entry",
       "reorder_queue",
       "prune_queue",
+      // STA-71: the cloud status projection is pinned in test/cloud-connect.test.ts
+      // against the same `localCloudStatus` the CLI and HTTP surfaces render.
+      "cloud_status",
     ]);
     expect([...covered].sort()).toEqual([...tools].sort());
   });

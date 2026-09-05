@@ -354,6 +354,15 @@ describe("KNOWN: logical errors this surface cannot project", () => {
       "/api/action",
       "/api/agent-context",
       "/api/bootstrap",
+      /**
+       * STA-71. GET-only, read-only, and network-free: it renders whether THIS
+       * MACHINE has connected the repository, from local files, so the page can
+       * say "not connected" as static text rather than probing. It carries no
+       * `refresh` parameter on purpose — a polled UI against a refreshing status
+       * endpoint is a heartbeat to Cloudflare arrived at by accident.
+       * `test/cloud-ui-status.test.ts` pins it, including under network spies.
+       */
+      "/api/cloud/status",
       "/api/document",
       "/api/events",
       "/api/gate/approve",

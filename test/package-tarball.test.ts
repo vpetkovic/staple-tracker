@@ -346,8 +346,8 @@ describe("the installed binary, run from outside this repository", () => {
       const listed = (await rpc("tools/list", {})) as { result?: { tools?: Array<{ name: string }> } };
       const tools = listed.result?.tools ?? [];
       // The same tools scripts/smoke-mcp.ts exercises against the source tree.
-      // STA-249 took this from 40 to 43: hub_unregister, hub_prune, cross_unlink.
-      expect(tools).toHaveLength(43);
+      // 40, plus hub_unregister / hub_prune / cross_unlink and cloud_status.
+      expect(tools).toHaveLength(44);
       expect(tools.map((tool) => tool.name)).toContain("list_tasks");
 
       // A real call, so this proves the workspace path too, not just the handshake.
