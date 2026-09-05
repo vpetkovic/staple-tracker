@@ -5,7 +5,7 @@ import { openDb } from "./db.js";
 import { migrateWorkspace } from "./schema.js";
 import { WorkspaceStore } from "./store.js";
 import { Hub } from "./hub.js";
-import { type OpenedWorkspace, openWorkspace, readMeta, writeMeta } from "./open.js";
+import { type OpenedWorkspace, openWorkspace, readMeta, writeMetaPairs } from "./open.js";
 import { writeAgentsGuide } from "./agents-template.js";
 import { writeWorkspaceGitignore } from "./workspace-gitignore.js";
 import { reconcileRepositoryIdentity, type RepositoryIdentityReport } from "./repo-identity.js";
@@ -195,8 +195,10 @@ export function initWorkspace(options: {
     const storedSlug = readMeta(probe, "slug") ?? slug;
     if (!prefix) {
       prefix = hub.allocatePrefix(storedSlug);
-      writeMeta(probe, "slug", storedSlug);
-      writeMeta(probe, "prefix", prefix);
+      writeMetaPairs(probe, [
+        ["slug", storedSlug],
+        ["prefix", prefix],
+      ]);
     }
     hub.register({ slug: storedSlug, prefix, path: dbPath, kind });
 

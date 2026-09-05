@@ -70,8 +70,70 @@ export function openDb(path: string): DatabaseSync {
   return db;
 }
 
-/** Run fn inside BEGIN IMMEDIATE .. COMMIT (write lock up front, no upgrade deadlocks). */
+/**
+ * Savepoint names only have to be unique within one nesting stack, but a single
+ * monotonic counter is simpler to reason about than a per-database one and
+ * costs nothing — the number never resets, so no two live savepoints can ever
+ * share a name even across databases.
+ */
+let savepointSeq = 0;
+
+/** True while this connection has an open transaction, opened by anyone. */
+export function inTransaction(db: DatabaseSync): boolean {
+  return db.isTransaction;
+}
+
+/**
+ * Run fn inside a transaction: BEGIN IMMEDIATE .. COMMIT at the outermost call,
+ * SAVEPOINT .. RELEASE within one that is already open.
+ *
+ * ## Why it nests
+ *
+ * It did not use to, and that was load-bearing in the wrong direction. Callers
+ * that needed to compose two mutators could not, so they ran them as separate
+ * transactions and documented the resulting hole — `MilestoneStore.create`
+ * ("createIssue owns its own transaction, which is why they are not one") and
+ * the HTTP create route ("NOT TRANSACTIONAL WITH THE CREATE, and deliberately
+ * not pretended to be") are the two worst, and both cite non-re-entrancy as the
+ * reason rather than as a preference. `WorkspaceStore.atomically` existed purely
+ * to work around it for the settings writers, with its own savepoint logic.
+ *
+ * Nesting here removes the reason and the duplicate implementation together.
+ *
+ * ## Why it asks SQLite rather than counting
+ *
+ * `db.isTransaction` is the connection's own answer, so a transaction opened by
+ * anything else on this connection — the migration runner's `BEGIN IMMEDIATE`,
+ * `path-migration`'s write barrier — is seen correctly. A depth counter kept
+ * beside the connection would be right only about the transactions it opened
+ * itself, and wrong in exactly the cases where being wrong means a `BEGIN`
+ * inside a `BEGIN`.
+ *
+ * ## Why a failing inner call still rethrows
+ *
+ * `ROLLBACK TO` undoes the inner work and leaves the outer transaction open, so
+ * a caller that swallowed the error would commit a mutation that half happened.
+ * The error is always rethrown; the outer frame decides.
+ */
 export function tx<T>(db: DatabaseSync, fn: () => T): T {
+  if (db.isTransaction) {
+    const savepoint = `staple_tx_${(savepointSeq += 1)}`;
+    db.exec(`SAVEPOINT ${savepoint}`);
+    try {
+      const result = fn();
+      db.exec(`RELEASE ${savepoint}`);
+      return result;
+    } catch (error) {
+      try {
+        db.exec(`ROLLBACK TO ${savepoint}`);
+        db.exec(`RELEASE ${savepoint}`);
+      } catch {
+        // the outer transaction is already aborting; it owns the rollback
+      }
+      throw error;
+    }
+  }
+
   db.exec("BEGIN IMMEDIATE");
   try {
     const result = fn();
