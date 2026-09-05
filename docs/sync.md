@@ -883,7 +883,7 @@ partial batch, no half-applied page. The server supports the current version and
 the one before it for at least one release cycle, so a fleet upgrades one machine
 at a time.
 
-**`schema`** is the workspace migration number, currently heading for `010`. A
+**`schema`** is the workspace migration number, `010` as of the sync tables. A
 device receiving operations stamped with a schema newer than it understands
 refuses with `schema_ahead` and says which version to upgrade to. It never applies
 part of a page and never guesses at a column it does not have. This mirrors the
