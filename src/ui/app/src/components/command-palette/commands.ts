@@ -12,7 +12,7 @@
  * exist at test time.
  */
 import { HANDOFF_RISKS, handoffRiskOf, type HandoffRisk } from "../../lib/filters";
-import { VIEWS, type Selection, type ViewName } from "../../lib/session";
+import { VIEWS, viewLabel, type Selection, type ViewName } from "../../lib/session";
 import { SEED_SETTINGS } from "../../lib/settings";
 import {
   type IssueRow,
@@ -336,11 +336,13 @@ export function buildCommands(context: PaletteContext): PaletteCommand[] {
 
   for (const view of VIEWS) {
     if (view === context.view) continue;
+    // The label is the rail's word for the view ("Tasks"); the internal value stays in
+    // the keywords so a reader who still types "tree" finds it.
     commands.push({
       id: `view:${view}`,
       group: "view",
-      label: `Go to ${view}`,
-      keywords: `view switch ${view}`,
+      label: `Go to ${viewLabel(view)}`,
+      keywords: `view switch ${view} ${viewLabel(view)}`,
       action: { type: "view", view },
     });
   }

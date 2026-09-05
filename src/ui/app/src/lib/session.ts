@@ -2,8 +2,8 @@
  * The page's own state — what is on screen, filtered how, with what selected.
  *
  * Kept as one context rather than scattered useState so every surface (the palette, a
- * tree row, a graph node, the header) can drive navigation without any one of them
- * owning it.
+ * tree row, a graph node, the navigation rail) can drive navigation without any one of
+ * them owning it.
  */
 import { createContext, useContext } from "react";
 import type { FilterContext } from "./filter-dimensions";
@@ -14,28 +14,36 @@ import type { GroupBy } from "./view-prefs";
 import type { Resource } from "./useStaple";
 
 /**
- * The views, in the order the header shows them. FIRST IS THE DEFAULT.
+ * The views, in the order the navigation rail lists them. FIRST IS THE DEFAULT.
  *
- * V2 (STA-87) cut this from four to two. `inbox` and `board` were removed on VP's
- * decision, and this constant is the mechanism: the header tabs, the palette's "Go to …"
- * commands and the switch in App.tsx are all derived from it, so shrinking the tuple
- * removed all three without any of them being edited to know about it. That is what the
- * tuple was for, and it is worth keeping true — a fifth view should be one line here plus
- * one line in App.tsx's map, and nothing else.
+ * This tuple is the one registry of views: the rail's "Workspace" group
+ * (`components/nav/nav-model.ts`), the palette's "Go to …" commands and the component map
+ * in App.tsx are all derived from it, so adding or removing a view is one line here plus
+ * one line in App.tsx's map and nothing else. `inbox` and `board` left this way, and the
+ * pieces worth keeping moved to `lib/refusal.ts` and `components/GuardRefusal`.
  *
- * What went with them, so nobody goes looking in git for it:
- *   - `views/board/refusal.ts`   -> `lib/refusal.ts`        (salvaged, unchanged)
- *   - `views/board/GuardRefusal` -> `components/GuardRefusal` (salvaged, now shared)
- *   - `views/board/guards.ts`    -> deleted. It only ever answered "how should this
- *     COLUMN look while a card is in the air", which is a question no surviving surface
- *     asks. Its useful half (`transitionWarnings`) is nine lines and is recoverable from
- *     history if a status control ever wants pre-write hints.
+ * The VALUE `tree` is internal and stays: `sortScopeKey(ws, view)` and the localStorage
+ * envelope key off it, so renaming it would silently discard every saved sort and filter
+ * preference. What the user sees is `VIEW_LABELS` — the tree view is called "Tasks"
+ * everywhere a human reads it.
  */
-export const VIEWS = ["tree", "graph", "milestones", "queue"] as const;
+export const VIEWS = ["tree", "queue", "graph", "milestones"] as const;
 export type ViewName = (typeof VIEWS)[number];
 
+/** The human name of each view — the rail row, the content header, the palette command. */
+export const VIEW_LABELS: Record<ViewName, string> = {
+  tree: "Tasks",
+  queue: "Queue",
+  graph: "Graph",
+  milestones: "Milestones",
+};
+
+export function viewLabel(view: ViewName): string {
+  return VIEW_LABELS[view];
+}
+
 /**
- * Where the app lands. Tree is the product now — the list is what you look at, and the
+ * Where the app lands. Tasks is the product — the list is what you look at, and the
  * graph is where you go to answer a question about shape. Declared rather than written
  * as a literal in App.tsx so "what is the default view" has one answer.
  */

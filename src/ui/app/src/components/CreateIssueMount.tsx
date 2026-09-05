@@ -13,31 +13,16 @@
  *   - `c`, the convention every issue tracker shares;
  *   - a visible control, because a keyboard-only affordance is undiscoverable.
  *
- * V2 (STA-87) MOVED THE VISIBLE CONTROL. It used to be a floating pill pinned to the
- * bottom-right corner of the viewport. A FAB is an Android pattern; no tool in the
- * language this app now speaks has one, and it had two concrete costs beyond taste — it
- * hovered over the last rows of the list, and it put the app's primary action as far from
- * the app's other actions as the screen allows. The button now lives in the header next
- * to search and theme, and reaches this state through `lib/shell-events`, so the open
- * flag stays here rather than being lifted into a component that does not care about it.
+ * THE VISIBLE CONTROL IS THE FIRST ROW OF THE NAVIGATION RAIL. It was once a floating
+ * pill in the bottom-right corner, then a button in the header; it is now the full-width
+ * "New task" at the top of the rail (`components/nav/NavRail.tsx`), which reaches this
+ * state through `lib/shell-events`, so the open flag stays here rather than being lifted
+ * into a component that does not care about it.
  */
 import { useEffect, useState } from "react";
+import { dialogIsOpen, isTyping } from "@/lib/keyboard";
 import { onOpenCreateIssue } from "@/lib/shell-events";
 import { CreateIssueDialog } from "./CreateIssueDialog";
-
-/**
- * True when the keystroke belongs to whatever the user is typing into.
- *
- * The palette binds cmd-K and can afford to ignore focus; a bare letter cannot. Without
- * this, `c` would be swallowed out of the assignee filter, the comment box, and the
- * dialog's own title field — which would make the shortcut actively hostile.
- */
-function isTyping(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) return false;
-  if (target.isContentEditable) return true;
-  const tag = target.tagName;
-  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
-}
 
 export function CreateIssueMount() {
   const [open, setOpen] = useState(false);
@@ -49,10 +34,10 @@ export function CreateIssueMount() {
       if (event.key !== "c" && event.key !== "C") return;
       // A modifier means the user meant cmd-C / ctrl-C / alt-C, none of which are ours.
       if (event.metaKey || event.ctrlKey || event.altKey) return;
-      if (isTyping(event.target)) return;
-      // Radix marks the rest of the page inert while any dialog is open; opening a
-      // second one over the palette would trap focus between the two.
-      if (document.querySelector("[data-slot='dialog-content'], [role='dialog']")) return;
+      // `isTyping`: a bare letter must not fire out of a text box. `dialogIsOpen`: Radix
+      // marks the rest of the page inert while any dialog is open, and opening a second
+      // one over the palette would trap focus between the two.
+      if (isTyping(event.target) || dialogIsOpen()) return;
       event.preventDefault();
       setOpen(true);
     };
