@@ -8,6 +8,8 @@ import {
   isRailToggleKey,
   loadRailCollapsed,
   navItemForView,
+  overlayFocusTarget,
+  railKeyAction,
   saveRailCollapsed,
 } from "./nav-model";
 
@@ -56,6 +58,48 @@ describe("the toggle shortcut", () => {
     expect(isRailToggleKey(key({ key: "[", altKey: true }))).toBe(false);
     expect(isRailToggleKey(key({ key: "]" }))).toBe(false);
     expect(isRailToggleKey(key({ key: "k", metaKey: true }))).toBe(false);
+  });
+});
+
+describe("what the shell does with a key", () => {
+  const key = (over: Partial<Parameters<typeof railKeyAction>[0]>) => ({
+    key: "",
+    metaKey: false,
+    ctrlKey: false,
+    altKey: false,
+    shiftKey: false,
+    ...over,
+  });
+  const quiet = { overlayOpen: false, surfaceOpen: false, typing: false };
+
+  it("lets an open dialog, menu or listbox own the keyboard — Escape and the toggle alike", () => {
+    const busy = { overlayOpen: true, surfaceOpen: true, typing: false };
+    expect(railKeyAction(key({ key: "Escape" }), busy)).toBeNull();
+    expect(railKeyAction(key({ key: "[" }), busy)).toBeNull();
+    expect(railKeyAction(key({ key: "\\", metaKey: true }), busy)).toBeNull();
+  });
+
+  it("closes the sheet on Escape only while it is open", () => {
+    expect(railKeyAction(key({ key: "Escape" }), { ...quiet, overlayOpen: true })).toBe("close-overlay");
+    expect(railKeyAction(key({ key: "Escape" }), quiet)).toBeNull();
+  });
+
+  it("toggles on the shortcut, except a bare [ typed into a field", () => {
+    expect(railKeyAction(key({ key: "[" }), quiet)).toBe("toggle");
+    expect(railKeyAction(key({ key: "\\", ctrlKey: true }), quiet)).toBe("toggle");
+    expect(railKeyAction(key({ key: "[" }), { ...quiet, typing: true })).toBeNull();
+    // cmd-\ can afford to fire from a field: it is not a character anyone types there.
+    expect(railKeyAction(key({ key: "\\", metaKey: true }), { ...quiet, typing: true })).toBe("toggle");
+    expect(railKeyAction(key({ key: "k", metaKey: true }), quiet)).toBeNull();
+  });
+});
+
+describe("where focus goes when the sheet opens or closes", () => {
+  it("lands in the rail on open, returns to the show button on close, and moves otherwise not at all", () => {
+    expect(overlayFocusTarget(false, true)).toBe("rail");
+    expect(overlayFocusTarget(true, false)).toBe("show-navigation");
+    expect(overlayFocusTarget(true, true)).toBeNull();
+    expect(overlayFocusTarget(false, false)).toBeNull();
   });
 });
 
