@@ -1226,6 +1226,17 @@
   }
 }
 
+/*
+ * Below 640px the date goes for good: the two-line row brought it back at 719px because
+ * line two had room, and at phone widths it no longer does. The `<time>` keeps its `title`,
+ * so the exact stamp is one hover away.
+ */
+@media (max-width: 639px) {
+  .staple-row-date {
+    display: none !important;
+  }
+}
+
 @media (max-width: 719px) {
   .staple-row {
     height: 56px;

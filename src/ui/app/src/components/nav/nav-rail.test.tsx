@@ -108,10 +108,10 @@ describe("the shell", () => {
         positions(markup, [
           "<h1",
           'aria-label="Group tasks"',
-          'aria-label="Sort tasks"',
-          'aria-label="Search tasks"',
+          'aria-label="Sort: ',
           'aria-label="Add a filter"',
           'aria-label="Show done and cancelled tasks"',
+          'aria-label="Search tasks"',
         ]),
       ),
     ).toBe(true);

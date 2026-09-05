@@ -22,16 +22,20 @@
  */
 import { Check, Rows3 } from "lucide-react";
 import { useState } from "react";
-import { Button } from "@/components/ui/button";
+import { HeaderButton } from "@/components/filters/HeaderButton";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useSession } from "@/lib/session";
+// `Button` left with the trigger: the recipe is HeaderButton's now, shared with the row.
 import { GROUP_BY_OPTIONS, type GroupBy } from "@/lib/view-prefs";
 import { cn } from "@/lib/utils";
 
-export function GroupByMenu() {
+export function GroupByMenu({ compact = false }: { compact?: boolean } = {}) {
   const session = useSession();
   const [open, setOpen] = useState(false);
   const grouped = session.groupBy !== "none";
+  // "Group" when off, "Group: Status" when on — the label carries the state, so nothing
+  // has to be inferred from a highlight.
+  const label = grouped ? `Group: ${GROUP_BY_OPTIONS.find((o) => o.id === session.groupBy)?.label}` : "Group";
 
   const choose = (next: GroupBy) => {
     session.setGroupBy(next);
@@ -43,18 +47,15 @@ export function GroupByMenu() {
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <Button
-          variant="ghost"
-          size="sm"
+        <HeaderButton
+          icon={<Rows3 aria-hidden />}
+          label={label}
           aria-label="Group tasks"
+          hint={compact ? label : undefined}
+          compact={compact}
+          active={grouped}
           data-group-by={session.groupBy}
-          className={cn("text-muted-foreground hover:text-foreground", grouped && "text-foreground")}
-        >
-          <Rows3 className="size-3.5" aria-hidden />
-          {/* "Group" when off, "Group: Status" when on — the label carries the state, so
-              nothing has to be inferred from a highlight. */}
-          {grouped ? `Group: ${GROUP_BY_OPTIONS.find((o) => o.id === session.groupBy)?.label}` : "Group"}
-        </Button>
+        />
       </PopoverTrigger>
 
       <PopoverContent align="end" className="w-72 p-1">

@@ -25,7 +25,14 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { SORT_MODES, type SortPref } from "@/lib/sort-modes";
-import { isDefaultSort, SortByMenu, SortByOptions, sortTriggerLabel, tieBreakSentence } from "./SortByMenu";
+import {
+  isDefaultSort,
+  SortByMenu,
+  SortByOptions,
+  sortTriggerLabel,
+  sortTriggerReading,
+  tieBreakSentence,
+} from "./SortByMenu";
 
 const noop = () => {};
 
@@ -45,22 +52,36 @@ const checkedRow = (group: "mode" | "direction", option: string) =>
   new RegExp(`aria-checked="true"[^>]*data-sort-group="${group}" data-sort-option="${option}"`);
 
 describe("the trigger states the sort WITHOUT being opened", () => {
-  it("names the mode and the reading of the direction, not an arrow", () => {
-    expect(sortTriggerLabel({ mode: "activity", direction: "asc" })).toBe(
+  it("shows the mode, and keeps the reading of the direction as its whole-sentence name", () => {
+    expect(sortTriggerLabel({ mode: "activity", direction: "asc" })).toBe("Sort: Activity");
+    expect(sortTriggerLabel({ mode: "queue", direction: "desc" })).toBe("Sort: Queue position");
+    expect(sortTriggerReading({ mode: "activity", direction: "asc" })).toBe(
       "Sort: Activity · Most active first",
     );
-    expect(sortTriggerLabel({ mode: "updated", direction: "desc" })).toBe(
+    expect(sortTriggerReading({ mode: "updated", direction: "desc" })).toBe(
       "Sort: Updated · Newest first",
     );
-    expect(sortTriggerLabel({ mode: "queue", direction: "desc" })).toBe(
+    expect(sortTriggerReading({ mode: "queue", direction: "desc" })).toBe(
       "Sort: Queue position · Back of the queue first",
     );
   });
 
-  it("renders that sentence into the closed control, so nothing has to be opened", () => {
+  it("renders the words, the arrow and the full reading into the closed control", () => {
     const html = menu({ mode: "title", direction: "asc" });
-    expect(html).toContain("Sort: Title · A to Z");
-    expect(html).toContain('aria-label="Sort tasks"');
+    expect(html).toContain("Sort: Title");
+    expect(html).toContain('aria-label="Sort: Title · A to Z"');
+    expect(html).toContain('data-sort-arrow="asc"');
+    expect(menu({ mode: "title", direction: "desc" })).toContain('data-sort-arrow="desc"');
+  });
+
+  it("drops the words and the arrow when compact, and keeps the reading", () => {
+    const html = renderToStaticMarkup(
+      <SortByMenu sort={{ mode: "title", direction: "asc" }} onChange={noop} compact />,
+    );
+    expect(html).not.toContain("Sort: Title<");
+    expect(html).not.toContain("data-sort-arrow");
+    expect(html).toContain('aria-label="Sort: Title · A to Z"');
+    expect(html).toContain('data-compact=""');
   });
 
   it("publishes both halves of the state as data attributes, for the browser tests", () => {
@@ -73,9 +94,11 @@ describe("the trigger states the sort WITHOUT being opened", () => {
     for (const mode of SORT_MODES) {
       for (const direction of ["asc", "desc"] as const) {
         const label = sortTriggerLabel({ mode: mode.id, direction });
+        const reading = sortTriggerReading({ mode: mode.id, direction });
         expect(label).toContain(mode.label);
-        expect(label).toContain(mode.directions[direction]);
-        expect(label.toLowerCase()).not.toContain("undefined");
+        expect(reading).toContain(mode.label);
+        expect(reading).toContain(mode.directions[direction]);
+        expect(reading.toLowerCase()).not.toContain("undefined");
       }
     }
   });
