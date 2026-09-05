@@ -8,6 +8,7 @@ import {
   isRailToggleKey,
   loadRailCollapsed,
   navItemForView,
+  projectCaption,
   saveRailCollapsed,
 } from "./nav-model";
 
@@ -30,6 +31,25 @@ describe("the rail's groups", () => {
     expect(navItemForView("tree")).toMatchObject({ id: "view:tree", label: "Tasks", view: "tree" });
     // Every rail item wears an icon; a row without one would be the odd one out.
     for (const group of NAV_GROUPS) for (const entry of group.items) expect(entry.icon).toBeTruthy();
+  });
+
+  it("hangs the projects off the Tasks row and nowhere else", () => {
+    expect(navItemForView("tree")).toMatchObject({
+      action: { id: "new-project", label: "New project" },
+      subItems: "projects",
+    });
+    for (const view of VIEWS) {
+      if (view === "tree") continue;
+      const entry = navItemForView(view)!;
+      expect(entry.action, view).toBeUndefined();
+      expect(entry.subItems, view).toBeUndefined();
+    }
+  });
+
+  it("captions a project with its workspace only when the rows span more than one", () => {
+    expect(projectCaption("staple", new Set(["staple"]))).toBeNull();
+    expect(projectCaption("staple", new Set(["staple", "pinecone"]))).toBe("staple");
+    expect(projectCaption("staple", new Set())).toBeNull();
   });
 });
 

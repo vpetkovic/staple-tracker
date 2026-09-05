@@ -25,9 +25,11 @@ import { KindGlyph } from "@/components/task-list";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
-import { action } from "@/lib/api";
+import { action, assignProject } from "@/lib/api";
 import { describeRefusal, type Refusal } from "@/lib/refusal";
+import { useSession } from "@/lib/session";
 import { configuredKindOrder, kindLabel } from "@/lib/settings";
+import { cn } from "@/lib/utils";
 import { ISSUE_PRIORITIES, type ActionPayload, type Issue, type IssueKind, type IssuePriority } from "@/lib/types";
 
 interface EditorProps {
@@ -232,6 +234,72 @@ export function InlineKind({ issue, workspace, refresh }: EditorProps) {
         </SelectContent>
       </Select>
       <RefusalSlot refusal={refusal} onDismiss={dismiss} />
+    </>
+  );
+}
+
+// ------------------------------------------------------------- project
+
+/** Radix Select forbids an empty item value; this stands for "no project". */
+const NO_PROJECT = "__none__";
+
+/**
+ * The project an issue is filed under (migration 009) — an editor, like kind, because
+ * the store can refuse it (an unknown project is `not_found`) and because the value has
+ * to be writable where it is read. The options are the page's own `session.projects`,
+ * narrowed to the issue's workspace: a project in another workspace is not a place this
+ * issue can go. The write is `/api/project/assign`, not `/api/action`, which is why this
+ * editor does not share `useUpdate` with its neighbours; the refetch-on-success rule is
+ * the same.
+ */
+export function InlineProject({ issue, workspace, refresh }: EditorProps) {
+  const session = useSession();
+  const [refusal, setRefusal] = useState<Refusal | null>(null);
+  const [busy, setBusy] = useState(false);
+  const rows = (session.projects.data ?? []).filter((row) => row.workspace === workspace);
+  const current = rows.find((row) => row.project.id === issue.projectId);
+
+  const assign = async (project: string | null) => {
+    if (busy) return;
+    setBusy(true);
+    setRefusal(null);
+    try {
+      await assignProject({ ws: workspace, ref: issue.identifier, project });
+      refresh();
+    } catch (caught) {
+      setRefusal(describeRefusal(caught));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <>
+      <Select
+        value={issue.projectId && current ? issue.projectId : NO_PROJECT}
+        disabled={busy}
+        onValueChange={(value) => void assign(value === NO_PROJECT ? null : value)}
+      >
+        <SelectTrigger
+          size="sm"
+          data-edit-project
+          aria-label="Project"
+          className="h-auto w-auto gap-1.5 rounded-sm border-0 bg-transparent px-1 py-0 text-[12px] shadow-none hover:bg-accent"
+        >
+          <span className={cn("truncate", !current && "text-text-tertiary")}>
+            {current ? current.project.name : "No project"}
+          </span>
+        </SelectTrigger>
+        <SelectContent position="popper" align="start">
+          <SelectItem value={NO_PROJECT}>No project</SelectItem>
+          {rows.map((row) => (
+            <SelectItem key={row.project.id} value={row.project.id}>
+              {row.project.name}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      <RefusalSlot refusal={refusal} onDismiss={() => setRefusal(null)} />
     </>
   );
 }

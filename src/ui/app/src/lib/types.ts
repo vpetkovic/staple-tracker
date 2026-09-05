@@ -1075,6 +1075,8 @@ export type ActionPayload =
        * rather than a second action type.
        */
       blocking?: string[];
+      /** The project to file it under — an id or a slug (migration 009). Absent is none. */
+      project?: string;
     }
   /**
    * Inline property editing (U5). A partial patch: a key that is absent is left

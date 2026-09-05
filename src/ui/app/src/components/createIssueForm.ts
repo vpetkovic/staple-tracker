@@ -48,6 +48,11 @@ export interface CreateFormState {
    * read-modify-write lives on the server so it cannot straddle a round trip.
    */
   blocking: string[];
+  /**
+   * The project to file it under — a `Project.id`, or "" for none. Single-select for the
+   * reason `parent` is: an issue is in one project or none.
+   */
+  project: string;
 }
 
 /** Medium is the store's own create-time default, so an untouched form agrees with it. */
@@ -63,6 +68,7 @@ export const EMPTY_CREATE_FORM: CreateFormState = {
   labels: [],
   blockedBy: [],
   blocking: [],
+  project: "",
 };
 
 /**
@@ -158,6 +164,11 @@ export function buildCreatePayload(state: CreateFormState): Extract<ActionPayloa
 
   const blocking = tidy(state.blocking);
   if (blocking.length > 0) payload.blocking = blocking;
+
+  // Omitted when untouched, for rule 1: an absent project is "none", and sending "" would
+  // ask the server to look up a project called nothing.
+  const project = state.project.trim();
+  if (project) payload.project = project;
 
   return payload;
 }

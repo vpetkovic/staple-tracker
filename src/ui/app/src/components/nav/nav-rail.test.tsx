@@ -15,10 +15,23 @@ import { buildFilterContext } from "@/lib/filter-dimensions";
 import { emptyFilters } from "@/lib/filters";
 import { SessionContext, type StapleSession } from "@/lib/session";
 import { DEFAULT_SORT } from "@/lib/sort-modes";
+import type { Project, ProjectRow } from "@/lib/types";
 import { NAV_GROUPS } from "./nav-model";
 import { NavRail } from "./NavRail";
 
 const noop = () => {};
+
+const project = (over: Partial<Project> = {}): Project => ({
+  id: "p-1",
+  slug: "docs",
+  name: "Docs",
+  kind: "unmanaged",
+  sourceKind: null,
+  source: null,
+  createdAt: "2026-09-05T00:00:00.000Z",
+  updatedAt: "2026-09-05T00:00:00.000Z",
+  ...over,
+});
 
 function session(over: Partial<StapleSession> = {}): StapleSession {
   return {
@@ -28,6 +41,8 @@ function session(over: Partial<StapleSession> = {}): StapleSession {
     setView: noop,
     milestoneFocus: null,
     focusMilestone: noop,
+    projects: { data: [], error: undefined, loading: false, reload: noop },
+    focusProject: noop,
     ws: "",
     setWs: noop,
     issues: { data: [], error: undefined, loading: false, reload: noop },
@@ -160,6 +175,82 @@ describe("the rail", () => {
 
   it("puts nothing in the tab order out of sequence", () => {
     expect(rail()).not.toContain("tabindex");
+  });
+});
+
+describe("projects under Tasks", () => {
+  const rows: ProjectRow[] = [
+    { workspace: "staple", project: project({ id: "p-docs", slug: "docs", name: "Docs" }) },
+    { workspace: "staple", project: project({ id: "p-site", slug: "site", name: "Site" }) },
+  ];
+
+  it("gives the Tasks row a New project action, reachable by keyboard, and no other row", () => {
+    const markup = rail();
+    const tasks = /<div class="group\/row relative">[\s\S]*?<\/div>/.exec(
+      markup.slice(markup.indexOf('data-nav-item="view:tree"') - 200),
+    )?.[0];
+    expect(tasks).toContain('aria-label="New project"');
+    expect(tasks).toContain('data-nav-action="new-project"');
+    expect(markup.match(/data-nav-action=/g)).toHaveLength(1);
+    // Hidden until hover, never out of the tab order.
+    expect(markup).not.toContain("tabindex");
+  });
+
+  it("lists each project as a sub-row with its own settings gear, in served order", () => {
+    const markup = rail({ projects: { data: rows, error: undefined, loading: false, reload: noop } });
+    expect(
+      ascending(
+        positions(markup, [
+          'data-nav-item="view:tree"',
+          "data-nav-projects",
+          'data-nav-project="p-docs"',
+          'aria-label="Project settings: Docs"',
+          'data-nav-project="p-site"',
+          'aria-label="Project settings: Site"',
+          'data-nav-item="view:queue"',
+        ]),
+      ),
+    ).toBe(true);
+    expect(markup).toContain('data-nav-project-settings="p-docs"');
+  });
+
+  it("draws nothing under Tasks while there are no projects", () => {
+    expect(rail()).not.toContain("data-nav-projects");
+  });
+
+  it("marks the project the list is narrowed to, and only on Tasks", () => {
+    const filtered = { ...emptyFilters(), dims: { project: ["p-site"] } };
+    const on = rail({ projects: { data: rows, error: undefined, loading: false, reload: noop }, filters: filtered });
+    expect(on).toMatch(/data-nav-project="p-site" aria-current="true"/);
+    expect(on).not.toMatch(/data-nav-project="p-docs" aria-current/);
+    // The view row keeps `page`; the project is a place within it.
+    expect(on.match(/aria-current="page"/g)).toHaveLength(1);
+    const elsewhere = rail({
+      projects: { data: rows, error: undefined, loading: false, reload: noop },
+      filters: filtered,
+      view: "graph",
+    });
+    expect(elsewhere).not.toMatch(/data-nav-project="p-site" aria-current/);
+  });
+
+  it("captions a project with its workspace only when the rows span several", () => {
+    const one = rail({ projects: { data: rows, error: undefined, loading: false, reload: noop } });
+    expect(one).not.toContain(">staple</span></button>");
+    const many: ProjectRow[] = [
+      ...rows,
+      { workspace: "pinecone", project: project({ id: "p-docs-2", slug: "docs", name: "Docs" }) },
+    ];
+    const hub = rail({
+      mode: "hub",
+      workspaces: [
+        { slug: "staple", prefix: "STA" },
+        { slug: "pinecone", prefix: "PIN" },
+      ],
+      projects: { data: many, error: undefined, loading: false, reload: noop },
+    });
+    expect(hub).toMatch(/data-nav-project="p-docs"[^>]*title="Docs · staple"/);
+    expect(hub).toMatch(/data-nav-project="p-docs-2"[^>]*title="Docs · pinecone"/);
+    expect(hub).toContain(">pinecone</span>");
   });
 });
 

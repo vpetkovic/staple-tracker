@@ -8,7 +8,7 @@
 import { createContext, useContext } from "react";
 import type { FilterContext } from "./filter-dimensions";
 import type { FilterState } from "./filters";
-import type { IssueRow, UiMode, WorkspaceRef } from "./types";
+import type { IssueRow, ProjectRow, UiMode, WorkspaceRef } from "./types";
 import type { SortPref } from "./sort-modes";
 import type { GroupBy } from "./view-prefs";
 import type { Resource } from "./useStaple";
@@ -75,6 +75,23 @@ export interface StapleSession {
    */
   milestoneFocus: string | null;
   focusMilestone: (ref: string) => void;
+
+  /**
+   * THE TRACKED PROJECTS, fetched once for the whole page — the rail lists them under
+   * Tasks, the Project filter offers them, the create dialog and the detail panel pick
+   * from them. Scoped like `issues`: one workspace, or every workspace in hub mode with
+   * none chosen, each row labelled with its workspace so two projects with one name are
+   * tellable apart. Refetched on the same 1.5s fingerprint as everything else.
+   */
+  projects: Resource<ProjectRow[]>;
+
+  /**
+   * The rail's project click, as one navigation primitive like `focusMilestone`: switch
+   * to Tasks AND narrow it to this project. It writes the project filter into the TASKS
+   * scope whichever view is on screen, because `setFilters` writes to the current scope
+   * and a click from the graph would otherwise filter the graph and then leave it.
+   */
+  focusProject: (projectId: string) => void;
 
   /** "" means every workspace, and is only reachable in hub mode. */
   ws: string;

@@ -418,3 +418,15 @@ describe("labelOptions", () => {
     expect(labelOptions([row("staple", { labels: [] })])).toEqual([]);
   });
 });
+
+describe("project on the create form", () => {
+  it("starts on no project, and omits the key rather than sending an empty string", () => {
+    expect(EMPTY_CREATE_FORM.project).toBe("");
+    expect(buildCreatePayload(form({ title: "t" }))).not.toHaveProperty("project");
+    expect(buildCreatePayload(form({ title: "t", project: "  " }))).not.toHaveProperty("project");
+  });
+
+  it("sends the chosen project's id", () => {
+    expect(buildCreatePayload(form({ title: "t", project: "p-docs" })).project).toBe("p-docs");
+  });
+});

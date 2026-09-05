@@ -316,6 +316,68 @@ describe("epic", () => {
 
 // ---------- composition ----------
 
+describe("project", () => {
+  const docs = { id: "p-docs", name: "Docs", workspace: "staple" };
+  const site = { id: "p-site", name: "Site", workspace: "staple" };
+  const rows = () => [
+    row({ identifier: "A", id: "a", projectId: "p-docs" }),
+    row({ identifier: "B", id: "b", projectId: "p-docs" }),
+    row({ identifier: "C", id: "c", projectId: "p-site" }),
+    // A row from before projects existed carries nothing, and is in no project.
+    row({ identifier: "D", id: "d" }),
+  ];
+
+  it("offers every project on the page by name, with the count of rows in it, even at zero", () => {
+    const empty = { id: "p-empty", name: "Archive", workspace: "staple" };
+    const context = buildFilterContext(rows(), [], [site, docs, empty]);
+    expect(filterDimensionOptions("project", rows(), context)).toEqual([
+      { value: "p-empty", label: "Archive", count: 0 },
+      { value: "p-docs", label: "Docs", count: 2 },
+      { value: "p-site", label: "Site", count: 1 },
+    ]);
+  });
+
+  it("matches on the project id, so a rename does not lose a saved filter", () => {
+    const context = buildFilterContext(rows(), [], [docs, site]);
+    expect(ids(applyFilterDimensions(rows(), state({ dims: { project: ["p-docs"] } }), context))).toEqual(["A", "B"]);
+    // OR within: both projects.
+    expect(ids(applyFilterDimensions(rows(), state({ dims: { project: ["p-docs", "p-site"] } }), context))).toEqual([
+      "A",
+      "B",
+      "C",
+    ]);
+    // A project nobody has heard of matches nothing rather than everything.
+    expect(applyFilterDimensions(rows(), state({ dims: { project: ["p-nope"] } }), context)).toEqual([]);
+  });
+
+  it("prints the name on the chip, and the workspace beside it only when the rows span several", () => {
+    const one = buildFilterContext(rows(), [], [docs, site]);
+    expect(activeFilterChips(state({ dims: { project: ["p-docs"] } }), one).map((c) => [c.dimensionLabel, c.label])).toEqual([
+      ["Project", "Docs"],
+    ]);
+    const twin = { id: "p-docs-2", name: "Docs", workspace: "pinecone" };
+    const many = buildFilterContext(rows(), [], [docs, site, twin]);
+    expect(activeFilterChips(state({ dims: { project: ["p-docs", "p-docs-2"] } }), many).map((c) => c.label)).toEqual([
+      "Docs · staple",
+      "Docs · pinecone",
+    ]);
+    expect(filterDimensionOptions("project", rows(), many).map((o) => o.label)).toEqual([
+      "Docs · pinecone",
+      "Docs · staple",
+      "Site · staple",
+    ]);
+    // An id the context cannot name is printed as itself rather than blank.
+    expect(activeFilterChips(state({ dims: { project: ["p-gone"] } }), one)[0]?.label).toBe("p-gone");
+  });
+
+  it("counts toward the badge and clears with everything else", () => {
+    const on = state({ dims: { project: ["p-docs"], status: ["todo"] } });
+    expect(countActiveFilters(on)).toBe(2);
+    expect(isFilteringNow(on)).toBe(true);
+    expect(clearFilters().dims.project).toBeUndefined();
+  });
+});
+
 describe("OR within a dimension, AND across dimensions", () => {
   const rows = () => [
     row({ identifier: "A", id: "a", kind: "epic", priority: "high" }),
@@ -372,6 +434,7 @@ describe("the registry, the count and the chips", () => {
       "pickup",
       "milestone",
       "epic",
+      "project",
     ]);
     // Every one of them has a heading; a menu of bare ids makes the user guess.
     expect(ALL_FILTER_DIMENSIONS.every((d) => d.label.length > 0)).toBe(true);

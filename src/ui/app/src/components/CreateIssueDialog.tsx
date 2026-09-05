@@ -45,11 +45,18 @@ import { Label } from "@/components/ui/label";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { action, getIssues } from "@/lib/api";
+import { action, getIssues, getProjects } from "@/lib/api";
 import { describeRefusal, type Refusal } from "@/lib/refusal";
 import { useSession } from "@/lib/session";
 import { configuredKindOrder, kindLabel } from "@/lib/settings";
-import { ISSUE_PRIORITIES, type Issue, type IssueKind, type IssuePriority, type IssueRow } from "@/lib/types";
+import {
+  ISSUE_PRIORITIES,
+  type Issue,
+  type IssueKind,
+  type IssuePriority,
+  type IssueRow,
+  type ProjectRow,
+} from "@/lib/types";
 import {
   EMPTY_CREATE_FORM,
   buildCreatePayload,
@@ -74,6 +81,9 @@ const PARENT_NOTE = "A parent lives in the same workspace.";
  * cross-workspace is the normal case in a hub, it just lands in a different table.
  */
 const CROSS_WORKSPACE_NOTE = "Picks from another workspace become hub links.";
+
+/** Radix Select forbids an empty item value; this stands for "no project". */
+const NO_PROJECT = "__none__";
 
 export function CreateIssueDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const session = useSession();
@@ -106,6 +116,12 @@ export function CreateIssueDialog({ open, onOpenChange }: { open: boolean; onOpe
    * is creating a task with no relations at all.
    */
   const [rows, setRows] = useState<IssueRow[]>([]);
+  /**
+   * The projects, on the same terms (migration 009): every workspace's, fetched per open,
+   * narrowed to the target workspace below — a project in another workspace is not a
+   * place this task can go, and the workspace select can change after the fetch.
+   */
+  const [projectRows, setProjectRows] = useState<ProjectRow[]>([]);
   useEffect(() => {
     if (!open) return;
     let live = true;
@@ -118,6 +134,11 @@ export function CreateIssueDialog({ open, onOpenChange }: { open: boolean; onOpe
       // Deliberately silent. A failed option fetch degrades the dropdowns to empty; it
       // is not a refusal of anything the user asked for, and putting it in the refusal
       // panel would put a fetch error where store guards are supposed to speak.
+      .catch(() => {});
+    getProjects({})
+      .then((next) => {
+        if (live) setProjectRows(next);
+      })
       .catch(() => {});
     return () => {
       live = false;
@@ -174,6 +195,10 @@ export function CreateIssueDialog({ open, onOpenChange }: { open: boolean; onOpe
   const parents = parentOptions(rows, ws);
   const relations = relationOptions(rows, ws);
   const labels = labelOptions(rows);
+  const projects = projectRows.filter((row) => row.workspace === ws);
+  // A project chosen for one workspace is not offered in another; the select shows
+  // "No project" rather than holding a value it cannot list.
+  const projectValue = projects.some((row) => row.project.id === form.project) ? form.project : NO_PROJECT;
   // Neither relation may offer what the other already holds: the same ref on both
   // sides is a two-node cycle, and the store can only refuse it once the task exists.
   // See withoutValues() — the deeper cycles are still the store's to catch.
@@ -304,6 +329,31 @@ export function CreateIssueDialog({ open, onOpenChange }: { open: boolean; onOpe
                 mono
                 note={PARENT_NOTE}
               />
+            </div>
+
+            <div className="grid gap-1.5">
+              <Label htmlFor="create-project">Project</Label>
+              {/*
+                Where the task is filed (migration 009). A short pick from a closed list
+                like Kind, and optional like Parent: "No project" is the default and a real
+                answer. The value is the project's ID, which is what `/api/action` resolves.
+              */}
+              <Select
+                value={projectValue}
+                onValueChange={(value) => set("project", value === NO_PROJECT ? "" : value)}
+              >
+                <SelectTrigger id="create-project" data-create-project className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent position="popper" align="start">
+                  <SelectItem value={NO_PROJECT}>No project</SelectItem>
+                  {projects.map((row) => (
+                    <SelectItem key={row.project.id} value={row.project.id}>
+                      {row.project.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
           </div>
 

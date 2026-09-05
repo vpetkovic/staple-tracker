@@ -28,6 +28,16 @@ export interface NavItem {
   /** The view the row switches to. */
   view: ViewName;
   icon: LucideIcon;
+  /**
+   * An inline action on the row's right — visible on hover and focus, always in the tab
+   * order. Only `new-project` exists today; the rail maps the id to a verb.
+   */
+  action?: { id: "new-project"; label: string };
+  /**
+   * What the row lists beneath itself. Only `projects` exists today: the tracked
+   * projects, each a sub-row with its own settings gear.
+   */
+  subItems?: "projects";
 }
 
 export interface NavGroup {
@@ -45,7 +55,13 @@ const ICONS: Record<ViewName, LucideIcon> = {
 };
 
 function item(view: ViewName): NavItem {
-  return { id: `view:${view}`, label: VIEW_LABELS[view], view, icon: ICONS[view] };
+  const base: NavItem = { id: `view:${view}`, label: VIEW_LABELS[view], view, icon: ICONS[view] };
+  // Projects hang off Tasks: the `+` makes one, and each one is a sub-row that narrows
+  // the list to its issues. They are a property of the Tasks row, not of the group.
+  if (view === "tree") {
+    return { ...base, action: { id: "new-project", label: "New project" }, subItems: "projects" };
+  }
+  return base;
 }
 
 /**
@@ -63,6 +79,16 @@ export const NAV_GROUPS: readonly NavGroup[] = [
     items: VIEWS.map(item),
   },
 ];
+
+/**
+ * How a project sub-row is captioned. The workspace joins the name only when the rows on
+ * hand span more than one workspace — hub mode with every workspace showing — because
+ * that is the one case two projects can share a name and the caption is what tells them
+ * apart. Everywhere else the caption would say what the switcher already says.
+ */
+export function projectCaption(workspace: string, workspaces: ReadonlySet<string>): string | null {
+  return workspaces.size > 1 ? workspace : null;
+}
 
 /** The rail item for a view, or undefined if no group lists it. */
 export function navItemForView(view: ViewName): NavItem | undefined {

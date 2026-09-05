@@ -55,7 +55,7 @@ import { ErrorState, LoadingState } from "@/views/ViewChrome";
 import type { DetailMode } from "./drawer";
 import type { NavState, NavTarget } from "./navigation";
 import { IssueActions } from "./IssueActions";
-import { InlineKind, InlineLabels, InlinePriority, InlineTitle } from "./InlineProperties";
+import { InlineKind, InlineLabels, InlinePriority, InlineProject, InlineTitle } from "./InlineProperties";
 import { FactRow, PropertyGrid, type PropertyLayout } from "./PropertyGrid";
 import { detailFacts } from "./properties";
 import { onOpenDetailTab, visibleTabs } from "./tabs/registry";
@@ -475,6 +475,10 @@ function PropertiesBlock({
       </FactRow>
       <FactRow label="Priority" layout={layout}>
         <InlinePriority issue={detail.issue} workspace={detail.workspace} refresh={refresh} />
+      </FactRow>
+      {/* Project (migration 009): where the ticket is filed, editable where it is read. */}
+      <FactRow label="Project" layout={layout}>
+        <InlineProject issue={detail.issue} workspace={detail.workspace} refresh={refresh} />
       </FactRow>
     </PropertyGrid>
   );
