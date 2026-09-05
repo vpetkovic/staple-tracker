@@ -234,6 +234,15 @@ const DISCONNECTED_SCENARIOS: Array<[name: string, args: string[]]> = [
   ["cloud status", ["cloud", "status"]],
   ["cloud status --json", ["cloud", "status", "--json"]],
   ["cloud --help", ["cloud", "--help"]],
+  /**
+   * `cloud sync` IS allowed to call out — on a connected repository. On a
+   * disconnected one it must refuse from local files alone, which is the
+   * interesting case: a sync command that resolved the endpoint before checking
+   * whether there was a connection would break the invariant on the machine
+   * least likely to be watching.
+   */
+  ["cloud sync", ["cloud", "sync"]],
+  ["cloud sync --json", ["cloud", "sync", "--json"]],
 ];
 
 describe("disconnected: every ordinary command makes zero outbound calls", () => {
