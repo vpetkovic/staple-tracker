@@ -243,7 +243,20 @@ describe("exactly one operation per logical mutation", () => {
     expect(JSON.parse(added[0]!.payload)).toEqual({ order: [b.id, a.id] });
   });
 
-  it("journals a blocker set as one relation replace, not one operation per edge", () => {
+  /**
+   * The verb here is `update`, and it changed from `replace` deliberately.
+   *
+   * `replace` is not a generic "the whole value changed" verb. It is the
+   * ordered-collection mechanism — `queue` and `milestone`, whose `UNIQUE (rank)`
+   * constraints are made unreachable by never transporting a rank — and
+   * `worker/src/envelope.ts` refuses it for any other entity. A blocker set is a
+   * set-valued FIELD of one issue, so it is an update carrying that field.
+   *
+   * The property being pinned is unchanged and is the one that matters: ONE
+   * operation carrying the WHOLE set, not one per edge, because a receiver
+   * applying N creates would never learn about the edges that were removed.
+   */
+  it("journals a blocker set as one whole-set operation, not one per edge", () => {
     const target = store.createIssue({ title: "Blocked" });
     const one = store.createIssue({ title: "Blocker one" });
     const two = store.createIssue({ title: "Blocker two" });
@@ -254,8 +267,27 @@ describe("exactly one operation per logical mutation", () => {
     const added = outbox().slice(before);
     const relations = added.filter((row) => row.entity === "relation");
     expect(relations).toHaveLength(1);
-    expect(relations[0]!.verb).toBe("replace");
+    expect(relations[0]!.verb).toBe("update");
     expect(JSON.parse(relations[0]!.payload)).toEqual({ blockedBy: [one.id, two.id] });
+  });
+
+  /**
+   * `replace` is reserved, and this is the assertion that keeps it reserved.
+   *
+   * The two ordered collections may use it and nothing else may, because the
+   * deployed service rejects a `replace` on any other entity and rejects the
+   * whole batch with it. A future emitter reaching for `replace` because it feels
+   * like the right word fails here rather than in production.
+   */
+  it("uses the replace verb for the ordered collections and for nothing else", () => {
+    const target = store.createIssue({ title: "Ordered" });
+    store.queue().enqueue(target.identifier, {}, "agent-a");
+    store.setBlockedBy(target.identifier, [], "agent-a");
+    store.reorderStatuses(store.getStatuses().map((status) => status.id).reverse(), "agent-a");
+    store.reorderKinds(store.getKinds().map((kind) => kind.id).reverse(), "agent-a");
+
+    const replaces = outbox().filter((row) => row.verb === "replace");
+    expect([...new Set(replaces.map((row) => row.entity))].sort()).toEqual(["queue"]);
   });
 });
 

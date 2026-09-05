@@ -262,6 +262,76 @@ describe("devices", () => {
   });
 });
 
+/**
+ * `staple cloud sync` at the command layer.
+ *
+ * What the engine does is pinned in `test/cloud-sync.test.ts` against an
+ * in-process service. What is pinned HERE is the part that only exists in the
+ * command: that it refuses from local files when there is nothing to sync with,
+ * that an unreachable endpoint is a bounded, typed failure rather than a hang or
+ * an unhandled rejection, and that the local database survives both.
+ */
+describe("sync", () => {
+  it("refuses on a repository that is not connected, and says which command connects it", () => {
+    const result = staple("cloud", "sync");
+    expect(result.status).toBe(3);
+    expect(result.stderr).toContain("not connected");
+    expect(result.stderr).toContain("staple cloud connect");
+  });
+
+  it("--json returns the error envelope every other surface returns", () => {
+    const result = staple("cloud", "sync", "--json");
+    expect(result.status).toBe(3);
+    const envelope = JSON.parse(result.stderr) as { code: string; message: string };
+    expect(envelope.code).toBe("not_found");
+  });
+
+  /**
+   * The endpoint in `forgeConnection` does not resolve, so this is the real
+   * offline path through a real process — which is the case that would otherwise
+   * surface as an `UnhandledPromiseRejection` and exit 1, losing the code, the
+   * message and the retry bit.
+   */
+  it("an unreachable endpoint is a bounded failure, not a hang", () => {
+    forgeConnection();
+    const result = staple("cloud", "sync", "--json");
+    expect(result.status).not.toBe(0);
+    const envelope = JSON.parse(result.stderr) as {
+      code: string;
+      retryable: boolean;
+      detail?: { cloudCode?: string; retryable?: boolean };
+    };
+    /**
+     * The true code and the true retry bit are in `detail`, not at the top
+     * level. `StapleErrorCode` is a closed union with no `offline` member and
+     * exactly one retryable code, so the connect lane preserved both in `detail`
+     * rather than widening a shared union mid-wave. This asserts that decision
+     * rather than working around it: a `--json` consumer gets the truth, and the
+     * shell gets a sensible exit status.
+     */
+    expect(envelope.detail?.cloudCode).toBe("offline");
+    expect(envelope.detail?.retryable).toBe(true);
+    expect(envelope.retryable).toBe(false);
+  });
+
+  it("leaves the local database readable and unchanged after a failed sync", () => {
+    forgeConnection();
+    staple("cloud", "sync");
+    const listing = staple("ls", "--json");
+    expect(listing.status).toBe(0);
+    expect(listing.stdout).toContain("local work");
+  });
+
+  it("rejects a --pull-limit that is not a page size", () => {
+    forgeConnection();
+    expect(staple("cloud", "sync", "--pull-limit", "0").stderr).toMatch(/positive integer/);
+    // `=` form, because a bare `-3` is parsed as a short option by `parseArgs`
+    // before this command sees it at all.
+    expect(staple("cloud", "sync", "--pull-limit=-3").stderr).toMatch(/positive integer/);
+    expect(staple("cloud", "sync", "--pull-limit", "notanumber").stderr).toMatch(/positive integer/);
+  });
+});
+
 describe("help and dispatch", () => {
   it("cloud --help names the three consents and keeps them apart", () => {
     const help = staple("cloud", "--help").stdout;
@@ -275,6 +345,7 @@ describe("help and dispatch", () => {
     const help = staple("help").stdout;
     expect(help).toContain("cloud [status] [--refresh]");
     expect(help).toContain("cloud connect");
+    expect(help).toContain("cloud sync");
     expect(help).toContain("cloud purge --confirm");
   });
 

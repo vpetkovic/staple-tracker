@@ -33,16 +33,18 @@
  * ## Disarmed by default, and that is the whole privacy posture
  *
  * Journalling requires both a repository identity in `sync_state` and a device
- * id. The device id is machine-local by contract and lives in machine config,
- * which this lane does not own — so {@link resolveDeviceId} reads the
- * environment and otherwise returns null, and an unconnected workspace journals
- * nothing at all: no outbox rows, no version rows, no observable difference from
- * the build before this one. The seam still runs, so the scope discipline and
- * the event dedup keys are exercised on every machine; only the recording is
- * withheld.
+ * id. The device id is machine-local by contract and lives in the staple home,
+ * written only by `staple cloud connect` — so {@link resolveDeviceId} returns
+ * null on a machine that has never connected, and an unconnected workspace
+ * journals nothing at all: no outbox rows, no version rows, no observable
+ * difference from the build before this one. The seam still runs, so the scope
+ * discipline and the event dedup keys are exercised on every machine; only the
+ * recording is withheld.
  */
 import { createHash, randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
+import { stapleHome } from "../config/home.js";
+import { readDeviceId } from "./cloud/device.js";
 import { tx } from "./db.js";
 import { nowIso } from "./types.js";
 
@@ -127,14 +129,48 @@ export function deriveOpId(
 /**
  * This device's identity, or null when there is none.
  *
- * A placeholder with a real contract: the device id is machine-local, belongs in
- * machine config, and the lane that owns machine config has not landed. Reading
- * the environment keeps the seam testable and keeps every production workspace
- * disarmed until a device is genuinely bound. Replace the body, not the callers.
+ * ## What arms the seam, now that machine config exists
+ *
+ * The device id lives in the staple home, beside the connection records, and is
+ * written by exactly one thing: `staple cloud connect`, through
+ * {@link ensureDeviceId}. {@link readDeviceId} **never mints** — it returns null
+ * when the file is absent — which is what keeps the disarmed property intact:
+ * a machine that has never connected anything has no file, so every workspace on
+ * it journals nothing, and the observable behaviour is byte-identical to the
+ * build before the seam landed.
+ *
+ * Two independent conditions have to hold before a single outbox row is written,
+ * and neither implies the other:
+ *
+ *   1. this machine has a device id — only `connect` creates one
+ *   2. `sync_state.repository_id` is set — {@link Journal.armed} checks it
+ *
+ * So a connected laptop opening an unrelated global workspace still journals
+ * nothing, and a repo-local workspace on a machine that has never connected does
+ * too. That is the privacy posture stated as two `null` checks rather than as a
+ * convention.
+ *
+ * ## Why the environment still wins
+ *
+ * `STAPLE_DEVICE_ID` is read first. Tests need to arm the seam without writing to
+ * a real home, and an operator running under a container-managed identity needs a
+ * way to say so. It is an override, not a fallback: a value in the environment is
+ * an explicit statement about which device this is.
+ *
+ * Reading the home is wrapped because {@link stapleHome} refuses a home it cannot
+ * resolve. A workspace whose home is misconfigured must still be fully usable —
+ * that is a cloud problem, and this function is called on every ordinary command
+ * path — so an unresolvable home reads as "no device", which is the disarmed
+ * state and the safe one.
  */
 export function resolveDeviceId(): string | null {
-  const value = process.env.STAPLE_DEVICE_ID?.trim();
-  return value ? value : null;
+  const override = process.env.STAPLE_DEVICE_ID?.trim();
+  if (override) return override;
+  try {
+    return readDeviceId(stapleHome());
+  } catch {
+    return null;
+  }
 }
 
 interface SyncStateRow {

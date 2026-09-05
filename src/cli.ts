@@ -796,6 +796,9 @@ Cloud (optional, off until you turn it on — see staple cloud --help)
               show the service, the repository id and where the credential will be
               stored, then connect once you agree. Nothing is sent before you do,
               and a successful connection leaves automatic sync OFF
+  cloud sync                            push what this device journaled, then apply what the
+              others did. The only thing that moves data in manual mode; a first run on a
+              fresh clone hydrates the database, and an interrupted run resumes
   cloud disconnect [--yes]              remove this device's credential and stop all later
               cloud traffic; local data and pending operations are preserved, the
               remote state is untouched and other devices are unaffected
