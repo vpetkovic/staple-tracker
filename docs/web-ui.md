@@ -8,9 +8,36 @@ One command, no daemon: the server runs in the foreground and Ctrl-C closes it
 along with every database handle. `--hub` serves every registered workspace at
 once; the browser behaviour follows `config browser=auto|always|never`.
 
-Views: subtask tree, dependency graph, milestones and the pickup queue, plus a detail panel with documents,
-comments, and the agent-payload pane, and the Work Workspace Settings dialog for
-the status and kind vocabularies and the settings registry.
+Views: Tasks (the subtask tree), the pickup queue, the dependency graph and
+milestones, plus a detail panel with documents, comments, and the agent-payload
+pane, and the Work Workspace Settings dialog for the status and kind
+vocabularies and the settings registry.
+
+## Layout
+
+Navigation on the left, content on the right — Linear's shape.
+
+**The rail** (232px) reads top to bottom: the **workspace switcher** (the
+workspace's name and prefix; in `--hub` mode a menu of *All workspaces* and
+every registered workspace), **New task** as the first row — a filled primary
+button, the same `c` shortcut — then **Search** (the command palette, `⌘K`),
+then the views in named groups. The first group is **Workspace**: *Tasks*,
+*Queue*, *Graph*, *Milestones*. The groups are data
+(`components/nav/nav-model.ts`, an array of groups of items), so moving a view
+between groups is an edit to that array and not to the rail. The active view
+carries `aria-current="page"`; a group header is a real disclosure button. At
+the foot of the rail sit **Settings** (the Work Workspace Settings dialog) and
+the theme toggle.
+
+The rail collapses with `[` or `⌘\` and remembers that it did; a *Show
+navigation* button then leads the content header. Below 768px the rail is a
+sheet opened from that same button and closed by a row, the scrim or Escape, so
+the list keeps its width on a narrow window.
+
+**The content header** at the top of the pane names the view on the left and,
+on the right, holds the group, sort, search, filter and done controls; the
+active-filter chips sit directly beneath it and take no space when no filter is
+on. The Tasks view keeps every filter, sort and group control it had.
 
 ## Grouping
 
@@ -258,9 +285,10 @@ explanation, not a blank page.
 
 ## Work Workspace Settings
 
-The settings surface is titled exactly that. It opens from the gear in the
-header, from the command palette, or by URL: `?settings` opens it on its first
-category and `?settings=kinds` focuses one. Opening from the gear pushes one
+The settings surface is titled exactly that. It opens from the Settings row at
+the foot of the navigation rail, from the command palette, or by URL: `?settings`
+opens it on its first category and `?settings=kinds` focuses one. Opening from
+the rail pushes one
 history entry, so Back closes it and lands on the page you were on; moving
 between categories replaces that entry rather than adding to it; Forward
 reopens it. A deep-link arrival pushed nothing, so closing strips the
