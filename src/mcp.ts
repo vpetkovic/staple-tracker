@@ -1539,6 +1539,124 @@ server.registerTool(
     }),
 );
 
+/**
+ * STA-249 — the three verbs that let an agent clean up after itself.
+ *
+ * `init` registered a workspace and nothing ever removed it, so every scratch
+ * directory an agent initialised stayed in the machine registry forever. These
+ * are on MCP and not just the CLI because the agents doing schema and probe work
+ * are the ones creating the rows, and a capability they cannot reach is one they
+ * will not use.
+ *
+ * All three touch the hub database only. Unregistering a workspace never opens,
+ * moves or deletes the workspace database — see `deleteHubRegistration`, whose
+ * signature is what makes that structural.
+ */
+server.registerTool(
+  "hub_unregister",
+  {
+    description:
+      "Remove ONE workspace from the machine registry, addressed by slug or identifier prefix. Deletes the hub row and releases its prefix for reuse; the workspace database and every file beside it are left untouched, so calling init in that directory registers it again. Refuses while cross-workspace links name the workspace — pass remove_cross_links to delete those edges too, or drop them one at a time with cross_unlink. Use for scratch and temporary workspaces; hub_prune is the bulk form for entries whose path is already gone.",
+    // No `ws`: the registry is machine-global and the target is named here.
+    inputSchema: {
+      workspace: z.string().describe("Workspace slug or identifier prefix, as shown by hub_overview"),
+      remove_cross_links: z
+        .boolean()
+        .optional()
+        .describe("Also delete every cross-workspace link naming this workspace (default false: refuse instead)"),
+    },
+    annotations: {
+      title: "Unregister workspace",
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  ({ workspace, remove_cross_links }) =>
+    run(() => {
+      const hub = Hub.open();
+      try {
+        return hub.unregister(workspace, { withLinks: remove_cross_links === true });
+      } finally {
+        hub.close();
+      }
+    }),
+);
+
+server.registerTool(
+  "hub_prune",
+  {
+    description:
+      "Sweep every registry entry whose recorded path no longer exists on this machine. PREVIEWS BY DEFAULT: without apply it reports what it would remove and writes nothing, so call it once to look and again with apply to act. Rows whose file is present are never candidates. A dead row still named by cross-workspace links is reported under skipped rather than removed, unless remove_cross_links is set. Workspace databases are never touched.",
+    inputSchema: {
+      apply: z
+        .boolean()
+        .optional()
+        .describe("Perform the removal. Omit or false to preview; nothing is written without it"),
+      remove_cross_links: z
+        .boolean()
+        .optional()
+        .describe("Also remove dead rows that cross-workspace links name, deleting those edges"),
+    },
+    // Not readOnlyHint even though the default call writes nothing: the same
+    // tool with apply:true deletes rows, and an annotation that depends on an
+    // argument is worse than no annotation.
+    annotations: {
+      title: "Prune hub registry",
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  ({ apply, remove_cross_links }) =>
+    run(() => {
+      const hub = Hub.open();
+      try {
+        return hub.prune({ apply: apply === true, withLinks: remove_cross_links === true });
+      } finally {
+        hub.close();
+      }
+    }),
+);
+
+server.registerTool(
+  "cross_unlink",
+  {
+    description:
+      "Remove ONE cross-workspace dependency previously created by cross_link. The inverse of that tool, and the non-destructive way out of a hub_unregister that is refusing because links name the workspace. A link that does not exist is not_found, so a mistyped identifier is reported rather than silently succeeding.",
+    inputSchema: {
+      blocker_identifier: z.string(),
+      blocked_identifier: z.string(),
+    },
+    annotations: {
+      title: "Remove cross-workspace link",
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  ({ blocker_identifier, blocked_identifier }) =>
+    run(() => {
+      const hub = Hub.open();
+      try {
+        const removed = hub.removeCrossLink(blocker_identifier, blocked_identifier);
+        if (!removed) {
+          throw new StapleError(
+            "not_found",
+            `No cross-workspace link where ${blocker_identifier.toUpperCase()} blocks ${blocked_identifier.toUpperCase()}. ` +
+              "Call hub_overview to see the links that exist.",
+          );
+        }
+        return removed;
+      } finally {
+        hub.close();
+      }
+    }),
+);
+
 server.registerTool(
   "init",
   {
