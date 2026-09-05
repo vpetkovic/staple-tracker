@@ -62,31 +62,48 @@ export function reasonLabel(row: EffectiveQueueRow): string | null {
 // ---------- the two numbers ----------
 
 /**
- * What a PLAN row says about its EFFECTIVE position, beside the plan number the row is
- * already showing in its editable field. Null means "the two numbers agree, say nothing":
- * a plan whose every row already sits at its own number would otherwise be a column of
- * "#3 · pickup #3", which teaches a reader that the distinction does not matter on the one
- * screen that exists to teach them that it does.
+ * THE ONE NUMBER A ROW PRINTS: its place in the order an agent is handed.
  *
- * `position === null` is a container. It is never a checkout target and has no effective
- * position of its own (docs/queue.md, "never emits a container as a row") — what it has is
- * the descendants it expanded to, so that is what the cue counts. A container with none is
- * a parent with nothing open underneath, and saying so is better than a blank.
+ * Null for a container, which has no such place. Null also for a row in the unqueued band —
+ * it HAS a position, but printing it would put the plan's scale on rows that are not in the
+ * plan, and the section those rows live in already says what they are. This is the whole of
+ * the numbering after the redesign: one scale, on the rows it describes.
+ *
+ * It replaces `effectivePositionLabel`, which printed up to three numbers per row
+ * (`#12 · from plan #4`) across two scales. "From plan" is gone entirely: the row is drawn
+ * UNDERNEATH the plan row it came from, so position answers provenance and a label that
+ * repeated it was answering a question the shape answers better.
  */
-export function pickupLabel(planPosition: number, position: number | null, expansion: number): string | null {
-  if (position === null) return expansion > 0 ? `expands to ${expansion}` : "no pickup row";
-  return position === planPosition ? null : `pickup #${position}`;
+export function rowOrdinal(row: EffectiveQueueRow | null): number | null {
+  if (row === null || row.unqueued) return null;
+  // A RESOLVED row keeps its place in the plan and loses its number. The ordinal is a
+  // pickup queue position — an answer to "when do I get handed this" — and finished work is
+  // never handed to anybody. It still renders, dimmed and in order, so the plan reads whole;
+  // it just stops advertising a turn it will not take. Without this the list numbers a done
+  // row `9` between a `5` and a `10`, which is a queue position that can never come up.
+  if (row.eligibility === "resolved") return null;
+  return row.position;
 }
 
 /**
- * An EFFECTIVE row's position cue, from the other side: the pickup number first, and where
- * it came from second — the plan row that expanded to it, or the fact that it is in the
- * unqueued band and is therefore work nobody has planned yet.
+ * The blockers named in an effective row's `detail`, local and cross-workspace alike.
+ *
+ * The STORE wrote them and this never re-derives them — `reasonLabel` above makes the same
+ * promise about the sentence. What this adds is that the rail can render them as rows you
+ * can OPEN, which a sentence cannot; the sentence still says it in words for anyone reading
+ * the row rather than the rail.
+ *
+ * Shape-checked rather than cast: `detail` is `Record<string, unknown>` on the wire, and a
+ * payload that ever stops carrying these should render nothing rather than throw.
  */
-export function effectivePositionLabel(row: EffectiveQueueRow): string {
-  if (row.unqueued) return `#${row.position} · unqueued`;
-  if (row.planPosition === null || row.planPosition === row.position) return `#${row.position}`;
-  return `#${row.position} · from plan #${row.planPosition}`;
+export function blockersOf(row: EffectiveQueueRow | null): string[] {
+  const detail = row?.detail;
+  if (!detail) return [];
+  const named = (key: string): string[] => {
+    const value = detail[key];
+    return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+  };
+  return [...named("blockers"), ...named("crossBlockers")];
 }
 
 // ---------- the plan, joined to its expansion ----------
@@ -195,9 +212,14 @@ export function previewOf<T>(rows: readonly T[], limit: number): { shown: T[]; h
 // ---------- the effective preview ----------
 
 export interface EffectivePreview {
-  /** Every row that came out of the plan. Never capped: the plan is shown whole. */
-  planned: EffectiveQueueRow[];
-  /** The unqueued band, capped — it is every other open leaf in the workspace. */
+  /**
+   * The unqueued band, capped — it is every other open leaf in the workspace.
+   *
+   * There is no `planned` counterpart any more. It existed to feed the old preview pane's
+   * second copy of the list; the plan is now drawn once, from `entries` joined to their
+   * expansions, so a second flat projection of the same rows was a filter run per render for
+   * nobody.
+   */
   unqueued: EffectiveQueueRow[];
   unqueuedHidden: number;
   /** The row an agent asking now would be given, or null when nothing is pickable. */
@@ -205,12 +227,11 @@ export interface EffectivePreview {
 }
 
 export function effectivePreview(view: QueueView, limit = UNQUEUED_PREVIEW_LIMIT): EffectivePreview {
-  const planned = view.effective.filter((row) => !row.unqueued);
   const band = previewOf(
     view.effective.filter((row) => row.unqueued),
     limit,
   );
-  return { planned, unqueued: band.shown, unqueuedHidden: band.hidden, next: nextEligible(view.effective) };
+  return { unqueued: band.shown, unqueuedHidden: band.hidden, next: nextEligible(view.effective) };
 }
 
 /** The resolver's next item for an actorless read: the first eligible row. See the header. */
@@ -271,60 +292,4 @@ export function retryOrder(intended: readonly string[], current: readonly QueueE
   const order = [...intended.filter((id) => present.includes(id)), ...present.filter((id) => !wanted.has(id))];
   if (order.length === present.length && order.every((id, i) => id === present[i])) return null;
   return order;
-}
-
-// ---------- search and add ----------
-
-/** How many candidates the add box offers at once. */
-export const SEARCH_LIMIT = 8;
-
-/**
- * Issues, epics and milestones a human could put in the plan, for a typed query.
- *
- * Anything already in the plan is out — enqueuing it again is a replay the store answers
- * with `replayed: true` and no write, and offering it is offering a no-op. Kinds are NOT
- * filtered: a milestone is a legitimate plan row and expands to its members (R3d), and
- * refusing one here would be a client-side policy the store does not share. An identifier
- * match outranks a title match, then the identifier's own counter orders the rest.
- */
-export function searchCandidates(
-  issues: readonly IssueRow[],
-  query: string,
-  queued: readonly string[],
-  limit = SEARCH_LIMIT,
-): IssueRow[] {
-  const needle = query.trim().toLowerCase();
-  if (needle === "") return [];
-  const inPlan = new Set(queued);
-  const matches = issues.filter((row) => {
-    if (inPlan.has(row.issue.identifier)) return false;
-    return (
-      row.issue.identifier.toLowerCase().includes(needle) || row.issue.title.toLowerCase().includes(needle)
-    );
-  });
-  matches.sort((a, b) => {
-    const byRef =
-      Number(b.issue.identifier.toLowerCase().includes(needle)) -
-      Number(a.issue.identifier.toLowerCase().includes(needle));
-    return byRef || a.issue.identifier.localeCompare(b.issue.identifier, undefined, { numeric: true });
-  });
-  return matches.slice(0, limit);
-}
-
-// ---------- layout ----------
-
-/**
- * The two panes and the three shapes they take. `stacked` is the narrow drawer — one pane
- * at a time, with a Back out of the preview; `split` puts the plan beside the preview;
- * full screen (a flag, not a third layout) gives whichever pane you are on the whole box,
- * at either width, the way the milestone detail's expand does.
- */
-export type QueueLayout = "stacked" | "split";
-export type QueuePane = "plan" | "preview";
-
-/** Tailwind's `md` (48rem at 16px), the same breakpoint the milestones view splits at. */
-export const SPLIT_MIN_WIDTH_PX = 768;
-
-export function layoutFor(widthPx: number): QueueLayout {
-  return widthPx >= SPLIT_MIN_WIDTH_PX ? "split" : "stacked";
 }

@@ -305,6 +305,7 @@ export function TreeGrid({
   hiddenParents,
   onOpen,
   onOpenMilestone,
+  rowActionsMenu,
   onCloseDrawer,
   onVisibleOrder,
 }: {
@@ -378,6 +379,15 @@ export function TreeGrid({
    * the marker — the tooltip names the milestone either way.
    */
   onOpenMilestone?: (identifier: string) => void;
+  /**
+   * THE `⋯` MENU, BUILT PER ROW — the slot `TaskRowLine.actionsMenu` opened.
+   *
+   * A BUILDER rather than data, so this grid never learns what a menu is: it hands over the
+   * row and the ready-made trigger button and renders whatever comes back. Absent means the
+   * `⋯` keeps its original behaviour — it opens the drawer — which is what the palette and
+   * every static-markup test still want.
+   */
+  rowActionsMenu?: (row: TaskRow, trigger: ReactNode) => ReactNode;
   onCloseDrawer: () => void;
   /** R6's contract (STA-106): the visible rows, in screen order. See lib/session.ts. */
   onVisibleOrder: (order: readonly Selection[]) => void;
@@ -764,6 +774,7 @@ export function TreeGrid({
       onOpen={() => openIssue(row)}
       onOpenParent={(identifier) => onOpen(row.workspace, identifier)}
       onOpenMilestone={onOpenMilestone}
+      actionsMenu={rowActionsMenu ? (trigger) => rowActionsMenu(row, trigger) : undefined}
       onToggleExpand={() => expansion.toggleRow(row.issue, row.isExpanded)}
       onToggleSelect={() => toggleSelect(row.issue.id)}
       onFocus={() => focus.set(navKeyOf(row))}

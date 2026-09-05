@@ -29,6 +29,24 @@ function DropdownMenuTrigger({
   )
 }
 
+/**
+ * ── THE MENU'S EVENTS ARE THE MENU'S — REACT PORTALS BUBBLE THROUGH THE REACT TREE ────
+ *
+ * The content is portalled into `document.body`, so nothing it does reaches the host in the
+ * DOM. React does not care: a synthetic event propagates up the COMPONENT tree regardless of
+ * where the portal put the node. Hang this menu off a row whose own `onClick` opens a detail
+ * drawer — which `TaskRowLine`'s `⋯` does — and choosing an item runs the action AND opens the
+ * task, with Enter doing the same through the row's `onKeyDown`.
+ *
+ * Diagnosed rather than guessed: a native capture listener on the row saw NOTHING (the DOM
+ * really is separate), while a stack trace from the drawer's open call showed it arriving at
+ * the row's handler through React's dispatcher.
+ *
+ * The stop lives here and not at the call site: every consumer hangs this off something, and
+ * "the thing I opened the menu on also fired" is not a bug each of them should rediscover. It
+ * is `click` and `keydown` only — the two a host acts on — and it stops nothing INSIDE the
+ * menu, because Radix's item handlers sit at or below this node and have already run.
+ */
 function DropdownMenuContent({
   className,
   sideOffset = 4,
@@ -38,6 +56,8 @@ function DropdownMenuContent({
     <DropdownMenuPrimitive.Portal>
       <DropdownMenuPrimitive.Content
         data-slot="dropdown-menu-content"
+        onClick={(event) => event.stopPropagation()}
+        onKeyDown={(event) => event.stopPropagation()}
         sideOffset={sideOffset}
         className={cn(
           // The same floating surface the Select menu uses: a real border does the
@@ -59,26 +79,58 @@ function DropdownMenuGroup({
   )
 }
 
+/**
+ * `reason` — WHY A DISABLED ITEM CANNOT BE CHOSEN.
+ *
+ * A disabled item with no explanation is the worst control on any surface: it tells a reader
+ * that the thing they want is possible in principle and refuses to say what is in the way.
+ * The sentence renders muted under the label AND as the item's `title`, so a pointer and a
+ * screen reader get the same words.
+ *
+ * It is part of the primitive rather than left to each call site for the reason `variant` is:
+ * the first call site that forgets is the one that teaches everybody the menu lies. The item
+ * keeps its single-line layout when there is no reason — `flex-col` only engages once there
+ * is a second line to stack.
+ */
 function DropdownMenuItem({
   className,
   inset,
   variant = "default",
+  reason,
+  children,
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Item> & {
   inset?: boolean
   variant?: "default" | "destructive"
+  reason?: string
 }) {
   return (
     <DropdownMenuPrimitive.Item
       data-slot="dropdown-menu-item"
       data-inset={inset}
       data-variant={variant}
+      title={reason}
       className={cn(
         "focus:bg-surface-hover focus:text-foreground data-[variant=destructive]:text-destructive data-[variant=destructive]:focus:bg-destructive/10 dark:data-[variant=destructive]:focus:bg-destructive/20 data-[variant=destructive]:focus:text-destructive data-[variant=destructive]:*:[svg]:!text-destructive [&_svg:not([class*='text-'])]:text-muted-foreground relative flex cursor-default items-center gap-2 rounded-md px-2 py-1.5 text-[13px] outline-hidden select-none data-[disabled]:pointer-events-none data-[disabled]:opacity-50 data-[inset]:pl-8 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+        reason && "flex-col items-start gap-0.5",
         className
       )}
       {...props}
-    />
+    >
+      {reason ? (
+        <>
+          <span className="flex items-center gap-2">{children}</span>
+          <span
+            data-slot="dropdown-menu-reason"
+            className="text-[11px] text-muted-foreground"
+          >
+            {reason}
+          </span>
+        </>
+      ) : (
+        children
+      )}
+    </DropdownMenuPrimitive.Item>
   )
 }
 

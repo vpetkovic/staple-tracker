@@ -186,8 +186,17 @@ export function buildCreatePayload(state: CreateFormState): Extract<ActionPayloa
 
 // ------------------------------------------------------------------ options
 
-/** One row -> one option. The pill is its OWN workspace, never the target's. */
-function toOption(row: IssueRow): SelectOption {
+/**
+ * One row -> one option. The pill is its OWN workspace, never the target's.
+ *
+ * EXPORTED, because the create dialog is no longer the only surface that asks a human to
+ * pick a task that exists. The Queue view's add control is the same question — "which task",
+ * answered from a list rather than from memory — and it must be the same control, so it must
+ * be the same option shape. A second mapper would be a second answer to "how does a task look
+ * in a dropdown", which is exactly the drift `StatusIcon`'s import note one file over argues
+ * against.
+ */
+export function taskOption(row: IssueRow): SelectOption {
   return {
     value: row.issue.identifier,
     label: row.issue.identifier,
@@ -217,7 +226,7 @@ function toOption(row: IssueRow): SelectOption {
  */
 export function parentOptions(rows: readonly IssueRow[], workspace: string): SelectOption[] {
   if (!workspace) return [];
-  return rows.filter((row) => row.workspace === workspace).map(toOption);
+  return rows.filter((row) => row.workspace === workspace).map(taskOption);
 }
 
 /**
@@ -241,7 +250,7 @@ export function parentOptions(rows: readonly IssueRow[], workspace: string): Sel
 export function relationOptions(rows: readonly IssueRow[], workspace: string): SelectOption[] {
   const here = rows.filter((row) => row.workspace === workspace);
   const elsewhere = rows.filter((row) => row.workspace !== workspace);
-  return [...here, ...elsewhere].map(toOption);
+  return [...here, ...elsewhere].map(taskOption);
 }
 
 /**

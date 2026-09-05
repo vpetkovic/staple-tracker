@@ -23,10 +23,18 @@
  * Both of them also have to CLEAR the published visible order, or the detail drawer's
  * prev/next arrows would keep paging a list that is no longer on the page.
  */
-import { useEffect, useMemo } from "react";
-import { getInbox, getQueue, type AuthError } from "@/lib/api";
-import { attachRowCues, buildRowCueIndex, EMPTY_ROW_CUE_INDEX } from "@/components/task-list";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { dequeueTask, enqueueTask, getInbox, getQueue, isRevisionConflict, type AuthError } from "@/lib/api";
+import {
+  attachRowCues,
+  buildRowCueIndex,
+  EMPTY_ROW_CUE_INDEX,
+  type TaskRow,
+} from "@/components/task-list";
+import { GuardRefusal } from "@/components/GuardRefusal";
+import { QueueRowMenu, queueRowMenuState } from "@/components/QueueRowMenu";
 import { buildGateCaptions } from "@/lib/derived-queued";
+import { describeRefusal, type Refusal } from "@/lib/refusal";
 import { FilterEmptyState } from "@/components/filters/FilterEmptyState";
 import { applyFilterDimensions } from "@/lib/filter-dimensions";
 import { hiddenParents } from "@/lib/filters";
@@ -68,11 +76,103 @@ export function TreeView({ onAuthError }: { onAuthError: (error: AuthError) => v
    * another's rows and captioning all of them "unqueued", which is not a partial answer but
    * the wrong one.
    */
-  const wantCues = groupBy === "none" && (mode !== "hub" || session.ws !== "");
+  const wantQueue = mode !== "hub" || session.ws !== "";
+  const wantCues = groupBy === "none" && wantQueue;
+  /*
+   * THE FETCH IS WIDER THAN THE CUES, and choice (1) above is now about the CUES only.
+   *
+   * The row menu (components/QueueRowMenu.tsx) can put a task into the plan from any shape
+   * of this list, and to do that it needs two things the plan alone carries: `revision`, the
+   * CAS every queue write is checked against, and `entries`, which is what "is this already
+   * queued" means. Neither is derivable from a row. So the request is made whenever a
+   * workspace is in view — one request per fingerprint change, the bargain `/api/settings`
+   * and `/api/milestones` already make — while `wantCues` still gates the JOIN, so a grouped
+   * view renders exactly the elements it rendered before.
+   */
   const queue = useResource<QueueView | null>(
-    () => (wantCues ? getQueue({ ws: session.ws || undefined, all: true }) : Promise.resolve(null)),
-    [wantCues, session.ws, session.version],
+    () => (wantQueue ? getQueue({ ws: session.ws || undefined, all: true }) : Promise.resolve(null)),
+    [wantQueue, session.ws, session.version],
     onAuthError,
+  );
+
+  /**
+   * THE ROW MENU'S WRITES — the `⋯` slot, wired to the queue.
+   *
+   * Every one of them is the SAME `POST /api/queue/…` the Queue view sends, carrying the
+   * same `baseRevision`. There is no second write path and no optimistic local plan: the
+   * answer is a whole `QueueView`, and rather than hold a copy of it here the view simply
+   * re-reads — `session.refresh()` bumps the fingerprint every surface on the page polls on,
+   * so the row's cue, the queue tab and this menu's own "is it queued" all move together.
+   *
+   * A refusal is surfaced through the same `describeRefusal` sentence the Queue view uses.
+   * It is put in the session's guard channel rather than swallowed: a menu item that appears
+   * to do nothing is worse than one that says it was refused.
+   */
+  const [queueBusy, setQueueBusy] = useState(false);
+  const [queueRefusal, setQueueRefusal] = useState<Refusal | null>(null);
+  const queueRevision = queue.data?.revision;
+  const queueReload = queue.reload;
+  const queueWrite = useCallback(
+    async (run: (baseRevision: number) => Promise<unknown>) => {
+      if (queueRevision === undefined) return;
+      setQueueBusy(true);
+      try {
+        await run(queueRevision);
+        /*
+         * ONE refetch, not two. `session.refresh()` bumps the fingerprint this resource
+         * already lists in its deps, so the read that follows is the same read
+         * `queue.reload()` would force — calling both was a second request for one write.
+         */
+        session.refresh();
+      } catch (error) {
+        /*
+         * A CONFLICT IS NOT A REFUSAL, and saying so is the difference between "somebody
+         * else moved the plan, here it is again" and "the server said no". The Queue view
+         * makes the same distinction and offers Retry; the tree has no order of its own to
+         * retry, so it re-reads and says what happened.
+         */
+        if (isRevisionConflict(error)) queueReload();
+        setQueueRefusal(describeRefusal(error));
+      } finally {
+        setQueueBusy(false);
+      }
+    },
+    [queueRevision, queueReload, session],
+  );
+
+  /**
+   * "Is this identifier in the plan", as a SET rather than a scan.
+   *
+   * `queueRowMenuState` is called once per rendered row and the tree is not virtualised, so
+   * the `entries.some(...)` it used to do was O(rows × entries) — 15k string comparisons per
+   * render on a 300-row list with a 50-entry plan, every 1.5s poll.
+   */
+  const queuedIds = useMemo(
+    () => new Set((queue.data?.entries ?? []).map((entry) => entry.identifier)),
+    [queue.data],
+  );
+
+  const rowActionsMenu = useCallback(
+    (row: TaskRow, trigger: ReactNode) => {
+      const ref = row.issue.identifier;
+      const ws = session.ws || undefined;
+      return (
+        <QueueRowMenu
+          trigger={trigger}
+          identifier={ref}
+          state={queueRowMenuState(row, queuedIds)}
+          disabled={queueBusy || queueRevision === undefined}
+          onOpen={() => session.open(row.workspace, ref)}
+          // `at: 1` is the wire's own "put it in front", not a reorder computed here.
+          onQueueNext={() =>
+            void queueWrite((baseRevision) => enqueueTask({ ws, ref, at: 1, baseRevision }))
+          }
+          onQueueLast={() => void queueWrite((baseRevision) => enqueueTask({ ws, ref, baseRevision }))}
+          onDequeue={() => void queueWrite((baseRevision) => dequeueTask({ ws, ref, baseRevision }))}
+        />
+      );
+    },
+    [queuedIds, queueBusy, queueRevision, queueWrite, session],
   );
 
   /**
@@ -183,6 +283,16 @@ export function TreeView({ onAuthError }: { onAuthError: (error: AuthError) => v
 
   return (
     <div className="scrollbar-auto-hide h-full overflow-y-auto">
+      {/*
+        A queue write refused from the row menu. It renders HERE rather than over the row,
+        because the refusal is about the plan rather than about the task, and the row it came
+        from may have been filtered away by the time the answer lands.
+      */}
+      {queueRefusal ? (
+        <div className="px-4 pt-3">
+          <GuardRefusal refusal={queueRefusal} onDismiss={() => setQueueRefusal(null)} />
+        </div>
+      ) : null}
       <ViewState resource={session.issues} empty="no open issues">
         {(loaded) => {
           if (loaded.length === 0) return <EmptyState>no issues yet</EmptyState>;
@@ -239,6 +349,11 @@ export function TreeView({ onAuthError }: { onAuthError: (error: AuthError) => v
                * that it has somewhere to send a click.
                */
               onOpenMilestone={session.focusMilestone}
+              /*
+               * The `⋯` menu, built per row. Passed as a BUILDER rather than as data so the
+               * grid never has to know what a menu is — see `TaskRowLine.actionsMenu`.
+               */
+              rowActionsMenu={rowActionsMenu}
               onCloseDrawer={session.close}
               onVisibleOrder={publishVisibleOrder}
             />
