@@ -238,6 +238,17 @@ describe("what narrow actually changes", () => {
     expect(block!.body).toMatch(/\.staple-worklog-cue\s*{[^}]*display:\s*inline-flex/);
   });
 
+  it("hides the date for good below 640px, keeping its title for the hover", () => {
+    /*
+     * The two-line row at 719px brought the date back on line two; at phone widths that
+     * line has no room for it either. The `<time>` keeps `title`, so the stamp is a hover
+     * away — pinned in row-render, not here; this pins that the sheet drops it.
+     */
+    const block = mediaBlocks().find((b) => b.query.includes("max-width: 639px"));
+    expect(block, "no 639px breakpoint in the sheet").toBeDefined();
+    expect(block!.body).toMatch(/\.staple-row-date\s*{[^}]*display:\s*none/);
+  });
+
   it("drops the wider elements in §14's order — date before the working label", () => {
     const queries = mediaBlocks().map((b) => b.query);
     // 959 drops the worklog cue, 879 the date and the pill's word, 719 reflows. Least

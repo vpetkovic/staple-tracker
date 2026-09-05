@@ -30,9 +30,9 @@
  * than a toggle, because "Newest first" and "Oldest first" are two named readings of the
  * mode above them and a toggle would make the reader infer the unnamed one.
  */
-import { ArrowDownUp, Check } from "lucide-react";
+import { ArrowDown, ArrowDownUp, ArrowUp, Check } from "lucide-react";
 import { useState } from "react";
-import { Button } from "@/components/ui/button";
+import { HeaderButton } from "@/components/filters/HeaderButton";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   DEFAULT_SORT,
@@ -47,10 +47,19 @@ import {
 import { cn } from "@/lib/utils";
 
 /**
- * What the trigger says. Exported so the test can assert the sentence directly rather than
- * fishing it out of markup, exactly as `viewTriggerLabel` is next door in the graph toolbar.
+ * What the trigger SHOWS: the mode, short — "Sort: Activity". The direction is an arrow
+ * beside it, and its reading ("Most active first") is the trigger's accessible name and
+ * tooltip (`sortTriggerReading`) and the menu's direction rows. The polish pass shortened
+ * this from the full sentence: on a 40px header row beside four other controls the reading
+ * cost more width than it earned, and the arrow plus the tooltip keep it one hover away.
+ * Exported so the test can assert the words directly, as `viewTriggerLabel` is next door.
  */
 export function sortTriggerLabel(sort: SortPref): string {
+  return `Sort: ${sortMode(sort.mode).label}`;
+}
+
+/** The whole state in one sentence — the accessible name, the tooltip, never an arrow. */
+export function sortTriggerReading(sort: SortPref): string {
   return `Sort: ${sortLabel(sort)}`;
 }
 
@@ -62,9 +71,12 @@ export function isDefaultSort(sort: SortPref): boolean {
 export function SortByMenu({
   sort,
   onChange,
+  compact = false,
 }: {
   sort: SortPref;
   onChange: (next: SortPref) => void;
+  /** Icon only, the reading in the tooltip — the header's narrow form. */
+  compact?: boolean;
 }) {
   const [open, setOpen] = useState(false);
 
@@ -91,20 +103,25 @@ export function SortByMenu({
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <Button
-          variant="ghost"
-          size="sm"
-          aria-label="Sort tasks"
+        <HeaderButton
+          icon={<ArrowDownUp aria-hidden />}
+          label={sortTriggerLabel(sort)}
+          // The accessible name carries the whole state, so a screen reader hears the
+          // direction the sighted reader gets from the arrow.
+          aria-label={sortTriggerReading(sort)}
+          hint={sortTriggerReading(sort)}
+          compact={compact}
+          active={!isDefaultSort(sort)}
           data-sort-mode={sort.mode}
           data-sort-direction={sort.direction}
-          className={cn(
-            "text-muted-foreground hover:text-foreground",
-            !isDefaultSort(sort) && "text-foreground",
-          )}
-        >
-          <ArrowDownUp className="size-3.5" aria-hidden />
-          {sortTriggerLabel(sort)}
-        </Button>
+          badge={
+            compact ? null : sort.direction === "asc" ? (
+              <ArrowDown className="size-3 text-text-tertiary" aria-hidden data-sort-arrow="asc" />
+            ) : (
+              <ArrowUp className="size-3 text-text-tertiary" aria-hidden data-sort-arrow="desc" />
+            )
+          }
+        />
       </PopoverTrigger>
 
       <PopoverContent align="end" className="w-72 p-1">

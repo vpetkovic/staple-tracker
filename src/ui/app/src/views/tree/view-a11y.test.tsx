@@ -38,7 +38,12 @@ import {
 import { FilterBar } from "@/components/filters/FilterBar";
 import { FilterChipStrip } from "@/components/filters/FilterChips";
 import { FilterEmptyState } from "@/components/filters/FilterEmptyState";
-import { SortByMenu, SortByOptions, sortTriggerLabel } from "@/components/view-options/SortByMenu";
+import {
+  SortByMenu,
+  SortByOptions,
+  sortTriggerLabel,
+  sortTriggerReading,
+} from "@/components/view-options/SortByMenu";
 import { buildFilterContext, type FilterContext } from "@/lib/filter-dimensions";
 import { emptyFilters, type FilterState } from "@/lib/filters";
 import { DEFAULT_SORT, SORT_MODES, type SortPref } from "@/lib/sort-modes";
@@ -146,9 +151,12 @@ describe("the sort control names the mode AND the direction", () => {
       for (const direction of ["asc", "desc"] as const) {
         const pref: SortPref = { mode: mode.id, direction };
         const markup = html(<SortByMenu sort={pref} onChange={noop} />);
+        // The visible words are the mode; the direction's reading is the accessible name,
+        // so a screen reader hears what the sighted reader gets from the arrow.
         expect(markup, `${mode.id}/${direction}`).toContain(sortTriggerLabel(pref));
+        expect(markup, `${mode.id}/${direction}`).toContain(`aria-label="${sortTriggerReading(pref)}"`);
         expect(markup, `${mode.id}/${direction}`).toContain(mode.directions[direction]);
-        expect(markup).toContain('aria-label="Sort tasks"');
+        expect(markup).toContain(`data-sort-arrow="${direction}"`);
       }
     }
   });
@@ -349,14 +357,14 @@ describe("tab order", () => {
    * row is a tab stop and the arrow keys move it, which is what stops a hundred-row list
    * from being a hundred tabs deep.
    */
-  it("puts the whole control cluster in reading order: Group, Sort, Search, Filter, Done", () => {
+  it("puts the whole control cluster in reading order: Group, Sort, Filter, Done, Search", () => {
     const markup = inSession(<FilterBar />);
     const positions = [
       markup.indexOf('aria-label="Group tasks"'),
-      markup.indexOf('aria-label="Sort tasks"'),
-      markup.indexOf('aria-label="Search tasks"'),
+      markup.indexOf('aria-label="Sort: '),
       markup.indexOf('aria-label="Add a filter"'),
       markup.indexOf('aria-label="Show done and cancelled tasks"'),
+      markup.indexOf('aria-label="Search tasks"'),
     ];
     expect(positions.every((at) => at > -1)).toBe(true);
     expect(positions).toEqual([...positions].sort((a, b) => a - b));
