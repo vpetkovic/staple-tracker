@@ -17,6 +17,7 @@ import { runAddCommand } from "./commands/add.js";
 import { runDiscoverCommand } from "./commands/discover.js";
 import { runMilestoneCommand } from "./commands/milestone.js";
 import { runQueueCommand } from "./commands/queue.js";
+import { runCloudCommand } from "./commands/cloud.js";
 import { findMigrationRoot, planMigration, runMigration } from "./core/path-migration.js";
 import {
   type ConfigPatch,
@@ -777,6 +778,24 @@ Workspace
               its value and where it came from (default | workspace)
   settings get <key>                    one setting, e.g. queue.policy
   settings set <key> <value>            write one; queue.policy takes advisory | strict
+
+Cloud (optional, off until you turn it on — see staple cloud --help)
+  cloud [status] [--refresh]            this machine's relationship to a sync service.
+              Local and silent: it reads files and makes NO request. --refresh is
+              the only form that contacts the endpoint
+  cloud connect --endpoint <url> --token <secret> [--yes]
+              show the service, the repository id and where the credential will be
+              stored, then connect once you agree. Nothing is sent before you do,
+              and a successful connection leaves automatic sync OFF
+  cloud disconnect [--yes]              remove this device's credential and stop all later
+              cloud traffic; local data and pending operations are preserved, the
+              remote state is untouched and other devices are unaffected
+  cloud auto on|off                     THIS device's consent to sync without being asked
+  cloud devices [ls|revoke <id>]        devices registered to this repository; revoking is
+              server-side and effective on that device's next request
+  cloud purge --confirm <repositoryId>  DESTROY the remote state. Separately named because
+              it is not disconnecting; discloses what is stored before it will accept
+              the confirmation, and never touches your local database
 
 Tasks
   new <title> [-d text] [-p prio] [--parent REF] [--assignee A]
@@ -2083,6 +2102,21 @@ function main() {
      */
     case "queue": {
       runQueueCommand(rest);
+      break;
+    }
+
+    /**
+     * `staple cloud` — connection and credential lifecycle (STA-71). Thin
+     * delegation, like `queue` and `milestone`: the logic, and in particular
+     * every decision about what may touch the network, lives in
+     * `src/commands/cloud.ts` and `src/core/cloud/`.
+     *
+     * The command module handles its own async failures. It is the first
+     * command in the tree that awaits anything, and the top-level `catch`
+     * below is synchronous — see `settle()` there.
+     */
+    case "cloud": {
+      runCloudCommand(rest);
       break;
     }
 

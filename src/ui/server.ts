@@ -32,6 +32,8 @@ import type { QueueVerb } from "../core/queue-store.js";
 // beside the workspace ones so the page can say which scope each setting has.
 import { settingDefinitionsFor, settingRegistryView, settingValueView } from "../core/settings-registry.js";
 import { sanitizeSvg } from "../core/svg-sanitize.js";
+import { readStoredRepositoryId } from "../core/repo-identity.js";
+import { describeState, localCloudStatus } from "../core/cloud/status.js";
 import { readConfig, stapleHome } from "../config/index.js";
 
 interface UiOptions {
@@ -591,6 +593,70 @@ export function startUiServer(options: UiOptions): UiHandle {
         json(res, 200, {
           mode: options.hub ? "hub" : "workspace",
           workspaces: handles.map((h) => ({ slug: h.slug, prefix: h.prefix })),
+        });
+        return;
+      }
+
+      /**
+       * `GET /api/cloud/status` — read-only, and network-free by construction.
+       *
+       * `docs/sync.md`, on what a surface may do before a repository is
+       * connected: *"render 'not connected' and a static hint naming
+       * `staple cloud connect`. Static text. No probe, no reachability check, no
+       * 'we noticed you might want to connect'. The UI does not prompt."*
+       *
+       * So this route exists precisely so the UI does NOT have to guess, and it
+       * deliberately has no `refresh` parameter. `localCloudStatus` reads files;
+       * there is no argument that can make it call out. A polled UI with a
+       * refreshing status endpoint would turn one human's page-open into a
+       * heartbeat to Cloudflare every few seconds, which is a telemetry channel
+       * arrived at by accident — and *"no telemetry, no update check, no
+       * discovery request, ever."*
+       *
+       * GET-only falls out of the method table above, which defaults every route
+       * not named there to GET. This one must never be named there.
+       *
+       * Identity comes from `sync_state.repository_id` rather than the manifest
+       * because the server holds a database handle and not a path. That row is
+       * written from the manifest at open time by `reconcileRepositoryIdentity`,
+       * so it is the same id — and on a workspace old enough not to have the
+       * table, the read fails closed to "disconnected", which is true.
+       */
+      if (url.pathname === "/api/cloud/status") {
+        const handle = handleFor(url.searchParams.get("ws") ?? undefined);
+        let repositoryId: string | null = null;
+        try {
+          repositoryId = readStoredRepositoryId(handle.store.db);
+        } catch {
+          repositoryId = null;
+        }
+        if (repositoryId === null) {
+          json(res, 200, {
+            state: "disconnected",
+            repositoryId: null,
+            endpoint: null,
+            deviceId: null,
+            auto: false,
+            backup: false,
+            credentialPresent: false,
+            warnings: [],
+            detail: "This workspace has no sync identity, so it cannot be connected.",
+            hint: "staple cloud connect",
+          });
+          return;
+        }
+        const status = localCloudStatus(stapleHome(), repositoryId);
+        json(res, 200, {
+          state: status.state,
+          repositoryId: status.repositoryId,
+          endpoint: status.endpoint,
+          deviceId: status.deviceId,
+          auto: status.auto,
+          backup: status.backup,
+          credentialPresent: status.credentialPresent,
+          warnings: status.warnings,
+          detail: describeState(status),
+          hint: status.state === "disconnected" ? "staple cloud connect" : null,
         });
         return;
       }
