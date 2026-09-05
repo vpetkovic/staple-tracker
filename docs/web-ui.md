@@ -899,9 +899,13 @@ kind (`components/projects/projectForm.ts`, pinned without a DOM), switching
 kind keeps the name and drops or seeds the source, and the sections are a list
 the next project setting slots into.
 
-**Where a project shows up.** The rail lists it under Tasks; the **Project**
-filter dimension offers it by name (captioned with its workspace when the page
-spans several) and matches on its id, so a saved filter survives a rename; the
+**Where a project shows up.** The page fetches every workspace's projects once
+per poll and narrows them where they are used, so an issue opened from another
+workspace still sees its own workspace's projects. The rail lists them under
+Tasks; the **Project** filter dimension offers them by name (captioned with the
+workspace when the page spans several) and matches on the id, so a saved filter
+survives a rename — and a deleted project's id is dropped from every saved
+scope on the next poll, so no chip outlives its project; the
 New task dialog has a *Project* select (no project by default, narrowed to the
 target workspace); and the detail panel's property block has a *Project* row
 that is an editor, like Kind, writing through `/api/project/assign`.
