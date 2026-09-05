@@ -29,6 +29,16 @@ carries `aria-current="page"`; a group header is a real disclosure button. At
 the foot of the rail sit **Settings** (the Work Workspace Settings dialog) and
 the theme toggle.
 
+**Projects hang off Tasks.** The Tasks row carries a `+` — visible on hover and
+focus, always in the tab order — that opens the project dialog to create one,
+and lists every tracked project beneath itself as a sub-row (see *Projects*
+below). Clicking a project switches to Tasks and narrows it to that project's
+issues, and nothing else; the row then carries `aria-current="true"` for as
+long as Tasks is filtered to exactly it. Each sub-row has a gear that opens the
+same dialog on that project. On *All workspaces* in hub mode the rows are
+captioned with their workspace, which is what tells two projects with one name
+apart.
+
 The rail collapses with `[` or `⌘\` and remembers that it did; a *Show
 navigation* button then leads the content header. Below 768px the rail is a
 sheet opened from that same button and closed by a row, the scrim or Escape, so
@@ -198,6 +208,7 @@ ancestry. Nothing in the menu is a value this build invented.
 | **Pickup state** | Pickable, Queued, Waiting, Gated, In flight | the queue resolver |
 | **Milestone** | every milestone, by title | milestone **membership** |
 | **Epic** | the top-level ancestors present | the row's ancestry |
+| **Project** | every tracked project, by name (captioned with its workspace when the page spans several) | the issue's `projectId` |
 
 **Pickup state** is the resolver's own word for the row when the server sends one
 (`docs/queue.md`, step 3). When it does not, four of the five are derived locally in the
@@ -263,7 +274,7 @@ the same rows on the screen.
 
 Alongside them, `lib/sort-modes.test.ts` walks each mode's key and tie-breaks,
 `lib/filter-dimensions.test.ts` and `components/filters/filters-render.test.tsx` walk the
-eleven dimensions, `views/tree/tree-model.test.ts` pins placement and ghosts, and
+twelve dimensions, `views/tree/tree-model.test.ts` pins placement and ghosts, and
 `views/tree/group-header.test.tsx` pins the epic-axis rhythm.
 
 `view-combinations.test.ts` also pins the three things that used to be gaps: the chosen
@@ -875,6 +886,25 @@ points at a project by `projectId` — at most one, exactly like `parentId`, and
 null for every issue that predates the migration. Deleting a project lets its
 issues go (their `projectId` becomes null in the same transaction) and touches
 nothing else about them.
+
+**The dialog.** One dialog creates and edits: a *General* section (name, kind
+— and, on a create in hub mode with several workspaces, which one) and a
+*Source* section that appears for a managed project (source kind, then the URL
+or the path, labelled by kind). Errors sit beside their field once a save has
+been tried, in the form's own words; a store refusal renders the store's
+sentence unchanged. An edit starts on the served values, saves only when
+something changed, and offers *Delete project* behind a confirm that says what
+deleting does — the issues stay, unfiled. The draft is a discriminated union on
+kind (`components/projects/projectForm.ts`, pinned without a DOM), switching
+kind keeps the name and drops or seeds the source, and the sections are a list
+the next project setting slots into.
+
+**Where a project shows up.** The rail lists it under Tasks; the **Project**
+filter dimension offers it by name (captioned with its workspace when the page
+spans several) and matches on its id, so a saved filter survives a rename; the
+New task dialog has a *Project* select (no project by default, narrowed to the
+target workspace); and the detail panel's property block has a *Project* row
+that is an editor, like Kind, writing through `/api/project/assign`.
 
 **Routes.** `GET /api/projects` answers `{ workspace, project }` rows — for one
 workspace with `?ws=`, and in `--hub` mode with no `ws` for every workspace at
