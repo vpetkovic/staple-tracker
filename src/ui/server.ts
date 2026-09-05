@@ -1519,7 +1519,19 @@ export function startUiServer(options: UiOptions): UiHandle {
         const handle = handleFor((body.ws as string) ?? undefined);
         const projects = handle.store.projects();
         const actor = (body.actor as string) || "ui";
-        const ref = body.ref as string;
+        /**
+         * A missing or non-string `ref` is a validation refusal in the same envelope
+         * every other refusal uses — not a TypeError three frames down that arrives as
+         * a 500 with a stack trace for a message.
+         */
+        const requireRef = (): string => {
+          if (typeof body.ref !== "string" || body.ref.trim() === "") {
+            throw new StapleError("validation", "ref is required: a project id or slug, or an issue identifier", {
+              field: "ref",
+            });
+          }
+          return body.ref;
+        };
         const fields = {
           name: body.name as string | null | undefined,
           kind: body.kind as ProjectKind | null | undefined,
@@ -1531,16 +1543,24 @@ export function startUiServer(options: UiOptions): UiHandle {
             json(res, 200, { workspace: handle.slug, project: projects.create(fields, actor) });
             return;
           case "/api/project/update":
-            json(res, 200, { workspace: handle.slug, project: projects.update(ref, fields, actor) });
+            json(res, 200, { workspace: handle.slug, project: projects.update(requireRef(), fields, actor) });
             return;
           case "/api/project/delete": {
-            const removal = projects.remove(ref, actor);
+            const removal = projects.remove(requireRef(), actor);
             json(res, 200, { workspace: handle.slug, ...removal });
             return;
           }
           case "/api/project/assign": {
-            const project = body.project === undefined || body.project === null ? null : String(body.project);
-            projects.assign(ref, project, actor);
+            const ref = requireRef();
+            // `project` must be SAID: a string files the issue, null takes it out. An
+            // absent key is refused rather than read as "take it out" — a body that
+            // forgot the field must not unfile a task by accident.
+            if (!("project" in body) || (body.project !== null && typeof body.project !== "string")) {
+              throw new StapleError("validation", "project must be a project id or slug, or null to unfile", {
+                field: "project",
+              });
+            }
+            projects.assign(ref, body.project as string | null, actor);
             json(res, 200, issueDetail(handle, ref));
             return;
           }

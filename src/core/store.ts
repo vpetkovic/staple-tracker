@@ -1552,9 +1552,6 @@ export class WorkspaceStore {
     // consumed an issue number.
     const estimatedSeconds =
       input.estimatedSeconds == null ? null : assertEstimateSeconds(input.estimatedSeconds);
-    // Resolved BEFORE the transaction like everything above it: an unknown project is
-    // `not_found` in the project store's own words, before an issue number is spent.
-    const project = input.project ? this.projects().get(input.project) : null;
 
     /**
      * Default status: the workspace's READY status when the issue is assigned,
@@ -1569,6 +1566,12 @@ export class WorkspaceStore {
     }
 
     return tx(this.db, () => {
+      // The project is resolved INSIDE the transaction, first, so the lookup and the
+      // insert cannot straddle a delete: a project removed between the two would leave
+      // a pointer at nothing. Still before the issue number is spent, so an unknown
+      // project is `not_found` in the project store's own words and consumes nothing.
+      const project = input.project ? this.projects().get(input.project) : null;
+
       // Idempotency replay: the same key always returns the original issue.
       if (input.idempotencyKey) {
         const existing = this.db

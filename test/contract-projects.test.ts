@@ -263,6 +263,28 @@ describe("refusals arrive as refusals", () => {
     expect(list.map((row) => row.issue.identifier)).toEqual(["ALP-1", "ALP-2", "ALP-3"]);
   });
 
+  it("a missing or malformed ref, or an unsaid project on assign, is a validation refusal and never a 500", async () => {
+    const cases: Array<[string, Body, string]> = [
+      ["/api/project/update", { ws: "alpha", name: "X" }, "ref"],
+      ["/api/project/update", { ws: "alpha", ref: 42, name: "X" }, "ref"],
+      ["/api/project/delete", { ws: "alpha" }, "ref"],
+      ["/api/project/delete", { ws: "alpha", ref: "  " }, "ref"],
+      ["/api/project/assign", { ws: "alpha", project: null }, "ref"],
+      ["/api/project/assign", { ws: "alpha", ref: "ALP-1" }, "project"],
+      ["/api/project/assign", { ws: "alpha", ref: "ALP-1", project: 7 }, "project"],
+    ];
+    for (const [route, body, field] of cases) {
+      const { status, body: envelope } = await post(route, body);
+      expect(status, `${route} ${JSON.stringify(body)}`).toBe(httpStatusFor("validation"));
+      expect(envelope.code).toBe("validation");
+      expect((envelope.detail as Body | undefined)?.field).toBe(field);
+      expect(envelope.error).toBe(envelope.message);
+    }
+    // Nothing moved: no issue was unfiled by a body that forgot to say which project.
+    const list = (await get("/api/issues?ws=alpha")).body as Array<{ issue: { projectId: string | null } }>;
+    expect(list.every((row) => row.issue.projectId === null)).toBe(true);
+  });
+
   it("an unknown verb under the family is a plain 404", async () => {
     expect((await post("/api/project/explode", { ws: "alpha" })).status).toBe(404);
   });
