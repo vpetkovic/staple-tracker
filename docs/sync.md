@@ -232,12 +232,37 @@ replicates — it is this device's record of its relationship to a shared log.
 | `sync_conflicts` | `id` | `entity`, `entity_id`, `field`, `base_value`, `local_value`, `remote_value`, `local_op_id`, `remote_op_id`, `local_device_id`, `remote_device_id`, `local_at`, `remote_at`, `detected_at`, `resolved_at`, `resolved_by`, `resolution` |
 | `sync_leases` | `entity_id` | `fencing_token`, `holder`, `device_id`, `server_expires_at`, `acquired_at`, `renewed_at` |
 | `sync_devices` | `device_id` | `label`, `last_seen_at`, `revoked_at` — a read cache of the server's device list, never authoritative |
-| `sync_state` | single row | `repository_id`, `epoch`, `cursor`, `head_seq`, `last_sync_at`, `bootstrap_cursor` |
+| `sync_state` | single row | `repository_id`, `epoch`, `cursor`, `head_seq`, `last_sync_at`, `bootstrap_cursor`, `client_seq_high_water` |
 
 The entity version lives in a side table rather than as a `version` column on
 each synchronized table for one reason: it is sync metadata, not domain state,
 and putting it beside the domain rows would make every existing schema-equivalence
 and fixture test negotiate a change that has nothing to do with what an issue is.
+
+### `client_seq_high_water` is allocated, never derived
+
+`sync_state.client_seq_high_water` is a persisted monotonic counter, bumped on
+allocation inside the same transaction as the domain write and the outbox row.
+`sync_outbox.client_seq` is the per-row record of what was allocated. The two are
+not the same thing, and the counter is **never** recomputed from the outbox.
+
+**Deriving the next `clientSeq` from `MAX(sync_outbox.client_seq)` is forbidden.**
+It is the obvious optimization — the value is right there, and the extra column
+looks redundant — and it silently destroys data twice over:
+
+- **Outbox compaction rewinds it.** Pruning acknowledged rows is a routine,
+  correct operation, and it drops exactly the rows the maximum was reading. The
+  counter restarts, the device re-mints operation ids the server already holds,
+  the server deduplicates them and returns each original `seq`, and the client
+  marks genuinely new work as acknowledged. The write is gone, no error is raised
+  anywhere, and the two databases disagree from then on.
+- **Re-bootstrap rewinds it.** A device that hydrates after a restore starts with
+  an empty outbox and the same collision follows, against a log that explicitly
+  still contains the originals because epoch bumps do not truncate.
+
+Both failures are silent, which is what makes them worth this much prose. A
+counter that only ever moves forward, stored where nothing prunes it, costs one
+column.
 
 `sync_state` holds the `repository_id` as well as the manifest, deliberately. The
 manifest is the git-recoverable copy; `sync_state` is what the database itself
@@ -303,7 +328,9 @@ mutation:
    per table touched. `checkoutIssue` writes several columns and emits an event;
    it journals a single `issue.update`.
 3. **A deterministic `opId`.** Derived, never random, so a retry regenerates it —
-   see [the envelope](#the-operation-envelope).
+   see [the envelope](#the-operation-envelope). The `clientSeq` it is derived from
+   is allocated from `sync_state.client_seq_high_water` in the same transaction,
+   never read back out of the outbox.
 4. **Echo suppression.** Applying a pulled operation performs the same domain
    write through the same seam and **must not** journal a new outbound operation.
    Without this, two devices synchronize forever.
@@ -347,12 +374,30 @@ One shape, for every mutation, on the wire and in the outbox.
 `verb` is `create`, `update`, `delete`, `replace` (ordered collections only), or
 `renumber` (issues only).
 
-`opId` is **deterministic**: `sha256(repoId + "\n" + deviceId + "\n" + clientSeq)`,
-first 32 hex characters. `clientSeq` is a per-device monotonic counter allocated
-inside the same transaction as the domain write, so a replayed or retried push
-regenerates byte-identical ids and the server's uniqueness check absorbs it. An
-operation id is never random, because a random one cannot be deduplicated after a
-lost acknowledgement.
+`opId` is **deterministic**:
+`sha256(repoId + "\n" + epoch + "\n" + deviceId + "\n" + clientSeq)`, first 32 hex
+characters. A replayed or retried push regenerates byte-identical ids and the
+server's uniqueness check absorbs it. An operation id is never random, because a
+random one cannot be deduplicated after a lost acknowledgement.
+
+**The `epoch` is in the derivation, and it has to be.** Operation ids are scoped
+to an epoch exactly as `seq` and cursors already are. Without it, a device that
+re-bootstraps after a restore re-mints ids that collide with operations still
+present in the log — the epoch bump is non-truncating, so the originals are
+*definitely* still there — and the collision happens in precisely the path the
+epoch mechanism exists to make safe.
+
+`clientSeq` is a per-device monotonic counter allocated inside the same
+transaction as the domain write. Its home is
+`sync_state.client_seq_high_water`, and the rules for it are in
+[The local sync tables](#the-local-sync-tables). **It is never derived from the
+outbox.**
+
+Server-side, operation uniqueness is scoped **`(repoId, epoch, opId)`**, not
+`opId` alone. The client derivation already makes ids epoch-unique, so this is
+defence in depth: a client that gets the derivation wrong is *rejected* rather
+than silently deduplicated. That distinction is the whole point — a wrong id that
+deduplicates is indistinguishable from success, and loses the write.
 
 `payload` carries **only the fields the mutation actually changed**, not the whole
 row. Full-row writes would turn every concurrent edit into a conflict on fields
@@ -567,6 +612,11 @@ newer than the oldest live cursor, every operation newer than the oldest live
 cursor, and the conflict records referenced by any unresolved or recently
 resolved conflict. A device that has not synced for longer than the horizon is
 not silently broken — its next pull returns `epoch_changed` and it re-bootstraps.
+
+Pruning **acknowledged** outbox rows is routine and safe, and it is safe only
+because `client_seq_high_water` lives outside the outbox
+([above](#client_seq_high_water-is-allocated-never-derived)). Compaction must
+never be the thing that decides what the next operation id will be.
 
 ## Conflicts are preserved, never resolved silently
 
