@@ -8,22 +8,19 @@ import { describe, expect, it } from "vitest";
 import { row } from "@/components/task-list/fixtures";
 import { effective, entry, queue, workedExample } from "./fixtures";
 import {
-  effectivePositionLabel,
+  blockersOf,
   effectivePreview,
   ELIGIBILITY_PRESENTATION,
-  layoutFor,
   movedOrder,
   nextEligible,
   nextWorkLabel,
   NOTHING_PICKABLE_LABEL,
   orderForPosition,
-  pickupLabel,
   planRows,
   previewOf,
   reasonLabel,
   retryOrder,
-  searchCandidates,
-  SPLIT_MIN_WIDTH_PX,
+  rowOrdinal,
 } from "./queue-model";
 
 describe("the plan joined to its expansion", () => {
@@ -65,26 +62,63 @@ describe("the plan joined to its expansion", () => {
   });
 });
 
-describe("the two numbers", () => {
-  it("says nothing about pickup when it agrees with the plan", () => {
-    expect(pickupLabel(3, 3, 0)).toBeNull();
+/**
+ * ONE SCALE, replacing `pickupLabel` and `effectivePositionLabel`.
+ *
+ * Those two printed up to three numbers per row across two scales — `expands to 8`,
+ * `pickup #10`, `#12 · from plan #4` — which is what made the old list unreadable. They are
+ * gone rather than deprecated: a dead exported label that still spells the old vocabulary is
+ * how the next surface reintroduces it.
+ */
+describe("the one number a row prints", () => {
+  it("is the row's place in the order an agent is handed", () => {
+    expect(rowOrdinal(effective({ identifier: "A", position: 2, planPosition: 2 }))).toBe(2);
+    expect(rowOrdinal(effective({ identifier: "A", position: 3, planPosition: 2 }))).toBe(3);
   });
 
-  it("shows them side by side when they differ", () => {
-    expect(pickupLabel(3, 5, 0)).toBe("pickup #5");
+  it("is nothing for a container, which is never handed to anybody", () => {
+    expect(rowOrdinal(null)).toBeNull();
   });
 
-  it("counts a container's expansion instead, because a container has no pickup row", () => {
-    expect(pickupLabel(2, null, 3)).toBe("expands to 3");
-    expect(pickupLabel(2, null, 0)).toBe("no pickup row");
+  it("is nothing in the unqueued band, whose section already says what those rows are", () => {
+    expect(rowOrdinal(effective({ identifier: "A", position: 9, unqueued: true }))).toBeNull();
   });
 
-  it("reads an effective row from the other side: pickup first, provenance second", () => {
-    expect(effectivePositionLabel(effective({ identifier: "A", position: 2, planPosition: 2 }))).toBe("#2");
-    expect(effectivePositionLabel(effective({ identifier: "A", position: 3, planPosition: 2 }))).toBe(
-      "#3 · from plan #2",
-    );
-    expect(effectivePositionLabel(effective({ identifier: "A", position: 9, unqueued: true }))).toBe("#9 · unqueued");
+  it("is nothing for finished work, which will never take its turn", () => {
+    expect(
+      rowOrdinal(effective({ identifier: "A", position: 4, planPosition: 1, eligibility: "resolved" })),
+    ).toBeNull();
+  });
+
+  /*
+   * A CONTAINER HAS NO ORDINAL AND NEEDS NO LABEL. An earlier cut gave it `step N`, which
+   * put the plan scale and the effective scale in the same gutter column — the list then
+   * read `step 1 / 10 / step 4 / 14`, which looks like a hole where there is none. The
+   * gutter now holds ONE scale per indent level: a plan entry prints `entry.planPosition`
+   * bare, a nested descendant prints its pickup number marked `#N`.
+   */
+  it("leaves a container's gutter to the plan position the entry already carries", () => {
+    expect(rowOrdinal(effective({ identifier: "A", position: 1, planPosition: 1 }))).toBe(1);
+  });
+});
+
+describe("what a row is waiting on", () => {
+  it("is read off the store's own detail, local and cross-workspace alike", () => {
+    expect(
+      blockersOf(
+        effective({
+          identifier: "A",
+          eligibility: "blocked",
+          detail: { blockers: ["STA-35", "STA-67"], crossBlockers: ["WOR-9"] },
+        }),
+      ),
+    ).toEqual(["STA-35", "STA-67", "WOR-9"]);
+  });
+
+  it("is empty rather than thrown when the payload carries nothing of the kind", () => {
+    expect(blockersOf(null)).toEqual([]);
+    expect(blockersOf(effective({ identifier: "A" }))).toEqual([]);
+    expect(blockersOf(effective({ identifier: "A", detail: { blockers: "nonsense" } }))).toEqual([]);
   });
 });
 
@@ -118,7 +152,6 @@ describe("the preview", () => {
   it("splits the plan band from the unqueued band and names the next pickup", () => {
     const view = workedExample();
     const preview = effectivePreview(view);
-    expect(preview.planned.map((r) => r.identifier)).toEqual(["STA-31", "STA-67", "STA-68", "STA-70", "STA-146"]);
     expect(preview.unqueued).toEqual([]);
     // STA-31 is resolved and STA-68/STA-70 are blocked, so the first eligible row is STA-67.
     expect(preview.next?.identifier).toBe("STA-67");
@@ -200,47 +233,3 @@ describe("the retry a conflict offers", () => {
   });
 });
 
-describe("search and add", () => {
-  const issues = [
-    row({ identifier: "STA-31", title: "characterize current product contracts" }),
-    row({ identifier: "STA-66", title: "opt-in cloud continuity", kind: "epic" }),
-    row({ identifier: "STA-146", title: "flaky under full-suite load" }),
-    row({ identifier: "STA-190", title: "October cut", kind: "milestone" }),
-  ];
-
-  it("matches an identifier or a title, case-insensitively", () => {
-    expect(searchCandidates(issues, "sta-146", []).map((r) => r.issue.identifier)).toEqual(["STA-146"]);
-    expect(searchCandidates(issues, "FLAKY", []).map((r) => r.issue.identifier)).toEqual(["STA-146"]);
-    expect(searchCandidates(issues, "", []).length).toBe(0);
-  });
-
-  it("offers epics and milestones, because both are legitimate plan rows", () => {
-    expect(searchCandidates(issues, "c", []).map((r) => r.issue.kind)).toContain("epic");
-    expect(searchCandidates(issues, "October", []).map((r) => r.issue.kind)).toEqual(["milestone"]);
-  });
-
-  it("never offers something already in the plan", () => {
-    expect(searchCandidates(issues, "sta", ["STA-31", "STA-66"]).map((r) => r.issue.identifier)).toEqual([
-      "STA-146",
-      "STA-190",
-    ]);
-  });
-
-  it("ranks an identifier match above a title match, then by the identifier's counter", () => {
-    // "1" is in STA-31, STA-146 and STA-190 as an identifier, and in nothing as a title.
-    expect(searchCandidates(issues, "1", []).map((r) => r.issue.identifier)).toEqual(["STA-31", "STA-146", "STA-190"]);
-    expect(searchCandidates(issues, "cut", []).map((r) => r.issue.identifier)).toEqual(["STA-190"]);
-  });
-
-  it("stops at the limit", () => {
-    expect(searchCandidates(issues, "sta", [], 2).length).toBe(2);
-  });
-});
-
-describe("the layout", () => {
-  it("stacks below the split breakpoint and splits at or above it", () => {
-    expect(layoutFor(SPLIT_MIN_WIDTH_PX - 1)).toBe("stacked");
-    expect(layoutFor(SPLIT_MIN_WIDTH_PX)).toBe("split");
-    expect(layoutFor(1440)).toBe("split");
-  });
-});

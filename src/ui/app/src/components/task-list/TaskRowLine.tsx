@@ -74,6 +74,21 @@ function Chevron() {
 }
 
 /**
+ * The three dots. Hand-rolled for the reason `Chevron` and `SubtaskGlyph` are — at 14px a
+ * 24-unit lucide glyph needs a size override — and hoisted out of the row so the menu
+ * trigger and the open-details button cannot drift into two different `⋯`.
+ */
+function ActionsDots() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true" focusable="false">
+      <circle cx="3" cy="7" r="1.2" fill="currentColor" />
+      <circle cx="7" cy="7" r="1.2" fill="currentColor" />
+      <circle cx="11" cy="7" r="1.2" fill="currentColor" />
+    </svg>
+  );
+}
+
+/**
  * "This belongs to something" — O5 (STA-137).
  *
  * A ring, a rounded elbow, a node: the shape of a thing hanging off another thing. It is
@@ -188,6 +203,20 @@ export interface TaskRowLineProps {
    */
   onOpenMilestone?: (identifier: string) => void;
   onToggleExpand?: () => void;
+  /**
+   * THE `⋯` AS A MENU — the slot V5 promised and left empty.
+   *
+   * This component does not know what a menu IS, deliberately: it hands the caller a
+   * ready-made trigger button — correct class, correct accessible name, `stopPropagation`
+   * already wired so opening a menu never also opens the drawer — and the caller wraps it in
+   * whatever it wants. That keeps `components/ui/dropdown-menu` out of the row's imports,
+   * which matters because the row is rendered by the palette and by static-markup tests that
+   * have no business pulling in a portal.
+   *
+   * Absent means the `⋯` keeps its original behaviour exactly: it opens the detail drawer,
+   * which is what every surface without a menu still wants.
+   */
+  actionsMenu?: (trigger: ReactNode) => ReactNode;
   onToggleSelect?: () => void;
   onFocus?: () => void;
   onKeyDown?: (event: KeyboardEvent<HTMLDivElement>) => void;
@@ -209,6 +238,7 @@ export function TaskRowLine({
   onOpenParent,
   onOpenMilestone,
   onToggleExpand,
+  actionsMenu,
   onToggleSelect,
   onFocus,
   onKeyDown,
@@ -505,21 +535,32 @@ export function TaskRowLine({
           <span className="staple-row-actions-spacer" aria-hidden="true" />
         ) : null}
         {columns.actions && !ghost ? (
-          <button
-            type="button"
-            className="staple-row-actions"
-            aria-label={`Open details for ${issue.identifier}`}
-            onClick={(event) => {
-              event.stopPropagation();
-              onOpen?.();
-            }}
-          >
-            <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true" focusable="false">
-              <circle cx="3" cy="7" r="1.2" fill="currentColor" />
-              <circle cx="7" cy="7" r="1.2" fill="currentColor" />
-              <circle cx="11" cy="7" r="1.2" fill="currentColor" />
-            </svg>
-          </button>
+          actionsMenu ? (
+            actionsMenu(
+              <button
+                type="button"
+                className="staple-row-actions"
+                aria-label={`Actions for ${issue.identifier}`}
+                // Without this, opening the menu ALSO opens the drawer behind it — the row's
+                // own onClick is one element up and would fire on the way past.
+                onClick={(event) => event.stopPropagation()}
+              >
+                <ActionsDots />
+              </button>,
+            )
+          ) : (
+            <button
+              type="button"
+              className="staple-row-actions"
+              aria-label={`Open details for ${issue.identifier}`}
+              onClick={(event) => {
+                event.stopPropagation();
+                onOpen?.();
+              }}
+            >
+              <ActionsDots />
+            </button>
+          )
         ) : null}
       </span>
     </div>

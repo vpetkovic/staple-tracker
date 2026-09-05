@@ -19,6 +19,15 @@ export { TaskList } from "./TaskList";
 export { TaskRowLine, RowSkeleton, type TaskRowLineProps, type TaskRowSemantics } from "./TaskRowLine";
 export { StatusIcon } from "./StatusIcon";
 /**
+ * The one-tab-stop contract. Exported because the QUEUE is now a second list outside this
+ * module that owes it: its rows are `TaskRowLine`s in a listbox of its own, and a list whose
+ * rows can only be reached with a mouse is the defect this hook exists to prevent. The
+ * module header calls the hook an implementation detail; that was true while the tree and
+ * `TaskList` were its only callers, and a third caller in another domain is exactly the
+ * moment it stops being one.
+ */
+export { useRovingFocus, clampIndex, type RovingFocus } from "./roving";
+/**
  * O1b (STA-125). Exported because the row is not the only surface with kinds on it: the
  * graph canvas draws one per node and O4b left an `EpicKindMark` placeholder for it. That
  * placeholder should become this import rather than a second set of paths — two glyph sets

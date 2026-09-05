@@ -34,6 +34,20 @@ import {
   type DragEndEvent,
 } from "@dnd-kit/core";
 import { ChevronDown, ChevronUp, GripVertical } from "lucide-react";
+
+/**
+ * THE WIDTH OF THE HANDLE COLUMN, so `renderBelow` can line up with `renderItem`.
+ *
+ * `p-1` (4px each side) around a `size-3.5` (14px) grip is 22px, and the row's `gap-2` adds
+ * 8. Anything rendered BELOW a row means below its CONTENT — a caller drawing a nested list
+ * under an entry expects it to hang off that entry, not off the drag handle to its left.
+ * Without this the queue's expansion sat 30px left of the row it belonged to, which put every
+ * child's elbow 30px left of the parent chevron it is supposed to hang from.
+ *
+ * It is a constant rather than a class because the two numbers it adds up are in the handle's
+ * own className, and a second literal `pl-[30px]` somewhere else is how they drift apart.
+ */
+const HANDLE_COLUMN_PX = 22 + 8;
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { reorderFocusTarget, type ReorderControl } from "./form-model";
@@ -152,7 +166,9 @@ function Row<T>({
           {renderActions?.(item, index)}
         </div>
       </div>
-      {renderBelow?.(item, index)}
+      {renderBelow ? (
+        <div style={{ paddingLeft: HANDLE_COLUMN_PX }}>{renderBelow(item, index)}</div>
+      ) : null}
     </div>
   );
 }
