@@ -44,5 +44,20 @@ export default defineConfig({
      */
     testTimeout: 20_000,
     hookTimeout: 20_000,
+
+    /**
+     * On CI, cap the worker count.
+     *
+     * Vitest sizes its pool from the core count, but the cost of a file here is not
+     * CPU — it is the fleet of `staple` subprocesses a file spawns. Workers multiply
+     * that: N workers each spawning eight processes is N x 8 Node startups competing
+     * for two cores, and the tests with the tightest timing margin lose. That is a
+     * false negative, and it moves: capping the timeout above fixed one test and the
+     * next-most-marginal one failed in its place.
+     *
+     * Local runs are untouched — a developer machine has the headroom, and halving
+     * the pool there would cost minutes for no benefit.
+     */
+    ...(process.env.CI ? { maxWorkers: 2, minWorkers: 1 } : {}),
   },
 });
