@@ -278,7 +278,7 @@ export class Journal {
     }
     if (scope.suppressed) return;
 
-    const key = `${intent.entity} ${intent.entityId}`;
+    const key = `${intent.entity}\u0000${intent.entityId}`;
     const existing = scope.intents.get(key);
     if (!existing) {
       scope.intents.set(key, {
