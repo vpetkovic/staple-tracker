@@ -33,6 +33,7 @@ import type { QueueVerb } from "../core/queue-store.js";
 import { settingDefinitionsFor, settingRegistryView, settingValueView } from "../core/settings-registry.js";
 import { sanitizeSvg } from "../core/svg-sanitize.js";
 import { readStoredRepositoryId } from "../core/repo-identity.js";
+import { SurfaceAutoSync } from "../core/cloud/auto-triggers.js";
 import { listConflicts, resolveConflict } from "../core/cloud/conflicts.js";
 import { localCloudStatus } from "../core/cloud/status.js";
 import { cloudSurfaceReport, noIdentityReport } from "../core/cloud/surface.js";
@@ -147,6 +148,28 @@ const QUEUE_VERBS: Record<string, QueueVerb> = {
   "/api/queue/prune": "prune",
 };
 const QUEUE_WRITE_PATHS = new Set(Object.keys(QUEUE_VERBS));
+
+/**
+ * The cloud writes that must NOT arm the post-write sync trigger (S10).
+ *
+ * Every one of them changes this machine's relationship to the service rather
+ * than the tracker's contents: there is no journalled operation behind them for a
+ * sync to carry, so a trigger would produce a request with nothing in it.
+ *
+ * `/api/cloud/disconnect` is the one that would actually be wrong rather than
+ * merely pointless — *"a person who has decided to stop talking to a service must
+ * not need that service's permission to stop"* — and `/api/cloud/consent` is
+ * excluded because the consent route fires its own, deliberately, and only in the
+ * direction that turns automatic sync ON.
+ */
+const CLOUD_LIFECYCLE_WRITES = new Set([
+  "/api/cloud/connect/preview",
+  "/api/cloud/connect",
+  "/api/cloud/disconnect",
+  "/api/cloud/consent",
+  "/api/cloud/devices",
+  "/api/cloud/devices/revoke",
+]);
 
 /**
  * How many events GET /api/events?issue= returns — the newest N, oldest first.
@@ -506,6 +529,31 @@ export function startUiServer(options: UiOptions): UiHandle {
   const consents = new ConsentTicketStore();
 
   /**
+   * S10: this server's automatic-sync registration, and all of it.
+   *
+   * Contract: `docs/sync.md`, "Three consents" — *"After automatic — bounded
+   * triggers only: startup, post-write, long-running session … Coalesced,
+   * jittered backoff, cancellable, bounded timeout."*
+   *
+   * `resolve` hands over this server's own workspace resolution rather than
+   * duplicating it: `handleFor` already knows about hub mode, and
+   * `readStoredRepositoryId` is the same read `/api/cloud/status` does. A
+   * workspace with no identity returns null and nothing is fired.
+   *
+   * Everything about *whether* it may run lives in `core/cloud/auto.ts`. Nothing
+   * here checks a consent, which is the point of it being one gate rather than
+   * one per surface.
+   */
+  const autoSync = new SurfaceAutoSync({
+    home: () => stapleHome(),
+    resolve: (ws) => {
+      const handle = handleFor(ws);
+      const repositoryId = readStoredRepositoryId(handle.store.db);
+      return repositoryId === null ? null : { db: handle.store.db, repositoryId };
+    },
+  });
+
+  /**
    * This workspace's sync identity, or a refusal naming why there is none.
    *
    * Same read as `/api/cloud/status` — `sync_state.repository_id`, written from
@@ -681,6 +729,38 @@ export function startUiServer(options: UiOptions): UiHandle {
         if (req.method === "POST" && !originAllowed(req)) {
           deny(res, 403, "forbidden", `Cross-origin request rejected (Origin: ${req.headers.origin})`);
           return;
+        }
+
+        /**
+         * S10: the post-write trigger, registered ONCE, for every mutating route.
+         *
+         * On `finish` rather than inline, which buys two properties that matter
+         * more than the brevity. The response is already on the wire, so the
+         * trigger cannot delay a write no matter what the link is doing — the
+         * page's latency is unchanged whether this machine is in automatic mode or
+         * not. And `res.statusCode` is settled, so a refused or failed write does
+         * not produce a request to Cloudflare: only work that actually happened is
+         * worth telling anybody about.
+         *
+         * `CLOUD_LIFECYCLE_WRITES` is excluded because none of them journals
+         * anything. Connecting, disconnecting and listing devices change this
+         * machine's relationship to the service; there is no new operation for a
+         * sync to carry, and firing one on `disconnect` in particular would be a
+         * request made in the act of stopping.
+         *
+         * KNOWN LIMIT, stated rather than hidden: the workspace is read from the
+         * query string because the body has not been parsed yet and cannot be read
+         * twice. In single-workspace mode — every connected repository today —
+         * that is exact. In hub mode a write that named its workspace only in the
+         * body triggers the default workspace instead; the named one still syncs
+         * on its session tick. Fixing it properly means threading the resolved
+         * handle out of the route, which is not a thin registration.
+         */
+        if (req.method === "POST" && !CLOUD_LIFECYCLE_WRITES.has(url.pathname)) {
+          const ws = url.searchParams.get("ws") ?? undefined;
+          res.once("finish", () => {
+            if (res.statusCode >= 200 && res.statusCode < 300) autoSync.postWrite(ws);
+          });
         }
       }
 
@@ -979,6 +1059,29 @@ export function startUiServer(options: UiOptions): UiHandle {
         const key = named[0] as "auto" | "backup";
         setConsent(stapleHome(), repositoryId, { [key]: body[key] as boolean });
         json(res, 200, { report: cloudReport(handle, repositoryId) });
+        /**
+         * S10: **this route fires no trigger, in either direction.** It writes one
+         * file and answers, exactly as it did before automatic sync existed.
+         *
+         * Firing one on the way ON was the obvious thing to want — a human just
+         * said "keep this device up to date", and making them wait for a session
+         * tick is a poor first impression. It was written, and then removed,
+         * because S13 pinned this route as silent on purpose (`test/network-
+         * silence.test.ts`, *"Turning a consent on and off is a local file write
+         * and must say nothing to anybody"*), and a lane that quietly relaxed
+         * another lane's assertion to make its own feature feel snappier would be
+         * spending a guarantee it does not own. The route that SPENDS a consent
+         * does one thing; the next trigger — a write, or the session tick — is
+         * what acts on it.
+         *
+         * On the way OFF there is nothing to fire and nothing to send. Stopping is
+         * the absence of requests, and the gate is what produces that absence:
+         * every later trigger reads `auto: false` and returns before
+         * `core/cloud/sync.js` is so much as loaded. A run already in flight is
+         * bounded by its own budget. There is deliberately no "tell the service we
+         * stopped" either — a device that announced its withdrawal would be making
+         * a request in the act of ceasing to make them.
+         */
         return;
       }
 
@@ -2132,6 +2235,17 @@ export function startUiServer(options: UiOptions): UiHandle {
   }
 
   server.listen(options.port, "127.0.0.1", () => {
+    /**
+     * S10: the startup and long-running-session triggers, both of them, here.
+     *
+     * On `listening` rather than at construction, because a server that failed to
+     * bind is not a session and must not have started one. Both calls are silent
+     * on a machine that has not consented — `startup` returns after one
+     * `existsSync` on a fresh install — and the interval is `unref`'d, so a
+     * process that has finished its work is never held open by its own heartbeat.
+     */
+    autoSync.startup();
+    autoSync.startSession();
     const mode = describeMode();
     // The token rides in the URL because that URL is the only way into the page.
     console.log(`staple ui — ${mode} at http://localhost:${boundPort()}/`);
@@ -2142,6 +2256,17 @@ export function startUiServer(options: UiOptions): UiHandle {
     token,
     server,
     close() {
+      /**
+       * S10: FIRST, before the stores are closed.
+       *
+       * A run in flight holds `handle.store.db` and will keep applying pulled
+       * pages to it. Closing the handle underneath it would turn a routine
+       * shutdown into a write against a closed database, and the abort has to
+       * land before that can happen. It also stops the session interval, without
+       * which a `close()` would leave a timer firing at a resolver whose stores
+       * are gone.
+       */
+      autoSync.stop();
       server.closeAllConnections();
       server.close();
       // Outstanding connect consents die with the process that showed them. A
