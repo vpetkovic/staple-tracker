@@ -482,7 +482,6 @@ export function screenForConflicts(
   if (op.baseVersion >= version) return input;
 
   const between = localOpsSince(db, op.entity, op.entityId, op.baseVersion);
-  if (between.length === 0) return input;
 
   /** Canonical field name -> the newest local operation that wrote it. */
   const localWrites = new Map<string, LocalSide>();
@@ -499,6 +498,47 @@ export function screenForConflicts(
       }
     }
   }
+
+  /**
+   * An ordered collection is contested by the version comparison ALONE.
+   *
+   * For every other entity, condition (2) — "the field is named by a local
+   * outbox row" — is what keeps *"Disjoint field sets are not a conflict"*
+   * true: without it, one device's `priority` edit would contest another's
+   * `estimate`. An ordered collection has no disjoint field sets to protect.
+   * It replicates as ONE pseudo-field carrying the whole list, so any local
+   * operation on it necessarily named that field, and condition (1) has already
+   * proved a local operation happened — `baseVersion < version` means this
+   * database has seen operations on this entity that the sender had not.
+   * Consulting the outbox therefore adds no information here, and requiring it
+   * costs the guarantee outright, twice:
+   *
+   *   - **The incumbent order need not be this device's own.** A device that
+   *     APPLIED the order it holds journaled nothing, so it has no outbox row —
+   *     and silently adopted the next stale `replace` to arrive, discarding a
+   *     plan a human had deliberately chosen, with no record on any device.
+   *   - **The outbox is transient.** `compact()` prunes acknowledged rows as a
+   *     matter of routine, and the moment it does, the device that authored the
+   *     incumbent order stops being able to defend it. Detection that expires is
+   *     not detection; two devices and one compaction were enough to lose an
+   *     order silently.
+   *
+   * So the pseudo-field is contestable whenever the operation carries it, with
+   * the local side attributed to an outbox row when one survives and left
+   * unattributed when none does. `localOpId` is nullable precisely because the
+   * operation that produced the incumbent value is not always nameable here;
+   * the two ORDERS are retained in full either way, and it is the orders, not
+   * the operation ids, that a human is being asked to choose between.
+   */
+  const wholeField = WHOLE[op.entity];
+  if (wholeField !== undefined && !localWrites.has(wholeField)) {
+    for (const key of Object.keys(op.payload)) {
+      if (policy(op.entity, key)?.name !== wholeField) continue;
+      localWrites.set(wholeField, { opId: null, at: null, baseValue: undefined });
+      break;
+    }
+  }
+
   if (localWrites.size === 0) return input;
 
   const contested = new Set<string>();
@@ -539,8 +579,7 @@ export function screenForConflicts(
    * A whole-plan pseudo-field contested means the operation carries nothing this
    * device may apply — an ordered collection is replaced entire or not at all.
    */
-  const whole = WHOLE[op.entity];
-  if (whole !== undefined && contested.has(whole)) return null;
+  if (wholeField !== undefined && contested.has(wholeField)) return null;
 
   const kept: Record<string, unknown> = {};
   let contentful = false;
@@ -810,6 +849,7 @@ export function resolveConflict(db: DatabaseSync, request: ResolveRequest): Reso
     }
 
     close(db, conflict.id, at, actor, chosen);
+    settleOpenFor(db, conflict.entity, conflict.entityId, conflict.field, at, actor, chosen);
 
     /**
      * The decision replicates as its own operation so that every other device
@@ -859,6 +899,46 @@ function close(
   db.prepare(
     "UPDATE sync_conflicts SET resolved_at = ?, resolved_by = ?, resolution = ? WHERE id = ?",
   ).run(at, actor, JSON.stringify(value ?? null), id);
+}
+
+/**
+ * A decision about a field settles every OPEN record about that same field here.
+ *
+ * A conflict id is a function of the two operation ids, sorted, so that two
+ * devices holding mirrored views of one disagreement compute the same id and a
+ * resolution emitted by either closes the record on both. That derivation needs
+ * both ids, and there is one case where this device cannot supply its own: an
+ * ordered collection whose incumbent order was APPLIED rather than authored
+ * here, or authored here and then compacted out of the outbox. Those records are
+ * real — they retain both orders, which is the point — but their id is derived
+ * from `(null, remote)` and no other device computes it.
+ *
+ * Without this, such a record would outlive its own resolution: the field
+ * settles, every device converges, and this one still reports an open conflict
+ * about a plan that was decided. That is a false alarm, and a false alarm about
+ * the exact mechanism that exists to be trusted is expensive.
+ *
+ * So the rule is stated on the FIELD rather than on the record id: once someone
+ * has decided what this collection holds, no record on this device may still
+ * claim it is undecided. Nothing is discarded — the row keeps both values, and
+ * now names the value chosen and who chose it, which is the audit shape the
+ * contract asks for. Records already closed are untouched, including ones closed
+ * to a different value, exactly as before: *"a resolution is not overwritten by
+ * a later opinion"*.
+ */
+function settleOpenFor(
+  db: DatabaseSync,
+  entity: string,
+  entityId: string,
+  field: string,
+  at: string,
+  actor: string | null,
+  value: unknown,
+): void {
+  db.prepare(
+    `UPDATE sync_conflicts SET resolved_at = ?, resolved_by = ?, resolution = ?
+      WHERE entity = ? AND entity_id = ? AND field = ? AND resolved_at IS NULL`,
+  ).run(at, actor, JSON.stringify(value ?? null), entity, entityId, field);
 }
 
 /**
@@ -988,6 +1068,11 @@ export function applyConflictOperation(db: DatabaseSync, op: RemoteOperation): b
   }
 
   if (existing !== null) close(db, op.entityId, at, resolvedBy, value);
+  /**
+   * And any record this device opened about the same field, whose id the
+   * deciding device could not have named — see {@link settleOpenFor}.
+   */
+  settleOpenFor(db, entity, targetId, field, at, resolvedBy, value);
   return true;
 }
 

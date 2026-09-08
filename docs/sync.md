@@ -124,12 +124,12 @@ reordering offline produce colliding ranks that no row-level merge can repair
 without inventing an order neither human asked for.
 
 So they do not replicate row by row. Each is one operation carrying the **entire
-ordered list of entity ids plus the base revision it was computed from**:
+ordered list of entity ids**, checked against **the base revision it was computed
+from**:
 
-- `queue.replace` — `{ entries: [issueId…], baseRevision }`, against
-  `store.queue().revision()`
-- `milestone.replaceMembers` — `{ milestoneId, members: [issueId…], baseRevision }`,
-  against `milestone_meta.members_revision`
+- `queue.replace` — payload `{ order: [issueId…] }`, on the singleton plan entity
+- `milestone.replaceMembers` — payload `{ members: [issueId…] }`, on the
+  milestone, which the envelope already names in `entityId`
 
 **There is no per-row queue or membership operation.** No `queue.insert`, no
 `milestone.addMember` on the wire. Membership changes only ever travel as a whole
@@ -138,19 +138,52 @@ is never transported, it is recomputed densely from list order inside the same
 transaction that applies the list. A concurrent insert on two devices cannot
 violate a constraint, because neither device ever sends a rank.
 
-The `baseRevision` in these operations is the entity's version from
-`sync_entity_versions`, **not** `meta.queue_revision` or
-`milestone_meta.members_revision`. Those two are device-local
-cache-invalidation and CAS counters for the local editor; they are derived, they
-merge as `max()` so the local optimistic-concurrency checks stay monotonic, and
-they are bumped on apply like any other local write. Two counters, deliberately:
-one is what this database has seen, the other is what the repository agreed. The
-existing local editor keeps using the local one and needs no change
-([queue.md](queue.md)).
+**The base revision is the envelope's `baseVersion`, and is not repeated in the
+payload.** It is the entity's version from `sync_entity_versions` — **not**
+`meta.queue_revision` or `milestone_meta.members_revision`. Those two are
+device-local cache-invalidation and CAS counters for the local editor; they are
+derived, they merge as `max()` so the local optimistic-concurrency checks stay
+monotonic, and they are bumped on apply like any other local write. Two counters,
+deliberately: one is what this database has seen, the other is what the
+repository agreed. The existing local editor keeps using the local one and needs
+no change ([queue.md](queue.md)).
 
-A `replace` whose `baseRevision` is behind the applied version is a conflict on
+A `baseRevision` key inside the payload would be a second copy of a number the
+envelope already carries for every operation — a second thing that can be wrong,
+and one that `screenForConflicts` would additionally have to special-case, since
+a payload key on an ordered collection is otherwise a contestable field of that
+collection and this one is not. One token, in the one place every operation
+already puts it. Likewise `milestoneId`: the envelope's `entityId` is the
+milestone, and a payload copy is a second name for it that can disagree.
+
+A `replace` whose `baseVersion` is behind the applied version is a conflict on
 the *plan*, recorded whole — both orderings preserved — and never merged. A human
 reordered a plan; the machine does not get to average two plans.
+
+**That check is unconditional, and the wording matters.** Field-scoped detection
+elsewhere additionally requires the incoming payload to name a field some *local
+operation in between* also named, which keeps *"Disjoint field sets are not a
+conflict"* true. An ordered collection has no disjoint field sets: it is one
+pseudo-field carrying the whole list, so `baseVersion` being behind is already
+proof that this device has seen a change to that list which the sender had not.
+The extra condition adds nothing here, and reading it off the outbox would cost
+the guarantee outright in two ordinary situations — a device holding an order it
+*applied* rather than authored has no outbox row and never will, and outbox
+compaction routinely prunes the row of a device that did author one. Detection
+that expires with housekeeping is not detection. So the comparison stands on the
+version alone, on every device, whether or not it can name the operation that
+produced the order it is defending.
+
+When it cannot, the conflict record's `localOpId` is `null`. Both orderings are
+still retained in full, which is what a human is being asked to choose between;
+what is unavailable is only the attribution of the incumbent side. One
+consequence follows and is deliberate: a conflict id is derived from the two
+operation ids, so a record with an unattributable side has an id no other device
+computes. **A resolution therefore settles every open record on that device for
+the same `(entity, entityId, field)`**, not only the one whose id it names —
+otherwise a decision everyone converged on would leave a device still reporting
+an open conflict about a plan that was decided. Records already resolved are
+untouched, including ones resolved to a different value.
 
 `queue_entries.added_by`, `added_at` and `note` ride along inside the entry
 objects.
@@ -657,10 +690,17 @@ fields changed by the local operations in between. Disjoint field sets are not a
 conflict — two devices setting `priority` and `estimated_seconds` on one issue
 both apply, and the version bumps twice.
 
+The second condition is read off this device's outbox, and that is a deliberately
+narrow reading of "the local operations in between": it sees the operations this
+device *authored* and still holds. For ordered collections that reading is
+[dropped](#ordered-collections-replicate-whole-not-row-by-row), because there is
+one field and the version comparison already carries the whole answer.
+
 A conflict record retains both sides in full: entity, field, base value, local
-value, remote value, both `opId`s, both `deviceId`s, both timestamps. Unrelated
-operations keep flowing while it sits unresolved — one contested field does not
-stop the repository.
+value, remote value, both `opId`s, both `deviceId`s, both timestamps — except
+that `localOpId` is `null` when the operation that produced the incumbent value
+is not nameable here. Unrelated operations keep flowing while it sits unresolved
+— one contested field does not stop the repository.
 
 Resolution emits a **new** operation with `baseVersion` set to the post-conflict
 version. History is never rewritten and no side is discarded from the record. The
