@@ -15,7 +15,10 @@ import type {
   ActionPayload,
   AgentContext,
   Bootstrap,
+  CloudMutationResult,
   CloudSurfaceReport,
+  ConnectPreviewResponse,
+  ConsentTicket,
   DocumentRevision,
   ErrorEnvelope,
   Graph,
@@ -30,6 +33,7 @@ import type {
   ProjectRemoval,
   ProjectRow,
   QueueView,
+  RemoteDevice,
   StapleEvent,
   VocabularyOp,
 } from "./types";
@@ -184,6 +188,99 @@ export const getPoll = () => request<Poll>("/api/poll");
  * read a page.
  */
 export const getCloudStatus = () => request<CloudSurfaceReport>("/api/cloud/status");
+
+// ---------- cloud mutations (S13, STA-258) ----------
+
+/**
+ * The cloud writes, and the two-step exchange that keeps connect's
+ * preview-then-consent shape alive across HTTP.
+ *
+ * ── WHY THERE ARE TWO CONNECT CALLS AND NOT ONE ───────────────────────────────
+ *
+ * `previewCloudConnect` is the ONLY function in this app that can name an
+ * endpoint. `cloudConnect` takes a consent id and a digest and has no parameter
+ * for one — deliberately, and matching the route, which also has no such field.
+ * The endpoint travels in one direction: it comes back in the preview response,
+ * and there is no request shape that carries it forward. So a caller cannot
+ * connect without having first been handed the description of what it would be
+ * connecting to. See src/core/cloud/consent.ts for the whole argument.
+ *
+ * Collapsing these into one convenience function that previewed and then
+ * connected would put that property back in the hands of whoever calls it, which
+ * is exactly the kind of guarantee this codebase keeps structural instead.
+ *
+ * ── WHAT IS AND IS NOT A NETWORK CALL ─────────────────────────────────────────
+ *
+ * Everything on this page is a same-origin loopback request to the local server.
+ * Of the routes below, only `listCloudDevices` and `revokeCloudDevice` cause that
+ * server to leave the machine. `previewCloudConnect`, `setCloudConsent` and
+ * `cloudDisconnect` read and write local files and nothing else — which is why
+ * the settings section can render its entire state without any of them.
+ *
+ * There is no `purgeCloud`. `staple cloud purge` requires the repository id typed
+ * back, STA-256 records that the server does not yet validate a confirmation on
+ * the wire, and a one-click irreversible remote deletion behind a browser session
+ * is not a thing to add while that is true. The section says purge exists and
+ * names the command.
+ */
+const cloudWrite = <T>(route: string, body: Record<string, unknown>) =>
+  request<T>(`/api/cloud/${route}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+/**
+ * Step one. Local: parses the URL, reads two files, probes the credential store.
+ *
+ * `credentialFile` is `staple cloud connect --credential-file`. It belongs on the
+ * PREVIEW rather than on the connect, because the preview is what says where the
+ * secret is about to go — making the choice part of what consent is given to
+ * rather than a setting hidden behind it.
+ */
+export const previewCloudConnect = (target: {
+  ws?: string;
+  endpoint: string;
+  label?: string;
+  credentialFile?: boolean;
+}) => cloudWrite<ConnectPreviewResponse>("connect/preview", target);
+
+/** Step two. Carries the ticket and the digest of the preview that was shown, and nothing else that names a service. */
+export const cloudConnect = (target: {
+  ws?: string;
+  consent: ConsentTicket;
+  /** The enrollment secret. Sent once, stored by the server, never echoed back. */
+  token: string;
+}) =>
+  cloudWrite<CloudMutationResult>("connect", {
+    ws: target.ws,
+    consent: target.consent.id,
+    digest: target.consent.digest,
+    token: target.token,
+  });
+
+/** Local only — no request leaves the machine, not even a courtesy one. */
+export const cloudDisconnect = (target: { ws?: string }) =>
+  cloudWrite<CloudMutationResult>("disconnect", { ...target, confirm: true });
+
+/**
+ * One consent, one call. The signature takes a single flag rather than an object
+ * of two, because the route refuses a body naming both: they are two decisions
+ * and a control that spent both at once would be spending one of them silently.
+ */
+export const setCloudConsent = (target: { ws?: string; consent: "auto" | "backup"; value: boolean }) =>
+  cloudWrite<CloudMutationResult>("consent", { ws: target.ws, [target.consent]: target.value });
+
+/** EGRESSES. Called only from an explicit press, never on mount. */
+export const listCloudDevices = (target: { ws?: string } = {}) =>
+  cloudWrite<{ devices: RemoteDevice[] }>("devices", target);
+
+/** EGRESSES. Ends that device's access on its very next request. */
+export const revokeCloudDevice = (target: { ws?: string; deviceId: string }) =>
+  cloudWrite<CloudMutationResult & { deviceId: string; revoked: boolean; self: boolean }>(
+    "devices/revoke",
+    { ...target, confirm: true },
+  );
 
 export const getIssues = (params: { ws?: string; assignee?: string } = {}) =>
   request<IssueRow[]>(`/api/issues${qs(params)}`);

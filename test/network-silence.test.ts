@@ -581,7 +581,7 @@ describe("connect: nothing leaves the machine before consent", () => {
  * and still assert zero. The spy sees the server's OWN outbound calls, of which
  * there must be none.
  */
-describe("the UI server on a disconnected workspace serves the whole page and calls nobody", () => {
+describe("the UI server serves the whole page, connected or not, and calls nobody", () => {
   let spy: ReturnType<typeof installNetworkSpy> | null = null;
 
   afterEach(() => {
@@ -641,6 +641,41 @@ describe("the UI server on a disconnected workspace serves the whole page and ca
         }
       }
 
+      /**
+       * S13 (STA-258): the cloud MUTATION routes, on a workspace that has no
+       * connection. These are the ones a settings panel reaches, and every one of
+       * them must be silent here — three of them because they only ever touch
+       * local files, and three of them (`devices`, `devices/revoke`, `connect`)
+       * because on a DISCONNECTED repository they must refuse from local files
+       * alone. That last group is the interesting one: a devices route that
+       * resolved the endpoint before checking whether there was a connection
+       * would break the invariant on the machine least likely to be watching,
+       * which is exactly the failure mode `cloud sync` is on this list for.
+       *
+       * The status codes are not asserted (they are `test/ui-cloud-settings.test.ts`'s
+       * job); what is asserted is that answering them attempted nothing.
+       */
+      const CLOUD_WRITES: Array<[string, Record<string, unknown>]> = [
+        ["/api/cloud/connect/preview", { endpoint: "https://sync.example.com", credentialFile: true }],
+        ["/api/cloud/connect", { endpoint: "https://sync.example.com", token: "enrollment-secret" }],
+        ["/api/cloud/connect", { consent: "made-up", digest: "made-up", token: "enrollment-secret" }],
+        ["/api/cloud/consent", { auto: true }],
+        ["/api/cloud/consent", { backup: true }],
+        ["/api/cloud/disconnect", { confirm: true }],
+        ["/api/cloud/devices", {}],
+        ["/api/cloud/devices/revoke", { deviceId: "someone-else", confirm: true }],
+      ];
+      for (let round = 0; round < 3; round += 1) {
+        for (const [route, body] of CLOUD_WRITES) {
+          const res = await fetch(`${origin}${route}`, {
+            method: "POST",
+            headers: { "x-staple-token": token, "content-type": "application/json" },
+            body: JSON.stringify(body),
+          });
+          await res.json();
+        }
+      }
+
       // The anchor: the server really served, so "zero violations" means "it ran
       // and stayed silent" rather than "nothing happened".
       const status = (await (
@@ -648,6 +683,151 @@ describe("the UI server on a disconnected workspace serves the whole page and ca
       ).json()) as { state: string; hint: string | null };
       expect(status.state).toBe("disconnected");
       expect(status.hint).toBe("staple cloud connect");
+
+      // A second anchor for the writes above: previewing a connection really does
+      // produce a preview, so their silence is a silence with a subject.
+      const previewed = (await (
+        await fetch(`${origin}/api/cloud/connect/preview`, {
+          method: "POST",
+          headers: { "x-staple-token": token, "content-type": "application/json" },
+          body: JSON.stringify({ endpoint: "https://sync.example.com", credentialFile: true }),
+        })
+      ).json()) as { preview: { endpoint: { origin: string } }; consent: { id: string } };
+      expect(previewed.preview.endpoint.origin).toBe("https://sync.example.com");
+      expect(previewed.consent.id).toBeTruthy();
+
+      expect(spy.violations, describeViolations(spy.violations)).toHaveLength(0);
+    } finally {
+      ui?.close();
+      if (previousHome === undefined) delete process.env.STAPLE_HOME;
+      else process.env.STAPLE_HOME = previousHome;
+      rmSync(uiHome, { recursive: true, force: true });
+      rmSync(uiRepo, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * The other half, and the harder one: **connected in manual mode.**
+   *
+   * *"Connected in manual mode, the same list asserts zero. Only `staple cloud
+   * sync`, `staple cloud connect`, `staple cloud status --refresh` and the
+   * explicitly named backup and purge commands may call out."* The subprocess
+   * section above asserts that for the CLI; this asserts it for the page, which is
+   * where it is easier to lose — a connected settings panel is exactly the surface
+   * somebody would "improve" by refreshing the device list on open, or by probing
+   * reachability so the status could be shown in colour.
+   *
+   * `/api/cloud/devices` and `/api/cloud/devices/revoke` are DELIBERATELY absent
+   * from the list below. They are the two routes that are supposed to egress, and
+   * putting them here would either fail honestly or force an exemption that would
+   * then quietly cover something else. What holds them is
+   * `test/ui-cloud-settings.test.ts`, which drives a fake service on loopback and
+   * asserts against its request log that nothing else reaches it — including that
+   * reading `/api/cloud/status` does not.
+   */
+  it("stays silent on a CONNECTED workspace too, across every route the page can reach", async () => {
+    spy = installNetworkSpy();
+    spy.selfCheck();
+
+    const { startUiServer } = await import("../src/ui/server.js");
+
+    const uiHome = mkdtempSync(join(tmpdir(), "staple-netsilence-uic-home-"));
+    const uiRepo = mkdtempSync(join(tmpdir(), "staple-netsilence-uic-repo-"));
+    const previousHome = process.env.STAPLE_HOME;
+    process.env.STAPLE_HOME = uiHome;
+
+    let ui: { server: import("node:http").Server; token: string; close: () => void } | null = null;
+    try {
+      const ws = initWorkspace({ dir: uiRepo, slug: "netsilenceuic" });
+      ws.store.createIssue({ title: "a task", assignee: "netsilence" });
+      ws.store.db.close();
+
+      // Forged, for the reason the CLI half forges: connecting for real would
+      // need a server, and this is about what happens when there ISN'T one being
+      // talked to.
+      const manifest = JSON.parse(readFileSync(join(uiRepo, ".staple", "repository.json"), "utf8")) as {
+        repositoryId: string;
+      };
+      const dir = join(uiHome, "cloud");
+      mkdirSync(dir, { recursive: true, mode: 0o700 });
+      writeFileSync(join(dir, `${manifest.repositoryId}.token`), "stpl_fake\n", { mode: 0o600 });
+      writeFileSync(
+        join(dir, `${manifest.repositoryId}.json`),
+        JSON.stringify({
+          schemaVersion: 1,
+          repositoryId: manifest.repositoryId,
+          endpoint: "https://staple-sync-dev.example.workers.dev",
+          deviceId: "11111111-2222-3333-4444-555555555555",
+          label: "test device",
+          credentialMechanism: "file",
+          connectedAt: new Date().toISOString(),
+          auto: false,
+          backup: false,
+          protocol: 1,
+        }),
+        { mode: 0o600 },
+      );
+
+      ui = startUiServer({ port: 0, hub: false, db: join(uiRepo, ".staple", "staple.db") });
+      await once(ui.server, "listening");
+      const origin = `http://127.0.0.1:${(ui.server.address() as AddressInfo).port}`;
+      const token = ui.token;
+      const headers = { "x-staple-token": token, "content-type": "application/json" };
+
+      for (let round = 0; round < 3; round += 1) {
+        for (const route of ["/api/cloud/status", "/api/cloud/conflicts", "/api/settings", "/api/poll"]) {
+          const res = await fetch(`${origin}${route}`, { headers });
+          expect(res.status, `${route} answered ${res.status}`).toBe(200);
+          await res.json();
+        }
+        /**
+         * Turning a consent on and off is a local file write and must say nothing
+         * to anybody — a device that told the service it had enabled automatic
+         * sync would be making a request BEFORE the sync the consent authorizes.
+         * And previewing a re-connect, on a machine that is already connected, is
+         * still local: the preview names the existing endpoint in its
+         * `existingEndpoint` field without ever resolving it.
+         */
+        for (const [route, body] of [
+          ["/api/cloud/consent", { auto: true }],
+          ["/api/cloud/consent", { auto: false }],
+          ["/api/cloud/consent", { backup: true }],
+          ["/api/cloud/consent", { backup: false }],
+          ["/api/cloud/connect/preview", { endpoint: "https://elsewhere.example", credentialFile: true }],
+        ] as Array<[string, Record<string, unknown>]>) {
+          const res = await fetch(`${origin}${route}`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify(body),
+          });
+          expect(res.status, `${route} answered ${res.status}`).toBe(200);
+          await res.json();
+        }
+      }
+
+      // The anchor: the server really was connected while all of that happened.
+      const status = (await (await fetch(`${origin}/api/cloud/status`, { headers })).json()) as {
+        state: string;
+        checked: boolean;
+      };
+      expect(status.state).toBe("manual");
+      expect(status.checked).toBe(false);
+
+      /**
+       * And disconnect, last, because it is the one write on a connected
+       * repository whose whole contract is that it does NOT tell the service:
+       * *"a person who has decided to stop talking to a service must not need
+       * that service's permission to stop."*
+       */
+      const off = (await (
+        await fetch(`${origin}/api/cloud/disconnect`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ confirm: true }),
+        })
+      ).json()) as { wasConnected: boolean; report: { state: string } };
+      expect(off.wasConnected).toBe(true);
+      expect(off.report.state).toBe("disconnected");
 
       expect(spy.violations, describeViolations(spy.violations)).toHaveLength(0);
     } finally {
