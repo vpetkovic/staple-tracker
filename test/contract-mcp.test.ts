@@ -232,7 +232,13 @@ describe("tool inventory", () => {
    * moment this ticket is buying. Read-only tools deliberately omit
    * destructiveHint (the MCP spec only defines it when readOnlyHint is false).
    */
-  it("exposes exactly these 45 tools with these annotations and output schemas", async () => {
+  // STA-75: the title said 45 while the array below held 46 and `src/mcp.ts`
+  // registered 46 — the count in the title was simply never updated when the
+  // conflict pair landed, so it asserted nothing and quietly disagreed with
+  // `characterize-mcp-startup` and `package-tarball`, which both pin 46. The
+  // array was always right; only the sentence was stale. Corrected, not moved:
+  // this ticket adds no tool.
+  it("exposes exactly these 46 tools with these annotations and output schemas", async () => {
     const tools = await harness.listTools();
     const inventory = tools.map((t) => ({
       name: t.name,
@@ -1406,6 +1412,14 @@ describe("tool response shapes (31/31)", () => {
       "prune_queue",
       // STA-71: the cloud status projection is pinned in test/cloud-connect.test.ts
       // against the same `localCloudStatus` the CLI and HTTP surfaces render.
+      //
+      // STA-75 moved WHAT it returns without moving the tool: it now emits
+      // `CloudSurfaceReport` verbatim — the same object `staple cloud status
+      // --json` prints and `/api/cloud/status` answers — instead of a nine-field
+      // literal this file used to build for itself. `test/cloud-surfaces.test.ts`
+      // asserts the three payloads equal key-for-key, and `src/mcp.ts` carries an
+      // `Equals<>` proof that the zod schema cannot drift from the type. No tool
+      // was added: the count above is 46 before and after.
       "cloud_status",
       // The conflict lane's two are pinned in test/conflict-surfaces.test.ts,
       // against the CLI and HTTP projections of the same record — including that

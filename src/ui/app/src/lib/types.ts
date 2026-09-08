@@ -437,6 +437,28 @@ export interface ClaimActivity {
   heldSeconds: number;
   /** Wall-clock seconds since the holder last did anything here. */
   idleSeconds: number;
+  /**
+   * How exclusive the claim is: `"local"` = this database only, `"lease"` = a
+   * fenced server lease is held and the claim is globally exclusive.
+   *
+   * An unconnected workspace always reports `"local"`, which is every workspace
+   * until somebody runs `staple cloud connect`. A UI must not render a badge for
+   * `"local"` — it is the norm, and decorating the norm is how a page acquires
+   * cloud furniture on a machine that has no cloud.
+   */
+  scope: ClaimScope;
+  /** The lease behind `scope: "lease"`. Null whenever scope is `"local"`. */
+  lease: ClaimLease | null;
+}
+
+/** Mirrors `ClaimScope` in src/core/cloud/lease-store.ts. */
+export type ClaimScope = "local" | "lease";
+
+/** Mirrors `ClaimLease` in src/core/cloud/lease-store.ts. */
+export interface ClaimLease {
+  fencingToken: number;
+  /** When the SERVICE says the lease expires. The browser's clock has no say. */
+  serverExpiresAt: string;
 }
 
 /**
@@ -1297,4 +1319,57 @@ export interface ProjectFieldsInput {
   kind?: ProjectKind | null;
   sourceKind?: ProjectSourceKind | null;
   source?: string | null;
+}
+
+/**
+ * `GET /api/cloud/status` — mirrors `CloudSurfaceReport` in
+ * src/core/cloud/surface.ts, the ONE contract the CLI, MCP, HTTP and this page
+ * all render.
+ *
+ * Hand-kept like the rest of this file, but NOT unchecked:
+ * `test/contract-ui-types.test.ts` asserts this interface exactly equal to the
+ * core one at compile time, so the two cannot drift the way a hand-kept mirror
+ * otherwise silently does.
+ *
+ * Every field is present in every state. The page therefore never asks "does
+ * this repository have a cursor" — it asks what the cursor IS, and gets null
+ * when there has not been one.
+ */
+export interface CloudSurfaceReport {
+  state: "disconnected" | "manual" | "automatic" | "offline" | "revoked" | "auth_failed";
+  /** What this page may OFFER. offline/revoked/auth_failed are still connected. */
+  mode: "disconnected" | "manual" | "automatic";
+  detail: string;
+  repositoryId: string | null;
+  endpoint: string | null;
+  deviceId: string | null;
+  label: string | null;
+  credentialMechanism: "keychain" | "secret-tool" | "file" | null;
+  credentialPresent: boolean;
+  auto: boolean;
+  backup: boolean;
+  connectedAt: string | null;
+  checked: boolean;
+  pending: number;
+  cursor: string | null;
+  epoch: number | null;
+  lastSyncAt: string | null;
+  conflicts: { open: number; resolved: number };
+  leases: { held: number };
+  warnings: string[];
+  failure: {
+    code: "offline" | "revoked" | "auth_failed" | "no_identity";
+    summary: string;
+    remedy: string;
+  } | null;
+  /**
+   * Static text, and ONLY when disconnected.
+   *
+   * The page deliberately does not render it. `docs/sync.md` permits a static
+   * hint before connect, but permitting is not requiring, and this page's
+   * requirement is the stronger one: *"The UI does not prompt."* The field is
+   * mirrored because it is part of the contract, and left unrendered because
+   * rendering it is precisely the nag the invariant forbids.
+   */
+  hint: string | null;
 }

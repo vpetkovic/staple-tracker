@@ -25,7 +25,12 @@ import { dirname } from "node:path";
 import { stapleHome } from "./config/home.js";
 import { readRepositoryManifest } from "./core/repo-identity.js";
 import { listConflicts, resolveConflict } from "./core/cloud/conflicts.js";
-import { describeState, localCloudStatus } from "./core/cloud/status.js";
+import { localCloudStatus } from "./core/cloud/status.js";
+import {
+  cloudSurfaceReport,
+  noIdentityReport,
+  type CloudSurfaceReport,
+} from "./core/cloud/surface.js";
 import { Hub, notifyHubResolvedSafe } from "./core/hub.js";
 import type { CrossBlockerState } from "./core/hub.js";
 import {
@@ -403,6 +408,29 @@ const claimShape = {
   idleSeconds: z
     .number()
     .describe("Seconds since the holder last did anything here — the staleness signal"),
+  /**
+   * STA-75. The field that stops an agent over-claiming exclusivity it does not
+   * have — and the description is the whole mechanism, because this is read by a
+   * model rather than by code with a `switch` in it.
+   */
+  scope: z
+    .enum(["local", "lease"])
+    .describe(
+      'How exclusive this claim actually is. "local" means THIS DATABASE ONLY: no global ' +
+        "exclusivity is claimed and another machine may be holding the same work right now — " +
+        "coordinate before assuming you are the only one on it. \"lease\" means a fenced server " +
+        "lease is held and the claim IS globally exclusive. An unconnected workspace always " +
+        'reports "local", which is not a degraded answer but the true one.',
+    ),
+  lease: z
+    .object({
+      fencingToken: z.number().describe("Monotonic server-issued token; higher always wins"),
+      serverExpiresAt: z
+        .string()
+        .describe("When the SERVICE says the lease expires. Client clocks have no authority here"),
+    })
+    .nullable()
+    .describe('The lease backing scope="lease", so it can be confirmed rather than trusted. Null when scope="local"'),
 };
 type _ClaimShapeMatchesInterface = Expect<
   Equals<z.infer<z.ZodObject<typeof claimShape>>, ClaimActivity>
@@ -2210,55 +2238,73 @@ server.registerTool(
  * `refresh` parameter, because "let the agent probe the endpoint" is how a
  * silent tracker acquires a heartbeat.
  */
+/**
+ * The MCP projection of `CloudSurfaceReport`, proven equal to it at compile time.
+ *
+ * This tool used to build its own nine-field object literal, and `/api/cloud/status`
+ * built the same one again — the duplication STA-75 exists to remove. Now both
+ * return the core report verbatim, and `_CloudStatusShapeMatchesInterface` below
+ * makes the schema incapable of drifting from the type: add a field to
+ * `CloudSurfaceReport` without adding it here and `tsc` fails, rather than the
+ * MCP SDK silently stripping it from `structuredContent` at runtime.
+ */
+const cloudStatusShape = {
+  state: z.enum(["disconnected", "manual", "automatic", "offline", "revoked", "auth_failed"]),
+  mode: z
+    .enum(["disconnected", "manual", "automatic"])
+    .describe("What this surface may OFFER — offline/revoked/auth_failed are still connected"),
+  detail: z.string().describe("One human sentence for state. The values below are authoritative"),
+  repositoryId: z.string().nullable(),
+  endpoint: z.string().nullable(),
+  deviceId: z.string().nullable(),
+  label: z.string().nullable(),
+  credentialMechanism: z.enum(["keychain", "secret-tool", "file"]).nullable(),
+  credentialPresent: z.boolean().describe("Whether a credential is retrievable, not merely recorded"),
+  auto: z.boolean().describe("THIS device's automatic-sync consent"),
+  backup: z.boolean().describe("THIS device's backup consent — a separate decision from auto"),
+  connectedAt: z.string().nullable(),
+  checked: z.boolean().describe("True only after a live probe. Always false here: this tool cannot probe"),
+  pending: z.number().describe("Operations journalled locally and not yet acknowledged by the server"),
+  cursor: z.string().nullable().describe("Last successful pull cursor; null before first bootstrap"),
+  epoch: z.number().nullable(),
+  lastSyncAt: z.string().nullable(),
+  conflicts: z.object({ open: z.number(), resolved: z.number() }),
+  leases: z.object({ held: z.number() }).describe("Leases THIS device holds"),
+  warnings: z.array(z.string()),
+  failure: z
+    .object({
+      code: z.enum(["offline", "revoked", "auth_failed", "no_identity"]),
+      summary: z.string(),
+      remedy: z.string().describe("The command that fixes it"),
+    })
+    .nullable()
+    .describe("Present only when there is something to be done about it"),
+  hint: z
+    .string()
+    .nullable()
+    .describe("Static text, and only when disconnected. Never a prompt on a connected repository"),
+};
+type _CloudStatusShapeMatchesInterface = Expect<
+  Equals<z.infer<z.ZodObject<typeof cloudStatusShape>>, CloudSurfaceReport>
+>;
+
 server.registerTool(
   "cloud_status",
   {
     description:
       "Whether THIS MACHINE has connected this repository to a sync service, and in what mode. States: disconnected (no credential, no endpoint, no cloud state here), manual (connected; nothing syncs until a human runs `staple cloud sync`), automatic (this device consented to background sync), offline, revoked, auth_failed. Reads local files only — it makes no network request and cannot be made to. Connecting, disconnecting, revoking a device and purging remote state are deliberately NOT available as tools: each is a human consent decision whose preview and typed confirmation only mean something to a person at a terminal.",
     inputSchema: { ws: wsSchema },
-    outputSchema: {
-      state: z.enum(["disconnected", "manual", "automatic", "offline", "revoked", "auth_failed"]),
-      repositoryId: z.string().nullable(),
-      endpoint: z.string().nullable(),
-      deviceId: z.string().nullable(),
-      auto: z.boolean(),
-      backup: z.boolean(),
-      credentialPresent: z.boolean(),
-      warnings: z.array(z.string()),
-      detail: z.string(),
-    },
+    outputSchema: cloudStatusShape,
     annotations: { title: "Cloud status", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
   },
   ({ ws }) =>
     run(() => {
-      const workspaceDir = dirname(workspaceFor(ws).dbPath);
-      const manifest = readRepositoryManifest(workspaceDir);
-      if (!manifest) {
-        return {
-          state: "disconnected" as const,
-          repositoryId: null,
-          endpoint: null,
-          deviceId: null,
-          auto: false,
-          backup: false,
-          credentialPresent: false,
-          warnings: [],
-          detail:
-            "This workspace has no repository.json, so it has no sync identity and cannot be connected.",
-        };
-      }
-      const status = localCloudStatus(stapleHome(), manifest.repositoryId);
-      return {
-        state: status.state,
-        repositoryId: status.repositoryId,
-        endpoint: status.endpoint,
-        deviceId: status.deviceId,
-        auto: status.auto,
-        backup: status.backup,
-        credentialPresent: status.credentialPresent,
-        warnings: [...status.warnings],
-        detail: describeState(status),
-      };
+      const store = storeFor(ws);
+      const manifest = readRepositoryManifest(dirname(workspaceFor(ws).dbPath));
+      // No manifest means no sync identity — one wording, in core, shared with
+      // the HTTP route that used to spell out its own.
+      if (!manifest) return noIdentityReport();
+      return cloudSurfaceReport(localCloudStatus(stapleHome(), manifest.repositoryId), store.db);
     }),
 );
 

@@ -92,6 +92,8 @@ const claim = (heldBy = "opus-x"): ClaimActivity => ({
   lastActivityAt: "2026-09-01T00:00:00Z",
   heldSeconds: 120,
   idleSeconds: 60,
+  scope: "local",
+  lease: null,
 });
 
 const ids = (rows: readonly IssueRow[]): string[] => rows.map((r) => r.issue.identifier);

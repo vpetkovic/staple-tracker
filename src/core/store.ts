@@ -67,6 +67,14 @@ import {
 import { MILESTONE_KIND } from "./milestones.js";
 import { ProjectStore } from "./project-store.js";
 import { QueueStore } from "./queue-store.js";
+/**
+ * `scope.js`, NOT `status.js`. See the header of `cloud/scope.ts`: `status.ts`
+ * statically imports `client.ts`, which owns the only outbound `fetch` in the
+ * runtime, and this module is on the path of `staple ls`. The scope resolver is
+ * split out precisely so the claim payload can name its scope without dragging
+ * the fetch module onto the most-used command in the product.
+ */
+import { claimScopeResolver, type ClaimScopeResolver } from "./cloud/scope.js";
 
 export interface CreateIssueInput {
   title: string;
@@ -3538,7 +3546,11 @@ export class WorkspaceStore {
     return newest && newest > checkoutAt ? newest : checkoutAt;
   }
 
-  private claimActivityOfRow(row: IssueRow, now: string = nowIso()): ClaimActivity | null {
+  private claimActivityOfRow(
+    row: IssueRow,
+    now: string = nowIso(),
+    scopes: ClaimScopeResolver = claimScopeResolver(this.db),
+  ): ClaimActivity | null {
     if (!this.isActiveStatus(row.status) || !row.checkout_agent || !row.checkout_at) return null;
     const lastActivityAt = this.lastActivityOf(row.id, row.checkout_agent, row.checkout_at);
     return {
@@ -3547,6 +3559,8 @@ export class WorkspaceStore {
       lastActivityAt,
       heldSeconds: secondsBetween(row.checkout_at, now),
       idleSeconds: secondsBetween(lastActivityAt, now),
+      scope: scopes.scopeOf(row.id),
+      lease: scopes.leaseOf(row.id),
     };
   }
 
@@ -3564,6 +3578,10 @@ export class WorkspaceStore {
     const out = new Map<string, ClaimActivity>();
     if (issueIds.length === 0) return out;
     const now = nowIso();
+    // ONE resolver for the whole page, for the same reason this method exists at
+    // all: per-row scope resolution would be one connection-file read and one
+    // `sync_leases` query per row, which is the N+1 the batching removes.
+    const scopes = claimScopeResolver(this.db);
     const placeholders = issueIds.map(() => "?").join(",");
     const rows = this.db
       .prepare(
@@ -3597,6 +3615,8 @@ export class WorkspaceStore {
         lastActivityAt,
         heldSeconds: secondsBetween(row.checkout_at, now),
         idleSeconds: secondsBetween(lastActivityAt, now),
+        scope: scopes.scopeOf(row.id),
+        lease: scopes.leaseOf(row.id),
       });
     }
     return out;

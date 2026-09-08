@@ -76,7 +76,12 @@ import {
 } from "../core/cloud/lease.js";
 import { runHeartbeat } from "../core/cloud/lease-heartbeat.js";
 import { syncRepository, type SyncReport } from "../core/cloud/sync.js";
-import { describeState, localCloudStatus, refreshCloudStatus, type CloudStatus } from "../core/cloud/status.js";
+import { localCloudStatus, refreshCloudStatus, type CloudStatus } from "../core/cloud/status.js";
+import {
+  cloudSurfaceReport,
+  describeReport,
+  type CloudSurfaceReport,
+} from "../core/cloud/surface.js";
 
 const USAGE =
   "Use: status, connect, disconnect, auto, sync, lease, devices, conflicts, resolve, backup, restore, purge (staple cloud --help)";
@@ -238,31 +243,21 @@ function repositoryIdFor(options: { db?: string; ws?: string }): string {
   }
 }
 
-function renderStatus(status: CloudStatus): string {
-  const lines = [describeState(status)];
-  lines.push("");
-  lines.push(`  repository     ${status.repositoryId}`);
-  if (status.endpoint) lines.push(`  service        ${status.endpoint}`);
-  if (status.deviceId) lines.push(`  device         ${status.deviceId}${status.label ? `  (${status.label})` : ""}`);
-  if (status.credentialMechanism) {
-    lines.push(
-      `  credential     ${status.credentialMechanism}${status.credentialPresent ? "" : "  — NOT FOUND"}`,
-    );
-  }
-  if (status.state !== "disconnected") {
-    lines.push(`  automatic sync ${status.auto ? "on" : "off"}`);
-    lines.push(`  backup         ${status.backup ? "on" : "off"}`);
-    lines.push(`  connected at   ${status.connectedAt}`);
-  }
-  lines.push(`  checked        ${status.checked ? "just now, against the endpoint" : "local files only (--refresh to ask the endpoint)"}`);
-  if (status.state === "disconnected") {
-    lines.push("");
-    lines.push("  Connect with: staple cloud connect --endpoint <url> --token <secret>");
-  }
-  for (const warning of status.warnings) {
-    lines.push("");
-    lines.push(`  ! ${warning}`);
-  }
+/**
+ * The human rendering, which is now `describeReport` plus the one thing the
+ * shared report deliberately does not carry.
+ *
+ * **Why `devices` is not on `CloudSurfaceReport`.** Every other field is derived
+ * from local files and the local database, which is what makes the report safe
+ * for a polled UI to render unconditionally. The device list is not: it exists
+ * only after an authenticated `GET /devices`, so a report that carried it would
+ * be a report whose completeness depended on whether the caller had paid for a
+ * network round trip — and the first surface to render it would quietly acquire
+ * a reason to ask for one. `--refresh` already has the list in hand here, so the
+ * CLI appends it; nothing else needs to.
+ */
+function renderStatus(status: CloudStatus, report: CloudSurfaceReport): string {
+  const lines = [describeReport(report)];
   if (status.devices) {
     lines.push("");
     for (const device of status.devices) {
@@ -322,17 +317,30 @@ function runStatus(argv: string[]): void {
   const home = stapleHome();
   const repositoryId = repositoryIdFor(values);
 
+  /**
+   * The counters (`pending`, `cursor`, `epoch`, conflicts, leases) come off this
+   * workspace's database, so unlike every other `cloud` subcommand this one needs
+   * a handle open while it renders. Opened here and closed in `finally` — the
+   * report is a plain object, so nothing escapes the handle's lifetime.
+   */
+  const emit = (status: CloudStatus): void => {
+    const opened = resolveWorkspace(values);
+    try {
+      const report = cloudSurfaceReport(status, opened.store.db);
+      console.log(json ? JSON.stringify(report, null, 2) : renderStatus(status, report));
+    } finally {
+      opened.store.db.close();
+    }
+  };
+
   if (values.refresh !== true) {
     // The silent path. No await, no client import reached, no request.
-    const status = localCloudStatus(home, repositoryId);
-    console.log(json ? JSON.stringify(status, null, 2) : renderStatus(status));
+    emit(localCloudStatus(home, repositoryId));
     return;
   }
 
   settle(
-    refreshCloudStatus(home, repositoryId).then((status) => {
-      console.log(json ? JSON.stringify(status, null, 2) : renderStatus(status));
-    }),
+    refreshCloudStatus(home, repositoryId).then(emit),
     json,
   );
 }

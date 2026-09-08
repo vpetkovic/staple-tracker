@@ -38,6 +38,23 @@ import type { DatabaseSync } from "node:sqlite";
 export type ClaimScope = "local" | "lease";
 
 /**
+ * The two facts about a lease that a local checkout cannot supply.
+ *
+ * Lives here, beside {@link LocalLease} it is projected from, rather than in
+ * `scope.ts` — `core/types.ts` needs it for `ClaimActivity`, and this module's
+ * import graph is `node:sqlite` and nothing else, so depending on it cannot
+ * create a cycle.
+ *
+ * Both values are the SERVER's. Neither is checked against the local clock: a
+ * surface may render `serverExpiresAt`, but *"client clocks have no authority
+ * over expiry"*, so nothing may decide from it.
+ */
+export interface ClaimLease {
+  fencingToken: number;
+  serverExpiresAt: string;
+}
+
+/**
  * One row of `sync_leases`.
  *
  * `serverExpiresAt`, `acquiredAt` and `renewedAt` are ISO renderings of absolute
