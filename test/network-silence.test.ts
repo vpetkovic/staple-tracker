@@ -30,6 +30,8 @@
  * its own runner and is not collected here.
  */
 import { spawnSync } from "node:child_process";
+import { once } from "node:events";
+import type { AddressInfo } from "node:net";
 import { DatabaseSync } from "node:sqlite";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -553,6 +555,107 @@ describe("connect: nothing leaves the machine before consent", () => {
       expect(spy.violations, describeViolations(spy.violations)).toHaveLength(0);
     } finally {
       rmSync(scratch, { recursive: true, force: true });
+    }
+  });
+});
+
+// ------------------------------------------------------- the UI, actually served
+
+/**
+ * The half of the invariant this suite never covered: **the page.**
+ *
+ * Everything above drives the CLI in a subprocess or calls a cloud module
+ * directly. Neither reaches `src/ui/server.ts`, so until now the assertion
+ * *"Fresh installs and unconnected workspaces make zero Staple-owned DNS socket
+ * or HTTP calls"* was proved for the command line and merely believed for the
+ * browser — which is the surface with a poll loop on it, and therefore the one
+ * where an accidental heartbeat would be continuous rather than once.
+ *
+ * The gap mattered more after STA-75, because the page now reads
+ * `/api/cloud/status` on mount. That route is network-free by construction — it
+ * has no `refresh` parameter and `localCloudStatus` cannot be made to call out —
+ * but "by construction" is a claim, and this is the thing that checks it.
+ *
+ * Loopback is not egress: `network-spy.ts` classifies `127.0.0.0/8` as exempt,
+ * which is what makes it honest to drive a real server over a real socket here
+ * and still assert zero. The spy sees the server's OWN outbound calls, of which
+ * there must be none.
+ */
+describe("the UI server on a disconnected workspace serves the whole page and calls nobody", () => {
+  let spy: ReturnType<typeof installNetworkSpy> | null = null;
+
+  afterEach(() => {
+    spy?.restore();
+    spy = null;
+  });
+
+  it("answers every route an open page hits, repeatedly, with zero outbound calls", async () => {
+    spy = installNetworkSpy();
+    // The self-check first: an assertion of zero from a spy that never installed
+    // is the same lie as a scenario whose subject never ran.
+    spy.selfCheck();
+
+    // `src/ui/server.js` is imported dynamically so the spy is installed before a
+    // line of it is evaluated, the same discipline the cloud modules above use.
+    const { startUiServer } = await import("../src/ui/server.js");
+
+    const uiHome = mkdtempSync(join(tmpdir(), "staple-netsilence-ui-home-"));
+    const uiRepo = mkdtempSync(join(tmpdir(), "staple-netsilence-ui-repo-"));
+    const previousHome = process.env.STAPLE_HOME;
+    process.env.STAPLE_HOME = uiHome;
+
+    let ui: { server: import("node:http").Server; token: string; close: () => void } | null = null;
+    try {
+      const ws = initWorkspace({ dir: uiRepo, slug: "netsilenceui" });
+      ws.store.createIssue({ title: "a task", assignee: "netsilence" });
+      ws.store.db.close();
+
+      ui = startUiServer({ port: 0, hub: false, db: join(uiRepo, ".staple", "staple.db") });
+      await once(ui.server, "listening");
+      const port = (ui.server.address() as AddressInfo).port;
+      const origin = `http://127.0.0.1:${port}`;
+      const token = ui.token;
+
+      /**
+       * Everything a freshly opened tab asks for, in the order it asks. The poll
+       * routes are hit repeatedly rather than once: a heartbeat that fired on
+       * every Nth poll rather than on the first would pass a single-shot check,
+       * and a poll loop is exactly where such a thing would hide.
+       */
+      const ROUTES = [
+        "/api/bootstrap",
+        "/api/cloud/status",
+        "/api/cloud/conflicts",
+        "/api/issues",
+        "/api/inbox",
+        "/api/queue",
+        "/api/settings",
+        "/api/poll",
+      ];
+
+      for (let round = 0; round < 3; round += 1) {
+        for (const route of ROUTES) {
+          const res = await fetch(`${origin}${route}`, { headers: { "x-staple-token": token } });
+          expect(res.status, `${route} answered ${res.status}`).toBe(200);
+          await res.json();
+        }
+      }
+
+      // The anchor: the server really served, so "zero violations" means "it ran
+      // and stayed silent" rather than "nothing happened".
+      const status = (await (
+        await fetch(`${origin}/api/cloud/status`, { headers: { "x-staple-token": token } })
+      ).json()) as { state: string; hint: string | null };
+      expect(status.state).toBe("disconnected");
+      expect(status.hint).toBe("staple cloud connect");
+
+      expect(spy.violations, describeViolations(spy.violations)).toHaveLength(0);
+    } finally {
+      ui?.close();
+      if (previousHome === undefined) delete process.env.STAPLE_HOME;
+      else process.env.STAPLE_HOME = previousHome;
+      rmSync(uiHome, { recursive: true, force: true });
+      rmSync(uiRepo, { recursive: true, force: true });
     }
   });
 });

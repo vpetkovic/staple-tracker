@@ -34,7 +34,8 @@ import { settingDefinitionsFor, settingRegistryView, settingValueView } from "..
 import { sanitizeSvg } from "../core/svg-sanitize.js";
 import { readStoredRepositoryId } from "../core/repo-identity.js";
 import { listConflicts, resolveConflict } from "../core/cloud/conflicts.js";
-import { describeState, localCloudStatus } from "../core/cloud/status.js";
+import { localCloudStatus } from "../core/cloud/status.js";
+import { cloudSurfaceReport, noIdentityReport } from "../core/cloud/surface.js";
 import { readConfig, stapleHome } from "../config/index.js";
 
 interface UiOptions {
@@ -638,34 +639,21 @@ export function startUiServer(options: UiOptions): UiHandle {
         } catch {
           repositoryId = null;
         }
-        if (repositoryId === null) {
-          json(res, 200, {
-            state: "disconnected",
-            repositoryId: null,
-            endpoint: null,
-            deviceId: null,
-            auto: false,
-            backup: false,
-            credentialPresent: false,
-            warnings: [],
-            detail: "This workspace has no sync identity, so it cannot be connected.",
-            hint: "staple cloud connect",
-          });
-          return;
-        }
-        const status = localCloudStatus(stapleHome(), repositoryId);
-        json(res, 200, {
-          state: status.state,
-          repositoryId: status.repositoryId,
-          endpoint: status.endpoint,
-          deviceId: status.deviceId,
-          auto: status.auto,
-          backup: status.backup,
-          credentialPresent: status.credentialPresent,
-          warnings: status.warnings,
-          detail: describeState(status),
-          hint: status.state === "disconnected" ? "staple cloud connect" : null,
-        });
+        /**
+         * STA-75: both branches now return `CloudSurfaceReport` verbatim — the
+         * same object `cloud_status` returns over MCP and `staple cloud status
+         * --json` prints. This route used to re-map nine fields by hand and word
+         * its own "no sync identity" sentence, and `src/mcp.ts` did both again,
+         * slightly differently. One contract, four renderings; the mapping lives
+         * in `core/cloud/surface.ts` and nowhere else.
+         */
+        json(
+          res,
+          200,
+          repositoryId === null
+            ? noIdentityReport()
+            : cloudSurfaceReport(localCloudStatus(stapleHome(), repositoryId), handle.store.db),
+        );
         return;
       }
 

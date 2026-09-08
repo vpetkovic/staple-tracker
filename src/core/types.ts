@@ -3,6 +3,15 @@
  * — CLI, MCP, HTTP, UI — agrees on. Defined once, here.
  */
 import { createHash } from "node:crypto";
+// Type-only, and from `lease-store.js` rather than `scope.js` on purpose: that
+// module's whole import graph is `node:sqlite`, so `ClaimActivity` can name a
+// claim's scope without this file acquiring a dependency on the cloud layer at
+// runtime, and without the cycle `scope.js -> repo-identity.js -> types.js`.
+import type { ClaimLease, ClaimScope } from "./cloud/lease-store.js";
+// Re-exported so a consumer of `ClaimActivity` can name the types of its own
+// fields from the same module it got the interface from, rather than having to
+// know that the scope vocabulary happens to live in the cloud layer.
+export type { ClaimLease, ClaimScope };
 
 /**
  * The BUILT-IN status vocabulary — the SEED, not the law (STA-140).
@@ -500,6 +509,34 @@ export interface ClaimActivity {
   heldSeconds: number;
   /** Wall-clock seconds since the holder last did anything here ("silent for"). */
   idleSeconds: number;
+  /**
+   * How exclusive this claim actually is — `docs/sync.md`, "Claims: a local
+   * checkout is not a global lease".
+   *
+   * `"local"` means THIS DATABASE only: the claim still refuses a fresher holder
+   * here, still refuses through gates and blockers, still records `claim_stolen`
+   * — and says nothing whatsoever about any other machine. `"lease"` means a
+   * fenced server lease is held and the claim is globally exclusive.
+   *
+   * *"An agent that reads `local` and behaves as though it read `lease` is the
+   * failure this field exists to prevent."* Offline acquisition is allowed —
+   * refusing to work without a network would be a worse tracker — and it is
+   * LABELLED, never silently upgraded on the next sync.
+   *
+   * On an unconnected machine this is always `"local"`, which is exactly what
+   * was already true before the field existed. Adding it does not change what a
+   * claim means; it stops surfaces implying an exclusivity they never had.
+   */
+  scope: ClaimScope;
+  /**
+   * The lease backing a `"lease"` scope, and null whenever `scope` is `"local"`.
+   *
+   * The two facts a local checkout cannot supply, so an agent can *confirm* the
+   * distinction rather than take the word `"lease"` on trust. Derived at read
+   * time from `sync_leases`: *"the token and the server expiry live in the sync
+   * tables, not in new `issues` columns."*
+   */
+  lease: ClaimLease | null;
 }
 
 /**

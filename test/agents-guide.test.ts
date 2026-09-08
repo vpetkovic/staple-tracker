@@ -255,6 +255,26 @@ describe("the guide teaches the whole protocol", () => {
     }
   });
 
+  /**
+   * STA-75. `claim.scope` is the one claim field whose whole purpose is to
+   * change what an agent DOES, so a guide that shipped without it would leave
+   * every agent inferring global exclusivity from a local checkout — the exact
+   * failure the field was added to prevent.
+   *
+   * The assertion is on the meaning, not just the name: `"local"` is useless
+   * unless the guide says it makes no promise about other machines.
+   */
+  it("tells an agent that a local claim is not a global lease", () => {
+    expect(guide).toContain("claim.scope");
+    expect(guide).toContain('scope: "local"');
+    expect(guide).toContain('scope: "lease"');
+    expect(guide).toContain("fencingToken");
+    expect(guide).toContain("serverExpiresAt");
+    // The consequence, spelled out, not left to be inferred from the field name.
+    expect(guide).toMatch(/nothing about any other\s+machine/i);
+    expect(guide).toMatch(/cloud lease acquire/);
+  });
+
   it("presents steal/release as explicit affordances, never as policy", () => {
     expect(guide).toContain("--steal-if-stale");
     expect(guide).toContain("--if-stale");

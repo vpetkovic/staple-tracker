@@ -15,6 +15,7 @@ import type {
   ActionPayload,
   AgentContext,
   Bootstrap,
+  CloudSurfaceReport,
   DocumentRevision,
   ErrorEnvelope,
   Graph,
@@ -167,6 +168,22 @@ const qs = (params: Record<string, string | number | undefined>): string => {
 export const getBootstrap = () => request<Bootstrap>("/api/bootstrap");
 
 export const getPoll = () => request<Poll>("/api/poll");
+
+/**
+ * This machine's cloud state — the same `CloudSurfaceReport` the CLI prints and
+ * the `cloud_status` MCP tool returns.
+ *
+ * Same-origin loopback to the local server, which answers it from three files
+ * and the local database. There is no `refresh` parameter to pass and that is
+ * structural, not an omission: *"a polled UI with a refreshing status endpoint
+ * would turn one human's page-open into a heartbeat to Cloudflare every few
+ * seconds."*
+ *
+ * Call this ONCE per mount. It is deliberately not part of the 1.5s fingerprint
+ * poll — connection state changes when a human runs a command, not while they
+ * read a page.
+ */
+export const getCloudStatus = () => request<CloudSurfaceReport>("/api/cloud/status");
 
 export const getIssues = (params: { ws?: string; assignee?: string } = {}) =>
   request<IssueRow[]>(`/api/issues${qs(params)}`);

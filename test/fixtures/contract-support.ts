@@ -253,6 +253,21 @@ export function claimGolden(over: Record<string, unknown> = {}): Record<string, 
     lastActivityAt: ISO,
     heldSeconds: SECONDS,
     idleSeconds: SECONDS,
+    /**
+     * STA-75. Pinned as the LITERAL `"local"` rather than tokenized, and that is
+     * the assertion: these fixtures are unconnected workspaces, so every claim
+     * they produce is local-only, and `docs/sync.md` is explicit that this must
+     * be stated rather than left for a reader to assume — *"an agent that reads
+     * `local` and behaves as though it read `lease` is the failure this field
+     * exists to prevent."*
+     *
+     * A regression that made an unconnected checkout report `"lease"` — by
+     * defaulting the scope, or by trusting a mirror row without checking the
+     * connection — fails here, on all four surfaces at once. Pass an override
+     * only from a test that has actually forged a connection AND a lease.
+     */
+    scope: "local",
+    lease: null,
     ...over,
   };
 }

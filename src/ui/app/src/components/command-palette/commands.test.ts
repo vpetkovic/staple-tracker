@@ -263,6 +263,8 @@ describe("handoff-risk commands", () => {
       lastActivityAt: ACTIVE,
       heldSeconds: 6 * 60 * 60,
       idleSeconds: 30,
+      scope: "local",
+      lease: null,
     },
     worklog:
       checkpointAgo === null

@@ -78,6 +78,10 @@ export function claim(over: Partial<ClaimActivity> = {}): ClaimActivity {
     lastActivityAt: "2026-09-01T00:00:00.000Z",
     heldSeconds: 600,
     idleSeconds: 30,
+    // Local-only, like every unconnected workspace. A UI fixture that
+    // claimed "lease" would be asserting an exclusivity nothing granted.
+    scope: "local",
+    lease: null,
     ...over,
   };
 }

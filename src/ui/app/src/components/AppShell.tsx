@@ -35,6 +35,9 @@
  */
 import { PanelLeft } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { CloudStrip } from "@/components/CloudStrip";
+import { getCloudStatus } from "@/lib/api";
+import type { CloudSurfaceReport } from "@/lib/types";
 import { FilterBar } from "@/components/filters/FilterBar";
 import { FilterChips } from "@/components/filters/FilterChips";
 import { NavRail } from "@/components/nav/NavRail";
@@ -73,6 +76,33 @@ const storage = () => (typeof localStorage === "undefined" ? undefined : localSt
 export function AppShell({ children }: { children: ReactNode }) {
   const session = useSession();
   const wide = useWideViewport();
+
+  /**
+   * This machine's cloud state, fetched ONCE per mount.
+   *
+   * Deliberately not on the 1.5s fingerprint poll: connection state changes when
+   * a human runs `staple cloud connect`, not while they read a page, so polling
+   * it would be a great deal of traffic to learn nothing — and a polled status
+   * endpoint is the shape most likely to be quietly upgraded into a probe later.
+   *
+   * A failure leaves it null, which renders nothing. An unreachable local status
+   * route is not a reason to put an error on a page about tasks, and null is
+   * indistinguishable from disconnected here on purpose: both mean "say nothing".
+   */
+  const [cloud, setCloud] = useState<CloudSurfaceReport | null>(null);
+  useEffect(() => {
+    let live = true;
+    getCloudStatus()
+      .then((report) => {
+        if (live) setCloud(report);
+      })
+      .catch(() => {
+        /* Silence is the correct rendering of "this machine could not tell". */
+      });
+    return () => {
+      live = false;
+    };
+  }, []);
 
   const [collapsed, setCollapsed] = useState(() => loadRailCollapsed(storage()));
   const [overlayOpen, setOverlayOpen] = useState(false);
@@ -192,6 +222,14 @@ export function AppShell({ children }: { children: ReactNode }) {
           no height — when no filter is on, which is the app's usual state. See FilterChips.
         */}
         <FilterChips />
+
+        {/*
+          Cloud state, and NOTHING when this workspace is not connected — which
+          is every workspace until somebody types a command. See CloudStrip: the
+          contract permits a static "not connected" hint here, and this app
+          declines it, because *"the UI does not prompt."*
+        */}
+        <CloudStrip report={cloud} />
 
         {/*
           `relative` so anything that wants to anchor to the content area rather than the

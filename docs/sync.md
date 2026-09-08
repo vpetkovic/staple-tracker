@@ -687,6 +687,17 @@ grows a scope, and every surface reports it:
 
 - `claim.scope: "local"` — this database only. No global exclusivity is claimed.
 - `claim.scope: "lease"` — a server lease is held; the claim is globally exclusive.
+- `claim.lease` — `{ fencingToken, serverExpiresAt }` when the scope is `lease`,
+  and `null` when it is `local`. The two facts a local checkout cannot supply, so
+  a reader can **confirm** the distinction instead of trusting the word. Both are
+  the server's values; rendering `serverExpiresAt` is allowed, deciding from it
+  is not.
+
+`scope` is reported by the everyday read surfaces — `ls`, `show` and `inbox`, and
+their MCP and HTTP projections — not only by the lease commands. A field visible
+only to a reader who already thought to ask about leases does not prevent the
+mistake it exists to prevent, because the agent about to make that mistake is
+running `inbox`.
 
 An agent that reads `local` and behaves as though it read `lease` is the failure
 this field exists to prevent. Offline acquisition is **allowed** — refusing to

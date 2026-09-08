@@ -128,6 +128,8 @@ function claim(
     lastActivityAt,
     heldSeconds: idleSeconds + 60,
     idleSeconds,
+    scope: "local",
+    lease: null,
   };
 }
 
