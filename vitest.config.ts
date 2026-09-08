@@ -44,5 +44,38 @@ export default defineConfig({
      * collects.
      */
     exclude: [...configDefaults.exclude, "worker/**"],
+
+    /**
+     * Vitest's default is 5000ms, which is wrong for this suite.
+     *
+     * Many tests here drive the real CLI by spawning it, and a single `it` can spawn
+     * eight processes — `cli-settings`' "adds, renames, reorders and removes" does
+     * exactly that. Each spawn pays Node and tsx startup, so the budget is roughly
+     * 600ms per process. That is comfortable on a developer machine (the test above
+     * runs in 1.4s) and marginal on a two-core CI runner executing 175 files in
+     * parallel, where it times out while the code under test is perfectly healthy.
+     *
+     * This is not papering over slowness. The failure it was producing is a false
+     * negative: the same test passes in isolation on the same commit, and adding
+     * subprocess-heavy tests elsewhere in the suite — not changing the CLI — is what
+     * pushed it over. A genuine hang still fails, just at 20s instead of 5s.
+     */
+    testTimeout: 20_000,
+    hookTimeout: 20_000,
+
+    /**
+     * On CI, cap the worker count.
+     *
+     * Vitest sizes its pool from the core count, but the cost of a file here is not
+     * CPU — it is the fleet of `staple` subprocesses a file spawns. Workers multiply
+     * that: N workers each spawning eight processes is N x 8 Node startups competing
+     * for two cores, and the tests with the tightest timing margin lose. That is a
+     * false negative, and it moves: capping the timeout above fixed one test and the
+     * next-most-marginal one failed in its place.
+     *
+     * Local runs are untouched — a developer machine has the headroom, and halving
+     * the pool there would cost minutes for no benefit.
+     */
+    ...(process.env.CI ? { maxWorkers: 2, minWorkers: 1 } : {}),
   },
 });

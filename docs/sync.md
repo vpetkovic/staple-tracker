@@ -552,6 +552,17 @@ counter — is simpler and cheaper in storage, and is rejected because the fence
 lease tokens depend on a monotonic value that never restarts, and because a
 restore is exactly the moment somebody wants the pre-restore rows for forensics.
 
+**Non-truncating means the rows are retained, not that a snapshot spans epochs.**
+A snapshot folds only operations stamped with the *current* epoch, and that is
+correct: the current epoch is the timeline every connected device is on. The
+obligation this places on restore is absolute, and it is the trap in this whole
+mechanism — **a restore that bumps the epoch must also materialise the restored
+state as operations in the new epoch.** Bumping alone leaves the new epoch empty,
+and a device that re-bootstraps into it hydrates nothing while the old rows sit
+there being retained for forensics that nobody asked for. The two options a
+restore may take are *append compensating operations* or *bump the epoch and
+re-materialise*; "bump the epoch" on its own is not one of them.
+
 ### What the server cannot do
 
 Three platform facts the protocol is shaped around, so that no lane designs
