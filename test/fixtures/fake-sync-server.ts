@@ -45,7 +45,30 @@ export interface StoredOp {
 interface Device {
   token: string;
   deviceId: string;
+  /** Set by {@link FakeSyncServer.revoke}. Refused at authentication, like the Worker. */
+  revoked?: boolean;
 }
+
+/**
+ * One lease, exactly as `worker/src/leases.ts` stores it.
+ *
+ * `expiresAt` is absolute server time and is only ever computed here, from this
+ * object's own clock. A client's `ttlSeconds` is the only input it gets to
+ * supply, which is the property the client tests exist to hold.
+ */
+interface StoredLease {
+  entityId: string;
+  fencingToken: number;
+  holder: string;
+  deviceId: string;
+  acquiredAt: number;
+  renewedAt: number;
+  expiresAt: number;
+}
+
+/** `worker/src/limits.ts`. Reproduced so a bad ttl is refused here too. */
+const DEFAULT_LEASE_TTL_SECONDS = 300;
+const MAX_LEASE_TTL_SECONDS = 3600;
 
 export interface FakeServerOptions {
   repositoryId: string;
@@ -119,6 +142,30 @@ export class FakeSyncServer {
   enroll(deviceId: string, token: string): void {
     this.devices.push({ deviceId, token });
   }
+
+  /**
+   * Revoke a device, the way `cloud devices revoke` does.
+   *
+   * Effective on that device's very next request, and reported as `revoked`
+   * rather than `auth` — the Worker looks the row up WITHOUT filtering on
+   * `revoked_at` precisely so it can tell a revoked device from an unknown one.
+   */
+  revoke(deviceId: string): void {
+    const device = this.devices.find((candidate) => candidate.deviceId === deviceId);
+    if (device) device.revoked = true;
+  }
+
+  /**
+   * The server's clock, and the only clock any expiry in this fixture comes
+   * from. Tests move it to make a lease expire; they never move the client's.
+   */
+  now = (): number => Date.now();
+
+  /** Every lease the service currently holds, for assertions. */
+  readonly leases = new Map<string, StoredLease>();
+
+  /** Per-repository, monotonic, never reused — including across a takeover. */
+  private lastFencingToken = 0;
 
   /** Bump the epoch the way a restore does: NON-truncating. The old ops stay. */
   bumpEpoch(): void {
@@ -205,6 +252,19 @@ export class FakeSyncServer {
         })),
       });
     }
+    const lease = /^\/leases(?:\/([^/]+))?(\/renew)?$/.exec(tail);
+    if (lease) {
+      const entityId = lease[1] ? decodeURIComponent(lease[1]) : null;
+      const text = body === undefined || body === null ? "{}" : String(body);
+      const payload = JSON.parse(text) as Record<string, unknown>;
+      if (entityId === null && method === "POST") return this.acquireLease(session, payload);
+      if (entityId !== null && lease[2] && method === "POST") {
+        return this.renewLease(session, entityId, payload);
+      }
+      if (entityId !== null && !lease[2] && method === "DELETE") {
+        return this.releaseLease(session, entityId, payload);
+      }
+    }
     throw new ServerError(404, "not_found", "no such route");
   }
 
@@ -221,7 +281,137 @@ export class FakeSyncServer {
     const token = auth.startsWith("Bearer ") ? auth.slice("Bearer ".length) : "";
     const device = this.devices.find((candidate) => candidate.token === token);
     if (!device) throw new ServerError(401, "auth", "no such credential");
+    if (device.revoked === true) {
+      throw new ServerError(403, "revoked", "this device was revoked; re-connect required");
+    }
     return { repoId, deviceId: device.deviceId };
+  }
+
+  // ----------------------------------------------------------------- leases
+
+  private ttlOf(raw: unknown): number {
+    if (raw === undefined || raw === null) return DEFAULT_LEASE_TTL_SECONDS;
+    if (typeof raw !== "number" || !Number.isInteger(raw)) {
+      throw new ServerError(400, "validation", "ttlSeconds must be an integer");
+    }
+    if (raw < 1 || raw > MAX_LEASE_TTL_SECONDS) {
+      throw new ServerError(400, "validation", "ttlSeconds is outside the permitted range", {
+        maxTtlSeconds: MAX_LEASE_TTL_SECONDS,
+      });
+    }
+    return raw;
+  }
+
+  private leaseWire(lease: StoredLease): Record<string, unknown> {
+    return {
+      entityId: lease.entityId,
+      fencingToken: lease.fencingToken,
+      holder: lease.holder,
+      deviceId: lease.deviceId,
+      acquiredAt: lease.acquiredAt,
+      renewedAt: lease.renewedAt,
+      expiresAt: lease.expiresAt,
+    };
+  }
+
+  /**
+   * `POST /leases`. The token is allocated BEFORE the slot is contested, so it
+   * increments even for the loser of a race — gaps are as legal as gaps in
+   * `seq`, and reusing a number is the one thing fencing cannot survive.
+   *
+   * An expired lease on this entity is cleared lazily, by the acquire that wants
+   * the slot. There is no sweeper here either.
+   */
+  private acquireLease(
+    session: { deviceId: string },
+    body: Record<string, unknown>,
+  ): Response {
+    const entityId = String(body.entityId ?? "");
+    const holder = String(body.holder ?? "");
+    if (!entityId || !holder) {
+      throw new ServerError(400, "validation", "entityId and holder must be non-empty strings");
+    }
+    const ttl = this.ttlOf(body.ttlSeconds);
+    const now = this.now();
+    this.lastFencingToken += 1;
+
+    const existing = this.leases.get(entityId);
+    if (existing && existing.expiresAt <= now) this.leases.delete(entityId);
+
+    const live = this.leases.get(entityId);
+    if (live) {
+      throw new ServerError(409, "conflict", "lease is held by another device", {
+        entityId,
+        holder: live.holder,
+        expiresAt: live.expiresAt,
+      });
+    }
+
+    const lease: StoredLease = {
+      entityId,
+      fencingToken: this.lastFencingToken,
+      holder,
+      deviceId: session.deviceId,
+      acquiredAt: now,
+      renewedAt: now,
+      expiresAt: now + ttl * 1000,
+    };
+    this.leases.set(entityId, lease);
+    return this.json(200, { protocol: 1, lease: this.leaseWire(lease) });
+  }
+
+  /**
+   * `POST /leases/{entityId}/renew`. One predicate covers every way a renewal
+   * can be illegitimate — wrong token, wrong device, or already expired.
+   */
+  private renewLease(
+    session: { deviceId: string },
+    entityId: string,
+    body: Record<string, unknown>,
+  ): Response {
+    const fencingToken = body.fencingToken;
+    if (typeof fencingToken !== "number" || !Number.isInteger(fencingToken)) {
+      throw new ServerError(400, "validation", "fencingToken must be an integer");
+    }
+    const ttl = this.ttlOf(body.ttlSeconds);
+    const now = this.now();
+    const lease = this.leases.get(entityId);
+
+    if (
+      !lease ||
+      lease.fencingToken !== fencingToken ||
+      lease.deviceId !== session.deviceId ||
+      lease.expiresAt <= now
+    ) {
+      throw new ServerError(409, "conflict", "lease is not held with that fencing token", {
+        entityId,
+        ...(lease ? { currentFencingToken: lease.fencingToken } : {}),
+      });
+    }
+
+    lease.renewedAt = now;
+    lease.expiresAt = now + ttl * 1000;
+    return this.json(200, { protocol: 1, lease: this.leaseWire(lease) });
+  }
+
+  /** `DELETE /leases/{entityId}`, presenting the token. */
+  private releaseLease(
+    session: { deviceId: string },
+    entityId: string,
+    body: Record<string, unknown>,
+  ): Response {
+    const fencingToken = body.fencingToken;
+    if (typeof fencingToken !== "number" || !Number.isInteger(fencingToken)) {
+      throw new ServerError(400, "validation", "fencingToken must be an integer");
+    }
+    const lease = this.leases.get(entityId);
+    if (!lease || lease.fencingToken !== fencingToken || lease.deviceId !== session.deviceId) {
+      throw new ServerError(409, "conflict", "lease is not held with that fencing token", {
+        entityId,
+      });
+    }
+    this.leases.delete(entityId);
+    return this.json(200, { protocol: 1, released: true, entityId });
   }
 
   // ------------------------------------------------------------------- push

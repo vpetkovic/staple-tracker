@@ -56,10 +56,18 @@ import {
   retentionDisclosure,
 } from "../core/cloud/connect.js";
 import { buildConnectPreview, renderConnectPreview } from "../core/cloud/preview.js";
+import {
+  acquireClaim,
+  releaseClaim,
+  renewClaim,
+  summarizeLeases,
+  type LeaseSummary,
+} from "../core/cloud/lease.js";
+import { runHeartbeat } from "../core/cloud/lease-heartbeat.js";
 import { syncRepository, type SyncReport } from "../core/cloud/sync.js";
 import { describeState, localCloudStatus, refreshCloudStatus, type CloudStatus } from "../core/cloud/status.js";
 
-const USAGE = "Use: status, connect, disconnect, auto, devices, purge (staple cloud --help)";
+const USAGE = "Use: status, connect, disconnect, auto, lease, devices, purge (staple cloud --help)";
 
 const HELP = `staple cloud — connect this repository to a sync service, and manage the
 credential that connection produces. Three separate consents: connecting,
@@ -95,6 +103,28 @@ synchronizing automatically, and backing up. None of them implies another.
               this DEVICE's consent to synchronize without being asked. Stored
               per-machine, because consent given on a laptop is not consent
               given on a build box. Off does not disconnect.
+  cloud lease [status] [<ref>]
+              what this machine may honestly say about who holds what. Local
+              and silent: it reads the mirror and the connection record and
+              makes no request. A claim is either "local" — this database
+              only, no global exclusivity — or "lease", held under a fenced
+              server lease.
+  cloud lease acquire <ref> [--agent A] [--ttl <dur>]
+              claim <ref> GLOBALLY: take the server lease, then check the work
+              out locally. Two machines racing produce one winner and one
+              conflict that is not worth retrying. On a repository that is not
+              connected this still claims locally, and says so — offline work
+              is allowed, it is just not exclusive.
+  cloud lease renew <ref> [--ttl <dur>] [--heartbeat <dur> [--for <dur>]]
+              extend the lease, presenting the fencing token. --heartbeat
+              renews on an interval instead of once, bounded by --for and
+              stoppable with ctrl-c. A refusal stops it: the lease expired or
+              was taken over, and asking again will not change that.
+  cloud lease release <ref>
+              give the lease back, presenting the fencing token, and release
+              the local claim. If the lease was expired, stolen or revoked the
+              server refuses it and this says so rather than reporting a
+              release that did not happen.
   cloud devices [ls]
               every device registered to this repository, as the server sees
               it. The server is the authority; the local cache is not.
@@ -219,6 +249,8 @@ export function runCloudCommand(argv: string[]): void {
       return runAuto(rest);
     case "sync":
       return runSync(rest);
+    case "lease":
+      return runLease(rest);
     case "devices":
       return runDevices(rest);
     case "purge":
@@ -512,6 +544,260 @@ function renderSyncReport(report: SyncReport): string {
         `Both sides are preserved; nothing was merged or discarded.`,
     );
   }
+  return lines.join("\n");
+}
+
+// --------------------------------------------------------------------- lease
+
+/**
+ * `--ttl`, `--heartbeat` and `--for`, in the duration grammar the rest of the
+ * CLI already uses: `90s`, `30m`, `2h`, `3d`, or a bare number of seconds.
+ *
+ * A local copy of `cli.ts`'s parser rather than an import of it. `cli.ts` is a
+ * shared surface with several lanes in it this wave, and exporting a helper from
+ * it to save ten lines here would be the more expensive change. Folding the two
+ * into one exported helper is an additive follow-up.
+ *
+ * A bad duration is a hard error and never a silent zero, for the reason the
+ * original gives: a `--ttl` that collapsed to nothing would ask for a lease that
+ * expires immediately, which is the failure mode hardest to see.
+ */
+function durationSeconds(raw: string, flag: string): number {
+  const match = /^(\d+(?:\.\d+)?)([smhd]?)$/.exec(raw.trim());
+  if (!match) {
+    throw new StapleError(
+      "validation",
+      `--${flag} must be a duration like 90s, 30m, 2h, 3d, or a number of seconds, got "${raw}"`,
+    );
+  }
+  const scale = { "": 1, s: 1, m: 60, h: 3600, d: 86400 }[match[2]!]!;
+  return Math.round(Number(match[1]) * scale);
+}
+
+/**
+ * Open the workspace and its repository identity together.
+ *
+ * Every lease subcommand needs both, and the store must outlive the async work —
+ * unlike `repositoryIdFor`, which closes immediately because it reads nothing.
+ */
+function leaseContext(values: { db?: string; ws?: string }): {
+  store: ReturnType<typeof resolveWorkspace>["store"];
+  repositoryId: string;
+} {
+  const opened = resolveWorkspace(values);
+  const manifest = readRepositoryManifest(dirname(opened.dbPath));
+  if (!manifest) {
+    opened.store.db.close();
+    throw new StapleError(
+      "not_found",
+      `This workspace has no repository.json, so it has no sync identity and cannot hold a ` +
+        `server lease. Repository identity is minted for repo-local workspaces by \`staple init\`.`,
+    );
+  }
+  return { store: opened.store, repositoryId: manifest.repositoryId };
+}
+
+function runLease(argv: string[]): void {
+  const sub = argv[0] && !argv[0].startsWith("-") ? argv[0] : "status";
+  const known = new Set(["status", "acquire", "renew", "release"]);
+  if (!known.has(sub)) {
+    throw new StapleError(
+      "validation",
+      `Unknown lease subcommand "${sub}". Use: status, acquire, renew, release.`,
+    );
+  }
+  const rest = argv[0] && !argv[0].startsWith("-") ? argv.slice(1) : argv;
+
+  const { values, positionals } = parseArgs({
+    args: rest,
+    allowPositionals: true,
+    options: {
+      ...common,
+      agent: { type: "string" },
+      ttl: { type: "string" },
+      heartbeat: { type: "string" },
+      for: { type: "string" },
+    },
+  });
+  const json = values.json === true;
+  const home = stapleHome();
+  const ref = positionals[0];
+
+  if (sub !== "status" && ref === undefined) {
+    throw new StapleError("validation", `\`staple cloud lease ${sub}\` needs an issue reference.`);
+  }
+
+  const ttlSeconds = values.ttl === undefined ? undefined : durationSeconds(values.ttl, "ttl");
+  const { store, repositoryId } = leaseContext(values);
+
+  /**
+   * `status` is the silent one, and it is synchronous on purpose: it must not be
+   * able to reach the async path at all. Local files, then out.
+   */
+  if (sub === "status") {
+    try {
+      const summary = summarizeLeases(store.db, home, repositoryId);
+      const filtered = ref === undefined ? summary.leases : summary.leases.filter((lease) => {
+        const issue = store.getIssue(ref);
+        return lease.entityId === issue.id;
+      });
+      const payload = { ...summary, leases: filtered };
+      console.log(json ? JSON.stringify(payload, null, 2) : renderLeaseStatus(store, payload));
+    } finally {
+      store.db.close();
+    }
+    return;
+  }
+
+  const options = { home, ...(ttlSeconds === undefined ? {} : { ttlSeconds }) };
+
+  if (sub === "acquire") {
+    const holder = values.agent ?? process.env.STAPLE_AGENT ?? process.env.USER ?? "user";
+    settle(
+      acquireClaim(store, repositoryId, ref!, holder, options)
+        .then((outcome) => {
+          if (json) {
+            console.log(JSON.stringify(outcome, null, 2));
+            return;
+          }
+          console.log(
+            `claimed ${outcome.issue.identifier} — scope ${outcome.scope}\n\n  ${outcome.note}`,
+          );
+        })
+        .finally(() => store.db.close()),
+      json,
+    );
+    return;
+  }
+
+  if (sub === "release") {
+    settle(
+      releaseClaim(store, repositoryId, ref!, options)
+        .then((outcome) => {
+          if (json) {
+            console.log(JSON.stringify(outcome, null, 2));
+            return;
+          }
+          /**
+           * The headline distinguishes "there was no lease" from "there was one
+           * and it is still out there". Only the second deserves an alarm; a
+           * disconnected release is the ordinary case and shouting at it would
+           * teach people to ignore the shouting.
+           */
+          const headline = outcome.remoteReleased
+            ? "released"
+            : outcome.stranded
+              ? "NOT released"
+              : "released (local only)";
+          console.log(`${headline}\n\n  ${outcome.note}`);
+        })
+        .finally(() => store.db.close()),
+      json,
+    );
+    return;
+  }
+
+  // renew, with or without the loop
+  const everyMs =
+    values.heartbeat === undefined ? null : durationSeconds(values.heartbeat, "heartbeat") * 1000;
+  const budgetMs = values.for === undefined ? undefined : durationSeconds(values.for, "for") * 1000;
+
+  if (everyMs === null) {
+    settle(
+      renewClaim(store, repositoryId, ref!, options)
+        .then((outcome) => {
+          if (json) {
+            console.log(JSON.stringify(outcome, null, 2));
+            return;
+          }
+          console.log(`renewed lease ${outcome.lease.fencingToken}\n\n  ${outcome.note}`);
+        })
+        .finally(() => store.db.close()),
+      json,
+    );
+    return;
+  }
+
+  /**
+   * The bounded heartbeat. Ctrl-C is the cancellation, wired to the same
+   * `AbortSignal` the loop already understands, so an interrupted heartbeat
+   * finishes its report rather than dying mid-beat with nothing to show.
+   */
+  const controller = new AbortController();
+  const stop = (): void => controller.abort();
+  process.once("SIGINT", stop);
+  process.once("SIGTERM", stop);
+
+  const entityId = store.getIssue(ref!).id;
+  settle(
+    runHeartbeat(store.db, repositoryId, entityId, {
+      ...options,
+      everyMs,
+      ...(budgetMs === undefined ? {} : { budgetMs }),
+      signal: controller.signal,
+      onBeat: json
+        ? undefined
+        : (beat) => {
+            console.log(
+              `  beat ${beat.n}  ${beat.outcome}` +
+                (beat.serverExpiresAt ? `  until ${beat.serverExpiresAt}` : "") +
+                (beat.message ? `  — ${beat.message}` : ""),
+            );
+          },
+    })
+      .then((report) => {
+        if (json) {
+          console.log(JSON.stringify(report, null, 2));
+          return;
+        }
+        console.log(
+          `\nstopped: ${report.stopped} after ${report.beats.length} ` +
+            `${report.beats.length === 1 ? "beat" : "beats"}. ` +
+            (report.holds
+              ? "The lease is still held."
+              : "The lease is NOT held — it expired or was taken over."),
+        );
+      })
+      .finally(() => {
+        process.off("SIGINT", stop);
+        process.off("SIGTERM", stop);
+        store.db.close();
+      }),
+    json,
+  );
+}
+
+function renderLeaseStatus(
+  store: ReturnType<typeof resolveWorkspace>["store"],
+  summary: LeaseSummary,
+): string {
+  const lines: string[] = [];
+  lines.push(
+    summary.connected
+      ? `Connected as ${summary.deviceId}. A claim here can be globally exclusive.`
+      : "Not connected on this machine. Every claim here is local to this database.",
+  );
+  lines.push("");
+  if (summary.leases.length === 0) {
+    lines.push("  no leases known to this device");
+    lines.push("");
+    lines.push("  Take one with: staple cloud lease acquire <ref>");
+    return lines.join("\n");
+  }
+  for (const lease of summary.leases) {
+    let identifier = lease.entityId;
+    try {
+      identifier = store.getIssue(lease.entityId).identifier;
+    } catch {
+      // A lease for an issue this device has not pulled yet. Show the id.
+    }
+    lines.push(
+      `  ${identifier}  ${lease.holder}  scope ${lease.scope}  token ${lease.fencingToken}`,
+    );
+    lines.push(`      service says it expires at ${lease.serverExpiresAt}`);
+  }
+  lines.push("");
+  lines.push(`  ${summary.note}`);
   return lines.join("\n");
 }
 

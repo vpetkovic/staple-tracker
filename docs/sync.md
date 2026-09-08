@@ -826,9 +826,24 @@ Disconnected, on a workspace with no `repository.json` and no credential:
 every mutating tool · `staple open` startup plus one authenticated API request.
 
 Connected in manual mode, the same list asserts zero. Only `staple cloud sync`,
-`staple cloud connect`, `staple cloud status --refresh` and the explicitly named
-backup and purge commands may call out, and each is exercised separately with the
-spy asserting the destination is the configured endpoint and nothing else.
+`staple cloud connect`, `staple cloud status --refresh`, `staple cloud lease
+acquire|renew|release` and the explicitly named backup and purge commands may
+call out, and each is exercised separately with the spy asserting the
+destination is the configured endpoint and nothing else.
+
+The lease commands deserve naming rather than being folded into "the cloud
+commands", because of what they are next to. `staple cloud lease acquire` is the
+only verb in the tree that both talks to the service and changes an issue's
+claim, and the reason `checkout` is still in the zero list above is that the two
+are separate commands rather than one command with a flag. The connected
+assertions are therefore run on a repository that is connected **and** holds a
+row in `sync_leases`: without the row, "`checkout` made no call" could be true
+merely because there was no lease to consult, which is the shape of a test that
+passes for the wrong reason. `staple cloud lease status` asserts zero on both
+sides of the connection, and `staple cloud lease acquire` asserts zero on a
+*disconnected* repository — where it still succeeds, claims locally, and says
+`scope: "local"`, because offline acquisition is allowed and labelled rather
+than refused.
 
 The browser bundle is out of a Node process spy's reach, so it is covered
 separately: the built asset is asserted to contain no absolute origin other than

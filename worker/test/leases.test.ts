@@ -214,6 +214,74 @@ describe("lease release", () => {
   });
 });
 
+/**
+ * The third member of "expired, stolen or revoked".
+ *
+ * Expiry and takeover are the lease code's own business and are covered above.
+ * Revocation is not — it is enforced one layer earlier, at authentication — and
+ * that is exactly why it is worth asserting here rather than assuming. A holder
+ * whose device was revoked still has a valid, current, un-superseded fencing
+ * token; the lease predicate would be perfectly happy with it. The only thing
+ * standing between that device and a write is the auth check, and this is the
+ * test that says so.
+ */
+describe("a revoked holder cannot finish the work it holds", () => {
+  it("refuses to renew a live lease held by a device that was revoked", async () => {
+    const granted = await acquire("STA-1", "agent-a", { token, device: "device-a" });
+    const { lease } = await jsonOf(granted);
+
+    await env.DB.prepare(
+      `UPDATE devices SET revoked_at = ?3 WHERE repo_id = ?1 AND device_id = ?2`,
+    )
+      .bind(REPO, "device-a", Date.now())
+      .run();
+
+    const response = await call(`/v1/repos/${REPO}/leases/STA-1/renew`, {
+      method: "POST",
+      body: { fencingToken: lease.fencingToken, ttlSeconds: 300 },
+      token,
+      device: "device-a",
+    });
+    await expectError(response, "revoked", 403);
+
+    // The lease is untouched. A revoked device cannot renew it and cannot make
+    // it disappear either; it stands until the service expires it or somebody
+    // else takes it over explicitly.
+    const row = await env.DB.prepare(
+      `SELECT fencing_token AS token FROM leases WHERE repo_id = ?1 AND entity_id = 'STA-1'`,
+    )
+      .bind(REPO)
+      .first<{ token: number }>();
+    expect(row!.token).toBe(lease.fencingToken);
+  });
+
+  it("refuses to release a live lease held by a device that was revoked", async () => {
+    const granted = await acquire("STA-1", "agent-a", { token, device: "device-a" });
+    const { lease } = await jsonOf(granted);
+
+    await env.DB.prepare(
+      `UPDATE devices SET revoked_at = ?3 WHERE repo_id = ?1 AND device_id = ?2`,
+    )
+      .bind(REPO, "device-a", Date.now())
+      .run();
+
+    const response = await call(`/v1/repos/${REPO}/leases/STA-1`, {
+      method: "DELETE",
+      body: { fencingToken: lease.fencingToken },
+      token,
+      device: "device-a",
+    });
+    await expectError(response, "revoked", 403);
+
+    const row = await env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM leases WHERE repo_id = ?1 AND entity_id = 'STA-1'`,
+    )
+      .bind(REPO)
+      .first<{ n: number }>();
+    expect(row!.n).toBe(1);
+  });
+});
+
 describe("lease repository scoping", () => {
   it("refuses a lease request against another repository", async () => {
     const other = "22222222-2222-4222-8222-222222222222";
