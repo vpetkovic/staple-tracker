@@ -55,11 +55,13 @@ import {
   performRevoke,
   retentionDisclosure,
 } from "../core/cloud/connect.js";
+import { listConflicts, resolveConflict } from "../core/cloud/conflicts.js";
 import { buildConnectPreview, renderConnectPreview } from "../core/cloud/preview.js";
 import { syncRepository, type SyncReport } from "../core/cloud/sync.js";
 import { describeState, localCloudStatus, refreshCloudStatus, type CloudStatus } from "../core/cloud/status.js";
 
-const USAGE = "Use: status, connect, disconnect, auto, devices, purge (staple cloud --help)";
+const USAGE =
+  "Use: status, connect, disconnect, auto, sync, devices, conflicts, resolve, purge (staple cloud --help)";
 
 const HELP = `staple cloud — connect this repository to a sync service, and manage the
 credential that connection produces. Three separate consents: connecting,
@@ -102,6 +104,19 @@ synchronizing automatically, and backing up. None of them implies another.
               end that device's access, server-side, effective on its very next
               request. Other devices are undisturbed. This is NOT disconnect:
               revoking is about a device you may not be holding.
+  cloud conflicts [--all]
+              fields two devices changed to different things. Both values are
+              kept, in full, and NOTHING is applied on your behalf — a conflict
+              is data, not an error, and the rest of the repository keeps
+              synchronizing around it. Local read; makes no request. --all
+              includes the ones already settled, which are kept as the record of
+              who chose what.
+  cloud resolve <id> --take local|remote
+  cloud resolve <id> --value <text>
+              settle one, explicitly. Emits a NEW operation carrying the choice,
+              so the other devices agree; it never rewrites the two operations
+              that disagreed and never picks for you. Resolving the same
+              conflict the same way twice does nothing the second time.
   cloud purge --confirm <repositoryId>
               DESTROY the repository's remote state. Separately named because
               it is not disconnecting. Prints what is stored, for how long and
@@ -221,6 +236,10 @@ export function runCloudCommand(argv: string[]): void {
       return runSync(rest);
     case "devices":
       return runDevices(rest);
+    case "conflicts":
+      return runConflicts(rest);
+    case "resolve":
+      return runResolve(rest);
     case "purge":
       return runPurge(rest);
     default:
@@ -513,6 +532,120 @@ function renderSyncReport(report: SyncReport): string {
     );
   }
   return lines.join("\n");
+}
+
+/**
+ * `staple cloud conflicts` — what two devices disagree about.
+ *
+ * A local read of one table. It makes no request and needs no connection: the
+ * disagreement is already recorded, and asking the service about it would tell
+ * nobody anything the row does not already say.
+ *
+ * The rendering leads with what was contested and shows BOTH values with equal
+ * weight. There is no "current" or "incoming" framing and no ordering that
+ * implies a default, because the whole point is that neither has been chosen —
+ * a surface that made one look settled would reintroduce last-write-wins in the
+ * only place it still could, which is the reader's head.
+ */
+function runConflicts(argv: string[]): void {
+  const { values } = parseArgs({ args: argv, options: { ...common, all: { type: "boolean" } } });
+  const json = values.json === true;
+  const opened = resolveWorkspace(values);
+  try {
+    const conflicts = listConflicts(opened.store.db, { includeResolved: values.all === true });
+    if (json) {
+      console.log(JSON.stringify({ conflicts }, null, 2));
+      return;
+    }
+    if (conflicts.length === 0) {
+      console.log(values.all === true ? "No conflicts, ever." : "No open conflicts.");
+      return;
+    }
+    for (const conflict of conflicts) {
+      console.log(`${conflict.id}  ${conflict.entity}.${conflict.field} on ${conflict.entityId}`);
+      console.log(`  here     ${render(conflict.localValue)}  (${conflict.localDeviceId ?? "this device"})`);
+      console.log(`  arrived  ${render(conflict.remoteValue)}  (${conflict.remoteDeviceId ?? "unknown device"})`);
+      if (conflict.baseValue !== undefined) console.log(`  was      ${render(conflict.baseValue)}`);
+      if (conflict.resolvedAt === null) {
+        console.log(`  open since ${conflict.detectedAt} — staple cloud resolve ${conflict.id} --take local|remote`);
+      } else {
+        console.log(
+          `  settled by ${conflict.resolvedBy ?? "someone"} at ${conflict.resolvedAt}: ` +
+            `${render(conflict.resolvedValue)} (${conflict.resolvedChoice})`,
+        );
+      }
+      console.log("");
+    }
+  } finally {
+    opened.store.db.close();
+  }
+}
+
+function render(value: unknown): string {
+  return typeof value === "string" ? value : JSON.stringify(value ?? null);
+}
+
+/**
+ * `staple cloud resolve` — settle one, on the record.
+ *
+ * `--take` and `--value` are separate flags rather than one, so that choosing a
+ * side and writing a third answer cannot be confused for each other in shell
+ * history. Neither has a default: a resolve with no flag is a usage error, not
+ * a guess.
+ */
+function runResolve(argv: string[]): void {
+  const { values, positionals } = parseArgs({
+    args: argv,
+    allowPositionals: true,
+    options: { ...common, take: { type: "string" }, value: { type: "string" } },
+  });
+  const json = values.json === true;
+  const id = positionals[0];
+  if (!id) {
+    throw new StapleError(
+      "validation",
+      "usage: staple cloud resolve <id> --take local|remote  |  --value <text>",
+    );
+  }
+  if (values.take !== undefined && values.value !== undefined) {
+    throw new StapleError(
+      "validation",
+      "--take and --value are two different decisions. Pass one.",
+    );
+  }
+  if (values.take !== undefined && values.take !== "local" && values.take !== "remote") {
+    throw new StapleError("validation", `--take is "local" or "remote", not "${values.take}".`);
+  }
+  if (values.take === undefined && values.value === undefined) {
+    throw new StapleError(
+      "validation",
+      "Nothing chosen. Pass --take local, --take remote, or --value <text>.",
+    );
+  }
+
+  const opened = resolveWorkspace(values);
+  try {
+    const outcome = resolveConflict(opened.store.db, {
+      id,
+      choice: values.take === undefined ? "custom" : (values.take as "local" | "remote"),
+      value: values.value,
+      actor: process.env.STAPLE_AGENT ?? null,
+    });
+    if (json) {
+      console.log(JSON.stringify(outcome, null, 2));
+      return;
+    }
+    console.log(
+      outcome.changed
+        ? `${outcome.conflict.entity}.${outcome.conflict.field} is now ${render(outcome.conflict.resolvedValue)}.`
+        : `Already resolved to ${render(outcome.conflict.resolvedValue)}. Nothing to do.`,
+    );
+    for (const move of outcome.renumbered) {
+      console.log(`  ${move.from} was taken, so ${move.issueId} is now ${move.to}.`);
+    }
+  } finally {
+    opened.store.db.close();
+  }
 }
 
 function runDevices(argv: string[]): void {

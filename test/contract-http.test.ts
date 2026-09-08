@@ -362,6 +362,22 @@ describe("KNOWN: logical errors this surface cannot project", () => {
        * endpoint is a heartbeat to Cloudflare arrived at by accident.
        * `test/cloud-ui-status.test.ts` pins it, including under network spies.
        */
+      /**
+       * The conflict pair. `/api/cloud/conflicts` is a GET and a local read of
+       * one table — available in every cloud state including disconnected,
+       * because a repository that has synced and then been disconnected still
+       * holds its unsettled decisions and hiding them would make them invisible
+       * for as long as the credential was gone.
+       *
+       * `/api/cloud/conflicts/resolve` is the POST, and it is named in the
+       * method gate individually rather than by prefix: a `/api/cloud/` family
+       * rule would have made the two reads above cross-origin-writable, which is
+       * the same trap `/api/queue`'s verbs are spelled out to avoid.
+       * `test/conflict-surfaces.test.ts` pins both, against the CLI and MCP
+       * projections of the same record.
+       */
+      "/api/cloud/conflicts",
+      "/api/cloud/conflicts/resolve",
       "/api/cloud/status",
       "/api/document",
       "/api/events",

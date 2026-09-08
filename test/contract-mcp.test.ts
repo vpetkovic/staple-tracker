@@ -232,7 +232,7 @@ describe("tool inventory", () => {
    * moment this ticket is buying. Read-only tools deliberately omit
    * destructiveHint (the MCP spec only defines it when readOnlyHint is false).
    */
-  it("exposes exactly these 43 tools with these annotations and output schemas", async () => {
+  it("exposes exactly these 45 tools with these annotations and output schemas", async () => {
     const tools = await harness.listTools();
     const inventory = tools.map((t) => ({
       name: t.name,
@@ -698,10 +698,36 @@ describe("tool inventory", () => {
         annotations: { title: "Cloud status", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
         hasOutputSchema: true,
       },
+      /**
+       * The conflict lane's two, and the ONE cloud write an agent may make.
+       *
+       * The paragraph above holds because connect, disconnect, revoke and purge
+       * are consents. Resolving is not: `docs/sync.md` says outright that
+       * *"resolving it is a decision a human or an agent makes on the record"*.
+       * It touches the local database only, spends no credential, and destroys
+       * nothing — the losing value stays on the record — so `destructiveHint` is
+       * false, and `idempotentHint` is true because resolving the same conflict
+       * the same way twice is a no-op by construction rather than by luck.
+       */
+      {
+        name: "conflict_list",
+        annotations: { title: "List conflicts", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+        hasOutputSchema: true,
+      },
+      {
+        name: "conflict_resolve",
+        annotations: {
+          title: "Resolve conflict",
+          readOnlyHint: false,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
+        hasOutputSchema: true,
+      },
     ]);
   });
 
-  it("marks exactly the fifteen read tools readOnlyHint: true", async () => {
+  it("marks exactly the sixteen read tools readOnlyHint: true", async () => {
     const tools = await harness.listTools();
     const readOnly = tools.filter((t) => t.annotations?.readOnlyHint === true).map((t) => t.name);
     expect(readOnly).toEqual([
@@ -727,6 +753,8 @@ describe("tool inventory", () => {
       // STA-71: reading whether this MACHINE has connected the repository is as
       // read-only as reading a task, and it makes no network request either.
       "cloud_status",
+      // Listing what two devices disagree about is a read of one local table.
+      "conflict_list",
     ]);
   });
 
@@ -1379,6 +1407,11 @@ describe("tool response shapes (31/31)", () => {
       // STA-71: the cloud status projection is pinned in test/cloud-connect.test.ts
       // against the same `localCloudStatus` the CLI and HTTP surfaces render.
       "cloud_status",
+      // The conflict lane's two are pinned in test/conflict-surfaces.test.ts,
+      // against the CLI and HTTP projections of the same record — including that
+      // no surface will resolve without an explicit choice.
+      "conflict_list",
+      "conflict_resolve",
     ]);
     expect([...covered].sort()).toEqual([...tools].sort());
   });

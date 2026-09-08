@@ -26,6 +26,7 @@ import { bindJournal } from "../src/core/journal.js";
 import { writeStoredRepositoryId } from "../src/core/repo-identity.js";
 import { migrateWorkspace } from "../src/core/schema.js";
 import { WorkspaceStore } from "../src/core/store.js";
+import { listConflicts } from "../src/core/cloud/conflicts.js";
 import { writeConnection } from "../src/core/cloud/connection.js";
 import { credentialStoreFor } from "../src/core/cloud/credential-store.js";
 import { syncRepository, type SyncReport } from "../src/core/cloud/sync.js";
@@ -447,20 +448,22 @@ describe("offline identifier collisions are recorded, not silently resolved", ()
       // identity. A last-write-wins on `identifier` would have dropped one.
       expect((store.db.prepare("SELECT COUNT(*) AS n FROM issues").get() as { n: number }).n).toBe(3);
 
-      const conflicts = store.db
-        .prepare("SELECT entity, field, local_value, remote_value FROM sync_conflicts")
-        .all() as Array<{
-        entity: string;
-        field: string;
-        local_value: string;
-        remote_value: string;
-      }>;
+      /**
+       * Read through the typed contract rather than off the columns, because
+       * the columns now carry the same convention every other conflict uses:
+       * `local_*` is what THIS database holds and `remote_*` is what arrived.
+       * For a collision that makes the provisional the local value — it is what
+       * the row here now carries — and the contested number the remote one. The
+       * two were the other way round while the op and device columns already
+       * followed the convention, so one row described opposite sides of itself.
+       */
+      const conflicts = listConflicts(store.db);
       expect(conflicts).toHaveLength(1);
       expect(conflicts[0]!.entity).toBe("issue");
       expect(conflicts[0]!.field).toBe("identifier");
       // Both sides on the record: the value that was wanted, and the one used.
-      expect(conflicts[0]!.local_value).toBe("TST-2");
-      expect(conflicts[0]!.remote_value).not.toBe("TST-2");
+      expect(conflicts[0]!.remoteValue).toBe("TST-2");
+      expect(conflicts[0]!.localValue).not.toBe("TST-2");
     }
 
     /**
