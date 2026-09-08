@@ -932,7 +932,7 @@ function applySetting(db: DatabaseSync, input: ApplyInput): boolean {
 }
 
 /**
- * A milestone: its dates, or its whole ordered membership.
+ * A milestone: its dates, its whole ordered membership, or both.
  *
  * `replace` is the ordered-collection verb and this is one of the two entities it
  * is for. `rank` is never transported — it is recomputed densely from list order
@@ -945,16 +945,43 @@ function applySetting(db: DatabaseSync, input: ApplyInput): boolean {
  * regardless of which verb carried it. Gating on `verb === "replace"` made this
  * handler's correctness depend on a verb surviving every hop of the wire, and when
  * the snapshot route did not carry one, membership was not dropped loudly — it fell
- * through to the dates branch below and wrote two NULLs over the milestone instead.
+ * through to the dates branch and wrote two NULLs over the milestone instead.
  *
  * `applyQueue` has always keyed off `payload.order` for the same reason. The two
  * ordered collections now agree, and a verb that goes missing again costs a
  * diagnosis rather than a silent hydration into the wrong state.
+ *
+ * ## Why every facet is applied, and only the facets the payload named (STA-259)
+ *
+ * A milestone holds two facts that travel as two different payload shapes against the
+ * same entity key: dates as `{ targetDate, startDate }`, membership as `{ members }`.
+ * This handler used to treat them as alternatives — apply the members and RETURN, else
+ * write the dates — and both halves of that were wrong the moment one payload carried
+ * both, which is exactly what a fold produces. A snapshot ships one entity per entity
+ * and a restore materialises one operation per folded entity, so there is no server-side
+ * way to split them back apart; the receiver has to apply what it was handed.
+ *
+ *   - Members present and dates ignored was a silent DROP.
+ *   - Absent date keys written as NULL was a silent OVERWRITE, which is worse: it
+ *     destroyed values that were never in question. An operation about membership said
+ *     nothing whatsoever about dates, and this wrote both of them to NULL.
+ *
+ * So each facet is applied when, and only when, the payload names it. The distinction
+ * that carries the weight is PRESENT-AND-NULL versus ABSENT: `{ targetDate: null }`
+ * means "cleared" and is honoured, which is how `MilestoneStore.update` clears a date;
+ * no `targetDate` key at all means "I have no opinion" and the stored value stands. A
+ * payload naming neither facet is a no-op rather than an eraser.
  */
 function applyMilestone(db: DatabaseSync, input: ApplyInput): boolean {
   const members = input.payload.members;
-  if (Array.isArray(members)) {
-    if (!issueExists(db, input.entityId)) throw new ReferentMissing(`milestone ${input.entityId}`);
+  const hasMembers = Array.isArray(members);
+  const hasTarget = "targetDate" in input.payload;
+  const hasStart = "startDate" in input.payload;
+  if (!hasMembers && !hasTarget && !hasStart) return false;
+
+  if (!issueExists(db, input.entityId)) throw new ReferentMissing(`milestone ${input.entityId}`);
+
+  if (hasMembers) {
     const ids = members.filter((id): id is string => typeof id === "string");
     for (const id of ids) {
       if (!issueExists(db, id)) throw new ReferentMissing(`issue ${id} (member of ${input.entityId})`);
@@ -981,25 +1008,34 @@ function applyMilestone(db: DatabaseSync, input: ApplyInput): boolean {
        ON CONFLICT (issue_id) DO UPDATE SET
          members_revision = members_revision + 1, updated_at = excluded.updated_at`,
     ).run(input.entityId, input.at);
-    return true;
   }
 
-  if (!issueExists(db, input.entityId)) throw new ReferentMissing(`milestone ${input.entityId}`);
-  const target = input.payload.targetDate;
-  const start = input.payload.startDate;
-  db.prepare(
-    `INSERT INTO milestone_meta (issue_id, target_date, start_date, updated_at)
-     VALUES (?, ?, ?, ?)
-     ON CONFLICT (issue_id) DO UPDATE SET
-       target_date = excluded.target_date,
-       start_date  = excluded.start_date,
-       updated_at  = excluded.updated_at`,
-  ).run(
-    input.entityId,
-    typeof target === "string" ? target : null,
-    typeof start === "string" ? start : null,
-    input.at,
-  );
+  if (hasTarget || hasStart) {
+    const target = input.payload.targetDate;
+    const start = input.payload.startDate;
+    /**
+     * The `CASE` is the "silent about what it did not name" rule, in SQL. On INSERT the
+     * row is new and an unnamed column is null because it has no prior value to keep; on
+     * conflict, an unnamed column keeps the value it already had rather than taking the
+     * null this statement had to bind for it.
+     */
+    db.prepare(
+      `INSERT INTO milestone_meta (issue_id, target_date, start_date, updated_at)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT (issue_id) DO UPDATE SET
+         target_date = CASE WHEN ? = 1 THEN excluded.target_date ELSE milestone_meta.target_date END,
+         start_date  = CASE WHEN ? = 1 THEN excluded.start_date  ELSE milestone_meta.start_date  END,
+         updated_at  = excluded.updated_at`,
+    ).run(
+      input.entityId,
+      typeof target === "string" ? target : null,
+      typeof start === "string" ? start : null,
+      input.at,
+      hasTarget ? 1 : 0,
+      hasStart ? 1 : 0,
+    );
+  }
+
   return true;
 }
 

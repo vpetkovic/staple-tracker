@@ -7,25 +7,36 @@
  * from the way it was captured, and the difference would only ever be discovered by
  * whoever was relying on the backup.
  *
- * ## Why this is a new file rather than an export from `snapshot.ts`
+ * ## Why this is a file of its own
  *
- * `snapshot.ts` is owned by another lane this wave and is explicitly not to be edited
- * here. Duplicating a fold is a real cost and it is recorded as one: when that lane
- * lands, `snapshot.ts` should import `foldLog` from here and delete its private
- * `fold`. The two are deliberately written to produce the same state for the same log
- * so that the refactor is a deletion rather than a reconciliation, and
- * `worker/test/backups.test.ts` pins that equivalence against the live `/snapshot`
- * route so it cannot quietly drift in the meantime.
+ * It was written here while `snapshot.ts` was owned by another lane, and duplicating a
+ * fold was recorded as a debt to be repaid by deletion rather than reconciliation. It
+ * has been: `snapshot.ts` imports `foldLog` and has no private fold. There is one fold,
+ * and `worker/test/backups.test.ts` pins a backup against the live `/snapshot` route so
+ * that stays true.
  *
- * ## The one field this fold has that the snapshot's does not
+ * ## A fold supersedes the keys an operation carried, never the entity (STA-259)
  *
- * `superseded`. The snapshot represents a `replace` by setting the state to
- * `{ replaced: payload }`, which is unambiguous to a hydrating client because a
- * client never has to turn it back into an operation. A restore does, and inferring
- * "was this a replace?" from the shape of the state means guessing about an entity
- * whose only field happens to be called `replaced`. Guessing about that is how a
- * plan comes back as an object with a `replaced` key instead of as a plan, so the
- * verb is recorded at fold time instead of being reconstructed at restore time.
+ * Every verb here merges its payload's keys over the state and is silent about every key
+ * it did not mention. `replace` is no exception, and that is the whole of the fix: an
+ * ordered collection lives entirely under ONE key (`{ members: … }`, `{ order: … }` —
+ * the only two shapes `envelope.ts` admits a `replace` for), so assigning that key's
+ * value WHOLE, never merging it element-wise, already IS supersede for the collection.
+ *
+ * Superseding the entity was a strictly stronger claim than any operation ever made.
+ * This fold used to make it by setting the state to `{ replaced: payload }`, and that
+ * wrapper was the bug made structural: to hold one payload as "the whole state" it had
+ * to evict every other key. A milestone dated before its membership changed folded to
+ * membership alone and hydrated devices with null dates — through a snapshot and through
+ * a restored backup identically, because both come out of this function.
+ *
+ * ## Why `superseded` survives the wrapper
+ *
+ * With nothing wrapped, the verb is not inferable from the shape of the state AT ALL —
+ * which is exactly why it is recorded at fold time rather than reconstructed at restore
+ * time. It was always a mistake to ask the shape: the answer means guessing about an
+ * entity whose only field happens to be called `replaced`, and guessing is how a plan
+ * comes back as an object with a `replaced` key instead of as a plan.
  */
 
 import { entityKey } from "./cursor.js";
@@ -41,7 +52,12 @@ export interface FoldedEntity {
   /** Server timestamp of the tombstone, or null. A tombstone is data, not an absence. */
   deletedAt: number | null;
   lastSeq: number;
-  /** True when the last surviving write was a `replace`. See the module comment. */
+  /**
+   * True when the last surviving write was a `replace`, so a restore materialises this
+   * state under that verb again. It records the VERB, not a shape: it says nothing about
+   * which keys the state holds, because a `replace` is authoritative only for the keys
+   * it carried. See the module comment.
+   */
   superseded: boolean;
   state: Record<string, unknown>;
 }
@@ -60,7 +76,9 @@ export interface FoldResult {
  * Mechanical, and knows nothing about what an issue is:
  *
  *   create/update/renumber — shallow-merge the payload's fields over the state
- *   replace                — supersede the state wholesale (ordered collections only)
+ *   replace                — the same merge, and the value of the key naming the ordered
+ *                            collection is assigned WHOLE, which is the supersede. The
+ *                            verb is recorded so a restore can reproduce it.
  *   delete                 — record a tombstone; later updates become no-ops
  *
  * The tombstone wins regardless of arrival order, which is what makes convergence
@@ -140,15 +158,23 @@ export async function foldLog(
       if (entry.deletedAt !== null) continue;
 
       const payload = JSON.parse(row.payload) as unknown;
-      if (row.verb === "replace") {
-        // Ordered collections replicate whole. Merging two plans would invent an
-        // order neither human asked for, so a replace supersedes rather than merges.
-        entry.state = { replaced: payload } as Record<string, unknown>;
-        entry.superseded = true;
-      } else if (payload !== null && typeof payload === "object" && !Array.isArray(payload)) {
-        Object.assign(entry.state, payload as Record<string, unknown>);
-        entry.superseded = false;
+      if (payload === null || typeof payload !== "object" || Array.isArray(payload)) {
+        // No keys, so nothing to be authoritative about. `envelope.ts` refuses a null or
+        // non-object payload at ingest — it does admit an array, and no emitter produces
+        // one for any verb — so this is a floor under a corrupted log rather than a case
+        // the wire is expected to carry. The floor is "contributes no state", which is
+        // what a non-object payload has always got here.
+        continue;
       }
+
+      // EVERY verb merges the keys it carried and is silent about the rest. A `replace`
+      // still supersedes the collection it names, because that collection is the value
+      // of a single key and the value is assigned whole — merging two plans element by
+      // element would invent an order neither human asked for. What it no longer does is
+      // discard `startsOn` because it happened to be talking about `members`.
+      Object.assign(entry.state, payload as Record<string, unknown>);
+      // So the merge is the same for every verb and only the RECORD of the verb differs.
+      entry.superseded = row.verb === "replace";
     }
 
     after = page.results[page.results.length - 1]!.seq;
@@ -177,11 +203,17 @@ export async function foldLog(
  */
 export function materializedVerb(entity: FoldedEntity): {
   verb: string;
-  payload: Record<string, unknown> | unknown;
+  payload: Record<string, unknown>;
 } {
   if (entity.deletedAt !== null) return { verb: "delete", payload: {} };
-  if (entity.superseded) return { verb: "replace", payload: entity.state.replaced };
-  // `create` rather than `update`: the new epoch has no prior version of anything, so
-  // an `update` would carry a `baseVersion` describing a timeline that does not exist.
-  return { verb: "create", payload: entity.state };
+  // The WHOLE state either way, because the fold no longer holds a `replace` apart from
+  // the rest of the entity — and it must be the whole state, or a restore would emit an
+  // operation that says less than the fold knew. Re-folding this yields exactly the state
+  // it was given, `superseded` included, which is what makes it an inverse rather than an
+  // approximation.
+  //
+  // `create` rather than `update` when nothing was superseded: the new epoch has no prior
+  // version of anything, so an `update` would carry a `baseVersion` describing a timeline
+  // that does not exist.
+  return { verb: entity.superseded ? "replace" : "create", payload: entity.state };
 }

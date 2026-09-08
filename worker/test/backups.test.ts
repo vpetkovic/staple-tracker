@@ -280,6 +280,57 @@ describe("restore materialises into the new epoch", () => {
     expect(snapshot.entities[0]!.verb).toBe("replace");
     expect(snapshot.entities[0]!.state).toEqual({ members: ["c", "a", "b"] });
   });
+
+  /**
+   * STA-259, through this path rather than through `/snapshot`.
+   *
+   * The two paths share `foldLog`, so a granularity mistake in the fold was never a
+   * divergence between them — it was the same loss twice. It is worse here: a restore
+   * materialises the folded state as real operations in the new epoch, so a dropped
+   * field is written into the LOG and no later pull can disagree with it. The snapshot
+   * path loses the dates for a device; this path loses them for the repository.
+   */
+  it("keeps the fields a `replace` never mentioned, through a backup and a restore", async () => {
+    const token = await seedRepo();
+    await enableBackup();
+    await pushOps(
+      [
+        {
+          ...creates(["plan-1"])[0],
+          entity: "milestone",
+          verb: "update",
+          baseVersion: 1,
+          payload: { targetDate: "2026-12-24", startDate: "2026-10-01" },
+        },
+        {
+          ...creates(["plan-1"], 2)[0],
+          entity: "milestone",
+          verb: "replace",
+          baseVersion: 1,
+          payload: { members: ["c", "a", "b"] },
+        },
+      ],
+      { token },
+    );
+
+    const backup = await jsonOf<{ backup: { backupId: string } }>(
+      await call(`/v1/repos/${REPO}/backups`, { method: "POST", token, body: {} }),
+    );
+    await runRestore(token, backup.backup.backupId);
+
+    const snapshot = await jsonOf<
+      { entities: { verb: string; state: Record<string, unknown> }[] }
+    >(await call(`/v1/repos/${REPO}/snapshot`, { token }));
+
+    // Both facts crossed the backup and came back, and the collection is still whole
+    // and still under the verb that carried it.
+    expect(snapshot.entities[0]!.verb).toBe("replace");
+    expect(snapshot.entities[0]!.state).toEqual({
+      targetDate: "2026-12-24",
+      startDate: "2026-10-01",
+      members: ["c", "a", "b"],
+    });
+  });
 });
 
 describe("restore is non-truncating", () => {

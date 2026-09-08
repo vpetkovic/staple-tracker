@@ -116,8 +116,94 @@ describe("GET /v1/repos/{repoId}/snapshot", () => {
     // And the verb the fold consumed travels, so the client does not have to guess
     // it back out of the shape of the state.
     expect(body.entities[0].verb).toBe("replace");
-    // `{ replaced: … }` is fold-internal. It must not reach a client.
+    // `{ replaced: … }` was fold-internal and no longer exists at all. It must not
+    // reach a client under any circumstances.
     expect(body.entities[0].state.replaced).toBeUndefined();
+  });
+
+  /**
+   * STA-259. The supersede above is right about the collection and used to be wrong
+   * about everything else: it replaced the ENTITY, so it also discarded the fields the
+   * operation had said nothing about.
+   *
+   * A milestone is the entity where that costs data, because it holds two facts that
+   * travel as two different payload shapes against the same entity key — dates as
+   * `update { targetDate, startDate }`, membership as `replace { members }`. Dated
+   * Monday, re-membered Tuesday, folded to membership alone.
+   */
+  it("keeps the fields a `replace` never mentioned", async () => {
+    await pushOps(
+      [
+        envelope({
+          clientSeq: 1,
+          entity: "milestone",
+          entityId: "milestone-1",
+          verb: "update",
+          payload: { targetDate: "2026-12-24", startDate: "2026-10-01" },
+        }),
+        envelope({
+          clientSeq: 2,
+          entity: "milestone",
+          entityId: "milestone-1",
+          verb: "replace",
+          payload: { members: ["b", "a"] },
+        }),
+      ],
+      { token },
+    );
+
+    const body = await jsonOf(await call(`/v1/repos/${REPO}/snapshot`, { token }));
+    // The membership is superseded whole — and the dates, which that operation never
+    // spoke about, are still here.
+    expect(body.entities[0].state).toEqual({
+      targetDate: "2026-12-24",
+      startDate: "2026-10-01",
+      members: ["b", "a"],
+    });
+    // The verb is still the one the fold consumed, and still carried rather than
+    // inferred: with nothing wrapped, the shape of the state cannot reveal it.
+    expect(body.entities[0].verb).toBe("replace");
+  });
+
+  /**
+   * The other order, which failed differently and is the sharper proof.
+   *
+   * A later merge landed ON TOP of the fold's private `{ replaced: … }` wrapper, so the
+   * wrapper itself crossed the wire — the exact thing the test above pins as
+   * fold-internal — and the membership was invisible underneath it. One shape, two
+   * symptoms; neither survives its removal.
+   */
+  it("keeps a superseded collection when an ordinary update follows it", async () => {
+    await pushOps(
+      [
+        envelope({
+          clientSeq: 1,
+          entity: "milestone",
+          entityId: "milestone-1",
+          verb: "replace",
+          payload: { members: ["b", "a"] },
+        }),
+        envelope({
+          clientSeq: 2,
+          entity: "milestone",
+          entityId: "milestone-1",
+          verb: "update",
+          payload: { targetDate: "2026-12-24", startDate: "2026-10-01" },
+        }),
+      ],
+      { token },
+    );
+
+    const body = await jsonOf(await call(`/v1/repos/${REPO}/snapshot`, { token }));
+    expect(body.entities[0].state).toEqual({
+      members: ["b", "a"],
+      targetDate: "2026-12-24",
+      startDate: "2026-10-01",
+    });
+    expect(body.entities[0].state.replaced).toBeUndefined();
+    // The last surviving write was the update, so this materialises as one — the verb
+    // records what happened last, not which keys the state happens to hold.
+    expect(body.entities[0].verb).toBe("create");
   });
 
   /**

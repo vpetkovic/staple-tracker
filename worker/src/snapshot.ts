@@ -138,28 +138,25 @@ export async function snapshot(
 /**
  * The wire form of a folded entity.
  *
- * `{ replaced: … }` is how the fold represents a superseded ordered collection TO
- * ITSELF. It is not a wire shape and it does not leave this function. A client handed
- * it would have to decide whether an entity whose only field is called `replaced` was
- * a `replace`, or was simply an entity with a field of that name — and guessing about
- * that is exactly how the plan arrives as an object with a `replaced` key instead of
- * as a plan.
+ * The state travels as the fold holds it, because since STA-259 the fold holds nothing
+ * private: a `replace` merges the keys it carried like every other verb, so there is no
+ * `{ replaced: … }` wrapper to strip and no unwrapping step to get wrong. What a client
+ * applies for the collection is byte-identical to the payload of the `replace` it would
+ * have received from the ordered tail, which is the property that matters — a collection
+ * arrives the same way whichever half of a bootstrap carried it — and the milestone's
+ * dates come with it instead of being evicted by a `replace` that never mentioned them.
  *
- * So the verb the fold consumed travels explicitly and the payload is handed over
- * unwrapped, which is precisely what `materializedVerb` does when a RESTORE turns a
- * folded entity back into an operation. Both ways out of a fold now go through the
- * same function, so a bootstrap and a restore cannot reach different conclusions
- * about the same log.
+ * The VERB still travels explicitly, and now it has to: with nothing wrapped, a client
+ * could not infer it from the shape of the state even if it were willing to guess. It
+ * comes from `materializedVerb`, the same function a RESTORE uses, so a bootstrap and a
+ * restore cannot reach different conclusions about the same log.
  *
- * What the client then applies is byte-identical to the payload of the `replace` it
- * would have received from the ordered tail. That is the property that matters: a
- * collection arrives the same way whichever half of a bootstrap carried it.
- *
- * ONE DIFFERENCE FROM A RESTORE, deliberately. A restore materialises a tombstone as
- * a bare `delete` and drops the state the entity had, because reproducing the corpse
- * would cost two operations for a state nothing reads. A snapshot keeps it: a
- * hydrating device is handed the tombstone AND what the entity looked like, which is
- * what this route has always returned and what its callers already assert.
+ * ONE DIFFERENCE FROM A RESTORE, deliberately, and it is why `state` is read from the
+ * entity rather than from `materializedVerb`'s payload. A restore materialises a
+ * tombstone as a bare `delete` and drops the state the entity had, because reproducing
+ * the corpse would cost two operations for a state nothing reads. A snapshot keeps it: a
+ * hydrating device is handed the tombstone AND what the entity looked like, which is what
+ * this route has always returned and what its callers already assert.
  */
 function toWireEntity(entity: FoldedEntity): WireEntity {
   return {
@@ -169,23 +166,8 @@ function toWireEntity(entity: FoldedEntity): WireEntity {
     deletedAt: entity.deletedAt,
     lastSeq: entity.lastSeq,
     verb: materializedVerb(entity).verb,
-    state: unwrapped(entity),
+    state: entity.state,
   };
-}
-
-/**
- * The payload a `replace` carried, or the merged state for everything else.
- *
- * A `replace` whose payload was not an object cannot be unwrapped into one, and
- * becomes an empty state rather than a lie about what the operation said.
- * `worker/src/envelope.ts` refuses such an operation at ingest, so this is a floor
- * under a corrupted log rather than a case the wire is expected to carry.
- */
-function unwrapped(entity: FoldedEntity): Record<string, unknown> {
-  if (!entity.superseded) return entity.state;
-  const payload = entity.state.replaced;
-  if (payload === null || typeof payload !== "object" || Array.isArray(payload)) return {};
-  return payload as Record<string, unknown>;
 }
 
 function parseLimit(raw: string | null): number {

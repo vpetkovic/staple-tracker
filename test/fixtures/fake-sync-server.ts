@@ -726,13 +726,13 @@ export class FakeSyncServer {
         continue;
       }
       if (entry.deletedAt !== null) continue;
-      if (op.verb === "replace") {
-        entry.state = { replaced: op.payload } as Record<string, unknown>;
-        entry.superseded = true;
-      } else if (op.payload !== null && typeof op.payload === "object" && !Array.isArray(op.payload)) {
-        Object.assign(entry.state, op.payload as Record<string, unknown>);
-        entry.superseded = false;
+      if (op.payload === null || typeof op.payload !== "object" || Array.isArray(op.payload)) {
+        continue;
       }
+      // Every verb merges the keys it carried and is silent about the rest; only the
+      // record of the verb differs. Mirrors `worker/src/fold.ts` (STA-259).
+      Object.assign(entry.state, op.payload as Record<string, unknown>);
+      entry.superseded = op.verb === "replace";
     }
 
     const ordered = [...folded.values()].sort((a, b) =>
@@ -752,11 +752,11 @@ export class FakeSyncServer {
       cutoffSeq: cutoff,
       tailCursor: b64url(JSON.stringify({ v: 1, r: session.repoId, e: this.epoch, s: cutoff })),
       /**
-       * `{ replaced: … }` is how a fold represents a superseded ordered collection to
-       * itself, and it does not cross the wire — the real route unwraps it here and
-       * carries the verb instead (`worker/src/snapshot.ts::toWireEntity`). This fixture
-       * has to do the same or an end-to-end bootstrap test proves nothing about the
-       * Worker it is standing in for.
+       * The state as the fold holds it, and the VERB carried separately — the shape the
+       * real route emits (`worker/src/snapshot.ts::toWireEntity`). There is no unwrapping
+       * step on either side since STA-259, because a `replace` no longer supersedes the
+       * whole entity and so has nothing to be held apart from. This fixture has to agree
+       * with the Worker it stands in for or an end-to-end bootstrap test proves nothing.
        */
       entities: page.map((entry) => ({
         entity: entry.entity,
@@ -765,7 +765,7 @@ export class FakeSyncServer {
         deletedAt: entry.deletedAt,
         lastSeq: entry.lastSeq,
         verb: entry.deletedAt !== null ? "delete" : entry.superseded ? "replace" : "create",
-        state: entry.superseded ? (entry.state.replaced as Record<string, unknown>) : entry.state,
+        state: entry.state,
       })),
       nextCursor: hasMore
         ? b64url(
@@ -817,13 +817,12 @@ export class FakeSyncServer {
         continue;
       }
       if (entry.deletedAt !== null) continue;
-      if (op.verb === "replace") {
-        entry.state = { replaced: op.payload } as Record<string, unknown>;
-        entry.superseded = true;
-      } else if (op.payload !== null && typeof op.payload === "object" && !Array.isArray(op.payload)) {
-        Object.assign(entry.state, op.payload as Record<string, unknown>);
-        entry.superseded = false;
+      if (op.payload === null || typeof op.payload !== "object" || Array.isArray(op.payload)) {
+        continue;
       }
+      // As above and as `worker/src/fold.ts`: the keys carried, not the entity (STA-259).
+      Object.assign(entry.state, op.payload as Record<string, unknown>);
+      entry.superseded = op.verb === "replace";
     }
 
     const entities = [...folded.values()].sort((a, b) =>
@@ -927,13 +926,11 @@ export class FakeSyncServer {
       );
       for (const entity of chunk) {
         this.lastSeq += 1;
+        // `worker/src/fold.ts::materializedVerb`: the whole state under the recorded verb,
+        // except a tombstone, which materialises bare because the corpse is a state
+        // nothing reads.
         const verb = entity.deletedAt !== null ? "delete" : entity.superseded ? "replace" : "create";
-        const payload =
-          entity.deletedAt !== null
-            ? {}
-            : entity.superseded
-              ? (entity.state.replaced as Record<string, unknown>)
-              : entity.state;
+        const payload = entity.deletedAt !== null ? {} : entity.state;
         this.ops.push({
           seq: this.lastSeq,
           epoch: restore.toEpoch,
