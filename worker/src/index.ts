@@ -18,6 +18,14 @@
  */
 
 import { type Session, authenticate, assertRepoScope } from "./auth.js";
+import {
+  createBackup,
+  deleteBackup,
+  listBackups,
+  purgeRepository,
+  restoreBackup,
+  setBackupConsent,
+} from "./backups.js";
 import { connect, listDevices, revokeDevice } from "./devices.js";
 import type { Env } from "./env.js";
 import { SyncError, json } from "./errors.js";
@@ -150,6 +158,42 @@ async function route(
   // /v1/repos/{repoId}/leases/{entityId}
   if (tail.length === 2 && tail[0] === "leases" && method === "DELETE") {
     return releaseLease(request, env, session, protocol, decodeURIComponent(tail[1]!));
+  }
+
+  // Backup, restore and purge. Disaster recovery, not convergence — see backups.ts.
+  //
+  // `/backup` (singular) is the consent flag; `/backups` (plural) is the collection.
+  // The two names are one character apart, which is unlovely, and the alternative was
+  // to invent a route the contract does not name for one of them. The router
+  // distinguishes them exactly and every one of them is a different method, so the
+  // ambiguity is in the reading rather than in the dispatch.
+
+  // /v1/repos/{repoId}/backup — the server-side half of the third consent
+  if (tail.length === 1 && tail[0] === "backup" && method === "PUT") {
+    return setBackupConsent(request, env, session, protocol);
+  }
+
+  // /v1/repos/{repoId}/backups
+  if (tail.length === 1 && tail[0] === "backups") {
+    if (method === "POST") return createBackup(request, env, session, protocol, startedAt);
+    if (method === "GET") return listBackups(env, session, protocol);
+    throw new SyncError("validation", "method not allowed");
+  }
+
+  // /v1/repos/{repoId}/backups/{backupId}
+  if (tail.length === 2 && tail[0] === "backups" && method === "DELETE") {
+    return deleteBackup(env, session, protocol, decodeURIComponent(tail[1]!));
+  }
+
+  // /v1/repos/{repoId}/backups/{backupId}/restore — resumable; call until `done`
+  if (tail.length === 3 && tail[0] === "backups" && tail[2] === "restore" && method === "POST") {
+    return restoreBackup(request, env, session, protocol, decodeURIComponent(tail[1]!), startedAt);
+  }
+
+  // /v1/repos/{repoId} — purge. A separate verb on the repository itself, never a
+  // flag on disconnect.
+  if (tail.length === 0 && method === "DELETE") {
+    return purgeRepository(env, session, protocol, startedAt);
   }
 
   // /v1/repos/{repoId}/devices

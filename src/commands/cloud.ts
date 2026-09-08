@@ -55,11 +55,22 @@ import {
   performRevoke,
   retentionDisclosure,
 } from "../core/cloud/connect.js";
+import {
+  type RemoteBackup,
+  createBackup,
+  deleteBackup,
+  listBackups,
+  localEpochOf,
+  restoreDisclosure,
+  restoreFromBackup,
+  setBackupConsent,
+} from "../core/cloud/backup.js";
 import { buildConnectPreview, renderConnectPreview } from "../core/cloud/preview.js";
 import { syncRepository, type SyncReport } from "../core/cloud/sync.js";
 import { describeState, localCloudStatus, refreshCloudStatus, type CloudStatus } from "../core/cloud/status.js";
 
-const USAGE = "Use: status, connect, disconnect, auto, devices, purge (staple cloud --help)";
+const USAGE =
+  "Use: status, connect, disconnect, auto, devices, backup, restore, purge (staple cloud --help)";
 
 const HELP = `staple cloud — connect this repository to a sync service, and manage the
 credential that connection produces. Three separate consents: connecting,
@@ -102,6 +113,27 @@ synchronizing automatically, and backing up. None of them implies another.
               end that device's access, server-side, effective on its very next
               request. Other devices are undisturbed. This is NOT disconnect:
               revoking is about a device you may not be holding.
+  cloud backup enable|disable
+              this DEVICE's consent to keep point-in-time copies of this
+              repository on the service. A THIRD consent: connecting does not
+              turn it on and neither does automatic sync. Disabling stops new
+              backups and deletes none of the existing ones.
+  cloud backup create [--label L]
+              take a backup NOW. A point-in-time export, not a checkpoint:
+              it moves no cursor and changes nothing about convergence.
+  cloud backup ls
+              every backup the service holds for this repository. Metadata
+              only. A "pre-restore" one is the undo a restore took for you.
+  cloud backup rm <backupId> [--yes]
+              delete one backup. Retention is yours to manage; nothing here
+              expires on its own.
+  cloud restore <backupId> --confirm <repositoryId>
+              put the repository back to what that backup holds. Takes a
+              pre-restore backup first, writes the contents into a NEW epoch
+              and moves every device onto it, which forces each one through a
+              bounded re-bootstrap. DISCARDS anything synchronized since the
+              backup was taken. Prints all of that before it will accept the
+              repository id typed back. Never merges database files.
   cloud purge --confirm <repositoryId>
               DESTROY the repository's remote state. Separately named because
               it is not disconnecting. Prints what is stored, for how long and
@@ -221,6 +253,10 @@ export function runCloudCommand(argv: string[]): void {
       return runSync(rest);
     case "devices":
       return runDevices(rest);
+    case "backup":
+      return runBackup(rest);
+    case "restore":
+      return runRestore(rest);
     case "purge":
       return runPurge(rest);
     default:
@@ -639,6 +675,241 @@ function runPurge(argv: string[]): void {
       console.log("Remote state for this repository has been destroyed. Your local database is unchanged.");
       console.log("Every other device's next request will fail; they keep their local state.");
     }),
+    json,
+  );
+}
+
+/**
+ * `staple cloud backup <enable|disable|create|ls|rm>`.
+ *
+ * Two-level, like `devices`. The default when no subcommand is given is `ls`,
+ * because listing is the only one of the five that changes nothing — a bare
+ * `staple cloud backup` should never be the command that took a backup.
+ */
+function runBackup(argv: string[]): void {
+  const subs = new Set(["enable", "disable", "create", "ls", "rm"]);
+  const sub = argv[0] && subs.has(argv[0]) ? argv[0] : "ls";
+  const rest = argv[0] && subs.has(argv[0]) ? argv.slice(1) : argv;
+
+  const { values, positionals } = parseArgs({
+    args: rest,
+    allowPositionals: true,
+    options: { ...common, label: { type: "string" }, yes: { type: "boolean" } },
+  });
+  const json = values.json === true;
+  const home = stapleHome();
+  const repositoryId = repositoryIdFor(values);
+
+  if (sub === "enable" || sub === "disable") {
+    const enabled = sub === "enable";
+    settle(
+      setBackupConsent(home, repositoryId, enabled).then((outcome) => {
+        if (json) {
+          console.log(JSON.stringify(outcome));
+        } else {
+          console.log(`Backup is ${outcome.enabled ? "on" : "off"} for this repository on this machine.`);
+          if (outcome.enabled) {
+            console.log("  - this is a separate consent; it did not change automatic sync");
+            console.log("  - take one with: staple cloud backup create");
+          } else {
+            console.log("  - existing backups were NOT deleted; remove one with `backup rm`");
+          }
+        }
+        if (outcome.warning) {
+          console.error(`\n! ${outcome.warning}`);
+          process.exitCode = 4;
+        }
+      }),
+      json,
+    );
+    return;
+  }
+
+  if (sub === "create") {
+    settle(
+      createBackup(home, repositoryId, values.label ?? null).then((backup) => {
+        if (json) {
+          console.log(JSON.stringify({ backup }, null, 2));
+          return;
+        }
+        console.log(`Backed up ${backup.entityCount} entities as ${backup.backupId}.`);
+        console.log(`  epoch ${backup.epoch}, at sequence ${backup.cutoffSeq}`);
+        console.log("  no cursor moved; this changed nothing about synchronization");
+      }),
+      json,
+    );
+    return;
+  }
+
+  if (sub === "ls") {
+    settle(
+      listBackups(home, repositoryId).then((backups) => {
+        if (json) {
+          console.log(JSON.stringify({ backups }, null, 2));
+          return;
+        }
+        if (backups.length === 0) {
+          console.log("No backups. Take one with: staple cloud backup create");
+          return;
+        }
+        for (const backup of backups) {
+          console.log(renderBackupLine(backup));
+        }
+      }),
+      json,
+    );
+    return;
+  }
+
+  const target = positionals[0];
+  if (!target) throw new StapleError("validation", "usage: staple cloud backup rm <backupId>");
+
+  if (values.yes !== true) {
+    console.log(`Delete backup ${target} from repository ${repositoryId}.`);
+    console.log("  - the backup is destroyed on the service. Not reversible.");
+    console.log("  - your local database and every other backup are untouched");
+    console.log("  - nothing about synchronization changes");
+    if (!(isInteractive() && confirm("\nDelete?", { default: false }))) {
+      console.error(isInteractive() ? "\nDeclined." : "\nRe-run with --yes to delete.");
+      process.exitCode = 2;
+      return;
+    }
+  }
+
+  settle(
+    deleteBackup(home, repositoryId, target).then(() => {
+      if (json) console.log(JSON.stringify({ deleted: true, backupId: target }));
+      else console.log(`Deleted ${target}.`);
+    }),
+    json,
+  );
+}
+
+function renderBackupLine(backup: RemoteBackup): string {
+  const taken = new Date(backup.createdAt).toISOString();
+  const mark = backup.kind === "pre-restore" ? "  [pre-restore — the undo of a restore]" : "";
+  return (
+    `${backup.backupId}  ${taken}  ${backup.entityCount} entities  ` +
+    `epoch ${backup.epoch}@${backup.cutoffSeq}${mark}`
+  );
+}
+
+/**
+ * `staple cloud restore <backupId> --confirm <repositoryId>`.
+ *
+ * Shaped exactly like `purge`, because it is the other irreversible remote
+ * operation and a human should recognise the ceremony: the disclosure prints
+ * FIRST and unconditionally, and only then is the typed confirmation looked at.
+ * A disclosure shown only to people who got the confirmation wrong is not a
+ * disclosure.
+ *
+ * The workspace database is opened because a committed restore has a local
+ * consequence — this device must re-bootstrap — and it is closed on every path,
+ * including the ones that refuse before making a request.
+ */
+function runRestore(argv: string[]): void {
+  const { values, positionals } = parseArgs({
+    args: argv,
+    allowPositionals: true,
+    options: { ...common, confirm: { type: "string" } },
+  });
+  const json = values.json === true;
+  const home = stapleHome();
+
+  const backupId = positionals[0];
+  if (!backupId) {
+    throw new StapleError(
+      "validation",
+      "usage: staple cloud restore <backupId> --confirm <repositoryId>. " +
+        "`staple cloud backup ls` lists the backups that exist.",
+    );
+  }
+
+  const opened = resolveWorkspace(values);
+  const workspaceDir = dirname(opened.dbPath);
+  const manifest = readRepositoryManifest(workspaceDir);
+  if (!manifest) {
+    opened.store.db.close();
+    throw new StapleError(
+      "not_found",
+      `This workspace has no ${workspaceDir}/repository.json, so it has no sync identity and ` +
+        `nothing to restore into.`,
+    );
+  }
+  const repositoryId = manifest.repositoryId;
+  const status = localCloudStatus(home, repositoryId);
+
+  if (status.state === "disconnected") {
+    opened.store.db.close();
+    throw new StapleError(
+      "not_found",
+      "This repository is not connected on this machine, so there is no service to restore from.",
+    );
+  }
+
+  /**
+   * The disclosure needs the backup's metadata, so this one request happens
+   * before the confirmation is checked. It is a read, it changes nothing, and it
+   * is the only way to tell a human what they are about to discard rather than
+   * asking them to confirm an id.
+   */
+  settle(
+    listBackups(home, repositoryId)
+      .then(async (backups) => {
+        const backup = backups.find((candidate) => candidate.backupId === backupId);
+        if (!backup) {
+          throw new StapleError(
+            "not_found",
+            `No backup ${backupId} on ${status.endpoint}. ` +
+              `\`staple cloud backup ls\` lists the ones that exist.`,
+          );
+        }
+
+        const disclosure = restoreDisclosure(
+          status.endpoint ?? "",
+          repositoryId,
+          backup,
+          localEpochOf(opened.store.db),
+        );
+        if (!json) {
+          console.log(disclosure);
+          console.log("");
+        }
+
+        if (values.confirm !== repositoryId) {
+          const message =
+            values.confirm === undefined
+              ? `Nothing was restored. To proceed, re-run with --confirm ${repositoryId}`
+              : `Nothing was restored: --confirm did not match this repository's id. ` +
+                `Expected ${repositoryId}.`;
+          if (json) console.error(JSON.stringify({ restored: false, message }));
+          else console.error(message);
+          process.exitCode = 2;
+          return;
+        }
+
+        const report = await restoreFromBackup(opened.store.db, home, repositoryId, backupId);
+        if (json) {
+          console.log(JSON.stringify({ restored: true, ...report }, null, 2));
+          return;
+        }
+        console.log("");
+        console.log(
+          `Restored ${report.entityCount} entities from ${report.backupId} in ${report.turns} ` +
+            `${report.turns === 1 ? "request" : "requests"}.`,
+        );
+        console.log(`  epoch ${report.fromEpoch} -> ${report.toEpoch}`);
+        if (report.preRestoreBackupId) {
+          console.log(`  the way back: staple cloud restore ${report.preRestoreBackupId}`);
+        }
+        console.log("");
+        console.log(
+          "Every device, including this one, must re-bootstrap before it syncs again. " +
+            "This device's cursor has been cleared; its pending work is untouched. Run " +
+            "`staple cloud sync` to hydrate.",
+        );
+      })
+      .finally(() => opened.store.db.close()),
     json,
   );
 }

@@ -16,7 +16,7 @@ test runner.
 ```bash
 cd worker
 npm install --legacy-peer-deps   # see "Why --legacy-peer-deps" below
-npm test                          # 117 tests, in the Workers runtime, no network
+npm test                          # 140 tests, in the Workers runtime, no network
 npm run typecheck
 npm run lint:logs                 # no console.* outside src/log.ts
 ```
@@ -41,11 +41,13 @@ worker/
     snapshot.ts        bootstrap; folds the log on read
     leases.ts          fenced, server-expired leases
     devices.ts         connect, list, revoke
+    backups.ts         backup, epoch-safe restore, purge
+    fold.ts            the log-to-entity-state fold a backup persists
     cursor.ts          opaque cursors
     errors.ts          the error taxonomy
     limits.ts          everything /v1/capabilities advertises
     log.ts             THE ONLY console.* in this Worker
-  test/                117 tests
+  test/                140 tests
   scripts/lint-logs.mjs
   wrangler.toml        COMMITTED. Placeholders only.
   wrangler.local.toml  GITIGNORED. Real account and database ids.
@@ -65,10 +67,47 @@ worker/
 | `DELETE` | `/v1/repos/{repoId}/leases/{entityId}` | device token |
 | `GET` | `/v1/repos/{repoId}/devices` | device token |
 | `DELETE` | `/v1/repos/{repoId}/devices/{deviceId}` | device token |
+| `PUT` | `/v1/repos/{repoId}/backup` | device token |
+| `POST` | `/v1/repos/{repoId}/backups` | device token |
+| `GET` | `/v1/repos/{repoId}/backups` | device token |
+| `DELETE` | `/v1/repos/{repoId}/backups/{backupId}` | device token |
+| `POST` | `/v1/repos/{repoId}/backups/{backupId}/restore` | device token |
+| `DELETE` | `/v1/repos/{repoId}` | device token |
 
-Backup, restore and purge (`/backups`, `DELETE /v1/repos/{repoId}`) are **not
-implemented here** — they belong to the restore lane, and implementing them without the
-retention and confirmation semantics that lane owns would be worse than not having them.
+Three of those are **additive** to the route table in `docs/sync.md`, which names create,
+list and restore but nothing that writes the backup consent flag and nothing that removes
+a backup. `PUT /backup` exists because the contract grants backup with "a server-side
+flag" and names no route that sets one; `DELETE /backups/{backupId}` exists because "its
+own retention" is not implementable without a delete, and the alternative — an automatic
+expiry job — would destroy a human's backups on a schedule nobody typed.
+
+### Backup, restore and purge
+
+See `src/backups.ts`; the short version, because getting it wrong is unrecoverable:
+
+- **Every backup route requires two consents**, one on each side. `sync.backup` in the
+  device's machine config, and `repos.backup_enabled` here. The device's half cannot
+  stand alone — it is a file on the device — so the server keeps its own.
+- **A backup is a fold of the log, not a copy of it.** Storing a range of `ops` rows
+  would mean restoring by replaying ids the dedupe index already holds. Storing the fold
+  means a restore mints fresh operations, which is the only shape that can be re-applied.
+- **A restore stages, then flips.** It writes the backup's entities into `epoch + 1`
+  while the repository is still on `epoch`, and only then moves `repos.epoch`. Both
+  `pull` and `snapshot` filter on the session's epoch, so nothing is visible until the
+  flip and the cutover is atomic across three requests without a transaction spanning
+  them.
+- **Bumping the epoch alone would be total data loss.** `GET /snapshot` folds the CURRENT
+  epoch, so a device re-bootstrapping into a freshly bumped, empty epoch hydrates an
+  empty repository while the old rows sit there being retained for forensics nobody
+  asked for. Non-truncating means rows are RETAINED; it does not mean a snapshot spans
+  epochs, and it must not be made to. `test/backups.test.ts` asserts the restored
+  content is visible through `/snapshot` for exactly this reason — a bump-only
+  implementation passes every other test in that file.
+- **Restore is chunked** at `maxBatchSize`, because staging N entities costs N+1 queries
+  against the free plan's ceiling of 50. It is driven by calling the one route in a loop
+  until it answers `done`.
+- **Purge deletes `devices` last**, so a batch that fails halfway leaves the repository
+  still reachable to try again rather than leaving data nobody can reach or delete.
 
 ---
 

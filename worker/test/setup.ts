@@ -44,6 +44,8 @@ beforeEach(async () => {
   await env.DB.batch([
     env.DB.prepare("DELETE FROM ops"),
     env.DB.prepare("DELETE FROM leases"),
+    env.DB.prepare("DELETE FROM backups"),
+    env.DB.prepare("DELETE FROM restores"),
     env.DB.prepare("DELETE FROM devices"),
     env.DB.prepare("DELETE FROM repos"),
   ]);

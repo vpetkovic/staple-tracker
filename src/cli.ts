@@ -805,6 +805,15 @@ Cloud (optional, off until you turn it on — see staple cloud --help)
   cloud auto on|off                     THIS device's consent to sync without being asked
   cloud devices [ls|revoke <id>]        devices registered to this repository; revoking is
               server-side and effective on that device's next request
+  cloud backup enable|disable           THIS device's consent to keep point-in-time copies
+              on the service. A THIRD consent: neither connecting nor automatic sync
+              turns it on. Disabling stops new backups and deletes none
+  cloud backup create|ls|rm <id>        take, list and delete backups. Disaster recovery,
+              not convergence: none of these moves a cursor or changes what syncs
+  cloud restore <backupId> --confirm <repositoryId>
+              put the repository back to that backup. Takes a pre-restore backup first,
+              re-materialises the contents into a NEW epoch and moves every device onto
+              it. DISCARDS anything synchronized since. Never merges database files
   cloud purge --confirm <repositoryId>  DESTROY the remote state. Separately named because
               it is not disconnecting; discloses what is stored before it will accept
               the confirmation, and never touches your local database
