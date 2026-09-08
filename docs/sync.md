@@ -827,10 +827,23 @@ What a surface may do at each stage:
   count, epoch, device and mode. Ordinary commands still make no request; a
   `staple ls` on a connected repository in manual mode is as silent as a `staple
   ls` on a disconnected one, and that is a tested assertion, not an intention.
-- **After automatic** — bounded triggers only: startup, post-write, long-running
-  session, pre-checkout. Coalesced, jittered backoff, cancellable, bounded
+- **After automatic** — bounded triggers only: startup, post-write and
+  long-running session. Coalesced, jittered backoff, cancellable, bounded
   timeout. **A tracker command never blocks indefinitely on Cloudflare**; sync
   failure degrades to manual and reports, it does not hang `staple checkout`.
+
+  **There is deliberately no pre-checkout trigger.** An earlier draft of this
+  page listed one. It is not merely unimplemented — it is refused, and the
+  reason is what it would mean rather than what it would cost. A pull
+  immediately before a local claim returns a view already stale by the time the
+  claim is written, and it would read to a human as *"checkout is coordinated
+  now"* when the only thing that coordinates a checkout across devices is a
+  [lease](#claims-a-local-checkout-is-not-a-global-lease). The leases lane made
+  global exclusivity a separately named `cloud` verb precisely so nothing on the
+  everyday path depends on a service being reachable; a pre-checkout sync is
+  that dependency wearing a better name. `checkout` is a mutation, so it fires
+  `post-write` — the claim is pushed promptly once it has been taken, which is
+  the half of the value that is true.
 - **After backup** — export and retention commands appear. They do not touch
   cursors and cannot change convergence.
 

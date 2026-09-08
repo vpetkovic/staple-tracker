@@ -9,6 +9,7 @@
  * its first argument. There is no entry point here that can be called without
  * one.
  */
+import { clearAutoSyncState } from "./auto-state.js";
 import { connectDevice, fetchCapabilities, purgeRemoteRepository, revokeRemoteDevice, listRemoteDevices, type Capabilities, type RemoteDevice, type RequestOptions } from "./client.js";
 import { CONNECTION_SCHEMA_VERSION, deleteConnection, readConnection, writeConnection, type CloudConnection } from "./connection.js";
 import { credentialStoreFor, selectCredentialStore, type SelectOptions } from "./credential-store.js";
@@ -182,6 +183,14 @@ export function performDisconnect(
   }
 
   const recordRemoved = deleteConnection(home, repositoryId);
+  /**
+   * The automatic-sync bookkeeping goes too. A stale `.autosync` file is
+   * harmless — the gate refuses on the absent connection record long before it
+   * reads a clock — but disconnect's contract is to leave nothing behind, and a
+   * file that outlives the thing it describes is how the next reader concludes
+   * the repository is still connected.
+   */
+  clearAutoSyncState(home, repositoryId);
   return { wasConnected: true, credentialRemoved, recordRemoved };
 }
 
