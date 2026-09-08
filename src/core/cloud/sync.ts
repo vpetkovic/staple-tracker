@@ -50,7 +50,6 @@ import {
   ReferentMissing,
   applyToDatabase,
   bumpEntityVersion,
-  operationToInput,
   setEntityVersion,
   snapshotToInput,
 } from "./apply.js";
