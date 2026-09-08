@@ -6,10 +6,19 @@ every read and every write a command performs still goes to `.staple/staple.db`,
 and sync moves *operations* between that file and the cloud out of band. Nothing
 on this page changes what a command does when it is not asked to sync.
 
-This is the contract the S tickets implement — not yet built. Every rule names
-the test that pins it, or that will. Where this page and
-[semantics.md](semantics.md) disagree, semantics.md describes today and this page
-the target.
+This is the contract the S tickets implement. It was written before any of it was
+built, and most of it now is: the seam, the envelope, identity, the Worker,
+connect, manual sync, conflicts, leases, the surfaces, automatic sync and backup
+all ship. Every rule names the test that pins it, or that will. Where this page
+and [semantics.md](semantics.md) disagree, semantics.md describes today and this
+page the target.
+
+**Two parts of this page describe a design that is specified but not yet
+shipped**, and they are marked where they appear rather than only here, because a
+contract that does not distinguish the two is read as a description of the build:
+server-side [identifier allocation](#identity-is-the-uuid-never-the-identifier),
+and honouring `Retry-After` in the [error taxonomy](#error-taxonomy). Everything
+else on this page is implemented.
 
 ## Two invariants the rest of the page serves
 
@@ -57,6 +66,21 @@ tie-break to get subtly wrong on one device. The cost is that an identifier
 created offline on a connected repository can change once, at first push, and
 surfaces must show provisional identifiers as provisional rather than pretending
 they are settled.
+
+> **Not yet shipped — the three bullets above are the design, not the build.**
+> Neither half of the allocator exists. The push response carries `opId`, `status`
+> and `seq` and no identifier, there is no renumber-on-acceptance path, and no
+> surface marks an identifier provisional. So the collision this section says
+> cannot happen *can*, and what ships instead is detection: `apply.ts` gives the
+> incoming issue a locally free provisional identifier and records a
+> `sync_conflicts` row on the `identifier` field, applying the rest of the entity
+> rather than dropping it. Resolving that conflict frees the contested number and
+> renumbers whichever issue was holding it, which is why `renumber` is a real verb
+> today — it is emitted by *conflict resolution*, not by an allocation response.
+> Nothing is lost silently, but a human settles what one authority was supposed to
+> make unaskable. **STA-254** owns closing this, and owns recording which of the
+> two options this page names — a single allocator or per-device ranges — was
+> taken.
 
 `meta.next_issue_number` therefore **never synchronizes**: it is a local
 provisional allocator, not shared state.
@@ -1061,6 +1085,19 @@ Only `rate_limited`, `unavailable` and `offline` are retried. Everything else is
 decision for a human, and retrying it is how a client turns one bad request into a
 sustained one.
 
+**`Retry-After` is not yet honoured**, and the backoff half of that row is the only
+half that ships. The Worker sends the header, and the client reads it into
+`detail.retryAfter` where `--json` consumers can see it — and then nothing consumes
+it: the in-sync schedule is `min(2s, 200ms · 2ⁿ)` over three attempts, so a service
+asking for sixty seconds is retried after two hundred milliseconds. Automatic sync
+is better behaved by a different mechanism rather than by reading the header — one
+attempt per run, with a persisted jittered backoff based at five seconds and capped
+at five minutes — so the observable damage today is bounded to manual `staple cloud
+sync` against a rate-limited endpoint. It is written down here because the row
+above is what an implementer of a *second* transport would read and believe, and a
+provider with a real quota is exactly where ignoring the header stops being
+cosmetic.
+
 ## Backup, disconnect and purge are three different things
 
 Conflating them is the most expensive mistake available here, so they are named
@@ -1126,6 +1163,44 @@ reconciliation engine. If an adapter appears to need its own outbox, its own
 conflict table and its own retry loop, that is the signal for the STA-26
 reevaluation to resolve — not a licence to build a parallel one alongside this
 contract.
+
+**That sharing is a design intent, not a shipped capability, and the reevaluation
+resolved it as follows.** As built, an adapter cannot read the journal, for two
+reasons that are both small and both load-bearing:
+
+- **The seam is armed by cloud connection.** `Journal.armed()` requires a device
+  id *and* `sync_state.repository_id`, and `flush()` returns early without both —
+  so on a machine that has never run `staple cloud connect` there are no outbox
+  rows and no version rows at all. That is the correct privacy posture for this
+  epic and the wrong one for an adapter, because it makes external-tracker sync
+  depend on cloud sync being connected, which is precisely the coupling this
+  section exists to prevent. Journalling has to become armed by *any* enabled
+  replication consumer, not by this one.
+- **The outbox has one consumer.** `sync_outbox.acknowledged_seq` is a single
+  column, written only by the cloud push path; `pending()` means "not yet sent to
+  the cloud", and `compact()` deletes rows the cloud has acknowledged. A second
+  reader has nowhere to record its own progress and would have its queue pruned by
+  the first reader's routine housekeeping. Per-consumer delivery state is the
+  missing piece, and no table in migration 010 or 011 carries a provider or remote
+  discriminator to hang it on.
+
+So the boundary holds in the direction that matters — **the replication
+infrastructure is built and must not be built twice** — while the one thing this
+page offered to share needs a bounded generalization first. What an adapter should
+reuse rather than reimplement: the outbox and the seam once generalized, the
+conflict record and its resolution and settle rules, the per-field detection and
+merge engine and its `sync_field_writes` provenance, the credential store's
+keychain / `secret-tool` / `0600` mechanism selection, the retryable-code taxonomy,
+and both backoff mechanisms. What it must add on top: a field-*ownership* policy,
+which does not exist here in any form — arbitration in this epic is version and
+provenance based and its answer to a genuine collision is to withhold the field and
+escalate, never to declare a winner.
+
+One obligation is easy to miss and expensive to miss. Migration 011's invariant is
+that **every** path which can change a field records provenance — the journal flush
+and the apply path both do. An adapter writing Staple rows from an external system
+is a *third* such path, and one that does not write `sync_field_writes` silently
+reopens the relay hole that migration exists to have closed.
 
 Concretely, this page defines no TaskLink field, no external id column, no
 provider adapter and no field-ownership policy. It does not reserve names for
