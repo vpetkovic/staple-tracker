@@ -4,6 +4,7 @@
  *   cloud [status] [--refresh] [--json]
  *   cloud connect --endpoint <url> --token <secret> [--label L] [--yes]
  *                 [--credential-file] [--json]
+ *   cloud sync [--pull-limit N] [--json]
  *   cloud disconnect [--yes] [--json]
  *   cloud auto <on|off> [--json]
  *   cloud devices [ls] [--json]
@@ -28,10 +29,15 @@
  *
  * ## Which of these can talk to the network
  *
- * `connect` (after consent), `devices`, `devices revoke`, `purge`, and `status`
- * ONLY with `--refresh`. Everything else — plain `status`, `disconnect`, `auto`
- * — is local files and nothing else, and `test/network-silence.test.ts` asserts
- * it with real spies rather than trusting this paragraph.
+ * `connect` (after consent), `sync`, `devices`, `devices revoke`, `purge`, and
+ * `status` ONLY with `--refresh`. Everything else — plain `status`,
+ * `disconnect`, `auto` — is local files and nothing else, and
+ * `test/network-silence.test.ts` asserts it with real spies rather than trusting
+ * this paragraph.
+ *
+ * `sync` is the ONLY one of those that a human runs as part of ordinary work,
+ * and it is deliberately a verb they have to type. Manual is the default and
+ * stays the default; automatic mode is a separate consent and a separate lane.
  */
 import { parseArgs } from "node:util";
 import { dirname } from "node:path";
@@ -50,6 +56,7 @@ import {
   retentionDisclosure,
 } from "../core/cloud/connect.js";
 import { buildConnectPreview, renderConnectPreview } from "../core/cloud/preview.js";
+import { syncRepository, type SyncReport } from "../core/cloud/sync.js";
 import { describeState, localCloudStatus, refreshCloudStatus, type CloudStatus } from "../core/cloud/status.js";
 
 const USAGE = "Use: status, connect, disconnect, auto, devices, purge (staple cloud --help)";
@@ -77,6 +84,13 @@ synchronizing automatically, and backing up. None of them implies another.
               traffic. LOCAL ONLY: your database, your pending operations and
               the remote state are all untouched, and other devices are
               unaffected. Makes no network call, so it works offline.
+  cloud sync
+              synchronize NOW: push what this device has journaled, then apply
+              what the others have. The only thing that moves data in manual
+              mode, which is the default and stays the default. A first run on
+              a fresh clone hydrates the database from a snapshot; an
+              interrupted run resumes where it stopped. Your local database
+              stays the only read and write path for every other command.
   cloud auto on|off
               this DEVICE's consent to synchronize without being asked. Stored
               per-machine, because consent given on a laptop is not consent
@@ -203,6 +217,8 @@ export function runCloudCommand(argv: string[]): void {
       return runDisconnect(rest);
     case "auto":
       return runAuto(rest);
+    case "sync":
+      return runSync(rest);
     case "devices":
       return runDevices(rest);
     case "purge":
@@ -393,6 +409,110 @@ function runAuto(argv: string[]): void {
       ? "Automatic sync is ON for THIS device only. Other devices are unchanged; each one decides for itself."
       : "Automatic sync is OFF for this device. Still connected — `staple cloud sync` works, nothing runs on its own.",
   );
+}
+
+/**
+ * `staple cloud sync` — the only command in manual mode that moves data.
+ *
+ * The database handle stays open across the whole operation, unlike every other
+ * subcommand here, because this is the one that writes to it. It is closed in a
+ * `finally` on both paths: a sync that fails halfway has still applied whole
+ * pages, and leaving the connection open would hold the WAL against the next
+ * command in the same shell.
+ */
+function runSync(argv: string[]): void {
+  const { values } = parseArgs({
+    args: argv,
+    options: { ...common, "pull-limit": { type: "string" } },
+  });
+  const json = values.json === true;
+  const home = stapleHome();
+
+  const opened = resolveWorkspace(values);
+  const workspaceDir = dirname(opened.dbPath);
+  const manifest = readRepositoryManifest(workspaceDir);
+  if (!manifest) {
+    opened.store.db.close();
+    throw new StapleError(
+      "not_found",
+      `This workspace has no ${workspaceDir}/repository.json, so it has no sync identity and ` +
+        `nothing to synchronize. Repository identity is minted for repo-local workspaces by ` +
+        `\`staple init\`; a global workspace has none and cannot be connected.`,
+    );
+  }
+
+  const pullLimit = values["pull-limit"] ? Number(values["pull-limit"]) : undefined;
+  if (pullLimit !== undefined && (!Number.isInteger(pullLimit) || pullLimit < 1)) {
+    opened.store.db.close();
+    throw new StapleError("validation", "--pull-limit must be a positive integer");
+  }
+
+  settle(
+    syncRepository(opened.store.db, manifest.repositoryId, { home, pullLimit })
+      .then((report) => {
+        if (json) {
+          console.log(JSON.stringify(report, null, 2));
+          return;
+        }
+        console.log(renderSyncReport(report));
+      })
+      .finally(() => opened.store.db.close()),
+    json,
+  );
+}
+
+/**
+ * The report, in the order a human wants to read it.
+ *
+ * `duplicate` is reported beside `applied` rather than hidden, because it is the
+ * visible evidence that a lost acknowledgement was absorbed rather than
+ * duplicated — and somebody debugging a flaky link needs to see it.
+ */
+function renderSyncReport(report: SyncReport): string {
+  const lines: string[] = [];
+
+  if (report.bootstrap) {
+    const b = report.bootstrap;
+    lines.push(
+      `${b.resumed ? "Resumed" : "Hydrated"} from a snapshot at seq ${b.cutoffSeq}: ` +
+        `${b.entities} ${b.entities === 1 ? "entity" : "entities"} over ` +
+        `${b.pages} ${b.pages === 1 ? "page" : "pages"}.`,
+    );
+  }
+
+  const { attempted, applied, duplicate } = report.pushed;
+  lines.push(
+    attempted === 0
+      ? "Pushed nothing — this device had no unsent operations."
+      : `Pushed ${attempted}: ${applied} applied` +
+        (duplicate > 0 ? `, ${duplicate} already present (a retry the service absorbed)` : ""),
+  );
+
+  lines.push(
+    report.pulled.operations === 0 && report.pulled.alreadyApplied === 0
+      ? "Pulled nothing — no other device has written since this one last looked."
+      : `Applied ${report.pulled.operations} remote ${report.pulled.operations === 1 ? "operation" : "operations"}` +
+        (report.pulled.alreadyApplied > 0
+          ? `, and skipped ${report.pulled.alreadyApplied} already applied here`
+          : ""),
+  );
+
+  lines.push("");
+  lines.push(`  service    ${report.endpoint}`);
+  lines.push(`  device     ${report.deviceId}`);
+  lines.push(`  epoch      ${report.epoch}`);
+  lines.push(`  watermark  ${report.headSeq}`);
+  if (report.pending > 0) {
+    lines.push(`  pending    ${report.pending}  — still queued; run sync again`);
+  }
+  if (report.conflicts > 0) {
+    lines.push("");
+    lines.push(
+      `  ! ${report.conflicts} unresolved ${report.conflicts === 1 ? "conflict" : "conflicts"}. ` +
+        `Both sides are preserved; nothing was merged or discarded.`,
+    );
+  }
+  return lines.join("\n");
 }
 
 function runDevices(argv: string[]): void {

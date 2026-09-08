@@ -1093,10 +1093,25 @@ export class WorkspaceStore {
         actor: actor ?? null,
         payload: { action: "reorder", order: normalized },
       });
+      /**
+       * `update` on the singleton `@order` entity, not `replace`.
+       *
+       * `replace` is not a generic "the whole value changed" verb. It is the
+       * ordered-collection mechanism, it has a defined payload
+       * (`{ entries, baseRevision }` / `{ milestoneId, members, baseRevision }`),
+       * and it exists so that `rank` is never transported and the `UNIQUE` rank
+       * constraints on `queue_entries` and `milestone_members` are structurally
+       * unreachable. Neither of those constraints exists here, and this payload
+       * carries no `baseRevision`, so this was never that verb —
+       * `worker/src/envelope.ts` refuses it for exactly that reason.
+       *
+       * The vocabulary order IS one entity. "The order changed" is an update to
+       * it, and an update payload already carries only what changed.
+       */
       this.journal.record({
         entity: "status",
         entityId: VOCABULARY_ORDER_ID,
-        verb: "replace",
+        verb: "update",
         payload: { order: normalized },
         actor: actor ?? null,
       });
@@ -1250,10 +1265,13 @@ export class WorkspaceStore {
         actor: actor ?? null,
         payload: { action: "reorder", order: normalized },
       });
+      // `update` on the singleton `@order` entity. Same reasoning as
+      // `reorderStatuses` above: `replace` is the ordered-collection verb and
+      // this is not an ordered collection with a transported rank.
       this.journal.record({
         entity: "kind",
         entityId: VOCABULARY_ORDER_ID,
-        verb: "replace",
+        verb: "update",
         payload: { order: normalized },
         actor: actor ?? null,
       });
@@ -1757,6 +1775,30 @@ export class WorkspaceStore {
        * their own: `blockedBy` is an argument to the create, and a receiver that
        * applied the issue and the edges separately could observe an issue whose
        * declared blockers had not arrived.
+       *
+       * The payload is the contract's `issues` field inventory
+       * (`docs/sync.md`, "What synchronizes"), and it has to be. A create is the
+       * only operation that will ever carry these columns: nothing journals an
+       * update for a field that was set once at birth and never touched again, so
+       * a field missing here is a field that never reaches another device at all.
+       * `test/sync-issue-field-coverage.test.ts` reads the `issues` schema and
+       * fails if a column is neither here nor on its documented exclusion list,
+       * so the next column added to this table has to make that decision
+       * explicitly.
+       *
+       * What is deliberately absent, and why:
+       *
+       *   id                     — this is `entityId`, not a payload field
+       *   status_version         — 0 by schema default on every device; it is the
+       *                            optimistic-concurrency token, carried by the
+       *                            operations that move status
+       *   checkout_agent/_at     — never a plain field write. They are the
+       *                            projection of a lease (docs/sync.md, "Claims")
+       *   blocked_transition_at  — local timing state; not in the contract's list
+       *   completed_at,          — null at create by construction; the status
+       *   cancelled_at             transitions that set them journal updates
+       *   gate_* (seven)         — null or 0 at create; every gate transition
+       *                            journals its own update
        */
       this.journal.record({
         entity: "issue",
@@ -1765,14 +1807,29 @@ export class WorkspaceStore {
         payload: {
           identifier,
           title,
+          normalizedTitle: normalized,
+          description: input.description ?? null,
           status,
           kind,
           priority: input.priority ?? "medium",
           parentId: parent?.id ?? null,
+          depth: parent ? parent.depth + 1 : 0,
           assignee: input.assignee ?? null,
-          blockedBy: blockerRows.map((blocker) => blocker.id),
+          createdBy: input.createdBy ?? null,
+          labels: input.labels ?? [],
+          acceptanceCriteria: input.acceptanceCriteria ?? null,
           blockParentUntilDone: input.blockParentUntilDone ?? false,
+          unblockOwner: row.unblock_owner,
+          unblockAction: row.unblock_action,
+          originKind: input.originKind ?? "manual",
+          originId: input.originId ?? null,
+          idempotencyKey: input.idempotencyKey ?? null,
+          estimatedSeconds: estimatedSeconds,
           projectId: project?.id ?? null,
+          startedAt: row.started_at,
+          createdAt: now,
+          updatedAt: now,
+          blockedBy: blockerRows.map((blocker) => blocker.id),
         },
         actor: input.createdBy ?? null,
       });
@@ -1869,20 +1926,26 @@ export class WorkspaceStore {
         payload: { identifier: row.identifier, blockedBy: deduped.map((b) => b.identifier) },
       });
       /**
-       * `replace`, not a create or delete per edge. Blockers are set-replacement
-       * here — the mutation deletes the whole set and re-inserts it — and the
-       * envelope has to say the same thing, or a receiver that applied N creates
-       * would never learn about the edges that were removed.
+       * One operation carrying the WHOLE blocker set, not a create or delete per
+       * edge. Blockers are set-replacement here — the mutation deletes the whole
+       * set and re-inserts it — and the envelope has to say the same thing, or a
+       * receiver that applied N creates would never learn about the edges that
+       * were removed.
        *
        * The entity is the BLOCKED issue, because the blocked issue is what owns
        * the set. `relations.id` is a local AUTOINCREMENT surrogate and is not
        * transported; the natural key is the triple the UNIQUE constraint
        * declares.
+       *
+       * The verb is `update`, not `replace`. `blockedBy` is a set-valued field of
+       * one entity, and `replace` is reserved for the ordered collections whose
+       * transported `rank` would collide — see `reorderStatuses`, and
+       * `worker/src/envelope.ts`, which refuses `replace` for anything else.
        */
       this.journal.record({
         entity: "relation",
         entityId: row.id,
-        verb: "replace",
+        verb: "update",
         payload: { blockedBy: deduped.map((blocker) => blocker.id) },
         actor: actor ?? null,
       });

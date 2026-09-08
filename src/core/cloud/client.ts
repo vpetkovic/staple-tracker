@@ -237,7 +237,15 @@ async function request<T>(call: Call): Promise<T> {
     const detail: Record<string, unknown> = { status: response.status, endpoint: call.endpoint.origin };
     // The code-specific extras the taxonomy names: the supported protocol range
     // on `protocol_unsupported`, the current epoch on `epoch_changed`.
-    for (const key of ["min", "max", "epoch", "maxBytes", "bytes"]) {
+    //
+    // `currentEpoch` is in that list because it is the name the DEPLOYED Worker
+    // uses — every `SyncError("epoch_changed", …)` in `worker/src/` carries
+    // `currentEpoch`, and none carries `epoch`. Copying only `epoch` meant the
+    // recovery path never learned the real number from the service and fell back
+    // to `local + 1`, which is right only when exactly one restore happened.
+    // *"Where they disagree the Worker wins."* Both names are read so a service
+    // that uses either is understood.
+    for (const key of ["min", "max", "epoch", "currentEpoch", "maxBytes", "bytes"]) {
       if (body[key] !== undefined) detail[key] = body[key];
     }
     const retryAfter = response.headers.get("retry-after");
@@ -336,6 +344,105 @@ export function revokeRemoteDevice(
     endpoint,
     path: `/v1/repos/${encodeURIComponent(args.repositoryId)}/devices/${encodeURIComponent(args.targetDeviceId)}`,
     method: "DELETE",
+    token: args.token,
+    deviceId: args.deviceId,
+  });
+}
+
+/** What every repository-scoped sync call needs. The token is never logged. */
+export interface RepoCall {
+  repositoryId: string;
+  token: string;
+  deviceId: string;
+}
+
+/**
+ * `POST /v1/repos/{repoId}/ops` — push a batch.
+ *
+ * The batch is atomic server-side: it is validated whole before any statement is
+ * prepared, and it rolls back whole on any failure. So a rejection here means
+ * NOTHING was written, and the identical batch may be retried unchanged — which
+ * is the property the deterministic `opId` exists to make useful.
+ *
+ * `epoch` fences the push, and is sent only when this device actually knows one.
+ *
+ * The field is optional in the protocol, and that optionality is load-bearing
+ * rather than decorative. A device that has never synchronized has no epoch — its
+ * `sync_state.epoch` is the migration's default of zero, which is not an epoch,
+ * it is the absence of one. Sending zero would fence every first push against a
+ * value the server has never used and turn first-device upload into a permanent
+ * `epoch_changed`. So `null` means "I do not know yet, do not fence me", and the
+ * server's own in-batch epoch guard still makes the write race-free.
+ */
+export function pushOperations(
+  endpoint: CloudEndpoint,
+  args: RepoCall & { epoch: number | null; ops: readonly unknown[] },
+  options: RequestOptions = {},
+): Promise<unknown> {
+  const body: Record<string, unknown> = {
+    protocol: CLIENT_PROTOCOL,
+    deviceId: args.deviceId,
+    ops: args.ops,
+  };
+  if (args.epoch !== null) body.epoch = args.epoch;
+  return request({
+    ...options,
+    endpoint,
+    path: `/v1/repos/${encodeURIComponent(args.repositoryId)}/ops`,
+    method: "POST",
+    token: args.token,
+    deviceId: args.deviceId,
+    body,
+  });
+}
+
+/**
+ * `GET /v1/repos/{repoId}/ops?cursor=&limit=` — pull one page.
+ *
+ * The cursor is passed through as bytes. It is `encodeURIComponent`'d because it
+ * is going in a query string and nothing else — no inspection, no validation, no
+ * assumption about its alphabet. A client that parsed a cursor to check it would
+ * be building exactly the coupling the opacity rule exists to prevent.
+ */
+export function pullOperations(
+  endpoint: CloudEndpoint,
+  args: RepoCall & { cursor: string | null; limit: number },
+  options: RequestOptions = {},
+): Promise<unknown> {
+  const query = new URLSearchParams();
+  if (args.cursor !== null) query.set("cursor", args.cursor);
+  query.set("limit", String(args.limit));
+  return request({
+    ...options,
+    endpoint,
+    path: `/v1/repos/${encodeURIComponent(args.repositoryId)}/ops?${query.toString()}`,
+    method: "GET",
+    token: args.token,
+    deviceId: args.deviceId,
+  });
+}
+
+/**
+ * `GET /v1/repos/{repoId}/snapshot?cursor=&limit=` — one page of a bootstrap.
+ *
+ * Without a cursor the server pins a fresh cutoff at its current watermark and
+ * returns the pull cursor for the tail beyond it. With one, it re-folds to the
+ * SAME cutoff the cursor carries, which is what makes a multi-page bootstrap a
+ * consistent view rather than a series of unrelated ones.
+ */
+export function fetchSnapshotPage(
+  endpoint: CloudEndpoint,
+  args: RepoCall & { cursor: string | null; limit: number },
+  options: RequestOptions = {},
+): Promise<unknown> {
+  const query = new URLSearchParams();
+  if (args.cursor !== null) query.set("cursor", args.cursor);
+  query.set("limit", String(args.limit));
+  return request({
+    ...options,
+    endpoint,
+    path: `/v1/repos/${encodeURIComponent(args.repositoryId)}/snapshot?${query.toString()}`,
+    method: "GET",
     token: args.token,
     deviceId: args.deviceId,
   });
