@@ -26,7 +26,7 @@
  *
  *   1. `op.baseVersion < sync_entity_versions.version` — the sender had seen
  *      fewer operations on this entity than this device has.
- *   2. The field is named by a local outbox row for the same entity with
+ *   2. The field is named by a `sync_field_writes` row for the same entity with
  *      `base_version >= op.baseVersion` — those are exactly "the local
  *      operations in between".
  *   3. The remote value differs from what the row currently holds.
@@ -44,6 +44,30 @@
  * only (3) that stops every ordinary write being reported as a conflict with
  * itself. It also stops two devices that made the *same* call about an open
  * conflict from forking a second time over their agreement.
+ *
+ * ## Condition (2) is evidence, and evidence has to outlive housekeeping
+ *
+ * That condition used to be read off `sync_outbox`, and the outbox is the wrong
+ * witness twice over. It is a queue of what this device has to SEND, and the
+ * question is what this device HOLDS. A device that **applied** another device's
+ * `title` journaled nothing — obligation 4, and the reason two devices do not
+ * synchronize forever — so it had no row naming `title` and handed the value to
+ * the next stale write in silence. And `compact()` prunes acknowledged rows as
+ * routine, documented housekeeping, after which even the **author** could no
+ * longer defend its own edit. **Detection that expires with housekeeping is not
+ * detection.**
+ *
+ * So the evidence lives in `sync_field_writes` (migration 011): the newest write
+ * of each field of each entity, with the version it moved off, written by BOTH
+ * paths that can change a field — `Journal.flush` for a local mutation and
+ * {@link screenForConflicts} for an applied remote one. Only the newest write per
+ * field is kept, which is all detection asks for, and which bounds the table by
+ * live entities rather than by history: nothing time-based ever prunes it, so
+ * nothing time-based can expire it.
+ *
+ * **{@link screenForConflicts} therefore writes as well as reads**, in the
+ * caller's transaction, immediately before the apply it screens for. Its name
+ * says less than it does; the ordering constraints are spelled out on it.
  *
  * ## What is never contested
  *
@@ -72,7 +96,7 @@
  */
 import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import { journalFor, type SyncEntity, type SyncVerb } from "../journal.js";
+import { journalFor, recordFieldWrites, type SyncEntity, type SyncVerb } from "../journal.js";
 import { settingMetaKey } from "../settings-registry.js";
 import { StapleError, nowIso } from "../types.js";
 import {
@@ -365,35 +389,67 @@ interface LocalSide {
 }
 
 /**
- * The local operations the sender had not seen, newest first.
+ * The fields written on this device since the version the sender claims.
  *
- * `base_version >= op.baseVersion` is the whole test: a local row recording that
- * it moved the entity from version v to v+1, where v is at or after the version
- * the remote claimed as its base, is by definition an operation the remote did
- * not have.
+ * `base_version >= op.baseVersion` is the whole test: a write recorded as moving
+ * the entity from version v to v+1, where v is at or after the version the remote
+ * claimed as its base, is by definition a change the remote did not have.
+ *
+ * ## Why this reads `sync_field_writes` and not the outbox
+ *
+ * It used to read the outbox, and the outbox cannot answer this question. It is a
+ * queue of what this device has to SEND, and the question is what this device
+ * HOLDS. The two differ in both directions, and both are ordinary:
+ *
+ *   - **A relayed value was never in the outbox.** A device that APPLIED another
+ *     device's `title` journaled nothing — that is obligation 4, and it is what
+ *     stops two devices synchronizing forever — so it held a title somebody had
+ *     chosen with no row anywhere saying so, and handed it to the next stale
+ *     write to arrive. In silence, with no conflict on any record.
+ *   - **The outbox is emptied.** `compact()` prunes acknowledged rows as routine,
+ *     documented, safe housekeeping. The moment it ran, the device that AUTHORED
+ *     the value stopped being able to defend it. **Detection that expires with
+ *     housekeeping is not detection.**
+ *
+ * STA-260 hit both of these on ordered collections and closed them by dropping
+ * this condition entirely, which is sound there and only there: a collection
+ * replicates as ONE pseudo-field, so it has no disjoint field sets to protect.
+ * A scalar entity does, and *"Disjoint field sets are not a conflict"* is a
+ * guarantee — dropping the condition would make one device's `priority` edit
+ * contest another's `estimate`. So the answer is not to ask less. It is to record
+ * what `sync_applied` never did: which FIELDS an applied operation touched.
+ * {@link recordFieldWrites} is where that happens, on both paths.
+ *
+ * Ordered ascending so the highest `base_version` for a canonical name is the one
+ * that survives the loop. Two spellings of one field can both be present — the
+ * table stores the payload key as sent — and `MAX` over them is the same `MAX`
+ * this would take over one spelling.
  */
-function localOpsSince(
+function localFieldWrites(
   db: DatabaseSync,
   entity: string,
   entityId: string,
   baseVersion: number,
-): Array<{ opId: string; payload: Record<string, unknown>; createdAt: string }> {
+): Map<string, LocalSide> {
   const rows = db
     .prepare(
-      `SELECT op_id, payload, created_at FROM sync_outbox
-        WHERE entity = ? AND entity_id = ? AND base_version IS NOT NULL AND base_version >= ?
-        ORDER BY client_seq DESC`,
+      `SELECT field, op_id, written_at FROM sync_field_writes
+        WHERE entity = ? AND entity_id = ? AND base_version >= ?
+        ORDER BY base_version`,
     )
     .all(entity, entityId, baseVersion) as Array<{
-    op_id: string;
-    payload: string;
-    created_at: string;
+    field: string;
+    op_id: string | null;
+    written_at: string;
   }>;
-  return rows.map((row) => ({
-    opId: row.op_id,
-    payload: JSON.parse(row.payload) as Record<string, unknown>,
-    createdAt: row.created_at,
-  }));
+
+  const writes = new Map<string, LocalSide>();
+  for (const row of rows) {
+    const named = policy(entity, row.field);
+    if (!named || named.bookkeeping || named.derivedFrom) continue;
+    writes.set(named.name, { opId: row.op_id, at: row.written_at, baseValue: undefined });
+  }
+  return writes;
 }
 
 /**
@@ -479,56 +535,106 @@ export function screenForConflicts(
   if (!screenable(op.verb) || op.baseVersion === null) return input;
 
   const version = entityVersion(db, op.entity, op.entityId);
-  if (op.baseVersion >= version) return input;
+  const kept =
+    op.baseVersion >= version ? input : contest(db, op, op.baseVersion, localDeviceId);
 
-  const between = localOpsSince(db, op.entity, op.entityId, op.baseVersion);
-
-  /** Canonical field name -> the newest local operation that wrote it. */
-  const localWrites = new Map<string, LocalSide>();
-  for (const local of between) {
-    for (const key of Object.keys(local.payload)) {
-      const named = policy(op.entity, key);
-      if (!named || named.bookkeeping || named.derivedFrom) continue;
-      if (!localWrites.has(named.name)) {
-        localWrites.set(named.name, {
-          opId: local.opId,
-          at: local.createdAt,
-          baseValue: undefined,
-        });
-      }
-    }
+  /**
+   * Whatever survived is now a value this device holds, and it has to be
+   * defensible tomorrow.
+   *
+   * This is the half of the fix the outbox could never provide. A relayed field
+   * gets provenance here — the same provenance a locally authored one gets from
+   * {@link Journal.flush} — so the two are indistinguishable to detection, which
+   * is exactly right: the question is what this database holds, not who typed it.
+   *
+   * Recorded AFTER screening and BEFORE the version bump the caller does. After,
+   * because a row written first would be found by the very screen that is running
+   * and the operation would contest itself. Withheld fields are deliberately not
+   * recorded: the incumbent still stands, and overwriting its provenance with the
+   * op that lost to it would say the stale value is what this device holds.
+   *
+   * `max(version, op.baseVersion)` rather than `version` alone: the sender is
+   * asserting it had seen `baseVersion` operations on this entity, and every
+   * device counts the same events, so a value arriving from further ahead than
+   * this device has counted is at least that current. Understating it would leave
+   * the field defenceless against a write that is genuinely staler.
+   */
+  if (kept !== null) {
+    recordFieldWrites(db, {
+      entity: op.entity,
+      entityId: op.entityId,
+      fields: Object.keys(kept.payload),
+      baseVersion: Math.max(version, op.baseVersion),
+      opId: op.opId,
+      deviceId: op.deviceId,
+      at: op.createdAt,
+    });
   }
+  return kept;
+}
+
+/**
+ * The screen proper: everything from here on knows the sender is behind.
+ *
+ * Split out so {@link screenForConflicts} has ONE place where a surviving
+ * operation is recorded, rather than four early returns each of which would have
+ * to remember to do it — a field that reached the row without leaving provenance
+ * is the original bug wearing a different hat.
+ */
+function contest(
+  db: DatabaseSync,
+  op: RemoteOperation,
+  baseVersion: number,
+  localDeviceId: string | null,
+): ApplyInput | null {
+  const input: ApplyInput = {
+    entity: op.entity,
+    entityId: op.entityId,
+    verb: op.verb,
+    payload: op.payload,
+    actor: op.actor === "" ? null : op.actor,
+    deviceId: op.deviceId,
+    at: op.createdAt,
+    opId: op.opId,
+  };
+
+  /** Canonical field name -> the newest write of it this device holds. */
+  const localWrites = localFieldWrites(db, op.entity, op.entityId, baseVersion);
 
   /**
    * An ordered collection is contested by the version comparison ALONE.
    *
-   * For every other entity, condition (2) — "the field is named by a local
-   * outbox row" — is what keeps *"Disjoint field sets are not a conflict"*
+   * For every other entity, condition (2) — "the field is named by a write this
+   * device holds" — is what keeps *"Disjoint field sets are not a conflict"*
    * true: without it, one device's `priority` edit would contest another's
    * `estimate`. An ordered collection has no disjoint field sets to protect.
    * It replicates as ONE pseudo-field carrying the whole list, so any local
    * operation on it necessarily named that field, and condition (1) has already
    * proved a local operation happened — `baseVersion < version` means this
    * database has seen operations on this entity that the sender had not.
-   * Consulting the outbox therefore adds no information here, and requiring it
-   * costs the guarantee outright, twice:
+   * Consulting the field record therefore adds no information here.
    *
-   *   - **The incumbent order need not be this device's own.** A device that
-   *     APPLIED the order it holds journaled nothing, so it has no outbox row —
-   *     and silently adopted the next stale `replace` to arrive, discarding a
-   *     plan a human had deliberately chosen, with no record on any device.
-   *   - **The outbox is transient.** `compact()` prunes acknowledged rows as a
-   *     matter of routine, and the moment it does, the device that authored the
-   *     incumbent order stops being able to defend it. Detection that expires is
-   *     not detection; two devices and one compaction were enough to lose an
-   *     order silently.
+   * ## This branch is a floor, and it stays one
    *
-   * So the pseudo-field is contestable whenever the operation carries it, with
-   * the local side attributed to an outbox row when one survives and left
-   * unattributed when none does. `localOpId` is nullable precisely because the
-   * operation that produced the incumbent value is not always nameable here;
-   * the two ORDERS are retained in full either way, and it is the orders, not
-   * the operation ids, that a human is being asked to choose between.
+   * STA-260 introduced it because the outbox could not name the incumbent in two
+   * ordinary situations; `sync_field_writes` now can, so for a relayed or a
+   * compacted order this branch is no longer what saves the plan — the ordinary
+   * field record does, WITH an attribution, and the conflict id therefore
+   * converges across the fleet where it previously could not.
+   *
+   * It is not dead. Provenance is not universal and cannot be made so:
+   *
+   *   - a database upgraded to 011 whose outbox had ALREADY been compacted has
+   *     nothing to backfill from — the evidence was destroyed before the table
+   *     existed, and no migration can reconstruct it;
+   *   - a device that bootstrapped from a snapshot holds values it neither
+   *     authored nor relayed, and the fold ships no per-field provenance.
+   *
+   * In both, `localOpId` is `null`, the two ORDERS are still retained in full —
+   * and it is the orders, not the operation ids, that a human is being asked to
+   * choose between — and {@link settleOpenFor} is what closes a record whose id
+   * no other device computes. That path is exercised by the "no provenance at
+   * all" case in `test/cloud-scalar-conflict-evidence.test.ts`.
    */
   const wholeField = WHOLE[op.entity];
   if (wholeField !== undefined && !localWrites.has(wholeField)) {
@@ -560,7 +666,7 @@ export function screenForConflicts(
       entity: op.entity,
       entityId: op.entityId,
       field: named.name,
-      baseValue: baseValueFor(db, op.entity, op.entityId, op.baseVersion, named.name),
+      baseValue: baseValueFor(db, op.entity, op.entityId, baseVersion, named.name),
       localValue: local.value,
       remoteValue,
       localOpId: side.opId,

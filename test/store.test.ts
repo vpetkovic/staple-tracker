@@ -388,6 +388,9 @@ describe("schema migration against a live database", () => {
       // the tables takes their partial indexes with them, so the indexes are not
       // named separately — unlike 006 and 009 above, where the index sat on
       // `issues` and had to come off before the column could.
+      // Migration 011 (field-write provenance) adds one more table on the same
+      // terms — no column on anything that already existed — so the rewind is
+      // one more DROP and nothing else.
       for (const table of [
         "sync_entity_versions",
         "sync_outbox",
@@ -397,6 +400,7 @@ describe("schema migration against a live database", () => {
         "sync_leases",
         "sync_devices",
         "sync_state",
+        "sync_field_writes",
       ]) {
         legacyDb.exec(`DROP TABLE IF EXISTS ${table}`);
       }

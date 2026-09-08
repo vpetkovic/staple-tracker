@@ -121,10 +121,11 @@ describe("version detection", () => {
     // workspace gained 003-issue-estimate (STA-81), 004-workspace-settings
     // (STA-140), 005-issue-kind (STA-124), 006-approval-gates (STA-143) and
     // 007-milestones (STA-172), 008-queue-entries (STA-167), 009-projects and
-    // 010-sync-metadata while the hub gained none of them. Pinned as two separate
+    // 010-sync-metadata and 011-sync-field-writes (STA-261) while the hub
+    // gained none of them. Pinned as two separate
     // numbers precisely so a migration added to one target cannot be silently
     // assumed to have been added to both.
-    expect(latestVersion(WORKSPACE_TARGET)).toBe(10);
+    expect(latestVersion(WORKSPACE_TARGET)).toBe(11);
     expect(latestVersion(HUB_TARGET)).toBe(2);
   });
 });

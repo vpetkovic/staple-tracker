@@ -261,6 +261,7 @@ replicates — it is this device's record of its relationship to a shared log.
 | `sync_entity_versions` | `(entity, entity_id)` | `version` — bumped once per journaled mutation, in the same transaction as the domain write. This is the `baseVersion` an envelope carries. |
 | `sync_outbox` | `op_id` | `client_seq`, `entity`, `entity_id`, `verb`, `base_version`, `payload`, `actor`, `created_at`, `acknowledged_seq` — `NULL` until the server accepts it |
 | `sync_applied` | `op_id` | `seq`, `applied_at` — the deduplication ledger that makes re-delivery a no-op |
+| `sync_field_writes` | `(entity, entity_id, field)` | `base_version`, `op_id`, `device_id`, `written_at` — the NEWEST write of one field, whoever made it. Written by the journal seam and by the apply path, so a relayed value has provenance. Only the newest is kept, which bounds the table by live entities rather than by history — so nothing time-based prunes it, and detection cannot expire with housekeeping. |
 | `sync_tombstones` | `(entity, entity_id)` | `deleted_at`, `device_id`, `op_id` |
 | `sync_conflicts` | `id` | `entity`, `entity_id`, `field`, `base_value`, `local_value`, `remote_value`, `local_op_id`, `remote_op_id`, `local_device_id`, `remote_device_id`, `local_at`, `remote_at`, `detected_at`, `resolved_at`, `resolved_by`, `resolution` |
 | `sync_leases` | `entity_id` | `fencing_token`, `holder`, `device_id`, `server_expires_at`, `acquired_at`, `renewed_at` |
@@ -690,11 +691,42 @@ fields changed by the local operations in between. Disjoint field sets are not a
 conflict — two devices setting `priority` and `estimated_seconds` on one issue
 both apply, and the version bumps twice.
 
-The second condition is read off this device's outbox, and that is a deliberately
-narrow reading of "the local operations in between": it sees the operations this
-device *authored* and still holds. For ordered collections that reading is
+The second condition is read off `sync_field_writes`, which holds **the newest
+write of each field of each entity** — the version it moved off, and the
+operation and device that made it. Every path that can change a field writes it:
+a locally journaled mutation from the journal seam, and an applied remote
+operation from the apply path. For ordered collections the condition is still
 [dropped](#ordered-collections-replicate-whole-not-row-by-row), because there is
 one field and the version comparison already carries the whole answer.
+
+It used to be read off the outbox, and the outbox is the wrong witness. It is a
+queue of what this device has to *send*, and the question is what this device
+*holds*:
+
+- **A relayed value was never in it.** A device that applied another device's
+  `title` journals nothing — that is [obligation 4](#the-journal-seam-and-what-it-owes) —
+  so it held a title somebody had chosen with no row naming it, and handed it to
+  the next stale write in silence.
+- **It is emptied.** [Compaction](#deletion-is-a-tombstone) prunes acknowledged
+  rows as routine, after which even the *author* could no longer defend its own
+  edit.
+
+**Detection that expires with housekeeping is not detection.** The field record
+does not expire: only the newest write per field is kept, so it is bounded by
+live entities rather than by history and nothing time-based ever prunes it.
+Compaction removes rows for **tombstoned entities only** — an update to a
+tombstoned entity is a no-op regardless of arrival order, so those rows could
+never have been evidence for anything.
+
+Two limits are real and neither is hidden. A database upgraded to schema 11 whose
+outbox had already been compacted has nothing to backfill from. And a device that
+**bootstrapped from a snapshot** holds values it neither authored nor relayed:
+the fold ships one value per field with no per-field version, so recording it
+would either understate the provenance or invent one, and inventing one contests
+`priority` against `estimate` — the guarantee the field condition exists to keep.
+In both, `localOpId` is `null`, both values are still retained in full, and the
+[settle rule](#ordered-collections-replicate-whole-not-row-by-row) is what closes
+a record whose id no other device computes.
 
 A conflict record retains both sides in full: entity, field, base value, local
 value, remote value, both `opId`s, both `deviceId`s, both timestamps — except

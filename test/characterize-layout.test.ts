@@ -162,10 +162,11 @@ describe("a fresh repo-local `staple init`", () => {
       // or an old binary's `CAST(meta.value AS INTEGER)` guard misbehaves.
       // Bumped to "6" by STA-143 (006-approval-gates), after STA-140's 004 and
       // STA-124's 005, to "7" by STA-172 (007-milestones), to "8" by STA-167
-      // (008-queue-entries), to "9" by 009-projects and to "10" by
-      // 010-sync-metadata; the TEXT typing is the characterization, the number
+      // (008-queue-entries), to "9" by 009-projects, to "10" by
+      // 010-sync-metadata and to "11" by 011-sync-field-writes; the TEXT typing
+      // is the characterization, the number
       // just tracks the migration list.
-      { key: "schema_version", value: "10" },
+      { key: "schema_version", value: "11" },
       { key: "slug", value: "metarepo" },
     ]);
   }, 30_000);
@@ -226,6 +227,9 @@ describe("a fresh repo-local `staple init`", () => {
       "index:sqlite_autoindex_sync_conflicts_1",
       "index:sqlite_autoindex_sync_devices_1",
       "index:sqlite_autoindex_sync_entity_versions_1",
+      // STA-261 (011-sync-field-writes): the one provenance table conflict
+      // detection reads instead of the outbox, and its composite primary key.
+      "index:sqlite_autoindex_sync_field_writes_1",
       "index:sqlite_autoindex_sync_leases_1",
       "index:sqlite_autoindex_sync_outbox_1",
       "index:sqlite_autoindex_sync_outbox_2",
@@ -259,6 +263,7 @@ describe("a fresh repo-local `staple init`", () => {
       "table:sync_conflicts",
       "table:sync_devices",
       "table:sync_entity_versions",
+      "table:sync_field_writes",
       "table:sync_leases",
       "table:sync_outbox",
       "table:sync_state",
@@ -389,7 +394,7 @@ describe("global workspaces", () => {
       { key: "prefix", value: "SOL" },
       // WORKSPACE_SCHEMA_VERSION — 10 since 010-sync-metadata. The hub beside it
       // is still 2; the two databases version independently.
-      { key: "schema_version", value: "10" },
+      { key: "schema_version", value: "11" },
       { key: "slug", value: "solo" },
     ]);
   }, 30_000);

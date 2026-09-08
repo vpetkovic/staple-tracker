@@ -3,7 +3,7 @@
  * Regenerate with: npx tsx scripts/regen-migration-snapshots.ts
  *
  * The `sqlite_master` dump of a workspace database that walked migrations
- * 001, 002, 003, 004, 005, 006, 007, 008, 009, 010. Executed verbatim by the runner when — and only when —
+ * 001, 002, 003, 004, 005, 006, 007, 008, 009, 010, 011. Executed verbatim by the runner when — and only when —
  * version detection proved the file has no tables at all.
  *
  * No `IF NOT EXISTS` anywhere, deliberately: reaching this text with tables
@@ -280,5 +280,16 @@ CREATE TABLE sync_state (
          client_seq_high_water INTEGER NOT NULL DEFAULT 0,
          last_sync_at          TEXT,
          bootstrap_cursor      TEXT
+       );
+
+CREATE TABLE sync_field_writes (
+         entity       TEXT    NOT NULL,
+         entity_id    TEXT    NOT NULL,
+         field        TEXT    NOT NULL,
+         base_version INTEGER NOT NULL,
+         op_id        TEXT,
+         device_id    TEXT,
+         written_at   TEXT    NOT NULL,
+         PRIMARY KEY (entity, entity_id, field)
        );
 `;
