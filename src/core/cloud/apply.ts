@@ -258,20 +258,28 @@ export function operationToInput(op: RemoteOperation): ApplyInput {
 }
 
 /**
- * A folded snapshot entity is an apply with the verb it already carries in
- * `deletedAt`.
+ * A folded snapshot entity is an apply with the verb the server folded it to.
  *
- * The server folds `create`, `update` and `renumber` into one merged `state` and
- * records the tombstone separately, so there is exactly one distinction left to
- * make here. The `version` it reports becomes the local entity version, which is
- * what makes the first post-bootstrap local mutation carry a `baseVersion` that
- * means something.
+ * The verb is taken from the wire rather than derived here, and that is the whole
+ * point of this function. Deriving it — `deletedAt === null ? "create" : "delete"`,
+ * as this once did — silently loses the one verb a fold cannot express as a merge:
+ * `replace`, the ordered-collection verb. A queue plan and a milestone's membership
+ * both fold to a `replace`, so a device hydrating from a snapshot was handed them
+ * under a verb that meant something else, applied neither, and reported success.
+ *
+ * With the verb carried, this `ApplyInput` is field-for-field the same record
+ * `operationToInput` builds when the identical operation arrives in the ordered
+ * tail, and both go through the identical handler. Two paths, one shape.
+ *
+ * The `version` the server reports becomes the local entity version, which is what
+ * makes the first post-bootstrap local mutation carry a `baseVersion` that means
+ * something.
  */
 export function snapshotToInput(entity: SnapshotEntity, at: string): ApplyInput {
   return {
     entity: entity.entity,
     entityId: entity.entityId,
-    verb: entity.deletedAt === null ? "create" : "delete",
+    verb: entity.verb,
     payload: entity.state,
     actor: null,
     deviceId: null,
@@ -930,11 +938,22 @@ function applySetting(db: DatabaseSync, input: ApplyInput): boolean {
  * is for. `rank` is never transported — it is recomputed densely from list order
  * inside this transaction — which is what makes `UNIQUE (milestone_id, rank)`
  * structurally unreachable no matter what two devices did offline.
+ *
+ * ## Why membership is recognised by its shape rather than by the verb
+ *
+ * A `members` array means "these are the members, in this order", and it means that
+ * regardless of which verb carried it. Gating on `verb === "replace"` made this
+ * handler's correctness depend on a verb surviving every hop of the wire, and when
+ * the snapshot route did not carry one, membership was not dropped loudly — it fell
+ * through to the dates branch below and wrote two NULLs over the milestone instead.
+ *
+ * `applyQueue` has always keyed off `payload.order` for the same reason. The two
+ * ordered collections now agree, and a verb that goes missing again costs a
+ * diagnosis rather than a silent hydration into the wrong state.
  */
 function applyMilestone(db: DatabaseSync, input: ApplyInput): boolean {
-  if (input.verb === "replace") {
-    const members = input.payload.members;
-    if (!Array.isArray(members)) return false;
+  const members = input.payload.members;
+  if (Array.isArray(members)) {
     if (!issueExists(db, input.entityId)) throw new ReferentMissing(`milestone ${input.entityId}`);
     const ids = members.filter((id): id is string => typeof id === "string");
     for (const id of ids) {

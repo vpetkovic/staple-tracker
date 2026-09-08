@@ -112,7 +112,49 @@ describe("GET /v1/repos/{repoId}/snapshot", () => {
 
     const body = await jsonOf(await call(`/v1/repos/${REPO}/snapshot`, { token }));
     // Merging two plans would invent an order neither human asked for.
-    expect(body.entities[0].state.replaced.entries).toEqual(["c", "a"]);
+    expect(body.entities[0].state.entries).toEqual(["c", "a"]);
+    // And the verb the fold consumed travels, so the client does not have to guess
+    // it back out of the shape of the state.
+    expect(body.entities[0].verb).toBe("replace");
+    // `{ replaced: … }` is fold-internal. It must not reach a client.
+    expect(body.entities[0].state.replaced).toBeUndefined();
+  });
+
+  /**
+   * STA-257. An ordered collection reaches a device by one of two routes — folded
+   * into a snapshot, or replayed from the ordered tail — and it must look the same
+   * either way. It did not: the fold wrapped a `replace` in `{ replaced: … }` and
+   * dropped the verb, so the two halves of a bootstrap described the same plan in
+   * two different shapes and the client had a handler for only one of them.
+   *
+   * Asserted at the wire rather than at its effect, because the effect can agree by
+   * luck — a client that keys off the payload alone would pass a state comparison
+   * while the shapes had already diverged again.
+   */
+  it("describes an ordered collection identically in the snapshot and in the tail", async () => {
+    await pushOps(
+      [
+        envelope({
+          clientSeq: 1,
+          entity: "queue",
+          entityId: "queue",
+          verb: "replace",
+          payload: { entries: ["a", "b", "c"], baseRevision: 1 },
+        }),
+      ],
+      { token },
+    );
+
+    const snapshot = await jsonOf(await call(`/v1/repos/${REPO}/snapshot`, { token }));
+    const tail = await jsonOf(await call(`/v1/repos/${REPO}/ops`, { token }));
+
+    const folded = snapshot.entities.find((e: any) => e.entity === "queue");
+    const replayed = tail.ops.find((o: any) => o.entity === "queue");
+
+    expect({ verb: folded.verb, payload: folded.state }).toEqual({
+      verb: replayed.verb,
+      payload: replayed.payload,
+    });
   });
 
   it("separates entities that share an id across different entity types", async () => {

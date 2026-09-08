@@ -696,6 +696,8 @@ export class FakeSyncServer {
         version: number;
         deletedAt: number | null;
         lastSeq: number;
+        /** True when the last surviving write was a `replace`. Mirrors `worker/src/fold.ts`. */
+        superseded: boolean;
         state: Record<string, unknown>;
       }
     >();
@@ -712,6 +714,7 @@ export class FakeSyncServer {
           version: 0,
           deletedAt: null,
           lastSeq: op.seq,
+          superseded: false,
           state: {},
         };
         folded.set(key, entry);
@@ -725,8 +728,10 @@ export class FakeSyncServer {
       if (entry.deletedAt !== null) continue;
       if (op.verb === "replace") {
         entry.state = { replaced: op.payload } as Record<string, unknown>;
+        entry.superseded = true;
       } else if (op.payload !== null && typeof op.payload === "object" && !Array.isArray(op.payload)) {
         Object.assign(entry.state, op.payload as Record<string, unknown>);
+        entry.superseded = false;
       }
     }
 
@@ -746,7 +751,22 @@ export class FakeSyncServer {
       epoch: this.epoch,
       cutoffSeq: cutoff,
       tailCursor: b64url(JSON.stringify({ v: 1, r: session.repoId, e: this.epoch, s: cutoff })),
-      entities: page,
+      /**
+       * `{ replaced: … }` is how a fold represents a superseded ordered collection to
+       * itself, and it does not cross the wire — the real route unwraps it here and
+       * carries the verb instead (`worker/src/snapshot.ts::toWireEntity`). This fixture
+       * has to do the same or an end-to-end bootstrap test proves nothing about the
+       * Worker it is standing in for.
+       */
+      entities: page.map((entry) => ({
+        entity: entry.entity,
+        entityId: entry.entityId,
+        version: entry.version,
+        deletedAt: entry.deletedAt,
+        lastSeq: entry.lastSeq,
+        verb: entry.deletedAt !== null ? "delete" : entry.superseded ? "replace" : "create",
+        state: entry.superseded ? (entry.state.replaced as Record<string, unknown>) : entry.state,
+      })),
       nextCursor: hasMore
         ? b64url(
             JSON.stringify({ v: 1, r: session.repoId, e: this.epoch, c: cutoff, k: lastKey }),

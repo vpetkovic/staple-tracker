@@ -84,6 +84,18 @@ export interface SnapshotEntity {
   /** Server timestamp of the tombstone, or null. A tombstone is data. */
   readonly deletedAt: number | null;
   readonly lastSeq: number;
+  /**
+   * The verb the server's fold materialised.
+   *
+   * Carried rather than inferred. An ordered collection folds to a `replace`, and a
+   * client left to guess from the shape of `state` would have to decide whether an
+   * entity whose only field is called `replaced` was a replace or merely had a field
+   * of that name. With the verb on the wire, the `ApplyInput` built from a snapshot
+   * entity is identical to the one built from that same operation arriving in the
+   * ordered tail — which is the point: a collection must arrive the same way
+   * whichever half of a bootstrap carried it.
+   */
+  readonly verb: string;
   readonly state: Record<string, unknown>;
 }
 

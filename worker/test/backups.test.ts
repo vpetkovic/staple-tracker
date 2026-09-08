@@ -271,11 +271,14 @@ describe("restore materialises into the new epoch", () => {
     );
     await runRestore(token, backup.backup.backupId);
 
-    const snapshot = await jsonOf<{ entities: { state: Record<string, unknown> }[] }>(
-      await call(`/v1/repos/${REPO}/snapshot`, { token }),
-    );
-    // The order is the one that was backed up, still whole, still not merged.
-    expect(snapshot.entities[0]!.state).toEqual({ replaced: { members: ["c", "a", "b"] } });
+    const snapshot = await jsonOf<
+      { entities: { verb: string; state: Record<string, unknown> }[] }
+    >(await call(`/v1/repos/${REPO}/snapshot`, { token }));
+    // The order is the one that was backed up, still whole, still not merged — and it
+    // arrives as the payload of a `replace`, which is the same shape the ordered tail
+    // would have delivered it in.
+    expect(snapshot.entities[0]!.verb).toBe("replace");
+    expect(snapshot.entities[0]!.state).toEqual({ members: ["c", "a", "b"] });
   });
 });
 

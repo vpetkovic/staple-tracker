@@ -41,15 +41,12 @@ import {
 } from "./cursor.js";
 import type { Env } from "./env.js";
 import { SyncError, json } from "./errors.js";
-import {
-  DEFAULT_SNAPSHOT_PAGE,
-  MAX_SNAPSHOT_FOLD_OPS,
-  MAX_SNAPSHOT_PAGE,
-  SNAPSHOT_FOLD_PAGE,
-} from "./limits.js";
+import { type FoldedEntity, foldLog, materializedVerb } from "./fold.js";
+import { DEFAULT_SNAPSHOT_PAGE, MAX_SNAPSHOT_PAGE } from "./limits.js";
 import { log, tokenFingerprint } from "./log.js";
 
-interface EntitySnapshot {
+/** One folded entity, as it crosses the wire. */
+interface WireEntity {
   entity: string;
   entityId: string;
   /** Count of operations folded into this entity. The client's initial version. */
@@ -57,6 +54,11 @@ interface EntitySnapshot {
   /** Server timestamp of the tombstone, or null. A tombstone is data, not an absence. */
   deletedAt: number | null;
   lastSeq: number;
+  /**
+   * The verb the fold materialised, so a client never has to infer it from the
+   * shape of the state. See `toWireEntity`.
+   */
+  verb: string;
   state: Record<string, unknown>;
 }
 
@@ -85,12 +87,10 @@ export async function snapshot(
     cutoff = session.lastSeq;
   }
 
-  const folded = await fold(env, session, cutoff);
+  const folded = await foldLog(env, session.repoId, session.epoch, cutoff);
 
-  const ordered = [...folded.values()].sort((a, b) =>
-    entityKey(a.entity, a.entityId) < entityKey(b.entity, b.entityId) ? -1 : 1,
-  );
-  const remaining = ordered.filter((e) => entityKey(e.entity, e.entityId) > afterKey);
+  // `foldLog` already returns entities ordered by entity key, which is the paging order.
+  const remaining = folded.entities.filter((e) => entityKey(e.entity, e.entityId) > afterKey);
   const hasMore = remaining.length > limit;
   const page = remaining.slice(0, limit);
 
@@ -129,114 +129,63 @@ export async function snapshot(
      * independently and must not be confused for one another.
      */
     tailCursor: encodeCursor({ v: 1, r: session.repoId, e: session.epoch, s: cutoff }),
-    entities: page,
+    entities: page.map(toWireEntity),
     nextCursor: hasMore ? encodeCursor(next) : null,
     hasMore,
   });
 }
 
 /**
- * Fold the operation log up to `cutoff` into per-entity state.
+ * The wire form of a folded entity.
  *
- * The fold is mechanical and knows nothing about what an issue is:
+ * `{ replaced: … }` is how the fold represents a superseded ordered collection TO
+ * ITSELF. It is not a wire shape and it does not leave this function. A client handed
+ * it would have to decide whether an entity whose only field is called `replaced` was
+ * a `replace`, or was simply an entity with a field of that name — and guessing about
+ * that is exactly how the plan arrives as an object with a `replaced` key instead of
+ * as a plan.
  *
- *   create/update/renumber — shallow-merge the payload's fields over the state
- *   replace                — supersede the state wholesale (ordered collections only)
- *   delete                 — record a tombstone; later updates become no-ops
+ * So the verb the fold consumed travels explicitly and the payload is handed over
+ * unwrapped, which is precisely what `materializedVerb` does when a RESTORE turns a
+ * folded entity back into an operation. Both ways out of a fold now go through the
+ * same function, so a bootstrap and a restore cannot reach different conclusions
+ * about the same log.
  *
- * That shallow merge is NOT last-write-wins conflict resolution, and the distinction
- * matters. Conflict detection is field-scoped and happens on the applying device,
- * against a LOCAL entity version. A bootstrapping device has no local state to
- * conflict with — that is what bootstrapping means — so folding the log in seq order
- * gives it exactly what replaying the log in seq order would have given it, for less
- * bandwidth. No conflict is being resolved here because none can exist yet.
+ * What the client then applies is byte-identical to the payload of the `replace` it
+ * would have received from the ordered tail. That is the property that matters: a
+ * collection arrives the same way whichever half of a bootstrap carried it.
  *
- * A tombstoned entity's later updates are dropped rather than applied: the tombstone
- * wins regardless of arrival order, which is what makes convergence
- * order-independent. The tombstone itself is returned, not omitted — a device that is
- * handed silence about a deleted entity has no way to distinguish it from one it has
- * simply never heard of.
+ * ONE DIFFERENCE FROM A RESTORE, deliberately. A restore materialises a tombstone as
+ * a bare `delete` and drops the state the entity had, because reproducing the corpse
+ * would cost two operations for a state nothing reads. A snapshot keeps it: a
+ * hydrating device is handed the tombstone AND what the entity looked like, which is
+ * what this route has always returned and what its callers already assert.
  */
-async function fold(
-  env: Env,
-  session: Session,
-  cutoff: number,
-): Promise<Map<string, EntitySnapshot>> {
-  const entities = new Map<string, EntitySnapshot>();
-  let after = 0;
-  let read = 0;
+function toWireEntity(entity: FoldedEntity): WireEntity {
+  return {
+    entity: entity.entity,
+    entityId: entity.entityId,
+    version: entity.version,
+    deletedAt: entity.deletedAt,
+    lastSeq: entity.lastSeq,
+    verb: materializedVerb(entity).verb,
+    state: unwrapped(entity),
+  };
+}
 
-  for (;;) {
-    const page = await env.DB.prepare(
-      `SELECT seq, entity, entity_id, verb, payload, server_ts
-         FROM ops
-        WHERE repo_id = ?1 AND epoch = ?2 AND seq > ?3 AND seq <= ?4
-        ORDER BY seq
-        LIMIT ?5`,
-    )
-      .bind(session.repoId, session.epoch, after, cutoff, SNAPSHOT_FOLD_PAGE)
-      .all<{
-        seq: number;
-        entity: string;
-        entity_id: string;
-        verb: string;
-        payload: string;
-        server_ts: number;
-      }>();
-
-    if (page.results.length === 0) break;
-
-    read += page.results.length;
-    if (read > MAX_SNAPSHOT_FOLD_OPS) {
-      // A truncated snapshot would hydrate a device into quiet divergence, which is
-      // strictly worse than a loud refusal. Retryable, because the honest fix is
-      // operational (compaction, or the projection table described above) rather than
-      // anything the client did wrong.
-      throw new SyncError("unavailable", "operation log is too large to snapshot in one pass", {
-        maxSnapshotFoldOps: MAX_SNAPSHOT_FOLD_OPS,
-      });
-    }
-
-    for (const row of page.results) {
-      const key = entityKey(row.entity, row.entity_id);
-      let entry = entities.get(key);
-      if (!entry) {
-        entry = {
-          entity: row.entity,
-          entityId: row.entity_id,
-          version: 0,
-          deletedAt: null,
-          lastSeq: row.seq,
-          state: {},
-        };
-        entities.set(key, entry);
-      }
-
-      entry.version += 1;
-      entry.lastSeq = row.seq;
-
-      if (row.verb === "delete") {
-        entry.deletedAt = row.server_ts;
-        continue;
-      }
-      // The tombstone wins regardless of arrival order.
-      if (entry.deletedAt !== null) continue;
-
-      const payload = JSON.parse(row.payload) as unknown;
-      if (row.verb === "replace") {
-        // Ordered collections replicate whole. Merging two plans would invent an order
-        // neither human asked for, so a replace supersedes rather than merges.
-        entry.state = { replaced: payload } as Record<string, unknown>;
-      } else if (payload !== null && typeof payload === "object" && !Array.isArray(payload)) {
-        Object.assign(entry.state, payload as Record<string, unknown>);
-      }
-    }
-
-    after = page.results[page.results.length - 1]!.seq;
-    if (page.results.length < SNAPSHOT_FOLD_PAGE) break;
-  }
-
-  return entities;
+/**
+ * The payload a `replace` carried, or the merged state for everything else.
+ *
+ * A `replace` whose payload was not an object cannot be unwrapped into one, and
+ * becomes an empty state rather than a lie about what the operation said.
+ * `worker/src/envelope.ts` refuses such an operation at ingest, so this is a floor
+ * under a corrupted log rather than a case the wire is expected to carry.
+ */
+function unwrapped(entity: FoldedEntity): Record<string, unknown> {
+  if (!entity.superseded) return entity.state;
+  const payload = entity.state.replaced;
+  if (payload === null || typeof payload !== "object" || Array.isArray(payload)) return {};
+  return payload as Record<string, unknown>;
 }
 
 function parseLimit(raw: string | null): number {
