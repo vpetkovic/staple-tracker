@@ -21,6 +21,8 @@
 import type { SettingCategoryView, SettingOp, WorkspaceSettingsEnvelope } from "@/lib/settings";
 import type { Refusal } from "@/lib/refusal";
 import type { VocabularyOp } from "@/lib/types";
+import { CloudSection } from "./CloudSection";
+import { isCloudCategory } from "./cloud-settings";
 import { FieldsForm } from "./FieldsForm";
 import { VocabularyList } from "./VocabularyList";
 import { servedGlyphMap } from "./glyph-picker/glyph-picker-model";
@@ -37,9 +39,29 @@ export interface CategoryContentProps {
   settings: WorkspaceSettingsEnvelope;
   applyTo: ApplyTo;
   onDirtyChange: (dirty: boolean) => void;
+  /** The workspace whose sync identity the cloud section acts on. */
+  ws?: string;
 }
 
-export function CategoryContent({ category, settings, applyTo, onDirtyChange }: CategoryContentProps) {
+export function CategoryContent({ category, settings, applyTo, onDirtyChange, ws }: CategoryContentProps) {
+  /**
+   * CLOUD IS MATCHED BY ID, BEFORE THE EDITOR SWITCH — S13 (STA-258).
+   *
+   * Every other arm below is reached through `category.editor`, which is a field
+   * the SERVER sends: the registry says what kind of surface a category needs and
+   * this file provides it. Cloud has no registry entry and cannot have one — the
+   * registry describes values stored in the workspace database, the workspace
+   * database synchronizes, and a credential or an `auto` flag replicated to every
+   * device is exactly the consent this epic promises not to spend on somebody
+   * else's behalf. See `cloud-settings.ts`, and `src/core/cloud/connection.ts`
+   * for the original argument.
+   *
+   * So it is matched on its id, first, and `applyTo` is deliberately not passed
+   * down: `applyTo` writes `/api/settings`, and there is nothing in this section
+   * that route could ever legally carry.
+   */
+  if (isCloudCategory(category.id)) return <CloudSection ws={ws} />;
+
   switch (category.editor) {
     case "statuses":
       return (

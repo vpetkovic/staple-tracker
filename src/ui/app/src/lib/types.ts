@@ -1373,3 +1373,78 @@ export interface CloudSurfaceReport {
    */
   hint: string | null;
 }
+
+/**
+ * The endpoint half of a connect preview — S13 (STA-258). Mirrors `CloudEndpoint`
+ * in src/core/cloud/endpoint.ts.
+ */
+export interface CloudEndpointView {
+  readonly origin: string;
+  readonly host: string;
+  readonly loopback: boolean;
+}
+
+/**
+ * `POST /api/cloud/connect/preview` — mirrors `ConnectPreview` in
+ * src/core/cloud/preview.ts, and pinned equal to it by
+ * test/contract-ui-types.test.ts.
+ *
+ * This one is pinned for a stronger reason than convenience. The preview IS the
+ * consent mechanism: *"showing the endpoint and repository identity before any
+ * remote call is the consent mechanism, not a courtesy."* A mirror that quietly
+ * lost a field would be a consent screen that had stopped disclosing something —
+ * `credentialFallbackReason`, say, which is the sentence explaining that the
+ * secret is about to go into a file because the keychain would not open. Silent
+ * divergence here is not a stale type; it is an under-informed human.
+ */
+export interface ConnectPreview {
+  readonly endpoint: CloudEndpointView;
+  readonly repositoryId: string;
+  /** Null when this machine has never minted one; connecting mints it. */
+  readonly deviceId: string | null;
+  readonly label: string;
+  readonly credentialMechanism: "keychain" | "secret-tool" | "file";
+  /** Why the OS store was not chosen, when it was not. Shown, never swallowed. */
+  readonly credentialFallbackReason: string | null;
+  readonly alreadyConnected: boolean;
+  /** The endpoint the existing connection names, when it differs from this one. */
+  readonly existingEndpoint: string | null;
+  /** Always false, as a FIELD rather than as prose: connecting does not start syncing. */
+  readonly autoAfterConnect: false;
+}
+
+/**
+ * The ticket returned beside a preview — the only thing `/api/cloud/connect`
+ * accepts. See src/core/cloud/consent.ts: that route has no endpoint parameter,
+ * so a client cannot connect without having been handed, in a prior response,
+ * the preview describing what it would connect to.
+ */
+export interface ConsentTicket {
+  id: string;
+  digest: string;
+  expiresAt: string;
+}
+
+export interface ConnectPreviewResponse {
+  preview: ConnectPreview;
+  consent: ConsentTicket;
+}
+
+/**
+ * One row of `POST /api/cloud/devices` — mirrors `RemoteDevice` in
+ * src/core/cloud/client.ts. The server's list is the authority; this page never
+ * derives it from local state.
+ */
+export interface RemoteDevice {
+  deviceId: string;
+  label: string | null;
+  createdAt: number;
+  lastSeenAt: number | null;
+  revokedAt: number | null;
+  self: boolean;
+}
+
+/** What every cloud mutation answers with: the act's outcome, plus the refreshed report. */
+export interface CloudMutationResult {
+  report: CloudSurfaceReport;
+}

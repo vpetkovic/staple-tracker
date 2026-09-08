@@ -36,6 +36,21 @@ import { readStoredRepositoryId } from "../core/repo-identity.js";
 import { listConflicts, resolveConflict } from "../core/cloud/conflicts.js";
 import { localCloudStatus } from "../core/cloud/status.js";
 import { cloudSurfaceReport, noIdentityReport } from "../core/cloud/surface.js";
+/**
+ * S13 (STA-258): the cloud MUTATIONS, which until now had no HTTP surface at all.
+ *
+ * `buildConnectPreview` and `ConsentTicketStore` are the pre-consent half and
+ * neither can reach the network — see `core/cloud/consent.ts` for why the
+ * two-step exchange below is the property and not the ceremony. `connect.js` is
+ * the post-consent half and DOES import `client.ts`; every function it exports
+ * takes an already-shown preview or an existing connection record as its
+ * subject, so importing it here does not give this file a way to reach a service
+ * nobody named.
+ */
+import { buildConnectPreview } from "../core/cloud/preview.js";
+import { ConsentTicketStore } from "../core/cloud/consent.js";
+import { fetchDevices, performConnect, performDisconnect, performRevoke } from "../core/cloud/connect.js";
+import { setConsent } from "../core/cloud/connection.js";
 import { readConfig, stapleHome } from "../config/index.js";
 
 interface UiOptions {
@@ -476,6 +491,52 @@ export function startUiServer(options: UiOptions): UiHandle {
     return raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
   }
 
+  // ------------------------------------------------------------- cloud (S13, STA-258)
+
+  /**
+   * The outstanding connect consents of THIS process. See `core/cloud/consent.ts`
+   * for the whole argument; the short version is that `/api/cloud/connect` has no
+   * endpoint parameter, so the only way to reach a service is to hold a ticket
+   * this server minted while returning the preview that named it.
+   *
+   * One store per server, not per workspace: a ticket already carries the
+   * repository id it was built for, and the redeem path re-derives the preview
+   * from that id rather than from anything the request said.
+   */
+  const consents = new ConsentTicketStore();
+
+  /**
+   * This workspace's sync identity, or a refusal naming why there is none.
+   *
+   * Same read as `/api/cloud/status` — `sync_state.repository_id`, written from
+   * the manifest at open time — and the same failure mode: a workspace old enough
+   * to have no table, or a global workspace that never had a manifest, has no
+   * identity for a connection to be ABOUT. `/api/cloud/status` answers that with
+   * `noIdentityReport()`; a mutation has to refuse, because there is nothing to
+   * mutate.
+   */
+  function requireRepositoryId(handle: StoreHandle): string {
+    let repositoryId: string | null = null;
+    try {
+      repositoryId = readStoredRepositoryId(handle.store.db);
+    } catch {
+      repositoryId = null;
+    }
+    if (repositoryId === null) {
+      throw new StapleError(
+        "not_found",
+        "This workspace has no repository identity, so it has no sync identity and cannot be " +
+          "connected. Run `staple init` inside a repository to record one.",
+      );
+    }
+    return repositoryId;
+  }
+
+  /** The report every cloud mutation answers with, so one round trip both acts and refreshes. */
+  function cloudReport(handle: StoreHandle, repositoryId: string) {
+    return cloudSurfaceReport(localCloudStatus(stapleHome(), repositoryId), handle.store.db);
+  }
+
   const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", "http://localhost");
     try {
@@ -575,7 +636,33 @@ export function startUiServer(options: UiOptions): UiHandle {
            * `/api/cloud/status` are reads sharing the prefix, and a family rule
            * would have made both cross-origin-writable.
            */
-          url.pathname === "/api/cloud/conflicts/resolve"
+          url.pathname === "/api/cloud/conflicts/resolve" ||
+          /**
+           * S13 (STA-258): the cloud mutations. Named individually for the same
+           * reason the conflict verb is — `/api/cloud/status` and
+           * `/api/cloud/conflicts` are reads under the same prefix, and a family
+           * rule would make both cross-origin-writable.
+           *
+           * `/api/cloud/devices` is in this list although it READS. It is here
+           * because it LEAVES THE MACHINE: it presents this device's credential
+           * to the endpoint and asks who else is enrolled. The GET default exists
+           * for routes that touch local state, and a route that reaches
+           * Cloudflare belongs behind the Origin check with the writes — a
+           * cross-origin page that could make this server call out has made a
+           * request the user never authorized, whether or not anything changed.
+           *
+           * There is deliberately NO `/api/cloud/purge`. `staple cloud purge`
+           * requires the repository id typed back and STA-256 records that the
+           * server does not yet validate a confirmation on the wire; a one-click
+           * irreversible remote deletion behind a browser session is not a thing
+           * to add while that is true.
+           */
+          url.pathname === "/api/cloud/connect/preview" ||
+          url.pathname === "/api/cloud/connect" ||
+          url.pathname === "/api/cloud/disconnect" ||
+          url.pathname === "/api/cloud/consent" ||
+          url.pathname === "/api/cloud/devices" ||
+          url.pathname === "/api/cloud/devices/revoke"
             ? ["POST"]
             : url.pathname === "/api/settings"
               ? ["GET", "POST"]
@@ -710,6 +797,246 @@ export function startUiServer(options: UiOptions): UiHandle {
             actor: (body.actor as string) || "ui",
           }),
         );
+        return;
+      }
+
+      /**
+       * `POST /api/cloud/connect/preview` — step one of two, and the only place
+       * an endpoint may be named.
+       *
+       * Local by construction: `buildConnectPreview` parses a URL, reads the
+       * connection record and the device id, and probes the credential store. It
+       * cannot reach the network, because `preview.ts` does not import
+       * `client.ts` — *"the way to keep a consent mechanism from quietly
+       * acquiring a network call is not to remember not to add one; it is to
+       * build it somewhere a network call cannot be written."*
+       *
+       * A POST although it computes rather than commits, because it takes a body
+       * and because it has one local side effect worth the Origin check: probing
+       * the OS keychain writes and deletes a sentinel item, which on macOS can
+       * raise an unlock prompt. That is not a page another origin gets to summon.
+       *
+       * The response carries the preview AND a consent ticket minted from it.
+       * The ticket is the only thing `/api/cloud/connect` will accept, which is
+       * what makes "shown before asked" a property of the wire rather than of the
+       * client.
+       */
+      if (url.pathname === "/api/cloud/connect/preview") {
+        const body = await readBody(req);
+        const handle = handleFor((body.ws as string) ?? undefined);
+        const repositoryId = requireRepositoryId(handle);
+        const endpoint = typeof body.endpoint === "string" ? body.endpoint.trim() : "";
+        if (endpoint === "") {
+          deny(res, 400, "validation", "An endpoint is required to preview a connection.");
+          return;
+        }
+        /**
+         * `credentialFile` is `staple cloud connect --credential-file`, offered
+         * here for the same reason it is offered there: on a machine whose
+         * keychain prompts, or whose keychain the user would rather staple stayed
+         * out of, the honest `0600` file is a legitimate choice. The preview then
+         * SAYS "a 0600 file in your staple home", so the choice is part of what
+         * consent is given to rather than a setting hidden behind it.
+         */
+        const context = { credentialFile: body.credentialFile === true };
+        const preview = buildConnectPreview({
+          home: stapleHome(),
+          repositoryId,
+          endpoint,
+          label: typeof body.label === "string" ? body.label : undefined,
+          credential: { forceFile: context.credentialFile },
+        });
+        json(res, 200, { preview, consent: consents.mint(preview, context) });
+        return;
+      }
+
+      /**
+       * `POST /api/cloud/connect` — step two. **No endpoint. No repository id.**
+       *
+       * `{ consent, digest, token }`, and the absence of the first two fields is
+       * the design. There is no wire spelling for "connect to X": the endpoint is
+       * a field of the PREVIEW RESPONSE and appears in no request this server
+       * accepts. The only thing a connect may carry is an id minted while a
+       * preview was being returned, so the description of what is about to happen
+       * was necessarily delivered to the client first.
+       *
+       * The preview is REBUILT here from local state rather than taken from the
+       * ticket alone, and the two digests are compared: the ticket's (what the
+       * human read) against the rebuilt one (what is true now). A repository that
+       * was connected by another process, or a keychain that locked and pushed the
+       * credential to a `0600` file, changes something the preview asserted, and
+       * consent to a sentence that is no longer true is not consent.
+       *
+       * `token` is the enrollment credential and is the one secret on this route.
+       * It is never stored by this file, never logged, and never echoed: the
+       * response is the connection record and the surface report, and
+       * `CloudConnection` deliberately does not contain the credential.
+       */
+      if (url.pathname === "/api/cloud/connect") {
+        const body = await readBody(req);
+        const handle = handleFor((body.ws as string) ?? undefined);
+        const repositoryId = requireRepositoryId(handle);
+        const enrollmentSecret = typeof body.token === "string" ? body.token : "";
+
+        /**
+         * Redeem first, connect second. `redeem` consumes the ticket, re-derives
+         * the preview THROUGH THE TICKET'S OWN endpoint — the callback is how the
+         * endpoint gets here at all — and refuses on a mismatch. Every refusal on
+         * this path happens before a socket is opened, which is what makes
+         * "nothing was sent" a true sentence in each of those messages.
+         */
+        const { preview, context } = consents.redeem(body.consent, body.digest, (stored, choices) =>
+          buildConnectPreview({
+            home: stapleHome(),
+            repositoryId,
+            endpoint: stored.endpoint.origin,
+            label: stored.label,
+            credential: { forceFile: choices.credentialFile },
+          }),
+        );
+
+        const outcome = await performConnect(preview, {
+          home: stapleHome(),
+          enrollmentSecret,
+          credential: { forceFile: context.credentialFile },
+        });
+
+        json(res, 200, {
+          connection: outcome.connection,
+          capabilities: outcome.capabilities,
+          credentialLocation: outcome.credentialLocation,
+          report: cloudReport(handle, repositoryId),
+        });
+        return;
+      }
+
+      /**
+       * `POST /api/cloud/disconnect` — local, and only local.
+       *
+       * *"Disconnect is local. It removes this device's credential, stops all
+       * later cloud traffic, and preserves the entire local database including
+       * pending outbox operations."* So this route makes NO network call, not
+       * even a courtesy "please forget me": a person who has decided to stop
+       * talking to a service must not need that service's permission to stop.
+       * Revoking the device server-side is the separately named operation below.
+       *
+       * `confirm` is the CLI's `--yes`, restated. Nothing irreversible happens —
+       * the workspace database is untouched — but the credential goes, and a
+       * re-connect needs an enrollment secret the user may not have to hand.
+       */
+      if (url.pathname === "/api/cloud/disconnect") {
+        const body = await readBody(req);
+        const handle = handleFor((body.ws as string) ?? undefined);
+        const repositoryId = requireRepositoryId(handle);
+        if (body.confirm !== true) {
+          deny(
+            res,
+            400,
+            "validation",
+            "Disconnecting removes this machine's credential for this repository. Pass " +
+              "confirm to proceed. Your local database, including pending operations, is not " +
+              "touched.",
+          );
+          return;
+        }
+        const outcome = performDisconnect(stapleHome(), repositoryId);
+        json(res, 200, { ...outcome, report: cloudReport(handle, repositoryId) });
+        return;
+      }
+
+      /**
+       * `POST /api/cloud/consent` — the two later consents, one at a time.
+       *
+       * `{ auto: boolean }` OR `{ backup: boolean }`, and **exactly one**. Two
+       * consents are two decisions; a body carrying both would let one click
+       * spend both, which is the shape `docs/sync.md` separates them to prevent.
+       *
+       * This writes a file in the staple home — `setConsent` — and nothing else.
+       * It is emphatically NOT a workspace setting and never touches
+       * `/api/settings`: the workspace database synchronizes, so an `auto` flag
+       * stored there would replicate and turn one laptop's decision into a fleet
+       * policy. See the header of `core/cloud/connection.ts`.
+       *
+       * `setConsent` refuses `not_found` on an unconnected repository rather than
+       * springing a record into existence, so turning automatic sync on before
+       * connecting is an error and not a silent partial connection.
+       */
+      if (url.pathname === "/api/cloud/consent") {
+        const body = await readBody(req);
+        const handle = handleFor((body.ws as string) ?? undefined);
+        const repositoryId = requireRepositoryId(handle);
+        const named = ["auto", "backup"].filter((key) => body[key] !== undefined);
+        if (named.length !== 1 || typeof body[named[0]!] !== "boolean") {
+          deny(
+            res,
+            400,
+            "validation",
+            "Pass exactly one of auto and backup, as a boolean. They are two separate consents " +
+              "and are changed one decision at a time.",
+          );
+          return;
+        }
+        const key = named[0] as "auto" | "backup";
+        setConsent(stapleHome(), repositoryId, { [key]: body[key] as boolean });
+        json(res, 200, { report: cloudReport(handle, repositoryId) });
+        return;
+      }
+
+      /**
+       * `POST /api/cloud/devices` — the server's device list, which is the
+       * authority.
+       *
+       * **This route egresses.** It is the only read on this server that does, it
+       * is a POST for exactly that reason (see the method gate), and it is never
+       * called on mount: the settings section renders its whole connected state
+       * from `/api/cloud/status`, which is network-free, and asks for devices only
+       * when a human presses the button. A panel that listed devices on open would
+       * turn opening settings into a request to Cloudflare — the shape
+       * `docs/sync.md` calls a heartbeat arrived at by accident.
+       */
+      if (url.pathname === "/api/cloud/devices") {
+        const body = await readBody(req);
+        const handle = handleFor((body.ws as string) ?? undefined);
+        const repositoryId = requireRepositoryId(handle);
+        json(res, 200, { devices: await fetchDevices(stapleHome(), repositoryId) });
+        return;
+      }
+
+      /**
+       * `POST /api/cloud/devices/revoke` — end one device's access, from here.
+       *
+       * Revoking THIS device is allowed and is a real thing to want: a stolen
+       * laptop is revoked from the laptop you still have. `performRevoke` reports
+       * it as `self` rather than refusing, and deliberately leaves the local
+       * credential in place — it is already useless, and deleting it would
+       * conflate revoke with disconnect, which the contract insists on keeping
+       * apart.
+       *
+       * `confirm` because this one is not undoable from here: a revoked device
+       * re-enrols with `staple cloud connect` and an enrollment secret, which is
+       * a trip to another machine.
+       */
+      if (url.pathname === "/api/cloud/devices/revoke") {
+        const body = await readBody(req);
+        const handle = handleFor((body.ws as string) ?? undefined);
+        const repositoryId = requireRepositoryId(handle);
+        const deviceId = typeof body.deviceId === "string" ? body.deviceId.trim() : "";
+        if (deviceId === "") {
+          deny(res, 400, "validation", "A deviceId is required.");
+          return;
+        }
+        if (body.confirm !== true) {
+          deny(
+            res,
+            400,
+            "validation",
+            "Revoking ends that device's access on its very next request. Pass confirm to " +
+              "proceed. Its local data and pending work are untouched.",
+          );
+          return;
+        }
+        const outcome = await performRevoke(stapleHome(), repositoryId, deviceId);
+        json(res, 200, { ...outcome, report: cloudReport(handle, repositoryId) });
         return;
       }
 
@@ -1817,6 +2144,10 @@ export function startUiServer(options: UiOptions): UiHandle {
     close() {
       server.closeAllConnections();
       server.close();
+      // Outstanding connect consents die with the process that showed them. A
+      // ticket is a record that somebody was looking at a preview a moment ago,
+      // not a stored permission; see `core/cloud/consent.ts`.
+      consents.clear();
       for (const handle of stores.values()) {
         try {
           handle.store.db.close();

@@ -40,11 +40,15 @@
 import { describe, expect, it } from "vitest";
 import type { ClaimActivity, ClaimLease, ClaimScope } from "../src/core/types.js";
 import type { CloudSurfaceReport } from "../src/core/cloud/surface.js";
+import type { ConnectPreview } from "../src/core/cloud/preview.js";
+import type { RemoteDevice } from "../src/core/cloud/client.js";
 import type {
   ClaimActivity as UiClaimActivity,
   ClaimLease as UiClaimLease,
   ClaimScope as UiClaimScope,
   CloudSurfaceReport as UiCloudSurfaceReport,
+  ConnectPreview as UiConnectPreview,
+  RemoteDevice as UiRemoteDevice,
 } from "../src/ui/app/src/lib/types.js";
 
 /**
@@ -64,6 +68,26 @@ type _ClaimScopeMatches = Expect<Equals<ClaimScope, UiClaimScope>>;
 type _ClaimLeaseMatches = Expect<Equals<ClaimLease, UiClaimLease>>;
 type _ClaimActivityMatches = Expect<Equals<ClaimActivity, UiClaimActivity>>;
 type _CloudReportMatches = Expect<Equals<CloudSurfaceReport, UiCloudSurfaceReport>>;
+/**
+ * S13 (STA-258): the two types the cloud SECTION renders, now that the page can
+ * mutate cloud state and not merely read it.
+ *
+ * `ConnectPreview` earns its place by the file's own rule — "the types where a
+ * silent divergence has a real cost" — more clearly than anything already here.
+ * The preview IS the consent mechanism: *"showing the endpoint and repository
+ * identity before any remote call is the consent mechanism, not a courtesy."* A
+ * field dropped from the mirror is not a stale type, it is a disclosure that
+ * stopped being made — `credentialFallbackReason` is the sentence explaining that
+ * the secret is about to land in a file because the keychain would not open, and
+ * a consent screen that silently stopped saying so is the failure this whole lane
+ * is built to prevent.
+ *
+ * `RemoteDevice` because revoke acts on a row of it, and a mirror that had drifted
+ * on `self` would put the "this is the machine you are using" warning on the wrong
+ * row.
+ */
+type _ConnectPreviewMatches = Expect<Equals<ConnectPreview, UiConnectPreview>>;
+type _RemoteDeviceMatches = Expect<Equals<RemoteDevice, UiRemoteDevice>>;
 
 describe("the browser app's mirror of the wire vocabulary", () => {
   /**
@@ -84,7 +108,11 @@ describe("the browser app's mirror of the wire vocabulary", () => {
       true satisfies _ClaimLeaseMatches,
       true satisfies _ClaimActivityMatches,
       true satisfies _CloudReportMatches,
+      true satisfies _ConnectPreviewMatches,
+      true satisfies _RemoteDeviceMatches,
     ];
-    expect(proofs).toHaveLength(4);
+    // GOLDEN, moved by S13 (STA-258): 4 -> 6. The two additions are the connect
+    // preview and the device row; see the comment above them.
+    expect(proofs).toHaveLength(6);
   });
 });

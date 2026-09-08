@@ -68,6 +68,7 @@ import type { VocabularyOp } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { ErrorState, LoadingState } from "@/views/ViewChrome";
 import { CategoryContent, type ApplyTo } from "./CategoryContent";
+import { withCloudCategory } from "./cloud-settings";
 import { UnsavedChangesDialog } from "./form/ConfirmDialog";
 import { leaveDecision } from "./form/form-model";
 import { SettingsShell } from "./SettingsShell";
@@ -169,9 +170,19 @@ export function SettingsDialog({
   }, [dirty]);
 
   const settings = resource.settings;
-  // Re-read on every render: `settings` above is the same snapshot the accessor reads,
-  // so this is the served registry, in shell order, with no list of its own.
-  const categories = settingCategories();
+  /**
+   * Re-read on every render: `settings` above is the same snapshot the accessor reads,
+   * so this is the served registry, in shell order, with no list of its own.
+   *
+   * `withCloudCategory` is the ONE addition to that list, and it is not a
+   * back door into the registry — it is the opposite (S13, STA-258). Cloud state
+   * is machine-local because the workspace database synchronizes, so it has no
+   * registry entry, is not a setting key, and never travels on `/api/settings`.
+   * The category object is declared in `cloud-settings.ts`, in the browser, and
+   * merged in here so the shell can render it in the same place as everything
+   * else while it is backed by an entirely different store.
+   */
+  const categories = withCloudCategory(settingCategories());
   const active = resolveCategory(categories, category);
 
   const stacked = useStacked();
@@ -259,6 +270,7 @@ export function SettingsDialog({
                   settings={settings}
                   applyTo={applyTo}
                   onDirtyChange={setDirty}
+                  ws={session.ws || undefined}
                 />
               )
             }
