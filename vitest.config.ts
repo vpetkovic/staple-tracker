@@ -26,4 +26,23 @@ export default defineConfig({
   resolve: {
     alias: { "@": fileURLToPath(new URL("./src/ui/app/src", import.meta.url)) },
   },
+  test: {
+    /**
+     * Vitest's default is 5000ms, which is wrong for this suite.
+     *
+     * Many tests here drive the real CLI by spawning it, and a single `it` can spawn
+     * eight processes — `cli-settings`' "adds, renames, reorders and removes" does
+     * exactly that. Each spawn pays Node and tsx startup, so the budget is roughly
+     * 600ms per process. That is comfortable on a developer machine (the test above
+     * runs in 1.4s) and marginal on a two-core CI runner executing 175 files in
+     * parallel, where it times out while the code under test is perfectly healthy.
+     *
+     * This is not papering over slowness. The failure it was producing is a false
+     * negative: the same test passes in isolation on the same commit, and adding
+     * subprocess-heavy tests elsewhere in the suite — not changing the CLI — is what
+     * pushed it over. A genuine hang still fails, just at 20s instead of 5s.
+     */
+    testTimeout: 20_000,
+    hookTimeout: 20_000,
+  },
 });
