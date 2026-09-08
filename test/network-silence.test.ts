@@ -260,6 +260,25 @@ const DISCONNECTED_SCENARIOS: Array<[name: string, args: string[]]> = [
   ["cloud lease status --json", ["cloud", "lease", "status", "--json"]],
   ["cloud lease acquire", ["cloud", "lease", "acquire", "NET-1", "--agent", "netsilence"]],
   ["cloud lease release", ["cloud", "lease", "release", "NET-1"]],
+  /**
+   * Backup and restore, for the same reason as `cloud sync` and one more.
+   *
+   * On a disconnected repository they refuse from local files alone. But backup
+   * is also a THIRD consent, so even on a connected machine these commands must
+   * not reach the network until it has been given — a device that probed the
+   * service to find out whether it was allowed to back up would have made the
+   * request the consent exists to authorize. The connected-but-not-consented
+   * half of that is asserted directly in `test/cloud-backup-restore.test.ts`
+   * against the call log; this half is the harness's, on the machine least
+   * likely to be watching.
+   */
+  ["cloud backup", ["cloud", "backup"]],
+  ["cloud backup ls", ["cloud", "backup", "ls"]],
+  ["cloud backup ls --json", ["cloud", "backup", "ls", "--json"]],
+  ["cloud backup create", ["cloud", "backup", "create"]],
+  ["cloud backup enable", ["cloud", "backup", "enable"]],
+  ["cloud backup disable", ["cloud", "backup", "disable"]],
+  ["cloud restore", ["cloud", "restore", "some-backup-id"]],
 ];
 
 describe("disconnected: every ordinary command makes zero outbound calls", () => {

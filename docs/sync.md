@@ -433,10 +433,26 @@ and every request carries `Authorization: Bearer <token>`,
 | `DELETE` | `/v1/repos/{repoId}/leases/{entityId}` | Release — presents the fencing token |
 | `GET` | `/v1/repos/{repoId}/devices` | List devices |
 | `DELETE` | `/v1/repos/{repoId}/devices/{deviceId}` | Revoke a device |
+| `PUT` | `/v1/repos/{repoId}/backup` | Set the server-side half of the backup consent |
 | `GET` | `/v1/repos/{repoId}/backups` | List backups |
 | `POST` | `/v1/repos/{repoId}/backups` | Create a backup |
-| `POST` | `/v1/repos/{repoId}/backups/{backupId}/restore` | Restore |
+| `DELETE` | `/v1/repos/{repoId}/backups/{backupId}` | Delete one backup — retention |
+| `POST` | `/v1/repos/{repoId}/backups/{backupId}/restore` | Restore — resumable; call until `done` |
 | `DELETE` | `/v1/repos/{repoId}` | Purge — requires a separate typed confirmation token |
+
+Two of the backup routes were added after this table was first written. `PUT /backup`
+exists because the consent table below grants backup with "a server-side flag" and
+named no route that writes one, and a consent recorded only in a file on the device is
+not the two-sided consent described there. `DELETE /backups/{backupId}` exists because
+backup has "its own retention", and retention without a delete is not retention — the
+alternative, an expiry job, would destroy a human's backups on a schedule nobody typed.
+
+**Restore is one route called in a loop.** It answers with `staged`, `entityCount` and
+`done`; a caller keeps calling with the `restoreId` it was given until `done` is true.
+Which phase runs — take the pre-restore snapshot, stage the next chunk, or commit — is
+decided from durable state rather than from anything the caller asks for, so a client
+that lost its place recovers by calling again and being told where it actually got to.
+Staging is chunked at `maxBatchSize` for the same reason a push is.
 
 Push takes `{ protocol, deviceId, ops: [envelope…] }` and returns a per-operation
 status, never a bare accepted/rejected split:
@@ -977,6 +993,21 @@ device through a bounded re-bootstrap. It never moves remote state behind an
 active cursor within the same epoch, it requires confirmation and a compatibility
 check, and it takes a recoverable pre-restore snapshot first. It never merges
 database files.
+
+**How the epoch-changing form is built**, because "bump the epoch" on its own is
+not one of the two options and the difference is invisible from outside. The
+server *stages* the backup's folded state as operations stamped with `epoch + 1`
+while the repository is still on `epoch`, and only then moves `repos.epoch` in
+one guarded statement. Both `GET /ops` and `GET /snapshot` filter on the
+session's epoch, so until that flip no device can see a single staged row, and
+after it every device re-bootstraps into an epoch that is *already fully
+materialised*. Staging before flipping is what makes the cutover atomic across
+several requests; flipping first would leave a window in which a device
+re-bootstraps into a half-materialised epoch and hydrates half a repository.
+
+The pre-restore snapshot is an ordinary backup with `kind: "pre-restore"`,
+restorable by the same route. That is what "recoverable" has to mean: not a
+record that a restore happened, but a thing you can restore.
 
 ## What this is not — the STA-26 boundary
 

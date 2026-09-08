@@ -69,6 +69,42 @@ interface StoredLease {
 /** `worker/src/limits.ts`. Reproduced so a bad ttl is refused here too. */
 const DEFAULT_LEASE_TTL_SECONDS = 300;
 const MAX_LEASE_TTL_SECONDS = 3600;
+/** A folded entity, as a backup stores it. `superseded` records the verb. */
+interface FoldedEntity {
+  entity: string;
+  entityId: string;
+  version: number;
+  deletedAt: number | null;
+  lastSeq: number;
+  superseded: boolean;
+  state: Record<string, unknown>;
+}
+
+export interface FakeBackup {
+  backupId: string;
+  epoch: number;
+  cutoffSeq: number;
+  entityCount: number;
+  opCount: number;
+  schemaVersion: number;
+  protocol: number;
+  kind: "manual" | "pre-restore";
+  createdAt: number;
+  createdByDevice: string;
+  entities: FoldedEntity[];
+}
+
+export interface FakeRestore {
+  restoreId: string;
+  backupId: string;
+  preRestoreBackupId: string;
+  fromEpoch: number;
+  toEpoch: number;
+  guardSeq: number;
+  entityCount: number;
+  staged: number;
+  status: "staging" | "committed";
+}
 
 export interface FakeServerOptions {
   repositoryId: string;
@@ -123,6 +159,11 @@ export class FakeSyncServer {
   readonly calls: string[] = [];
   /** Set to make the next N matching requests fail transiently. */
   failNext: { route: string; times: number; status: number; code: string } | null = null;
+
+  /** The server-side half of the third consent. Off until something turns it on. */
+  backupEnabled = false;
+  readonly backups: FakeBackup[] = [];
+  readonly restores: FakeRestore[] = [];
 
   private readonly devices: Device[] = [];
   private readonly options: Required<FakeServerOptions>;
@@ -240,6 +281,58 @@ export class FakeSyncServer {
     }
     if (tail === "/ops" && method === "GET") return this.pull(session, url);
     if (tail === "/snapshot" && method === "GET") return this.snapshot(session, url);
+
+    // Backup, restore and purge. Modelled on worker/src/backups.ts, including the
+    // property that matters most: a restore MATERIALISES the backup into the new
+    // epoch rather than only bumping it. A fake that merely bumped would let a
+    // bump-only client pass, which is the one bug these tests exist to catch.
+    if (tail === "/backup" && method === "PUT") {
+      const parsed = JSON.parse(String(body)) as { enabled?: unknown };
+      if (typeof parsed.enabled !== "boolean") {
+        throw new ServerError(400, "validation", "enabled must be a boolean");
+      }
+      this.backupEnabled = parsed.enabled;
+      return this.json(200, { protocol: 1, backupEnabled: this.backupEnabled });
+    }
+    if (tail === "/backups" && method === "POST") {
+      this.assertBackupConsent();
+      return this.json(200, { protocol: 1, backup: this.captureBackup(session.deviceId, "manual") });
+    }
+    if (tail === "/backups" && method === "GET") {
+      this.assertBackupConsent();
+      return this.json(200, {
+        protocol: 1,
+        epoch: this.epoch,
+        backups: [...this.backups]
+          .sort((a, b) => b.createdAt - a.createdAt)
+          .map((backup) => this.describeBackup(backup)),
+      });
+    }
+    const backupMatch = /^\/backups\/([^/]+)(\/restore)?$/.exec(tail);
+    if (backupMatch && !backupMatch[2] && method === "DELETE") {
+      this.assertBackupConsent();
+      const id = decodeURIComponent(backupMatch[1]!);
+      const index = this.backups.findIndex((backup) => backup.backupId === id);
+      if (index < 0) throw new ServerError(404, "not_found", "no such backup");
+      this.backups.splice(index, 1);
+      return this.json(200, { protocol: 1, backupId: id, deleted: true });
+    }
+    if (backupMatch && backupMatch[2] && method === "POST") {
+      this.assertBackupConsent();
+      return this.restore(
+        session,
+        decodeURIComponent(backupMatch[1]!),
+        JSON.parse(String(body)) as Record<string, unknown>,
+      );
+    }
+    if (tail === "" && method === "DELETE") {
+      this.ops.length = 0;
+      this.backups.length = 0;
+      this.restores.length = 0;
+      this.devices.length = 0;
+      return this.json(200, { protocol: 1, purged: true });
+    }
+
     if (tail === "/devices" && method === "GET") {
       return this.json(200, {
         devices: this.devices.map((device) => ({
@@ -660,6 +753,218 @@ export class FakeSyncServer {
           )
         : null,
       hasMore,
+    });
+  }
+
+  // --------------------------------------------------------- backup, restore
+
+  private assertBackupConsent(): void {
+    if (!this.backupEnabled) {
+      throw new ServerError(403, "forbidden", "backup is not enabled for this repository");
+    }
+  }
+
+  /** The same fold `snapshot` computes, plus the verb, pinned at the watermark. */
+  private foldForBackup(): { entities: FoldedEntity[]; opCount: number; schemaVersion: number } {
+    const folded = new Map<string, FoldedEntity>();
+    let opCount = 0;
+    let schemaVersion = 0;
+
+    for (const op of this.ops
+      .filter((candidate) => candidate.epoch === this.epoch && candidate.seq <= this.lastSeq)
+      .sort((a, b) => a.seq - b.seq)) {
+      opCount += 1;
+      if (op.schema > schemaVersion) schemaVersion = op.schema;
+
+      const key = `${op.entity} ${op.entityId}`;
+      let entry = folded.get(key);
+      if (!entry) {
+        entry = {
+          entity: op.entity,
+          entityId: op.entityId,
+          version: 0,
+          deletedAt: null,
+          lastSeq: op.seq,
+          superseded: false,
+          state: {},
+        };
+        folded.set(key, entry);
+      }
+      entry.version += 1;
+      entry.lastSeq = op.seq;
+      if (op.verb === "delete") {
+        entry.deletedAt = op.serverTs;
+        continue;
+      }
+      if (entry.deletedAt !== null) continue;
+      if (op.verb === "replace") {
+        entry.state = { replaced: op.payload } as Record<string, unknown>;
+        entry.superseded = true;
+      } else if (op.payload !== null && typeof op.payload === "object" && !Array.isArray(op.payload)) {
+        Object.assign(entry.state, op.payload as Record<string, unknown>);
+        entry.superseded = false;
+      }
+    }
+
+    const entities = [...folded.values()].sort((a, b) =>
+      `${a.entity} ${a.entityId}` < `${b.entity} ${b.entityId}` ? -1 : 1,
+    );
+    return { entities, opCount, schemaVersion };
+  }
+
+  private captureBackup(deviceId: string, kind: "manual" | "pre-restore"): Record<string, unknown> {
+    const folded = this.foldForBackup();
+    const backup: FakeBackup = {
+      backupId: `backup-${this.backups.length + 1}`,
+      epoch: this.epoch,
+      cutoffSeq: this.lastSeq,
+      entityCount: folded.entities.length,
+      opCount: folded.opCount,
+      schemaVersion: folded.schemaVersion,
+      protocol: 1,
+      kind,
+      createdAt: Date.now() + this.backups.length,
+      createdByDevice: deviceId,
+      entities: folded.entities,
+    };
+    this.backups.push(backup);
+    return this.describeBackup(backup);
+  }
+
+  private describeBackup(backup: FakeBackup): Record<string, unknown> {
+    const { entities: _entities, ...metadata } = backup;
+    return metadata;
+  }
+
+  /**
+   * The resumable restore, with the property under test: it MATERIALISES.
+   *
+   * Staged operations are written with `epoch = toEpoch` while the server is still
+   * on `fromEpoch`, so — exactly as in the real Worker — no pull and no snapshot
+   * can see them until the flip, because both filter on the current epoch.
+   */
+  private restore(
+    session: { repoId: string; deviceId: string },
+    backupId: string,
+    body: Record<string, unknown>,
+  ): Response {
+    if (body.confirm !== this.options.repositoryId) {
+      throw new ServerError(400, "validation", "restore requires the repository id in `confirm`");
+    }
+
+    const backup = this.backups.find((candidate) => candidate.backupId === backupId);
+    if (!backup) throw new ServerError(404, "not_found", "no such backup");
+
+    let restore = this.restores.find((candidate) => candidate.restoreId === body.restoreId);
+    if (body.restoreId === undefined) {
+      if (this.restores.some((candidate) => candidate.status === "staging")) {
+        throw new ServerError(409, "conflict", "a restore is already in flight");
+      }
+      const undo = this.captureBackup(session.deviceId, "pre-restore");
+      restore = {
+        restoreId: `restore-${this.restores.length + 1}`,
+        backupId,
+        preRestoreBackupId: String(undo.backupId),
+        fromEpoch: this.epoch,
+        toEpoch: this.epoch + 1,
+        guardSeq: this.lastSeq,
+        entityCount: backup.entityCount,
+        staged: 0,
+        status: "staging",
+      };
+      this.restores.push(restore);
+      return this.json(200, {
+        protocol: 1,
+        restoreId: restore.restoreId,
+        status: "staging",
+        done: false,
+        fromEpoch: restore.fromEpoch,
+        toEpoch: restore.toEpoch,
+        entityCount: restore.entityCount,
+        staged: 0,
+        preRestoreBackupId: restore.preRestoreBackupId,
+      });
+    }
+
+    if (!restore) throw new ServerError(404, "not_found", "no such restore");
+    if (restore.status === "committed") {
+      return this.json(200, {
+        protocol: 1,
+        restoreId: restore.restoreId,
+        status: "committed",
+        done: true,
+        epoch: restore.toEpoch,
+        toEpoch: restore.toEpoch,
+        entityCount: restore.entityCount,
+        staged: restore.entityCount,
+      });
+    }
+
+    if (restore.staged < restore.entityCount) {
+      const chunk = backup.entities.slice(
+        restore.staged,
+        restore.staged + this.options.maxBatchSize,
+      );
+      for (const entity of chunk) {
+        this.lastSeq += 1;
+        const verb = entity.deletedAt !== null ? "delete" : entity.superseded ? "replace" : "create";
+        const payload =
+          entity.deletedAt !== null
+            ? {}
+            : entity.superseded
+              ? (entity.state.replaced as Record<string, unknown>)
+              : entity.state;
+        this.ops.push({
+          seq: this.lastSeq,
+          epoch: restore.toEpoch,
+          opId: `restore-${restore.restoreId}-${entity.entity} ${entity.entityId}`,
+          deviceId: session.deviceId,
+          entity: entity.entity,
+          entityId: entity.entityId,
+          verb,
+          baseVersion: verb === "create" ? null : 0,
+          payload,
+          actor: `restore:${restore.restoreId}`,
+          clientSeq: restore.staged + 1,
+          schema: backup.schemaVersion,
+          createdAt: new Date().toISOString(),
+          serverTs: Date.now(),
+        });
+        restore.staged += 1;
+      }
+      return this.json(200, {
+        protocol: 1,
+        restoreId: restore.restoreId,
+        status: "staging",
+        done: false,
+        fromEpoch: restore.fromEpoch,
+        toEpoch: restore.toEpoch,
+        entityCount: restore.entityCount,
+        staged: restore.staged,
+      });
+    }
+
+    // Commit. Refuse over work that landed in the old epoch after we began: it is
+    // in neither the backup nor the pre-restore fold.
+    const intruder = this.ops.find(
+      (op) => op.epoch === restore.fromEpoch && op.seq > restore.guardSeq,
+    );
+    if (intruder) {
+      throw new ServerError(409, "conflict", "operations landed after this restore began");
+    }
+    this.epoch = restore.toEpoch;
+    restore.status = "committed";
+    return this.json(200, {
+      protocol: 1,
+      restoreId: restore.restoreId,
+      status: "committed",
+      done: true,
+      fromEpoch: restore.fromEpoch,
+      toEpoch: restore.toEpoch,
+      epoch: restore.toEpoch,
+      entityCount: restore.entityCount,
+      staged: restore.entityCount,
+      preRestoreBackupId: restore.preRestoreBackupId,
     });
   }
 

@@ -141,7 +141,14 @@ export function cloudCodeOf(error: unknown): CloudErrorCode | null {
   return isCloudErrorCode(code) ? code : null;
 }
 
-function cloudError(
+/**
+ * Exported so that a client-side refusal carries the SAME shape as a server-side
+ * one. The backup lane refuses two things before it ever makes a request — a
+ * backup written by a newer schema (`schema_ahead`) and a command run without the
+ * third consent (`forbidden`) — and a caller reading `detail.cloudCode` should
+ * not have to know which side of the wire decided.
+ */
+export function cloudError(
   code: CloudErrorCode,
   message: string,
   detail: Record<string, unknown> = {},
@@ -567,18 +574,22 @@ export function releaseRemoteLease(
 /**
  * `DELETE /v1/repos/{repoId}` — destroy the repository's remote state.
  *
- * DIVERGENCE, and the significant one in this lane: **the deployed Worker does
- * not implement this route.** `worker/README.md` says so explicitly — purge
- * belongs to the restore lane, "and implementing them without the retention and
- * confirmation semantics that lane owns would be worse than not having them".
- * The Worker's router therefore answers `not_found` for it.
+ * HISTORY, because the comment that used to be here said the opposite and it
+ * matters that the change is visible. This route did not exist when the connect
+ * lane wrote this function: `worker/README.md` assigned purge to the restore
+ * lane, the Worker's router answered `not_found`, and `performPurge` translated
+ * that into `unsupported` so that nobody was told their data had been destroyed
+ * when it had not.
  *
- * The client half is implemented anyway, and the command's gating — a separate
- * name, a typed confirmation, a retention disclosure printed first — is real and
- * tested, because that gating is the part this lane owns. What the command must
- * not do is *report success*: when the route is absent, `staple cloud purge`
- * says the remote state was NOT purged and leaves the local credential in place,
- * so nobody walks away believing their data was deleted when it was not.
+ * **The route now exists** — `worker/src/backups.ts`, `purgeRepository`. It
+ * deletes the operation log, the leases, the backups, the restore audit rows,
+ * the repository row and finally the device credentials, in that order.
+ *
+ * FOLLOW-UP, deliberately not taken here. `performPurge` still maps `not_found`
+ * to `unsupported`, and with the route present that mapping has changed meaning:
+ * a `not_found` now describes a repository the server genuinely does not have,
+ * not a server that cannot purge. Rewording it is the connect lane's decision to
+ * make and is left alone rather than quietly changed underneath it.
  */
 export function purgeRemoteRepository(
   endpoint: CloudEndpoint,
@@ -592,5 +603,141 @@ export function purgeRemoteRepository(
     method: "DELETE",
     token: args.token,
     deviceId: args.deviceId,
+  });
+}
+
+// ------------------------------------------------------------------- backups
+//
+// Backup is a THIRD consent and none of these calls is reachable until it has
+// been given. Not one of them takes a cursor, returns a cursor, or reads one —
+// which is the wire-level shape of "creating, retaining or deleting a backup
+// does not change convergence state".
+
+export interface RemoteBackup {
+  backupId: string;
+  epoch: number;
+  cutoffSeq: number;
+  entityCount: number;
+  opCount: number;
+  schemaVersion: number;
+  protocol: number;
+  /** `manual` for one a human took; `pre-restore` for the undo a restore takes. */
+  kind: string;
+  createdAt: number;
+  createdByDevice: string;
+}
+
+/** `PUT /v1/repos/{repoId}/backup` — the server-side half of the third consent. */
+export function setRemoteBackupConsent(
+  endpoint: CloudEndpoint,
+  args: RepoCall & { enabled: boolean },
+  options: RequestOptions = {},
+): Promise<{ backupEnabled: boolean }> {
+  return request({
+    ...options,
+    endpoint,
+    path: `/v1/repos/${encodeURIComponent(args.repositoryId)}/backup`,
+    method: "PUT",
+    token: args.token,
+    deviceId: args.deviceId,
+    body: { enabled: args.enabled },
+  });
+}
+
+/** `POST /v1/repos/{repoId}/backups` — take a point-in-time fold. */
+export function createRemoteBackup(
+  endpoint: CloudEndpoint,
+  args: RepoCall & { label: string | null },
+  options: RequestOptions = {},
+): Promise<{ backup: RemoteBackup }> {
+  return request({
+    ...options,
+    endpoint,
+    path: `/v1/repos/${encodeURIComponent(args.repositoryId)}/backups`,
+    method: "POST",
+    token: args.token,
+    deviceId: args.deviceId,
+    body: { label: args.label },
+  });
+}
+
+/** `GET /v1/repos/{repoId}/backups` — metadata only; never the folded contents. */
+export function listRemoteBackups(
+  endpoint: CloudEndpoint,
+  args: RepoCall,
+  options: RequestOptions = {},
+): Promise<{ epoch: number; backups: RemoteBackup[] }> {
+  return request({
+    ...options,
+    endpoint,
+    path: `/v1/repos/${encodeURIComponent(args.repositoryId)}/backups`,
+    method: "GET",
+    token: args.token,
+    deviceId: args.deviceId,
+  });
+}
+
+/** `DELETE /v1/repos/{repoId}/backups/{backupId}` — retention, one row at a time. */
+export function deleteRemoteBackup(
+  endpoint: CloudEndpoint,
+  args: RepoCall & { backupId: string },
+  options: RequestOptions = {},
+): Promise<{ deleted: boolean }> {
+  return request({
+    ...options,
+    endpoint,
+    path:
+      `/v1/repos/${encodeURIComponent(args.repositoryId)}` +
+      `/backups/${encodeURIComponent(args.backupId)}`,
+    method: "DELETE",
+    token: args.token,
+    deviceId: args.deviceId,
+  });
+}
+
+/** One turn of the resumable restore. */
+export interface RestoreProgress {
+  restoreId: string;
+  status: string;
+  done: boolean;
+  fromEpoch?: number;
+  toEpoch?: number;
+  epoch?: number;
+  entityCount: number;
+  staged: number;
+  preRestoreBackupId?: string;
+}
+
+/**
+ * `POST /v1/repos/{repoId}/backups/{backupId}/restore` — one turn.
+ *
+ * Resumable by design, and called in a loop until `done`. The first turn omits
+ * `restoreId` and the server allocates one; every later turn passes the one it
+ * was given back. `confirm` carries the repository id on EVERY turn, so a loop
+ * that somehow escaped its command still cannot advance a restore against a
+ * repository it was not told the id of.
+ *
+ * Why a loop rather than one call: staging N entities costs N+1 D1 queries
+ * against a free-plan ceiling of 50, so a single-shot restore would work on a
+ * demonstration repository and fail permanently on a real one.
+ */
+export function advanceRemoteRestore(
+  endpoint: CloudEndpoint,
+  args: RepoCall & { backupId: string; restoreId: string | null; actor: string | null },
+  options: RequestOptions = {},
+): Promise<RestoreProgress> {
+  const body: Record<string, unknown> = { confirm: args.repositoryId };
+  if (args.restoreId !== null) body.restoreId = args.restoreId;
+  if (args.actor !== null) body.actor = args.actor;
+  return request({
+    ...options,
+    endpoint,
+    path:
+      `/v1/repos/${encodeURIComponent(args.repositoryId)}` +
+      `/backups/${encodeURIComponent(args.backupId)}/restore`,
+    method: "POST",
+    token: args.token,
+    deviceId: args.deviceId,
+    body,
   });
 }

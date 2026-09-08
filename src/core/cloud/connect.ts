@@ -191,7 +191,16 @@ interface RemoteSession {
   token: string;
 }
 
-function requireSession(home: string, repositoryId: string, options: SelectOptions = {}): RemoteSession {
+/**
+ * Exported for the backup lane, which needs exactly this — a connection record
+ * plus the credential it names — and must not grow a second, subtly different
+ * copy of the two failure messages below.
+ */
+export function requireSession(
+  home: string,
+  repositoryId: string,
+  options: SelectOptions = {},
+): RemoteSession {
   const connection = readConnection(home, repositoryId);
   if (!connection) {
     throw new StapleError(
