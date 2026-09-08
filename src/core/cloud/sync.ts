@@ -134,7 +134,13 @@ const RETRYABLE: ReadonlySet<CloudErrorCode> = new Set(["rate_limited", "unavail
 const sleepDefault = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
-interface Session {
+/**
+ * Exported for the lease client, which needs exactly the same three local files
+ * resolved in exactly the same order. Duplicating {@link openSession} there
+ * would mean two implementations of "the credential is missing" to keep in
+ * agreement, and the one that drifted would be the one nobody was reading.
+ */
+export interface Session {
   readonly repositoryId: string;
   readonly token: string;
   readonly deviceId: string;
@@ -149,7 +155,7 @@ interface Session {
  * record is `not_found` rather than a prompt: connecting is a separate consent
  * and `sync` does not get to spend it.
  */
-function openSession(home: string, repositoryId: string): Session {
+export function openSession(home: string, repositoryId: string): Session {
   const connection = readConnection(home, repositoryId);
   if (!connection) {
     throw new StapleError(

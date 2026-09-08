@@ -312,17 +312,15 @@ export function applyToDatabase(db: DatabaseSync, input: ApplyInput): boolean {
     case "queue":
       return applyQueue(db, input);
     case "lease":
+      return applyLease(db, input);
     case "conflict":
       /**
        * Not applied by this build, and not an error either.
        *
-       * Nothing in the tree journals either entity yet — leases belong to the
-       * distributed-claim lane and conflict resolutions to the conflict lane —
-       * so this branch is currently unreachable from any device running this
-       * code. It is a no-op rather than a throw so that a future device pushing
-       * one cannot stall an older device's whole page; the older device simply
-       * has no lease table entries to show, which is the same position it is in
-       * today.
+       * Nothing in the tree journals a conflict resolution yet — that belongs to
+       * the conflict lane — so this branch is currently unreachable from any
+       * device running this code. It is a no-op rather than a throw so that a
+       * future device pushing one cannot stall an older device's whole page.
        */
       return false;
     default:
@@ -941,6 +939,109 @@ function applyQueue(db: DatabaseSync, input: ApplyInput): boolean {
     `INSERT INTO meta (key, value) VALUES ('queue_revision', '1')
      ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT)`,
   ).run();
+  return true;
+}
+
+// -------------------------------------------------------------------- leases
+
+/**
+ * A pulled lease operation, projected onto the checkout model.
+ *
+ * *"Pulled lease operations project deterministically onto `checkout_agent` and
+ * `checkout_at`, so `ls`, `show` and `inbox` keep rendering the fields they
+ * already render; the token and the server expiry live in the sync tables, not
+ * in new `issues` columns."*
+ *
+ * ## Deterministic means "a function of the operations, and of nothing else"
+ *
+ * Not of the clock, and not of arrival order. Every decision below is a
+ * comparison of fencing tokens, which are allocated by one counter on one server
+ * and are therefore totally ordered no matter which device is reading them. Two
+ * machines that apply the same operations reach the same two columns, whatever
+ * order the pages arrived in and whatever their clocks say.
+ *
+ * `expires_at` is written and never read. Nothing here — nothing anywhere in the
+ * client — decides that a lease has ended by looking at a timestamp. Expiry is
+ * the server's, and the way that stays true is that the client has no code that
+ * could make the other choice.
+ *
+ * ## Why a delete names its holder
+ *
+ * A release that arrives after a takeover must not free work the new holder is
+ * doing. The tombstone-shaped instinct — "delete means gone" — is wrong for a
+ * lease, because a lease is a claim on a slot that somebody else may now own.
+ * So a delete clears the checkout only when the holder it names is still the
+ * holder, and its fencing token is not older than the row it is trying to clear.
+ */
+function applyLease(db: DatabaseSync, input: ApplyInput): boolean {
+  if (!issueExists(db, input.entityId)) {
+    throw new ReferentMissing(`issue ${input.entityId} (subject of a lease)`);
+  }
+
+  const payload = input.payload;
+  const incoming = typeof payload.fencingToken === "number" ? payload.fencingToken : null;
+  const holder = typeof payload.holder === "string" ? payload.holder : input.actor;
+  const existing = db
+    .prepare("SELECT fencing_token AS token, holder FROM sync_leases WHERE entity_id = ?")
+    .get(input.entityId) as { token: number; holder: string } | undefined;
+
+  if (input.verb === "delete") {
+    /**
+     * Stale on either axis is ignored: an older token, or a holder who is no
+     * longer the one recorded. Both describe a release for a lease generation
+     * that has already been superseded, and acting on either would hand a
+     * running agent's work back to the pool.
+     */
+    if (existing && incoming !== null && incoming < existing.token) return false;
+    if (existing && holder !== null && existing.holder !== holder) return false;
+
+    db.prepare("DELETE FROM sync_leases WHERE entity_id = ?").run(input.entityId);
+    db.prepare(
+      `UPDATE issues SET checkout_agent = NULL, checkout_at = NULL, updated_at = ?
+        WHERE id = ? AND checkout_agent = ?`,
+    ).run(input.at, input.entityId, holder);
+    return true;
+  }
+
+  if (incoming === null || holder === null) return false;
+  // A create or an update carrying a superseded token is a replay. Keeping the
+  // newer row is the whole reason the mirror is fenced as well as the server.
+  if (existing && incoming < existing.token) return false;
+
+  const serverExpiresAt =
+    typeof payload.serverExpiresAt === "string" ? payload.serverExpiresAt : null;
+  if (serverExpiresAt === null) return false;
+  const acquiredAt = typeof payload.acquiredAt === "string" ? payload.acquiredAt : input.at;
+  const renewedAt = typeof payload.renewedAt === "string" ? payload.renewedAt : null;
+  const deviceId = typeof payload.deviceId === "string" ? payload.deviceId : input.deviceId;
+
+  db.prepare(
+    `INSERT INTO sync_leases
+       (entity_id, fencing_token, holder, device_id, server_expires_at, acquired_at, renewed_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT (entity_id) DO UPDATE SET
+       fencing_token     = excluded.fencing_token,
+       holder            = excluded.holder,
+       device_id         = excluded.device_id,
+       server_expires_at = excluded.server_expires_at,
+       acquired_at       = excluded.acquired_at,
+       renewed_at        = excluded.renewed_at`,
+  ).run(input.entityId, incoming, holder, deviceId, serverExpiresAt, acquiredAt, renewedAt);
+
+  /**
+   * The projection. `acquired_at` and not `input.at`: the checkout time a human
+   * reads should be when the lease was granted, by the clock that granted it,
+   * not when the operation happened to be journaled on the far machine.
+   *
+   * A renewal moves nothing here. It extends an expiry that no local surface
+   * renders and that no local decision reads; rewriting `checkout_at` on every
+   * beat would make an issue's age reset every thirty seconds.
+   */
+  if (input.verb === "create") {
+    db.prepare(
+      "UPDATE issues SET checkout_agent = ?, checkout_at = ?, updated_at = ? WHERE id = ?",
+    ).run(holder, acquiredAt, input.at, input.entityId);
+  }
   return true;
 }
 

@@ -245,7 +245,24 @@ async function request<T>(call: Call): Promise<T> {
     // to `local + 1`, which is right only when exactly one restore happened.
     // *"Where they disagree the Worker wins."* Both names are read so a service
     // that uses either is understood.
-    for (const key of ["min", "max", "epoch", "currentEpoch", "maxBytes", "bytes"]) {
+    //
+    // `entityId`, `holder`, `expiresAt` and `currentFencingToken` are the lease
+    // routes' extras. The loser of a race is told WHO won and until when, which
+    // is the difference between "pick another task" and "pick another task, and
+    // here is who to chase if you think that is wrong". Dropping them would have
+    // left a non-retryable conflict with nothing actionable in it.
+    for (const key of [
+      "min",
+      "max",
+      "epoch",
+      "currentEpoch",
+      "maxBytes",
+      "bytes",
+      "entityId",
+      "holder",
+      "expiresAt",
+      "currentFencingToken",
+    ]) {
       if (body[key] !== undefined) detail[key] = body[key];
     }
     const retryAfter = response.headers.get("retry-after");
@@ -445,6 +462,105 @@ export function fetchSnapshotPage(
     method: "GET",
     token: args.token,
     deviceId: args.deviceId,
+  });
+}
+
+/**
+ * One lease, as the Worker returns it.
+ *
+ * Every time here is absolute SERVER time in epoch milliseconds. A client asks
+ * for a `ttlSeconds` and gets told an `expiresAt`; it never proposes one, and it
+ * never derives one. *"Client clocks have no authority over expiry."*
+ */
+export interface RemoteLease {
+  readonly entityId: string;
+  readonly fencingToken: number;
+  readonly holder: string;
+  readonly deviceId: string;
+  readonly acquiredAt: number;
+  readonly renewedAt: number;
+  readonly expiresAt: number;
+}
+
+/**
+ * `POST /v1/repos/{repoId}/leases` — take the lease on one entity.
+ *
+ * A `conflict` here is the losing side of a race and is NOT retryable: the
+ * server is telling this device that somebody else legitimately holds the lease,
+ * and asking again is a spin against a fact. `RETRYABLE` above already omits it;
+ * this comment exists so nobody adds it.
+ *
+ * `ttlSeconds` is omitted rather than defaulted client-side when the caller has
+ * no opinion, so the service's default is the one that applies. A client that
+ * mirrored the default would have to be redeployed to follow a change in it.
+ */
+export function acquireRemoteLease(
+  endpoint: CloudEndpoint,
+  args: RepoCall & { entityId: string; holder: string; ttlSeconds?: number },
+  options: RequestOptions = {},
+): Promise<{ protocol: number; lease: RemoteLease }> {
+  const body: Record<string, unknown> = { entityId: args.entityId, holder: args.holder };
+  if (args.ttlSeconds !== undefined) body.ttlSeconds = args.ttlSeconds;
+  return request({
+    ...options,
+    endpoint,
+    path: `/v1/repos/${encodeURIComponent(args.repositoryId)}/leases`,
+    method: "POST",
+    token: args.token,
+    deviceId: args.deviceId,
+    body,
+  });
+}
+
+/**
+ * `POST /v1/repos/{repoId}/leases/{entityId}/renew` — the heartbeat.
+ *
+ * The fencing token is the whole request. One server-side predicate covers every
+ * way a renewal can be illegitimate — wrong token because it was superseded,
+ * wrong device because it is somebody else's lease, or already expired — so this
+ * client does not pre-check any of them. Pre-checking would mean deciding
+ * locally what only the server can know, and getting it wrong in the direction
+ * that matters.
+ */
+export function renewRemoteLease(
+  endpoint: CloudEndpoint,
+  args: RepoCall & { entityId: string; fencingToken: number; ttlSeconds?: number },
+  options: RequestOptions = {},
+): Promise<{ protocol: number; lease: RemoteLease }> {
+  const body: Record<string, unknown> = { fencingToken: args.fencingToken };
+  if (args.ttlSeconds !== undefined) body.ttlSeconds = args.ttlSeconds;
+  return request({
+    ...options,
+    endpoint,
+    path: `/v1/repos/${encodeURIComponent(args.repositoryId)}/leases/${encodeURIComponent(args.entityId)}/renew`,
+    method: "POST",
+    token: args.token,
+    deviceId: args.deviceId,
+    body,
+  });
+}
+
+/**
+ * `DELETE /v1/repos/{repoId}/leases/{entityId}` — release, presenting the token.
+ *
+ * A DELETE with a body, because that is what the deployed Worker reads, and
+ * *"where they disagree the Worker wins"*. The body-size cap the service applies
+ * to POST/PUT/PATCH does not apply here, but `Content-Length` is still set by
+ * `request` for every body, so nothing about this call is special-cased.
+ */
+export function releaseRemoteLease(
+  endpoint: CloudEndpoint,
+  args: RepoCall & { entityId: string; fencingToken: number },
+  options: RequestOptions = {},
+): Promise<{ protocol: number; released: boolean; entityId: string }> {
+  return request({
+    ...options,
+    endpoint,
+    path: `/v1/repos/${encodeURIComponent(args.repositoryId)}/leases/${encodeURIComponent(args.entityId)}`,
+    method: "DELETE",
+    token: args.token,
+    deviceId: args.deviceId,
+    body: { fencingToken: args.fencingToken },
   });
 }
 

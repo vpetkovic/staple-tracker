@@ -30,6 +30,7 @@
  * its own runner and is not collected here.
  */
 import { spawnSync } from "node:child_process";
+import { DatabaseSync } from "node:sqlite";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -243,6 +244,22 @@ const DISCONNECTED_SCENARIOS: Array<[name: string, args: string[]]> = [
    */
   ["cloud sync", ["cloud", "sync"]],
   ["cloud sync --json", ["cloud", "sync", "--json"]],
+  /**
+   * `cloud lease status` reads the mirror and the connection record and is
+   * silent on both sides of the wire, connected or not.
+   *
+   * `cloud lease acquire` is the interesting one. On a DISCONNECTED repository
+   * it must succeed — offline acquisition is allowed, because refusing to work
+   * without a network would be a worse tracker — and it must do so without
+   * resolving an endpoint or reading a credential, because there is neither.
+   * A version of it that resolved the connection after taking the lease, or
+   * that probed to decide which path to take, would break the invariant in the
+   * exact place nobody would look for it.
+   */
+  ["cloud lease", ["cloud", "lease"]],
+  ["cloud lease status --json", ["cloud", "lease", "status", "--json"]],
+  ["cloud lease acquire", ["cloud", "lease", "acquire", "NET-1", "--agent", "netsilence"]],
+  ["cloud lease release", ["cloud", "lease", "release", "NET-1"]],
 ];
 
 describe("disconnected: every ordinary command makes zero outbound calls", () => {
@@ -333,6 +350,32 @@ describe("connected in manual mode: still zero", () => {
       }),
       { mode: 0o600 },
     );
+
+    /**
+     * A lease this device holds, written straight into the mirror.
+     *
+     * Acquiring one for real would need a service, and this suite is about what
+     * happens when there ISN'T one being talked to — the same reasoning as the
+     * forged connection above. The row is what makes the everyday-verb
+     * assertions below meaningful: without it, "checkout made no call" could be
+     * true simply because there was no lease to consult.
+     */
+    const db = new DatabaseSync(dbPath);
+    try {
+      const issue = db.prepare("SELECT id FROM issues WHERE identifier = 'NET-1'").get() as
+        | { id: string }
+        | undefined;
+      if (issue) {
+        db.prepare(
+          `INSERT INTO sync_leases
+             (entity_id, fencing_token, holder, device_id, server_expires_at, acquired_at, renewed_at)
+           VALUES (?, 1, 'netsilence', '11111111-2222-3333-4444-555555555555', ?, ?, NULL)
+           ON CONFLICT (entity_id) DO NOTHING`,
+        ).run(issue.id, "2099-01-01T00:00:00.000Z", "2026-09-08T00:00:00.000Z");
+      }
+    } finally {
+      db.close();
+    }
   });
 
   for (const [name, args] of [
@@ -346,6 +389,17 @@ describe("connected in manual mode: still zero", () => {
     ["cloud status --json", ["cloud", "status", "--json"]],
     ["cloud auto on", ["cloud", "auto", "on"]],
     ["cloud auto off", ["cloud", "auto", "off"]],
+    /**
+     * The everyday verbs, on a repository that is connected AND on which this
+     * device holds a lease (the mirror row is seeded below). This is the
+     * assertion the lease lane most needs: *"Do not make local checkout depend
+     * on a lease being reachable — that would put a network call on an everyday
+     * verb"*. A `checkout` that validated the lease, or a `done` that released
+     * it, would show up right here.
+     */
+    ["done", ["done", "NET-1"]],
+    ["cloud lease status", ["cloud", "lease", "status"]],
+    ["cloud lease status --json", ["cloud", "lease", "status", "--json"]],
   ] as Array<[string, string[]]>) {
     it(`${name} on a CONNECTED repository attempts no network call`, () => {
       const result = staple(args);
