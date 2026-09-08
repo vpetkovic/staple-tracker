@@ -227,6 +227,71 @@ export interface CompactionResult {
   readonly outboxPruned: number;
   /** Applied-ledger rows removed. */
   readonly appliedPruned: number;
+  /** Field-write provenance removed, for tombstoned entities only. */
+  readonly fieldWritesPruned: number;
+}
+
+/** One entity's fields, written by whichever device made the write. */
+export interface FieldWriteRecord {
+  readonly entity: string;
+  readonly entityId: string;
+  readonly fields: readonly string[];
+  /** The entity version this write moved OFF — `sync_outbox.base_version`. */
+  readonly baseVersion: number;
+  readonly opId: string | null;
+  readonly deviceId: string | null;
+  readonly at: string;
+}
+
+/**
+ * Record who last wrote which fields of which entity, and at what version.
+ *
+ * The evidence conflict detection runs on, and the reason it is here rather than
+ * beside the detection: **both** paths that can change a field have to leave it.
+ * A locally journaled mutation writes it in {@link Journal.flush}; an applied
+ * remote operation writes it from the apply path, which is what closes the relay
+ * hole — a device that applied another device's `title` had no record it held a
+ * `title` anybody had chosen, and handed it over to the next stale write in
+ * silence.
+ *
+ * Only the newest write per field is kept. That is not a compromise for space:
+ * detection asks whether *any* write of this field happened at
+ * `base_version >= X`, and since `base_version` rises with every operation on the
+ * entity, the newest write answers that question exactly. Keeping only it is what
+ * bounds the table by live data rather than by history — and a table that never
+ * grows with history is a table nothing has to prune on a timer, which is the
+ * whole point. The outbox failed here because it is a queue, and a queue is
+ * emptied.
+ *
+ * The `WHERE` on the upsert is a monotonicity guard: operations can arrive out of
+ * order (a deferred referent, a replayed page), and an older write must never
+ * rewind a newer one's version. `>=` rather than `>` so that a re-delivery of the
+ * newest write refreshes its attribution rather than being ignored.
+ */
+export function recordFieldWrites(db: DatabaseSync, record: FieldWriteRecord): void {
+  if (record.fields.length === 0) return;
+  const insert = db.prepare(
+    `INSERT INTO sync_field_writes
+       (entity, entity_id, field, base_version, op_id, device_id, written_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT (entity, entity_id, field) DO UPDATE SET
+       base_version = excluded.base_version,
+       op_id        = excluded.op_id,
+       device_id    = excluded.device_id,
+       written_at   = excluded.written_at
+      WHERE excluded.base_version >= sync_field_writes.base_version`,
+  );
+  for (const field of record.fields) {
+    insert.run(
+      record.entity,
+      record.entityId,
+      field,
+      record.baseVersion,
+      record.opId,
+      record.deviceId,
+      record.at,
+    );
+  }
 }
 
 export class Journal {
@@ -398,6 +463,31 @@ export class Journal {
           intent.actor ?? null,
           createdAt,
         );
+
+      /**
+       * The same fields again, in the one place that outlives the outbox.
+       *
+       * Not a duplicate of the row above: the outbox is a queue and is emptied
+       * by {@link compact} the moment the server acknowledges, while conflict
+       * detection has to be able to say "I have written this field since the
+       * version you claim" for as long as the value stands. Reading that off a
+       * queue was the defect — a device stopped being able to defend its own
+       * edit as soon as routine housekeeping ran.
+       *
+       * A `create` is skipped because it carries no base version and was never
+       * one of "the operations in between".
+       */
+      if (intent.verb !== "create") {
+        recordFieldWrites(this.db, {
+          entity: intent.entity,
+          entityId: intent.entityId,
+          fields: Object.keys(intent.payload),
+          baseVersion,
+          opId,
+          deviceId: this.deviceId,
+          at: createdAt,
+        });
+      }
     }
   }
 
@@ -476,9 +566,34 @@ export class Journal {
       const applied = this.db
         .prepare("DELETE FROM sync_applied WHERE applied_at < ?")
         .run(before);
+      /**
+       * Field-write provenance is NOT pruned on the horizon, and that is the
+       * point of the table. It is bounded by live entities rather than by
+       * history, so it never needs to be — and the moment it were, detection
+       * would expire with housekeeping again.
+       *
+       * The one exception is not an exception to that rule. An entity with a
+       * tombstone cannot be contested at all: *"an `update` for a tombstoned
+       * entity is a no-op regardless of arrival order"*, so its provenance can
+       * never be the evidence for any conflict, and keeping it would be keeping
+       * rows about something that no longer exists. Deleting them cannot change
+       * what the repository converges to, which is the bar compaction has to
+       * clear.
+       */
+      const fields = this.db
+        .prepare(
+          `DELETE FROM sync_field_writes
+             WHERE EXISTS (
+               SELECT 1 FROM sync_tombstones t
+                WHERE t.entity = sync_field_writes.entity
+                  AND t.entity_id = sync_field_writes.entity_id
+             )`,
+        )
+        .run();
       return {
         outboxPruned: Number(outbox.changes),
         appliedPruned: Number(applied.changes),
+        fieldWritesPruned: Number(fields.changes),
       };
     });
   }

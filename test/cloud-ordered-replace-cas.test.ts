@@ -287,13 +287,32 @@ describe("two devices reorder the same plan offline", () => {
     expect(open(a)).toHaveLength(1);
     expect(open(a)[0]!.field).toBe("order");
     /**
-     * Both orders are still retained in full. The local SIDE is unattributed —
-     * the operation that authored it has been compacted away and cannot be
-     * named — and that is the honest answer rather than a guess.
+     * Both orders are still retained in full.
+     *
+     * The local side used to be unattributed here, and this assertion used to
+     * read `toBeNull()`. It has been INVERTED by STA-261, and the inversion is
+     * the improvement rather than a regression: `sync_field_writes` (migration
+     * 011) records the newest write of every field of every entity, is written
+     * by the apply path as well as by the journal, and is never pruned on the
+     * compaction horizon — so the operation that authored this order is still
+     * nameable after its outbox row is gone.
+     *
+     * That matters for more than tidiness. A conflict id is a function of the
+     * two operation ids, so an unattributable side gave this device an id no
+     * other device could compute, and only {@link settleOpenFor} kept the fleet
+     * from stranding it. With the incumbent named, the two devices compute the
+     * SAME id from the same pair, which is what lets one resolution close one
+     * record everywhere.
+     *
+     * The `null` branch is not dead and is not allowed to become dead: a
+     * database upgraded to 011 whose outbox had already been compacted has
+     * nothing to backfill from, and a bootstrapped device holds values it never
+     * authored or relayed. That residual case is asserted, deliberately, in
+     * `test/cloud-scalar-conflict-evidence.test.ts`.
      */
     expect(open(a)[0]!.localValue).toEqual(aOrder);
     expect(open(a)[0]!.remoteValue).toEqual([ids.two, ids.three, ids.one]);
-    expect(open(a)[0]!.localOpId).toBeNull();
+    expect(open(a)[0]!.localOpId).not.toBeNull();
   });
 
   /**
