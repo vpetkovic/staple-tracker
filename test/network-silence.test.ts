@@ -36,7 +36,7 @@ import { DatabaseSync } from "node:sqlite";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { initWorkspace } from "../src/core/workspace.js";
 import { describeViolations, installNetworkSpy, isExempt } from "./fixtures/network-spy.js";
 
@@ -89,12 +89,7 @@ function staple(args: string[], extraEnv: Record<string, string> = {}) {
     encoding: "utf8",
     cwd: repoDir,
   });
-  const violations = existsSync(logPath)
-    ? readFileSync(logPath, "utf8")
-        .split("\n")
-        .filter((line) => line.trim().length > 0)
-        .map((line) => JSON.parse(line) as Record<string, unknown>)
-    : [];
+  const violations = readViolations();
   const stderr = result.stderr ?? "";
 
   /**
@@ -109,6 +104,75 @@ function staple(args: string[], extraEnv: Record<string, string> = {}) {
   if (result.error) throw result.error;
 
   return { status: result.status ?? 0, stdout: result.stdout ?? "", stderr, violations };
+}
+
+const INITIALIZE_PARAMS = {
+  protocolVersion: "2024-11-05",
+  capabilities: {},
+  clientInfo: { name: "t", version: "0" },
+};
+
+function call(id: number, name: string, args: Record<string, unknown>) {
+  return { jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } };
+}
+
+/**
+ * One MCP session, with the spy in the child — the same discipline `staple()`
+ * uses, and for the same reason.
+ *
+ * Extracted from the handshake case (S10, STA-76) so that a scenario which calls
+ * write tools is one array literal rather than a second copy of the spawn. The
+ * child-never-started guard is the same one: a session that died in the module
+ * loader answers nothing and calls nobody, and would otherwise pass.
+ */
+function mcp(messages: Array<Record<string, unknown>>, extraEnv: Record<string, string> = {}) {
+  rmSync(logPath, { force: true });
+  const result = spawnSync(process.execPath, [TSX, MCP], {
+    input: `${messages.map((m) => JSON.stringify(m)).join("\n")}\n`,
+    env: {
+      ...process.env,
+      STAPLE_HOME: home,
+      STAPLE_DB: dbPath,
+      STAPLE_AGENT: "network-silence",
+      NODE_NO_WARNINGS: "1",
+      NODE_OPTIONS: `--import ${JSON.stringify(PRELOAD)}`,
+      STAPLE_NETWORK_SPY_LOG: logPath,
+      ...extraEnv,
+    },
+    encoding: "utf8",
+    timeout: 30_000,
+  });
+  const stderr = result.stderr ?? "";
+  if (/ERR_MODULE_NOT_FOUND|Cannot find module|ERR_UNKNOWN_FILE_EXTENSION/.test(stderr)) {
+    throw new Error(`the MCP child never started, so its silence proves nothing:\n${stderr}`);
+  }
+  return { stdout: result.stdout ?? "", stderr, violations: readViolations() };
+}
+
+/** The `tools/call` responses, keyed by request id. Non-JSON lines are the server's banner. */
+function parseToolResults(stdout: string): Map<number, Record<string, unknown>> {
+  const found = new Map<number, Record<string, unknown>>();
+  for (const line of stdout.split("\n")) {
+    if (!line.trim().startsWith("{")) continue;
+    let message: { id?: unknown; result?: unknown };
+    try {
+      message = JSON.parse(line) as typeof message;
+    } catch {
+      continue;
+    }
+    if (typeof message.id === "number" && message.id > 1 && message.result !== undefined) {
+      found.set(message.id, message.result as Record<string, unknown>);
+    }
+  }
+  return found;
+}
+
+function readViolations(): Array<Record<string, unknown>> {
+  if (!existsSync(logPath)) return [];
+  return readFileSync(logPath, "utf8")
+    .split("\n")
+    .filter((line) => line.trim().length > 0)
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
 }
 
 beforeAll(() => {
@@ -310,30 +374,53 @@ describe("disconnected: every ordinary command makes zero outbound calls", () =>
   }
 
   it("an MCP initialize handshake attempts no network call", () => {
-    rmSync(logPath, { force: true });
-    const handshake = `${JSON.stringify({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "initialize",
-      params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "t", version: "0" } },
-    })}\n${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} })}\n`;
-
-    const result = spawnSync(process.execPath, [TSX, MCP], {
-      input: handshake,
-      env: {
-        ...process.env,
-        STAPLE_HOME: home,
-        STAPLE_DB: dbPath,
-        NODE_NO_WARNINGS: "1",
-        NODE_OPTIONS: `--import ${JSON.stringify(PRELOAD)}`,
-        STAPLE_NETWORK_SPY_LOG: logPath,
-      },
-      encoding: "utf8",
-      timeout: 30_000,
-    });
+    const result = mcp([
+      { jsonrpc: "2.0", id: 1, method: "initialize", params: INITIALIZE_PARAMS },
+      { jsonrpc: "2.0", id: 2, method: "tools/list", params: {} },
+    ]);
 
     expect(result.stdout).toContain("cloud_status");
-    expect(existsSync(logPath) ? readFileSync(logPath, "utf8") : "").toBe("");
+    expect(result.violations).toHaveLength(0);
+  });
+
+  /**
+   * S10 (STA-76). *"an MCP `initialize` handshake **plus one call of every
+   * mutating tool**"* — the contract's scenario list, and the second half of it
+   * had never been exercised.
+   *
+   * That is worth naming as a finding rather than quietly fixing, because it is
+   * the same failure mode this file already carries a comment about: a scenario
+   * whose subject never ran. The MCP case above sends `initialize` and
+   * `tools/list` and asserts silence, and it would have gone on asserting silence
+   * after somebody put a network call in every write tool, because it never called
+   * one. The name of the file was doing the work the file was not.
+   *
+   * Three real writes, with real arguments, whose results are asserted NOT to be
+   * errors — that assertion is the anchor. A `tools/call` answered with a
+   * validation failure makes no network call either, so without it this test
+   * would be back where the last one was.
+   */
+  it("MCP write tools attempt no network call — and really did write", () => {
+    const result = mcp([
+      { jsonrpc: "2.0", id: 1, method: "initialize", params: INITIALIZE_PARAMS },
+      call(2, "create_task", { title: "a task made over MCP", actor: "network-silence" }),
+      call(3, "add_comment", { ref: "NET-1", body: "said over MCP", actor: "network-silence" }),
+      call(4, "put_document", {
+        ref: "NET-1",
+        key: "plan",
+        body: "written over MCP",
+        actor: "network-silence",
+      }),
+      call(5, "enqueue_task", { ref: "NET-1", actor: "network-silence" }),
+    ]);
+
+    // The anchor: four writes that worked, not four refusals that were silent.
+    const results = parseToolResults(result.stdout);
+    expect(results.size).toBe(4);
+    for (const [id, payload] of results) {
+      expect(payload.isError, `tool call ${id} failed: ${JSON.stringify(payload)}`).not.toBe(true);
+    }
+    expect(result.violations).toHaveLength(0);
   });
 });
 
@@ -445,6 +532,317 @@ describe("connected in manual mode: still zero", () => {
     expect(result.violations).toHaveLength(0);
     expect(result.status).toBe(0);
     expect(staple(["cloud", "status", "--json"]).stdout).toContain('"state": "disconnected"');
+  });
+});
+
+// ------------------------------------------------ the second consent, once spent
+
+/**
+ * S10 (STA-76): **connected AND automatically synchronizing.**
+ *
+ * Every other block in this file asserts an absence. This one asserts a presence
+ * first, and that inversion is the whole reason it exists.
+ *
+ * *"Network-spy tests prove ordinary commands make zero calls while connected in
+ * manual mode"* is only worth something if the same commands, on the same
+ * machine, with one boolean changed, are seen to call out. Otherwise "zero" is
+ * indistinguishable from a trigger that was never wired up, a gate that refuses
+ * everything, or a spy watching a surface nothing runs on — the three ways this
+ * epic has already produced a green suite that proved nothing.
+ *
+ * So the shape here is: turn the consent on, watch the spy catch a real outbound
+ * attempt at exactly the configured endpoint; turn the consent off; watch the
+ * same commands go silent. The second half is the acceptance criterion
+ * *"Disabling automatic mode stops background requests while preserving manual
+ * sync"*, and it is meaningful precisely because the first half is not zero.
+ *
+ * The endpoint is a `.invalid` host (RFC 2606). The spy throws before calling
+ * through, so nothing resolves in the normal case — and if the spy were ever to
+ * be missing, the name still cannot resolve, so a regression here fails rather
+ * than quietly reaching a real service.
+ */
+describe("connected in AUTOMATIC mode: the trigger fires, at the endpoint and nowhere else", () => {
+  const ENDPOINT = "https://staple-sync-auto.invalid";
+  const ENDPOINT_HOST = "staple-sync-auto.invalid";
+  let cloudDir: string;
+  let repositoryId: string;
+
+  function forge(auto: boolean): void {
+    writeFileSync(join(cloudDir, `${repositoryId}.token`), "stpl_fake\n", { mode: 0o600 });
+    writeFileSync(
+      join(cloudDir, `${repositoryId}.json`),
+      JSON.stringify({
+        schemaVersion: 1,
+        repositoryId,
+        endpoint: ENDPOINT,
+        deviceId: "11111111-2222-3333-4444-555555555555",
+        label: "test device",
+        credentialMechanism: "file",
+        connectedAt: new Date().toISOString(),
+        auto,
+        backup: false,
+        protocol: 1,
+      }),
+      { mode: 0o600 },
+    );
+  }
+
+  /**
+   * A fresh device, every case.
+   *
+   * The trigger persists a jittered backoff after a failed run, and every run
+   * here fails — there is no service at a `.invalid` host. Without this each
+   * scenario after the first would be refused by the previous one's backoff and
+   * would report "zero calls" for a reason that has nothing to do with what it
+   * claims to test. Which is exactly the kind of false green this file exists to
+   * refuse, so it is worth the two lines.
+   */
+  function freshDevice(): void {
+    rmSync(join(cloudDir, `${repositoryId}.autosync`), { force: true });
+  }
+
+  beforeAll(() => {
+    const manifest = JSON.parse(readFileSync(join(repoDir, ".staple", "repository.json"), "utf8")) as {
+      repositoryId: string;
+    };
+    repositoryId = manifest.repositoryId;
+    cloudDir = join(home, "cloud");
+    mkdirSync(cloudDir, { recursive: true, mode: 0o700 });
+    forge(true);
+  });
+
+  beforeEach(() => {
+    freshDevice();
+  });
+
+  /**
+   * Leave the machine as this block found it: disconnected.
+   *
+   * The blocks after this one assert things about a workspace with no connection
+   * — *"a declined connect leaves no credential, no config key and no server-side
+   * record"* among them — and a forged record left lying about would make one of
+   * them pass or fail for a reason belonging to this block.
+   */
+  afterAll(() => {
+    for (const suffix of [".json", ".token", ".autosync"]) {
+      rmSync(join(cloudDir, `${repositoryId}${suffix}`), { force: true });
+    }
+  });
+
+  /**
+   * THE POSITIVE ANCHOR for this whole block, and the strongest single statement
+   * this lane can make: a read command, on a machine that consented, really does
+   * reach the network — and the spy really does see it.
+   */
+  it("an ordinary READ attempts exactly one call, and its destination is the endpoint", () => {
+    const result = staple(["ls"]);
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("a task");
+
+    expect(result.violations.length).toBeGreaterThan(0);
+    for (const violation of result.violations) {
+      expect(violation.destination, JSON.stringify(violation)).toBe(ENDPOINT_HOST);
+    }
+    // One host, and the first thing a sync does is the capabilities handshake, so
+    // the call that was caught is the transport's and not something else's.
+    expect(new Set(result.violations.map((v) => v.destination))).toEqual(new Set([ENDPOINT_HOST]));
+  });
+
+  it("an ordinary WRITE does too, and nothing it touched leaked into the destination", () => {
+    const result = staple(["new", "a task made while automatic"]);
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.violations.length).toBeGreaterThan(0);
+    expect(new Set(result.violations.map((v) => v.destination))).toEqual(new Set([ENDPOINT_HOST]));
+  });
+
+  /**
+   * The failure is recorded where the next PROCESS can read it, which is the only
+   * place a CLI trigger can coalesce at all — and the next command inside that
+   * window is silent again.
+   *
+   * This is the anti-hot-loop property. A device pointed at an endpoint that is
+   * not answering must not attempt a doomed sync on every single command, and a
+   * bound that lived in memory would be no bound at all for a tool that exits
+   * after every command.
+   */
+  it("backs off across processes: the next command inside the window attempts nothing", () => {
+    const first = staple(["ls"]);
+    expect(first.violations.length).toBeGreaterThan(0);
+
+    const clock = JSON.parse(readFileSync(join(cloudDir, `${repositoryId}.autosync`), "utf8")) as {
+      consecutiveFailures: number;
+      nextEligibleAt: string | null;
+    };
+    expect(clock.consecutiveFailures).toBeGreaterThan(0);
+    expect(Date.parse(clock.nextEligibleAt!)).toBeGreaterThan(Date.now());
+
+    // Same machine, new process, inside the window. Silent.
+    const second = staple(["ls"]);
+    expect(
+      second.violations,
+      `a second command inside the backoff window attempted: ${JSON.stringify(second.violations)}`,
+    ).toHaveLength(0);
+  });
+
+  /**
+   * A command that FAILED synchronizes nothing.
+   *
+   * The registration runs only when `process.exitCode` is falsy, so a typo does
+   * not become a request to Cloudflare. Small, and worth pinning: the natural
+   * place to put a trigger is "at the end", and "at the end" includes the error
+   * path unless somebody says otherwise.
+   */
+  it("a command that failed attempts nothing — a typo is not a reason to call anybody", () => {
+    const result = staple(["show", "NET-99999"]);
+    expect(result.status).not.toBe(0);
+    expect(result.violations).toHaveLength(0);
+  });
+
+  /**
+   * THE ACCEPTANCE CRITERION, in its own test:
+   * *"Disabling automatic mode stops background requests while preserving manual
+   * sync."*
+   *
+   * Both halves, in order, on one machine — and note what is NOT done between
+   * them. Nothing disconnects, no credential moves, and the endpoint in the record
+   * is untouched. One boolean changes.
+   */
+  it("`cloud auto off` stops the background requests, and manual sync still works", () => {
+    // Off is itself local: turning it off must not tell the service.
+    const off = staple(["cloud", "auto", "off"]);
+    expect(off.status, off.stderr).toBe(0);
+    expect(off.violations).toHaveLength(0);
+    expect(off.stdout).toContain("Still connected");
+
+    freshDevice();
+    for (const args of [["ls"], ["new", "a task made after auto off"], ["show", "NET-1"]]) {
+      const result = staple(args);
+      expect(
+        result.violations,
+        `${args.join(" ")} after \`cloud auto off\` attempted: ${JSON.stringify(result.violations)}`,
+      ).toHaveLength(0);
+    }
+
+    // Still connected, and still manual — the mode the report shows.
+    const status = JSON.parse(staple(["cloud", "status", "--json"]).stdout) as {
+      state: string;
+      mode: string;
+      auto: boolean;
+      endpoint: string;
+    };
+    expect(status.state).toBe("manual");
+    expect(status.mode).toBe("manual");
+    expect(status.auto).toBe(false);
+    expect(status.endpoint).toBe(ENDPOINT);
+
+    /**
+     * And the half that would be easy to lose: manual sync is UNAFFECTED. A
+     * "stop background requests" implemented by breaking the transport, or by
+     * clearing the credential, would pass every assertion above and destroy the
+     * feature the consent was separate from.
+     */
+    const manual = staple(["cloud", "sync"]);
+    expect(manual.violations.length).toBeGreaterThan(0);
+    expect(new Set(manual.violations.map((v) => v.destination))).toEqual(new Set([ENDPOINT_HOST]));
+  });
+
+  it("`cloud auto on` gives it back, and the consent is the only thing that changed", () => {
+    expect(staple(["cloud", "auto", "on"]).violations).toHaveLength(0);
+    freshDevice();
+    const result = staple(["ls"]);
+    expect(result.violations.length).toBeGreaterThan(0);
+    expect(new Set(result.violations.map((v) => v.destination))).toEqual(new Set([ENDPOINT_HOST]));
+  });
+
+  /**
+   * The MCP surface, in automatic mode, through the post-write wrapper.
+   *
+   * The counterpart to the disconnected MCP case above, and the reason that one
+   * needed write tools at all: this is where a per-tool trigger becomes visible.
+   * A read tool fires nothing; a write tool fires exactly one endpoint's worth of
+   * traffic.
+   */
+  /**
+   * The MCP surface, where the per-tool trigger is decided by the `readOnlyHint`
+   * annotation each tool already declares.
+   *
+   * The spy alone cannot separate a read from a write here, because an MCP server
+   * also fires the STARTUP trigger when its transport connects — so every session
+   * in automatic mode has at least one attempt in it no matter what tools were
+   * called. The distinction is read from `STAPLE_AUTO_SYNC_DEBUG`, which names the
+   * trigger and the gate's answer on stderr, and the spy is what proves that when
+   * something did go out, it went to exactly one place.
+   *
+   * That is what the debug channel is for. It goes to stderr, never stdout,
+   * precisely so that a `--json` consumer never sees it and a test like this one
+   * can.
+   */
+  it("an MCP write tool triggers a sync; a read tool adds nothing beyond startup", () => {
+    freshDevice();
+    const reads = mcp(
+      [
+        { jsonrpc: "2.0", id: 1, method: "initialize", params: INITIALIZE_PARAMS },
+        call(2, "list_tasks", {}),
+        call(3, "cloud_status", {}),
+      ],
+      { STAPLE_AUTO_SYNC_DEBUG: "1" },
+    );
+    expect(parseToolResults(reads.stdout).size).toBe(2);
+    expect(reads.stderr).toMatch(/auto-sync: startup/);
+    // Two read tools, and not one post-write between them.
+    expect(reads.stderr, reads.stderr).not.toMatch(/auto-sync: post-write/);
+
+    freshDevice();
+    const writes = mcp(
+      [
+        { jsonrpc: "2.0", id: 1, method: "initialize", params: INITIALIZE_PARAMS },
+        call(2, "create_task", {
+          title: "a task made over MCP while automatic",
+          actor: "network-silence",
+        }),
+      ],
+      { STAPLE_AUTO_SYNC_DEBUG: "1" },
+    );
+    const results = parseToolResults(writes.stdout);
+    expect(results.size).toBe(1);
+    expect(results.get(2)?.isError).not.toBe(true);
+    expect(writes.stderr, writes.stderr).toMatch(/auto-sync: post-write/);
+
+    // And whatever went out, in either session, went to one host and no other.
+    for (const violation of [...reads.violations, ...writes.violations]) {
+      expect(violation.destination, JSON.stringify(violation)).toBe(ENDPOINT_HOST);
+    }
+    expect(writes.violations.length).toBeGreaterThan(0);
+  });
+
+  /**
+   * And the UI server, which is the surface the S9 lane found had never been
+   * booted here at all. Its startup trigger is the one that would be easiest to
+   * ship unnoticed: nobody is watching a server bind.
+   */
+  it("the UI server's startup trigger fires in automatic mode, and only at the endpoint", async () => {
+    freshDevice();
+    const spy = installNetworkSpy();
+    try {
+      const { startUiServer } = await import("../src/ui/server.js");
+      const ui = startUiServer({ port: 0, hub: false, db: dbPath });
+      await once(ui.server, "listening");
+      try {
+        // The startup trigger is fired from the `listening` callback and its
+        // transport failure is absorbed; give the microtask queue a turn.
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        expect(spy.violations.length, "the UI server's startup trigger never fired").toBeGreaterThan(
+          0,
+        );
+        for (const violation of spy.violations) {
+          expect(violation.destination, describeViolations(spy.violations)).toContain(ENDPOINT_HOST);
+        }
+      } finally {
+        ui.close();
+      }
+    } finally {
+      spy.restore();
+    }
   });
 });
 

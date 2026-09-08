@@ -18,6 +18,7 @@ import { runDiscoverCommand } from "./commands/discover.js";
 import { runMilestoneCommand } from "./commands/milestone.js";
 import { runQueueCommand } from "./commands/queue.js";
 import { runCloudCommand } from "./commands/cloud.js";
+import { CLI_COMMAND_TRIGGERS, runCommandTrigger } from "./core/cloud/auto-triggers.js";
 import { findMigrationRoot, planMigration, runMigration } from "./core/path-migration.js";
 import {
   type ConfigPatch,
@@ -2332,4 +2333,45 @@ try {
     console.error(error);
   }
   process.exitCode = EXIT_CODES[envelope.code] ?? 1;
+}
+
+/**
+ * S10: the CLI's entire automatic-sync registration.
+ *
+ * Contract: `docs/sync.md`, "Three consents" — *"After automatic — bounded
+ * triggers only … A tracker command never blocks indefinitely on Cloudflare."*
+ *
+ * **After the command, never around it.** Output is printed, `process.exitCode`
+ * is set, and the error envelope is on stderr before this line is reached, so
+ * there is no path by which an automatic sync can change what a script sees from
+ * any of the thirty commands above. That is what makes it safe to have a trigger
+ * on `checkout` at all: the claim is taken and reported exactly as it is today,
+ * and only then does this device mention it to anybody.
+ *
+ * **Silent unless it was asked for.** `runCommandTrigger` returns
+ * `skipped/no-connections` after a single `existsSync` on a machine that has
+ * never connected a repository, and `skipped/manual` after one further file read
+ * on a connected machine that never ran `staple cloud auto on`. Neither path
+ * opens a database and neither loads `core/cloud/sync.js`, so the zero-network
+ * invariant here is structural rather than checked.
+ *
+ * **Only after a command that worked.** A `validation` failure means the argv was
+ * not a command; synchronizing on the strength of it would be a network request
+ * caused by a typo.
+ */
+if (!process.exitCode && CLI_COMMAND_TRIGGERS[process.argv[2] ?? ""] !== undefined) {
+  try {
+    /**
+     * Both guards, deliberately. `runCommandTrigger` absorbs its own failures, so
+     * neither should ever fire — but this is the last statement in the process and
+     * an escape from it would print an unhandled rejection *after* a command that
+     * had already succeeded and reported. Belt and braces is the right amount of
+     * caution for a line whose entire job is to be optional.
+     */
+    void runCommandTrigger(process.argv[2], process.argv.slice(3), {
+      home: stapleHome(),
+    }).catch(() => undefined);
+  } catch {
+    /* an unusable home is `staple doctor`'s to report, not a background sync's */
+  }
 }

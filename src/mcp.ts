@@ -24,6 +24,7 @@ import { KIND_APPEARANCE_SOURCES, type KindWithAppearance } from "./core/kind-ap
 import { dirname } from "node:path";
 import { stapleHome } from "./config/home.js";
 import { readRepositoryManifest } from "./core/repo-identity.js";
+import { SurfaceAutoSync } from "./core/cloud/auto-triggers.js";
 import { listConflicts, resolveConflict } from "./core/cloud/conflicts.js";
 import { localCloudStatus } from "./core/cloud/status.js";
 import {
@@ -164,6 +165,79 @@ function resetWorkspaceCache(): void {
 }
 
 const server = new McpServer({ name: "staple", version: "0.1.0" });
+
+/**
+ * S10: this server's automatic-sync registration.
+ *
+ * Contract: `docs/sync.md`, "Three consents" — *"After automatic — bounded
+ * triggers only: startup, post-write, long-running session."* An MCP server is
+ * the canonical long-running session: one process, many writes, an agent at the
+ * other end that will not think to synchronize.
+ *
+ * `resolve` reuses this file's own `workspaceFor`/`storeFor`, and reads the
+ * identity the same way `cloud_status` does. A workspace with no manifest returns
+ * null and nothing fires — which is also what happens on every workspace that has
+ * not consented, one file read later, inside the gate.
+ */
+const autoSync = new SurfaceAutoSync({
+  home: () => stapleHome(),
+  resolve: (ws) => {
+    const manifest = readRepositoryManifest(dirname(workspaceFor(ws).dbPath));
+    return manifest === null ? null : { db: storeFor(ws).db, repositoryId: manifest.repositoryId };
+  },
+});
+
+/**
+ * The post-write trigger, for all forty-six tools, in one place.
+ *
+ * `registerTool` is wrapped ONCE, here, before the first tool is registered, and
+ * the decision of whether a tool is a write is read from the `readOnlyHint`
+ * annotation every tool already declares to the protocol. That annotation is not
+ * decoration — a client uses it to decide whether to ask a human — so a tool that
+ * lies about it has a bigger problem than this trigger, and a tool that tells the
+ * truth needs nothing added to it.
+ *
+ * The alternative was a second `run()` for writes, which meant editing forty-odd
+ * call sites to encode a fact each of them had already stated one line above.
+ * This is a monkey-patch and monkey-patches are usually a smell; it earns its
+ * place by being the only shape in which "every write, and only a write" is one
+ * statement rather than forty-six.
+ *
+ * **Nothing is awaited.** The tool's result is returned untouched and the sync is
+ * fired beside it, so an agent's call is exactly as fast on a connected machine
+ * as on a disconnected one. And a failed tool fires nothing: `run()` reports
+ * failure as `isError` rather than by throwing, so the check is on the value.
+ */
+{
+  type ToolConfig = { annotations?: { readOnlyHint?: boolean } };
+  type ToolCallback = (...args: unknown[]) => unknown;
+  const direct = server.registerTool.bind(server) as unknown as (
+    name: string,
+    config: ToolConfig,
+    cb: ToolCallback,
+  ) => unknown;
+
+  const afterWrite =
+    (cb: ToolCallback): ToolCallback =>
+    (...args: unknown[]) => {
+      const result = cb(...args);
+      const first = args[0] as { ws?: unknown } | undefined;
+      const ws = typeof first?.ws === "string" ? first.ws : undefined;
+      const fire = (value: unknown) => {
+        if ((value as { isError?: boolean } | null)?.isError !== true) autoSync.postWrite(ws);
+        return value;
+      };
+      // Every tool here is synchronous today. Handling a thenable anyway costs one
+      // branch and means the first async tool does not silently lose its trigger.
+      return result instanceof Promise ? result.then(fire) : fire(result);
+    };
+
+  (server as unknown as { registerTool: unknown }).registerTool = (
+    name: string,
+    config: ToolConfig,
+    cb: ToolCallback,
+  ) => direct(name, config, config.annotations?.readOnlyHint === true ? cb : afterWrite(cb));
+}
 
 /**
  * structuredContent must be a JSON object (CallToolResult uses a string record),
@@ -2400,6 +2474,17 @@ server.registerTool(
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
+/**
+ * S10: startup and the long-running-session tick, after the transport is up.
+ *
+ * After `connect`, not before, so that a server which failed to attach to stdio
+ * has not started a session. Both are silent on a machine that has not consented
+ * — `startup` returns after one `existsSync` on a fresh install — and the
+ * interval is `unref`'d, so it can never be the reason this process outlives the
+ * client that spawned it.
+ */
+autoSync.startup();
+autoSync.startSession();
 const workspaceSource = process.env.STAPLE_DB
   ? `STAPLE_DB ${process.env.STAPLE_DB}`
   : process.env.STAPLE_WS
