@@ -159,8 +159,16 @@ const PROJECT_FIELDS: Record<string, Column> = {
  * dropped on arrival.
  */
 export const ISSUE_COLUMNS: Record<string, Column> = withColumnAliases(ISSUE_FIELDS);
-const COMMENT_COLUMNS = withColumnAliases(COMMENT_FIELDS);
-const PROJECT_COLUMNS = withColumnAliases(PROJECT_FIELDS);
+/**
+ * Also exported for `conflicts.ts`, which has to answer "do these two payload
+ * keys name the same thing" before it can say whether two devices contested one
+ * field. The seam journals `title` on a create and `normalized_title` on an
+ * update, so that question is only answerable through this map — and a second
+ * copy of it in the conflict module would drift the first time a column is
+ * added, and drift silently, into missed conflicts.
+ */
+export const COMMENT_COLUMNS: Record<string, Column> = withColumnAliases(COMMENT_FIELDS);
+export const PROJECT_COLUMNS: Record<string, Column> = withColumnAliases(PROJECT_FIELDS);
 
 /**
  * Accept a column's own name as well as the camelCase payload key.
@@ -317,10 +325,13 @@ export function applyToDatabase(db: DatabaseSync, input: ApplyInput): boolean {
       /**
        * Not applied by this build, and not an error either.
        *
-       * Nothing in the tree journals a conflict resolution yet — that belongs to
-       * the conflict lane — so this branch is currently unreachable from any
-       * device running this code. It is a no-op rather than a throw so that a
-       * future device pushing one cannot stall an older device's whole page.
+       * Leases belong to the distributed-claim lane and nothing here journals
+       * one yet. A `conflict` operation IS journaled now, but it is routed in
+       * `sync.ts` to `applyConflictOperation` before it reaches this switch —
+       * it settles a record rather than folding fields onto a row, so it has no
+       * business in a function whose whole job is the fold. Reaching this branch
+       * with either is a no-op rather than a throw so that a newer device
+       * pushing one cannot stall an older device's whole page.
        */
       return false;
     default:
@@ -357,6 +368,7 @@ function applyIssue(db: DatabaseSync, input: ApplyInput): boolean {
   if (!exists) {
     insertIssue(db, input, pairs);
   } else if (pairs.length > 0) {
+    displaceIdentifierHolder(db, input.entityId, pairs);
     updateRow(db, "issues", "id", input.entityId, pairs);
   }
 
@@ -492,6 +504,25 @@ function provisionalIdentifier(db: DatabaseSync, identifier: string): string {
   throw new StapleError("conflict", `Could not find a free identifier near ${identifier}.`);
 }
 
+/**
+ * Record the collision in the shape every other conflict is recorded in.
+ *
+ * `local_*` describes what THIS database holds and `remote_*` what arrived — one
+ * convention, so a resolution surface can read any row without asking which
+ * detector wrote it. For a collision that means the **provisional** is the local
+ * value (it is what this row now carries) and the **contested** identifier is
+ * the remote one (it is what the operation asked for). An earlier draft had the
+ * two values the other way round while the op and device columns already
+ * followed the convention, so `local_value` and `local_op_id` described opposite
+ * sides of the same row — and resolving "take the local value" would have driven
+ * the write straight into the `UNIQUE` index it was avoiding.
+ *
+ * `base_value` is NULL and means it: the entity is arriving for the first time,
+ * so there is no ancestor the two sides diverged from.
+ *
+ * `DO NOTHING` because detection must be idempotent. The primary key is a
+ * function of the entity, so a redelivery is the same collision, not a new one.
+ */
 function recordIdentifierConflict(
   db: DatabaseSync,
   input: ApplyInput,
@@ -503,16 +534,58 @@ function recordIdentifierConflict(
        (id, entity, entity_id, field, base_value, local_value, remote_value,
         local_op_id, remote_op_id, local_device_id, remote_device_id,
         local_at, remote_at, detected_at)
-     VALUES (?, 'issue', ?, 'identifier', NULL, ?, ?, NULL, ?, NULL, ?, NULL, ?, ?)`,
+     VALUES (?, 'issue', ?, 'identifier', NULL, ?, ?, NULL, ?, NULL, ?, NULL, ?, ?)
+     ON CONFLICT (id) DO NOTHING`,
   ).run(
     `identifier:${input.entityId}`,
     input.entityId,
-    contested,
-    provisional,
+    JSON.stringify(provisional),
+    JSON.stringify(contested),
     input.opId,
     input.deviceId,
     input.at,
     input.at,
+  );
+}
+
+/**
+ * Move whoever holds an incoming identifier out of the way, on an EXISTING row.
+ *
+ * `insertIssue` has always done this for arrivals; an update needed it once
+ * identifier conflicts became resolvable, because settling one is frequently a
+ * SWAP. Two devices that both minted `TST-2` offline end in mirror-image states —
+ * each holds its own issue at `TST-2` and the other's at `TST-2+1` — so a
+ * decision made on one device replicates to the other as "these two issues
+ * exchange numbers", and the first half of that exchange collides with the
+ * second half until the second half arrives.
+ *
+ * Without this, applying the first renumber raises `UNIQUE constraint failed:
+ * issues.identifier`, which fails the whole page, rolls back everything in it and
+ * leaves the cursor where it was — a single contested display allocation
+ * wedging the entire repository, which is the exact failure the conflict machinery
+ * exists to prevent.
+ *
+ * The incumbent goes to a suffixed identifier by the same pure rule
+ * {@link provisionalIdentifier} uses, so it is derived from what is present
+ * rather than allocated, and a later operation in the same page assigning it its
+ * settled number simply lands on top. No conflict is recorded: a `renumber` is
+ * already the outcome of a decision somebody made explicitly, and re-opening it
+ * here would report the resolution as a fresh disagreement.
+ */
+function displaceIdentifierHolder(
+  db: DatabaseSync,
+  entityId: string,
+  pairs: Array<[string, unknown]>,
+): void {
+  const incoming = pairs.find(([column]) => column === "identifier");
+  if (!incoming || typeof incoming[1] !== "string") return;
+
+  const owner = identifierOwner(db, incoming[1]);
+  if (owner === null || owner === entityId) return;
+
+  db.prepare("UPDATE issues SET identifier = ? WHERE id = ?").run(
+    provisionalIdentifier(db, incoming[1]),
+    owner,
   );
 }
 
@@ -629,7 +702,8 @@ function applyDocument(db: DatabaseSync, input: ApplyInput): boolean {
   return true;
 }
 
-function splitDocumentKey(entityId: string): [string, string] {
+/** Exported so `conflicts.ts` reads a document's current value from the same key. */
+export function splitDocumentKey(entityId: string): [string, string] {
   const slash = entityId.indexOf("/");
   if (slash < 0) {
     throw new StapleError("validation", `A document entity id must be "<issueId>/<key>": ${entityId}`);

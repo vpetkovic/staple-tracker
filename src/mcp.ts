@@ -24,6 +24,7 @@ import { KIND_APPEARANCE_SOURCES, type KindWithAppearance } from "./core/kind-ap
 import { dirname } from "node:path";
 import { stapleHome } from "./config/home.js";
 import { readRepositoryManifest } from "./core/repo-identity.js";
+import { listConflicts, resolveConflict } from "./core/cloud/conflicts.js";
 import { describeState, localCloudStatus } from "./core/cloud/status.js";
 import { Hub, notifyHubResolvedSafe } from "./core/hub.js";
 import type { CrossBlockerState } from "./core/hub.js";
@@ -2258,6 +2259,96 @@ server.registerTool(
         warnings: [...status.warnings],
         detail: describeState(status),
       };
+    }),
+);
+
+/**
+ * `conflict_list` and `conflict_resolve` — the two cloud writes an agent MAY do.
+ *
+ * The reasoning above holds that connect, disconnect, revoke and purge are human
+ * consent decisions and stay off MCP. Resolving a conflict is a different kind of
+ * thing and `docs/sync.md` says so directly: *"resolving it is a decision a human
+ * or an agent makes on the record."* It touches only the local database, makes no
+ * network request, cannot store or spend a credential, and cannot destroy
+ * anything — the losing value stays on the record forever, so the worst outcome
+ * of a wrong call is a field that has to be set again, which is what every other
+ * write tool here can already do.
+ *
+ * What the agent is NOT given is a way to avoid deciding. There is no "resolve
+ * all", no "prefer newest" and no default side, because a bulk apply-the-latest
+ * would be exactly the last-write-wins the whole design removes, wearing an
+ * agent's name instead of the transport's.
+ */
+const conflictShape = {
+  id: z.string(),
+  entity: z.string(),
+  entityId: z.string(),
+  field: z.string(),
+  baseValue: z.unknown().optional(),
+  localValue: z.unknown(),
+  remoteValue: z.unknown(),
+  localDeviceId: z.string().nullable(),
+  remoteDeviceId: z.string().nullable(),
+  localOpId: z.string().nullable(),
+  remoteOpId: z.string().nullable(),
+  localAt: z.string().nullable(),
+  remoteAt: z.string().nullable(),
+  detectedAt: z.string(),
+  resolvedAt: z.string().nullable(),
+  resolvedBy: z.string().nullable(),
+  resolvedValue: z.unknown().optional(),
+  resolvedChoice: z.enum(["local", "remote", "custom"]).nullable(),
+};
+
+server.registerTool(
+  "conflict_list",
+  {
+    description:
+      "Fields two devices changed to different things while offline. Both values are retained in full and NEITHER has been applied — a conflict is data, not an error, and everything else in the repository keeps synchronizing around it. localValue is what this database holds, remoteValue is what arrived and was withheld, baseValue is what they diverged from when that is still recoverable. Reads the local database only; makes no network request. Pass include_resolved for the audit trail of what was already settled and by whom.",
+    inputSchema: { include_resolved: z.boolean().optional(), ws: wsSchema },
+    outputSchema: { items: z.array(z.object(conflictShape)) },
+    annotations: { title: "List conflicts", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+  },
+  ({ include_resolved, ws }) =>
+    run(() => listConflicts(storeFor(ws).db, { includeResolved: include_resolved === true })),
+);
+
+server.registerTool(
+  "conflict_resolve",
+  {
+    description:
+      "Settle one conflict by choosing a value, explicitly. take='local' keeps what this database holds, take='remote' adopts what arrived, and passing value instead writes a third answer. Emits a NEW operation carrying the choice, so every other device converges on it; it never rewrites the two operations that disagreed and never picks a winner on your behalf. Resolving the same conflict the same way twice is a no-op; resolving it a DIFFERENT way after it is settled is refused — edit the field instead, which is its own decision on the record. Resolving an identifier collision frees the contested number, renumbering whichever issue was holding it, and reports that.",
+    inputSchema: {
+      id: z.string(),
+      take: z.enum(["local", "remote"]).optional(),
+      value: z.unknown().optional(),
+      actor: actorSchema,
+      ws: wsSchema,
+    },
+    outputSchema: {
+      conflict: z.object(conflictShape),
+      changed: z.boolean(),
+      renumbered: z.array(z.object({ issueId: z.string(), from: z.string(), to: z.string() })),
+    },
+    annotations: { title: "Resolve conflict", readOnlyHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  ({ id, take, value, actor, ws }) =>
+    run(() => {
+      if (take !== undefined && value !== undefined) {
+        throw new StapleError("validation", "take and value are two different decisions. Pass one.");
+      }
+      if (take === undefined && value === undefined) {
+        throw new StapleError(
+          "validation",
+          'Nothing chosen. Pass take="local", take="remote", or a value to write instead.',
+        );
+      }
+      return resolveConflict(storeFor(ws).db, {
+        id,
+        choice: take ?? "custom",
+        value,
+        actor: requireActor(actor),
+      });
     }),
 );
 

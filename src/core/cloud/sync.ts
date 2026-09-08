@@ -54,6 +54,7 @@ import {
   setEntityVersion,
   snapshotToInput,
 } from "./apply.js";
+import { applyConflictOperation, countOpenConflicts, screenForConflicts } from "./conflicts.js";
 import {
   acknowledgeOperation,
   advanceCursor,
@@ -328,11 +329,7 @@ export async function syncRepository(
   const after = requireSyncState(db);
   recordSyncedAt(db);
 
-  const conflicts = (
-    db.prepare("SELECT COUNT(*) AS n FROM sync_conflicts WHERE resolved_at IS NULL").get() as {
-      n: number;
-    }
-  ).n;
+  const conflicts = countOpenConflicts(db);
 
   return {
     repositoryId,
@@ -705,7 +702,7 @@ async function drainTail(
 
     pages += 1;
     if (page.ops.length > 0) {
-      const outcome = applyPage(db, journal, page.ops);
+      const outcome = applyPage(db, journal, page.ops, session.deviceId);
       operations += outcome.applied;
       alreadyApplied += outcome.skipped;
     }
@@ -737,6 +734,7 @@ function applyPage(
   db: DatabaseSync,
   journal: Journal,
   ops: readonly RemoteOperation[],
+  localDeviceId: string,
 ): { applied: number; skipped: number } {
   const schema = localSchemaVersion(db);
 
@@ -763,7 +761,7 @@ function applyPage(
     const deferred: RemoteOperation[] = [];
 
     for (const op of ops) {
-      const outcome = applyOne(db, journal, op);
+      const outcome = applyOne(db, journal, op, localDeviceId);
       if (outcome === "deferred") deferred.push(op);
       else if (outcome === "skipped") skipped += 1;
       else applied += 1;
@@ -773,7 +771,7 @@ function applyPage(
     // applied coherently, and a partial page is worse than none.
     for (const op of deferred) {
       try {
-        const outcome = applyOne(db, journal, op, true);
+        const outcome = applyOne(db, journal, op, localDeviceId, true);
         if (outcome === "skipped") skipped += 1;
         else applied += 1;
       } catch (error) {
@@ -796,6 +794,7 @@ function applyOne(
   db: DatabaseSync,
   journal: Journal,
   op: RemoteOperation,
+  localDeviceId: string,
   final = false,
 ): "applied" | "skipped" | "deferred" {
   try {
@@ -806,15 +805,48 @@ function applyOne(
      * whole page on the next run.
      */
     const result = journal.applyRemote({ opId: op.opId, seq: op.seq }, () => {
-      applyToDatabase(db, operationToInput(op));
+      if (op.entity === "conflict") {
+        /**
+         * Somebody settled a disagreement. That is not a fold onto a row, so it
+         * does not go through the applier's switch — see
+         * {@link applyConflictOperation}.
+         */
+        applyConflictOperation(db, op);
+        bumpEntityVersion(db, op.entity, op.entityId);
+        return true;
+      }
+
+      /**
+       * Screen before applying. A field this device has changed since the
+       * version this operation claims as its base is recorded as a conflict and
+       * WITHHELD — *"No path applies last-write-wins."* The rest of the same
+       * operation still lands, so one contested field cannot wedge the entity
+       * it sits on, and `null` means every contentful field was contested and
+       * there is nothing left to write.
+       */
+      const screened = screenForConflicts(db, op, localDeviceId);
+      if (screened !== null) applyToDatabase(db, screened);
       /**
        * The local entity version moves because, as far as this database is
        * concerned, this entity just changed. Not set to the remote's
        * `baseVersion + 1`: the local counter also counts this device's own
        * mutations, and adopting a remote number would make the next local
        * operation claim a version the receiver has already seen.
+       *
+       * ONCE PER OPERATION, which is why the device's own echo is excluded. A
+       * push acknowledges into the outbox and does not move the cursor, so a
+       * device pulls its own operations back and applies them; counting them a
+       * second time here made the counter
+       * `(operations seen) + (operations authored)` rather than
+       * `(operations seen)`, and two devices with different shares of the
+       * authorship drifted apart permanently. Conflict detection reads
+       * "`baseVersion` behind the local version" as "the sender had seen less
+       * than I have", and that is only true of a counter both devices increment
+       * on the same events. Four enqueues on one device and one on the other
+       * was enough to put the drift past the gap and lose the conflict
+       * entirely.
        */
-      bumpEntityVersion(db, op.entity, op.entityId);
+      if (op.deviceId !== localDeviceId) bumpEntityVersion(db, op.entity, op.entityId);
       return true;
     });
     return result === null ? "skipped" : "applied";

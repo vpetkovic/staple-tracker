@@ -814,6 +814,12 @@ Cloud (optional, off until you turn it on — see staple cloud --help)
               put the repository back to that backup. Takes a pre-restore backup first,
               re-materialises the contents into a NEW epoch and moves every device onto
               it. DISCARDS anything synchronized since. Never merges database files
+  cloud conflicts [--all]               fields two devices set to different things. Both
+              values are kept and NEITHER is applied; the rest of the repository keeps
+              synchronizing around it. Local read, no request
+  cloud resolve <id> --take local|remote | --value <text>
+              settle one explicitly. Emits a new operation carrying the choice so the
+              other devices agree; never rewrites what disagreed, never picks for you
   cloud purge --confirm <repositoryId>  DESTROY the remote state. Separately named because
               it is not disconnecting; discloses what is stored before it will accept
               the confirmation, and never touches your local database

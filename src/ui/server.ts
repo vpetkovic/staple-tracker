@@ -33,6 +33,7 @@ import type { QueueVerb } from "../core/queue-store.js";
 import { settingDefinitionsFor, settingRegistryView, settingValueView } from "../core/settings-registry.js";
 import { sanitizeSvg } from "../core/svg-sanitize.js";
 import { readStoredRepositoryId } from "../core/repo-identity.js";
+import { listConflicts, resolveConflict } from "../core/cloud/conflicts.js";
 import { describeState, localCloudStatus } from "../core/cloud/status.js";
 import { readConfig, stapleHome } from "../config/index.js";
 
@@ -566,7 +567,14 @@ export function startUiServer(options: UiOptions): UiHandle {
            * naming the family by prefix the way the gate routes do would have
            * made two reads cross-origin-writable. The verbs are therefore named.
            */
-          QUEUE_WRITE_PATHS.has(url.pathname)
+          QUEUE_WRITE_PATHS.has(url.pathname) ||
+          /**
+           * Settling a sync conflict. Named, not prefixed, for the same reason
+           * the queue's verbs are: `/api/cloud/conflicts` and
+           * `/api/cloud/status` are reads sharing the prefix, and a family rule
+           * would have made both cross-origin-writable.
+           */
+          url.pathname === "/api/cloud/conflicts/resolve"
             ? ["POST"]
             : url.pathname === "/api/settings"
               ? ["GET", "POST"]
@@ -658,6 +666,62 @@ export function startUiServer(options: UiOptions): UiHandle {
           detail: describeState(status),
           hint: status.state === "disconnected" ? "staple cloud connect" : null,
         });
+        return;
+      }
+
+      /**
+       * `GET /api/cloud/conflicts` — what two devices disagree about.
+       *
+       * A local read of one table, so it is available in every cloud state
+       * including disconnected: a repository that has synced and then been
+       * disconnected still holds its conflicts, and hiding them behind a
+       * connection check would make an unsettled decision invisible for as long
+       * as the credential was gone.
+       */
+      if (url.pathname === "/api/cloud/conflicts") {
+        const handle = handleFor(url.searchParams.get("ws") ?? undefined);
+        const includeResolved = url.searchParams.get("all") === "1";
+        json(res, 200, {
+          conflicts: listConflicts(handle.store.db, { includeResolved }),
+        });
+        return;
+      }
+
+      /**
+       * `POST /api/cloud/conflicts/resolve` — settle one, from the page.
+       *
+       * `{ id, take?: "local" | "remote", value?, actor?, ws? }`. Exactly one of
+       * `take` and `value` — a resolve with neither is a `validation` error
+       * rather than a default, because a default here is the last-write-wins the
+       * whole feature removes.
+       *
+       * No decision is made in this file: the refusals for "already resolved",
+       * "no such conflict" and "custom with no value" all live in
+       * `resolveConflict`, with one wording that every surface repeats.
+       */
+      if (url.pathname === "/api/cloud/conflicts/resolve") {
+        const body = await readBody(req);
+        const handle = handleFor((body.ws as string) ?? undefined);
+        const take = body.take as "local" | "remote" | undefined;
+        if ((take === undefined) === (body.value === undefined)) {
+          deny(
+            res,
+            400,
+            "validation",
+            'Pass exactly one of take ("local" or "remote") and value.',
+          );
+          return;
+        }
+        json(
+          res,
+          200,
+          resolveConflict(handle.store.db, {
+            id: body.id as string,
+            choice: take ?? "custom",
+            value: body.value,
+            actor: (body.actor as string) || "ui",
+          }),
+        );
         return;
       }
 
