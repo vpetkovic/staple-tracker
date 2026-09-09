@@ -118,7 +118,7 @@ try {
   );
   const readOnly = tools.tools.filter((t: any) => t.annotations?.readOnlyHint === true).map((t: any) => t.name);
   assert(
-    readOnly.length === 14 &&
+    readOnly.length === 16 &&
       [
         "inbox",
         "list_tasks",
@@ -139,8 +139,13 @@ try {
         // nothing — next_task resolves the order, it never claims anything.
         "list_queue",
         "next_task",
+        // S5 (STA-71) and S7 (STA-73): reading whether THIS machine is connected,
+        // and reading what two devices disagree about, are both local reads. The
+        // cloud one is emphatically so — it makes no request and cannot be made to.
+        "cloud_status",
+        "conflict_list",
       ].every((n) => readOnly.includes(n)),
-    `exactly the 14 read-only tools flagged readOnlyHint (${readOnly.join(", ")})`,
+    `exactly the 16 read-only tools flagged readOnlyHint (${readOnly.join(", ")})`,
   );
   assert(byName.get("checkout_task").annotations.idempotentHint === true, "checkout_task flagged idempotent");
   assert(
@@ -734,7 +739,7 @@ try {
   // queue tools. All of them act on ONE workspace — a queue belongs to one
   // workspace file and references only its own issues — so all of them take `ws`
   // like every other workspace tool.
-  assert(wsTargetable.length === 37, `37 workspace tools accept ws targeting (${wsTargetable.length} found)`);
+  assert(wsTargetable.length === 40, `40 workspace tools accept ws targeting (${wsTargetable.length} found)`);
   assert(
     !coldByName.get("cross_link").inputSchema.properties?.ws &&
       !coldByName.get("hub_overview").inputSchema.properties?.ws,
@@ -852,6 +857,9 @@ try {
         "add_milestone_member",
         "approve_task",
         "checkout_task",
+        // S7 (STA-73): settling a conflict emits a NEW operation carrying the
+        // choice, so it is a write and is attributed like one.
+        "conflict_resolve",
         "create_milestone",
         "create_task",
         // STA-168: a queue mutation is an actor-attributed event, which is what
