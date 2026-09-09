@@ -264,7 +264,7 @@ this contract, not a judgement call for an implementer.
 | `queue_entries.rank`, `milestone_members.rank` | workspace db | Positional, recomputed from list order. |
 | Cloud credentials | staple home, OS keychain or `0600` file | See [Trust boundaries](#trust-boundaries). |
 | Device id and device secret | machine config | A device identifies itself; it is not a property of the repository. |
-| `sync.auto`, `sync.backup` consent flags | machine config | Per-device by design, see [Three consents](#three-consents). |
+| `sync.auto`, `sync.backup`, `sync.registry` consent flags | machine config | Per-device by design, see [Three consents](#three-consents). |
 | Sync cursors, outbox rows, applied-op ledger | workspace db, sync tables | Local bookkeeping about a shared log; not part of the shared log. |
 | Absolute paths, hostnames, usernames | anywhere | Staple never *adds* one to a payload. Text a human typed into a title or a comment body is that human's to control. |
 
@@ -516,9 +516,12 @@ One shape, for every mutation, on the wire and in the outbox.
 ```
 
 `entity` is one of `issue`, `comment`, `document`, `documentRevision`, `relation`,
-`project`, `status`, `kind`, `setting`, `milestone`, `queue`, `lease`, `conflict`.
-`verb` is `create`, `update`, `delete`, `replace` (ordered collections only), or
-`renumber` (issues only).
+`project`, `status`, `kind`, `setting`, `milestone`, `queue`, `lease`, `conflict` at
+protocol 1, plus `registration` and `crossLink` at protocol 2 — the hub registry, and
+the reason the vocabulary is version-scoped rather than merely growing. See
+[The hub is a repository](#the-hub-is-a-repository-and-that-is-the-whole-mechanism)
+and [Protocol evolution](#protocol-evolution). `verb` is `create`, `update`,
+`delete`, `replace` (ordered collections only), or `renumber` (issues only).
 
 `opId` is **deterministic**:
 `sha256(repoId + "\n" + epoch + "\n" + deviceId + "\n" + clientSeq)`, first 32 hex
@@ -532,6 +535,15 @@ re-bootstraps after a restore re-mints ids that collide with operations still
 present in the log — the epoch bump is non-truncating, so the originals are
 *definitely* still there — and the collision happens in precisely the path the
 epoch mechanism exists to make safe.
+
+**The hub registry derives its ids differently, and has to.** `clientSeq` lives in
+`sync_state`, and `hub.db` has no `sync_state` — so a hub operation id is
+content-addressed instead: `hub:<epoch>:<entity>:<32 hex of entityId, verb and
+payload>`. It keeps the property that matters, which is that a retry regenerates a
+byte-identical id, and it gets it from what the operation *says* rather than from a
+counter nothing allocates. Keyed on the entity alone it would be unique per entity
+per epoch rather than per operation, and a second write to one registration would be
+absorbed as a duplicate and read as an acknowledgement.
 
 `clientSeq` is a per-device monotonic counter allocated inside the same
 transaction as the domain write. Its home is
@@ -999,6 +1011,84 @@ express that and the invariant was free. It is no longer free, so it is paid for
 explicitly — a separate consent, granted by itself, with that sentence in front
 of it.
 
+### The hub is a repository, and that is the whole mechanism
+
+The service is repository-scoped end to end: a credential resolves to exactly one
+`repo_id`, a backup is a fold of one repository's operation log, and a restore
+materialises that fold into a new epoch of the same log. There is no second storage
+shape and no route that accepts a blob.
+
+So the hub becomes a repository, scoped by its own identity, and **its operation log
+carries the registry**. Backup is then the existing fold and restore is the existing
+snapshot. This feature adds no persistence mechanism at all, which is why this shape
+was chosen over inventing one.
+
+Two entity kinds, at protocol 2:
+
+| Entity | Key | Payload |
+|---|---|---|
+| `registration` | the workspace's `repository_id` | `format`, `slug`, `prefix`, `kind`, `addedAt` |
+| `crossLink` | its four names, each percent-encoded, joined with `/` | `format`, `blockerWs`, `blockerIdentifier`, `blockedWs`, `blockedIdentifier`, `type` |
+
+They are two entities rather than one blob because the fold is per entity and is
+last-write-wins: one entity holding the whole registry would make every publish
+rewrite every workspace, so two machines editing two different workspaces would each
+supersede the other's row. **The granularity of the entity is the granularity of the
+conflict.**
+
+`replace` and `renumber` are refused for both, by name and not merely by falling
+outside the ordered-collection allowlist. Neither is an ordered collection, and
+`renumber` is about identifiers the hub does not own.
+
+The cross-link key is an **encoding, not a hash**: `encodeURIComponent` escapes the
+separator, so distinct four-tuples cannot collide, and a log row stays readable. It
+follows the `document` precedent, whose key is already `"<issueId>/<key>"`. The edge
+`type` is deliberately not in the key, so changing an edge's type is an update rather
+than a delete plus an unrelated create.
+
+**A `registration` with no `repository_id` is not publishable.** The entity id *is*
+the adoption key, and minting one locally is the fork the manifest exists to prevent
+— the real repository would record its own id later and the registry would hold two
+rows for one workspace. Such an entry is reported by name, never invented and never
+silently dropped.
+
+**Operation ids are content-addressed**: `hub:<epoch>:<entity>:<32 hex of entityId,
+verb and payload>`. Keyed on the entity alone they would be unique per entity per
+epoch and not per operation — so a second write to one registration inside an epoch
+would be answered `duplicate` with the original `seq` and read as an
+acknowledgement. Content-addressing keeps a retry idempotent *and* lets a genuine
+change land, which is what makes publishing safe with no outbox.
+
+**There is no hub outbox and no hub migration.** Every workspace sync path assumes
+`sync_outbox`, `sync_state` and `sync_field_writes`; `hub.db` has none of them, and
+adding them would be a journal seam, a `client_seq` allocator, an applied-op ledger
+and a cursor bought for a table with a dozen rows in it. The registry is small and
+**fully re-derivable from current state**, so the operations to publish are computed
+on demand by comparing the hub against the service's current fold. An outbox exists
+to remember intent across a crash; a re-derivable set has no intent to remember. The
+cost is one `GET /snapshot` per publish, bounded by the number of workspaces on one
+machine.
+
+**The registry identity is adopted, never re-minted.** The hub id names *the
+registry* — one person's set of workspaces — and not the machine; the machine is
+named by `deviceId`, which is separate and already hub-wide. Two machines belonging
+to one person share a hub id on purpose, because that sharing is the mechanism by
+which the second learns what the first has. A replacement machine that minted its own
+would be scoped to an empty repository and would report, truthfully and uselessly,
+that there is nothing to restore. So the id travels out of band alongside the
+enrollment secret, for the same reason: the service has no account model to look
+either of them up in. Replacing an id the machine is already connected under is
+refused, because it would leave the old registry published with nothing pointing at
+it.
+
+**Staple cannot provision the hub.** This page defines no provisioning route and no
+account model, so the Worker has none, and an unknown repository id answers
+`forbidden` on purpose — *"an unknown id is far more likely to be a copied manifest
+than a new repository"*. Every surface that offers to connect a hub must therefore
+render a **"not provisioned on this service"** state that names the out-of-band step,
+rather than a generic failure that reads as a bug. See `worker/README.md`,
+"Provisioning a repository".
+
 ### Adoption, not duplication
 
 A new machine matches an incoming entry on `repository_id`, the clone-surviving
@@ -1089,6 +1179,54 @@ What a surface may do at each stage:
   the half of the value that is true.
 - **After backup** — export and retention commands appear. They do not touch
   cursors and cannot change convergence.
+
+### The fourth consent: publishing the hub registry
+
+The heading above says three because three is the number of **per-repository**
+consents, and that has not changed. This one is **per-machine**, and it is a
+different kind of decision, which is why it is a subsection rather than a fourth row
+in that table.
+
+| Consent | Granted by | Writes | Revoked by |
+|---|---|---|---|
+| **Publish the registry** | `staple hub registry publish --enable` | `sync.registry = true` on the HUB's connection record, keyed by the hub id | `staple hub registry publish --disable` |
+
+**Connect, automatic sync and backup do not imply it, and it implies none of them.**
+It is its own consent because it discloses something none of the other three does:
+
+> a machine that publishes its registry tells the service the names, prefixes and
+> identities of every workspace on it, and that they sit together.
+
+That sentence appears **verbatim** wherever the consent is granted and wherever it is
+refused. It is not reworded per surface: a disclosure with a different wording on
+each screen is a disclosure whose strongest wording is whichever screen the person
+did not read.
+
+Connecting one repository says nothing about any other repository. Automatic sync
+says nothing about *what* is synchronized. Backup says a copy may be **kept**, not
+that the shape of the machine may be **described**. Until this feature the wire could
+not express the last of those at all and the invariant was free; it is no longer
+free, so it is paid for explicitly.
+
+What it does not upload is stated at the same moment, because a person will
+reasonably get it wrong about a thing called "the hub": no filesystem paths, no
+tasks, and not the list of workspaces this machine has removed —
+`registry_optouts` never leaves, which is what keeps `staple hub unregister` local.
+
+There is **no server-side half** to this consent, unlike backup. There is no wire
+spelling for "this machine may describe itself" and no route that takes one, and
+inventing a flag would mean the service storing a permission it cannot enforce —
+every operation the consent gates is an ordinary push the credential already
+authorizes. So it is enforced entirely client-side, by every egress path on that leg
+beginning with the check.
+
+Turning it off stops this machine publishing. It does not delete what has already
+been published; removing an entry from a shared registry is a purge-shaped operation
+and is not offered.
+
+Keeping point-in-time copies of the registry is a **further** decision, and reuses
+the ordinary backup consent on the hub's own connection record. A person may
+reasonably want the registry replicated and no history of it kept.
 
 ## The network rule — and the test that proves it
 
@@ -1257,12 +1395,19 @@ error rather than a truncation.
 Two version numbers, deliberately separate.
 
 **`protocol`** is the wire contract — the envelope, the verbs, the routes. It is
-an integer, currently `1`, sent in every envelope and as a request header. The
-server advertises `{ min, max }`. A client outside that range is refused with
-`protocol_unsupported`, carrying the supported range, **before any write** — no
-partial batch, no half-applied page. The server supports the current version and
-the one before it for at least one release cycle, so a fleet upgrades one machine
-at a time.
+an integer, currently `2`, sent in every envelope and as a request header. The
+server advertises `{ min, max }`, presently `{ min: 1, max: 2 }`. A client outside
+that range is refused with `protocol_unsupported`, carrying the supported range,
+**before any write** — no partial batch, no half-applied page. The server supports
+the current version and the one before it for at least one release cycle, so a
+fleet upgrades one machine at a time.
+
+Protocol 2 adds the two hub registry entities and nothing else. `min` stays at 1,
+so every protocol-1 client keeps working unchanged, and the client's own floor
+stays at 1 too: `CLIENT_PROTOCOL` is 1 and only the hub registry leg declares 2.
+A client that declared 2 for everything would be refused outright by any Worker
+not yet redeployed, which would turn a hub feature into a total sync outage on
+every repository on the machine.
 
 **`schema`** is the workspace migration number, `010` as of the sync tables. A
 device receiving operations stamped with a schema newer than it understands
@@ -1271,11 +1416,42 @@ part of a page and never guesses at a column it does not have. This mirrors the
 refusal the migration runner already performs on a database written by a newer
 build ([migration.md](migration.md)).
 
-Within a protocol version, change is **additive only**: new optional fields, new
-entity kinds, new verbs. Removing a field, renaming one, or changing the meaning
-of an existing one requires a new protocol integer. Unknown fields are preserved
-and re-emitted ([the envelope](#the-operation-envelope)), which is what makes
-additive change safe on a mixed fleet.
+Within a protocol version, change is **additive only**: new optional fields.
+Removing a field, renaming one, or changing the meaning of an existing one requires
+a new protocol integer. Unknown fields are preserved and re-emitted
+([the envelope](#the-operation-envelope)), which is what makes additive change safe
+on a mixed fleet.
+
+**A new entity kind is NOT additive, and this page used to say it was.** That was
+wrong about the client that exists, and the correction matters more than the
+mistake. An unknown *field* is stored verbatim and re-emitted; an unknown *entity*
+is not ignored — `applyToDatabase` throws `Operation names entity "…", which this
+build does not know`, and the pull loop defers only an unresolvable referent. So an
+older device handed an entity added after its release fails the page and stops
+converging, reporting something that reads like corruption rather than like
+"upgrade".
+
+Making the client ignore unknown entities instead would be worse: a skipped
+operation still advances the cursor, so it would be skipped for ever rather than
+deferred — the same silent non-synchronization that filtering a batch client-side
+was already reverted for. A refusal is right; it just belongs at the request
+boundary rather than inside a fold.
+
+Therefore a new entity kind takes a protocol integer, and the vocabulary is
+version-scoped on the server. A protocol-1 client cannot push a protocol-2 entity,
+and `GET /ops` and `GET /snapshot` **refuse a page or a fold containing one**, with
+`protocol_unsupported`, the supported range, `requiredProtocol`, and the entity
+name so the client can say which feature the upgrade is for. A snapshot is refused
+over the whole fold rather than per page, because a device that applied the
+admissible pages and failed on a later one would be left holding a partial
+hydration.
+
+`backups.protocol` records **the lowest protocol that can replay that backup**, not
+the ceiling of the Worker that took it. A workspace backup is therefore still
+protocol 1 after this change, and a Worker rolled back one version can still
+restore it. A restore is also refused when the backup needs a protocol the
+*request* cannot read — otherwise the epoch moves, the pre-restore capture is
+spent, and the device that asked is left on a timeline it cannot hydrate.
 
 ### Error taxonomy
 
