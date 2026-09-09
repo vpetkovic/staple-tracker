@@ -40,7 +40,20 @@ import { WORKSPACE_LATEST_VERSION } from "../src/core/migrations/workspace/index
 import { HUB_LATEST_VERSION } from "../src/core/migrations/hub/index.js";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const outDir = join(repoRoot, "dist-package");
+/**
+ * Where the payload is assembled.
+ *
+ * A `let`, not a `const`, so a caller can build somewhere else — and the reason
+ * is a real defect rather than flexibility for its own sake. `package-tarball`
+ * calls `buildPackage()` mid-suite, which deletes and rewrites this directory,
+ * while `install-real-package` and `install-schema-matrix` read it from parallel
+ * workers and skip when it is absent. That race produced failures whose set
+ * changed between runs, and made a stale build look green once.
+ *
+ * Pass `outDir` to build into a scratch directory and leave the shared one
+ * alone.
+ */
+let outDir = join(repoRoot, "dist-package");
 const uiDist = join(repoRoot, "src", "ui", "app", "dist");
 
 const sourcePkg = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")) as {
@@ -224,12 +237,13 @@ function verifyNoSourceLeaks(): void {
   }
 }
 
-export async function buildPackage(): Promise<{
+export async function buildPackage(options: { outDir?: string } = {}): Promise<{
   outDir: string;
   version: string;
   bundledPackages: string[];
   externals: string[];
 }> {
+  outDir = options.outDir ?? join(repoRoot, "dist-package");
   rmSync(outDir, { recursive: true, force: true });
   mkdirSync(outDir, { recursive: true });
 
