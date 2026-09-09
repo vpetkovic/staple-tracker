@@ -316,6 +316,12 @@ describe("KNOWN: logical errors this surface cannot project", () => {
   it("pins the exact API surface, read out of the server source", () => {
     // GOLDEN, moved by S16 (STA-275): 45 -> 46. The addition is
     // `/api/cloud/workspaces`; see the comment beside it below.
+    // GOLDEN, moved by S17/S19/S21 (STA-278, STA-280, STA-282): 46 -> 52. Six
+    // additions: the five `/api/cloud/workspace/*` per-row routes and
+    // `/api/hub/unregister`. Both comments beside them explain why they could not
+    // be a `ws` parameter on the routes that already existed — the short version
+    // is that `handleFor` ignores a slug in single-workspace mode, which would
+    // make a per-row press act on the wrong workspace.
     // Derived, not restated: adding a route to src/ui/server.ts changes this
     // list and fails here, which is the review moment. U5's create and update
     // are branches inside POST /api/action rather than routes of their own,
@@ -424,6 +430,59 @@ describe("KNOWN: logical errors this surface cannot project", () => {
       "/api/cloud/disconnect",
       "/api/cloud/status",
       /**
+       * S17/S19/S21 (STA-278, STA-280, STA-282) — the PER-ROW cloud surface, and
+       * the largest addition this golden has taken since S13. Read the shape
+       * before the list, because the shape is the review.
+       *
+       * ## Why these exist beside `/api/cloud/*` rather than replacing them
+       *
+       * Every `/api/cloud/*` mutation above takes an optional `ws` and resolves
+       * it through the server's `handleFor`. In HUB mode that resolves a slug. In
+       * SINGLE-WORKSPACE mode — the ordinary `staple ui` in a repository — it
+       * ignores the argument entirely and returns the workspace the server was
+       * started on. That is correct for those routes, which are about the
+       * workspace the settings dialog was opened on.
+       *
+       * It is catastrophic for a row in a machine-wide list: pressing Disconnect
+       * on `bravo` would disconnect `alpha`, silently, on the common
+       * configuration. So the routes below address the MACHINE REGISTRY by slug
+       * and never touch the server's store cache. If one of them ever acquires a
+       * `ws` parameter, or one of the routes above starts being used from the
+       * workspace list, that is the review moment.
+       * `test/ui-cloud-workspace-actions.test.ts` drives all six in
+       * single-workspace mode for exactly this reason.
+       *
+       * ## Connect is still two routes, and still carries no endpoint
+       *
+       * `/api/cloud/workspace/connect/preview` is the only one of the six that
+       * may name an endpoint, and `/api/cloud/workspace/connect` has no endpoint
+       * field — only a slug and a ticket the server minted while returning a
+       * preview. Adding a slug did not weaken that: a slug names a workspace this
+       * machine has already registered, and no arrangement of registered
+       * workspaces can spell a service address. The server additionally refuses a
+       * ticket minted for a different workspace, by name, so the two-step
+       * exchange cannot be walked sideways across rows.
+       *
+       * ## Which of them egress
+       *
+       * `/api/cloud/workspace/sync` and `/api/cloud/workspace/connect`, and
+       * nothing else. `preview`, `consent` and `disconnect` read and write local
+       * files, and `test/network-silence.test.ts` drives all three under a spy.
+       *
+       * ## There is still deliberately NO purge and NO bulk prune
+       *
+       * Purge for the reason stated above. Prune because STA-282 asks that "a
+       * dead entry can be removed" — singular — and a route that swept every dead
+       * row at once would be a second, coarser removal path whose blast radius
+       * nobody had previewed row by row. `staple hub prune` remains the CLI verb
+       * for that, and it previews by default.
+       */
+      "/api/cloud/workspace/connect",
+      "/api/cloud/workspace/connect/preview",
+      "/api/cloud/workspace/consent",
+      "/api/cloud/workspace/disconnect",
+      "/api/cloud/workspace/sync",
+      /**
        * S16 (STA-275) added `/api/cloud/workspaces`, a GET, and it is the only
        * cloud route that is about MORE THAN ONE workspace.
        *
@@ -447,6 +506,32 @@ describe("KNOWN: logical errors this surface cannot project", () => {
       "/api/gate/request-changes",
       "/api/glyph/sanitize",
       "/api/graph",
+      /**
+       * S21 (STA-282) — the only `/api/hub/` route, and it is under `/api/hub/`
+       * rather than `/api/cloud/` because it is NOT a cloud operation.
+       *
+       * It deletes one row from the machine registry and reaches nothing else: no
+       * credential, no connection record, no workspace file. Filing it under
+       * `cloud` would be a route name that lied about what it touches, and the
+       * method gate's per-route reasoning is only worth anything while the names
+       * are honest.
+       *
+       * It PREVIEWS BY DEFAULT — without `confirm` it writes nothing and answers
+       * with what would happen, including how many cross-workspace links name the
+       * row — which is what lets the confirmation state a fact rather than a
+       * hope. It refuses a workspace that is still CONNECTED, because the
+       * registry row is the only thing on this machine pointing at that
+       * workspace's credential.
+       *
+       * `deleteHubRegistration` is what makes "never touches the workspace
+       * database" structural rather than intended: it is handed a database
+       * connection and a NAME, with no `fs` module and no workspace opener, so it
+       * has nothing to delete a file with.
+       *
+       * It is NAMED in the method gate rather than matched by prefix, so that a
+       * future `/api/hub/…` READ does not inherit a write pin nobody asked for.
+       */
+      "/api/hub/unregister",
       "/api/inbox",
       "/api/issue",
       "/api/issues",

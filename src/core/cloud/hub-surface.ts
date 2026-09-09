@@ -81,6 +81,43 @@ export interface HubWorkspaceReport {
   kind: string;
   /** `existsSync(path)`. False is `hub ls`'s `MISSING`. */
   available: boolean;
+  /**
+   * True when staple records a sync identity for this workspace the next time it
+   * opens it — every workspace that is not in a version control checkout.
+   *
+   * Carried through from {@link import("./hub-scope.js").HubWorkspace} rather
+   * than re-derived, because re-deriving it means another `isCheckoutBacked`
+   * walk and two walks can disagree. It is on the ROW because a surface has to
+   * tell the two identity absences apart WITHOUT parsing prose: one of them
+   * needs no instruction at all, and the other needs `staple init` in a precise
+   * directory. Before this field existed the settings page had one sentence for
+   * both, and for the first case that sentence invited a second repository id
+   * over a workspace that was about to record its own.
+   */
+  recordsIdentityOnOpen: boolean;
+  /**
+   * Can any control on this row do anything at all?
+   *
+   * **Not `skip === null`, and the difference is the reason this is a field.**
+   * A workspace whose only obstacle is that it has not recorded a sync identity
+   * yet, and which will record one the next time staple opens it, is perfectly
+   * connectable — pressing Connect is what opens it. `skipReasonFor` calls that
+   * row `no_identity` and is right to: a hub-wide FAN-OUT will not act on it,
+   * because a fan-out reads files and never opens a database. A row with its own
+   * button is a different question, and this is that question's answer.
+   *
+   * Decided here so it is decided once. The alternative is every surface
+   * re-deriving `!available ? no : problem ? no : identity ? yes :
+   * recordsIdentityOnOpen` — which is a rule about `repo-identity.ts` spelled
+   * out in a React component, in a CLI renderer, and in the next surface too.
+   *
+   * Orthogonal to {@link available}, deliberately, and both are needed. A
+   * surface GROUPS on `available` ("is this thing on the machine") and COUNTS on
+   * `actionable` ("is there anything to do here"). A reachable workspace inside a
+   * checkout with no manifest is `available: true, actionable: false`, and
+   * collapsing the two would hide it — which STA-282 forbids in as many words.
+   */
+  actionable: boolean;
   repositoryId: string | null;
   state: HubConnectionState;
   /** What a surface may OFFER for this row. Same three values as one workspace. */
@@ -119,6 +156,19 @@ export interface HubCloudCounts {
   disconnected: number;
   /** Rows a fan-out would not act on, for any of the three reasons. */
   skipped: number;
+  /**
+   * Rows a surface can offer a working control on. See
+   * {@link HubWorkspaceReport.actionable}.
+   *
+   * `total - skipped` is NOT this number, and that is the point of counting it
+   * separately: a workspace that will record its identity on its next open is
+   * skipped by a fan-out and actionable from a button.
+   *
+   * This is the count a settings page should lead with. "7 workspaces" said
+   * about a list of which four point at paths that no longer exist is a true
+   * number answering a question nobody asked.
+   */
+  actionable: number;
   /** Of the connected rows, those with automatic sync on for this device. */
   automatic: number;
 }
@@ -136,6 +186,35 @@ export interface HubCloudReport {
    * connected.
    */
   endpoints: string[];
+}
+
+/**
+ * What one row's control just did — S19 (STA-280), *"A row shows the outcome of
+ * the last operation on it"*.
+ *
+ * One shape for all six of them, and the uniformity is the feature: a surface
+ * that had a different result type per verb would render six different outcome
+ * lines, and five of them would be written by whoever added the sixth verb last.
+ *
+ * `slug` is on it although the caller knew which row it pressed. It is the
+ * evidence: an outcome whose slug does not match the row it is being rendered
+ * against is the exact bug S19 asks to be prevented — *"an action on one row
+ * does not act on another"* — and a result that carried no name could not be
+ * checked. `test/ui-cloud-workspace-actions.test.ts` checks it.
+ */
+export interface HubWorkspaceOutcome {
+  /** The workspace acted on, as the server resolved it. */
+  slug: string;
+  action: "connect" | "sync" | "auto" | "backup" | "disconnect" | "remove";
+  status: "ok" | "skipped" | "failed";
+  /**
+   * One sentence about THIS workspace. Rendered for a human, never parsed —
+   * every decision a surface makes comes from `status` and from the refreshed
+   * row beside it.
+   */
+  detail: string;
+  /** ISO 8601, so a row can say "a moment ago" without the client guessing. */
+  at: string;
 }
 
 export interface HubReportOptions {
@@ -177,10 +256,54 @@ export function hubCloudReport(home: string, options: HubReportOptions = {}): Hu
       connected: rows.filter((row) => row.state !== "disconnected").length,
       disconnected: rows.filter((row) => row.state === "disconnected").length,
       skipped: rows.filter((row) => row.skip !== null).length,
+      actionable: rows.filter((row) => row.actionable).length,
       automatic: rows.filter((row) => row.auto).length,
     },
     endpoints,
   };
+}
+
+/**
+ * The ONE place `actionable` is decided. See
+ * {@link HubWorkspaceReport.actionable} for why it is not `skip === null`.
+ *
+ * Written as a switch over the skip reason rather than as a boolean expression,
+ * because each arm is a different argument and the next person to add a skip
+ * reason must be made to answer this question for it:
+ *
+ * - `unavailable` — the database file is not on this machine. Connect would mint
+ *   a credential for something that cannot then sync, and sync would either fail
+ *   or, worse, CREATE an empty database and hydrate it from the remote. `hub-
+ *   scope.ts` makes that argument at length. The one control that IS offered on
+ *   such a row is disconnect, and it is offered for the opposite reason —
+ *   `performHubDisconnect` is deliberately not gated on `available`, because the
+ *   credential is on THIS machine and refusing to remove it would leave a live
+ *   secret behind for exactly the workspace somebody is most likely to be
+ *   disconnecting. That asymmetry belongs to the surface, not to this flag: a
+ *   surface asks "is there anything here" and then asks each control separately.
+ *
+ * - `problem` — the manifest is present and will not parse. Neither absent nor
+ *   usable, and every consumer treats it as not actionable rather than guessing.
+ *
+ * - `no_identity` — the interesting one, and it splits.
+ *   `recordsIdentityOnOpen` means opening this workspace records an identity, and
+ *   opening it is exactly what a per-row connect does. So the row IS actionable,
+ *   and the surface offers Connect with no instruction attached. Inside a
+ *   checkout the manifest is a committed file; nothing that opens the database
+ *   will produce one, and `staple init` in that directory really is the answer.
+ *
+ * - `null` — nothing is in the way.
+ */
+function actionableFor(workspace: HubWorkspace, skip: HubSkipReason | null): boolean {
+  switch (skip) {
+    case null:
+      return true;
+    case "unavailable":
+    case "problem":
+      return false;
+    case "no_identity":
+      return workspace.recordsIdentityOnOpen;
+  }
 }
 
 function reportFor(
@@ -197,6 +320,8 @@ function reportFor(
     path: workspace.path,
     kind: workspace.kind,
     available: workspace.available,
+    recordsIdentityOnOpen: workspace.recordsIdentityOnOpen,
+    actionable: actionableFor(workspace, skip),
     repositoryId: workspace.repositoryId,
     skip,
     skipDetail,
@@ -241,6 +366,14 @@ function reportFor(
       ...base,
       skip: "problem",
       skipDetail: `This workspace's connection record could not be read: ${message}`,
+      /**
+       * Overridden alongside `skip`, and it has to be. `base.actionable` was
+       * computed before this read was attempted and said true, because the only
+       * facts known at that point were that the disk is here and the manifest
+       * parsed. A control offered now would act through a connection record
+       * nobody could read.
+       */
+      actionable: false,
       state: "disconnected",
       mode: "disconnected",
       endpoint: null,

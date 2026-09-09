@@ -22,7 +22,10 @@ import type {
   DocumentRevision,
   ErrorEnvelope,
   Graph,
+  HubActionResult,
   HubCloudReport,
+  HubConnectPreviewResult,
+  HubUnregisterPreviewResult,
   InboxRow,
   IssueDetail,
   IssueDocument,
@@ -299,6 +302,115 @@ export const revokeCloudDevice = (target: { ws?: string; deviceId: string }) =>
     "devices/revoke",
     { ...target, confirm: true },
   );
+
+// ---------- the per-row cloud surface (S17/S19/S21) ----------
+
+/**
+ * Six calls, each naming the ONE workspace it acts on — S17 (STA-278), S19
+ * (STA-280), S21 (STA-282).
+ *
+ * ## Why these are separate from the five above, and not a `ws` argument
+ *
+ * The functions above take an optional `ws` and hit `/api/cloud/*`, where the
+ * server resolves it through `handleFor`. In HUB mode that resolves a slug. In
+ * single-workspace mode — the ordinary `staple ui` in a repository — it IGNORES
+ * the slug and answers with the one workspace the server was started on. That is
+ * correct for those routes, which are about the workspace the dialog was opened
+ * on; it would be catastrophic here, where pressing Disconnect on the `bravo`
+ * row would silently disconnect `alpha`.
+ *
+ * So every function below hits `/api/cloud/workspace/*`, which addresses the
+ * MACHINE REGISTRY by slug and never touches the server's store cache. The two
+ * families look interchangeable and are not, which is why they do not share a
+ * helper: a shared `cloudWrite` with an optional slug is one careless call away
+ * from the bug.
+ *
+ * ## What leaves the machine
+ *
+ * `syncWorkspace` and `connectWorkspace`. Nothing else — `previewWorkspaceConnect`
+ * reads local files and cannot import the client, `setWorkspaceConsent` writes one
+ * file in the staple home, `disconnectWorkspace` deletes one, and
+ * `unregisterWorkspace` deletes a row from the local registry. None of them is
+ * called on mount; the list itself comes from `getCloudWorkspaces`, which is
+ * silent by construction.
+ */
+const hubWrite = <T>(path: string, body: Record<string, unknown>) =>
+  request<T>(path, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+/**
+ * Step one, for one row. Local.
+ *
+ * Answers with `preview: null` and a reason when the row would be skipped — an
+ * already-connected workspace, most often — and mints no ticket for it.
+ */
+export const previewWorkspaceConnect = (target: {
+  slug: string;
+  endpoint: string;
+  label?: string;
+  credentialFile?: boolean;
+}) => hubWrite<HubConnectPreviewResult>("/api/cloud/workspace/connect/preview", target);
+
+/**
+ * Step two. EGRESSES. Carries the ticket, the digest and the slug — and no
+ * endpoint, exactly as `cloudConnect` carries none.
+ *
+ * The slug does not weaken that guarantee: it names a workspace already
+ * registered on this machine, and no arrangement of registered workspaces can
+ * spell a service address. The server additionally refuses a ticket minted for a
+ * different workspace, by name.
+ */
+export const connectWorkspace = (target: { slug: string; consent: ConsentTicket; token: string }) =>
+  hubWrite<HubActionResult>("/api/cloud/workspace/connect", {
+    slug: target.slug,
+    consent: target.consent.id,
+    digest: target.consent.digest,
+    token: target.token,
+  });
+
+/** One consent, one row, one call. Writes a file in the staple home and nothing else. */
+export const setWorkspaceConsent = (target: {
+  slug: string;
+  consent: "auto" | "backup";
+  value: boolean;
+}) =>
+  hubWrite<HubActionResult>("/api/cloud/workspace/consent", {
+    slug: target.slug,
+    [target.consent]: target.value,
+  });
+
+/**
+ * Local only. Offered even on a row whose disk is not mounted, deliberately: the
+ * credential is on THIS machine and removing it is the whole point.
+ */
+export const disconnectWorkspace = (target: { slug: string }) =>
+  hubWrite<HubActionResult>("/api/cloud/workspace/disconnect", { ...target, confirm: true });
+
+/**
+ * EGRESSES. A row that fails answers 200 with `outcome.status === "failed"` and
+ * the service's own sentence — the fan-out reports a failure as a row rather
+ * than by throwing, so the caller must read `status` and not merely `catch`.
+ */
+export const syncWorkspace = (target: { slug: string }) =>
+  hubWrite<HubActionResult>("/api/cloud/workspace/sync", target);
+
+/** What removal would do, having written nothing. Previews by default, like `hub prune`. */
+export const previewUnregisterWorkspace = (target: { slug: string }) =>
+  hubWrite<HubUnregisterPreviewResult>("/api/hub/unregister", target);
+
+/**
+ * Remove one row from this machine's registry.
+ *
+ * Unregisters; it does not delete. The workspace database and every file beside
+ * it are untouched, which is a property of `deleteHubRegistration`'s signature
+ * rather than a promise. Refused while the workspace is still connected, because
+ * that would leave this machine's credential with nothing pointing at it.
+ */
+export const unregisterWorkspace = (target: { slug: string; removeCrossLinks?: boolean }) =>
+  hubWrite<HubActionResult>("/api/hub/unregister", { ...target, confirm: true });
 
 export const getIssues = (params: { ws?: string; assignee?: string } = {}) =>
   request<IssueRow[]>(`/api/issues${qs(params)}`);

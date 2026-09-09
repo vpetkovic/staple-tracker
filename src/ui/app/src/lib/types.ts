@@ -1401,6 +1401,30 @@ export interface HubWorkspaceReport {
   kind: string;
   /** False is `hub ls`'s MISSING: the file is not on this machine right now. */
   available: boolean;
+  /**
+   * True when staple records this workspace's sync identity the next time it
+   * opens it — every workspace outside a version control checkout. S17.
+   *
+   * The field the settings page needed and did not have. Without it there is one
+   * "no identity" state and one sentence for it, and that sentence has to name
+   * `staple init` — which for this half of the rows is wrong advice that mints a
+   * SECOND identity. With it, a row here needs no instruction at all: pressing
+   * Connect opens the workspace, which records one.
+   */
+  recordsIdentityOnOpen: boolean;
+  /**
+   * Can any control on this row do anything? Decided in `hub-surface.ts`.
+   *
+   * NOT `skip === null`, and the browser must not re-derive it. A row that will
+   * record its identity on its next open is skipped by a hub-wide fan-out and is
+   * still connectable from its own button — a rule about `repo-identity.ts` that
+   * has no business being restated in a React component.
+   *
+   * The surface GROUPS on `available` and COUNTS on this. They are different
+   * questions: a reachable workspace inside a checkout with no manifest is
+   * `available: true, actionable: false`, and it must stay in the main list.
+   */
+  actionable: boolean;
   repositoryId: string | null;
   /**
    * A deliberate SUBSET of `CloudSurfaceReport["state"]`. `offline` and
@@ -1443,10 +1467,88 @@ export interface HubCloudReport {
     connected: number;
     disconnected: number;
     skipped: number;
+    /**
+     * Rows a control could act on. THE number the header leads with.
+     *
+     * `total - skipped` is not this: a workspace that records its identity on its
+     * next open is skipped by a fan-out and actionable from a button. "7
+     * workspaces" said about a list of which four point at paths that no longer
+     * exist is a true number answering a question nobody asked.
+     */
+    actionable: number;
     automatic: number;
   };
   /** Sorted and deduped. A hub spanning two services is legitimate. */
   endpoints: string[];
+}
+
+/**
+ * What one row's control just did — S19 (STA-280). Mirrors `HubWorkspaceOutcome`
+ * in src/core/cloud/hub-surface.ts, and pinned equal to it by
+ * `test/contract-ui-types.test.ts`.
+ *
+ * One shape for all six verbs, so the surface renders one outcome line rather
+ * than six written by whoever added each verb last.
+ *
+ * `slug` is on it although the caller knew which row it pressed, and it is not
+ * redundant: it is the EVIDENCE. An outcome whose slug does not match the row it
+ * is rendered against is the exact defect S19 asks to be prevented, and a result
+ * that carried no name could not be checked. The panel keys its outcome map on
+ * `outcome.slug` for that reason, not on the slug it sent.
+ */
+export interface HubWorkspaceOutcome {
+  slug: string;
+  action: "connect" | "sync" | "auto" | "backup" | "disconnect" | "remove";
+  status: "ok" | "skipped" | "failed";
+  /** One sentence for a human. Never parsed — decisions come from `status`. */
+  detail: string;
+  /** ISO 8601. */
+  at: string;
+}
+
+/** What every per-row route answers with: the act's outcome, plus the refreshed list. */
+export interface HubActionResult {
+  outcome: HubWorkspaceOutcome;
+  report: HubCloudReport;
+}
+
+/**
+ * `POST /api/cloud/workspace/connect/preview` — one row's connect preview.
+ *
+ * `preview` and `consent` are BOTH null when the fan-out would skip this row,
+ * and `reason` is the fan-out's own sentence for why. A ticket for something
+ * that will not happen would be a consent with no subject.
+ */
+export interface HubConnectPreviewResult {
+  slug: string;
+  action: "connect" | "reconnect" | "skip";
+  reason: string;
+  preview: ConnectPreview | null;
+  consent: ConsentTicket | null;
+  report: HubCloudReport;
+}
+
+/**
+ * `POST /api/hub/unregister` without `confirm` — what removal WOULD do, having
+ * written nothing. The same previews-by-default discipline as the `hub_prune`
+ * tool, and what lets the confirmation state a fact rather than a hope.
+ */
+export interface HubUnregisterPreviewResult {
+  preview: {
+    slug: string;
+    prefix: string;
+    path: string;
+    available: boolean;
+    /** Removal is refused while true: it would orphan this machine's credential. */
+    connected: boolean;
+    crossLinks: Array<{
+      blockerWs: string;
+      blockerIdentifier: string;
+      blockedWs: string;
+      blockedIdentifier: string;
+    }>;
+  };
+  report: HubCloudReport;
 }
 
 /**

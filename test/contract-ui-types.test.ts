@@ -40,7 +40,7 @@
 import { describe, expect, it } from "vitest";
 import type { ClaimActivity, ClaimLease, ClaimScope } from "../src/core/types.js";
 import type { CloudSurfaceReport } from "../src/core/cloud/surface.js";
-import type { HubCloudReport } from "../src/core/cloud/hub-surface.js";
+import type { HubCloudReport, HubWorkspaceOutcome } from "../src/core/cloud/hub-surface.js";
 import type { ConnectPreview } from "../src/core/cloud/preview.js";
 import type { RemoteDevice } from "../src/core/cloud/client.js";
 import type {
@@ -50,6 +50,7 @@ import type {
   CloudSurfaceReport as UiCloudSurfaceReport,
   ConnectPreview as UiConnectPreview,
   HubCloudReport as UiHubCloudReport,
+  HubWorkspaceOutcome as UiHubWorkspaceOutcome,
   RemoteDevice as UiRemoteDevice,
 } from "../src/ui/app/src/lib/types.js";
 
@@ -114,6 +115,23 @@ type _RemoteDeviceMatches = Expect<Equals<RemoteDevice, UiRemoteDevice>>;
  */
 type _HubCloudReportMatches = Expect<Equals<HubCloudReport, UiHubCloudReport>>;
 
+/**
+ * S19 (STA-280): what one row's control just did.
+ *
+ * It earns its place by this file's rule — the page renders it and BRANCHES on
+ * it — and the branch is the reason. `status` is a closed three-value union and
+ * the panel draws a different mark for each, including for `failed`, which is
+ * the interesting one: `syncAllWorkspaces` reports a failed workspace as a ROW
+ * rather than by throwing, so a `failed` outcome arrives on a 200 and the page
+ * must render it as an outcome and not as a success. A mirror that widened
+ * `status` to `string` would let that branch fall through silently, and a page
+ * that silently renders a failure as nothing is worse than one that crashes.
+ *
+ * `action` is likewise closed. Six verbs, and the page keys its per-row label
+ * off them; a seventh added on the server and not here would render blank.
+ */
+type _HubWorkspaceOutcomeMatches = Expect<Equals<HubWorkspaceOutcome, UiHubWorkspaceOutcome>>;
+
 describe("the browser app's mirror of the wire vocabulary", () => {
   /**
    * The assertions above are types, and types are erased — so `vitest` would
@@ -136,11 +154,17 @@ describe("the browser app's mirror of the wire vocabulary", () => {
       true satisfies _ConnectPreviewMatches,
       true satisfies _RemoteDeviceMatches,
       true satisfies _HubCloudReportMatches,
+      true satisfies _HubWorkspaceOutcomeMatches,
     ];
     // GOLDEN, moved by S13 (STA-258): 4 -> 6. The two additions are the connect
     // preview and the device row; see the comment above them.
     // GOLDEN, moved by S16 (STA-275): 6 -> 7. The addition is the hub-wide
     // workspace list; see the comment above it.
-    expect(proofs).toHaveLength(7);
+    // GOLDEN, moved by S19 (STA-280): 7 -> 8. The addition is the per-row
+    // outcome every `/api/cloud/workspace/*` route answers with; see the comment
+    // above it. The hub report itself did NOT need a new proof — it grew two
+    // fields, and the existing equality caught both sides going out of step,
+    // which is the proof doing its job rather than needing a sibling.
+    expect(proofs).toHaveLength(8);
   });
 });

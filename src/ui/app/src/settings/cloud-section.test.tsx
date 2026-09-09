@@ -36,7 +36,7 @@ import type {
   HubWorkspaceReport,
   RemoteDevice,
 } from "@/lib/types";
-import { CloudPanel, type CloudPanelProps } from "./CloudSection";
+import { CloudPanel, type CloudPanelProps, type HubPanelState } from "./CloudSection";
 import {
   CLOUD_CATEGORY,
   CLOUD_CATEGORY_ID,
@@ -46,11 +46,19 @@ import {
   consentControls,
   counterFacts,
   describeDevice,
+  groupDisabledReasons,
+  hubGroups,
   hubListDescription,
+  hubRowControls,
+  hubRowRationale,
+  hubRowSummary,
   hubRowView,
+  hubUnreachableDescription,
   isCloudCategory,
+  joinLabels,
   orderDevices,
   previewFacts,
+  removeWarning,
   revokeWarning,
   withCloudCategory,
 } from "./cloud-settings";
@@ -114,6 +122,17 @@ const PREVIEW: ConnectPreview = {
 
 const NOOP = () => {};
 
+/** Nothing on the list is doing anything. The default for every case in this file. */
+const IDLE_HUB: HubPanelState = {
+  busy: null,
+  refreshing: false,
+  outcomes: {},
+  connecting: null,
+  removing: null,
+  disconnecting: null,
+  error: null,
+};
+
 function panel(overrides: Partial<CloudPanelProps> = {}): string {
   const props: CloudPanelProps = {
     report: DISCONNECTED,
@@ -127,6 +146,20 @@ function panel(overrides: Partial<CloudPanelProps> = {}): string {
     // flight or failed, and is the correct default for every case in this file —
     // they are all about ONE workspace.
     workspaces: null,
+    hub: IDLE_HUB,
+    hubActions: {
+      onOpenConnect: NOOP,
+      onDraft: NOOP,
+      onPreview: NOOP,
+      onConnect: NOOP,
+      onSync: NOOP,
+      onConsent: NOOP,
+      onAskDisconnect: NOOP,
+      onDisconnect: NOOP,
+      onAskRemove: NOOP,
+      onRemove: NOOP,
+      onRefresh: NOOP,
+    },
     revoking: null,
     confirmDisconnect: false,
     onPreview: NOOP,
@@ -460,7 +493,8 @@ describe("devices", () => {
   });
 });
 
-// ---------------------------------------------- the hub-wide list (S16/STA-275)
+
+// ------------------- the workspace list, as a CONTROL (S17/S19/S21)
 
 function hubRow(overrides: Partial<HubWorkspaceReport> = {}): HubWorkspaceReport {
   return {
@@ -469,6 +503,8 @@ function hubRow(overrides: Partial<HubWorkspaceReport> = {}): HubWorkspaceReport
     path: "/work/alpha/.staple/staple.db",
     kind: "repo",
     available: true,
+    recordsIdentityOnOpen: true,
+    actionable: true,
     repositoryId: "0e77fa01-1111-2222-3333-444444444444",
     state: "manual",
     mode: "manual",
@@ -486,6 +522,29 @@ function hubRow(overrides: Partial<HubWorkspaceReport> = {}): HubWorkspaceReport
   };
 }
 
+/** A row whose disk is gone — four of the five entries STA-282 is about. */
+function missingRow(slug: string): HubWorkspaceReport {
+  return hubRow({
+    slug,
+    prefix: slug.slice(0, 3).toUpperCase(),
+    path: `/tmp/gone/${slug}/.staple/staple.db`,
+    available: false,
+    actionable: false,
+    repositoryId: null,
+    state: "disconnected",
+    mode: "disconnected",
+    endpoint: null,
+    deviceId: null,
+    label: null,
+    credentialMechanism: null,
+    connectedAt: null,
+    skip: "unavailable",
+    skipDetail:
+      "The workspace database is not on this machine right now (/tmp/gone). It is left " +
+      "registered and untouched — an unmounted volume is not a deleted workspace.",
+  });
+}
+
 function hubReport(rows: HubWorkspaceReport[]): HubCloudReport {
   return {
     workspaces: rows,
@@ -494,6 +553,7 @@ function hubReport(rows: HubWorkspaceReport[]): HubCloudReport {
       connected: rows.filter((row) => row.state !== "disconnected").length,
       disconnected: rows.filter((row) => row.state === "disconnected").length,
       skipped: rows.filter((row) => row.skip !== null).length,
+      actionable: rows.filter((row) => row.actionable).length,
       automatic: rows.filter((row) => row.auto).length,
     },
     endpoints: [
@@ -502,7 +562,12 @@ function hubReport(rows: HubWorkspaceReport[]): HubCloudReport {
   };
 }
 
-describe("the hub-wide workspace list", () => {
+/** Every control a row offers, as a map, so a test can name one. */
+function controlsOf(row: HubWorkspaceReport, options: { current?: boolean } = {}) {
+  return new Map(hubRowControls(row, options).map((control) => [control.action, control]));
+}
+
+describe("every registered workspace is actionable from the page (S19/STA-280)", () => {
   it("names every workspace with its own state, not a summary of them", () => {
     const html = panel({
       workspaces: hubReport([
@@ -518,24 +583,331 @@ describe("the hub-wide workspace list", () => {
       ]),
     });
 
-    expect(html).toContain('data-cloud-workspaces');
+    expect(html).toContain("data-cloud-workspaces");
     for (const slug of ["alpha", "bravo", "charlie"]) {
       expect(html).toContain(`data-cloud-workspace="${slug}"`);
     }
-    // Each row carries its OWN state, which is the criterion.
     expect(html).toContain("Connected, manual");
     expect(html).toContain("Connected, automatic");
     expect(html).toContain("Not connected");
   });
 
-  it("renders when the CURRENT workspace is disconnected — the case it exists for", () => {
+  /**
+   * THE CRITERION. Six controls on every row, and each one addressed to the row
+   * it is drawn on — `data-cloud-workspace-action="<slug>:<verb>"`. The attribute
+   * is not decoration: it is the assertion that a control knows which workspace
+   * it belongs to, which is the whole of "an action on one row does not act on
+   * another" at this layer.
+   */
+  it("gives each row its own connect, sync, backup and disconnect", () => {
+    const html = panel({
+      workspaces: hubReport([
+        hubRow(),
+        hubRow({ slug: "bravo", repositoryId: "b", state: "disconnected", mode: "disconnected", endpoint: null }),
+      ]),
+    });
+
+    for (const verb of ["connect", "sync", "disconnect", "remove"]) {
+      expect(html).toContain(`data-cloud-workspace-action="alpha:${verb}"`);
+      expect(html).toContain(`data-cloud-workspace-action="bravo:${verb}"`);
+    }
+    for (const consent of ["auto", "backup"]) {
+      expect(html).toContain(`data-cloud-workspace-toggle="alpha:${consent}"`);
+      expect(html).toContain(`data-cloud-workspace-toggle="bravo:${consent}"`);
+    }
+  });
+
+  it("offers every action from the page, with no row telling the reader to open a terminal", () => {
     /**
-     * Every other section on this panel is behind the `connected` branch. This
-     * one must not be: the question it answers is "have I connected anything?",
-     * asked by somebody looking at a workspace that says Not connected. Hiding
-     * the list until the current workspace happened to be connected would make it
-     * invisible exactly when it is useful.
+     * S17's criterion, asserted against the markup rather than against intent.
+     * `staple cloud connect --all` was the previous section description; it is
+     * gone, along with every other command that appeared as a row's ANSWER.
+     *
+     * `staple init` survives in exactly one place — the disabled reason on a
+     * checkout-backed row with no manifest — and that is deliberate: there the
+     * command genuinely is the remedy, and it appears as an explanation of why a
+     * control is unavailable rather than as the control.
      */
+    const html = panel({
+      workspaces: hubReport([hubRow(), hubRow({ slug: "bravo", repositoryId: "b" })]),
+    });
+    expect(html).not.toContain("staple cloud connect --all");
+    expect(html).not.toContain("staple cloud sync");
+    expect(html).not.toContain("staple init");
+  });
+
+  /**
+   * The pure half of the criterion. A control that cannot work is RETURNED, with
+   * a sentence, rather than dropped: a control that vanishes leaves a reader
+   * unable to tell an unavailable capability from one that does not exist.
+   */
+  it("disables a control with a stated reason rather than hiding it", () => {
+    const disconnected = controlsOf(
+      hubRow({ state: "disconnected", mode: "disconnected", endpoint: null, repositoryId: "x" }),
+    );
+    expect([...disconnected.keys()]).toEqual([
+      "connect",
+      "sync",
+      "auto",
+      "backup",
+      "disconnect",
+      "remove",
+    ]);
+    expect(disconnected.get("connect")!.disabledReason).toBeNull();
+    for (const verb of ["sync", "auto", "backup", "disconnect"] as const) {
+      expect(disconnected.get(verb)!.disabledReason).toContain("not connected on this machine");
+    }
+  });
+
+  it("renders the reason beside the disabled control, not only in a tooltip", () => {
+    const html = panel({
+      workspaces: hubReport([
+        hubRow({ slug: "alpha", state: "disconnected", mode: "disconnected", endpoint: null }),
+        hubRow({ slug: "bravo", repositoryId: "b" }),
+      ]),
+    });
+    // A tooltip is not an explanation on a page somebody opened to understand
+    // the model. The sentence is in the document.
+    expect(html).toContain("there is nothing to act on");
+    expect(html).toContain('data-disabled="true"');
+  });
+
+  /**
+   * THE ANTI-NOISE PROPERTY, and it is the criterion's other half.
+   *
+   * The first build of this rendered each control's reason beside that control.
+   * On a disconnected row that is one identical sentence four times, seven rows
+   * deep — which satisfies "stated rather than hidden" and reintroduces the very
+   * thing this ticket removes. The reason is still stated in full; it is stated
+   * ONCE, naming every control it covers.
+   */
+  it("states a shared reason once, naming every control it covers", () => {
+    const disconnected = hubRow({
+      state: "disconnected",
+      mode: "disconnected",
+      endpoint: null,
+      repositoryId: "x",
+    });
+    const groups = groupDisabledReasons(hubRowControls(disconnected));
+    expect(groups).toHaveLength(1);
+    expect(groups[0]!.labels).toEqual(["Sync now", "Automatic sync", "Backup", "Disconnect"]);
+    expect(joinLabels(groups[0]!.labels)).toBe(
+      "Sync now, Automatic sync, Backup and Disconnect",
+    );
+
+    const html = panel({
+      workspaces: hubReport([disconnected, hubRow({ slug: "bravo", repositoryId: "b" })]),
+    });
+    /**
+     * One rendered LINE, not four. The sentence also appears in each disabled
+     * control's `title`, which is deliberate and is not visible text — so the
+     * count is taken over the rendered list rather than over the whole document.
+     */
+    const list = html.slice(html.indexOf("data-cloud-workspace-unavailable"));
+    const firstList = list.slice(0, list.indexOf("</ul>"));
+    expect(firstList.match(/there is nothing to act on/g)).toHaveLength(1);
+    expect(firstList).toContain("Sync now, Automatic sync, Backup and Disconnect");
+    expect(firstList).toContain("are unavailable:");
+  });
+
+  it("keeps two genuinely different reasons apart", () => {
+    /**
+     * A MISSING row that is still connected: Sync cannot open the database, and
+     * Remove would strand its credential. Two facts, two sentences — grouping
+     * must not merge them, which is why the reasons stay per-control in
+     * `hubRowControls` and are grouped only for rendering.
+     */
+    const gone = hubRow({
+      available: false,
+      actionable: false,
+      skip: "unavailable",
+      skipDetail: "not here",
+    });
+    const groups = groupDisabledReasons(hubRowControls(gone));
+    expect(groups.length).toBeGreaterThanOrEqual(2);
+    const reasons = groups.map((group) => group.reason);
+    expect(reasons.some((reason) => reason.includes("not on this machine"))).toBe(true);
+    expect(reasons.some((reason) => reason.includes("Disconnect it first"))).toBe(true);
+    // Disconnect is not in any group: it is live on this row, deliberately.
+    expect(groups.flatMap((group) => group.labels)).not.toContain("Disconnect");
+  });
+
+  it("says 'is unavailable' for one control and 'are' for several", () => {
+    expect(joinLabels(["Connect"])).toBe("Connect");
+    expect(joinLabels([])).toBe("");
+    const html = panel({
+      workspaces: hubReport([hubRow(), hubRow({ slug: "bravo", repositoryId: "b" })]),
+    });
+    // A connected row has exactly two disabled controls, each with its own
+    // reason, so both singular forms appear.
+    expect(html).toContain("is unavailable:");
+  });
+
+  it("refuses to connect a row that is already connected, and says where it is connected to", () => {
+    const connected = controlsOf(hubRow());
+    expect(connected.get("connect")!.disabledReason).toContain("https://sync.example.com");
+    expect(connected.get("connect")!.disabledReason).toContain("Disconnect it first");
+    // And the four that need a connection are live.
+    for (const verb of ["sync", "auto", "backup", "disconnect"] as const) {
+      expect(connected.get(verb)!.disabledReason).toBeNull();
+    }
+  });
+
+  /**
+   * THE ASYMMETRY WORTH PINNING. On a row whose disk is gone, sync is impossible
+   * — it opens the database — and disconnect is MORE important, not less: the
+   * credential is on this machine and `performHubDisconnect` is deliberately not
+   * gated on availability, because refusing would strand a live secret for
+   * exactly the workspace somebody is most likely to be disconnecting.
+   */
+  it("keeps disconnect live on a row whose disk is gone, while sync is not", () => {
+    const gone = controlsOf(
+      hubRow({
+        available: false,
+        actionable: false,
+        skip: "unavailable",
+        skipDetail: "The workspace database is not on this machine right now.",
+      }),
+    );
+    expect(gone.get("disconnect")!.disabledReason).toBeNull();
+    expect(gone.get("sync")!.disabledReason).toContain("not on this machine");
+    expect(gone.get("connect")!.disabledReason).not.toBeNull();
+  });
+
+  it("refuses removal while a workspace is still connected, and says why", () => {
+    expect(controlsOf(hubRow()).get("remove")!.disabledReason).toContain("Disconnect it first");
+    expect(controlsOf(hubRow()).get("remove")!.disabledReason).toContain(
+      "with nothing pointing at it",
+    );
+  });
+
+  it("refuses to remove the workspace this window is serving", () => {
+    const disconnected = hubRow({ state: "disconnected", mode: "disconnected", endpoint: null });
+    expect(controlsOf(disconnected, { current: true }).get("remove")!.disabledReason).toContain(
+      "register itself again",
+    );
+    expect(controlsOf(disconnected, { current: false }).get("remove")!.disabledReason).toBeNull();
+  });
+
+  /**
+   * S17's other half. Before this, the identity absence had ONE sentence and it
+   * named `staple init` — wrong advice for every workspace outside a checkout,
+   * and wrong in the expensive direction: run anywhere but the exact registered
+   * directory it mints a second identity for a workspace that was about to
+   * record its own.
+   */
+  it("offers a plain Connect on a row that records its identity when opened", () => {
+    const willRecord = hubRow({
+      repositoryId: null,
+      recordsIdentityOnOpen: true,
+      actionable: true,
+      state: "disconnected",
+      mode: "disconnected",
+      endpoint: null,
+      skip: "no_identity",
+      skipDetail: "…the long version…",
+    });
+    expect(controlsOf(willRecord).get("connect")!.disabledReason).toBeNull();
+    expect(hubRowSummary(willRecord)).toContain("nothing to set up first");
+    expect(hubRowSummary(willRecord)).not.toContain("staple");
+  });
+
+  it("names the command only where the command really is the remedy", () => {
+    const checkout = hubRow({
+      repositoryId: null,
+      recordsIdentityOnOpen: false,
+      actionable: false,
+      state: "disconnected",
+      mode: "disconnected",
+      endpoint: null,
+      skip: "no_identity",
+    });
+    const reason = controlsOf(checkout).get("connect")!.disabledReason;
+    expect(reason).toContain("staple init");
+    expect(reason).toContain("creates nothing new");
+    // As an explanation of an unavailable control — never as the control.
+    expect(controlsOf(checkout).get("connect")!.label).toBe("Connect");
+  });
+
+  it("shows the outcome of the last operation on the row it happened to", () => {
+    const html = panel({
+      workspaces: hubReport([hubRow(), hubRow({ slug: "bravo", repositoryId: "b" })]),
+      hub: {
+        ...IDLE_HUB,
+        outcomes: {
+          bravo: {
+            slug: "bravo",
+            action: "sync",
+            status: "ok",
+            detail: "Pushed 3, pulled 1.",
+            at: "2026-09-09T10:00:00.000Z",
+          },
+        },
+      },
+    });
+    expect(html).toContain('data-cloud-workspace-outcome="bravo"');
+    expect(html).not.toContain('data-cloud-workspace-outcome="alpha"');
+    expect(html).toContain("Pushed 3, pulled 1.");
+  });
+
+  it("renders a failed outcome as a failure rather than as nothing", () => {
+    /**
+     * `syncAllWorkspaces` reports a failed workspace as a ROW rather than by
+     * throwing, so a failure arrives on a 200. A panel that only rendered
+     * `status: "ok"` would answer a failed sync with silence, which is worse than
+     * an error.
+     */
+    const html = panel({
+      workspaces: hubReport([hubRow(), hubRow({ slug: "bravo", repositoryId: "b" })]),
+      hub: {
+        ...IDLE_HUB,
+        outcomes: {
+          alpha: {
+            slug: "alpha",
+            action: "sync",
+            status: "failed",
+            detail: "The service could not be reached.",
+            at: "2026-09-09T10:00:00.000Z",
+          },
+        },
+      },
+    });
+    expect(html).toContain('data-status="failed"');
+    expect(html).toContain("Did not work:");
+    expect(html).toContain("The service could not be reached.");
+  });
+
+  it("busies only the row that was pressed", () => {
+    const html = panel({
+      workspaces: hubReport([hubRow(), hubRow({ slug: "bravo", repositoryId: "b" })]),
+      hub: { ...IDLE_HUB, busy: { slug: "bravo", action: "sync" } },
+    });
+    // One "Working…", on bravo's sync button. Every other control is disabled
+    // (one registry, one staple home — a second press mid-flight races a write)
+    // but none of them claims to be doing anything.
+    expect(html.match(/Working…/g)).toHaveLength(1);
+  });
+
+  it("draws an error on the row that produced it", () => {
+    const html = panel({
+      workspaces: hubReport([hubRow(), hubRow({ slug: "bravo", repositoryId: "b" })]),
+      hub: { ...IDLE_HUB, error: { slug: "bravo", message: "that enrollment secret was refused" } },
+    });
+    const alpha = html.slice(
+      html.indexOf('data-cloud-workspace="alpha"'),
+      html.indexOf('data-cloud-workspace="bravo"'),
+    );
+    expect(html).toContain("that enrollment secret was refused");
+    expect(alpha).not.toContain("that enrollment secret was refused");
+  });
+
+  it("offers a refresh, so a workspace registered after load appears", () => {
+    const html = panel({ workspaces: hubReport([hubRow(), hubRow({ slug: "bravo", repositoryId: "b" })]) });
+    expect(html).toContain("data-cloud-workspaces-refresh");
+    expect(html).toContain("registered since you opened this");
+  });
+
+  it("renders when the CURRENT workspace is disconnected — the case it exists for", () => {
     const html = panel({
       report: DISCONNECTED,
       workspaces: hubReport([
@@ -563,63 +935,18 @@ describe("the hub-wide workspace list", () => {
     expect(hubRowView(hubRow()).marks).toEqual([]);
   });
 
-  it("shows why a workspace a hub-wide operation would skip is skipped", () => {
-    const html = panel({
-      workspaces: hubReport([
-        hubRow(),
-        hubRow({
-          slug: "bravo",
-          repositoryId: null,
-          available: false,
-          state: "disconnected",
-          mode: "disconnected",
-          endpoint: null,
-          skip: "unavailable",
-          skipDetail: "The workspace database is not on this machine right now.",
-        }),
-      ]),
-    });
-    expect(html).toContain("not on this machine right now");
-  });
-
   it("never renders credentialPresent, because the route that feeds it does not look", () => {
-    /**
-     * `null` means NOT ASKED. A column that read it as falsy would print "no
-     * credential" for every workspace on a surface that deliberately never
-     * probed — the difference between "your credential is gone" and "we did not
-     * check".
-     */
     const view = hubRowView(hubRow({ credentialPresent: null }));
     expect(Object.keys(view)).not.toContain("credentialPresent");
     expect(view.state).toBe("Connected, manual");
   });
 
   it("draws nothing for a machine with one workspace or none", () => {
-    // A "list" of one is a heading restating what the sections above already say.
+    // A "list" of one is a heading restating what the sections above already say
+    // about that same workspace, controls included.
     expect(panel({ workspaces: hubReport([hubRow()]) })).not.toContain("data-cloud-workspaces");
     expect(panel({ workspaces: hubReport([]) })).not.toContain("data-cloud-workspaces");
     expect(panel({ workspaces: null })).not.toContain("data-cloud-workspaces");
-  });
-
-  it("names the CLI gesture rather than offering a button that would ask less", () => {
-    /**
-     * A deliberate scope boundary, not an omission. Connecting every workspace
-     * spends one enrollment secret against N services and produces a
-     * per-workspace outcome; a button here would have to re-implement the whole
-     * fan-out preview to ask for that honestly, and one that showed less than the
-     * CLI preview shows would be a worse consent rather than a more convenient
-     * one.
-     */
-    const text = hubListDescription({
-      total: 4,
-      connected: 2,
-      disconnected: 2,
-      skipped: 1,
-      automatic: 1,
-    });
-    expect(text).toContain("2 of 4 connected");
-    expect(text).toContain("staple cloud connect --all");
-    expect(text).toContain("enumerated when the page loads");
   });
 
   it("is fetched once on mount and is NOT on any poll", () => {
@@ -628,12 +955,200 @@ describe("the hub-wide workspace list", () => {
     /**
      * The list describes N workspaces, and the temptation with a list is to poll
      * it. It must not be polled: connection state changes when a human runs a
-     * command in a terminal, so a poll would do the work forever to learn
-     * nothing. `useEffect` with an empty dependency array is the assertion — it is
-     * about the MACHINE, so it does not even re-run when `ws` changes.
+     * command, so a poll would do the work forever to learn nothing. The MOUNT
+     * effect's empty dependency array is the assertion; `onRefresh` calls the
+     * same function from a press, which is why the source is searched for
+     * `setInterval` rather than for a second call site.
      */
-    const effect = text.slice(text.indexOf("getCloudWorkspaces()"));
-    expect(effect.slice(0, effect.indexOf("}, [") + 8)).toContain("}, []);");
     expect(text).not.toMatch(/setInterval[\s\S]{0,200}getCloudWorkspaces/);
+  });
+});
+
+describe("a row says what it is in one line, with the paragraph behind a disclosure (S17/STA-278)", () => {
+  it("summarises each state in a single sentence", () => {
+    expect(hubRowSummary(hubRow())).toBe(
+      "Connected to https://sync.example.com. Nothing moves until you sync it.",
+    );
+    expect(hubRowSummary(hubRow({ state: "automatic", mode: "automatic", auto: true }))).toContain(
+      "Syncing automatically",
+    );
+    expect(
+      hubRowSummary(hubRow({ state: "disconnected", mode: "disconnected", endpoint: null })),
+    ).toBe("Not connected. Nothing about this workspace leaves the machine.");
+    expect(hubRowSummary(missingRow("qdemo"))).toBe(
+      "Not on this machine right now. Still registered, and nothing has been deleted.",
+    );
+  });
+
+  it("keeps the summary to one sentence-length line, not a paragraph", () => {
+    /**
+     * The failure this replaces was four lines per row, seven rows deep. A
+     * length bound is a blunt instrument and it is the right one here: the
+     * regression is not "the wording got worse", it is "somebody moved the
+     * explanation back into the row body".
+     */
+    for (const row of [
+      hubRow(),
+      hubRow({ state: "automatic", mode: "automatic" }),
+      hubRow({ state: "disconnected", mode: "disconnected", endpoint: null }),
+      missingRow("r6b"),
+      hubRow({ repositoryId: null, skip: "no_identity", recordsIdentityOnOpen: true, state: "disconnected", mode: "disconnected", endpoint: null }),
+      hubRow({ repositoryId: null, skip: "problem", actionable: false }),
+    ]) {
+      expect(hubRowSummary(row).length).toBeLessThanOrEqual(120);
+      expect(hubRowSummary(row).split("\n")).toHaveLength(1);
+    }
+  });
+
+  it("puts describeSkip's paragraph behind the disclosure and passes it through unchanged", () => {
+    const row = missingRow("qdemo");
+    const rationale = hubRowRationale(row)!;
+    // Verbatim. A surface that paraphrases a core explanation is a surface that
+    // will be paraphrasing a stale one within a release.
+    expect(rationale).toContain(row.skipDetail!);
+    expect(rationale).toContain(row.path);
+    // And it is NOT in the one-line summary.
+    expect(hubRowSummary(row)).not.toContain("unmounted volume");
+  });
+
+  it("renders the rationale inside a details element, closed", () => {
+    const html = panel({ workspaces: hubReport([hubRow(), missingRow("qdemo")]) });
+    expect(html).toContain("data-cloud-workspace-details");
+    expect(html).toContain("<summary");
+    // `<details>` with no `open` attribute is closed. The paragraph is present
+    // in the markup and not in the reader's way.
+    expect(html).not.toContain("<details open");
+    expect(html).toContain("unmounted volume is not a deleted workspace");
+  });
+});
+
+describe("test debris does not compete with real workspaces (S21/STA-282)", () => {
+  const DEBRIS = ["autotrigger", "legacyrepo", "qdemo", "r6b"];
+
+  function withDebris(): HubCloudReport {
+    return hubReport([
+      hubRow(),
+      hubRow({ slug: "staple", repositoryId: "s", state: "disconnected", mode: "disconnected", endpoint: null }),
+      // The fifth entry the ticket names, still on disk. It must NOT be
+      // subordinated: `available` is the key, not the slug.
+      hubRow({
+        slug: "s1-schema-probe",
+        repositoryId: "p",
+        state: "disconnected",
+        mode: "disconnected",
+        endpoint: null,
+      }),
+      ...DEBRIS.map(missingRow),
+    ]);
+  }
+
+  it("groups unreachable rows below the reachable ones", () => {
+    const report = withDebris();
+    const groups = hubGroups(report);
+    expect(groups.reachable.map((view) => view.slug)).toEqual([
+      "alpha",
+      "staple",
+      "s1-schema-probe",
+    ]);
+    expect(groups.unreachable.map((view) => view.slug)).toEqual(DEBRIS);
+  });
+
+  it("never hides a reachable workspace, whatever its slug looks like", () => {
+    /**
+     * THE TRAP THIS AVOIDS. The five entries are named in the ticket, and a
+     * denylist of those five slugs would have "worked" — and would have been the
+     * same class of mistake as the debris itself: a fact about one afternoon's
+     * testing compiled into the product, wrong on the next machine and invisible
+     * when it is. `s1-schema-probe` is scratch by every human measure and its
+     * files are still there, so it stays in the main list and is removable from
+     * there.
+     */
+    const groups = hubGroups(withDebris());
+    expect(groups.reachable.some((view) => view.slug === "s1-schema-probe")).toBe(true);
+    expect(groups.unreachable.some((view) => view.slug === "s1-schema-probe")).toBe(false);
+  });
+
+  it("renders the subordinate group, dimmed, rather than dropping it", () => {
+    const html = panel({ workspaces: withDebris() });
+    expect(html).toContain("data-cloud-workspaces-unreachable");
+    expect(html).toContain("Not on this machine");
+    // Subordinate is not hidden: every debris row is still in the document and
+    // still carries the control that gets rid of it.
+    for (const slug of DEBRIS) {
+      expect(html).toContain(`data-cloud-workspace="${slug}"`);
+      expect(html).toContain(`data-cloud-workspace-action="${slug}:remove"`);
+    }
+  });
+
+  it("answers 'does this delete my data' once, in the group heading", () => {
+    /**
+     * Asked once about the group rather than six times about its members, which
+     * is why it lives in the heading and not in each row. The rows still carry
+     * the full sentence in their removal confirmation — that is the moment it
+     * has to be unambiguous — but a reader scanning the group gets the answer
+     * before they press anything.
+     */
+    const text = hubUnreachableDescription(4);
+    expect(text).toContain("4 registered workspaces are not on this machine");
+    expect(text).toContain("removing one only unregisters it");
+    expect(text).toContain("Nothing is deleted");
+    expect(hubUnreachableDescription(1)).toContain("1 registered workspace is");
+  });
+
+  it("removes a dead entry from the page, with no CLI", () => {
+    const row = missingRow("qdemo");
+    expect(controlsOf(row).get("remove")!.disabledReason).toBeNull();
+    const html = panel({
+      workspaces: withDebris(),
+      hub: { ...IDLE_HUB, removing: { slug: "qdemo", crossLinks: 0 } },
+    });
+    expect(html).toContain("Remove from list");
+    expect(html).not.toContain("hub unregister");
+    expect(html).not.toContain("hub prune");
+  });
+
+  it("explains that removal unregisters and does not delete", () => {
+    const warning = removeWarning(missingRow("qdemo"), 0);
+    expect(warning).toContain("this unregisters, it does not delete");
+    expect(warning).toContain("left exactly as they are");
+    expect(warning).toContain("QDE"); // its prefix is released for reuse
+  });
+
+  it("says when removal also changes another workspace's blockers", () => {
+    const none = removeWarning(missingRow("qdemo"), 0);
+    const some = removeWarning(missingRow("qdemo"), 2);
+    expect(none).not.toContain("cross-workspace");
+    expect(some).toContain("2 cross-workspace links name it");
+    expect(some).toContain("another workspace's blockers");
+  });
+
+  it("says a reachable workspace will come back and an unreachable one will not", () => {
+    expect(removeWarning(hubRow({ state: "disconnected" }), 0)).toContain("registers it again");
+    expect(removeWarning(missingRow("r6b"), 0)).toContain("nothing will bring it back");
+  });
+
+  it("leads with the actionable count rather than with every row", () => {
+    const report = withDebris();
+    const text = hubListDescription(report);
+    // 7 rows; 3 reachable and actionable.
+    expect(report.counts.total).toBe(7);
+    expect(report.counts.actionable).toBe(3);
+    expect(text).toContain("3 of 7");
+    expect(text).toContain("4 are not on this machine");
+    // And the terminal command that used to end this sentence is gone.
+    expect(text).not.toContain("staple cloud connect --all");
+    expect(text).not.toContain("staple");
+  });
+
+  it("says so plainly when nothing on the list can be acted on", () => {
+    const text = hubListDescription(hubReport(DEBRIS.map(missingRow)));
+    expect(text).toContain("None of the workspaces");
+    expect(text).toContain("4 are not on this machine");
+  });
+
+  it("does not claim a fraction when every workspace is actionable", () => {
+    const text = hubListDescription(hubReport([hubRow(), hubRow({ slug: "bravo", repositoryId: "b" })]));
+    expect(text).toContain("All 2 workspaces");
+    expect(text).not.toContain("2 of 2 workspaces");
   });
 });

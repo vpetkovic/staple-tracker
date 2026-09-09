@@ -41,7 +41,46 @@ import {
   missingIdentityRemedy,
   noIdentityReport,
 } from "../core/cloud/surface.js";
-import { hubCloudReport } from "../core/cloud/hub-surface.js";
+import { hubCloudReport, type HubWorkspaceOutcome } from "../core/cloud/hub-surface.js";
+/**
+ * S17/S19/S21 (STA-278, STA-280, STA-282): the per-row half of the cloud surface.
+ *
+ * ## Why a row is a fan-out of size one, rather than a new kind of operation
+ *
+ * `buildHubConnectPreview`, `syncAllWorkspaces` and `performHubDisconnect` each
+ * take `workspaces?: readonly HubWorkspace[]` — an injection point that
+ * "replaces the hub enumeration". Handing one of them a single-element array is
+ * therefore not a hack around a hub-wide API; it is the API, scoped. Everything
+ * the fan-out was built to get right comes with it unchanged: the preview cannot
+ * reach the network, the enumeration opens no workspace database, a failure is a
+ * ROW rather than a thrown error, and the outcome is already per-workspace
+ * because a fan-out had no other way to report.
+ *
+ * The alternative was six new core functions differing from these only in taking
+ * a slug — six more places for "what counts as skippable" to drift from
+ * `skipReasonFor`, which `hub-scope.ts` says in as many words is the thing it
+ * exists to prevent.
+ *
+ * ## Why these routes do not go through `handleFor`, and must not
+ *
+ * `handleFor(slug)` is this server's workspace resolution, and in HUB mode it
+ * does resolve a slug. In single-workspace mode — which is how `staple ui` runs
+ * for a repository, and therefore the common case — it ignores the argument
+ * entirely and returns the one workspace it was started on. Every existing
+ * `/api/cloud/*` mutation takes `ws` and resolves it that way, which is correct
+ * for those routes because they are ABOUT the workspace the dialog was opened
+ * on. Reusing them for a per-row press would mean a button on the `bravo` row
+ * disconnecting `alpha`, silently, on the ordinary configuration — exactly the
+ * failure STA-280 names ("an action on one row does not act on another").
+ *
+ * So these routes address the MACHINE REGISTRY by slug and never touch `stores`.
+ * `test/ui-cloud-workspace-actions.test.ts` drives them in single-workspace mode
+ * for that reason and no other.
+ */
+import { listHubWorkspaces, type HubWorkspace } from "../core/cloud/hub-scope.js";
+import { buildHubConnectPreview } from "../core/cloud/hub-preview.js";
+import { performHubDisconnect } from "../core/cloud/hub-connect.js";
+import { syncAllWorkspaces } from "../core/cloud/hub-sync.js";
 /**
  * S13 (STA-258): the cloud MUTATIONS, which until now had no HTTP surface at all.
  *
@@ -56,7 +95,7 @@ import { hubCloudReport } from "../core/cloud/hub-surface.js";
 import { buildConnectPreview } from "../core/cloud/preview.js";
 import { ConsentTicketStore } from "../core/cloud/consent.js";
 import { fetchDevices, performConnect, performDisconnect, performRevoke } from "../core/cloud/connect.js";
-import { setConsent } from "../core/cloud/connection.js";
+import { readConnection, setConsent } from "../core/cloud/connection.js";
 import { readConfig, stapleHome } from "../config/index.js";
 
 interface UiOptions {
@@ -183,6 +222,27 @@ const CLOUD_LIFECYCLE_WRITES = new Set([
   "/api/cloud/consent",
   "/api/cloud/devices",
   "/api/cloud/devices/revoke",
+  /**
+   * S17/S19/S21: the per-row routes, all six, for the same reason and one more.
+   *
+   * None of them journals an operation, so a post-write trigger behind them
+   * would produce a request with nothing in it. `/api/cloud/workspace/sync` is
+   * the one that would be actively wrong: it has just synchronized, and arming
+   * the trigger would queue a second run of the thing that just finished.
+   *
+   * And the trigger reads its workspace from the QUERY STRING, because the body
+   * has not been parsed yet and cannot be read twice (see the note where it is
+   * registered). Every route here names its workspace in the BODY, so a trigger
+   * on one of them would fire at the DEFAULT workspace — a sync of `alpha`
+   * caused by pressing a button on `bravo`, which is the exact confusion S19
+   * exists to remove.
+   */
+  "/api/cloud/workspace/connect/preview",
+  "/api/cloud/workspace/connect",
+  "/api/cloud/workspace/consent",
+  "/api/cloud/workspace/disconnect",
+  "/api/cloud/workspace/sync",
+  "/api/hub/unregister",
 ]);
 
 /**
@@ -617,6 +677,125 @@ export function startUiServer(options: UiOptions): UiHandle {
     return cloudSurfaceReport(localCloudStatus(stapleHome(), repositoryId), handle.store.db);
   }
 
+  // ------------------------------------- the per-row cloud surface (S17/S19/S21)
+
+  /**
+   * One registered workspace, addressed by SLUG through the machine registry.
+   *
+   * `listHubWorkspaces()` reads the hub registry and each workspace's
+   * `repository.json` and opens no workspace database — the property
+   * `hub-scope.ts` exists to hold. Deliberately NOT `handleFor`: see the import
+   * header. A slug that names nothing is `not_found` rather than the default
+   * workspace, which is the whole difference.
+   */
+  function hubRowFor(res: ServerResponse, slug: unknown): HubWorkspace | null {
+    const wanted = typeof slug === "string" ? slug.trim() : "";
+    /**
+     * A missing slug is a 400 through `deny` rather than a thrown `StapleError`,
+     * and the difference is not stylistic. The catch-all at the bottom of this
+     * server answers `not_found` with 404 and EVERY other staple code with 409,
+     * so a thrown `validation` would arrive as "409 Conflict" for a body that is
+     * simply malformed. Every other body-shape refusal on this file already uses
+     * `deny(400, "validation")`; this joins them.
+     *
+     * There is deliberately no default. A route that fell back to "the current
+     * workspace" when `slug` was absent would reintroduce, one careless client
+     * call at a time, exactly the wrong-workspace defect these routes exist to
+     * avoid — see the import header.
+     */
+    if (wanted === "") {
+      deny(
+        res,
+        400,
+        "validation",
+        "A workspace slug is required. Every control on this list names the one workspace it " +
+          "acts on; there is no wire spelling for 'the current one' here on purpose.",
+      );
+      return null;
+    }
+    const workspace = listHubWorkspaces().find((entry) => entry.slug === wanted);
+    if (!workspace) {
+      // `not_found` DOES map cleanly, so this one is thrown and lands as a 404.
+      throw new StapleError(
+        "not_found",
+        `No workspace "${wanted}" is registered on this machine. The list is enumerated on every ` +
+          `read, so a workspace unregistered a moment ago is already gone from it.`,
+      );
+    }
+    return workspace;
+  }
+
+  /**
+   * The sync identity of a row, or a refusal that says which of the two absences
+   * this is.
+   *
+   * The single-workspace `requireRepositoryId` cannot serve here: it reads
+   * `sync_state.repository_id` out of an OPEN DATABASE, and the whole point of
+   * this path is that drawing and acting on a list must not open twelve of them.
+   * This reads the manifest, which `listHubWorkspaces` already did.
+   */
+  function hubRepositoryId(workspace: HubWorkspace): string {
+    if (workspace.repositoryId !== null) return workspace.repositoryId;
+    throw new StapleError(
+      "not_found",
+      `"${workspace.slug}" has no sync identity, so there is no connection for this to act on. ` +
+        (workspace.recordsIdentityOnOpen
+          ? "Connecting it records one; nothing else needs doing first."
+          : `It is inside a version control checkout, where ${workspace.identityDir}/repository.json ` +
+            "is committed alongside the code rather than minted behind you."),
+    );
+  }
+
+  /**
+   * Give a row its sync identity, if opening it is what records one.
+   *
+   * THE ONE PLACE ON THIS PATH THAT OPENS A WORKSPACE DATABASE, and it does it
+   * on a human's press, for one workspace, at the start of a connect the human
+   * has asked for. `openWorkspace` reconciles the identity when the workspace is
+   * not in a checkout (`src/core/open.ts`, `if (!isCheckoutBacked(dbPath))`), so
+   * this is the same gesture `staple cloud connect --ws <slug>` performs — and
+   * the reason the settings page can offer a plain Connect button on a row that
+   * used to be told to run `staple init`.
+   *
+   * A no-op for every other row, including a checkout-backed one: opening that
+   * would migrate a schema and produce no identity, which is a cost with no
+   * benefit attached.
+   */
+  function recordIdentityIfOpenWould(workspace: HubWorkspace): HubWorkspace {
+    if (workspace.repositoryId !== null) return workspace;
+    if (!workspace.available || !workspace.recordsIdentityOnOpen) return workspace;
+    const opened = openWorkspace(workspace.path);
+    opened.store.db.close();
+    // Re-enumerated rather than patched: the manifest is the authority for the
+    // id, and reading it back is how we know the open actually recorded one.
+    return listHubWorkspaces().find((entry) => entry.slug === workspace.slug) ?? workspace;
+  }
+
+  /**
+   * Every per-row route's answer: what happened to this row, and the whole list
+   * as it now reads.
+   *
+   * The refreshed list rather than the one row, for the same reason the
+   * single-workspace mutations answer with a `CloudSurfaceReport`: acting and
+   * re-reading are one round trip, so the page never renders the state that
+   * existed before the thing it just did. It is the LIST because a per-row
+   * action can change another row's rendering — the header's actionable count
+   * moves, and unregistering removes a row outright.
+   */
+  function hubActed(res: ServerResponse, outcome: HubWorkspaceOutcome): void {
+    json(res, 200, { outcome, report: hubCloudReport(stapleHome()) });
+  }
+
+  /** An outcome, stamped. Written once so six routes cannot disagree on the shape. */
+  function outcomeOf(
+    slug: string,
+    action: HubWorkspaceOutcome["action"],
+    status: HubWorkspaceOutcome["status"],
+    detail: string,
+  ): HubWorkspaceOutcome {
+    return { slug, action, status, detail, at: new Date().toISOString() };
+  }
+
   const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", "http://localhost");
     try {
@@ -742,7 +921,24 @@ export function startUiServer(options: UiOptions): UiHandle {
           url.pathname === "/api/cloud/disconnect" ||
           url.pathname === "/api/cloud/consent" ||
           url.pathname === "/api/cloud/devices" ||
-          url.pathname === "/api/cloud/devices/revoke"
+          url.pathname === "/api/cloud/devices/revoke" ||
+          /**
+           * S17/S19/S21: the per-row routes. Named individually, like every
+           * cloud route above and for the same reason — `/api/cloud/status`,
+           * `/api/cloud/conflicts` and `/api/cloud/workspaces` are READS under
+           * the shared prefix, and a `startsWith("/api/cloud/")` family rule
+           * would make all three cross-origin-writable in one line.
+           *
+           * `/api/hub/unregister` is the only `/api/hub/` route and is still
+           * named rather than prefixed, so that adding a `/api/hub/…` READ later
+           * does not inherit a write pin nobody asked for.
+           */
+          url.pathname === "/api/cloud/workspace/connect/preview" ||
+          url.pathname === "/api/cloud/workspace/connect" ||
+          url.pathname === "/api/cloud/workspace/consent" ||
+          url.pathname === "/api/cloud/workspace/disconnect" ||
+          url.pathname === "/api/cloud/workspace/sync" ||
+          url.pathname === "/api/hub/unregister"
             ? ["POST"]
             : url.pathname === "/api/settings"
               ? ["GET", "POST"]
@@ -1211,6 +1407,361 @@ export function startUiServer(options: UiOptions): UiHandle {
         }
         const outcome = await performRevoke(stapleHome(), repositoryId, deviceId);
         json(res, 200, { ...outcome, report: cloudReport(handle, repositoryId) });
+        return;
+      }
+
+      /**
+       * ─── THE PER-ROW CLOUD SURFACE — S17/S19/S21 ────────────────────────────
+       *
+       * Five routes under `/api/cloud/workspace/`, each naming the ONE workspace
+       * it acts on, plus `/api/hub/unregister` below. Read the import header for
+       * why these exist beside the `/api/cloud/*` routes rather than replacing
+       * them: those are about the workspace the dialog was opened on and resolve
+       * through `handleFor`; these are about a row in a machine-wide list and
+       * resolve through the registry.
+       *
+       * The shape is uniform on purpose. Every one of them answers
+       * `{ outcome, report }` — what happened to this row, and the refreshed
+       * list — so the surface has one thing to render and cannot end up with six
+       * differently-worded outcome lines.
+       */
+
+      /**
+       * `POST /api/cloud/workspace/connect/preview` — step one, for one row.
+       *
+       * The single-workspace `/api/cloud/connect/preview` remains the only OTHER
+       * route that may name an endpoint, and this one inherits every property of
+       * it: `buildHubConnectPreview` imports `preview.ts`, `connection.ts`,
+       * `credential-store.ts`, `endpoint.ts` and `hub-scope.ts` and **nothing
+       * that reaches `client.ts`** — a walk `test/cloud-hub-connect.test.ts`
+       * makes transitively. So this cannot contact the service it is describing,
+       * and that is a property of the import graph rather than of this handler's
+       * restraint.
+       *
+       * A skipped row answers with `preview: null` and the fan-out's own sentence
+       * for WHY, and mints no ticket. A ticket for something that will not happen
+       * would be a consent with no subject.
+       */
+      if (url.pathname === "/api/cloud/workspace/connect/preview") {
+        const body = await readBody(req);
+        const addressed = hubRowFor(res, body.slug);
+        if (addressed === null) return;
+        const endpoint = typeof body.endpoint === "string" ? body.endpoint.trim() : "";
+        if (endpoint === "") {
+          deny(res, 400, "validation", "An endpoint is required to preview a connection.");
+          return;
+        }
+        const credentialFile = body.credentialFile === true;
+        /**
+         * Before the preview, not after: a workspace that records its identity
+         * on open has none to preview a connection FOR until it has been opened.
+         * This is the whole of STA-281's remedy expressed as a button.
+         */
+        const workspace = recordIdentityIfOpenWould(addressed);
+        const preview = buildHubConnectPreview({
+          home: stapleHome(),
+          endpoint,
+          label: typeof body.label === "string" ? body.label : undefined,
+          credential: { forceFile: credentialFile },
+          workspaces: [workspace],
+        });
+        const entry = preview.entries[0]!;
+        json(res, 200, {
+          slug: workspace.slug,
+          action: entry.action,
+          /** The fan-out's sentence for this row, skipped or not. Never invented here. */
+          reason: entry.reason,
+          preview: entry.preview,
+          consent: entry.preview === null ? null : consents.mint(entry.preview, { credentialFile }),
+          report: hubCloudReport(stapleHome()),
+        });
+        return;
+      }
+
+      /**
+       * `POST /api/cloud/workspace/connect` — step two. **No endpoint.**
+       *
+       * `{ slug, consent, digest, token }`. The absence of an endpoint field is
+       * the same structural guarantee `/api/cloud/connect` gives, and it is worth
+       * restating that adding a slug did not weaken it: a slug names a workspace
+       * this machine already has registered, and no arrangement of registered
+       * workspaces can spell a service address.
+       *
+       * The slug is checked AGAINST THE TICKET, in the rebuild callback. A client
+       * that previewed `alpha` and posted the resulting ticket with `slug:
+       * "bravo"` would otherwise reach the digest comparison and be refused with
+       * "this machine's connection state changed" — true in a sense, and the
+       * wrong sentence entirely. Refused here instead, by name.
+       */
+      if (url.pathname === "/api/cloud/workspace/connect") {
+        const body = await readBody(req);
+        const workspace = hubRowFor(res, body.slug);
+        if (workspace === null) return;
+        const repositoryId = hubRepositoryId(workspace);
+        const enrollmentSecret = typeof body.token === "string" ? body.token : "";
+
+        const { preview, context } = consents.redeem(body.consent, body.digest, (stored, choices) => {
+          if (stored.repositoryId !== repositoryId) {
+            throw new StapleError(
+              "validation",
+              `That confirmation was issued for a different workspace, so it cannot be used to ` +
+                `connect "${workspace.slug}". Nothing was sent. Review the connection for this ` +
+                `workspace and confirm what that shows.`,
+            );
+          }
+          return buildConnectPreview({
+            home: stapleHome(),
+            repositoryId,
+            endpoint: stored.endpoint.origin,
+            label: stored.label,
+            credential: { forceFile: choices.credentialFile },
+          });
+        });
+
+        const outcome = await performConnect(preview, {
+          home: stapleHome(),
+          enrollmentSecret,
+          credential: { forceFile: context.credentialFile },
+        });
+        hubActed(
+          res,
+          outcomeOf(
+            workspace.slug,
+            "connect",
+            "ok",
+            `Connected to ${outcome.connection.endpoint}. The credential for this machine is in ` +
+              `${outcome.credentialLocation}. Automatic sync and backup are off — they are ` +
+              `separate decisions.`,
+          ),
+        );
+        return;
+      }
+
+      /**
+       * `POST /api/cloud/workspace/consent` — the two later consents, for one row.
+       *
+       * `{ slug, auto }` OR `{ slug, backup }`, and exactly one, for the reason
+       * `/api/cloud/consent` gives: two consents are two decisions and a body
+       * carrying both would let one press spend both.
+       *
+       * Writes one file in the staple home and opens no database at all — which
+       * is why a row can carry these toggles without the page paying for twelve
+       * schema migrations to draw them. Fires no sync trigger, in either
+       * direction; see `CLOUD_LIFECYCLE_WRITES` and the note on the
+       * single-workspace consent route, which this deliberately copies rather
+       * than improves on.
+       */
+      if (url.pathname === "/api/cloud/workspace/consent") {
+        const body = await readBody(req);
+        const workspace = hubRowFor(res, body.slug);
+        if (workspace === null) return;
+        const repositoryId = hubRepositoryId(workspace);
+        const named = ["auto", "backup"].filter((key) => body[key] !== undefined);
+        if (named.length !== 1 || typeof body[named[0]!] !== "boolean") {
+          deny(
+            res,
+            400,
+            "validation",
+            "Pass exactly one of auto and backup, as a boolean. They are two separate consents " +
+              "and are changed one decision at a time.",
+          );
+          return;
+        }
+        const key = named[0] as "auto" | "backup";
+        const value = body[key] as boolean;
+        // `setConsent` refuses `not_found` on an unconnected repository rather
+        // than springing a record into existence, so this cannot become a silent
+        // partial connection.
+        setConsent(stapleHome(), repositoryId, { [key]: value });
+        hubActed(
+          res,
+          outcomeOf(
+            workspace.slug,
+            key,
+            "ok",
+            key === "auto"
+              ? value
+                ? "Automatic sync is on for this workspace, on this machine only."
+                : "Automatic sync is off. Nothing is uploaded until a sync is run."
+              : value
+                ? "Backup is on for this workspace, on this machine only. It does not turn on sync."
+                : "Backup is off. No snapshot will be taken.",
+          ),
+        );
+        return;
+      }
+
+      /**
+       * `POST /api/cloud/workspace/disconnect` — local, and only local.
+       *
+       * `performHubDisconnect` is **not** gated on `available`, deliberately, and
+       * this route inherits that: the connection record and the credential live
+       * in the staple home rather than in the workspace, so disconnecting a
+       * workspace whose disk is unmounted is both possible and right. Refusing
+       * would leave a live credential behind for precisely the row somebody is
+       * most likely to be disconnecting — which is why the surface keeps this one
+       * control enabled on a row where everything else is disabled.
+       */
+      if (url.pathname === "/api/cloud/workspace/disconnect") {
+        const body = await readBody(req);
+        const workspace = hubRowFor(res, body.slug);
+        if (workspace === null) return;
+        if (body.confirm !== true) {
+          deny(
+            res,
+            400,
+            "validation",
+            `Disconnecting removes this machine's credential for "${workspace.slug}". Pass ` +
+              "confirm to proceed. Its database, including pending operations and unsettled " +
+              "conflicts, is not touched, and no other device is affected.",
+          );
+          return;
+        }
+        const row = performHubDisconnect(stapleHome(), { workspaces: [workspace] }).workspaces[0]!;
+        hubActed(
+          res,
+          outcomeOf(
+            workspace.slug,
+            "disconnect",
+            row.status === "disconnected" ? "ok" : "skipped",
+            row.reason,
+          ),
+        );
+        return;
+      }
+
+      /**
+       * `POST /api/cloud/workspace/sync` — **this route egresses.**
+       *
+       * One of the two on this server that leave the machine, alongside
+       * `/api/cloud/devices`, and it is a POST for that reason as much as for
+       * what it writes. It is never called on load: `test/network-silence.test.ts`
+       * drives the page's whole mount path and this is not on it.
+       *
+       * A row that fails answers **200 with `status: "failed"`**, and that is not
+       * a swallowed error. `syncAllWorkspaces` deliberately does not throw for a
+       * row — every failure becomes a row carrying the service's own message and
+       * its own `cloudCode`, because folding `offline`, `revoked` and
+       * `rate_limited` into one thrown `conflict` is the thing that makes a
+       * multi-row table unactionable. Re-throwing here would discard exactly the
+       * distinction the fan-out was built to keep.
+       */
+      if (url.pathname === "/api/cloud/workspace/sync") {
+        const body = await readBody(req);
+        const workspace = hubRowFor(res, body.slug);
+        if (workspace === null) return;
+        const row = (await syncAllWorkspaces({ home: stapleHome(), workspaces: [workspace] }))
+          .workspaces[0]!;
+        hubActed(
+          res,
+          outcomeOf(
+            workspace.slug,
+            "sync",
+            row.status === "synced" ? "ok" : row.status === "skipped" ? "skipped" : "failed",
+            row.reason,
+          ),
+        );
+        return;
+      }
+
+      /**
+       * `POST /api/hub/unregister` — take a row off the list. S21 (STA-282).
+       *
+       * ## Why this is not under `/api/cloud/`
+       *
+       * Because it is not a cloud operation. It deletes a row from the machine
+       * registry and touches nothing else — no credential, no connection record,
+       * no workspace file. Filing it under `cloud` would be a name that lied
+       * about what it reaches, and the method gate's per-route reasoning is only
+       * useful while the route names are honest.
+       *
+       * ## Previews by default, like `hub_prune`
+       *
+       * Without `confirm` this WRITES NOTHING and answers with what would happen:
+       * the path, whether cross-workspace links name it, and whether it is still
+       * connected. The surface renders that as its confirmation, which is how the
+       * page can say "this unregisters and does not delete data" over a fact
+       * rather than over a hope.
+       *
+       * ## The one refusal this route adds
+       *
+       * A CONNECTED workspace is refused. The connection record and credential
+       * are keyed by repository id in the staple home, and the registry row is
+       * the only thing on this machine that points a human at them; removing it
+       * leaves a live credential nothing names. Disconnect first — which the
+       * surface offers on the same row, and which the refusal says.
+       *
+       * `deleteHubRegistration` is what makes "never touches the workspace
+       * database" structural: it is handed a database connection and a NAME, and
+       * has no `fs` and no workspace opener to do damage with.
+       */
+      if (url.pathname === "/api/hub/unregister") {
+        const body = await readBody(req);
+        const workspace = hubRowFor(res, body.slug);
+        if (workspace === null) return;
+        const connected =
+          workspace.repositoryId !== null &&
+          (() => {
+            try {
+              return readConnection(stapleHome(), workspace.repositoryId) !== null;
+            } catch {
+              // Unreadable is not "connected". A record nobody can parse is
+              // reported by the row's own `skip`, and blocking removal on it
+              // would make a broken record unremovable from here forever.
+              return false;
+            }
+          })();
+
+        const hub = Hub.open();
+        try {
+          const preview = hub.previewUnregister(workspace.slug);
+          if (body.confirm !== true) {
+            json(res, 200, {
+              preview: {
+                slug: preview.entry.slug,
+                prefix: preview.entry.prefix,
+                path: preview.entry.path,
+                available: workspace.available,
+                connected,
+                crossLinks: preview.crossLinks,
+              },
+              report: hubCloudReport(stapleHome()),
+            });
+            return;
+          }
+          if (connected) {
+            deny(
+              res,
+              409,
+              "conflict",
+              `"${workspace.slug}" is still connected on this machine. Removing it from the list ` +
+                `would leave its credential here with nothing pointing at it. Disconnect it ` +
+                `first — that removes the credential and keeps every byte of its data.`,
+            );
+            return;
+          }
+          // A `conflict` naming the cross-workspace links propagates from here
+          // when there are links and the caller did not ask for the cascade. The
+          // surface offers the cascade as a second press rather than performing
+          // it behind the first: deleting a dependency edge is a decision.
+          hub.unregister(workspace.slug, { withLinks: body.removeCrossLinks === true });
+        } finally {
+          hub.close();
+        }
+        hubActed(
+          res,
+          outcomeOf(
+            workspace.slug,
+            "remove",
+            "ok",
+            `Removed from this machine's list. Its database and every file beside it are ` +
+              `untouched — this unregisters, it does not delete. ` +
+              (workspace.available
+                ? `Because its files are still here, running staple in ${dirname(workspace.path)} ` +
+                  `registers it again.`
+                : `Its files are not on this machine, so nothing will register it again.`),
+          ),
+        );
         return;
       }
 
