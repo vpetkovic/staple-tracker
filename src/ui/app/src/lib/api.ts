@@ -532,8 +532,28 @@ export const disconnectHub = () =>
  * Refuses on a hub that has never been connected rather than creating a record,
  * so the surface must disable the control rather than let it error.
  */
-export const setHubRegistryConsent = (enabled: boolean) =>
-  hubWrite<HubActionResult>("/api/hub/consent", { registry: enabled });
+export const setHubRegistryConsent = (enabled: boolean, disclosure?: string) =>
+  hubWrite<HubActionResult>("/api/hub/consent", {
+    registry: enabled,
+    /**
+     * **The acknowledgement, and it must come from the REPORT.**
+     *
+     * `setRegistryConsent` refuses to enable unless handed the disclosure
+     * verbatim — evidence that whoever is granting this had the sentence in
+     * hand. The server forwards what this sends rather than supplying its own,
+     * so the check survives the HTTP boundary instead of being spent at it.
+     *
+     * The only place this client can obtain the string is
+     * `report.self.registry.disclosure`, which requires having fetched the
+     * report that draws the panel. Pass that value — never a literal typed here,
+     * which would be both a second copy and a way to satisfy the check without
+     * having rendered anything.
+     *
+     * Omitted when withdrawing: turning this OFF needs no acknowledgement,
+     * because making revocation harder than granting is the wrong asymmetry.
+     */
+    ...(enabled ? { disclosure } : {}),
+  });
 
 export const getIssues = (params: { ws?: string; assignee?: string } = {}) =>
   request<IssueRow[]>(`/api/issues${qs(params)}`);

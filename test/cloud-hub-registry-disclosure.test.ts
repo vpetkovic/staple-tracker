@@ -1,5 +1,5 @@
 /**
- * ONE DISCLOSURE, DECLARED TWICE, PINNED EQUAL — S22 (STA-283).
+ * THE REGISTRY DISCLOSURE REACHES EVERY SURFACE, IN ONE WORDING — S22 (STA-283).
  *
  * ## The sentence
  *
@@ -9,59 +9,56 @@
  * It is the whole price of the invariant the registry gave up. `hub-scope.ts`
  * says cross-repository topology *"is not this repository's business"*, and
  * publishing is precisely the act of making it the service's business. So the
- * sentence has to appear wherever the consent is granted, in the same words,
- * because a disclosure reworded per surface is a disclosure whose strongest
- * wording is whichever surface a person did not read.
+ * sentence has to appear wherever the consent is granted, in the same words —
+ * a disclosure reworded per surface is a disclosure whose strongest wording is
+ * whichever surface a person did not read.
  *
- * ## Why it is declared twice, and why that is not the usual mistake
+ * ## What changed, and what this file is now for
  *
- * `REGISTRY_DISCLOSURE` lives in `hub-registry-service.ts`, which reaches
- * `client.ts`. `hubCloudReport` carries the sentence to the browser — the
- * browser cannot import `src/core` at all, so the report is the only way it can
- * travel — and `hubCloudReport` is called by a route the settings page POLLS.
+ * It briefly checked two declarations against each other: `REGISTRY_DISCLOSURE`
+ * lived in `hub-registry-service.ts`, which reaches `client.ts`, and
+ * `hub-surface.ts` could not import it — `hubCloudReport` is called by a route
+ * the settings page POLLS, and putting the transport into a polled read's import
+ * graph is the setup `hub-preview.ts` was split out of `hub-connect.ts` to
+ * prevent. So the sentence was declared twice and pinned equal here.
  *
- * Importing the service module into `hub-surface.ts` to avoid a second
- * declaration would therefore put the TRANSPORT into a polled read's import
- * graph. That is the exact setup `hub-preview.ts` was split out of
- * `hub-connect.ts` to prevent, and the reason given there applies verbatim: the
- * way to keep a consent mechanism from quietly acquiring a network call is not
- * to remember not to add one, it is to build it somewhere a network call cannot
- * be written.
+ * `opus-hubwire` then moved it into `hub-registry.ts`, the leaf, which
+ * `hub-surface.ts` already imported for the backup strings. One declaration in a
+ * leaf beats two that cannot drift, so that half of this file is gone.
  *
- * So the choice was: one declaration and a transport-reaching import in a polled
- * path, or two declarations and a test. This file is that test. Two copies that
- * CANNOT drift are not the failure "one copy or it drifts" is warning about —
- * that warning is about copies with nothing holding them together, which is
- * exactly what this removes.
- *
- * If this fails, the two have diverged and **the one in the service module is
- * the original**: it is what `requireRegistryConsent` quotes in its refusal and
- * what `registryDisclosure()` renders for the CLI.
+ * What remains is the part that was never about duplication: the sentence has to
+ * survive the trip to each surface intact. The CLI renders it through
+ * `registryDisclosure()`, which capitalises the sentence-initial letter inside a
+ * block; the browser gets it on `hubCloudReport`, because it cannot import
+ * `src/core` at all. Those are two different transformations of one string, and
+ * this pins both to it.
  */
 import { describe, expect, it } from "vitest";
-import { REGISTRY_DISCLOSURE, registryDisclosure } from "../src/core/cloud/hub-registry-service.js";
-import { HUB_REGISTRY_DISCLOSURE, hubCloudReport } from "../src/core/cloud/hub-surface.js";
+import { REGISTRY_DISCLOSURE } from "../src/core/cloud/hub-registry.js";
+import { registryDisclosure } from "../src/core/cloud/hub-registry-service.js";
+import { hubCloudReport } from "../src/core/cloud/hub-surface.js";
 
 describe("the registry disclosure has one wording", () => {
-  it("is identical in the surface report and in the service that enforces it", () => {
-    expect(HUB_REGISTRY_DISCLOSURE).toBe(REGISTRY_DISCLOSURE);
-  });
-
-  it("is the sentence the CLI prints, so terminal and browser disclose the same thing", () => {
-    // `registryDisclosure` renders it capitalised inside a block; the substring
-    // check is against the sentence itself, which is what must match.
-    expect(registryDisclosure("https://sync.example.com")).toContain(
-      REGISTRY_DISCLOSURE.slice(1),
+  it("is the sentence the CLI prints, capitalised and nothing else", () => {
+    const rendered = registryDisclosure("https://sync.example.com");
+    /**
+     * Compared on the tail rather than the whole string, because the rendered
+     * block upper-cases the first letter — which is the ONE difference allowed,
+     * and is pinned to exactly that by checking the remainder verbatim.
+     */
+    expect(rendered).toContain(REGISTRY_DISCLOSURE.slice(1));
+    expect(rendered).toContain(
+      `${REGISTRY_DISCLOSURE.charAt(0).toUpperCase()}${REGISTRY_DISCLOSURE.slice(1)}`,
     );
   });
 
   it("reaches the browser on the report, which is the only way it can", () => {
     /**
-     * No workspaces and no hub file: `hubCloudReport` still answers, and the
+     * No workspaces and no hub: `hubCloudReport` still answers, and the
      * disclosure is on it. That matters because the panel renders the sentence
      * BEFORE the consent is granted and on a machine that may never have
-     * connected anything — if it were only present once connected, the one
-     * moment it is needed is the moment it would be missing.
+     * connected anything — if it appeared only once connected, the one moment it
+     * is needed is the moment it would be missing.
      */
     const report = hubCloudReport("/nonexistent-home-for-this-test", {
       workspaces: [],

@@ -1246,14 +1246,25 @@ describe("the UI server serves the whole page, connected or not, and calls nobod
          * a service, so a request made while GRANTING it would be the disclosure
          * happening before the consent.
          *
-         * 404 on this machine, whose hub has never been connected —
-         * `setRegistryConsent` refuses rather than springing a record into
-         * existence. That refusal is established from local files, which is what
-         * is being pinned: a route that resolved an endpoint before establishing
-         * it had nothing to record would break the invariant on exactly the
-         * machine least likely to be watching.
+         * Two different refusals, and pinning both is the point.
+         *
+         * **Enabling is 409** (`validation`): `setRegistryConsent` refuses
+         * without the disclosure handed back verbatim, and this body carries
+         * none. That check fires before it looks at the connection at all.
+         *
+         * **Withdrawing is 404** (`not_found`): no acknowledgement is needed to
+         * turn this off — making revocation harder than granting is the wrong
+         * asymmetry — so it gets as far as the connection, which this machine's
+         * hub does not have.
+         *
+         * Both are established from local files, which is what is being pinned:
+         * a route that resolved an endpoint before working out it had nothing to
+         * record would break the invariant on exactly the machine least likely
+         * to be watching. The 409 arrived here by *changing* from 404 when the
+         * acknowledgement argument landed upstream, which is this list's status
+         * column earning its keep on its first outing.
          */
-        ["/api/hub/consent", { registry: true }, 404],
+        ["/api/hub/consent", { registry: true }, 409],
         ["/api/hub/consent", { registry: false }, 404],
       ];
       for (let round = 0; round < 3; round += 1) {

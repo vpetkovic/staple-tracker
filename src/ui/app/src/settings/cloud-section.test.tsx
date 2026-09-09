@@ -1827,8 +1827,33 @@ describe("the hub's publish consent (S22/STA-283)", () => {
 
   it("takes no slug, because the hub is not one of the rows", () => {
     const file = source("CloudSection.tsx");
-    expect(file).toContain("onHubRegistryConsent: (enabled: boolean) => void;");
+    expect(file).toContain("onHubRegistryConsent: (enabled: boolean, disclosure: string) => void;");
     expect(file).not.toMatch(/onHubRegistryConsent: \(slug/);
+  });
+
+  it("hands back the sentence it rendered, from the report and not a literal", () => {
+    /**
+     * `setRegistryConsent` refuses to enable without the disclosure verbatim —
+     * evidence that whoever is granting this had it in hand. The check only
+     * survives the HTTP boundary because the CLIENT supplies it; a server that
+     * passed the constant on the client's behalf would satisfy the check while
+     * proving nothing.
+     *
+     * So the switch must send the value it just rendered, and the only place it
+     * can get that is the report. A literal typed into this component would be
+     * both a second copy and a way to grant the consent having displayed
+     * nothing — which is precisely the failure the argument exists to remove.
+     */
+    const file = source("CloudSection.tsx");
+    expect(file).toContain("onConsent(event.target.checked, report.self.registry.disclosure)");
+
+    const client = readFileSync(fileURLToPath(new URL("../lib/api.ts", import.meta.url)), "utf8");
+    const clientCode = client.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+    // The client forwards its argument and never carries the sentence itself.
+    expect(clientCode).not.toContain("names, prefixes and identities");
+    expect(clientCode).toContain("disclosure");
+    // Withdrawing carries no acknowledgement: revocation must not be harder.
+    expect(clientCode).toContain("enabled ? { disclosure } : {}");
   });
 });
 

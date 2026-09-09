@@ -1067,6 +1067,88 @@ describe("the hub's publish consent is the hub's, not a workspace's", () => {
     expect(seen, "asking about a consent reached the service").toEqual([]);
   });
 
+  /**
+   * Give the hub an identity, so the route gets past its own "no hub id yet"
+   * refusal and reaches `setRegistryConsent`.
+   *
+   * `hubId()` MINTS, which is exactly what neither the polled report nor the
+   * route may do — and is fine here, because a test standing in for a machine
+   * whose hub has been used is the one caller that should. Idempotent after the
+   * first call.
+   */
+  function ensureHubId(): string {
+    const hub = Hub.open();
+    try {
+      return hub.hubId();
+    } finally {
+      hub.close();
+    }
+  }
+
+  /**
+   * **THE ACKNOWLEDGEMENT SURVIVES THE HTTP BOUNDARY.**
+   *
+   * `setRegistryConsent` refuses to ENABLE unless handed the disclosure
+   * verbatim — evidence the caller had the sentence in hand, removing the case
+   * where *"somebody adds a toggle, wires it to the setter, and nobody notices
+   * the screen was never built"*.
+   *
+   * That check is worth nothing over HTTP if the ROUTE supplies the constant.
+   * A server passing it on the client's behalf satisfies the check while
+   * proving exactly nothing — the same failure `/api/cloud/connect` would have
+   * if it accepted an `endpoint`. So the route forwards what the client sent,
+   * and this pins both halves: an enable with no acknowledgement is refused,
+   * and the server does not have the sentence in scope to supply one.
+   *
+   * The hub in this suite is never connected, so every enable here refuses. The
+   * assertion is therefore on WHICH refusal: `validation` for a missing
+   * acknowledgement, which `setRegistryConsent` raises before it looks at the
+   * connection at all.
+   */
+  it("refuses to enable without the disclosure handed back, and supplies none itself", async () => {
+    ensureHubId();
+    const response = await post("/api/hub/consent", { registry: true });
+    expect(response.status).toBeGreaterThanOrEqual(400);
+    const refusal = (await response.json()) as { message: string };
+    expect(refusal.message).toContain("verbatim");
+
+    /**
+     * The source half, and the one no request can make: the route must not have
+     * the constant available to satisfy the check with. If `REGISTRY_DISCLOSURE`
+     * is ever imported into `src/ui/server.ts`, the acknowledgement stops
+     * meaning "a surface displayed this" and starts meaning nothing.
+     */
+    const server = readFileSync(new URL("../src/ui/server.ts", import.meta.url).pathname, "utf8");
+    const code = server.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+    expect(code).not.toContain("REGISTRY_DISCLOSURE");
+    expect(code).not.toContain("names, prefixes and identities");
+    // It forwards the client's value instead.
+    expect(code).toContain("body.disclosure");
+  });
+
+  it("refuses an acknowledgement that is not the disclosure", async () => {
+    ensureHubId();
+    const response = await post("/api/hub/consent", {
+      registry: true,
+      disclosure: "I promise I showed something",
+    });
+    expect(response.status).toBeGreaterThanOrEqual(400);
+    expect(((await response.json()) as { message: string }).message).toContain("verbatim");
+  });
+
+  it("needs no acknowledgement to WITHDRAW, because revocation must not be harder", async () => {
+    ensureHubId();
+    /**
+     * Making it harder to turn off than on is the wrong asymmetry in a
+     * revocation that has to work offline. This hub is unconnected, so the
+     * refusal is `not_found` — about the connection, never about a missing
+     * acknowledgement, which is the distinction being pinned.
+     */
+    const response = await post("/api/hub/consent", { registry: false });
+    expect(response.status).toBeGreaterThanOrEqual(400);
+    expect(((await response.json()) as { message: string }).message).not.toContain("verbatim");
+  });
+
   it("refuses a body that does not name the consent as a boolean", async () => {
     for (const body of [{}, { registry: "yes" }, { auto: true }, { registry: null }]) {
       const response = await post("/api/hub/consent", body);

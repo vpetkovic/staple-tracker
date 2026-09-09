@@ -88,18 +88,20 @@ import { buildHubConnectPreview, type HubConnectEntry } from "../core/cloud/hub-
 import { performHubConnect, performHubDisconnect } from "../core/cloud/hub-connect.js";
 import { syncAllWorkspaces } from "../core/cloud/hub-sync.js";
 /**
- * S22 (STA-283): the hub's own consent, and the sentence that grants it.
+ * S22 (STA-283): the hub's own consent.
  *
- * `REGISTRY_DISCLOSURE` is imported rather than retyped, for the reason
- * `CONNECT_DISCLOSURE` is: a disclosure reworded per surface is a disclosure
- * whose strongest wording is whichever surface a person did not read.
+ * ONE name is taken, and deliberately not the disclosure constant: this route
+ * forwards the acknowledgement the CLIENT sent rather than supplying one, so
+ * having the sentence in scope here would be an invitation to satisfy the check
+ * on the client's behalf. See the route for why that would spend the check
+ * rather than honour it.
  *
- * Importing `hub-registry-service.js` here does NOT give this file a way to
- * publish anything. Every egress path in that module begins with
- * `requireRegistryConsent`, and the two names taken here are the consent writer
- * — which touches one file in the staple home — and a string.
+ * Importing `hub-registry-service.js` does NOT give this file a way to publish
+ * anything. Every egress path in that module begins with
+ * `requireRegistryConsent`, and `setRegistryConsent` writes one file in the
+ * staple home and makes no request.
  */
-import { REGISTRY_DISCLOSURE, setRegistryConsent } from "../core/cloud/hub-registry-service.js";
+import { setRegistryConsent } from "../core/cloud/hub-registry-service.js";
 /**
  * S13 (STA-258): the cloud MUTATIONS, which until now had no HTTP surface at all.
  *
@@ -2642,14 +2644,52 @@ export function startUiServer(options: UiOptions): UiHandle {
           );
         }
 
-        const outcome = setRegistryConsent(stapleHome(), hubId, body.registry);
+        /**
+         * ─── THE ACKNOWLEDGEMENT CROSSES THE WIRE, AND THAT IS THE POINT ─────
+         *
+         * `setRegistryConsent` refuses to ENABLE unless handed the disclosure
+         * verbatim — evidence that the caller had the sentence in hand. It is
+         * not authentication; a caller can look the constant up. What it removes
+         * is *"somebody adds a toggle, wires it to the setter, and nobody
+         * notices the screen was never built."*
+         *
+         * That argument means nothing here if this route supplies the constant
+         * itself. A server that passed `REGISTRY_DISCLOSURE` on the client's
+         * behalf would satisfy the check while proving exactly nothing about
+         * whether anything was ever displayed — the check would have been
+         * spent, not honoured. It is the same failure `/api/cloud/connect` would
+         * have if it accepted an `endpoint`: a property that holds inside the
+         * process, discarded at the last surface.
+         *
+         * **So the CLIENT sends it back, and this route forwards what the client
+         * sent — never a constant of its own.** The browser's only source for
+         * the sentence is `report.self.registry.disclosure`, which it can only
+         * have by fetching the report that draws the panel. A caller that never
+         * had the panel cannot produce the string, and `setRegistryConsent`
+         * refuses it. The disclosure therefore travels OUT in a report and back
+         * IN on the grant, which is the same one-way-then-back shape the connect
+         * preview and its ticket have.
+         *
+         * Withdrawing carries nothing, because `setRegistryConsent` requires
+         * nothing to withdraw: making it harder to turn off than on is the wrong
+         * asymmetry in a revocation that has to work offline.
+         */
+        const acknowledgement =
+          typeof body.disclosure === "string" ? body.disclosure : undefined;
+        const outcome = setRegistryConsent(
+          stapleHome(),
+          hubId,
+          body.registry,
+          acknowledgement,
+        );
         json(res, 200, {
           outcome: outcomeOf(
             "",
             "registry",
             "ok",
             outcome.enabled
-              ? `Publishing this machine's workspace registry is on. ${REGISTRY_DISCLOSURE}`
+              ? "Publishing this machine's workspace registry is on. What that discloses is " +
+                "stated above the switch, and is unchanged by turning it on."
               : "Publishing this machine's workspace registry is off. Nothing about your " +
                 "workspace list leaves this machine.",
           ),

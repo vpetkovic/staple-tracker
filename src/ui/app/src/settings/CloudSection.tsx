@@ -337,7 +337,7 @@ export interface HubActions {
    * The hub's own publish consent — S22 (STA-283). Takes no slug, like every
    * member above it, because the hub is not one of the rows.
    */
-  onHubRegistryConsent: (enabled: boolean) => void;
+  onHubRegistryConsent: (enabled: boolean, disclosure: string) => void;
 }
 
 /**
@@ -1069,7 +1069,7 @@ function RegistryConsent({
   report: HubCloudReport;
   busy: boolean;
   locked: boolean;
-  onConsent: (enabled: boolean) => void;
+  onConsent: (enabled: boolean, disclosure: string) => void;
 }) {
   const control = hubRegistryControl(report);
   const disabled = control.disabledReason !== null;
@@ -1091,7 +1091,7 @@ function RegistryConsent({
               checked={control.value}
               disabled={disabled || locked}
               title={control.disabledReason ?? control.description}
-              onChange={(event) => onConsent(event.target.checked)}
+              onChange={(event) => onConsent(event.target.checked, report.self.registry.disclosure)}
               className="accent-primary size-4"
             />
             <span>{busy ? "Saving…" : control.value ? "On" : "Off"}</span>
@@ -2390,9 +2390,9 @@ export function CloudSection({ ws }: { ws?: string }) {
      * slug like the backup's, because the hub is not a row and a key colliding
      * with a real slug would put a hub result inside a workspace's.
      */
-    onHubRegistryConsent: (enabled) => {
+    onHubRegistryConsent: (enabled, disclosure) => {
       patchHub({ consenting: true });
-      setHubRegistryConsent(enabled)
+      setHubRegistryConsent(enabled, disclosure)
         .then((answer) => {
           if (!alive.current) return;
           setWorkspaces(answer.report);

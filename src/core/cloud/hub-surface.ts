@@ -65,6 +65,7 @@ import {
   HUB_BACKUP_CONTENTS,
   HUB_BACKUP_EXCLUSIONS,
   HUB_BACKUP_HEADLINE,
+  REGISTRY_DISCLOSURE,
 } from "./hub-registry.js";
 import type { CloudMode } from "./surface.js";
 
@@ -258,14 +259,16 @@ export interface HubSelfReport {
      * import `src/core` at all, so a client-side copy would be a second wording
      * with nothing holding it in step.
      *
-     * It is declared as {@link HUB_REGISTRY_DISCLOSURE} in this module rather
-     * than imported from `hub-registry-service.ts`, and that is a deliberate
-     * trade rather than an oversight: that module reaches `client.ts`, and
-     * `hubCloudReport` is called by a route the settings page POLLS. Putting the
-     * transport into a polled read's import graph is the precise setup
-     * `hub-preview.ts` was split out to prevent. `test/cloud-hub-registry-
-     * disclosure.test.ts` pins the two declarations equal, so they are two
-     * copies that cannot drift rather than two copies that will.
+     * Taken from `hub-registry.ts`, the LEAF — which imports only `../types.js`
+     * and a `Hub` type — and never from `hub-registry-service.ts`, which reaches
+     * `client.ts`. `hubCloudReport` is called by a route the settings page
+     * POLLS, and putting the transport into a polled read's import graph is the
+     * precise setup `hub-preview.ts` was split out of `hub-connect.ts` to
+     * prevent.
+     *
+     * It briefly lived in two places, here and in the service, pinned equal by a
+     * test. One declaration in a leaf is better than two that cannot drift, and
+     * this is now that.
      */
     disclosure: string;
     /**
@@ -423,23 +426,11 @@ export function hubCloudReport(home: string, options: HubReportOptions = {}): Hu
  * no hub file has no hub connection, and a settings page that failed to render
  * because a registry was missing is a worse answer than "not connected".
  */
-/**
- * The registry disclosure, declared here so a POLLED report does not have to
- * import the module that reaches the transport.
- *
- * Verbatim from `hub-registry-service.ts`'s `REGISTRY_DISCLOSURE`, and pinned
- * equal to it by `test/cloud-hub-registry-disclosure.test.ts`. If that test ever
- * fails, the two have diverged and the one in the SERVICE is the original.
- */
-export const HUB_REGISTRY_DISCLOSURE =
-  "a machine that publishes its registry tells the service the names, prefixes and " +
-  "identities of every workspace on it, and that they sit together.";
-
 function readHubRegistryState(home: string): HubSelfReport["registry"] {
   const absent = {
     connected: false,
     endpoint: null,
-    disclosure: HUB_REGISTRY_DISCLOSURE,
+    disclosure: REGISTRY_DISCLOSURE,
     consent: false,
   };
   let hubId: string | null;
@@ -461,7 +452,7 @@ function readHubRegistryState(home: string): HubSelfReport["registry"] {
     return {
       connected: true,
       endpoint: connection.endpoint,
-      disclosure: HUB_REGISTRY_DISCLOSURE,
+      disclosure: REGISTRY_DISCLOSURE,
       consent: connection.registry === true,
     };
   } catch {
