@@ -21,10 +21,9 @@
  * the everyday path at all.
  */
 import type { DatabaseSync } from "node:sqlite";
-import { dirname } from "node:path";
 import { existsSync } from "node:fs";
 import { credentialDir } from "./credential-store.js";
-import { readRepositoryManifest } from "../repo-identity.js";
+import { readWorkspaceManifest, workspaceIdentityDir } from "../repo-identity.js";
 import { findWorkspaceDb } from "../workspace.js";
 import { openWorkspace } from "../open.js";
 import {
@@ -121,8 +120,8 @@ export interface AutoSyncLocation {
  */
 export function locateAutoSyncTarget(dbPath: string | null): AutoSyncLocation | null {
   if (dbPath === null) return null;
-  const workspaceDir = dirname(dbPath);
-  const manifest = readRepositoryManifest(workspaceDir);
+  const workspaceDir = workspaceIdentityDir(dbPath);
+  const manifest = readWorkspaceManifest(dbPath);
   if (!manifest) return null;
   return { workspaceDir, repositoryId: manifest.repositoryId };
 }

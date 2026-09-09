@@ -52,6 +52,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { conflictsSummary } from "./conflicts.js";
 import type { CredentialMechanism } from "./credential-store.js";
 import { listLocalLeases } from "./lease-store.js";
+import { COPIED_HOME_DIAGNOSTIC, describeHostBinding } from "../repo-identity.js";
 import { describeState, type CloudState, type CloudStatus } from "./status.js";
 import { pendingCount, readSyncState } from "./sync-state.js";
 
@@ -271,20 +272,47 @@ export function cloudSurfaceReport(status: CloudStatus, db: DatabaseSync): Cloud
         0,
       ),
     },
-    warnings: [...status.warnings],
+    warnings: [...status.warnings, ...copiedHomeWarning(db)],
     failure: failureOf(status.state),
     hint: status.state === "disconnected" ? CONNECT : null,
   };
 }
 
 /**
+ * "This staple home was restored from another machine", if it was.
+ *
+ * A warning rather than a {@link CloudFailure}, and the distinction is the one
+ * this file already draws: a failure is a state this machine is IN, and every
+ * code in that union describes the connection. This describes the workspace's
+ * provenance, it is true in every connection state including `disconnected`, and
+ * it is exactly the class the `warnings` array exists for — "things worth knowing
+ * that are not the state".
+ *
+ * It is also, deliberately, not the enforcement. Status reports; the refusal
+ * lives at `assertOwnHost` on the paths that move data, so a person who opens
+ * status to find out what is wrong gets an answer instead of an exception.
+ *
+ * Read through `safely` because a workspace predating migration 012 has no
+ * column to read, and a status command that fell over on an old database would
+ * be a worse answer than the true one — which is that nothing is bound.
+ */
+function copiedHomeWarning(db: DatabaseSync): string[] {
+  const binding = safely(() => describeHostBinding(db).status, "unbound" as const);
+  return binding === "moved" ? [COPIED_HOME_DIAGNOSTIC] : [];
+}
+
+/**
  * The report for a workspace that has no sync identity at all.
  *
- * A global workspace, or one predating repository manifests, has no
- * `repository.json` and no `sync_state.repository_id`. It is not "disconnected
- * from something" — there is no something. Both `src/mcp.ts` and
- * `src/ui/server.ts` had already written this case out by hand, in two different
- * sentences; this is the one of them.
+ * A workspace predating repository manifests has no `repository.json` and no
+ * `sync_state.repository_id`. It is not "disconnected from something" — there is
+ * no something. Both `src/mcp.ts` and `src/ui/server.ts` had already written this
+ * case out by hand, in two different sentences; this is the one of them.
+ *
+ * This used to be where a global workspace ended up, permanently and by design.
+ * It is not any more (STA-273): a workspace with no repository mints an identity
+ * in its own directory inside the staple home, so the only workspaces that reach
+ * this report are ones `staple init` has never been run in.
  *
  * It carries a `failure` where plain `disconnected` does not, because the two
  * are genuinely different: a disconnected repository can be connected, and this
@@ -317,9 +345,8 @@ export function noIdentityReport(): CloudSurfaceReport {
     failure: {
       code: "no_identity",
       summary:
-        "This workspace has no repository identity, so there is nothing for a connection to be " +
-        "about. A global workspace has none by design.",
-      remedy: "Run `staple init` inside a repository to record one.",
+        "This workspace has no sync identity, so there is nothing for a connection to be about.",
+      remedy: "Run `staple init` in this workspace to record one.",
     },
     hint: null,
   };

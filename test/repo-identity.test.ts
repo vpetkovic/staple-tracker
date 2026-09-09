@@ -556,13 +556,49 @@ describe("what identity does NOT do", () => {
      * A structural stand-in for the epic-wide network assertion, scoped to this
      * module: identity is local file and local row work, and it stays that way.
      * A future edit that reaches for `fetch` or `node:http` fails here.
+     *
+     * STA-273 added two: `../config/home.js`, because identity now has to know
+     * where the staple home is in order to give a workspace that has no
+     * repository a directory of its own, and `./host-id.js`, which answers
+     * "which machine is this" for the copied-home check. Both are enumerated
+     * rather than allowed by pattern, which is the whole value of this list.
      */
-    const source = readFileSync(
-      new URL("../src/core/repo-identity.ts", import.meta.url),
-      "utf8",
-    );
+    const source = readFileSync(new URL("../src/core/repo-identity.ts", import.meta.url), "utf8");
     const imports = [...source.matchAll(/from "([^"]+)"/g)].map((m) => m[1]!);
-    expect(imports.sort()).toEqual(["./types.js", "node:crypto", "node:fs", "node:path", "node:sqlite"]);
+    expect(imports.sort()).toEqual([
+      "../config/home.js",
+      "./host-id.js",
+      "./types.js",
+      "node:crypto",
+      "node:fs",
+      "node:path",
+      "node:sqlite",
+    ]);
     expect(source).not.toMatch(/\bfetch\s*\(/);
+  });
+
+  it("keeps the machine check to the machine: no socket, and two named programs", () => {
+    /**
+     * `host-id.ts` is reachable from identity, so the same guarantee has to hold
+     * one module further out — and it imports `node:child_process`, which is the
+     * one genuinely powerful thing anywhere in this path.
+     *
+     * So the argv is pinned, not just the import. Both programs are read-only
+     * system queries with fixed arguments and no shell, and neither is a version
+     * control system: STA-273 exists precisely so that synchronizing does not
+     * require one, and a detector that shelled out to one would put the
+     * dependency back a layer down where nobody would look for it.
+     */
+    const source = readFileSync(new URL("../src/core/host-id.ts", import.meta.url), "utf8");
+    const imports = [...source.matchAll(/from "([^"]+)"/g)].map((m) => m[1]!);
+    expect(imports.sort()).toEqual(["node:child_process", "node:crypto", "node:fs", "node:os"]);
+    expect(source).not.toMatch(/\bfetch\s*\(/);
+
+    const spawned = [...source.matchAll(/execFileSync\(\s*\n?\s*"([^"]+)"/g)].map((m) => m[1]!);
+    expect(spawned.sort()).toEqual(["/usr/sbin/ioreg", "reg"]);
+    // No shell, ever: `execFileSync` takes an argv, `exec`/`execSync` take a
+    // command line, and `shell: true` turns the safe one into the unsafe one.
+    expect(source).not.toMatch(/(^|[^.\w])exec(Sync)?\s*\(/);
+    expect(source).not.toMatch(/shell\s*:\s*true/);
   });
 });

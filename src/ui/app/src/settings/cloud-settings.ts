@@ -199,11 +199,16 @@ export function consentControls(report: CloudSurfaceReport): ConsentControl[] {
 /**
  * Is the section allowed to offer a connect form at all?
  *
- * False when the workspace has no repository identity — a global workspace has
- * none by design, and there is nothing for a connection to be ABOUT. The report
- * says so through `failure.code === "no_identity"`, which is the value; the
- * section renders `failure.summary` and `failure.remedy` rather than a form that
- * would be refused.
+ * False when the workspace has no sync identity, because there is nothing for a
+ * connection to be ABOUT. The report says so through
+ * `failure.code === "no_identity"`, which is the value; the section renders
+ * `failure.summary` and `failure.remedy` rather than a form that would be
+ * refused.
+ *
+ * This used to exclude every global workspace, permanently. STA-273 gave a
+ * workspace with no repository an identity of its own, so the answer here is
+ * now true for one — the predicate did not have to change, because it was
+ * already asking about the identity rather than about the kind.
  */
 export function canOfferConnect(report: CloudSurfaceReport): boolean {
   return report.mode === "disconnected" && report.failure?.code !== "no_identity";

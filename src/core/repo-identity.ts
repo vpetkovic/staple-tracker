@@ -43,9 +43,11 @@
  * stops and says which file and what it expected.
  */
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { stapleHome } from "../config/home.js";
+import { hostFingerprint } from "./host-id.js";
 import { StapleError } from "./types.js";
 
 export const REPOSITORY_MANIFEST_FILENAME = "repository.json";
@@ -79,6 +81,58 @@ export function isRepositoryId(value: unknown): value is string {
 
 export function repositoryManifestPath(workspaceDir: string): string {
   return join(workspaceDir, REPOSITORY_MANIFEST_FILENAME);
+}
+
+/** Where global workspaces live inside the staple home. */
+const WORKSPACES_DIRNAME = "workspaces";
+
+/**
+ * True when this database is one of the staple home's own global workspaces —
+ * `<home>/workspaces/<slug>.db`, the layout `initWorkspace` writes for
+ * `--global`.
+ *
+ * Checked against the parent directory rather than by a prefix match on the
+ * whole path, so a repository that happens to sit inside the home (which nothing
+ * forbids) is not mistaken for one of staple's own.
+ */
+export function isHomeResidentWorkspace(dbPath: string, home: string = stapleHome()): boolean {
+  const file = resolve(dbPath);
+  if (!file.endsWith(".db")) return false;
+  return dirname(file) === resolve(home, WORKSPACES_DIRNAME);
+}
+
+/**
+ * The directory that holds this workspace's identity.
+ *
+ * For a repository-backed workspace this is the directory the database is in —
+ * `.staple/`, beside the guide and the ignore file — which is what every caller
+ * passed by hand before this function existed, so nothing about that case moves.
+ *
+ * For a global workspace it is `<home>/workspaces/<slug>/`, a directory named
+ * for the workspace and created on demand. It is emphatically NOT
+ * `dirname(dbPath)`: that is `<home>/workspaces`, which every global workspace on
+ * the machine shares, and a manifest there would hand all of them ONE identity —
+ * a collision minted by the very change that was supposed to give them each one.
+ *
+ * The database does not move to get here. An existing global workspace gains an
+ * identity by gaining a sibling directory, so nothing re-registers in the hub,
+ * no path a person has typed changes, and no data is rewritten. `<slug>` is
+ * already the unique name of a global workspace — its database is `<slug>.db` in
+ * the same directory — so two of them cannot collide on the directory without
+ * having already collided on the file.
+ *
+ * One directory in `workspaces/` is not a workspace: `snapshots/`, where
+ * `openWorkspace` retains pre-upgrade copies. A workspace slugged "snapshots"
+ * would share it. Deliberately not special-cased — the two never collide on a
+ * FILE name (`repository.json` against `<db>.schema-N.<stamp>.db`), nothing
+ * removes that directory wholesale, and no other workspace would read the
+ * manifest as its own. It is untidy, not wrong, and a reserved-name rule would
+ * be a new way for `staple init` to fail.
+ */
+export function workspaceIdentityDir(dbPath: string, home: string = stapleHome()): string {
+  const file = resolve(dbPath);
+  if (!isHomeResidentWorkspace(file, home)) return dirname(file);
+  return join(dirname(file), basename(file, ".db"));
 }
 
 /**
@@ -403,4 +457,170 @@ export function findRepositoryIdCollisions(
     if (unique.length > 1) collisions.push({ repositoryId, paths: unique });
   }
   return collisions.sort((a, b) => a.repositoryId.localeCompare(b.repositoryId));
+}
+
+// --------------------------------------------------------- the host binding
+
+/**
+ * The machine a home-resident workspace was minted on.
+ *
+ * NULL for every repository-backed workspace, and that is the semantic rather
+ * than an omission — see `migrations/workspace/012-host-binding.ts`. One
+ * repository id at two machines is what a clone IS; one HOME at two machines is
+ * a copy, because a home carries the database, the cursors, the sequence
+ * allocator and the device credential that a clone deliberately does not.
+ */
+export function readOriginHost(db: DatabaseSync): string | null {
+  const row = db.prepare("SELECT origin_host FROM sync_state WHERE id = 1").get() as
+    | { origin_host: string | null }
+    | undefined;
+  return row?.origin_host ?? null;
+}
+
+/** Claim this workspace for this machine. Writes the singleton row if absent. */
+export function writeOriginHost(db: DatabaseSync, host: string): void {
+  db.prepare(
+    `INSERT INTO sync_state (id, origin_host) VALUES (1, ?)
+     ON CONFLICT (id) DO UPDATE SET origin_host = excluded.origin_host`,
+  ).run(host);
+}
+
+export type HostBindingStatus =
+  /** No binding recorded: a repository-backed workspace, or one not yet minted. */
+  | "unbound"
+  /** Recorded on this machine. */
+  | "consistent"
+  /** Recorded on a DIFFERENT machine — this home is a copy. */
+  | "moved";
+
+export interface HostBindingReport {
+  readonly status: HostBindingStatus;
+  /** The digest stored in the database, or null when nothing is bound. */
+  readonly recorded: string | null;
+  /** This machine, as `hostFingerprint` computes it. */
+  readonly current: string;
+}
+
+/** Compare what the database records against the machine actually running. */
+export function describeHostBinding(db: DatabaseSync): HostBindingReport {
+  const current = hostFingerprint();
+  const recorded = readOriginHost(db);
+  if (recorded === null) return { status: "unbound", recorded: null, current };
+  return { status: recorded === current ? "consistent" : "moved", recorded, current };
+}
+
+/**
+ * The one wording for "this home was restored somewhere else", used by the
+ * refusal and by the status warning so the two can never drift apart.
+ *
+ * Names both ways out, because both are legitimate and only a person knows
+ * which. Forking is right when both machines are live and are about to become
+ * two independent workspaces. Removing the copy is right when this machine was
+ * only ever meant to be a restore of a machine that is now gone — and that case
+ * is why the refusal is not phrased as an accusation.
+ */
+export const COPIED_HOME_DIAGNOSTIC =
+  "This workspace's sync identity was minted on a different machine, and its database, cursors " +
+  "and device credential were copied here with it — a restored staple home, not a second " +
+  "device. Two machines synchronizing under one identity and one client-sequence allocator " +
+  "would mint operation ids for different work that the service cannot tell apart, and the " +
+  "loser is discarded silently. Nothing was sent. Run `staple cloud fork-id` to make this " +
+  "machine an independent workspace with its own identity, or remove this copy if the machine " +
+  "it came from is the one that should keep syncing.";
+
+/**
+ * Refuse before anything moves.
+ *
+ * Silent on `unbound` and `consistent`, so a repository-backed workspace — which
+ * never records a binding — passes through untouched, and so does every machine
+ * that actually is the one that minted the identity.
+ */
+export function assertOwnHost(db: DatabaseSync): void {
+  if (describeHostBinding(db).status === "moved") {
+    throw new StapleError("conflict", COPIED_HOME_DIAGNOSTIC);
+  }
+}
+
+// -------------------------------------------------- the workspace-level door
+
+/** A repository identity report plus the host binding, when there is one. */
+export interface WorkspaceIdentityReport extends RepositoryIdentityReport {
+  /** Null for a workspace that is not host-bound, i.e. every repository. */
+  readonly host: HostBindingReport | null;
+}
+
+/**
+ * Read the manifest for a database, wherever that database keeps it.
+ *
+ * The replacement for `readRepositoryManifest(dirname(dbPath))`, which was the
+ * idiom at seven call sites and is correct only for a repository — for a global
+ * workspace it reads the SHARED `workspaces/` directory and finds nothing, which
+ * is exactly why a global workspace reported that it had no identity.
+ *
+ * Still throws on a manifest that is present but unreadable: "unreadable" must
+ * never degrade into "absent" here either.
+ */
+export function readWorkspaceManifest(dbPath: string, home?: string): RepositoryManifest | null {
+  return readRepositoryManifest(workspaceIdentityDir(dbPath, home));
+}
+
+/**
+ * Reconcile identity for any workspace, repository-backed or not.
+ *
+ * For a repository this is `reconcileRepositoryIdentity` with the directory it
+ * was always given, and nothing else happens: no directory is created, no host
+ * is recorded, and the report's `host` is null.
+ *
+ * For a home-resident workspace it additionally creates the identity directory
+ * (inside staple's own home, so creating a file is not a surprise the way it
+ * would be inside somebody's repository) and records the machine — but ONLY when
+ * nothing is recorded yet. A binding that names another machine is reported and
+ * never rewritten: re-binding on sight would erase the single piece of evidence
+ * that the home was copied, which is the entire mechanism.
+ */
+export function reconcileWorkspaceIdentity(
+  db: DatabaseSync,
+  dbPath: string,
+  home?: string,
+): WorkspaceIdentityReport {
+  const bound = isHomeResidentWorkspace(dbPath, home ?? stapleHome());
+  const dir = workspaceIdentityDir(dbPath, home);
+  if (bound) mkdirSync(dir, { recursive: true, mode: 0o700 });
+
+  const report = reconcileRepositoryIdentity(db, dir);
+  if (!bound) return { ...report, host: null };
+
+  const binding = describeHostBinding(db);
+  if (binding.status !== "unbound") return { ...report, host: binding };
+
+  writeOriginHost(db, binding.current);
+  return {
+    ...report,
+    host: { status: "consistent", recorded: binding.current, current: binding.current },
+  };
+}
+
+/**
+ * Fork any workspace — the operation behind `staple cloud fork-id`.
+ *
+ * {@link forkRepositoryId} does the work and its reasoning is unchanged: a new
+ * id, and every position in the old repository's log dropped. The only thing
+ * added here is the host binding, and it is added for the same reason the
+ * positions are dropped — a fork is the moment an operator says "this machine is
+ * its own workspace now", so the machine that says it is the machine that owns
+ * the result. Clearing `sync_state` has already removed the old binding, so this
+ * writes rather than overwrites.
+ */
+export function forkWorkspaceIdentity(
+  db: DatabaseSync,
+  dbPath: string,
+  home?: string,
+): ForkResult {
+  const bound = isHomeResidentWorkspace(dbPath, home ?? stapleHome());
+  const dir = workspaceIdentityDir(dbPath, home);
+  if (bound) mkdirSync(dir, { recursive: true, mode: 0o700 });
+
+  const result = forkRepositoryId(db, dir);
+  if (bound) writeOriginHost(db, hostFingerprint());
+  return result;
 }

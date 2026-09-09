@@ -8,7 +8,7 @@ import { Hub } from "./hub.js";
 import { type OpenedWorkspace, openWorkspace, readMeta, writeMetaPairs } from "./open.js";
 import { writeAgentsGuide } from "./agents-template.js";
 import { writeWorkspaceGitignore } from "./workspace-gitignore.js";
-import { reconcileRepositoryIdentity, type RepositoryIdentityReport } from "./repo-identity.js";
+import { reconcileWorkspaceIdentity, type WorkspaceIdentityReport } from "./repo-identity.js";
 import { repairHubRegistration } from "./hub-repair.js";
 import {
   assertResolvable,
@@ -155,12 +155,13 @@ export function initWorkspace(options: {
   /** false when the ignore file already existed and was kept as-is. */
   gitignoreWritten: boolean;
   /**
-   * Repository identity as reconciled on this init; null for global workspaces,
-   * which have no repository to identify. `status: "manifest_mismatch"` means
-   * the database was copied out of another repository or the manifest was
-   * hand-edited — reported, never repaired here.
+   * Sync identity as reconciled on this init, for both kinds of workspace.
+   * `status: "manifest_mismatch"` means the database was copied out of another
+   * repository or the manifest was hand-edited; `host.status: "moved"` means
+   * this staple home was restored from another machine. Both are reported here
+   * and never repaired here.
    */
-  repository: RepositoryIdentityReport | null;
+  repository: WorkspaceIdentityReport;
   /** Which layout this workspace stores its state in. */
   layout: WorkspaceLayout;
 } {
@@ -230,15 +231,29 @@ export function initWorkspace(options: {
      * and an init that minted its own id here would fork the repository at
      * precisely the moment the manifest exists to prevent that.
      *
-     * Repo workspaces only, like the guide and the ignore file. A global
-     * workspace lives under the machine home with no repository around it, so
-     * there is nothing to identify and nowhere for a manifest to be checked in.
+     * BOTH kinds, unlike the guide and the ignore file. This used to be repo
+     * workspaces only, on the reasoning that a global workspace has "nothing to
+     * identify and nowhere for a manifest to be checked in" — but that is an
+     * argument about CLONE RECOVERY, which is the one thing a global workspace
+     * never needs. Nothing in the identity path invokes a version control
+     * system; the manifest is a plain JSON file, and a checkout is merely how a
+     * REPOSITORY carries its id to a machine that has no database yet. A
+     * workspace in the staple home has a directory of its own
+     * (`workspaceIdentityDir`) and can hold a manifest perfectly well, so
+     * refusing it one only meant that a workspace outside a repository could
+     * never synchronize — which made a version control system a requirement for
+     * sync by the back door.
+     *
+     * What a home-resident workspace gets in addition is a host binding, and it
+     * is not optional: a fixed path inside the home means a restored backup
+     * lands on a second machine as the same identity at the same path, with no
+     * clone to tell them apart. See `repo-identity.ts`, "the host binding".
      *
      * This is local file and local row work: it makes no network call, and it is
      * not `connect`. A workspace carrying an identity has not consented to
      * anything — see docs/sync.md, "Three consents".
      */
-    const repository = kind === "repo" ? reconcileRepositoryIdentity(db, dirname(dbPath)) : null;
+    const repository = reconcileWorkspaceIdentity(db, dbPath);
 
     return {
       store: new WorkspaceStore(db, storedSlug, prefix),
