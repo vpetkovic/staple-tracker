@@ -325,7 +325,19 @@ describe("flag inventory", () => {
     // new verbs, since a mistyped `--yes` leaves prune previewing and a
     // mistyped `--with-links` leaves the cross-link cascade off. Every typo
     // does less, never more.
-    expect(badSub.stdout).toBe("usage: staple hub [ls|links|events|unregister|prune|unlink]\n");
+    /**
+     * GOLDEN MOVED (STA-283): `registry` joins the usage line.
+     *
+     * The flag tolerance this test pins is UNCHANGED and still applies to plain `hub`,
+     * which is why the assertion above still passes. `hub registry` deliberately does NOT
+     * inherit it — it parses strictly, because the "every typo does less" argument does
+     * not transfer to a command group that publishes to a service: a swallowed
+     * `--disable` would leave publishing on, and a swallowed `--apply` is the only thing
+     * between a preview and a write. See `test/cloud-hub-registry-cli.test.ts`.
+     */
+    expect(badSub.stdout).toBe(
+      "usage: staple hub [ls|links|events|unregister|prune|unlink|registry]\n",
+    );
     expect(badSub.stderr).toBe("");
   }, 30_000);
 

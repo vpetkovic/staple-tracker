@@ -46,6 +46,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hub } from "../src/core/hub.js";
 import { buildConnectPreview } from "../src/core/cloud/preview.js";
+import { REGISTRY_DISCLOSURE } from "../src/core/cloud/hub-registry.js";
 import {
   adoptPublishedRegistry,
   adoptRegistryIdentity,
@@ -54,6 +55,7 @@ import {
   listHubBackups,
   publishRegistry,
   readPublishedRegistry,
+  registryDisclosure,
   restoreRegistry,
   setHubBackupConsent,
   setRegistryConsent,
@@ -110,6 +112,8 @@ function safe(value: unknown): string {
 async function main(): Promise<void> {
   const WS_A = "aaaaaaaa-0000-4000-8000-000000000001";
   const WS_B = "bbbbbbbb-0000-4000-8000-000000000002";
+  const WS_C = "cccccccc-0000-4000-8000-000000000003";
+  const WS_D = "dddddddd-0000-4000-8000-000000000004";
 
   step(1, "connect the hub as a repository");
   const a = machine("first");
@@ -150,14 +154,23 @@ async function main(): Promise<void> {
   } catch (error) {
     console.log(`refused: ${error instanceof Error ? error.message.slice(0, 120) : error}…`);
   }
-  setRegistryConsent(a.home, hubId, true);
+  /**
+   * The disclosure is RENDERED and then handed back, which is what `setRegistryConsent`
+   * now requires when enabling. A script is a surface too, and it does not get an
+   * exemption from showing what it is agreeing to.
+   */
+  console.log(registryDisclosure(endpoint));
+  setRegistryConsent(a.home, hubId, true, REGISTRY_DISCLOSURE);
   const published = await publishRegistry(a.hub, a.home);
   console.log(
     safe({
       published: published.published,
       created: published.created,
       updated: published.updated,
-      removed: published.removed,
+      retracted: published.retracted,
+      applied: published.applied,
+      deduplicated: published.deduplicated,
+      retained: published.retained.length,
       batches: published.batches,
       epoch: published.epoch,
       unpublishable: published.unpublishable.map((u) => u.entry.slug),
@@ -168,7 +181,46 @@ async function main(): Promise<void> {
   const readBack = await readPublishedRegistry(a.home, hubId);
   console.log(safe(readBack.registry));
 
-  step(4, "POST /backups — the fold, persisted");
+  step(4, "cross-links: publish, retract, and re-add — the half a delete could not do")
+  /**
+   * Registered ABSENT on purpose. `Hub.addCrossLink` only opens a workspace database when
+   * the row is `available`, so absent rows let this script exercise the real cross-link
+   * path — the content-derived key, the retraction, the re-add — without standing up two
+   * workspaces with real issues in them. What is under test is the WIRE, not `addCrossLink`.
+   */
+  a.hub.registerAbsent({ slug: "live-edge-a", prefix: "LEA", kind: "repo", repositoryId: WS_C });
+  a.hub.registerAbsent({ slug: "live-edge-b", prefix: "LEB", kind: "repo", repositoryId: WS_D });
+  a.hub.addCrossLink("LEA-1", "LEB-2");
+  const withEdge = await publishRegistry(a.hub, a.home);
+  console.log(`published with edge: ${safe({ published: withEdge.published, applied: withEdge.applied, deduplicated: withEdge.deduplicated })}`);
+  console.log(
+    `service edges: ${safe((await readPublishedRegistry(a.home, hubId)).registry.crossLinks.map((l) => `${l.blockerIdentifier}->${l.blockedIdentifier}`))}`,
+  );
+
+  a.hub.removeCrossLink("LEA-1", "LEB-2");
+  const retracted = await publishRegistry(a.hub, a.home);
+  console.log(`retracted: ${safe({ published: retracted.published, retracted: retracted.retracted, applied: retracted.applied, deduplicated: retracted.deduplicated })}`);
+  const afterRetract = (await readPublishedRegistry(a.home, hubId)).registry.crossLinks.length;
+  console.log(`service edges after retract: ${afterRetract}`);
+
+  /**
+   * THE assertion this script exists to add. Under the `delete` verb the re-add produced
+   * the same entity id, landed on a tombstone, and was discarded while the push reported
+   * success — for ever. `present: false` makes it an ordinary field update.
+   */
+  a.hub.addCrossLink("LEA-1", "LEB-2");
+  const readded = await publishRegistry(a.hub, a.home);
+  console.log(`re-added: ${safe({ published: readded.published, applied: readded.applied, deduplicated: readded.deduplicated })}`);
+  const afterReadd = (await readPublishedRegistry(a.home, hubId)).registry.crossLinks;
+  console.log(`service edges after re-add: ${safe(afterReadd.map((l) => `${l.blockerIdentifier}->${l.blockedIdentifier}`))}`);
+  const cycleOk = afterRetract === 0 && afterReadd.length === 1 && readded.deduplicated === 0;
+  console.log(
+    cycleOk
+      ? "PASS — a cross-link survives remove-then-re-add against the real service"
+      : `FAIL — retract left ${afterRetract}, re-add left ${afterReadd.length}, deduplicated ${readded.deduplicated}`,
+  );
+
+  step(5, "POST /backups — the fold, persisted");
   await setHubBackupConsent(a.home, hubId, true);
   const backup = await createHubBackup(a.home, hubId, "hub-registry-live");
   console.log(safe(backup));
@@ -177,7 +229,7 @@ async function main(): Promise<void> {
   );
   a.hub.close();
 
-  step(5, "a replacement machine adopts the registry it never had");
+  step(6, "a replacement machine adopts the registry it never had");
   const b = machine("replacement");
   await connectHubRegistry(
     buildConnectPreview({ home: b.home, repositoryId: hubId, endpoint }),
@@ -193,8 +245,8 @@ async function main(): Promise<void> {
     }),
   );
 
-  step(6, "publish damage, then restore the backup and adopt what comes back");
-  setRegistryConsent(b.home, hubId, true);
+  step(7, "publish damage, then restore the backup and adopt what comes back");
+  setRegistryConsent(b.home, hubId, true, REGISTRY_DISCLOSURE);
   // The identity moves to a new slug — a real second write to one registration, and the
   // case that a content-addressed opId exists to let land.
   register(b.home, b.hub, "renamed-by-mistake", "RBM", WS_A);
@@ -225,19 +277,36 @@ async function main(): Promise<void> {
     }),
   );
 
-  step(7, "assertions");
+  step(8, "assertions");
   const slugs = restored.registry.workspaces.map((w) => w.slug).sort();
-  const expected = ["live-other", "live-tracker"];
+  // All four: the two named workspaces plus the two the cross-link cycle registered.
+  const expected = ["live-edge-a", "live-edge-b", "live-other", "live-tracker"];
   const ok = JSON.stringify(slugs) === JSON.stringify(expected);
   console.log(ok ? `PASS — restored ${JSON.stringify(slugs)}` : `FAIL — got ${JSON.stringify(slugs)}, wanted ${JSON.stringify(expected)}`);
-  // No path anywhere in what the service holds. The single most important one.
-  const serialized = JSON.stringify(restored.registry);
-  const leaked = homes.filter((home) => serialized.includes(home));
-  console.log(leaked.length === 0 ? "PASS — no filesystem path in the published registry" : `FAIL — leaked ${leaked}`);
+  /**
+   * No path in what was PUSHED.
+   *
+   * The earlier version of this check serialized `restored.registry` — a
+   * `HubRegistryPayload`, which has no path field at all, so `registryFromSnapshot` would
+   * have dropped any path before the check ever saw it. It could not fail. The meaningful
+   * subject is the operation batch this machine emitted, which is what actually left the
+   * process, so that is what is checked here.
+   */
+  const { diffRegistry, publishedStateOf } = await import("../src/core/cloud/hub-registry-ops.js");
+  const { exportRegistry } = await import("../src/core/cloud/hub-registry.js");
+  const emitted = JSON.stringify(
+    diffRegistry(exportRegistry(c.hub), publishedStateOf([])).operations,
+  );
+  const leaked = homes.filter((home) => emitted.includes(home));
+  console.log(
+    leaked.length === 0
+      ? "PASS — no filesystem path in the operations this machine emits"
+      : `FAIL — leaked ${leaked}`,
+  );
 
   b.hub.close();
   c.hub.close();
-  if (!ok || leaked.length > 0) process.exit(1);
+  if (!ok || leaked.length > 0 || !cycleOk) process.exit(1);
 }
 
 main()

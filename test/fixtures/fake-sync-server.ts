@@ -375,6 +375,7 @@ export class FakeSyncServer {
         session,
         decodeURIComponent(backupMatch[1]!),
         JSON.parse(String(body)) as Record<string, unknown>,
+        protocol,
       );
     }
     if (tail === "" && method === "DELETE") {
@@ -843,7 +844,9 @@ export class FakeSyncServer {
         : afterKey;
 
     return this.json(200, {
-      protocol: 1,
+      // The version this REQUEST negotiated, like `worker/src/snapshot.ts`. `pull` was
+      // fixed to echo it and this was missed.
+      protocol,
       epoch: this.epoch,
       cutoffSeq: cutoff,
       tailCursor: b64url(JSON.stringify({ v: 1, r: session.repoId, e: this.epoch, s: cutoff })),
@@ -971,7 +974,14 @@ export class FakeSyncServer {
       entityCount: folded.entities.length,
       opCount: folded.opCount,
       schemaVersion: folded.schemaVersion,
-      protocol: 1,
+      /**
+       * The lowest protocol that can REPLAY this backup, mirroring
+       * `worker/src/backups.ts`'s `protocolForEntities`. Hardcoding 1 made every hub
+       * backup in the client suite claim protocol 1 while the deployed Worker stamps 2 —
+       * the fixture being MORE permissive than the service, which is the one thing it
+       * exists not to be.
+       */
+      protocol: folded.entities.some((entity) => REGISTRY_ENTITIES.has(entity.entity)) ? 2 : 1,
       kind,
       createdAt: Date.now() + this.backups.length,
       createdByDevice: deviceId,
@@ -999,6 +1009,7 @@ export class FakeSyncServer {
     session: { repoId: string; deviceId: string },
     backupId: string,
     body: Record<string, unknown>,
+    protocol: number,
   ): Response {
     if (body.confirm !== this.options.repositoryId) {
       throw new ServerError(400, "validation", "restore requires the repository id in `confirm`");
@@ -1006,6 +1017,28 @@ export class FakeSyncServer {
 
     const backup = this.backups.find((candidate) => candidate.backupId === backupId);
     if (!backup) throw new ServerError(404, "not_found", "no such backup");
+
+    /**
+     * Mirrors `worker/src/backups.ts`: a backup the REQUEST's protocol cannot read is
+     * refused before the undo is captured and before anything is staged.
+     *
+     * This was missing, so a protocol-1 restore of a protocol-2 hub backup passed here
+     * and was 426'd by the deployed Worker. Nothing bit only because `restoreRegistry`
+     * happens to pass `REGISTRY_PROTOCOL` on every call — which is exactly the kind of
+     * accident a fixture is supposed to catch rather than depend on.
+     */
+    if (backup.protocol > protocol) {
+      throw new ServerError(
+        426,
+        "protocol_unsupported",
+        "this backup contains operations this request's protocol cannot read",
+        {
+          min: this.options.protocol.min,
+          max: this.options.protocol.max,
+          requiredProtocol: backup.protocol,
+        },
+      );
+    }
 
     let restore = this.restores.find((candidate) => candidate.restoreId === body.restoreId);
     if (body.restoreId === undefined) {
