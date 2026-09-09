@@ -163,11 +163,14 @@ function b64urlDecode(raw: string): string {
  * the cost is one repeated pass for a bootstrap that happened to straddle a deploy, and
  * the alternative was leaving a file nobody can review or grep.
  *
- * **Note for anyone reviewing the pull request that changed this.** The PRE-IMAGE at the
- * merge base still contains the NUL, so git classifies the whole diff as binary and
- * `gh pr diff` shows nothing for this file — the net-new code here was unreviewable in the
- * diff that introduced it. `test/source-hygiene.test.ts` guards the post-image and cannot
- * help with that; reading the file at HEAD is the only way to review it.
+ * **The diff of this file used to be invisible, and that is now fixed at the root.** The
+ * PRE-IMAGE at the merge base still contains the NUL, so git classified the whole diff as
+ * binary — `+0/-0`, nothing in `gh pr diff`, nothing in the GitHub UI — and the net-new code
+ * here was unreviewable in the pull request that introduced it.
+ * `test/source-hygiene.test.ts` fails on a NUL at HEAD and can do nothing about history, so
+ * `.gitattributes` now marks source as `diff`, which forces a textual diff whatever the
+ * bytes. Verified: this file went from `Binary files differ` to `44 3` in
+ * `git diff --numstat`.
  */
 export function entityKey(entity: string, entityId: string): string {
   return `${entity} ${entityId}`;

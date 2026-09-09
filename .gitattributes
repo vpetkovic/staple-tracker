@@ -1,0 +1,26 @@
+# Source is always diffable, whatever stray bytes are in it.
+#
+# Git classifies a file as binary when it finds a NUL in the first 8 KiB of EITHER side of a
+# diff, and then reports "Binary files differ", +0/-0 — the file becomes invisible to
+# `git diff`, to the GitHub pull-request UI, and to `grep`/`rg`.
+#
+# That has happened three times here, from a `\x00` escape in a template literal becoming a
+# real byte: `src/core/journal.ts`, `src/core/cloud/hub-registry-ops.ts`, and
+# `worker/src/cursor.ts`. The last one is why this file exists rather than just a test. The
+# byte was fixed, but the PRE-IMAGE at the merge base still holds it, so the diff stayed
+# binary and ~1.9 KiB of net-new Worker code was unreviewable in the pull request that
+# introduced it. `test/source-hygiene.test.ts` fails on a NUL in a tracked source file at HEAD
+# and cannot do anything about history.
+#
+# `diff` here forces a textual diff regardless of content. It does not change what is stored,
+# it does not normalise line endings, and it does not touch the working tree — it only tells
+# git's diff machinery not to give up. Combined with the test, a stray NUL is now both refused
+# going forward and harmless to review if one ever gets in again.
+*.ts    diff
+*.tsx   diff
+*.mts   diff
+*.mjs   diff
+*.js    diff
+*.json  diff
+*.md    diff
+*.sql   diff
