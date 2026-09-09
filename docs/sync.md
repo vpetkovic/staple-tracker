@@ -382,12 +382,24 @@ identity. The database does not move to get this, so an existing global
 workspace gains an identity by gaining a sibling directory — no data rewritten,
 no registered path changed.
 
-`staple init` mints it, and so does every `openWorkspace` of a home-resident
-database. The asymmetry with a repository is deliberate: a repository gets its
-identity from `init`, which is the first command anybody runs in a fresh
-checkout, and minting a file inside somebody's repository on a read path would be
-a surprise. A global workspace has no second ritual, so open is the only door —
-and the file lands inside staple's own home.
+The same is true of a workspace in a plain directory — one that is not in the
+staple home and not in a version control checkout either. It keeps its manifest
+in its own `.staple/` beside its database, exactly as a repository does, and it
+falls under the same rule as a global workspace for the same reason: nothing will
+ever clone it, so nothing will ever run `init` in it a second time.
+
+`staple init` mints it, and so does every `openWorkspace` of a workspace that is
+not checkout-backed. The asymmetry with a checkout is deliberate: a checkout gets
+its identity from `init`, which is the first command anybody runs in a fresh
+clone, and minting a file inside somebody's checkout on a read path would be a
+surprise — the manifest there is a *committed* file, so an untracked one is a
+diff nobody asked for. Every other workspace has no second ritual, so open is the
+only door it has.
+
+Whether a workspace is checkout-backed is a bounded walk for a `.git` marker
+above its identity directory. It is a file test and never a subprocess, and it
+gates nothing about identity — both answers mint one. It decides only which
+*copy* story applies, which is the subject of the next section.
 
 ### A copied home is not a second device
 
@@ -406,11 +418,26 @@ bring with it, because it is derived from the machine and not from the home.
 Detection needs no version control, no network and no second machine to compare
 against.
 
-The value is NULL for every repository-backed workspace, and that is the
+The value is NULL for every checkout-backed workspace, and that is the
 semantics rather than an omission. One repository id at two machines is what a
 clone *is*, and clones are required to converge. `STAPLE_HOST_ID` overrides the
 detection for environments where the heuristic is wrong in either direction;
 setting it wrongly defeats the check.
+
+**It is not only the home.** A workspace in a plain directory is in the same
+position in every respect that matters: a copy of it — a restored backup, an
+rsync, a folder a file-sync service put on a second machine — arrives carrying
+the database, the cursors and `client_seq_high_water`, and there is no clone to
+tell the two machines apart. So every workspace that is not checkout-backed
+records `origin_host`, and the section heading is kept as it was only because
+three modules cite it by name.
+
+The binding is to the MACHINE and never to the path, which is what keeps a
+*moved* workspace from being read as a *copied* one. Renaming a directory,
+re-nesting it, or dragging it across this disk changes nothing and says nothing.
+Two copies at two paths on ONE machine are still not detected here — they have
+the same fingerprint — and remain the business of the hub collision diagnostic
+above.
 
 When the recorded host is not this machine:
 

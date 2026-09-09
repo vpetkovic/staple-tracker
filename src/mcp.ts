@@ -2377,7 +2377,7 @@ server.registerTool(
       const manifest = readWorkspaceManifest(workspaceFor(ws).dbPath);
       // No manifest means no sync identity — one wording, in core, shared with
       // the HTTP route that used to spell out its own.
-      if (!manifest) return noIdentityReport();
+      if (!manifest) return noIdentityReport(workspaceFor(ws).dbPath);
       return cloudSurfaceReport(localCloudStatus(stapleHome(), manifest.repositoryId), store.db);
     }),
 );

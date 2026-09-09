@@ -562,11 +562,19 @@ describe("what identity does NOT do", () => {
      * repository a directory of its own, and `./host-id.js`, which answers
      * "which machine is this" for the copied-home check. Both are enumerated
      * rather than allowed by pattern, which is the whole value of this list.
+     *
+     * STA-281 added `./checkout.js`, and it is worth pausing on because it is the
+     * one that looks like a violation: identity now asks whether a directory is
+     * inside a version control checkout. It is a bounded walk of `existsSync`
+     * looking for a `.git` marker — no subprocess, no socket, and asserted so in
+     * that module's own test — and it decides only which COPY story a workspace
+     * has, never whether it gets an identity at all.
      */
     const source = readFileSync(new URL("../src/core/repo-identity.ts", import.meta.url), "utf8");
     const imports = [...source.matchAll(/from "([^"]+)"/g)].map((m) => m[1]!);
     expect(imports.sort()).toEqual([
       "../config/home.js",
+      "./checkout.js",
       "./host-id.js",
       "./types.js",
       "node:crypto",

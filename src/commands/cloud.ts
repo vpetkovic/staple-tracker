@@ -43,12 +43,10 @@ import { parseArgs } from "node:util";
 import { dirname } from "node:path";
 import { stapleHome } from "../config/home.js";
 import {
-  REPOSITORY_MANIFEST_FILENAME,
   assertOwnHost,
   describeHostBinding,
   forkWorkspaceIdentity,
   readWorkspaceManifest,
-  workspaceIdentityDir,
 } from "../core/repo-identity.js";
 import { resolveWorkspace } from "../core/workspace.js";
 import { StapleError, errorEnvelope } from "../core/types.js";
@@ -95,6 +93,7 @@ import { localCloudStatus, refreshCloudStatus, type CloudStatus } from "../core/
 import {
   cloudSurfaceReport,
   describeReport,
+  missingIdentityRemedy,
   type CloudSurfaceReport,
 } from "../core/cloud/surface.js";
 
@@ -273,16 +272,22 @@ function settle(work: Promise<void>, json: boolean): void {
 /**
  * The refusal when a workspace has no manifest at all.
  *
- * One wording, four call sites. It no longer says "a global workspace has none":
- * since STA-273 a workspace outside a repository mints an identity in its own
- * directory inside the staple home, so the only way to reach this is a workspace
- * `staple init` has never been run in.
+ * One wording, four call sites, and since STA-281 the remedy half of it is
+ * {@link missingIdentityRemedy} — the same sentence `staple cloud status`, the
+ * MCP report and the page render, because there is one true answer to "what can
+ * I do about this" and it depends on the workspace rather than on the surface
+ * that noticed.
+ *
+ * It takes the DATABASE path rather than the identity directory, for the same
+ * reason: only the database path can tell whether this workspace is inside a
+ * checkout, and that is what decides whether `staple init` is the answer or the
+ * very thing not to do.
  */
-function noIdentity(identityDir: string, consequence: string): StapleError {
+function noIdentity(dbPath: string, consequence: string): StapleError {
   return new StapleError(
     "not_found",
-    `This workspace has no ${identityDir}/${REPOSITORY_MANIFEST_FILENAME}, so it has no sync ` +
-      `identity and ${consequence}. Run \`staple init\` in it to record one.`,
+    `This workspace is registered and its data is intact, but it has no sync identity and ` +
+      `${consequence}. ${missingIdentityRemedy(dbPath)}`,
   );
 }
 
@@ -304,7 +309,7 @@ function repositoryIdFor(options: { db?: string; ws?: string }): string {
   const opened = resolveWorkspace(options);
   try {
     const manifest = readWorkspaceManifest(opened.dbPath);
-    if (!manifest) throw noIdentity(workspaceIdentityDir(opened.dbPath), "cannot be connected");
+    if (!manifest) throw noIdentity(opened.dbPath, "cannot be connected");
     return manifest.repositoryId;
   } finally {
     opened.store.db.close();
@@ -797,7 +802,7 @@ function runForkId(argv: string[]): void {
 
   try {
     const manifest = readWorkspaceManifest(opened.dbPath);
-    if (!manifest) throw noIdentity(workspaceIdentityDir(opened.dbPath), "nothing to fork");
+    if (!manifest) throw noIdentity(opened.dbPath, "nothing to fork");
 
     if (values.yes !== true) {
       const binding = describeHostBinding(opened.store.db);
@@ -928,12 +933,7 @@ function runSync(argv: string[]): void {
   const manifest = readWorkspaceManifest(opened.dbPath);
   if (!manifest) {
     opened.store.db.close();
-    throw new StapleError(
-      "not_found",
-      `This workspace has no ${workspaceIdentityDir(opened.dbPath)}/` +
-        `${REPOSITORY_MANIFEST_FILENAME}, so it has no sync identity and nothing to ` +
-        `synchronize. Run \`staple init\` in it to record one.`,
-    );
+    throw noIdentity(opened.dbPath, "nothing to synchronize");
   }
 
   /**
@@ -1060,7 +1060,7 @@ function leaseContext(values: { db?: string; ws?: string }): {
   const manifest = readWorkspaceManifest(opened.dbPath);
   if (!manifest) {
     opened.store.db.close();
-    throw noIdentity(workspaceIdentityDir(opened.dbPath), "cannot hold a server lease");
+    throw noIdentity(opened.dbPath, "cannot hold a server lease");
   }
   // A lease is an exclusive claim on shared state, so a copied home taking one
   // out is the same hazard as a copied home pushing: two machines, one identity.
@@ -1669,7 +1669,7 @@ function runRestore(argv: string[]): void {
   const manifest = readWorkspaceManifest(opened.dbPath);
   if (!manifest) {
     opened.store.db.close();
-    throw noIdentity(workspaceIdentityDir(opened.dbPath), "nothing to restore into");
+    throw noIdentity(opened.dbPath, "nothing to restore into");
   }
   const repositoryId = manifest.repositoryId;
   const status = localCloudStatus(home, repositoryId);
