@@ -316,6 +316,11 @@ describe("KNOWN: logical errors this surface cannot project", () => {
   it("pins the exact API surface, read out of the server source", () => {
     // GOLDEN, moved by S18 (STA-279): 52 -> 53. One addition, `/api/hub/backup`
     // — the first route whose subject is the hub itself rather than a workspace.
+    // GOLDEN, moved again by S18 (STA-279), closing its last acceptance
+    // criterion: 53 -> 57. Four additions, the HUB-WIDE VERBS —
+    // `/api/hub/connect/preview`, `/api/hub/connect`, `/api/hub/sync` and
+    // `/api/hub/disconnect`. See the block beside them below for why they are
+    // four routes and not a flag on the five `/api/cloud/workspace/*` ones.
     // GOLDEN, moved by S16 (STA-275): 45 -> 46. The addition is
     // `/api/cloud/workspaces`; see the comment beside it below.
     // GOLDEN, moved by S17/S19/S21 (STA-278, STA-280, STA-282): 46 -> 52. Six
@@ -553,6 +558,86 @@ describe("KNOWN: logical errors this surface cannot project", () => {
        * and is deliberately not this route.
        */
       "/api/hub/backup",
+      /**
+       * ─── THE HUB-WIDE VERBS — S18 (STA-279) ────────────────────────────────
+       *
+       * Four routes whose subject is the whole machine registry. They close
+       * S18's last acceptance criterion — *"Hub-wide connect, sync and
+       * disconnect are performed from there"* — and the shape is the review, so
+       * read it before the names.
+       *
+       * ## Why four routes and not a flag on the per-row five
+       *
+       * Because `{ slug: "*" }` or `{ all: true }` on
+       * `/api/cloud/workspace/disconnect` would make "one workspace" and "every
+       * workspace on the machine" the same request with one character between
+       * them, behind one Origin check and one confirmation. The blast radius is
+       * the thing being named here, and a route name is the only place on this
+       * surface where it is legible from the outside. A reader auditing what a
+       * loopback page can do should be able to see "this one is machine-wide"
+       * without reading a handler.
+       *
+       * ## They are the existing fan-outs with one argument omitted
+       *
+       * `buildHubConnectPreview`, `syncAllWorkspaces` and
+       * `performHubDisconnect` each take `workspaces?: readonly HubWorkspace[]`.
+       * The `/api/cloud/workspace/*` routes pass a single-element array; these
+       * pass nothing, so the enumeration is the registry. There is no new core
+       * function, and therefore no second definition of "skippable" to drift
+       * from `skipReasonFor`. If one of these ever grows its own enumeration,
+       * that is the review moment.
+       *
+       * ## Connect is STILL two routes, and now carries N tickets
+       *
+       * `/api/hub/connect/preview` is the only one of the four that may name an
+       * endpoint. It returns the fan-out preview — every registered workspace,
+       * including every one it will skip and why — and mints ONE CONSENT TICKET
+       * PER ACTIONABLE ROW. `/api/hub/connect` then carries
+       * `{ consents: [{ slug, consent, digest }], token }` and has no endpoint
+       * field and no repositoryId field at all.
+       *
+       * A ticket per row rather than one ticket for the gesture, and that is the
+       * answer to the objection this feature was refused on for two tickets:
+       * *"connecting every workspace at once spends one enrollment secret
+       * against N services."* One ticket for the gesture would make the consent
+       * a consent to a COUNT, and `willConnect: 9` is a number rather than a
+       * disclosure. N tickets make it a consent to the ENUMERATION: each row's
+       * endpoint, repository id, device id, label and credential store are
+       * inside its own digest, and the server re-derives the whole enumeration
+       * before the secret moves — so a workspace registered or connected while
+       * the screen was up is a refusal naming it, not a silent tenth
+       * connection.
+       *
+       * It deliberately offers no `--reconnect`: an already-connected workspace
+       * is SKIPPED, with the preview naming the service it is already talking
+       * to. Replacing N credentials and resetting N consents behind one press is
+       * the unbounded blast radius the original refusal was actually about.
+       *
+       * ## Which of them egress
+       *
+       * `/api/hub/sync` and `/api/hub/connect`, and nothing else.
+       * `/api/hub/connect/preview` cannot: `hub-preview.ts` imports nothing that
+       * reaches `client.ts`, a walk `test/cloud-hub-connect.test.ts` makes
+       * transitively. `/api/hub/disconnect` makes no request even as a courtesy
+       * — a person who has decided to stop talking to a service must not need
+       * that service's permission to stop — and it is NOT gated on
+       * availability, because the credential is in the staple home and refusing
+       * over an unmounted volume would leave a live secret behind for exactly
+       * the workspace somebody is most likely to be disconnecting.
+       * `test/network-silence.test.ts` drives the preview and the disconnect
+       * under a real spy and deliberately does not list the sync.
+       *
+       * ## There is still deliberately NO /api/hub/purge
+       *
+       * For the reason `/api/cloud/purge` does not exist, multiplied by the size
+       * of the registry: STA-256 records that the server does not validate a
+       * purge confirmation on the wire. If a purge ever appears in this list,
+       * hub-wide least of all, that is the review moment.
+       */
+      "/api/hub/connect",
+      "/api/hub/connect/preview",
+      "/api/hub/disconnect",
+      "/api/hub/sync",
       "/api/hub/unregister",
       "/api/inbox",
       "/api/issue",

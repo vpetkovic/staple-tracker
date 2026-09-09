@@ -358,3 +358,65 @@ describe("help and dispatch", () => {
     expect(staple("cloud", "sink").stderr).toMatch(/Unknown subcommand "sink"/);
   });
 });
+
+describe("disconnect --all exits non-zero on a partial failure", () => {
+  /**
+   * **A PARTIAL FAILURE IS A NON-ZERO EXIT AND A COMPLETE REPORT.**
+   *
+   * `connect --all` and `sync --all` have said so since they shipped;
+   * `disconnect --all` gained a `failed` count and a summary clause without the
+   * exit code, and the gap undid the point of the count. A decommissioning
+   * script running `disconnect --all` against a machine with one truncated
+   * connection record printed a `failed` row, **exited 0**, and moved on
+   * believing every credential was gone — while one was still on disk in a file
+   * this build cannot read. The row made the failure visible to a human and the
+   * exit code hid it from everything else.
+   *
+   * No `--all` verb had its exit code pinned anywhere, which is why this went
+   * unnoticed. Both output modes are covered, because a script asking for JSON
+   * is the caller most likely to be acting on the status alone.
+   */
+  it("reports the row, and exits 1", () => {
+    forgeConnection();
+    writeFileSync(join(cloudDir(), `${repositoryId}.json`), "{ not json", { mode: 0o600 });
+
+    const result = staple("cloud", "disconnect", "--all");
+
+    expect(result.status, result.stdout + result.stderr).toBe(1);
+    expect(result.stdout).toContain("failed");
+    expect(result.stdout).toContain("cloudcli");
+    // The remedy, named on the row: the file this build cannot read.
+    expect(result.stdout).toContain(`${repositoryId}.json`);
+  });
+
+  it("exits 1 for --json too, where the status is all a caller reads", () => {
+    forgeConnection();
+    writeFileSync(join(cloudDir(), `${repositoryId}.json`), "{ not json", { mode: 0o600 });
+
+    const result = staple("cloud", "disconnect", "--all", "--json");
+
+    expect(result.status, result.stdout + result.stderr).toBe(1);
+    const payload = JSON.parse(result.stdout) as {
+      failed: number;
+      disconnected: number;
+      workspaces: Array<{ slug: string; status: string; credentialRemoved: boolean | null }>;
+    };
+    expect(payload.failed).toBe(1);
+    const row = payload.workspaces.find((entry) => entry.slug === "cloudcli")!;
+    expect(row.status).toBe("failed");
+    /**
+     * `null`, not `false`. `performDisconnect` deletes the credential before it
+     * writes the record, so a throw from a later step leaves it gone — and
+     * `false` is the one direction of this field a human acts on, sending them
+     * to hunt for a secret that is not there.
+     */
+    expect(row.credentialRemoved).toBeNull();
+  });
+
+  it("still exits 0 when every row succeeded", () => {
+    forgeConnection();
+    const result = staple("cloud", "disconnect", "--all");
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toContain("1 disconnected");
+  });
+});

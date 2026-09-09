@@ -65,7 +65,12 @@
  * tier above it, so this takes ONE enrollment secret and offers it to each
  * workspace in turn.
  */
-import { performConnect, performDisconnect, type ConnectOutcome } from "./connect.js";
+import {
+  performConnect,
+  performDisconnect,
+  type ConnectOutcome,
+  type DisconnectOutcome,
+} from "./connect.js";
 import { cloudCodeOf } from "./client.js";
 import type { CloudConnection } from "./connection.js";
 import type { SelectOptions } from "./credential-store.js";
@@ -279,15 +284,38 @@ export interface HubDisconnectWorkspaceOutcome {
   slug: string;
   path: string;
   repositoryId: string | null;
-  status: "disconnected" | "skipped";
+  status: "disconnected" | "skipped" | "failed";
   reason: string;
-  credentialRemoved: boolean;
+  /**
+   * Whether this machine's credential for the workspace is gone.
+   *
+   * `null` means NOT ESTABLISHED, and it is the honest answer for a `failed`
+   * row. `performDisconnect` deletes the credential and only THEN writes the
+   * record and clears the auto-sync state, so a throw from either of those
+   * later steps happens with the credential already gone — and reporting
+   * `false` there would be the one direction of this field a human acts on,
+   * sending them to hunt for a secret that is not there. The overwhelmingly
+   * likely thrower is `readConnection`, which fires before anything is touched,
+   * but nothing outside can tell the two apart and guessing is what this null
+   * refuses to do.
+   */
+  credentialRemoved: boolean | null;
+  /**
+   * The staple error code, when this row failed. Null otherwise.
+   *
+   * There is deliberately no `cloudCode` beside it, unlike the connect and sync
+   * rows: this fan-out makes no request, so a failure here can only ever be
+   * local and a field for the service's opinion would be a field that is always
+   * null.
+   */
+  code: string | null;
 }
 
 export interface HubDisconnectOutcome {
   workspaces: HubDisconnectWorkspaceOutcome[];
   disconnected: number;
   skipped: number;
+  failed: number;
 }
 
 /**
@@ -319,6 +347,7 @@ export function performHubDisconnect(
         status: "skipped",
         reason: "No sync identity, so there is no connection to remove.",
         credentialRemoved: false,
+        code: null,
       });
       continue;
     }
@@ -333,7 +362,58 @@ export function performHubDisconnect(
      * live credential behind for precisely the workspace somebody is most likely
      * to be disconnecting.
      */
-    const outcome = performDisconnect(home, workspace.repositoryId, options);
+    let outcome: DisconnectOutcome;
+    try {
+      outcome = performDisconnect(home, workspace.repositoryId, options);
+    } catch (error) {
+      /**
+       * **Recorded and stepped over**, exactly as `performHubConnect` and
+       * `syncAllWorkspaces` do — and this arm was missing until STA-279's UI
+       * lane went looking for it.
+       *
+       * `performDisconnect` reaches `readConnection`, which THROWS rather than
+       * returning null on a record that is not valid JSON, is not an object,
+       * carries a bad `schemaVersion`, or was written by a newer staple. That
+       * refusal is right and deliberate — *"a parse failure that fell back to
+       * 'not connected' would tell a human they had never connected"* — but
+       * without this catch it escaped the LOOP, and a fan-out is the one place
+       * where that is unacceptable.
+       *
+       * The failure it produced was the worst available shape: on a machine with
+       * three connected workspaces and one corrupt record, the first two
+       * credentials were deleted, the third threw, and the caller received an
+       * exception about a JSON file with **no report of the two disconnections
+       * that had already happened**. The surface then showed a parse complaint
+       * and no outcome table, so a person had no way to learn that half the
+       * fan-out had succeeded. Twelve workspaces and one bad file must not blank
+       * the other eleven — the same rule `hub-scope.ts` states for a manifest
+       * and `hub-sync.ts` states for a sync, applied to the one verb that was
+       * missing it.
+       *
+       * Note which rows can reach here: a corrupt record makes
+       * `hubCloudReport` report the row as `state: "disconnected"` with
+       * `skip: "problem"`, so a surface that counts connected rows will NOT have
+       * counted it and will not have named it in its confirmation. It is
+       * reported as a row anyway rather than silently passed over, because a
+       * credential this machine cannot parse is still a credential this machine
+       * has, and the remedy — delete the file by hand — needs saying.
+       */
+      rows.push({
+        slug: workspace.slug,
+        path: workspace.path,
+        repositoryId: workspace.repositoryId,
+        status: "failed",
+        reason:
+          `${error instanceof Error ? error.message : String(error)} ` +
+          `Whether this machine's credential for "${workspace.slug}" was removed before this ` +
+          `could not be established — revoke this device to be certain it cannot be used.`,
+        // Not established. See the field's own comment for why this is not `false`.
+        credentialRemoved: null,
+        code: error instanceof StapleError ? error.code : "unknown",
+      });
+      continue;
+    }
+
     rows.push({
       slug: workspace.slug,
       path: workspace.path,
@@ -346,6 +426,7 @@ export function performHubDisconnect(
             "there — revoke this device to be certain."
         : "Was not connected on this machine.",
       credentialRemoved: outcome.credentialRemoved,
+      code: null,
     });
   }
 
@@ -353,5 +434,6 @@ export function performHubDisconnect(
     workspaces: rows,
     disconnected: rows.filter((row) => row.status === "disconnected").length,
     skipped: rows.filter((row) => row.status === "skipped").length,
+    failed: rows.filter((row) => row.status === "failed").length,
   };
 }

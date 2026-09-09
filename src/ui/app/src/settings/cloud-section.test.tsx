@@ -33,13 +33,16 @@ import type {
   CloudSurfaceReport,
   ConnectPreview,
   HubCloudReport,
+  HubConnectPreview,
+  HubFanOut,
   HubWorkspaceReport,
   RemoteDevice,
 } from "@/lib/types";
-import { CloudPanel, type CloudPanelProps, type HubPanelState } from "./CloudSection";
+import { CloudPanel, type CloudPanelProps, type HubPanelState, type HubWideState } from "./CloudSection";
 import {
   CLOUD_CATEGORY,
   CLOUD_CATEGORY_ID,
+  CONNECT_DISCLOSURE,
   canOfferConnect,
   connectFormProblem,
   connectionFacts,
@@ -47,13 +50,22 @@ import {
   counterFacts,
   describeDevice,
   groupDisabledReasons,
+  hubFanOutSummary,
   hubGroups,
   hubListDescription,
   hubRowControls,
   hubRowRationale,
   hubRowSummary,
+  hubRowActed,
   hubRowView,
   hubUnreachableDescription,
+  hubWideControls,
+  hubWideActed,
+  hubWideDisconnectWarning,
+  hubWideFailure,
+  hubWideTargets,
+  type HubWideAction,
+  type HubWideControl,
   isCloudCategory,
   joinLabels,
   orderDevices,
@@ -122,6 +134,15 @@ const PREVIEW: ConnectPreview = {
 
 const NOOP = () => {};
 
+/** Nothing hub-wide is happening either — S18 (STA-279). */
+const IDLE_WIDE: HubWideState = {
+  busy: null,
+  connecting: null,
+  disconnecting: false,
+  fanOut: null,
+  error: null,
+};
+
 /** Nothing on the list is doing anything. The default for every case in this file. */
 const IDLE_HUB: HubPanelState = {
   busy: null,
@@ -132,6 +153,7 @@ const IDLE_HUB: HubPanelState = {
   removing: null,
   disconnecting: null,
   error: null,
+  wide: IDLE_WIDE,
 };
 
 function panel(overrides: Partial<CloudPanelProps> = {}): string {
@@ -161,6 +183,13 @@ function panel(overrides: Partial<CloudPanelProps> = {}): string {
       onRemove: NOOP,
       onRefresh: NOOP,
       onBackup: NOOP,
+      onHubOpenConnect: NOOP,
+      onHubDraft: NOOP,
+      onHubPreview: NOOP,
+      onHubConnect: NOOP,
+      onHubSync: NOOP,
+      onHubAskDisconnect: NOOP,
+      onHubDisconnect: NOOP,
     },
     revoking: null,
     confirmDisconnect: false,
@@ -1218,5 +1247,596 @@ describe("the hub states itself above the list (S18/STA-279)", () => {
     // The hub panel carries no connection state at all — that belongs to rows,
     // and putting it here is the conflation the ticket exists to end.
     expect(self).not.toContain("Not connected");
+  });
+});
+
+// ----------------------------------------- the hub acts on all of them (S18/STA-279)
+
+/**
+ * THE HUB-WIDE VERBS — S18 (STA-279), the last acceptance criterion:
+ * *"Hub-wide connect, sync and disconnect are performed from there"*.
+ *
+ * ## What is pinned here, and why it is not the wiring
+ *
+ * `test/ui-cloud-hub-verbs.test.ts` proves the ROUTES act on the whole registry,
+ * against real workspaces and a real fake service on loopback. Nothing in this
+ * file can prove that and it must not pretend to: the suite has no DOM, so no
+ * handler here ever runs. What it CAN prove is the two things the surface is
+ * uniquely responsible for and which no route test can see:
+ *
+ *  1. **Every control states the count it will act on.** The whole objection this
+ *     feature was refused on twice is that a hub-wide button asks for less than
+ *     the CLI shows. "Connect all" is a blast radius invisible until after the
+ *     press; "Connect 4 workspaces" is one somebody can decline for a reason. The
+ *     count is a pure function of the report, so it is testable exactly.
+ *  2. **The consent screen discloses per workspace, out of the single copy.** The
+ *     disclosure is `CONNECT_DISCLOSURE` and there is no second copy of it in this
+ *     component — asserted at the SOURCE, because a second copy would render
+ *     identically on the day it was added and no rendered assertion would notice.
+ */
+
+/** A row that has not recorded a sync identity yet: actionable by BUTTON, skipped by FAN-OUT. */
+function unrecordedRow(slug: string): HubWorkspaceReport {
+  return hubRow({
+    slug,
+    prefix: slug.slice(0, 3).toUpperCase(),
+    repositoryId: null,
+    state: "disconnected",
+    mode: "disconnected",
+    endpoint: null,
+    deviceId: null,
+    label: null,
+    credentialMechanism: null,
+    connectedAt: null,
+    // `actionable: true` with `skip: "no_identity"` is the whole point of the row:
+    // pressing its own Connect opens the workspace and records an identity, and a
+    // fan-out never opens a database.
+    actionable: true,
+    recordsIdentityOnOpen: true,
+    skip: "no_identity",
+    skipDetail:
+      "This workspace is registered and its database is on this machine; it has not recorded a " +
+      "sync identity yet.",
+  });
+}
+
+/** Connected, and its disk is gone. In disconnect's set; in neither of the others. */
+function connectedButAbsentRow(slug: string): HubWorkspaceReport {
+  return hubRow({
+    slug,
+    prefix: slug.slice(0, 3).toUpperCase(),
+    path: `/tmp/gone/${slug}/.staple/staple.db`,
+    available: false,
+    actionable: false,
+    state: "manual",
+    mode: "manual",
+    skip: "unavailable",
+    skipDetail: "The workspace database is not on this machine right now.",
+  });
+}
+
+function controlOf(report: HubCloudReport, action: HubWideAction): HubWideControl {
+  const control = hubWideControls(report).find((candidate) => candidate.action === action);
+  if (!control) throw new Error(`no hub-wide ${action} control`);
+  return control;
+}
+
+/** A fan-out preview with two actionable rows and one skipped, as the route returns it. */
+function connectPreviewFixture(): HubConnectPreview {
+  const forSlug = (repositoryId: string): ConnectPreview => ({
+    ...PREVIEW,
+    repositoryId,
+    credentialMechanism: "keychain",
+    credentialFallbackReason: null,
+  });
+  return {
+    endpoint: "https://sync.example.com",
+    willConnect: 2,
+    willReconnect: 0,
+    willSkip: 1,
+    autoAfterConnect: false,
+    entries: [
+      {
+        slug: "alpha",
+        prefix: "ALP",
+        path: "/work/alpha/.staple/staple.db",
+        kind: "repo",
+        available: true,
+        repositoryId: "id-alpha",
+        action: "connect",
+        reason: "Not connected on this machine. A credential will be minted and stored here.",
+        skip: null,
+        preview: forSlug("id-alpha"),
+      },
+      {
+        slug: "bravo",
+        prefix: "BRA",
+        path: "/work/bravo/.staple/staple.db",
+        kind: "repo",
+        available: true,
+        repositoryId: "id-bravo",
+        action: "connect",
+        reason: "Not connected on this machine. A credential will be minted and stored here.",
+        skip: null,
+        preview: forSlug("id-bravo"),
+      },
+      {
+        slug: "charlie",
+        prefix: "CHA",
+        path: "/tmp/gone/charlie/.staple/staple.db",
+        kind: "repo",
+        available: false,
+        repositoryId: null,
+        action: "skip",
+        reason:
+          "The workspace database is not on this machine right now. It is left registered and " +
+          "untouched — an unmounted volume is not a deleted workspace.",
+        skip: "unavailable",
+        preview: null,
+      },
+    ],
+  };
+}
+
+const FAN_OUT: HubFanOut = {
+  action: "connect",
+  at: "2026-09-09T12:00:00.000Z",
+  ok: 2,
+  skipped: 1,
+  failed: 0,
+  workspaces: [
+    {
+      slug: "alpha",
+      action: "connect",
+      status: "ok",
+      detail: "Connected. Credential stored in this machine's keychain.",
+      at: "2026-09-09T12:00:00.000Z",
+    },
+    {
+      slug: "bravo",
+      action: "connect",
+      status: "ok",
+      detail: "Connected. Credential stored in this machine's keychain.",
+      at: "2026-09-09T12:00:00.000Z",
+    },
+    {
+      slug: "charlie",
+      action: "connect",
+      status: "skipped",
+      detail: "The workspace database is not on this machine right now.",
+      at: "2026-09-09T12:00:00.000Z",
+    },
+  ],
+};
+
+describe("the hub panel performs all three verbs, each naming its count (S18/STA-279)", () => {
+  it("offers connect, sync and disconnect, and each label carries the count", () => {
+    const report = hubReport([
+      hubRow({ slug: "alpha", repositoryId: "a", state: "disconnected", mode: "disconnected", endpoint: null }),
+      hubRow({ slug: "bravo", repositoryId: "b", state: "disconnected", mode: "disconnected", endpoint: null }),
+      hubRow({ slug: "charlie", repositoryId: "c" }),
+    ]);
+    const html = panel({ workspaces: report });
+
+    expect(html).toContain("data-cloud-hub-wide");
+    for (const action of ["connect", "sync", "disconnect"] as const) {
+      expect(html, `no hub-wide ${action}`).toContain(`data-cloud-hub-action="${action}"`);
+    }
+    // The COUNT, not the word "all". Two disconnected, one connected.
+    expect(html).toContain("Connect 2 workspaces");
+    expect(html).toContain("Sync 1 connected workspace");
+    expect(html).toContain("Disconnect 1 workspace");
+    expect(html).not.toContain("Connect all");
+  });
+
+  /**
+   * THE THREE PREDICATES DISAGREE, and each disagreement is a real machine state
+   * rather than a hypothetical. The surface half of the asymmetry the routes are
+   * held to.
+   */
+  it("counts an unreachable CONNECTED workspace for disconnect, and for neither of the others", () => {
+    const report = hubReport([connectedButAbsentRow("gone")]);
+    expect(hubWideTargets(report, "connect").map((row) => row.slug)).toEqual([]);
+    // Sync opens the database, so an unmounted volume makes it impossible…
+    expect(hubWideTargets(report, "sync").map((row) => row.slug)).toEqual([]);
+    // …and disconnect removes a file in the staple home, so it makes it MORE
+    // important: refusing would leave a live credential behind for exactly the
+    // workspace somebody is most likely to be disconnecting.
+    expect(hubWideTargets(report, "disconnect").map((row) => row.slug)).toEqual(["gone"]);
+
+    expect(controlOf(report, "disconnect").disabledReason).toBeNull();
+    expect(controlOf(report, "sync").disabledReason).toContain("not on this machine");
+  });
+
+  it("does NOT count a workspace that would record its identity on open, and says why", () => {
+    /**
+     * The row is `actionable: true` — its OWN Connect works, because pressing it
+     * opens the workspace and recording an identity is what opening does. A
+     * fan-out reads files and never opens a database, so it is not in the
+     * hub-wide set. Counting it would promise something the fan-out then declines
+     * to do, which is worse than not offering it.
+     */
+    const report = hubReport([unrecordedRow("fresh")]);
+    expect(hubWideTargets(report, "connect")).toEqual([]);
+    const connect = controlOf(report, "connect");
+    expect(connect.count).toBe(0);
+    expect(connect.disabledReason).toContain("not recorded");
+    expect(connect.disabledReason).toContain("its own Connect button");
+  });
+
+  it("states a reason for every unavailable control and hides none of them", () => {
+    // A machine with nothing registered: all three are unavailable, and all three
+    // are still on screen.
+    const html = panel({ workspaces: hubReport([]) });
+    for (const action of ["connect", "sync", "disconnect"] as const) {
+      expect(html).toContain(`data-cloud-hub-wide-control="${action}"`);
+      expect(html).toContain(`data-cloud-hub-action="${action}"`);
+    }
+    expect(html).toContain("data-cloud-hub-wide-unavailable");
+    expect(html).toContain("No workspaces are registered on this machine yet.");
+  });
+
+  it("groups a shared reason into one line rather than repeating it three times", () => {
+    /**
+     * *"We don't need settings page to be noise gibrish but functional."* On an
+     * empty machine all three controls share one sentence, and printing it beside
+     * each of them is the noise this page is supposed to be free of — the same
+     * grouping the rows use, through the same function.
+     */
+    const grouped = groupDisabledReasons(hubWideControls(hubReport([])));
+    expect(grouped).toHaveLength(1);
+    expect(grouped[0]!.labels).toHaveLength(3);
+    expect(joinLabels(grouped[0]!.labels)).toContain(" and ");
+  });
+
+  it("keeps the hub-wide controls in the hub panel, above the list, and out of the rows", () => {
+    const report = hubReport([hubRow(), hubRow({ slug: "bravo", repositoryId: "b" })]);
+    const html = panel({ workspaces: report });
+    // Position is the claim: a hub-wide Disconnect inside a list of per-row
+    // Disconnects is the wrong-subject confusion this ticket exists to end.
+    expect(html.indexOf("data-cloud-hub-wide")).toBeLessThan(html.indexOf("data-cloud-workspaces="));
+    const list = html.slice(html.indexOf("data-cloud-workspaces="));
+    expect(list).not.toContain("data-cloud-hub-action");
+  });
+
+  it("says where each kind of action lives, instead of claiming none acts on all", () => {
+    const text = hubListDescription(hubReport([hubRow(), hubRow({ slug: "bravo", repositoryId: "b" })]));
+    expect(text).toContain("the hub panel above acts on all of them");
+    expect(text).not.toContain("nothing here acts on all of them");
+  });
+});
+
+describe("the hub-wide consent screen asks for as much as the CLI preview does", () => {
+  const consenting = (preview: HubConnectPreview): string =>
+    panel({
+      workspaces: hubReport([hubRow(), hubRow({ slug: "bravo", repositoryId: "b" })]),
+      hub: {
+        ...IDLE_HUB,
+        wide: {
+          ...IDLE_WIDE,
+          connecting: {
+            draft: { endpoint: "https://sync.example.com", enrollment: "s", label: "", credentialFile: false },
+            pending: { preview, consents: [] },
+          },
+        },
+      },
+    });
+
+  it("names every actionable workspace and its own service, repository and credential store", () => {
+    const html = consenting(connectPreviewFixture());
+    expect(html).toContain("data-cloud-hub-consent");
+    /**
+     * PER ROW, which is the answer to *"one enrollment secret against N
+     * services"*. A count is not consent — `willConnect: 2` is a number — so each
+     * row carries its own destination, rendered through the same `previewFacts`
+     * the single-workspace consent screen uses.
+     */
+    for (const slug of ["alpha", "bravo"]) {
+      expect(html).toContain(`data-cloud-hub-consent-row="${slug}"`);
+    }
+    expect(html).toContain("https://sync.example.com");
+    expect(html).toContain("id-alpha");
+    expect(html).toContain("id-bravo");
+    // The credential store, in words, for each of them.
+    expect(html.match(/keychain/g)?.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("lists the workspaces it will NOT touch, with the fan-out's own reason", () => {
+    /**
+     * Rendered and not hidden. They answer "why is my other repository not in
+     * this list?" before it is asked, and dropping them would turn "2 of 3" into
+     * "2" — the number that makes debris look like inventory.
+     */
+    const html = consenting(connectPreviewFixture());
+    expect(html).toContain("data-cloud-hub-consent-skipped");
+    expect(html).toContain('data-cloud-hub-consent-skip="charlie"');
+    expect(html).toContain("an unmounted volume is not a deleted workspace");
+  });
+
+  it("shows the SAME disclosure as a per-row connect, out of the one copy of it", () => {
+    const html = consenting(connectPreviewFixture());
+    for (const line of CONNECT_DISCLOSURE) {
+      expect(html, `the hub-wide consent screen dropped: ${line}`).toContain(
+        line.replace(/&/g, "&amp;"),
+      );
+    }
+    /**
+     * THE SOURCE ASSERTION, and the one no rendered check could make. A second
+     * copy of these sentences is a second place for a consent promise to drift,
+     * and it would render identically on the day it was added. So the component
+     * must not contain the text at all — only the import, used twice: once on a
+     * row's connect and once hub-wide.
+     */
+    const file = source("CloudSection.tsx");
+    expect(file).not.toContain("AUTOMATIC SYNC STAYS OFF");
+    expect(file).not.toContain("stored in PLAINTEXT");
+    expect(file.match(/CONNECT_DISCLOSURE\.map/g)?.length).toBe(3);
+  });
+
+  it("confirms with the count, not with the word all", () => {
+    const html = consenting(connectPreviewFixture());
+    expect(html).toContain("data-cloud-hub-confirm");
+    expect(html).toContain("Connect 2 workspaces");
+  });
+});
+
+describe("a hub-wide disconnect names what it is about, and reports per workspace", () => {
+  it("names the count and every workspace in the confirmation", () => {
+    const report = hubReport([
+      hubRow({ slug: "alpha", repositoryId: "a" }),
+      hubRow({ slug: "bravo", repositoryId: "b" }),
+    ]);
+    const warning = hubWideDisconnectWarning(report);
+    expect(warning).toContain("2 workspaces");
+    expect(warning).toContain("alpha, bravo");
+    // What is NOT lost, said in the confirmation rather than discovered after it.
+    expect(warning).toContain("untouched");
+    expect(warning).toContain("no remote copy is deleted");
+
+    const html = panel({
+      workspaces: report,
+      hub: { ...IDLE_HUB, wide: { ...IDLE_WIDE, disconnecting: true } },
+    });
+    expect(html).toContain("alpha, bravo");
+    expect(html).toContain("Disconnect 2 workspaces");
+  });
+
+  it("pluralises the confirm button, on the very common one-workspace hub", () => {
+    /**
+     * It read "Disconnect 1 workspaces" — rebuilt from `.count` instead of using
+     * the control's own `.label`, which every other hub-wide label gets right.
+     * Reachable whenever exactly one workspace is connected, in the one dialog
+     * whose entire job is being read carefully.
+     */
+    const one = hubReport([
+      hubRow({ slug: "alpha", repositoryId: "a" }),
+      hubRow({
+        slug: "bravo",
+        repositoryId: "b",
+        state: "disconnected",
+        mode: "disconnected",
+        endpoint: null,
+      }),
+    ]);
+    const html = panel({
+      workspaces: one,
+      hub: { ...IDLE_HUB, wide: { ...IDLE_WIDE, disconnecting: true } },
+    });
+    expect(html).toContain("Disconnect 1 workspace");
+    expect(html).not.toContain("Disconnect 1 workspaces");
+  });
+
+  it("says that an unreachable workspace is disconnected too, and why that is right", () => {
+    const warning = hubWideDisconnectWarning(
+      hubReport([hubRow({ slug: "here", repositoryId: "h" }), connectedButAbsentRow("gone")]),
+    );
+    expect(warning).toContain("not on this machine");
+    expect(warning).toContain("the credential is here, not there");
+  });
+
+  it("renders a per-workspace outcome TABLE, including the rows nothing happened to", () => {
+    /**
+     * The resolution of *"an outcome a dialog has nowhere to put"*. It has
+     * somewhere to go, and the skipped row is in it: a table listing only the
+     * failures would be indistinguishable, on a good day, from a button that did
+     * nothing.
+     */
+    const html = panel({
+      workspaces: hubReport([hubRow(), hubRow({ slug: "bravo", repositoryId: "b" })]),
+      hub: { ...IDLE_HUB, wide: { ...IDLE_WIDE, fanOut: FAN_OUT } },
+    });
+    expect(html).toContain('data-cloud-hub-fanout="connect"');
+    for (const slug of ["alpha", "bravo", "charlie"]) {
+      expect(html).toContain(`data-cloud-hub-fanout-row="${slug}"`);
+    }
+    expect(html).toContain('data-status="ok"');
+    expect(html).toContain('data-status="skipped"');
+  });
+
+  it("summarizes with counts and never with a bare 'done'", () => {
+    expect(hubFanOutSummary(FAN_OUT)).toContain("2 connected, 1 skipped.");
+    // And the promise a connect must not silently drop.
+    expect(hubFanOutSummary(FAN_OUT)).toContain("Automatic sync and backup are OFF");
+
+    const failed: HubFanOut = { ...FAN_OUT, action: "sync", ok: 1, skipped: 0, failed: 2 };
+    expect(hubFanOutSummary(failed)).toContain("1 synchronized, 2 failed.");
+    expect(hubFanOutSummary(failed)).toContain("a failure on one did not stop the others");
+  });
+});
+
+describe("a refused hub-wide confirm returns to the form, not to a dead consent screen", () => {
+  const PENDING = {
+    draft: { endpoint: "https://sync.example.com", enrollment: "s", label: "", credentialFile: false },
+    pending: { preview: connectPreviewFixture(), consents: [] },
+  };
+
+  /**
+   * **THE RULE, tested as a transition rather than asserted at the source.**
+   *
+   * `ConsentTicketStore.redeem` deletes a ticket before it validates anything,
+   * so every refusal on the confirm path except the blank-secret one lands with
+   * tickets already spent. Leaving `pending` up left the enumeration on screen
+   * behind an enabled "Connect 3 workspaces", and the second press answered
+   * `Confirming "alpha": That consent has expired, was already used…` — the
+   * wrong workspace and the wrong cause, which is the same misleading refusal
+   * this lane fixed one layer down inside `redeem`.
+   */
+  it("clears the pending enumeration on any refusal, and keeps the draft", () => {
+    const after = hubWideFailure({ ...IDLE_WIDE, connecting: PENDING }, "nope");
+    expect(after.error).toBe("nope");
+    expect(after.connecting).not.toBeNull();
+    expect(after.connecting!.pending).toBeNull();
+    // The draft survives, so recovering is one press of Review rather than
+    // retyping an endpoint and an enrollment secret.
+    expect(after.connecting!.draft).toEqual(PENDING.draft);
+  });
+
+  it("leaves a closed connect flow closed rather than reopening it", () => {
+    const after = hubWideFailure({ ...IDLE_WIDE, connecting: null }, "nope");
+    expect(after.connecting).toBeNull();
+    expect(after.error).toBe("nope");
+  });
+
+  it("renders the form again, not the confirm button, once pending is cleared", () => {
+    const html = panel({
+      workspaces: hubReport([hubRow(), hubRow({ slug: "bravo", repositoryId: "b" })]),
+      hub: {
+        ...IDLE_HUB,
+        wide: hubWideFailure(
+          { ...IDLE_WIDE, connecting: PENDING },
+          "This machine's workspaces changed while that preview was on screen.",
+        ),
+      },
+    });
+    // The consent screen is gone…
+    expect(html).not.toContain("data-cloud-hub-consent");
+    expect(html).not.toContain("data-cloud-hub-confirm");
+    // …the form is back, and the refusal is on screen above it.
+    expect(html).toContain("data-cloud-hub-preview");
+    expect(html).toContain("changed while that preview was on screen");
+  });
+});
+
+describe("the two outcome surfaces do not contradict each other", () => {
+  /**
+   * A fan-out table is a RESULT, not a log, and so is a row's outcome line. When
+   * one is produced the other has stopped being true of at least one row —
+   * press hub-wide Sync then `bravo`'s own Disconnect and the table still read
+   * `bravo — done — Synchronized…` above a `bravo` rendering as disconnected,
+   * which breaks S19's *"a row shows the outcome of the last operation on it"*.
+   */
+  it("drops every per-row outcome when a hub-wide verb acts", () => {
+    /**
+     * Tested as a TRANSITION rather than by grepping the component. The first
+     * version of this pinned it with a source regex whose anchor was not what it
+     * looked like — the earliest literal `applyFanOut` in the file is a comment
+     * inside `applyRowResult`, and a lazy unanchored `[\s\S]*?` after it meant
+     * the assertion really read "some `outcomes: {}` appears somewhere below".
+     * It held for one accidental reason and would have kept holding for wrong
+     * ones.
+     */
+    const before = {
+      outcomes: { bravo: { slug: "bravo", detail: "pushed 3" }, "": { slug: "", detail: "backed up" } },
+      wide: { ...IDLE_WIDE },
+    };
+    const after = hubWideActed(before, FAN_OUT);
+    expect(after.outcomes).toEqual({});
+    expect(after.wide.fanOut).toBe(FAN_OUT);
+  });
+
+  it("drops the fan-out table when a single row acts", () => {
+    const before = { outcomes: {}, wide: { ...IDLE_WIDE, fanOut: FAN_OUT } };
+    const outcome = {
+      slug: "bravo",
+      action: "disconnect" as const,
+      status: "ok" as const,
+      detail: "Disconnected.",
+      at: "2026-09-09T12:00:00.000Z",
+    };
+    const after = hubRowActed(before, "bravo", outcome);
+    expect(after.wide.fanOut).toBeNull();
+    expect(after.outcomes).toEqual({ bravo: outcome });
+  });
+
+  it("never renders both surfaces, because neither reducer can produce that state", () => {
+    /**
+     * The state the component cannot reach. Composing the two in either order
+     * leaves exactly one surface populated, which is the property — not that the
+     * renderer refuses to draw both, but that nothing can hand it both.
+     */
+    const both = hubRowActed(
+      hubWideActed({ outcomes: {}, wide: { ...IDLE_WIDE } }, FAN_OUT),
+      "bravo",
+      { slug: "bravo", action: "sync" as const, status: "ok" as const, detail: "x", at: "t" },
+    );
+    expect(both.wide.fanOut).toBeNull();
+
+    const reverse = hubWideActed(
+      hubRowActed({ outcomes: {}, wide: { ...IDLE_WIDE } }, "bravo", {
+        slug: "bravo",
+        action: "sync" as const,
+        status: "ok" as const,
+        detail: "x",
+        at: "t",
+      }),
+      FAN_OUT,
+    );
+    expect(reverse.outcomes).toEqual({});
+  });
+});
+
+describe("nothing hub-wide happens without a press", () => {
+  /**
+   * `syncHub` is the widest egressing call on this surface — one authenticated
+   * round trip per connected workspace — so it is the one that would turn opening
+   * settings into a machine-wide heartbeat. `connectHub` spends a secret. Neither
+   * may appear in an effect, and the assertion is at the source because the suite
+   * has no DOM and effects never run here.
+   */
+  it("calls no hub-wide route from an effect", () => {
+    const file = source("CloudSection.tsx");
+    const effects = [...file.matchAll(/useEffect\(([\s\S]*?)\n\s*\}, \[/g)].map((match) => match[1]!);
+    expect(effects.length).toBeGreaterThan(0);
+    const joined = effects.join("\n");
+    /**
+     * The pattern is NOT indentation-bound (`\n\s*\}, \[` rather than
+     * `\n  \}, \[`), so an effect declared inside a nested component —
+     * `HubSelfPanel`, `HubWorkspaceList`, `HubRow` — is seen too. The
+     * two-space form could only ever see effects at the top level of
+     * `CloudSection`, which is exactly where nobody would hide one.
+     */
+    for (const egress of ["syncHub", "connectHub", "previewHubConnect", "disconnectHub"]) {
+      expect(joined, `${egress} is called from an effect — that is a fan-out on open`).not.toContain(
+        egress,
+      );
+    }
+  });
+
+  it("has no hub-wide purge, in the panel, the pure half, or the client", () => {
+    /**
+     * STA-256 records that the server does not validate a purge confirmation on
+     * the wire. A one-click irreversible remote deletion of every workspace is
+     * worse hub-wide than per workspace by exactly the size of the registry, and
+     * `PURGE_NOTICE` names the capability without offering it.
+     *
+     * **`lib/api.ts` is in this list, and it is the one that matters.** The
+     * first version of this scan covered only the two files in this directory —
+     * but a `purgeHub` would live in the CLIENT, which neither of them is, so
+     * the assertion could not have failed on the thing it was written to catch.
+     * The server-side 405/404 assertions in `test/ui-cloud-hub-verbs.test.ts`
+     * would still have bitten; this one would have watched it go past.
+     */
+    for (const file of ["CloudSection.tsx", "cloud-settings.ts"]) {
+      expect(source(file), file).not.toMatch(/purgeHub|hubPurge|\/api\/hub\/purge/);
+    }
+    const client = readFileSync(
+      fileURLToPath(new URL("../lib/api.ts", import.meta.url)),
+      "utf8",
+    );
+    expect(client).not.toMatch(/purgeHub|hubPurge/);
+    expect(client).not.toContain("/api/hub/purge");
+    expect(client).not.toContain("/api/cloud/purge");
+    // And the scan really is looking at the client: it has the routes it should.
+    expect(client).toContain("/api/hub/disconnect");
   });
 });

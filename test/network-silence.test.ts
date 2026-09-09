@@ -1108,7 +1108,22 @@ describe("the UI server serves the whole page, connected or not, and calls nobod
        * The status codes are not asserted (they are `test/ui-cloud-settings.test.ts`'s
        * job); what is asserted is that answering them attempted nothing.
        */
-      const CLOUD_WRITES: Array<[string, Record<string, unknown>]> = [
+      /**
+       * `[route, body, expectedStatus?]`.
+       *
+       * The third element was added by S18 (STA-279) and the reason is worth
+       * stating, because its absence is a trap this epic has already fallen into
+       * four times. Without a status assertion, "zero outbound calls" is reported
+       * identically whether the route answered what it should, 404'd on a
+       * misspelled path, or 500'd inside `readBody` — a silent server and an
+       * absent one are indistinguishable, and the whole file is about proving
+       * silence WITH a subject.
+       *
+       * The pre-existing entries are left unpinned rather than pinned wrongly:
+       * several of them deliberately refuse and this file has never claimed to
+       * know with which code. The four hub-wide additions all state theirs.
+       */
+      const CLOUD_WRITES: Array<[string, Record<string, unknown>, number?]> = [
         ["/api/cloud/connect/preview", { endpoint: "https://sync.example.com", credentialFile: true }],
         ["/api/cloud/connect", { endpoint: "https://sync.example.com", token: "enrollment-secret" }],
         ["/api/cloud/connect", { consent: "made-up", digest: "made-up", token: "enrollment-secret" }],
@@ -1164,15 +1179,80 @@ describe("the UI server serves the whole page, connected or not, and calls nobod
          * registry and writes a local file; this is where that stays true.
          */
         ["/api/hub/backup", {}],
+        /**
+         * S18 (STA-279), the hub-wide verbs. **Three of the four belong here;
+         * `/api/hub/sync` deliberately does not.**
+         *
+         * `/api/hub/connect/preview` is the interesting one, and it is the whole
+         * reason this entry exists rather than a comment. It enumerates EVERY
+         * registered workspace and states, per row, the endpoint and the
+         * credential store that row's secret would go into. That is precisely
+         * the screen somebody would later "improve" with a *"let us check which
+         * of these endpoints is reachable"* convenience — and across twelve
+         * endpoints, on a page nobody has agreed to anything on yet, that is
+         * twelve violations. `hub-preview.ts` is a separate file from
+         * `hub-connect.ts` so that the silence is a property of the import graph
+         * (`test/cloud-hub-connect.test.ts` walks it transitively); this is the
+         * same statement made about the ROUTE, under a real spy, which is the
+         * half a graph walk cannot make.
+         *
+         * `/api/hub/connect` is here in its REFUSED forms only: a body naming an
+         * endpoint, and a made-up ticket. Both must be rejected from local state
+         * alone, before a socket is opened, exactly as its single-workspace and
+         * per-row twins above are on this list for.
+         *
+         * `/api/hub/disconnect` is here in both forms — without `confirm`, where
+         * it refuses, and with it, where it does the work. Disconnecting is the
+         * one verb where a request would be actively wrong rather than merely
+         * unwanted: a device that announced its withdrawal would be making a
+         * request in the act of ceasing to make them. On this DISCONNECTED
+         * workspace it refuses because nothing is connected, which is itself
+         * worth pinning as silent — a route that resolved endpoints before
+         * establishing that there was nothing to do would break the invariant on
+         * the machine least likely to be watching.
+         *
+         * `/api/hub/sync` is ABSENT. It is the widest egressing route on this
+         * server — one authenticated round trip per connected workspace — and
+         * putting it here would either fail honestly or force an exemption that
+         * would then quietly cover something else. Same reasoning that keeps
+         * `/api/cloud/workspace/sync` and `/api/cloud/devices` off these lists.
+         */
+        // 200: this workspace is registered and disconnected, so the fan-out has
+        // exactly one actionable row. It probes the credential store and mints a
+        // ticket, which is the interesting path and the one most likely to grow
+        // a reachability check later.
+        ["/api/hub/connect/preview", { endpoint: "https://sync.example.com", credentialFile: true }, 200],
+        // 400: no `consents`, and an `endpoint` this route has no field for.
+        ["/api/hub/connect", { endpoint: "https://sync.example.com", token: "enrollment-secret" }, 400],
+        [
+          "/api/hub/connect",
+          {
+            consents: [{ slug: "netsilenceui", consent: "made-up", digest: "made-up" }],
+            token: "enrollment-secret",
+          },
+          // 404: the ticket is refused from local state, before a socket opens.
+          // `not_found` is what an unknown consent id maps to.
+          404,
+        ],
+        // 409 both times, and for the same reason rather than for the missing
+        // `confirm`: nothing is connected on this machine, so the fan-out would
+        // be empty and the emptiness check fires before the confirmation check.
+        ["/api/hub/disconnect", {}, 409],
+        ["/api/hub/disconnect", { confirm: true }, 409],
       ];
       for (let round = 0; round < 3; round += 1) {
-        for (const [route, body] of CLOUD_WRITES) {
+        for (const [route, body, expected] of CLOUD_WRITES) {
           const res = await fetch(`${origin}${route}`, {
             method: "POST",
             headers: { "x-staple-token": token, "content-type": "application/json" },
             body: JSON.stringify(body),
           });
-          await res.json();
+          const payload = await res.json();
+          if (expected !== undefined) {
+            expect(res.status, `${route} answered ${res.status}: ${JSON.stringify(payload)}`).toBe(
+              expected,
+            );
+          }
         }
       }
 
@@ -1334,6 +1414,38 @@ describe("the UI server serves the whole page, connected or not, and calls nobod
       };
       expect(status.state).toBe("manual");
       expect(status.checked).toBe(false);
+
+      /**
+       * S18 (STA-279): the HUB-WIDE connect preview on a machine where the only
+       * registered workspace is already connected, which is the case where it
+       * REFUSES — there is nothing actionable to fan out over, so it answers 409
+       * with the per-row reason rather than 200 with an empty enumeration.
+       *
+       * That refusal path is worth pinning here specifically. Establishing "every
+       * row is already connected" is exactly the moment a future author would
+       * reach for the service to find out whether those connections are still
+       * good, and the refusal is the branch nobody looks at twice. It is
+       * established from `readConnection` — local files in the staple home — and
+       * it stays that way.
+       *
+       * The hub-wide DISCONNECT is deliberately not repeated here: it would
+       * remove this workspace's credential, and the per-row disconnect below has
+       * to be the write that does that or it proves nothing about silence on the
+       * path that actually removes one. The disconnected half of this file drives
+       * `/api/hub/disconnect` in both of its forms.
+       */
+      for (let round = 0; round < 3; round += 1) {
+        const refused = await fetch(`${origin}/api/hub/connect/preview`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ endpoint: "https://elsewhere.example", credentialFile: true }),
+        });
+        expect(refused.status, "the hub-wide preview did not refuse").toBe(409);
+        const body = (await refused.json()) as { message: string };
+        // The per-row sentence, from `hub-preview.ts`, naming the service this
+        // workspace is already talking to. Not a summary, and not a probe.
+        expect(body.message).toContain("Already connected");
+      }
 
       /**
        * And disconnect, last, because it is the one write on a connected

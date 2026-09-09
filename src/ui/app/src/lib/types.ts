@@ -1569,6 +1569,127 @@ export interface HubConnectPreviewResult {
 }
 
 /**
+ * ─── THE HUB-WIDE FAN-OUT — S18 (STA-279) ─────────────────────────────────────
+ *
+ * `POST /api/hub/connect/preview` — what connecting EVERY registered workspace
+ * would do, before anything has been sent. Mirrors `HubConnectPreview` in
+ * src/core/cloud/hub-preview.ts, and pinned equal to it by
+ * `test/contract-ui-types.test.ts`.
+ *
+ * ## Why this one is pinned, when `HubActionResult` and `HubBackupResult` are not
+ *
+ * Those two are response ENVELOPES this file invented. This is the CONSENT
+ * MECHANISM, and it earns its pin by the same rule `ConnectPreview` does, at N
+ * times the stake: *"showing the endpoint and repository identity before any
+ * remote call is the consent mechanism, not a courtesy."*
+ *
+ * A field dropped from this mirror is not a stale type — it is a disclosure that
+ * stopped being made about somebody's whole machine. `entries[].preview` is
+ * where each workspace's endpoint, repository id and credential store live, and
+ * `entries[].reason` is the sentence explaining why a row will be skipped rather
+ * than connected. A hub-wide consent screen that silently stopped rendering
+ * either of those would be asking for agreement to a count, which is the exact
+ * objection this feature was refused on twice before it was built.
+ */
+export type HubConnectAction = "connect" | "reconnect" | "skip";
+
+/** What a fan-out would do to ONE workspace, and why. */
+export interface HubConnectEntry {
+  slug: string;
+  prefix: string;
+  path: string;
+  kind: string;
+  available: boolean;
+  repositoryId: string | null;
+  action: HubConnectAction;
+  /** Always present, for every action. A sentence, not a code. */
+  reason: string;
+  /**
+   * Why this row is not actionable at all, or null.
+   *
+   * Distinct from `action: "skip"`, which is broader: a workspace skipped only
+   * because it is ALREADY CONNECTED is perfectly actionable and carries
+   * `skip: null`. Collapsing the two would make "not connected because something
+   * is wrong" and "not connected because nothing needs doing" indistinguishable,
+   * and they have opposite remedies.
+   */
+  skip: "unavailable" | "no_identity" | "problem" | null;
+  /**
+   * The per-workspace preview this fan-out would act on, or null for a skipped
+   * row. **This is what the consent screen renders per row**, and it is the
+   * answer to "one enrollment secret against N services": each row names the
+   * endpoint and credential store its own secret would go to.
+   */
+  preview: ConnectPreview | null;
+}
+
+export interface HubConnectPreview {
+  /** The normalized origin every actionable entry would be connected to. */
+  readonly endpoint: string;
+  readonly entries: readonly HubConnectEntry[];
+  readonly willConnect: number;
+  readonly willReconnect: number;
+  readonly willSkip: number;
+  /**
+   * Always false, for every workspace. A field rather than prose for the same
+   * reason `ConnectPreview.autoAfterConnect` is one: a hub-wide connect is not a
+   * hub-wide automatic-sync consent, and there is no argument on this path that
+   * could make it one.
+   */
+  readonly autoAfterConnect: false;
+}
+
+/**
+ * `POST /api/hub/connect/preview` — the preview, and ONE TICKET PER ACTIONABLE
+ * ROW.
+ *
+ * A ticket per row rather than one for the gesture, because the confirm step has
+ * to be over the ENUMERATION and not over a number. Each row's endpoint,
+ * repository, device, label and credential store are inside its own digest, so a
+ * row whose facts changed while the screen was up is refused by name.
+ *
+ * A skipped row gets no ticket at all: a consent for something that will not
+ * happen is a consent with no subject.
+ */
+export interface HubConnectPreviewResponse {
+  preview: HubConnectPreview;
+  consents: Array<{ slug: string; consent: ConsentTicket }>;
+  report: HubCloudReport;
+}
+
+/**
+ * What a hub-wide verb did, per workspace — S18 (STA-279).
+ *
+ * A TABLE, and that is the resolution of the recorded refusal that a fan-out
+ * *"produces a per-workspace outcome a dialog has nowhere to put"*. It is true
+ * that a toast has nowhere to put it. `HubConnectOutcome`, `HubSyncOutcome` and
+ * `HubDisconnectOutcome` are already per-workspace shapes precisely because a
+ * fan-out had no other way to report, and the server normalizes all three into
+ * the row shape S19 pinned — so the page renders one table with one renderer,
+ * and a fourth verb cannot invent a fifth wording for a failure.
+ *
+ * `ok + skipped + failed === workspaces.length`, always. Every registered
+ * workspace gets a row including the ones nothing happened to: a report that
+ * listed only the failures would be indistinguishable, on a good day, from a
+ * button that did nothing.
+ */
+export interface HubFanOut {
+  action: "connect" | "sync" | "disconnect";
+  /** ISO 8601, so the panel can say "a moment ago" without guessing. */
+  at: string;
+  ok: number;
+  skipped: number;
+  failed: number;
+  workspaces: HubWorkspaceOutcome[];
+}
+
+/** What `/api/hub/connect`, `/api/hub/sync` and `/api/hub/disconnect` answer with. */
+export interface HubFanOutResult {
+  fanOut: HubFanOut;
+  report: HubCloudReport;
+}
+
+/**
  * `POST /api/hub/unregister` without `confirm` — what removal WOULD do, having
  * written nothing. The same previews-by-default discipline as the `hub_prune`
  * tool, and what lets the confirmation state a fact rather than a hope.
