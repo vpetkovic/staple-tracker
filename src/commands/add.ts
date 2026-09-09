@@ -160,17 +160,21 @@ export function previewAdd(path: string): AddPreview {
    * nothing would be taken from anybody.
    */
   if (claimant) {
-    const shared =
-      claimant.sharedRepositoryId !== null
-        ? ` Both also present repository ${claimant.sharedRepositoryId}.`
-        : "";
+    const because =
+      claimant.unreadableReason !== null
+        ? // Not "a copy": we could not read the registered path to find out, and
+          // that is not a licence to take its row either.
+          `and what is at that path could not be read to rule that out: ${claimant.unreadableReason}.`
+        : `and a workspace answering to that slug is still there.` +
+          (claimant.sharedRepositoryId !== null
+            ? ` Both also present repository ${claimant.sharedRepositoryId}.`
+            : "");
     throw new StapleError(
       "conflict",
       `${plan.layout.currentPath} is stamped with slug "${claimant.slug}", which the hub already ` +
-        `registers at ${claimant.path} — and a workspace answering to that slug is still there.` +
-        `${shared} Registering this one would take the registration away from it, and Staple will not ` +
-        `choose between two copies. Keep the one you mean, or run \`${releaseSlugCommand(claimant.slug)}\` ` +
-        "first to register this one instead.",
+        `registers at ${claimant.path} — ${because} Registering this one would take the registration ` +
+        "away from it, and Staple will not choose between two copies. Keep the one you mean, or run " +
+        `\`${releaseSlugCommand(claimant.slug)}\` first to register this one instead.`,
       { path: dir, claimant },
     );
   }

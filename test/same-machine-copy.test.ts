@@ -30,15 +30,17 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
+  chmodSync,
   cpSync,
   existsSync,
   mkdirSync,
   readFileSync,
   renameSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { classifyRegisteredPath, isSecondClaimant } from "../src/core/hub-repair.js";
 import { removeDir, runCliAt, tempDir } from "./fixtures/characterize-support.js";
@@ -240,6 +242,61 @@ describe("a second copy of a workspace on this machine", () => {
     expect(rowFor("added")!.path).toBe(dbIn(original));
     expect(dataVersion()).toBe(settled);
   }, 90_000);
+
+  /**
+   * The end-to-end reproduction of the second round's defect: freeze the original
+   * and work in the copy.
+   *
+   * Every staple workspace is WAL, and SQLite needs a writable `-shm` in the
+   * database's own directory to read one. With the original's `.staple` not
+   * writable, the read-only probe fails with `attempt to write a readonly
+   * database` — and the first version read that as "not a workspace" and handed
+   * the registration to the copy, silently, with `doctor` then reporting `pass`.
+   * `chmod -R a-w`, a checkout owned by another uid and a read-only bind mount are
+   * all this shape, and freezing an original is precisely how copies come about.
+   *
+   * Skipped as root, where `chmod` does not bite; the classifier's unit cases keep
+   * the branch covered there.
+   */
+  it.skipIf(process.getuid?.() === 0)(
+    "is refused when the original's directory cannot be written",
+    () => {
+      const original = repo("frozen");
+      const copy = join(root, "frozen-copied");
+      cpSync(original, copy, { recursive: true });
+
+      // First contact: a `-shm` left behind by an earlier reader makes the
+      // read-only open succeed, which is what made the defect order-dependent.
+      const stapleDir = join(original, ".staple");
+      for (const sidecar of ["-wal", "-shm"]) {
+        rmSync(join(stapleDir, `staple.db${sidecar}`), { force: true });
+      }
+      expect(existsSync(join(stapleDir, "staple.db-shm"))).toBe(false);
+
+      chmodSync(stapleDir, 0o500);
+      try {
+        const settled = dataVersion();
+        const ls = cli(copy, ["ls"]);
+        expect(ls.timedOut).toBe(false);
+        expect(ls.status, ls.stderr).toBe(0);
+
+        // The registration did NOT follow the copy, and nothing was written.
+        expect(rowFor("frozen")!.path).toBe(dbIn(original));
+        expect(dataVersion()).toBe(settled);
+
+        // ...and the operator is told, with the reason rather than a claim of a copy.
+        const { check, exit } = doctorCheck(copy, "workspace-hub-link");
+        expect(check.status).toBe("fail");
+        expect(exit).toBe(1);
+        expect(check.data.unreadableReason).toBe("attempt to write a readonly database");
+        expect(check.detail).toContain(dbIn(original));
+        expect(check.detail).toContain("could not be read");
+      } finally {
+        chmodSync(stapleDir, 0o700);
+      }
+    },
+    120_000,
+  );
 
   /**
    * The regression the first version of this fix shipped, and the reason the
@@ -465,9 +522,15 @@ describe("classifyRegisteredPath", () => {
    * A project root holding a workspace database stamped with a slug, plus
    * whatever identity was asked for beside it.
    *
-   * `meta` is the one table that matters here, written directly: these cases are
-   * about what the classifier reads, so the fixture states exactly that and
-   * nothing else. `slug: null` writes a file that is not a database at all.
+   * **WAL, like every database staple writes.** The first version of this fixture
+   * used a bare `new DatabaseSync` and so left `journal_mode = delete`, which is
+   * the one dimension these cases turn on: a WAL database needs a writable `-shm`
+   * in its own directory to be read at all. A non-WAL fixture made the read
+   * unconditionally succeed, hid the failure mode entirely, and let a test assert
+   * an invariant that is false of every real workspace.
+   *
+   * `meta` is written directly because it is the one table the classifier reads.
+   * `slug: null` writes a file that is not a database at all.
    */
   function project(
     name: string,
@@ -483,6 +546,7 @@ describe("classifyRegisteredPath", () => {
     } else {
       const db = new DatabaseSync(dbPath);
       try {
+        db.exec("PRAGMA journal_mode=WAL");
         db.exec("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
         db.prepare("INSERT INTO meta (key, value) VALUES ('slug', ?)").run(slug);
       } finally {
@@ -604,14 +668,77 @@ describe("classifyRegisteredPath", () => {
     expect(verdict).toEqual({ kind: "same-workspace", slug: "twin", sharedRepositoryId: null });
   });
 
-  /** Read-only: asking the question must not create, stamp or WAL-ise anything. */
-  it("leaves the registered database and its directory untouched", () => {
+  /**
+   * A path that cannot be read is its own answer, and it must refuse.
+   *
+   * A directory where the database should be, because that is an open failure for
+   * every uid INCLUDING root — the permission-based reproduction below is the real
+   * scenario but is meaningless when the suite runs as root, and this branch has to
+   * be covered either way.
+   */
+  it("refuses when the registered path cannot be read at all", () => {
+    const registered = join(bench, "u-unreadable", ".staple", "staple.db");
+    mkdirSync(registered, { recursive: true });
+    const opened = project("u-live", { slug: "twin", id: ID_A });
+    const verdict = classifyRegisteredPath(registered, opened, "twin");
+    expect(verdict.kind).toBe("unreadable");
+    expect(isSecondClaimant(verdict)).toBe(true);
+    // The reason is carried, because "could not read it" is useless without it.
+    expect(verdict.kind === "unreadable" && verdict.reason.length > 0).toBe(true);
+  });
+
+  /**
+   * The reproduction, at unit level: a real WAL database whose directory is not
+   * writable. SQLite cannot create the `-shm` it needs, the read-only open fails
+   * with `attempt to write a readonly database`, and the FIRST version called that
+   * "not a workspace" and re-pointed the row — STA-285, re-created for the exact
+   * workflow that produces copies (freeze the original, work in a copy).
+   *
+   * Skipped as root, where the permission does not bite; the case above keeps the
+   * branch covered there.
+   */
+  it.skipIf(process.getuid?.() === 0)("refuses a live WAL database in a frozen directory", () => {
+    const registered = project("w-frozen", { slug: "twin", id: ID_A });
+    const opened = project("w-copy", { slug: "twin", id: ID_A });
+    // First contact: a `-shm` left by an earlier reader makes the open succeed, so
+    // the fixture must start from rest, which is how a copied directory arrives.
+    for (const sidecar of ["-wal", "-shm"]) rmSync(`${registered}${sidecar}`, { force: true });
+    chmodSync(dirname(registered), 0o500);
+    try {
+      const verdict = classifyRegisteredPath(registered, opened, "twin");
+      expect(verdict.kind).toBe("unreadable");
+      expect(isSecondClaimant(verdict)).toBe(true);
+    } finally {
+      chmodSync(dirname(registered), 0o700);
+    }
+  });
+
+  /**
+   * Read-only means the database's CONTENT is safe. It does NOT mean the directory
+   * is untouched: reading a WAL database creates `-shm` beside it, which is how a
+   * WAL database is read at all.
+   *
+   * The previous version of this test asserted those sidecars were absent and
+   * passed only because its fixture was not WAL — a fixture differing from the real
+   * thing in precisely the dimension under test. What is asserted now is the thing
+   * that actually matters, and it is asserted against a WAL database.
+   */
+  it("cannot change the registered database, though reading it may add a -shm", () => {
     const registered = project("r-original", { slug: "twin", id: ID_A });
     const opened = project("r-copy", { slug: "twin", id: ID_A });
-    const before = statSync(registered).mtimeMs;
+    const before = statSync(registered);
+
     classifyRegisteredPath(registered, opened, "twin");
-    expect(statSync(registered).mtimeMs).toBe(before);
-    expect(existsSync(`${registered}-wal`)).toBe(false);
-    expect(existsSync(`${registered}-shm`)).toBe(false);
+
+    const after = statSync(registered);
+    expect(after.mtimeMs).toBe(before.mtimeMs);
+    expect(after.size).toBe(before.size);
+    // And the row is still what it was, read through a fresh handle.
+    const db = new DatabaseSync(registered, { readOnly: true });
+    try {
+      expect(db.prepare("SELECT value FROM meta WHERE key = 'slug'").get()).toEqual({ value: "twin" });
+    } finally {
+      db.close();
+    }
   });
 });

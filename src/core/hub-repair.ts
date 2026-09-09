@@ -143,21 +143,24 @@ export interface HubRepairTarget {
 /**
  * What is at the path the hub still names, relative to the one just opened.
  *
- * Exactly one verdict means "do not write": `same-workspace`. Every other answer
- * is a stale row, and a stale row is repaired, because leaving one behind points
- * `--ws` and every hub view at a database that is not the workspace.
+ * Three verdicts repair and two report. A stale row is repaired because leaving
+ * one behind points `--ws` and every hub view at a database that is not the
+ * workspace; a row is only kept when something is demonstrably still there or
+ * cannot be ruled out.
  *
  *   - `vacated` — nothing is there. The workspace moved; re-point.
  *   - `same-project` — both paths are inside ONE project root, so they are two
  *     layouts of one workspace rather than two workspaces; re-point.
- *   - `not-a-workspace` — a file is there, but nothing that answers to a slug: a
- *     stray database, an unreadable one, something that is not staple's. The row
- *     names it and it is not this workspace; re-point.
+ *   - `not-a-workspace` — a file is there and it was READ: it is not a database,
+ *     or it is one staple did not write, or it records no slug. Not this
+ *     workspace; re-point.
  *   - `other-workspace` — a live workspace answering to a DIFFERENT slug. The
  *     row is stale because something else moved into the vacated directory;
  *     re-point, and leave the newcomer's own row alone.
  *   - `same-workspace` — a live workspace still answering to THIS row's slug.
  *     Two directories, one registration; report both paths and write nothing.
+ *   - `unreadable` — something is there and it could not be read at all. Not a
+ *     licence to take the registration: report, with the reason.
  */
 export type RegisteredPathVerdict =
   | { kind: "vacated" }
@@ -169,11 +172,20 @@ export type RegisteredPathVerdict =
       slug: string;
       /** Both manifests, when they agree. Evidence for a human, never the decision. */
       sharedRepositoryId: string | null;
-    };
+    }
+  | { kind: "unreadable"; reason: string };
 
-/** The one verdict that means "somebody else still answers to this row". */
+/**
+ * The verdicts that mean "do not take this row".
+ *
+ * `unreadable` belongs here and its absence was a real defect: a WAL database in
+ * a directory SQLite cannot write is unreadable and very much alive, and treating
+ * that as "not a workspace" handed the registration to the copy silently. A
+ * refusal must be earned by evidence, and so must a repair — "I could not look"
+ * is neither.
+ */
 export function isSecondClaimant(verdict: RegisteredPathVerdict): boolean {
-  return verdict.kind === "same-workspace";
+  return verdict.kind === "same-workspace" || verdict.kind === "unreadable";
 }
 
 /**
@@ -188,30 +200,84 @@ function projectRootOf(dbPath: string): string | null {
 }
 
 /**
- * The slug the database at this path answers to, or null when nothing there
- * does.
- *
- * Read-only and never throws, so "unopenable", "not a database" and "no slug
- * recorded" all arrive as the same null — which is the right shape, because all
- * three mean the same thing to the caller: whatever is at that path, it is not
- * this registration.
- *
- * `readOnly` is the same guarantee `doctor` leans on for its own checks: SQLite
- * refuses a write through this handle, so reading one row here cannot stamp,
- * migrate or WAL-initialise a database that some other process owns. It reads
- * `meta` directly rather than through `WorkspaceStore`/`readMeta` to keep
- * `hub-repair.ts` free of the open path, which imports the hub.
+ * The same budget `openDb` arms before anything else (`src/core/db.ts`), for the
+ * reason recorded there: without it, `SQLITE_BUSY` arrives at 0 ms. Spelled out
+ * here rather than imported to keep this change inside one lane's files; if the
+ * two ever drift, the only consequence is how long this single read waits.
  */
-function slugAt(dbPath: string): string | null {
+const BUSY_TIMEOUT_MS = 5_000;
+
+/**
+ * The two SQLite primary result codes that mean "this file is not a workspace"
+ * rather than "I could not read it".
+ *
+ * `SQLITE_NOTADB` is a file that is not a database at all. `SQLITE_ERROR` out of
+ * this one fixed query is `no such table: meta` — a database, but not one staple
+ * wrote. Every other code (READONLY, CANTOPEN, IOERR, BUSY, LOCKED, PERM,
+ * CORRUPT) is a failure to find out, which is a different answer and must not be
+ * spelled the same way.
+ */
+const SQLITE_ERROR = 1;
+const SQLITE_NOTADB = 26;
+
+/** `read: false` means "could not find out", never "there is nothing there". */
+type SlugProbe = { read: true; slug: string | null } | { read: false; reason: string };
+
+/**
+ * Ask the database at this path which slug it answers to.
+ *
+ * ## Why "could not read it" is not the same answer as "it is not a workspace"
+ *
+ * The first version collapsed both into one null, and that silently re-created
+ * STA-285 for one input. Every staple workspace is WAL, and SQLite needs a
+ * writable `-shm` **in the database's own directory** to read a WAL database; a
+ * read-only open in a directory it cannot write fails with
+ * `SQLITE_READONLY_DIRECTORY` ("attempt to write a readonly database"). Freezing
+ * the original and working in a copy — `chmod -R a-w`, a checkout owned by
+ * another uid, a read-only bind mount — is the workflow that PRODUCES copies, so
+ * the failure landed exactly where the refusal was needed: the copy read null,
+ * concluded "not a workspace", and took the registration.
+ *
+ * Ordering hid it: anything that had already read the original while its directory
+ * was writable left a `-shm` behind, after which the read-only open succeeds. The
+ * defect was first contact with a frozen original, which is the common case.
+ *
+ * `busy_timeout` is armed against the same class of failure from the other
+ * direction: `wal_checkpoint(TRUNCATE)` in `config home --move` and in a path
+ * migration takes a lock this read would otherwise bounce off immediately, and
+ * losing a registration to a transient lock needs no unusual permissions at all —
+ * only concurrency, which this codebase has six-process suites for.
+ *
+ * ## What "read-only" does and does not promise
+ *
+ * It promises the database's CONTENT is safe: SQLite refuses a write through this
+ * handle, so one `SELECT` cannot stamp it, migrate it, or change a row. It does
+ * NOT promise the directory is untouched — reading a WAL database creates `-shm`
+ * (and an empty `-wal`) beside it, because that is how a WAL database is read at
+ * all, and they outlive the handle. That is true of every reader of a WAL
+ * database, including `doctor`'s own checks. The earlier claim that this "cannot
+ * WAL-initialise" a database was simply wrong, and it was the claim that hid the
+ * defect above.
+ *
+ * `meta` is read directly rather than through `WorkspaceStore`/`readMeta` to keep
+ * this file clear of the open path, which imports the hub.
+ */
+function probeSlugAt(dbPath: string): SlugProbe {
   let db: DatabaseSync | null = null;
   try {
     db = new DatabaseSync(dbPath, { readOnly: true });
+    // Armed FIRST, like `openDb`, so the read queues instead of erroring.
+    db.exec(`PRAGMA busy_timeout=${BUSY_TIMEOUT_MS}`);
     const row = db.prepare("SELECT value FROM meta WHERE key = 'slug'").get() as
       | { value: string }
       | undefined;
-    return row?.value ?? null;
-  } catch {
-    return null;
+    return { read: true, slug: row?.value ?? null };
+  } catch (error) {
+    // Extended result codes carry the primary code in their low byte.
+    const errcode = (error as { errcode?: number }).errcode;
+    const primary = errcode === undefined ? undefined : errcode & 0xff;
+    if (primary === SQLITE_ERROR || primary === SQLITE_NOTADB) return { read: true, slug: null };
+    return { read: false, reason: error instanceof Error ? error.message : String(error) };
   } finally {
     try {
       db?.close();
@@ -266,15 +332,18 @@ function sharedIdentity(registeredDbPath: string, openedDbPath: string): string 
  * copy until an operator settles it.
  *
  * On that branch it costs one `existsSync`, one read-only SQLite open that reads
- * a single `meta` row, and — only once the answer is already `same-workspace` —
- * two small manifest reads to enrich the report.
+ * a single `meta` row — waiting up to {@link BUSY_TIMEOUT_MS} for a lock rather
+ * than treating contention as an answer — and, only once the verdict is already
+ * `same-workspace`, two small manifest reads to enrich the report.
  *
  * The read-only open is the cost this check is worth paying, and the first
  * version's attempt to avoid it is what made it wrong. The only slug-bearing
  * file beside a database is `AGENTS.md`, which is prose, is never overwritten
  * once written, and is absent for a `--global` workspace; the manifest carries an
  * id, which is the wrong key (see the module header). `meta.slug` is the fact
- * that decides, so it is the fact that gets read.
+ * that decides, so it is the fact that gets read — see {@link probeSlugAt} for
+ * what that read can and cannot promise, and for why a read that FAILS is its own
+ * answer rather than a null.
  *
  * The pathological case is still CHEAPER than the bug it replaces. Two copies
  * used to cost one hub write per command, forever; they now cost a stat, a
@@ -290,12 +359,19 @@ function sharedIdentity(registeredDbPath: string, openedDbPath: string): string 
  * to correct it. Hence `same-project`, `not-a-workspace` and `other-workspace`,
  * all of which repair.
  *
- * ## Why an unreadable path repairs rather than reports
+ * ## Why "a file is there" repairs but "I could not read it" does not
  *
- * A refusal has to be justified by evidence, because a refusal is permanent
- * until a human intervenes and `doctor` cannot choose a winner for them. "A file
- * exists there" is not evidence that this workspace does. Only a database that
- * still answers to this row's slug is, and that is the single case that reports.
+ * A refusal has to be justified by evidence, because a refusal is permanent until
+ * a human intervenes and `doctor` cannot choose a winner for them. "A file exists
+ * there" is not evidence that this workspace does — so a file that is READ and
+ * turns out not to be this workspace is repaired.
+ *
+ * A read that FAILS is a third thing, and conflating it with the second was a
+ * defect: a live WAL database in a directory SQLite cannot write is unreadable,
+ * and calling that "not a workspace" handed the registration to the copy in
+ * exactly the freeze-the-original workflow that produces copies. So an unreadable
+ * path reports, with the reason, and repairs itself the moment the path becomes
+ * readable or goes away.
  */
 export function classifyRegisteredPath(
   registeredDbPath: string,
@@ -308,12 +384,13 @@ export function classifyRegisteredPath(
   const openedRoot = projectRootOf(openedDbPath);
   if (registeredRoot !== null && registeredRoot === openedRoot) return { kind: "same-project" };
 
-  const registeredSlug = slugAt(registeredDbPath);
-  if (registeredSlug === null) return { kind: "not-a-workspace" };
-  if (registeredSlug !== slug) return { kind: "other-workspace", slug: registeredSlug };
+  const probe = probeSlugAt(registeredDbPath);
+  if (!probe.read) return { kind: "unreadable", reason: probe.reason };
+  if (probe.slug === null) return { kind: "not-a-workspace" };
+  if (probe.slug !== slug) return { kind: "other-workspace", slug: probe.slug };
   return {
     kind: "same-workspace",
-    slug: registeredSlug,
+    slug: probe.slug,
     sharedRepositoryId: sharedIdentity(registeredDbPath, openedDbPath),
   };
 }
@@ -335,6 +412,24 @@ export function releaseSlugCommand(slug: string): string {
 }
 
 /**
+ * The caveats on that command, named rather than discovered.
+ *
+ * `hub.unregister` REFUSES while cross-workspace links name the slug, and says so
+ * — pointing at `staple hub unlink`. `--with-links` gets past it by deleting
+ * those edges, and `cross_links` lives only in the hub, so that deletion is the
+ * end of them. Naming `unlink` first is deliberate: the destructive flag should be
+ * a choice somebody makes, not the first thing they read.
+ *
+ * The re-registration that follows also drops `workspaces.repository_id`, because
+ * `repointPath`'s insert does not carry that column — it is set only by cloud
+ * registry adoption, so a workspace that had been adopted needs adopting again.
+ * Recoverable, and worth knowing before rather than after.
+ */
+const RELEASE_SLUG_CAVEAT =
+  "If cross-workspace links name it, that is refused until you remove them with `staple hub unlink` " +
+  "(or accept losing those edges with `--with-links`).";
+
+/**
  * One sentence for three surfaces.
  *
  * `repairHubRegistration` returns it as `error`, `doctor` prints it as a failed
@@ -348,6 +443,22 @@ export function describeSecondClaimant(input: {
   opened: string;
   verdict: RegisteredPathVerdict;
 }): string {
+  const tail =
+    `Local commands work here, and the registered path is what \`--ws\` and hub views follow. ` +
+    `Keep the one you mean and move the other aside; to register this one instead, run ` +
+    `\`${releaseSlugCommand(input.slug)}\` and then any command inside it. ${RELEASE_SLUG_CAVEAT}`;
+
+  if (input.verdict.kind === "unreadable") {
+    return (
+      `The hub registers ${input.registered} for workspace "${input.slug}" and something is still ` +
+      `there, but it could not be read to tell whether it is still this workspace: ` +
+      `${input.verdict.reason}. Staple does not take a registration away from a path it cannot ` +
+      "inspect — that is how a frozen or busy original loses its row to a copy — so nothing was " +
+      `written. If that path is stale, make it readable or remove it and the next command repairs ` +
+      `the row. ${tail}`
+    );
+  }
+
   const shared =
     input.verdict.kind === "same-workspace" && input.verdict.sharedRepositoryId !== null
       ? ` Both also present repository ${input.verdict.sharedRepositoryId}.`
@@ -356,9 +467,7 @@ export function describeSecondClaimant(input: {
     `Two directories on this machine answer to workspace "${input.slug}": the hub registers ` +
     `${input.registered}, and this resolved ${input.opened}. Both still hold a workspace database ` +
     `stamped with that slug.${shared} Staple will not choose between them, so the registration was ` +
-    "left as it was and nothing was written. Local commands work in both, and the registered one is " +
-    `what \`--ws\` and hub views follow. Keep the one you mean and move the other aside; to register ` +
-    `the other instead, run \`${releaseSlugCommand(input.slug)}\` and then any command inside it.`
+    `left as it was and nothing was written. ${tail}`
   );
 }
 
@@ -507,10 +616,12 @@ export interface StaleHubRow {
 export interface CopyClaimant {
   /** The slug both directories are stamped with. */
   slug: string;
-  /** The registered path, normalised. It exists and answers to `slug`. */
+  /** The registered path, normalised. It exists, and was not ruled out. */
   path: string;
   /** The id both present, when they present the same one. */
   sharedRepositoryId: string | null;
+  /** Why the registered path could not be read, when that is why it is refused. */
+  unreadableReason: string | null;
 }
 
 /**
@@ -534,8 +645,11 @@ export interface CopyClaimant {
  */
 export function findCopyClaimant(hub: Hub, openedDbPath: string): CopyClaimant | null {
   const here = normalizePath(openedDbPath);
-  const slug = slugAt(here);
-  if (slug === null) return null; // nothing here to collide with a row
+  const probe = probeSlugAt(here);
+  // A path `add` cannot read is `performSetup`'s problem a moment later, and it
+  // collides with no row until it says which slug it is.
+  if (!probe.read || probe.slug === null) return null;
+  const slug = probe.slug;
 
   const entry = hub.findBySlug(slug);
   if (!entry) return null; // the slug is free; registering takes nothing
@@ -543,8 +657,14 @@ export function findCopyClaimant(hub: Hub, openedDbPath: string): CopyClaimant |
   const registered = normalizePath(entry.path);
   if (registered === here) return null; // already this row's path
   const verdict = classifyRegisteredPath(registered, here, slug);
-  if (verdict.kind !== "same-workspace") return null;
-  return { slug, path: registered, sharedRepositoryId: verdict.sharedRepositoryId };
+  if (!isSecondClaimant(verdict)) return null;
+  return {
+    slug,
+    path: registered,
+    sharedRepositoryId:
+      verdict.kind === "same-workspace" ? verdict.sharedRepositoryId : null,
+    unreadableReason: verdict.kind === "unreadable" ? verdict.reason : null,
+  };
 }
 
 export function findRepointableRows(hub: Hub): StaleHubRow[] {

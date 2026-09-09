@@ -657,6 +657,7 @@ function checkWorkspaceHubLink(dir: string): CheckResult {
       registeredPathNormalized: entry ? normalizePath(entry.path) : null,
       secondClaimant: null as string | null,
       sharedRepositoryId: null as string | null,
+      unreadableReason: null as string | null,
     };
 
     if (!entry) {
@@ -706,6 +707,7 @@ function checkWorkspaceHubLink(dir: string): CheckResult {
             secondClaimant: registered,
             sharedRepositoryId:
               verdict.kind === "same-workspace" ? verdict.sharedRepositoryId : null,
+            unreadableReason: verdict.kind === "unreadable" ? verdict.reason : null,
           },
           /**
            * Not a `--fix`, and it must not become one: repointing the row would be
@@ -718,8 +720,9 @@ function checkWorkspaceHubLink(dir: string): CheckResult {
           {
             id: "workspace-hub-link",
             description:
-              "Not a doctor fix — Staple will not choose between two directories answering to one " +
-              "slug. Move one aside, or release the slug and re-register the one you want:",
+              "Not a doctor fix — Staple will not take a registration from a path it cannot rule " +
+              "out. Move one aside, or release the slug and re-register the one you want (refused " +
+              "while cross-workspace links name it; the re-created row carries no repository_id):",
             command: releaseSlugCommand(slug),
           },
         );
