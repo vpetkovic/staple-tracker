@@ -40,9 +40,15 @@ import {
   type SnapshotCursor,
 } from "./cursor.js";
 import type { Env } from "./env.js";
+import { minProtocolFor } from "./envelope.js";
 import { SyncError, json } from "./errors.js";
 import { type FieldWrite, type FoldedEntity, foldLog, materializedVerb } from "./fold.js";
-import { DEFAULT_SNAPSHOT_PAGE, MAX_SNAPSHOT_PAGE } from "./limits.js";
+import {
+  DEFAULT_SNAPSHOT_PAGE,
+  MAX_SNAPSHOT_PAGE,
+  PROTOCOL_MAX,
+  PROTOCOL_MIN,
+} from "./limits.js";
 import { log, tokenFingerprint } from "./log.js";
 
 /** One folded entity, as it crosses the wire. */
@@ -97,6 +103,35 @@ export async function snapshot(
   }
 
   const folded = await foldLog(env, session.repoId, session.epoch, cutoff);
+
+  /**
+   * Refused over the WHOLE fold, not over the page about to be served.
+   *
+   * A snapshot is one consistent view delivered across several pages, and a device
+   * applies each page as it arrives. Refusing per page would hand out the pages
+   * whose entities happen to be admissible and fail on a later one, leaving the
+   * device holding a partial hydration of a repository it cannot finish reading —
+   * which is exactly the half-bootstrap the cursor's pinned cutoff exists to
+   * prevent. Either the whole view is serveable at this protocol or none of it is.
+   *
+   * Same table and same code as `pull.ts`; see `assertServable` there for why 426
+   * rather than filtering or serving.
+   */
+  for (const entity of folded.entities) {
+    const required = minProtocolFor(entity.entity);
+    if (required !== null && required > protocol) {
+      throw new SyncError(
+        "protocol_unsupported",
+        "this repository contains entities that require a newer protocol than this request negotiated",
+        {
+          min: PROTOCOL_MIN,
+          max: PROTOCOL_MAX,
+          requiredProtocol: required,
+          entity: entity.entity,
+        },
+      );
+    }
+  }
 
   // `foldLog` already returns entities ordered by entity key, which is the paging order.
   const remaining = folded.entities.filter((e) => entityKey(e.entity, e.entityId) > afterKey);

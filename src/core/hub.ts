@@ -418,13 +418,84 @@ export class Hub {
    * lazily so that no existing hub grows one until something actually asks.
    */
   hubId(): string {
-    const row = this.db.prepare("SELECT value FROM meta WHERE key = 'hub_id'").get() as
-      | { value: string }
-      | undefined;
-    if (row?.value) return row.value;
+    const stored = this.storedHubId();
+    if (stored !== null) return stored;
     const minted = randomUUID();
     this.db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('hub_id', ?)").run(minted);
     return minted;
+  }
+
+  /**
+   * The stored hub id, or null when this hub has never needed one.
+   *
+   * Separate from {@link hubId} because reading and MINTING are different acts, and
+   * several callers need the first without the second. Adoption is the one that
+   * matters: a machine about to take on an existing registry identity has to be able
+   * to ask whether it already has one, and asking through `hubId()` would mint the
+   * very value it was checking for the absence of.
+   */
+  storedHubId(): string | null {
+    const row = this.db.prepare("SELECT value FROM meta WHERE key = 'hub_id'").get() as
+      | { value: string }
+      | undefined;
+    return row?.value ?? null;
+  }
+
+  /**
+   * Take on an existing hub identity, rather than minting a fresh one.
+   *
+   * ## Why this has to exist, and what it means about what a hub id is
+   *
+   * `hubId()` mints, which is right for the first machine and wrong for every later
+   * one. A replacement machine that minted its own id would be scoped to an empty
+   * repository on the service and could never read what the lost machine published —
+   * so "restorable after a machine is lost" would be false no matter how good the
+   * rest of the mechanism was.
+   *
+   * Which forces the question of what the id actually identifies, and the honest
+   * answer is **the registry, not the machine**. It names one person's set of
+   * workspaces; the machine is named by `deviceId`, which already exists, is already
+   * hub-wide, and is already separate. Two machines belonging to one person share a
+   * hub id on purpose — that sharing is the entire mechanism by which the second
+   * learns what the first has.
+   *
+   * That makes this exactly `repo-identity.ts`'s story one level up: the identity is
+   * adopted from outside, never re-minted, because *"an unknown id is far more likely
+   * to be a copied manifest than a new repository"* and a second id for one thing is
+   * a fork nothing later reports.
+   *
+   * ## The refusal
+   *
+   * Refuses when a DIFFERENT id is already stored, because replacing one silently is
+   * how a machine ends up orphaning a registry it was already publishing to — the old
+   * log keeps existing, nothing points at it, and the workspaces recorded there are
+   * simply gone from every surface. Idempotent for the same id, so a repeated adopt is
+   * not an error.
+   *
+   * `force` exists because the refusal is sometimes wrong: an id that was minted
+   * lazily and never used names nothing, and refusing to replace it would be refusing
+   * on the strength of a value that has never left the machine. The caller decides,
+   * because the caller is the one that can see whether a connection record exists for
+   * the old id — see `hub-registry-service.ts`, `adoptRegistryIdentity`.
+   */
+  adoptHubId(hubId: string, options: { force?: boolean } = {}): void {
+    const trimmed = hubId.trim();
+    if (trimmed.length === 0) {
+      throw new StapleError("validation", "A hub id is required. Nothing was changed.");
+    }
+    const stored = this.storedHubId();
+    if (stored === trimmed) return;
+    if (stored !== null && options.force !== true) {
+      throw new StapleError(
+        "conflict",
+        `This machine's hub already has the identity ${stored}, and adopting ${trimmed} would ` +
+          "point it at a different registry. Whatever was published under the old identity would " +
+          "still exist on the service with nothing pointing at it. Nothing was changed.",
+      );
+    }
+    this.db
+      .prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('hub_id', ?)")
+      .run(trimmed);
   }
 
   /** The row holding this sync identity, if this machine has one. */

@@ -68,6 +68,7 @@
 import { type Session, sha256 } from "./auth.js";
 import { entityKey } from "./cursor.js";
 import type { Env } from "./env.js";
+import { protocolForEntities } from "./envelope.js";
 import { SyncError, json } from "./errors.js";
 import { type BackupEntity, foldLog, forBackup, materializedVerb } from "./fold.js";
 import { readJson } from "./http.js";
@@ -299,7 +300,24 @@ async function captureBackup(
       folded.entities.length,
       folded.opCount,
       folded.schemaVersion,
-      PROTOCOL_MAX,
+      /**
+       * The lowest protocol that can REPLAY this backup, not this build's ceiling.
+       *
+       * It used to be `PROTOCOL_MAX`, which was indistinguishable from this while
+       * there was only one version. It is not the same thing, and the difference
+       * shows the moment the range moves: `beginRestore` refuses a backup whose
+       * stored protocol is outside `[PROTOCOL_MIN, PROTOCOL_MAX]`, so stamping the
+       * ceiling would mark every ordinary workspace backup as needing protocol 2
+       * merely because the Worker that took it happened to know about the hub
+       * registry. A Worker rolled back one version would then refuse to restore
+       * backups containing nothing it does not understand — refusing to open the
+       * parachute because it was folded by a newer machine.
+       *
+       * `protocolForEntities` reads the same per-entity table validation uses, so a
+       * backup's stamp cannot disagree with what the wire would accept. A workspace
+       * backup stamps 1; a hub backup stamps 2 because `registration` requires it.
+       */
+      protocolForEntities(folded.entities),
       kind,
       createdAt,
       session.deviceId,
@@ -576,6 +594,29 @@ async function beginRestore(
       min: PROTOCOL_MIN,
       max: PROTOCOL_MAX,
     });
+  }
+
+  /**
+   * And the same check against THIS REQUEST's negotiated protocol, which is a
+   * different question with a different answer.
+   *
+   * The check above asks whether this SERVER can write the backup's envelopes. This
+   * one asks whether the CALLER will be able to read what it is asking for. A
+   * protocol-1 device restoring a protocol-2 backup would succeed here and then be
+   * refused by `GET /snapshot` on the very next call — having already moved the
+   * repository onto an epoch it cannot hydrate, and having spent the pre-restore
+   * capture doing it. The data would be intact and the device would be stuck, which
+   * is the worst available combination because it looks like corruption.
+   *
+   * Refused before the undo is captured and before anything is staged, so declining
+   * costs nothing and the remedy — upgrade, then restore — is in the response.
+   */
+  if (source.protocol > protocol) {
+    throw new SyncError(
+      "protocol_unsupported",
+      "this backup contains operations this request's protocol cannot read; upgrade before restoring it",
+      { min: PROTOCOL_MIN, max: PROTOCOL_MAX, requiredProtocol: source.protocol },
+    );
   }
 
   const undo = await captureBackup(env, session, repo, "pre-restore", null);

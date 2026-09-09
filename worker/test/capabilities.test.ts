@@ -13,7 +13,13 @@ describe("GET /v1/capabilities", () => {
 
     const body = await jsonOf(response);
     expect(body).toMatchObject({
-      protocol: { min: 1, max: 1 },
+      // GOLDEN MOVED (STA-283). `max` was 1 and is now 2: the hub registry adds two
+      // entity kinds, and an older client handed one THROWS in `apply.ts` rather than
+      // ignoring it, so the widening is a protocol change rather than an additive one.
+      // `min` deliberately does not move — that is what keeps every existing client
+      // working — so this assertion is also the statement that the bump was
+      // backwards-compatible. See `worker/src/limits.ts`.
+      protocol: { min: 1, max: 2 },
       maxOpBytes: 512 * 1024,
       maxPullLimit: 500,
       defaultPullLimit: 200,

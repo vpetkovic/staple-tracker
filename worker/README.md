@@ -306,6 +306,53 @@ enrollment secret or an existing device token. An unknown `repoId` fails closed 
 copied manifest than a new repository, and auto-creating turns that into a silently
 forked workspace.
 
+### Provisioning a HUB
+
+A hub is a repository. There is no hub table, no hub flag and no separate route, and
+there deliberately is not: a flag would be a second thing to keep in step with the
+entities the log actually contains. So provisioning one is the `INSERT` above, with the
+hub's id in place of a workspace's:
+
+```sql
+-- The hub id comes from `hub.db`'s meta table: `staple hub registry id` prints it.
+-- It is minted locally by the FIRST machine and adopted by every later one.
+INSERT INTO repos (repo_id, epoch, last_seq, last_fencing_token, enroll_sha256, created_at)
+VALUES ('<hub id>', 1, 0, 0, X'<sha256 hex>', <unix millis>);
+```
+
+Two things follow from there being no provisioning route, and both have to be visible
+in the product rather than discovered:
+
+**1. `forbidden` on a hub's first connect means "not provisioned", and the product must
+say so.** It is the same wire answer as "you are not a member", and it always will be —
+`devices.ts` answers `forbidden` for an unknown `repoId` precisely so that a caller
+cannot enumerate which repository ids this server knows about. What makes the
+translation safe for a hub specifically is that a hub id is minted locally and never
+typed by a human, so "you fat-fingered the id" is not one of the readings. The client
+maps it to a named state that spells out this `INSERT` (`HUB_NOT_PROVISIONED` in
+`src/core/cloud/hub-registry-service.ts`). Do not replace that with a generic failure;
+it reads as a bug in Staple, and the remedy is an operator action nobody would guess.
+
+**2. The hub id has to reach the second machine out of band, alongside the enrollment
+secret.** A replacement machine mints its own hub id on first use, and a machine scoped
+to a freshly minted id reads an empty repository — so "restorable after a machine is
+lost" would be false however good the rest of the mechanism was. The id is not a secret
+and the enrollment secret is, but neither is derivable from anything, and losing either
+costs the same recovery. Keep them together.
+
+The hub's log contains only `registration` and `crossLink` operations, which require
+**protocol 2**. Consequences worth knowing before you deploy:
+
+- A hub backup is stamped `protocol = 2`, and `POST /backups/{id}/restore` refuses it
+  when the request negotiated protocol 1 — otherwise the epoch moves, the pre-restore
+  capture is spent, and the device that asked is left on a timeline it cannot hydrate.
+- An ordinary workspace backup is still stamped `protocol = 1`, because the stamp is
+  the lowest protocol that can REPLAY the backup rather than the ceiling of the Worker
+  that took it. A Worker rolled back one version can still restore one.
+- `GET /ops` and `GET /snapshot` on a hub refuse a protocol-1 request outright, rather
+  than filtering the registry entities out of it. Filtering would advance the cursor
+  past operations that were never delivered.
+
 ### Never
 
 No `wrangler delete`, no `wrangler d1 delete`, no destructive subcommand against any
