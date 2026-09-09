@@ -2094,7 +2094,17 @@ function main() {
        * Handed the raw `rest` rather than `words`, because it needs its flags.
        */
       if (sub === "registry") {
-        runHubRegistryCommand(rest.slice(rest.indexOf("registry") + 1));
+        /**
+         * Everything after the FIRST positional word, flags included, wherever they sat.
+         *
+         * `rest.slice(rest.indexOf("registry") + 1)` dropped any flag written to the LEFT
+         * of `registry` — so `staple hub --disable registry publish` silently lost
+         * `--disable` and attempted a publish instead of withdrawing a consent. That is
+         * failing UNSAFE, in exactly the case the comment above cites for parsing
+         * strictly. Splitting on the word's position in the original argv keeps every flag.
+         */
+        const at = rest.indexOf("registry");
+        runHubRegistryCommand([...rest.slice(0, at), ...rest.slice(at + 1)]);
         break;
       }
 

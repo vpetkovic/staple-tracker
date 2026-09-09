@@ -202,6 +202,14 @@ export function initWorkspace(options: {
       ]);
     }
     hub.register({ slug: storedSlug, prefix, path: dbPath, kind });
+    /**
+     * Read back for the comparison below, so the common case writes nothing.
+     *
+     * `recordRepositoryId` is an unconditional UPDATE, and this runs on every workspace
+     * open — including `staple ls`. Writing the same value on every command would dirty
+     * the hub's WAL for no reason.
+     */
+    const hubRow = hub.get(storedSlug);
 
     // openDb() has already created the .staple dir, so the guide has somewhere to land.
     const guide =
@@ -258,6 +266,35 @@ export function initWorkspace(options: {
      * anything — see docs/sync.md, "Three consents".
      */
     const repository = reconcileWorkspaceIdentity(db, dbPath);
+
+    /**
+     * Record the identity on the HUB ROW, now that there is one (STA-283).
+     *
+     * `workspaces.repository_id` had no writer on any user-facing path. `register()`
+     * above cannot fill it — it runs BEFORE `reconcileWorkspaceIdentity`, because the
+     * manifest may not exist until that call mints it — and `performConnect` never
+     * touched it. So on a real machine every hub row read `repositoryId: null`, and
+     * since that column is the adoption key, two things were quietly broken:
+     * `exportRegistry` published an EMPTY registry, and `adoptRegistry` could not match
+     * an incoming entry to a workspace this machine already had.
+     *
+     * It survived three review rounds because every test and the live script called
+     * `hub.recordRepositoryId(...)` by hand — a hub-internal API no user path invokes —
+     * so the proofs were of a column nothing populated.
+     *
+     * This is the right place for it: the hub is already open in this scope, the identity
+     * has just been reconciled from the manifest that is its authority, and every command
+     * that touches a workspace comes through here — so a machine that predates this fix
+     * heals the first time anything opens the workspace, with no migration and no repair
+     * command.
+     *
+     * Local row work only. It makes no network call and it is not `connect`; a workspace
+     * carrying an identity has consented to nothing. See the comment above and
+     * `docs/sync.md`, "Three consents".
+     */
+    if (hubRow?.repositoryId !== repository.repositoryId) {
+      hub.recordRepositoryId(storedSlug, repository.repositoryId);
+    }
 
     return {
       store: new WorkspaceStore(db, storedSlug, prefix),

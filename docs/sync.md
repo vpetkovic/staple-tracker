@@ -1062,15 +1062,32 @@ the cross-link payload, and resurrection is an ordinary update the fold's plain 
 already handles. A missing `present` reads as present, so edges published before the
 field existed are not lost.
 
-**A machine may only retract an edge whose two workspaces it has registered.** Absence
-of an edge locally is not a removal: adoption previews by default, and even on an apply
-it skips an edge naming a workspace that did not land — which happens for an opted-out
-identity, a parked prefix collision, and an entry with no identity. Without this floor a
-machine holding a strict subset retracts edges it was never in a position to know about,
-and a shared registry converges to the **intersection** of the machines' edges rather
-than to last-write-wins. An edge naming a workspace this machine does not have is left
-exactly as published and reported, because a person who expected a removal to propagate
-needs to know it did not.
+**`workspaces.repository_id` is written when staple OPENS a workspace**, from the manifest
+that is its authority. It is the adoption key, and until STA-283 nothing on a user-facing
+path wrote it at all: `Hub.register()` runs before the manifest exists and `connect` never
+touched it. So publish uploaded an empty registry and adoption could not recognise a
+workspace this machine already had. A row whose workspace has not been opened since is
+reconciled at publish, adopt and restore. An identity held by two rows is **reported, not
+published** — two clones or two worktrees of one repository legitimately share one, and
+publishing both would make the registered name flip between them on every pass.
+
+**A machine may only retract an edge when, for both endpoint slugs, the workspace it holds
+under that slug is the same repository the service has a registration for.** Absence of an
+edge locally is not a removal: adoption previews by default, and even on an apply it skips
+an edge naming a workspace that did not land — which happens for an opted-out identity, a
+parked prefix collision, and an entry with no identity. Without a floor, a machine holding
+a strict subset retracts edges it was never in a position to know about, and a shared
+registry converges to the **intersection** of the machines' edges rather than to
+last-write-wins.
+
+The floor keys on **identity, not slug**, and that distinction is the whole of it. Slugs
+derive from directory names, so two machines holding the same repositories match by
+default — a slug-keyed rule granted edge-deletion authority on a name match, and a machine
+that had cloned both repositories but never applied an adopt destroyed the other machine's
+edge on its first publish. Both sides of the comparison are already in the snapshot the
+diff reads, so it costs no new state. Anything a machine has no standing on is left exactly
+as published and reported, because a person who expected a removal to propagate needs to
+know it did not.
 
 **Operation ids are `hub:<epoch>:<entity>:<32 hex of entityId, verb, base version and
 payload>`.** Two earlier shapes were wrong in the same way, one level apart. Keyed on the

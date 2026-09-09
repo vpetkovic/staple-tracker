@@ -29,15 +29,20 @@
  * for its reason: *"the transport is loaded only via `await import()` after the
  * consent gate"*.
  *
- * What that buys, precisely, and it is worth being exact because it is easy to
- * overclaim: `staple ls` already reaches `client.ts` statically through
- * `commands/cloud.ts`, so this file cannot make the CLI's import graph pure and
- * does not pretend to. What it can do is add no new static edge, and keep the two
- * genuinely local verbs — `status` and `id` — on a path that never loads the
- * transport at all. The enforceable property is the one the contract states and
- * the one `test/cloud-hub-registry-cli.test.ts` asserts with a real subprocess
- * spy: **no command that is not supposed to talk to the network makes a call.**
- * That is proven by running the CLI, not by reading it.
+ * What that buys, precisely, and it is worth being exact because the first version of
+ * this paragraph overclaimed. `staple ls` already reaches `client.ts` statically through
+ * `commands/cloud.ts`, so this file cannot make the CLI's import graph pure and does not
+ * pretend to — and NOR are `status` and `id` on a transport-free path, as this comment
+ * used to say: `import { settle } from "./cloud.js"` at the top pulls `status.ts`, which
+ * pulls `client.ts`. That claim was false when written.
+ *
+ * What the deferral does buy is real and narrower: no NEW static edge to the service
+ * module, so the registry leg's transport is loaded only when a registry verb that needs
+ * it runs. The enforceable property is the one the contract states and the one
+ * `test/cloud-hub-registry-cli.test.ts` asserts with a real subprocess spy: **no command
+ * that is not supposed to talk to the network makes a call.** That is proven by running
+ * the CLI, not by reading it — which is the only reason the false claim above was
+ * harmless rather than load-bearing.
  *
  * ## Which of these can talk to the network
  *
@@ -282,23 +287,50 @@ function runIdentity(argv: string[]): void {
   const hub = openHub();
   try {
     const previous = hub.storedHubId();
-    if (previous !== null && previous !== target.trim() && !json) {
-      console.log(`This machine's hub currently has the identity ${previous}.`);
-      console.log("");
-      /**
-       * The shared sentence, unconditional. Printed from the constant rather than written
-       * here so the settings page cannot word it differently — and stated as a fact about
-       * the id rather than a warning about a state, because the state is not observable:
-       * a disconnect leaves no evidence that the old id was ever used.
-       */
-      console.log(describeIdentityReplacement(previous));
+    /**
+     * The gate is OUTSIDE `!json`; only the printing is inside.
+     *
+     * This whole block used to be `... && !json`, which meant machine mode skipped both
+     * the orphan notice and the `--yes` gate — so `identity <new> --json` replaced the
+     * identity silently, exit 0, and the notice I was told to make unconditional was
+     * false in exactly the mode a script uses. Third instance of the same shape in this
+     * file; `runConnect` is the one that had it right.
+     */
+    if (previous !== null && previous !== target.trim()) {
+      if (!json) {
+        console.log(`This machine's hub currently has the identity ${previous}.`);
+        console.log("");
+        /**
+         * The shared sentence. Printed from the constant rather than written here so the
+         * settings page cannot word it differently — and stated as a fact about the id
+         * rather than a warning about a state, because the state is not observable: a
+         * disconnect leaves no evidence that the old id was ever used.
+         */
+        console.log(describeIdentityReplacement(previous));
+      }
       if (values.yes !== true) {
-        if (!(isInteractive() && confirm(`\nAdopt ${target.trim()} instead?`, { default: false }))) {
-          console.error(
-            isInteractive()
-              ? "\nDeclined. The identity is unchanged."
-              : "\nNothing was changed. Re-run with --yes to adopt.",
-          );
+        const agreed =
+          !json && isInteractive() && confirm(`\nAdopt ${target.trim()} instead?`, { default: false });
+        if (!agreed) {
+          if (json) {
+            // The notice travels in the refusal, so a machine caller cannot reach the
+            // replacement without having received it first.
+            console.error(
+              JSON.stringify({
+                code: "validation",
+                message: `Replacing a registry identity needs --yes. ${describeIdentityReplacement(previous)}`,
+                retryable: false,
+                previousHubId: previous,
+                notice: describeIdentityReplacement(previous),
+              }),
+            );
+          } else {
+            console.error(
+              isInteractive()
+                ? "\nDeclined. The identity is unchanged."
+                : "\nNothing was changed. Re-run with --yes to adopt.",
+            );
+          }
           process.exitCode = 2;
           hub.close();
           return;
@@ -321,7 +353,17 @@ function runIdentity(argv: string[]): void {
         .then(({ adoptRegistryIdentity }) => {
           const outcome = adoptRegistryIdentity(home, hub, target.trim());
           if (json) {
-            console.log(JSON.stringify({ hubId: target.trim(), ...outcome }));
+            console.log(
+              JSON.stringify({
+                hubId: target.trim(),
+                ...outcome,
+                // The notice rides on the success too, not only the refusal: a machine
+                // that passed --yes still has to be able to record what it did.
+                ...(outcome.previousHubId === null
+                  ? {}
+                  : { notice: describeIdentityReplacement(outcome.previousHubId) }),
+              }),
+            );
             return;
           }
           if (!outcome.adopted) {
@@ -734,8 +776,24 @@ function runAdopt(argv: string[]): void {
 /** `hub registry backup` — point-in-time copies of the registry, a further consent. */
 function runBackup(argv: string[]): void {
   const subs = new Set(["enable", "disable", "create", "ls", "rm"]);
-  const sub = argv[0] && subs.has(argv[0]) ? argv[0] : "ls";
-  const rest = argv[0] && subs.has(argv[0]) ? argv.slice(1) : argv;
+  /**
+   * A typo is REFUSED, not silently treated as `ls`.
+   *
+   * Defaulting an unrecognised word to `ls` made `backup enabel` a network call that
+   * listed backups — doing something the person did not ask for, against a paid service,
+   * and reporting success. A bare `backup` still means `ls`, because that is a choice
+   * rather than a mistake.
+   */
+  const first = argv[0];
+  if (first !== undefined && !first.startsWith("-") && !subs.has(first)) {
+    throw new StapleError(
+      "validation",
+      `Unknown backup subcommand "${first}". ` +
+        "usage: staple hub registry backup [enable|disable|create|ls|rm <backupId>]",
+    );
+  }
+  const sub = first && subs.has(first) ? first : "ls";
+  const rest = first && subs.has(first) ? argv.slice(1) : argv;
 
   const { values, positionals } = parseArgs({
     args: rest,
@@ -846,17 +904,48 @@ function runRestore(argv: string[]): void {
   const home = stapleHome();
   const { hub } = withHub((h) => requireHubId(h, "restore into"));
 
-  if (!json && values.yes !== true) {
-    console.log("Restoring rewinds the registry ON THE SERVICE to this backup.");
-    console.log("  - the service moves to a new epoch; work published since is discarded");
-    console.log("  - a pre-restore copy is taken first, and this prints its id");
-    console.log("  - your local hub is only changed if you pass --apply");
-    if (!(isInteractive() && confirm(`\nRestore from ${target}?`, { default: false }))) {
-      console.error(
-        isInteractive()
-          ? "\nDeclined. Nothing was changed, here or on the service."
-          : "\nNothing was changed. Re-run with --yes to restore.",
-      );
+  /**
+   * The gate is OUTSIDE `!json`, and this is the instance that mattered most.
+   *
+   * It used to be `if (!json && values.yes !== true)`, so `restore <id> --json` skipped
+   * the whole disclosure AND the confirmation and went straight to the remote restore —
+   * which moves the epoch, discards everything published since the backup, and affects
+   * every machine on that hub id. Only the unrelated backup-consent check stood in the
+   * way, and anyone who has taken a backup has that consent. A destructive, fleet-wide,
+   * one-keystroke operation with no confirmation is precisely what `cloud.ts` refuses to
+   * let `disconnect --purge` be.
+   *
+   * `--apply` gates only the LOCAL half, and the wording says so: by the time an
+   * adoption is shown the service has already moved.
+   */
+  const restoreNotice = [
+    "Restoring rewinds the registry ON THE SERVICE to this backup.",
+    "  - the service moves to a new epoch; work published since is discarded",
+    "  - every machine on this hub id is affected, not just this one",
+    "  - a pre-restore copy is taken first, and this prints its id",
+    "  - your local hub is only changed if you pass --apply",
+  ];
+  if (values.yes !== true) {
+    if (!json) for (const line of restoreNotice) console.log(line);
+    const agreed =
+      !json && isInteractive() && confirm(`\nRestore from ${target}?`, { default: false });
+    if (!agreed) {
+      if (json) {
+        console.error(
+          JSON.stringify({
+            code: "validation",
+            message: `Restoring needs --yes. ${restoreNotice.join(" ")}`,
+            retryable: false,
+            notice: restoreNotice,
+          }),
+        );
+      } else {
+        console.error(
+          isInteractive()
+            ? "\nDeclined. Nothing was changed, here or on the service."
+            : "\nNothing was changed. Re-run with --yes to restore.",
+        );
+      }
       process.exitCode = 2;
       hub.close();
       return;

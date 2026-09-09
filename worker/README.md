@@ -353,6 +353,57 @@ The hub's log contains only `registration` and `crossLink` operations, which req
   than filtering the registry entities out of it. Filtering would advance the cursor
   past operations that were never delivered.
 
+### If a registry operation lands in a WORKSPACE's log
+
+This Worker has no notion of hub-versus-workspace repository, deliberately — a flag would
+be a second thing to keep in step with what the log actually contains. So a `registration`
+or `crossLink` pushed at a workspace's `repoId` **is accepted**, and from that moment every
+protocol-1 client of that workspace is refused at `/ops` and `/snapshot` with a
+non-retryable 426.
+
+It is not a privilege boundary: it needs a valid device credential for the target, and
+anyone holding one can already push arbitrary operations or restore an old backup. The
+client closes both reachable routes to it — `adoptRegistryIdentity` refuses a hub id that
+names a known workspace or an existing connection, and `push` refuses a batch mixing the
+two vocabularies — so reaching this state now takes deliberate effort.
+
+What makes it worth a recipe is that it is **irreversible by the one remedy a user has**.
+A restore materialises the fold into the new epoch, so the protocol-2 entity is
+re-materialised and survives. Rolling the epoch does not remove it.
+
+The remedy is operator-side, and it is surgical rather than a purge. Identify the rows:
+
+```bash
+npx wrangler d1 execute staple-sync-dev --remote -c wrangler.local.toml --command \
+  "SELECT epoch, seq, entity, entity_id FROM ops
+    WHERE repo_id = '<workspace repo id>' AND entity IN ('registration','crossLink')
+    ORDER BY epoch, seq;"
+```
+
+Then delete exactly those, in every epoch they appear in:
+
+```sql
+DELETE FROM ops
+ WHERE repo_id = '<workspace repo id>'
+   AND entity IN ('registration', 'crossLink');
+```
+
+`seq` gaps are legal and expected — a slot reserved for a deduplicated operation already
+goes unused, and `WHERE seq > cursor` is gap-tolerant by construction — so removing rows
+does not disturb cursors, and `repos.last_seq` is deliberately left alone so no `seq` is
+ever reused. Devices that had already applied the operations are unaffected: they are the
+only clients that could read them, and a protocol-2 client tolerates their absence.
+
+**Do this before taking a backup you intend to keep**, because a backup captured while the
+rows are present carries them into every future restore. If one already exists, delete that
+backup row too — `DELETE FROM backups WHERE repo_id = '…' AND backup_id = '…'` — rather
+than restoring from it.
+
+Only if the rows cannot be identified is the answer `DELETE /v1/repos/{repoId}` (purge) and
+a re-provision from a device that still holds the data. That is the outcome this recipe
+exists to avoid; "no remedy short of a purge" with no documented purge is the difference
+between an incident and a dead repository.
+
 ### Never
 
 No `wrangler delete`, no `wrangler d1 delete`, no destructive subcommand against any

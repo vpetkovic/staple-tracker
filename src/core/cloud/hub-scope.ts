@@ -178,6 +178,79 @@ export function describeWorkspace(entry: WorkspaceEntry): HubWorkspace {
   };
 }
 
+/** What {@link reconcileRepositoryIds} changed, and what it could not establish. */
+export interface RegistryIdentityReconciliation {
+  /** Rows whose `repository_id` was filled in or corrected from the manifest. */
+  readonly updated: readonly { slug: string; repositoryId: string }[];
+  /** Rows whose manifest is present and unreadable. Reported, never treated as absent. */
+  readonly problems: readonly { slug: string; problem: string }[];
+  /**
+   * Identities held by MORE THAN ONE row, after reconciliation.
+   *
+   * Reported rather than resolved, which is what hub migration 003 asks for: a non-null
+   * duplicate is *"a real problem, but it is a problem to REPORT"*. And it is not always
+   * a problem at all — two clones or two `git worktree` checkouts of one repository
+   * legitimately share an identity, which `findRepositoryIdCollisions` exists to support.
+   */
+  readonly duplicates: readonly { repositoryId: string; slugs: readonly string[] }[];
+}
+
+/**
+ * Fill in `workspaces.repository_id` from each workspace's manifest.
+ *
+ * ## Why this exists at all
+ *
+ * The column is the adoption key — every decision in `hub-registry.ts` turns on it — and
+ * until STA-283 nothing on a user-facing path wrote it. `openWorkspace` now records it
+ * when it opens a workspace, which covers every workspace anything touches. This covers
+ * the rest: a row registered on this machine whose workspace has not been opened since,
+ * which is the state a machine is in right after `staple discover`, or after a restore
+ * that landed absent rows and a human then cloned one of them.
+ *
+ * ## The manifest is the authority, and a null never overwrites a value
+ *
+ * `repo-identity.ts` is emphatic that the tracked `.staple/repository.json` is the copy
+ * that survives cloning, so it wins over anything cached in the hub. But an unreadable
+ * manifest must NOT clear a column that already holds an id — *"unreadable must never
+ * degrade into absent"* — because a row reported as having no identity is one a human
+ * will happily `staple init` over, minting a second id for a repository that already had
+ * one. So this only ever writes a non-null value, and reports the rest.
+ *
+ * Opens no workspace database: it reads manifests, through {@link describeWorkspace},
+ * which is the whole reason that function resolves identity the way it does.
+ */
+export function reconcileRepositoryIds(hub: Hub): RegistryIdentityReconciliation {
+  const updated: { slug: string; repositoryId: string }[] = [];
+  const problems: { slug: string; problem: string }[] = [];
+
+  for (const entry of hub.list()) {
+    const resolved = describeWorkspace(entry);
+    if (resolved.problem !== null) {
+      problems.push({ slug: entry.slug, problem: resolved.problem });
+      continue;
+    }
+    if (resolved.repositoryId === null) continue;
+    if (resolved.repositoryId === entry.repositoryId) continue;
+    hub.recordRepositoryId(entry.slug, resolved.repositoryId);
+    updated.push({ slug: entry.slug, repositoryId: resolved.repositoryId });
+  }
+
+  // Read back, so duplicates are computed from what the rows now hold rather than from
+  // what they held before the writes above.
+  const byIdentity = new Map<string, string[]>();
+  for (const entry of hub.list()) {
+    if (entry.repositoryId === null) continue;
+    const slugs = byIdentity.get(entry.repositoryId) ?? [];
+    slugs.push(entry.slug);
+    byIdentity.set(entry.repositoryId, slugs);
+  }
+  const duplicates = [...byIdentity.entries()]
+    .filter(([, slugs]) => slugs.length > 1)
+    .map(([repositoryId, slugs]) => ({ repositoryId, slugs }));
+
+  return { updated, problems, duplicates };
+}
+
 /**
  * Why a fan-out will not act on a workspace.
  *

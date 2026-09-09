@@ -28,6 +28,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Hub } from "../src/core/hub.js";
+import { initWorkspace } from "../src/core/workspace.js";
 import { StapleError } from "../src/core/types.js";
 import { cloudCodeOf, cloudError } from "../src/core/cloud/client.js";
 import {
@@ -527,9 +528,17 @@ describe("what the diff will and will not emit", () => {
     const diff = diffRegistry(registry, new Map());
     expect(diff.operations).toEqual([]);
     expect(diff.unpublishable).toHaveLength(1);
-    // A sentence, naming the workspace and the remedy — not a code and not a silence.
+    /**
+     * A sentence naming the workspace and a remedy THAT WORKS — not a code, not a silence,
+     * and not the old wording, which said "connect that workspace, or run `staple init` in
+     * it" to a person who had already done both. Nothing populated the column those
+     * remedies were supposed to fill; the identity is recorded when staple OPENS the
+     * workspace, so that is what the message now says.
+     */
     expect(diff.unpublishable[0]!.reason).toContain("nameless");
-    expect(diff.unpublishable[0]!.reason).toContain("staple init");
+    expect(diff.unpublishable[0]!.reason).toContain("next time it OPENS that workspace");
+    expect(diff.unpublishable[0]!.reason).toContain("staple ls --ws nameless");
+    expect(diff.unpublishable[0]!.reason).not.toContain("staple init");
   });
 
   it("NEVER deletes a registration, even when the workspace is gone locally", () => {
@@ -696,6 +705,103 @@ describe("what the diff will and will not emit", () => {
   });
 });
 
+describe("a workspace initialised the ordinary way is publishable", () => {
+  /**
+   * THE regression this file was missing, and the reason it was missing is the finding.
+   *
+   * Every other test here, and the live script, called `hub.recordRepositoryId(...)`
+   * directly — a hub-internal API no user-facing path invokes. So they proved the wire
+   * works when `workspaces.repository_id` is populated, and nothing populated it:
+   * `Hub.register()` runs BEFORE the manifest exists, and `performConnect` never touched
+   * the column. On a real machine `publish` uploaded an empty registry and reported every
+   * workspace unpublishable, naming remedies the person had already performed.
+   *
+   * So this test uses `openWorkspace` — the real path every command goes through — and
+   * calls `recordRepositoryId` nowhere. If the column stops being written, it fails.
+   */
+  it("publishes a workspace created by openWorkspace, with no hub-internal writes", async () => {
+    const home = mkdtempSync(join(tmpdir(), "staple-hubreal-"));
+    dirs.push(home);
+    const previous = process.env.STAPLE_HOME;
+    process.env.STAPLE_HOME = home;
+    try {
+      // A workspace brought up exactly as `staple init` brings one up.
+      const repoDir = join(home, "projects", "alpha");
+      mkdirSync(repoDir, { recursive: true });
+      // `initWorkspace` is what `staple init` calls, and it is the function that now
+      // records the identity on the hub row after reconciling it from the manifest.
+      const opened = initWorkspace({ dir: repoDir, kind: "repo" });
+      const identity = opened.repository.repositoryId;
+      opened.store.db.close();
+      expect(identity).toMatch(/^[0-9a-f-]{36}$/);
+
+      const hub = Hub.open();
+      const hubId = hub.hubId();
+      const server = serverFor(hubId);
+      connect(home, hubId, server);
+      setRegistryConsent(home, hubId, true, REGISTRY_DISCLOSURE);
+
+      // The column the whole feature keys on, written by the ordinary open.
+      expect(hub.list().map((r) => r.repositoryId)).toEqual([identity]);
+
+      const report = await publishRegistry(hub, home, { fetchImpl: server.fetch });
+      expect(report.unpublishable).toEqual([]);
+      expect(report.published).toBe(1);
+      expect(report.applied).toBe(1);
+      expect(server.ops.map((o) => o.entityId)).toEqual([identity]);
+
+      // And it reads back as the workspace it is, which is what a restore depends on.
+      const readBack = await readPublishedRegistry(home, hubId, { fetchImpl: server.fetch });
+      expect(readBack.registry.workspaces).toEqual([
+        expect.objectContaining({ repositoryId: identity, slug: "alpha" }),
+      ]);
+      hub.close();
+    } finally {
+      if (previous === undefined) delete process.env.STAPLE_HOME;
+      else process.env.STAPLE_HOME = previous;
+    }
+  }, 30_000);
+
+  it("parks an identity two rows share rather than flip-flopping the published name", () => {
+    /**
+     * Two rows sharing a `repositoryId` are ONE entity on the wire, so publishing both
+     * emits two operations on one entity and the published slug alternates on every pass —
+     * `published: 1, upToDate: false` for ever, one operation appended to a paid log each
+     * time. Migration 003 asks for it to be REPORTED, and #92 documents two clones or two
+     * worktrees of one repository as legitimate, so neither is published and both are named.
+     */
+    const shared = "11111111-1111-4111-8111-111111111111";
+    const registry: HubRegistryPayload = {
+      format: REGISTRY_PAYLOAD_FORMAT,
+      hubId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      capturedAt: "2026-09-09T12:00:00.000Z",
+      workspaces: [
+        { repositoryId: shared, slug: "checkout-a", prefix: "CKA", kind: "repo", addedAt: "2026-01-01T00:00:00.000Z" },
+        { repositoryId: shared, slug: "checkout-b", prefix: "CKB", kind: "repo", addedAt: "2026-01-02T00:00:00.000Z" },
+        { repositoryId: "22222222-2222-4222-8222-222222222222", slug: "solo", prefix: "SOL", kind: "repo", addedAt: "2026-01-03T00:00:00.000Z" },
+      ],
+      crossLinks: [],
+    };
+
+    const diff = diffRegistry(registry, new Map(), [
+      { repositoryId: shared, slugs: ["checkout-a", "checkout-b"] },
+    ]);
+
+    // Neither of the sharing rows is published; the unrelated one still is.
+    expect(diff.operations.map((o) => o.entityId)).toEqual([
+      "22222222-2222-4222-8222-222222222222",
+    ]);
+    expect(diff.unpublishable.map((u) => u.entry.slug).sort()).toEqual([
+      "checkout-a",
+      "checkout-b",
+    ]);
+    // Both reasons name the OTHER row, and say the sharing is legitimate rather than broken.
+    expect(diff.unpublishable[0]!.reason).toContain('"checkout-b"');
+    expect(diff.unpublishable[0]!.reason).toContain("legitimately share an identity");
+    expect(diff.unpublishable[0]!.reason).toContain("staple hub unregister");
+  });
+});
+
 describe("a value that returns to an earlier value still lands", () => {
   it("survives alpha -> beta -> alpha -> beta without a collision", async () => {
     /**
@@ -827,7 +933,7 @@ describe("a machine may only retract an edge it could have had", () => {
       .toEqual([]);
   });
 
-  it("DOES retract an edge whose two workspaces are both here", () => {
+  it("DOES retract an edge whose two workspaces are the same repositories here", () => {
     // The negative tests above would also pass if retraction never happened at all.
     const hubId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
     const full = withEdge(hubId);
@@ -838,6 +944,57 @@ describe("a machine may only retract an edge it could have had", () => {
     expect(diff.operations).toHaveLength(1);
     expect((diff.operations[0]!.payload as { present: boolean }).present).toBe(false);
     expect(diff.retained).toEqual([]);
+  });
+
+  it("does NOT retract on a slug match when the identities differ", () => {
+    /**
+     * REGRESSION, and the first version of this rule was wrong in exactly this way.
+     *
+     * The floor tested `localSlugs.has(blockerWs) && localSlugs.has(blockedWs)` — a NAME
+     * match. This module's own header says why that fails: *"slugs and prefixes are NAMES,
+     * and names are exactly what two machines can independently disagree about; the
+     * identity is the only thing that means the same thing on both."* Slugs derive from
+     * directory names, so two machines holding the same repositories match by DEFAULT, and
+     * a machine that had cloned both but never applied an adopt retracted the other
+     * machine's edge on its first publish.
+     */
+    const hubId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const full = withEdge(hubId);
+    const published = publishedStateOf(foldOperations(diffRegistry(full, new Map()).operations));
+
+    // Same slugs, DIFFERENT repositories, and no local edge — the shape a machine is in
+    // when it has its own "one" and "two" directories and has never adopted.
+    const impostor: HubRegistryPayload = {
+      ...full,
+      workspaces: [
+        { repositoryId: "99999999-9999-4999-8999-999999999999", slug: "one", prefix: "ONE", kind: "repo", addedAt: "2026-01-01T00:00:00.000Z" },
+        { repositoryId: "88888888-8888-4888-8888-888888888888", slug: "two", prefix: "TWO", kind: "repo", addedAt: "2026-01-01T00:00:00.000Z" },
+      ],
+      crossLinks: [],
+    };
+    const diff = diffRegistry(impostor, published);
+
+    expect(diff.operations.filter((o) => o.entity === CROSS_LINK_ENTITY)).toEqual([]);
+    expect(diff.retained).toHaveLength(1);
+    expect(diff.retained[0]!.reason).toContain("DIFFERENT repository here");
+    expect(diff.retained[0]!.reason).toContain("a slug is a name");
+  });
+
+  it("does not retract when this machine has not recorded the identity", () => {
+    // The state a machine is in before anything opens the workspace: slug present,
+    // identity null. Absence of an edge is not a removal from a machine that cannot yet
+    // say which repository it is holding.
+    const hubId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const full = withEdge(hubId);
+    const published = publishedStateOf(foldOperations(diffRegistry(full, new Map()).operations));
+    const unresolved: HubRegistryPayload = {
+      ...full,
+      workspaces: full.workspaces.map((w) => ({ ...w, repositoryId: null })),
+      crossLinks: [],
+    };
+    const diff = diffRegistry(unresolved, published);
+    expect(diff.operations.filter((o) => o.entity === CROSS_LINK_ENTITY)).toEqual([]);
+    expect(diff.retained[0]!.reason).toContain("has not recorded");
   });
 
   it("reports a tombstone from an older build instead of looping on it", () => {
@@ -1109,7 +1266,7 @@ describe("publishing against a service with the worker's semantics", () => {
     hub.close();
   });
 
-  it("is refused by a protocol-1 service, and says which version it needed", async () => {
+  it("is refused by a protocol-1 service, before anything is sent", async () => {
     const { home, hub } = machine();
     const hubId = hub.hubId();
     // A Worker that has not been redeployed. This is the honest failure for a machine
@@ -1122,6 +1279,15 @@ describe("publishing against a service with the worker's semantics", () => {
     const error = await publishRegistry(hub, home, { fetchImpl: server.fetch }).catch((e) => e);
     expect(cloudCodeOf(error)).toBe("protocol_unsupported");
     expect(server.ops).toEqual([]);
+    /**
+     * The title used to promise "and says which version it needed" while asserting only
+     * the code. It does not, and cannot from here: this refusal comes from the header
+     * range check in `negotiateProtocol`, which knows nothing about entities. The version
+     * an OPERATION needed is reported by `assertServable` on the read paths and by
+     * `connectHubRegistry`'s pre-flight — which is where a person actually meets this, and
+     * which names redeployment. Asserted there rather than promised here.
+     */
+    expect((error as { detail?: Record<string, unknown> }).detail?.requiredProtocol).toBeUndefined();
     hub.close();
   });
 

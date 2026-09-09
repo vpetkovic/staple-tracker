@@ -636,6 +636,42 @@ export class FakeSyncServer {
     // Validated WHOLE, before a single row is written.
     const ops = body.ops.map((raw, index) => this.validate(raw, index, session, protocol));
 
+    /**
+     * A batch may not mix the registry vocabulary with the workspace one — mirroring
+     * `worker/src/push.ts`. A hub's log holds only registry entities and a workspace's
+     * holds only the others, so a mixed batch is always a bug.
+     */
+    const registryCount = ops.filter((op) => REGISTRY_ENTITIES.has(op.entity)).length;
+    if (registryCount > 0 && registryCount < ops.length) {
+      throw new ServerError(
+        400,
+        "validation",
+        "a batch may not mix hub registry entities with workspace entities",
+      );
+    }
+
+    /**
+     * A repeated `opId` within one batch is refused, not absorbed — mirroring
+     * `worker/src/push.ts`.
+     *
+     * This is the one worth having most. The fake answers a duplicate with the ORIGINAL
+     * seq and `status: "duplicate"`, which is the exact presentation of both operation-id
+     * bugs in `hub-registry-service.ts`: accepted, acknowledged, never applied. A
+     * regression that reintroduced a colliding id inside one batch would have looked like
+     * success here and been a 400 in production.
+     */
+    const seenIds = new Set<string>();
+    for (const [index, op] of ops.entries()) {
+      if (seenIds.has(op.opId)) {
+        throw new ServerError(
+          400,
+          "validation",
+          `ops[${index}].opId is repeated within this batch`,
+        );
+      }
+      seenIds.add(op.opId);
+    }
+
     if (ops.length === 0) {
       return this.json(200, {
         protocol: 1,
@@ -744,6 +780,20 @@ export class FakeSyncServer {
         400,
         "validation",
         `${at}.verb '${verb}' is never valid for a registry entity`,
+      );
+    }
+    /**
+     * `delete` too — mirroring `worker/src/envelope.ts`.
+     *
+     * A tombstone on a content-derived key can never be undone, so retraction is a field.
+     * Un-mirrored, a regression emitting `verb: "delete"` instead of `present: false` went
+     * GREEN here and 400'd the whole batch in production.
+     */
+    if (REGISTRY_ENTITIES.has(entity) && verb === "delete") {
+      throw new ServerError(
+        400,
+        "validation",
+        `${at}.verb 'delete' is never valid for a registry entity — a retraction is a field`,
       );
     }
 

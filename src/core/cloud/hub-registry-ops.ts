@@ -387,35 +387,82 @@ export interface RegistryDiff {
  * shared registry converged not to last-write-wins but to the **intersection** of the
  * machines' edges.
  *
- * The rule is the mirror image of adoption's own: **an edge is retractable only when
- * both of its workspaces are registered on this machine.** Then absence is a statement
- * this machine is entitled to make. An edge naming a workspace it does not have is not
- * its business, is left exactly as published, and is REPORTED in
- * {@link RegistryDiff.retained} rather than dropped silently — because a person who
- * expected a removal to propagate needs to know it did not.
+ * The rule is the mirror image of adoption's own, and it keys on IDENTITY: **an edge is
+ * retractable only when, for both of its endpoint slugs, the workspace this machine has
+ * under that slug is the same repository the SERVICE has a registration for.** Then
+ * absence is a statement this machine is entitled to make.
+ *
+ * Keying on the slug alone — which the first version did — grants edge-deletion authority
+ * on a name match, and this module's header says exactly why that fails: *"slugs and
+ * prefixes are NAMES, and names are exactly what two machines can independently disagree
+ * about; the identity is the only thing that means the same thing on both."* Slugs come
+ * from directory names, so two machines holding the same repositories match by default,
+ * and a machine that had cloned both but never applied an adopt destroyed the other's
+ * edge on its first publish.
+ *
+ * Anything this machine has no standing on is left exactly as published and REPORTED in
+ * {@link RegistryDiff.retained}, because a person who expected a removal to propagate
+ * needs to know it did not. See {@link edgeStanding}.
  */
 export function diffRegistry(
   local: HubRegistryPayload,
   published: Map<string, PublishedState>,
+  /**
+   * Identities held by more than one local row. Parked rather than published.
+   *
+   * Two rows sharing a `repositoryId` are ONE entity on the wire, so publishing both
+   * emits two operations on one entity and the published slug flips between them on every
+   * pass — `published: 1, upToDate: false` for ever, appending an operation to a paid log
+   * each time. Hub migration 003 asks for exactly this handling: a non-null duplicate is
+   * *"a real problem, but it is a problem to REPORT"*. And it is not always a problem —
+   * two clones or two `git worktree` checkouts of one repository legitimately share an
+   * identity — so the honest move is to publish neither and name both, rather than pick
+   * one and be silently wrong half the time.
+   */
+  duplicateIdentities: readonly { repositoryId: string; slugs: readonly string[] }[] = [],
 ): RegistryDiff {
   assertFormat(local.format);
+  const duplicated = new Map(duplicateIdentities.map((d) => [d.repositoryId, d.slugs]));
 
   const operations: RegistryOperation[] = [];
   const unpublishable: UnpublishableEntry[] = [];
   const retained: RetainedEdge[] = [];
-  /** The workspaces this machine actually has. The basis for retracting an edge. */
-  const localSlugs = new Set(local.workspaces.map((w) => w.slug));
 
   for (const entry of local.workspaces) {
     if (entry.repositoryId === null) {
       unpublishable.push({
         entry,
         reason:
-          `"${entry.slug}" has not recorded a sync identity, so there is no key another machine ` +
-          "could recognise it by. It is left out of the published registry rather than given an " +
-          "id here: an id minted on this machine would not be the one the repository itself " +
-          "records later, and the registry would then hold two rows for one workspace. Connect " +
-          `that workspace, or run \`staple init\` in it, and publish again.`,
+          `"${entry.slug}" has no sync identity recorded against it, so there is no key another ` +
+          "machine could recognise it by. It is left out of the published registry rather than " +
+          "given an id here: an id minted on this machine would not be the one the repository " +
+          "itself records later, and the registry would then hold two rows for one workspace. " +
+          "Staple records the identity the next time it OPENS that workspace, so run any command " +
+          `against it — \`staple ls --ws ${entry.slug}\` is enough — and publish again. If that ` +
+          "does not fix it, either the workspace's database is not on this machine or its " +
+          "`.staple/repository.json` is present and unreadable; publish reports which.",
+      });
+      continue;
+    }
+
+    /**
+     * An identity two local rows share is parked, not published. See the parameter.
+     *
+     * Checked BEFORE the payload is built, so nothing about a duplicated identity reaches
+     * an operation — the flip-flop was the published slug changing on every pass.
+     */
+    const sharing = duplicated.get(entry.repositoryId);
+    if (sharing !== undefined) {
+      const others = sharing.filter((slug) => slug !== entry.slug).map((slug) => `"${slug}"`);
+      unpublishable.push({
+        entry,
+        reason:
+          `"${entry.slug}" shares the sync identity ${entry.repositoryId} with ` +
+          `${others.join(", ")} on this machine, and one identity is one entry in the registry — ` +
+          "publishing both would make the published name flip between them on every pass. Two " +
+          "clones or two git worktrees of one repository legitimately share an identity, so " +
+          "nothing was changed and nothing is wrong with either row. Unregister the ones you do " +
+          "not want listed with `staple hub unregister`, and the survivor publishes next pass.",
       });
       continue;
     }
@@ -497,19 +544,32 @@ export function diffRegistry(
     if (held.state.present === false) continue;
 
     /**
-     * The floor. Absence is only a removal when this machine could have HAD the edge.
-     * See the function comment — without this, one parked prefix or an unapplied adopt
-     * silently retracts edges this machine has never been in a position to know about.
+     * The floor, keyed on IDENTITY rather than on the slug.
+     *
+     * The first version tested `localSlugs.has(blockerWs) && localSlugs.has(blockedWs)`,
+     * which granted edge-deletion authority on a NAME match — and this module's own header
+     * is emphatic about why that is wrong: *"slugs and prefixes are NAMES, and names are
+     * exactly what two machines can independently disagree about; the identity is the only
+     * thing that means the same thing on both."* Slugs derive from directory names, so two
+     * machines holding the same repositories match **by default**, and a machine that had
+     * cloned both repositories but never applied an adopt would retract the other machine's
+     * edge on its first publish. Reproduced.
+     *
+     * So the test is: for each endpoint slug, does the workspace THIS machine has under
+     * that slug carry the same `repositoryId` as the published `registration` for it? Both
+     * sides are already in hand — the local registry and the same snapshot this diff reads
+     * — so it costs no new state and no round trip. If the answer is no for either end,
+     * the machines are talking about different workspaces and this one has no standing.
      */
     const names = readEdgeNames(held);
-    if (names === null || !localSlugs.has(names.blockerWs) || !localSlugs.has(names.blockedWs)) {
+    const standing = names === null ? null : edgeStanding(names, local, published);
+    if (names === null || standing !== null) {
       retained.push({
         entityId: held.entityId,
         reason:
           `The published link ${names?.blockerIdentifier ?? held.entityId} -> ` +
-          `${names?.blockedIdentifier ?? "?"} names a workspace this machine does not have ` +
-          "registered, so its absence here is not a statement that it was removed. Left exactly " +
-          "as published.",
+          `${names?.blockedIdentifier ?? "?"} ${standing ?? "could not be read"}, so its ` +
+          "absence here is not a statement that it was removed. Left exactly as published.",
       });
       continue;
     }
@@ -538,6 +598,57 @@ export function diffRegistry(
     retained,
     upToDate: operations.length === 0,
   };
+}
+
+/**
+ * May this machine retract this published edge? `null` means yes; a phrase means no.
+ *
+ * The phrase is returned rather than a boolean because the caller has to say WHY in a
+ * sentence a person can act on, and "which end, and how it differs" is the whole content.
+ *
+ * For each endpoint slug: find the workspace this machine has under that slug, find the
+ * `registration` the SERVICE holds for that slug, and require the identities to match. A
+ * slug the local machine does not have at all, or one the service does not have a
+ * registration for, is equally not this machine's to speak about.
+ */
+function edgeStanding(
+  names: { blockerWs: string; blockedWs: string },
+  local: HubRegistryPayload,
+  published: Map<string, PublishedState>,
+): string | null {
+  const publishedIdentityFor = (slug: string): string | null => {
+    for (const held of published.values()) {
+      if (held.entity !== REGISTRATION_ENTITY) continue;
+      if (held.deleted) continue;
+      if (held.state.slug === slug) return held.entityId;
+    }
+    return null;
+  };
+
+  for (const [end, slug] of [
+    ["blocker", names.blockerWs],
+    ["blocked", names.blockedWs],
+  ] as const) {
+    const mine = local.workspaces.find((w) => w.slug === slug);
+    if (mine === undefined) {
+      return `names a ${end} workspace "${slug}" this machine does not have registered`;
+    }
+    if (mine.repositoryId === null) {
+      return `names a ${end} workspace "${slug}" whose sync identity this machine has not recorded`;
+    }
+    const theirs = publishedIdentityFor(slug);
+    if (theirs === null) {
+      return `names a ${end} workspace "${slug}" the service has no registration for`;
+    }
+    if (theirs !== mine.repositoryId) {
+      return (
+        `names a ${end} workspace "${slug}" that is a DIFFERENT repository here (${mine.repositoryId}) ` +
+        `from the one the service has under that name (${theirs}) — a slug is a name, and two ` +
+        "machines can disagree about a name"
+      );
+    }
+  }
+  return null;
 }
 
 /**

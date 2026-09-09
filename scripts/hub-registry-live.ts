@@ -45,6 +45,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hub } from "../src/core/hub.js";
+import { initWorkspace } from "../src/core/workspace.js";
 import { buildConnectPreview } from "../src/core/cloud/preview.js";
 import { REGISTRY_DISCLOSURE } from "../src/core/cloud/hub-registry.js";
 import {
@@ -77,7 +78,56 @@ function required(name: string): string {
   return value.trim();
 }
 
+/**
+ * Refuse to run against a hub id that this machine's own hub is using.
+ *
+ * The script publishes, retracts edges and RESTORES — which rewinds the registry on the
+ * service and affects every machine on that hub id. Pointed at a real hub by a copied
+ * command line, it would do all of that to somebody's actual workspace list.
+ */
+function refuseRealHub(): void {
+  const previous = process.env.STAPLE_HOME;
+  delete process.env.STAPLE_HOME;
+  try {
+    const hub = Hub.open();
+    const mine = hub.storedHubId();
+    hub.close();
+    if (mine === hubId) {
+      console.error(
+        `STAPLE_HUB_ID is this machine's REAL hub identity. This script publishes, retracts ` +
+          "and restores, so it will not run against it. Provision a throwaway hub id and use " +
+          "that. Nothing was sent.",
+      );
+      process.exit(2);
+    }
+  } catch {
+    // No hub on this machine at all. Nothing to protect.
+  } finally {
+    if (previous === undefined) delete process.env.STAPLE_HOME;
+    else process.env.STAPLE_HOME = previous;
+  }
+}
+refuseRealHub();
+
 const homes: string[] = [];
+
+/**
+ * Every request body this process actually sent, captured at the transport.
+ *
+ * The path assertion at the end used to serialise `diffRegistry(exportRegistry(...))`,
+ * which cannot contain a path for ANY input — `RegistryEntry` has no path field, so
+ * `exportRegistry` has already dropped it. The tautology moved one function earlier when
+ * it was "fixed" rather than being removed.
+ *
+ * The only honest subject is what left the process. This wraps the global `fetch`, so the
+ * bytes inspected are the bytes the deployed Worker received, from the machine whose hub
+ * rows carry REAL absolute paths.
+ */
+const sentBodies: string[] = [];
+const recordingFetch: typeof fetch = async (input, init) => {
+  if (typeof init?.body === "string") sentBodies.push(init.body);
+  return globalThis.fetch(input as Parameters<typeof fetch>[0], init);
+};
 
 /** A machine: its own staple home and its own hub, with the shared registry identity. */
 function machine(label: string): { home: string; hub: Hub } {
@@ -91,13 +141,25 @@ function machine(label: string): { home: string; hub: Hub } {
   return { home, hub };
 }
 
-function register(home: string, hub: Hub, slug: string, prefix: string, repositoryId: string): void {
+/**
+ * A workspace brought up the way a person brings one up.
+ *
+ * `initWorkspace` is what `staple init` calls. It creates the database, registers the hub
+ * row, reconciles the identity from the manifest and records it on that row — and there is
+ * **no `hub.recordRepositoryId` call anywhere in this script**, deliberately.
+ *
+ * The previous version wrote that column by hand, so the whole live proof was of a column
+ * nothing populated: `workspaces.repository_id` had no writer on any user-facing path, and
+ * on a real machine `publish` uploaded an empty registry. The script being green was the
+ * evidence that hid it. Returns the identity `initWorkspace` established, so the
+ * assertions can check the wire carried the real one.
+ */
+function register(home: string, slug: string): string {
   const dir = join(home, "ws", slug);
   mkdirSync(dir, { recursive: true });
-  const path = join(dir, "staple.db");
-  writeFileSync(path, "");
-  hub.register({ slug, prefix, path, kind: "repo" });
-  hub.recordRepositoryId(slug, repositoryId);
+  const opened = initWorkspace({ dir, slug, kind: "repo" });
+  opened.store.db.close();
+  return opened.repository.repositoryId;
 }
 
 function step(n: number, what: string): void {
@@ -110,15 +172,18 @@ function safe(value: unknown): string {
 }
 
 async function main(): Promise<void> {
-  const WS_A = "aaaaaaaa-0000-4000-8000-000000000001";
-  const WS_B = "bbbbbbbb-0000-4000-8000-000000000002";
+  // Only the two ABSENT rows need invented ids; the real workspaces get theirs from
+  // `initWorkspace`, which is the whole point of this script no longer faking the column.
   const WS_C = "cccccccc-0000-4000-8000-000000000003";
   const WS_D = "dddddddd-0000-4000-8000-000000000004";
 
   step(1, "connect the hub as a repository");
   const a = machine("first");
-  register(a.home, a.hub, "live-tracker", "LVT", WS_A);
-  register(a.home, a.hub, "live-other", "LVO", WS_B);
+  const trackerId = register(a.home, "live-tracker");
+  const otherId = register(a.home, "live-other");
+  console.log(
+    `identities recorded by initWorkspace: ${safe([trackerId.slice(0, 8), otherId.slice(0, 8)])}`,
+  );
   // A workspace with no identity, so the unpublishable report is exercised for real.
   const nameless = join(a.home, "ws", "live-nameless");
   mkdirSync(nameless, { recursive: true });
@@ -148,7 +213,7 @@ async function main(): Promise<void> {
 
   step(2, "publish the registry (refused first, to prove the consent gates egress)");
   try {
-    await publishRegistry(a.hub, a.home);
+    await publishRegistry(a.hub, a.home, { fetchImpl: recordingFetch });
     console.error("!! published without consent — this is a bug");
     process.exit(1);
   } catch (error) {
@@ -161,7 +226,7 @@ async function main(): Promise<void> {
    */
   console.log(registryDisclosure(endpoint));
   setRegistryConsent(a.home, hubId, true, REGISTRY_DISCLOSURE);
-  const published = await publishRegistry(a.hub, a.home);
+  const published = await publishRegistry(a.hub, a.home, { fetchImpl: recordingFetch });
   console.log(
     safe({
       published: published.published,
@@ -178,7 +243,7 @@ async function main(): Promise<void> {
   );
 
   step(3, "GET /snapshot — read the registry back off the real service");
-  const readBack = await readPublishedRegistry(a.home, hubId);
+  const readBack = await readPublishedRegistry(a.home, hubId, { fetchImpl: recordingFetch });
   console.log(safe(readBack.registry));
 
   step(4, "cross-links: publish, retract, and re-add — the half a delete could not do")
@@ -190,17 +255,23 @@ async function main(): Promise<void> {
    */
   a.hub.registerAbsent({ slug: "live-edge-a", prefix: "LEA", kind: "repo", repositoryId: WS_C });
   a.hub.registerAbsent({ slug: "live-edge-b", prefix: "LEB", kind: "repo", repositoryId: WS_D });
+  /**
+   * These two are `registerAbsent`, which is the one legitimate writer of the column on a
+   * real path — it is how a restore lands a row for a workspace this machine does not have.
+   * They exist so `addCrossLink` has two registered slugs to join without needing two more
+   * workspace databases; the two ABOVE are the ones that prove the ordinary path works.
+   */
   a.hub.addCrossLink("LEA-1", "LEB-2");
-  const withEdge = await publishRegistry(a.hub, a.home);
+  const withEdge = await publishRegistry(a.hub, a.home, { fetchImpl: recordingFetch });
   console.log(`published with edge: ${safe({ published: withEdge.published, applied: withEdge.applied, deduplicated: withEdge.deduplicated })}`);
   console.log(
-    `service edges: ${safe((await readPublishedRegistry(a.home, hubId)).registry.crossLinks.map((l) => `${l.blockerIdentifier}->${l.blockedIdentifier}`))}`,
+    `service edges: ${safe((await readPublishedRegistry(a.home, hubId, { fetchImpl: recordingFetch })).registry.crossLinks.map((l) => `${l.blockerIdentifier}->${l.blockedIdentifier}`))}`,
   );
 
   a.hub.removeCrossLink("LEA-1", "LEB-2");
-  const retracted = await publishRegistry(a.hub, a.home);
+  const retracted = await publishRegistry(a.hub, a.home, { fetchImpl: recordingFetch });
   console.log(`retracted: ${safe({ published: retracted.published, retracted: retracted.retracted, applied: retracted.applied, deduplicated: retracted.deduplicated })}`);
-  const afterRetract = (await readPublishedRegistry(a.home, hubId)).registry.crossLinks.length;
+  const afterRetract = (await readPublishedRegistry(a.home, hubId, { fetchImpl: recordingFetch })).registry.crossLinks.length;
   console.log(`service edges after retract: ${afterRetract}`);
 
   /**
@@ -209,9 +280,9 @@ async function main(): Promise<void> {
    * success — for ever. `present: false` makes it an ordinary field update.
    */
   a.hub.addCrossLink("LEA-1", "LEB-2");
-  const readded = await publishRegistry(a.hub, a.home);
+  const readded = await publishRegistry(a.hub, a.home, { fetchImpl: recordingFetch });
   console.log(`re-added: ${safe({ published: readded.published, applied: readded.applied, deduplicated: readded.deduplicated })}`);
-  const afterReadd = (await readPublishedRegistry(a.home, hubId)).registry.crossLinks;
+  const afterReadd = (await readPublishedRegistry(a.home, hubId, { fetchImpl: recordingFetch })).registry.crossLinks;
   console.log(`service edges after re-add: ${safe(afterReadd.map((l) => `${l.blockerIdentifier}->${l.blockedIdentifier}`))}`);
   const cycleOk = afterRetract === 0 && afterReadd.length === 1 && readded.deduplicated === 0;
   console.log(
@@ -249,12 +320,21 @@ async function main(): Promise<void> {
   setRegistryConsent(b.home, hubId, true, REGISTRY_DISCLOSURE);
   // The identity moves to a new slug — a real second write to one registration, and the
   // case that a content-addressed opId exists to let land.
-  register(b.home, b.hub, "renamed-by-mistake", "RBM", WS_A);
-  b.hub.recordRepositoryId("live-tracker", null);
-  const damaged = await publishRegistry(b.hub, b.home);
+  /**
+   * The damage: machine B publishes a DIFFERENT name for the same repository. Registered
+   * absent under the identity machine A recorded, which is what a second machine holding a
+   * clone under another directory name looks like.
+   */
+  b.hub.registerAbsent({
+    slug: "renamed-by-mistake",
+    prefix: "RBM",
+    kind: "repo",
+    repositoryId: trackerId,
+  });
+  const damaged = await publishRegistry(b.hub, b.home, { fetchImpl: recordingFetch });
   console.log(`damage published: ${safe({ published: damaged.published, updated: damaged.updated })}`);
   console.log(
-    `service now says: ${safe((await readPublishedRegistry(b.home, hubId)).registry.workspaces.map((w) => w.slug))}`,
+    `service now says: ${safe((await readPublishedRegistry(b.home, hubId, { fetchImpl: recordingFetch })).registry.workspaces.map((w) => w.slug))}`,
   );
 
   const c = machine("restorer");
@@ -278,11 +358,29 @@ async function main(): Promise<void> {
   );
 
   step(8, "assertions");
-  const slugs = restored.registry.workspaces.map((w) => w.slug).sort();
-  // All four: the two named workspaces plus the two the cross-link cycle registered.
+  /**
+   * A SUPERSET check, because this script is re-runnable and each run mints new identities.
+   *
+   * Every run creates fresh temporary homes, so `initWorkspace` mints new `repositoryId`s
+   * and publishes new `registration` entities into the same hub log. Two runs against one
+   * seeded hub id therefore leave two registrations per slug — which is correct behaviour
+   * (they ARE different repositories) and made an equality assertion fail on the second
+   * run. Asserting the slugs this run created are PRESENT keeps the script honest without
+   * requiring a freshly provisioned hub id every time.
+   */
+  const slugs = [...new Set(restored.registry.workspaces.map((w) => w.slug))].sort();
   const expected = ["live-edge-a", "live-edge-b", "live-other", "live-tracker"];
-  const ok = JSON.stringify(slugs) === JSON.stringify(expected);
-  console.log(ok ? `PASS — restored ${JSON.stringify(slugs)}` : `FAIL — got ${JSON.stringify(slugs)}, wanted ${JSON.stringify(expected)}`);
+  // The identities on the wire are the ones initWorkspace established, not invented ones.
+  const publishedIds = restored.registry.workspaces.map((w) => w.repositoryId);
+  const realIdsTravelled = publishedIds.includes(trackerId) && publishedIds.includes(otherId);
+  console.log(realIdsTravelled ? "PASS — the identities initWorkspace recorded are the ones published" : "FAIL — published ids do not match what initWorkspace recorded");
+  const missing = expected.filter((slug) => !slugs.includes(slug));
+  const ok = missing.length === 0;
+  console.log(
+    ok
+      ? `PASS — restored every slug this run published ${JSON.stringify(expected)}`
+      : `FAIL — missing ${JSON.stringify(missing)} from ${JSON.stringify(slugs)}`,
+  );
   /**
    * No path in what was PUSHED.
    *
@@ -292,21 +390,30 @@ async function main(): Promise<void> {
    * subject is the operation batch this machine emitted, which is what actually left the
    * process, so that is what is checked here.
    */
-  const { diffRegistry, publishedStateOf } = await import("../src/core/cloud/hub-registry-ops.js");
-  const { exportRegistry } = await import("../src/core/cloud/hub-registry.js");
-  const emitted = JSON.stringify(
-    diffRegistry(exportRegistry(c.hub), publishedStateOf([])).operations,
-  );
-  const leaked = homes.filter((home) => emitted.includes(home));
+  /**
+   * The REQUEST BODIES, not a payload type that structurally cannot hold a path.
+   *
+   * Machine `a` is the one whose hub rows carry real absolute paths — `register()` writes
+   * `join(home, "ws", slug, "staple.db")` — so its pushes are the meaningful subject. The
+   * assertion can fail: if `RegistrationPayload` ever grew a path field, or if a slug were
+   * built from a path, these bytes would contain `homes[0]`.
+   */
+  const pushed = sentBodies.filter((body) => body.includes('"registration"'));
+  if (pushed.length === 0) {
+    console.log("FAIL — captured no push body, so the path assertion proves nothing");
+    process.exit(1);
+  }
+  const leaked = homes.filter((home) => sentBodies.some((body) => body.includes(home)));
   console.log(
     leaked.length === 0
-      ? "PASS — no filesystem path in the operations this machine emits"
+      ? `PASS — no filesystem path in ${sentBodies.length} request bodies actually sent ` +
+          `(${pushed.length} carrying registrations)`
       : `FAIL — leaked ${leaked}`,
   );
 
   b.hub.close();
   c.hub.close();
-  if (!ok || leaked.length > 0 || !cycleOk) process.exit(1);
+  if (!ok || leaked.length > 0 || !cycleOk || !realIdsTravelled) process.exit(1);
 }
 
 main()

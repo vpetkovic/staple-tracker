@@ -384,6 +384,62 @@ describe("status and id", () => {
 
 // ------------------------------------------------------------------- refusals
 
+describe("--json is not a way around any agreement gate", () => {
+  /**
+   * The shape, grepped rather than hunted: `&& !json` wrapping a block that contains BOTH
+   * a disclosure and a `--yes` check. Three instances existed; one was fixed in isolation
+   * and the other two shipped. `runConnect` was the one that had it right all along —
+   * only the printing inside `!json`, the gate outside.
+   */
+  it("`identity` will not replace an identity in machine mode without --yes", () => {
+    adoptIdentity();
+    const other = "88888888-8888-4888-8888-888888888888";
+
+    const refused = staple("hub", "registry", "identity", other, "--json");
+    expect(refused.status).toBe(2);
+    const envelope = JSON.parse(refused.stderr);
+    expect(envelope.previousHubId).toBe(HUB_ID);
+    // The orphan notice was given to me as a hard requirement to state unconditionally.
+    // In machine mode it was not stated at all, and there was no field to carry it.
+    expect(envelope.notice).toContain("stays on the service");
+    expect(envelope.notice).toContain(HUB_ID);
+    // Unchanged.
+    expect(JSON.parse(staple("hub", "registry", "status", "--json").stdout).hubId).toBe(HUB_ID);
+    expect(refused.violations).toEqual([]);
+
+    // With --yes it goes through, and the notice rides on the success too.
+    const done = staple("hub", "registry", "identity", other, "--json", "--yes");
+    expect(done.status).toBe(0);
+    const result = JSON.parse(done.stdout);
+    expect(result).toMatchObject({ hubId: other, adopted: true, previousHubId: HUB_ID });
+    expect(result.notice).toContain("stays on the service");
+  }, 120_000);
+
+  it("`restore` will not rewind the service in machine mode without --yes", () => {
+    /**
+     * The most dangerous of the three. `restore <id> --json` skipped the entire
+     * "rewinds the registry ON THE SERVICE / the service moves to a new epoch; work
+     * published since is discarded" screen AND the confirmation, and went straight to the
+     * remote restore — which affects every machine on that hub id. Only the unrelated
+     * backup-consent check stood in the way, and anyone who has taken a backup has that.
+     *
+     * Backup consent is GRANTED here, deliberately, so the test exercises the state a real
+     * user is in rather than one where an unrelated gate hides the hole.
+     */
+    adoptIdentity();
+    connectHub({ backup: true });
+
+    const refused = staple("hub", "registry", "restore", "some-backup-id", "--json");
+    expect(refused.status).toBe(2);
+    const envelope = JSON.parse(refused.stderr);
+    expect(envelope.notice.join(" ")).toContain("moves to a new epoch");
+    expect(envelope.notice.join(" ")).toContain("every machine on this hub id is affected");
+    // NOTHING was sent. The gate is before the first request, which is the whole point of
+    // a confirmation on a destructive fleet-wide operation.
+    expect(refused.violations).toEqual([]);
+  }, 60_000);
+});
+
 describe("refusals name the remedy", () => {
   it("refuses to connect before an identity has been adopted", () => {
     /**

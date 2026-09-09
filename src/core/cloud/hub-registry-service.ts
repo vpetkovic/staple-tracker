@@ -100,6 +100,7 @@ import {
   type UnpublishableEntry,
 } from "./hub-registry-ops.js";
 import { buildConnectPreview, type ConnectPreview } from "./preview.js";
+import { reconcileRepositoryIds, type RegistryIdentityReconciliation } from "./hub-scope.js";
 
 type Options = RequestOptions & SelectOptions;
 
@@ -147,7 +148,7 @@ export const HUB_NOT_PROVISIONED =
   "This machine's hub is not provisioned on that service, so there is nothing to publish to " +
   "yet. Staple cannot create it: the sync service has no provisioning route and no account " +
   "model — a repository row and its first enrollment secret are created out of band by whoever " +
-  "runs the service (see worker/README.md, \"Provisioning a repository\"). Ask them to add this " +
+  "runs the service (see worker/README.md, \"Provisioning a HUB\"). Ask them to add this " +
   "hub id, then connect again. Nothing was sent and nothing was changed.";
 
 /**
@@ -589,6 +590,13 @@ export interface PublishReport {
   readonly unpublishable: readonly UnpublishableEntry[];
   /** Published edges this machine had no basis to retract, and tombstoned ones. */
   readonly retained: readonly RetainedEdge[];
+  /**
+   * What resolving each row's identity from its manifest changed, and what it could not
+   * establish. Reported because an unreadable manifest or a duplicated identity is the
+   * reason a workspace is missing from what was published, and a person needs the cause
+   * rather than the absence.
+   */
+  readonly identities: RegistryIdentityReconciliation;
   readonly upToDate: boolean;
 }
 
@@ -600,13 +608,17 @@ export interface PublishReport {
  * registry is fully re-derivable from current state, so there is no intent to remember
  * across a crash and therefore nothing for an outbox to be.
  *
- * `opId` is deterministic and derived from the epoch, the entity and the entity id —
- * NOT from a counter. That is what makes a retry safe: a publish interrupted halfway
- * through its chunks can be run again unchanged, and the operations that already
- * landed come back `duplicate`, which the contract defines as a success. A
- * `client_seq`-derived id, which is what a workspace uses, would need the allocator
- * `hub.db` does not have — and re-minting one across a crash is the documented route
- * to silent data loss.
+ * `opId` is derived from the epoch, the entity, the entity id, the verb, the base
+ * version and the payload — NOT from a counter. See {@link operationId} for the two
+ * earlier versions of that derivation and why each was wrong; this paragraph used to
+ * describe the FIRST of them, contradicting the function a hundred lines below, which is
+ * the sort of drift that makes a comment worse than no comment.
+ *
+ * The retry property is what it buys: a publish interrupted halfway through its chunks
+ * can be run again unchanged, because re-reading the snapshot re-derives the same diff
+ * and therefore byte-identical ids. A `client_seq`-derived id, which is what a workspace
+ * uses, would need the allocator `hub.db` does not have — and re-minting one across a
+ * crash is the documented route to silent data loss.
  */
 export async function publishRegistry(
   hub: Hub,
@@ -619,9 +631,21 @@ export async function publishRegistry(
   const { token } = requireSession(home, hubId, options);
   const endpoint = parseEndpoint(connection.endpoint);
 
+  /**
+   * Resolve every row's identity from its manifest BEFORE exporting.
+   *
+   * `workspaces.repository_id` is the adoption key and had no writer on any user-facing
+   * path until STA-283, so on a real machine `exportRegistry` published an empty
+   * registry and reported every workspace unpublishable — while naming remedies the
+   * person had already performed. `openWorkspace` now records it, and this covers rows
+   * whose workspace has not been opened since.
+   *
+   * Local file reads and local row writes. No workspace database is opened.
+   */
+  const identities = reconcileRepositoryIds(hub);
   const local = exportRegistry(hub);
   const { entities, epoch } = await readSnapshotEntities(home, hubId, options);
-  const diff = diffRegistry(local, publishedStateOf(entities));
+  const diff = diffRegistry(local, publishedStateOf(entities), identities.duplicates);
 
   if (diff.operations.length === 0) {
     return {
@@ -637,6 +661,7 @@ export async function publishRegistry(
       deduplicated: 0,
       unpublishable: diff.unpublishable,
       retained: diff.retained,
+      identities,
       upToDate: true,
     };
   }
@@ -710,6 +735,7 @@ export async function publishRegistry(
     retained: diff.retained,
     batches: chunks.length,
     unpublishable: diff.unpublishable,
+    identities,
     upToDate: false,
   };
 }
@@ -985,6 +1011,9 @@ export async function restoreRegistry(
   const { token } = requireSession(home, hubId, options);
   const endpoint = parseEndpoint(connection.endpoint);
   const call = { repositoryId: hubId, token, deviceId: connection.deviceId, backupId };
+  // Same reason as `adoptPublishedRegistry`: the adoption at the end of this keys on the
+  // column, so it has to be right before the restore starts.
+  reconcileRepositoryIds(hub);
 
   let restoreId: string | null = null;
   let turns = 0;
@@ -1066,6 +1095,13 @@ export async function adoptPublishedRegistry(
   options: Options & { apply?: boolean; locate?: AdoptOptions["locate"] } = {},
 ): Promise<{ registry: HubRegistryPayload; adoption: AdoptionReport }> {
   const hubId = hubRepositoryId(hub);
+  /**
+   * Before adopting, not after. Adoption keys on `repository_id` through
+   * `hub.findByRepositoryId`, so a machine whose rows have a null column matches nothing
+   * and reports every incoming entry `absent` — including the workspaces it is holding a
+   * clone of. That made the recovery path report the opposite of the truth.
+   */
+  reconcileRepositoryIds(hub);
   const { registry } = await readPublishedRegistry(home, hubId, options);
   const adoption = adoptRegistry(hub, registry, {
     ...(options.apply === undefined ? {} : { apply: options.apply }),
