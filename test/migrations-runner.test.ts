@@ -125,7 +125,7 @@ describe("version detection", () => {
     // gained none of them. Pinned as two separate
     // numbers precisely so a migration added to one target cannot be silently
     // assumed to have been added to both.
-    expect(latestVersion(WORKSPACE_TARGET)).toBe(11);
+    expect(latestVersion(WORKSPACE_TARGET)).toBe(12);
     expect(latestVersion(HUB_TARGET)).toBe(2);
   });
 });

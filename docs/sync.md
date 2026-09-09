@@ -366,6 +366,66 @@ was copied without forking. The server cannot detect it and does not try; the
 diagnostic is local — `staple doctor` reports when a workspace's manifest id is
 also registered to a different workspace path in the hub.
 
+### A workspace does not have to be a repository
+
+Nothing in the identity path invokes git. The manifest is a plain JSON file, and
+version control is only how a *repository-backed* workspace carries its id to a
+machine that has no database yet. A workspace created with `staple init --global
+<slug>` is never cloned, so it needs no recovery from a tree — it simply needs
+somewhere of its own to keep the file.
+
+That somewhere is `<home>/workspaces/<slug>/repository.json`, a directory named
+for the workspace, beside the `<slug>.db` it belongs to. Not
+`<home>/workspaces/repository.json`: that directory is shared by every global
+workspace on the machine, and one manifest there would give all of them one
+identity. The database does not move to get this, so an existing global
+workspace gains an identity by gaining a sibling directory — no data rewritten,
+no registered path changed.
+
+`staple init` mints it, and so does every `openWorkspace` of a home-resident
+database. The asymmetry with a repository is deliberate: a repository gets its
+identity from `init`, which is the first command anybody runs in a fresh
+checkout, and minting a file inside somebody's repository on a read path would be
+a surprise. A global workspace has no second ritual, so open is the only door —
+and the file lands inside staple's own home.
+
+### A copied home is not a second device
+
+A global workspace lives at a fixed path inside the staple home, so restoring a
+backup of `~/.staple` onto a second machine puts the same identity at the *same*
+absolute path on both. There is no clone to tell them apart, and the copy is
+worse than a clone in the way that matters: it carries the database, the cursors,
+the device credential and `client_seq_high_water`. Two machines allocating client
+sequences from one copied counter mint deterministic operation ids for *different*
+work, and the server's dedup — the thing that makes a lost acknowledgement safe —
+discards the loser silently.
+
+So a home-resident workspace records `sync_state.origin_host`: a digest of the
+machine that minted its identity. The digest is the one thing a restore cannot
+bring with it, because it is derived from the machine and not from the home.
+Detection needs no version control, no network and no second machine to compare
+against.
+
+The value is NULL for every repository-backed workspace, and that is the
+semantics rather than an omission. One repository id at two machines is what a
+clone *is*, and clones are required to converge. `STAPLE_HOST_ID` overrides the
+detection for environments where the heuristic is wrong in either direction;
+setting it wrongly defeats the check.
+
+When the recorded host is not this machine:
+
+- `staple cloud sync` refuses before it opens a session, so nothing is sent and
+  no credential is read. The refusal is inside `syncRepository`, which is also
+  the only path automatic sync takes.
+- `staple cloud lease acquire` refuses, for the same reason: an exclusive claim
+  taken under a shared identity is the same hazard.
+- `staple cloud status` reports it as a warning rather than dying of it, so
+  somebody trying to find out what is wrong gets an answer.
+- `staple cloud fork-id` is the way out: a new identity, the positions dropped,
+  and the workspace re-bound to this machine. Removing the copy is the other way
+  out, and the diagnostic names both because only a person knows which machine
+  should keep the identity.
+
 ## The journal seam and what it owes
 
 There is **no write chokepoint today**. Mutation is spread across roughly 45

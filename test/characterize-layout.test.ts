@@ -163,10 +163,10 @@ describe("a fresh repo-local `staple init`", () => {
       // Bumped to "6" by STA-143 (006-approval-gates), after STA-140's 004 and
       // STA-124's 005, to "7" by STA-172 (007-milestones), to "8" by STA-167
       // (008-queue-entries), to "9" by 009-projects, to "10" by
-      // 010-sync-metadata and to "11" by 011-sync-field-writes; the TEXT typing
-      // is the characterization, the number
+      // 010-sync-metadata, to "11" by 011-sync-field-writes and to "12" by
+      // 012-host-binding; the TEXT typing is the characterization, the number
       // just tracks the migration list.
-      { key: "schema_version", value: "11" },
+      { key: "schema_version", value: "12" },
       { key: "slug", value: "metarepo" },
     ]);
   }, 30_000);
@@ -308,9 +308,19 @@ describe("the machine home", () => {
     expect(diskTree(home)).toEqual(["hub.db 644"]);
 
     expect(runCliAt(project, ["init", "--global", "globalone"], { STAPLE_HOME: home }).status).toBe(0);
+    /**
+     * UPDATED BY STA-273. A global workspace now gets an identity directory of
+     * its own beside its database, holding the same `repository.json` a
+     * repository keeps in `.staple/`. It is a directory rather than a file
+     * dropped in `workspaces/` because `workspaces/` is shared by every global
+     * workspace on the machine — one manifest there would have given all of them
+     * one identity.
+     */
     expect(diskTree(home)).toEqual([
       "hub.db 644",
       "workspaces/",
+      "workspaces/globalone/",
+      "workspaces/globalone/repository.json 644",
       "workspaces/globalone.db 644",
     ]);
   }, 60_000);
@@ -389,12 +399,20 @@ describe("global workspaces", () => {
     expect(runCliAt(project, ["init", "--global", "solo"], { STAPLE_HOME: home }).status).toBe(0);
     // Nothing lands in the repository at all — not even a .staple directory.
     expect(diskTree(root)).toEqual(["anyrepo/"]);
-    expect(diskTree(home)).toEqual(["hub.db 644", "workspaces/", "workspaces/solo.db 644"]);
+    expect(diskTree(home)).toEqual([
+      "hub.db 644",
+      "workspaces/",
+      // STA-273: the identity directory, which is the whole of what a global
+      // workspace gained. The database did not move.
+      "workspaces/solo/",
+      "workspaces/solo/repository.json 644",
+      "workspaces/solo.db 644",
+    ]);
     expect(metaRows(join(home, "workspaces", "solo.db"))).toEqual([
       { key: "prefix", value: "SOL" },
-      // WORKSPACE_SCHEMA_VERSION — 10 since 010-sync-metadata. The hub beside it
+      // WORKSPACE_SCHEMA_VERSION — 12 since 012-host-binding. The hub beside it
       // is still 2; the two databases version independently.
-      { key: "schema_version", value: "11" },
+      { key: "schema_version", value: "12" },
       { key: "slug", value: "solo" },
     ]);
   }, 30_000);
@@ -422,7 +440,11 @@ describe("global workspaces", () => {
     expect(diskTree(home)).toEqual([
       "hub.db 644",
       "workspaces/",
+      "workspaces/123/",
+      "workspaces/123/repository.json 644",
       "workspaces/123.db 644",
+      "workspaces/workspace/",
+      "workspaces/workspace/repository.json 644",
       "workspaces/workspace.db 644",
     ]);
   }, 40_000);

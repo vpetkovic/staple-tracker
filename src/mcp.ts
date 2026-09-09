@@ -23,7 +23,7 @@ import { MILESTONE_STATES } from "./core/milestones.js";
 import { KIND_APPEARANCE_SOURCES, type KindWithAppearance } from "./core/kind-appearance.js";
 import { dirname } from "node:path";
 import { stapleHome } from "./config/home.js";
-import { readRepositoryManifest } from "./core/repo-identity.js";
+import { readWorkspaceManifest } from "./core/repo-identity.js";
 import { SurfaceAutoSync } from "./core/cloud/auto-triggers.js";
 import { listConflicts, resolveConflict } from "./core/cloud/conflicts.js";
 import { localCloudStatus } from "./core/cloud/status.js";
@@ -182,7 +182,7 @@ const server = new McpServer({ name: "staple", version: "0.1.0" });
 const autoSync = new SurfaceAutoSync({
   home: () => stapleHome(),
   resolve: (ws) => {
-    const manifest = readRepositoryManifest(dirname(workspaceFor(ws).dbPath));
+    const manifest = readWorkspaceManifest(workspaceFor(ws).dbPath);
     return manifest === null ? null : { db: storeFor(ws).db, repositoryId: manifest.repositoryId };
   },
 });
@@ -2374,7 +2374,7 @@ server.registerTool(
   ({ ws }) =>
     run(() => {
       const store = storeFor(ws);
-      const manifest = readRepositoryManifest(dirname(workspaceFor(ws).dbPath));
+      const manifest = readWorkspaceManifest(workspaceFor(ws).dbPath);
       // No manifest means no sync identity — one wording, in core, shared with
       // the HTTP route that used to spell out its own.
       if (!manifest) return noIdentityReport();

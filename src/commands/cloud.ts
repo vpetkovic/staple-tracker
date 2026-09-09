@@ -42,7 +42,14 @@
 import { parseArgs } from "node:util";
 import { dirname } from "node:path";
 import { stapleHome } from "../config/home.js";
-import { readRepositoryManifest } from "../core/repo-identity.js";
+import {
+  REPOSITORY_MANIFEST_FILENAME,
+  assertOwnHost,
+  describeHostBinding,
+  forkWorkspaceIdentity,
+  readWorkspaceManifest,
+  workspaceIdentityDir,
+} from "../core/repo-identity.js";
 import { resolveWorkspace } from "../core/workspace.js";
 import { StapleError, errorEnvelope } from "../core/types.js";
 import { confirm, isInteractive } from "../onboarding/prompts.js";
@@ -84,7 +91,7 @@ import {
 } from "../core/cloud/surface.js";
 
 const USAGE =
-  "Use: status, connect, disconnect, auto, sync, lease, devices, conflicts, resolve, backup, restore, purge (staple cloud --help)";
+  "Use: status, connect, disconnect, auto, sync, lease, devices, conflicts, resolve, backup, restore, fork-id, purge (staple cloud --help)";
 
 const HELP = `staple cloud — connect this repository to a sync service, and manage the
 credential that connection produces. Three separate consents: connecting,
@@ -183,6 +190,14 @@ synchronizing automatically, and backing up. None of them implies another.
               so the other devices agree; it never rewrites the two operations
               that disagreed and never picks for you. Resolving the same
               conflict the same way twice does nothing the second time.
+  cloud fork-id [--yes]
+              make this workspace an INDEPENDENT one: mint a new sync identity
+              and drop every position in the old repository's log — cursors,
+              outbox, dedup ledger, leases and the device cache. The answer
+              when a directory was copied, or a staple home was restored onto a
+              second machine and both are now live. The workspace it was copied
+              FROM is untouched: this makes no network call. Local edit history,
+              tombstones and settled conflicts are kept.
   cloud purge --confirm <repositoryId>
               DESTROY the repository's remote state. Separately named because
               it is not disconnecting. Prints what is stored, for how long and
@@ -217,26 +232,40 @@ function settle(work: Promise<void>, json: boolean): void {
 }
 
 /**
- * This workspace's repository id, from the git-recoverable manifest.
+ * The refusal when a workspace has no manifest at all.
+ *
+ * One wording, four call sites. It no longer says "a global workspace has none":
+ * since STA-273 a workspace outside a repository mints an identity in its own
+ * directory inside the staple home, so the only way to reach this is a workspace
+ * `staple init` has never been run in.
+ */
+function noIdentity(identityDir: string, consequence: string): StapleError {
+  return new StapleError(
+    "not_found",
+    `This workspace has no ${identityDir}/${REPOSITORY_MANIFEST_FILENAME}, so it has no sync ` +
+      `identity and ${consequence}. Run \`staple init\` in it to record one.`,
+  );
+}
+
+/**
+ * This workspace's repository id, from the recoverable manifest.
  *
  * The manifest rather than `sync_state`, for the reason `repo-identity.ts`
- * gives: on a fresh clone the manifest is the only copy, and it is the one a
+ * gives: on a fresh checkout the manifest is the only copy, and it is the one a
  * human can see in a diff. The database handle is opened to locate the
  * workspace and closed immediately — nothing here reads a domain table.
+ *
+ * `assertOwnHost` deliberately does NOT run here. This is the read every
+ * subcommand starts with, `staple cloud status` included, and status must be
+ * able to REPORT that this home was restored elsewhere rather than dying of it.
+ * The refusal belongs on the paths that move something, and it is spelled out
+ * there.
  */
 function repositoryIdFor(options: { db?: string; ws?: string }): string {
   const opened = resolveWorkspace(options);
-  const workspaceDir = dirname(opened.dbPath);
   try {
-    const manifest = readRepositoryManifest(workspaceDir);
-    if (!manifest) {
-      throw new StapleError(
-        "not_found",
-        `This workspace has no ${workspaceDir}/repository.json, so it has no sync identity. ` +
-          `Repository identity is minted for repo-local workspaces by \`staple init\`; a global ` +
-          `workspace has none and cannot be connected.`,
-      );
-    }
+    const manifest = readWorkspaceManifest(opened.dbPath);
+    if (!manifest) throw noIdentity(workspaceIdentityDir(opened.dbPath), "cannot be connected");
     return manifest.repositoryId;
   } finally {
     opened.store.db.close();
@@ -302,6 +331,8 @@ export function runCloudCommand(argv: string[]): void {
       return runConflicts(rest);
     case "resolve":
       return runResolve(rest);
+    case "fork-id":
+      return runForkId(rest);
     case "purge":
       return runPurge(rest);
     default:
@@ -484,6 +515,67 @@ function runDisconnect(argv: string[]): void {
   }
 }
 
+/**
+ * `staple cloud fork-id` — the way out of "two machines, one identity".
+ *
+ * Three messages in the tree have named this command since S2 and none of them
+ * could be obeyed, because the core operation existed and nothing exposed it.
+ * S15 makes that reachable for a workspace that has no repository, where there
+ * is no `checkout -- repository.json` to undo a copy with, so it is wired here.
+ *
+ * Confirmed rather than immediate, and the preview says what is dropped, because
+ * a fork is not reversible from inside staple: the positions it deletes are the
+ * only local record of where this device had got to in the old repository's log.
+ * It is nonetheless SAFE in the direction people worry about — no network call,
+ * no effect on the machine this workspace was copied from, and every domain row
+ * left exactly where it is.
+ */
+function runForkId(argv: string[]): void {
+  const { values } = parseArgs({ args: argv, options: { ...common, yes: { type: "boolean" } } });
+  const json = values.json === true;
+  const opened = resolveWorkspace(values);
+
+  try {
+    const manifest = readWorkspaceManifest(opened.dbPath);
+    if (!manifest) throw noIdentity(workspaceIdentityDir(opened.dbPath), "nothing to fork");
+
+    if (values.yes !== true) {
+      const binding = describeHostBinding(opened.store.db);
+      console.log(`Fork this workspace away from repository ${manifest.repositoryId}.`);
+      console.log("");
+      if (binding.status === "moved") {
+        console.log("  - this staple home was restored from another machine, which is why");
+        console.log("    synchronizing is currently refused");
+      }
+      console.log("  - a NEW sync identity is minted and written to the manifest");
+      console.log("  - cursors, the outbox, the dedup ledger, leases and the device cache");
+      console.log("    are dropped: they are positions in the OLD repository's log");
+      console.log("  - your issues, comments, tombstones and settled conflicts are untouched");
+      console.log("  - the workspace this was copied from is untouched; nothing is sent");
+      console.log("  - unsent local work is regenerated against the new identity when it syncs");
+      if (!(isInteractive() && confirm("\nFork?", { default: false }))) {
+        console.error(isInteractive() ? "\nDeclined. Identity unchanged." : "\nRe-run with --yes to fork.");
+        process.exitCode = 2;
+        return;
+      }
+    }
+
+    const result = forkWorkspaceIdentity(opened.store.db, opened.dbPath);
+    if (json) {
+      console.log(JSON.stringify(result));
+      return;
+    }
+    console.log(`Forked. ${result.previousRepositoryId ?? "(none)"} -> ${result.repositoryId}`);
+    console.log(`Manifest: ${result.manifestPath}`);
+    console.log(
+      "This workspace is now independent and unconnected. `staple cloud connect` enrols it as a " +
+        "repository of its own.",
+    );
+  } finally {
+    opened.store.db.close();
+  }
+}
+
 function runAuto(argv: string[]): void {
   const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: common });
   const choice = positionals[0];
@@ -523,18 +615,28 @@ function runSync(argv: string[]): void {
   const home = stapleHome();
 
   const opened = resolveWorkspace(values);
-  const workspaceDir = dirname(opened.dbPath);
-  const manifest = readRepositoryManifest(workspaceDir);
+  const manifest = readWorkspaceManifest(opened.dbPath);
   if (!manifest) {
     opened.store.db.close();
     throw new StapleError(
       "not_found",
-      `This workspace has no ${workspaceDir}/repository.json, so it has no sync identity and ` +
-        `nothing to synchronize. Repository identity is minted for repo-local workspaces by ` +
-        `\`staple init\`; a global workspace has none and cannot be connected.`,
+      `This workspace has no ${workspaceIdentityDir(opened.dbPath)}/` +
+        `${REPOSITORY_MANIFEST_FILENAME}, so it has no sync identity and nothing to ` +
+        `synchronize. Run \`staple init\` in it to record one.`,
     );
   }
 
+  /**
+   * No copied-home check here, deliberately.
+   *
+   * `syncRepository` asserts it as its very first statement, ahead of opening
+   * the session, so this command already refuses a restored home before it
+   * reaches for a credential or an endpoint. A second check here was written
+   * first and then deleted: removing it changed no observable behaviour in any
+   * test, which is the definition of a guard that can only ever drift away from
+   * the one that matters. The lease path below is different — it does not go
+   * through `syncRepository`, so it does its own.
+   */
   const pullLimit = values["pull-limit"] ? Number(values["pull-limit"]) : undefined;
   if (pullLimit !== undefined && (!Number.isInteger(pullLimit) || pullLimit < 1)) {
     opened.store.db.close();
@@ -647,14 +749,18 @@ function leaseContext(values: { db?: string; ws?: string }): {
   repositoryId: string;
 } {
   const opened = resolveWorkspace(values);
-  const manifest = readRepositoryManifest(dirname(opened.dbPath));
+  const manifest = readWorkspaceManifest(opened.dbPath);
   if (!manifest) {
     opened.store.db.close();
-    throw new StapleError(
-      "not_found",
-      `This workspace has no repository.json, so it has no sync identity and cannot hold a ` +
-        `server lease. Repository identity is minted for repo-local workspaces by \`staple init\`.`,
-    );
+    throw noIdentity(workspaceIdentityDir(opened.dbPath), "cannot hold a server lease");
+  }
+  // A lease is an exclusive claim on shared state, so a copied home taking one
+  // out is the same hazard as a copied home pushing: two machines, one identity.
+  try {
+    assertOwnHost(opened.store.db);
+  } catch (error) {
+    opened.store.db.close();
+    throw error;
   }
   return { store: opened.store, repositoryId: manifest.repositoryId };
 }
@@ -1252,15 +1358,10 @@ function runRestore(argv: string[]): void {
   }
 
   const opened = resolveWorkspace(values);
-  const workspaceDir = dirname(opened.dbPath);
-  const manifest = readRepositoryManifest(workspaceDir);
+  const manifest = readWorkspaceManifest(opened.dbPath);
   if (!manifest) {
     opened.store.db.close();
-    throw new StapleError(
-      "not_found",
-      `This workspace has no ${workspaceDir}/repository.json, so it has no sync identity and ` +
-        `nothing to restore into.`,
-    );
+    throw noIdentity(workspaceIdentityDir(opened.dbPath), "nothing to restore into");
   }
   const repositoryId = manifest.repositoryId;
   const status = localCloudStatus(home, repositoryId);

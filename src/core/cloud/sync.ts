@@ -30,6 +30,7 @@
  */
 import type { DatabaseSync } from "node:sqlite";
 import { tx } from "../db.js";
+import { assertOwnHost } from "../repo-identity.js";
 import {
   bindJournal,
   recordInheritedFieldWrites,
@@ -278,6 +279,19 @@ export async function syncRepository(
   repositoryId: string,
   options: SyncOptions,
 ): Promise<SyncReport> {
+  /**
+   * First, before the session is even opened.
+   *
+   * The CLI refuses a copied home earlier and with the same words, but this is
+   * the only chokepoint the AUTOMATIC path passes through: `AutoSyncScheduler`
+   * imports this function directly, so a restored home whose device had already
+   * consented to background sync would otherwise start pushing on the next write
+   * with nobody typing anything. Placed ahead of `openSession` because a
+   * restored home carries the credential too — reaching for it first would
+   * report a connection problem instead of the copy that is actually the matter.
+   */
+  assertOwnHost(db);
+
   const session = openSession(options.home, repositoryId);
   const state = requireSyncState(db);
 
