@@ -109,6 +109,9 @@ function entryFor(slug: string, dbPath: string) {
     addedAt: "2026-01-01T00:00:00.000Z",
     lastSeenAt: null,
     available: existsSync(dbPath),
+    // These fixtures deliberately have no manifest, which is the whole subject
+    // of this file — so the registry's copy of the identity is absent too.
+    repositoryId: null,
   };
 }
 

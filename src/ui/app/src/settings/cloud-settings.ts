@@ -801,6 +801,56 @@ export function hubGroups(
  * workspaces rather than every row"* — and names the unreachable ones separately
  * so nothing is concealed by the change.
  */
+/**
+ * The hub, said in one line — S18 (STA-279).
+ *
+ * States what the HUB is, not what the current workspace is doing. That
+ * distinction is the ticket: the page used to lead with the open workspace's
+ * connection and then show a list of other workspaces, so the sentence at the
+ * top described something different from the thing underneath it.
+ *
+ * Leads with `present` rather than `registered`, for the same reason
+ * {@link hubListDescription} leads with `actionable`: on a machine that has just
+ * been set up, "9 workspaces" is a true number that hides the only fact the
+ * person is looking for, which is that six of them are not here yet.
+ */
+export function hubSelfSummary(report: HubCloudReport): string {
+  const { registered, present, absent, crossLinks } = report.self;
+  if (registered === 0) {
+    return "No workspaces are registered on this machine yet. The hub is the list they will appear in.";
+  }
+  const lead =
+    absent === 0
+      ? `${registered} ${registered === 1 ? "workspace" : "workspaces"}, all of them on this machine.`
+      : `${registered} ${registered === 1 ? "workspace" : "workspaces"} registered, ${present} on this machine and ${absent} ${absent === 1 ? "that is" : "that are"} not.`;
+  const links =
+    crossLinks === 0
+      ? ""
+      : ` ${crossLinks} cross-workspace ${crossLinks === 1 ? "link" : "links"} between them.`;
+  return `${lead}${links}`;
+}
+
+/**
+ * The hub's own facts, for the panel's `<dl>`.
+ *
+ * Deliberately does NOT include any connection state. The hub is a registry, and
+ * the connections belong to the workspaces in it — putting "connected to X" here
+ * would recreate exactly the conflation the panel exists to end.
+ */
+export function hubSelfFacts(report: HubCloudReport): CloudFact[] {
+  const facts: CloudFact[] = [
+    { label: "Workspaces registered", value: String(report.self.registered) },
+    { label: "On this machine", value: String(report.self.present) },
+  ];
+  if (report.self.absent > 0) {
+    facts.push({ label: "Registered elsewhere", value: String(report.self.absent) });
+  }
+  if (report.self.crossLinks > 0) {
+    facts.push({ label: "Cross-workspace links", value: String(report.self.crossLinks) });
+  }
+  return facts;
+}
+
 export function hubListDescription(report: HubCloudReport): string {
   const counts = report.counts;
   const missing = report.workspaces.filter((row) => !row.available).length;

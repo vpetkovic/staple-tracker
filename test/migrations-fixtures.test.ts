@@ -674,10 +674,15 @@ describe("a pre-A4 hub (no meta table at all)", () => {
     withFixture(FIXTURES.hubV1, (path) => {
       const db = new DatabaseSync(path);
       try {
+        // GOLDEN, moved by S22 (STA-283): latest 2 -> 3, pending gains 3.
+        // `current` and `detection` are deliberately unmoved — a pre-A4 hub is
+        // still inferred as version 1 from the sentinel table, which is the
+        // property this case exists to pin. Only the distance it has to travel
+        // changed.
         expect(describeSchema(db, HUB_TARGET)).toEqual({
           current: 1,
-          latest: 2,
-          pending: [2],
+          latest: 3,
+          pending: [2, 3],
           detection: "unstamped",
         });
         // Nothing to read: this is the quirk A4 exists to close.
@@ -699,7 +704,10 @@ describe("a pre-A4 hub (no meta table at all)", () => {
         const row = db
           .prepare("SELECT typeof(value) AS t, value FROM meta WHERE key='schema_version'")
           .get() as { t: string; value: string };
-        expect(row).toEqual({ t: "text", value: "2" });
+        // GOLDEN, moved by S22 (STA-283): "2" -> "3". Still TEXT, which is the
+        // part that matters here — an old binary's `CAST(value AS INTEGER)`
+        // guard has to be able to read it.
+        expect(row).toEqual({ t: "text", value: "3" });
       } finally {
         db.close();
       }

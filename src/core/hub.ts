@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { stapleHome } from "../config/home.js";
 import { openDb, tx } from "./db.js";
@@ -23,6 +23,22 @@ export function notifyHubResolvedSafe(workspaceSlug: string, identifier: string)
   }
 }
 
+/**
+ * The path stored for a row this machine knows OF but does not have.
+ *
+ * Empty rather than null because `workspaces.path` is `NOT NULL` and has been
+ * since version 1, and widening it would mean every existing reader learning
+ * about a second spelling of "no path". Empty string is already falsy, already
+ * unequal to every real path, and `existsSync("")` is false — so `available`
+ * comes out correct with no special case anywhere.
+ *
+ * The alternative was to invent a plausible path for an absent workspace. That
+ * is precisely the failure mode the absent row exists to avoid: a registry that
+ * points somewhere is trusted, and a registry that points somewhere WRONG sends
+ * repair, prune and `--ws` at a directory that has nothing to do with it.
+ */
+export const ABSENT_PATH = "";
+
 export interface WorkspaceEntry {
   slug: string;
   prefix: string;
@@ -32,6 +48,25 @@ export interface WorkspaceEntry {
   lastSeenAt: string | null;
   /** Whether the workspace file exists on this machine right now. */
   available: boolean;
+  /**
+   * The workspace's sync identity, as the REGISTRY recorded it.
+   *
+   * Null for a workspace that has never recorded one, and for every row written
+   * before hub schema 3. Not authoritative: the manifest on disk is, and
+   * `hub-scope.ts` prefers it whenever the workspace is present. This copy earns
+   * its place by being readable when the workspace is NOT present, which is the
+   * only situation in which adoption has to make a decision.
+   */
+  repositoryId: string | null;
+}
+
+/** One identity this machine has been told it does not want back. */
+export interface RegistryOptOut {
+  repositoryId: string;
+  /** The slug it had when it was dropped. For the sentence, not for matching. */
+  slug: string;
+  reason: string;
+  createdAt: string;
 }
 
 export interface CrossLink {
@@ -280,6 +315,7 @@ export class Hub {
           kind: string;
           added_at: string;
           last_seen_at: string | null;
+          repository_id: string | null;
         }
       | undefined;
     if (!row) return undefined;
@@ -290,7 +326,8 @@ export class Hub {
       kind: row.kind,
       addedAt: row.added_at,
       lastSeenAt: row.last_seen_at,
-      available: existsSync(row.path),
+      available: row.path !== ABSENT_PATH && existsSync(row.path),
+      repositoryId: row.repository_id ?? null,
     };
   }
 
@@ -356,6 +393,7 @@ export class Hub {
       kind: string;
       added_at: string;
       last_seen_at: string | null;
+      repository_id: string | null;
     }>;
     return rows.map((r) => ({
       slug: r.slug,
@@ -364,8 +402,113 @@ export class Hub {
       kind: r.kind,
       addedAt: r.added_at,
       lastSeenAt: r.last_seen_at,
-      available: existsSync(r.path),
+      available: r.path !== ABSENT_PATH && existsSync(r.path),
+      repositoryId: r.repository_id ?? null,
     }));
+  }
+
+  // ---------- identity, absent rows and the opt-out list ----------
+
+  /**
+   * This hub's own id, minted once and kept in `meta`.
+   *
+   * The hub needs an identity for the same reason a repository does: it is the
+   * thing a backup is OF, and a backup that cannot say what it is a backup of
+   * cannot be safely restored onto a machine that already has a hub. Minted
+   * lazily so that no existing hub grows one until something actually asks.
+   */
+  hubId(): string {
+    const row = this.db.prepare("SELECT value FROM meta WHERE key = 'hub_id'").get() as
+      | { value: string }
+      | undefined;
+    if (row?.value) return row.value;
+    const minted = randomUUID();
+    this.db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('hub_id', ?)").run(minted);
+    return minted;
+  }
+
+  /** The row holding this sync identity, if this machine has one. */
+  findByRepositoryId(repositoryId: string): WorkspaceEntry | undefined {
+    return this.list().find((w) => w.repositoryId === repositoryId);
+  }
+
+  /**
+   * Record the identity a workspace turned out to have.
+   *
+   * Separate from {@link register} because it is a different KIND of statement:
+   * register says "this workspace is here, at this path", and this says "the
+   * thing at that path calls itself X". They are learned at different moments —
+   * the manifest is often absent when a workspace is first registered and
+   * appears only when it is connected — and conflating them would mean either
+   * refusing to register a workspace with no manifest or re-registering it every
+   * time one showed up.
+   */
+  recordRepositoryId(slug: string, repositoryId: string | null): void {
+    this.db
+      .prepare("UPDATE workspaces SET repository_id = ? WHERE slug = ?")
+      .run(repositoryId, slug);
+  }
+
+  /**
+   * Add a row for a workspace this machine knows of but does not have.
+   *
+   * The prefix is taken as a FACT, exactly as {@link repointPath} takes it: it
+   * was allocated by whichever machine first registered this workspace, it is
+   * stamped into that workspace's database, and it is not this machine's to
+   * reassign. Allocation is therefore deliberately absent from this path — an
+   * absent row that minted its own prefix would be a different workspace wearing
+   * the same name.
+   */
+  registerAbsent(entry: {
+    slug: string;
+    prefix: string;
+    kind: string;
+    repositoryId: string | null;
+    addedAt?: string;
+  }): void {
+    this.db
+      .prepare(
+        `INSERT INTO workspaces (slug, prefix, path, kind, added_at, last_seen_at, repository_id)
+         VALUES (?,?,?,?,?,NULL,?)`,
+      )
+      .run(entry.slug, entry.prefix, ABSENT_PATH, entry.kind, entry.addedAt ?? nowIso(), entry.repositoryId);
+  }
+
+  /**
+   * Remember that this machine does not want an identity back.
+   *
+   * Written by unregister, read by adoption, and never published. See hub
+   * migration 003 for why it is a table beside the registry rather than a flag
+   * inside it.
+   */
+  addOptOut(repositoryId: string, slug: string, reason = "unregistered"): void {
+    this.db
+      .prepare(
+        `INSERT INTO registry_optouts (repository_id, slug, reason, created_at)
+         VALUES (?,?,?,?)
+         ON CONFLICT(repository_id) DO UPDATE SET slug = excluded.slug, reason = excluded.reason`,
+      )
+      .run(repositoryId, slug, reason, nowIso());
+  }
+
+  listOptOuts(): RegistryOptOut[] {
+    const rows = this.db
+      .prepare("SELECT * FROM registry_optouts ORDER BY created_at, repository_id")
+      .all() as Array<{ repository_id: string; slug: string; reason: string; created_at: string }>;
+    return rows.map((r) => ({
+      repositoryId: r.repository_id,
+      slug: r.slug,
+      reason: r.reason,
+      createdAt: r.created_at,
+    }));
+  }
+
+  /** Undo an opt-out, so the next adoption may bring the workspace back. */
+  clearOptOut(repositoryId: string): boolean {
+    return (
+      this.db.prepare("DELETE FROM registry_optouts WHERE repository_id = ?").run(repositoryId)
+        .changes > 0
+    );
   }
 
   get(slugOrPrefix: string): WorkspaceEntry | undefined {
@@ -414,6 +557,18 @@ export class Hub {
     const removedCrossLinks = deleteHubRegistration(this.db, entry.slug, {
       withLinks: options.withLinks === true,
     });
+    // Removing the row is the whole of the REMOTE effect, because there is none:
+    // a registry entry this machine drops stays on every other machine, and
+    // nothing here reaches the service. What the opt-out adds is the LOCAL
+    // durability the operator plainly meant — without it, the next adoption
+    // would put the row straight back and the removal would read as broken.
+    //
+    // Only recorded when there is an identity to key it on. A workspace with no
+    // manifest cannot be matched by adoption either, so there is nothing for an
+    // opt-out to suppress.
+    if (entry.repositoryId !== null) {
+      this.addOptOut(entry.repositoryId, entry.slug);
+    }
     return { workspace: entry, removedCrossLinks, prefixReleased: entry.prefix };
   }
 

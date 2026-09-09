@@ -3,7 +3,7 @@
  * Regenerate with: npx tsx scripts/regen-migration-snapshots.ts
  *
  * The `sqlite_master` dump of a hub database that walked migrations
- * 001, 002. Executed verbatim by the runner when — and only when —
+ * 001, 002, 003. Executed verbatim by the runner when — and only when —
  * version detection proved the file has no tables at all.
  *
  * No `IF NOT EXISTS` anywhere, deliberately: reaching this text with tables
@@ -20,7 +20,7 @@ CREATE TABLE workspaces (
   kind TEXT NOT NULL DEFAULT 'repo',
   added_at TEXT NOT NULL,
   last_seen_at TEXT
-);
+, repository_id TEXT);
 
 CREATE TABLE cross_links (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -51,5 +51,15 @@ CREATE UNIQUE INDEX hub_events_dedup_uq
 CREATE TABLE meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
+);
+
+CREATE INDEX workspaces_repository_id_idx
+  ON workspaces(repository_id) WHERE repository_id IS NOT NULL;
+
+CREATE TABLE registry_optouts (
+  repository_id TEXT PRIMARY KEY,
+  slug TEXT NOT NULL,
+  reason TEXT NOT NULL DEFAULT 'unregistered',
+  created_at TEXT NOT NULL
 );
 `;

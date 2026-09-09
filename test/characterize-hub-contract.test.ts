@@ -72,8 +72,12 @@ describe("what `init` writes into the hub", () => {
 
   it("pins the hub row field set, so an added or renamed column is a diff", () => {
     const row = hubList().find((w) => w.slug === "hubrepo")!;
+    // GOLDEN, moved by S22 (STA-283): 7 -> 8. `repositoryId` is the registry's
+    // copy of the workspace's sync identity, and it is the key adoption matches
+    // on when a workspace arrives from another machine — names cannot do that
+    // job, because two machines can independently disagree about a name.
     expect(Object.keys(row).sort()).toEqual([
-      "addedAt", "available", "kind", "lastSeenAt", "path", "prefix", "slug",
+      "addedAt", "available", "kind", "lastSeenAt", "path", "prefix", "repositoryId", "slug",
     ]);
   });
 

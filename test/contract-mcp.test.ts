@@ -1196,6 +1196,16 @@ describe("tool response shapes (31/31)", () => {
   });
 
   it("hub_overview", () => {
+    // GOLDEN, moved by S22 (STA-283): each workspace row gained `repositoryId`.
+    // The tool COUNT is unmoved at 46 — this is a field on an existing shape,
+    // not a new tool.
+    //
+    // Passed through rather than stripped, deliberately. `workspaces` here is
+    // `hub.list()` verbatim, and a projection that dropped one column would be a
+    // second place that has to be kept in step with `WorkspaceEntry` — which is
+    // the drift this pin exists to catch, reintroduced in the act of hiding it.
+    // The value is not a secret either: it is read from `.staple/repository.json`,
+    // a tracked file any caller with the checkout already has.
     assertGolden("hub_overview", {
       workspaces: [
         {
@@ -1206,6 +1216,7 @@ describe("tool response shapes (31/31)", () => {
           addedAt: ISO,
           lastSeenAt: ISO,
           available: true,
+          repositoryId: null,
         },
         {
           slug: "contract-two",
@@ -1215,6 +1226,7 @@ describe("tool response shapes (31/31)", () => {
           addedAt: ISO,
           lastSeenAt: ISO,
           available: true,
+          repositoryId: null,
         },
       ],
       crossLinks: [

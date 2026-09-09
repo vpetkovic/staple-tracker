@@ -314,6 +314,8 @@ describe("KNOWN: logical errors this surface cannot project", () => {
    * unattributed, must change THIS list, which is the review moment.
    */
   it("pins the exact API surface, read out of the server source", () => {
+    // GOLDEN, moved by S18 (STA-279): 52 -> 53. One addition, `/api/hub/backup`
+    // — the first route whose subject is the hub itself rather than a workspace.
     // GOLDEN, moved by S16 (STA-275): 45 -> 46. The addition is
     // `/api/cloud/workspaces`; see the comment beside it below.
     // GOLDEN, moved by S17/S19/S21 (STA-278, STA-280, STA-282): 46 -> 52. Six
@@ -531,6 +533,26 @@ describe("KNOWN: logical errors this surface cannot project", () => {
        * It is NAMED in the method gate rather than matched by prefix, so that a
        * future `/api/hub/…` READ does not inherit a write pin nobody asked for.
        */
+      /**
+       * `POST /api/hub/backup` — S18 (STA-279). The hub backing ITSELF up.
+       *
+       * The only route on this surface that acts on the hub rather than on a
+       * workspace, which is why it takes no `slug` and no `ws`: there is nothing
+       * to name. That absence is the review moment — a body parameter appearing
+       * here later would mean the hub had stopped being the subject.
+       *
+       * Writes the registry and its cross-links to a file in the staple home,
+       * with every path dropped from the payload. It contains NO tasks, because
+       * `hub.db` has no issues table; the response carries the counts so the
+       * caller can see what it actually saved.
+       *
+       * Local, and therefore offered unconditionally — VP: "the main hub should
+       * always have option to backup". It makes no network call, which is what
+       * lets it live on a page `test/network-silence.test.ts` drives. Publishing
+       * the same payload to a service is a separate and separately-consented act
+       * and is deliberately not this route.
+       */
+      "/api/hub/backup",
       "/api/hub/unregister",
       "/api/inbox",
       "/api/issue",

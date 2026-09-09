@@ -10,7 +10,7 @@
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { randomBytes, timingSafeEqual } from "node:crypto";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Hub, notifyHubResolvedSafe } from "../core/hub.js";
@@ -42,6 +42,7 @@ import {
   noIdentityReport,
 } from "../core/cloud/surface.js";
 import { hubCloudReport, type HubWorkspaceOutcome } from "../core/cloud/hub-surface.js";
+import { exportRegistry } from "../core/cloud/hub-registry.js";
 /**
  * S17/S19/S21 (STA-278, STA-280, STA-282): the per-row half of the cloud surface.
  *
@@ -243,6 +244,9 @@ const CLOUD_LIFECYCLE_WRITES = new Set([
   "/api/cloud/workspace/disconnect",
   "/api/cloud/workspace/sync",
   "/api/hub/unregister",
+  // A hub backup reads the registry and writes a file. It changes no issue, so
+  // a sync trigger would be a wake-up about nothing.
+  "/api/hub/backup",
 ]);
 
 /**
@@ -938,7 +942,8 @@ export function startUiServer(options: UiOptions): UiHandle {
           url.pathname === "/api/cloud/workspace/consent" ||
           url.pathname === "/api/cloud/workspace/disconnect" ||
           url.pathname === "/api/cloud/workspace/sync" ||
-          url.pathname === "/api/hub/unregister"
+          url.pathname === "/api/hub/unregister" ||
+          url.pathname === "/api/hub/backup"
             ? ["POST"]
             : url.pathname === "/api/settings"
               ? ["GET", "POST"]
@@ -1695,6 +1700,38 @@ export function startUiServer(options: UiOptions): UiHandle {
        * database" structural: it is handed a database connection and a NAME, and
        * has no `fs` and no workspace opener to do damage with.
        */
+      /**
+       * Back up the hub — S18 (STA-279).
+       *
+       * Writes the registry and its cross-links, with every path dropped, to a
+       * timestamped file in the staple home. Local, so it is available with no
+       * connection and no consent beyond the press — which is what "the main hub
+       * should always have option to backup" requires. Publishing the same
+       * payload to a service is a separate, separately-consented act.
+       *
+       * Makes no network call, which is why it is safe to reach from a page that
+       * `test/network-silence.test.ts` drives.
+       */
+      if (url.pathname === "/api/hub/backup") {
+        const hub = Hub.open();
+        try {
+          const payload = exportRegistry(hub);
+          const dir = join(stapleHome(), "backups");
+          mkdirSync(dir, { recursive: true, mode: 0o700 });
+          const file = join(dir, `hub-${payload.capturedAt.replace(/[:.]/g, "-")}.json`);
+          writeFileSync(file, `${JSON.stringify(payload, null, 2)}\n`, { mode: 0o600 });
+          json(res, 200, {
+            path: file,
+            workspaces: payload.workspaces.length,
+            crossLinks: payload.crossLinks.length,
+            report: hubCloudReport(stapleHome()),
+          });
+        } finally {
+          hub.close();
+        }
+        return;
+      }
+
       if (url.pathname === "/api/hub/unregister") {
         const body = await readBody(req);
         const workspace = hubRowFor(res, body.slug);
