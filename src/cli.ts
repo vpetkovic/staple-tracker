@@ -18,6 +18,7 @@ import { runDiscoverCommand } from "./commands/discover.js";
 import { runMilestoneCommand } from "./commands/milestone.js";
 import { runQueueCommand } from "./commands/queue.js";
 import { runCloudCommand } from "./commands/cloud.js";
+import { runHubRegistryCommand } from "./commands/hub-registry.js";
 import { CLI_COMMAND_TRIGGERS, runCommandTrigger } from "./core/cloud/auto-triggers.js";
 import { findMigrationRoot, planMigration, runMigration } from "./core/path-migration.js";
 import {
@@ -773,6 +774,23 @@ Workspace
               previews and writes nothing without --yes; a dead row named by
               cross-links is kept and reported unless --with-links
   hub unlink <blocker> <blocked>        remove ONE cross-workspace link
+  hub registry [status|id]              this machine's hub on a sync service: is it
+              connected, and is publishing on. Local files only; no request.
+  hub registry identity <hubId>         take on the registry identity another machine
+              published under — the step that makes a lost machine recoverable
+  hub registry connect --endpoint U --token S
+              connect the HUB itself as a repository; publishing stays OFF
+  hub registry publish [--enable|--disable]
+              grant or withdraw the consent to publish this machine's workspace
+              LIST; with neither flag, publish it now. Granting prints exactly what
+              is uploaded. No other consent implies this one.
+  hub registry adopt [--apply]          adopt the registry the service holds; previews
+              and writes nothing to this hub without --apply
+  hub registry backup <enable|disable|create|ls|rm>
+              point-in-time copies of the registry — a further decision
+  hub registry restore <backupId> [--apply]
+              rewind the registry ON THE SERVICE to a backup, then adopt what comes
+              back; reports one decision per incoming workspace
   doctor [--json] [--dir p] [--home p]  read-only diagnosis of home, config, hub, workspace,
               schema, migration journals, UI port, runtime and assets; exits 1
               when a check fails and prints the exact repair commands
@@ -2060,6 +2078,26 @@ function main() {
       const words = rest.filter((arg) => !arg.startsWith("--"));
       const flag = (name: string): boolean => rest.includes(`--${name}`);
       const sub = words[0] ?? "ls";
+
+      /**
+       * `registry` is handled BEFORE the tolerant split above reaches it, and it
+       * does not inherit the flag tolerance.
+       *
+       * The quirk documented above fails safe for the local verbs because every
+       * typo there does LESS — a mistyped `--yes` leaves prune previewing. That
+       * argument does not transfer to a command group that publishes to a service:
+       * a swallowed `--disable` would leave publishing ON, and a swallowed
+       * `--apply` is the only thing standing between a preview and a write. So
+       * `hub registry` parses its own arguments strictly, and an unknown flag is a
+       * refusal rather than a silent no-op.
+       *
+       * Handed the raw `rest` rather than `words`, because it needs its flags.
+       */
+      if (sub === "registry") {
+        runHubRegistryCommand(rest.slice(rest.indexOf("registry") + 1));
+        break;
+      }
+
       const hub = Hub.open();
       try {
         if (sub === "ls") {
@@ -2172,7 +2210,7 @@ function main() {
             `Removed cross-link ${removed.blockerIdentifier} blocks ${removed.blockedIdentifier}  (${removed.blockerWs} → ${removed.blockedWs})`,
           );
         } else {
-          console.log("usage: staple hub [ls|links|events|unregister|prune|unlink]");
+          console.log("usage: staple hub [ls|links|events|unregister|prune|unlink|registry]");
         }
       } finally {
         hub.close();

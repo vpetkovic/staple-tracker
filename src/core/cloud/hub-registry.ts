@@ -120,6 +120,50 @@ export const HUB_BACKUP_EXCLUSIONS: readonly string[] = [
   "No credentials, and no device identity.",
 ];
 
+/**
+ * The one sentence that has to appear wherever the publish consent is granted.
+ *
+ * Lives HERE, in the leaf, rather than beside the code that spends the consent. Three
+ * surfaces need it — the CLI's grant screen, the settings page, and the refusal when it
+ * is missing — and one of them is reached by a route the page POLLS. Declaring it in
+ * `hub-registry-service.ts` would have put `client.ts`, the only `fetch` in the tree,
+ * into the import graph of a polled read; declaring it twice would have been two copies
+ * of the load-bearing sentence in the feature. This module imports `../types.js` and a
+ * `Hub` type and nothing else, so every surface can reach it and none of them acquires
+ * the transport by doing so.
+ *
+ * It is the same sentence as the module header above, and as `docs/sync.md`, verbatim.
+ * A disclosure reworded per surface is a disclosure whose strongest wording is whichever
+ * surface the person did not read.
+ */
+export const REGISTRY_DISCLOSURE =
+  "a machine that publishes its registry tells the service the names, prefixes and " +
+  "identities of every workspace on it, and that they sit together.";
+
+/**
+ * What replacing a registry identity does to whatever the old one named.
+ *
+ * Stated UNCONDITIONALLY wherever a previous id exists, and worded as a fact about the id
+ * rather than a warning about an observable state — because the state is not observable.
+ * `adoptRegistryIdentity` refuses when a connection record exists for the old id, but
+ * `performDisconnect` deletes that record (its contract is to leave nothing behind), so
+ * `connect -> publish -> disconnect -> adopt` passes the check and orphans the old
+ * registry with no local evidence it ever existed. A surface that said "this may orphan a
+ * registry" would be hedging about something it cannot check; this says what is true
+ * either way, including that the operation is reversible.
+ *
+ * Exported as a constant, like the publish disclosure, so the CLI and the settings page
+ * cannot word it two ways. `%s` is the previous id.
+ */
+export const HUB_IDENTITY_REPLACEMENT_NOTICE =
+  "If anything was ever published under %s, that registry stays on the service and this " +
+  "machine will no longer point at it. Nothing is deleted, and re-adopting %s brings it back.";
+
+/** The notice with the previous id substituted. */
+export function describeIdentityReplacement(previousHubId: string): string {
+  return HUB_IDENTITY_REPLACEMENT_NOTICE.replaceAll("%s", previousHubId);
+}
+
 /** The one sentence that has to appear wherever a hub backup is offered. */
 export const HUB_BACKUP_HEADLINE =
   "A hub backup contains your workspace list and the links between them. " +

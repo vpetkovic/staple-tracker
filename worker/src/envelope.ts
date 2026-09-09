@@ -247,6 +247,35 @@ export function validateEnvelope(
       { index },
     );
   }
+  /**
+   * `delete` is refused for a registry entity too, and this one is a correctness fence
+   * rather than a tidiness rule.
+   *
+   * A tombstone is FINAL in the fold — every later operation on a deleted entity is
+   * discarded — and that is right for an `issue`, whose id is minted once, because
+   * resurrecting one is meaningless. A registry entity's id is **derived from its
+   * content**: a `crossLink`'s key is its four names, and a `registration`'s is the
+   * workspace's `repositoryId`. So removing an edge and adding it back produces the same
+   * entity id, lands on the tombstone, and is silently dropped while the push reports
+   * success — and a restore carries the tombstone into the new epoch, because
+   * `materializedVerb` reproduces a bare `delete`. The epoch bump is not an escape.
+   *
+   * So retraction is a FIELD (`present: false` on a cross-link) and this vocabulary has
+   * no delete at all. Refused here rather than merely not emitted, because the client is
+   * not the only thing that can push and "we do not send that" is not an invariant.
+   *
+   * The restore path is unaffected and deliberately so: `backups.ts` stages materialised
+   * operations straight into D1 without going through this validator, which is what lets
+   * a backup taken before this rule still be restored faithfully, tombstones included.
+   */
+  if (REGISTRY_ENTITIES.has(entity) && verb === "delete") {
+    throw new SyncError(
+      "validation",
+      `${at}.verb 'delete' is never valid for a registry entity — a retraction is a field, ` +
+        "because a tombstone on a content-derived key can never be undone",
+      { index },
+    );
+  }
 
   // `baseVersion` is null for `create` and an integer otherwise. The server records it
   // and does not act on it: conflict detection is field-scoped against a LOCAL entity

@@ -18,7 +18,7 @@
 import type { Session } from "./auth.js";
 import type { Env } from "./env.js";
 import { SyncError, json } from "./errors.js";
-import { type Envelope, validateEnvelope } from "./envelope.js";
+import { REGISTRY_ENTITIES, type Envelope, validateEnvelope } from "./envelope.js";
 import { readJson } from "./http.js";
 import { maxBatchSize, planOf } from "./limits.js";
 import { log, tokenFingerprint } from "./log.js";
@@ -107,6 +107,36 @@ function parseBatch(
   // Every envelope is validated before any statement is prepared. A batch with one bad
   // operation is rejected whole and writes nothing — never a partially accepted batch.
   const ops = body.ops.map((op, index) => validateEnvelope(op, index, session, protocol));
+
+  /**
+   * A batch may not mix the registry vocabulary with the workspace one.
+   *
+   * A hub's log holds only `registration` and `crossLink`; a workspace's holds only the
+   * other thirteen. Nothing legitimate produces a batch containing both, because nothing
+   * legitimate has both a hub and a workspace in hand at once.
+   *
+   * What it fences is a specific, expensive accident. This service has no notion of
+   * hub-versus-workspace repository, and deliberately should not — a flag would be a
+   * second thing to keep in step with what the log actually contains. So a `registration`
+   * pushed at a workspace's `repoId` is accepted, and from that moment every protocol-1
+   * client of that workspace is refused at `/ops` and `/snapshot` with a non-retryable
+   * 426, permanently, with no remedy short of a purge. The reachable route to that was a
+   * mistyped hub id on the client, which `adoptRegistryIdentity` now refuses; this closes
+   * the other half, cheaply and in memory, with no extra query.
+   *
+   * It is NOT a claim that a repository's kind is enforced — a batch of registry
+   * operations alone still lands wherever the credential points. Making that structural
+   * would need a per-push read of what the log already holds, which is a query per push
+   * against the ceiling this service is built around.
+   */
+  const registry = ops.filter((op) => REGISTRY_ENTITIES.has(op.entity)).length;
+  if (registry > 0 && registry < ops.length) {
+    throw new SyncError(
+      "validation",
+      "a batch may not mix hub registry entities with workspace entities",
+      { registryCount: registry, opCount: ops.length },
+    );
+  }
 
   // Duplicate ids WITHIN one batch would each reserve a slot and only one would land,
   // which is legal but means the client is confused about its own clientSeq counter.

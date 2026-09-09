@@ -102,7 +102,17 @@ describe("the registry entities on the wire", () => {
         verb: r.verb,
         payload: JSON.parse(r.payload),
       })),
-    ).toEqual(FIXTURE_OPS.map((f) => ({ ...f })));
+    ).toEqual(
+      // `baseVersion` is an envelope field with no column of its own in this projection —
+      // it is stored, and `push.ts` writes it to `base_version`. Compared where it
+      // matters, which is the client's `opId` derivation, not here.
+      FIXTURE_OPS.map((f) => ({
+        entity: f.entity,
+        entityId: f.entityId,
+        verb: f.verb,
+        payload: { ...f.payload },
+      })),
+    );
   });
 
   it("stores a path-like slug verbatim, because a slug is a name", async () => {
@@ -353,7 +363,19 @@ describe("the fold, the snapshot and the round trip", () => {
     expect(Object.keys(entity.fieldWrites).sort()).toEqual(["format", "slug"]);
   });
 
-  it("tombstones a deleted cross-link and returns the tombstone", async () => {
+  it("REFUSES to delete a cross-link, because a tombstone on a derived key is forever", async () => {
+    /**
+     * The fence, and the reason for it.
+     *
+     * A cross-link's entity id is derived from its four names, so removing an edge and
+     * adding it back produces the SAME id. A tombstone is final in the fold — every later
+     * operation on a deleted entity is discarded — so the re-add would be accepted,
+     * acknowledged and dropped, for ever, while the push reported success. And a restore
+     * carries the tombstone into the new epoch, because `materializedVerb` reproduces a
+     * bare `delete`, so the epoch bump is not an escape either.
+     *
+     * Retraction is therefore a FIELD, and the verb is refused rather than merely unused.
+     */
     await publishFixture();
     const removed = op(2, {
       opId: "reg-op-unlink",
@@ -362,17 +384,100 @@ describe("the fold, the snapshot and the round trip", () => {
       baseVersion: 1,
       payload: {},
     });
-    expect((await pushOps([removed], { token, protocol: 2, repoId: HUB })).status).toBe(200);
+    const body = await expectError(
+      await pushOps([removed], { token, protocol: 2, repoId: HUB }),
+      "validation",
+      400,
+    );
+    expect(String(body.message)).toContain("never valid for a registry entity");
+    expect(String(body.message)).toContain("retraction is a field");
 
+    // Nothing was written, and the edge is still there and still present.
     const page = await jsonOf(await call(`/v1/repos/${HUB}/snapshot`, { token, protocol: 2 }));
     const entity = page.entities.find(
       (e: { entityId: string }) => e.entityId === FIXTURE_OPS[2]!.entityId,
     );
-    // Returned, not omitted: a device handed silence cannot tell a deleted edge from
-    // one it has never heard of. The CLIENT is what skips it when rebuilding a
-    // registry, because a registry has no way to express an absent edge.
-    expect(entity.deletedAt).not.toBeNull();
-    expect(entity.verb).toBe("delete");
+    expect(entity.deletedAt).toBeNull();
+    expect(entity.state.present).toBe(true);
+  });
+
+  it("retracts a cross-link with a field, and lets it be re-added afterwards", async () => {
+    /**
+     * The whole point of the field: an edge can go away and come back. Under the `delete`
+     * verb the third operation here was silently discarded.
+     */
+    await publishFixture();
+    const retract = op(2, {
+      opId: "reg-op-retract",
+      clientSeq: 11,
+      verb: "update",
+      baseVersion: 1,
+      payload: { ...FIXTURE_OPS[2]!.payload, present: false },
+    });
+    expect((await pushOps([retract], { token, protocol: 2, repoId: HUB })).status).toBe(200);
+
+    let page = await jsonOf(await call(`/v1/repos/${HUB}/snapshot`, { token, protocol: 2 }));
+    let entity = page.entities.find(
+      (e: { entityId: string }) => e.entityId === FIXTURE_OPS[2]!.entityId,
+    );
+    expect(entity.deletedAt).toBeNull();
+    expect(entity.state.present).toBe(false);
+    // Every other key survives, because the fold merges and is silent about the rest.
+    expect(entity.state.blockerIdentifier).toBe("STA-283");
+
+    const readd = op(2, {
+      opId: "reg-op-readd",
+      clientSeq: 12,
+      verb: "update",
+      baseVersion: 2,
+      payload: { ...FIXTURE_OPS[2]!.payload, present: true },
+    });
+    expect((await pushOps([readd], { token, protocol: 2, repoId: HUB })).status).toBe(200);
+
+    page = await jsonOf(await call(`/v1/repos/${HUB}/snapshot`, { token, protocol: 2 }));
+    entity = page.entities.find(
+      (e: { entityId: string }) => e.entityId === FIXTURE_OPS[2]!.entityId,
+    );
+    expect(entity.state.present).toBe(true);
+    expect(entity.version).toBe(3);
+  });
+
+  it("refuses a batch that mixes registry and workspace entities", async () => {
+    /**
+     * A hub's log holds only registry entities and a workspace's holds only the others.
+     * A mixed batch is always a bug, and the specific accident it fences is a
+     * `registration` landing in a WORKSPACE's log — after which every protocol-1 client
+     * of that workspace is refused permanently, with no remedy short of a purge.
+     */
+    const issueOp = {
+      opId: "mixed-issue",
+      repoId: HUB,
+      protocol: 2,
+      schema: 12,
+      entity: "issue",
+      entityId: "issue-1",
+      verb: "create",
+      baseVersion: null,
+      payload: { title: "ordinary work" },
+      deviceId: DEVICE,
+      actor: "opus-hubwire",
+      clientSeq: 1,
+      createdAt: "2026-09-09T12:00:00.000Z",
+    };
+    const body = await expectError(
+      await pushOps([issueOp, op(0, { clientSeq: 2 })], { token, protocol: 2, repoId: HUB }),
+      "validation",
+      400,
+    );
+    expect(String(body.message)).toContain("may not mix hub registry entities");
+
+    const count = await env.DB.prepare(`SELECT COUNT(*) AS n FROM ops WHERE repo_id = ?1`)
+      .bind(HUB)
+      .first<{ n: number }>();
+    expect(count!.n).toBe(0);
+
+    // Either vocabulary alone is fine — the refusal is about MIXING.
+    expect((await pushOps([issueOp], { token, protocol: 2, repoId: HUB })).status).toBe(200);
   });
 });
 

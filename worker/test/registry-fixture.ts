@@ -106,6 +106,7 @@ export const FIXTURE_OPS = [
     entity: "registration",
     entityId: "11111111-1111-4111-8111-111111111111",
     verb: "create",
+    baseVersion: 0,
     payload: {
       format: 1,
       slug: "staple-tracker",
@@ -118,6 +119,7 @@ export const FIXTURE_OPS = [
     entity: "registration",
     entityId: "22222222-2222-4222-8222-222222222222",
     verb: "create",
+    baseVersion: 0,
     payload: {
       format: 1,
       slug: "/Users/someone/projects/qde",
@@ -132,6 +134,7 @@ export const FIXTURE_OPS = [
     // slashes are escaped, which is what makes the join injective.
     entityId: "staple-tracker/STA-283/%2FUsers%2Fsomeone%2Fprojects%2Fqde/QDE-42",
     verb: "create",
+    baseVersion: 0,
     payload: {
       format: 1,
       blockerWs: "staple-tracker",
@@ -139,12 +142,14 @@ export const FIXTURE_OPS = [
       blockedWs: "/Users/someone/projects/qde",
       blockedIdentifier: "QDE-42",
       type: "blocks",
+      present: true,
     },
   },
   {
     entity: "crossLink",
     entityId: "a%2Fb/A%252FB-1/w%C3%B6rk%E2%80%94space/WS-7",
     verb: "create",
+    baseVersion: 0,
     payload: {
       format: 1,
       blockerWs: "a/b",
@@ -152,6 +157,7 @@ export const FIXTURE_OPS = [
       blockedWs: "wörk—space",
       blockedIdentifier: "WS-7",
       type: "blocks",
+      present: true,
     },
   },
 ] as const;
@@ -178,6 +184,7 @@ export const FIXTURE_FOLDED_STATE = [
       blockedWs: "wörk—space",
       blockedIdentifier: "WS-7",
       type: "blocks",
+      present: true,
     },
   },
   {
@@ -190,6 +197,7 @@ export const FIXTURE_FOLDED_STATE = [
       blockedWs: "/Users/someone/projects/qde",
       blockedIdentifier: "QDE-42",
       type: "blocks",
+      present: true,
     },
   },
   {
