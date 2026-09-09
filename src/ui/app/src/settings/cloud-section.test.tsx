@@ -29,7 +29,13 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { SettingCategoryView } from "@/lib/settings";
-import type { CloudSurfaceReport, ConnectPreview, RemoteDevice } from "@/lib/types";
+import type {
+  CloudSurfaceReport,
+  ConnectPreview,
+  HubCloudReport,
+  HubWorkspaceReport,
+  RemoteDevice,
+} from "@/lib/types";
 import { CloudPanel, type CloudPanelProps } from "./CloudSection";
 import {
   CLOUD_CATEGORY,
@@ -40,6 +46,8 @@ import {
   consentControls,
   counterFacts,
   describeDevice,
+  hubListDescription,
+  hubRowView,
   isCloudCategory,
   orderDevices,
   previewFacts,
@@ -115,6 +123,10 @@ function panel(overrides: Partial<CloudPanelProps> = {}): string {
     onDraft: NOOP,
     pending: null,
     devices: null,
+    // S16 (STA-275): null is what the panel gets when the hub list request is in
+    // flight or failed, and is the correct default for every case in this file —
+    // they are all about ONE workspace.
+    workspaces: null,
     revoking: null,
     confirmDisconnect: false,
     onPreview: NOOP,
@@ -445,5 +457,183 @@ describe("devices", () => {
     expect(describeDevice(DEVICES[1]!, now)).toMatch(/last seen \d+[mhd] ago/);
     expect(describeDevice({ ...DEVICES[1]!, lastSeenAt: null }, now)).toContain("never seen");
     expect(describeDevice(DEVICES[0]!, now)).toContain("revoked");
+  });
+});
+
+// ---------------------------------------------- the hub-wide list (S16/STA-275)
+
+function hubRow(overrides: Partial<HubWorkspaceReport> = {}): HubWorkspaceReport {
+  return {
+    slug: "alpha",
+    prefix: "ALP",
+    path: "/work/alpha/.staple/staple.db",
+    kind: "repo",
+    available: true,
+    repositoryId: "0e77fa01-1111-2222-3333-444444444444",
+    state: "manual",
+    mode: "manual",
+    endpoint: "https://sync.example.com",
+    deviceId: "device-1",
+    label: "work laptop",
+    credentialMechanism: "keychain",
+    credentialPresent: null,
+    auto: false,
+    backup: false,
+    connectedAt: "2026-09-05T00:00:00.000Z",
+    skip: null,
+    skipDetail: null,
+    ...overrides,
+  };
+}
+
+function hubReport(rows: HubWorkspaceReport[]): HubCloudReport {
+  return {
+    workspaces: rows,
+    counts: {
+      total: rows.length,
+      connected: rows.filter((row) => row.state !== "disconnected").length,
+      disconnected: rows.filter((row) => row.state === "disconnected").length,
+      skipped: rows.filter((row) => row.skip !== null).length,
+      automatic: rows.filter((row) => row.auto).length,
+    },
+    endpoints: [
+      ...new Set(rows.map((row) => row.endpoint).filter((value): value is string => value !== null)),
+    ].sort(),
+  };
+}
+
+describe("the hub-wide workspace list", () => {
+  it("names every workspace with its own state, not a summary of them", () => {
+    const html = panel({
+      workspaces: hubReport([
+        hubRow(),
+        hubRow({ slug: "bravo", repositoryId: "b", state: "automatic", mode: "automatic", auto: true }),
+        hubRow({
+          slug: "charlie",
+          repositoryId: "c",
+          state: "disconnected",
+          mode: "disconnected",
+          endpoint: null,
+        }),
+      ]),
+    });
+
+    expect(html).toContain('data-cloud-workspaces');
+    for (const slug of ["alpha", "bravo", "charlie"]) {
+      expect(html).toContain(`data-cloud-workspace="${slug}"`);
+    }
+    // Each row carries its OWN state, which is the criterion.
+    expect(html).toContain("Connected, manual");
+    expect(html).toContain("Connected, automatic");
+    expect(html).toContain("Not connected");
+  });
+
+  it("renders when the CURRENT workspace is disconnected — the case it exists for", () => {
+    /**
+     * Every other section on this panel is behind the `connected` branch. This
+     * one must not be: the question it answers is "have I connected anything?",
+     * asked by somebody looking at a workspace that says Not connected. Hiding
+     * the list until the current workspace happened to be connected would make it
+     * invisible exactly when it is useful.
+     */
+    const html = panel({
+      report: DISCONNECTED,
+      workspaces: hubReport([
+        hubRow(),
+        hubRow({ slug: "bravo", repositoryId: "b", state: "disconnected", mode: "disconnected" }),
+      ]),
+    });
+    expect(html).toContain('data-cloud-section="true" data-mode="disconnected"');
+    expect(html).toContain('data-cloud-workspace="alpha"');
+  });
+
+  it("marks the workspace the dialog is open on, so the list is orientable", () => {
+    const html = panel({
+      workspaces: hubReport([
+        hubRow({ repositoryId: DISCONNECTED.repositoryId }),
+        hubRow({ slug: "bravo", repositoryId: "b" }),
+      ]),
+    });
+    expect(html).toContain("(this one)");
+  });
+
+  it("badges auto, backup and MISSING from values rather than from prose", () => {
+    const view = hubRowView(hubRow({ auto: true, backup: true, available: false }));
+    expect(view.marks).toEqual(["auto", "backup", "MISSING"]);
+    expect(hubRowView(hubRow()).marks).toEqual([]);
+  });
+
+  it("shows why a workspace a hub-wide operation would skip is skipped", () => {
+    const html = panel({
+      workspaces: hubReport([
+        hubRow(),
+        hubRow({
+          slug: "bravo",
+          repositoryId: null,
+          available: false,
+          state: "disconnected",
+          mode: "disconnected",
+          endpoint: null,
+          skip: "unavailable",
+          skipDetail: "The workspace database is not on this machine right now.",
+        }),
+      ]),
+    });
+    expect(html).toContain("not on this machine right now");
+  });
+
+  it("never renders credentialPresent, because the route that feeds it does not look", () => {
+    /**
+     * `null` means NOT ASKED. A column that read it as falsy would print "no
+     * credential" for every workspace on a surface that deliberately never
+     * probed — the difference between "your credential is gone" and "we did not
+     * check".
+     */
+    const view = hubRowView(hubRow({ credentialPresent: null }));
+    expect(Object.keys(view)).not.toContain("credentialPresent");
+    expect(view.state).toBe("Connected, manual");
+  });
+
+  it("draws nothing for a machine with one workspace or none", () => {
+    // A "list" of one is a heading restating what the sections above already say.
+    expect(panel({ workspaces: hubReport([hubRow()]) })).not.toContain("data-cloud-workspaces");
+    expect(panel({ workspaces: hubReport([]) })).not.toContain("data-cloud-workspaces");
+    expect(panel({ workspaces: null })).not.toContain("data-cloud-workspaces");
+  });
+
+  it("names the CLI gesture rather than offering a button that would ask less", () => {
+    /**
+     * A deliberate scope boundary, not an omission. Connecting every workspace
+     * spends one enrollment secret against N services and produces a
+     * per-workspace outcome; a button here would have to re-implement the whole
+     * fan-out preview to ask for that honestly, and one that showed less than the
+     * CLI preview shows would be a worse consent rather than a more convenient
+     * one.
+     */
+    const text = hubListDescription({
+      total: 4,
+      connected: 2,
+      disconnected: 2,
+      skipped: 1,
+      automatic: 1,
+    });
+    expect(text).toContain("2 of 4 connected");
+    expect(text).toContain("staple cloud connect --all");
+    expect(text).toContain("enumerated when the page loads");
+  });
+
+  it("is fetched once on mount and is NOT on any poll", () => {
+    const text = source("CloudSection.tsx");
+    expect(text).toContain("getCloudWorkspaces()");
+    /**
+     * The list describes N workspaces, and the temptation with a list is to poll
+     * it. It must not be polled: connection state changes when a human runs a
+     * command in a terminal, so a poll would do the work forever to learn
+     * nothing. `useEffect` with an empty dependency array is the assertion — it is
+     * about the MACHINE, so it does not even re-run when `ws` changes.
+     */
+    const effect = text.slice(text.indexOf("getCloudWorkspaces()"));
+    expect(effect.slice(0, effect.indexOf("}, [") + 8)).toContain("}, []);");
+    expect(text).not.toMatch(/setInterval[\s\S]{0,200}getCloudWorkspaces/);
   });
 });

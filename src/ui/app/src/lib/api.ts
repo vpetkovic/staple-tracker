@@ -22,6 +22,7 @@ import type {
   DocumentRevision,
   ErrorEnvelope,
   Graph,
+  HubCloudReport,
   InboxRow,
   IssueDetail,
   IssueDocument,
@@ -188,6 +189,23 @@ export const getPoll = () => request<Poll>("/api/poll");
  * read a page.
  */
 export const getCloudStatus = () => request<CloudSurfaceReport>("/api/cloud/status");
+
+/**
+ * `GET /api/cloud/workspaces` — every registered workspace with its own
+ * connection state. S16 (STA-275).
+ *
+ * Also once per mount, and for a stronger reason than `getCloudStatus`. This
+ * response describes N workspaces, and the temptation with a list is to poll it
+ * so it stays fresh. It must not be polled: the route reads the hub registry and
+ * a handful of files per workspace, and a page that asked every 1.5 seconds
+ * would be doing that work forever to watch a value that only changes when a
+ * human runs `staple cloud connect` or `staple init` in a terminal.
+ *
+ * The route takes no parameters at all — no `ws`, because it is about all of
+ * them, and no `refresh`, because a refresh across a hub is one authenticated
+ * round trip per workspace.
+ */
+export const getCloudWorkspaces = () => request<HubCloudReport>("/api/cloud/workspaces");
 
 // ---------- cloud mutations (S13, STA-258) ----------
 

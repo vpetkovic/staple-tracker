@@ -314,6 +314,8 @@ describe("KNOWN: logical errors this surface cannot project", () => {
    * unattributed, must change THIS list, which is the review moment.
    */
   it("pins the exact API surface, read out of the server source", () => {
+    // GOLDEN, moved by S16 (STA-275): 45 -> 46. The addition is
+    // `/api/cloud/workspaces`; see the comment beside it below.
     // Derived, not restated: adding a route to src/ui/server.ts changes this
     // list and fails here, which is the review moment. U5's create and update
     // are branches inside POST /api/action rather than routes of their own,
@@ -421,6 +423,23 @@ describe("KNOWN: logical errors this surface cannot project", () => {
       "/api/cloud/devices/revoke",
       "/api/cloud/disconnect",
       "/api/cloud/status",
+      /**
+       * S16 (STA-275) added `/api/cloud/workspaces`, a GET, and it is the only
+       * cloud route that is about MORE THAN ONE workspace.
+       *
+       * It reads the hub registry, each workspace's `repository.json` and the
+       * connection records in the staple home, and returns every registered
+       * workspace with its own connection state. It opens no workspace database
+       * — a list that carried each workspace's counters would migrate every
+       * project on the machine on every poll of the settings page — and it makes
+       * no request, because `hubCloudReport` cannot reach the transport.
+       *
+       * It takes no `?refresh`, and that absence belongs in this pin rather than
+       * only in a comment on the handler: a refresh across a hub is one
+       * authenticated round trip PER WORKSPACE fired by one page load. If a
+       * refresh parameter ever appears on this route, that is the review moment.
+       */
+      "/api/cloud/workspaces",
       "/api/document",
       "/api/events",
       "/api/gate/approve",

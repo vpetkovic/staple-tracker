@@ -62,6 +62,7 @@ import {
   cloudConnect,
   cloudDisconnect,
   getCloudStatus,
+  getCloudWorkspaces,
   listCloudDevices,
   previewCloudConnect,
   revokeCloudDevice,
@@ -72,6 +73,7 @@ import type {
   CloudSurfaceReport,
   ConnectPreview,
   ConsentTicket,
+  HubCloudReport,
   RemoteDevice,
 } from "@/lib/types";
 import { LoadingState } from "@/views/ViewChrome";
@@ -85,6 +87,8 @@ import {
   consentControls,
   counterFacts,
   describeDevice,
+  hubListDescription,
+  hubRowView,
   orderDevices,
   previewFacts,
   revokeWarning,
@@ -121,6 +125,14 @@ export interface CloudPanelProps {
   pending: { preview: ConnectPreview; consent: ConsentTicket } | null;
   /** `null` means "we have not left this machine and will not until you press the button". */
   devices: readonly RemoteDevice[] | null;
+  /**
+   * Every registered workspace and its own connection state — S16 (STA-275).
+   *
+   * `null` while the one request for it is in flight, or when it failed. A
+   * failure here does NOT take the panel down: the rest of this surface is about
+   * one workspace and is perfectly usable without the list.
+   */
+  workspaces: HubCloudReport | null;
   revoking: string | null;
   confirmDisconnect: boolean;
   onPreview: () => void;
@@ -445,7 +457,70 @@ export function CloudPanel(props: CloudPanelProps) {
           </Section>
         </>
       ) : null}
+
+      {/*
+        OUTSIDE the `connected` branch, deliberately.
+
+        Every other section on this page is about the workspace the dialog was
+        opened on, so they are all behind that branch. This one is about the
+        MACHINE, and the case it exists for is precisely the one where the
+        current workspace is NOT connected and five others are — a person looking
+        at "Not connected" and wondering whether they connected anything. Hiding
+        the list until the current workspace happens to be connected would make
+        it invisible exactly when it answers the question.
+      */}
+      <HubWorkspaceList report={props.workspaces} currentRepositoryId={report.repositoryId} />
     </div>
+  );
+}
+
+/**
+ * Every registered workspace, with its own state — S16 (STA-275).
+ *
+ * A LIST AND NOT A CONTROL, and that is a decision rather than an omission.
+ * Connecting every workspace spends one enrollment secret against N services and
+ * produces a per-workspace outcome — nine connected, two skipped, one refused —
+ * which is a table this dialog has nowhere sensible to put and a consent this
+ * page would have to re-implement the whole fan-out preview to ask for honestly.
+ * So the description names the command instead. A button that showed less than
+ * the CLI preview shows would be a worse consent, not a more convenient one.
+ *
+ * Renders nothing at all when there is one workspace or none: a "list" of one is
+ * a heading and a row restating what the four sections above already said.
+ */
+function HubWorkspaceList({
+  report,
+  currentRepositoryId,
+}: {
+  report: HubCloudReport | null;
+  currentRepositoryId: string | null;
+}) {
+  if (report === null || report.workspaces.length < 2) return null;
+  const rows = report.workspaces.map((row) => hubRowView(row, { currentRepositoryId }));
+
+  return (
+    <Section title="Workspaces on this machine" description={hubListDescription(report.counts)}>
+      <ul data-cloud-workspaces className="space-y-1">
+        {rows.map((row) => (
+          <li key={row.slug} data-cloud-workspace={row.slug} className="text-[12px]">
+            <div className="flex flex-wrap items-baseline gap-x-2">
+              <span className={row.current ? "font-semibold" : undefined}>{row.slug}</span>
+              {row.current ? <span className="text-muted-foreground">(this one)</span> : null}
+              <span className="text-muted-foreground">{row.state}</span>
+              <span className="min-w-0 wrap-anywhere text-muted-foreground">{row.endpoint}</span>
+              {row.marks.map((mark) => (
+                <span key={mark} className="rounded border px-1 text-[11px] text-muted-foreground">
+                  {mark}
+                </span>
+              ))}
+            </div>
+            {row.skipDetail ? (
+              <p className="text-[11px] leading-relaxed text-muted-foreground">{row.skipDetail}</p>
+            ) : null}
+          </li>
+        ))}
+      </ul>
+    </Section>
   );
 }
 
@@ -462,6 +537,7 @@ export function CloudSection({ ws }: { ws?: string }) {
   const [devices, setDevices] = useState<RemoteDevice[] | null>(null);
   const [revoking, setRevoking] = useState<string | null>(null);
   const [confirmDisconnect, setConfirmDisconnect] = useState(false);
+  const [workspaces, setWorkspaces] = useState<HubCloudReport | null>(null);
 
   const alive = useRef(true);
   useEffect(() => {
@@ -495,6 +571,36 @@ export function CloudSection({ ws }: { ws?: string }) {
       live = false;
     };
   }, [ws]);
+
+  /**
+   * The hub-wide list — S16 (STA-275). One request, once, on mount.
+   *
+   * A SEPARATE effect from the status read above, not a `Promise.all` with it,
+   * and the reason is the error handling. `loadError` from the status read
+   * replaces the whole panel, because without a report there is nothing to draw.
+   * The list is different: it is one section of several, and losing it must not
+   * take away the connect form. So its failure is swallowed to `null` and the
+   * section simply does not render — see `HubWorkspaceList`.
+   *
+   * Not keyed on `ws`. The list is about the MACHINE and is identical whichever
+   * workspace the dialog was opened on; re-fetching it when `ws` changes would be
+   * a request for a value that cannot have changed. `currentRepositoryId` is what
+   * marks the current row, and that comes from the status report.
+   */
+  useEffect(() => {
+    let live = true;
+    getCloudWorkspaces()
+      .then((next) => {
+        if (live) setWorkspaces(next);
+      })
+      .catch(() => {
+        // Deliberately silent. The list is additive; the panel is not about it.
+        if (live) setWorkspaces(null);
+      });
+    return () => {
+      live = false;
+    };
+  }, []);
 
   /**
    * Every mutation answers with the refreshed report, so acting and re-reading
@@ -535,6 +641,7 @@ export function CloudSection({ ws }: { ws?: string }) {
       onDraft={(patch) => setDraft((current) => ({ ...current, ...patch }))}
       pending={pending}
       devices={devices}
+      workspaces={workspaces}
       revoking={revoking}
       confirmDisconnect={confirmDisconnect}
       onPreview={() =>

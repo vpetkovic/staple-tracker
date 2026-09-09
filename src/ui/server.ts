@@ -37,6 +37,7 @@ import { SurfaceAutoSync } from "../core/cloud/auto-triggers.js";
 import { listConflicts, resolveConflict } from "../core/cloud/conflicts.js";
 import { localCloudStatus } from "../core/cloud/status.js";
 import { cloudSurfaceReport, noIdentityReport } from "../core/cloud/surface.js";
+import { hubCloudReport } from "../core/cloud/hub-surface.js";
 /**
  * S13 (STA-258): the cloud MUTATIONS, which until now had no HTTP surface at all.
  *
@@ -821,6 +822,45 @@ export function startUiServer(options: UiOptions): UiHandle {
             ? noIdentityReport()
             : cloudSurfaceReport(localCloudStatus(stapleHome(), repositoryId), handle.store.db),
         );
+        return;
+      }
+
+      /**
+       * `GET /api/cloud/workspaces` — every registered workspace and its own
+       * connection state. STA-275.
+       *
+       * ## Why this is a separate route and not a field on `/api/cloud/status`
+       *
+       * `/api/cloud/status` is about ONE workspace and returns a
+       * `CloudSurfaceReport`, which carries counters read out of that
+       * workspace's database. Folding a list into it would either make the list
+       * carry counters — N databases opened and migrated per poll of the
+       * settings page — or make the response shape depend on a query parameter,
+       * which the UI type mirror could not express.
+       *
+       * So the list is its own route with its own type, and everything on it
+       * comes from files: the hub registry, each workspace's `repository.json`,
+       * and the connection records in the staple home. No workspace database is
+       * opened by this handler at all.
+       *
+       * ## Silent, with no `--refresh` equivalent and deliberately no way to add one
+       *
+       * `hubCloudReport` cannot reach the transport — nothing in its import
+       * graph does — so this route is silent by construction rather than by
+       * discipline. There is no `?refresh` parameter here and there must never
+       * be: a refresh across a hub is one authenticated round trip per
+       * workspace, and this page polls. That is *"one human's page-open into a
+       * heartbeat to Cloudflare"* with a multiplier on it.
+       *
+       * `probeCredentials` is likewise NOT passed. Establishing whether each
+       * credential is really present means a `security(1)` subprocess per
+       * workspace on macOS, and this response is rendered every few seconds.
+       * `credentialPresent` therefore comes back `null`, which the type says
+       * means "not asked" — an honest third value. `staple cloud status --all`,
+       * typed once by a human, is where the probe happens.
+       */
+      if (url.pathname === "/api/cloud/workspaces") {
+        json(res, 200, hubCloudReport(stapleHome()));
         return;
       }
 

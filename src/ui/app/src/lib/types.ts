@@ -1375,6 +1375,81 @@ export interface CloudSurfaceReport {
 }
 
 /**
+ * `GET /api/cloud/workspaces` — every registered workspace with its OWN
+ * connection state. S16 (STA-275). Mirrors `HubCloudReport` in
+ * src/core/cloud/hub-surface.ts, and pinned equal to it by
+ * `test/contract-ui-types.test.ts`.
+ *
+ * ## Why the rows are not `CloudSurfaceReport`s
+ *
+ * `CloudSurfaceReport` carries `pending`, `cursor`, `epoch`, conflicts and
+ * leases, all of which come out of a workspace's DATABASE. An array of them
+ * would mean this page opened — and migrated — every workspace on the machine,
+ * on every poll. So a row is a connection state and nothing more; the
+ * single-workspace `/api/cloud/status` is still where counters come from, for
+ * the one workspace being looked at.
+ *
+ * A list is for choosing. Choosing needs to know which workspaces are connected,
+ * to what, and whether background sync is on. It does not need each one's
+ * outbox depth.
+ */
+export interface HubWorkspaceReport {
+  slug: string;
+  prefix: string;
+  /** The workspace database path, as the hub registered it. */
+  path: string;
+  kind: string;
+  /** False is `hub ls`'s MISSING: the file is not on this machine right now. */
+  available: boolean;
+  repositoryId: string | null;
+  /**
+   * A deliberate SUBSET of `CloudSurfaceReport["state"]`. `offline` and
+   * `revoked` need an authenticated round trip, and this route makes none — so
+   * a union admitting them would promise information the server cannot produce.
+   */
+  state: "disconnected" | "manual" | "automatic" | "auth_failed";
+  mode: "disconnected" | "manual" | "automatic";
+  endpoint: string | null;
+  deviceId: string | null;
+  label: string | null;
+  credentialMechanism: "keychain" | "secret-tool" | "file" | null;
+  /**
+   * `null` means NOT ASKED, not "no credential".
+   *
+   * Establishing it is a keychain subprocess per workspace, and this page polls.
+   * The route deliberately does not probe, so this is always null here; the
+   * field exists because `staple cloud status --all` does probe and shares the
+   * type.
+   */
+  credentialPresent: boolean | null;
+  auto: boolean;
+  backup: boolean;
+  connectedAt: string | null;
+  /**
+   * Why a hub-wide operation would not act on this row, or null.
+   *
+   * Orthogonal to `state`: a workspace whose disk is unmounted but which has a
+   * connection record is genuinely `manual` AND genuinely not something a
+   * fan-out will touch. Two facts, two fields.
+   */
+  skip: "unavailable" | "no_identity" | "problem" | null;
+  skipDetail: string | null;
+}
+
+export interface HubCloudReport {
+  workspaces: HubWorkspaceReport[];
+  counts: {
+    total: number;
+    connected: number;
+    disconnected: number;
+    skipped: number;
+    automatic: number;
+  };
+  /** Sorted and deduped. A hub spanning two services is legitimate. */
+  endpoints: string[];
+}
+
+/**
  * The endpoint half of a connect preview — S13 (STA-258). Mirrors `CloudEndpoint`
  * in src/core/cloud/endpoint.ts.
  */
