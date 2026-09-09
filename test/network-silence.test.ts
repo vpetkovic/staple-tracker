@@ -345,6 +345,39 @@ const DISCONNECTED_SCENARIOS: Array<[name: string, args: string[]]> = [
   ["cloud backup enable", ["cloud", "backup", "enable"]],
   ["cloud backup disable", ["cloud", "backup", "disable"]],
   ["cloud restore", ["cloud", "restore", "some-backup-id"]],
+  /**
+   * The hub-wide fan-out — S16 (STA-275). Every one of these visits EVERY
+   * registered workspace, which is what makes them worth adding here rather than
+   * trusting the single-workspace cases above: a fan-out MULTIPLIES any egress it
+   * has by the number of workspaces on the machine, so a probe hidden in one of
+   * them is N violations from a single word.
+   *
+   * `cloud status --all` is the path the polled settings surface shares, and it
+   * reads only files: the hub registry, each workspace's `repository.json`, and
+   * the connection records in the home. It opens no workspace database either,
+   * which is not a network property but is asserted in
+   * `test/cloud-hub-connect.test.ts` — the two together are why a settings page
+   * can render this list every time it opens.
+   *
+   * `cloud connect --all --endpoint ...` is the important one. It builds the
+   * WHOLE fan-out preview — one per-workspace preview for every registered
+   * workspace, naming the service each would be bound to — and then exits 2
+   * because there is no `--yes`. Not one byte leaves. That is the pre-consent
+   * boundary of the single-workspace path, asserted at N.
+   *
+   * `cloud sync --all` and `cloud disconnect --all` are here for the reason their
+   * single-workspace forms are: on a machine with nothing connected they must
+   * refuse, or skip, from local files alone.
+   */
+  ["cloud status --all", ["cloud", "status", "--all"]],
+  ["cloud status --all --json", ["cloud", "status", "--all", "--json"]],
+  [
+    "cloud connect --all (preview only)",
+    ["cloud", "connect", "--all", "--endpoint", "https://staple-sync-dev.example.workers.dev"],
+  ],
+  ["cloud sync --all", ["cloud", "sync", "--all"]],
+  ["cloud sync --all --json", ["cloud", "sync", "--all", "--json"]],
+  ["cloud disconnect --all", ["cloud", "disconnect", "--all"]],
 ];
 
 describe("disconnected: every ordinary command makes zero outbound calls", () => {
@@ -508,6 +541,28 @@ describe("connected in manual mode: still zero", () => {
     ["done", ["done", "NET-1"]],
     ["cloud lease status", ["cloud", "lease", "status"]],
     ["cloud lease status --json", ["cloud", "lease", "status", "--json"]],
+    /**
+     * The hub-wide reads on a CONNECTED machine — S16 (STA-275).
+     *
+     * `cloud status --all` is the one that matters here. It now has a connection
+     * record to find, an endpoint written inside it, and a credential beside it,
+     * so this is the case where a "helpful" reachability check would actually
+     * have something to reach for. It must still read three files and stop.
+     *
+     * `cloud connect --all` is listed connected as well as disconnected, because
+     * the fan-out behaves DIFFERENTLY here: it skips the already-connected
+     * workspace, and that decision is made from the connection record. A version
+     * that confirmed the existing connection with the service before deciding to
+     * skip it would be silent when nothing was connected and chatty exactly when
+     * a hub was already set up — which is the wrong way round for an invariant
+     * anybody would notice.
+     */
+    ["cloud status --all", ["cloud", "status", "--all"]],
+    ["cloud status --all --json", ["cloud", "status", "--all", "--json"]],
+    [
+      "cloud connect --all (preview only)",
+      ["cloud", "connect", "--all", "--endpoint", "https://staple-sync-dev.example.workers.dev"],
+    ],
   ] as Array<[string, string[]]>) {
     it(`${name} on a CONNECTED repository attempts no network call`, () => {
       const result = staple(args);

@@ -74,6 +74,14 @@ import {
 } from "../core/cloud/backup.js";
 import { listConflicts, resolveConflict } from "../core/cloud/conflicts.js";
 import { buildConnectPreview, renderConnectPreview } from "../core/cloud/preview.js";
+import { buildHubConnectPreview, renderHubConnectPreview } from "../core/cloud/hub-preview.js";
+import {
+  performHubConnect,
+  performHubDisconnect,
+  renderHubConnectOutcome,
+} from "../core/cloud/hub-connect.js";
+import { renderHubSyncOutcome, syncAllWorkspaces } from "../core/cloud/hub-sync.js";
+import { describeHubReport, hubCloudReport } from "../core/cloud/hub-surface.js";
 import {
   acquireClaim,
   releaseClaim,
@@ -102,6 +110,14 @@ synchronizing automatically, and backing up. None of them implies another.
               silent by default: it reads three files and makes no request.
               --refresh is the only form that contacts the endpoint, and it is
               what tells offline from revoked from a rejected credential.
+  cloud status --all
+              every workspace the hub has registered, each with its OWN
+              connection state, endpoint and consents. Reads the registry and
+              some files in your staple home; opens no workspace database and
+              makes no request. A workspace registered a minute ago is in this
+              list, because the list is enumerated when you ask rather than
+              stored. Not combinable with --refresh: that is one request per
+              workspace from a single word.
   cloud connect --endpoint <url> --token <secret> [--label L] [--yes]
                 [--credential-file]
               show what is about to happen, then do it once you agree.
@@ -111,22 +127,43 @@ synchronizing automatically, and backing up. None of them implies another.
               provisioned out of band. Without --yes and without a terminal it
               prints the preview, exits 2, and sends nothing.
               A successful connection leaves automatic sync OFF.
-  cloud disconnect [--yes]
+  cloud connect --all --endpoint <url> --token <secret> [--reconnect]
+              one gesture, every registered workspace. Prints the whole list
+              first — what would be connected, what would be skipped, and why
+              for each — and sends nothing until you agree to that list.
+              EACH WORKSPACE KEEPS ITS OWN CREDENTIAL: revoking one does not
+              disconnect the others. This machine is one device in all of them.
+              The enrollment secret is offered to each workspace in turn; one
+              that refuses it is reported and skipped, and THE REST STILL
+              CONNECT. Already-connected workspaces are left exactly as they
+              are, so re-running after a staple init connects only the new one.
+              --reconnect replaces every existing credential instead.
+              Automatic sync stays OFF for every one of them.
+  cloud disconnect [--yes] [--all]
               remove this device's credential and stop all later cloud
               traffic. LOCAL ONLY: your database, your pending operations and
               the remote state are all untouched, and other devices are
-              unaffected. Makes no network call, so it works offline.
-  cloud sync
+              unaffected. Makes no network call, so it works offline. --all
+              does it for every registered workspace, including ones whose disk
+              is not currently mounted — the credential is on this machine.
+  cloud sync [--all]
               synchronize NOW: push what this device has journaled, then apply
               what the others have. The only thing that moves data in manual
               mode, which is the default and stays the default. A first run on
               a fresh clone hydrates the database from a snapshot; an
               interrupted run resumes where it stopped. Your local database
               stays the only read and write path for every other command.
+              --all synchronizes every connected workspace and reports a
+              PER-WORKSPACE outcome: one failing does not stop the others, and
+              the exit code is non-zero if any of them failed. Workspaces that
+              are not connected, and ones whose disk is not mounted, are
+              skipped rather than failed.
   cloud auto on|off
               this DEVICE's consent to synchronize without being asked. Stored
               per-machine, because consent given on a laptop is not consent
-              given on a build box. Off does not disconnect.
+              given on a build box. Off does not disconnect. There is no --all
+              here on purpose: connecting everywhere must not be one word away
+              from agreeing to background traffic everywhere.
   cloud lease [status] [<ref>]
               what this machine may honestly say about who holds what. Local
               and silent: it reads the mirror and the connection record and
@@ -183,7 +220,9 @@ synchronizing automatically, and backing up. None of them implies another.
               is data, not an error, and the rest of the repository keeps
               synchronizing around it. Local read; makes no request. --all
               includes the ones already settled, which are kept as the record of
-              who chose what.
+              who chose what. NOTE: --all here means "settled ones too", for one
+              workspace. It is the older sense of the flag and predates the
+              hub-wide --all on status, connect, sync and disconnect.
   cloud resolve <id> --take local|remote
   cloud resolve <id> --value <text>
               settle one, explicitly. Emits a NEW operation carrying the choice,
@@ -342,10 +381,70 @@ export function runCloudCommand(argv: string[]): void {
 
 const common = { db: { type: "string" as const }, ws: { type: "string" as const }, json: { type: "boolean" as const } };
 
+/**
+ * `--all`: every workspace the hub has registered, instead of this one.
+ *
+ * Accepted by `status`, `connect`, `sync` and `disconnect`. Deliberately NOT by
+ * `auto` — see {@link runAuto} — and note that `cloud conflicts --all` is an
+ * older, unrelated flag meaning "include the settled ones", which is why the
+ * help says so under that subcommand rather than leaving somebody to find out.
+ */
+const withAll = { ...common, all: { type: "boolean" as const } };
+
+/**
+ * `--all` names the hub; `--db` and `--ws` name one workspace. Passing both is
+ * not an ambiguity to resolve, it is a sentence with two subjects.
+ *
+ * Refused rather than silently preferring one. A `--all --ws foo` that quietly
+ * ignored `--ws` would be a fan-out somebody thought was scoped, which on
+ * `connect` means credentials minted for workspaces they did not mean to touch.
+ */
+function refuseTargeted(values: { all?: boolean; db?: string; ws?: string }, verb: string): void {
+  if (values.all !== true) return;
+  if (values.db === undefined && values.ws === undefined) return;
+  throw new StapleError(
+    "validation",
+    `--all ${verb} every registered workspace, so it cannot be combined with ` +
+      `${values.db !== undefined ? "--db" : "--ws"}, which names one. Drop one of them.`,
+  );
+}
+
 function runStatus(argv: string[]): void {
-  const { values } = parseArgs({ args: argv, options: { ...common, refresh: { type: "boolean" } } });
+  const { values } = parseArgs({ args: argv, options: { ...withAll, refresh: { type: "boolean" } } });
   const json = values.json === true;
   const home = stapleHome();
+
+  if (values.all === true) {
+    refuseTargeted(values, "reports");
+    /**
+     * `--refresh --all` is refused rather than implemented.
+     *
+     * A refresh is one authenticated `GET /devices`. Across a hub it is N of
+     * them fired by one word, which is the "one human's page-open into a
+     * heartbeat" shape `surface.ts` warns about, arriving through the CLI
+     * instead. And it would be N round trips to decorate a LIST — a surface for
+     * choosing, not for diagnosing. The remedy is named because it is short:
+     * refresh the one workspace whose reachability is actually in question.
+     */
+    if (values.refresh === true) {
+      throw new StapleError(
+        "validation",
+        "--refresh contacts the endpoint, and --all would contact one per registered workspace " +
+          "from a single word. Refresh a single workspace instead: `staple cloud status --refresh " +
+          "--ws <slug>`.",
+      );
+    }
+    /**
+     * `probeCredentials` is ON here and off for the polled HTTP surface. A human
+     * typed this once and wants to be told that a credential has gone missing;
+     * the settings page renders every few seconds and must not spawn a keychain
+     * subprocess per workspace per poll. See `hub-surface.ts`.
+     */
+    const report = hubCloudReport(home, { probeCredentials: true });
+    console.log(json ? JSON.stringify(report, null, 2) : describeHubReport(report));
+    return;
+  }
+
   const repositoryId = repositoryIdFor(values);
 
   /**
@@ -380,16 +479,31 @@ function runConnect(argv: string[]): void {
   const { values } = parseArgs({
     args: argv,
     options: {
-      ...common,
+      ...withAll,
       endpoint: { type: "string" },
       token: { type: "string" },
       label: { type: "string" },
       yes: { type: "boolean" },
+      reconnect: { type: "boolean" },
       "credential-file": { type: "boolean" },
     },
   });
   const json = values.json === true;
   const home = stapleHome();
+
+  if (values.all === true) {
+    runConnectAll(values);
+    return;
+  }
+  if (values.reconnect === true) {
+    throw new StapleError(
+      "validation",
+      "--reconnect only means something with --all, where it distinguishes 'connect the " +
+        "workspaces that are not connected yet' from 'replace every credential'. A single-workspace " +
+        "`staple cloud connect` already re-connects.",
+    );
+  }
+
   const repositoryId = repositoryIdFor(values);
 
   if (!values.endpoint) {
@@ -472,10 +586,156 @@ function runConnect(argv: string[]): void {
   );
 }
 
-function runDisconnect(argv: string[]): void {
-  const { values } = parseArgs({ args: argv, options: { ...common, yes: { type: "boolean" } } });
+/**
+ * `staple cloud connect --all` — one gesture, every registered workspace.
+ *
+ * Structurally identical to the single-workspace path above, and deliberately
+ * so: preview first, from a module that cannot reach the network; then consent;
+ * then, and only then, the enrollment secret is even looked at. The one
+ * difference is that the preview is a list and the outcome is a list, because
+ * *"partial failure is the normal case"* — nine connected, two skipped and one
+ * refused by the service is a perfectly ordinary Tuesday, and an aggregate
+ * result would describe it as a failure.
+ *
+ * `--token` is checked AFTER consent here, exactly as it is for one workspace.
+ * Asking for a secret before showing what it will be spent on is the ordering
+ * this whole design exists to avoid.
+ */
+function runConnectAll(values: {
+  all?: boolean;
+  db?: string;
+  ws?: string;
+  json?: boolean;
+  endpoint?: string;
+  token?: string;
+  label?: string;
+  yes?: boolean;
+  reconnect?: boolean;
+  "credential-file"?: boolean;
+}): void {
+  refuseTargeted(values, "connects");
   const json = values.json === true;
   const home = stapleHome();
+
+  if (!values.endpoint) {
+    throw new StapleError(
+      "validation",
+      "usage: staple cloud connect --all --endpoint <url> --token <secret>. Every registered " +
+        "workspace is connected to that one service; nothing is contacted until you agree to the " +
+        "list it prints.",
+    );
+  }
+
+  const preview = buildHubConnectPreview({
+    home,
+    endpoint: values.endpoint,
+    label: values.label,
+    credential: { forceFile: values["credential-file"] === true },
+    reconnect: values.reconnect === true,
+  });
+
+  if (json) {
+    console.log(JSON.stringify({ preview }, null, 2));
+  } else {
+    console.log(renderHubConnectPreview(preview));
+  }
+
+  /**
+   * Nothing to do is not a thing to ask about. Every workspace is either already
+   * connected or not actionable, so there is no consent to seek and no request
+   * to make — and prompting anyway would train a person to say yes to a question
+   * that never means anything.
+   */
+  if (preview.willConnect === 0 && preview.willReconnect === 0) {
+    if (!json) {
+      console.error(
+        "\nNothing to do. Every registered workspace is either already connected or not " +
+          "actionable; nothing was sent.",
+      );
+    }
+    return;
+  }
+
+  if (values.yes !== true) {
+    const agreed = isInteractive() && confirm("\nConnect these workspaces?", { default: false });
+    if (!agreed) {
+      console.error(
+        isInteractive()
+          ? "\nDeclined. Nothing was sent, and no credential or setting was written."
+          : "\nNothing was sent. Re-run with --yes to connect.",
+      );
+      process.exitCode = 2;
+      return;
+    }
+  }
+
+  if (!values.token) {
+    throw new StapleError(
+      "validation",
+      "--token is required: the enrollment secret these workspaces were provisioned with. It is " +
+        "offered to each one in turn, and a workspace that does not accept it is reported rather " +
+        "than aborting the others.",
+    );
+  }
+
+  settle(
+    performHubConnect(preview, {
+      home,
+      enrollmentSecret: values.token,
+      credential: { forceFile: values["credential-file"] === true },
+    }).then((outcome) => {
+      if (json) {
+        console.log(JSON.stringify(outcome, null, 2));
+      } else {
+        console.log("");
+        console.log(renderHubConnectOutcome(outcome));
+      }
+      /**
+       * A partial failure is a non-zero exit and a complete report, not an
+       * exception. The rows above already say which workspaces failed and why;
+       * throwing here would replace N precise statements with one vague one.
+       */
+      if (outcome.failed > 0) process.exitCode = 1;
+    }),
+    json,
+  );
+}
+
+function runDisconnect(argv: string[]): void {
+  const { values } = parseArgs({ args: argv, options: { ...withAll, yes: { type: "boolean" } } });
+  const json = values.json === true;
+  const home = stapleHome();
+
+  if (values.all === true) {
+    refuseTargeted(values, "disconnects");
+    /**
+     * No confirmation prompt, matching the single-workspace path, which also has
+     * none by default: disconnect is local, reversible by re-connecting, and
+     * destroys no data. `--yes` is accepted and ignored for symmetry with the
+     * single form rather than refused, because a script that passes it to both
+     * should not have to know which one cares.
+     */
+    const outcome = performHubDisconnect(home);
+    if (json) {
+      console.log(JSON.stringify(outcome, null, 2));
+      return;
+    }
+    if (outcome.workspaces.length === 0) {
+      console.log("No workspaces are registered on this machine, so nothing was disconnected.");
+      return;
+    }
+    const width = Math.max(...outcome.workspaces.map((row) => row.slug.length), 9);
+    for (const row of outcome.workspaces) {
+      console.log(`  ${row.status.padEnd(13)} ${row.slug.padEnd(width)}  ${row.reason}`);
+    }
+    console.log("");
+    console.log(
+      `  ${outcome.disconnected} disconnected, ${outcome.skipped} were not connected. ` +
+        `No network call was made, and no local data was touched.`,
+    );
+    return;
+  }
+
   const repositoryId = repositoryIdFor(values);
   const status = localCloudStatus(home, repositoryId);
 
@@ -577,10 +837,35 @@ function runForkId(argv: string[]): void {
 }
 
 function runAuto(argv: string[]): void {
-  const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: common });
+  const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: withAll });
   const choice = positionals[0];
   if (choice !== "on" && choice !== "off") {
     throw new StapleError("validation", "usage: staple cloud auto on|off");
+  }
+  /**
+   * **`--all` is REFUSED here, and that refusal is the point.**
+   *
+   * `connect`, `sync` and `disconnect` all grew a fan-out in STA-275 and this
+   * one deliberately did not. Connecting is one decision about one service, and
+   * doing it in twelve places at once is the same decision twelve times.
+   * Agreeing that a machine may talk to a service **without being asked again**
+   * is a different kind of decision, and `--all` would make the most consequential
+   * consent in the product the cheapest thing to type — one word away from a
+   * hub-wide connect that a person is already saying yes to.
+   *
+   * The option is parsed rather than left to `parseArgs` to reject as unknown, so
+   * that somebody who reasonably assumes it exists is told WHY it does not
+   * instead of getting `ERR_PARSE_ARGS_UNKNOWN_OPTION`. Accepted into the parser,
+   * refused by the command: the argument, not the arity, is what is wrong.
+   */
+  if (values.all === true) {
+    throw new StapleError(
+      "validation",
+      "There is no `staple cloud auto --all`, on purpose. Connecting and agreeing to background " +
+        "synchronization are two separate consents, and a hub-wide connect must not be able to " +
+        "become a hub-wide automatic-sync consent by adding one word. Turn it on per workspace: " +
+        "`staple cloud auto on --ws <slug>`.",
+    );
   }
   const home = stapleHome();
   const repositoryId = repositoryIdFor(values);
@@ -609,10 +894,35 @@ function runAuto(argv: string[]): void {
 function runSync(argv: string[]): void {
   const { values } = parseArgs({
     args: argv,
-    options: { ...common, "pull-limit": { type: "string" } },
+    options: { ...withAll, "pull-limit": { type: "string" } },
   });
   const json = values.json === true;
   const home = stapleHome();
+
+  const pullLimitAll = values["pull-limit"] ? Number(values["pull-limit"]) : undefined;
+  if (pullLimitAll !== undefined && (!Number.isInteger(pullLimitAll) || pullLimitAll < 1)) {
+    throw new StapleError("validation", "--pull-limit must be a positive integer");
+  }
+
+  if (values.all === true) {
+    refuseTargeted(values, "synchronizes");
+    settle(
+      syncAllWorkspaces({ home, pullLimit: pullLimitAll }).then((outcome) => {
+        if (json) {
+          console.log(JSON.stringify(outcome, null, 2));
+        } else {
+          console.log(renderHubSyncOutcome(outcome));
+        }
+        /**
+         * The ONLY aggregation this command does, and the only one a shell can
+         * consume. Everything else a caller might want to know is a row.
+         */
+        if (outcome.failed > 0) process.exitCode = 1;
+      }),
+      json,
+    );
+    return;
+  }
 
   const opened = resolveWorkspace(values);
   const manifest = readWorkspaceManifest(opened.dbPath);
@@ -637,11 +947,9 @@ function runSync(argv: string[]): void {
    * the one that matters. The lease path below is different — it does not go
    * through `syncRepository`, so it does its own.
    */
-  const pullLimit = values["pull-limit"] ? Number(values["pull-limit"]) : undefined;
-  if (pullLimit !== undefined && (!Number.isInteger(pullLimit) || pullLimit < 1)) {
-    opened.store.db.close();
-    throw new StapleError("validation", "--pull-limit must be a positive integer");
-  }
+  // Already validated above, before the workspace was opened, because the
+  // `--all` path needs the same check and must not open anything to make it.
+  const pullLimit = pullLimitAll;
 
   settle(
     syncRepository(opened.store.db, manifest.repositoryId, { home, pullLimit })

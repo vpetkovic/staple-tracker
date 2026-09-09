@@ -491,6 +491,108 @@ describe("POST /api/cloud/devices — the one route that leaves the machine", ()
 
 // --------------------------------------------------- the method and origin gates
 
+/**
+ * `GET /api/cloud/workspaces` — the hub-wide list. S16 (STA-275).
+ *
+ * Acceptance criteria 2 and 3: *"The settings surface lists every workspace with
+ * its own connection state"* and *"A newly registered workspace appears without
+ * reconnecting"*.
+ */
+describe("GET /api/cloud/workspaces — every workspace, its own state", () => {
+  it("lists the registered workspaces, with the connected one's state on its own row", async () => {
+    await connectForReal();
+    try {
+      const report = (await (await get("/api/cloud/workspaces")).json()) as {
+        workspaces: Array<{ slug: string; state: string; endpoint: string | null; auto: boolean }>;
+        counts: { total: number; connected: number };
+        endpoints: string[];
+      };
+
+      const row = report.workspaces.find((entry) => entry.slug === "cloudset")!;
+      expect(row.state).toBe("manual");
+      expect(row.endpoint).toBe(endpoint);
+      expect(row.auto).toBe(false);
+      expect(report.counts.connected).toBeGreaterThanOrEqual(1);
+      expect(report.endpoints).toContain(endpoint);
+    } finally {
+      await disconnectQuietly();
+    }
+  });
+
+  it("reports the workspace as disconnected once it is, on the same route", async () => {
+    const report = (await (await get("/api/cloud/workspaces")).json()) as {
+      workspaces: Array<{ slug: string; state: string; endpoint: string | null }>;
+    };
+    const row = report.workspaces.find((entry) => entry.slug === "cloudset")!;
+    expect(row.state).toBe("disconnected");
+    expect(row.endpoint).toBeNull();
+  });
+
+  it("a workspace registered after the page loaded is in the next response", async () => {
+    const before = (await (await get("/api/cloud/workspaces")).json()) as {
+      workspaces: Array<{ slug: string }>;
+    };
+    expect(before.workspaces.map((entry) => entry.slug)).not.toContain("latecomer");
+
+    const late = mkdtempSync(join(tmpdir(), "staple-cloudset-late-"));
+    try {
+      const ws = initWorkspace({ dir: late, slug: "latecomer" });
+      ws.store.db.close();
+
+      /**
+       * No reconnect, no restart, no cache to invalidate. The route ENUMERATES
+       * the hub every time it is called, and there is no stored set of member
+       * workspaces that could have gone stale — which is the entire mechanism
+       * behind the criterion.
+       */
+      const after = (await (await get("/api/cloud/workspaces")).json()) as {
+        workspaces: Array<{ slug: string; state: string }>;
+      };
+      const row = after.workspaces.find((entry) => entry.slug === "latecomer")!;
+      expect(row.state).toBe("disconnected");
+    } finally {
+      rmSync(late, { recursive: true, force: true });
+    }
+  });
+
+  it("does not probe the credential, and says so with null rather than guessing", async () => {
+    await connectForReal();
+    try {
+      const report = (await (await get("/api/cloud/workspaces")).json()) as {
+        workspaces: Array<{ slug: string; credentialPresent: boolean | null }>;
+      };
+      /**
+       * `null` means NOT ASKED. Establishing it is a keychain subprocess per
+       * workspace and this response is rendered every time the settings dialog
+       * opens; a route that probed would spawn N subprocesses to draw a list.
+       * `false` would be a lie about a credential nothing looked at.
+       */
+      const row = report.workspaces.find((entry) => entry.slug === "cloudset")!;
+      expect(row.credentialPresent).toBeNull();
+    } finally {
+      await disconnectQuietly();
+    }
+  });
+
+  it("makes no request to the service, connected or not", async () => {
+    await connectForReal();
+    try {
+      seen = [];
+      await get("/api/cloud/workspaces");
+      await get("/api/cloud/workspaces");
+      /**
+       * The local fake service records every request it receives. Two reads of
+       * the list touched it zero times — and there is no `?refresh` on this route
+       * that could change that, which is the point: a refresh across a hub is one
+       * authenticated round trip PER WORKSPACE, fired by a page load.
+       */
+      expect(seen).toEqual([]);
+    } finally {
+      await disconnectQuietly();
+    }
+  });
+});
+
 describe("the gates these routes inherit", () => {
   it("every cloud mutation is POST-only, including the one that merely reads", async () => {
     for (const path of [

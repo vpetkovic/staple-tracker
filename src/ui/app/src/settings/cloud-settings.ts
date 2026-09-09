@@ -34,7 +34,12 @@
  * wrong the first time the prose is improved."*
  */
 import type { SettingCategoryView } from "@/lib/settings";
-import type { CloudSurfaceReport, ConnectPreview, RemoteDevice } from "@/lib/types";
+import type {
+  CloudSurfaceReport,
+  ConnectPreview,
+  HubWorkspaceReport,
+  RemoteDevice,
+} from "@/lib/types";
 
 /** The category id. Not a setting key: nothing is ever stored under it. */
 export const CLOUD_CATEGORY_ID = "cloud";
@@ -371,4 +376,87 @@ export function revokeWarning(device: RemoteDevice): string {
         "needs `staple cloud connect` and an enrollment credential."
     : "That device loses access on its very next request. Its local data and pending work are " +
         "untouched, and every other device is unaffected.";
+}
+
+// ------------------------------------------- the hub-wide list (S16, STA-275)
+
+/** One workspace row, reduced to what the table draws. */
+export interface HubRowView {
+  slug: string;
+  /** `state`, in the words a person uses. Never parsed back. */
+  state: string;
+  /** The service it is connected to, or a dash. */
+  endpoint: string;
+  /** Short badges: auto, backup, MISSING. */
+  marks: string[];
+  /** Why a hub-wide operation would skip it, or null. */
+  skipDetail: string | null;
+  /** True for the workspace this settings dialog is currently open on. */
+  current: boolean;
+}
+
+/**
+ * Describe one row of the hub-wide list.
+ *
+ * `state` and `marks` are derived from VALUES — `state`, `auto`, `backup`,
+ * `available` — and never from `skipDetail`, which is a sentence for a human.
+ * The rule the rest of this file follows: a control that has to reverse-engineer
+ * prose is a control that will get it wrong the first time the prose improves.
+ *
+ * `credentialPresent` is deliberately NOT rendered. The route that feeds this
+ * table does not probe it, so it is always `null` here, and a column that read
+ * `null` as "missing" would tell somebody their credential had gone when nothing
+ * had looked for it. `state` already carries `auth_failed` on the one surface
+ * that does probe.
+ */
+export function hubRowView(
+  row: HubWorkspaceReport,
+  options: { currentRepositoryId?: string | null } = {},
+): HubRowView {
+  const marks: string[] = [];
+  if (row.auto) marks.push("auto");
+  if (row.backup) marks.push("backup");
+  if (!row.available) marks.push("MISSING");
+  return {
+    slug: row.slug,
+    state: HUB_STATE_WORDS[row.state],
+    endpoint: row.endpoint ?? "—",
+    marks,
+    skipDetail: row.skipDetail,
+    current:
+      options.currentRepositoryId != null &&
+      row.repositoryId != null &&
+      row.repositoryId === options.currentRepositoryId,
+  };
+}
+
+const HUB_STATE_WORDS: Record<HubWorkspaceReport["state"], string> = {
+  disconnected: "Not connected",
+  manual: "Connected, manual",
+  automatic: "Connected, automatic",
+  auth_failed: "Credential missing",
+};
+
+/**
+ * The one sentence under the hub-wide table.
+ *
+ * Says what the list IS and, just as importantly, what it is not: it is not a
+ * control. Connecting every workspace is a CLI gesture, because it spends one
+ * enrollment secret against N services and prints a per-workspace outcome that a
+ * settings dialog has nowhere sensible to put. Naming the command is more use
+ * than a button that would have to re-invent the preview.
+ */
+export function hubListDescription(counts: HubWorkspaceCounts): string {
+  const parts = [`${counts.connected} of ${counts.total} connected`];
+  if (counts.automatic > 0) parts.push(`${counts.automatic} on automatic sync`);
+  if (counts.skipped > 0) parts.push(`${counts.skipped} a hub-wide operation would skip`);
+  return `${parts.join(", ")}. Connect all of them at once with \`staple cloud connect --all\`; this list is enumerated when the page loads, so a workspace registered since then appears on the next open.`;
+}
+
+export interface HubWorkspaceCounts {
+  total: number;
+  connected: number;
+  disconnected: number;
+  skipped: number;
+  automatic: number;
 }

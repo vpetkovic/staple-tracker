@@ -1337,6 +1337,25 @@ Honest gaps, so nobody discovers them the hard way.
   release, so a cross-workspace blocker resolved on one machine is not visible on
   another. `unresolvable → treat as blocked` ([architecture.md](architecture.md))
   is still the behaviour.
+
+  `staple cloud connect --all` does **not** change this, and the distinction is
+  worth stating because the command reads as though it might. It is a **fan-out
+  over locally registered workspaces**, not a synced hub: one gesture on one
+  machine, visiting each registered workspace in turn and performing the
+  per-repository connect that already existed. Each workspace keeps **its own
+  credential**, so revoking one does not disconnect the others; the device id is
+  shared, because it always was — one machine is one device in every repository
+  it is enrolled in. Nothing in the wire format can say that two repositories sit
+  in one hub, so the service never learns that they do. `status --all` and
+  `sync --all` are the same shape, and `sync --all` reports a **per-workspace
+  outcome**: one workspace failing does not stop the others, and an aggregate
+  "sync failed" is not a thing it can print.
+
+  There is deliberately **no `cloud auto --all`**. Connecting in twelve places is
+  one decision made twelve times; agreeing that a machine may talk to a service
+  *without being asked again* is a different kind of decision, and it stays
+  per-workspace so that a hub-wide connect cannot become hub-wide background
+  traffic by adding one word.
 - **Provisional identifiers change once.** An issue created offline on a connected
   repository is renumbered when the server allocates its canonical number. The
   provisional identifier remains a resolvable alias, but a number written into a

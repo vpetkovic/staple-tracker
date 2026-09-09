@@ -27,7 +27,12 @@
  */
 import { parseEndpoint, type CloudEndpoint } from "./endpoint.js";
 import { defaultDeviceLabel, readDeviceId } from "./device.js";
-import { selectCredentialStore, type CredentialMechanism, type SelectOptions } from "./credential-store.js";
+import {
+  selectCredentialStore,
+  type CredentialMechanism,
+  type SelectOptions,
+  type StoreSelection,
+} from "./credential-store.js";
 import { readConnection } from "./connection.js";
 
 export interface ConnectPreview {
@@ -57,6 +62,23 @@ export interface BuildPreviewArgs {
   endpoint: string;
   label?: string;
   credential?: SelectOptions;
+  /**
+   * A credential-store selection made once, by a caller building SEVERAL
+   * previews.
+   *
+   * Only `hub-connect.ts` passes it. The probe below is a real round trip
+   * through the OS keychain — a sentinel written, read back and deleted — and a
+   * hub-wide preview over twelve workspaces would otherwise run it twelve
+   * times, which is thirty-six `security(1)` subprocesses to render one screen.
+   *
+   * It does NOT weaken the property the probe exists for. The probe still
+   * happens, still happens before anything leaves the machine, and still decides
+   * what the preview says about where the secret is going. It happens once for a
+   * gesture that is one decision, which is the granularity the human is
+   * actually consenting at. `performConnect` re-selects per workspace regardless
+   * — see its comment on why — so the fallback path is unaffected.
+   */
+  selection?: StoreSelection;
 }
 
 /**
@@ -66,7 +88,7 @@ export interface BuildPreviewArgs {
 export function buildConnectPreview(args: BuildPreviewArgs): ConnectPreview {
   const endpoint = parseEndpoint(args.endpoint);
   const existing = readConnection(args.home, args.repositoryId);
-  const selection = selectCredentialStore(args.home, args.credential ?? {});
+  const selection = args.selection ?? selectCredentialStore(args.home, args.credential ?? {});
 
   return {
     endpoint,

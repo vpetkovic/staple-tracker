@@ -40,6 +40,7 @@
 import { describe, expect, it } from "vitest";
 import type { ClaimActivity, ClaimLease, ClaimScope } from "../src/core/types.js";
 import type { CloudSurfaceReport } from "../src/core/cloud/surface.js";
+import type { HubCloudReport } from "../src/core/cloud/hub-surface.js";
 import type { ConnectPreview } from "../src/core/cloud/preview.js";
 import type { RemoteDevice } from "../src/core/cloud/client.js";
 import type {
@@ -48,6 +49,7 @@ import type {
   ClaimScope as UiClaimScope,
   CloudSurfaceReport as UiCloudSurfaceReport,
   ConnectPreview as UiConnectPreview,
+  HubCloudReport as UiHubCloudReport,
   RemoteDevice as UiRemoteDevice,
 } from "../src/ui/app/src/lib/types.js";
 
@@ -89,6 +91,29 @@ type _CloudReportMatches = Expect<Equals<CloudSurfaceReport, UiCloudSurfaceRepor
 type _ConnectPreviewMatches = Expect<Equals<ConnectPreview, UiConnectPreview>>;
 type _RemoteDeviceMatches = Expect<Equals<RemoteDevice, UiRemoteDevice>>;
 
+/**
+ * S16 (STA-275): the hub-wide list, which the settings section renders as a
+ * table of every registered workspace.
+ *
+ * It earns its place by the file's own rule twice over, and the second reason is
+ * the load-bearing one.
+ *
+ * `state` here is a deliberate SUBSET of `CloudSurfaceReport["state"]` —
+ * `offline` and `revoked` are absent because the route that produces this makes
+ * no authenticated round trip and therefore cannot establish them. A mirror that
+ * drifted wider would let the page write a branch for a state the server can
+ * never send, and the natural next step from an unreachable branch is somebody
+ * "fixing" it by making the route probe.
+ *
+ * `credentialPresent` is `boolean | null` here against `boolean` on the
+ * single-workspace report, and the null means NOT ASKED. A mirror that narrowed
+ * it to `boolean` would make `null` read as falsy, and the page would render
+ * "no credential" for every workspace on a surface that deliberately never
+ * looked — which is the difference between "your credential is gone" and "we did
+ * not check".
+ */
+type _HubCloudReportMatches = Expect<Equals<HubCloudReport, UiHubCloudReport>>;
+
 describe("the browser app's mirror of the wire vocabulary", () => {
   /**
    * The assertions above are types, and types are erased — so `vitest` would
@@ -110,9 +135,12 @@ describe("the browser app's mirror of the wire vocabulary", () => {
       true satisfies _CloudReportMatches,
       true satisfies _ConnectPreviewMatches,
       true satisfies _RemoteDeviceMatches,
+      true satisfies _HubCloudReportMatches,
     ];
     // GOLDEN, moved by S13 (STA-258): 4 -> 6. The two additions are the connect
     // preview and the device row; see the comment above them.
-    expect(proofs).toHaveLength(6);
+    // GOLDEN, moved by S16 (STA-275): 6 -> 7. The addition is the hub-wide
+    // workspace list; see the comment above it.
+    expect(proofs).toHaveLength(7);
   });
 });
