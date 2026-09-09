@@ -350,11 +350,14 @@ describe("the machine home", () => {
       "index:hub_events_dedup_uq",
       "index:sqlite_autoindex_cross_links_1",
       "index:sqlite_autoindex_meta_1",
+      "index:sqlite_autoindex_registry_optouts_1",
       "index:sqlite_autoindex_workspaces_1",
       "index:sqlite_autoindex_workspaces_2",
+      "index:workspaces_repository_id_idx",
       "table:cross_links",
       "table:hub_events",
       "table:meta",
+      "table:registry_optouts",
       "table:sqlite_sequence",
       "table:workspaces",
     ]);
@@ -362,9 +365,17 @@ describe("the machine home", () => {
     // The hub now carries a version, stamped as TEXT in the same representation
     // the workspace uses — so an old binary's `CAST(meta.value AS INTEGER)`
     // guard can read it, and A4's newer-database refusal has something to read
-    // on this side. `schema_version` is the ONLY key the hub stores: slug and
-    // prefix remain authoritative in each workspace file, not here.
-    expect(metaRows(join(home, "hub.db"))).toEqual([{ key: "schema_version", value: "2" }]);
+    // on this side.
+    //
+    // GOLDEN, moved by S22 (STA-283): version 2 -> 3. Hub migration 003 adds
+    // `workspaces.repository_id` and `registry_optouts`.
+    //
+    // `schema_version` is still the only key a FRESHLY INITIALISED hub holds —
+    // slug and prefix remain authoritative in each workspace file, not here. It
+    // is no longer the only key the hub can ever hold: `hub_id` is minted, once,
+    // the first time something asks the hub to identify itself (a hub backup).
+    // Lazily on purpose, so that no existing hub grows one until it is used.
+    expect(metaRows(join(home, "hub.db"))).toEqual([{ key: "schema_version", value: "3" }]);
   }, 30_000);
 
   it("mints ~/.staple/ui-token at 0600 the first time the UI is asked for", () => {

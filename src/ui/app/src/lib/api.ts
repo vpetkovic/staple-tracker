@@ -23,6 +23,7 @@ import type {
   ErrorEnvelope,
   Graph,
   HubActionResult,
+  HubBackupResult,
   HubCloudReport,
   HubConnectPreviewResult,
   HubUnregisterPreviewResult,
@@ -411,6 +412,15 @@ export const previewUnregisterWorkspace = (target: { slug: string }) =>
  */
 export const unregisterWorkspace = (target: { slug: string; removeCrossLinks?: boolean }) =>
   hubWrite<HubActionResult>("/api/hub/unregister", { ...target, confirm: true });
+
+/**
+ * Back up the hub itself — the registry and its cross-links, never any task.
+ *
+ * Takes no slug, because the hub is not one of the rows. Writes a file on this
+ * machine and makes no network call, which is what lets it be offered
+ * unconditionally.
+ */
+export const backupHub = () => hubWrite<HubBackupResult>("/api/hub/backup", {});
 
 export const getIssues = (params: { ws?: string; assignee?: string } = {}) =>
   request<IssueRow[]>(`/api/issues${qs(params)}`);

@@ -126,6 +126,7 @@ const NOOP = () => {};
 const IDLE_HUB: HubPanelState = {
   busy: null,
   refreshing: false,
+  backingUp: false,
   outcomes: {},
   connecting: null,
   removing: null,
@@ -159,6 +160,7 @@ function panel(overrides: Partial<CloudPanelProps> = {}): string {
       onAskRemove: NOOP,
       onRemove: NOOP,
       onRefresh: NOOP,
+      onBackup: NOOP,
     },
     revoking: null,
     confirmDisconnect: false,
@@ -555,6 +557,17 @@ function hubReport(rows: HubWorkspaceReport[]): HubCloudReport {
       skipped: rows.filter((row) => row.skip !== null).length,
       actionable: rows.filter((row) => row.actionable).length,
       automatic: rows.filter((row) => row.auto).length,
+    },
+    self: {
+      registered: rows.length,
+      present: rows.filter((row) => row.available).length,
+      absent: rows.filter((row) => !row.available).length,
+      crossLinks: 0,
+      backupHeadline:
+        "A hub backup contains your workspace list and the links between them. " +
+        "It does not contain any tasks — each workspace is backed up separately.",
+      backupContents: ["Which workspaces exist, and what each one is called."],
+      backupExclusions: ["No tasks."],
     },
     endpoints: [
       ...new Set(rows.map((row) => row.endpoint).filter((value): value is string => value !== null)),
@@ -1150,5 +1163,60 @@ describe("test debris does not compete with real workspaces (S21/STA-282)", () =
     const text = hubListDescription(hubReport([hubRow(), hubRow({ slug: "bravo", repositoryId: "b" })]));
     expect(text).toContain("All 2 workspaces");
     expect(text).not.toContain("2 of 2 workspaces");
+  });
+});
+
+/**
+ * S18 (STA-279) — the hub is a thing on the page, not just the shape of a list.
+ *
+ * The failure being designed out is a page that reads as though the current
+ * workspace's connection described the hub. Every case here is therefore about
+ * the panel stating the HUB, and about the backup affordance never disappearing.
+ */
+describe("the hub states itself above the list (S18/STA-279)", () => {
+  it("renders for a single workspace, where the list deliberately does not", () => {
+    // `HubWorkspaceList` returns null below two rows, because a list of one is
+    // not a list. The hub is a thing regardless, and so is its backup.
+    const html = panel({ workspaces: hubReport([hubRow()]) });
+    expect(html).toContain("data-cloud-hub-self");
+    expect(html).not.toContain("data-cloud-workspaces=");
+  });
+
+  it("always offers the backup, with nothing gating it on a connection", () => {
+    const html = panel({ report: DISCONNECTED, workspaces: hubReport([hubRow()]) });
+    expect(html).toContain("data-cloud-hub-backup");
+    expect(html).not.toContain("Backing up…");
+  });
+
+  it("says that a hub backup does not contain tasks, without being asked", () => {
+    // Not behind the disclosure, not a tooltip. A person reads "back up the hub"
+    // as "back up my work"; the correction has to be visible by default.
+    const html = panel({ workspaces: hubReport([hubRow()]) });
+    const note = html.slice(html.indexOf("data-cloud-hub-backup-note"));
+    expect(note).toContain("does not contain any tasks");
+  });
+
+  it("counts what is NOT on this machine, which is what a new machine asks", () => {
+    const html = panel({ workspaces: hubReport([hubRow(), missingRow("gone")]) });
+    const self = html.slice(
+      html.indexOf("data-cloud-hub-self"),
+      html.indexOf("data-cloud-workspaces="),
+    );
+    expect(self).toContain("Registered elsewhere");
+  });
+
+  it("states the hub rather than the open workspace", () => {
+    const html = panel({
+      report: DISCONNECTED,
+      workspaces: hubReport([hubRow(), hubRow({ slug: "bravo", repositoryId: "b" })]),
+    });
+    const self = html.slice(
+      html.indexOf("data-cloud-hub-self"),
+      html.indexOf("data-cloud-workspaces="),
+    );
+    expect(self).toContain("2");
+    // The hub panel carries no connection state at all — that belongs to rows,
+    // and putting it here is the conflation the ticket exists to end.
+    expect(self).not.toContain("Not connected");
   });
 });

@@ -250,7 +250,8 @@ this contract, not a judgement call for an implementer.
 
 | Value | Where it lives | Why it stays |
 |---|---|---|
-| The whole hub database | `~/.staple/hub.db` | `workspaces.path` is an absolute filesystem path and the registry names every *other* repository on the machine. Cross-repository topology is not this repository's business. |
+| `workspaces.path`, `workspaces.last_seen_at` | `~/.staple/hub.db` | An absolute filesystem path, and an observation this machine made about its own disk. Neither means anything on another machine. Re-resolved by adoption; see [The hub registry](#the-hub-registry-is-a-set-not-a-map). |
+| `hub_events`, `registry_optouts`, hub `meta.schema_version` | `~/.staple/hub.db` | `hub_events` is level-triggered and re-derived from the edges. `registry_optouts` is this machine's decision about its own list and is meaningless elsewhere — that is what makes an unregister local. The schema version stays for the same reason the workspace one does, one row above. |
 | `meta.next_issue_number` | workspace db | Per-database counter; see [Identity](#identity-is-the-uuid-never-the-identifier). |
 | `meta.settings_revision`, `meta.queue_revision` | workspace db | Derived cache-invalidation and CAS counters. Merged as `max()` so local optimistic concurrency stays monotonic. |
 | `meta.schema_version` | workspace db | **Correctness, not privacy.** It describes the format *this binary* understands. Replicating it lets an older build be told it is newer than it is, defeating the `assertNotNewer` upgrade guard that exists precisely because version and file must travel together. |
@@ -961,6 +962,80 @@ Takeover stays explicit. `--steal-if-stale` and `--if-stale` still mean what
 [continuity.md](continuity.md) says they mean; connected, they additionally
 require the server to agree the lease is stale. There is still **no sweeper and
 no automatic takeover**, on either side of the wire.
+
+## The hub registry is a set, not a map
+
+The hub used to be on the never-leaves list whole. The reason given was that
+`workspaces.path` is an absolute filesystem path, and that cross-repository
+topology is not a repository's business. Both halves of that are still true, and
+neither is weakened here.
+
+What the rewrite separates is the **paths** from the **set**. Which workspaces
+exist, what they are called, what prefix each one holds and which of them block
+each other are facts about the person's work, not about this computer's disk.
+Where each one happens to sit is a fact about the disk and stays on it.
+
+So the hub publishes a set:
+
+| In a hub backup | Not in a hub backup |
+|---|---|
+| `repository_id`, `slug`, `prefix`, `kind`, `added_at` per workspace | `path` — the original objection, and it stands |
+| `cross_links`, both ends, by slug and identifier | `last_seen_at`, `hub_events`, `registry_optouts`, `meta.schema_version` |
+| The hub's own id | **Any task. There is no issues table in `hub.db`.** |
+
+That last row is the one to say out loud, because a person will reasonably assume
+that backing up "the hub" backs up their work. It does not. Issues, comments,
+documents and attachments live in each workspace and are backed up per workspace,
+under that workspace's own backup consent. Every surface that offers a hub backup
+has to say so in those words.
+
+**Topology still does not ride in a repository's channel.** A hub backup is not
+reachable from any workspace's sync or backup; it travels under the hub's own
+identity and its own consent or it does not travel. What genuinely changes is
+that it *can* travel, and the disclosure that buys is real: a machine that
+publishes its registry tells the service the names, prefixes and identities of
+every workspace on it, and that they sit together. Until now the wire could not
+express that and the invariant was free. It is no longer free, so it is paid for
+explicitly — a separate consent, granted by itself, with that sentence in front
+of it.
+
+### Adoption, not duplication
+
+A new machine matches an incoming entry on `repository_id`, the clone-surviving
+UUID from the tracked `.staple/repository.json`. Slugs and prefixes are names,
+and names are exactly what two machines can independently disagree about.
+
+- **Already registered here under that identity** — adopted. This machine's name
+  and path stay as they are.
+- **On disk here but not registered** — the row is repointed at the copy you
+  already have.
+- **Not here at all** — the row lands with **no path**. It states that the
+  workspace is registered elsewhere and offers to be located; nothing is invented
+  for it, because a registry that points at the wrong directory is believed.
+- **Prefix or slug already held by a different identity** — the entry is parked
+  and named, and **nothing is renumbered**. A prefix is stamped into the workspace
+  database and into every `PREFIX-N` that database ever emitted, including in
+  commit messages and handoffs no migration can reach. The hub is derived state
+  and does not overrule a stamp. Resolution is a human act in the owning
+  repository.
+
+Adoption **never deletes a local row**. An incoming set is another machine's
+knowledge, not an instruction about what this machine should stop having.
+
+### Unregistering is local, and deliberately does not propagate
+
+`staple hub unregister` removes a row here and nowhere else. It is already the
+soft half of a pair — the hub is derived state, the authoritative slug and prefix
+live in the workspace file, and the next command run inside that repository
+re-registers it. Propagating it would turn a reversible local act into an
+irreversible remote one: on the other machine there is no repository to
+re-register from, so the row would be gone for good.
+
+To keep the removal from being undone by the next adoption, the machine records
+the identity in `registry_optouts`, which never leaves. The entry remains on every
+other machine, and the surface says so rather than implying otherwise. Removing
+an entry from a shared registry is a purge-shaped operation and is **not** offered
+yet; see the note on purge.
 
 ## Three consents
 

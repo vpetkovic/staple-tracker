@@ -1,0 +1,482 @@
+/**
+ * The hub registry as a portable set: what this machine knows about, in a form
+ * another machine can adopt.
+ *
+ * Contract: `docs/sync.md`, "What never leaves the machine" — amended by this
+ * module and only this far.
+ *
+ * ## What changed in the contract, and what did not
+ *
+ * `docs/sync.md` put the whole hub database on the never-leaves list for two
+ * reasons: `workspaces.path` is an absolute filesystem path, and cross-repository
+ * topology is not a repository's business. Both survive intact.
+ *
+ *   - **Paths still never leave.** {@link exportRegistry} has no path in its
+ *     output type. They are not redacted late, in a serializer somebody could
+ *     later "fix" — the field does not exist to be forgotten.
+ *   - **Topology still does not ride in any repository's channel.** Nothing here
+ *     is reachable from a workspace's sync or backup. The set travels under the
+ *     hub's own identity and its own consent, or it does not travel.
+ *
+ * What genuinely changes is that the set CAN travel at all, and it is worth
+ * being blunt about the disclosure that buys: a machine that publishes its
+ * registry tells the service the names, prefixes and identities of every
+ * workspace on it, and that they sit together. Until now the wire format could
+ * not express that, and the invariant was free. It is no longer free, so it is
+ * paid for the only honest way — a separate, explicit consent that no other
+ * consent implies, and a sentence at the point of granting it that says exactly
+ * what is about to be uploaded.
+ *
+ * ## Why the set is worth replicating even though the paths are not
+ *
+ * A new machine that knows the SET can tell you what you are missing. A new
+ * machine that knows nothing cannot, and the recovery it forces is a person
+ * remembering which repositories they had — which is the failure this feature
+ * exists to remove.
+ *
+ * ## Adoption, not duplication
+ *
+ * Every decision here keys on `repositoryId`, the UUID from the tracked
+ * `.staple/repository.json` that survives cloning. Slugs and prefixes are NAMES,
+ * and names are exactly what two machines can independently disagree about; the
+ * identity is the only thing that means the same thing on both.
+ *
+ * The rule the whole module obeys: **this machine's stamps win, and a
+ * disagreement is reported rather than resolved.** A prefix is written into the
+ * workspace database and into every identifier that database has ever emitted —
+ * `QDE-42` is in commit messages, in comments and in agent handoffs that no
+ * migration can reach. Renumbering to accommodate an incoming set would silently
+ * invalidate every one of those references, so it is never done. The hub is
+ * derived state; it does not get to overrule a stamp.
+ */
+import { StapleError, nowIso } from "../types.js";
+import type { Hub, WorkspaceEntry } from "../hub.js";
+
+/**
+ * The payload format number.
+ *
+ * A payload declaring a higher number was written by a newer build and is
+ * refused rather than best-effort parsed, for the same reason
+ * `repo-identity.ts` refuses a manifest it cannot understand: guessing at a
+ * format you do not know produces a registry that is subtly wrong, and a wrong
+ * registry is worse than none because it is believed.
+ */
+export const REGISTRY_PAYLOAD_FORMAT = 1;
+
+/** One workspace, reduced to what is true independently of any machine. */
+export interface RegistryEntry {
+  /** The adoption key. Null for a workspace that has never recorded one. */
+  readonly repositoryId: string | null;
+  readonly slug: string;
+  readonly prefix: string;
+  readonly kind: string;
+  readonly addedAt: string;
+}
+
+/** A cross-workspace edge. Slugs and identifiers only; both ends are names. */
+export interface RegistryCrossLink {
+  readonly blockerWs: string;
+  readonly blockerIdentifier: string;
+  readonly blockedWs: string;
+  readonly blockedIdentifier: string;
+  readonly type: "blocks";
+}
+
+/**
+ * The whole publishable registry.
+ *
+ * Note what has no field here: no path, no `lastSeenAt`, no `hub_events`, no
+ * schema version. `lastSeenAt` is an observation this machine made about its own
+ * filesystem and means nothing anywhere else. `hub_events` is level-triggered
+ * and is re-derived from the edges on arrival. The schema version is omitted for
+ * the reason `docs/sync.md` already gives for the workspace one: replicating it
+ * lets an older build be told it is newer than it is.
+ */
+export interface HubRegistryPayload {
+  readonly format: number;
+  readonly hubId: string;
+  readonly capturedAt: string;
+  readonly workspaces: readonly RegistryEntry[];
+  readonly crossLinks: readonly RegistryCrossLink[];
+}
+
+/**
+ * Everything a hub backup contains, said in the words a person needs.
+ *
+ * Kept next to the payload type on purpose. A user will reasonably assume that
+ * "back up the hub" covers their work — it does not, because there is no issues
+ * table in `hub.db` — and the place to prevent that assumption is the same file
+ * that decides what goes in, so the two cannot drift.
+ */
+export const HUB_BACKUP_CONTENTS: readonly string[] = [
+  "Which workspaces exist, and what each one is called: its slug, its identifier prefix and its kind.",
+  "Each workspace's sync identity, where it has recorded one. This is what lets another machine recognise a workspace it already has instead of registering it twice.",
+  "The cross-workspace links — which issue blocks which, across workspaces.",
+];
+
+export const HUB_BACKUP_EXCLUSIONS: readonly string[] = [
+  "No tasks. A hub backup contains none of your issues, comments, documents or attachments — those live in each workspace and are backed up separately, per workspace.",
+  "No filesystem paths. Where each workspace sits on this machine stays on this machine, and is worked out again on the machine that restores.",
+  "No credentials, and no device identity.",
+];
+
+/** The one sentence that has to appear wherever a hub backup is offered. */
+export const HUB_BACKUP_HEADLINE =
+  "A hub backup contains your workspace list and the links between them. " +
+  "It does not contain any tasks — each workspace is backed up separately.";
+
+/**
+ * The registry, ready to publish.
+ *
+ * Reads rows and edges and drops everything machine-local. Takes no options: a
+ * "include paths" switch would be a footgun with a default, and there is no
+ * caller that wants one.
+ */
+export function exportRegistry(hub: Hub): HubRegistryPayload {
+  return {
+    format: REGISTRY_PAYLOAD_FORMAT,
+    hubId: hub.hubId(),
+    capturedAt: nowIso(),
+    workspaces: hub.list().map((entry) => ({
+      repositoryId: entry.repositoryId,
+      slug: entry.slug,
+      prefix: entry.prefix,
+      kind: entry.kind,
+      addedAt: entry.addedAt,
+    })),
+    crossLinks: hub.listCrossLinks().map((link) => ({
+      blockerWs: link.blockerWs,
+      blockerIdentifier: link.blockerIdentifier,
+      blockedWs: link.blockedWs,
+      blockedIdentifier: link.blockedIdentifier,
+      type: "blocks" as const,
+    })),
+  };
+}
+
+/** What adoption did with one incoming entry. */
+export type AdoptionOutcome =
+  /** A local row already holds this identity and already agrees. Nothing written. */
+  | "current"
+  /** A local row holds this identity; the registry learned its slug or kind. */
+  | "adopted"
+  /** No row held it, but a present workspace does. The row now points at it. */
+  | "repointed"
+  /** Known, not here. A row with an identity, a name and no path. */
+  | "absent"
+  /** This machine asked not to have this one back. */
+  | "declined"
+  /** The prefix or slug is held locally by a DIFFERENT identity. */
+  | "conflict"
+  /** No identity, so nothing can be matched on. Left for a human. */
+  | "unmatchable";
+
+export interface AdoptionDecision {
+  readonly entry: RegistryEntry;
+  readonly outcome: AdoptionOutcome;
+  /** A sentence, for every outcome. Never empty, never a code. */
+  readonly reason: string;
+  /** The local slug this resolved to, when it resolved to one. */
+  readonly localSlug: string | null;
+  /** Set for `conflict`: what already holds the name, and which name it is. */
+  readonly conflict: {
+    readonly field: "prefix" | "slug";
+    readonly value: string;
+    readonly heldBySlug: string;
+    readonly heldByRepositoryId: string | null;
+  } | null;
+}
+
+export interface AdoptionReport {
+  readonly hubId: string;
+  readonly capturedAt: string;
+  readonly decisions: readonly AdoptionDecision[];
+  readonly crossLinks: {
+    readonly added: number;
+    readonly skipped: number;
+  };
+  /** True when nothing was written — a preview. */
+  readonly dryRun: boolean;
+}
+
+export interface AdoptOptions {
+  /** Preview by default. Nothing is written unless this is true. */
+  apply?: boolean;
+  /**
+   * Where to look for a workspace that is on this machine but not in the
+   * registry. Injected in tests; production passes the hub's own view.
+   */
+  locate?: (repositoryId: string) => { path: string; prefix: string; slug: string } | null;
+}
+
+function assertPayload(payload: HubRegistryPayload): void {
+  if (payload.format > REGISTRY_PAYLOAD_FORMAT) {
+    throw new StapleError(
+      "validation",
+      `This registry was written in format ${payload.format}, and this build understands ` +
+        `${REGISTRY_PAYLOAD_FORMAT}. Upgrade staple on this machine rather than adopting it ` +
+        "partially — a registry read with the wrong rules is believed, which is worse than not " +
+        "having one.",
+    );
+  }
+}
+
+/**
+ * Walk an incoming registry and decide what this machine should do with each
+ * entry. Previews by default.
+ *
+ * Deliberately never deletes. A local row absent from the incoming set is left
+ * exactly where it is — the incoming set is another machine's knowledge, not a
+ * statement about what this machine should stop having. That asymmetry is the
+ * whole answer to "a workspace unregistered on one machine must not vanish on
+ * another": there is no code path here that removes anything, so it cannot.
+ */
+export function adoptRegistry(
+  hub: Hub,
+  payload: HubRegistryPayload,
+  options: AdoptOptions = {},
+): AdoptionReport {
+  assertPayload(payload);
+  const apply = options.apply === true;
+  const declined = new Set(hub.listOptOuts().map((o) => o.repositoryId));
+  const decisions: AdoptionDecision[] = [];
+
+  for (const entry of payload.workspaces) {
+    decisions.push(decide(hub, entry, declined, options, apply));
+  }
+
+  // Edges last, and only between two slugs this machine now actually has. An
+  // edge naming a workspace that did not land would read as an unresolvable
+  // blocker, and `crossBlockersOf` treats unresolvable as BLOCKED — so importing
+  // it would wedge a live issue on the other side with nothing to say why.
+  const known = new Set(hub.list().map((w) => w.slug));
+  let added = 0;
+  let skipped = 0;
+  for (const link of payload.crossLinks) {
+    if (!known.has(link.blockerWs) || !known.has(link.blockedWs)) {
+      skipped += 1;
+      continue;
+    }
+    if (apply) {
+      try {
+        hub.addCrossLink(link.blockerIdentifier, link.blockedIdentifier);
+        added += 1;
+      } catch {
+        // A cycle, or an identifier the local workspace does not have. Both are
+        // the incoming machine's business to fix; neither is worth aborting an
+        // import that has already adopted rows correctly.
+        skipped += 1;
+      }
+    } else {
+      added += 1;
+    }
+  }
+
+  return {
+    hubId: payload.hubId,
+    capturedAt: payload.capturedAt,
+    decisions,
+    crossLinks: { added, skipped },
+    dryRun: !apply,
+  };
+}
+
+function decide(
+  hub: Hub,
+  entry: RegistryEntry,
+  declined: Set<string>,
+  options: AdoptOptions,
+  apply: boolean,
+): AdoptionDecision {
+  const base = { entry, localSlug: null, conflict: null } as const;
+
+  if (entry.repositoryId === null) {
+    return {
+      ...base,
+      outcome: "unmatchable",
+      reason:
+        `"${entry.slug}" has never recorded a sync identity, so there is nothing to recognise it ` +
+        "by on this machine. It is listed, and it has to be located by hand.",
+    };
+  }
+
+  if (declined.has(entry.repositoryId)) {
+    return {
+      ...base,
+      outcome: "declined",
+      reason:
+        `"${entry.slug}" was removed from this machine's list, so it was not brought back. It is ` +
+        "still registered on the machine that published this. Undo with `staple hub restore-entry`.",
+    };
+  }
+
+  const held = hub.findByRepositoryId(entry.repositoryId);
+  if (held) {
+    const learned = held.slug !== entry.slug || held.kind !== entry.kind;
+    if (!learned) {
+      return {
+        ...base,
+        outcome: "current",
+        localSlug: held.slug,
+        reason: `"${held.slug}" is already registered here as the same workspace. Nothing to do.`,
+      };
+    }
+    return {
+      ...base,
+      outcome: "adopted",
+      localSlug: held.slug,
+      reason:
+        `Already here as "${held.slug}"; the published list calls it "${entry.slug}". Matched by ` +
+        "sync identity and left where it is — this machine's name and path are unchanged.",
+    };
+  }
+
+  // Not registered here under that identity. Is it on disk anyway?
+  const found = options.locate?.(entry.repositoryId) ?? null;
+  if (found) {
+    if (apply) {
+      hub.repointPath({
+        slug: found.slug,
+        prefix: found.prefix,
+        path: found.path,
+        kind: entry.kind,
+      });
+      hub.recordRepositoryId(found.slug, entry.repositoryId);
+    }
+    return {
+      ...base,
+      outcome: "repointed",
+      localSlug: found.slug,
+      reason:
+        `Found on this machine as "${found.slug}" and matched by sync identity, so the registry ` +
+        "now points at the copy you already have rather than registering it a second time.",
+    };
+  }
+
+  // Nothing local holds the identity. The names are the last obstacle.
+  const prefixHolder = hub.list().find((w) => w.prefix === entry.prefix);
+  if (prefixHolder) {
+    return {
+      ...base,
+      outcome: "conflict",
+      conflict: {
+        field: "prefix",
+        value: entry.prefix,
+        heldBySlug: prefixHolder.slug,
+        heldByRepositoryId: prefixHolder.repositoryId,
+      },
+      reason:
+        `Prefix ${entry.prefix} is already held here by "${prefixHolder.slug}", which is a ` +
+        `different workspace. "${entry.slug}" was not added, and neither one was renumbered: the ` +
+        `prefix is stamped into its workspace database and into every ${entry.prefix}-N ever ` +
+        "written, so renaming either would break references no migration can reach. Re-stamp one " +
+        "of them in its own repository, then adopt again.",
+    };
+  }
+  const slugHolder = hub.list().find((w) => w.slug === entry.slug);
+  if (slugHolder) {
+    return {
+      ...base,
+      outcome: "conflict",
+      conflict: {
+        field: "slug",
+        value: entry.slug,
+        heldBySlug: slugHolder.slug,
+        heldByRepositoryId: slugHolder.repositoryId,
+      },
+      reason:
+        `The name "${entry.slug}" is already taken here by a different workspace, so the ` +
+        "published one was not added. Rename one of them, then adopt again.",
+    };
+  }
+
+  if (apply) {
+    hub.registerAbsent({
+      slug: entry.slug,
+      prefix: entry.prefix,
+      kind: entry.kind,
+      repositoryId: entry.repositoryId,
+      addedAt: entry.addedAt,
+    });
+  }
+  return {
+    ...base,
+    outcome: "absent",
+    localSlug: entry.slug,
+    reason:
+      `"${entry.slug}" is registered but its database is not on this machine. Nothing was ` +
+      "invented for it — clone or copy the workspace, then point this row at it.",
+  };
+}
+
+/**
+ * Attach an absent row to a workspace the operator has found, refusing unless
+ * the identities match.
+ *
+ * The refusal is the point. Locate exists precisely to be used when someone is
+ * unsure where a workspace went, which is exactly when they are most likely to
+ * offer the wrong directory — and stapling a registry row to the wrong
+ * repository is silent, durable, and discovered later as two workspaces that
+ * will not agree. Identity is checked because the operator cannot be expected to.
+ */
+export function locateAbsent(
+  hub: Hub,
+  slug: string,
+  found: { path: string; prefix: string; repositoryId: string | null },
+): WorkspaceEntry {
+  const row = hub.get(slug);
+  if (!row) {
+    throw new StapleError("not_found", `No workspace "${slug}" is registered in the hub.`);
+  }
+  if (row.repositoryId === null) {
+    throw new StapleError(
+      "conflict",
+      `"${slug}" has no recorded sync identity, so there is nothing to check a candidate against. ` +
+        "Run `staple init` inside the workspace instead; that registers it from the workspace's " +
+        "own stamp rather than from a guess made here.",
+    );
+  }
+  if (found.repositoryId !== row.repositoryId) {
+    throw new StapleError(
+      "conflict",
+      `That directory is a different repository. "${slug}" is registered with sync identity ` +
+        `${row.repositoryId}, and the workspace you pointed at ` +
+        (found.repositoryId === null
+          ? "has not recorded one at all."
+          : `calls itself ${found.repositoryId}.`) +
+        " Nothing was changed. Pointing a registry row at the wrong repository is not something " +
+        "that reports itself later.",
+    );
+  }
+  if (found.prefix !== row.prefix) {
+    throw new StapleError(
+      "conflict",
+      `"${slug}" is registered with prefix ${row.prefix}, and the workspace at that path is ` +
+        `stamped ${found.prefix}. Staple will not renumber either one.`,
+    );
+  }
+  hub.repointPath({ slug: row.slug, prefix: row.prefix, path: found.path, kind: row.kind });
+  return hub.get(slug)!;
+}
+
+/** One-line count summary of an adoption, for a surface that shows one line. */
+export function describeAdoption(report: AdoptionReport): string {
+  const tally = new Map<AdoptionOutcome, number>();
+  for (const d of report.decisions) tally.set(d.outcome, (tally.get(d.outcome) ?? 0) + 1);
+  const say = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+  const parts: string[] = [];
+  const adopted = (tally.get("adopted") ?? 0) + (tally.get("repointed") ?? 0);
+  if (adopted > 0) parts.push(`${say(adopted, "workspace")} matched to what is already here`);
+  if (tally.get("current")) parts.push(`${tally.get("current")} already current`);
+  if (tally.get("absent")) parts.push(`${say(tally.get("absent")!, "workspace")} listed but not on this machine`);
+  if (tally.get("conflict")) parts.push(`${say(tally.get("conflict")!, "name conflict")} left alone`);
+  if (tally.get("declined")) parts.push(`${tally.get("declined")} previously removed here`);
+  if (tally.get("unmatchable")) parts.push(`${tally.get("unmatchable")} with no sync identity`);
+  const head = parts.length === 0 ? "Nothing to adopt" : parts.join(", ");
+  const links =
+    report.crossLinks.added + report.crossLinks.skipped === 0
+      ? ""
+      : ` ${say(report.crossLinks.added, "cross-workspace link")} imported` +
+        (report.crossLinks.skipped > 0 ? `, ${report.crossLinks.skipped} skipped.` : ".");
+  return `${head}.${links}${report.dryRun ? " Nothing was written." : ""}`;
+}

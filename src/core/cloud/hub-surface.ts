@@ -60,6 +60,12 @@ import {
   type HubSkipReason,
   type HubWorkspace,
 } from "./hub-scope.js";
+import { Hub } from "../hub.js";
+import {
+  HUB_BACKUP_CONTENTS,
+  HUB_BACKUP_EXCLUSIONS,
+  HUB_BACKUP_HEADLINE,
+} from "./hub-registry.js";
 import type { CloudMode } from "./surface.js";
 
 /**
@@ -173,9 +179,52 @@ export interface HubCloudCounts {
   automatic: number;
 }
 
+/**
+ * The hub, stated as a thing in its own right — S18 (STA-279).
+ *
+ * Separate from {@link HubCloudCounts} on purpose, and the distinction is the
+ * whole ticket. `counts` describes the WORKSPACES: how many are connected, how
+ * many a fan-out would act on. This describes the HUB: what it is, what it holds,
+ * and what backing it up would and would not save.
+ *
+ * The old page conflated the two — it showed the current workspace's connection
+ * at the top of a list of other workspaces, so the state on screen belonged to
+ * something different from the thing the list was about. A panel that states the
+ * hub's own state has to have somewhere to read it from that is not a workspace,
+ * and this is it.
+ */
+export interface HubSelfReport {
+  /** Rows in the registry, present or not. */
+  registered: number;
+  /** Rows whose database is on this machine right now. */
+  present: number;
+  /**
+   * Rows registered here with no database on this machine.
+   *
+   * Worth its own number rather than `registered - present`: it is the count the
+   * hub panel exists to make visible, because it is what a person on a new
+   * machine is trying to find out — what am I missing.
+   */
+  absent: number;
+  /** Cross-workspace edges the hub holds. Part of a hub backup; not tasks. */
+  crossLinks: number;
+  /**
+   * What a hub backup would contain, and what it would not, in the words a
+   * surface shows.
+   *
+   * Carried on the report rather than imported by the client so the two cannot
+   * drift: whatever decides the payload decides the sentence.
+   */
+  backupHeadline: string;
+  backupContents: readonly string[];
+  backupExclusions: readonly string[];
+}
+
 export interface HubCloudReport {
   workspaces: HubWorkspaceReport[];
   counts: HubCloudCounts;
+  /** The hub itself. See {@link HubSelfReport} for why this is not `counts`. */
+  self: HubSelfReport;
   /**
    * Every distinct endpoint in use across the hub, sorted.
    *
@@ -228,6 +277,13 @@ export interface HubReportOptions {
   platform?: NodeJS.Platform;
   /** Injected in tests. Replaces the whole enumeration. */
   workspaces?: readonly HubWorkspace[];
+  /**
+   * Injected in tests, alongside `workspaces`. A caller that replaced the
+   * enumeration has no hub file for the link count to be read from, and a
+   * report that went to disk anyway would make those tests depend on the
+   * developer's own registry.
+   */
+  crossLinks?: number;
 }
 
 /**
@@ -259,8 +315,37 @@ export function hubCloudReport(home: string, options: HubReportOptions = {}): Hu
       actionable: rows.filter((row) => row.actionable).length,
       automatic: rows.filter((row) => row.auto).length,
     },
+    self: {
+      registered: rows.length,
+      present: rows.filter((row) => row.available).length,
+      absent: rows.filter((row) => !row.available).length,
+      crossLinks: options.crossLinks ?? countCrossLinks(),
+      backupHeadline: HUB_BACKUP_HEADLINE,
+      backupContents: HUB_BACKUP_CONTENTS,
+      backupExclusions: HUB_BACKUP_EXCLUSIONS,
+    },
     endpoints,
   };
+}
+
+/**
+ * Cross-link count, read through the hub's read-only handle.
+ *
+ * Never throws: a machine with no hub file at all has no links, and a settings
+ * page that failed to render because a registry was missing would be a worse
+ * answer than a zero.
+ */
+function countCrossLinks(): number {
+  try {
+    const hub = Hub.openReadOnly();
+    try {
+      return hub.listCrossLinks().length;
+    } finally {
+      hub.close();
+    }
+  } catch {
+    return 0;
+  }
 }
 
 /**

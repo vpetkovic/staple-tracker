@@ -125,8 +125,12 @@ describe("version detection", () => {
     // gained none of them. Pinned as two separate
     // numbers precisely so a migration added to one target cannot be silently
     // assumed to have been added to both.
+    // GOLDEN, moved by S22 (STA-283): the HUB target 2 -> 3, and the workspace
+    // target deliberately unmoved at 12. Hub 003 is the first migration in this
+    // series that the workspace did not also need, which is exactly the
+    // divergence this assertion exists to make visible.
     expect(latestVersion(WORKSPACE_TARGET)).toBe(12);
-    expect(latestVersion(HUB_TARGET)).toBe(2);
+    expect(latestVersion(HUB_TARGET)).toBe(3);
   });
 });
 

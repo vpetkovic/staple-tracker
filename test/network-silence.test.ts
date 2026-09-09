@@ -1155,6 +1155,15 @@ describe("the UI server serves the whole page, connected or not, and calls nobod
         ["/api/cloud/workspace/disconnect", { slug: "netsilenceui", confirm: true }],
         ["/api/hub/unregister", { slug: "netsilenceui" }],
         ["/api/hub/unregister", { slug: "no-such-workspace", confirm: true }],
+        /*
+         * S18 (STA-279). A hub backup is offered unconditionally — the button is
+         * never hidden and never gated on a connection — so it is reachable on a
+         * machine that has never connected anything. That is exactly the shape of
+         * control that has historically grown a quiet reachability probe, and a
+         * backup is the verb a reader most expects to be remote. It reads the
+         * registry and writes a local file; this is where that stays true.
+         */
+        ["/api/hub/backup", {}],
       ];
       for (let round = 0; round < 3; round += 1) {
         for (const [route, body] of CLOUD_WRITES) {

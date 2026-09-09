@@ -64,6 +64,7 @@ import {
   connectWorkspace,
   disconnectWorkspace,
   getCloudStatus,
+  backupHub,
   getCloudWorkspaces,
   listCloudDevices,
   previewCloudConnect,
@@ -99,6 +100,8 @@ import {
   groupDisabledReasons,
   hubGroups,
   hubListDescription,
+  hubSelfFacts,
+  hubSelfSummary,
   hubRowControls,
   hubUnreachableDescription,
   joinLabels,
@@ -187,6 +190,8 @@ export interface HubPanelState {
   busy: HubBusy | null;
   /** True while the list is being re-enumerated. Not a row action. */
   refreshing: boolean;
+  /** A hub backup is in flight. Separate from `busy`, which is per-row. */
+  backingUp: boolean;
   /**
    * The last outcome for each row, keyed by slug.
    *
@@ -226,6 +231,13 @@ export interface HubActions {
   onRemove: (slug: string, removeCrossLinks: boolean) => void;
   /** Re-enumerates the registry, so a workspace registered since load appears. */
   onRefresh: () => void;
+  /**
+   * Back up the hub itself — the registry and its cross-links, never tasks.
+   *
+   * Takes no slug, unlike every other action on this interface, and that is the
+   * signature saying what it acts on: the hub is not one of the rows.
+   */
+  onBackup: () => void;
 }
 
 /**
@@ -588,6 +600,7 @@ export function CloudPanel(props: CloudPanelProps) {
         the list until the current workspace happens to be connected would make
         it invisible exactly when it answers the question.
       */}
+      <HubSelfPanel report={props.workspaces} onBackup={props.hubActions.onBackup} busy={props.hub.backingUp} />
       <HubWorkspaceList
         report={props.workspaces}
         currentRepositoryId={report.repositoryId}
@@ -595,6 +608,78 @@ export function CloudPanel(props: CloudPanelProps) {
         actions={props.hubActions}
       />
     </div>
+  );
+}
+
+/**
+ * The hub, as an object — S18 (STA-279).
+ *
+ * Sits ABOVE the workspace list and states the hub's own state. Nothing in here
+ * reads the current workspace, which is the whole point: the page used to lead
+ * with one workspace's connection and follow it with a list of others, so the
+ * heading described a different thing from the list under it.
+ *
+ * ## Why it renders even for one workspace
+ *
+ * `HubWorkspaceList` returns null below two workspaces, because a list of one is
+ * not a list. This panel does not, and the asymmetry is deliberate: the hub is
+ * a thing whether or not there is more than one workspace in it, and the backup
+ * it offers is exactly as available — and exactly as necessary — on a machine
+ * with one workspace as on a machine with nine.
+ *
+ * ## Why backup is not behind a connection check
+ *
+ * VP: *"the main hub should always have option to backup."* The control is
+ * therefore always rendered and always enabled. It is not a promise that a
+ * backup will succeed without further consent — pressing it walks through
+ * whatever is missing — but the affordance never disappears, because a backup
+ * button that vanishes when you most want it is the failure being designed out.
+ */
+function HubSelfPanel({
+  report,
+  onBackup,
+  busy,
+}: {
+  report: HubCloudReport | null;
+  onBackup: () => void;
+  busy: boolean;
+}) {
+  if (report === null) return null;
+  return (
+    <Section title="This hub" description={hubSelfSummary(report)}>
+      <div data-cloud-hub-self>
+        <Facts facts={hubSelfFacts(report)} />
+        {/*
+          Not a dismissible hint, and not a tooltip. A person will reasonably
+          read "back up the hub" as "back up my work", and it is not — there is
+          no issues table in hub.db at all. The sentence that corrects that has
+          to be next to the button, every time, or the assumption survives.
+        */}
+        <p data-cloud-hub-backup-note className="mt-2 text-[12px] text-muted-foreground">
+          {report.self.backupHeadline}
+        </p>
+        <details data-cloud-hub-backup-details className="mt-1">
+          <summary className="cursor-pointer text-[11px] text-muted-foreground">
+            What a hub backup contains
+          </summary>
+          <ul className="m-0 mt-1 list-disc space-y-1 pl-4 text-[11px] text-muted-foreground">
+            {report.self.backupContents.map((line) => (
+              <li key={line}>{line}</li>
+            ))}
+          </ul>
+          <ul className="m-0 mt-1 list-disc space-y-1 pl-4 text-[11px] text-muted-foreground">
+            {report.self.backupExclusions.map((line) => (
+              <li key={line}>{line}</li>
+            ))}
+          </ul>
+        </details>
+        <div className="mt-2">
+          <Button size="sm" variant="outline" data-cloud-hub-backup onClick={onBackup} disabled={busy}>
+            {busy ? "Backing up…" : "Back up the hub"}
+          </Button>
+        </div>
+      </div>
+    </Section>
   );
 }
 
@@ -1067,6 +1152,7 @@ export function CloudSection({ ws }: { ws?: string }) {
   const [hub, setHub] = useState<HubPanelState>({
     busy: null,
     refreshing: false,
+    backingUp: false,
     outcomes: {},
     connecting: null,
     removing: null,
@@ -1361,6 +1447,47 @@ export function CloudSection({ ws }: { ws?: string }) {
         })
         .finally(() => {
           if (alive.current) patchHub({ refreshing: false });
+        });
+    },
+
+    /**
+     * Back up the hub. Never disabled by connection state — see `HubSelfPanel`.
+     *
+     * Reports the receipt through the same per-row outcome channel, keyed on the
+     * empty slug, because the hub is not a row and must not light one up. A key
+     * that collided with a real slug would put a hub result inside a workspace's
+     * row, which is the precise class of bug S19 pinned `outcome.slug` to catch.
+     */
+    onBackup: () => {
+      patchHub({ backingUp: true, error: null });
+      backupHub()
+        .then((answer) => {
+          if (!alive.current) return;
+          setWorkspaces(answer.report);
+          setHub((current) => ({
+            ...current,
+            outcomes: {
+              ...current.outcomes,
+              "": {
+                slug: "",
+                action: "backup",
+                status: "ok",
+                detail: `Wrote ${answer.workspaces} ${answer.workspaces === 1 ? "workspace" : "workspaces"} and ${answer.crossLinks} ${answer.crossLinks === 1 ? "link" : "links"} to ${answer.path}. No tasks are in this file.`,
+                at: new Date().toISOString(),
+              },
+            },
+          }));
+        })
+        .catch((caught: unknown) => {
+          if (alive.current) {
+            setHub((current) => ({
+              ...current,
+              error: { slug: "", message: describeRefusal(caught).message },
+            }));
+          }
+        })
+        .finally(() => {
+          if (alive.current) patchHub({ backingUp: false });
         });
     },
   };

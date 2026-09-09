@@ -1478,6 +1478,31 @@ export interface HubCloudReport {
     actionable: number;
     automatic: number;
   };
+  /**
+   * The hub itself, as opposed to the workspaces under it. S18 (STA-279).
+   *
+   * Deliberately not folded into `counts`. `counts` answers questions about the
+   * LIST; this answers questions about the THING the list hangs off, and the old
+   * page's core readability problem was that it never distinguished them — it
+   * showed the current workspace's connection above a list of other workspaces,
+   * so the state on screen belonged to something other than the list it sat on.
+   *
+   * The backup sentences travel on the report rather than being written in the
+   * component, so that whatever decides what a hub backup CONTAINS is the same
+   * thing that decides what the UI SAYS it contains. A component that wrote its
+   * own copy of that sentence would be a second source of truth for a promise
+   * about somebody's data.
+   */
+  self: {
+    registered: number;
+    present: number;
+    /** Registered here, database not on this machine. What a new machine lacks. */
+    absent: number;
+    crossLinks: number;
+    backupHeadline: string;
+    backupContents: readonly string[];
+    backupExclusions: readonly string[];
+  };
   /** Sorted and deduped. A hub spanning two services is legitimate. */
   endpoints: string[];
 }
@@ -1509,6 +1534,21 @@ export interface HubWorkspaceOutcome {
 /** What every per-row route answers with: the act's outcome, plus the refreshed list. */
 export interface HubActionResult {
   outcome: HubWorkspaceOutcome;
+  report: HubCloudReport;
+}
+
+/**
+ * `POST /api/hub/backup` — what a hub backup wrote.
+ *
+ * Carries no `outcome`, unlike every per-row result, because there is no row it
+ * happened to. The counts are the receipt: they are what the operator can check
+ * against the panel to see that the backup covered what the panel said it would.
+ */
+export interface HubBackupResult {
+  /** Where it was written, on this machine. */
+  path: string;
+  workspaces: number;
+  crossLinks: number;
   report: HubCloudReport;
 }
 
