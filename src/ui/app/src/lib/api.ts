@@ -25,7 +25,9 @@ import type {
   HubActionResult,
   HubBackupResult,
   HubCloudReport,
+  HubConnectPreviewResponse,
   HubConnectPreviewResult,
+  HubFanOutResult,
   HubUnregisterPreviewResult,
   InboxRow,
   IssueDetail,
@@ -421,6 +423,100 @@ export const unregisterWorkspace = (target: { slug: string; removeCrossLinks?: b
  * unconditionally.
  */
 export const backupHub = () => hubWrite<HubBackupResult>("/api/hub/backup", {});
+
+// ---------- the hub-wide verbs (S18, STA-279) ----------
+
+/**
+ * Four calls whose subject is the WHOLE machine registry — S18 (STA-279).
+ *
+ * ## Why these are separate from the per-row six, and not a flag on them
+ *
+ * Because `{ slug: "*" }` on `disconnectWorkspace` would put "one workspace" and
+ * "every workspace on this machine" one character apart, in one function, behind
+ * one confirmation. The blast radius is the thing being named, and a function
+ * name is where a reader of this file can see it without opening a handler.
+ *
+ * ## What they are, underneath
+ *
+ * The same three core fan-outs the per-row calls use, with the `workspaces`
+ * argument OMITTED so the enumeration is the registry rather than a
+ * single-element array. There is no separate hub-wide implementation to drift.
+ *
+ * ## What leaves the machine
+ *
+ * `syncHub` and `connectHub`. Nothing else — `previewHubConnect` reads local
+ * files and cannot import the client, and `disconnectHub` deletes files in the
+ * staple home and makes no request even as a courtesy. **None of them is called
+ * on mount**, and `syncHub` in particular is the widest egressing call on this
+ * surface: one authenticated round trip per connected workspace. A settings page
+ * that reached it on open would be a heartbeat with a multiplier on it.
+ */
+
+/**
+ * Step one, for the whole registry. Local.
+ *
+ * Returns the fan-out preview — every registered workspace, including every one
+ * it will skip and why — together with ONE CONSENT TICKET PER ACTIONABLE ROW. A
+ * skipped row gets no ticket, because a consent for something that will not
+ * happen is a consent with no subject.
+ *
+ * Refuses with a stated reason when nothing is actionable, rather than answering
+ * an empty enumeration: an empty table is indistinguishable from a button that
+ * did nothing.
+ */
+export const previewHubConnect = (target: {
+  endpoint: string;
+  label?: string;
+  credentialFile?: boolean;
+}) => hubWrite<HubConnectPreviewResponse>("/api/hub/connect/preview", target);
+
+/**
+ * Step two. EGRESSES, once per workspace. **Carries no endpoint and no
+ * repositoryId** — only the tickets and the enrollment secret.
+ *
+ * The tickets are what make this expressible at all: there is no wire spelling
+ * for "connect everything to X", so the description of every service, repository
+ * and credential store was necessarily delivered to this client in a prior
+ * response. Sending all of them together is what makes the confirm a confirm of
+ * the ENUMERATION — the server re-derives it and refuses if a workspace has been
+ * registered or connected since the screen was drawn.
+ */
+export const connectHub = (target: {
+  consents: ReadonlyArray<{ slug: string; consent: ConsentTicket }>;
+  token: string;
+}) =>
+  hubWrite<HubFanOutResult>("/api/hub/connect", {
+    consents: target.consents.map((issued) => ({
+      slug: issued.slug,
+      consent: issued.consent.id,
+      digest: issued.consent.digest,
+    })),
+    token: target.token,
+  });
+
+/**
+ * EGRESSES, once per connected workspace. The widest outbound call on this
+ * surface.
+ *
+ * A row that fails comes back inside a 200 with `status: "failed"` and the
+ * service's own sentence — the fan-out reports a failure as a ROW rather than by
+ * throwing, because folding `offline`, `revoked` and `rate_limited` into one
+ * thrown error is what makes a multi-row table unactionable. So the caller must
+ * read the rows and not merely `catch`.
+ */
+export const syncHub = () => hubWrite<HubFanOutResult>("/api/hub/sync", {});
+
+/**
+ * Local, and only local, N times over. Makes no request even as a courtesy: a
+ * person who has decided to stop talking to a service must not need that
+ * service's permission to stop.
+ *
+ * Not gated on availability, deliberately — the credentials are in the staple
+ * home, so a workspace whose disk is unmounted is disconnected here too, which
+ * is the whole point rather than an edge case.
+ */
+export const disconnectHub = () =>
+  hubWrite<HubFanOutResult>("/api/hub/disconnect", { confirm: true });
 
 export const getIssues = (params: { ws?: string; assignee?: string } = {}) =>
   request<IssueRow[]>(`/api/issues${qs(params)}`);

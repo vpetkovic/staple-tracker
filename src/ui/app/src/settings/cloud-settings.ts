@@ -38,6 +38,7 @@ import type {
   CloudSurfaceReport,
   ConnectPreview,
   HubCloudReport,
+  HubFanOut,
   HubWorkspaceReport,
   RemoteDevice,
 } from "@/lib/types";
@@ -735,7 +736,19 @@ export function hubRowControls(
  * lookalikes.
  */
 export function groupDisabledReasons(
-  controls: readonly HubRowControl[],
+  /**
+   * Widened from `HubRowControl[]` by S18 (STA-279) to the two fields this
+   * actually reads, so the three HUB-WIDE controls group through the same
+   * function rather than through a copy of it.
+   *
+   * A copy is what would have happened, and it would have been wrong in a
+   * specific way: on a machine with nothing connected, the hub-wide Sync and
+   * Disconnect share one sentence, and a second implementation is a second place
+   * for "print it once" to become "print it twice". The parameter names what is
+   * needed and nothing more, which is also the honest description of what this
+   * function is about — a label and a reason.
+   */
+  controls: readonly { label: string; disabledReason: string | null }[],
 ): Array<{ reason: string; labels: string[] }> {
   const grouped = new Map<string, string[]>();
   for (const control of controls) {
@@ -851,6 +864,240 @@ export function hubSelfFacts(report: HubCloudReport): CloudFact[] {
   return facts;
 }
 
+// ------------------------------------------- the hub-wide verbs (S18, STA-279)
+
+/** The three verbs the hub panel offers over the whole registry. */
+export type HubWideAction = "connect" | "sync" | "disconnect";
+
+export interface HubWideControl {
+  action: HubWideAction;
+  /**
+   * **States the count it will act on**, not the verb alone. "Connect 4
+   * workspaces", never "Connect all".
+   *
+   * The whole objection this feature was refused on twice was that a hub-wide
+   * button asks for agreement to less than the CLI shows. "Connect all" is a
+   * button whose blast radius is invisible until after the press; a button that
+   * carries the number is one a person can decline for a reason. It is also the
+   * only place the count appears before the preview, and on a machine with nine
+   * registered workspaces of which four are debris, the difference between 9 and
+   * 4 is the whole question.
+   */
+  label: string;
+  /** One line: what pressing this does. Rendered whether it is enabled or not. */
+  effect: string;
+  /** How many rows this would act on. Zero exactly when `disabledReason` is set. */
+  count: number;
+  /**
+   * Null when the control works; one line when it does not.
+   *
+   * **Never used to filter.** Same rule as `hubRowControls`: a control that
+   * disappears leaves a reader unable to tell an unavailable capability from one
+   * the product does not have — and a hub-wide Connect button that vanished the
+   * moment everything was connected would teach nobody that it existed.
+   */
+  disabledReason: string | null;
+  destructive?: boolean;
+}
+
+/**
+ * Which rows each hub-wide verb would visit.
+ *
+ * ## The three predicates disagree, and the disagreement is the design
+ *
+ * Exactly the asymmetry `hubRowControls` states for one row, restated for the
+ * whole registry:
+ *
+ *   connect    needs `skip === null` AND no connection. A fan-out reads files
+ *              and never opens a workspace database, so a row that would record
+ *              its sync identity on its next open is NOT in this set — that row
+ *              is `actionable: true`, and pressing its OWN Connect button is
+ *              what opens it. Counting it here would promise something the
+ *              fan-out then declines to do.
+ *   sync       needs `skip === null` AND a connection. `syncRepository` opens the
+ *              database, so an unmounted volume makes it impossible.
+ *   disconnect needs a connection AND NOTHING ELSE. The credential is in the
+ *              staple home, so an unmounted volume makes it *more* important:
+ *              refusing would leave a live secret behind for exactly the row
+ *              somebody is most likely to be disconnecting.
+ *
+ * ## This is stated twice, and that is a known and bounded cost
+ *
+ * `src/ui/server.ts` states the sync and disconnect predicates again, because the
+ * browser cannot import `src/core` — this whole file is a hand-kept mirror, which
+ * is why `test/contract-ui-types.test.ts` exists. The split is deliberate about
+ * which side decides what: **this copy decides a LABEL, the server's copy decides
+ * a REFUSAL.** So the worst a divergence can produce is a wrong number on a
+ * button followed by an honest refusal naming the real reason — never a wrong
+ * action. `test/ui-cloud-hub-verbs.test.ts` asserts the two agree.
+ */
+export function hubWideTargets(
+  report: HubCloudReport,
+  action: HubWideAction,
+): HubWorkspaceReport[] {
+  switch (action) {
+    case "connect":
+      return report.workspaces.filter((row) => row.skip === null && row.state === "disconnected");
+    case "sync":
+      return report.workspaces.filter((row) => row.skip === null && row.state !== "disconnected");
+    case "disconnect":
+      return report.workspaces.filter((row) => row.state !== "disconnected");
+  }
+}
+
+/**
+ * The three hub-wide controls, in the order they are drawn.
+ *
+ * **All three, always, on every machine.** Enablement is `disabledReason` and
+ * never omission — the criterion the per-row controls are held to, and the same
+ * reason: a reader who presses nothing still learns that connecting, syncing and
+ * disconnecting the whole hub are three separate things, because they can see all
+ * three and read why two of them are not available yet.
+ *
+ * Every one of them either does something or says in one line why it cannot.
+ * *"We don't need settings page to be noise gibrish but functional."*
+ */
+export function hubWideControls(report: HubCloudReport): HubWideControl[] {
+  const registered = report.self.registered;
+  const connectable = hubWideTargets(report, "connect");
+  const syncable = hubWideTargets(report, "sync");
+  const connected = hubWideTargets(report, "disconnect");
+  /**
+   * Rows a fan-out will not touch but a ROW's own button will — the ones that
+   * record a sync identity the next time staple opens them. Named in the connect
+   * control's refusal rather than silently missing from its count, because "why
+   * is that one not included" is the question the number provokes.
+   */
+  const perRowOnly = report.workspaces.filter(
+    (row) => row.state === "disconnected" && row.skip !== null && row.actionable,
+  );
+
+  return [
+    {
+      action: "connect",
+      count: connectable.length,
+      label:
+        connectable.length === 0
+          ? "Connect every workspace"
+          : `Connect ${connectable.length} ${connectable.length === 1 ? "workspace" : "workspaces"}`,
+      effect:
+        "Shows every workspace it would connect, with the service and credential store for each " +
+        "one, and asks before anything is sent. Each keeps its own credential, so revoking one " +
+        "does not disconnect the others. Automatic sync stays off for all of them.",
+      disabledReason:
+        connectable.length > 0
+          ? null
+          : registered === 0
+            ? "No workspaces are registered on this machine yet."
+            : connected.length === registered
+              ? "Every registered workspace is already connected. Re-connecting replaces a " +
+                "credential and resets its consents, which is a per-workspace decision — it is " +
+                "on each row."
+              : perRowOnly.length > 0
+                ? `Nothing can be connected all at once. ${perRowOnly.length} ` +
+                  `${perRowOnly.length === 1 ? "workspace has" : "workspaces have"} not recorded ` +
+                  `a sync identity yet, and recording one means opening that workspace — which ` +
+                  `its own Connect button does, one at a time.`
+                : "None of the registered workspaces can be connected right now. Each row says why.",
+    },
+    {
+      action: "sync",
+      count: syncable.length,
+      label:
+        syncable.length === 0
+          ? "Sync every connected workspace"
+          : `Sync ${syncable.length} connected ${syncable.length === 1 ? "workspace" : "workspaces"}`,
+      effect:
+        "Sends each connected workspace's queued changes and applies what other devices have " +
+        "sent. One workspace at a time, and a failure on one does not stop the others.",
+      disabledReason:
+        syncable.length > 0
+          ? null
+          : connected.length === 0
+            ? registered === 0
+              ? "No workspaces are registered on this machine yet."
+              : "Nothing is connected, so there is nothing to synchronize with. Connecting is a " +
+                "separate consent, and a sync does not get to spend it."
+            : `${connected.length} ${connected.length === 1 ? "workspace is" : "workspaces are"} ` +
+              `connected but not on this machine right now, so there is no database to ` +
+              `synchronize. They are listed below.`,
+    },
+    {
+      action: "disconnect",
+      count: connected.length,
+      label:
+        connected.length === 0
+          ? "Disconnect every workspace"
+          : `Disconnect ${connected.length} ${connected.length === 1 ? "workspace" : "workspaces"}`,
+      effect:
+        "Removes this machine's credential for every connected workspace and stops all later " +
+        "traffic. Every database, including queued changes and unsettled conflicts, is " +
+        "untouched. No other device is affected and no remote copy is deleted.",
+      destructive: true,
+      // Deliberately NOT gated on availability. See `hubWideTargets`.
+      disabledReason:
+        connected.length > 0
+          ? null
+          : registered === 0
+            ? "No workspaces are registered on this machine yet."
+            : "Nothing is connected, so no credential is stored for any of them.",
+    },
+  ];
+}
+
+/**
+ * What a hub-wide disconnect confirmation says.
+ *
+ * **Names the count and the workspaces.** A confirmation reading "this will
+ * disconnect the hub" is a confirmation of a word; the number and the names are
+ * what a person actually needs in order to notice that it includes the one they
+ * did not mean.
+ */
+export function hubWideDisconnectWarning(report: HubCloudReport): string {
+  const connected = hubWideTargets(report, "disconnect");
+  const absent = connected.filter((row) => !row.available);
+  const base =
+    `This machine stops talking to the service for ${connected.length} ` +
+    `${connected.length === 1 ? "workspace" : "workspaces"}: ` +
+    `${connected.map((row) => row.slug).join(", ")}. Each credential is removed from this ` +
+    `machine. Every database, including queued changes and unsettled conflicts, is untouched, ` +
+    `no other device is affected, and no remote copy is deleted. Re-connecting later needs an ` +
+    `enrollment credential for each one.`;
+  return absent.length === 0
+    ? base
+    : `${base} ${absent.length} of them ${absent.length === 1 ? "is" : "are"} not on this machine ` +
+        `right now (${absent.map((row) => row.slug).join(", ")}) and ${absent.length === 1 ? "is" : "are"} ` +
+        `disconnected anyway — the credential is here, not there, and leaving it behind is the ` +
+        `thing worth avoiding.`;
+}
+
+/**
+ * The one line above a hub-wide outcome table.
+ *
+ * Counts, and then the sentence a reader needs next. Never a bare "done": on a
+ * machine with one unreachable workspace, "connected 3, skipped 1" and
+ * "connected 4" are different facts and only one of them is true.
+ */
+export function hubFanOutSummary(fanOut: HubFanOut): string {
+  const verb =
+    fanOut.action === "connect" ? "connected" : fanOut.action === "sync" ? "synchronized" : "disconnected";
+  const parts = [`${fanOut.ok} ${verb}`];
+  if (fanOut.skipped > 0) parts.push(`${fanOut.skipped} skipped`);
+  if (fanOut.failed > 0) parts.push(`${fanOut.failed} failed`);
+  const counts = `${parts.join(", ")}.`;
+
+  if (fanOut.failed > 0) {
+    return (
+      `${counts} Each workspace was handled independently, so a failure on one did not stop the ` +
+      `others. Re-running acts only on what is still behind.`
+    );
+  }
+  if (fanOut.action === "connect" && fanOut.ok > 0) {
+    return `${counts} Automatic sync and backup are OFF for every one of them — those are separate, per-workspace decisions.`;
+  }
+  return counts;
+}
+
 export function hubListDescription(report: HubCloudReport): string {
   const counts = report.counts;
   const missing = report.workspaces.filter((row) => !row.available).length;
@@ -873,7 +1120,18 @@ export function hubListDescription(report: HubCloudReport): string {
       `${missing} ${missing === 1 ? "is" : "are"} not on this machine and ${missing === 1 ? "is" : "are"} listed separately below.`,
     );
   }
-  parts.push("Each acts on its own workspace; nothing here acts on all of them at once.");
+  /**
+   * S18 (STA-279) changed the second half of this sentence, and the change is
+   * the ticket.
+   *
+   * It used to end *"nothing here acts on all of them at once"* — accurate, and
+   * by then a statement about a missing feature rather than about a design. The
+   * hub-wide verbs live in the panel ABOVE this list, where the hub is the
+   * subject; the rows below still act one at a time. So the sentence now says
+   * where each kind of action is, which is the thing a reader needs, instead of
+   * asserting that one of them does not exist.
+   */
+  parts.push("Each row acts on its own workspace; the hub panel above acts on all of them.");
   return parts.join(" ");
 }
 

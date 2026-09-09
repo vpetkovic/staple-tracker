@@ -41,7 +41,12 @@ import {
   missingIdentityRemedy,
   noIdentityReport,
 } from "../core/cloud/surface.js";
-import { hubCloudReport, type HubWorkspaceOutcome } from "../core/cloud/hub-surface.js";
+import {
+  hubCloudReport,
+  type HubCloudReport,
+  type HubWorkspaceOutcome,
+  type HubWorkspaceReport,
+} from "../core/cloud/hub-surface.js";
 import { exportRegistry } from "../core/cloud/hub-registry.js";
 /**
  * S17/S19/S21 (STA-278, STA-280, STA-282): the per-row half of the cloud surface.
@@ -79,8 +84,8 @@ import { exportRegistry } from "../core/cloud/hub-registry.js";
  * for that reason and no other.
  */
 import { listHubWorkspaces, type HubWorkspace } from "../core/cloud/hub-scope.js";
-import { buildHubConnectPreview } from "../core/cloud/hub-preview.js";
-import { performHubDisconnect } from "../core/cloud/hub-connect.js";
+import { buildHubConnectPreview, type HubConnectEntry } from "../core/cloud/hub-preview.js";
+import { performHubConnect, performHubDisconnect } from "../core/cloud/hub-connect.js";
 import { syncAllWorkspaces } from "../core/cloud/hub-sync.js";
 /**
  * S13 (STA-258): the cloud MUTATIONS, which until now had no HTTP surface at all.
@@ -94,7 +99,7 @@ import { syncAllWorkspaces } from "../core/cloud/hub-sync.js";
  * nobody named.
  */
 import { buildConnectPreview } from "../core/cloud/preview.js";
-import { ConsentTicketStore } from "../core/cloud/consent.js";
+import { ConsentTicketStore, MAX_OUTSTANDING_CONSENTS, previewDigest } from "../core/cloud/consent.js";
 import { fetchDevices, performConnect, performDisconnect, performRevoke } from "../core/cloud/connect.js";
 import { readConnection, setConsent } from "../core/cloud/connection.js";
 import { readConfig, stapleHome } from "../config/index.js";
@@ -247,6 +252,33 @@ const CLOUD_LIFECYCLE_WRITES = new Set([
   // A hub backup reads the registry and writes a file. It changes no issue, so
   // a sync trigger would be a wake-up about nothing.
   "/api/hub/backup",
+  /**
+   * S18 (STA-279): the four hub-wide verbs, and this is the list they most
+   * belong on.
+   *
+   * None of them journals an operation, so a post-write trigger behind any of
+   * them would produce a request with nothing in it. Two would be actively
+   * wrong rather than merely pointless:
+   *
+   * `/api/hub/sync` has just synchronized EVERY connected workspace. Arming the
+   * trigger would queue a second run of the thing that just finished, across
+   * the whole machine.
+   *
+   * `/api/hub/disconnect` is the stronger case, and it is the same one
+   * `/api/cloud/disconnect` is here for said N times over: *"a person who has
+   * decided to stop talking to a service must not need that service's
+   * permission to stop."* A trigger fired in the act of disconnecting every
+   * workspace would be a request made in the act of ceasing to make them.
+   *
+   * And the trigger reads its workspace from the QUERY STRING, which none of
+   * these routes has — they are about the whole registry, so there is no `ws`
+   * for it to read. It would therefore fire at the DEFAULT workspace: a sync of
+   * `alpha` caused by disconnecting the hub.
+   */
+  "/api/hub/connect/preview",
+  "/api/hub/connect",
+  "/api/hub/sync",
+  "/api/hub/disconnect",
 ]);
 
 /**
@@ -800,6 +832,118 @@ export function startUiServer(options: UiOptions): UiHandle {
     return { slug, action, status, detail, at: new Date().toISOString() };
   }
 
+  // ------------------------------------------- the HUB-WIDE verbs (S18, STA-279)
+
+  /**
+   * ─── WHICH ROWS A HUB-WIDE VERB WOULD VISIT ──────────────────────────────────
+   *
+   * Two predicates, one line each, and they deliberately do not agree with each
+   * other. The disagreement is the design, and it is the same asymmetry
+   * `hubRowControls` states for one row:
+   *
+   *   sync       needs the disk AND a connection. `syncRepository` opens the
+   *              workspace database, so a row whose volume is unmounted cannot be
+   *              synchronized — and `hub-scope.ts` explains at length why reaching
+   *              for the missing path would be worse than useless.
+   *
+   *   disconnect needs a connection AND NOTHING ELSE. The record and the
+   *              credential live in the staple home, so removing them for a
+   *              workspace whose disk is gone is both possible and right.
+   *              Refusing on `available` would leave a live credential behind for
+   *              precisely the row somebody is most likely to be disconnecting.
+   *
+   * `row.skip` is `skipReasonFor`'s answer, decided once in `hub-scope.ts` so the
+   * connect fan-out and the sync fan-out cannot drift on what "actionable" means.
+   * Note it is NOT `row.actionable`, which is the broader per-BUTTON question: a
+   * workspace that will record its sync identity on its next open is
+   * `actionable: true` and `skip: "no_identity"`, and a fan-out will not touch it
+   * because a fan-out reads files and never opens a database. Pressing that row's
+   * own Connect button is what opens it. Using `actionable` here would make the
+   * count promise something the fan-out then declines to do.
+   *
+   * ## These two predicates are stated twice, and that is a known cost
+   *
+   * `cloud-settings.ts` states them again, because the browser cannot import
+   * `src/core` — it is a hand-kept mirror, which is the whole reason
+   * `test/contract-ui-types.test.ts` exists. The page's copy decides a LABEL
+   * ("Sync 2 connected workspaces"); this copy decides a REFUSAL. So a
+   * divergence can only ever produce a wrong number on a button followed by an
+   * honest refusal from here, never a wrong action —
+   * `test/ui-cloud-hub-verbs.test.ts` asserts the two agree.
+   */
+
+  /** The rows a hub-wide SYNC would visit. */
+  function hubSyncTargets(report: HubCloudReport): HubWorkspaceReport[] {
+    return report.workspaces.filter((row) => row.skip === null && row.state !== "disconnected");
+  }
+
+  /** The rows a hub-wide DISCONNECT would visit. Not gated on `available`; see above. */
+  function hubDisconnectTargets(report: HubCloudReport): HubWorkspaceReport[] {
+    return report.workspaces.filter((row) => row.state !== "disconnected");
+  }
+
+  /**
+   * Every hub-wide verb's answer: **a table, and the refreshed list.**
+   *
+   * A table rather than an aggregate, and this is where the recorded refusal in
+   * `CloudSection.tsx` gets answered rather than overruled. The objection was
+   * that a fan-out *"produces a per-workspace outcome a dialog has nowhere to
+   * put"*. It is true that a toast has nowhere to put it. The remedy is not to
+   * withhold the verb; it is to stop reaching for a toast.
+   * `HubConnectOutcome`, `HubSyncOutcome` and `HubDisconnectOutcome` are already
+   * per-workspace shapes precisely because a fan-out had no other way to report,
+   * and this normalizes all three into the ONE row shape S19 already pinned —
+   * so the page renders one outcome table with one renderer, and a fourth verb
+   * added later cannot invent a fifth way of wording a failure.
+   *
+   * The refreshed report comes along for the same reason every per-row mutation
+   * carries one: acting and re-reading are one round trip, so the page never
+   * renders the state that existed before the thing it just did. After a
+   * hub-wide verb that matters more, not less — every row's rendering moved.
+   */
+  function hubFanOutActed(
+    res: ServerResponse,
+    action: "connect" | "sync" | "disconnect",
+    workspaces: HubWorkspaceOutcome[],
+  ): void {
+    json(res, 200, {
+      fanOut: {
+        action,
+        at: new Date().toISOString(),
+        ok: workspaces.filter((row) => row.status === "ok").length,
+        skipped: workspaces.filter((row) => row.status === "skipped").length,
+        failed: workspaces.filter((row) => row.status === "failed").length,
+        workspaces,
+      },
+      report: hubCloudReport(stapleHome()),
+    });
+  }
+
+  /**
+   * Why a hub-wide connect has nothing to do, stated per row.
+   *
+   * *"Refuse with a stated reason when the fan-out would be empty, rather than
+   * answering 200 with zero rows."* A 200 carrying an empty table is the worst
+   * available answer: it is indistinguishable, to a reader, from a button that
+   * did nothing, and it is indistinguishable to a script from success. The
+   * sentences are the fan-out's own — `describeSkip`'s and `hub-preview.ts`'s —
+   * because a refusal that paraphrased them would be a fifth wording of the same
+   * three facts.
+   */
+  function hubConnectRefusal(entries: readonly HubConnectEntry[]): string {
+    if (entries.length === 0) {
+      return (
+        "No workspaces are registered on this machine, so there is nothing to connect. " +
+        "Running staple in a repository registers it, and it appears here on the next read."
+      );
+    }
+    const rows = entries.map((entry) => `${entry.slug}: ${entry.reason}`).join(" ");
+    return (
+      `None of the ${entries.length} ${entries.length === 1 ? "workspace" : "workspaces"} ` +
+      `registered on this machine can be connected right now, so nothing was sent. ${rows}`
+    );
+  }
+
   const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", "http://localhost");
     try {
@@ -943,7 +1087,38 @@ export function startUiServer(options: UiOptions): UiHandle {
           url.pathname === "/api/cloud/workspace/disconnect" ||
           url.pathname === "/api/cloud/workspace/sync" ||
           url.pathname === "/api/hub/unregister" ||
-          url.pathname === "/api/hub/backup"
+          url.pathname === "/api/hub/backup" ||
+          /**
+           * S18 (STA-279): the four HUB-WIDE verbs. Named individually, like
+           * every cloud and hub route above, and the reason is sharper here
+           * than anywhere else on this list.
+           *
+           * `/api/hub/` now holds six routes and will hold reads later — a
+           * `startsWith("/api/hub/")` family rule would pin those reads as
+           * cross-origin-writable the day somebody adds one, which is a
+           * security change disguised as a tidying. Worse, this family is the
+           * one where a mistake is machine-wide: a cross-origin page that
+           * could POST `/api/hub/disconnect` would remove every credential on
+           * the machine in one request.
+           *
+           * `/api/hub/sync` is on this list for what it WRITES and for what it
+           * SENDS. It is the third route on this server that leaves the
+           * machine, after `/api/cloud/devices` and
+           * `/api/cloud/workspace/sync`, and it leaves it once per connected
+           * workspace — so it is the single route here with the largest
+           * outbound blast radius, and the one most obviously belonging behind
+           * the Origin check.
+           *
+           * There is deliberately NO `/api/hub/purge`, for the reason
+           * `/api/cloud/purge` does not exist and more so: STA-256 records
+           * that the server does not validate a purge confirmation on the
+           * wire, and a one-click irreversible remote deletion of every
+           * workspace at once is not a thing to add while that is true.
+           */
+          url.pathname === "/api/hub/connect/preview" ||
+          url.pathname === "/api/hub/connect" ||
+          url.pathname === "/api/hub/sync" ||
+          url.pathname === "/api/hub/disconnect"
             ? ["POST"]
             : url.pathname === "/api/settings"
               ? ["GET", "POST"]
@@ -1797,6 +1972,549 @@ export function startUiServer(options: UiOptions): UiHandle {
                 ? `Because its files are still here, running staple in ${dirname(workspace.path)} ` +
                   `registers it again.`
                 : `Its files are not on this machine, so nothing will register it again.`),
+          ),
+        );
+        return;
+      }
+
+      /**
+       * ─── THE HUB-WIDE VERBS — S18 (STA-279) ──────────────────────────────────
+       *
+       * Four routes, and the acceptance criterion they close is *"Hub-wide
+       * connect, sync and disconnect are performed from there"* — from the hub
+       * panel, which is where the hub is now a thing in its own right.
+       *
+       * ## A row is a fan-out of size one; the hub is the same call unscoped
+       *
+       * `buildHubConnectPreview`, `syncAllWorkspaces` and `performHubDisconnect`
+       * each take `workspaces?: readonly HubWorkspace[]`, an injection point that
+       * replaces the hub enumeration. The `/api/cloud/workspace/*` routes above
+       * pass a single-element array. **These routes pass nothing**, so the
+       * enumeration is the whole registry — and that is the entire difference
+       * between the two families. There is no new core function here, no second
+       * definition of "skippable", and no place for the per-row and hub-wide
+       * answers to drift apart, because they are the same code with a different
+       * argument.
+       *
+       * ## THE RECORDED REFUSAL, AND WHY IT NO LONGER HOLDS
+       *
+       * `CloudSection.tsx` carried this, and it was right when it was written:
+       *
+       *   > connecting every workspace at once spends one enrollment secret
+       *   > against N services and produces a per-workspace outcome a dialog has
+       *   > nowhere to put, so naming `staple cloud connect --all` was more use
+       *   > than a button asking for less than the CLI preview does.
+       *
+       * Two objections. Both are answered by building the thing properly rather
+       * than by declining to build it.
+       *
+       * **"One secret against N services."** The remedy is that the secret is
+       * never offered to a service the human has not been shown, per workspace,
+       * by name. `/api/hub/connect/preview` returns the fan-out preview whose
+       * every actionable row carries its own `ConnectPreview` — the endpoint, the
+       * repository id, the device id, the label and the credential store that
+       * row's secret is about to go into — and a row that would be skipped
+       * carries `preview: null` and the fan-out's own sentence for why. A
+       * workspace already talking to a DIFFERENT service is one of those skips,
+       * and it says which service. Then the confirm carries ONE TICKET PER ROW,
+       * so the consent is literally over the enumeration rather than over a
+       * count: `willConnect: 9` is a number, and agreeing to a number is not
+       * agreeing to anything. And the enumeration is re-derived and compared
+       * before the secret moves, so a workspace registered or connected while the
+       * screen was up is a REFUSAL, not a silent tenth connection.
+       *
+       * What this deliberately does NOT offer is `--reconnect`. Replacing an
+       * existing credential and resetting its consents is destructive, and doing
+       * it to N workspaces behind one press is the unbounded blast radius the
+       * refusal above was actually worried about. An already-connected workspace
+       * is skipped here and has its own Connect button on its own row.
+       *
+       * It equally does not open any workspace database. A row that has not
+       * recorded a sync identity yet is skipped, with `describeSkip`'s sentence
+       * saying that opening it records one — which its own row's Connect button
+       * does, for one workspace, on one press. A hub-wide connect that took the
+       * `recordIdentityIfOpenWould` door would migrate the schema of every
+       * project on the machine behind a single button, which is exactly what
+       * `hub-scope.ts` exists to prevent.
+       *
+       * **"An outcome a dialog has nowhere to put."** True of a dialog, and the
+       * conclusion drawn from it was wrong. `HubConnectOutcome`, `HubSyncOutcome`
+       * and `HubDisconnectOutcome` are per-workspace shapes precisely because a
+       * fan-out had no other way to report; `hubFanOutActed` normalizes all three
+       * into the row shape S19 already pinned, and the page renders a TABLE. A
+       * toast was the wrong container, not the outcome the wrong shape.
+       *
+       * ## What is still not here
+       *
+       * No hub-wide purge, and nothing that reaches `staple cloud purge`.
+       * STA-256 records that the server does not validate a purge confirmation on
+       * the wire, and a one-click irreversible remote deletion is worse hub-wide
+       * than per workspace by exactly the factor this whole family multiplies by.
+       */
+
+      /**
+       * `POST /api/hub/connect/preview` — step one, for the whole registry.
+       *
+       * **Reaches no network, and that is the import graph rather than this
+       * handler's restraint.** `buildHubConnectPreview` lives in `hub-preview.ts`,
+       * which imports `preview.ts`, `connection.ts`, `credential-store.ts`,
+       * `endpoint.ts` and `hub-scope.ts` and **nothing that reaches `client.ts`**;
+       * `test/cloud-hub-connect.test.ts` walks that graph transitively and
+       * asserts it, and `test/network-silence.test.ts` drives this route under a
+       * real spy. It is a separate file from `hub-connect.ts` for exactly this
+       * reason — if the two are ever merged, the graph walk fails, which is the
+       * review moment.
+       *
+       * One ticket per ACTIONABLE row, and none for a skipped one: a consent for
+       * something that will not happen is a consent with no subject.
+       */
+      if (url.pathname === "/api/hub/connect/preview") {
+        const body = await readBody(req);
+        const endpoint = typeof body.endpoint === "string" ? body.endpoint.trim() : "";
+        if (endpoint === "") {
+          deny(res, 400, "validation", "An endpoint is required to preview a hub-wide connection.");
+          return;
+        }
+        const credentialFile = body.credentialFile === true;
+        const preview = buildHubConnectPreview({
+          home: stapleHome(),
+          endpoint,
+          label: typeof body.label === "string" ? body.label : undefined,
+          credential: { forceFile: credentialFile },
+          /**
+           * `workspaces` OMITTED. This is the whole of "hub-wide": the fan-out
+           * enumerates the registry itself, through `listHubWorkspaces()`, which
+           * opens the hub READ-ONLY and opens no workspace database at all.
+           */
+        });
+
+        const actionable = preview.entries.filter((entry) => entry.preview !== null);
+        if (actionable.length === 0) {
+          deny(res, 409, "conflict", hubConnectRefusal(preview.entries));
+          return;
+        }
+        /**
+         * A HONEST CEILING, rather than a silent one. `ConsentTicketStore` holds
+         * `MAX_OUTSTANDING_CONSENTS` tickets and evicts the oldest first, so a
+         * fan-out wider than that would quietly invalidate its own earliest
+         * tickets and then refuse them at confirm time with "that consent has
+         * expired" — a true sentence about the wrong thing. Refused up front,
+         * naming the per-row route as the remedy.
+         */
+        if (actionable.length > MAX_OUTSTANDING_CONSENTS) {
+          deny(
+            res,
+            409,
+            "conflict",
+            `${actionable.length} workspaces would be connected, and this server holds at most ` +
+              `${MAX_OUTSTANDING_CONSENTS} outstanding confirmations — a wider fan-out would ` +
+              `discard its own earliest consent before you could give it. Connect them from ` +
+              `their own rows, or use \`staple cloud connect --all\` at a terminal, which has ` +
+              `no such limit because it does not carry consent over HTTP.`,
+          );
+          return;
+        }
+
+        json(res, 200, {
+          preview,
+          consents: actionable.map((entry) => ({
+            slug: entry.slug,
+            // `entry.preview` is non-null by the filter above.
+            consent: consents.mint(entry.preview!, { credentialFile }),
+          })),
+          report: hubCloudReport(stapleHome()),
+        });
+        return;
+      }
+
+      /**
+       * `POST /api/hub/connect` — step two. **No endpoint. No repository id.**
+       *
+       * `{ consents: [{ slug, consent, digest }], token }`, and the absence of the
+       * first two fields is structural and load-bearing. There is no wire spelling
+       * for "connect everything to X": the endpoint is a field of the PREVIEW
+       * RESPONSE and appears in no request this server accepts, on this route or
+       * any other except the two preview routes. A ticket is minted only in the
+       * act of returning a preview, so the bytes naming each service, each
+       * repository, each device and each credential store were necessarily
+       * delivered to the client before any ticket existed for it to send back.
+       * See `src/core/cloud/consent.ts`, and the comment above
+       * `/api/cloud/connect`, which this restates N times over.
+       *
+       * ## Three refusals, in this order, and the order is deliberate
+       *
+       * 1. **A blank enrollment secret, BEFORE any ticket is redeemed.**
+       *    `performHubConnect` validates it too, but only after the tickets are
+       *    consumed — and burning N consents over an empty password field is a
+       *    materially worse failure than burning one. Checked here so the same
+       *    tickets still work on the retry.
+       * 2. **Each ticket, against the row it names.** `redeem` consumes it,
+       *    re-derives that row's preview from local state and refuses on a
+       *    mismatch, so every per-row fact the human read is re-checked. The slug
+       *    is compared inside the rebuild callback, by NAME, for the reason
+       *    `/api/cloud/workspace/connect` does it: without that check a ticket
+       *    previewed for `alpha` and posted against `bravo` reaches the digest
+       *    comparison and is refused with "this machine's connection state
+       *    changed" — true in a sense, and the wrong sentence entirely.
+       * 3. **The enumeration, against the one that was shown.** The fan-out
+       *    preview is rebuilt and its actionable set compared to the consented
+       *    set. A workspace that appeared is refused because consent to three is
+       *    not consent to a fourth; one that vanished is refused because the
+       *    screen described something that is no longer true. Either way nothing
+       *    is sent, and the remedy is to look at the new preview.
+       */
+      if (url.pathname === "/api/hub/connect") {
+        const body = await readBody(req);
+        const enrollmentSecret = typeof body.token === "string" ? body.token : "";
+        if (enrollmentSecret.trim() === "") {
+          deny(
+            res,
+            400,
+            "validation",
+            "An enrollment credential is required. It is offered to each workspace in turn, and " +
+              "a workspace whose service does not accept it is reported rather than aborting the " +
+              "others. Nothing was sent, and the confirmations you were issued are still valid.",
+          );
+          return;
+        }
+
+        const offered = Array.isArray(body.consents) ? body.consents : [];
+        if (offered.length === 0) {
+          deny(
+            res,
+            400,
+            "validation",
+            "A hub-wide connect must carry the confirmations the preview issued, one for each " +
+              "workspace it named. There is no way to name an endpoint here: connecting requires " +
+              "having been shown, in a prior response, every service and repository it would bind.",
+          );
+          return;
+        }
+
+        const registry = listHubWorkspaces();
+        /** slug -> the digest of the preview that row's consent was given to. */
+        const agreed = new Map<string, string>();
+        let endpoint: string | null = null;
+        let label: string | null = null;
+        let credentialFile: boolean | null = null;
+
+        for (const raw of offered) {
+          const ticket = raw as { slug?: unknown; consent?: unknown; digest?: unknown };
+          const slug = typeof ticket.slug === "string" ? ticket.slug.trim() : "";
+          if (slug === "") {
+            deny(
+              res,
+              400,
+              "validation",
+              "Every confirmation in a hub-wide connect names the workspace it was issued for. " +
+                "There is no wire spelling for 'the rest of them' here on purpose.",
+            );
+            return;
+          }
+          if (agreed.has(slug)) {
+            deny(
+              res,
+              400,
+              "validation",
+              `"${slug}" appears twice in this confirmation. One consent buys one connection.`,
+            );
+            return;
+          }
+          const workspace = registry.find((entry) => entry.slug === slug);
+          if (!workspace) {
+            throw new StapleError(
+              "not_found",
+              `No workspace "${slug}" is registered on this machine. The registry is enumerated ` +
+                `on every read, so a workspace unregistered a moment ago is already gone from it.`,
+            );
+          }
+          const repositoryId = hubRepositoryId(workspace);
+
+          let redeemed;
+          try {
+            redeemed = consents.redeem(ticket.consent, ticket.digest, (stored, choices) => {
+              if (stored.repositoryId !== repositoryId) {
+                throw new StapleError(
+                  "validation",
+                  `That confirmation was issued for a different workspace, so it cannot be used ` +
+                    `to connect "${slug}". Nothing was sent. Review the hub-wide connection ` +
+                    `again and confirm what that shows.`,
+                );
+              }
+              return buildConnectPreview({
+                home: stapleHome(),
+                repositoryId,
+                endpoint: stored.endpoint.origin,
+                label: stored.label,
+                credential: { forceFile: choices.credentialFile },
+              });
+            });
+          } catch (error) {
+            /**
+             * **A FAN-OUT'S REFUSAL HAS TO NAME THE ROW IT IS ABOUT.**
+             *
+             * `ConsentTicketStore`'s own sentences are written for one
+             * workspace, where the subject is unambiguous: *"This machine's
+             * connection state changed while that preview was on screen."* Said
+             * about a screen listing four workspaces, that is the exact failure
+             * this epic keeps meeting from different directions — a true
+             * sentence that leaves a reader with four directories to go and
+             * check. `hub-sync.ts` makes the same argument about why `offline`
+             * and `revoked` must not both fold into `conflict`.
+             *
+             * The code is preserved, so the HTTP status and any script reading
+             * it are unchanged; only the subject is added. Re-thrown rather than
+             * `deny`d because these are the codes the catch-all already maps
+             * correctly, and a second mapping here would be a place for the two
+             * to disagree.
+             */
+            if (error instanceof StapleError) {
+              throw new StapleError(error.code, `Confirming "${slug}": ${error.message}`);
+            }
+            throw error;
+          }
+          const { preview, context } = redeemed;
+
+          /**
+           * ONE GESTURE, ONE SERVICE, ONE CREDENTIAL CHOICE. Every ticket came
+           * out of a single preview, which has a single endpoint and a single
+           * credential-store decision, so a disagreement here means two previews
+           * were mixed — and a fan-out assembled out of two screens is a
+           * consent nobody gave in one piece.
+           */
+          if (endpoint === null) {
+            endpoint = preview.endpoint.origin;
+            label = preview.label;
+            credentialFile = context.credentialFile;
+          } else if (
+            preview.endpoint.origin !== endpoint ||
+            preview.label !== label ||
+            context.credentialFile !== credentialFile
+          ) {
+            deny(
+              res,
+              400,
+              "validation",
+              "These confirmations came from more than one preview, so they do not describe one " +
+                "decision. Nothing was sent. Review the hub-wide connection again.",
+            );
+            return;
+          }
+          agreed.set(slug, previewDigest(preview));
+        }
+
+        /**
+         * THE ENUMERATION, RE-DERIVED. `endpoint` and `label` come out of the
+         * tickets and out of nothing else — the request could not name them —
+         * which is why this rebuild is possible at all without a field the design
+         * refuses to accept.
+         */
+        if (endpoint === null) {
+          // Unreachable: the loop above ran at least once and every path through
+          // it either sets this or returns. Stated rather than asserted away,
+          // because the alternative is a `!` on the one value this whole route
+          // exists to make sure the request could not supply.
+          deny(res, 400, "validation", "No confirmation named a service. Nothing was sent.");
+          return;
+        }
+        const preview = buildHubConnectPreview({
+          home: stapleHome(),
+          endpoint,
+          label: label ?? undefined,
+          credential: { forceFile: credentialFile === true },
+        });
+        const actionable = preview.entries.filter((entry) => entry.preview !== null);
+        const appeared = actionable.filter((entry) => !agreed.has(entry.slug)).map((e) => e.slug);
+        const vanished = [...agreed.keys()].filter(
+          (slug) => !actionable.some((entry) => entry.slug === slug),
+        );
+        if (appeared.length > 0 || vanished.length > 0) {
+          deny(
+            res,
+            409,
+            "conflict",
+            "This machine's workspaces changed while that preview was on screen, so it no longer " +
+              "describes what would happen. Nothing was sent. " +
+              (appeared.length > 0
+                ? `Not covered by what you agreed to: ${appeared.join(", ")}. `
+                : "") +
+              (vanished.length > 0
+                ? `No longer connectable: ${vanished.join(", ")}. `
+                : "") +
+              "Review the hub-wide connection again and read what it now says.",
+          );
+          return;
+        }
+        for (const entry of actionable) {
+          if (previewDigest(entry.preview!) !== agreed.get(entry.slug)) {
+            deny(
+              res,
+              409,
+              "conflict",
+              `What connecting "${entry.slug}" would do has changed since that preview was ` +
+                `shown, so it no longer describes what you agreed to. Nothing was sent. Review ` +
+                `the hub-wide connection again.`,
+            );
+            return;
+          }
+        }
+
+        const outcome = await performHubConnect(preview, {
+          home: stapleHome(),
+          enrollmentSecret,
+          credential: { forceFile: credentialFile === true },
+        });
+        hubFanOutActed(
+          res,
+          "connect",
+          outcome.workspaces.map((row) =>
+            outcomeOf(
+              row.slug,
+              "connect",
+              row.status === "connected" ? "ok" : row.status === "failed" ? "failed" : "skipped",
+              row.reason,
+            ),
+          ),
+        );
+        return;
+      }
+
+      /**
+       * `POST /api/hub/sync` — **this route egresses, once per connected
+       * workspace.**
+       *
+       * The widest outbound surface on this server, and it is a POST for that
+       * reason as much as for what it writes. **It is not on the page's mount
+       * path**: `test/network-silence.test.ts` drives every route an opening
+       * settings panel touches and this is deliberately absent from all of those
+       * lists, exactly as `/api/cloud/workspace/sync` and `/api/cloud/devices`
+       * are. A settings page that synchronized the machine when you opened it
+       * would be the heartbeat `docs/sync.md` describes as arrived at by
+       * accident, multiplied by the size of the registry.
+       *
+       * A row that fails answers **200 with `status: "failed"`**, and that is not
+       * a swallowed error. `syncAllWorkspaces` deliberately does not throw for a
+       * row: every failure becomes a row carrying the service's own message and
+       * its own `cloudCode`, because folding `offline`, `revoked` and
+       * `rate_limited` into one thrown `conflict` is the thing that makes a
+       * twelve-row table unactionable. Re-throwing here would discard exactly the
+       * distinction the fan-out was built to keep.
+       */
+      if (url.pathname === "/api/hub/sync") {
+        const before = hubCloudReport(stapleHome());
+        const targets = hubSyncTargets(before);
+        if (targets.length === 0) {
+          /**
+           * Refused rather than answered 200 with an empty table, and the reason
+           * distinguishes the three ways of having nothing to do. A single
+           * "nothing to sync" would send somebody looking for a network problem
+           * when the answer is that they have not connected anything.
+           */
+          const connected = hubDisconnectTargets(before);
+          const detail =
+            before.workspaces.length === 0
+              ? "No workspaces are registered on this machine."
+              : connected.length === 0
+                ? `None of the ${before.workspaces.length} registered ` +
+                  `${before.workspaces.length === 1 ? "workspace is" : "workspaces are"} ` +
+                  `connected on this machine. Connecting is a separate consent, and a sync run ` +
+                  `does not get to spend it.`
+                : `${connected.length} ${connected.length === 1 ? "workspace is" : "workspaces are"} ` +
+                  `connected but not available to synchronize right now. ` +
+                  connected.map((row) => `${row.slug}: ${row.skipDetail ?? "unavailable"}`).join(" ");
+          deny(res, 409, "conflict", `There is nothing to synchronize. ${detail}`);
+          return;
+        }
+
+        /**
+         * `workspaces` OMITTED — the fan-out enumerates the registry. Nothing
+         * here loops over `handleFor`, which in single-workspace mode would
+         * answer with the server's own workspace whatever it was asked and turn a
+         * hub-wide sync into one workspace synchronized N times.
+         */
+        const outcome = await syncAllWorkspaces({ home: stapleHome() });
+        hubFanOutActed(
+          res,
+          "sync",
+          outcome.workspaces.map((row) =>
+            outcomeOf(
+              row.slug,
+              "sync",
+              row.status === "synced" ? "ok" : row.status === "failed" ? "failed" : "skipped",
+              row.reason,
+            ),
+          ),
+        );
+        return;
+      }
+
+      /**
+       * `POST /api/hub/disconnect` — local, and only local, N times over.
+       *
+       * `performHubDisconnect` inherits `performDisconnect`'s contract exactly:
+       * **no network call**, not even a courtesy one, and the entire local
+       * database of every workspace preserved including pending outbox
+       * operations. A person who has decided to stop talking to a service must
+       * not need that service's permission to stop, and that is no less true of
+       * twelve workspaces than of one — which is why this route is **not gated on
+       * service availability**, and not gated on `available` either. The
+       * credential lives in the staple home, so disconnecting a workspace whose
+       * disk is unmounted is both possible and right; refusing would leave a live
+       * credential behind for precisely the workspace somebody is most likely to
+       * be disconnecting. Same reasoning as the per-row route above.
+       *
+       * ## Why the empty check comes before the confirmation
+       *
+       * `confirm` is the CLI's `--yes`, and the confirmation NAMES THE COUNT AND
+       * THE WORKSPACES — which it can only do once it knows them. So the order is
+       * "is there anything to do", then "are you sure about these". Asking for a
+       * confirmation of nothing, and then reporting that nothing was there, would
+       * be two round trips to learn one fact.
+       */
+      if (url.pathname === "/api/hub/disconnect") {
+        const body = await readBody(req);
+        const before = hubCloudReport(stapleHome());
+        const targets = hubDisconnectTargets(before);
+        if (targets.length === 0) {
+          deny(
+            res,
+            409,
+            "conflict",
+            "There is nothing to disconnect. " +
+              (before.workspaces.length === 0
+                ? "No workspaces are registered on this machine."
+                : `None of the ${before.workspaces.length} registered ` +
+                  `${before.workspaces.length === 1 ? "workspace is" : "workspaces are"} ` +
+                  `connected on this machine, so no credential is stored for any of them.`),
+          );
+          return;
+        }
+        if (body.confirm !== true) {
+          deny(
+            res,
+            400,
+            "validation",
+            `Disconnecting the hub removes this machine's credential for ${targets.length} ` +
+              `connected ${targets.length === 1 ? "workspace" : "workspaces"}: ` +
+              `${targets.map((row) => row.slug).join(", ")}. Pass confirm to proceed. Every ` +
+              `database, including pending operations and unsettled conflicts, is untouched, no ` +
+              `other device is affected, and no remote copy is deleted. Re-connecting later needs ` +
+              `an enrollment credential.`,
+          );
+          return;
+        }
+        // `workspaces` OMITTED. The registry is the enumeration.
+        const outcome = performHubDisconnect(stapleHome());
+        hubFanOutActed(
+          res,
+          "disconnect",
+          outcome.workspaces.map((row) =>
+            outcomeOf(
+              row.slug,
+              "disconnect",
+              row.status === "disconnected" ? "ok" : "skipped",
+              row.reason,
+            ),
           ),
         );
         return;

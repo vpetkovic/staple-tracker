@@ -41,6 +41,7 @@ import { describe, expect, it } from "vitest";
 import type { ClaimActivity, ClaimLease, ClaimScope } from "../src/core/types.js";
 import type { CloudSurfaceReport } from "../src/core/cloud/surface.js";
 import type { HubCloudReport, HubWorkspaceOutcome } from "../src/core/cloud/hub-surface.js";
+import type { HubConnectPreview } from "../src/core/cloud/hub-preview.js";
 import type { ConnectPreview } from "../src/core/cloud/preview.js";
 import type { RemoteDevice } from "../src/core/cloud/client.js";
 import type {
@@ -50,6 +51,7 @@ import type {
   CloudSurfaceReport as UiCloudSurfaceReport,
   ConnectPreview as UiConnectPreview,
   HubCloudReport as UiHubCloudReport,
+  HubConnectPreview as UiHubConnectPreview,
   HubWorkspaceOutcome as UiHubWorkspaceOutcome,
   RemoteDevice as UiRemoteDevice,
 } from "../src/ui/app/src/lib/types.js";
@@ -132,6 +134,38 @@ type _HubCloudReportMatches = Expect<Equals<HubCloudReport, UiHubCloudReport>>;
  */
 type _HubWorkspaceOutcomeMatches = Expect<Equals<HubWorkspaceOutcome, UiHubWorkspaceOutcome>>;
 
+/**
+ * S18 (STA-279): what connecting EVERY registered workspace would do, before
+ * anything has been sent.
+ *
+ * It earns its place by this file's rule more clearly than anything here except
+ * `ConnectPreview`, and for the same reason multiplied by the size of the
+ * registry. **This type IS the consent mechanism for a fan-out.** The page
+ * renders one row per `entries[]` member — `preview` for the endpoint,
+ * repository id and credential store that row's secret is about to go into, and
+ * `reason` for why a row will be skipped instead — and the server mints one
+ * consent ticket per actionable row so that the confirm is over the enumeration
+ * rather than over a count.
+ *
+ * A field dropped from the mirror here is not a stale type. It is a disclosure
+ * that stopped being made about somebody's whole machine, on a screen that then
+ * still asks for agreement — which is precisely the shape this feature was twice
+ * refused on rather than shipped as a button *"asking for less than the CLI
+ * preview does"*.
+ *
+ * `entries[].preview` is `ConnectPreview | null`, and the null carries meaning:
+ * a row nothing will happen to has no preview, because a placeholder would
+ * describe an action that is not going to be taken. A mirror that narrowed it to
+ * `ConnectPreview` would make the skipped rows unrenderable and invite somebody
+ * to drop them from the screen — and the skipped rows are the answer to the
+ * question a reader asks immediately ("why is my other repository not in this
+ * list?").
+ *
+ * `autoAfterConnect` is the literal `false` on both sides, deliberately, so the
+ * JSON a script reads carries the same promise the human screen prints.
+ */
+type _HubConnectPreviewMatches = Expect<Equals<HubConnectPreview, UiHubConnectPreview>>;
+
 describe("the browser app's mirror of the wire vocabulary", () => {
   /**
    * The assertions above are types, and types are erased — so `vitest` would
@@ -155,6 +189,7 @@ describe("the browser app's mirror of the wire vocabulary", () => {
       true satisfies _RemoteDeviceMatches,
       true satisfies _HubCloudReportMatches,
       true satisfies _HubWorkspaceOutcomeMatches,
+      true satisfies _HubConnectPreviewMatches,
     ];
     // GOLDEN, moved by S13 (STA-258): 4 -> 6. The two additions are the connect
     // preview and the device row; see the comment above them.
@@ -165,6 +200,12 @@ describe("the browser app's mirror of the wire vocabulary", () => {
     // above it. The hub report itself did NOT need a new proof — it grew two
     // fields, and the existing equality caught both sides going out of step,
     // which is the proof doing its job rather than needing a sibling.
-    expect(proofs).toHaveLength(8);
+    // GOLDEN, moved by S18 (STA-279): 8 -> 9. The addition is the HUB-WIDE
+    // connect preview — the fan-out's consent screen. See the comment above it
+    // for why a response envelope like `HubActionResult` does not earn a proof
+    // and this does: the envelope is a shape this repository invented, and this
+    // is the disclosure a human agrees to before one secret is offered to N
+    // services.
+    expect(proofs).toHaveLength(9);
   });
 });

@@ -61,18 +61,22 @@ import { Input } from "@/components/ui/input";
 import {
   cloudConnect,
   cloudDisconnect,
+  connectHub,
   connectWorkspace,
+  disconnectHub,
   disconnectWorkspace,
   getCloudStatus,
   backupHub,
   getCloudWorkspaces,
   listCloudDevices,
   previewCloudConnect,
+  previewHubConnect,
   previewUnregisterWorkspace,
   previewWorkspaceConnect,
   revokeCloudDevice,
   setCloudConsent,
   setWorkspaceConsent,
+  syncHub,
   syncWorkspace,
   unregisterWorkspace,
 } from "@/lib/api";
@@ -82,6 +86,8 @@ import type {
   ConnectPreview,
   ConsentTicket,
   HubCloudReport,
+  HubConnectPreview,
+  HubFanOut,
   HubWorkspaceOutcome,
   HubWorkspaceReport,
   RemoteDevice,
@@ -98,12 +104,15 @@ import {
   counterFacts,
   describeDevice,
   groupDisabledReasons,
+  hubFanOutSummary,
   hubGroups,
   hubListDescription,
   hubSelfFacts,
   hubSelfSummary,
   hubRowControls,
   hubUnreachableDescription,
+  hubWideControls,
+  hubWideDisconnectWarning,
   joinLabels,
   orderDevices,
   previewFacts,
@@ -113,6 +122,8 @@ import {
   type HubRowAction,
   type HubRowControl,
   type HubRowView,
+  type HubWideAction,
+  type HubWideControl,
 } from "./cloud-settings";
 
 /** Which action is in flight. One at a time: every control disables while any is. */
@@ -216,6 +227,58 @@ export interface HubPanelState {
   disconnecting: string | null;
   /** The last refusal from a per-row call. Shown on the row it came from. */
   error: { slug: string; message: string } | null;
+  /**
+   * Everything the HUB-WIDE half is doing — S18 (STA-279).
+   *
+   * A nested object rather than more fields on this one, and the nesting is the
+   * statement: nothing in here is keyed by slug, because none of it is about a
+   * row. `busy` here does not lock a row's spinner and a refusal here is drawn in
+   * the hub panel, never against a workspace — which is the same discipline
+   * `outcome.slug` enforces one level down, applied to the thing that has no
+   * slug.
+   */
+  wide: HubWideState;
+}
+
+export interface HubWideState {
+  /** Which hub-wide verb is in flight, or null. One at a time. */
+  busy: HubWideAction | null;
+  /**
+   * The hub-wide connect flow: its own draft, and its own two-step preview.
+   *
+   * Separate from `connecting` above, which is one row's flow, because the two
+   * are genuinely different decisions holding two different enrollment secrets —
+   * and opening either closes the other, by construction, since two half-filled
+   * connect forms is a state in which the wrong secret gets sent.
+   */
+  connecting: {
+    draft: ConnectDraft;
+    /**
+     * The ENUMERATION shown and waiting on a yes, with one ticket per actionable
+     * row. Null before Review is pressed.
+     *
+     * The tickets travel together because the confirm is a confirm of the whole
+     * enumeration: the server re-derives it and refuses if a workspace has been
+     * registered or connected since this was drawn.
+     */
+    pending: {
+      preview: HubConnectPreview;
+      consents: Array<{ slug: string; consent: ConsentTicket }>;
+    } | null;
+  } | null;
+  /** True while the hub-wide disconnect confirmation is up. */
+  disconnecting: boolean;
+  /**
+   * The last hub-wide result, as a per-workspace TABLE.
+   *
+   * This is the resolution of the recorded refusal that a fan-out *"produces a
+   * per-workspace outcome a dialog has nowhere to put"*. It has somewhere to go:
+   * here, rendered as rows. A toast was the wrong container, not the outcome the
+   * wrong shape.
+   */
+  fanOut: HubFanOut | null;
+  /** The last hub-wide refusal. Drawn in the hub panel; never on a row. */
+  error: string | null;
 }
 
 export interface HubActions {
@@ -238,6 +301,33 @@ export interface HubActions {
    * signature saying what it acts on: the hub is not one of the rows.
    */
   onBackup: () => void;
+
+  /**
+   * ─── THE HUB-WIDE VERBS — S18 (STA-279) ────────────────────────────────────
+   *
+   * Seven members, and **none of them takes a slug.** That is the same statement
+   * `onBackup`'s signature makes, extended to the three verbs: the hub is not one
+   * of the rows, so there is no workspace for these to name. A `slug` parameter
+   * appearing on any of them later would mean one of two things — either it had
+   * quietly become a per-row action, in which case it belongs above beside the
+   * others, or a hub-wide verb had acquired a way to be scoped, which is the
+   * per-row family's job and is already done. Either way it is the review moment.
+   *
+   * Connect is THREE members rather than one because it is a two-step consent,
+   * exactly as the per-row connect is: `onHubPreview` fetches the enumeration and
+   * `onHubConnect` redeems the tickets it issued. There is no shape either can
+   * produce that connects without the enumeration having been returned first —
+   * the route accepts no endpoint, so it is not a matter of this component's
+   * diligence.
+   */
+  onHubOpenConnect: (open: boolean) => void;
+  onHubDraft: (patch: Partial<ConnectDraft>) => void;
+  onHubPreview: () => void;
+  onHubConnect: () => void;
+  /** EGRESSES, once per connected workspace. Never called on mount. */
+  onHubSync: () => void;
+  onHubAskDisconnect: (asking: boolean) => void;
+  onHubDisconnect: () => void;
 }
 
 /**
@@ -600,7 +690,12 @@ export function CloudPanel(props: CloudPanelProps) {
         the list until the current workspace happens to be connected would make
         it invisible exactly when it answers the question.
       */}
-      <HubSelfPanel report={props.workspaces} onBackup={props.hubActions.onBackup} busy={props.hub.backingUp} />
+      <HubSelfPanel
+        report={props.workspaces}
+        hub={props.hub}
+        actions={props.hubActions}
+        outcome={props.hub.outcomes[""]}
+      />
       <HubWorkspaceList
         report={props.workspaces}
         currentRepositoryId={report.repositoryId}
@@ -634,17 +729,46 @@ export function CloudPanel(props: CloudPanelProps) {
  * backup will succeed without further consent — pressing it walks through
  * whatever is missing — but the affordance never disappears, because a backup
  * button that vanishes when you most want it is the failure being designed out.
+ *
+ * ## Why the three hub-wide verbs live HERE and nowhere else
+ *
+ * They act on the hub, so they belong to the thing that IS the hub. Put on the
+ * workspace list they would be a fourth control competing with each row's own
+ * six, and a reader would have no way to tell "Disconnect" at the top of a list
+ * from "Disconnect" inside it — the wrong-subject confusion S18 exists to end,
+ * arrived at from the other direction.
+ *
+ * Every control STATES THE COUNT it will act on — "Connect 4 workspaces", "Sync
+ * 2 connected workspaces" — rather than saying "all". "All" is a blast radius
+ * that is invisible until after the press; a number is something somebody can
+ * decline for a reason. On a machine with nine registered workspaces of which
+ * four are debris, 9 against 4 is the whole question.
  */
 function HubSelfPanel({
   report,
-  onBackup,
-  busy,
+  hub,
+  actions,
+  outcome,
 }: {
   report: HubCloudReport | null;
-  onBackup: () => void;
-  busy: boolean;
+  hub: HubPanelState;
+  actions: HubActions;
+  /** The hub's own outcome, keyed on the empty slug — a backup receipt, so far. */
+  outcome: HubWorkspaceOutcome | undefined;
 }) {
   if (report === null) return null;
+  const wide = hub.wide;
+  const controls = hubWideControls(report);
+  const unavailable = groupDisabledReasons(controls);
+  /**
+   * Any hub-wide verb in flight locks all of them, and the backup and every row
+   * too. These are one-at-a-time operations against one registry and one staple
+   * home; a second press mid-flight would race a file write across every
+   * workspace at once, which is the rows' own argument with a bigger blast
+   * radius.
+   */
+  const locked = wide.busy !== null || hub.backingUp || hub.busy !== null;
+
   return (
     <Section title="This hub" description={hubSelfSummary(report)}>
       <div data-cloud-hub-self>
@@ -674,9 +798,207 @@ function HubSelfPanel({
           </ul>
         </details>
         <div className="mt-2">
-          <Button size="sm" variant="outline" data-cloud-hub-backup onClick={onBackup} disabled={busy}>
-            {busy ? "Backing up…" : "Back up the hub"}
+          <Button
+            size="sm"
+            variant="outline"
+            data-cloud-hub-backup
+            onClick={actions.onBackup}
+            disabled={locked}
+          >
+            {hub.backingUp ? "Backing up…" : "Back up the hub"}
           </Button>
+        </div>
+
+        {/*
+          ─── THE THREE HUB-WIDE VERBS — S18 (STA-279) ─────────────────────────
+
+          All three, always, each carrying the count it will act on. Enablement
+          is `disabledReason` and never omission, exactly as on a row: a control
+          that disappeared would leave a reader unable to tell an unavailable
+          capability from one the product does not have — and a hub-wide Connect
+          that vanished the moment everything was connected would teach nobody
+          that it existed.
+        */}
+        <div data-cloud-hub-wide className="mt-3 border-t pt-3">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            {controls.map((control) => (
+              <HubWideControlButton
+                key={control.action}
+                control={control}
+                busy={wide.busy === control.action}
+                locked={locked}
+                actions={actions}
+              />
+            ))}
+          </div>
+
+          {/*
+            WHY EACH UNAVAILABLE CONTROL IS UNAVAILABLE — once per distinct
+            reason, naming the controls it covers. The same grouping the rows
+            use, and for the same reason: on a machine with nothing connected,
+            Sync and Disconnect share one sentence, and printing it twice is the
+            noise this page is supposed to be free of.
+          */}
+          {unavailable.length > 0 ? (
+            <ul data-cloud-hub-wide-unavailable className="m-0 mt-1 list-none space-y-0.5 p-0">
+              {unavailable.map((group) => (
+                <li key={group.reason} className="text-[11px] leading-relaxed text-muted-foreground">
+                  <span className="font-medium">{joinLabels(group.labels)}</span>
+                  {group.labels.length > 1 ? " are unavailable: " : " is unavailable: "}
+                  {group.reason}
+                </li>
+              ))}
+            </ul>
+          ) : null}
+
+          {/*
+            THE HUB-WIDE CONNECT FLOW. Fields, then the ENUMERATION, then the
+            confirm — two steps, exactly as the current workspace's form and each
+            row's form are, and for the same structural reason:
+            `/api/hub/connect` accepts no endpoint, only the tickets the server
+            minted while returning the enumeration it therefore had to show
+            first.
+          */}
+          {wide.connecting !== null ? (
+            <div data-cloud-hub-connect className="mt-2 space-y-3 rounded-md border px-3 py-3">
+              {wide.connecting.pending === null ? (
+                <>
+                  <p className="text-[12px] text-muted-foreground">
+                    Connecting every workspace that can be. The next screen names each one, the
+                    service it would be registered with and where its credential would go. Nothing
+                    is sent until you confirm what it shows.
+                  </p>
+                  <ConnectFields
+                    idPrefix="cloud-hub"
+                    draft={wide.connecting.draft}
+                    problem={connectFormProblem({
+                      endpoint: wide.connecting.draft.endpoint,
+                      token: wide.connecting.draft.enrollment,
+                    })}
+                    onDraft={actions.onHubDraft}
+                  />
+                  {/*
+                    THE ONE SENTENCE THIS FORM ADDS over the per-row one, and it
+                    is the honest half of the recorded objection: the secret is
+                    offered to each workspace in turn. It is not hidden behind
+                    the preview, because a person typing a secret into a
+                    hub-wide form should know that before they type it.
+                  */}
+                  <p className="text-[12px] leading-relaxed text-muted-foreground">
+                    The enrollment credential is offered to each workspace in turn. A workspace
+                    whose service does not accept it is reported and skipped; the rest still
+                    connect. Each workspace gets its own credential, so revoking one does not
+                    disconnect the others.
+                  </p>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      type="button"
+                      size="sm"
+                      data-cloud-hub-preview
+                      disabled={
+                        locked ||
+                        connectFormProblem({
+                          endpoint: wide.connecting.draft.endpoint,
+                          token: wide.connecting.draft.enrollment,
+                        }) !== null
+                      }
+                      onClick={actions.onHubPreview}
+                    >
+                      {wide.busy === "connect" ? "Reading…" : "Review what would be connected"}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      disabled={locked}
+                      onClick={() => actions.onHubOpenConnect(false)}
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+                </>
+              ) : (
+                <HubConnectConsent
+                  preview={wide.connecting.pending.preview}
+                  busy={wide.busy === "connect"}
+                  locked={locked}
+                  actions={actions}
+                />
+              )}
+            </div>
+          ) : null}
+
+          {wide.disconnecting ? (
+            <div className="mt-2">
+              <DestructiveConfirm
+                message={hubWideDisconnectWarning(report)}
+                confirmLabel={
+                  wide.busy === "disconnect"
+                    ? "Disconnecting…"
+                    : `Disconnect ${hubWideControls(report).find((c) => c.action === "disconnect")!.count} workspaces`
+                }
+                disabled={locked}
+                onConfirm={actions.onHubDisconnect}
+                onCancel={() => actions.onHubAskDisconnect(false)}
+              />
+            </div>
+          ) : null}
+
+          {wide.error !== null ? <InlineError>{wide.error}</InlineError> : null}
+
+          {/*
+            THE PER-WORKSPACE OUTCOME TABLE — and this is the answer to the
+            recorded refusal, not a workaround for it.
+
+            The objection was that a fan-out *"produces a per-workspace outcome a
+            dialog has nowhere to put"*. True of a dialog. `HubConnectOutcome`,
+            `HubSyncOutcome` and `HubDisconnectOutcome` are already per-workspace
+            shapes precisely because a fan-out had no other way to report, and
+            the server normalizes all three into the row shape S19 pinned. So it
+            renders as rows, including the skipped ones — a table listing only
+            the failures would be indistinguishable, on a good day, from a button
+            that did nothing.
+          */}
+          {wide.fanOut !== null ? (
+            <div data-cloud-hub-fanout={wide.fanOut.action} className="mt-3">
+              <p className="text-[12px] leading-relaxed">{hubFanOutSummary(wide.fanOut)}</p>
+              <ul className="m-0 mt-1 list-none space-y-1 p-0">
+                {wide.fanOut.workspaces.map((row) => (
+                  <li
+                    key={row.slug}
+                    data-cloud-hub-fanout-row={row.slug}
+                    data-status={row.status}
+                    className="rounded-md border px-2 py-1"
+                  >
+                    <div className="flex flex-wrap items-baseline gap-x-2">
+                      <span className="text-[12px] font-medium">{row.slug}</span>
+                      <span className="text-[10px] uppercase text-muted-foreground">
+                        {row.status === "ok" ? "done" : row.status}
+                      </span>
+                    </div>
+                    <p className="text-[11px] leading-relaxed text-muted-foreground">{row.detail}</p>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+
+          {/*
+            The hub's own single-outcome line — the backup receipt. Keyed on the
+            EMPTY slug because the hub is not a row, and a key that collided with
+            a real slug would put a hub result inside a workspace's row, which is
+            the precise class of bug S19 pinned `outcome.slug` to catch.
+          */}
+          {outcome ? (
+            <p
+              data-cloud-hub-outcome={outcome.action}
+              data-status={outcome.status}
+              className="mt-2 text-[11px] leading-relaxed text-muted-foreground"
+            >
+              {outcome.status === "failed" ? "Did not work: " : ""}
+              {outcome.detail}
+            </p>
+          ) : null}
         </div>
       </div>
     </Section>
@@ -684,22 +1006,249 @@ function HubSelfPanel({
 }
 
 /**
+ * One hub-wide control.
+ *
+ * A button for all three, unlike a row's six — none of the hub-wide verbs has a
+ * standing VALUE, so a switch would make an event look like a state. The two
+ * consents that do have values are per workspace and stay there: automatic sync
+ * is a decision about one repository's traffic, and a hub-wide switch for it
+ * would be one press spending N consents, which is the shape `docs/sync.md`
+ * separates them to prevent.
+ *
+ * `title` carries the reason for a pointer AND the sentence is rendered
+ * separately, because a tooltip is not an explanation on a page somebody is
+ * reading to understand the model.
+ */
+function HubWideControlButton({
+  control,
+  busy,
+  locked,
+  actions,
+}: {
+  control: HubWideControl;
+  busy: boolean;
+  locked: boolean;
+  actions: HubActions;
+}) {
+  const disabled = control.disabledReason !== null;
+  const press = () => {
+    if (control.action === "connect") actions.onHubOpenConnect(true);
+    else if (control.action === "sync") actions.onHubSync();
+    else actions.onHubAskDisconnect(true);
+  };
+  return (
+    <span
+      data-cloud-hub-wide-control={control.action}
+      data-disabled={disabled ? "true" : "false"}
+      data-count={control.count}
+      className="flex items-center gap-1.5"
+    >
+      <Button
+        type="button"
+        size="sm"
+        variant={control.destructive === true ? "ghost" : "outline"}
+        data-cloud-hub-action={control.action}
+        disabled={disabled || locked}
+        title={control.disabledReason ?? control.effect}
+        onClick={press}
+      >
+        {busy ? "Working…" : control.label}
+      </Button>
+    </span>
+  );
+}
+
+/**
+ * THE HUB-WIDE CONSENT SCREEN — the enumeration, per workspace, and then the ask.
+ *
+ * ## This is where the recorded refusal is answered rather than overruled
+ *
+ * The objection was that a hub-wide connect *"spends one enrollment secret
+ * against N services"* and that a button therefore asked *"for less than the CLI
+ * preview does"*. The answer is to ask for exactly as much as the CLI preview
+ * does, which is what this screen is: **every registered workspace appears,
+ * including every one that will be skipped and why**, and each actionable row
+ * names its own service, repository, device, label and credential store through
+ * `previewFacts` — the same function the single-workspace consent screen uses, so
+ * there is one definition of what a connect discloses.
+ *
+ * `willConnect: 4` is a number, and agreeing to a number is not consent. The
+ * count is on the button; the enumeration is here.
+ *
+ * ## Why the disclosure is `CONNECT_DISCLOSURE` and not a hub-wide copy
+ *
+ * Because a second copy is a second place for a consent promise to drift. Every
+ * line of it is true of every row — the credential is per workspace and stays on
+ * this machine, automatic sync stays off, the contents are stored in plaintext —
+ * so a hub-wide rewording would be the same promise said differently, and the
+ * two would diverge the first time one of them was edited. The only thing this
+ * screen adds is the sentence about the secret being offered to each workspace in
+ * turn, which is a fact about the FAN-OUT rather than about what connecting
+ * means, and it sits beside the field the secret is typed into.
+ */
+function HubConnectConsent({
+  preview,
+  busy,
+  locked,
+  actions,
+}: {
+  preview: HubConnectPreview;
+  busy: boolean;
+  locked: boolean;
+  actions: HubActions;
+}) {
+  const acting = preview.entries.filter((entry) => entry.preview !== null);
+  const skipping = preview.entries.filter((entry) => entry.preview === null);
+  return (
+    <div data-cloud-hub-consent className="space-y-3">
+      <h5 className="text-sm font-semibold">
+        Connect {acting.length} {acting.length === 1 ? "workspace" : "workspaces"} to{" "}
+        {preview.endpoint}
+      </h5>
+
+      <ul className="m-0 list-none space-y-2 p-0">
+        {acting.map((entry) => (
+          <li
+            key={entry.slug}
+            data-cloud-hub-consent-row={entry.slug}
+            data-action={entry.action}
+            className="rounded-md border px-2 py-1.5"
+          >
+            <div className="flex flex-wrap items-baseline gap-x-2">
+              <span className="text-[12px] font-medium">{entry.slug}</span>
+              <span className="text-[10px] uppercase text-muted-foreground">{entry.action}</span>
+            </div>
+            {/*
+              The per-row enumeration. `previewFacts` is the single-workspace
+              consent screen's own renderer, reused rather than re-described, so
+              a hub-wide row cannot end up disclosing less than a single connect
+              does.
+            */}
+            <Facts facts={previewFacts(entry.preview!)} />
+          </li>
+        ))}
+      </ul>
+
+      {/*
+        THE SKIPPED ROWS, rendered and not hidden. They answer the question a
+        reader asks immediately — "why is my other repository not in this list?"
+        — before they ask it, and each carries the fan-out's own sentence for
+        why. Dropping them would turn "4 of 7" into "4", which is the number that
+        makes debris look like inventory.
+      */}
+      {skipping.length > 0 ? (
+        <div data-cloud-hub-consent-skipped>
+          <p className="text-[12px] font-medium">
+            Not included ({skipping.length}), and left exactly as they are:
+          </p>
+          <ul className="m-0 mt-1 list-none space-y-1 p-0">
+            {skipping.map((entry) => (
+              <li
+                key={entry.slug}
+                data-cloud-hub-consent-skip={entry.slug}
+                className="text-[11px] leading-relaxed text-muted-foreground"
+              >
+                <span className="font-medium">{entry.slug}</span> — {entry.reason}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
+      <div>
+        <p className="text-[12px] font-medium">What happens if you say yes:</p>
+        <ul className="mt-1 list-disc space-y-1 pl-5 text-[12px] leading-relaxed text-muted-foreground">
+          {CONNECT_DISCLOSURE.map((line) => (
+            <li key={line}>{line}</li>
+          ))}
+        </ul>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          type="button"
+          size="sm"
+          data-cloud-hub-confirm
+          disabled={locked}
+          onClick={actions.onHubConnect}
+        >
+          {busy
+            ? "Connecting…"
+            : `Connect ${acting.length} ${acting.length === 1 ? "workspace" : "workspaces"}`}
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          disabled={locked}
+          onClick={() => actions.onHubOpenConnect(false)}
+        >
+          Cancel
+        </Button>
+        <span className="text-[12px] text-muted-foreground">
+          This confirmation expires, and it covers exactly the workspaces above — if one is
+          registered or connected in the meantime, you will be asked to look again.
+        </span>
+      </div>
+    </div>
+  );
+}
+
+/**
  * Every registered workspace, with its own state and its own controls —
  * S17 (STA-278), S19 (STA-280), S21 (STA-282).
  *
- * ## What this replaced, and what survives of the argument
+ * ## What this replaced, and how the argument ended
  *
  * This shipped as a read-only table whose header said *"A LIST AND NOT A
- * CONTROL"*. The reasoning was that connecting every workspace at once spends one
- * enrollment secret against N services and produces a per-workspace outcome a
- * dialog has nowhere to put, so naming `staple cloud connect --all` was more use
- * than a button asking for less than the CLI preview does.
+ * CONTROL"*, on two grounds:
  *
- * That reasoning is intact and there is still no hub-wide button here. What it
- * did not justify — and was taken to — is the absence of PER-ROW controls. One
- * row's connect spends one secret against one service and produces one outcome:
- * the same shape the sections above have offered since S13. `cloud-settings.ts`
- * states this at length beside the pure half.
+ *   > connecting every workspace at once spends one enrollment secret against N
+ *   > services and produces a per-workspace outcome a dialog has nowhere to put,
+ *   > so naming `staple cloud connect --all` was more use than a button asking
+ *   > for less than the CLI preview does.
+ *
+ * S17 (STA-278) answered the part about PER-ROW controls: one row's connect
+ * spends one secret against one service and produces one outcome, the same shape
+ * the sections above have offered since S13.
+ *
+ * **S18 (STA-279) answered the hub-wide part, and the refusal no longer stands.**
+ * It was not overruled — both objections were correct, and both were about the
+ * SHAPE the button was imagined to have rather than about the verb:
+ *
+ *  - *"one secret against N services"* — the objection is to a button that asks
+ *    for less than the CLI. So the hub panel's connect asks for exactly as much:
+ *    `/api/hub/connect/preview` returns the fan-out preview, EVERY registered
+ *    workspace appears including every one that will be skipped and why, and each
+ *    actionable row names its own service, repository, device and credential
+ *    store through the same `previewFacts` the single-workspace screen uses. Then
+ *    the confirm carries ONE TICKET PER ROW, so the consent is over that
+ *    enumeration and not over a count — and the server re-derives the
+ *    enumeration before the secret moves, so a workspace registered or connected
+ *    while the screen was up is a refusal naming it rather than a silent extra
+ *    connection. An already-connected workspace is SKIPPED, with the preview
+ *    naming the service it is already talking to; there is deliberately no
+ *    hub-wide reconnect, because replacing N credentials and resetting N consents
+ *    behind one press is the unbounded blast radius the objection was really
+ *    about.
+ *  - *"an outcome a dialog has nowhere to put"* — true of a dialog, and the
+ *    conclusion drawn from it was the wrong one. `HubConnectOutcome`,
+ *    `HubSyncOutcome` and `HubDisconnectOutcome` are per-workspace shapes
+ *    *precisely because* a fan-out had no other way to report. The container was
+ *    wrong, not the outcome: `HubSelfPanel` renders a per-workspace TABLE,
+ *    including the skipped rows, so nothing needs squeezing into a toast.
+ *
+ * `staple cloud connect --all` remains the better tool for a hub of forty. The
+ * page is not trying to beat it; it is trying not to be a dead end for the person
+ * who is already looking at their workspaces.
+ *
+ * ## The hub-wide controls are NOT here, and that is deliberate
+ *
+ * They are in `HubSelfPanel`, above, whose subject is the hub. A hub-wide
+ * Disconnect at the top of a list of per-row Disconnects would be the
+ * wrong-subject confusion S18 exists to end, arrived at from the other side.
+ * Every control on THIS list acts on the one workspace whose row it is on.
+ * `cloud-settings.ts` states the per-row half at length beside the pure functions.
  *
  * ## Why a row can act at all
  *
@@ -1128,6 +1677,15 @@ function HubControl({
 
 const EMPTY_DRAFT: ConnectDraft = { endpoint: "", enrollment: "", label: "", credentialFile: false };
 
+/** Nothing hub-wide is happening. The state the panel mounts in and returns to. */
+const IDLE_WIDE: HubWideState = {
+  busy: null,
+  connecting: null,
+  disconnecting: false,
+  fanOut: null,
+  error: null,
+};
+
 /** The data half: one read on mount, and one round trip per press. */
 export function CloudSection({ ws }: { ws?: string }) {
   const [report, setReport] = useState<CloudSurfaceReport | null>(null);
@@ -1158,9 +1716,15 @@ export function CloudSection({ ws }: { ws?: string }) {
     removing: null,
     disconnecting: null,
     error: null,
+    wide: IDLE_WIDE,
   });
   const patchHub = useCallback(
     (patch: Partial<HubPanelState>) => setHub((current) => ({ ...current, ...patch })),
+    [],
+  );
+  const patchWide = useCallback(
+    (patch: Partial<HubWideState>) =>
+      setHub((current) => ({ ...current, wide: { ...current.wide, ...patch } })),
     [],
   );
 
@@ -1299,6 +1863,66 @@ export function CloudSection({ ws }: { ws?: string }) {
     },
     [],
   );
+
+  /**
+   * One hub-wide round trip — S18 (STA-279).
+   *
+   * The sibling of `runRow`, and the differences are all consequences of the hub
+   * not being a row:
+   *
+   *  - `busy` carries only the VERB, because there is no slug. It is a separate
+   *    field from `hub.busy` so that a hub-wide press cannot spin a workspace's
+   *    spinner and a workspace's press cannot spin the hub's — the same "an
+   *    action on one row does not act on another" discipline, applied to the one
+   *    subject that is not a row.
+   *  - a refusal is stored on `wide.error`, drawn in the hub panel. Putting it in
+   *    `hub.error` would draw a machine-wide refusal against whichever workspace
+   *    happened to match its slug, and the empty slug is already the backup's.
+   *  - the previous `fanOut` table is CLEARED on a new press. It is a result, not
+   *    a log: leaving last run's rows on screen under a spinner would show
+   *    somebody a table describing a state that no longer exists.
+   */
+  const runWide = useCallback(
+    async <T,>(action: HubWideAction, work: () => Promise<T>): Promise<T | null> => {
+      setHub((current) => ({
+        ...current,
+        wide: { ...current.wide, busy: action, error: null, fanOut: null },
+      }));
+      try {
+        return await work();
+      } catch (caught) {
+        if (alive.current) {
+          const refusal = describeRefusal(caught);
+          setHub((current) => ({
+            ...current,
+            wide: { ...current.wide, error: refusal.message },
+          }));
+        }
+        return null;
+      } finally {
+        if (alive.current) {
+          setHub((current) => ({ ...current, wide: { ...current.wide, busy: null } }));
+        }
+      }
+    },
+    [],
+  );
+
+  /**
+   * Apply what a hub-wide route answered: the TABLE, and the fresh list.
+   *
+   * The table is kept whole rather than folded into `outcomes` keyed by slug, and
+   * that is deliberate. Scattering a fan-out's rows onto the workspace list below
+   * would put a machine-wide result in N places and lose the one thing a reader
+   * needs from it — that these rows are one action, taken together, with totals.
+   * The rows still carry the slug the SERVER reported, so nothing is drawn
+   * against a workspace it is not about.
+   */
+  const applyFanOut = useCallback((answer: { fanOut: HubFanOut; report: HubCloudReport }) => {
+    if (!alive.current) return;
+    setWorkspaces(answer.report);
+    setHub((current) => ({ ...current, wide: { ...current.wide, fanOut: answer.fanOut } }));
+  }, []);
 
   const hubActions: HubActions = {
     /**
@@ -1490,6 +2114,123 @@ export function CloudSection({ ws }: { ws?: string }) {
           if (alive.current) patchHub({ backingUp: false });
         });
     },
+
+    // ─── the hub-wide verbs — S18 (STA-279) ────────────────────────────────
+
+    /**
+     * Opening the hub-wide connect closes any ROW's connect form, and vice
+     * versa, by construction: `connecting` here and `connecting` on the row
+     * state are two fields and both are cleared. Two half-filled connect forms
+     * holding two enrollment secrets is not a state worth supporting, and it is
+     * a state in which the wrong secret gets sent — the same argument
+     * `onOpenConnect` makes between rows, extended to the one form that is not a
+     * row.
+     */
+    onHubOpenConnect: (open) =>
+      setHub((current) => ({
+        ...current,
+        connecting: null,
+        removing: null,
+        disconnecting: null,
+        error: null,
+        wide: {
+          ...current.wide,
+          connecting: open ? { draft: EMPTY_DRAFT, pending: null } : null,
+          disconnecting: false,
+          error: null,
+        },
+      })),
+
+    onHubDraft: (patch) =>
+      setHub((current) =>
+        current.wide.connecting === null
+          ? current
+          : {
+              ...current,
+              wide: {
+                ...current.wide,
+                connecting: {
+                  ...current.wide.connecting,
+                  draft: { ...current.wide.connecting.draft, ...patch },
+                },
+              },
+            },
+      ),
+
+    onHubPreview: () => {
+      const open = hub.wide.connecting;
+      if (open === null) return;
+      void runWide("connect", async () => {
+        const answer = await previewHubConnect({
+          endpoint: open.draft.endpoint.trim(),
+          label: open.draft.label.trim() || undefined,
+          credentialFile: open.draft.credentialFile,
+        });
+        if (!alive.current) return;
+        setWorkspaces(answer.report);
+        setHub((current) =>
+          current.wide.connecting === null
+            ? current
+            : {
+                ...current,
+                wide: {
+                  ...current.wide,
+                  connecting: {
+                    ...current.wide.connecting,
+                    pending: { preview: answer.preview, consents: answer.consents },
+                  },
+                },
+              },
+        );
+      });
+    },
+
+    onHubConnect: () => {
+      const open = hub.wide.connecting;
+      if (open === null || open.pending === null) return;
+      const consents = open.pending.consents;
+      const token = open.draft.enrollment;
+      void runWide("connect", async () => {
+        /**
+         * Every ticket goes together, because the confirm is a confirm of the
+         * whole enumeration. Sending them one at a time would turn one decision
+         * into N requests, each of which could succeed while the next was
+         * refused — which is exactly the partial state the enumeration check
+         * exists to make impossible.
+         */
+        applyFanOut(await connectHub({ consents, token }));
+        // The secret has been spent. Holding it in React state after the server
+        // has stored N credentials is a copy of a credential nobody needs.
+        if (alive.current) patchWide({ connecting: null });
+      });
+    },
+
+    /**
+     * EGRESSES, once per connected workspace, and only on this press. A failed
+     * row comes back inside a 200 with `status: "failed"`; `applyFanOut` renders
+     * it as a row, because turning it back into a thrown error here would discard
+     * exactly the `offline` / `revoked` / `rate_limited` distinction the fan-out
+     * exists to keep.
+     */
+    onHubSync: () =>
+      void runWide("sync", async () => {
+        applyFanOut(await syncHub());
+      }),
+
+    onHubAskDisconnect: (asking) =>
+      setHub((current) => ({
+        ...current,
+        connecting: null,
+        removing: null,
+        disconnecting: null,
+        wide: { ...current.wide, disconnecting: asking, connecting: null, error: null },
+      })),
+
+    onHubDisconnect: () =>
+      void runWide("disconnect", async () => {
+        applyFanOut(await disconnectHub());
+        if (alive.current) patchWide({ disconnecting: false });
+      }),
   };
 
   if (loadError !== null) {
