@@ -1123,6 +1123,49 @@ export function hubWideDisconnectWarning(report: HubCloudReport): string {
  * screen above it.
  */
 /**
+ * The hub's own consent, as a control binds to it — S22 (STA-283).
+ *
+ * A SWITCH rather than a button, unlike the three hub-wide verbs, and for the
+ * same reason the per-row `auto` and `backup` are switches: this has a VALUE
+ * that persists, and a button would make a standing state look like an event.
+ *
+ * It is the fourth consent and the first that belongs to the hub. The other
+ * three are per workspace and stay on their rows — automatic sync is a decision
+ * about one repository's traffic, and a hub-wide switch for it would be one
+ * press spending N consents, which is the shape `docs/sync.md` separates them to
+ * prevent. This one is genuinely singular: there is one registry.
+ */
+export function hubRegistryControl(report: HubCloudReport): {
+  label: string;
+  description: string;
+  value: boolean;
+  /** Null when the switch works. A sentence when it does not. */
+  disabledReason: string | null;
+} {
+  const { connected, endpoint, consent } = report.self.registry;
+  return {
+    label: "Publish this machine's workspace registry",
+    /**
+     * The disclosure is `REGISTRY_DISCLOSURE`'s sentence, and the surface renders
+     * the constant rather than this string — see `RegistryConsent` in
+     * `CloudSection.tsx`. What lives here is what the control DOES, which is a
+     * different question from what granting it discloses.
+     */
+    description: connected
+      ? `Lets this machine publish its workspace list to ${endpoint ?? "the service"} so another ` +
+        "machine can restore it. Separate from connecting, from automatic sync and from backup; " +
+        "none of those turns it on."
+      : "Lets this machine publish its workspace list so another machine can restore it.",
+    value: consent,
+    disabledReason: connected
+      ? null
+      : "The hub itself is not connected to a service on this machine, so there is no connection " +
+        "for this consent to be recorded against. It is a separate connection from each " +
+        "workspace's.",
+  };
+}
+
+/**
  * Generic over the caller's own state type rather than naming it, so this file
  * does not import from `CloudSection.tsx`. The pure half must not depend on the
  * component half — that direction is the whole reason the two are separate — and

@@ -1239,6 +1239,22 @@ describe("the UI server serves the whole page, connected or not, and calls nobod
         // be empty and the emptiness check fires before the confirmation check.
         ["/api/hub/disconnect", {}, 409],
         ["/api/hub/disconnect", { confirm: true }, 409],
+        /**
+         * S22 (STA-283). The hub's own publish consent, and it belongs on this
+         * list more obviously than anything else here: it is the switch that
+         * decides whether this machine may describe its whole workspace list to
+         * a service, so a request made while GRANTING it would be the disclosure
+         * happening before the consent.
+         *
+         * 404 on this machine, whose hub has never been connected —
+         * `setRegistryConsent` refuses rather than springing a record into
+         * existence. That refusal is established from local files, which is what
+         * is being pinned: a route that resolved an endpoint before establishing
+         * it had nothing to record would break the invariant on exactly the
+         * machine least likely to be watching.
+         */
+        ["/api/hub/consent", { registry: true }, 404],
+        ["/api/hub/consent", { registry: false }, 404],
       ];
       for (let round = 0; round < 3; round += 1) {
         for (const [route, body, expected] of CLOUD_WRITES) {

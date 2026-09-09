@@ -1502,6 +1502,34 @@ export interface HubCloudReport {
     backupHeadline: string;
     backupContents: readonly string[];
     backupExclusions: readonly string[];
+    /**
+     * The HUB's own connection — S22 (STA-283). Mirrors `HubSelfReport.registry`
+     * in src/core/cloud/hub-surface.ts.
+     *
+     * Three fields, all locally establishable. There is deliberately no `epoch`
+     * and no `lastPublishedAt`: `hubCloudReport` makes no authenticated round
+     * trip, and an epoch is only knowable from a push or snapshot response. A
+     * mirror that grew either would be a type promising the page information the
+     * route cannot produce, which is the same failure the narrow
+     * `HubWorkspaceReport["state"]` union is written to avoid.
+     *
+     * `consent` is false whenever `connected` is false, and the panel must
+     * DISABLE the toggle rather than let it error: `setRegistryConsent` refuses
+     * `not_found` on an unconnected hub rather than springing a record into
+     * existence, so there is nowhere for a true to live.
+     */
+    registry: {
+      connected: boolean;
+      endpoint: string | null;
+      /**
+       * The sentence that must appear wherever this consent is granted, carried
+       * on the report for the same reason `backupHeadline` is: the browser
+       * cannot import `src/core`, so a client-side copy would be a second
+       * wording with nothing holding it in step.
+       */
+      disclosure: string;
+      consent: boolean;
+    };
   };
   /** Sorted and deduped. A hub spanning two services is legitimate. */
   endpoints: string[];
@@ -1523,7 +1551,8 @@ export interface HubCloudReport {
  */
 export interface HubWorkspaceOutcome {
   slug: string;
-  action: "connect" | "sync" | "auto" | "backup" | "disconnect" | "remove";
+  /** S22 (STA-283): `registry` is the hub's own consent, and arrives with the empty slug. */
+  action: "connect" | "sync" | "auto" | "backup" | "disconnect" | "remove" | "registry";
   status: "ok" | "skipped" | "failed";
   /** One sentence for a human. Never parsed — decisions come from `status`. */
   detail: string;

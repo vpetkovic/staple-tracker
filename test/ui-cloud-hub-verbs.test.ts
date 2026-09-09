@@ -1023,6 +1023,91 @@ describe("every hub-wide verb answers with a per-workspace table and a refreshed
   });
 });
 
+// ------------------------------------------- the hub's own consent (S22/STA-283)
+
+describe("the hub's publish consent is the hub's, not a workspace's", () => {
+  /**
+   * **THE WRONG-SUBJECT TEST**, and the reason this is a route rather than a
+   * fourth key on the two consent routes that already exist.
+   *
+   * Adding `"registry"` to `/api/cloud/consent`'s `["auto", "backup"]` literal
+   * was a two-character change that would have worked in hub mode. In
+   * single-workspace mode — which is how `staple ui` runs — `handleFor` ignores
+   * its argument and returns the workspace the server booted on, so the hub's
+   * consent would have been written into `alpha`'s connection record. The server
+   * here IS started on `alpha`, so that is exactly what this file can catch.
+   */
+  it("is not reachable through either per-workspace consent route", async () => {
+    await connectRow("alpha");
+
+    for (const [route, body] of [
+      ["/api/cloud/consent", { registry: true }],
+      ["/api/cloud/workspace/consent", { slug: "alpha", registry: true }],
+    ] as Array<[string, Record<string, unknown>]>) {
+      const response = await post(route, body);
+      expect(response.status, `${route} accepted a registry consent`).toBeGreaterThanOrEqual(400);
+    }
+
+    // And nothing was written under alpha's repository id, which is the effect
+    // the widening would have had.
+    const record = readConnection(home, idOf("alpha"))!;
+    expect((record as unknown as Record<string, unknown>).registry).not.toBe(true);
+  });
+
+  it("refuses on a hub that has never been connected, rather than creating a record", async () => {
+    /**
+     * `setRegistryConsent` inherits `setConsent`'s refusal: the zero-network
+     * invariant is *"before a repository is connected, no cloud setting,
+     * credential or request may exist at all"*, and `at all` is not satisfied by
+     * a file recording a consent for a connection that is not there. The hub in
+     * this suite is never connected, so this is the state under test.
+     */
+    const response = await post("/api/hub/consent", { registry: true });
+    expect(response.status).toBeGreaterThanOrEqual(400);
+    expect(seen, "asking about a consent reached the service").toEqual([]);
+  });
+
+  it("refuses a body that does not name the consent as a boolean", async () => {
+    for (const body of [{}, { registry: "yes" }, { auto: true }, { registry: null }]) {
+      const response = await post("/api/hub/consent", body);
+      expect(response.status, JSON.stringify(body)).toBe(400);
+    }
+  });
+
+  it("is POST-only and refuses a cross-origin POST", async () => {
+    const get405 = await get("/api/hub/consent");
+    expect(get405.status).toBe(405);
+    expect(get405.headers.get("allow")).toBe("POST");
+
+    const cross = await fetch(`${origin}/api/hub/consent`, {
+      method: "POST",
+      headers: {
+        "x-staple-token": token,
+        "content-type": "application/json",
+        origin: "http://evil.example",
+      },
+      body: JSON.stringify({ registry: true }),
+    });
+    expect(cross.status).toBe(403);
+  });
+
+  it("carries the disclosure on the report, before anything is granted", async () => {
+    /**
+     * The sentence has to be on screen BEFORE the switch is flipped, on a
+     * machine that has never connected anything — which is the state this suite
+     * is in. If it only appeared once connected, the one moment it is needed is
+     * the moment it would be missing.
+     */
+    const report = (await (await get("/api/cloud/workspaces")).json()) as {
+      self: { registry: { connected: boolean; consent: boolean; disclosure: string } };
+    };
+    expect(report.self.registry.connected).toBe(false);
+    expect(report.self.registry.consent).toBe(false);
+    expect(report.self.registry.disclosure).toContain("names, prefixes and identities");
+    expect(report.self.registry.disclosure).toContain("sit together");
+  });
+});
+
 // ------------------------------------------------------------ the gates
 
 describe("the gates these four routes inherit", () => {

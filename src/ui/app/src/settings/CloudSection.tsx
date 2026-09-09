@@ -75,6 +75,7 @@ import {
   previewWorkspaceConnect,
   revokeCloudDevice,
   setCloudConsent,
+  setHubRegistryConsent,
   setWorkspaceConsent,
   syncHub,
   syncWorkspace,
@@ -110,6 +111,7 @@ import {
   hubSelfFacts,
   hubSelfSummary,
   hubRowControls,
+  hubRegistryControl,
   hubWideFailure,
   hubUnreachableDescription,
   hubWideControls,
@@ -204,6 +206,8 @@ export interface HubPanelState {
   refreshing: boolean;
   /** A hub backup is in flight. Separate from `busy`, which is per-row. */
   backingUp: boolean;
+  /** The hub's own consent is being written — S22. Separate again: not a row, not a verb. */
+  consenting: boolean;
   /**
    * The last outcome for each row, keyed by slug.
    *
@@ -329,6 +333,11 @@ export interface HubActions {
   onHubSync: () => void;
   onHubAskDisconnect: (asking: boolean) => void;
   onHubDisconnect: () => void;
+  /**
+   * The hub's own publish consent — S22 (STA-283). Takes no slug, like every
+   * member above it, because the hub is not one of the rows.
+   */
+  onHubRegistryConsent: (enabled: boolean) => void;
 }
 
 /**
@@ -811,6 +820,25 @@ function HubSelfPanel({
         </div>
 
         {/*
+          ─── THE HUB'S OWN CONSENT — S22 (STA-283) ────────────────────────────
+
+          The fourth consent, and the first that belongs to the hub rather than
+          to a workspace. It sits here for the same reason the three verbs below
+          do: its subject is the hub, and there is exactly one registry.
+
+          It is deliberately NOT a fourth toggle on each row. The other three
+          consents are per workspace and a hub-wide switch for any of them would
+          be one press spending N consents — the shape `docs/sync.md` separates
+          them to prevent. This one is singular by nature.
+        */}
+        <RegistryConsent
+          report={report}
+          busy={hub.consenting}
+          locked={locked}
+          onConsent={actions.onHubRegistryConsent}
+        />
+
+        {/*
           ─── THE THREE HUB-WIDE VERBS — S18 (STA-279) ─────────────────────────
 
           All three, always, each carrying the count it will act on. Enablement
@@ -1003,6 +1031,88 @@ function HubSelfPanel({
         </div>
       </div>
     </Section>
+  );
+}
+
+/**
+ * THE HUB'S PUBLISH CONSENT — S22 (STA-283).
+ *
+ * ## The disclosure is rendered from the constant, never retyped
+ *
+ * `REGISTRY_DISCLOSURE` is the one sentence that has to appear wherever this
+ * consent is granted: *"a machine that publishes its registry tells the service
+ * the names, prefixes and identities of every workspace on it, and that they sit
+ * together."* It is the whole price of the invariant the registry gave up —
+ * `hub-scope.ts` had said cross-repository topology *"is not this repository's
+ * business"*, and publishing is precisely the act of making it the service's.
+ *
+ * So the surface imports the constant and shows it BEFORE the switch, not behind
+ * a disclosure triangle and not as a tooltip. Same rule as `CONNECT_DISCLOSURE`:
+ * one copy, or the strongest wording becomes whichever surface a person did not
+ * read. `cloud-section.test.tsx` asserts at the source that this file contains no
+ * copy of the text.
+ *
+ * ## Disabled rather than merely erroring when the hub is unconnected
+ *
+ * `setRegistryConsent` refuses `not_found` on a hub with no connection record,
+ * inherited from `setConsent`, which will not spring one into existence. A switch
+ * that flipped and then threw would be offering a decision the product cannot
+ * store; it carries its reason instead, like every other unavailable control on
+ * this page.
+ */
+function RegistryConsent({
+  report,
+  busy,
+  locked,
+  onConsent,
+}: {
+  report: HubCloudReport;
+  busy: boolean;
+  locked: boolean;
+  onConsent: (enabled: boolean) => void;
+}) {
+  const control = hubRegistryControl(report);
+  const disabled = control.disabledReason !== null;
+  return (
+    <div data-cloud-hub-registry className="mt-3 border-t pt-3">
+      <Field
+        id="cloud-hub-registry"
+        label={control.label}
+        description={control.description}
+      >
+        {(aria) => (
+          <label className="flex h-7 items-center gap-2 text-[13px]">
+            <input
+              {...aria}
+              type="checkbox"
+              role="switch"
+              data-cloud-hub-registry-toggle
+              aria-checked={control.value}
+              checked={control.value}
+              disabled={disabled || locked}
+              title={control.disabledReason ?? control.description}
+              onChange={(event) => onConsent(event.target.checked)}
+              className="accent-primary size-4"
+            />
+            <span>{busy ? "Saving…" : control.value ? "On" : "Off"}</span>
+          </label>
+        )}
+      </Field>
+      {/*
+        THE DISCLOSURE, from the constant, and always visible. A person granting
+        this is telling a service that these workspaces are one person's — which
+        is the single fact the rest of the design goes to lengths to withhold.
+      */}
+      <p data-cloud-hub-registry-disclosure className="mt-1 text-[12px] leading-relaxed">
+        {report.self.registry.disclosure.charAt(0).toUpperCase()}
+        {report.self.registry.disclosure.slice(1)}
+      </p>
+      {disabled ? (
+        <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+          {control.disabledReason}
+        </p>
+      ) : null}
+    </div>
   );
 }
 
@@ -1712,6 +1822,7 @@ export function CloudSection({ ws }: { ws?: string }) {
     busy: null,
     refreshing: false,
     backingUp: false,
+    consenting: false,
     outcomes: {},
     connecting: null,
     removing: null,
@@ -2266,6 +2377,42 @@ export function CloudSection({ ws }: { ws?: string }) {
         applyFanOut(await disconnectHub());
         if (alive.current) patchWide({ disconnecting: false });
       }),
+
+    /**
+     * The hub's own consent — S22 (STA-283). One local file write.
+     *
+     * Not routed through `runWide`, because that is for the three VERBS and
+     * clears the fan-out table on every press: flipping a consent is not a
+     * fan-out and must not wipe the result of one somebody is still reading.
+     * `consenting` is its own flag for the same reason `backingUp` is.
+     *
+     * The receipt goes through the hub's outcome channel, keyed on the empty
+     * slug like the backup's, because the hub is not a row and a key colliding
+     * with a real slug would put a hub result inside a workspace's.
+     */
+    onHubRegistryConsent: (enabled) => {
+      patchHub({ consenting: true });
+      setHubRegistryConsent(enabled)
+        .then((answer) => {
+          if (!alive.current) return;
+          setWorkspaces(answer.report);
+          setHub((current) => ({
+            ...current,
+            outcomes: { ...current.outcomes, [answer.outcome.slug]: answer.outcome },
+          }));
+        })
+        .catch((caught: unknown) => {
+          if (alive.current) {
+            setHub((current) => ({
+              ...current,
+              error: { slug: "", message: describeRefusal(caught).message },
+            }));
+          }
+        })
+        .finally(() => {
+          if (alive.current) patchHub({ consenting: false });
+        });
+    },
   };
 
   if (loadError !== null) {

@@ -518,6 +518,23 @@ export const syncHub = () => hubWrite<HubFanOutResult>("/api/hub/sync", {});
 export const disconnectHub = () =>
   hubWrite<HubFanOutResult>("/api/hub/disconnect", { confirm: true });
 
+/**
+ * The HUB's own consent — S22 (STA-283). Local: writes one file in the staple
+ * home and asks the service nothing.
+ *
+ * Takes no slug and no `ws`, like every other `/api/hub/*` call, because the
+ * subject is the hub. It is deliberately NOT a fourth key on `setCloudConsent`
+ * or `setWorkspaceConsent`: both of those are keyed by a repository id, and the
+ * first resolves through `handleFor`, which in single-workspace mode ignores the
+ * workspace it is handed. A hub-scoped consent sent either way would land under
+ * the wrong subject.
+ *
+ * Refuses on a hub that has never been connected rather than creating a record,
+ * so the surface must disable the control rather than let it error.
+ */
+export const setHubRegistryConsent = (enabled: boolean) =>
+  hubWrite<HubActionResult>("/api/hub/consent", { registry: enabled });
+
 export const getIssues = (params: { ws?: string; assignee?: string } = {}) =>
   request<IssueRow[]>(`/api/issues${qs(params)}`);
 
