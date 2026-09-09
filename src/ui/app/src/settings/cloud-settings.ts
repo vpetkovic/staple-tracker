@@ -1183,6 +1183,59 @@ export function hubWideFailure<
 }
 
 /**
+ * **THE TWO OUTCOME SURFACES INVALIDATE EACH OTHER**, as transitions rather than
+ * as lines buried in a `setHub` call.
+ *
+ * The hub panel shows a fan-out TABLE and each row shows its own outcome line.
+ * Both are results, not logs, and producing either stops the other being true of
+ * at least one row: press hub-wide Sync then `bravo`'s own Disconnect and the
+ * table read `bravo — done — Synchronized…` above a `bravo` rendering as
+ * disconnected, which breaks S19's *"a row shows the outcome of the last
+ * operation on it"*.
+ *
+ * Extracted here for the reason {@link hubWideFailure} was: these were pinned by
+ * a source regex whose anchor was not what it looked like — the earliest literal
+ * `applyFanOut` in the component is a COMMENT inside `applyRowResult`, and a
+ * lazy unanchored `[\s\S]*?` after it meant the test really asserted "some
+ * `outcomes: {}` appears somewhere below", which happened to hold for one
+ * reason and would have kept holding for the wrong ones. A rule worth stating is
+ * worth testing on its own terms.
+ */
+export function hubWideActed<
+  T extends { outcomes: Record<string, unknown>; wide: { fanOut: unknown } },
+>(current: T, fanOut: T["wide"]["fanOut"]): T {
+  return {
+    ...current,
+    /**
+     * Every per-row line goes. A hub-wide verb has just acted on all of them, so
+     * the table now describes each one and any earlier line is superseded —
+     * possibly contradicted. The hub's own backup receipt (the empty slug) goes
+     * with them: this surface shows the result of the last thing pressed, not a
+     * log of everything ever pressed.
+     */
+    outcomes: {},
+    wide: { ...current.wide, fanOut },
+  };
+}
+
+/** The mirror: one row acted, so the table describing every row is dropped whole. */
+export function hubRowActed<
+  T extends { outcomes: Record<string, unknown>; wide: { fanOut: unknown } },
+>(current: T, slug: string, outcome: T["outcomes"][string]): T {
+  return {
+    ...current,
+    outcomes: { ...current.outcomes, [slug]: outcome },
+    /**
+     * Dropped whole rather than patched for the one slug: a table headed
+     * "3 connected, 1 skipped" whose rows had been edited individually
+     * afterwards would be a summary that no longer matched its own contents, and
+     * the counts are what a reader takes from it.
+     */
+    wide: { ...current.wide, fanOut: null },
+  };
+}
+
+/**
  * The one line above a hub-wide outcome table.
  *
  * Counts, and then the sentence a reader needs next. Never a bare "done": on a

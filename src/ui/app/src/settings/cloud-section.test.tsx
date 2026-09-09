@@ -57,9 +57,11 @@ import {
   hubRowRationale,
   hubRowSummary,
   hubRegistryControl,
+  hubRowActed,
   hubRowView,
   hubUnreachableDescription,
   hubWideControls,
+  hubWideActed,
   hubWideDisconnectWarning,
   hubWideFailure,
   hubWideTargets,
@@ -1610,6 +1612,31 @@ describe("a hub-wide disconnect names what it is about, and reports per workspac
     expect(html).toContain("Disconnect 2 workspaces");
   });
 
+  it("pluralises the confirm button, on the very common one-workspace hub", () => {
+    /**
+     * It read "Disconnect 1 workspaces" — rebuilt from `.count` instead of using
+     * the control's own `.label`, which every other hub-wide label gets right.
+     * Reachable whenever exactly one workspace is connected, in the one dialog
+     * whose entire job is being read carefully.
+     */
+    const one = hubReport([
+      hubRow({ slug: "alpha", repositoryId: "a" }),
+      hubRow({
+        slug: "bravo",
+        repositoryId: "b",
+        state: "disconnected",
+        mode: "disconnected",
+        endpoint: null,
+      }),
+    ]);
+    const html = panel({
+      workspaces: one,
+      hub: { ...IDLE_HUB, wide: { ...IDLE_WIDE, disconnecting: true } },
+    });
+    expect(html).toContain("Disconnect 1 workspace");
+    expect(html).not.toContain("Disconnect 1 workspaces");
+  });
+
   it("says that an unreachable workspace is disconnected too, and why that is right", () => {
     const warning = hubWideDisconnectWarning(
       hubReport([hubRow({ slug: "here", repositoryId: "h" }), connectedButAbsentRow("gone")]),
@@ -1709,38 +1736,63 @@ describe("the two outcome surfaces do not contradict each other", () => {
    * `bravo — done — Synchronized…` above a `bravo` rendering as disconnected,
    * which breaks S19's *"a row shows the outcome of the last operation on it"*.
    */
-  it("shows a fan-out table or per-row outcomes, never both", () => {
-    const report = hubReport([hubRow(), hubRow({ slug: "bravo", repositoryId: "b" })]);
-    const withBoth = panel({
-      workspaces: report,
-      hub: {
-        ...IDLE_HUB,
-        outcomes: {
-          bravo: {
-            slug: "bravo",
-            action: "sync",
-            status: "ok",
-            detail: "pushed 3, applied 0",
-            at: "2026-09-09T12:00:00.000Z",
-          },
-        },
-        wide: { ...IDLE_WIDE, fanOut: FAN_OUT },
-      },
-    });
+  it("drops every per-row outcome when a hub-wide verb acts", () => {
     /**
-     * This is the state the component now cannot reach — `applyFanOut` empties
-     * `outcomes` and `applyRowResult` nulls `fanOut` — so the assertion is that
-     * the two are mutually exclusive by construction upstream, pinned here at
-     * the source because the reducers live inside the component.
+     * Tested as a TRANSITION rather than by grepping the component. The first
+     * version of this pinned it with a source regex whose anchor was not what it
+     * looked like — the earliest literal `applyFanOut` in the file is a comment
+     * inside `applyRowResult`, and a lazy unanchored `[\s\S]*?` after it meant
+     * the assertion really read "some `outcomes: {}` appears somewhere below".
+     * It held for one accidental reason and would have kept holding for wrong
+     * ones.
      */
-    expect(withBoth).toContain("data-cloud-hub-fanout");
-    expect(withBoth).toContain("data-cloud-workspace-outcome");
+    const before = {
+      outcomes: { bravo: { slug: "bravo", detail: "pushed 3" }, "": { slug: "", detail: "backed up" } },
+      wide: { ...IDLE_WIDE },
+    };
+    const after = hubWideActed(before, FAN_OUT);
+    expect(after.outcomes).toEqual({});
+    expect(after.wide.fanOut).toBe(FAN_OUT);
+  });
 
-    const file = source("CloudSection.tsx");
-    // A hub-wide result supersedes every per-row line…
-    expect(file).toMatch(/applyFanOut[\s\S]*?outcomes: \{\},/);
-    // …and a per-row result drops the table rather than patching one of its rows.
-    expect(file).toMatch(/applyRowResult[\s\S]*?wide: \{ \.\.\.current\.wide, fanOut: null \}/);
+  it("drops the fan-out table when a single row acts", () => {
+    const before = { outcomes: {}, wide: { ...IDLE_WIDE, fanOut: FAN_OUT } };
+    const outcome = {
+      slug: "bravo",
+      action: "disconnect" as const,
+      status: "ok" as const,
+      detail: "Disconnected.",
+      at: "2026-09-09T12:00:00.000Z",
+    };
+    const after = hubRowActed(before, "bravo", outcome);
+    expect(after.wide.fanOut).toBeNull();
+    expect(after.outcomes).toEqual({ bravo: outcome });
+  });
+
+  it("never renders both surfaces, because neither reducer can produce that state", () => {
+    /**
+     * The state the component cannot reach. Composing the two in either order
+     * leaves exactly one surface populated, which is the property — not that the
+     * renderer refuses to draw both, but that nothing can hand it both.
+     */
+    const both = hubRowActed(
+      hubWideActed({ outcomes: {}, wide: { ...IDLE_WIDE } }, FAN_OUT),
+      "bravo",
+      { slug: "bravo", action: "sync" as const, status: "ok" as const, detail: "x", at: "t" },
+    );
+    expect(both.wide.fanOut).toBeNull();
+
+    const reverse = hubWideActed(
+      hubRowActed({ outcomes: {}, wide: { ...IDLE_WIDE } }, "bravo", {
+        slug: "bravo",
+        action: "sync" as const,
+        status: "ok" as const,
+        detail: "x",
+        at: "t",
+      }),
+      FAN_OUT,
+    );
+    expect(reverse.outcomes).toEqual({});
   });
 });
 
