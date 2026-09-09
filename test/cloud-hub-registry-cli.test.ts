@@ -198,6 +198,39 @@ describe("publishing is reachable only through its own consent", () => {
     );
   }, 90_000);
 
+  it("does not let --json bypass the agreement, and hands back the disclosure", () => {
+    /**
+     * REGRESSION, and it was a real hole. The grant branch was `if (enabled && !json)`,
+     * so `--json` skipped BOTH the disclosure and the `--yes` gate: a scripted
+     * `publish --enable --json` granted the consent having displayed nothing and asked
+     * nothing. The acknowledgement `setRegistryConsent` requires was then supplied by this
+     * command on the caller's behalf, which spends the check instead of honouring it —
+     * the same failure as a server filling in a client's argument.
+     *
+     * Found by `opus-hubverbs` reasoning about its own route and asking whether the CLI
+     * had the same shape. It did.
+     */
+    adoptIdentity();
+    connectHub();
+
+    const refused = staple("hub", "registry", "publish", "--enable", "--json");
+    expect(refused.status).toBe(2);
+    expect(JSON.parse(refused.stderr).disclosure).toBe(REGISTRY_DISCLOSURE);
+    // The consent was NOT recorded.
+    expect(JSON.parse(staple("hub", "registry", "status", "--json").stdout).publishConsent).toBe(
+      false,
+    );
+    expect(refused.violations).toEqual([]);
+
+    // With --yes it goes through, and the response still carries the sentence.
+    const granted = staple("hub", "registry", "publish", "--enable", "--json", "--yes");
+    expect(granted.status).toBe(0);
+    expect(JSON.parse(granted.stdout)).toEqual({
+      enabled: true,
+      disclosure: REGISTRY_DISCLOSURE,
+    });
+  }, 90_000);
+
   it("refuses to record the consent on a hub that is not connected", () => {
     // `at all` in the zero-network invariant is not satisfied by a file that records a
     // consent for a connection that does not exist. And the refusal names the HUB's
