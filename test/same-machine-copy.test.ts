@@ -29,7 +29,15 @@
  * SQLite afterwards, never on prose.
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { cpSync, existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { classifyRegisteredPath, isSecondClaimant } from "../src/core/hub-repair.js";
@@ -64,6 +72,13 @@ function repo(name: string): string {
 
 function dbIn(dir: string): string {
   return join(dir, ".staple", "staple.db");
+}
+
+/** The committed repository identity of a project directory. */
+function identityIn(dir: string): string {
+  return (JSON.parse(readFileSync(join(dir, ".staple", "repository.json"), "utf8")) as {
+    repositoryId: string;
+  }).repositoryId;
 }
 
 function hubDb<T>(read: (db: DatabaseSync) => T): T {
@@ -118,13 +133,20 @@ describe("a second copy of a workspace on this machine", () => {
    */
   it("is refused: the hub keeps pointing at the original", () => {
     const original = repo("twin");
+    // Written BEFORE the copy, so finding it in the copy's own output proves the
+    // child really resolved a workspace rather than dying early. `runCliAt`
+    // reports `status: 0` for a signal-killed child (`result.status ?? 0`), so an
+    // exit code alone would be satisfied by a process that never ran.
+    expect(cli(original, ["new", "carried across"]).status).toBe(0);
     const copy = join(root, "twin-copied");
     cpSync(original, copy, { recursive: true });
     expect(existsSync(dbIn(copy))).toBe(true);
 
     const settled = dataVersion();
     const ls = cli(copy, ["ls"]);
+    expect(ls.timedOut).toBe(false);
     expect(ls.status, ls.stderr).toBe(0);
+    expect(ls.stdout).toContain("carried across");
 
     expect(rowFor("twin")!.path).toBe(dbIn(original));
     expect(rowFor("twin")!.prefix).toBe("TWI");
@@ -140,6 +162,7 @@ describe("a second copy of a workspace on this machine", () => {
    */
   it("does not oscillate: alternating commands write nothing", () => {
     const original = repo("flap");
+    expect(cli(original, ["new", "still here"]).status).toBe(0);
     const copy = join(root, "flap-copied");
     cpSync(original, copy, { recursive: true });
 
@@ -147,7 +170,10 @@ describe("a second copy of a workspace on this machine", () => {
     const settled = dataVersion();
 
     for (const dir of [copy, original, copy]) {
-      expect(cli(dir, ["ls"]).status).toBe(0);
+      const ls = cli(dir, ["ls"]);
+      expect(ls.timedOut).toBe(false);
+      expect(ls.status, ls.stderr).toBe(0);
+      expect(ls.stdout).toContain("still here"); // the child really resolved one
       expect(rowFor("flap")!.path).toBe(dbIn(original));
     }
     expect(dataVersion()).toBe(settled);
@@ -171,13 +197,26 @@ describe("a second copy of a workspace on this machine", () => {
     expect(check.data.sharedRepositoryId).toMatch(/^[0-9a-f-]{36}$/);
   }, 90_000);
 
-  /** The original is a working workspace and must not be told it is broken. */
-  it("leaves the original's own diagnosis clean", () => {
+  /**
+   * The original is a working workspace and must not be told it is broken.
+   *
+   * The copy is OPENED first, deliberately. Without that this asserts nothing:
+   * the row still equals `here`, so `checkWorkspaceHubLink` returns `pass` before
+   * the classifier is reached, and the test passes on master and with the
+   * classifier stubbed to refuse everything. Opening the copy is the state a user
+   * is actually in when they ask the original how it is doing.
+   */
+  it("leaves the original's own diagnosis clean once a copy has been opened", () => {
     const original = repo("innocent");
-    cpSync(original, join(root, "innocent-copied"), { recursive: true });
+    const copy = join(root, "innocent-copied");
+    cpSync(original, copy, { recursive: true });
+    expect(cli(copy, ["ls"]).status).toBe(0); // the copy is now a live claimant
 
     const { check } = doctorCheck(original, "workspace-hub-link");
     expect(check.status).toBe("pass");
+    // Present and null rather than absent: `data` is one shape across statuses.
+    expect(check.data.secondClaimant).toBeNull();
+    expect(check.data.sharedRepositoryId).toBeNull();
   }, 90_000);
 
   /**
@@ -201,6 +240,124 @@ describe("a second copy of a workspace on this machine", () => {
     expect(rowFor("added")!.path).toBe(dbIn(original));
     expect(dataVersion()).toBe(settled);
   }, 90_000);
+
+  /**
+   * The regression the first version of this fix shipped, and the reason the
+   * discriminator is the slug rather than the repository id.
+   *
+   * `staple cloud fork-id` mints a new identity and touches NEITHER slug NOR
+   * prefix — `forkRepositoryId` writes the manifest and clears the `sync_*`
+   * tables, and `repointPath` only guards on prefix, which still matches. So an
+   * id-based check saw two different ids, called the copy a MOVE, and re-pointed:
+   * the exact oscillation, reached by obeying the advice the refusal printed.
+   *
+   * Forking is a real operation with a real purpose; it just is not the way out of
+   * this, because two directories cannot both answer to one slug however many
+   * identities they have.
+   */
+  it("stays refused after the copy forks its repository identity", () => {
+    const original = repo("forked");
+    const copy = join(root, "forked-copied");
+    cpSync(original, copy, { recursive: true });
+
+    const fork = cli(copy, ["cloud", "fork-id", "--yes", "--json"]);
+    expect(fork.timedOut).toBe(false);
+    expect(fork.status, fork.stderr).toBe(0);
+    const result = JSON.parse(fork.stdout.trim()) as {
+      previousRepositoryId: string;
+      repositoryId: string;
+    };
+    // The fork really happened: a new identity, and it is not the old one.
+    expect(result.repositoryId).not.toBe(result.previousRepositoryId);
+
+    const settled = dataVersion();
+    const ls = cli(copy, ["ls"]);
+    expect(ls.timedOut).toBe(false);
+    expect(ls.status, ls.stderr).toBe(0);
+
+    // Still refused, still nothing written, even though the ids now differ.
+    expect(rowFor("forked")!.path).toBe(dbIn(original));
+    expect(dataVersion()).toBe(settled);
+
+    const { check } = doctorCheck(copy, "workspace-hub-link");
+    expect(check.status).toBe("fail");
+    expect(check.detail).toContain(dbIn(original));
+    expect(check.detail).toContain(dbIn(copy));
+    // No shared id to report any more, and the sentence must not claim one.
+    expect(check.data.sharedRepositoryId).toBeNull();
+    expect(check.detail).not.toContain("Both also present repository");
+    // The remedy is executable in this state: `fork-id` has already been used and
+    // did not help, so what is offered is releasing the slug.
+    expect(check.detail).toContain("staple hub unregister forked");
+    expect(check.detail).not.toContain("fork-id");
+  }, 120_000);
+
+  /**
+   * ...and the remedy the refusal prints actually resolves it, which is the
+   * difference between a report and a dead end.
+   */
+  it("can be settled by releasing the slug, after which the copy registers", () => {
+    const original = repo("settle");
+    const copy = join(root, "settle-copied");
+    cpSync(original, copy, { recursive: true });
+    expect(cli(copy, ["ls"]).status).toBe(0);
+    expect(rowFor("settle")!.path).toBe(dbIn(original));
+
+    const released = cli(root, ["hub", "unregister", "settle"]);
+    expect(released.status, released.stderr).toBe(0);
+    expect(rowFor("settle")).toBeUndefined();
+
+    // Now the operator's choice stands: the next command in the copy takes it.
+    expect(cli(copy, ["ls"]).status).toBe(0);
+    expect(rowFor("settle")!.path).toBe(dbIn(copy));
+    expect(rowFor("settle")!.prefix).toBe("SET"); // the prefix its own database carries
+    expect(doctorCheck(copy, "workspace-hub-link").check.status).toBe("pass");
+  }, 120_000);
+});
+
+// -------------------------------------------------------- clones are not copies
+
+/**
+ * Two checkouts of one repository on one machine share a `repositoryId` BY
+ * DESIGN: `.staple/repository.json` is deliberately committed
+ * (`workspace-gitignore.ts` has `!repository.json`), and
+ * `findRepositoryIdCollisions`' own doc says two directories presenting one id
+ * "look exactly like two clones, which is a thing it must support".
+ *
+ * So a shared identity is not evidence of a copy, and refusing on it made
+ * `staple add` reject a legitimate second worktree while the walk-up door
+ * accepted it — the explicit command failing where the implicit one worked.
+ */
+describe("a second checkout of the same repository", () => {
+  it("registers through both doors: they share an identity but not a slug", () => {
+    const first = repo("api");
+
+    // A second checkout: same committed identity, its own directory, and its own
+    // slug, exactly as `git clone` then `staple init` would leave it.
+    const second = join(root, "api-worktree");
+    mkdirSync(join(second, ".staple"), { recursive: true });
+    cpSync(join(first, ".staple", "repository.json"), join(second, ".staple", "repository.json"));
+    const init = cli(second, ["init", "--slug", "api-wt"]);
+    expect(init.status, init.stderr).toBe(0);
+    // The premise: one identity, two slugs.
+    expect(identityIn(second)).toBe(identityIn(first));
+    expect(rowFor("api")!.path).toBe(dbIn(first));
+    expect(rowFor("api-wt")!.path).toBe(dbIn(second));
+
+    // The explicit door: `add` must not refuse what walking up already accepted.
+    const readded = cli(root, ["add", second, "--yes"]);
+    expect(readded.status, readded.stderr + readded.stdout).toBe(0);
+    expect(rowFor("api")!.path).toBe(dbIn(first)); // nothing stolen either way
+    expect(rowFor("api-wt")!.path).toBe(dbIn(second));
+
+    // ...including after its row is lost, which is the case that has to re-register.
+    const dropped = cli(root, ["hub", "unregister", "api-wt"]);
+    expect(dropped.status, dropped.stderr).toBe(0);
+    const again = cli(root, ["add", second, "--yes"]);
+    expect(again.status, again.stderr + again.stdout).toBe(0);
+    expect(rowFor("api-wt")!.path).toBe(dbIn(second));
+    expect(rowFor("api")!.path).toBe(dbIn(first));
+  }, 120_000);
 });
 
 // ------------------------------------------------------------------ the move
@@ -254,19 +411,46 @@ describe("a workspace that genuinely moved", () => {
     expect(rowFor("vacated")!.path).toBe(dbIn(after));
     expect(rowFor("newcomer")!.path).toBe(dbIn(before)); // untouched
   }, 120_000);
+
+  /**
+   * A file at the registered path is not the same thing as a workspace at it.
+   *
+   * A stray or unreadable `staple.db` left behind by a partial move is exactly
+   * what `doctor`'s `orphan-workspaces` check exists to report, and it must not
+   * make the row unrepairable: a refusal here would leave `--ws` opening the
+   * orphan indefinitely, with nothing to do about it, which is worse than the
+   * stale row this file exists to fix. A refusal has to be earned by a database
+   * that still answers to the slug.
+   */
+  it("re-points past a stray file that is not a workspace at all", () => {
+    const before = repo("stray");
+    const after = join(root, "stray-elsewhere");
+    renameSync(before, after);
+
+    mkdirSync(join(before, ".staple"), { recursive: true });
+    writeFileSync(dbIn(before), "this is not a database at all\n");
+    expect(existsSync(dbIn(before))).toBe(true);
+
+    const ls = cli(after, ["ls"]);
+    expect(ls.timedOut).toBe(false);
+    expect(ls.status, ls.stderr).toBe(0);
+
+    expect(rowFor("stray")!.path).toBe(dbIn(after));
+    expect(doctorCheck(after, "workspace-hub-link").check.status).toBe("pass");
+  }, 90_000);
 });
 
 // ------------------------------------------------------------ the classifier
 
 /**
- * The verdict, unit by unit.
+ * The verdict, unit by unit — and in particular the two cases that separate a
+ * slug-keyed decision from an identity-keyed one:
  *
- * These fixtures write an EMPTY FILE where the database goes, and every case
- * still gets the right answer. That is deliberate, and it is the pin on the cost
- * claim: the classifier reads a two-key JSON file beside the database and never
- * opens the database itself, so an "improvement" that reached for SQLite to
- * compare `sync_state` would fail here rather than quietly adding a second
- * database open to the resolution path.
+ *   - same slug, DIFFERENT ids (a forked copy) must still refuse; and
+ *   - different slugs, SAME id (two clones) must still repair.
+ *
+ * An implementation that compared `repositoryId` gets both backwards, which is
+ * exactly the pair of defects this replaces.
  */
 describe("classifyRegisteredPath", () => {
   let bench: string;
@@ -277,16 +461,34 @@ describe("classifyRegisteredPath", () => {
 
   afterAll(() => removeDir(bench));
 
-  /** A project root with a database file and, optionally, an identity beside it. */
+  /**
+   * A project root holding a workspace database stamped with a slug, plus
+   * whatever identity was asked for beside it.
+   *
+   * `meta` is the one table that matters here, written directly: these cases are
+   * about what the classifier reads, so the fixture states exactly that and
+   * nothing else. `slug: null` writes a file that is not a database at all.
+   */
   function project(
     name: string,
-    options: { id?: string; manifest?: string; legacy?: boolean } = {},
+    options: { slug?: string | null; id?: string; manifest?: string; legacy?: boolean } = {},
   ): string {
     const root = join(bench, name);
     const dir = join(root, options.legacy ? ".tasks" : ".staple");
     mkdirSync(dir, { recursive: true });
     const dbPath = join(dir, options.legacy ? "tasks.db" : "staple.db");
-    writeFileSync(dbPath, ""); // never opened, so it never has to be a database
+    const slug = options.slug === undefined ? name : options.slug;
+    if (slug === null) {
+      writeFileSync(dbPath, "not a database\n");
+    } else {
+      const db = new DatabaseSync(dbPath);
+      try {
+        db.exec("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
+        db.prepare("INSERT INTO meta (key, value) VALUES ('slug', ?)").run(slug);
+      } finally {
+        db.close();
+      }
+    }
     const manifest =
       options.manifest ?? (options.id ? `{\n  "repositoryId": "${options.id}",\n  "format": 1\n}\n` : null);
     if (manifest !== null) writeFileSync(join(dir, "repository.json"), manifest);
@@ -297,69 +499,119 @@ describe("classifyRegisteredPath", () => {
   const ID_B = "99999999-8888-4777-8666-555555555555";
 
   it("calls a registered path that no longer exists vacated", () => {
-    const opened = project("v-opened", { id: ID_A });
-    const verdict = classifyRegisteredPath(join(bench, "gone", ".staple", "staple.db"), opened);
+    const opened = project("v-opened", { slug: "twin", id: ID_A });
+    const verdict = classifyRegisteredPath(join(bench, "gone", ".staple", "staple.db"), opened, "twin");
     expect(verdict.kind).toBe("vacated");
     expect(isSecondClaimant(verdict)).toBe(false);
   });
 
-  it("calls two live directories that share an identity a shared identity", () => {
-    const registered = project("s-original", { id: ID_A });
-    const opened = project("s-copy", { id: ID_A });
-    const verdict = classifyRegisteredPath(registered, opened);
-    expect(verdict).toEqual({ kind: "shared-identity", repositoryId: ID_A });
+  it("reports a live database still stamped with the row's slug, and names the shared id", () => {
+    const registered = project("s-original", { slug: "twin", id: ID_A });
+    const opened = project("s-copy", { slug: "twin", id: ID_A });
+    const verdict = classifyRegisteredPath(registered, opened, "twin");
+    expect(verdict).toEqual({ kind: "same-workspace", slug: "twin", sharedRepositoryId: ID_A });
     expect(isSecondClaimant(verdict)).toBe(true);
   });
 
-  it("calls two live directories with different identities distinct, so the row is repaired", () => {
-    const registered = project("d-newcomer", { id: ID_B });
-    const opened = project("d-moved", { id: ID_A });
-    const verdict = classifyRegisteredPath(registered, opened);
-    expect(verdict.kind).toBe("distinct-identity");
+  /**
+   * The forked copy. `staple cloud fork-id` changes the id and leaves the slug
+   * alone, so an id comparison called this a move and re-pointed — the
+   * oscillation, re-entered by following the advice the refusal printed.
+   */
+  it("still reports a copy whose identity has been forked away", () => {
+    const registered = project("f-original", { slug: "twin", id: ID_A });
+    const opened = project("f-forked", { slug: "twin", id: ID_B });
+    const verdict = classifyRegisteredPath(registered, opened, "twin");
+    expect(verdict.kind).toBe("same-workspace");
+    expect(isSecondClaimant(verdict)).toBe(true);
+    // Nothing shared to report, and the message must not invent one.
+    expect(verdict).toEqual({ kind: "same-workspace", slug: "twin", sharedRepositoryId: null });
+  });
+
+  /**
+   * The second clone. `.staple/repository.json` is committed on purpose, so two
+   * checkouts share an id by design; each carries its own slug, and the row
+   * belongs to whichever one is stamped with it.
+   */
+  it("repairs past a different workspace that shares the identity, as two clones do", () => {
+    const registered = project("c-clone", { slug: "api-wt", id: ID_A });
+    const opened = project("c-origin", { slug: "api", id: ID_A });
+    const verdict = classifyRegisteredPath(registered, opened, "api");
+    expect(verdict).toEqual({ kind: "other-workspace", slug: "api-wt" });
     expect(isSecondClaimant(verdict)).toBe(false);
+  });
+
+  it("repairs past an unrelated workspace that moved into the old directory", () => {
+    const registered = project("o-newcomer", { slug: "newcomer", id: ID_B });
+    const opened = project("o-moved", { slug: "moved", id: ID_A });
+    const verdict = classifyRegisteredPath(registered, opened, "moved");
+    expect(verdict.kind).toBe("other-workspace");
+    expect(isSecondClaimant(verdict)).toBe(false);
+  });
+
+  /**
+   * A refusal has to be earned. A file that is not a workspace database is not
+   * evidence that this workspace is there, and refusing on it would leave the row
+   * permanently unrepairable and `--ws` pointing at the stray file for good.
+   */
+  it("repairs past a file that is not a workspace database", () => {
+    const registered = project("n-stray", { slug: null });
+    const opened = project("n-opened", { slug: "moved", id: ID_A });
+    const verdict = classifyRegisteredPath(registered, opened, "moved");
+    expect(verdict.kind).toBe("not-a-workspace");
+    expect(isSecondClaimant(verdict)).toBe(false);
+  });
+
+  it("repairs past a workspace database that records no slug", () => {
+    const registered = project("e-noslug", { slug: "" });
+    const opened = project("e-opened", { slug: "moved" });
+    // An empty slug matches no row, so it is somebody else's problem, not a rival.
+    expect(isSecondClaimant(classifyRegisteredPath(registered, opened, "moved"))).toBe(false);
   });
 
   /**
    * One project root cannot be a copy of itself. The legacy layout is where a
    * single project legitimately owns two database paths, so `same-project` is
    * what stops a row still naming `.tasks/tasks.db` from being read as a rival
-   * claimant to the `.staple/staple.db` beside it.
+   * claimant to the `.staple/staple.db` beside it — and it is decided by path
+   * arithmetic, before anything is opened or read.
    */
   it("calls two layouts of one project the same project", () => {
     const root = join(bench, "two-layouts");
     mkdirSync(join(root, ".tasks"), { recursive: true });
     mkdirSync(join(root, ".staple"), { recursive: true });
-    writeFileSync(join(root, ".tasks", "tasks.db"), "");
-    writeFileSync(join(root, ".staple", "staple.db"), "");
+    writeFileSync(join(root, ".tasks", "tasks.db"), "not a database\n");
+    writeFileSync(join(root, ".staple", "staple.db"), "not a database\n");
     const verdict = classifyRegisteredPath(
       join(root, ".tasks", "tasks.db"),
       join(root, ".staple", "staple.db"),
+      "whatever",
     );
     expect(verdict.kind).toBe("same-project");
     expect(isSecondClaimant(verdict)).toBe(false);
   });
 
   /**
-   * No identity to compare, so a copy cannot be ruled out. The tie goes to
-   * reporting: the row asserts this workspace lives there, a live database IS
-   * there, and overwriting that on no evidence is the oscillation being fixed.
-   */
-  it("reports a live registered path with no identity as indistinguishable", () => {
-    const registered = project("i-nomanifest");
-    const opened = project("i-opened", { id: ID_A });
-    const verdict = classifyRegisteredPath(registered, opened);
-    expect(verdict.kind).toBe("indistinguishable");
-    expect(isSecondClaimant(verdict)).toBe(true);
-  });
-
-  /**
    * A hand-broken manifest is reported, never thrown. `doctor` calls this from
    * inside a check, and a check that threw would say only that a check threw.
+   * The verdict is unaffected — the manifest is evidence, not the decision.
    */
-  it("does not throw on an unparseable manifest", () => {
-    const registered = project("u-broken", { manifest: "{ not json at all" });
-    const opened = project("u-opened", { id: ID_A });
-    expect(() => classifyRegisteredPath(registered, opened)).not.toThrow();
-    expect(classifyRegisteredPath(registered, opened).kind).toBe("indistinguishable");
+  it("does not throw on an unparseable manifest, and still decides on the slug", () => {
+    const registered = project("u-broken", { slug: "twin", manifest: "{ not json at all" });
+    const opened = project("u-opened", { slug: "twin", id: ID_A });
+    expect(() => classifyRegisteredPath(registered, opened, "twin")).not.toThrow();
+    const verdict = classifyRegisteredPath(registered, opened, "twin");
+    expect(verdict).toEqual({ kind: "same-workspace", slug: "twin", sharedRepositoryId: null });
+  });
+
+  /** Read-only: asking the question must not create, stamp or WAL-ise anything. */
+  it("leaves the registered database and its directory untouched", () => {
+    const registered = project("r-original", { slug: "twin", id: ID_A });
+    const opened = project("r-copy", { slug: "twin", id: ID_A });
+    const before = statSync(registered).mtimeMs;
+    classifyRegisteredPath(registered, opened, "twin");
+    expect(statSync(registered).mtimeMs).toBe(before);
+    expect(existsSync(`${registered}-wal`)).toBe(false);
+    expect(existsSync(`${registered}-shm`)).toBe(false);
   });
 });

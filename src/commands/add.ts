@@ -34,7 +34,12 @@ import { StapleError } from "../core/types.js";
 import { planSetup } from "../onboarding/setup.js";
 import { normalizePath } from "../core/path-migration.js";
 import { Hub } from "../core/hub.js";
-import { findCopyClaimant, repairHubRegistration, type CopyClaimant } from "../core/hub-repair.js";
+import {
+  findCopyClaimant,
+  releaseSlugCommand,
+  repairHubRegistration,
+  type CopyClaimant,
+} from "../core/hub-repair.js";
 import { performSetup, type InitReport } from "./init.js";
 
 export interface AddPreview {
@@ -146,17 +151,26 @@ export function previewAdd(path: string): AddPreview {
    *
    * A refusal rather than a warning because `add` is an explicit act on a path
    * the operator typed: it is allowed to fail, and telling them which two
-   * directories claim one identity is the only useful answer. `conflict` is the
+   * directories answer to one slug is the only useful answer. `conflict` is the
    * code `previewAdd` already uses for a state it will not resolve on its own.
+   *
+   * It refuses on the SLUG, not on the repository id, so a second clone or a
+   * `git worktree` of the same repository still adds cleanly: those share a
+   * committed `repository.json` by design and each carries its own slug, so
+   * nothing would be taken from anybody.
    */
   if (claimant) {
+    const shared =
+      claimant.sharedRepositoryId !== null
+        ? ` Both also present repository ${claimant.sharedRepositoryId}.`
+        : "";
     throw new StapleError(
       "conflict",
-      `${plan.layout.currentPath} is a copy of workspace "${claimant.slug}", which is registered at ` +
-        `${claimant.path} — both hold repository ${claimant.repositoryId}, and that directory still ` +
-        "exists. Registering this one would take the registration away from it, and Staple will not " +
-        "choose between two copies. Keep the one you mean, or give this one its own identity with " +
-        "`staple cloud fork-id` and add it then.",
+      `${plan.layout.currentPath} is stamped with slug "${claimant.slug}", which the hub already ` +
+        `registers at ${claimant.path} — and a workspace answering to that slug is still there.` +
+        `${shared} Registering this one would take the registration away from it, and Staple will not ` +
+        `choose between two copies. Keep the one you mean, or run \`${releaseSlugCommand(claimant.slug)}\` ` +
+        "first to register this one instead.",
       { path: dir, claimant },
     );
   }

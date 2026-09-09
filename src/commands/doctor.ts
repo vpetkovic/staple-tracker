@@ -42,6 +42,7 @@ import {
   describeSecondClaimant,
   findRepointableRows,
   isSecondClaimant,
+  releaseSlugCommand,
 } from "../core/hub-repair.js";
 import {
   describeLayout,
@@ -640,7 +641,23 @@ function checkWorkspaceHubLink(dir: string): CheckResult {
     hub = Hub.openReadOnly();
     const entry = hub.findBySlug(slug);
     const here = normalizePath(found.dbPath);
-    const data = { slug, prefix, dbPath: here, registeredPath: entry?.path ?? null };
+    /**
+     * `registeredPath` is the raw stored spelling, which is the fact about the
+     * hub; `registeredPathNormalized` is what every comparison here uses, and the
+     * two differ on a real macOS hub holding the `/var` spelling. Both are
+     * present on every branch that reports `data` at all, and so are the two
+     * STA-285 keys, so a consumer does not have to test the status to know the
+     * shape.
+     */
+    const data = {
+      slug,
+      prefix,
+      dbPath: here,
+      registeredPath: entry?.path ?? null,
+      registeredPathNormalized: entry ? normalizePath(entry.path) : null,
+      secondClaimant: null as string | null,
+      sharedRepositoryId: null as string | null,
+    };
 
     if (!entry) {
       return result(
@@ -677,7 +694,7 @@ function checkWorkspaceHubLink(dir: string): CheckResult {
        * command standing in one of the two directories. That is why the check
        * lives here rather than beside the repointable-row sweep.
        */
-      const verdict = classifyRegisteredPath(registered, here);
+      const verdict = classifyRegisteredPath(registered, here, slug);
       if (isSecondClaimant(verdict)) {
         return result(
           "workspace-hub-link",
@@ -687,7 +704,23 @@ function checkWorkspaceHubLink(dir: string): CheckResult {
           {
             ...data,
             secondClaimant: registered,
-            sharedRepositoryId: verdict.kind === "shared-identity" ? verdict.repositoryId : null,
+            sharedRepositoryId:
+              verdict.kind === "same-workspace" ? verdict.sharedRepositoryId : null,
+          },
+          /**
+           * Not a `--fix`, and it must not become one: repointing the row would be
+           * doctor picking which copy is real, which is the one thing this check
+           * exists to refuse. But a failure with no executable way out is worse
+           * than the state it reports, so the handle carries the command that
+           * releases the slug and lets the operator choose. Same shape the
+           * `workspace` check uses for `staple migrate`.
+           */
+          {
+            id: "workspace-hub-link",
+            description:
+              "Not a doctor fix — Staple will not choose between two directories answering to one " +
+              "slug. Move one aside, or release the slug and re-register the one you want:",
+            command: releaseSlugCommand(slug),
           },
         );
       }

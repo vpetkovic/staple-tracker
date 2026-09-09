@@ -63,20 +63,50 @@
  * registration. The evidence is here, at the moment of the repoint, and nowhere
  * else — which is why the decision is here rather than in `repo-identity.ts`.
  *
- * The discriminator is whether the registered path is still occupied:
+ * The discriminator is whether the registered path is still occupied BY THIS
+ * REGISTRATION:
  *
  *   - a MOVE vacates it, so re-pointing is the only way the row can be right;
- *   - a COPY leaves a live workspace database there, so re-pointing takes the
- *     registration away from a directory that still exists and still claims it.
+ *   - a COPY leaves a live workspace database there, still claiming this row's
+ *     slug, so re-pointing takes the registration away from a directory that
+ *     still exists and still answers to it.
+ *
+ * ## Why the SLUG decides this and the repository id must not
+ *
+ * The first version of this check compared `repositoryId`, and that was wrong in
+ * kind rather than in detail. A hub row is keyed by `slug`, constrained by
+ * `prefix`, and `repositoryId` answers a different question — "is this the same
+ * repository" — whose correct answer is YES for two clones, which
+ * `findRepositoryIdCollisions` itself says "look exactly like two clones, which
+ * is a thing it must support". Keying a slug-shaped decision on it broke both
+ * ways:
+ *
+ *   - `staple cloud fork-id` mints a new id and touches neither slug nor prefix
+ *     (`forkRepositoryId` writes the manifest and clears `sync_*`), so a forked
+ *     copy presented two different ids, was classified a MOVE, and re-pointed —
+ *     recreating the oscillation, reached by following the advice this file used
+ *     to print; and
+ *   - two clones or two `git worktree` checkouts share one id by design, because
+ *     `.staple/repository.json` is deliberately committed, so an id match falsely
+ *     accused a legitimate second checkout.
+ *
+ * The slug has neither failure. It is what `repointPath`'s `ON CONFLICT(slug)`
+ * would overwrite, it survives `fork-id`, it differs between two clones that were
+ * inited separately, and it differs for the unrelated project that moved into a
+ * vacated directory. So the question is asked in the registry's own terms: does
+ * the database still sitting at the registered path answer to this row's slug?
  *
  * {@link classifyRegisteredPath} is that question, and it reports rather than
  * choosing: "the right answer depends on which copy is the real one, and only a
  * human knows that" (`findRepositoryIdCollisions`). A second claimant returns
  * `conflict` with both paths named, nothing is written, and — as with every
- * other failure here — the local command still works.
+ * other failure here — the local command still works. A shared `repositoryId` is
+ * still read and reported when there is one, as evidence for the human; it is
+ * never the thing that decides.
  */
 import { existsSync } from "node:fs";
 import { basename, dirname } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { Hub } from "./hub.js";
 import { LEGACY_WORKSPACE_DIRNAME, WORKSPACE_DIRNAME, normalizePath } from "./path-migration.js";
 import { findRepositoryIdCollisions, readWorkspaceManifest } from "./repo-identity.js";
@@ -113,28 +143,37 @@ export interface HubRepairTarget {
 /**
  * What is at the path the hub still names, relative to the one just opened.
  *
+ * Exactly one verdict means "do not write": `same-workspace`. Every other answer
+ * is a stale row, and a stale row is repaired, because leaving one behind points
+ * `--ws` and every hub view at a database that is not the workspace.
+ *
  *   - `vacated` — nothing is there. The workspace moved; re-point.
  *   - `same-project` — both paths are inside ONE project root, so they are two
  *     layouts of one workspace rather than two workspaces; re-point.
- *   - `distinct-identity` — a live workspace, provably a DIFFERENT repository.
- *     The row is stale because something else moved into the old directory;
+ *   - `not-a-workspace` — a file is there, but nothing that answers to a slug: a
+ *     stray database, an unreadable one, something that is not staple's. The row
+ *     names it and it is not this workspace; re-point.
+ *   - `other-workspace` — a live workspace answering to a DIFFERENT slug. The
+ *     row is stale because something else moved into the vacated directory;
  *     re-point, and leave the newcomer's own row alone.
- *   - `shared-identity` — a live workspace presenting the SAME repository id.
- *     Two copies, one registration; report both paths and write nothing.
- *   - `indistinguishable` — a live workspace, and no identity on either side to
- *     tell them apart. Report, for the reason given in
- *     {@link classifyRegisteredPath}.
+ *   - `same-workspace` — a live workspace still answering to THIS row's slug.
+ *     Two directories, one registration; report both paths and write nothing.
  */
 export type RegisteredPathVerdict =
   | { kind: "vacated" }
   | { kind: "same-project" }
-  | { kind: "distinct-identity" }
-  | { kind: "shared-identity"; repositoryId: string }
-  | { kind: "indistinguishable" };
+  | { kind: "not-a-workspace" }
+  | { kind: "other-workspace"; slug: string }
+  | {
+      kind: "same-workspace";
+      slug: string;
+      /** Both manifests, when they agree. Evidence for a human, never the decision. */
+      sharedRepositoryId: string | null;
+    };
 
-/** True for the two verdicts that mean "somebody else still lives there". */
+/** The one verdict that means "somebody else still answers to this row". */
 export function isSecondClaimant(verdict: RegisteredPathVerdict): boolean {
-  return verdict.kind === "shared-identity" || verdict.kind === "indistinguishable";
+  return verdict.kind === "same-workspace";
 }
 
 /**
@@ -148,6 +187,40 @@ function projectRootOf(dbPath: string): string | null {
   return dirname(dir);
 }
 
+/**
+ * The slug the database at this path answers to, or null when nothing there
+ * does.
+ *
+ * Read-only and never throws, so "unopenable", "not a database" and "no slug
+ * recorded" all arrive as the same null — which is the right shape, because all
+ * three mean the same thing to the caller: whatever is at that path, it is not
+ * this registration.
+ *
+ * `readOnly` is the same guarantee `doctor` leans on for its own checks: SQLite
+ * refuses a write through this handle, so reading one row here cannot stamp,
+ * migrate or WAL-initialise a database that some other process owns. It reads
+ * `meta` directly rather than through `WorkspaceStore`/`readMeta` to keep
+ * `hub-repair.ts` free of the open path, which imports the hub.
+ */
+function slugAt(dbPath: string): string | null {
+  let db: DatabaseSync | null = null;
+  try {
+    db = new DatabaseSync(dbPath, { readOnly: true });
+    const row = db.prepare("SELECT value FROM meta WHERE key = 'slug'").get() as
+      | { value: string }
+      | undefined;
+    return row?.value ?? null;
+  } catch {
+    return null;
+  } finally {
+    try {
+      db?.close();
+    } catch {
+      /* nothing useful to do while unwinding */
+    }
+  }
+}
+
 /** Read an identity without letting a broken one become an exception. */
 function identityOf(dbPath: string): string | null {
   try {
@@ -157,14 +230,28 @@ function identityOf(dbPath: string): string | null {
      * `readWorkspaceManifest` refuses a manifest it cannot parse, and that
      * discipline is right everywhere it matters — every path that MOVES data
      * reads through it and fails closed. It must not fail closed HERE, where the
-     * question is only "can I prove these two directories are one repository".
-     * An unparseable manifest is not proof, and it is already reported by the
-     * identity surfaces whose job that is. Treating it as an exception would
-     * turn a hand-broken JSON file into a `doctor` check that says nothing
-     * except that a check threw.
+     * manifest is only corroborating evidence in a sentence a human reads. An
+     * unparseable manifest is already reported by the identity surfaces whose job
+     * that is; turning it into an exception would make a `doctor` check say
+     * nothing except that a check threw.
      */
     return null;
   }
+}
+
+/** The id both directories present, when they present the same one. */
+function sharedIdentity(registeredDbPath: string, openedDbPath: string): string | null {
+  /**
+   * S2's own diagnostic rather than a second `===`: it is pure and takes entries
+   * precisely so a caller holding two paths can ask it without a hub, and using
+   * it keeps one definition of "these two paths present one identity". It is
+   * asked here only to ENRICH the report — the verdict is already decided.
+   */
+  const [collision] = findRepositoryIdCollisions([
+    { path: registeredDbPath, repositoryId: identityOf(registeredDbPath) },
+    { path: openedDbPath, repositoryId: identityOf(openedDbPath) },
+  ]);
+  return collision?.repositoryId ?? null;
 }
 
 /**
@@ -178,39 +265,42 @@ function identityOf(dbPath: string): string | null {
  * reached when the row DISAGREES — once per move, and once per command inside a
  * copy until an operator settles it.
  *
- * On that branch it costs one `existsSync`, then up to two small file reads. It
- * deliberately does NOT open the registered database: a manifest is a two-key
- * JSON file beside it, and opening SQLite to compare `sync_state` would take a
- * lock on a database another process may be using, for an answer the tracked
- * file already carries.
+ * On that branch it costs one `existsSync`, one read-only SQLite open that reads
+ * a single `meta` row, and — only once the answer is already `same-workspace` —
+ * two small manifest reads to enrich the report.
  *
- * The pathological case is now CHEAPER than the bug it replaces. Two copies used
- * to cost one hub write per command, forever; they now cost four stat-and-read
- * syscalls and no write.
+ * The read-only open is the cost this check is worth paying, and the first
+ * version's attempt to avoid it is what made it wrong. The only slug-bearing
+ * file beside a database is `AGENTS.md`, which is prose, is never overwritten
+ * once written, and is absent for a `--global` workspace; the manifest carries an
+ * id, which is the wrong key (see the module header). `meta.slug` is the fact
+ * that decides, so it is the fact that gets read.
+ *
+ * The pathological case is still CHEAPER than the bug it replaces. Two copies
+ * used to cost one hub write per command, forever; they now cost a stat, a
+ * read-only open of one row, two file reads, and no write.
  *
  * ## Why `existsSync` is not the whole answer
  *
  * A directory a workspace moved out of can be occupied again — by another
- * project, or by the legacy database `staple migrate` deliberately RETAINS at
- * `.tasks/tasks.db` beside the `.staple/staple.db` it wrote. A presence-only
- * check would refuse to repair those rows and would keep refusing forever,
- * breaking both a re-used directory and the crash recovery of a migration. Hence
- * `same-project`, which is pure path arithmetic, and the identity read, which is
- * bounded to this branch.
+ * project, by a stray database, or by the legacy file `staple migrate`
+ * deliberately RETAINS. A presence-only check would refuse to repair those rows
+ * and would keep refusing forever, which is worse than the stale row: `--ws` and
+ * every hub view would follow a database that is not the workspace, with no way
+ * to correct it. Hence `same-project`, `not-a-workspace` and `other-workspace`,
+ * all of which repair.
  *
- * ## Why an unreadable identity is reported rather than repaired
+ * ## Why an unreadable path repairs rather than reports
  *
- * The row asserts that this workspace lives at that path. When a live database
- * is there and nothing proves it is a different repository, the assertion may
- * still be true, and overwriting it is the silent oscillation this whole change
- * exists to stop. So the tie goes to reporting: nothing is written, the local
- * command still works, and a human is shown two paths and asked which one is
- * real. The cost of being wrong is a stale row and a `doctor` line that names
- * the fix; the cost of the other default is the bug.
+ * A refusal has to be justified by evidence, because a refusal is permanent
+ * until a human intervenes and `doctor` cannot choose a winner for them. "A file
+ * exists there" is not evidence that this workspace does. Only a database that
+ * still answers to this row's slug is, and that is the single case that reports.
  */
 export function classifyRegisteredPath(
   registeredDbPath: string,
   openedDbPath: string,
+  slug: string,
 ): RegisteredPathVerdict {
   if (!existsSync(registeredDbPath)) return { kind: "vacated" };
 
@@ -218,29 +308,39 @@ export function classifyRegisteredPath(
   const openedRoot = projectRootOf(openedDbPath);
   if (registeredRoot !== null && registeredRoot === openedRoot) return { kind: "same-project" };
 
-  const registeredId = identityOf(registeredDbPath);
-  const openedId = identityOf(openedDbPath);
-  /**
-   * The pair, run through S2's own diagnostic rather than a second `===`. It is
-   * pure and takes entries precisely so a caller with two paths in hand can ask
-   * it without a hub, and using it keeps one definition of "these two paths
-   * claim one identity" on the machine.
-   */
-  const [collision] = findRepositoryIdCollisions([
-    { path: registeredDbPath, repositoryId: registeredId },
-    { path: openedDbPath, repositoryId: openedId },
-  ]);
-  if (collision) return { kind: "shared-identity", repositoryId: collision.repositoryId };
-  if (registeredId !== null && openedId !== null) return { kind: "distinct-identity" };
-  return { kind: "indistinguishable" };
+  const registeredSlug = slugAt(registeredDbPath);
+  if (registeredSlug === null) return { kind: "not-a-workspace" };
+  if (registeredSlug !== slug) return { kind: "other-workspace", slug: registeredSlug };
+  return {
+    kind: "same-workspace",
+    slug: registeredSlug,
+    sharedRepositoryId: sharedIdentity(registeredDbPath, openedDbPath),
+  };
 }
 
 /**
- * One sentence for two surfaces.
+ * The command that releases a contested slug, so an operator can choose.
  *
- * `repairHubRegistration` returns it as `error` and `doctor` prints it as a
- * failed check's detail, so the wording a script reads out of JSON and the
- * wording a human reads in the terminal cannot drift apart.
+ * The remedy has to be one that WORKS in the state being reported, which is why
+ * it is not `staple cloud fork-id`: forking mints a new repository id and touches
+ * neither slug nor prefix, so the two directories would still contend for this
+ * row — and in a checkout it rewrites a tracked file, which the next `git
+ * checkout` silently undoes. Unregistering releases the slug and the prefix; the
+ * databases and every file beside them are untouched, and whichever directory
+ * runs a command next re-registers itself with the prefix its own database
+ * carries. That is a human choosing, which is the only way this is decidable.
+ */
+export function releaseSlugCommand(slug: string): string {
+  return `staple hub unregister ${slug}`;
+}
+
+/**
+ * One sentence for three surfaces.
+ *
+ * `repairHubRegistration` returns it as `error`, `doctor` prints it as a failed
+ * check's detail, and `discover` prints it as a warning — so the wording a script
+ * reads out of JSON and the wording a human reads in the terminal cannot drift
+ * apart.
  */
 export function describeSecondClaimant(input: {
   slug: string;
@@ -249,15 +349,16 @@ export function describeSecondClaimant(input: {
   verdict: RegisteredPathVerdict;
 }): string {
   const shared =
-    input.verdict.kind === "shared-identity"
-      ? `Both present repository ${input.verdict.repositoryId}, so one is a copy of the other.`
-      : "Neither presents a repository identity that tells them apart, so a copy cannot be ruled out.";
+    input.verdict.kind === "same-workspace" && input.verdict.sharedRepositoryId !== null
+      ? ` Both also present repository ${input.verdict.sharedRepositoryId}.`
+      : "";
   return (
-    `Two directories on this machine claim workspace "${input.slug}": the hub registers ` +
-    `${input.registered}, and this resolved ${input.opened}. Both still hold a workspace database. ` +
-    `${shared} Staple will not choose between them, so the registration was left as it was and ` +
-    "nothing was written. Local commands work in both. Keep the one you mean and either delete the " +
-    "other or give it its own identity with `staple cloud fork-id`."
+    `Two directories on this machine answer to workspace "${input.slug}": the hub registers ` +
+    `${input.registered}, and this resolved ${input.opened}. Both still hold a workspace database ` +
+    `stamped with that slug.${shared} Staple will not choose between them, so the registration was ` +
+    "left as it was and nothing was written. Local commands work in both, and the registered one is " +
+    `what \`--ws\` and hub views follow. Keep the one you mean and move the other aside; to register ` +
+    `the other instead, run \`${releaseSlugCommand(input.slug)}\` and then any command inside it.`
   );
 }
 
@@ -312,7 +413,7 @@ export function repairHubRegistration(target: HubRepairTarget): HubRepairResult 
        * resolution disagree — so the question "did it move, or was it copied"
        * costs nothing on the path every other command takes.
        */
-      const verdict = classifyRegisteredPath(pathBefore, pathAfter);
+      const verdict = classifyRegisteredPath(pathBefore, pathAfter, target.slug);
       if (isSecondClaimant(verdict)) {
         return {
           ...base,
@@ -402,51 +503,48 @@ export interface StaleHubRow {
   spellingOnly: boolean;
 }
 
-/** A registered workspace that already holds the identity another path claims. */
+/** A live registration that this path would take over if it were registered. */
 export interface CopyClaimant {
+  /** The slug both directories are stamped with. */
   slug: string;
-  /** The registered path, normalised. It exists. */
+  /** The registered path, normalised. It exists and answers to `slug`. */
   path: string;
-  repositoryId: string;
+  /** The id both present, when they present the same one. */
+  sharedRepositoryId: string | null;
 }
 
 /**
- * Is some OTHER live registration already holding this database's identity?
+ * Would registering this database take a live registration away from another
+ * directory?
  *
  * The question {@link classifyRegisteredPath} answers for the walk-up path, asked
- * from the other end — by a caller that has a path in hand and has not been
- * given a row to compare it against. `staple add <copy>` is that caller: it
- * reaches the registry through `performSetup` -> `initWorkspace` ->
- * `hub.register()`, whose upsert on `slug` would repoint the row before
+ * from the other end — by a caller holding a path and no row. `staple add <copy>`
+ * is that caller, and it needs its own door because it reaches the registry
+ * through `performSetup` -> `initWorkspace` -> `hub.register()`, whose
+ * `ON CONFLICT(slug) DO UPDATE SET path` would repoint the row before
  * `repairHubRegistration` ever saw it.
  *
- * Two deliberate differences from the walk-up decision:
- *
- *   - it scans every live row rather than one, because `add` does not know which
- *     slug the directory it was handed will register as until it is opened; and
- *   - it requires a PROVEN shared identity. The walk-up branch reports an
- *     unreadable identity because the row it is about to overwrite specifically
- *     asserts that path. Here the rows are strangers, and refusing `add` because
- *     some unrelated legacy workspace on the machine has no manifest would be a
- *     refusal with no evidence behind it.
- *
- * Read-only, and only ever on an explicit `add`: one manifest read per live row,
- * on a command that already opens a database and previews a plan.
+ * That upsert names the exact hazard: the SLUG the database carries. So this reads
+ * that slug, looks up the one row it would collide with, and asks the same
+ * question about it. One indexed lookup, not a scan — and by keying on the slug
+ * rather than on `repositoryId` it lets a legitimate second clone or `git
+ * worktree` through, which is what the previous version refused: two checkouts of
+ * one repository share a committed `repository.json` by design, and each carries
+ * its own slug.
  */
 export function findCopyClaimant(hub: Hub, openedDbPath: string): CopyClaimant | null {
   const here = normalizePath(openedDbPath);
-  const mine = identityOf(here);
-  if (mine === null) return null;
+  const slug = slugAt(here);
+  if (slug === null) return null; // nothing here to collide with a row
 
-  for (const entry of hub.list()) {
-    const registered = normalizePath(entry.path);
-    if (registered === here) continue;
-    const verdict = classifyRegisteredPath(registered, here);
-    if (verdict.kind === "shared-identity") {
-      return { slug: entry.slug, path: registered, repositoryId: verdict.repositoryId };
-    }
-  }
-  return null;
+  const entry = hub.findBySlug(slug);
+  if (!entry) return null; // the slug is free; registering takes nothing
+
+  const registered = normalizePath(entry.path);
+  if (registered === here) return null; // already this row's path
+  const verdict = classifyRegisteredPath(registered, here, slug);
+  if (verdict.kind !== "same-workspace") return null;
+  return { slug, path: registered, sharedRepositoryId: verdict.sharedRepositoryId };
 }
 
 export function findRepointableRows(hub: Hub): StaleHubRow[] {
