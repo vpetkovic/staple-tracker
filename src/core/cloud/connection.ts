@@ -62,6 +62,44 @@ export interface CloudConnection {
   readonly auto: boolean;
   /** Backup is a third opt-in with its own commands. Also false on connect. */
   readonly backup: boolean;
+  /**
+   * Publishing the hub registry — the FOURTH consent (STA-283). False on connect,
+   * like the other two, and meaningful only on the hub's own record, whose key is
+   * `hub.hubId()` rather than a workspace's `repositoryId`.
+   *
+   * It is its own consent because it discloses something none of the other three
+   * does, and the sentence is `hub-registry.ts`'s, verbatim, wherever it is granted:
+   *
+   *   *"a machine that publishes its registry tells the service the names, prefixes
+   *   and identities of every workspace on it, and that they sit together."*
+   *
+   * Connecting a repository says nothing about other repositories. Automatic sync
+   * says nothing about what is synchronized. Backup says a copy may be KEPT, not that
+   * the shape of the machine may be described. So neither of the three implies this
+   * one, and this one implies none of them.
+   *
+   * `CONNECTION_SCHEMA_VERSION` deliberately does NOT move for this field, and the
+   * asymmetry is what makes that safe. An older build reading a record that carries
+   * it ignores it — `readConnection` reads a fixed key list and every flag as
+   * `x === true` — so it simply does not publish, which is the safe direction. And if
+   * an older build then WRITES the record through `setConsent`, its spread drops the
+   * field, silently REVOKING the consent rather than silently keeping it. A consent
+   * that degrades to "no" across a downgrade needs no version gate; one that degraded
+   * to "yes" would need much more than a version gate.
+   *
+   * OPTIONAL in the type, and that is the same statement said in TypeScript rather
+   * than a concession to the existing call sites. **Absent means not granted**, on a
+   * record written before this field existed and on one written by a build that does
+   * not know about it, and the only readers are `registry === true` tests. Making it
+   * required would force every hand-built `CloudConnection` literal in the tree to
+   * name a consent it is not about, which teaches nothing and is a merge conflict per
+   * file; more importantly it would let `undefined` mean "unset" in exactly one place
+   * — a partially-built record — instead of meaning "no" everywhere.
+   *
+   * `performConnect` still writes it explicitly as `false`, because a fresh connection
+   * should state all of its consents rather than leaving one to be inferred.
+   */
+  readonly registry?: boolean;
   /** Protocol version negotiated at connect. Advisory; re-read per session. */
   readonly protocol: number;
 }
@@ -126,14 +164,19 @@ export function readConnection(home: string, repositoryId: string): CloudConnect
   }
 
   /**
-   * `auto` and `backup` default to FALSE when the key is missing or is not a
-   * boolean, rather than being refused. A consent flag whose value cannot be
+   * `auto`, `backup` and `registry` default to FALSE when the key is missing or is
+   * not a boolean, rather than being refused. A consent flag whose value cannot be
    * read is not consent — the safe reading of a damaged file is that permission
    * was never given, and it is the only reading that cannot silently start
    * sending data.
+   *
+   * `registry` reaches this default by the ordinary path on every record written
+   * before STA-283, which is exactly right: a machine that has never been asked
+   * whether it wants to publish its registry has not agreed to.
    */
   const auto = record.auto === true;
   const backup = record.backup === true;
+  const registry = record.registry === true;
   const protocol = typeof record.protocol === "number" ? record.protocol : 1;
 
   return {
@@ -146,6 +189,7 @@ export function readConnection(home: string, repositoryId: string): CloudConnect
     connectedAt: assertString(record, "connectedAt", path),
     auto,
     backup,
+    registry,
     protocol,
   };
 }
@@ -167,7 +211,7 @@ export function writeConnection(home: string, connection: CloudConnection): stri
 export function setConsent(
   home: string,
   repositoryId: string,
-  patch: { auto?: boolean; backup?: boolean },
+  patch: { auto?: boolean; backup?: boolean; registry?: boolean },
 ): CloudConnection {
   const existing = readConnection(home, repositoryId);
   if (!existing) {
@@ -181,6 +225,13 @@ export function setConsent(
     ...existing,
     auto: patch.auto ?? existing.auto,
     backup: patch.backup ?? existing.backup,
+    /**
+     * Patched independently of the other two, which is the enforcement rather than a
+     * convenience: there is no argument shape here in which agreeing to one consent
+     * produces another, so "backup implies publish" is not something a caller can
+     * express even by mistake.
+     */
+    registry: patch.registry ?? existing.registry,
   };
   writeConnection(home, next);
   return next;

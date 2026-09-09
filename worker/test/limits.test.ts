@@ -13,15 +13,35 @@ describe("protocol negotiation", () => {
     expect((await call(`/v1/repos/${REPO}/ops`, { token, protocol: 1 })).status).toBe(200);
   });
 
+  /**
+   * GOLDEN MOVED (STA-283): both of these used `protocol: 2` as the out-of-range
+   * value, and 2 is now IN range. They moved to 3 and assert `max: 2`.
+   *
+   * The property under test did not change and is worth restating, because moving a
+   * number in a passing test is exactly how a real refusal gets quietly deleted: a
+   * version above the range is refused with the range attached, and refused before
+   * anything is written.
+   */
   it("refuses a version above the supported range with the range attached", async () => {
     const body = await expectError(
-      await call(`/v1/repos/${REPO}/ops`, { token, protocol: 2 }),
+      await call(`/v1/repos/${REPO}/ops`, { token, protocol: 3 }),
       "protocol_unsupported",
       426,
     );
     expect(body.min).toBe(1);
-    expect(body.max).toBe(1);
+    expect(body.max).toBe(2);
     expect(body.retryable).toBe(false);
+  });
+
+  it("accepts the version the hub registry needs, and still refuses the one after it", async () => {
+    // The bump is bounded. `min` did not move, so a protocol-1 client is unaffected;
+    // `max` moved by exactly one, so this is not a licence for anything above it.
+    expect((await call(`/v1/repos/${REPO}/ops`, { token, protocol: 2 })).status).toBe(200);
+    await expectError(
+      await call(`/v1/repos/${REPO}/ops`, { token, protocol: 3 }),
+      "protocol_unsupported",
+      426,
+    );
   });
 
   it("refuses a version below the supported range", async () => {
@@ -36,8 +56,8 @@ describe("protocol negotiation", () => {
     // The check runs before the body is read and before any statement is prepared, so
     // there is no partial batch and no half-applied page to reason about.
     const response = await pushOps(
-      [envelope({ clientSeq: 1, protocol: 2 }), envelope({ clientSeq: 2, protocol: 2 })],
-      { token, protocol: 2 },
+      [envelope({ clientSeq: 1, protocol: 3 }), envelope({ clientSeq: 2, protocol: 3 })],
+      { token, protocol: 3 },
     );
     await expectError(response, "protocol_unsupported", 426);
 

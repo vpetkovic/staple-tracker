@@ -14,8 +14,9 @@ import {
   type PullCursor,
 } from "./cursor.js";
 import type { Env } from "./env.js";
+import { minProtocolFor } from "./envelope.js";
 import { SyncError, json } from "./errors.js";
-import { DEFAULT_PULL_LIMIT, MAX_PULL_LIMIT } from "./limits.js";
+import { DEFAULT_PULL_LIMIT, MAX_PULL_LIMIT, PROTOCOL_MAX, PROTOCOL_MIN } from "./limits.js";
 import { log, tokenFingerprint } from "./log.js";
 
 interface OpRow {
@@ -74,6 +75,8 @@ export async function pull(
   const hasMore = page.results.length > limit;
   const rows = hasMore ? page.results.slice(0, limit) : page.results;
 
+  assertServable(rows, protocol);
+
   // The cursor advances to the last seq RETURNED, not to the high-water mark. Gaps
   // between them are legal — a slot reserved for a deduplicated operation goes unused
   // — and `WHERE seq > cursor` is gap-tolerant by construction.
@@ -98,10 +101,58 @@ export async function pull(
     protocol,
     epoch: session.epoch,
     serverHighWatermark: session.lastSeq,
-    ops: rows.map(toEnvelope),
+    ops: rows.map((row) => toEnvelope(row, protocol)),
     nextCursor: encodeCursor(next),
     hasMore,
   });
+}
+
+/**
+ * Refuse to hand a client an entity its protocol does not admit.
+ *
+ * The refusal is the point of the protocol bump. Three alternatives were available
+ * and each is worse:
+ *
+ *   - **Serve it anyway.** The client throws inside its apply loop
+ *     (`src/core/cloud/apply.ts`, the `default` branch), the page fails, and the
+ *     message names an entity the human has never heard of. Convergence stops and
+ *     nothing says why.
+ *   - **Filter it out.** Silent non-synchronization, which is the exact mistake
+ *     `src/core/cloud/wire.ts` records as having already been made once and
+ *     reverted: *"it converts a loud, fixable emitter bug into silent
+ *     non-synchronization."* Worse here, because a filtered page still advances the
+ *     cursor, so the operation is skipped for ever rather than deferred.
+ *   - **Say nothing and let the cursor stall.** A page that cannot be served and
+ *     does not say so is indistinguishable from a healthy empty log.
+ *
+ * So: 426 with the supported range and the version that would admit it, which is
+ * what the contract already promises for a client outside the range. Nothing has
+ * been written — a pull writes nothing — and the client's remedy is in the response.
+ *
+ * Costs one pass over a page already in memory. No query, no extra column: the
+ * entity name is on every row and `minProtocolFor` is the same table validation
+ * uses, so a route can never serve what the validator would have refused.
+ */
+function assertServable(rows: readonly OpRow[], protocol: number): void {
+  for (const row of rows) {
+    const required = minProtocolFor(row.entity);
+    if (required !== null && required > protocol) {
+      throw new SyncError(
+        "protocol_unsupported",
+        "this log contains operations that require a newer protocol than this request negotiated",
+        {
+          min: PROTOCOL_MIN,
+          max: PROTOCOL_MAX,
+          requiredProtocol: required,
+          // The entity NAME, not the row. It is a fixed word from a closed
+          // vocabulary in this Worker's own source — not user data, not an id, and
+          // not attacker-controlled — and without it the client cannot say which
+          // feature the upgrade is for.
+          entity: row.entity,
+        },
+      );
+    }
+  }
 }
 
 /**
@@ -110,14 +161,24 @@ export async function pull(
  * `payload` is re-parsed rather than re-serialized from a model: it went in verbatim
  * and comes out verbatim, so fields this build has no knowledge of survive the round
  * trip untouched.
+ *
+ * `protocol` is the version this REQUEST negotiated, not a constant. It used to be a
+ * hardcoded `1`, which was true only while `1` was the only version there was; the
+ * moment a second exists that literal is a lie on every protocol-2 page. There is no
+ * `ops.protocol` column to read the sender's version from and there should not be —
+ * `validateEnvelope` requires the envelope's protocol to equal the request header's,
+ * so the version an operation was pushed under is a property of the conversation
+ * rather than of the row. The honest value is the version of the conversation
+ * carrying it out, and `assertServable` has already guaranteed that version admits
+ * every entity on the page.
  */
-export function toEnvelope(row: OpRow): Record<string, unknown> {
+export function toEnvelope(row: OpRow, protocol: number): Record<string, unknown> {
   return {
     opId: row.op_id,
     repoId: undefined,
     seq: row.seq,
     epoch: row.epoch,
-    protocol: 1,
+    protocol,
     schema: row.schema_version,
     entity: row.entity,
     entityId: row.entity_id,

@@ -140,22 +140,47 @@ export interface FakeServerOptions {
   protocol?: { min: number; max: number };
 }
 
-const ENTITIES = new Set([
-  "issue",
-  "comment",
-  "document",
-  "documentRevision",
-  "relation",
-  "project",
-  "status",
-  "kind",
-  "setting",
-  "milestone",
-  "queue",
-  "lease",
-  "conflict",
-]);
+/**
+ * The vocabulary, PER PROTOCOL VERSION — mirroring `worker/src/envelope.ts`.
+ *
+ * It used to be one flat set. It is protocol-scoped now for the same reason the real
+ * Worker's is: `registration` and `crossLink` (STA-283) cannot be handed to a client
+ * that would throw on them, and `src/core/cloud/apply.ts` throws on an entity it does
+ * not know. A fake that accepted them at any protocol would let a client that forgot
+ * to declare 2 pass here and be refused by the deployed service — which is exactly
+ * the class of divergence this fixture exists to prevent.
+ */
+const ENTITIES_BY_PROTOCOL: ReadonlyArray<readonly [number, ReadonlySet<string>]> = [
+  [
+    1,
+    new Set([
+      "issue",
+      "comment",
+      "document",
+      "documentRevision",
+      "relation",
+      "project",
+      "status",
+      "kind",
+      "setting",
+      "milestone",
+      "queue",
+      "lease",
+      "conflict",
+    ]),
+  ],
+  [2, new Set(["registration", "crossLink"])],
+];
+const REGISTRY_ENTITIES = new Set(["registration", "crossLink"]);
 const VERBS = new Set(["create", "update", "delete", "replace", "renumber"]);
+
+/** The lowest protocol admitting this entity, or null. Mirrors `minProtocolFor`. */
+function minProtocolFor(entity: string): number | null {
+  for (const [protocol, entities] of ENTITIES_BY_PROTOCOL) {
+    if (entities.has(entity)) return protocol;
+  }
+  return null;
+}
 
 class ServerError extends Error {
   constructor(
@@ -198,7 +223,9 @@ export class FakeSyncServer {
       maxPullLimit: 500,
       defaultPullLimit: 200,
       maxSnapshotPageSize: 500,
-      protocol: { min: 1, max: 1 },
+      // Matches `worker/src/limits.ts`. `min` did not move with `max`, which is what
+      // keeps every protocol-1 client working.
+      protocol: { min: 1, max: 2 },
       ...options,
     };
   }
@@ -299,12 +326,13 @@ export class FakeSyncServer {
     const repoId = decodeURIComponent(match[1]!);
     const session = this.authenticate(repoId, headers);
     const tail = match[2] ?? "";
+    const protocol = this.negotiate(headers);
 
     if (tail === "/ops" && method === "POST") {
-      return this.push(session, JSON.parse(String(body)) as Record<string, unknown>);
+      return this.push(session, JSON.parse(String(body)) as Record<string, unknown>, protocol);
     }
-    if (tail === "/ops" && method === "GET") return this.pull(session, url);
-    if (tail === "/snapshot" && method === "GET") return this.snapshot(session, url);
+    if (tail === "/ops" && method === "GET") return this.pull(session, url, protocol);
+    if (tail === "/snapshot" && method === "GET") return this.snapshot(session, url, protocol);
 
     // Backup, restore and purge. Modelled on worker/src/backups.ts, including the
     // property that matters most: a restore MATERIALISES the backup into the new
@@ -390,6 +418,59 @@ export class FakeSyncServer {
    * comes from the path and the device from the credential; neither is ever taken
    * from a request body.
    */
+  /**
+   * The negotiated protocol, from `Staple-Protocol` — `worker/src/http.ts`.
+   *
+   * A missing header is the MINIMUM, not the maximum, so that a client which has not
+   * yet learned the range is not silently given the newest vocabulary.
+   */
+  private negotiate(headers: Headers): number {
+    const raw = headers.get("staple-protocol");
+    if (raw === null) return this.options.protocol.min;
+    const protocol = Number(raw);
+    if (!Number.isInteger(protocol)) {
+      throw new ServerError(400, "validation", "Staple-Protocol must be an integer", {
+        min: this.options.protocol.min,
+        max: this.options.protocol.max,
+      });
+    }
+    if (protocol < this.options.protocol.min || protocol > this.options.protocol.max) {
+      throw new ServerError(
+        426,
+        "protocol_unsupported",
+        `protocol ${protocol} is outside the supported range`,
+        { min: this.options.protocol.min, max: this.options.protocol.max },
+      );
+    }
+    return protocol;
+  }
+
+  /**
+   * Refuse to hand a caller an entity its protocol does not admit — the read-side
+   * half of the gate, mirroring `assertServable` in `worker/src/pull.ts`.
+   *
+   * Filtering instead would be worse than serving: a filtered page still advances the
+   * cursor, so the operation would be skipped for ever rather than deferred.
+   */
+  private assertServable(entities: readonly { entity: string }[], protocol: number): void {
+    for (const row of entities) {
+      const required = minProtocolFor(row.entity);
+      if (required !== null && required > protocol) {
+        throw new ServerError(
+          426,
+          "protocol_unsupported",
+          "this log contains operations that require a newer protocol than this request negotiated",
+          {
+            min: this.options.protocol.min,
+            max: this.options.protocol.max,
+            requiredProtocol: required,
+            entity: row.entity,
+          },
+        );
+      }
+    }
+  }
+
   private authenticate(repoId: string, headers: Headers): { repoId: string; deviceId: string } {
     if (repoId !== this.options.repositoryId) {
       throw new ServerError(403, "forbidden", "not a member of this repository");
@@ -536,6 +617,7 @@ export class FakeSyncServer {
   private push(
     session: { repoId: string; deviceId: string },
     body: Record<string, unknown>,
+    protocol: number,
   ): Response {
     if (!Array.isArray(body.ops)) throw new ServerError(400, "validation", "ops must be an array");
     if (body.ops.length > this.options.maxBatchSize) {
@@ -551,7 +633,7 @@ export class FakeSyncServer {
     }
 
     // Validated WHOLE, before a single row is written.
-    const ops = body.ops.map((raw, index) => this.validate(raw, index, session));
+    const ops = body.ops.map((raw, index) => this.validate(raw, index, session, protocol));
 
     if (ops.length === 0) {
       return this.json(200, {
@@ -597,6 +679,7 @@ export class FakeSyncServer {
     raw: unknown,
     index: number,
     session: { repoId: string; deviceId: string },
+    protocol: number,
   ): Omit<StoredOp, "seq" | "epoch" | "serverTs"> {
     const at = `ops[${index}]`;
     if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
@@ -623,8 +706,21 @@ export class FakeSyncServer {
       throw new ServerError(403, "forbidden", `${at}.deviceId does not match the credential`);
     }
     const entity = str(op.entity, "entity");
-    if (!ENTITIES.has(entity)) {
+    const entityProtocol = minProtocolFor(entity);
+    if (entityProtocol === null) {
       throw new ServerError(400, "validation", `${at}.entity is not a known entity`);
+    }
+    if (entityProtocol > protocol) {
+      throw new ServerError(
+        426,
+        "protocol_unsupported",
+        `${at}.entity requires a newer protocol than this request negotiated`,
+        {
+          min: this.options.protocol.min,
+          max: this.options.protocol.max,
+          requiredProtocol: entityProtocol,
+        },
+      );
     }
     const verb = str(op.verb, "verb");
     if (!VERBS.has(verb)) throw new ServerError(400, "validation", `${at}.verb is not a known verb`);
@@ -637,6 +733,17 @@ export class FakeSyncServer {
     }
     if (verb === "renumber" && entity !== "issue") {
       throw new ServerError(400, "validation", `${at}.verb 'renumber' is only for issues`);
+    }
+    // Explicit and by name, mirroring the same redundant assertion in
+    // `worker/src/envelope.ts`: the two checks above refuse these entities only
+    // because neither name is in either allowlist, which is an accident of the
+    // allowlists rather than a statement about the registry.
+    if (REGISTRY_ENTITIES.has(entity) && (verb === "replace" || verb === "renumber")) {
+      throw new ServerError(
+        400,
+        "validation",
+        `${at}.verb '${verb}' is never valid for a registry entity`,
+      );
     }
 
     let baseVersion: number | null = null;
@@ -667,7 +774,11 @@ export class FakeSyncServer {
 
   // ------------------------------------------------------------------- pull
 
-  private pull(session: { repoId: string; deviceId: string }, url: URL): Response {
+  private pull(
+    session: { repoId: string; deviceId: string },
+    url: URL,
+    protocol: number,
+  ): Response {
     const limit = this.limit(url, this.options.defaultPullLimit, this.options.maxPullLimit);
     const raw = url.searchParams.get("cursor");
     let after = 0;
@@ -685,11 +796,14 @@ export class FakeSyncServer {
     // The cursor advances to the last seq RETURNED, never to the watermark.
     const lastSeq = rows.length > 0 ? rows[rows.length - 1]!.seq : after;
 
+    this.assertServable(rows, protocol);
+
     return this.json(200, {
-      protocol: 1,
+      protocol,
       epoch: this.epoch,
       serverHighWatermark: this.lastSeq,
-      ops: rows.map((op) => ({ ...op, protocol: 1 })),
+      // The version this REQUEST negotiated, not a constant — `worker/src/pull.ts`.
+      ops: rows.map((op) => ({ ...op, protocol })),
       nextCursor: b64url(JSON.stringify({ v: 1, r: session.repoId, e: this.epoch, s: lastSeq })),
       hasMore,
     });
@@ -697,7 +811,11 @@ export class FakeSyncServer {
 
   // --------------------------------------------------------------- snapshot
 
-  private snapshot(session: { repoId: string; deviceId: string }, url: URL): Response {
+  private snapshot(
+    session: { repoId: string; deviceId: string },
+    url: URL,
+    protocol: number,
+  ): Response {
     const limit = this.limit(url, 200, this.options.maxSnapshotPageSize);
     const raw = url.searchParams.get("cursor");
     let cutoff: number;
@@ -713,6 +831,9 @@ export class FakeSyncServer {
     }
 
     const ordered = this.fold(cutoff).entities;
+    // Over the WHOLE fold, not the page: a snapshot is one view across several pages,
+    // and refusing halfway leaves a device holding a partial hydration.
+    this.assertServable(ordered, protocol);
     const remaining = ordered.filter((entry) => `${entry.entity} ${entry.entityId}` > afterKey);
     const hasMore = remaining.length > limit;
     const page = remaining.slice(0, limit);
