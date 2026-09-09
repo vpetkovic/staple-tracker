@@ -2375,8 +2375,21 @@ try {
   const envelope = errorEnvelope(normalized);
   if (jsonMode) {
     console.error(JSON.stringify(envelope));
-  } else if (error instanceof StapleError) {
-    console.error(`error(${error.code}): ${error.message}`);
+  } else if (normalized instanceof StapleError) {
+    /**
+     * `normalized`, not `error`.
+     *
+     * The normalisation above already turns a `parseArgs` failure into a `validation`
+     * `StapleError` and the exit code came from it — but this branch tested the ORIGINAL, so
+     * every usage error fell through to `console.error(error)` and printed a raw Node stack
+     * trace. Tree-wide: `staple ls --bogus` did it too, and `--json` was always fine.
+     *
+     * It bit hardest where two sibling commands spell a consent differently —
+     * `hub registry publish --enable` versus `hub registry backup enable` — so
+     * `backup --enable` is the natural typo and it stack-traced instead of saying what was
+     * wrong.
+     */
+    console.error(`error(${normalized.code}): ${normalized.message}`);
   } else {
     console.error(error);
   }

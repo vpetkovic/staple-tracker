@@ -23,7 +23,7 @@
  *  - **The round trip is property-style over generated registries**, not one fixture,
  *    and it goes through the fake's real fold rather than a local re-implementation.
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -1005,12 +1005,119 @@ describe("publishing is scoped to one machine, and says so", () => {
     const before = server.ops.length;
     const error = await publishRegistry(b.hub, b.home, { fetchImpl: server.fetch }).catch((e) => e);
     expect(cloudCodeOf(error)).toBe("conflict");
-    expect((error as Error).message).toContain('workspace "qde"');
+    expect((error as Error).message).toContain('"qde"');
     expect((error as Error).message).toContain("adopt --apply");
     expect((error as Error).message).toContain("scoped to ONE machine");
     // NOTHING was sent — the refusal is before the push, not a report after it.
     expect(server.ops.length).toBe(before);
     b.hub.close();
+  });
+
+  it("names the real escape when adoption would PARK rather than adopt", async () => {
+    /**
+     * The dead-end. `adoptRegistry` registers an absent row only after clearing the prefix and
+     * slug checks, so a collision returns `outcome: "conflict"` and writes NOTHING — the entry
+     * stays foreign for ever, publish keeps refusing, and the first version of the refusal told
+     * the operator to run the very thing that had just failed. There is no way out through the
+     * opt-out set either, because that is keyed on `repositoryId` and there is no local row to
+     * `hub unregister`.
+     *
+     * So the refusal establishes the reason by previewing the adoption, and names an escape
+     * that exists.
+     */
+    const a = machine();
+    const hubId = a.hub.hubId();
+    const server = serverFor(hubId);
+    connect(a.home, hubId, server);
+    setRegistryConsent(a.home, hubId, true, REGISTRY_DISCLOSURE);
+    seed(a.home, a.hub, "qde", "QDE", "22222222-2222-4222-8222-222222222222");
+    await publishRegistry(a.hub, a.home, { fetchImpl: server.fetch });
+    a.hub.close();
+
+    // B already owns prefix QDE for a DIFFERENT repository, so adoption parks it.
+    const b = machine();
+    process.env.STAPLE_HOME = b.home;
+    connect(b.home, hubId, server, "device-b", b.hub);
+    setRegistryConsent(b.home, hubId, true, REGISTRY_DISCLOSURE);
+    seed(b.home, b.hub, "something-else", "QDE", "99999999-9999-4999-8999-999999999999");
+
+    // Adopting genuinely does not fix it: the decision is `conflict` and nothing is written.
+    const adopted = await adoptPublishedRegistry(b.hub, b.home, {
+      fetchImpl: server.fetch,
+      apply: true,
+    });
+    expect(adopted.adoption.decisions.map((d) => d.outcome)).toContain("conflict");
+    expect(b.hub.list().map((r) => r.slug)).toEqual(["something-else"]);
+
+    const error = await publishRegistry(b.hub, b.home, { fetchImpl: server.fetch }).catch((e) => e);
+    expect(cloudCodeOf(error)).toBe("conflict");
+    // The reason is the ADOPTION's own sentence about the prefix, not "run adopt".
+    expect((error as Error).message).toContain("Prefix QDE is already held here");
+    // And an escape that exists, which the first version did not have.
+    expect((error as Error).message).toContain("will NOT be fixed by adopting");
+    expect((error as Error).message).toContain("staple hub registry ignore");
+    b.hub.close();
+  });
+
+  it("an ignored entry stops being foreign, so publishing works again", async () => {
+    // The escape the refusal names has to actually work, or it is a second dead end.
+    const a = machine();
+    const hubId = a.hub.hubId();
+    const server = serverFor(hubId);
+    connect(a.home, hubId, server);
+    setRegistryConsent(a.home, hubId, true, REGISTRY_DISCLOSURE);
+    seed(a.home, a.hub, "qde", "QDE", "22222222-2222-4222-8222-222222222222");
+    await publishRegistry(a.hub, a.home, { fetchImpl: server.fetch });
+    a.hub.close();
+
+    const b = machine();
+    process.env.STAPLE_HOME = b.home;
+    connect(b.home, hubId, server, "device-b", b.hub);
+    setRegistryConsent(b.home, hubId, true, REGISTRY_DISCLOSURE);
+    seed(b.home, b.hub, "something-else", "QDE", "99999999-9999-4999-8999-999999999999");
+
+    await expect(publishRegistry(b.hub, b.home, { fetchImpl: server.fetch })).rejects.toThrow();
+
+    // `staple hub registry ignore` — an opt-out for an identity with no local row.
+    b.hub.addOptOut("22222222-2222-4222-8222-222222222222", "(not registered here)", "ignored");
+    const report = await publishRegistry(b.hub, b.home, { fetchImpl: server.fetch });
+    expect(report.published).toBe(1);
+    b.hub.close();
+  });
+
+  it("a PRUNED row does not make publishing impossible on one machine", async () => {
+    /**
+     * REGRESSION, and it broke the single-machine configuration this scope reduction makes the
+     * only supported one. `Hub.unregister` records an opt-out; `Hub.prune` deleted rows and
+     * recorded none — and those are the only two row deleters in the tree. So a pruned row left
+     * a published registration with no local row and no opt-out, which is FOREIGN: publish
+     * refused, blamed another machine, and named `adopt --apply`, which re-added the row prune
+     * had just removed. Mutually exclusive, in a loop, and reachable from MCP.
+     */
+    const { home, hub } = machine();
+    const hubId = hub.hubId();
+    const server = serverFor(hubId);
+    connect(home, hubId, server);
+    setRegistryConsent(home, hubId, true, REGISTRY_DISCLOSURE);
+    const keptPath = seed(home, hub, "one", "ONE", "11111111-1111-4111-8111-111111111111");
+    const goingPath = seed(home, hub, "two", "TWO", "22222222-2222-4222-8222-222222222222");
+    await publishRegistry(hub, home, { fetchImpl: server.fetch });
+    expect(server.ops).toHaveLength(2);
+
+    // The workspace's database goes away, and prune notices.
+    rmSync(goingPath, { force: true });
+    expect(existsSync(keptPath)).toBe(true);
+    const pruned = hub.prune({ apply: true });
+    expect(pruned.removed.map((r) => r.workspace.slug)).toEqual(["two"]);
+    // The opt-out prune now records, which is what stops the row reading as foreign.
+    expect(hub.listOptOuts().map((o) => ({ id: o.repositoryId, reason: o.reason }))).toEqual([
+      { id: "22222222-2222-4222-8222-222222222222", reason: "pruned" },
+    ]);
+
+    // Publishing still works, and says nothing about another machine.
+    const after = await publishRegistry(hub, home, { fetchImpl: server.fetch });
+    expect(after.upToDate).toBe(true);
+    hub.close();
   });
 
   it("lets a machine publish once it has adopted what the service holds", async () => {
@@ -1656,7 +1763,14 @@ describe("the hub is restorable from the service after a machine is lost", () =>
     const c = machine();
     process.env.STAPLE_HOME = c.home;
     connect(c.home, hubId, server, "device-c", c.hub);
+    /**
+     * BOTH consents. A restore mutates the published registry — it moves the epoch and
+     * discards everything published since the backup — so it is behind the publish consent as
+     * well as the backup one. It used to need only `backup`, which meant
+     * `publish --disable` left a machine fully able to replace everything on the service.
+     */
     setConsent(c.home, hubId, { backup: true });
+    setRegistryConsent(c.home, hubId, true, REGISTRY_DISCLOSURE);
 
     const report = await restoreRegistry(c.hub, c.home, backup.backupId, {
       fetchImpl: server.fetch,

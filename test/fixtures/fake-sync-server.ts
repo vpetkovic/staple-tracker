@@ -324,9 +324,15 @@ export class FakeSyncServer {
     if (!match) throw new ServerError(404, "not_found", "no such route");
 
     const repoId = decodeURIComponent(match[1]!);
+    /**
+     * Protocol BEFORE credential, matching `worker/src/index.ts`'s stated order:
+     * *"TLS -> protocol -> route -> body size -> authenticate"*. The fake authenticated
+     * first, which `worker/test/limits.test.ts` pins the opposite of on purpose — *"refuses
+     * an unsupported version before authentication, so it is not an auth oracle"*.
+     */
+    const protocol = this.negotiate(headers);
     const session = this.authenticate(repoId, headers);
     const tail = match[2] ?? "";
-    const protocol = this.negotiate(headers);
 
     if (tail === "/ops" && method === "POST") {
       return this.push(session, JSON.parse(String(body)) as Record<string, unknown>, protocol);
@@ -626,6 +632,16 @@ export class FakeSyncServer {
         maxBatchSize: this.options.maxBatchSize,
       });
     }
+    /**
+     * The epoch fence is an INTEGER when present. `worker/src/push.ts` runs it through
+     * `intOrThrow`, so `null` and `"1"` are both `validation` there — and the fake ignored
+     * anything that was not already a number, so a client sending either passed here.
+     */
+    if (body.epoch !== undefined) {
+      if (typeof body.epoch !== "number" || !Number.isInteger(body.epoch)) {
+        throw new ServerError(400, "validation", "epoch must be an integer");
+      }
+    }
     if (typeof body.epoch === "number" && body.epoch !== this.epoch) {
       /**
        * `currentEpoch` ONLY. The Worker sends exactly that field
@@ -830,6 +846,17 @@ export class FakeSyncServer {
 
     if (op.payload === null || typeof op.payload !== "object") {
       throw new ServerError(400, "validation", `${at}.payload must be an object or an array`);
+    }
+    /**
+     * The per-operation cap, ENFORCED — it was advertised by `/v1/capabilities` and never
+     * checked, so a 700 KiB operation applied here and 413s against the Worker.
+     */
+    const payloadBytes = Buffer.byteLength(JSON.stringify(op.payload), "utf8");
+    if (payloadBytes > 512 * 1024) {
+      throw new ServerError(413, "payload_too_large", `${at}.payload exceeds the documented cap`, {
+        maxBytes: 512 * 1024,
+        bytes: payloadBytes,
+      });
     }
 
     return {
@@ -1256,9 +1283,10 @@ export class FakeSyncServer {
       throw new ServerError(400, "cursor_invalid", "cursor is from another repository");
     }
     if (cursor.e !== this.epoch) {
+      // `currentEpoch` only — the push path was fixed and this one was missed. The Worker
+      // sends exactly one field; sending both lets a client read the wrong name and pass.
       throw new ServerError(409, "epoch_changed", "cursor is from a superseded epoch", {
         currentEpoch: this.epoch,
-        epoch: this.epoch,
       });
     }
   }

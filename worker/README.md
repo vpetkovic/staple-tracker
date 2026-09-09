@@ -381,11 +381,33 @@ npx wrangler d1 execute staple-sync-dev --remote -c wrangler.local.toml --comman
      FROM restores WHERE repo_id = '<workspace repo id>' AND status = 'staging';"
 ```
 
-If that returns a row, **do not delete anything yet.** `stage` resumes from a slice OFFSET
-into the backup's entity list, not from which entities are present, so deleting rows out of
-a staging `to_epoch` makes the next resume re-insert them *and* advance `repos.last_seq`
-again. Drive the restore to completion first (call the restore route until `done`), or delete
-the `restores` row so it cannot resume, and only then continue.
+If that returns a row, **do not delete anything yet, and do not delete the `restores` row.**
+
+`stage` resumes from a slice offset computed from `stagedCount`, which is a bare `COUNT(*)`
+of the target epoch rather than a per-restore ledger. Two consequences, both measured:
+
+- **Deleting the `restores` row loses data silently.** The next restore picks the same
+  `toEpoch = repo.epoch + 1` and its in-flight guard reads the now-empty `restores` table, so
+  the orphaned staged rows still count. Reproduced: the row deleted with 25 orphan ops
+  staged, a new restore of a 30-entity backup staged only 5, then committed
+  `status: "committed", done: true, staged: 30` — **25 of 30 entities skipped on the
+  disaster-recovery path, reported as success.** If you must abandon a restore, delete its
+  staged operations in the same statement:
+  ```sql
+  DELETE FROM ops WHERE repo_id = '<repo id>' AND epoch = <to_epoch>;
+  DELETE FROM restores WHERE repo_id = '<repo id>' AND restore_id = '<restore id>';
+  ```
+  (`status = 'abandoned'` exists in the schema, but nothing writes it and there is no abandon
+  route, so it is not a remedy — do not set it and expect anything to honour it.)
+- **Deleting contaminated `ops` out of a staging epoch wedges the restore permanently.** The
+  count-based window shifts past the deleted row for ever: every poll inserts nothing,
+  `staged` never reaches `entityCount`, and `repos.last_seq` climbs unbounded. And because
+  nothing writes `'abandoned'`, the wedged row then blocks every future `beginRestore` with
+  `conflict`, for ever.
+
+**So: drive the restore to completion first** — call the restore route until it answers
+`done` — and only then continue with the steps below. That is the only remedy that loses
+nothing.
 
 **Step 1 — capture the rows to a file before deleting anything.** `SELECT *`, not a
 four-column projection: a mistyped `repo_id` deletes rows that cannot be reconstructed from
@@ -438,6 +460,14 @@ DELETE FROM backups WHERE repo_id = '<workspace repo id>' AND backup_id = '<id>'
 Do this in the same sitting. A backup captured while the rows were present carries them into
 every future restore, so leaving one is leaving the problem behind a route a user can reach
 on their own.
+
+Two things to know before you run it. **Some of these will be `kind = 'pre-restore'`, which
+is the documented undo for a restore somebody ran** — deleting one makes that restore
+permanent, so check `created_at` against the restore you care about and keep the ones that
+predate the contamination if you can. And this bypasses `DELETE /backups/{id}`'s in-flight
+guard, which is another reason step 0 has to be settled first: deleting the backup a staging
+restore is reading makes the next `stage` fail with `not_found` and leaves the restore wedged
+exactly as above.
 
 Only if the rows cannot be identified is the answer `DELETE /v1/repos/{repoId}` (purge) and
 a re-provision from a device that still holds the data. That is the outcome this recipe

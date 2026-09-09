@@ -1079,8 +1079,8 @@ published here" and "this machine is behind" are indistinguishable from the clie
 the same answer.
 
 Two machines sharing a registry is **not supported**, and the reasons are worth stating
-because neither is the accepted "two machines race on a name" — a name race settles once
-both agree:
+because a name race does NOT settle here — see the measurement below, and note that adoption
+deliberately refuses to converge a name, so there is nothing that would make it settle:
 
 - **Edge removal cannot be authorised.** Absence of an edge locally is ambiguous between
   "removed" and "never had", and *no comparison of the two sides can tell them apart*:
@@ -1097,11 +1097,40 @@ both agree:
 **So cross-links are additive-only.** Removing one does not propagate, exactly as
 unregistering a workspace does not, and for the reason given there: it would turn a
 reversible local act into an irreversible remote one. A removal is reported to the person
-who made it rather than silently dropped, and adopting brings the edge back. The
-consequence is that two machines publishing one registry can no longer destroy each other's
-edges at all — what remains is the slug name race, which settles.
+who made it rather than silently dropped, and adopting brings the edge back. The consequence
+is that two machines publishing one registry can no longer destroy each other's edges at all.
 
-Convergence is a separate ticket.
+**What remains does NOT settle, and this page said it did.** Two machines holding clones
+under different directory names get different slugs for one shared `repository_id` — the
+ordinary case, since a slug derives from the directory. `foreign` is empty every pass,
+because it is an identity comparison, so both machines publish an update to the same entity
+for ever. Measured, one workspace, no cross-links:
+
+```
+pass 1 A: published=1 foreign=0 log=1 slug=alpha
+pass 2 B: published=1 foreign=0 log=2 slug=alpha-clone
+...
+pass 8 B: published=1 foreign=0 log=8 slug=alpha-clone
+total ops in 8 passes: 8
+```
+
+That is **one metered operation per publish, indefinitely** — the same shape as the
+`addedAt` divergence above, and it cannot be fixed the same way, because a name is a fact
+each machine legitimately holds rather than a timestamp one of them recorded first. It is
+also not refusable: a single machine renaming a workspace produces exactly the same diff, and
+nothing available to a stateless comparison tells the two apart. `prefix` and `kind` behave
+identically.
+
+The same applies to edges: a `crossLink`'s entity id encodes the two SLUGS, so **two machines
+with different directory names can never share a cross-link at all** — each publishes edges
+under its own names and adoption skips the other's, because it cannot resolve their
+endpoints.
+
+So the accepted limitation is stated as measured rather than as hoped: publishing is scoped
+to one machine, a second machine publishing to the same registry costs one operation per
+publish for ever and cannot exchange cross-links, and `registryDisclosure()` says so at the
+point the consent is granted. Convergence — a name authority and an edge authority — is a
+separate ticket.
 
 ### Adoption, not duplication
 

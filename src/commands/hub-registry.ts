@@ -78,7 +78,8 @@ async function loadService() {
 }
 
 const USAGE =
-  "usage: staple hub registry [status|id|identity|connect|publish|adopt|backup|restore]";
+  "usage: staple hub registry " +
+  "[status|id|identity|connect|disconnect|publish|adopt|backup|restore|ignore|unignore]";
 
 export function runHubRegistryCommand(argv: string[]): void {
   const sub = argv[0] && !argv[0].startsWith("-") ? argv[0] : "status";
@@ -101,6 +102,12 @@ export function runHubRegistryCommand(argv: string[]): void {
       return runBackup(rest);
     case "restore":
       return runRestore(rest);
+    case "ignore":
+      return runIgnore(rest, true);
+    case "unignore":
+      return runIgnore(rest, false);
+    case "disconnect":
+      return runDisconnect(rest);
     default:
       throw new StapleError("validation", `Unknown subcommand "${sub}". ${USAGE}`);
   }
@@ -654,11 +661,26 @@ function runPublish(argv: string[]): void {
           return;
         }
         if (report.upToDate) {
-          console.log(`Already published. The service holds this machine's registry as it is.`);
+          /**
+           * "as it is" is only true when nothing was RETAINED.
+           *
+           * `upToDate` means no operation was needed, which is not the same as the service
+           * matching this machine: a removed cross-link, or an entry parked as a duplicate,
+           * leaves a real difference that this wire will never send. Saying "as it is" there
+           * is false, and a `--json` consumer keying on `upToDate` concludes convergence.
+           */
+          if (report.retained.length === 0 && report.unpublishable.length === 0) {
+            console.log("Already published. The service holds this machine's registry as it is.");
+          } else {
+            console.log(
+              "Nothing to send. The service does not match this machine exactly — see below; " +
+                "those differences are not ones this machine can publish.",
+            );
+          }
         } else {
           console.log(
             `Published ${report.published} operation(s) in ${report.batches} batch(es): ` +
-              `${report.created} new, ${report.updated} changed, ${report.retracted} link(s) retracted.`,
+              `${report.created} new, ${report.updated} changed.`,
           );
           /**
            * Surfaced, and it should always be zero. The snapshot diff excludes anything
@@ -1038,4 +1060,146 @@ function runRestore(argv: string[]): void {
       .finally(() => hub.close()),
     json,
   );
+}
+
+/**
+ * `hub registry ignore <repositoryId>` / `unignore <repositoryId>` — this machine's own
+ * opt-out list, made reachable.
+ *
+ * `registry_optouts` has existed since hub migration 003 and had no CLI verb, which left two
+ * things unreachable. The publish refusal can now name a real escape for an entry adoption
+ * PARKS — a prefix collision adoption will not renumber, which otherwise made publishing
+ * permanently impossible with no local way out, because the opt-out set is keyed on
+ * `repositoryId` and there is no local row to `hub unregister`. And `adoptRegistry`'s
+ * `declined` outcome said "undo with ..." and named nothing that existed.
+ *
+ * Local only, and it never leaves the machine — that is the whole point of the table, and
+ * what makes `staple hub unregister` a local act rather than a propagated delete.
+ */
+function runIgnore(argv: string[], ignoring: boolean): void {
+  const { values, positionals } = parseArgs({
+    args: argv,
+    allowPositionals: true,
+    options: { json: { type: "boolean" }, slug: { type: "string" } },
+  });
+  const json = values.json === true;
+  const target = positionals[0];
+  const verb = ignoring ? "ignore" : "unignore";
+  if (!target) {
+    throw new StapleError(
+      "validation",
+      `usage: staple hub registry ${verb} <repositoryId>\n` +
+        "The id is the one `staple hub registry publish` names in its refusal, or the " +
+        "`repositoryId` of a row in `staple hub ls --json`.",
+    );
+  }
+
+  const hub = openHub();
+  try {
+    if (ignoring) {
+      hub.addOptOut(target.trim(), values.slug ?? "(not registered here)", "ignored");
+      if (json) console.log(JSON.stringify({ repositoryId: target.trim(), ignored: true }));
+      else {
+        console.log(`This machine will leave ${target.trim()} out of its own registry.`);
+        console.log("  - it stays published, and stays on every other machine");
+        console.log("  - adopting will not bring it back here until you `unignore` it");
+        console.log("  - nothing was sent; this is a local list that never leaves the machine");
+      }
+      return;
+    }
+    const cleared = hub.clearOptOut(target.trim());
+    if (json) console.log(JSON.stringify({ repositoryId: target.trim(), cleared }));
+    else if (cleared) {
+      console.log(`${target.trim()} is no longer ignored. The next adopt may bring it back.`);
+    } else {
+      console.log(`${target.trim()} was not on this machine's ignore list. Nothing changed.`);
+    }
+  } finally {
+    hub.close();
+  }
+}
+
+/**
+ * `hub registry disconnect` — the verb `adoptRegistryIdentity`'s refusal names.
+ *
+ * It said "Disconnect it first" and there was nothing to run: `staple cloud disconnect`
+ * resolves a WORKSPACE manifest through `repositoryIdFor`, so it cannot reach a hub, and the
+ * only escape was deleting `~/.staple/cloud/<hubId>.json` by hand.
+ *
+ * `performDisconnect` is already keyed by repository id, so this is that function pointed at
+ * the hub's own identity. Local and offline by contract — *"a person who has decided to stop
+ * talking to a service must not need that service's permission to stop"* — so it makes no
+ * request, and what was published stays published.
+ */
+function runDisconnect(argv: string[]): void {
+  const { values } = parseArgs({
+    args: argv,
+    options: { json: { type: "boolean" }, yes: { type: "boolean" } },
+  });
+  const json = values.json === true;
+  const home = stapleHome();
+  const { hub, value: hubId } = withHub((h) => requireHubId(h, "disconnect"));
+
+  try {
+    if (values.yes !== true) {
+      const lines = [
+        `Disconnecting this machine's hub (${hubId}).`,
+        "  - the credential for it is removed from this machine",
+        "  - the published registry is NOT deleted, and other machines are unaffected",
+        "  - your local hub, and every workspace, is untouched",
+        "  - re-connecting later needs the enrollment secret again",
+      ];
+      if (!json) for (const line of lines) console.log(line);
+      const agreed =
+        !json && isInteractive() && confirm("\nDisconnect the hub?", { default: false });
+      if (!agreed) {
+        if (json) {
+          console.error(
+            JSON.stringify({
+              code: "validation",
+              message: `Disconnecting the hub needs --yes. ${lines.join(" ")}`,
+              retryable: false,
+              notice: lines,
+            }),
+          );
+        } else {
+          console.error(
+            isInteractive() ? "\nDeclined. Still connected." : "\nRe-run with --yes to disconnect.",
+          );
+        }
+        process.exitCode = 2;
+        return;
+      }
+    }
+
+    settle(
+      loadService()
+        .then(async () => {
+          const { performDisconnect } = await import("../core/cloud/connect.js");
+          const outcome = performDisconnect(home, hubId);
+          if (json) {
+            console.log(JSON.stringify({ hubId, ...outcome }));
+            return;
+          }
+          if (!outcome.wasConnected) {
+            console.log("This machine's hub was not connected. Nothing changed.");
+            return;
+          }
+          console.log("\nDisconnected this machine's hub.");
+          if (!outcome.credentialRemoved) {
+            console.error(
+              "! the credential could not be removed from the store; remove it by hand, and " +
+                "revoke the device with `staple cloud devices revoke` if you want it dead " +
+                "server-side too",
+            );
+            process.exitCode = 4;
+          }
+        })
+        .finally(() => hub.close()),
+      json,
+    );
+  } catch (error) {
+    hub.close();
+    throw error;
+  }
 }

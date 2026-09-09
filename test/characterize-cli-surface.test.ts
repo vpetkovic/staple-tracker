@@ -351,16 +351,31 @@ describe("flag inventory", () => {
    * A2 bundles the CLI into a single .mjs; this leaks the bundle's internals to
    * any user who mistypes a flag. Pinned, not fixed.
    */
-  it("KNOWN: a parse error without --json prints a raw stack, not error(validation)", () => {
+  /**
+   * GOLDEN MOVED, and the quirk is FIXED (STA-283).
+   *
+   * This pinned a real defect by name: a parse error without `--json` printed a raw Node
+   * stack, leaked an absolute source path, and never showed `error(validation)` — while the
+   * same failure under `--json` was a clean envelope. The cause was one word in `cli.ts`: the
+   * normalisation turned the `ERR_PARSE_ARGS` failure into a `StapleError` and the exit code
+   * came from it, but the print branch tested the ORIGINAL error, so every usage error fell
+   * through to `console.error(error)`.
+   *
+   * It surfaced because two sibling registry commands spell a consent differently —
+   * `hub registry publish --enable` versus `hub registry backup enable` — so `backup --enable`
+   * is the natural typo and it stack-traced. The fix is tree-wide: `ls --nope` is clean too,
+   * which is what this now pins.
+   */
+  it("a parse error without --json is a clean validation error, like every other failure", () => {
     const result = cli("ls", "--nope");
     expect(result.status).toBe(2);
-    expect(result.stderr).toContain("ERR_PARSE_ARGS_UNKNOWN_OPTION");
+    expect(result.stderr).toContain("error(validation):");
     expect(result.stderr).toContain("Unknown option '--nope'");
-    expect(result.stderr).toContain("src/cli.ts"); // absolute source path leaked
-    expect(result.stderr).toContain("at parseArgs");
-    expect(result.stderr).not.toContain("error(validation):");
-    // The SAME failure under --json is a clean one-line envelope, which is what
-    // contract-cli.test.ts pins. The divergence is the point of this test.
+    // No stack, and no absolute source path leaked into an ordinary usage error.
+    expect(result.stderr).not.toContain("at parseArgs");
+    expect(result.stderr).not.toContain("ERR_PARSE_ARGS_UNKNOWN_OPTION");
+    // `--json` is unchanged: it was always a clean envelope, and that is what
+    // contract-cli.test.ts pins. The two no longer diverge.
     const asJson = cli("ls", "--nope", "--json");
     expect(JSON.parse(asJson.stderr.trim())).toEqual({
       code: "validation",

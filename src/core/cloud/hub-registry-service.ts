@@ -135,6 +135,27 @@ export function registryDisclosure(endpoint: string): string {
   lines.push("Connecting, automatic sync and backup do not imply this, and this implies none of");
   lines.push("them. Turning it off later stops this machine publishing; it does not delete what");
   lines.push("has already been published.");
+  lines.push("");
+  /**
+   * The measured cost of a SECOND machine, stated at the point of consent.
+   *
+   * Publishing is scoped to one machine, and the two ways a second one degrades were measured
+   * rather than reasoned about: a differing directory name means one metered operation per
+   * publish for ever (8 ops in 8 passes, alternating, `foreign` empty throughout), and a
+   * cross-link's entity id encodes the two slugs, so two machines with different directory
+   * names cannot exchange edges at all. Neither is refusable — a single machine renaming a
+   * workspace produces the identical diff — so the honest place for it is here, where
+   * somebody is deciding.
+   */
+  lines.push("Publishing is scoped to ONE machine. If a second machine publishes to the same");
+  lines.push("registry:");
+  lines.push("  - and it holds a workspace under a different directory name, the two overwrite");
+  lines.push("    each other's name on every publish, for ever — one billed operation each");
+  lines.push("    time. Nothing converges it.");
+  lines.push("  - it cannot exchange cross-workspace links with this one, because a link is");
+  lines.push("    identified by the two workspace names and those differ.");
+  lines.push("Publishing from a second machine is refused while it holds less than the service");
+  lines.push("does. See docs/sync.md for what is and is not supported.");
   return lines.join("\n");
 }
 
@@ -506,7 +527,7 @@ async function readSnapshotEntities(
   options: Options,
 ): Promise<{ entities: SnapshotEntityLike[]; epoch: number; pages: number }> {
   const connection = requireHubRegistryConnection(home, hubId);
-  const { token } = requireSession(home, hubId, options);
+  const { token } = requireHubSession(home, hubId, options);
   const endpoint = parseEndpoint(connection.endpoint);
   const call = { repositoryId: hubId, token, deviceId: connection.deviceId };
 
@@ -560,6 +581,33 @@ export async function readPublishedRegistry(
 
 // ----------------------------------------------------------------- publishing
 
+/**
+ * `requireSession`, with the hub's own remedy in the refusal.
+ *
+ * `connect.ts`'s message says *"Re-connect with `staple cloud connect`"* — repository-generic,
+ * and reachable from every registry verb. `staple cloud connect` in a repository directory
+ * connects the WORKSPACE, not the hub, so following it fixes nothing and connects something
+ * else. `setRegistryConsent` already pre-empted the sibling case for `setConsent`'s
+ * `not_found`; the credential branch was missed.
+ */
+function requireHubSession(home: string, hubId: string, options: Options) {
+  try {
+    return requireSession(home, hubId, options);
+  } catch (error) {
+    if (error instanceof StapleError && error.message.includes("staple cloud connect")) {
+      throw new StapleError(
+        error.code,
+        error.message.replace(
+          /Re-connect with `staple cloud connect`[^.]*\./,
+          "Re-connect with `staple hub registry connect` — `staple cloud connect` connects a " +
+            "workspace, not this machine's hub.",
+        ),
+      );
+    }
+    throw error;
+  }
+}
+
 export interface PublishReport {
   readonly hubId: string;
   readonly endpoint: string;
@@ -568,8 +616,6 @@ export interface PublishReport {
   readonly published: number;
   readonly created: number;
   readonly updated: number;
-  /** Cross-links retracted — `present: false`. Never a delete; see `hub-registry-ops.ts`. */
-  readonly retracted: number;
   /** How many pushes it took. Reported so chunking is visible rather than assumed. */
   readonly batches: number;
   /**
@@ -628,7 +674,7 @@ export async function publishRegistry(
   const hubId = hubRepositoryId(hub);
   const connection = requireHubRegistryConnection(home, hubId);
   requireRegistryConsent(connection);
-  const { token } = requireSession(home, hubId, options);
+  const { token } = requireHubSession(home, hubId, options);
   const endpoint = parseEndpoint(connection.endpoint);
 
   /**
@@ -637,7 +683,7 @@ export async function publishRegistry(
    * `workspaces.repository_id` is the adoption key and had no writer on any user-facing
    * path until STA-283, so on a real machine `exportRegistry` published an empty
    * registry and reported every workspace unpublishable — while naming remedies the
-   * person had already performed. `openWorkspace` now records it, and this covers rows
+   * person had already performed. `initWorkspace` records it, and this covers rows
    * whose workspace has not been opened since.
    *
    * Local file reads and local row writes. No workspace database is opened.
@@ -677,25 +723,57 @@ export async function publishRegistry(
    * that are both current can interleave a read and a push. `docs/sync.md` records it, and
    * convergence is a separate ticket.
    */
-  const foreignCount = diff.foreign.registrations.length + diff.foreign.crossLinks.length;
-  if (foreignCount > 0) {
-    const named = [
-      ...diff.foreign.registrations.map((r) => `workspace "${r.slug}"`),
-      ...diff.foreign.crossLinks.map((c) => `link ${c.label}`),
-    ];
+  if (diff.foreign.registrations.length > 0) {
+    /**
+     * The refusal says WHY each entry is foreign, and names an escape that exists.
+     *
+     * The first version told the operator to run `adopt --apply` whatever the reason — and
+     * that DEAD-ENDS: `adoptRegistry` registers an absent row only after clearing the prefix
+     * and slug checks, so a collision returns `outcome: "conflict"` and writes nothing. The
+     * entry stays foreign for ever, publish keeps refusing, and the named remedy is the thing
+     * the operator just did. There is no way out through the opt-out set either, because
+     * that is keyed on `repositoryId` and there is no local row to unregister.
+     *
+     * So the reason is established rather than guessed, by previewing the adoption of what
+     * the service holds — `adoptRegistry` previews by default, writes nothing, makes no
+     * request, and already has a sentence for every outcome. An entry that would land says
+     * "adopt"; one that would park says what actually unblocks it.
+     */
+    const preview = adoptRegistry(hub, registryFromSnapshot({ hubId, capturedAt: nowIso(), entities }));
+    const byId = new Map(preview.decisions.map((d) => [d.entry.repositoryId, d]));
+    const lines = diff.foreign.registrations.map((r) => {
+      const decision = byId.get(r.entityId);
+      return `  "${r.slug}" — ${decision?.reason ?? "not present on this machine."}`;
+    });
+    const adoptable = diff.foreign.registrations.filter(
+      (r) => (byId.get(r.entityId)?.outcome ?? "absent") === "absent",
+    ).length;
+    const parked = diff.foreign.registrations.length - adoptable;
+
     throw cloudError(
       "conflict",
-      `The service holds ${foreignCount} entr${foreignCount === 1 ? "y" : "ies"} this machine ` +
-        `does not have: ${named.slice(0, 5).join(", ")}` +
-        `${named.length > 5 ? `, and ${named.length - 5} more` : ""}. ` +
-        "Publishing from here would retract them, so nothing was sent.\n\n" +
-        "Publishing a registry is scoped to ONE machine. Either another machine has published " +
-        "to this hub id, or this machine is behind — and the remedy is the same either way: " +
-        "run `staple hub registry adopt --apply` to take on what the service holds, then " +
-        "publish. If you did not expect another machine to be publishing here, two machines " +
-        "sharing one registry is not supported yet: it needs an authority record for edge " +
-        "removal that the hub does not have. See docs/sync.md.",
-      { foreignRegistrations: diff.foreign.registrations.length, foreignCrossLinks: diff.foreign.crossLinks.length },
+      `The service holds ${diff.foreign.registrations.length} workspace ` +
+        `entr${diff.foreign.registrations.length === 1 ? "y" : "ies"} this machine does not ` +
+        "have, so nothing was sent — publishing a registry is scoped to ONE machine.\n\n" +
+        `${lines.join("\n")}\n\n` +
+        (adoptable > 0
+          ? "Run `staple hub registry adopt --apply` to take on what the service holds, then " +
+            "publish again.\n"
+          : "") +
+        (parked > 0
+          ? `${parked} of these will NOT be fixed by adopting — adoption parks a name ` +
+            "collision rather than renumbering, because a prefix is stamped into every " +
+            "identifier its workspace has ever emitted. Resolve it in the owning repository, " +
+            "or tell this machine to leave the entry out of its own list with " +
+            "`staple hub registry ignore <repositoryId>`.\n"
+          : "") +
+        "\nIf you did not expect another machine to be publishing here: two machines sharing " +
+        "one registry is not supported. See docs/sync.md.",
+      {
+        foreignRegistrations: diff.foreign.registrations.length,
+        adoptable,
+        parked,
+      },
     );
   }
 
@@ -707,7 +785,6 @@ export async function publishRegistry(
       published: 0,
       created: 0,
       updated: 0,
-      retracted: 0,
       batches: 0,
       applied: 0,
       deduplicated: 0,
@@ -779,9 +856,6 @@ export async function publishRegistry(
     published: diff.operations.length,
     created: diff.operations.filter((o) => o.verb === "create").length,
     updated: diff.operations.filter((o) => o.verb === "update").length,
-    retracted: diff.operations.filter(
-      (o) => o.entity === CROSS_LINK_ENTITY && (o.payload as { present?: boolean }).present === false,
-    ).length,
     applied,
     deduplicated,
     retained: diff.retained,
@@ -921,7 +995,7 @@ export async function setHubBackupConsent(
   options: Options = {},
 ): Promise<{ enabled: boolean; serverAcknowledged: boolean; warning: string | null }> {
   const connection = requireHubRegistryConnection(home, hubId);
-  const { token } = requireSession(home, hubId, options);
+  const { token } = requireHubSession(home, hubId, options);
   const endpoint = parseEndpoint(connection.endpoint);
   const call = { repositoryId: hubId, token, deviceId: connection.deviceId, enabled };
 
@@ -968,7 +1042,7 @@ export async function createHubBackup(
 ): Promise<RemoteBackup> {
   const connection = requireHubRegistryConnection(home, hubId);
   requireHubBackupConsent(connection);
-  const { token } = requireSession(home, hubId, options);
+  const { token } = requireHubSession(home, hubId, options);
   const result = await createRemoteBackup(
     parseEndpoint(connection.endpoint),
     { repositoryId: hubId, token, deviceId: connection.deviceId, label },
@@ -985,7 +1059,7 @@ export async function listHubBackups(
 ): Promise<RemoteBackup[]> {
   const connection = requireHubRegistryConnection(home, hubId);
   requireHubBackupConsent(connection);
-  const { token } = requireSession(home, hubId, options);
+  const { token } = requireHubSession(home, hubId, options);
   const result = await listRemoteBackups(
     parseEndpoint(connection.endpoint),
     { repositoryId: hubId, token, deviceId: connection.deviceId },
@@ -1003,7 +1077,7 @@ export async function deleteHubBackup(
 ): Promise<void> {
   const connection = requireHubRegistryConnection(home, hubId);
   requireHubBackupConsent(connection);
-  const { token } = requireSession(home, hubId, options);
+  const { token } = requireHubSession(home, hubId, options);
   await deleteRemoteBackup(
     parseEndpoint(connection.endpoint),
     { repositoryId: hubId, token, deviceId: connection.deviceId, backupId },
@@ -1011,6 +1085,19 @@ export async function deleteHubBackup(
   );
 }
 
+/**
+ * `locate` is accepted and NO SURFACE SUPPLIES IT YET.
+ *
+ * Stated because "plumbed but never supplied" is the kind of thing that reads as wired. It is
+ * `adoptRegistry`'s hook for finding a workspace that is on this machine but not registered,
+ * and it is what produces the `repointed` outcome — so **`repointed` is unreachable from the
+ * CLI today**: a machine holding a clone it has not registered gets `absent` instead, whose
+ * sentence names `staple init` and `staple hub unregister`, both of which exist.
+ *
+ * Kept rather than removed because the parameter is `adoptRegistry`'s to own and removing it
+ * would make wiring a locator later a wider change. Supplying one needs a scan for a
+ * workspace by `repositoryId`, which is `discover`'s territory and a separate ticket.
+ */
 export interface HubRestoreReport {
   readonly hubId: string;
   readonly backupId: string;
@@ -1059,10 +1146,42 @@ export async function restoreRegistry(
 ): Promise<HubRestoreReport> {
   const hubId = hubRepositoryId(hub);
   const connection = requireHubRegistryConnection(home, hubId);
+  /**
+   * BOTH consents, and the publish one is the fix (STA-283 review).
+   *
+   * A restore is the most destructive mutation in this leg — it moves the epoch, discards
+   * everything published since the backup, and affects every machine on the hub id. It was
+   * gated on the BACKUP consent only, so `staple hub registry publish --disable` — which
+   * prints "no network call was needed to withdraw this" — left the machine fully able to
+   * replace everything on the service. Only `publish` itself was behind the fourth consent,
+   * which is the asymmetry that makes a partial fence worse than none.
+   *
+   * The line drawn, deliberately: **anything that MUTATES the published registry is behind
+   * the publish consent.** So `restore` is, and `adopt` is not (it reads the service and
+   * writes locally — no disclosure, and it is half of the recovery path), and `backup
+   * create`/`rm` are not (they keep or drop copies of data already published, which is what
+   * the backup consent is about).
+   */
+  requireRegistryConsent(connection);
   requireHubBackupConsent(connection);
-  const { token } = requireSession(home, hubId, options);
+  const { token } = requireHubSession(home, hubId, options);
   const endpoint = parseEndpoint(connection.endpoint);
   const call = { repositoryId: hubId, token, deviceId: connection.deviceId, backupId };
+
+  /**
+   * NO foreign check here, and that is a decision rather than an omission.
+   *
+   * Rewinding a registry another machine published to is real harm — but a restore is
+   * precisely the operation whose legitimate case is a machine that is NOT current: a
+   * replacement machine has an empty hub, so every published entry is foreign, and a foreign
+   * refusal would block the acceptance criterion this whole leg exists for. The two cases
+   * cannot be told apart for the same reason edge authority cannot.
+   *
+   * So restore is fenced by consent and confirmation instead — the publish consent above,
+   * the backup consent, and a CLI notice that states the fleet-wide effect in the words
+   * `runRestore` prints. Informing rather than refusing is the honest trade where refusing
+   * would break recovery.
+   */
   // Same reason as `adoptPublishedRegistry`: the adoption at the end of this keys on the
   // column, so it has to be right before the restore starts.
   reconcileRepositoryIds(hub);

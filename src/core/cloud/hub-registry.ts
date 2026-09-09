@@ -450,7 +450,9 @@ function decide(
     localSlug: entry.slug,
     reason:
       `"${entry.slug}" is registered but its database is not on this machine. Nothing was ` +
-      "invented for it — clone or copy the workspace, then point this row at it.",
+      "invented for it. Clone or copy the workspace, then run `staple init` in it — that " +
+      "registers the real row with the identity this placeholder is holding. The placeholder " +
+      "can then go with `staple hub unregister " + entry.slug + "`.",
   };
 }
 

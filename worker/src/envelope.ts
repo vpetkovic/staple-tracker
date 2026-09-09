@@ -214,31 +214,17 @@ export function validateEnvelope(
   // Ordered collections replicate whole and nothing else does. There is no per-row
   // queue or membership operation on the wire, by design: rank is never transported,
   // so the UNIQUE rank constraints are structurally unreachable.
-  if (verb === "replace" && !REPLACEABLE.has(entity)) {
-    throw new SyncError("validation", `${at}.verb 'replace' is only for ordered collections`, {
-      index,
-    });
-  }
-  if (verb === "renumber" && !RENUMBERABLE.has(entity)) {
-    throw new SyncError("validation", `${at}.verb 'renumber' is only for issues`, { index });
-  }
   /**
-   * The same two refusals again, stated about the registry entities directly.
+   * The registry entities FIRST, so the by-name refusal is reachable.
    *
-   * This is deliberately redundant with the two checks above and is NOT dead code.
-   * Those checks refuse `registration` and `crossLink` today only because neither
-   * name happens to be in `REPLACEABLE` or `RENUMBERABLE` — an accident of what
-   * those sets currently contain, not a statement about the registry. The day
-   * somebody adds a third ordered collection they will add it to `REPLACEABLE`, and
-   * nothing about that edit would prompt a thought about the registry.
+   * It used to sit after the two allowlist checks, which fire for these entities anyway — so
+   * the by-name branch was unreachable on both the Worker and the fake, and the message a
+   * client actually saw was always "is only for ordered collections". The PR body defended
+   * the redundancy as "not dead code"; it was dead code, probed live.
    *
-   * A registry entity is neither an ordered collection nor an issue. A `replace`
-   * would claim authority over keys it did not carry for an entity whose whole
-   * meaning is its keys, and `renumber` is about identifiers the hub does not own —
-   * `hub-registry.ts` is emphatic that no prefix is ever renumbered, because a
-   * prefix is stamped into commit messages and handoffs no migration can reach. So
-   * both are refused by name, and `worker/test/registry.test.ts` asserts the refusal
-   * against these entities specifically rather than against the allowlists.
+   * Ordering it first makes the specific message the one that appears, which is the point: a
+   * registry entity is not an ordered collection that happens to be missing from a list, and
+   * telling somebody it is sends them looking in the wrong place.
    */
   if (REGISTRY_ENTITIES.has(entity) && (verb === "replace" || verb === "renumber")) {
     throw new SyncError(
@@ -246,6 +232,14 @@ export function validateEnvelope(
       `${at}.verb '${verb}' is never valid for a registry entity`,
       { index },
     );
+  }
+  if (verb === "replace" && !REPLACEABLE.has(entity)) {
+    throw new SyncError("validation", `${at}.verb 'replace' is only for ordered collections`, {
+      index,
+    });
+  }
+  if (verb === "renumber" && !RENUMBERABLE.has(entity)) {
+    throw new SyncError("validation", `${at}.verb 'renumber' is only for issues`, { index });
   }
   /**
    * `delete` is refused for a registry entity too, and this one is a correctness fence

@@ -542,7 +542,12 @@ export class Hub {
         `INSERT INTO workspaces (slug, prefix, path, kind, added_at, last_seen_at, repository_id)
          VALUES (?,?,?,?,?,NULL,?)`,
       )
-      .run(entry.slug, entry.prefix, ABSENT_PATH, entry.kind, entry.addedAt ?? nowIso(), entry.repositoryId);
+            /**
+       * `||`, not `??`. An empty string is not a timestamp, and `??` passes it through — from
+       * the hub column into `exportRegistry`, onto the wire, into a backup, through a restore
+       * and into a second machine's adopt. `||` treats it as absent, which it is.
+       */
+      .run(entry.slug, entry.prefix, ABSENT_PATH, entry.kind, entry.addedAt || nowIso(), entry.repositoryId);
   }
 
   /**
@@ -694,6 +699,25 @@ export class Hub {
         deleteHubRegistration(this.db, candidate.entry.slug, {
           withLinks: options.withLinks === true,
         });
+        /**
+         * Record the opt-out, exactly as {@link unregister} does (STA-283).
+         *
+         * These two are the only row deleters in the tree and only one of them did this,
+         * which broke publishing on a SINGLE machine: a pruned row leaves the service
+         * holding a `registration` with no local row and no opt-out, which is precisely
+         * what `hub-registry-ops.ts` treats as FOREIGN — so `staple hub registry publish`
+         * refused, blamed another machine, and named `adopt --apply` as the remedy, which
+         * re-added the row that prune had just removed. Prune and publish became mutually
+         * exclusive, in a loop, and it is reachable from MCP's hub hygiene too.
+         *
+         * The opt-out is the right record because prune IS an unregister — the same
+         * decision, reached by noticing the path is gone rather than by naming the row. It
+         * is also what makes the removal survive the next adopt, which is the property
+         * `registry_optouts` exists for.
+         */
+        if (candidate.entry.repositoryId !== null) {
+          this.addOptOut(candidate.entry.repositoryId, candidate.entry.slug, "pruned");
+        }
       }
       removed.push(result);
     }

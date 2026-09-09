@@ -338,23 +338,21 @@ export interface RetainedEdge {
  * opt-out list. **No new state and no extra request.** That matters: the alternative
  * signals all needed a record of what this machine knew, which is hub-local state.
  *
- * An opted-out `repositoryId` is NOT foreign — `staple hub unregister` is deliberately
- * local and leaves the entry published, so a machine that removed a row must still be able
- * to publish. That is the one case where a published registration with no local row is
- * this machine's own doing.
+ * An opted-out `repositoryId` is NOT foreign. Removing a row from this machine's list is
+ * deliberately local and leaves the entry published, so a machine that removed one must
+ * still be able to publish.
+ *
+ * There are THREE ways a row leaves this machine's list, and the carve-out has to cover all
+ * of them. An earlier version of this comment said "the one case", and being wrong about
+ * that broke publishing on a SINGLE machine: `Hub.prune()` deleted rows without recording an
+ * opt-out, so a pruned row read as foreign, publish blamed another machine, and the remedy
+ * it named re-added the row prune had just removed — prune and publish mutually exclusive,
+ * in a loop, reachable from MCP's hub hygiene too. `prune` records one now, as `unregister`
+ * always did, and `staple hub registry ignore` is the third.
  */
 export interface ForeignEntities {
   /** Published `registration` ids with no local row and no opt-out. */
   readonly registrations: readonly { entityId: string; slug: string }[];
-  /**
-   * Always EMPTY today, and the field is kept rather than removed.
-   *
-   * Cross-links are additive-only, so a published edge this machine does not hold cannot do
-   * damage and does not justify refusing a publish. The field exists because the moment
-   * retraction becomes possible — which needs the authority record convergence needs — this
-   * is where the signal belongs, and a reader that already handles it will not need changing.
-   */
-  readonly crossLinks: readonly { entityId: string; label: string }[];
 }
 
 export interface RegistryDiff {
@@ -409,9 +407,11 @@ export interface RegistryDiff {
  * it is not expressible: this function has no branch that produces a `delete` for a
  * registration.
  *
- * Cross-links ARE diffed both ways, because an edge is a level-triggered fact about two
- * issues rather than a machine's decision about its own list. A retraction sets
- * `present: false` and never uses the `delete` verb — see {@link CrossLinkPayload}.
+ * Cross-links are **additive-only too**, and for a different reason than registrations: not
+ * because propagating a removal would be irreversible, but because no signal available to a
+ * diff can establish that this machine ever HAD the edge. See the loop below and
+ * {@link CrossLinkPayload}. An earlier version of this line said they were "diffed both
+ * ways", which stopped being true when retraction was removed.
  *
  * ## A machine may only retract an edge it could have HAD
  *
@@ -446,7 +446,7 @@ export interface RegistryDiff {
  *
  * Anything this machine has no standing on is left exactly as published and REPORTED in
  * {@link RegistryDiff.retained}, because a person who expected a removal to propagate
- * needs to know it did not. See {@link edgeStanding}.
+ * needs to know it did not. 
  */
 export function diffRegistry(
   local: HubRegistryPayload,
@@ -536,6 +536,27 @@ export function diffRegistry(
     }
 
     const held = published.get(key(REGISTRATION_ENTITY, entry.repositoryId));
+
+    /**
+     * A tombstoned registration is reported, not re-published for ever.
+     *
+     * Nothing emits a registration `delete` and the Worker refuses the verb, so this needs a
+     * pre-rule log to reach — but without it an update lands on the tombstone, `fold.ts`
+     * discards it, and the publish reports success on every pass. The cross-link loop had
+     * this branch and this one did not. Measured: one update per pass, indefinitely.
+     */
+    if (held !== undefined && held.deleted) {
+      retained.push({
+        entityId: entry.repositoryId,
+        reason:
+          `"${entry.slug}" was deleted from the published registry by an older build, and a ` +
+          "deletion is final in the operation log — re-publishing it would be accepted and " +
+          "then discarded. The workspace is intact here. Restoring from a backup taken before " +
+          "the deletion is the only way to return it to the shared set.",
+      });
+      continue;
+    }
+
 
     /**
      * `addedAt` is CREATE-ONLY, and that is a convergence fix rather than a tidy-up.
@@ -697,7 +718,6 @@ export function diffRegistry(
     local.workspaces.map((w) => w.repositoryId).filter((id): id is string => id !== null),
   );
   const foreignRegistrations: { entityId: string; slug: string }[] = [];
-  const foreignCrossLinks: { entityId: string; label: string }[] = [];
   for (const held of published.values()) {
     if (held.deleted) continue;
     if (held.entity === REGISTRATION_ENTITY) {
@@ -725,55 +745,9 @@ export function diffRegistry(
     operations,
     unpublishable,
     retained,
-    foreign: { registrations: foreignRegistrations, crossLinks: foreignCrossLinks },
+    foreign: { registrations: foreignRegistrations },
     upToDate: operations.length === 0,
   };
-}
-
-/**
- * May this machine retract this published edge? `null` means yes; a phrase means no.
- *
- * ## This is the BELT. The braces are `RegistryDiff.foreign`.
- *
- * Two earlier versions of this were wrong, and the second was wrong in an instructive way.
- *
- * The first keyed on the slug alone. That grants edge-deletion authority on a NAME match,
- * and this module's header says why that fails: names are what two machines can
- * independently disagree about.
- *
- * The second keyed on **identity equality** — local `repositoryId` equal to the one the
- * published `registration` carries — and gives ZERO protection, because
- * `.staple/repository.json` is TRACKED: two clones of one repository legitimately share an
- * identity, which is a property #92 exists to support. So a machine that had cloned both
- * repositories and never applied an adopt satisfied the check by construction, and deleted
- * the other machine's edge on its first publish. Reproduced through the real CLI.
- *
- * The lesson is that **no comparison of the two sides can establish authority**, because
- * two machines legitimately holding the same repositories are indistinguishable by
- * identity, by name, and by anything else in the payload. Authority needs a record of what
- * this machine KNEW — an applied adopt, or a per-edge ledger — which is hub-local state and
- * therefore the migration this whole leg exists to avoid.
- *
- * So the real protection is `foreign`: a publish is refused outright unless this machine is
- * CURRENT with the service, and a machine that is current has had every published edge, so
- * absence really is removal. This function stays as a cheap local floor for the residual
- * case — a slug this machine does not have registered at all — and its wording no longer
- * claims more than it can establish.
- */
-function edgeStanding(
-  names: { blockerWs: string; blockedWs: string },
-  local: HubRegistryPayload,
-): string | null {
-  for (const [end, slug] of [
-    ["blocker", names.blockerWs],
-    ["blocked", names.blockedWs],
-  ] as const) {
-    const mine = local.workspaces.find((w) => w.slug === slug);
-    if (mine === undefined) {
-      return `names a ${end} workspace "${slug}" this machine does not have registered`;
-    }
-  }
-  return null;
 }
 
 /**

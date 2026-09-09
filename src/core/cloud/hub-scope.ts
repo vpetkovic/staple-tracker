@@ -201,11 +201,14 @@ export interface RegistryIdentityReconciliation {
  * ## Why this exists at all
  *
  * The column is the adoption key — every decision in `hub-registry.ts` turns on it — and
- * until STA-283 nothing on a user-facing path wrote it. `openWorkspace` now records it
- * when it opens a workspace, which covers every workspace anything touches. This covers
- * the rest: a row registered on this machine whose workspace has not been opened since,
- * which is the state a machine is in right after `staple discover`, or after a restore
- * that landed absent rows and a human then cloned one of them.
+ * until STA-283 nothing on a user-facing path wrote it. `initWorkspace` records it
+ * when `staple init` runs in a workspace — NOT on any open: `open.ts` never touches the hub,
+ * and after clearing the column `staple ls` and `staple ls --ws <slug>` both leave it null
+ * while `staple init` restores it (measured).
+ *
+ * So this is the writer for everything else, which is more than "the rest": a row registered
+ * on this machine whose workspace has not been re-inited, the state a machine is in right
+ * after `staple discover`, and after a restore that landed absent rows.
  *
  * ## The manifest is the authority, and a null never overwrites a value
  *

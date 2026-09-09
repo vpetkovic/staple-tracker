@@ -287,7 +287,13 @@ describe("the verbs a registry entity may never take", () => {
           "validation",
           400,
         );
-        expect(String(body.message)).toContain("ops[0].verb");
+        /**
+         * The SPECIFIC message, not just "ops[0].verb" — which the generic allowlist message
+         * also satisfies, so this assertion used to pass while the by-name branch was
+         * unreachable. It was ordered after the allowlist checks, which fire for these
+         * entities anyway. Probed live; now ordered first.
+         */
+        expect(String(body.message)).toContain("never valid for a registry entity");
       });
     }
   }

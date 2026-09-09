@@ -153,12 +153,21 @@ function b64urlDecode(raw: string): string {
  * ## The one live consequence, and why it is harmless
  *
  * A snapshot cursor issued before this change carries a `k` built with a NUL. Compared
- * against keys built with a space, that stale `k` is LOWER than the same entity's new
- * key (0x00 < 0x20), so a bootstrap in flight across the deploy re-serves the entity it
- * had just been given. Re-serving a snapshot entity is idempotent — a device applies by
- * `(entity, entityId)` and the fold is a pure function of the log — so the cost is one
- * duplicated page of work, once, for a bootstrap that happened to straddle a deploy.
- * The alternative was leaving a file nobody can review or grep.
+ * against keys built with a space, that stale `k` sorts below **every** new key for the
+ * same entity (0x00 < 0x20), so a bootstrap in flight across the deploy re-walks the whole
+ * served range for that entity — NOT "one duplicated page of work", which is what an
+ * earlier version of this comment claimed and which was wrong.
+ *
+ * It is still bounded and still idempotent: the range is the snapshot's own pinned cutoff,
+ * a device applies by `(entity, entityId)`, and the fold is a pure function of the log. So
+ * the cost is one repeated pass for a bootstrap that happened to straddle a deploy, and
+ * the alternative was leaving a file nobody can review or grep.
+ *
+ * **Note for anyone reviewing the pull request that changed this.** The PRE-IMAGE at the
+ * merge base still contains the NUL, so git classifies the whole diff as binary and
+ * `gh pr diff` shows nothing for this file — the net-new code here was unreviewable in the
+ * diff that introduced it. `test/source-hygiene.test.ts` guards the post-image and cannot
+ * help with that; reading the file at HEAD is the only way to review it.
  */
 export function entityKey(entity: string, entityId: string): string {
   return `${entity} ${entityId}`;

@@ -501,7 +501,9 @@ describe("refusals name the remedy", () => {
     const result = staple("hub", "registry", "publsh");
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("Unknown subcommand");
-    expect(result.stderr).toContain("status|id|identity|connect|publish");
+    expect(result.stderr).toContain("status|id|identity|connect|disconnect|publish");
+    // The three verbs added this round, so the usage line and the dispatch cannot drift.
+    expect(result.stderr).toContain("ignore|unignore");
   }, 60_000);
 
   it("does NOT inherit `hub`'s flag tolerance", () => {
