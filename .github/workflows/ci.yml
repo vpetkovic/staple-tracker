@@ -28,6 +28,14 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Build the payload BEFORE the suite. `install-real-package` and
+      # `install-schema-matrix` skip when `dist-package/` is absent, so without
+      # this they ran only when `package-tarball` happened to build it first —
+      # which is the race this step and the outDir change remove. Building here
+      # makes them run every time instead of by accident.
+      - name: Build the installable payload
+        run: npm run build:package
+
       - name: Unit tests
         run: npm test
 

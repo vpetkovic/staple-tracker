@@ -79,7 +79,10 @@ beforeAll(async () => {
     expect(uiBuild.status, `npm run build:ui failed: ${uiBuild.stderr}`).toBe(0);
   }
 
-  const built = await buildPackage();
+  // Build into the staging directory, NOT the shared `dist-package/`. Rewriting
+  // that one mid-suite is what raced `install-real-package` and
+  // `install-schema-matrix`, which read it from parallel workers.
+  const built = await buildPackage({ outDir: join(staging, "dist-package") });
   artifactVersion = built.version;
 
   // `npm pack <dir>` produces exactly what `npm publish` would upload.
