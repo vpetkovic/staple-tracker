@@ -1052,12 +1052,36 @@ the adoption key, and minting one locally is the fork the manifest exists to pre
 rows for one workspace. Such an entry is reported by name, never invented and never
 silently dropped.
 
-**Operation ids are content-addressed**: `hub:<epoch>:<entity>:<32 hex of entityId,
-verb and payload>`. Keyed on the entity alone they would be unique per entity per
-epoch and not per operation — so a second write to one registration inside an epoch
-would be answered `duplicate` with the original `seq` and read as an
-acknowledgement. Content-addressing keeps a retry idempotent *and* lets a genuine
-change land, which is what makes publishing safe with no outbox.
+**This wire emits no `delete`, for either entity, and the Worker refuses the verb.**
+A tombstone is final in the fold, which is right for an `issue` whose id is minted once
+and wrong for an entity whose id is **derived from its content**. Removing a cross-link
+and adding it back produces the same entity id, lands on the tombstone, and is discarded
+while the push reports success — and a restore carries the tombstone into the new epoch,
+so the epoch bump is not an escape. Retraction is therefore a field: `present: false` on
+the cross-link payload, and resurrection is an ordinary update the fold's plain merge
+already handles. A missing `present` reads as present, so edges published before the
+field existed are not lost.
+
+**A machine may only retract an edge whose two workspaces it has registered.** Absence
+of an edge locally is not a removal: adoption previews by default, and even on an apply
+it skips an edge naming a workspace that did not land — which happens for an opted-out
+identity, a parked prefix collision, and an entry with no identity. Without this floor a
+machine holding a strict subset retracts edges it was never in a position to know about,
+and a shared registry converges to the **intersection** of the machines' edges rather
+than to last-write-wins. An edge naming a workspace this machine does not have is left
+exactly as published and reported, because a person who expected a removal to propagate
+needs to know it did not.
+
+**Operation ids are `hub:<epoch>:<entity>:<32 hex of entityId, verb, base version and
+payload>`.** Two earlier shapes were wrong in the same way, one level apart. Keyed on the
+entity alone, any second write inside an epoch collided. Keyed on the content, a value
+that RETURNS to an earlier value collided with its own past — `alpha → beta → alpha →
+beta` left the service on `alpha` and reported success for ever. The base version is
+monotonic in the number of operations folded, so no two operations on one entity can
+share an id however often the content cycles. The dedupe role of the id is a backstop
+rather than the mechanism: idempotency comes from re-reading `GET /snapshot` and
+re-deriving the diff, so an operation that already landed is excluded before an id is
+computed.
 
 **There is no hub outbox and no hub migration.** Every workspace sync path assumes
 `sync_outbox`, `sync_state` and `sync_field_writes`; `hub.db` has none of them, and
@@ -1212,6 +1236,13 @@ What it does not upload is stated at the same moment, because a person will
 reasonably get it wrong about a thing called "the hub": no filesystem paths, no
 tasks, and not the list of workspaces this machine has removed —
 `registry_optouts` never leaves, which is what keeps `staple hub unregister` local.
+
+Granting it requires the caller to hand the disclosure back to the setter, verbatim, as
+evidence that it rendered one. That is not authentication — the constant is exported and
+anyone can look it up — it removes the case where a surface writes the flag having never
+had the sentence in hand, which is how a disclosure actually goes missing. Withdrawing
+requires no acknowledgement; making it harder to turn off than on would be the wrong
+asymmetry in a revocation that has to work offline.
 
 There is **no server-side half** to this consent, unlike backup. There is no wire
 spelling for "this machine may describe itself" and no route that takes one, and

@@ -300,6 +300,9 @@ describe("no filesystem path can reach an operation", () => {
           "blockerIdentifier",
           "blockerWs",
           "format",
+          // The retraction flag. A field rather than the `delete` verb, because a
+          // tombstone on a content-derived key can never be undone.
+          "present",
           "type",
         ]);
       }
@@ -397,14 +400,24 @@ function generateRegistry(seed: number): HubRegistryPayload {
 function foldOperations(
   operations: readonly { entity: string; entityId: string; verb: string; payload: object }[],
 ): SnapshotEntityLike[] {
-  const entities = new Map<string, { entity: string; entityId: string; state: Record<string, unknown>; deletedAt: number | null }>();
+  const entities = new Map<
+    string,
+    { entity: string; entityId: string; state: Record<string, unknown>; deletedAt: number | null; version: number }
+  >();
   for (const operation of operations) {
     const key = `${operation.entity} ${operation.entityId}`;
     let entry = entities.get(key);
     if (!entry) {
-      entry = { entity: operation.entity, entityId: operation.entityId, state: {}, deletedAt: null };
+      entry = {
+        entity: operation.entity,
+        entityId: operation.entityId,
+        state: {},
+        deletedAt: null,
+        version: 0,
+      };
       entities.set(key, entry);
     }
+    entry.version += 1;
     if (operation.verb === "delete") {
       entry.deletedAt = 1;
       continue;
@@ -531,12 +544,17 @@ describe("what the diff will and will not emit", () => {
 
     const diff = diffRegistry(after, published);
     expect(diff.operations.filter((o) => o.entity === REGISTRATION_ENTITY)).toEqual([]);
-    expect(diff.operations.every((o) => o.verb !== "delete" || o.entity === CROSS_LINK_ENTITY)).toBe(
-      true,
-    );
+    /**
+     * Stronger than it was: this wire emits NO delete at all, for either entity, and the
+     * TYPE now says so — `RegistryOperation["verb"]` is `"create" | "update"`, so the
+     * comparison a previous version of this test made no longer typechecks. Asserted
+     * against the set of verbs actually emitted, which is the runtime half of the same
+     * claim.
+     */
+    expect([...new Set(diff.operations.map((o) => o.verb))].sort()).not.toContain("delete");
   });
 
-  it("DOES delete a cross-link that is no longer present", () => {
+  it("RETRACTS a cross-link with a field rather than deleting it", () => {
     const link = {
       blockerWs: "one",
       blockerIdentifier: "ONE-1",
@@ -548,8 +566,15 @@ describe("what the diff will and will not emit", () => {
       format: REGISTRY_PAYLOAD_FORMAT,
       hubId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
       capturedAt: "2026-09-09T12:00:00.000Z",
+      /**
+       * BOTH endpoint workspaces, deliberately. A machine may only retract an edge whose
+       * two workspaces it actually has — and an earlier version of this test registered
+       * only "one", so the floor correctly declined and the test failed. Keeping the
+       * realistic setup is the point: the floor is not an obstacle to work around.
+       */
       workspaces: [
         { repositoryId: "11111111-1111-4111-8111-111111111111", slug: "one", prefix: "ONE", kind: "repo", addedAt: "2026-01-01T00:00:00.000Z" },
+        { repositoryId: "22222222-2222-4222-8222-222222222222", slug: "two", prefix: "TWO", kind: "repo", addedAt: "2026-01-01T00:00:00.000Z" },
       ],
       crossLinks: [link],
     };
@@ -560,11 +585,39 @@ describe("what the diff will and will not emit", () => {
       {
         entity: CROSS_LINK_ENTITY,
         entityId: crossLinkEntityId(link),
-        verb: "delete",
-        // A tombstone IS the payload. Anything else would be stored and never read.
-        payload: {},
+        // An `update`, never a `delete` — see `CrossLinkPayload`. The whole payload
+        // travels, so re-folding it yields the same edge with `present: false`.
+        verb: "update",
+        baseVersion: 1,
+        payload: {
+          format: REGISTRY_PAYLOAD_FORMAT,
+          blockerWs: "one",
+          blockerIdentifier: "ONE-1",
+          blockedWs: "two",
+          blockedIdentifier: "TWO-1",
+          type: "blocks",
+          present: false,
+        },
       },
     ]);
+
+    // And it can come back. Under the `delete` verb this was silently discarded for ever.
+    const retracted = publishedStateOf(
+      foldOperations([...diffRegistry(base, new Map()).operations, ...diff.operations]),
+    );
+    const readd = diffRegistry(base, retracted);
+    expect(readd.operations).toHaveLength(1);
+    expect(readd.operations[0]!.verb).toBe("update");
+    expect((readd.operations[0]!.payload as { present: boolean }).present).toBe(true);
+    // A registry rebuilt from the retracted state has no edge; rebuilt after the re-add
+    // it has it again.
+    expect(
+      registryFromSnapshot({
+        hubId: base.hubId,
+        capturedAt: base.capturedAt,
+        entities: foldOperations([...diffRegistry(base, new Map()).operations, ...diff.operations]),
+      }).crossLinks,
+    ).toEqual([]);
   });
 
   it("uses create for a first write and update for a later one", () => {
@@ -643,12 +696,182 @@ describe("what the diff will and will not emit", () => {
   });
 });
 
+describe("a value that returns to an earlier value still lands", () => {
+  it("survives alpha -> beta -> alpha -> beta without a collision", async () => {
+    /**
+     * REGRESSION for the second form of the operation-id bug.
+     *
+     * The first form keyed the id on the entity, so any second write collided.
+     * Content-addressing fixed that and introduced this: a value that returns to a value
+     * it held before produces the same content, therefore the same id, therefore a
+     * `duplicate` answered with the ORIGINAL seq and a status the contract calls success.
+     * Three renames were enough. `alpha -> beta -> alpha -> beta` left the service on
+     * `alpha` and every later publish reported `published: 1` for ever.
+     *
+     * The base VERSION is what fixes it, and this test walks the exact cycle through a
+     * real service so the assertion is the service's state rather than the report.
+     */
+    const { home, hub } = machine();
+    const hubId = hub.hubId();
+    const server = serverFor(hubId);
+    connect(home, hubId, server);
+    setRegistryConsent(home, hubId, true, REGISTRY_DISCLOSURE);
+
+    const identity = "11111111-1111-4111-8111-111111111111";
+    seed(home, hub, "alpha", "ALP", identity);
+    await publishRegistry(hub, home, { fetchImpl: server.fetch });
+
+    /** Move the identity to a differently-named row, which is the publishable rename. */
+    const renameTo = async (slug: string, prefix: string): Promise<void> => {
+      for (const row of hub.list()) {
+        if (row.repositoryId === identity) hub.recordRepositoryId(row.slug, null);
+      }
+      if (hub.get(slug) === undefined) seed(home, hub, slug, prefix, identity);
+      else hub.recordRepositoryId(slug, identity);
+      await publishRegistry(hub, home, { fetchImpl: server.fetch });
+    };
+
+    await renameTo("beta", "BET");
+    await renameTo("alpha", "ALP");
+    await renameTo("beta", "BET");
+
+    const readBack = await readPublishedRegistry(home, hubId, { fetchImpl: server.fetch });
+    const held = readBack.registry.workspaces.find((w) => w.repositoryId === identity);
+    // The FOURTH statement, which is where the old scheme silently stopped.
+    expect(held!.slug).toBe("beta");
+
+    // Every operation landed rather than being absorbed: four distinct ids, four rows.
+    expect(new Set(server.ops.map((o) => o.opId)).size).toBe(server.ops.length);
+    expect(server.ops.filter((o) => o.entity === REGISTRATION_ENTITY).length).toBe(4);
+
+    // And the next publish has nothing to say, which is the property that proves the
+    // publish loop terminates instead of reporting success for ever.
+    const settled = await publishRegistry(hub, home, { fetchImpl: server.fetch });
+    expect(settled.upToDate).toBe(true);
+    expect(settled.deduplicated).toBe(0);
+    hub.close();
+  });
+
+  it("counts what the service applied, not what was sent", async () => {
+    const { home, hub } = machine();
+    const hubId = hub.hubId();
+    const server = serverFor(hubId);
+    connect(home, hubId, server);
+    setRegistryConsent(home, hubId, true, REGISTRY_DISCLOSURE);
+    seed(home, hub, "tracker", "TRK", "11111111-1111-4111-8111-111111111111");
+
+    const report = await publishRegistry(hub, home, { fetchImpl: server.fetch });
+    // `published` is intent; `applied` is outcome. They agree here, and the point is
+    // that they are now two numbers — a `duplicate` is how both id bugs presented, and a
+    // report built from the batch length announced success while nothing changed.
+    expect(report.published).toBe(1);
+    expect(report.applied).toBe(1);
+    expect(report.deduplicated).toBe(0);
+    hub.close();
+  });
+});
+
+describe("a machine may only retract an edge it could have had", () => {
+  /** A registry with two workspaces and one edge between them. */
+  function withEdge(hubId: string): HubRegistryPayload {
+    return {
+      format: REGISTRY_PAYLOAD_FORMAT,
+      hubId,
+      capturedAt: "2026-09-09T12:00:00.000Z",
+      workspaces: [
+        { repositoryId: "11111111-1111-4111-8111-111111111111", slug: "one", prefix: "ONE", kind: "repo", addedAt: "2026-01-01T00:00:00.000Z" },
+        { repositoryId: "22222222-2222-4222-8222-222222222222", slug: "two", prefix: "TWO", kind: "repo", addedAt: "2026-01-01T00:00:00.000Z" },
+      ],
+      crossLinks: [
+        {
+          blockerWs: "one",
+          blockerIdentifier: "ONE-1",
+          blockedWs: "two",
+          blockedIdentifier: "TWO-1",
+          type: "blocks",
+        },
+      ],
+    };
+  }
+
+  it("does not retract an edge naming a workspace it does not have", () => {
+    /**
+     * THE assertion for the third critical. A machine whose registry is a strict SUBSET
+     * of the published one is not a corner case: `adoptRegistry` previews by default, and
+     * even on an apply it skips an edge naming a workspace that did not land — which
+     * happens for an opted-out identity, a parked prefix collision, and an entry with no
+     * identity at all.
+     *
+     * Without the floor, that machine's next publish retracted every one of those edges,
+     * and the shared registry converged to the INTERSECTION of the machines' edges rather
+     * than to last-write-wins.
+     */
+    const hubId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const full = withEdge(hubId);
+    const published = publishedStateOf(foldOperations(diffRegistry(full, new Map()).operations));
+
+    // This machine adopted nothing — the empty hub a replacement machine starts with.
+    const empty: HubRegistryPayload = { ...full, workspaces: [], crossLinks: [] };
+    const diff = diffRegistry(empty, published);
+    expect(diff.operations).toEqual([]);
+    expect(diff.retained).toHaveLength(1);
+    expect(diff.retained[0]!.reason).toContain("does not have registered");
+
+    // And a machine that has only ONE of the two endpoints is equally not entitled.
+    const half: HubRegistryPayload = {
+      ...full,
+      workspaces: [full.workspaces[0]!],
+      crossLinks: [],
+    };
+    expect(diffRegistry(half, published).operations.filter((o) => o.entity === CROSS_LINK_ENTITY))
+      .toEqual([]);
+  });
+
+  it("DOES retract an edge whose two workspaces are both here", () => {
+    // The negative tests above would also pass if retraction never happened at all.
+    const hubId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const full = withEdge(hubId);
+    const published = publishedStateOf(foldOperations(diffRegistry(full, new Map()).operations));
+
+    const removed: HubRegistryPayload = { ...full, crossLinks: [] };
+    const diff = diffRegistry(removed, published);
+    expect(diff.operations).toHaveLength(1);
+    expect((diff.operations[0]!.payload as { present: boolean }).present).toBe(false);
+    expect(diff.retained).toEqual([]);
+  });
+
+  it("reports a tombstone from an older build instead of looping on it", () => {
+    /**
+     * Nothing emits a delete any more, but tombstones written by an earlier build are in
+     * the log for good, and the fold discards every operation on a deleted entity. An
+     * update would be accepted, acknowledged and dropped, and the publish would report
+     * success on every pass for ever. Reported as retained, with the only remedy there is.
+     */
+    const hubId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const full = withEdge(hubId);
+    const tombstoned = publishedStateOf([
+      {
+        entity: CROSS_LINK_ENTITY,
+        entityId: crossLinkEntityId(full.crossLinks[0]!),
+        deletedAt: 1,
+        state: {},
+        version: 2,
+      },
+    ]);
+    const diff = diffRegistry(full, tombstoned);
+    expect(diff.operations.filter((o) => o.entity === CROSS_LINK_ENTITY)).toEqual([]);
+    expect(diff.retained).toHaveLength(1);
+    expect(diff.retained[0]!.reason).toContain("deletion is final");
+  });
+});
+
 describe("chunking", () => {
   it("splits at the ceiling the service advertised, never at a constant", () => {
     const operations = Array.from({ length: 57 }, (_, index) => ({
       entity: REGISTRATION_ENTITY as typeof REGISTRATION_ENTITY,
       entityId: `id-${index}`,
       verb: "create" as const,
+      baseVersion: 0,
       payload: { format: 1, slug: `s${index}`, prefix: `P${index}`, kind: "repo", addedAt: "x" },
     }));
     expect(chunkOperations(operations, 25).map((c) => c.length)).toEqual([25, 25, 7]);
@@ -750,8 +973,12 @@ describe("publishing the registry is its own consent", () => {
     dirs.push(other);
     // `at all` in the zero-network invariant is not satisfied by a file that records a
     // consent for a connection that does not exist.
-    expect(() => setRegistryConsent(other, hub.hubId(), true)).toThrow(StapleError);
-    expect(cloudCodeOf(catchOf(() => setRegistryConsent(other, hub.hubId(), true)))).toBe(null);
+    expect(() => setRegistryConsent(other, hub.hubId(), true, REGISTRY_DISCLOSURE)).toThrow(
+      StapleError,
+    );
+    expect(
+      cloudCodeOf(catchOf(() => setRegistryConsent(other, hub.hubId(), true, REGISTRY_DISCLOSURE))),
+    ).toBe(null);
     hub.close();
   });
 
@@ -769,6 +996,44 @@ describe("publishing the registry is its own consent", () => {
     // whose strongest wording is whichever surface the person did not read.
     expect(message).toContain(REGISTRY_DISCLOSURE);
     expect(cloudCodeOf(catchOf(() => requireRegistryConsent(connection)))).toBe("forbidden");
+  });
+
+  it("cannot be granted without the disclosure being handed back", () => {
+    /**
+     * The disclosure tied to the grant STRUCTURALLY, which every other invariant in this
+     * feature already was — *"the field does not exist to be forgotten"*. Before this, a
+     * surface could write the flag with no evidence it had rendered anything, and the way
+     * a disclosure actually goes missing is exactly that: somebody adds a toggle, wires it
+     * to the setter, and nobody notices the screen was never built.
+     *
+     * It is not authentication and does not pretend to be — a caller can look the constant
+     * up. What it removes is granting this consent while never having had the sentence in
+     * hand.
+     */
+    const { home, hub } = machine();
+    const hubId = hub.hubId();
+    connect(home, hubId, serverFor(hubId));
+
+    for (const wrong of [undefined, "", "I promise I showed them something"]) {
+      const error = catchOf(() =>
+        wrong === undefined
+          ? setRegistryConsent(home, hubId, true)
+          : setRegistryConsent(home, hubId, true, wrong),
+      );
+      expect(error).toBeInstanceOf(StapleError);
+      expect((error as Error).message).toContain("verbatim");
+      // And nothing was written on any of those attempts.
+      expect(readConnection(home, hubId)!.registry).toBe(false);
+    }
+
+    // The real sentence works.
+    expect(setRegistryConsent(home, hubId, true, REGISTRY_DISCLOSURE).enabled).toBe(true);
+
+    // WITHDRAWING needs no acknowledgement. Making it harder to turn off than on would be
+    // the wrong asymmetry in a revocation that has to work offline.
+    expect(setRegistryConsent(home, hubId, false).enabled).toBe(false);
+    expect(readConnection(home, hubId)!.registry).toBe(false);
+    hub.close();
   });
 
   it("says the same sentence at the point of granting", () => {
@@ -797,7 +1062,7 @@ describe("publishing the registry is its own consent", () => {
     expect(server.calls).toEqual([]);
     expect(server.ops).toEqual([]);
 
-    setRegistryConsent(home, hubId, true);
+    setRegistryConsent(home, hubId, true, REGISTRY_DISCLOSURE);
     const report = await publishRegistry(hub, home, { fetchImpl: server.fetch });
     expect(report.published).toBe(1);
     expect(server.ops).toHaveLength(1);
@@ -813,7 +1078,7 @@ describe("publishing against a service with the worker's semantics", () => {
     const hubId = hub.hubId();
     const server = serverFor(hubId);
     connect(home, hubId, server);
-    setRegistryConsent(home, hubId, true);
+    setRegistryConsent(home, hubId, true, REGISTRY_DISCLOSURE);
 
     seed(home, hub, "tracker", "TRK", "11111111-1111-4111-8111-111111111111");
     seed(home, hub, "qde", "QDE", "22222222-2222-4222-8222-222222222222", "global");
@@ -851,7 +1116,7 @@ describe("publishing against a service with the worker's semantics", () => {
     // that upgraded its client before its service.
     const server = new FakeSyncServer({ repositoryId: hubId, protocol: { min: 1, max: 1 } });
     connect(home, hubId, server);
-    setRegistryConsent(home, hubId, true);
+    setRegistryConsent(home, hubId, true, REGISTRY_DISCLOSURE);
     seed(home, hub, "tracker", "TRK", "11111111-1111-4111-8111-111111111111");
 
     const error = await publishRegistry(hub, home, { fetchImpl: server.fetch }).catch((e) => e);
@@ -865,7 +1130,7 @@ describe("publishing against a service with the worker's semantics", () => {
     const hubId = hub.hubId();
     const server = serverFor(hubId, { maxBatchSize: 5 });
     connect(home, hubId, server);
-    setRegistryConsent(home, hubId, true);
+    setRegistryConsent(home, hubId, true, REGISTRY_DISCLOSURE);
 
     for (let index = 0; index < 12; index += 1) {
       seed(
@@ -892,7 +1157,7 @@ describe("publishing against a service with the worker's semantics", () => {
     const hubId = hub.hubId();
     const server = serverFor(hubId);
     connect(home, hubId, server);
-    setRegistryConsent(home, hubId, true);
+    setRegistryConsent(home, hubId, true, REGISTRY_DISCLOSURE);
     seed(home, hub, "tracker", "TRK", "11111111-1111-4111-8111-111111111111");
 
     await publishRegistry(hub, home, { fetchImpl: server.fetch });
@@ -923,7 +1188,7 @@ describe("publishing against a service with the worker's semantics", () => {
     const hubId = hub.hubId();
     const server = serverFor(hubId);
     connect(home, hubId, server);
-    setRegistryConsent(home, hubId, true);
+    setRegistryConsent(home, hubId, true, REGISTRY_DISCLOSURE);
     seed(home, hub, "tracker", "TRK", "11111111-1111-4111-8111-111111111111");
     await publishRegistry(hub, home, { fetchImpl: server.fetch });
 
@@ -963,7 +1228,7 @@ describe("publishing against a service with the worker's semantics", () => {
     const hubId = hub.hubId();
     const server = serverFor(hubId);
     connect(home, hubId, server);
-    setRegistryConsent(home, hubId, true);
+    setRegistryConsent(home, hubId, true, REGISTRY_DISCLOSURE);
     seed(home, hub, "tracker", "TRK", "11111111-1111-4111-8111-111111111111");
     seed(home, hub, "nameless", "NAM", null);
 
@@ -1017,7 +1282,7 @@ describe("the hub is restorable from the service after a machine is lost", () =>
     const hubId = a.hub.hubId();
     const server = serverFor(hubId);
     connect(a.home, hubId, server);
-    setRegistryConsent(a.home, hubId, true);
+    setRegistryConsent(a.home, hubId, true, REGISTRY_DISCLOSURE);
 
     seed(a.home, a.hub, "tracker", "TRK", "11111111-1111-4111-8111-111111111111");
     seed(a.home, a.hub, "qde", "QDE", "22222222-2222-4222-8222-222222222222", "global");
@@ -1069,7 +1334,7 @@ describe("the hub is restorable from the service after a machine is lost", () =>
     const hubId = a.hub.hubId();
     const server = serverFor(hubId);
     connect(a.home, hubId, server);
-    setRegistryConsent(a.home, hubId, true);
+    setRegistryConsent(a.home, hubId, true, REGISTRY_DISCLOSURE);
     seed(a.home, a.hub, "tracker", "TRK", "11111111-1111-4111-8111-111111111111");
     seed(a.home, a.hub, "qde", "QDE", "22222222-2222-4222-8222-222222222222", "global");
     await publishRegistry(a.hub, a.home, { fetchImpl: server.fetch });
@@ -1095,7 +1360,7 @@ describe("the hub is restorable from the service after a machine is lost", () =>
     const bad = machine();
     process.env.STAPLE_HOME = bad.home;
     connect(bad.home, hubId, server, "device-bad", bad.hub);
-    setRegistryConsent(bad.home, hubId, true);
+    setRegistryConsent(bad.home, hubId, true, REGISTRY_DISCLOSURE);
     seed(bad.home, bad.hub, "renamed-by-mistake", "TRK", "11111111-1111-4111-8111-111111111111");
     await publishRegistry(bad.hub, bad.home, { fetchImpl: server.fetch });
     bad.hub.close();
@@ -1132,7 +1397,7 @@ describe("the hub is restorable from the service after a machine is lost", () =>
     const hubId = a.hub.hubId();
     const server = serverFor(hubId);
     connect(a.home, hubId, server);
-    setRegistryConsent(a.home, hubId, true);
+    setRegistryConsent(a.home, hubId, true, REGISTRY_DISCLOSURE);
     seed(a.home, a.hub, "tracker", "TRK", "11111111-1111-4111-8111-111111111111");
     seed(a.home, a.hub, "qde", "QDE", "22222222-2222-4222-8222-222222222222", "global");
     await publishRegistry(a.hub, a.home, { fetchImpl: server.fetch });
@@ -1164,7 +1429,7 @@ describe("the hub is restorable from the service after a machine is lost", () =>
     const hubId = a.hub.hubId();
     const server = serverFor(hubId);
     connect(a.home, hubId, server);
-    setRegistryConsent(a.home, hubId, true);
+    setRegistryConsent(a.home, hubId, true, REGISTRY_DISCLOSURE);
     seed(a.home, a.hub, "tracker", "TRK", "11111111-1111-4111-8111-111111111111");
     await publishRegistry(a.hub, a.home, { fetchImpl: server.fetch });
     a.hub.close();

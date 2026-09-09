@@ -254,8 +254,12 @@ const EXIT_CODES: Record<string, number> = { validation: 2, not_found: 3, confli
  * retry bit that every other surface agrees on. This is the price of being the
  * first async command in the tree, and it is paid here rather than by making
  * cli.ts async underneath thirty commands that are fine as they are.
+ *
+ * EXPORTED for `hub-registry.ts` (STA-283), which is the second async command
+ * group and needs exactly this. Shared rather than copied: the reasoning above is
+ * the whole value, and a second copy of it is a second thing to keep true.
  */
-function settle(work: Promise<void>, json: boolean): void {
+export function settle(work: Promise<void>, json: boolean): void {
   void work.catch((error: unknown) => {
     const envelope = errorEnvelope(error);
     if (json) {

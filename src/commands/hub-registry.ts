@@ -1,0 +1,859 @@
+/**
+ * `staple hub registry` — the hub's own leg to a sync service (STA-283).
+ *
+ *   hub registry status                       local: is the hub connected, and is publishing on
+ *   hub registry id                           local: this machine's hub id, for provisioning
+ *   hub registry identity <hubId> [--yes]     local: take on an existing registry identity
+ *   hub registry connect --endpoint U --token S [--label L] [--yes] [--credential-file]
+ *   hub registry publish [--enable|--disable] consent, or publish now with neither flag
+ *   hub registry adopt [--apply]              read the service's registry and adopt it
+ *   hub registry backup <enable|disable|create|ls|rm <id>>
+ *   hub registry restore <backupId> [--apply]
+ *
+ * Every subcommand takes `--json`.
+ *
+ * ## Why this is a terminal command and not only a page
+ *
+ * The acceptance criterion is *"the hub is restorable from the service after a
+ * machine is lost"*, and the machine that was lost took the browser with it. On a
+ * fresh box the recovery path is a shell, before there is a hub for `staple ui` to
+ * describe. A module API with no invocable verb is not restorable by a person, so
+ * the CLI is the surface that makes the criterion true; the settings page is the
+ * convenience for a machine that is already working.
+ *
+ * ## The transport is loaded LATE, and that is structural rather than tidy
+ *
+ * `hub-registry-service.ts` is the only module in this feature that can reach the
+ * network, and it is imported **exclusively** through `await import()` in
+ * {@link loadService} — never at the top of this file. The pattern is `auto.ts`'s,
+ * for its reason: *"the transport is loaded only via `await import()` after the
+ * consent gate"*.
+ *
+ * What that buys, precisely, and it is worth being exact because it is easy to
+ * overclaim: `staple ls` already reaches `client.ts` statically through
+ * `commands/cloud.ts`, so this file cannot make the CLI's import graph pure and
+ * does not pretend to. What it can do is add no new static edge, and keep the two
+ * genuinely local verbs — `status` and `id` — on a path that never loads the
+ * transport at all. The enforceable property is the one the contract states and
+ * the one `test/cloud-hub-registry-cli.test.ts` asserts with a real subprocess
+ * spy: **no command that is not supposed to talk to the network makes a call.**
+ * That is proven by running the CLI, not by reading it.
+ *
+ * ## Which of these can talk to the network
+ *
+ * `connect`, `publish` (the verb, not the consent flags), `adopt`, `backup` and
+ * `restore`. NOT `status`, NOT `id`, NOT `identity`, and NOT `publish --enable` or
+ * `--disable`: granting or withdrawing this consent has no server-side half, so
+ * withdrawing it works with the network down — which is the point, since a consent
+ * you cannot withdraw offline is not really revocable.
+ */
+import { parseArgs } from "node:util";
+import { stapleHome } from "../config/home.js";
+import { Hub } from "../core/hub.js";
+import { StapleError } from "../core/types.js";
+import { readConnection } from "../core/cloud/connection.js";
+import { confirm, isInteractive } from "../onboarding/prompts.js";
+import { settle } from "./cloud.js";
+import {
+  REGISTRY_DISCLOSURE,
+  describeIdentityReplacement,
+  type AdoptionDecision,
+  type AdoptionReport,
+} from "../core/cloud/hub-registry.js";
+
+/**
+ * The service module, loaded on demand.
+ *
+ * The one place `hub-registry-service.js` is named. See the header: a static import
+ * here would put the transport on every path through this file, including the two
+ * that are local by definition.
+ */
+async function loadService() {
+  return import("../core/cloud/hub-registry-service.js");
+}
+
+const USAGE =
+  "usage: staple hub registry [status|id|identity|connect|publish|adopt|backup|restore]";
+
+export function runHubRegistryCommand(argv: string[]): void {
+  const sub = argv[0] && !argv[0].startsWith("-") ? argv[0] : "status";
+  const rest = argv[0] && !argv[0].startsWith("-") ? argv.slice(1) : argv;
+
+  switch (sub) {
+    case "status":
+      return runStatus(rest);
+    case "id":
+      return runId(rest);
+    case "identity":
+      return runIdentity(rest);
+    case "connect":
+      return runConnect(rest);
+    case "publish":
+      return runPublish(rest);
+    case "adopt":
+      return runAdopt(rest);
+    case "backup":
+      return runBackup(rest);
+    case "restore":
+      return runRestore(rest);
+    default:
+      throw new StapleError("validation", `Unknown subcommand "${sub}". ${USAGE}`);
+  }
+}
+
+/**
+ * Open the hub WITHOUT minting an identity.
+ *
+ * `Hub.open()` migrates, which is a write and is fine — every hub command does it.
+ * What must not happen is `hubId()`, which mints and stores a UUID the first time
+ * anything asks. A `status` that minted an identity as a side effect of being read
+ * would hand this machine a registry id it never chose, and `identity` would then
+ * refuse to adopt the real one on the strength of it.
+ */
+function openHub(): Hub {
+  return Hub.open();
+}
+
+/**
+ * Open the hub, run a synchronous prelude that may refuse, and close on the refusal.
+ *
+ * The async verbs below hand the handle to a promise chain that closes it in a
+ * `.finally`, which covers every path once the chain exists. What it does not cover is
+ * a prelude that throws BEFORE the chain is created — `requireHubId` on a machine with
+ * no identity — and that path would otherwise leave the database open for the rest of
+ * the process. Short-lived for a CLI, and still wrong: `Hub.open()` converts the
+ * journal to WAL, so an abandoned handle leaves `-wal` and `-shm` files beside the hub.
+ */
+function withHub<T>(prelude: (hub: Hub) => T): { hub: Hub; value: T } {
+  const hub = openHub();
+  try {
+    return { hub, value: prelude(hub) };
+  } catch (error) {
+    hub.close();
+    throw error;
+  }
+}
+
+/** The hub id, refusing rather than minting when there is not one yet. */
+function requireHubId(hub: Hub, what: string): string {
+  const stored = hub.storedHubId();
+  if (stored === null) {
+    throw new StapleError(
+      "not_found",
+      `This machine's hub has no registry identity yet, so there is nothing to ${what}. ` +
+        "Either run `staple hub registry id` to mint one and have it provisioned on a " +
+        "service, or run `staple hub registry identity <hubId>` to take on an identity " +
+        "another machine already published under.",
+    );
+  }
+  return stored;
+}
+
+// ------------------------------------------------------------------ local verbs
+
+/**
+ * `hub registry status` — local files only, and no round trip.
+ *
+ * Deliberately says nothing about the SERVICE's state — not the epoch, not when
+ * anything was last published. Establishing either needs an authenticated request,
+ * and a status command that made one would be a poll that costs money and fails
+ * when the network is down. The three facts here all come from
+ * `readConnection(home, hubId)`, which is the same file whose absence
+ * `connection.ts` defines as "never connected".
+ */
+function runStatus(argv: string[]): void {
+  const { values } = parseArgs({ args: argv, options: { json: { type: "boolean" } } });
+  const json = values.json === true;
+  const home = stapleHome();
+  const hub = openHub();
+  try {
+    const hubId = hub.storedHubId();
+    const connection = hubId === null ? null : readConnection(home, hubId);
+    const report = {
+      hubId,
+      connected: connection !== null,
+      endpoint: connection?.endpoint ?? null,
+      /** This machine's publish consent. Absent means never granted. */
+      publishConsent: connection?.registry === true,
+      backupConsent: connection?.backup === true,
+      registered: hub.list().length,
+      crossLinks: hub.listCrossLinks().length,
+    };
+
+    if (json) {
+      console.log(JSON.stringify(report, null, 2));
+      return;
+    }
+
+    if (hubId === null) {
+      console.log("This machine's hub has no registry identity yet.");
+      console.log("  - `staple hub registry id` mints one, for an operator to provision");
+      console.log("  - `staple hub registry identity <hubId>` takes on an existing one");
+      return;
+    }
+    console.log(`hub id        ${hubId}`);
+    console.log(`registry      ${report.connected ? `connected to ${report.endpoint}` : "not connected"}`);
+    console.log(`publishing    ${report.publishConsent ? "on" : "OFF"}`);
+    console.log(`hub backup    ${report.backupConsent ? "on" : "off"}`);
+    console.log(`workspaces    ${report.registered} registered, ${report.crossLinks} cross-workspace link(s)`);
+    if (!report.connected) {
+      console.log("");
+      console.log("  Connect with: staple hub registry connect --endpoint <url> --token <secret>");
+    } else if (!report.publishConsent) {
+      console.log("");
+      console.log("  Nothing is being published. Publishing is a separate consent:");
+      console.log("    staple hub registry publish --enable");
+    }
+  } finally {
+    hub.close();
+  }
+}
+
+/**
+ * `hub registry id` — print the hub id, minting one if this machine has none.
+ *
+ * The one command that mints deliberately, because it is the one an operator runs
+ * to find out what to provision. `worker/README.md`'s "Provisioning a HUB" names it
+ * for exactly that.
+ */
+function runId(argv: string[]): void {
+  const { values } = parseArgs({ args: argv, options: { json: { type: "boolean" } } });
+  const hub = openHub();
+  try {
+    const existed = hub.storedHubId() !== null;
+    const hubId = hub.hubId();
+    if (values.json === true) {
+      console.log(JSON.stringify({ hubId, minted: !existed }));
+      return;
+    }
+    console.log(hubId);
+    if (!existed) {
+      console.log("");
+      console.log("Minted just now, and stored in this machine's hub.");
+      console.log("It is not a secret. A repository row for it has to be created on the");
+      console.log("service out of band — staple cannot do it; see worker/README.md,");
+      console.log('"Provisioning a HUB".');
+    }
+  } finally {
+    hub.close();
+  }
+}
+
+/**
+ * `hub registry identity <hubId>` — take on an existing registry identity.
+ *
+ * The step that makes recovery possible at all, and the one easiest to leave out:
+ * every test written on one machine passes without it, because that machine minted
+ * the id it is using.
+ *
+ * ## The disclosure is unconditional, and that is not caution
+ *
+ * When this replaces an id, the old one may or may not have had a registry
+ * published under it, and **this machine cannot tell**. `adoptRegistryIdentity`
+ * refuses when a connection record exists for the old id, but `staple cloud
+ * disconnect` deletes that record — its contract is to leave nothing behind — so
+ * `connect → publish → disconnect → adopt` passes the check and orphans the old
+ * registry remotely.
+ *
+ * So the sentence is printed whenever there is a previous id, and it is not
+ * conditioned on evidence that does not exist. It also says the operation is
+ * reversible, because it is: re-adopting the old id brings it back. That is what
+ * makes this a confirmation rather than a refusal.
+ */
+function runIdentity(argv: string[]): void {
+  const { values, positionals } = parseArgs({
+    args: argv,
+    allowPositionals: true,
+    options: { json: { type: "boolean" }, yes: { type: "boolean" } },
+  });
+  const json = values.json === true;
+  const target = positionals[0];
+  if (!target) {
+    throw new StapleError(
+      "validation",
+      "usage: staple hub registry identity <hubId> [--yes]\n" +
+        "The hub id comes from the machine that published the registry — " +
+        "`staple hub registry id` there, or from wherever you kept it with the " +
+        "enrollment secret.",
+    );
+  }
+
+  const home = stapleHome();
+  const hub = openHub();
+  try {
+    const previous = hub.storedHubId();
+    if (previous !== null && previous !== target.trim() && !json) {
+      console.log(`This machine's hub currently has the identity ${previous}.`);
+      console.log("");
+      /**
+       * The shared sentence, unconditional. Printed from the constant rather than written
+       * here so the settings page cannot word it differently — and stated as a fact about
+       * the id rather than a warning about a state, because the state is not observable:
+       * a disconnect leaves no evidence that the old id was ever used.
+       */
+      console.log(describeIdentityReplacement(previous));
+      if (values.yes !== true) {
+        if (!(isInteractive() && confirm(`\nAdopt ${target.trim()} instead?`, { default: false }))) {
+          console.error(
+            isInteractive()
+              ? "\nDeclined. The identity is unchanged."
+              : "\nNothing was changed. Re-run with --yes to adopt.",
+          );
+          process.exitCode = 2;
+          hub.close();
+          return;
+        }
+      }
+    }
+
+    /**
+     * The hub is closed inside the chain, NOT in a synchronous `finally`.
+     *
+     * An earlier version of this closed it in a `finally` wrapped round `settle`,
+     * which reads as careful and is wrong: `settle` returns the instant the promise
+     * is created, so the `finally` ran first and the async body then called
+     * `storedHubId()` on a closed database — `ERR_INVALID_STATE: database is not
+     * open`. Found by running the command rather than by reading it, which is the
+     * only way this class of ordering bug shows up.
+     */
+    settle(
+      loadService()
+        .then(({ adoptRegistryIdentity }) => {
+          const outcome = adoptRegistryIdentity(home, hub, target.trim());
+          if (json) {
+            console.log(JSON.stringify({ hubId: target.trim(), ...outcome }));
+            return;
+          }
+          if (!outcome.adopted) {
+            console.log(`Already this machine's hub identity: ${target.trim()}. Nothing changed.`);
+            return;
+          }
+          console.log(`This machine's hub is now ${target.trim()}.`);
+          if (outcome.previousHubId !== null) {
+            console.log(`  previous identity ${outcome.previousHubId} — see the note above`);
+          }
+          console.log("  connect it with: staple hub registry connect --endpoint <url> --token <secret>");
+        })
+        .finally(() => hub.close()),
+      json,
+    );
+  } catch (error) {
+    hub.close();
+    throw error;
+  }
+}
+
+// ---------------------------------------------------------------- network verbs
+
+/**
+ * `hub registry connect` — connect the hub as a repository.
+ *
+ * Shows before it asks, like `cloud connect`, and for the same reason: the preview
+ * is built by `buildConnectPreview`, whose module cannot reach the network at all,
+ * and no code path here connects without one.
+ */
+function runConnect(argv: string[]): void {
+  const { values } = parseArgs({
+    args: argv,
+    options: {
+      json: { type: "boolean" },
+      endpoint: { type: "string" },
+      token: { type: "string" },
+      label: { type: "string" },
+      yes: { type: "boolean" },
+      "credential-file": { type: "boolean" },
+    },
+  });
+  const json = values.json === true;
+  if (!values.endpoint) {
+    throw new StapleError(
+      "validation",
+      "usage: staple hub registry connect --endpoint <url> --token <secret> [--label L] [--yes]",
+    );
+  }
+
+  const home = stapleHome();
+  /**
+   * `requireHubId`, NOT `hub.hubId()`.
+   *
+   * Minting here was a real bug and its symptom was misleading: connect invented a
+   * fresh UUID, the service had of course never heard of it, and the failure came back
+   * as "not provisioned" — sending the reader to an operator to provision an id that
+   * this machine had just made up, when the actual mistake was skipping
+   * `hub registry identity`. Refusing up front names the real remedy.
+   */
+  const { hub, value: hubId } = withHub((h) => requireHubId(h, "connect"));
+
+  settle(
+    loadService()
+      .then(async ({ buildHubRegistryPreview, connectHubRegistry, isNotProvisioned }) => {
+        const preview = buildHubRegistryPreview({
+          home,
+          hub,
+          endpoint: values.endpoint!,
+          ...(values.label === undefined ? {} : { label: values.label }),
+          credential: { forceFile: values["credential-file"] === true },
+        });
+
+        if (!json) {
+          const { renderConnectPreview } = await import("../core/cloud/preview.js");
+          console.log(renderConnectPreview(preview));
+          console.log("");
+          console.log("This is the HUB's own connection, not a workspace's. It is what lets this");
+          console.log("machine publish and restore its workspace LIST. It does not publish the");
+          console.log("list — that is a separate consent, `staple hub registry publish --enable`.");
+        }
+
+        if (values.yes !== true) {
+          if (!(isInteractive() && confirm("\nConnect this machine's hub?", { default: false }))) {
+            console.error(
+              isInteractive()
+                ? "\nDeclined. Nothing was sent, and no credential or setting was written."
+                : "\nNothing was sent. Re-run with --yes to connect.",
+            );
+            process.exitCode = 2;
+            return;
+          }
+        }
+        if (!values.token) {
+          throw new StapleError(
+            "validation",
+            "An enrollment credential is required: --token <secret>. For a hub this is the " +
+              "enrollment secret whoever runs the service created alongside the hub's " +
+              "repository row. Nothing was sent.",
+          );
+        }
+
+        try {
+          const outcome = await connectHubRegistry(preview, {
+            home,
+            enrollmentSecret: values.token,
+            credential: { forceFile: values["credential-file"] === true },
+          });
+          if (json) {
+            console.log(
+              JSON.stringify(
+                {
+                  connection: outcome.connection,
+                  capabilities: outcome.capabilities,
+                  credentialLocation: outcome.credentialLocation,
+                },
+                null,
+                2,
+              ),
+            );
+            return;
+          }
+          console.log(`\nConnected this machine's hub to ${outcome.connection.endpoint}.`);
+          console.log(`  hub id      ${hubId}`);
+          console.log(`  device      ${outcome.connection.deviceId}`);
+          console.log(`  credential  ${outcome.credentialLocation}`);
+          console.log("  PUBLISHING IS OFF. Nothing about your workspaces has been uploaded.");
+          console.log("    turn it on with: staple hub registry publish --enable");
+        } catch (error) {
+          /**
+           * The one failure that is not a bug, named as itself.
+           *
+           * `connectHubRegistry` has already replaced the message; this branch exists
+           * so the CLI can add the exit code and keep the sentence off a stack trace.
+           * See `worker/src/devices.ts`: an unknown repository id is `forbidden`
+           * deliberately, so that a caller cannot enumerate which ids the service
+           * knows about — which means "not provisioned" and "not a member" are the
+           * same wire answer and always will be.
+           */
+          if (isNotProvisioned(error) && !json) {
+            console.error(`\nerror(forbidden): ${(error as Error).message}`);
+            process.exitCode = 4;
+            return;
+          }
+          throw error;
+        }
+      })
+      .finally(() => hub.close()),
+    json,
+  );
+}
+
+/**
+ * `hub registry publish` — the consent with `--enable`/`--disable`, the act with
+ * neither.
+ *
+ * One verb for both because the error message a person is most likely to arrive
+ * here from says `staple hub registry publish --enable`, and a command that did not
+ * exist under the name it was told to run would be worse than the overload.
+ *
+ * `--enable` and `--disable` make **no network call**. This consent has no
+ * server-side half — there is no wire spelling for "this machine may describe
+ * itself" — so withdrawing it works with the service unreachable, which is what
+ * makes it genuinely revocable.
+ */
+function runPublish(argv: string[]): void {
+  const { values } = parseArgs({
+    args: argv,
+    options: {
+      json: { type: "boolean" },
+      enable: { type: "boolean" },
+      disable: { type: "boolean" },
+      yes: { type: "boolean" },
+    },
+  });
+  const json = values.json === true;
+  if (values.enable === true && values.disable === true) {
+    throw new StapleError(
+      "validation",
+      "--enable and --disable are two different decisions. Pass one.",
+    );
+  }
+
+  const home = stapleHome();
+  const { hub, value: hubId } = withHub((h) => requireHubId(h, "publish"));
+
+  if (values.enable === true || values.disable === true) {
+    const enabled = values.enable === true;
+    settle(
+      loadService()
+        .then(async (service) => {
+          const { setRegistryConsent, registryDisclosure } = service;
+          /**
+           * Established BEFORE the disclosure is printed, not after.
+           *
+           * The first version printed the whole consent screen and then failed with
+           * `not_found` — and with `setConsent`'s generic wording, which says "run
+           * `staple cloud connect`" and sends the reader to a workspace's connection to
+           * fix a hub's. Showing somebody a decision you cannot act on, and then naming
+           * the wrong remedy, is two mistakes in the one moment you had their attention.
+           */
+          const connection = service.requireHubRegistryConnection(home, hubId);
+          if (enabled && !json) {
+            /**
+             * The disclosure, printed BEFORE the flag is written and taken from the
+             * module rather than retyped. `REGISTRY_DISCLOSURE` is the one sentence
+             * and `registryDisclosure()` is the block around it; a surface with its
+             * own wording is a surface whose wording is the one nobody reviewed.
+             */
+            console.log(registryDisclosure(connection.endpoint));
+            if (values.yes !== true) {
+              if (!(isInteractive() && confirm("\nPublish this machine's registry?", { default: false }))) {
+                console.error(
+                  isInteractive()
+                    ? "\nDeclined. Nothing has been uploaded and the consent is unchanged."
+                    : "\nNothing was changed. Re-run with --yes to enable publishing.",
+                );
+                process.exitCode = 2;
+                return;
+              }
+            }
+          }
+
+          // The acknowledgement the setter now requires when enabling: the exact sentence
+          // this command printed above. Withdrawing needs none.
+          const outcome = enabled
+            ? setRegistryConsent(home, hubId, true, REGISTRY_DISCLOSURE)
+            : setRegistryConsent(home, hubId, false);
+          if (json) {
+            console.log(
+              JSON.stringify({ enabled: outcome.enabled, disclosure: REGISTRY_DISCLOSURE }),
+            );
+            return;
+          }
+          if (outcome.enabled) {
+            console.log("\nPublishing is ON for this machine's hub.");
+            console.log("  - nothing has been uploaded yet; `staple hub registry publish` does that");
+            console.log("  - this changed no other consent");
+          } else {
+            console.log("Publishing is OFF for this machine's hub.");
+            console.log("  - what was already published was NOT deleted");
+            console.log("  - no network call was needed to withdraw this");
+          }
+        })
+        .finally(() => hub.close()),
+      json,
+    );
+    return;
+  }
+
+  settle(
+    loadService()
+      .then(async ({ publishRegistry }) => {
+        const report = await publishRegistry(hub, home);
+        if (json) {
+          console.log(JSON.stringify(report, null, 2));
+          return;
+        }
+        if (report.upToDate) {
+          console.log(`Already published. The service holds this machine's registry as it is.`);
+        } else {
+          console.log(
+            `Published ${report.published} operation(s) in ${report.batches} batch(es): ` +
+              `${report.created} new, ${report.updated} changed, ${report.retracted} link(s) retracted.`,
+          );
+          /**
+           * Surfaced, and it should always be zero. The snapshot diff excludes anything
+           * that already landed, so a deduplicated operation means an id collided with
+           * its own past — the failure mode that twice reported success while changing
+           * nothing. Silence about it is what let it live.
+           */
+          if (report.deduplicated > 0) {
+            console.error(
+              `\n! ${report.deduplicated} operation(s) were deduplicated by the service rather ` +
+                "than applied. That should not happen — the registry on the service may not " +
+                "match this machine. Please report this.",
+            );
+            process.exitCode = 4;
+          }
+        }
+        if (report.retained.length > 0) {
+          console.log("");
+          console.log(`${report.retained.length} published link(s) left exactly as they were:`);
+          for (const item of report.retained) {
+            console.log(`  ${item.reason}`);
+          }
+        }
+        if (report.unpublishable.length > 0) {
+          console.log("");
+          console.log(`${report.unpublishable.length} workspace(s) could not be published:`);
+          for (const item of report.unpublishable) {
+            console.log(`  ${item.entry.slug}`);
+            console.log(`    ${item.reason}`);
+          }
+        }
+      })
+      .finally(() => hub.close()),
+    json,
+  );
+}
+
+/**
+ * One decision per incoming entry, rendered.
+ *
+ * A count tells an operator nothing about the two rows that parked, and parked rows
+ * are the entire reason adoption reports rather than resolves. So every decision
+ * gets a line and its own sentence — `hub-registry.ts` guarantees `reason` is never
+ * empty and never a code, which is what makes this printable rather than a lookup
+ * table maintained here.
+ */
+function renderDecisions(report: AdoptionReport, describe: (r: AdoptionReport) => string): void {
+  console.log(describe(report));
+  if (report.decisions.length > 0) console.log("");
+  for (const decision of report.decisions) {
+    console.log(`  ${outcomeLabel(decision)}  ${decision.entry.slug}`);
+    console.log(`    ${decision.reason}`);
+  }
+  if (report.crossLinks.added + report.crossLinks.skipped > 0) {
+    console.log("");
+    console.log(
+      `  cross-workspace links: ${report.crossLinks.added} imported, ${report.crossLinks.skipped} skipped`,
+    );
+  }
+  if (report.dryRun) {
+    console.log("");
+    console.log("Nothing was written. Re-run with --apply to make these changes.");
+  }
+}
+
+/** A fixed-width label per outcome, so a column of them reads as a column. */
+function outcomeLabel(decision: AdoptionDecision): string {
+  const labels: Record<AdoptionDecision["outcome"], string> = {
+    current: "current    ",
+    adopted: "adopted    ",
+    repointed: "re-pointed ",
+    absent: "absent     ",
+    declined: "skipped    ",
+    conflict: "PARKED     ",
+    unmatchable: "no identity",
+  };
+  return labels[decision.outcome];
+}
+
+/**
+ * `hub registry adopt` — read the service's registry and adopt it. Previews by
+ * default.
+ *
+ * The everyday path for a second machine, and the first half of recovery for a
+ * replacement one: it has lost nothing, it simply wants the set another machine
+ * published. `restore` is for when the SERVICE's current state is also wrong.
+ */
+function runAdopt(argv: string[]): void {
+  const { values } = parseArgs({
+    args: argv,
+    options: { json: { type: "boolean" }, apply: { type: "boolean" } },
+  });
+  const json = values.json === true;
+  const home = stapleHome();
+  const { hub } = withHub((h) => requireHubId(h, "adopt a registry into"));
+
+  settle(
+    loadService()
+      .then(async (service) => {
+        const { registry, adoption } = await service.adoptPublishedRegistry(hub, home, {
+          apply: values.apply === true,
+        });
+        if (json) {
+          console.log(JSON.stringify({ registry, adoption }, null, 2));
+          return;
+        }
+        const { describeAdoption } = await import("../core/cloud/hub-registry.js");
+        renderDecisions(adoption, describeAdoption);
+      })
+      .finally(() => hub.close()),
+    json,
+  );
+}
+
+/** `hub registry backup` — point-in-time copies of the registry, a further consent. */
+function runBackup(argv: string[]): void {
+  const subs = new Set(["enable", "disable", "create", "ls", "rm"]);
+  const sub = argv[0] && subs.has(argv[0]) ? argv[0] : "ls";
+  const rest = argv[0] && subs.has(argv[0]) ? argv.slice(1) : argv;
+
+  const { values, positionals } = parseArgs({
+    args: rest,
+    allowPositionals: true,
+    options: { json: { type: "boolean" }, label: { type: "string" }, yes: { type: "boolean" } },
+  });
+  const json = values.json === true;
+  const home = stapleHome();
+  const { hub, value: hubId } = withHub((h) => requireHubId(h, "back up"));
+
+  settle(
+    loadService()
+      .then(async (service) => {
+        if (sub === "enable" || sub === "disable") {
+          const outcome = await service.setHubBackupConsent(home, hubId, sub === "enable");
+          if (json) {
+            console.log(JSON.stringify(outcome));
+          } else if (outcome.enabled) {
+            console.log("Hub backup is on. Take one with: staple hub registry backup create");
+            console.log("  - a separate decision from publishing; it changed no other consent");
+          } else {
+            console.log("Hub backup is off on this machine. Existing backups were NOT deleted.");
+          }
+          if (outcome.warning) {
+            console.error(`\n! ${outcome.warning}`);
+            process.exitCode = 4;
+          }
+          return;
+        }
+
+        if (sub === "create") {
+          const backup = await service.createHubBackup(home, hubId, values.label ?? null);
+          if (json) {
+            console.log(JSON.stringify({ backup }, null, 2));
+            return;
+          }
+          console.log(`Backed up the registry as ${backup.backupId}.`);
+          console.log(`  ${backup.entityCount} entities, epoch ${backup.epoch}, sequence ${backup.cutoffSeq}`);
+          const { HUB_BACKUP_HEADLINE } = await import("../core/cloud/hub-registry.js");
+          console.log(`  ${HUB_BACKUP_HEADLINE}`);
+          return;
+        }
+
+        if (sub === "ls") {
+          const backups = await service.listHubBackups(home, hubId);
+          if (json) {
+            console.log(JSON.stringify({ backups }, null, 2));
+            return;
+          }
+          if (backups.length === 0) {
+            console.log("No hub backups. Take one with: staple hub registry backup create");
+            return;
+          }
+          for (const backup of backups) {
+            console.log(
+              `${backup.backupId}  ${new Date(backup.createdAt).toISOString().slice(0, 19)}  ` +
+                `${String(backup.entityCount).padStart(4)} entities  ${backup.kind}`,
+            );
+          }
+          return;
+        }
+
+        const target = positionals[0];
+        if (!target) {
+          throw new StapleError("validation", "usage: staple hub registry backup rm <backupId>");
+        }
+        await service.deleteHubBackup(home, hubId, target);
+        if (json) console.log(JSON.stringify({ backupId: target, deleted: true }));
+        else console.log(`Deleted hub backup ${target}.`);
+      })
+      .finally(() => hub.close()),
+    json,
+  );
+}
+
+/**
+ * `hub registry restore <backupId>` — restore on the service, then adopt what comes
+ * back. Previews the adoption by default.
+ *
+ * Two halves, and the second is why this is not a wrapper round a route. The
+ * restore leaves the SERVICE holding the backed-up registry on a fresh epoch; that
+ * is worth nothing on its own to a machine whose hub is empty. So the restored
+ * epoch is read back and handed to `adoptRegistry`, whose rules are what make it
+ * safe on a machine that is not empty — this machine's stamps win, no prefix is ever
+ * renumbered, collisions park, and an opted-out identity stays out.
+ *
+ * Note what `--apply` does and does not gate. The remote restore is NOT a preview:
+ * by the time the adoption is shown, the service has already moved epoch, and the
+ * undo for that is the pre-restore backup this prints. `--apply` gates the LOCAL
+ * half only, and the output says so rather than letting a reader assume otherwise.
+ */
+function runRestore(argv: string[]): void {
+  const { values, positionals } = parseArgs({
+    args: argv,
+    allowPositionals: true,
+    options: { json: { type: "boolean" }, apply: { type: "boolean" }, yes: { type: "boolean" } },
+  });
+  const json = values.json === true;
+  const target = positionals[0];
+  if (!target) {
+    throw new StapleError(
+      "validation",
+      "usage: staple hub registry restore <backupId> [--apply]\n" +
+        "List them with: staple hub registry backup ls",
+    );
+  }
+
+  const home = stapleHome();
+  const { hub } = withHub((h) => requireHubId(h, "restore into"));
+
+  if (!json && values.yes !== true) {
+    console.log("Restoring rewinds the registry ON THE SERVICE to this backup.");
+    console.log("  - the service moves to a new epoch; work published since is discarded");
+    console.log("  - a pre-restore copy is taken first, and this prints its id");
+    console.log("  - your local hub is only changed if you pass --apply");
+    if (!(isInteractive() && confirm(`\nRestore from ${target}?`, { default: false }))) {
+      console.error(
+        isInteractive()
+          ? "\nDeclined. Nothing was changed, here or on the service."
+          : "\nNothing was changed. Re-run with --yes to restore.",
+      );
+      process.exitCode = 2;
+      hub.close();
+      return;
+    }
+  }
+
+  settle(
+    loadService()
+      .then(async (service) => {
+        const report = await service.restoreRegistry(hub, home, target, {
+          apply: values.apply === true,
+        });
+        if (json) {
+          console.log(JSON.stringify(report, null, 2));
+          return;
+        }
+        console.log(
+          `\nRestored on the service: epoch ${report.fromEpoch} -> ${report.toEpoch}, ` +
+            `${report.entityCount} entities, ${report.turns} turn(s).`,
+        );
+        if (report.preRestoreBackupId !== null) {
+          console.log(`  undo with: staple hub registry restore ${report.preRestoreBackupId}`);
+        }
+        console.log("");
+        const { describeAdoption } = await import("../core/cloud/hub-registry.js");
+        renderDecisions(report.adoption, describeAdoption);
+      })
+      .finally(() => hub.close()),
+    json,
+  );
+}

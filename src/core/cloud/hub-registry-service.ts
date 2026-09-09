@@ -78,19 +78,24 @@ import type { SelectOptions } from "./credential-store.js";
 import { parseEndpoint } from "./endpoint.js";
 import { nowIso } from "../types.js";
 import {
+  HUB_IDENTITY_REPLACEMENT_NOTICE,
+  REGISTRY_DISCLOSURE,
   adoptRegistry,
+  describeIdentityReplacement,
   exportRegistry,
   type AdoptOptions,
   type AdoptionReport,
   type HubRegistryPayload,
 } from "./hub-registry.js";
 import {
+  CROSS_LINK_ENTITY,
   REGISTRY_PROTOCOL,
   chunkOperations,
   diffRegistry,
   publishedStateOf,
   registryFromSnapshot,
   type RegistryOperation,
+  type RetainedEdge,
   type SnapshotEntityLike,
   type UnpublishableEntry,
 } from "./hub-registry-ops.js";
@@ -99,16 +104,14 @@ import { buildConnectPreview, type ConnectPreview } from "./preview.js";
 type Options = RequestOptions & SelectOptions;
 
 /**
- * The sentence that has to appear wherever this consent is granted.
+ * Re-exported from the leaf, not declared here.
  *
- * Copied VERBATIM from `hub-registry.ts`'s header and from `docs/sync.md`, not
- * paraphrased. A disclosure that is reworded per surface is a disclosure whose
- * strongest wording is whichever surface a person did not read, and this one is the
- * whole price of the invariant the registry gave up.
+ * The sentence lives in `hub-registry.ts` so that `hub-surface.ts` — reached by a route
+ * the settings page POLLS — can render it without importing this module and acquiring
+ * `client.ts`, the only `fetch` in the tree. Re-exported so existing callers of this
+ * module keep working and there is still exactly one declaration.
  */
-export const REGISTRY_DISCLOSURE =
-  "a machine that publishes its registry tells the service the names, prefixes and " +
-  "identities of every workspace on it, and that they sit together.";
+export { REGISTRY_DISCLOSURE, HUB_IDENTITY_REPLACEMENT_NOTICE, describeIdentityReplacement };
 
 /** The consent, as a human is asked for it. Full sentences, because it is a question. */
 export function registryDisclosure(endpoint: string): string {
@@ -231,6 +234,47 @@ export function adoptRegistryIdentity(
   const previous = hub.storedHubId();
   if (previous === trimmed) return { adopted: false, previousHubId: previous };
 
+  /**
+   * Refuse an id that already names something else on this machine.
+   *
+   * A hub id travels out of band, by hand, next to repository ids and enrollment
+   * secrets — so pasting a workspace's `repositoryId` into this command is an ordinary
+   * slip, and until this check it was a destructive one. Connection records live in ONE
+   * namespace: `<credentialDir>/<repositoryId>.json`. Adopting workspace W's id as the
+   * hub id makes the next `connectHubRegistry` overwrite W's connection record and
+   * `selectCredentialStore(...).write(hubId, …)` overwrite W's token — so W silently
+   * stops being able to sync, with its credential gone.
+   *
+   * It is also the only way, in practice, to get a `registration` operation into a
+   * WORKSPACE's log. The Worker has no notion of hub-versus-workspace repository, so it
+   * would accept one — and from then on every protocol-1 client of W is refused at
+   * `/ops` and `/snapshot` with a non-retryable 426, permanently. `worker/src/envelope.ts`
+   * now refuses a batch that mixes the two vocabularies, which closes the accidental
+   * version of that; this closes the door it came through.
+   *
+   * Checked against the REGISTRY and against the connection directory, because the two
+   * answer different questions: a workspace may be registered here without ever having
+   * been connected, and a connection record may outlive a workspace's registration.
+   */
+  const heldByWorkspace = hub.findByRepositoryId(trimmed);
+  if (heldByWorkspace !== undefined) {
+    throw new StapleError(
+      "conflict",
+      `${trimmed} is the sync identity of the workspace "${heldByWorkspace.slug}" on this ` +
+        "machine, not a hub id. Adopting it would point the hub at that workspace's " +
+        "repository and overwrite its stored credential. Nothing was changed — check the id " +
+        "you were given.",
+    );
+  }
+  if (previous !== trimmed && readConnection(home, trimmed) !== null) {
+    throw new StapleError(
+      "conflict",
+      `${trimmed} already has a cloud connection record on this machine, so it names a ` +
+        "repository this machine is already connected to rather than a hub identity to take " +
+        "on. Nothing was changed.",
+    );
+  }
+
   if (previous !== null && readConnection(home, previous) !== null) {
     throw new StapleError(
       "conflict",
@@ -287,6 +331,39 @@ export async function connectHubRegistry(
   preview: ConnectPreview,
   args: PerformConnectArgs,
 ): Promise<ConnectOutcome> {
+  /**
+   * The capability pre-flight, BEFORE a device is minted.
+   *
+   * Without it, connecting an un-redeployed service SUCCEEDS: `performConnect` declares
+   * `CLIENT_PROTOCOL`, which is 1, and 1 is inside `{min:1,max:1}`. The failure then
+   * surfaces at the first publish as a bare `protocol 2 is outside the supported range`
+   * — no `requiredProtocol`, no entity, and it reads like a bug in the client rather
+   * than a service that has not been upgraded. The `forbidden` translation below got
+   * this treatment and its sibling was missed.
+   *
+   * `fetchCapabilities` is unauthenticated and this function is already past consent —
+   * the caller hands in a preview that was shown — so the call is permitted here for the
+   * same reason `performConnect` makes it. Doing it FIRST means a service that cannot
+   * carry the registry leaves no device row and no credential behind.
+   */
+  const capabilities = await fetchCapabilities(preview.endpoint, args);
+  if (capabilities.protocol.max < REGISTRY_PROTOCOL) {
+    throw cloudError(
+      "protocol_unsupported",
+      `${preview.endpoint.origin} speaks wire protocol ${capabilities.protocol.min}-` +
+        `${capabilities.protocol.max}, and the hub registry needs ${REGISTRY_PROTOCOL}. The ` +
+        "service is running a build from before the registry existed; it has to be redeployed " +
+        "before this machine's hub can publish to it. Nothing was sent and no credential was " +
+        "created. Every workspace connected to that service is unaffected.",
+      {
+        endpoint: preview.endpoint.origin,
+        min: capabilities.protocol.min,
+        max: capabilities.protocol.max,
+        requiredProtocol: REGISTRY_PROTOCOL,
+      },
+    );
+  }
+
   try {
     return await performConnect(preview, args);
   } catch (error) {
@@ -333,7 +410,42 @@ export function setRegistryConsent(
   home: string,
   hubId: string,
   enabled: boolean,
+  acknowledgement?: string,
 ): RegistryConsentOutcome {
+  /**
+   * ENABLING requires the caller to hand back the disclosure it showed.
+   *
+   * Every other invariant in this feature was made structural — *"the field does not
+   * exist to be forgotten"* — and this one was not: a surface could write the flag with
+   * no evidence it had rendered anything. The argument is that evidence. It is not
+   * authentication and does not pretend to be; a caller can always look the constant up.
+   * What it removes is the possibility of granting this consent while never having had
+   * the sentence in hand, which is the way a disclosure actually goes missing — someone
+   * adds a toggle, wires it to the setter, and nobody notices the screen was never built.
+   *
+   * Withdrawing needs no acknowledgement. Making it harder to turn something OFF than to
+   * turn it on would be the wrong asymmetry in a revocation path that must work offline.
+   */
+  if (enabled && acknowledgement !== REGISTRY_DISCLOSURE) {
+    throw new StapleError(
+      "validation",
+      "Enabling this consent requires the caller to pass the disclosure it displayed, " +
+        "verbatim, as evidence that it displayed one. Pass `REGISTRY_DISCLOSURE` from " +
+        "`hub-registry.ts` — and render it, or `registryDisclosure(endpoint)`, to the person " +
+        "being asked. Nothing was changed.",
+    );
+  }
+  /**
+   * Checked HERE rather than left to `setConsent`, for the message.
+   *
+   * `setConsent` is repository-generic and its refusal says *"Run `staple cloud
+   * connect` first"* — which is the wrong command for a hub, sends the reader to a
+   * workspace's connection, and would have them connect the wrong thing to fix the
+   * wrong problem. The refusal a person acts on has to name the command that
+   * actually helps, so the hub-scoped check comes first and `setConsent`'s own
+   * `not_found` becomes unreachable from this path.
+   */
+  requireHubRegistryConnection(home, hubId);
   const connection = setConsent(home, hubId, { registry: enabled });
   return { enabled, connection };
 }
@@ -357,7 +469,15 @@ export function requireRegistryConsent(connection: CloudConnection): void {
   }
 }
 
-function requireHubConnection(home: string, hubId: string): CloudConnection {
+/**
+ * The hub's connection record, or a refusal that names the right command.
+ *
+ * EXPORTED because the CLI needs to establish the connection BEFORE it prints the
+ * publish disclosure. A surface that showed a person a whole consent screen and then
+ * failed on "you are not connected" has wasted the one moment it had their attention
+ * on a decision it could not act on.
+ */
+export function requireHubRegistryConnection(home: string, hubId: string): CloudConnection {
   const connection = readConnection(home, hubId);
   if (!connection) {
     throw new StapleError(
@@ -384,7 +504,7 @@ async function readSnapshotEntities(
   hubId: string,
   options: Options,
 ): Promise<{ entities: SnapshotEntityLike[]; epoch: number; pages: number }> {
-  const connection = requireHubConnection(home, hubId);
+  const connection = requireHubRegistryConnection(home, hubId);
   const { token } = requireSession(home, hubId, options);
   const endpoint = parseEndpoint(connection.endpoint);
   const call = { repositoryId: hubId, token, deviceId: connection.deviceId };
@@ -447,12 +567,28 @@ export interface PublishReport {
   readonly published: number;
   readonly created: number;
   readonly updated: number;
-  /** Cross-link deletes. A registration is never deleted; see `hub-registry-ops.ts`. */
-  readonly removed: number;
+  /** Cross-links retracted — `present: false`. Never a delete; see `hub-registry-ops.ts`. */
+  readonly retracted: number;
   /** How many pushes it took. Reported so chunking is visible rather than assumed. */
   readonly batches: number;
+  /**
+   * Operations the SERVICE said it applied, and ones it deduplicated.
+   *
+   * Read off the push response rather than assumed from what was sent, because
+   * `published` is intent and this is outcome. A `duplicate` is how both of this
+   * module's operation-id bugs manifested: the service answers with the original
+   * operation's `seq` and a status the contract calls a success, and a report built from
+   * the batch length says "1 published" while nothing changed. So the two numbers are
+   * carried separately and a non-zero `deduplicated` is worth surfacing — with the
+   * snapshot diff excluding everything that already landed, it should always be zero,
+   * which is exactly what makes it a useful alarm.
+   */
+  readonly applied: number;
+  readonly deduplicated: number;
   /** Entries with no sync identity. Reported, never invented. */
   readonly unpublishable: readonly UnpublishableEntry[];
+  /** Published edges this machine had no basis to retract, and tombstoned ones. */
+  readonly retained: readonly RetainedEdge[];
   readonly upToDate: boolean;
 }
 
@@ -478,7 +614,7 @@ export async function publishRegistry(
   options: Options = {},
 ): Promise<PublishReport> {
   const hubId = hubRepositoryId(hub);
-  const connection = requireHubConnection(home, hubId);
+  const connection = requireHubRegistryConnection(home, hubId);
   requireRegistryConsent(connection);
   const { token } = requireSession(home, hubId, options);
   const endpoint = parseEndpoint(connection.endpoint);
@@ -495,9 +631,12 @@ export async function publishRegistry(
       published: 0,
       created: 0,
       updated: 0,
-      removed: 0,
+      retracted: 0,
       batches: 0,
+      applied: 0,
+      deduplicated: 0,
       unpublishable: diff.unpublishable,
+      retained: diff.retained,
       upToDate: true,
     };
   }
@@ -511,6 +650,8 @@ export async function publishRegistry(
   const chunks = chunkOperations(diff.operations, capabilities.maxBatchSize);
 
   let clientSeq = 0;
+  let applied = 0;
+  let deduplicated = 0;
   for (const chunk of chunks) {
     const ops = chunk.map((operation) => {
       clientSeq += 1;
@@ -521,7 +662,7 @@ export async function publishRegistry(
         clientSeq,
       });
     });
-    await pushOperations(
+    const response = (await pushOperations(
       endpoint,
       {
         repositoryId: hubId,
@@ -537,7 +678,21 @@ export async function publishRegistry(
         ops,
       },
       { ...options, protocol: REGISTRY_PROTOCOL },
-    );
+    )) as { results?: ReadonlyArray<{ status?: string }> };
+
+    /**
+     * The response is READ, not discarded.
+     *
+     * `published` is what was sent; these are what the service says it did. The
+     * distinction is not pedantic — a `duplicate` is precisely how both operation-id
+     * bugs in this module presented, and a report that counted the batch length
+     * announced success while nothing had changed. Counting the answer means the next
+     * such bug is visible in the report rather than only in the service's state.
+     */
+    for (const result of response.results ?? []) {
+      if (result.status === "duplicate") deduplicated += 1;
+      else applied += 1;
+    }
   }
 
   return {
@@ -547,7 +702,12 @@ export async function publishRegistry(
     published: diff.operations.length,
     created: diff.operations.filter((o) => o.verb === "create").length,
     updated: diff.operations.filter((o) => o.verb === "update").length,
-    removed: diff.operations.filter((o) => o.verb === "delete").length,
+    retracted: diff.operations.filter(
+      (o) => o.entity === CROSS_LINK_ENTITY && (o.payload as { present?: boolean }).present === false,
+    ).length,
+    applied,
+    deduplicated,
+    retained: diff.retained,
     batches: chunks.length,
     unpublishable: diff.unpublishable,
     upToDate: false,
@@ -557,40 +717,43 @@ export async function publishRegistry(
 /**
  * The operation id: `hub:<epoch>:<entity>:<32 hex of what the operation SAYS>`.
  *
- * ## Content-addressed, and the bug that made that necessary
+ * ## Two bugs deep, and the version is what actually fixes it
  *
- * The first version of this was `hub:<epoch>:<entity>:<entityId>` — readable,
- * deterministic, and unique per entity per epoch. Which is not unique per OPERATION,
- * and the difference is silent data loss.
+ * **First version: `hub:<epoch>:<entity>:<entityId>`.** Unique per entity per epoch,
+ * which is not unique per OPERATION. The dedupe index is `(repo_id, epoch, op_id)` and a
+ * duplicate is answered with the ORIGINAL operation's `seq` and a `duplicate` status the
+ * contract defines as success — so a second write to one entity inside an epoch was
+ * accepted, acknowledged and never applied.
  *
- * The dedupe index is `(repo_id, epoch, op_id)` and a duplicate is answered with the
- * ORIGINAL operation's `seq` and a `duplicate` status the contract defines as a
- * success. So the second write to one entity within an epoch — a workspace renamed on
- * a second machine, exactly the case a shared registry exists to carry — was accepted,
- * acknowledged, and never applied. `test/cloud-hub-registry-wire.test.ts` caught it
- * because it asserted the SERVICE's state afterwards rather than the report the publish
- * returned; a test that trusted the report would have passed.
+ * **Second version: hash the content.** That fixed "same entity, different content" and
+ * introduced "same content, different POINT IN TIME", which is the same bug displaced.
+ * A registry value can legitimately return to a value it held before — a workspace
+ * renamed back, an edge retracted and re-added — and the id then repeats, collides with
+ * its own earlier appearance, and is dropped. Reproduced as
+ * `alpha → beta → alpha → beta`: the fourth operation collided with the second, the
+ * service kept `alpha`, and every subsequent publish reported `published: 1` for ever.
  *
- * Hashing what the operation says fixes both halves at once:
+ * **This version adds the base VERSION**, which is monotonic in the number of operations
+ * folded into the entity, so no two operations on one entity can share an id however
+ * often the content cycles. It keeps the retry property intact: a retry re-derives the
+ * same diff from the same snapshot, so the same base version, so a byte-identical id.
  *
- *   - a retry of the identical operation produces the identical id, so an interrupted
- *     publish can be re-run unchanged and the operations that already landed come back
- *     `duplicate`, which is the property that lets this work with no outbox at all;
- *   - a genuinely different statement about the same entity produces a different id, so
- *     it lands.
+ * ## The dedupe role of the id is a backstop, not the mechanism
  *
- * The `epoch` is in the id because a restore moves the epoch and re-mints operation ids;
- * without it, an id reused across a restore would be absorbed as a duplicate of an
- * operation belonging to a timeline that no longer exists.
+ * Worth saying plainly, because the second version was designed as though it were the
+ * mechanism. Idempotency comes from `publishRegistry` re-reading `GET /snapshot` and
+ * re-deriving the diff: an operation that already landed is excluded before an id is
+ * computed at all. The id only has to be UNIQUE; being reproducible is a bonus that
+ * makes a retried batch cheap rather than a correctness requirement.
  *
- * The verb is hashed too. Nothing today emits two different verbs with identical
- * payloads for one entity — a `delete` carries `{}` and nothing else does — but the id
- * has to distinguish what the operation MEANS, not what it happens to carry, or the next
- * verb added here becomes a collision.
+ * The `epoch` is in the id because a restore moves the epoch and re-mints ids; without
+ * it, an id reused across a restore would be absorbed as a duplicate of an operation on
+ * a timeline that no longer exists. The verb is hashed so the id distinguishes what an
+ * operation MEANS rather than what it happens to carry.
  *
- * Fixed length by construction, which also retires a guard the readable version needed:
- * a cross-link entity id is four percent-encoded names and could exceed the Worker's
- * 128-character cap on `opId` all by itself. It cannot now.
+ * Fixed length by construction, which retires a guard the readable version needed: a
+ * cross-link entity id is four percent-encoded names and could exceed the Worker's
+ * 128-character cap on `opId` by itself.
  */
 function operationId(operation: RegistryOperation, epoch: number): string {
   // Keys sorted, so an id cannot change because a payload was built in a different
@@ -598,13 +761,16 @@ function operationId(operation: RegistryOperation, epoch: number): string {
   // be relying on something no test would notice changing.
   const canonical = JSON.stringify(
     Object.fromEntries(
-      Object.entries(operation.payload as Record<string, unknown>).sort(([a], [b]) =>
+      Object.entries(operation.payload as unknown as Record<string, unknown>).sort(([a], [b]) =>
         a < b ? -1 : 1,
       ),
     ),
   );
   const digest = createHash("sha256")
-    .update(`${operation.entityId}\n${operation.verb}\n${canonical}`)
+    .update(
+      // The base VERSION is the term that makes this unique over time. See the comment.
+      `${operation.entityId}\n${operation.verb}\n${operation.baseVersion}\n${canonical}`,
+    )
     .digest("hex")
     .slice(0, 32);
   return `hub:${epoch}:${operation.entity}:${digest}`;
@@ -636,11 +802,16 @@ function toEnvelope(
     entity: operation.entity,
     entityId: operation.entityId,
     verb: operation.verb,
-    // Null for `create`, and 0 otherwise. The hub keeps no per-entity version — that
-    // is `sync_state`'s job and `hub.db` has no `sync_state` — and the server records
-    // `baseVersion` without acting on it: conflict detection is field-scoped against
-    // a LOCAL version, and the hub has no local version to claim.
-    baseVersion: operation.verb === "create" ? null : 0,
+    /**
+     * Null for `create`, and the folded version the operation moves off otherwise.
+     *
+     * This used to be a hardcoded 0, which was a lie the server happens not to read —
+     * it records `baseVersion` without acting on it, because conflict detection is
+     * field-scoped against a LOCAL version and the hub has none. The snapshot reports
+     * the real folded version, so there is no reason to send a placeholder, and the
+     * honest value is worth something to whoever next reads the raw log.
+     */
+    baseVersion: operation.verb === "create" ? null : operation.baseVersion,
     payload: operation.payload,
     deviceId: context.deviceId,
     actor: process.env.STAPLE_AGENT ?? "",
@@ -671,7 +842,7 @@ export async function setHubBackupConsent(
   enabled: boolean,
   options: Options = {},
 ): Promise<{ enabled: boolean; serverAcknowledged: boolean; warning: string | null }> {
-  const connection = requireHubConnection(home, hubId);
+  const connection = requireHubRegistryConnection(home, hubId);
   const { token } = requireSession(home, hubId, options);
   const endpoint = parseEndpoint(connection.endpoint);
   const call = { repositoryId: hubId, token, deviceId: connection.deviceId, enabled };
@@ -717,7 +888,7 @@ export async function createHubBackup(
   label: string | null,
   options: Options = {},
 ): Promise<RemoteBackup> {
-  const connection = requireHubConnection(home, hubId);
+  const connection = requireHubRegistryConnection(home, hubId);
   requireHubBackupConsent(connection);
   const { token } = requireSession(home, hubId, options);
   const result = await createRemoteBackup(
@@ -734,7 +905,7 @@ export async function listHubBackups(
   hubId: string,
   options: Options = {},
 ): Promise<RemoteBackup[]> {
-  const connection = requireHubConnection(home, hubId);
+  const connection = requireHubRegistryConnection(home, hubId);
   requireHubBackupConsent(connection);
   const { token } = requireSession(home, hubId, options);
   const result = await listRemoteBackups(
@@ -752,7 +923,7 @@ export async function deleteHubBackup(
   backupId: string,
   options: Options = {},
 ): Promise<void> {
-  const connection = requireHubConnection(home, hubId);
+  const connection = requireHubRegistryConnection(home, hubId);
   requireHubBackupConsent(connection);
   const { token } = requireSession(home, hubId, options);
   await deleteRemoteBackup(
@@ -809,7 +980,7 @@ export async function restoreRegistry(
   options: Options & { apply?: boolean; actor?: string | null; locate?: AdoptOptions["locate"] } = {},
 ): Promise<HubRestoreReport> {
   const hubId = hubRepositoryId(hub);
-  const connection = requireHubConnection(home, hubId);
+  const connection = requireHubRegistryConnection(home, hubId);
   requireHubBackupConsent(connection);
   const { token } = requireSession(home, hubId, options);
   const endpoint = parseEndpoint(connection.endpoint);
