@@ -199,6 +199,28 @@ export function hubRepositoryId(hub: Hub): string {
  * absence `connection.ts` defines as "never connected", and the only local artifact that
  * implies anything was ever sent. Present, and the refusal stands and names it. Absent,
  * and the old id is discarded without ceremony, because there is nothing to orphan.
+ *
+ * ## The gap in that evidence, and why it is documented rather than closed
+ *
+ * `connect → publish → disconnect → adopt` passes this check, and the old registry is
+ * then orphaned on the service: intact, still there, and no longer reachable from this
+ * machine unless somebody re-adopts the old id. `performDisconnect` deletes the
+ * connection record and clears the auto-sync state — its contract is to *"leave nothing
+ * behind"* — so after it runs there is no local artifact that distinguishes "this id was
+ * never used" from "this id was used and then disconnected", and there deliberately
+ * never will be one.
+ *
+ * Closing it would mean keeping a hub-local list of identities this machine has
+ * published under. That is hub-local sync state, which is the migration this whole leg
+ * was built to avoid, bought to improve the wording of one confirmation dialog. Not
+ * worth it.
+ *
+ * So the honest handling is at the surface, and it is a requirement rather than a
+ * suggestion: **whenever `previousHubId` is non-null, say unconditionally that anything
+ * published under it stays on the service and this machine will stop pointing at it.**
+ * Do not branch on whether it was used — that is the unknowable part. Say also that
+ * re-adopting the old id brings it back, because the operation IS reversible, which is
+ * what keeps this a confirmation rather than a refusal.
  */
 export function adoptRegistryIdentity(
   home: string,
