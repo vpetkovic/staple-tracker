@@ -721,6 +721,20 @@ function runDisconnect(argv: string[]): void {
      * should not have to know which one cares.
      */
     const outcome = performHubDisconnect(home);
+    /**
+     * **A partial failure is a non-zero exit and a complete report**, the same
+     * as `connect --all` above and `sync --all` below.
+     *
+     * Set BEFORE the `--json` branch returns, because a script asking for JSON
+     * is the caller most likely to act on the exit code alone. This was missing
+     * when the fan-out gained its `failed` count, and the gap undid the point of
+     * adding it: a decommissioning script running `disconnect --all` against a
+     * machine with one truncated connection record printed a `failed` row,
+     * exited 0, and moved on believing every credential was gone — while one was
+     * still on disk in a file this build cannot read. The row made the failure
+     * visible to a human and the exit code hid it from everything else.
+     */
+    if (outcome.failed > 0) process.exitCode = 1;
     if (json) {
       console.log(JSON.stringify(outcome, null, 2));
       return;

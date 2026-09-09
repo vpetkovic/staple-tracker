@@ -40,7 +40,7 @@
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { once } from "node:events";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -589,5 +589,58 @@ describe("the list is enumerated on every read", () => {
       expect(typeof row.actionable, row.slug).toBe("boolean");
     }
     expect(typeof answer.counts.actionable).toBe("number");
+  });
+
+  /**
+   * **A STATUS CODE CHANGED ON THIS ROUTE, AND THIS PINS IT.**
+   *
+   * `/api/cloud/workspace/disconnect` has routed through
+   * `performHubDisconnect(home, { workspaces: [workspace] })` since it shipped.
+   * On master an unparseable connection record threw out of the fan-out and out
+   * of the route: HTTP 400 with the parse message.
+   *
+   * S18 gave `performHubDisconnect` the per-row `try`/`catch` its two siblings
+   * already had — necessary, because without it one corrupt file aborted a
+   * hub-wide run after deleting other credentials and reported none of them. The
+   * per-row route inherits that: the same request now answers **200 with
+   * `outcome.status: "failed"`**.
+   *
+   * That is the better answer — `HubWorkspaceOutcome.status` already carried
+   * `"failed"`, the panel already renders "Did not work: " for it, and a 400
+   * told a caller the REQUEST was malformed when the request was fine and a file
+   * on disk was not. But it is a behaviour change on a shipped route, and
+   * nothing tested it: every corrupt-record case drove the hub-wide fan-out. If
+   * somebody later "simplifies" the catch away, the hub-wide tests fail loudly
+   * and this one fails for the single-row case they would not have thought about.
+   */
+  it("answers 200 with a failed row when a connection record will not parse", async () => {
+    await connectRow("bravo");
+    const record = join(home, "cloud", `${bravoId}.json`);
+    writeFileSync(record, "{ this is not json", { mode: 0o600 });
+
+    try {
+      const response = await post("/api/cloud/workspace/disconnect", {
+        slug: "bravo",
+        confirm: true,
+      });
+      expect(response.status, await response.clone().text()).toBe(200);
+
+      const answer = (await response.json()) as {
+        outcome: { slug: string; action: string; status: string; detail: string };
+      };
+      expect(answer.outcome.slug).toBe("bravo");
+      expect(answer.outcome.action).toBe("disconnect");
+      // NOT "skipped": reporting "nothing needed doing" about a credential still
+      // sitting on disk is the one wrong answer available here.
+      expect(answer.outcome.status).toBe("failed");
+      // The row names the file, because deleting it by hand is the remedy.
+      expect(answer.outcome.detail).toContain(record);
+      // And it says the credential's fate could not be established rather than
+      // asserting it survived.
+      expect(answer.outcome.detail).toContain("could not be established");
+    } finally {
+      rmSync(record, { force: true });
+      rmSync(join(home, "cloud", `${bravoId}.token`), { force: true });
+    }
   });
 });

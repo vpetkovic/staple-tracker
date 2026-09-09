@@ -110,6 +110,8 @@ import {
   hubSelfFacts,
   hubSelfSummary,
   hubRowControls,
+  hubRowActed,
+  hubWideActed,
   hubWideFailure,
   hubUnreachableDescription,
   hubWideControls,
@@ -933,10 +935,18 @@ function HubSelfPanel({
             <div className="mt-2">
               <DestructiveConfirm
                 message={hubWideDisconnectWarning(report)}
+                /**
+                 * The control's OWN label, not a sentence rebuilt from its
+                 * `.count`. Rebuilding it produced "Disconnect 1 workspaces" on
+                 * the very common one-connected-workspace hub — in the one
+                 * dialog whose entire job is being read carefully — while every
+                 * other label on this page pluralises properly. `hubWideControls`
+                 * already did the work; this was a second, worse copy of it.
+                 */
                 confirmLabel={
                   wide.busy === "disconnect"
                     ? "Disconnecting…"
-                    : `Disconnect ${hubWideControls(report).find((c) => c.action === "disconnect")!.count} workspaces`
+                    : controls.find((control) => control.action === "disconnect")!.label
                 }
                 disabled={locked}
                 onConfirm={actions.onHubDisconnect}
@@ -1857,23 +1867,8 @@ export function CloudSection({ ws }: { ws?: string }) {
     (answer: { outcome: HubWorkspaceOutcome; report: HubCloudReport }) => {
       if (!alive.current) return;
       setWorkspaces(answer.report);
-      setHub((current) => ({
-        ...current,
-        outcomes: { ...current.outcomes, [answer.outcome.slug]: answer.outcome },
-        /**
-         * THE FAN-OUT TABLE IS DROPPED, for the mirror of the reason
-         * `applyFanOut` drops the per-row outcomes: it is a result, not a log,
-         * and it has just stopped being true of at least one of its rows.
-         * Leaving it up put `bravo — done — Synchronized…` above a `bravo` row
-         * rendering as disconnected.
-         *
-         * Dropped whole rather than patched for the one slug, because a table
-         * headed "3 connected, 1 skipped" whose rows had been individually
-         * edited afterwards would be a summary that no longer matched its own
-         * contents — and the counts are what a reader takes from it.
-         */
-        wide: { ...current.wide, fanOut: null },
-      }));
+      // `hubRowActed` in the pure half; the mirror of `hubWideActed`.
+      setHub((current) => hubRowActed(current, answer.outcome.slug, answer.outcome));
     },
     [],
   );
@@ -1916,6 +1911,30 @@ export function CloudSection({ ws }: { ws?: string }) {
            * refusals land here.
            */
           setHub((current) => ({ ...current, wide: hubWideFailure(current.wide, refusal.message) }));
+          /**
+           * **A REFUSAL REFRESHES THE LIST TOO.**
+           *
+           * Only the success paths carried a report, so after *"Confirming
+           * bravo: This machine's connection state changed…"* the control above
+           * still read "Connect 3 workspaces" — a button contradicting the
+           * message directly beneath it, and stale in exactly the case where the
+           * refusal EXISTS because the counts moved.
+           *
+           * A local re-read rather than a report on the refusal envelope:
+           * `deny` is shared by every route on this server and its shape is
+           * pinned by `test/contract-http.test.ts`, so widening it would put a
+           * registry read behind every 400 the API can produce. This is one
+           * network-free request, the same one `onRefresh` makes.
+           *
+           * Its own failure is swallowed. The refusal already on screen is the
+           * thing the reader needs; replacing it with a complaint about the
+           * refresh would lose the message that explains what just happened.
+           */
+          getCloudWorkspaces()
+            .then((next) => {
+              if (alive.current) setWorkspaces(next);
+            })
+            .catch(() => {});
         }
         return null;
       } finally {
@@ -1940,23 +1959,8 @@ export function CloudSection({ ws }: { ws?: string }) {
   const applyFanOut = useCallback((answer: { fanOut: HubFanOut; report: HubCloudReport }) => {
     if (!alive.current) return;
     setWorkspaces(answer.report);
-    setHub((current) => ({
-      ...current,
-      /**
-       * THE PER-ROW OUTCOMES ARE DROPPED. A hub-wide verb has just acted on
-       * every row, so the table below now describes all of them and any earlier
-       * per-row line is superseded — and possibly contradicted: a row that read
-       * "Synchronized, pushed 3" beside a fan-out that has since disconnected it
-       * is two answers to one question, and S19's rule is that *a row shows the
-       * outcome of the LAST operation on it*.
-       *
-       * The hub's own backup receipt (keyed on the empty slug) goes with them.
-       * That is a small loss and the coherent one: this surface shows the result
-       * of the last thing pressed, not a log of everything ever pressed.
-       */
-      outcomes: {},
-      wide: { ...current.wide, fanOut: answer.fanOut },
-    }));
+    // `hubWideActed` in the pure half, so the rule is tested as a transition.
+    setHub((current) => hubWideActed(current, answer.fanOut));
   }, []);
 
   const hubActions: HubActions = {

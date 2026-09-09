@@ -286,7 +286,20 @@ export interface HubDisconnectWorkspaceOutcome {
   repositoryId: string | null;
   status: "disconnected" | "skipped" | "failed";
   reason: string;
-  credentialRemoved: boolean;
+  /**
+   * Whether this machine's credential for the workspace is gone.
+   *
+   * `null` means NOT ESTABLISHED, and it is the honest answer for a `failed`
+   * row. `performDisconnect` deletes the credential and only THEN writes the
+   * record and clears the auto-sync state, so a throw from either of those
+   * later steps happens with the credential already gone — and reporting
+   * `false` there would be the one direction of this field a human acts on,
+   * sending them to hunt for a secret that is not there. The overwhelmingly
+   * likely thrower is `readConnection`, which fires before anything is touched,
+   * but nothing outside can tell the two apart and guessing is what this null
+   * refuses to do.
+   */
+  credentialRemoved: boolean | null;
   /**
    * The staple error code, when this row failed. Null otherwise.
    *
@@ -390,8 +403,12 @@ export function performHubDisconnect(
         path: workspace.path,
         repositoryId: workspace.repositoryId,
         status: "failed",
-        reason: error instanceof Error ? error.message : String(error),
-        credentialRemoved: false,
+        reason:
+          `${error instanceof Error ? error.message : String(error)} ` +
+          `Whether this machine's credential for "${workspace.slug}" was removed before this ` +
+          `could not be established — revoke this device to be certain it cannot be used.`,
+        // Not established. See the field's own comment for why this is not `false`.
+        credentialRemoved: null,
         code: error instanceof StapleError ? error.code : "unknown",
       });
       continue;
