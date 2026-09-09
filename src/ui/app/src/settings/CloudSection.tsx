@@ -61,12 +61,19 @@ import { Input } from "@/components/ui/input";
 import {
   cloudConnect,
   cloudDisconnect,
+  connectWorkspace,
+  disconnectWorkspace,
   getCloudStatus,
   getCloudWorkspaces,
   listCloudDevices,
   previewCloudConnect,
+  previewUnregisterWorkspace,
+  previewWorkspaceConnect,
   revokeCloudDevice,
   setCloudConsent,
+  setWorkspaceConsent,
+  syncWorkspace,
+  unregisterWorkspace,
 } from "@/lib/api";
 import { describeRefusal } from "@/lib/refusal";
 import type {
@@ -74,6 +81,8 @@ import type {
   ConnectPreview,
   ConsentTicket,
   HubCloudReport,
+  HubWorkspaceOutcome,
+  HubWorkspaceReport,
   RemoteDevice,
 } from "@/lib/types";
 import { LoadingState } from "@/views/ViewChrome";
@@ -87,12 +96,20 @@ import {
   consentControls,
   counterFacts,
   describeDevice,
+  groupDisabledReasons,
+  hubGroups,
   hubListDescription,
-  hubRowView,
+  hubRowControls,
+  hubUnreachableDescription,
+  joinLabels,
   orderDevices,
   previewFacts,
+  removeWarning,
   revokeWarning,
   type CloudFact,
+  type HubRowAction,
+  type HubRowControl,
+  type HubRowView,
 } from "./cloud-settings";
 
 /** Which action is in flight. One at a time: every control disables while any is. */
@@ -133,6 +150,17 @@ export interface CloudPanelProps {
    * one workspace and is perfectly usable without the list.
    */
   workspaces: HubCloudReport | null;
+  /**
+   * Everything the per-row half of the list is doing — S17/S19/S21.
+   *
+   * One object rather than eight props, and keyed by SLUG throughout. That is the
+   * mechanism behind *"an action on one row does not act on another"* at the
+   * rendering layer: a row reads `hub.busy?.slug === row.slug`, so a press on one
+   * row cannot spin another's spinner, and it reads `hub.outcomes[row.slug]`, so
+   * an outcome cannot be drawn against a row it is not about. The outcomes map is
+   * keyed on the slug the SERVER reported, not the one the client sent.
+   */
+  hub: HubPanelState;
   revoking: string | null;
   confirmDisconnect: boolean;
   onPreview: () => void;
@@ -144,6 +172,158 @@ export interface CloudPanelProps {
   onRevoke: (deviceId: string) => void;
   onAskDisconnect: (asking: boolean) => void;
   onDisconnect: () => void;
+  /** The per-row half. Every one takes the slug it acts on; none defaults. */
+  hubActions: HubActions;
+}
+
+/** What one row is in the middle of. Null when nothing on the list is busy. */
+export interface HubBusy {
+  slug: string;
+  action: HubRowAction;
+}
+
+export interface HubPanelState {
+  /** Null when nothing on the list is in flight. */
+  busy: HubBusy | null;
+  /** True while the list is being re-enumerated. Not a row action. */
+  refreshing: boolean;
+  /**
+   * The last outcome for each row, keyed by slug.
+   *
+   * Persisted across other rows' actions on purpose: *"a row shows the outcome
+   * of the last operation on it"*, and a map that cleared on every press would
+   * lose the answer to "what happened when I synced that one" the moment the
+   * next row was touched.
+   */
+  outcomes: Record<string, HubWorkspaceOutcome | undefined>;
+  /** The row whose connect flow is open, with its own draft and its own preview. */
+  connecting: {
+    slug: string;
+    draft: ConnectDraft;
+    /** The preview shown and waiting on a yes, or null before Review is pressed. */
+    pending: { preview: ConnectPreview; consent: ConsentTicket } | null;
+    /** The server's sentence when it would SKIP this row rather than connect it. */
+    skipped: string | null;
+  } | null;
+  /** The row whose removal is being confirmed, with what the server said it would do. */
+  removing: { slug: string; crossLinks: number } | null;
+  /** The row whose disconnect is being confirmed. */
+  disconnecting: string | null;
+  /** The last refusal from a per-row call. Shown on the row it came from. */
+  error: { slug: string; message: string } | null;
+}
+
+export interface HubActions {
+  onOpenConnect: (slug: string | null) => void;
+  onDraft: (patch: Partial<ConnectDraft>) => void;
+  onPreview: () => void;
+  onConnect: () => void;
+  onSync: (slug: string) => void;
+  onConsent: (slug: string, consent: "auto" | "backup", value: boolean) => void;
+  onAskDisconnect: (slug: string | null) => void;
+  onDisconnect: (slug: string) => void;
+  onAskRemove: (slug: string | null) => void;
+  onRemove: (slug: string, removeCrossLinks: boolean) => void;
+  /** Re-enumerates the registry, so a workspace registered since load appears. */
+  onRefresh: () => void;
+}
+
+/**
+ * The four fields a connect needs, wherever it is being offered.
+ *
+ * Factored out when the workspace list grew its own per-row connect — S17
+ * (STA-278). Not for brevity: the fields' DESCRIPTIONS are part of what consent
+ * is given to. "The next screen states which one it will be", said about the
+ * credential store, is a promise, and a second copy of these fields would be a
+ * second place for that promise to be worded slightly differently and to drift
+ * out of step with what the preview actually says.
+ *
+ * `idPrefix` keeps the label/input association unique when two of these are on
+ * the page — the current workspace's form and one row's — which is a real state
+ * and not a hypothetical.
+ */
+function ConnectFields({
+  idPrefix,
+  draft,
+  problem,
+  onDraft,
+}: {
+  idPrefix: string;
+  draft: ConnectDraft;
+  problem: string | null;
+  onDraft: (patch: Partial<ConnectDraft>) => void;
+}) {
+  return (
+    <>
+      <Field
+        id={`${idPrefix}-endpoint`}
+        label="Service endpoint"
+        description="The https origin of the sync service. Shown back to you for confirmation before anything is sent."
+      >
+        {(aria) => (
+          <Input
+            {...aria}
+            value={draft.endpoint}
+            placeholder="https://…"
+            autoComplete="off"
+            spellCheck={false}
+            onChange={(event) => onDraft({ endpoint: event.target.value })}
+          />
+        )}
+      </Field>
+      <Field
+        id={`${idPrefix}-enrollment`}
+        label="Enrollment credential"
+        description="This repository's enrollment secret for the first machine, or an existing device token from a machine that is already connected."
+      >
+        {(aria) => (
+          <Input
+            {...aria}
+            type="password"
+            value={draft.enrollment}
+            autoComplete="off"
+            spellCheck={false}
+            onChange={(event) => onDraft({ enrollment: event.target.value })}
+          />
+        )}
+      </Field>
+      <Field
+        id={`${idPrefix}-label`}
+        label="Device label"
+        description="Sent to the server so you can tell your machines apart. Defaults to this computer's hostname."
+      >
+        {(aria) => (
+          <Input
+            {...aria}
+            value={draft.label}
+            placeholder="this computer's hostname"
+            onChange={(event) => onDraft({ label: event.target.value })}
+          />
+        )}
+      </Field>
+      <Field
+        id={`${idPrefix}-credential-file`}
+        label="Store the credential in a file"
+        description="By default the secret goes into this machine's keychain. Tick this to put it in a 0600 file in your staple home instead — the same choice as `staple cloud connect --credential-file`. The next screen states which one it will be."
+      >
+        {(aria) => (
+          <label className="flex h-7 items-center gap-2 text-[13px]">
+            <input
+              {...aria}
+              type="checkbox"
+              role="switch"
+              aria-checked={draft.credentialFile}
+              checked={draft.credentialFile}
+              onChange={(event) => onDraft({ credentialFile: event.target.checked })}
+              className="accent-primary size-4"
+            />
+            <span>{draft.credentialFile ? "A 0600 file" : "This machine's keychain"}</span>
+          </label>
+        )}
+      </Field>
+      {problem ? <InlineError>{problem}</InlineError> : null}
+    </>
+  );
 }
 
 /** One label/value pair, the shape `connectionFacts` and friends produce. */
@@ -209,73 +389,12 @@ export function CloudPanel(props: CloudPanelProps) {
         >
           {pending === null ? (
             <>
-              <Field
-                id="cloud-endpoint"
-                label="Service endpoint"
-                description="The https origin of the sync service. Shown back to you for confirmation before anything is sent."
-              >
-                {(aria) => (
-                  <Input
-                    {...aria}
-                    value={draft.endpoint}
-                    placeholder="https://…"
-                    autoComplete="off"
-                    spellCheck={false}
-                    onChange={(event) => props.onDraft({ endpoint: event.target.value })}
-                  />
-                )}
-              </Field>
-              <Field
-                id="cloud-enrollment"
-                label="Enrollment credential"
-                description="This repository's enrollment secret for the first machine, or an existing device token from a machine that is already connected."
-              >
-                {(aria) => (
-                  <Input
-                    {...aria}
-                    type="password"
-                    value={draft.enrollment}
-                    autoComplete="off"
-                    spellCheck={false}
-                    onChange={(event) => props.onDraft({ enrollment: event.target.value })}
-                  />
-                )}
-              </Field>
-              <Field
-                id="cloud-label"
-                label="Device label"
-                description="Sent to the server so you can tell your machines apart. Defaults to this computer's hostname."
-              >
-                {(aria) => (
-                  <Input
-                    {...aria}
-                    value={draft.label}
-                    placeholder="this computer's hostname"
-                    onChange={(event) => props.onDraft({ label: event.target.value })}
-                  />
-                )}
-              </Field>
-              <Field
-                id="cloud-credential-file"
-                label="Store the credential in a file"
-                description="By default the secret goes into this machine's keychain. Tick this to put it in a 0600 file in your staple home instead — the same choice as `staple cloud connect --credential-file`. The next screen states which one it will be."
-              >
-                {(aria) => (
-                  <label className="flex h-7 items-center gap-2 text-[13px]">
-                    <input
-                      {...aria}
-                      type="checkbox"
-                      role="switch"
-                      aria-checked={draft.credentialFile}
-                      checked={draft.credentialFile}
-                      onChange={(event) => props.onDraft({ credentialFile: event.target.checked })}
-                      className="accent-primary size-4"
-                    />
-                    <span>{draft.credentialFile ? "A 0600 file" : "This machine's keychain"}</span>
-                  </label>
-                )}
-              </Field>
-              {formProblem ? <InlineError>{formProblem}</InlineError> : null}
+              <ConnectFields
+                idPrefix="cloud"
+                draft={draft}
+                problem={formProblem}
+                onDraft={props.onDraft}
+              />
               <div className="flex items-center gap-2">
                 <Button
                   type="button"
@@ -469,58 +588,456 @@ export function CloudPanel(props: CloudPanelProps) {
         the list until the current workspace happens to be connected would make
         it invisible exactly when it answers the question.
       */}
-      <HubWorkspaceList report={props.workspaces} currentRepositoryId={report.repositoryId} />
+      <HubWorkspaceList
+        report={props.workspaces}
+        currentRepositoryId={report.repositoryId}
+        hub={props.hub}
+        actions={props.hubActions}
+      />
     </div>
   );
 }
 
 /**
- * Every registered workspace, with its own state — S16 (STA-275).
+ * Every registered workspace, with its own state and its own controls —
+ * S17 (STA-278), S19 (STA-280), S21 (STA-282).
  *
- * A LIST AND NOT A CONTROL, and that is a decision rather than an omission.
- * Connecting every workspace spends one enrollment secret against N services and
- * produces a per-workspace outcome — nine connected, two skipped, one refused —
- * which is a table this dialog has nowhere sensible to put and a consent this
- * page would have to re-implement the whole fan-out preview to ask for honestly.
- * So the description names the command instead. A button that showed less than
- * the CLI preview shows would be a worse consent, not a more convenient one.
+ * ## What this replaced, and what survives of the argument
  *
- * Renders nothing at all when there is one workspace or none: a "list" of one is
- * a heading and a row restating what the four sections above already said.
+ * This shipped as a read-only table whose header said *"A LIST AND NOT A
+ * CONTROL"*. The reasoning was that connecting every workspace at once spends one
+ * enrollment secret against N services and produces a per-workspace outcome a
+ * dialog has nowhere to put, so naming `staple cloud connect --all` was more use
+ * than a button asking for less than the CLI preview does.
+ *
+ * That reasoning is intact and there is still no hub-wide button here. What it
+ * did not justify — and was taken to — is the absence of PER-ROW controls. One
+ * row's connect spends one secret against one service and produces one outcome:
+ * the same shape the sections above have offered since S13. `cloud-settings.ts`
+ * states this at length beside the pure half.
+ *
+ * ## Why a row can act at all
+ *
+ * Every control here posts to `/api/cloud/workspace/*` or `/api/hub/unregister`,
+ * which address the machine registry by SLUG. They deliberately do not reuse the
+ * `/api/cloud/*` routes the sections above use: those resolve their workspace
+ * through the server's `handleFor`, which in single-workspace mode — the ordinary
+ * `staple ui` — ignores the slug and answers with the workspace it was started
+ * on. A per-row press through those routes would disconnect the wrong workspace,
+ * silently, on the common configuration.
+ *
+ * ## Renders nothing for one workspace or none
+ *
+ * Unchanged, and still right: a "list" of one is a heading and a row restating
+ * what the four sections above already said about that same workspace.
  */
 function HubWorkspaceList({
   report,
   currentRepositoryId,
+  hub,
+  actions,
 }: {
   report: HubCloudReport | null;
   currentRepositoryId: string | null;
+  hub: HubPanelState;
+  actions: HubActions;
 }) {
   if (report === null || report.workspaces.length < 2) return null;
-  const rows = report.workspaces.map((row) => hubRowView(row, { currentRepositoryId }));
+  const groups = hubGroups(report, { currentRepositoryId });
+  const byslug = new Map(report.workspaces.map((row) => [row.slug, row]));
+
+  const renderRow = (view: HubRowView) => {
+    const row = byslug.get(view.slug);
+    if (!row) return null;
+    return (
+      <HubRow
+        key={view.slug}
+        row={row}
+        view={view}
+        hub={hub}
+        actions={actions}
+      />
+    );
+  };
 
   return (
-    <Section title="Workspaces on this machine" description={hubListDescription(report.counts)}>
-      <ul data-cloud-workspaces className="space-y-1">
-        {rows.map((row) => (
-          <li key={row.slug} data-cloud-workspace={row.slug} className="text-[12px]">
-            <div className="flex flex-wrap items-baseline gap-x-2">
-              <span className={row.current ? "font-semibold" : undefined}>{row.slug}</span>
-              {row.current ? <span className="text-muted-foreground">(this one)</span> : null}
-              <span className="text-muted-foreground">{row.state}</span>
-              <span className="min-w-0 wrap-anywhere text-muted-foreground">{row.endpoint}</span>
-              {row.marks.map((mark) => (
-                <span key={mark} className="rounded border px-1 text-[11px] text-muted-foreground">
-                  {mark}
-                </span>
-              ))}
-            </div>
-            {row.skipDetail ? (
-              <p className="text-[11px] leading-relaxed text-muted-foreground">{row.skipDetail}</p>
-            ) : null}
-          </li>
-        ))}
+    <Section title="Workspaces on this machine" description={hubListDescription(report)}>
+      <div className="flex items-center gap-2">
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          data-cloud-workspaces-refresh
+          disabled={hub.busy !== null || hub.refreshing}
+          onClick={actions.onRefresh}
+        >
+          {hub.refreshing ? "Reading…" : "Refresh list"}
+        </Button>
+        <span className="text-[12px] text-muted-foreground">
+          Reads this machine's registry again, so a workspace registered since you opened this
+          appears. It contacts nobody.
+        </span>
+      </div>
+
+      <ul data-cloud-workspaces className="m-0 list-none space-y-2 p-0">
+        {groups.reachable.map(renderRow)}
       </ul>
+
+      {/*
+        THE SUBORDINATE GROUP — S21. Rendered, not hidden: an unreachable row
+        still carries Disconnect (its credential is on THIS machine) and Remove,
+        and Remove is the point of it being on screen. Subordination is a
+        heading, dimmer text and second place, which is what "must not compete
+        with real workspaces for attention" asks for.
+
+        The group key is `available`. NOT a list of slugs: four of the five rows
+        this ticket names are unreachable because their paths are gone, which is
+        a fact about the world; the fifth is still on disk and stays in the main
+        list, which is what "a reachable workspace is never hidden by this
+        grouping" requires and what a denylist would have broken.
+      */}
+      {groups.unreachable.length > 0 ? (
+        <div data-cloud-workspaces-unreachable className="mt-4 border-t pt-3 opacity-70">
+          <h5 className="text-[12px] font-medium text-muted-foreground">Not on this machine</h5>
+          <p className="mb-2 text-[11px] leading-relaxed text-muted-foreground">
+            {hubUnreachableDescription(groups.unreachable.length)}
+          </p>
+          <ul className="m-0 list-none space-y-2 p-0">{groups.unreachable.map(renderRow)}</ul>
+        </div>
+      ) : null}
     </Section>
+  );
+}
+
+/**
+ * One row: a line, its controls, its outcome, and its rationale behind a
+ * disclosure.
+ *
+ * The order is the whole design of S17. What it IS comes first and takes one
+ * line; what you can DO comes second; what happened last comes third; the
+ * paragraph explaining why an unmounted volume is not a deleted workspace comes
+ * fourth, behind a `<details>` that is closed. Every one of those sentences used
+ * to be in position one.
+ */
+function HubRow({
+  row,
+  view,
+  hub,
+  actions,
+}: {
+  row: HubWorkspaceReport;
+  view: HubRowView;
+  hub: HubPanelState;
+  actions: HubActions;
+}) {
+  const controls = hubRowControls(row, { current: view.current });
+  const disabledReasons = groupDisabledReasons(controls);
+  const outcome = hub.outcomes[row.slug];
+  const busyHere = hub.busy?.slug === row.slug ? hub.busy.action : null;
+  // Any row busy locks every row's controls: these are one-at-a-time operations
+  // against one registry and one staple home, and a second press mid-flight
+  // would race a file write.
+  const locked = hub.busy !== null;
+  const connecting = hub.connecting?.slug === row.slug ? hub.connecting : null;
+  const removing = hub.removing?.slug === row.slug ? hub.removing : null;
+  const error = hub.error?.slug === row.slug ? hub.error.message : null;
+
+  return (
+    <li
+      data-cloud-workspace={row.slug}
+      data-cloud-workspace-reachable={view.reachable ? "true" : "false"}
+      data-cloud-workspace-actionable={view.actionable ? "true" : "false"}
+      className="rounded-md border px-3 py-2"
+    >
+      <div className="flex flex-wrap items-baseline gap-x-2">
+        <span className={`text-[13px] ${view.current ? "font-semibold" : "font-medium"}`}>
+          {row.slug}
+        </span>
+        {view.current ? <span className="text-[11px] text-muted-foreground">(this one)</span> : null}
+        <span className="text-[11px] text-muted-foreground">{view.state}</span>
+        {view.marks.map((mark) => (
+          <span key={mark} className="rounded border px-1 text-[10px] text-muted-foreground">
+            {mark}
+          </span>
+        ))}
+      </div>
+
+      {/* THE ONE LINE. Everything longer is in the disclosure below. */}
+      <p data-cloud-workspace-summary className="text-[12px] text-muted-foreground">
+        {view.summary}
+      </p>
+
+      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1">
+        {controls.map((control) => (
+          <HubControl
+            key={control.action}
+            slug={row.slug}
+            control={control}
+            busy={busyHere === control.action}
+            locked={locked}
+            actions={actions}
+          />
+        ))}
+      </div>
+
+      {/*
+        WHY EACH UNAVAILABLE CONTROL IS UNAVAILABLE — once per distinct reason,
+        naming the controls it covers.
+
+        The criterion is *"actions are disabled with a stated reason rather than
+        hidden"*, and the first build of this put each reason beside its control.
+        On a disconnected row that is the same sentence four times, seven rows
+        deep — repetitive, and worse: it is precisely the noise this ticket
+        exists to remove, arrived at from the other direction. Grouping states
+        every reason and hides none, in one line instead of four.
+      */}
+      {disabledReasons.length > 0 ? (
+        <ul data-cloud-workspace-unavailable className="m-0 mt-1 list-none space-y-0.5 p-0">
+          {disabledReasons.map((group) => (
+            <li key={group.reason} className="text-[11px] leading-relaxed text-muted-foreground">
+              <span className="font-medium">{joinLabels(group.labels)}</span>
+              {group.labels.length > 1 ? " are unavailable: " : " is unavailable: "}
+              {group.reason}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+
+      {/*
+        The per-row connect flow: fields, then the preview, then the confirm.
+        Two steps, exactly as the current workspace's form is, and for the same
+        structural reason — `/api/cloud/workspace/connect` accepts no endpoint,
+        only a ticket the server minted while returning a preview it therefore
+        had to show first.
+      */}
+      {connecting !== null ? (
+        <div data-cloud-workspace-connect={row.slug} className="mt-2 space-y-3 rounded-md border px-3 py-3">
+          {connecting.skipped !== null ? (
+            <>
+              <p className="text-[12px] leading-relaxed">{connecting.skipped}</p>
+              <Button type="button" variant="ghost" size="sm" onClick={() => actions.onOpenConnect(null)}>
+                Close
+              </Button>
+            </>
+          ) : connecting.pending === null ? (
+            <>
+              <p className="text-[12px] text-muted-foreground">
+                Connecting <strong>{row.slug}</strong>. Nothing is sent until you confirm what the
+                next screen shows.
+              </p>
+              <ConnectFields
+                idPrefix={`cloud-ws-${row.slug}`}
+                draft={connecting.draft}
+                problem={connectFormProblem({
+                  endpoint: connecting.draft.endpoint,
+                  token: connecting.draft.enrollment,
+                })}
+                onDraft={actions.onDraft}
+              />
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  data-cloud-workspace-preview={row.slug}
+                  disabled={
+                    locked ||
+                    connectFormProblem({
+                      endpoint: connecting.draft.endpoint,
+                      token: connecting.draft.enrollment,
+                    }) !== null
+                  }
+                  onClick={actions.onPreview}
+                >
+                  {busyHere === "connect" ? "Reading…" : "Review connection"}
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  disabled={locked}
+                  onClick={() => actions.onOpenConnect(null)}
+                >
+                  Cancel
+                </Button>
+              </div>
+            </>
+          ) : (
+            <>
+              <h5 className="text-sm font-semibold">
+                {connecting.pending.preview.alreadyConnected ? "Re-connect" : "Connect"} {row.slug}
+              </h5>
+              <Facts facts={previewFacts(connecting.pending.preview)} />
+              <div>
+                <p className="text-[12px] font-medium">What happens if you say yes:</p>
+                <ul className="mt-1 list-disc space-y-1 pl-5 text-[12px] leading-relaxed text-muted-foreground">
+                  {CONNECT_DISCLOSURE.map((line) => (
+                    <li key={line}>{line}</li>
+                  ))}
+                </ul>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  data-cloud-workspace-confirm={row.slug}
+                  disabled={locked}
+                  onClick={actions.onConnect}
+                >
+                  {busyHere === "connect" ? "Connecting…" : `Connect ${row.slug}`}
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  disabled={locked}
+                  onClick={() => actions.onOpenConnect(null)}
+                >
+                  Cancel
+                </Button>
+              </div>
+            </>
+          )}
+        </div>
+      ) : null}
+
+      {hub.disconnecting === row.slug ? (
+        <div className="mt-2">
+          <DestructiveConfirm
+            message={`${row.slug} stops talking to ${row.endpoint ?? "the service"}. Its data, including queued changes and unsettled conflicts, is untouched, and no other device is affected. Re-connecting later needs an enrollment credential.`}
+            confirmLabel={busyHere === "disconnect" ? "Disconnecting…" : "Disconnect"}
+            disabled={locked}
+            onConfirm={() => actions.onDisconnect(row.slug)}
+            onCancel={() => actions.onAskDisconnect(null)}
+          />
+        </div>
+      ) : null}
+
+      {removing !== null ? (
+        <div className="mt-2">
+          <DestructiveConfirm
+            message={removeWarning(row, removing.crossLinks)}
+            confirmLabel={busyHere === "remove" ? "Removing…" : "Remove from list"}
+            disabled={locked}
+            onConfirm={() => actions.onRemove(row.slug, removing.crossLinks > 0)}
+            onCancel={() => actions.onAskRemove(null)}
+          />
+        </div>
+      ) : null}
+
+      {error !== null ? <InlineError>{error}</InlineError> : null}
+
+      {/*
+        PER-ROW OUTCOME — S19. Keyed on `outcome.slug`, which is the slug the
+        SERVER reported rather than the one this client sent, so a result can
+        never be drawn against a row it is not about.
+      */}
+      {outcome ? (
+        <p
+          data-cloud-workspace-outcome={outcome.slug}
+          data-status={outcome.status}
+          className="mt-1 text-[11px] leading-relaxed text-muted-foreground"
+        >
+          {outcome.status === "failed" ? "Did not work: " : ""}
+          {outcome.detail}
+        </p>
+      ) : null}
+
+      {/*
+        THE DISCLOSURE — S17. `describeSkip`'s paragraphs used to be the row
+        body: four lines about unmounted volumes under every row, including the
+        rows they did not apply to. They are good writing and they answer a real
+        question; they answer it here, for the reader who went looking.
+      */}
+      {view.rationale !== null ? (
+        <details data-cloud-workspace-details className="mt-1">
+          <summary className="cursor-pointer text-[11px] text-muted-foreground">Details</summary>
+          <p className="mt-1 text-[11px] leading-relaxed wrap-anywhere text-muted-foreground">
+            {view.rationale}
+          </p>
+        </details>
+      ) : null}
+    </li>
+  );
+}
+
+/**
+ * One control on one row.
+ *
+ * **A disabled control renders, with its reason.** *"Actions are disabled with a
+ * stated reason rather than hidden"* — the alternative teaches a reader nothing,
+ * and worse, makes an unavailable capability indistinguishable from one the
+ * product does not have. `title` carries the reason for a pointer and the
+ * sentence is also rendered, because a tooltip is not an explanation on a page
+ * somebody is reading to understand the model.
+ *
+ * The two consents are switches and the four verbs are buttons, and that
+ * difference is not cosmetic: `auto` and `backup` have a VALUE that persists, and
+ * a button would make a standing state look like an event.
+ */
+function HubControl({
+  slug,
+  control,
+  busy,
+  locked,
+  actions,
+}: {
+  slug: string;
+  control: HubRowControl;
+  busy: boolean;
+  locked: boolean;
+  actions: HubActions;
+}) {
+  const disabled = control.disabledReason !== null;
+
+  if (control.action === "auto" || control.action === "backup") {
+    return (
+      <label
+        data-cloud-workspace-control={control.action}
+        data-disabled={disabled ? "true" : "false"}
+        className="flex items-center gap-1.5 text-[12px]"
+        title={control.disabledReason ?? control.effect}
+      >
+        <input
+          type="checkbox"
+          role="switch"
+          data-cloud-workspace-toggle={`${slug}:${control.action}`}
+          aria-checked={control.value === true}
+          aria-label={`${control.label} for ${slug}`}
+          checked={control.value === true}
+          disabled={disabled || locked}
+          onChange={(event) => actions.onConsent(slug, control.action as "auto" | "backup", event.target.checked)}
+          className="accent-primary size-3.5"
+        />
+        <span className={disabled ? "text-muted-foreground" : undefined}>{control.label}</span>
+      </label>
+    );
+  }
+
+  const press = () => {
+    if (control.action === "connect") actions.onOpenConnect(slug);
+    else if (control.action === "sync") actions.onSync(slug);
+    else if (control.action === "disconnect") actions.onAskDisconnect(slug);
+    else if (control.action === "remove") actions.onAskRemove(slug);
+  };
+
+  return (
+    <span
+      data-cloud-workspace-control={control.action}
+      data-disabled={disabled ? "true" : "false"}
+      className="flex items-center gap-1.5"
+    >
+      <Button
+        type="button"
+        size="sm"
+        variant={control.destructive === true ? "ghost" : "outline"}
+        data-cloud-workspace-action={`${slug}:${control.action}`}
+        disabled={disabled || locked}
+        title={control.disabledReason ?? control.effect}
+        onClick={press}
+      >
+        {busy ? "Working…" : control.label}
+      </Button>
+    </span>
   );
 }
 
@@ -538,6 +1055,28 @@ export function CloudSection({ ws }: { ws?: string }) {
   const [revoking, setRevoking] = useState<string | null>(null);
   const [confirmDisconnect, setConfirmDisconnect] = useState(false);
   const [workspaces, setWorkspaces] = useState<HubCloudReport | null>(null);
+
+  /**
+   * The per-row half — S17/S19/S21. One state object, all of it keyed by slug.
+   *
+   * `busy` holds the slug AND the verb rather than a bare boolean, because the
+   * two questions a row asks are "am I the one working" and "which control of
+   * mine is". A shared boolean would spin every row's button on one press, which
+   * is the visual form of the very confusion S19 exists to remove.
+   */
+  const [hub, setHub] = useState<HubPanelState>({
+    busy: null,
+    refreshing: false,
+    outcomes: {},
+    connecting: null,
+    removing: null,
+    disconnecting: null,
+    error: null,
+  });
+  const patchHub = useCallback(
+    (patch: Partial<HubPanelState>) => setHub((current) => ({ ...current, ...patch })),
+    [],
+  );
 
   const alive = useRef(true);
   useEffect(() => {
@@ -623,6 +1162,209 @@ export function CloudSection({ ws }: { ws?: string }) {
     [],
   );
 
+  /**
+   * One row's round trip — S19 (STA-280).
+   *
+   * The whole of "an action on one row does not act on another" at this layer,
+   * and it is three properties of these few lines:
+   *
+   *  - `busy` carries the SLUG, so only the pressed row locks and only its
+   *    control spins. A shared boolean would spin all seven, which is the visual
+   *    form of exactly the confusion this ticket removes.
+   *  - a refusal is stored WITH its slug, so an error is drawn on the row that
+   *    produced it rather than at the top of a list of seven.
+   *  - the outcome is keyed on `answer.outcome.slug` — the slug the SERVER
+   *    reported — and not on the one this function sent. If the two ever
+   *    disagreed, the outcome would appear on the row it actually happened to,
+   *    which is the honest failure. Drawing it on the row that was pressed is
+   *    the dishonest one.
+   *
+   * The refreshed list is applied from the same response, so acting and
+   * re-reading are one round trip and a row never renders the state that existed
+   * before the thing it just did.
+   */
+  const runRow = useCallback(
+    async <T,>(slug: string, action: HubRowAction, work: () => Promise<T>): Promise<T | null> => {
+      setHub((current) => ({ ...current, busy: { slug, action }, error: null }));
+      try {
+        return await work();
+      } catch (caught) {
+        if (alive.current) {
+          const refusal = describeRefusal(caught);
+          setHub((current) => ({ ...current, error: { slug, message: refusal.message } }));
+        }
+        return null;
+      } finally {
+        if (alive.current) setHub((current) => ({ ...current, busy: null }));
+      }
+    },
+    [],
+  );
+
+  /** Apply what a per-row route answered: the outcome on its own row, and the fresh list. */
+  const applyRowResult = useCallback(
+    (answer: { outcome: HubWorkspaceOutcome; report: HubCloudReport }) => {
+      if (!alive.current) return;
+      setWorkspaces(answer.report);
+      setHub((current) => ({
+        ...current,
+        outcomes: { ...current.outcomes, [answer.outcome.slug]: answer.outcome },
+      }));
+    },
+    [],
+  );
+
+  const hubActions: HubActions = {
+    /**
+     * Opening one row's form closes any other's, by construction: `connecting`
+     * holds a single slug. Two half-filled connect forms holding two enrollment
+     * secrets is not a state worth supporting, and it is a state in which the
+     * wrong secret gets sent.
+     */
+    onOpenConnect: (slug) =>
+      patchHub({
+        connecting:
+          slug === null ? null : { slug, draft: EMPTY_DRAFT, pending: null, skipped: null },
+        removing: null,
+        disconnecting: null,
+        error: null,
+      }),
+    onDraft: (patch) =>
+      setHub((current) =>
+        current.connecting === null
+          ? current
+          : {
+              ...current,
+              connecting: {
+                ...current.connecting,
+                draft: { ...current.connecting.draft, ...patch },
+              },
+            },
+      ),
+    onPreview: () => {
+      const open = hub.connecting;
+      if (open === null) return;
+      void runRow(open.slug, "connect", async () => {
+        const answer = await previewWorkspaceConnect({
+          slug: open.slug,
+          endpoint: open.draft.endpoint.trim(),
+          label: open.draft.label.trim() || undefined,
+          credentialFile: open.draft.credentialFile,
+        });
+        if (!alive.current) return;
+        setWorkspaces(answer.report);
+        setHub((current) =>
+          current.connecting === null || current.connecting.slug !== open.slug
+            ? current
+            : {
+                ...current,
+                connecting: {
+                  ...current.connecting,
+                  /**
+                   * A skipped row gets the fan-out's own sentence and NO ticket.
+                   * The server minted none, because a consent for something that
+                   * will not happen is a consent with no subject.
+                   */
+                  skipped:
+                    answer.preview === null || answer.consent === null ? answer.reason : null,
+                  pending:
+                    answer.preview === null || answer.consent === null
+                      ? null
+                      : { preview: answer.preview, consent: answer.consent },
+                },
+              },
+        );
+      });
+    },
+    onConnect: () => {
+      const open = hub.connecting;
+      if (open === null || open.pending === null) return;
+      const consent = open.pending.consent;
+      const token = open.draft.enrollment;
+      void runRow(open.slug, "connect", async () => {
+        applyRowResult(await connectWorkspace({ slug: open.slug, consent, token }));
+        // The secret has been spent. Holding it in React state after the server
+        // has stored it is a copy of a credential nobody needs.
+        if (alive.current) patchHub({ connecting: null });
+      });
+    },
+    onSync: (slug) =>
+      void runRow(slug, "sync", async () => {
+        /**
+         * EGRESSES, and a failed row comes back 200 with `status: "failed"`.
+         * `applyRowResult` renders it either way — the fan-out reports a failure
+         * as a row carrying the service's own message, and turning that back
+         * into a thrown error here would discard exactly the `offline` /
+         * `revoked` / `rate_limited` distinction it exists to keep.
+         */
+        applyRowResult(await syncWorkspace({ slug }));
+      }),
+    onConsent: (slug, consent, value) =>
+      void runRow(slug, consent, async () => {
+        applyRowResult(await setWorkspaceConsent({ slug, consent, value }));
+      }),
+    onAskDisconnect: (slug) =>
+      patchHub({ disconnecting: slug, connecting: null, removing: null, error: null }),
+    onDisconnect: (slug) =>
+      void runRow(slug, "disconnect", async () => {
+        applyRowResult(await disconnectWorkspace({ slug }));
+        if (alive.current) patchHub({ disconnecting: null });
+      }),
+    /**
+     * Asking to remove PREVIEWS first, on the server, and writes nothing.
+     *
+     * The confirmation then states a fact rather than a hope: how many
+     * cross-workspace links name this row, and therefore whether saying yes also
+     * changes another workspace's blockers. Guessing at that in the browser
+     * would mean either a warning that is usually wrong or no warning at all.
+     */
+    onAskRemove: (slug) => {
+      if (slug === null) {
+        patchHub({ removing: null });
+        return;
+      }
+      void runRow(slug, "remove", async () => {
+        const answer = await previewUnregisterWorkspace({ slug });
+        if (!alive.current) return;
+        setWorkspaces(answer.report);
+        patchHub({
+          removing: { slug, crossLinks: answer.preview.crossLinks.length },
+          connecting: null,
+          disconnecting: null,
+        });
+      });
+    },
+    onRemove: (slug, removeCrossLinks) =>
+      void runRow(slug, "remove", async () => {
+        applyRowResult(await unregisterWorkspace({ slug, removeCrossLinks }));
+        if (alive.current) patchHub({ removing: null });
+      }),
+    /**
+     * *"A workspace registered after page load appears on refresh."* One local
+     * read of the registry; `GET /api/cloud/workspaces` opens no workspace
+     * database and nothing in its import graph can reach the transport, so this
+     * contacts nobody.
+     */
+    onRefresh: () => {
+      patchHub({ refreshing: true, error: null });
+      getCloudWorkspaces()
+        .then((next) => {
+          if (alive.current) setWorkspaces(next);
+        })
+        .catch((caught: unknown) => {
+          if (alive.current) {
+            setHub((current) => ({
+              ...current,
+              error: { slug: "", message: describeRefusal(caught).message },
+            }));
+          }
+        })
+        .finally(() => {
+          if (alive.current) patchHub({ refreshing: false });
+        });
+    },
+  };
+
   if (loadError !== null) {
     return (
       <Section title="Cloud">
@@ -642,6 +1384,8 @@ export function CloudSection({ ws }: { ws?: string }) {
       pending={pending}
       devices={devices}
       workspaces={workspaces}
+      hub={hub}
+      hubActions={hubActions}
       revoking={revoking}
       confirmDisconnect={confirmDisconnect}
       onPreview={() =>

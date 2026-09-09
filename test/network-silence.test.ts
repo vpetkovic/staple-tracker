@@ -1117,6 +1117,44 @@ describe("the UI server serves the whole page, connected or not, and calls nobod
         ["/api/cloud/disconnect", { confirm: true }],
         ["/api/cloud/devices", {}],
         ["/api/cloud/devices/revoke", { deviceId: "someone-else", confirm: true }],
+        /**
+         * S17/S19/S21 (STA-278, STA-280, STA-282): the PER-ROW routes, on the
+         * same disconnected workspace, addressed by slug.
+         *
+         * Four of the six belong here. `preview` is silent by construction —
+         * `hub-preview.ts` imports nothing that reaches `client.ts`, and
+         * `test/cloud-hub-connect.test.ts` walks the graph to prove it — and
+         * `consent`, `disconnect` and `unregister` read and write local files
+         * and a local registry.
+         *
+         * `connect` is here in its REFUSED form only: a made-up ticket must be
+         * rejected from local state alone, before a socket is opened, which is
+         * the same property its single-workspace twin above is on this list for.
+         *
+         * `/api/cloud/workspace/sync` is DELIBERATELY ABSENT. It is one of the
+         * two routes on this server that are supposed to egress, and putting it
+         * here would either fail honestly or force an exemption that would then
+         * quietly cover something else — the same reasoning that keeps
+         * `/api/cloud/devices` off the connected list below.
+         *
+         * `unregister` is sent in both of its forms: without `confirm` it
+         * previews and writes nothing, and with `confirm` against a slug that
+         * does not exist it refuses. Neither touches the registry this
+         * workspace is registered in, so the anchors below still hold.
+         */
+        [
+          "/api/cloud/workspace/connect/preview",
+          { slug: "netsilenceui", endpoint: "https://sync.example.com", credentialFile: true },
+        ],
+        [
+          "/api/cloud/workspace/connect",
+          { slug: "netsilenceui", consent: "made-up", digest: "made-up", token: "enrollment-secret" },
+        ],
+        ["/api/cloud/workspace/consent", { slug: "netsilenceui", auto: true }],
+        ["/api/cloud/workspace/consent", { slug: "netsilenceui", backup: true }],
+        ["/api/cloud/workspace/disconnect", { slug: "netsilenceui", confirm: true }],
+        ["/api/hub/unregister", { slug: "netsilenceui" }],
+        ["/api/hub/unregister", { slug: "no-such-workspace", confirm: true }],
       ];
       for (let round = 0; round < 3; round += 1) {
         for (const [route, body] of CLOUD_WRITES) {
@@ -1247,6 +1285,28 @@ describe("the UI server serves the whole page, connected or not, and calls nobod
           ["/api/cloud/consent", { backup: true }],
           ["/api/cloud/consent", { backup: false }],
           ["/api/cloud/connect/preview", { endpoint: "https://elsewhere.example", credentialFile: true }],
+          /**
+           * S17/S19/S21: the same two per-row writes on a CONNECTED workspace,
+           * which is the harder half. A per-row consent toggle is the control
+           * most likely to be "improved" into something that tells the service
+           * what this device decided, and a per-row re-connect preview is the
+           * one most likely to acquire a reachability check so the row could be
+           * shown in colour. Both are one authenticated round trip per row on a
+           * page that lists every workspace on the machine — *"one human's
+           * page-open into a heartbeat"* with a multiplier on it.
+           *
+           * `/api/cloud/workspace/disconnect` is the last thing sent below, for
+           * the same reason its single-workspace twin is: it is the write whose
+           * whole contract is that it does not ask permission to stop.
+           */
+          ["/api/cloud/workspace/consent", { slug: "netsilenceuic", auto: true }],
+          ["/api/cloud/workspace/consent", { slug: "netsilenceuic", auto: false }],
+          ["/api/cloud/workspace/consent", { slug: "netsilenceuic", backup: true }],
+          ["/api/cloud/workspace/consent", { slug: "netsilenceuic", backup: false }],
+          [
+            "/api/cloud/workspace/connect/preview",
+            { slug: "netsilenceuic", endpoint: "https://elsewhere.example", credentialFile: true },
+          ],
         ] as Array<[string, Record<string, unknown>]>) {
           const res = await fetch(`${origin}${route}`, {
             method: "POST",
@@ -1272,6 +1332,22 @@ describe("the UI server serves the whole page, connected or not, and calls nobod
        * *"a person who has decided to stop talking to a service must not need
        * that service's permission to stop."*
        */
+      /**
+       * The per-row disconnect goes FIRST, so that when it runs the workspace is
+       * still connected — a disconnect of an already-disconnected row is a
+       * skipped no-op and would prove nothing about silence on the path that
+       * actually removes a credential.
+       */
+      const rowOff = (await (
+        await fetch(`${origin}/api/cloud/workspace/disconnect`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ slug: "netsilenceuic", confirm: true }),
+        })
+      ).json()) as { outcome: { slug: string; status: string } };
+      expect(rowOff.outcome.slug).toBe("netsilenceuic");
+      expect(rowOff.outcome.status).toBe("ok");
+
       const off = (await (
         await fetch(`${origin}/api/cloud/disconnect`, {
           method: "POST",
@@ -1279,7 +1355,10 @@ describe("the UI server serves the whole page, connected or not, and calls nobod
           body: JSON.stringify({ confirm: true }),
         })
       ).json()) as { wasConnected: boolean; report: { state: string } };
-      expect(off.wasConnected).toBe(true);
+      // Already off, because the per-row route above removed the same credential
+      // — the two routes act on one connection record, which is itself worth
+      // pinning: they are different addressing schemes, not different stores.
+      expect(off.wasConnected).toBe(false);
       expect(off.report.state).toBe("disconnected");
 
       expect(spy.violations, describeViolations(spy.violations)).toHaveLength(0);

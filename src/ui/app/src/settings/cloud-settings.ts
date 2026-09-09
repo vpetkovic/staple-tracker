@@ -37,6 +37,7 @@ import type { SettingCategoryView } from "@/lib/settings";
 import type {
   CloudSurfaceReport,
   ConnectPreview,
+  HubCloudReport,
   HubWorkspaceReport,
   RemoteDevice,
 } from "@/lib/types";
@@ -378,9 +379,53 @@ export function revokeWarning(device: RemoteDevice): string {
         "untouched, and every other device is unaffected.";
 }
 
-// ------------------------------------------- the hub-wide list (S16, STA-275)
+// ------------------- the per-workspace list, as a CONTROL (S17/S19/S21)
 
-/** One workspace row, reduced to what the table draws. */
+/**
+ * ## What changed here, and why the previous shape was wrong
+ *
+ * This section shipped as a table with a sentence under each row and no controls
+ * at all. Its own header said so — *"A LIST AND NOT A CONTROL, and that is a
+ * decision rather than an omission"* — and the argument was that connecting
+ * every workspace at once spends one enrollment secret against N services and
+ * produces a per-workspace outcome a settings dialog has nowhere to put, so
+ * naming `staple cloud connect --all` was more use than a button that would ask
+ * for less than the CLI preview does.
+ *
+ * **That argument was sound and it was about the wrong thing.** It is an argument
+ * against a HUB-WIDE button, and it is still correct: there is no "connect
+ * everything" control here and there should not be. What it was taken to justify
+ * was the absence of PER-ROW controls, which it does not touch. A single row's
+ * connect spends one secret against one service and produces one outcome, which
+ * is exactly the shape the single-workspace sections above have offered from the
+ * start. Nine tenths of the reasoning survives; the conclusion does not.
+ *
+ * The visible consequence was a page that explained at length and did nothing:
+ * seven rows, four of them pointing at paths that no longer exist, each with a
+ * four-line paragraph about unmounted volumes, and every action it described
+ * reachable only from a terminal. STA-278, STA-280 and STA-282 are three
+ * statements of that one fact.
+ *
+ * ## The three rules this half now follows
+ *
+ * 1. **A row states what it is in ONE line.** {@link hubRowSummary}. The
+ *    paragraph — `describeSkip`'s prose about unmounted volumes and committed
+ *    manifests — moves to {@link hubRowRationale}, behind a disclosure. It is
+ *    good writing; it was in the wrong place.
+ *
+ * 2. **Every control is present, and a control that will not work says why.**
+ *    {@link hubRowControls} returns all six for every row, always, with
+ *    `disabledReason` set instead of being dropped from the list. A control that
+ *    vanishes teaches a reader nothing; one that is greyed out with a sentence
+ *    teaches them the model.
+ *
+ * 3. **Nothing here parses prose.** Every decision below reads `state`, `auto`,
+ *    `backup`, `available`, `actionable` or `recordsIdentityOnOpen` — values.
+ *    `skipDetail` is rendered and never inspected, the rule the rest of this file
+ *    already followed.
+ */
+
+/** One workspace row, reduced to what the list draws. */
 export interface HubRowView {
   slug: string;
   /** `state`, in the words a person uses. Never parsed back. */
@@ -389,22 +434,127 @@ export interface HubRowView {
   endpoint: string;
   /** Short badges: auto, backup, MISSING. */
   marks: string[];
-  /** Why a hub-wide operation would skip it, or null. */
-  skipDetail: string | null;
+  /**
+   * ONE line saying what this row is and what its state means for it.
+   *
+   * The row body. Everything longer is behind {@link rationale}.
+   */
+  summary: string;
+  /**
+   * The long explanation, or null when the row needs none.
+   *
+   * This is where `describeSkip`'s paragraphs live now. They answer real
+   * questions — why an unmounted volume is not a deleted workspace, why a
+   * checkout's manifest is different — and they answer them for the reader who
+   * went looking, rather than for the six who did not.
+   */
+  rationale: string | null;
   /** True for the workspace this settings dialog is currently open on. */
   current: boolean;
+  /** `available`. Drives GROUPING — is this thing on the machine at all. */
+  reachable: boolean;
+  /** Drives the COUNT. See `HubWorkspaceReport.actionable`; it is not `!skip`. */
+  actionable: boolean;
+}
+
+/** One verb a row offers. Six of them, on every row, always. */
+export type HubRowAction = "connect" | "sync" | "auto" | "backup" | "disconnect" | "remove";
+
+export interface HubRowControl {
+  action: HubRowAction;
+  label: string;
+  /**
+   * One line: what pressing this does. Rendered whether the control is enabled
+   * or not, because "what would this have done" is the question a disabled
+   * control most needs to answer.
+   */
+  effect: string;
+  /**
+   * Null when the control works. A sentence when it does not.
+   *
+   * **Never used to filter.** *"Actions are disabled with a stated reason rather
+   * than hidden"* — a control that disappears leaves a reader unable to tell an
+   * unavailable capability from one that does not exist.
+   */
+  disabledReason: string | null;
+  /** The current value, for the two consents. Undefined for the four buttons. */
+  value?: boolean;
+  /** Renders as a destructive confirmation rather than as a plain press. */
+  destructive?: boolean;
+}
+
+const HUB_STATE_WORDS: Record<HubWorkspaceReport["state"], string> = {
+  disconnected: "Not connected",
+  manual: "Connected, manual",
+  automatic: "Connected, automatic",
+  auth_failed: "Credential missing",
+};
+
+/**
+ * The row's one line.
+ *
+ * Written as a switch over the facts rather than as a template with holes,
+ * because the six cases say genuinely different things and a template would have
+ * produced one sentence with three clauses that never all applied at once.
+ *
+ * Note what is NOT here: no path, no repository id, no device id, no timestamp.
+ * They are all true and none of them is what somebody scanning a list of
+ * workspaces is looking for. They are in the disclosure.
+ */
+export function hubRowSummary(row: HubWorkspaceReport): string {
+  if (!row.available) {
+    return "Not on this machine right now. Still registered, and nothing has been deleted.";
+  }
+  if (row.skip === "problem") {
+    return "Its sync identity could not be read, so nothing here can act on it.";
+  }
+  if (row.state === "auth_failed") {
+    return `Connected to ${row.endpoint ?? "a service"}, but this machine's credential is gone. Connecting again mints a new one.`;
+  }
+  if (row.state === "automatic") {
+    return `Syncing automatically with ${row.endpoint}, in the background, on this machine.`;
+  }
+  if (row.state === "manual") {
+    return `Connected to ${row.endpoint}. Nothing moves until you sync it.`;
+  }
+  if (row.skip === "no_identity") {
+    return row.recordsIdentityOnOpen
+      ? "Not connected. Connecting it records its sync identity — there is nothing to set up first."
+      : "Not connected, and its sync identity is a committed file that is not there yet.";
+  }
+  return "Not connected. Nothing about this workspace leaves the machine.";
 }
 
 /**
- * Describe one row of the hub-wide list.
+ * The paragraph, for the disclosure — or null when the row has nothing to
+ * explain.
+ *
+ * `skipDetail` is the server's own sentence and is passed through UNCHANGED, the
+ * same discipline `describeRefusal` follows: a surface that paraphrases a core
+ * explanation is a surface that will be paraphrasing a stale one within a
+ * release. The path is appended because a person who opened this disclosure is
+ * asking "which one IS this", and that is the answer.
+ */
+export function hubRowRationale(row: HubWorkspaceReport): string | null {
+  const parts: string[] = [];
+  if (row.skipDetail !== null) parts.push(row.skipDetail);
+  parts.push(`Database: ${row.path}`);
+  if (row.repositoryId !== null) parts.push(`Sync identity: ${row.repositoryId}`);
+  if (row.deviceId !== null) {
+    parts.push(`This machine is device ${row.deviceId}${row.label ? ` (${row.label})` : ""}.`);
+  }
+  if (row.connectedAt !== null) parts.push(`Connected ${row.connectedAt}.`);
+  return parts.length === 0 ? null : parts.join(" ");
+}
+
+/**
+ * Describe one row of the list.
  *
  * `state` and `marks` are derived from VALUES — `state`, `auto`, `backup`,
  * `available` — and never from `skipDetail`, which is a sentence for a human.
- * The rule the rest of this file follows: a control that has to reverse-engineer
- * prose is a control that will get it wrong the first time the prose improves.
  *
  * `credentialPresent` is deliberately NOT rendered. The route that feeds this
- * table does not probe it, so it is always `null` here, and a column that read
+ * list does not probe it, so it is always `null` here, and a column that read
  * `null` as "missing" would tell somebody their credential had gone when nothing
  * had looked for it. `state` already carries `auth_failed` on the one surface
  * that does probe.
@@ -422,41 +572,297 @@ export function hubRowView(
     state: HUB_STATE_WORDS[row.state],
     endpoint: row.endpoint ?? "—",
     marks,
-    skipDetail: row.skipDetail,
+    summary: hubRowSummary(row),
+    rationale: hubRowRationale(row),
     current:
       options.currentRepositoryId != null &&
       row.repositoryId != null &&
       row.repositoryId === options.currentRepositoryId,
+    reachable: row.available,
+    actionable: row.actionable,
   };
 }
 
-const HUB_STATE_WORDS: Record<HubWorkspaceReport["state"], string> = {
-  disconnected: "Not connected",
-  manual: "Connected, manual",
-  automatic: "Connected, automatic",
-  auth_failed: "Credential missing",
-};
-
 /**
- * The one sentence under the hub-wide table.
+ * Why nothing on this row will work, or null.
  *
- * Says what the list IS and, just as importantly, what it is not: it is not a
- * control. Connecting every workspace is a CLI gesture, because it spends one
- * enrollment secret against N services and prints a per-workspace outcome that a
- * settings dialog has nowhere sensible to put. Naming the command is more use
- * than a button that would have to re-invent the preview.
+ * Computed ONCE and shared by the controls that need it, so six disabled
+ * messages cannot become six paraphrases of one fact. Reads `actionable`, which
+ * `hub-surface.ts` decided — the browser does not re-derive the
+ * `recordsIdentityOnOpen` rule, which is a statement about `repo-identity.ts`
+ * and has no business in a settings component.
  */
-export function hubListDescription(counts: HubWorkspaceCounts): string {
-  const parts = [`${counts.connected} of ${counts.total} connected`];
-  if (counts.automatic > 0) parts.push(`${counts.automatic} on automatic sync`);
-  if (counts.skipped > 0) parts.push(`${counts.skipped} a hub-wide operation would skip`);
-  return `${parts.join(", ")}. Connect all of them at once with \`staple cloud connect --all\`; this list is enumerated when the page loads, so a workspace registered since then appears on the next open.`;
+function rowBlocked(row: HubWorkspaceReport): string | null {
+  if (row.actionable) return null;
+  if (!row.available) return "Its database is not on this machine right now.";
+  if (row.skip === "problem") return "Its sync identity could not be read. The details are below.";
+  return (
+    "It is inside a version control checkout, where the sync identity is committed alongside " +
+    "the code rather than minted behind you. `staple init` in that directory records one; it " +
+    "adopts this workspace and its data and creates nothing new."
+  );
 }
 
-export interface HubWorkspaceCounts {
-  total: number;
-  connected: number;
-  disconnected: number;
-  skipped: number;
-  automatic: number;
+/**
+ * The six controls a row offers, in the order they are drawn.
+ *
+ * **All six, on every row, always.** Enablement is expressed by
+ * `disabledReason` and never by omission, which is the acceptance criterion and
+ * also the thing that makes this list teachable: a reader who presses nothing
+ * still learns that connecting, syncing and backing up are three separate
+ * decisions, because they can see all three and read why two of them are not
+ * available yet.
+ *
+ * ## The three asymmetries worth reading before changing this
+ *
+ * **Sync needs the disk; disconnect does not.** Synchronizing opens the
+ * workspace database, so an unmounted volume makes it impossible. Disconnecting
+ * deletes a file in the staple home, so an unmounted volume makes it *more*
+ * important — `performHubDisconnect` is deliberately not gated on `available`,
+ * because refusing would leave a live credential behind for exactly the
+ * workspace somebody is most likely to be disconnecting. So on a MISSING row,
+ * five controls are disabled and Disconnect is not.
+ *
+ * **The two consents need a connection and nothing else.** They write one file
+ * in the staple home, so they are offered on a connected row whose disk is
+ * absent. That reads oddly beside "not on this machine" and is right: the
+ * consent is this device's, it persists, and it applies the moment the volume
+ * returns.
+ *
+ * **Remove is refused while connected.** The connection record and credential
+ * are keyed by repository id in the staple home, and the registry row is the
+ * only thing on this machine that points a human at them. Removing it leaves a
+ * live credential nothing names. The server refuses this too; it is stated here
+ * so the reason is visible before the press rather than after it.
+ */
+export function hubRowControls(
+  row: HubWorkspaceReport,
+  options: { current?: boolean } = {},
+): HubRowControl[] {
+  const connected = row.state !== "disconnected";
+  const blocked = rowBlocked(row);
+  const notConnected = "It is not connected on this machine, so there is nothing to act on.";
+  const noDisk = "Its database is not on this machine right now.";
+
+  return [
+    {
+      action: "connect",
+      label: "Connect",
+      effect:
+        "Shows what would be sent and asks, then stores a credential for this machine only. " +
+        "Sync stays off — that is a separate decision.",
+      disabledReason: connected
+        ? `Already connected to ${row.endpoint ?? "a service"}. Disconnect it first to point it somewhere else.`
+        : blocked,
+    },
+    {
+      action: "sync",
+      label: "Sync now",
+      effect: "Sends this workspace's queued changes and applies what other devices have sent.",
+      disabledReason: !connected ? notConnected : !row.available ? noDisk : blocked,
+    },
+    {
+      action: "auto",
+      label: "Automatic sync",
+      effect:
+        "On: this machine syncs this workspace in the background. Off: nothing moves until you " +
+        "press Sync now. This device only — it does not decide for your other machines.",
+      value: row.auto,
+      disabledReason: connected ? null : notConnected,
+    },
+    {
+      action: "backup",
+      label: "Backup",
+      effect:
+        "On: this machine may take and list remote snapshots of this workspace. A separate " +
+        "opt-in from sync, and turning it on does not turn sync on.",
+      value: row.backup,
+      disabledReason: connected ? null : notConnected,
+    },
+    {
+      action: "disconnect",
+      label: "Disconnect",
+      effect:
+        "Removes this machine's credential for it and stops all later traffic. Its data, " +
+        "including queued changes, is untouched, and other devices are unaffected.",
+      destructive: true,
+      // Deliberately NOT gated on `available`. See the header.
+      disabledReason: connected ? null : notConnected,
+    },
+    {
+      action: "remove",
+      label: "Remove from list",
+      effect:
+        "Takes it off this machine's list of workspaces. It unregisters; it does not delete — " +
+        "the database and every file beside it stay exactly where they are.",
+      destructive: true,
+      disabledReason: connected
+        ? "Disconnect it first. Removing it now would leave this machine's credential for it " +
+          "with nothing pointing at it."
+        : options.current === true
+          ? "This is the workspace this window is serving. It would register itself again immediately."
+          : null,
+    },
+  ];
+}
+
+/**
+ * The row's disabled controls, grouped by the reason they share.
+ *
+ * ## Why this exists, and why it is not a softening of the criterion
+ *
+ * *"Actions are disabled with a stated reason rather than hidden"* is the
+ * criterion, and the first thing built to satisfy it rendered each control's
+ * reason beside that control. On a disconnected row that produces the SAME
+ * sentence four times — beside Sync now, Automatic sync, Backup and Disconnect —
+ * seven rows deep. Which is repetitive, and worse than repetitive: it is the
+ * exact failure this ticket exists to fix, arrived at from the opposite
+ * direction. *"We don't need settings page to be noise gibberish."*
+ *
+ * So the reason is still STATED, once per distinct reason, naming every control
+ * it applies to. Nothing is hidden — a reader can see which controls are
+ * unavailable and why — and the row goes from four identical lines to one.
+ *
+ * Deliberately NOT done by making `hubRowControls` return one reason for the row:
+ * the reasons are genuinely per-control (on a MISSING row, Disconnect is live
+ * while Sync is not, and the two carry different sentences), and collapsing them
+ * at the source would lose that. This groups for RENDERING and leaves the
+ * decision per control, where it belongs.
+ *
+ * Insertion-ordered, so the sentences appear in the order their first control
+ * does — a `Map` rather than an object, because the reasons are sentences and
+ * object keys would be both enormous and reordered by the runtime for integer
+ * lookalikes.
+ */
+export function groupDisabledReasons(
+  controls: readonly HubRowControl[],
+): Array<{ reason: string; labels: string[] }> {
+  const grouped = new Map<string, string[]>();
+  for (const control of controls) {
+    if (control.disabledReason === null) continue;
+    const labels = grouped.get(control.disabledReason);
+    if (labels) labels.push(control.label);
+    else grouped.set(control.disabledReason, [control.label]);
+  }
+  return [...grouped].map(([reason, labels]) => ({ reason, labels }));
+}
+
+/** "Sync now, Automatic sync, Backup and Disconnect" — an Oxford-free list. */
+export function joinLabels(labels: readonly string[]): string {
+  if (labels.length <= 1) return labels[0] ?? "";
+  return `${labels.slice(0, -1).join(", ")} and ${labels[labels.length - 1]}`;
+}
+
+/**
+ * The list split into what is here and what is not — S21 (STA-282).
+ *
+ * The grouping key is `reachable`, and it is `available` and nothing else.
+ * **Not a list of slugs.** The rows this ticket is about are named in it —
+ * `autotrigger`, `legacyrepo`, `qdemo`, `r6b`, `s1-schema-probe` — and a
+ * denylist of those five would be the same class of mistake as the debris
+ * itself: a fact about one afternoon's testing, compiled into the product, wrong
+ * on the next machine and invisible when it is.
+ *
+ * `existsSync(path)` is a property of the world, and it happens to be false for
+ * four of the five. The fifth is still on disk, so it stays in the main list and
+ * is removable from there — which is exactly what *"a reachable workspace is
+ * never hidden by this grouping"* requires, and what a denylist would have
+ * broken.
+ *
+ * Both groups are rendered. Subordinate is not the same as hidden: an unreachable
+ * row keeps every control it can honestly offer, and Remove is the point of it
+ * being on screen at all.
+ */
+export function hubGroups(
+  report: HubCloudReport,
+  options: { currentRepositoryId?: string | null } = {},
+): { reachable: HubRowView[]; unreachable: HubRowView[] } {
+  const views = report.workspaces.map((row) => hubRowView(row, options));
+  return {
+    reachable: views.filter((view) => view.reachable),
+    unreachable: views.filter((view) => !view.reachable),
+  };
+}
+
+/**
+ * The one sentence under the list's heading.
+ *
+ * ## What it no longer says
+ *
+ * It used to end *"Connect all of them at once with `staple cloud connect
+ * --all`"* — a terminal command as the answer to the question the section had
+ * just raised, on a page whose whole job is to be the place you act. That
+ * sentence is gone, and no sentence replaces it: the actions are on the rows.
+ *
+ * It also used to lead with `total`. "7 workspaces" said about a list of which
+ * four point at paths that no longer exist is a true number answering a question
+ * nobody asked, and it is the number that made the debris look like inventory.
+ * It leads with `actionable` now — *"the count at the top reflects actionable
+ * workspaces rather than every row"* — and names the unreachable ones separately
+ * so nothing is concealed by the change.
+ */
+export function hubListDescription(report: HubCloudReport): string {
+  const counts = report.counts;
+  const missing = report.workspaces.filter((row) => !row.available).length;
+
+  const lead =
+    counts.actionable === 0
+      ? "None of the workspaces registered on this machine can be acted on from here."
+      : counts.actionable === counts.total
+        ? `All ${counts.total} workspaces registered on this machine can be acted on here.`
+        : `${counts.actionable} of ${counts.total} workspaces registered on this machine can be acted on here.`;
+
+  const parts = [lead];
+  parts.push(
+    counts.connected === 0
+      ? "None is connected."
+      : `${counts.connected} connected${counts.automatic > 0 ? `, ${counts.automatic} syncing automatically` : ""}.`,
+  );
+  if (missing > 0) {
+    parts.push(
+      `${missing} ${missing === 1 ? "is" : "are"} not on this machine and ${missing === 1 ? "is" : "are"} listed separately below.`,
+    );
+  }
+  parts.push("Each acts on its own workspace; nothing here acts on all of them at once.");
+  return parts.join(" ");
+}
+
+/**
+ * The heading over the subordinate group, with its count.
+ *
+ * Says what removal means in the heading rather than in each row's confirmation,
+ * because the question "does this delete my data" is asked once about the group
+ * and not six times about its members.
+ */
+export function hubUnreachableDescription(count: number): string {
+  return (
+    `${count} registered ${count === 1 ? "workspace is" : "workspaces are"} not on this machine ` +
+    "right now. An unmounted volume is not a deleted workspace, so they are left alone rather " +
+    "than repaired — and removing one only unregisters it. Nothing is deleted, and if its files " +
+    "come back, running staple in that directory registers it again."
+  );
+}
+
+/**
+ * What the removal confirmation says.
+ *
+ * The sentence STA-282 asks for — *"removal explains that it unregisters and
+ * does not delete data"* — and it is not a reassurance, it is the mechanism:
+ * `deleteHubRegistration` is handed a database connection and a NAME, with no
+ * `fs` module and no workspace opener, so it has nothing to delete a file WITH.
+ */
+export function removeWarning(row: HubWorkspaceReport, crossLinks: number): string {
+  const base =
+    `"${row.slug}" comes off this machine's list. Its database and every file beside it are ` +
+    `left exactly as they are — this unregisters, it does not delete. Its prefix ${row.prefix} ` +
+    "becomes available for another workspace to use.";
+  const returning = row.available
+    ? " Because its files are still here, running staple in that directory registers it again."
+    : " Its files are not on this machine, so nothing will bring it back on its own.";
+  const links =
+    crossLinks > 0
+      ? ` ${crossLinks} cross-workspace ${crossLinks === 1 ? "link names" : "links name"} it. ` +
+        "Removing it removes those links too, which is a change to another workspace's blockers."
+      : "";
+  return base + returning + links;
 }
