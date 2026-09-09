@@ -1803,7 +1803,10 @@ export function startUiServer(options: UiOptions): UiHandle {
           outcomeOf(
             workspace.slug,
             "disconnect",
-            row.status === "disconnected" ? "ok" : "skipped",
+            // `failed` is reachable on a single row too — an unreadable
+            // connection record — and reporting it as `skipped` would say
+            // "nothing needed doing" about a credential still sitting there.
+            row.status === "disconnected" ? "ok" : row.status === "failed" ? "failed" : "skipped",
             row.reason,
           ),
         );
@@ -2503,7 +2506,18 @@ export function startUiServer(options: UiOptions): UiHandle {
           );
           return;
         }
-        // `workspaces` OMITTED. The registry is the enumeration.
+        /**
+         * `workspaces` OMITTED. The registry is the enumeration.
+         *
+         * `performHubDisconnect` reports a row it could not act on as a
+         * `failed` ROW rather than throwing — a connection record this build
+         * refuses to parse is the only way to get one — so a corrupt file
+         * belonging to one workspace cannot abort the fan-out and hide the
+         * disconnections that already happened. That per-row catch was added
+         * for this route: without it, three connected workspaces and one
+         * unreadable record produced two deleted credentials, an exception
+         * about a JSON file, and no outcome table at all.
+         */
         const outcome = performHubDisconnect(stapleHome());
         hubFanOutActed(
           res,
@@ -2512,7 +2526,7 @@ export function startUiServer(options: UiOptions): UiHandle {
             outcomeOf(
               row.slug,
               "disconnect",
-              row.status === "disconnected" ? "ok" : "skipped",
+              row.status === "disconnected" ? "ok" : row.status === "failed" ? "failed" : "skipped",
               row.reason,
             ),
           ),

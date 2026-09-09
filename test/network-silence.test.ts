@@ -1108,7 +1108,22 @@ describe("the UI server serves the whole page, connected or not, and calls nobod
        * The status codes are not asserted (they are `test/ui-cloud-settings.test.ts`'s
        * job); what is asserted is that answering them attempted nothing.
        */
-      const CLOUD_WRITES: Array<[string, Record<string, unknown>]> = [
+      /**
+       * `[route, body, expectedStatus?]`.
+       *
+       * The third element was added by S18 (STA-279) and the reason is worth
+       * stating, because its absence is a trap this epic has already fallen into
+       * four times. Without a status assertion, "zero outbound calls" is reported
+       * identically whether the route answered what it should, 404'd on a
+       * misspelled path, or 500'd inside `readBody` — a silent server and an
+       * absent one are indistinguishable, and the whole file is about proving
+       * silence WITH a subject.
+       *
+       * The pre-existing entries are left unpinned rather than pinned wrongly:
+       * several of them deliberately refuse and this file has never claimed to
+       * know with which code. The four hub-wide additions all state theirs.
+       */
+      const CLOUD_WRITES: Array<[string, Record<string, unknown>, number?]> = [
         ["/api/cloud/connect/preview", { endpoint: "https://sync.example.com", credentialFile: true }],
         ["/api/cloud/connect", { endpoint: "https://sync.example.com", token: "enrollment-secret" }],
         ["/api/cloud/connect", { consent: "made-up", digest: "made-up", token: "enrollment-secret" }],
@@ -1202,26 +1217,42 @@ describe("the UI server serves the whole page, connected or not, and calls nobod
          * would then quietly cover something else. Same reasoning that keeps
          * `/api/cloud/workspace/sync` and `/api/cloud/devices` off these lists.
          */
-        ["/api/hub/connect/preview", { endpoint: "https://sync.example.com", credentialFile: true }],
-        ["/api/hub/connect", { endpoint: "https://sync.example.com", token: "enrollment-secret" }],
+        // 200: this workspace is registered and disconnected, so the fan-out has
+        // exactly one actionable row. It probes the credential store and mints a
+        // ticket, which is the interesting path and the one most likely to grow
+        // a reachability check later.
+        ["/api/hub/connect/preview", { endpoint: "https://sync.example.com", credentialFile: true }, 200],
+        // 400: no `consents`, and an `endpoint` this route has no field for.
+        ["/api/hub/connect", { endpoint: "https://sync.example.com", token: "enrollment-secret" }, 400],
         [
           "/api/hub/connect",
           {
             consents: [{ slug: "netsilenceui", consent: "made-up", digest: "made-up" }],
             token: "enrollment-secret",
           },
+          // 404: the ticket is refused from local state, before a socket opens.
+          // `not_found` is what an unknown consent id maps to.
+          404,
         ],
-        ["/api/hub/disconnect", {}],
-        ["/api/hub/disconnect", { confirm: true }],
+        // 409 both times, and for the same reason rather than for the missing
+        // `confirm`: nothing is connected on this machine, so the fan-out would
+        // be empty and the emptiness check fires before the confirmation check.
+        ["/api/hub/disconnect", {}, 409],
+        ["/api/hub/disconnect", { confirm: true }, 409],
       ];
       for (let round = 0; round < 3; round += 1) {
-        for (const [route, body] of CLOUD_WRITES) {
+        for (const [route, body, expected] of CLOUD_WRITES) {
           const res = await fetch(`${origin}${route}`, {
             method: "POST",
             headers: { "x-staple-token": token, "content-type": "application/json" },
             body: JSON.stringify(body),
           });
-          await res.json();
+          const payload = await res.json();
+          if (expected !== undefined) {
+            expect(res.status, `${route} answered ${res.status}: ${JSON.stringify(payload)}`).toBe(
+              expected,
+            );
+          }
         }
       }
 

@@ -60,6 +60,7 @@ import {
   hubUnreachableDescription,
   hubWideControls,
   hubWideDisconnectWarning,
+  hubWideFailure,
   hubWideTargets,
   type HubWideAction,
   type HubWideControl,
@@ -1636,6 +1637,102 @@ describe("a hub-wide disconnect names what it is about, and reports per workspac
   });
 });
 
+describe("a refused hub-wide confirm returns to the form, not to a dead consent screen", () => {
+  const PENDING = {
+    draft: { endpoint: "https://sync.example.com", enrollment: "s", label: "", credentialFile: false },
+    pending: { preview: connectPreviewFixture(), consents: [] },
+  };
+
+  /**
+   * **THE RULE, tested as a transition rather than asserted at the source.**
+   *
+   * `ConsentTicketStore.redeem` deletes a ticket before it validates anything,
+   * so every refusal on the confirm path except the blank-secret one lands with
+   * tickets already spent. Leaving `pending` up left the enumeration on screen
+   * behind an enabled "Connect 3 workspaces", and the second press answered
+   * `Confirming "alpha": That consent has expired, was already used…` — the
+   * wrong workspace and the wrong cause, which is the same misleading refusal
+   * this lane fixed one layer down inside `redeem`.
+   */
+  it("clears the pending enumeration on any refusal, and keeps the draft", () => {
+    const after = hubWideFailure({ ...IDLE_WIDE, connecting: PENDING }, "nope");
+    expect(after.error).toBe("nope");
+    expect(after.connecting).not.toBeNull();
+    expect(after.connecting!.pending).toBeNull();
+    // The draft survives, so recovering is one press of Review rather than
+    // retyping an endpoint and an enrollment secret.
+    expect(after.connecting!.draft).toEqual(PENDING.draft);
+  });
+
+  it("leaves a closed connect flow closed rather than reopening it", () => {
+    const after = hubWideFailure({ ...IDLE_WIDE, connecting: null }, "nope");
+    expect(after.connecting).toBeNull();
+    expect(after.error).toBe("nope");
+  });
+
+  it("renders the form again, not the confirm button, once pending is cleared", () => {
+    const html = panel({
+      workspaces: hubReport([hubRow(), hubRow({ slug: "bravo", repositoryId: "b" })]),
+      hub: {
+        ...IDLE_HUB,
+        wide: hubWideFailure(
+          { ...IDLE_WIDE, connecting: PENDING },
+          "This machine's workspaces changed while that preview was on screen.",
+        ),
+      },
+    });
+    // The consent screen is gone…
+    expect(html).not.toContain("data-cloud-hub-consent");
+    expect(html).not.toContain("data-cloud-hub-confirm");
+    // …the form is back, and the refusal is on screen above it.
+    expect(html).toContain("data-cloud-hub-preview");
+    expect(html).toContain("changed while that preview was on screen");
+  });
+});
+
+describe("the two outcome surfaces do not contradict each other", () => {
+  /**
+   * A fan-out table is a RESULT, not a log, and so is a row's outcome line. When
+   * one is produced the other has stopped being true of at least one row —
+   * press hub-wide Sync then `bravo`'s own Disconnect and the table still read
+   * `bravo — done — Synchronized…` above a `bravo` rendering as disconnected,
+   * which breaks S19's *"a row shows the outcome of the last operation on it"*.
+   */
+  it("shows a fan-out table or per-row outcomes, never both", () => {
+    const report = hubReport([hubRow(), hubRow({ slug: "bravo", repositoryId: "b" })]);
+    const withBoth = panel({
+      workspaces: report,
+      hub: {
+        ...IDLE_HUB,
+        outcomes: {
+          bravo: {
+            slug: "bravo",
+            action: "sync",
+            status: "ok",
+            detail: "pushed 3, applied 0",
+            at: "2026-09-09T12:00:00.000Z",
+          },
+        },
+        wide: { ...IDLE_WIDE, fanOut: FAN_OUT },
+      },
+    });
+    /**
+     * This is the state the component now cannot reach — `applyFanOut` empties
+     * `outcomes` and `applyRowResult` nulls `fanOut` — so the assertion is that
+     * the two are mutually exclusive by construction upstream, pinned here at
+     * the source because the reducers live inside the component.
+     */
+    expect(withBoth).toContain("data-cloud-hub-fanout");
+    expect(withBoth).toContain("data-cloud-workspace-outcome");
+
+    const file = source("CloudSection.tsx");
+    // A hub-wide result supersedes every per-row line…
+    expect(file).toMatch(/applyFanOut[\s\S]*?outcomes: \{\},/);
+    // …and a per-row result drops the table rather than patching one of its rows.
+    expect(file).toMatch(/applyRowResult[\s\S]*?wide: \{ \.\.\.current\.wide, fanOut: null \}/);
+  });
+});
+
 describe("nothing hub-wide happens without a press", () => {
   /**
    * `syncHub` is the widest egressing call on this surface — one authenticated
@@ -1646,9 +1743,16 @@ describe("nothing hub-wide happens without a press", () => {
    */
   it("calls no hub-wide route from an effect", () => {
     const file = source("CloudSection.tsx");
-    const effects = [...file.matchAll(/useEffect\(([\s\S]*?)\n  \}, \[/g)].map((match) => match[1]!);
+    const effects = [...file.matchAll(/useEffect\(([\s\S]*?)\n\s*\}, \[/g)].map((match) => match[1]!);
     expect(effects.length).toBeGreaterThan(0);
     const joined = effects.join("\n");
+    /**
+     * The pattern is NOT indentation-bound (`\n\s*\}, \[` rather than
+     * `\n  \}, \[`), so an effect declared inside a nested component —
+     * `HubSelfPanel`, `HubWorkspaceList`, `HubRow` — is seen too. The
+     * two-space form could only ever see effects at the top level of
+     * `CloudSection`, which is exactly where nobody would hide one.
+     */
     for (const egress of ["syncHub", "connectHub", "previewHubConnect", "disconnectHub"]) {
       expect(joined, `${egress} is called from an effect — that is a fan-out on open`).not.toContain(
         egress,
@@ -1656,15 +1760,31 @@ describe("nothing hub-wide happens without a press", () => {
     }
   });
 
-  it("has no hub-wide purge, in the panel or in the pure half", () => {
+  it("has no hub-wide purge, in the panel, the pure half, or the client", () => {
     /**
      * STA-256 records that the server does not validate a purge confirmation on
      * the wire. A one-click irreversible remote deletion of every workspace is
      * worse hub-wide than per workspace by exactly the size of the registry, and
      * `PURGE_NOTICE` names the capability without offering it.
+     *
+     * **`lib/api.ts` is in this list, and it is the one that matters.** The
+     * first version of this scan covered only the two files in this directory —
+     * but a `purgeHub` would live in the CLIENT, which neither of them is, so
+     * the assertion could not have failed on the thing it was written to catch.
+     * The server-side 405/404 assertions in `test/ui-cloud-hub-verbs.test.ts`
+     * would still have bitten; this one would have watched it go past.
      */
     for (const file of ["CloudSection.tsx", "cloud-settings.ts"]) {
-      expect(source(file)).not.toMatch(/purgeHub|hubPurge|\/api\/hub\/purge/);
+      expect(source(file), file).not.toMatch(/purgeHub|hubPurge|\/api\/hub\/purge/);
     }
+    const client = readFileSync(
+      fileURLToPath(new URL("../lib/api.ts", import.meta.url)),
+      "utf8",
+    );
+    expect(client).not.toMatch(/purgeHub|hubPurge/);
+    expect(client).not.toContain("/api/hub/purge");
+    expect(client).not.toContain("/api/cloud/purge");
+    // And the scan really is looking at the client: it has the routes it should.
+    expect(client).toContain("/api/hub/disconnect");
   });
 });

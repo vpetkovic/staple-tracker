@@ -735,9 +735,23 @@ function runDisconnect(argv: string[]): void {
     }
     console.log("");
     console.log(
-      `  ${outcome.disconnected} disconnected, ${outcome.skipped} were not connected. ` +
-        `No network call was made, and no local data was touched.`,
+      `  ${outcome.disconnected} disconnected, ${outcome.skipped} were not connected` +
+        (outcome.failed > 0 ? `, ${outcome.failed} failed` : "") +
+        `. No network call was made, and no local data was touched.`,
     );
+    if (outcome.failed > 0) {
+      console.log("");
+      /**
+       * A row can only fail here by having a connection record this build
+       * refuses to parse, and the others were disconnected anyway — which is the
+       * whole point of the per-row catch. Said explicitly because the counts
+       * alone would leave a reader wondering whether the run had stopped early.
+       */
+      console.log(
+        "The failures above did not stop the others. Each is a connection record in your " +
+          "staple home that could not be read; the message on each row names the file.",
+      );
+    }
     return;
   }
 

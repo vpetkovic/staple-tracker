@@ -1053,22 +1053,90 @@ export function hubWideControls(report: HubCloudReport): HubWideControl[] {
  * what a person actually needs in order to notice that it includes the one they
  * did not mean.
  */
+/**
+ * Slugs for a sentence, capped.
+ *
+ * A confirmation naming forty workspaces is a paragraph, and a paragraph is not
+ * read — which would defeat the point of naming them at all. Twelve is enough to
+ * recognise the set and to spot the one you did not mean; past that the count
+ * is doing the work and the remainder is stated rather than listed.
+ */
+const NAMED_SLUG_LIMIT = 12;
+
+function namedSlugs(rows: readonly HubWorkspaceReport[]): string {
+  const slugs = rows.map((row) => row.slug);
+  if (slugs.length <= NAMED_SLUG_LIMIT) return slugs.join(", ");
+  const shown = slugs.slice(0, NAMED_SLUG_LIMIT).join(", ");
+  return `${shown} and ${slugs.length - NAMED_SLUG_LIMIT} more`;
+}
+
 export function hubWideDisconnectWarning(report: HubCloudReport): string {
   const connected = hubWideTargets(report, "disconnect");
   const absent = connected.filter((row) => !row.available);
   const base =
     `This machine stops talking to the service for ${connected.length} ` +
     `${connected.length === 1 ? "workspace" : "workspaces"}: ` +
-    `${connected.map((row) => row.slug).join(", ")}. Each credential is removed from this ` +
+    `${namedSlugs(connected)}. Each credential is removed from this ` +
     `machine. Every database, including queued changes and unsettled conflicts, is untouched, ` +
     `no other device is affected, and no remote copy is deleted. Re-connecting later needs an ` +
     `enrollment credential for each one.`;
   return absent.length === 0
     ? base
     : `${base} ${absent.length} of them ${absent.length === 1 ? "is" : "are"} not on this machine ` +
-        `right now (${absent.map((row) => row.slug).join(", ")}) and ${absent.length === 1 ? "is" : "are"} ` +
+        `right now (${namedSlugs(absent)}) and ${absent.length === 1 ? "is" : "are"} ` +
         `disconnected anyway — the credential is here, not there, and leaving it behind is the ` +
         `thing worth avoiding.`;
+}
+
+/**
+ * What the hub-wide half looks like after a refusal — the STATE TRANSITION, as a
+ * pure function, so it can be tested.
+ *
+ * ## Why this is not three lines inside the catch block
+ *
+ * Because the rule it encodes is subtle enough to have been got wrong once, and
+ * a rule inside a `catch` inside a `useCallback` inside a component cannot be
+ * tested by a suite that has no DOM. It would have been asserted, if at all, by
+ * grepping the component's source for a fragment — which proves the line exists,
+ * not that it does the right thing.
+ *
+ * ## The rule
+ *
+ * **A refused confirm returns to the FORM, never to the consent screen.**
+ *
+ * `ConsentTicketStore.redeem` deletes a ticket before it validates anything:
+ * single use, consumed before it can fail, so a rejected attempt cannot be
+ * replayed. Every refusal on the confirm path except the blank-secret one
+ * therefore lands with some tickets already spent, and the enumeration on screen
+ * is no longer backed by anything redeemable.
+ *
+ * Leaving it up meant the screen still listed all three rows behind an enabled
+ * "Connect 3 workspaces", and a second press answered `Confirming "alpha": That
+ * consent has expired, was already used…` — a true sentence about the wrong
+ * workspace and the wrong cause, which is exactly the misleading refusal this
+ * lane fixed one layer down by naming the row inside `redeem`'s error.
+ *
+ * Cleared on EVERY failure and not only the post-redeem ones, because the
+ * surface cannot tell them apart without reading the message — and a message is
+ * rendered for a human and is never an input to a decision. The draft survives,
+ * so the blank-secret case costs one press of Review with the refusal still on
+ * screen above it.
+ */
+/**
+ * Generic over the caller's own state type rather than naming it, so this file
+ * does not import from `CloudSection.tsx`. The pure half must not depend on the
+ * component half — that direction is the whole reason the two are separate — and
+ * a second local copy of `HubWideState` would be one more thing to keep in step.
+ * The constraint names exactly the two fields the rule touches.
+ */
+export function hubWideFailure<
+  T extends { error: string | null; connecting: { pending: unknown } | null },
+>(current: T, message: string): T {
+  return {
+    ...current,
+    error: message,
+    connecting: current.connecting === null ? null : { ...current.connecting, pending: null },
+  };
 }
 
 /**

@@ -728,6 +728,56 @@ describe("the two-step connect survives being made hub-wide", () => {
     }
   });
 
+  /**
+   * **THE `vanished` BRANCH**, which nothing reached until this test.
+   *
+   * The connected-race case above passes on `redeem`'s digest refusal, which
+   * fires *before* the enumeration comparison — so it would still pass with the
+   * comparison deleted, and only `appeared` was genuinely exercised. This is the
+   * other half, and it is reachable for a specific reason: **availability is not
+   * in the digest.** A workspace whose volume unmounts between the preview and
+   * the confirm rebuilds to a byte-identical `ConnectPreview`, sails through
+   * `redeem`, and is caught only by the set comparison — where it is actionable
+   * no longer.
+   *
+   * The remedy in the message is "look again", not "we skipped it": consent to
+   * connect four is not consent to connect three.
+   */
+  it("refuses when a consented workspace stopped being connectable", async () => {
+    const previewed = await previewHub();
+    expect(previewed.consents.map((issued) => issued.slug)).toContain("bravo");
+
+    // The volume goes. `available` is `existsSync(path)` and nothing more, so
+    // removing the database file is the whole of an unmounted disk.
+    const bravoDb = join(DIRS.get("bravo")!, ".staple", "staple.db");
+    const saved = readFileSync(bravoDb);
+    unlinkSync(bravoDb);
+    seen = [];
+
+    try {
+      const response = await post("/api/hub/connect", {
+        consents: previewed.consents.map((issued) => ({
+          slug: issued.slug,
+          consent: issued.consent.id,
+          digest: issued.consent.digest,
+        })),
+        token: ENROLLMENT,
+      });
+      expect(response.status, await response.clone().text()).toBe(409);
+      const refusal = (await response.json()) as { message: string };
+      expect(refusal.message).toContain("No longer connectable");
+      expect(refusal.message).toContain("bravo");
+
+      // Nothing was sent, and nothing was connected — not even the rows that
+      // were still perfectly actionable. The gesture is one decision.
+      expect(seen).toEqual([]);
+      expect(readConnection(home, idOf("alpha"))).toBeNull();
+      expect(readConnection(home, idOf("charlie"))).toBeNull();
+    } finally {
+      writeFileSync(bravoDb, saved);
+    }
+  });
+
   it("refuses a blank enrollment secret BEFORE it spends the tickets", async () => {
     /**
      * `performHubConnect` validates the secret itself, but it does so after the
@@ -749,6 +799,93 @@ describe("the two-step connect survives being made hub-wide", () => {
     expect(seen).toEqual([]);
 
     expect((await post("/api/hub/connect", { consents, token: ENROLLMENT })).status).toBe(200);
+  });
+});
+
+// -------------------------------------------------- one bad row does not blank the rest
+
+describe("a fan-out reports what it already did, even when a later row throws", () => {
+  /**
+   * **THE FAULT-ISOLATION TEST**, and the one that would have caught a real
+   * defect: `performHubDisconnect` had no per-row `try`/`catch`, unlike
+   * `performHubConnect` and `syncAllWorkspaces`.
+   *
+   * `performDisconnect` reaches `readConnection`, which THROWS rather than
+   * returning null on a record that will not parse. So three connected
+   * workspaces and one corrupt record meant: two credentials deleted, an
+   * exception about a JSON file, `hubFanOutActed` never reached, and **no
+   * outcome table at all** — a person had no way to learn that half the fan-out
+   * had succeeded. The surface showed only the parse complaint.
+   *
+   * The assertions are on what is on DISK afterwards, not on the shape of the
+   * answer, because the answer is exactly what was missing.
+   */
+  it("disconnects the readable rows and reports the unreadable one as a failed row", async () => {
+    await connectRow("alpha");
+    await connectRow("bravo");
+    await connectRow("charlie");
+
+    // A record that is present and will not parse — a crash mid-write, or a
+    // downgrade after a newer staple wrote it.
+    const charlieRecord = join(home, "cloud", `${idOf("charlie")}.json`);
+    writeFileSync(charlieRecord, "{ this is not json", { mode: 0o600 });
+
+    try {
+      const response = await post("/api/hub/disconnect", { confirm: true });
+      expect(response.status, await response.clone().text()).toBe(200);
+      const answer = (await response.json()) as { fanOut: FanOut };
+
+      // THE POINT: the other two really were disconnected, and the run said so.
+      expect(readConnection(home, idOf("alpha"))).toBeNull();
+      expect(readConnection(home, idOf("bravo"))).toBeNull();
+      expect(answer.fanOut.ok).toBe(2);
+
+      const charlie = answer.fanOut.workspaces.find((row) => row.slug === "charlie")!;
+      expect(charlie.status).toBe("failed");
+      // The row names the file, because "delete it by hand" is the remedy.
+      expect(charlie.detail).toContain(charlieRecord);
+      expect(answer.fanOut.failed).toBe(1);
+
+      // Every registered workspace still gets a row, including the one that failed.
+      expect(answer.fanOut.workspaces.map((row) => row.slug).sort()).toEqual([
+        "alpha",
+        "bravo",
+        "charlie",
+        "delta",
+      ]);
+    } finally {
+      rmSync(charlieRecord, { force: true });
+      rmSync(join(home, "cloud", `${idOf("charlie")}.token`), { force: true });
+    }
+  });
+
+  /**
+   * The confirmation counts what it can SEE, and a corrupt row is not in it.
+   *
+   * `hubCloudReport` reports an unreadable connection record as
+   * `state: "disconnected"` with `skip: "problem"`, so `hubDisconnectTargets`
+   * excludes it and the confirmation names two workspaces while the fan-out
+   * visits four. That is the right behaviour — the surface must not claim to be
+   * about a credential it cannot read — but it is only safe BECAUSE the row is
+   * reported rather than thrown, which is what the test above pins.
+   */
+  it("does not name the unreadable row in the confirmation it cannot vouch for", async () => {
+    await connectRow("alpha");
+    await connectRow("bravo");
+    const charlieRecord = join(home, "cloud", `${idOf("charlie")}.json`);
+    await connectRow("charlie");
+    writeFileSync(charlieRecord, "{ this is not json", { mode: 0o600 });
+
+    try {
+      const refusal = (await (await post("/api/hub/disconnect", {})).json()) as { message: string };
+      expect(refusal.message).toContain("2");
+      expect(refusal.message).toContain("alpha");
+      expect(refusal.message).toContain("bravo");
+      expect(refusal.message).not.toContain("charlie");
+    } finally {
+      rmSync(charlieRecord, { force: true });
+      rmSync(join(home, "cloud", `${idOf("charlie")}.token`), { force: true });
+    }
   });
 });
 

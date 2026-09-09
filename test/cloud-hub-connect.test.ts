@@ -780,6 +780,46 @@ describe("disconnect --all is local, and only local", () => {
     expect(outcome.skipped).toBe(1);
     expect(outcome.workspaces[0]!.reason).toContain("Was not connected");
   });
+
+  /**
+   * **A ROW THAT THROWS IS A ROW**, and this arm was missing until S18's UI lane
+   * went looking for the parity its two siblings already had.
+   *
+   * `performDisconnect` reaches `readConnection`, which THROWS rather than
+   * returning null on a record that will not parse — right and deliberate,
+   * because *"a parse failure that fell back to 'not connected' would tell a
+   * human they had never connected"*. Without a per-row catch that refusal
+   * escaped the LOOP, and the shape of the failure was the worst available: the
+   * credentials already deleted were deleted, and the caller got an exception
+   * about a JSON file instead of a report saying so.
+   *
+   * Asserted on the OTHER rows, because they are what was being lost.
+   */
+  it("keeps disconnecting after a record it cannot parse, and reports it as a row", async () => {
+    const a = makeRepo("alpha");
+    const b = makeRepo("bravo");
+    const c = makeRepo("charlie");
+    await connectAll();
+
+    writeFileSync(join(home, "cloud", `${b.repositoryId}.json`), "{ not json", { mode: 0o600 });
+
+    const outcome = performHubDisconnect(home, { forceFile: true });
+
+    // The two readable rows were disconnected regardless of where the bad one sat.
+    expect(readConnection(home, a.repositoryId)).toBeNull();
+    expect(readConnection(home, c.repositoryId)).toBeNull();
+    expect(outcome.disconnected).toBe(2);
+
+    const failed = outcome.workspaces.find((row) => row.slug === "bravo")!;
+    expect(failed.status).toBe("failed");
+    expect(outcome.failed).toBe(1);
+    // The staple code survives, so a caller deriving an exit code still can.
+    expect(failed.code).toBe("validation");
+    // And the message names the file, because deleting it by hand is the remedy.
+    expect(failed.reason).toContain(`${b.repositoryId}.json`);
+    // Every registered workspace still has a row.
+    expect(outcome.workspaces).toHaveLength(3);
+  });
 });
 
 // -------------------------------------------------------- damaged rows in situ

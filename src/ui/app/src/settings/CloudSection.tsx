@@ -110,6 +110,7 @@ import {
   hubSelfFacts,
   hubSelfSummary,
   hubRowControls,
+  hubWideFailure,
   hubUnreachableDescription,
   hubWideControls,
   hubWideDisconnectWarning,
@@ -1859,6 +1860,19 @@ export function CloudSection({ ws }: { ws?: string }) {
       setHub((current) => ({
         ...current,
         outcomes: { ...current.outcomes, [answer.outcome.slug]: answer.outcome },
+        /**
+         * THE FAN-OUT TABLE IS DROPPED, for the mirror of the reason
+         * `applyFanOut` drops the per-row outcomes: it is a result, not a log,
+         * and it has just stopped being true of at least one of its rows.
+         * Leaving it up put `bravo — done — Synchronized…` above a `bravo` row
+         * rendering as disconnected.
+         *
+         * Dropped whole rather than patched for the one slug, because a table
+         * headed "3 connected, 1 skipped" whose rows had been individually
+         * edited afterwards would be a summary that no longer matched its own
+         * contents — and the counts are what a reader takes from it.
+         */
+        wide: { ...current.wide, fanOut: null },
       }));
     },
     [],
@@ -1893,10 +1907,15 @@ export function CloudSection({ ws }: { ws?: string }) {
       } catch (caught) {
         if (alive.current) {
           const refusal = describeRefusal(caught);
-          setHub((current) => ({
-            ...current,
-            wide: { ...current.wide, error: refusal.message },
-          }));
+          /**
+           * The transition is `hubWideFailure`, in the pure half, because the
+           * rule it encodes — **a refused confirm returns to the FORM, never to
+           * the consent screen** — is subtle enough to have been got wrong once
+           * and cannot be tested from inside a `catch` by a suite with no DOM.
+           * See its comment for why tickets are already spent by the time most
+           * refusals land here.
+           */
+          setHub((current) => ({ ...current, wide: hubWideFailure(current.wide, refusal.message) }));
         }
         return null;
       } finally {
@@ -1921,7 +1940,23 @@ export function CloudSection({ ws }: { ws?: string }) {
   const applyFanOut = useCallback((answer: { fanOut: HubFanOut; report: HubCloudReport }) => {
     if (!alive.current) return;
     setWorkspaces(answer.report);
-    setHub((current) => ({ ...current, wide: { ...current.wide, fanOut: answer.fanOut } }));
+    setHub((current) => ({
+      ...current,
+      /**
+       * THE PER-ROW OUTCOMES ARE DROPPED. A hub-wide verb has just acted on
+       * every row, so the table below now describes all of them and any earlier
+       * per-row line is superseded — and possibly contradicted: a row that read
+       * "Synchronized, pushed 3" beside a fan-out that has since disconnected it
+       * is two answers to one question, and S19's rule is that *a row shows the
+       * outcome of the LAST operation on it*.
+       *
+       * The hub's own backup receipt (keyed on the empty slug) goes with them.
+       * That is a small loss and the coherent one: this surface shows the result
+       * of the last thing pressed, not a log of everything ever pressed.
+       */
+      outcomes: {},
+      wide: { ...current.wide, fanOut: answer.fanOut },
+    }));
   }, []);
 
   const hubActions: HubActions = {
