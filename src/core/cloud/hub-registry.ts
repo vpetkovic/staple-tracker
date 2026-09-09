@@ -350,7 +350,8 @@ function decide(
       outcome: "declined",
       reason:
         `"${entry.slug}" was removed from this machine's list, so it was not brought back. It is ` +
-        "still registered on the machine that published this. Undo with `staple hub restore-entry`.",
+        "still registered on the machine that published this. Undo with `staple hub registry adopt` " +
+        "after clearing the opt-out — `Hub.clearOptOut(repositoryId)`; there is no CLI verb for it yet.",
     };
   }
 

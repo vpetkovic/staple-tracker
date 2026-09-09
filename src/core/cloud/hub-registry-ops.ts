@@ -117,7 +117,16 @@ export interface RegistrationPayload {
   readonly slug: string;
   readonly prefix: string;
   readonly kind: string;
-  readonly addedAt: string;
+  /**
+   * OPTIONAL, and only ever sent on the `create`. See {@link diffRegistry}.
+   *
+   * It is the local row's registration time, so two machines can never agree on it, and
+   * sending it on every update made a shared registry diverge for ever — appending an
+   * operation to a metered log on every pass, on a single workspace with no edges. Sent
+   * once, it is first-writer-wins: the registry's own record of when this SET first
+   * learned of the workspace, which is the only reading that means anything shared.
+   */
+  readonly addedAt?: string;
 }
 
 /**
@@ -318,9 +327,44 @@ export interface RetainedEdge {
   readonly reason: string;
 }
 
+/**
+ * Published entities this machine has no local counterpart for.
+ *
+ * The signal that another machine has published to this registry, or that this machine is
+ * simply behind — and the two are indistinguishable from here, which is fine, because the
+ * remedy is the same: adopt first.
+ *
+ * Computed from the snapshot this diff already reads plus the local registry and the
+ * opt-out list. **No new state and no extra request.** That matters: the alternative
+ * signals all needed a record of what this machine knew, which is hub-local state.
+ *
+ * An opted-out `repositoryId` is NOT foreign — `staple hub unregister` is deliberately
+ * local and leaves the entry published, so a machine that removed a row must still be able
+ * to publish. That is the one case where a published registration with no local row is
+ * this machine's own doing.
+ */
+export interface ForeignEntities {
+  /** Published `registration` ids with no local row and no opt-out. */
+  readonly registrations: readonly { entityId: string; slug: string }[];
+  /**
+   * Always EMPTY today, and the field is kept rather than removed.
+   *
+   * Cross-links are additive-only, so a published edge this machine does not hold cannot do
+   * damage and does not justify refusing a publish. The field exists because the moment
+   * retraction becomes possible — which needs the authority record convergence needs — this
+   * is where the signal belongs, and a reader that already handles it will not need changing.
+   */
+  readonly crossLinks: readonly { entityId: string; label: string }[];
+}
+
 export interface RegistryDiff {
   /** In log order: registrations first, then cross-links. Never a `delete`. */
   readonly operations: readonly RegistryOperation[];
+  /**
+   * What the service holds that this machine does not. Non-empty means **do not publish**
+   * — see {@link ForeignEntities} and `publishRegistry`, which refuses on it.
+   */
+  readonly foreign: ForeignEntities;
   /** Entries with no `repositoryId`. Reported, never invented. See the header. */
   readonly unpublishable: readonly UnpublishableEntry[];
   /**
@@ -420,6 +464,14 @@ export function diffRegistry(
    * one and be silently wrong half the time.
    */
   duplicateIdentities: readonly { repositoryId: string; slugs: readonly string[] }[] = [],
+  /**
+   * Identities this machine has deliberately removed from its own list.
+   *
+   * `registry_optouts`, which never leaves the machine. Passed in because a published
+   * registration matching one of these is not FOREIGN — it is this machine's own former
+   * row, left published because `staple hub unregister` is local by design.
+   */
+  optedOut: readonly string[] = [],
 ): RegistryDiff {
   assertFormat(local.format);
   const duplicated = new Map(duplicateIdentities.map((d) => [d.repositoryId, d.slugs]));
@@ -437,10 +489,26 @@ export function diffRegistry(
           "machine could recognise it by. It is left out of the published registry rather than " +
           "given an id here: an id minted on this machine would not be the one the repository " +
           "itself records later, and the registry would then hold two rows for one workspace. " +
-          "Staple records the identity the next time it OPENS that workspace, so run any command " +
-          `against it — \`staple ls --ws ${entry.slug}\` is enough — and publish again. If that ` +
-          "does not fix it, either the workspace's database is not on this machine or its " +
-          "`.staple/repository.json` is present and unreadable; publish reports which.",
+          /**
+           * `staple init`, and ONLY that — MEASURED rather than assumed, because this
+           * remedy has been wrong twice already.
+           *
+           * Round 2 named `connect` or `init` while nothing wrote the column at all. Round 3
+           * named "any command … `staple ls --ws <slug>` is enough", which a test then
+           * pinned. Measured after clearing the column on a real machine:
+           *
+           *     after nulling:  null
+           *     after ls:       null
+           *     after ls --ws:  null
+           *     after re-init:  d15be260
+           *
+           * The narrative stays here rather than in the sentence a person reads; the string
+           * itself is the action and the two things that would stop it working.
+           */
+          `Run \`staple init\` in that workspace's directory, then publish again — it records ` +
+          "the identity and creates nothing new. If that does not fix it, either the " +
+          "workspace's database is not on this machine, or its `.staple/repository.json` is " +
+          "present and unreadable; publish reports which.",
       });
       continue;
     }
@@ -467,14 +535,39 @@ export function diffRegistry(
       continue;
     }
 
-    const payload: RegistrationPayload = {
-      format: REGISTRY_PAYLOAD_FORMAT,
-      slug: entry.slug,
-      prefix: entry.prefix,
-      kind: entry.kind,
-      addedAt: entry.addedAt,
-    };
     const held = published.get(key(REGISTRATION_ENTITY, entry.repositoryId));
+
+    /**
+     * `addedAt` is CREATE-ONLY, and that is a convergence fix rather than a tidy-up.
+     *
+     * It is the local row's registration time — a fact about when THIS machine learned of
+     * the workspace — so two machines can never agree on it. Sent on every update, it made
+     * a shared registry diverge for ever on a single workspace with no cross-links at all:
+     *
+     *     pass 1 A: published=1  stateAddedAt=2026-01-01…
+     *     pass 2 B: published=1  stateAddedAt=2026-02-02…
+     *     pass 3 A: published=1  stateAddedAt=2026-01-01…   (6 ops in 6 passes)
+     *
+     * Every pass appended an operation to a METERED log, and unlike a name race it could
+     * never settle, because neither machine's value is wrong. Sending it only on the create
+     * makes it first-writer-wins — the registry's own "when this set first learned of this
+     * workspace", which is the honest reading of the field once it is shared at all.
+     */
+    const payload: RegistrationPayload =
+      held === undefined
+        ? {
+            format: REGISTRY_PAYLOAD_FORMAT,
+            slug: entry.slug,
+            prefix: entry.prefix,
+            kind: entry.kind,
+            addedAt: entry.addedAt,
+          }
+        : {
+            format: REGISTRY_PAYLOAD_FORMAT,
+            slug: entry.slug,
+            prefix: entry.prefix,
+            kind: entry.kind,
+          };
     if (held !== undefined && !held.deleted && statesAgree(held.state, payload)) continue;
     operations.push({
       entity: REGISTRATION_ENTITY,
@@ -544,58 +637,95 @@ export function diffRegistry(
     if (held.state.present === false) continue;
 
     /**
-     * The floor, keyed on IDENTITY rather than on the slug.
+     * **Cross-links are ADDITIVE-ONLY. Nothing here retracts.**
      *
-     * The first version tested `localSlugs.has(blockerWs) && localSlugs.has(blockedWs)`,
-     * which granted edge-deletion authority on a NAME match — and this module's own header
-     * is emphatic about why that is wrong: *"slugs and prefixes are NAMES, and names are
-     * exactly what two machines can independently disagree about; the identity is the only
-     * thing that means the same thing on both."* Slugs derive from directory names, so two
-     * machines holding the same repositories match **by default**, and a machine that had
-     * cloned both repositories but never applied an adopt would retract the other machine's
-     * edge on its first publish. Reproduced.
+     * The honest consequence of scoping publish to one machine, and it was forced by a run
+     * rather than reasoned to. Two authority tests were tried and both failed:
      *
-     * So the test is: for each endpoint slug, does the workspace THIS machine has under
-     * that slug carry the same `repositoryId` as the published `registration` for it? Both
-     * sides are already in hand — the local registry and the same snapshot this diff reads
-     * — so it costs no new state and no round trip. If the answer is no for either end,
-     * the machines are talking about different workspaces and this one has no standing.
+     *   - **slug match** — grants edge-deletion authority on a NAME, and names are exactly
+     *     what two machines can independently disagree about;
+     *   - **identity equality** — gives ZERO protection, because `.staple/repository.json`
+     *     is TRACKED, so two clones legitimately share a `repositoryId` (#92). A machine
+     *     that had cloned both repositories and never applied an adopt satisfied it by
+     *     construction and deleted the other machine's edge on its first publish.
+     *
+     * The deeper reason both failed: **no comparison of the two sides can establish
+     * authority**, because two machines legitimately holding the same repositories are
+     * indistinguishable by identity, by name, and by anything else in the payload.
+     * Authority needs a record of what this machine KNEW — an applied adopt, or a per-edge
+     * ledger — which is hub-local state, i.e. the migration this leg exists to avoid.
+     *
+     * And with `foreign` refusing a publish whenever the service holds a registration this
+     * machine does not have, a deliberately REMOVED edge became indistinguishable from one
+     * never held, so the owner's own removal read as foreign and nothing could retract at
+     * all. Measured, not predicted.
+     *
+     * So removal does not propagate — exactly as it already does not for a REGISTRATION,
+     * and for the reason `docs/sync.md` gives there: *"propagating it would turn a
+     * reversible local act into an irreversible remote one."* A registry where one
+     * collection propagated removals and the other did not would be the surprising design.
+     *
+     * What it buys beyond honesty: two machines publishing one registry can no longer
+     * destroy each other's edges at all.
+     *
+     * Reported rather than silent, because somebody who removed a blocker and expected it
+     * to leave the shared set needs telling that it did not.
      */
     const names = readEdgeNames(held);
-    const standing = names === null ? null : edgeStanding(names, local, published);
-    if (names === null || standing !== null) {
-      retained.push({
+    retained.push({
+      entityId: held.entityId,
+      reason:
+        `The published link ${
+          names === null ? held.entityId : `${names.blockerIdentifier} -> ${names.blockedIdentifier}`
+        } is not on this machine. Removing a cross-workspace link does not propagate — the ` +
+        "same rule as unregistering a workspace, and for the same reason: it would turn a " +
+        "reversible local act into an irreversible remote one. It stays in the published " +
+        "registry, and adopting will bring it back here.",
+    });
+  }
+
+  /**
+   * What the service holds and this machine does not.
+   *
+   * Registrations are matched on the entity id, which IS the `repositoryId`, so this is an
+   * identity comparison rather than a name one. Cross-links are matched on the entity id
+   * too, which is an encoding of the four names — so an edge the service holds under names
+   * this machine does not use reads as foreign, which is the honest answer.
+   */
+  const optedOutSet = new Set(optedOut);
+  const localIds = new Set(
+    local.workspaces.map((w) => w.repositoryId).filter((id): id is string => id !== null),
+  );
+  const foreignRegistrations: { entityId: string; slug: string }[] = [];
+  const foreignCrossLinks: { entityId: string; label: string }[] = [];
+  for (const held of published.values()) {
+    if (held.deleted) continue;
+    if (held.entity === REGISTRATION_ENTITY) {
+      if (localIds.has(held.entityId) || optedOutSet.has(held.entityId)) continue;
+      foreignRegistrations.push({
         entityId: held.entityId,
-        reason:
-          `The published link ${names?.blockerIdentifier ?? held.entityId} -> ` +
-          `${names?.blockedIdentifier ?? "?"} ${standing ?? "could not be read"}, so its ` +
-          "absence here is not a statement that it was removed. Left exactly as published.",
+        slug: typeof held.state.slug === "string" ? held.state.slug : "(unnamed)",
       });
       continue;
     }
-
-    operations.push({
-      entity: CROSS_LINK_ENTITY,
-      entityId: held.entityId,
-      // An `update`, never a `delete`. See {@link CrossLinkPayload}.
-      verb: "update",
-      baseVersion: held.version,
-      payload: {
-        format: REGISTRY_PAYLOAD_FORMAT,
-        blockerWs: names.blockerWs,
-        blockerIdentifier: names.blockerIdentifier,
-        blockedWs: names.blockedWs,
-        blockedIdentifier: names.blockedIdentifier,
-        type: "blocks",
-        present: false,
-      },
-    });
+    /**
+     * Cross-links are NOT counted as foreign, and that is deliberate.
+     *
+     * An edge the service holds and this machine does not is either another machine's or one
+     * this machine removed — indistinguishable, for the reason the retraction comment above
+     * gives. Since nothing retracts any more, neither case can do damage, so refusing a
+     * publish over it would block a legitimate machine for no benefit.
+     *
+     * A published REGISTRATION with no local row and no opt-out is different: it is the one
+     * signal that says another machine is publishing here, and it is what the refusal is for.
+     */
   }
 
   return {
     operations,
     unpublishable,
     retained,
+    foreign: { registrations: foreignRegistrations, crossLinks: foreignCrossLinks },
     upToDate: operations.length === 0,
   };
 }
@@ -603,28 +733,37 @@ export function diffRegistry(
 /**
  * May this machine retract this published edge? `null` means yes; a phrase means no.
  *
- * The phrase is returned rather than a boolean because the caller has to say WHY in a
- * sentence a person can act on, and "which end, and how it differs" is the whole content.
+ * ## This is the BELT. The braces are `RegistryDiff.foreign`.
  *
- * For each endpoint slug: find the workspace this machine has under that slug, find the
- * `registration` the SERVICE holds for that slug, and require the identities to match. A
- * slug the local machine does not have at all, or one the service does not have a
- * registration for, is equally not this machine's to speak about.
+ * Two earlier versions of this were wrong, and the second was wrong in an instructive way.
+ *
+ * The first keyed on the slug alone. That grants edge-deletion authority on a NAME match,
+ * and this module's header says why that fails: names are what two machines can
+ * independently disagree about.
+ *
+ * The second keyed on **identity equality** — local `repositoryId` equal to the one the
+ * published `registration` carries — and gives ZERO protection, because
+ * `.staple/repository.json` is TRACKED: two clones of one repository legitimately share an
+ * identity, which is a property #92 exists to support. So a machine that had cloned both
+ * repositories and never applied an adopt satisfied the check by construction, and deleted
+ * the other machine's edge on its first publish. Reproduced through the real CLI.
+ *
+ * The lesson is that **no comparison of the two sides can establish authority**, because
+ * two machines legitimately holding the same repositories are indistinguishable by
+ * identity, by name, and by anything else in the payload. Authority needs a record of what
+ * this machine KNEW — an applied adopt, or a per-edge ledger — which is hub-local state and
+ * therefore the migration this whole leg exists to avoid.
+ *
+ * So the real protection is `foreign`: a publish is refused outright unless this machine is
+ * CURRENT with the service, and a machine that is current has had every published edge, so
+ * absence really is removal. This function stays as a cheap local floor for the residual
+ * case — a slug this machine does not have registered at all — and its wording no longer
+ * claims more than it can establish.
  */
 function edgeStanding(
   names: { blockerWs: string; blockedWs: string },
   local: HubRegistryPayload,
-  published: Map<string, PublishedState>,
 ): string | null {
-  const publishedIdentityFor = (slug: string): string | null => {
-    for (const held of published.values()) {
-      if (held.entity !== REGISTRATION_ENTITY) continue;
-      if (held.deleted) continue;
-      if (held.state.slug === slug) return held.entityId;
-    }
-    return null;
-  };
-
   for (const [end, slug] of [
     ["blocker", names.blockerWs],
     ["blocked", names.blockedWs],
@@ -632,20 +771,6 @@ function edgeStanding(
     const mine = local.workspaces.find((w) => w.slug === slug);
     if (mine === undefined) {
       return `names a ${end} workspace "${slug}" this machine does not have registered`;
-    }
-    if (mine.repositoryId === null) {
-      return `names a ${end} workspace "${slug}" whose sync identity this machine has not recorded`;
-    }
-    const theirs = publishedIdentityFor(slug);
-    if (theirs === null) {
-      return `names a ${end} workspace "${slug}" the service has no registration for`;
-    }
-    if (theirs !== mine.repositoryId) {
-      return (
-        `names a ${end} workspace "${slug}" that is a DIFFERENT repository here (${mine.repositoryId}) ` +
-        `from the one the service has under that name (${theirs}) — a slug is a name, and two ` +
-        "machines can disagree about a name"
-      );
     }
   }
   return null;

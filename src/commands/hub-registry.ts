@@ -860,6 +860,68 @@ function runBackup(argv: string[]): void {
         if (!target) {
           throw new StapleError("validation", "usage: staple hub registry backup rm <backupId>");
         }
+
+        /**
+         * The gate `rm` never had, in EITHER mode.
+         *
+         * `--yes` was declared in this function's options and never read — which is worse
+         * than omitting it, because an operator who types it habitually got no error and no
+         * confirmation. Found by grepping for declared-but-unread options rather than for
+         * `!json`, since there was no `!json` here to find.
+         *
+         * It composes into real damage with the restore path: `runRestore` prints
+         * "undo with: staple hub registry restore <preRestoreBackupId>", and one unconfirmed
+         * `backup rm` of that id destroys the only undo for an epoch-rewinding, fleet-wide
+         * restore — previously exiting 0 having printed nothing.
+         *
+         * `cloud.ts` gates the workspace twin the same way, and this now matches it.
+         */
+        if (values.yes !== true) {
+          /**
+           * The notice makes NO REQUEST, and the first version of it did.
+           *
+           * It called `listHubBackups` to report whether the doomed backup was a
+           * `pre-restore` copy — which is useful, and put a network call inside a gate whose
+           * whole job is to refuse BEFORE anything is sent. The subprocess test caught it as
+           * exit 4 rather than 2, which is the right way to find out.
+           *
+           * So the pre-restore case is covered by wording that does not need to know:
+           * whatever this id is, saying what a pre-restore copy would mean costs nothing and
+           * is true of the ones that matter most.
+           */
+          const lines = [
+            `Deleting hub backup ${target}.`,
+            "  - a backup is the only way back to a moment; this destroys that one",
+            "  - if it is a PRE-RESTORE copy, it is the undo for a restore somebody ran, and",
+            "    deleting it makes that restore permanent. `backup ls` shows each one's kind.",
+            "  - it does not affect the registry itself, or any other backup",
+          ];
+          if (!json) for (const line of lines) console.log(line);
+          const agreed =
+            !json && isInteractive() && confirm(`\nDelete backup ${target}?`, { default: false });
+          if (!agreed) {
+            if (json) {
+              console.error(
+                JSON.stringify({
+                  code: "validation",
+                  message: `Deleting a hub backup needs --yes. ${lines.join(" ")}`,
+                  retryable: false,
+                  backupId: target,
+                  notice: lines,
+                }),
+              );
+            } else {
+              console.error(
+                isInteractive()
+                  ? "\nDeclined. The backup is intact."
+                  : "\nNothing was deleted. Re-run with --yes.",
+              );
+            }
+            process.exitCode = 2;
+            return;
+          }
+        }
+
         await service.deleteHubBackup(home, hubId, target);
         if (json) console.log(JSON.stringify({ backupId: target, deleted: true }));
         else console.log(`Deleted hub backup ${target}.`);

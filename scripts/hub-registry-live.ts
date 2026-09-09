@@ -89,9 +89,29 @@ function refuseRealHub(): void {
   const previous = process.env.STAPLE_HOME;
   delete process.env.STAPLE_HOME;
   try {
-    const hub = Hub.open();
+    /**
+     * `openReadOnly`, NOT `open`. `Hub.open()` MIGRATES and converts the journal to WAL, so
+     * the guard was creating `~/.staple/hub.db` on a machine that had none — a check with a
+     * side effect on the thing it is protecting.
+     */
+    const hub = Hub.openReadOnly();
     const mine = hub.storedHubId();
+    /**
+     * Also refuse a WORKSPACE's `repositoryId`. The hub id travels by hand next to
+     * repository ids, so a mispaste is ordinary — and pushing registry operations into a
+     * workspace's log is precisely the incident `worker/README.md`'s recipe exists to clean
+     * up. Cheaper to refuse here than to document the cleanup and then cause it.
+     */
+    const asWorkspace = hub.findByRepositoryId(hubId);
     hub.close();
+    if (asWorkspace !== undefined) {
+      console.error(
+        `STAPLE_HUB_ID is the sync identity of the workspace "${asWorkspace.slug}" on this ` +
+          "machine, not a hub id. Publishing registry operations into a workspace's log " +
+          "permanently 426s every protocol-1 client of it. Nothing was sent.",
+      );
+      process.exit(2);
+    }
     if (mine === hubId) {
       console.error(
         `STAPLE_HUB_ID is this machine's REAL hub identity. This script publishes, retracts ` +
@@ -325,6 +345,15 @@ async function main(): Promise<void> {
    * absent under the identity machine A recorded, which is what a second machine holding a
    * clone under another directory name looks like.
    */
+  /**
+   * ONE row holds the identity, under a new name.
+   *
+   * The first version added a second row with the same `repositoryId`, which the
+   * duplicate-identity rule now correctly parks — so `damage published: 0` and the restore
+   * assertion below passed against no damage at all. That is the vacuous-assertion class
+   * this whole review keeps finding, so the step now asserts the damage LANDED.
+   */
+  b.hub.unregister("live-tracker");
   b.hub.registerAbsent({
     slug: "renamed-by-mistake",
     prefix: "RBM",
@@ -333,6 +362,13 @@ async function main(): Promise<void> {
   });
   const damaged = await publishRegistry(b.hub, b.home, { fetchImpl: recordingFetch });
   console.log(`damage published: ${safe({ published: damaged.published, updated: damaged.updated })}`);
+  if (damaged.published === 0) {
+    console.error(
+      "!! the damage step published nothing, so the restore assertion below would pass " +
+        "against an unchanged service. Refusing to report a pass on that.",
+    );
+    process.exit(1);
+  }
   console.log(
     `service now says: ${safe((await readPublishedRegistry(b.home, hubId, { fetchImpl: recordingFetch })).registry.workspaces.map((w) => w.slug))}`,
   );
@@ -374,8 +410,24 @@ async function main(): Promise<void> {
   const publishedIds = restored.registry.workspaces.map((w) => w.repositoryId);
   const realIdsTravelled = publishedIds.includes(trackerId) && publishedIds.includes(otherId);
   console.log(realIdsTravelled ? "PASS — the identities initWorkspace recorded are the ones published" : "FAIL — published ids do not match what initWorkspace recorded");
+  /**
+   * Keyed on IDENTITY, not on slug presence.
+   *
+   * The superset check alone gutted this step in the very re-run case that motivated it: a
+   * previous run's registration survives under slug `live-tracker`, so a restore that
+   * silently failed to rewind THIS run's `renamed-by-mistake` would still find the slug
+   * present and pass. The registration `entityId` IS the `repositoryId`, so asking what
+   * slug THIS run's identity carries is unambiguous whatever else is in the log.
+   */
+  const trackerSlugNow = restored.registry.workspaces.find((w) => w.repositoryId === trackerId)?.slug;
+  const rewound = trackerSlugNow === "live-tracker";
+  console.log(
+    rewound
+      ? "PASS — the restore rewound this run's identity back to live-tracker"
+      : `FAIL — this run's identity reads as "${String(trackerSlugNow)}", so the restore did not rewind it`,
+  );
   const missing = expected.filter((slug) => !slugs.includes(slug));
-  const ok = missing.length === 0;
+  const ok = missing.length === 0 && rewound;
   console.log(
     ok
       ? `PASS — restored every slug this run published ${JSON.stringify(expected)}`

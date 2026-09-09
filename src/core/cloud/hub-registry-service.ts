@@ -645,7 +645,59 @@ export async function publishRegistry(
   const identities = reconcileRepositoryIds(hub);
   const local = exportRegistry(hub);
   const { entities, epoch } = await readSnapshotEntities(home, hubId, options);
-  const diff = diffRegistry(local, publishedStateOf(entities), identities.duplicates);
+  const diff = diffRegistry(
+    local,
+    publishedStateOf(entities),
+    identities.duplicates,
+    hub.listOptOuts().map((o) => o.repositoryId),
+  );
+
+  /**
+   * **Publishing is scoped to ONE machine, and this is the refusal that makes that true.**
+   *
+   * Two machines sharing a registry does not work, in two independent ways that are not the
+   * accepted "two machines race on a name":
+   *
+   *   - **Edge retraction cannot be authorised.** Absence of an edge locally is ambiguous
+   *     between "removed" and "never had", and no comparison of the two sides can tell them
+   *     apart: `.staple/repository.json` is TRACKED, so two clones legitimately share a
+   *     `repositoryId` (#92), and slugs are names. Authority needs a record of what this
+   *     machine KNEW — an applied adopt, or a per-edge ledger — which is hub-local state,
+   *     i.e. the migration this whole leg exists to avoid.
+   *   - **`addedAt` could not converge** until it was made create-only. A name race settles
+   *     once both machines agree; that one could not, because neither value was wrong.
+   *
+   * So a publish requires this machine to be CURRENT with the service and refuses
+   * otherwise. That is not a partial convergence story dressed up — it is a narrower
+   * capability, stated. What it buys beyond honesty: a machine that IS current has had every
+   * published edge, so absence really is removal, which is what makes the retraction floor
+   * safe at all.
+   *
+   * The residual is a narrow race rather than the systematic loss it replaces — two machines
+   * that are both current can interleave a read and a push. `docs/sync.md` records it, and
+   * convergence is a separate ticket.
+   */
+  const foreignCount = diff.foreign.registrations.length + diff.foreign.crossLinks.length;
+  if (foreignCount > 0) {
+    const named = [
+      ...diff.foreign.registrations.map((r) => `workspace "${r.slug}"`),
+      ...diff.foreign.crossLinks.map((c) => `link ${c.label}`),
+    ];
+    throw cloudError(
+      "conflict",
+      `The service holds ${foreignCount} entr${foreignCount === 1 ? "y" : "ies"} this machine ` +
+        `does not have: ${named.slice(0, 5).join(", ")}` +
+        `${named.length > 5 ? `, and ${named.length - 5} more` : ""}. ` +
+        "Publishing from here would retract them, so nothing was sent.\n\n" +
+        "Publishing a registry is scoped to ONE machine. Either another machine has published " +
+        "to this hub id, or this machine is behind — and the remedy is the same either way: " +
+        "run `staple hub registry adopt --apply` to take on what the service holds, then " +
+        "publish. If you did not expect another machine to be publishing here, two machines " +
+        "sharing one registry is not supported yet: it needs an authority record for edge " +
+        "removal that the hub does not have. See docs/sync.md.",
+      { foreignRegistrations: diff.foreign.registrations.length, foreignCrossLinks: diff.foreign.crossLinks.length },
+    );
+  }
 
   if (diff.operations.length === 0) {
     return {
@@ -902,7 +954,7 @@ function requireHubBackupConsent(connection: CloudConnection): void {
       "forbidden",
       "Backup is off for this machine's hub. Publishing the registry and keeping point-in-time " +
         "copies of it are separate decisions; enable the second with " +
-        "`staple hub registry backup --enable`.",
+        "`staple hub registry backup enable`.",
     );
   }
 }

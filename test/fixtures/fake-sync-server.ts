@@ -627,9 +627,15 @@ export class FakeSyncServer {
       });
     }
     if (typeof body.epoch === "number" && body.epoch !== this.epoch) {
+      /**
+       * `currentEpoch` ONLY. The Worker sends exactly that field
+       * (`worker/src/push.ts`), and this fake used to send `epoch` alongside it — which is
+       * the literal anti-pattern `worker/test/registry-fixture.ts` names: *"a fixture
+       * answering with both field names while the real service sent one."* A client reading
+       * the wrong one worked here and failed in production.
+       */
       throw new ServerError(409, "epoch_changed", "epoch has moved; re-bootstrap", {
         currentEpoch: this.epoch,
-        epoch: this.epoch,
       });
     }
 
@@ -742,6 +748,24 @@ export class FakeSyncServer {
     if (str(op.deviceId, "deviceId") !== session.deviceId) {
       throw new ServerError(403, "forbidden", `${at}.deviceId does not match the credential`);
     }
+    /**
+     * `op.protocol` must equal the request header's — `worker/src/envelope.ts` refuses a
+     * mismatch as `validation`, and the fake never checked it at all.
+     *
+     * This is the one envelope field the whole registry leg hangs on: `pushOperations` sets
+     * the body's `protocol` and the header from the same value precisely because the Worker
+     * requires them to agree. Unmirrored, a client that overrode one and not the other
+     * passed every test here and was refused by the deployed service.
+     */
+    const opProtocol = int(op.protocol, "protocol");
+    if (opProtocol !== protocol) {
+      throw new ServerError(
+        400,
+        "validation",
+        `${at}.protocol disagrees with the request header`,
+      );
+    }
+
     const entity = str(op.entity, "entity");
     const entityProtocol = minProtocolFor(entity);
     if (entityProtocol === null) {

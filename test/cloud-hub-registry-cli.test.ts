@@ -440,6 +440,46 @@ describe("--json is not a way around any agreement gate", () => {
   }, 60_000);
 });
 
+describe("backup rm is gated, in both modes", () => {
+  it("refuses without --yes, and its --yes is no longer dead code", () => {
+    /**
+     * `runBackup` declared `yes: { type: "boolean" }` and NEVER READ IT, and `rm` had no
+     * confirmation in either mode — exit 0, nothing printed. A declared-but-unread option is
+     * worse than an absent one: an operator who types `--yes` habitually got no error and no
+     * gate.
+     *
+     * Found by grepping for declared-but-unread OPTIONS rather than for `!json`, because
+     * there was no `!json` here for the previous grep to catch.
+     *
+     * It composes into real damage with `runRestore`, which prints
+     * "undo with: staple hub registry restore <preRestoreBackupId>" — one unconfirmed
+     * `backup rm` of that id destroys the only undo for an epoch-rewinding, fleet-wide
+     * restore.
+     */
+    adoptIdentity();
+    connectHub({ backup: true });
+
+    const refused = staple("hub", "registry", "backup", "rm", "some-backup-id", "--json");
+    expect(refused.status).toBe(2);
+    const envelope = JSON.parse(refused.stderr);
+    expect(envelope.notice.join(" ")).toContain("only way back to a moment");
+    expect(envelope.backupId).toBe("some-backup-id");
+    // NOTHING was sent: the gate is before the request, like every other destructive verb.
+    expect(refused.violations).toEqual([]);
+  }, 60_000);
+
+  it("refuses an unknown backup subcommand instead of falling through to `ls`", () => {
+    // `backup enabel` used to fall through to `ls` and make a NETWORK CALL — doing something
+    // the person did not ask for, against a paid service, and reporting success.
+    adoptIdentity();
+    connectHub({ backup: true });
+    const result = staple("hub", "registry", "backup", "enabel");
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("Unknown backup subcommand");
+    expect(result.violations).toEqual([]);
+  }, 60_000);
+});
+
 describe("refusals name the remedy", () => {
   it("refuses to connect before an identity has been adopted", () => {
     /**

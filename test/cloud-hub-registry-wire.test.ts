@@ -536,9 +536,17 @@ describe("what the diff will and will not emit", () => {
      * workspace, so that is what the message now says.
      */
     expect(diff.unpublishable[0]!.reason).toContain("nameless");
-    expect(diff.unpublishable[0]!.reason).toContain("next time it OPENS that workspace");
-    expect(diff.unpublishable[0]!.reason).toContain("staple ls --ws nameless");
-    expect(diff.unpublishable[0]!.reason).not.toContain("staple init");
+    /**
+     * The remedy has been wrong twice, so this pins the MEASURED one.
+     *
+     * Round 2's wording named `connect` or `staple init` when nothing wrote the column at
+     * all. Round 3's named "any command … `staple ls --ws <slug>` is enough" — and this test
+     * pinned that false string, which is how a wrong remedy acquired a passing assertion.
+     * Measured: after nulling the column, `staple ls` left it null, `staple ls --ws <slug>`
+     * left it null, `staple init` restored it.
+     */
+    expect(diff.unpublishable[0]!.reason).toContain("staple init");
+    expect(diff.unpublishable[0]!.reason).not.toContain("staple ls --ws");
   });
 
   it("NEVER deletes a registration, even when the workspace is gone locally", () => {
@@ -563,7 +571,20 @@ describe("what the diff will and will not emit", () => {
     expect([...new Set(diff.operations.map((o) => o.verb))].sort()).not.toContain("delete");
   });
 
-  it("RETRACTS a cross-link with a field rather than deleting it", () => {
+  it("NEVER retracts a cross-link: removal does not propagate", () => {
+    /**
+     * Measured, not reasoned to. Two authority tests were tried and both failed:
+     *
+     *   - slug match — grants edge-deletion authority on a NAME;
+     *   - identity equality — ZERO protection, because `.staple/repository.json` is TRACKED,
+     *     so two clones legitimately share a `repositoryId` (#92). A clone that never applied
+     *     an adopt satisfied it by construction and deleted the other machine's edge.
+     *
+     * No comparison of the two sides can establish authority, because two machines
+     * legitimately holding the same repositories are indistinguishable by identity, by name,
+     * and by anything else in the payload. So cross-links are additive-only, exactly as
+     * registrations are, and for the reason `docs/sync.md` gives there.
+     */
     const link = {
       blockerWs: "one",
       blockerIdentifier: "ONE-1",
@@ -575,12 +596,6 @@ describe("what the diff will and will not emit", () => {
       format: REGISTRY_PAYLOAD_FORMAT,
       hubId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
       capturedAt: "2026-09-09T12:00:00.000Z",
-      /**
-       * BOTH endpoint workspaces, deliberately. A machine may only retract an edge whose
-       * two workspaces it actually has — and an earlier version of this test registered
-       * only "one", so the floor correctly declined and the test failed. Keeping the
-       * realistic setup is the point: the floor is not an obstacle to work around.
-       */
       workspaces: [
         { repositoryId: "11111111-1111-4111-8111-111111111111", slug: "one", prefix: "ONE", kind: "repo", addedAt: "2026-01-01T00:00:00.000Z" },
         { repositoryId: "22222222-2222-4222-8222-222222222222", slug: "two", prefix: "TWO", kind: "repo", addedAt: "2026-01-01T00:00:00.000Z" },
@@ -589,44 +604,125 @@ describe("what the diff will and will not emit", () => {
     };
     const published = publishedStateOf(foldOperations(diffRegistry(base, new Map()).operations));
 
+    // Removed locally, by the machine that owns the registry, with both workspaces present.
     const diff = diffRegistry({ ...base, crossLinks: [] }, published);
-    expect(diff.operations).toEqual([
-      {
-        entity: CROSS_LINK_ENTITY,
-        entityId: crossLinkEntityId(link),
-        // An `update`, never a `delete` — see `CrossLinkPayload`. The whole payload
-        // travels, so re-folding it yields the same edge with `present: false`.
-        verb: "update",
-        baseVersion: 1,
-        payload: {
-          format: REGISTRY_PAYLOAD_FORMAT,
-          blockerWs: "one",
-          blockerIdentifier: "ONE-1",
-          blockedWs: "two",
-          blockedIdentifier: "TWO-1",
-          type: "blocks",
-          present: false,
-        },
-      },
+    expect(diff.operations).toEqual([]);
+    expect(diff.retained).toHaveLength(1);
+    expect(diff.retained[0]!.reason).toContain("does not propagate");
+    expect(diff.retained[0]!.reason).toContain("adopting will bring it back");
+  });
+
+  it("a CLONE cannot destroy another machine's edge — the reproduced case", () => {
+    /**
+     * The exact scenario identity equality passed by construction: machine B has genuinely
+     * cloned both repositories, so its `repositoryId`s ARE machine A's (the manifest is
+     * tracked), its slugs match, and it has no edge because it never applied an adopt.
+     */
+    const link = {
+      blockerWs: "alpha",
+      blockerIdentifier: "ALP-1",
+      blockedWs: "beta",
+      blockedIdentifier: "BET-1",
+      type: "blocks" as const,
+    };
+    const a: HubRegistryPayload = {
+      format: REGISTRY_PAYLOAD_FORMAT,
+      hubId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      capturedAt: "2026-09-09T12:00:00.000Z",
+      workspaces: [
+        { repositoryId: "11111111-1111-4111-8111-111111111111", slug: "alpha", prefix: "ALP", kind: "repo", addedAt: "2026-01-01T00:00:00.000Z" },
+        { repositoryId: "22222222-2222-4222-8222-222222222222", slug: "beta", prefix: "BET", kind: "repo", addedAt: "2026-01-01T00:00:00.000Z" },
+      ],
+      crossLinks: [link],
+    };
+    const published = publishedStateOf(foldOperations(diffRegistry(a, new Map()).operations));
+
+    const clone: HubRegistryPayload = { ...a, crossLinks: [] };
+    const diff = diffRegistry(clone, published);
+    expect(
+      diff.operations.filter(
+        (o) => o.entity === CROSS_LINK_ENTITY && (o.payload as { present?: boolean }).present === false,
+      ),
+    ).toEqual([]);
+    // And the clone is not blocked from publishing either — it has nothing foreign.
+    expect(diff.foreign.registrations).toEqual([]);
+  });
+
+  it("`addedAt` is create-only, so two machines converge instead of alternating forever", () => {
+    /**
+     * REGRESSION. `addedAt` is the LOCAL row's registration time, so two machines can never
+     * agree on it — and sent on every update it made a shared registry diverge for ever on a
+     * single workspace with no cross-links, appending an operation to a METERED log every
+     * pass. Unlike a name race it could never settle, because neither value is wrong.
+     *
+     * Measured before the fix: 6 operations in 6 passes, `stateAddedAt` alternating.
+     */
+    const id = "11111111-1111-4111-8111-111111111111";
+    const reg = (addedAt: string): HubRegistryPayload => ({
+      format: REGISTRY_PAYLOAD_FORMAT,
+      hubId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      capturedAt: "2026-09-09T12:00:00.000Z",
+      workspaces: [{ repositoryId: id, slug: "alpha", prefix: "ALP", kind: "repo", addedAt }],
+      crossLinks: [],
+    });
+    const first = reg("2026-01-01T00:00:00.000Z");
+    const second = reg("2026-02-02T00:00:00.000Z");
+
+    let entities = foldOperations(diffRegistry(first, new Map()).operations);
+    let total = 1;
+    for (let pass = 2; pass <= 6; pass += 1) {
+      const diff = diffRegistry(pass % 2 === 0 ? second : first, publishedStateOf(entities));
+      total += diff.operations.length;
+      if (diff.operations.length > 0) {
+        entities = foldOperations([
+          ...entities.map((e) => ({
+            entity: e.entity,
+            entityId: e.entityId,
+            verb: "create",
+            payload: e.state,
+          })),
+          ...diff.operations,
+        ]);
+      }
+    }
+    // One operation, ever: the create. Was six.
+    expect(total).toBe(1);
+    // And the value the FIRST writer set is the one that stands.
+    expect(entities[0]!.state.addedAt).toBe("2026-01-01T00:00:00.000Z");
+  });
+
+  it("refuses to publish when the service holds a registration this machine lacks", () => {
+    /**
+     * The gate that scopes publishing to one machine. A published registration with no local
+     * row and no opt-out is the one signal that says another machine is publishing here — or
+     * that this machine is behind, which has the same remedy.
+     */
+    const a: HubRegistryPayload = {
+      format: REGISTRY_PAYLOAD_FORMAT,
+      hubId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      capturedAt: "2026-09-09T12:00:00.000Z",
+      workspaces: [
+        { repositoryId: "11111111-1111-4111-8111-111111111111", slug: "alpha", prefix: "ALP", kind: "repo", addedAt: "2026-01-01T00:00:00.000Z" },
+        { repositoryId: "22222222-2222-4222-8222-222222222222", slug: "beta", prefix: "BET", kind: "repo", addedAt: "2026-01-01T00:00:00.000Z" },
+      ],
+      crossLinks: [],
+    };
+    const published = publishedStateOf(foldOperations(diffRegistry(a, new Map()).operations));
+
+    const behind: HubRegistryPayload = { ...a, workspaces: [a.workspaces[0]!] };
+    expect(diffRegistry(behind, published).foreign.registrations).toEqual([
+      { entityId: "22222222-2222-4222-8222-222222222222", slug: "beta" },
     ]);
 
-    // And it can come back. Under the `delete` verb this was silently discarded for ever.
-    const retracted = publishedStateOf(
-      foldOperations([...diffRegistry(base, new Map()).operations, ...diff.operations]),
-    );
-    const readd = diffRegistry(base, retracted);
-    expect(readd.operations).toHaveLength(1);
-    expect(readd.operations[0]!.verb).toBe("update");
-    expect((readd.operations[0]!.payload as { present: boolean }).present).toBe(true);
-    // A registry rebuilt from the retracted state has no edge; rebuilt after the re-add
-    // it has it again.
+    // An identity this machine deliberately unregistered is its OWN doing, not foreign —
+    // otherwise `staple hub unregister` would permanently block publishing.
     expect(
-      registryFromSnapshot({
-        hubId: base.hubId,
-        capturedAt: base.capturedAt,
-        entities: foldOperations([...diffRegistry(base, new Map()).operations, ...diff.operations]),
-      }).crossLinks,
+      diffRegistry(behind, published, [], ["22222222-2222-4222-8222-222222222222"]).foreign
+        .registrations,
     ).toEqual([]);
+
+    // And the machine whose registry it is is not blocked.
+    expect(diffRegistry(a, published).foreign.registrations).toEqual([]);
   });
 
   it("uses create for a first write and update for a later one", () => {
@@ -877,148 +973,159 @@ describe("a value that returns to an earlier value still lands", () => {
   });
 });
 
-describe("a machine may only retract an edge it could have had", () => {
-  /** A registry with two workspaces and one edge between them. */
-  function withEdge(hubId: string): HubRegistryPayload {
+describe("publishing is scoped to one machine, and says so", () => {
+  /**
+   * The retract-authority block that used to live here is gone, and its removal is the
+   * finding rather than a cleanup.
+   *
+   * It pinned a floor keyed on identity equality, with a comment claiming the scenario was
+   * "a machine that had cloned both but never applied an adopt" — and then handed that
+   * machine identities a clone can never have. The assertion was adjacent to the bug it was
+   * supposed to prevent. Nothing retracts now, so there is no authority question to pin;
+   * what replaces it is the refusal below and the additive-only rule above.
+   */
+  it("refuses rather than retracting when it is not the only publisher", async () => {
+    const a = machine();
+    const hubId = a.hub.hubId();
+    const server = serverFor(hubId);
+    connect(a.home, hubId, server);
+    setRegistryConsent(a.home, hubId, true, REGISTRY_DISCLOSURE);
+    seed(a.home, a.hub, "tracker", "TRK", "11111111-1111-4111-8111-111111111111");
+    seed(a.home, a.hub, "qde", "QDE", "22222222-2222-4222-8222-222222222222", "global");
+    await publishRegistry(a.hub, a.home, { fetchImpl: server.fetch });
+    a.hub.close();
+
+    // A second machine holding only ONE of the two, which is what "behind" looks like.
+    const b = machine();
+    process.env.STAPLE_HOME = b.home;
+    connect(b.home, hubId, server, "device-b", b.hub);
+    setRegistryConsent(b.home, hubId, true, REGISTRY_DISCLOSURE);
+    seed(b.home, b.hub, "tracker", "TRK", "11111111-1111-4111-8111-111111111111");
+
+    const before = server.ops.length;
+    const error = await publishRegistry(b.hub, b.home, { fetchImpl: server.fetch }).catch((e) => e);
+    expect(cloudCodeOf(error)).toBe("conflict");
+    expect((error as Error).message).toContain('workspace "qde"');
+    expect((error as Error).message).toContain("adopt --apply");
+    expect((error as Error).message).toContain("scoped to ONE machine");
+    // NOTHING was sent — the refusal is before the push, not a report after it.
+    expect(server.ops.length).toBe(before);
+    b.hub.close();
+  });
+
+  it("lets a machine publish once it has adopted what the service holds", async () => {
+    // The refusal has to be escapable by the documented remedy, or it is a wall.
+    const a = machine();
+    const hubId = a.hub.hubId();
+    const server = serverFor(hubId);
+    connect(a.home, hubId, server);
+    setRegistryConsent(a.home, hubId, true, REGISTRY_DISCLOSURE);
+    seed(a.home, a.hub, "tracker", "TRK", "11111111-1111-4111-8111-111111111111");
+    seed(a.home, a.hub, "qde", "QDE", "22222222-2222-4222-8222-222222222222", "global");
+    await publishRegistry(a.hub, a.home, { fetchImpl: server.fetch });
+    a.hub.close();
+
+    const b = machine();
+    process.env.STAPLE_HOME = b.home;
+    connect(b.home, hubId, server, "device-b", b.hub);
+    setRegistryConsent(b.home, hubId, true, REGISTRY_DISCLOSURE);
+    await adoptPublishedRegistry(b.hub, b.home, { fetchImpl: server.fetch, apply: true });
+
+    const report = await publishRegistry(b.hub, b.home, { fetchImpl: server.fetch });
+    expect(report.upToDate).toBe(true);
+    b.hub.close();
+  });
+});
+
+describe("the fake refuses what the Worker refuses", () => {
+  /**
+   * The three refusals mirrored into `FakeSyncServer` had NO test on either side, which is
+   * the same gap in miniature: a mirror nobody exercises is a mirror nobody notices going
+   * stale. These drive the fake directly, because the fake is the subject.
+   *
+   * The Worker's own copies are pinned in `worker/test/registry.test.ts`.
+   */
+  function envelope(overrides: Record<string, unknown> = {}): Record<string, unknown> {
     return {
-      format: REGISTRY_PAYLOAD_FORMAT,
-      hubId,
-      capturedAt: "2026-09-09T12:00:00.000Z",
-      workspaces: [
-        { repositoryId: "11111111-1111-4111-8111-111111111111", slug: "one", prefix: "ONE", kind: "repo", addedAt: "2026-01-01T00:00:00.000Z" },
-        { repositoryId: "22222222-2222-4222-8222-222222222222", slug: "two", prefix: "TWO", kind: "repo", addedAt: "2026-01-01T00:00:00.000Z" },
-      ],
-      crossLinks: [
-        {
-          blockerWs: "one",
-          blockerIdentifier: "ONE-1",
-          blockedWs: "two",
-          blockedIdentifier: "TWO-1",
-          type: "blocks",
-        },
-      ],
+      opId: "op-1",
+      repoId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      protocol: 2,
+      schema: 0,
+      entity: "registration",
+      entityId: "11111111-1111-4111-8111-111111111111",
+      verb: "create",
+      baseVersion: null,
+      payload: { format: 1, slug: "one", prefix: "ONE", kind: "repo", addedAt: "x" },
+      deviceId: "device-a",
+      actor: "",
+      clientSeq: 1,
+      createdAt: "2026-09-09T12:00:00.000Z",
+      ...overrides,
     };
   }
 
-  it("does not retract an edge naming a workspace it does not have", () => {
-    /**
-     * THE assertion for the third critical. A machine whose registry is a strict SUBSET
-     * of the published one is not a corner case: `adoptRegistry` previews by default, and
-     * even on an apply it skips an edge naming a workspace that did not land — which
-     * happens for an opted-out identity, a parked prefix collision, and an entry with no
-     * identity at all.
-     *
-     * Without the floor, that machine's next publish retracted every one of those edges,
-     * and the shared registry converged to the INTERSECTION of the machines' edges rather
-     * than to last-write-wins.
-     */
+  async function push(
+    ops: Record<string, unknown>[],
+    protocol = 2,
+  ): Promise<{ status: number; body: Record<string, unknown> }> {
     const hubId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
-    const full = withEdge(hubId);
-    const published = publishedStateOf(foldOperations(diffRegistry(full, new Map()).operations));
-
-    // This machine adopted nothing — the empty hub a replacement machine starts with.
-    const empty: HubRegistryPayload = { ...full, workspaces: [], crossLinks: [] };
-    const diff = diffRegistry(empty, published);
-    expect(diff.operations).toEqual([]);
-    expect(diff.retained).toHaveLength(1);
-    expect(diff.retained[0]!.reason).toContain("does not have registered");
-
-    // And a machine that has only ONE of the two endpoints is equally not entitled.
-    const half: HubRegistryPayload = {
-      ...full,
-      workspaces: [full.workspaces[0]!],
-      crossLinks: [],
-    };
-    expect(diffRegistry(half, published).operations.filter((o) => o.entity === CROSS_LINK_ENTITY))
-      .toEqual([]);
-  });
-
-  it("DOES retract an edge whose two workspaces are the same repositories here", () => {
-    // The negative tests above would also pass if retraction never happened at all.
-    const hubId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
-    const full = withEdge(hubId);
-    const published = publishedStateOf(foldOperations(diffRegistry(full, new Map()).operations));
-
-    const removed: HubRegistryPayload = { ...full, crossLinks: [] };
-    const diff = diffRegistry(removed, published);
-    expect(diff.operations).toHaveLength(1);
-    expect((diff.operations[0]!.payload as { present: boolean }).present).toBe(false);
-    expect(diff.retained).toEqual([]);
-  });
-
-  it("does NOT retract on a slug match when the identities differ", () => {
-    /**
-     * REGRESSION, and the first version of this rule was wrong in exactly this way.
-     *
-     * The floor tested `localSlugs.has(blockerWs) && localSlugs.has(blockedWs)` — a NAME
-     * match. This module's own header says why that fails: *"slugs and prefixes are NAMES,
-     * and names are exactly what two machines can independently disagree about; the
-     * identity is the only thing that means the same thing on both."* Slugs derive from
-     * directory names, so two machines holding the same repositories match by DEFAULT, and
-     * a machine that had cloned both but never applied an adopt retracted the other
-     * machine's edge on its first publish.
-     */
-    const hubId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
-    const full = withEdge(hubId);
-    const published = publishedStateOf(foldOperations(diffRegistry(full, new Map()).operations));
-
-    // Same slugs, DIFFERENT repositories, and no local edge — the shape a machine is in
-    // when it has its own "one" and "two" directories and has never adopted.
-    const impostor: HubRegistryPayload = {
-      ...full,
-      workspaces: [
-        { repositoryId: "99999999-9999-4999-8999-999999999999", slug: "one", prefix: "ONE", kind: "repo", addedAt: "2026-01-01T00:00:00.000Z" },
-        { repositoryId: "88888888-8888-4888-8888-888888888888", slug: "two", prefix: "TWO", kind: "repo", addedAt: "2026-01-01T00:00:00.000Z" },
-      ],
-      crossLinks: [],
-    };
-    const diff = diffRegistry(impostor, published);
-
-    expect(diff.operations.filter((o) => o.entity === CROSS_LINK_ENTITY)).toEqual([]);
-    expect(diff.retained).toHaveLength(1);
-    expect(diff.retained[0]!.reason).toContain("DIFFERENT repository here");
-    expect(diff.retained[0]!.reason).toContain("a slug is a name");
-  });
-
-  it("does not retract when this machine has not recorded the identity", () => {
-    // The state a machine is in before anything opens the workspace: slug present,
-    // identity null. Absence of an edge is not a removal from a machine that cannot yet
-    // say which repository it is holding.
-    const hubId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
-    const full = withEdge(hubId);
-    const published = publishedStateOf(foldOperations(diffRegistry(full, new Map()).operations));
-    const unresolved: HubRegistryPayload = {
-      ...full,
-      workspaces: full.workspaces.map((w) => ({ ...w, repositoryId: null })),
-      crossLinks: [],
-    };
-    const diff = diffRegistry(unresolved, published);
-    expect(diff.operations.filter((o) => o.entity === CROSS_LINK_ENTITY)).toEqual([]);
-    expect(diff.retained[0]!.reason).toContain("has not recorded");
-  });
-
-  it("reports a tombstone from an older build instead of looping on it", () => {
-    /**
-     * Nothing emits a delete any more, but tombstones written by an earlier build are in
-     * the log for good, and the fold discards every operation on a deleted entity. An
-     * update would be accepted, acknowledged and dropped, and the publish would report
-     * success on every pass for ever. Reported as retained, with the only remedy there is.
-     */
-    const hubId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
-    const full = withEdge(hubId);
-    const tombstoned = publishedStateOf([
-      {
-        entity: CROSS_LINK_ENTITY,
-        entityId: crossLinkEntityId(full.crossLinks[0]!),
-        deletedAt: 1,
-        state: {},
-        version: 2,
+    const server = new FakeSyncServer({ repositoryId: hubId });
+    server.enroll("device-a", "tok");
+    const response = await server.fetch(`https://sync.test/v1/repos/${hubId}/ops`, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer tok",
+        "Staple-Protocol": String(protocol),
+        "Content-Type": "application/json",
       },
+      body: JSON.stringify({ protocol, deviceId: "device-a", ops }),
+    });
+    return { status: response.status, body: (await response.json()) as Record<string, unknown> };
+  }
+
+  it("refuses `delete` for a registry entity", async () => {
+    const { status, body } = await push([envelope({ verb: "delete", baseVersion: 1, payload: {} })]);
+    expect({ status, code: body.code }).toEqual({ status: 400, code: "validation" });
+    expect(String(body.message)).toContain("never valid for a registry entity");
+  });
+
+  it("refuses a batch mixing registry and workspace entities", async () => {
+    const { status, body } = await push([
+      envelope(),
+      envelope({ opId: "op-2", entity: "issue", entityId: "issue-1", clientSeq: 2, payload: { title: "t" } }),
     ]);
-    const diff = diffRegistry(full, tombstoned);
-    expect(diff.operations.filter((o) => o.entity === CROSS_LINK_ENTITY)).toEqual([]);
-    expect(diff.retained).toHaveLength(1);
-    expect(diff.retained[0]!.reason).toContain("deletion is final");
+    expect({ status, code: body.code }).toEqual({ status: 400, code: "validation" });
+    expect(String(body.message)).toContain("may not mix hub registry entities");
+  });
+
+  it("refuses a repeated opId within one batch", async () => {
+    /**
+     * The one that matters most: the fake answers a duplicate with the ORIGINAL seq and
+     * `status: "duplicate"`, which is the exact presentation of both operation-id bugs in
+     * `hub-registry-service.ts`. A regression reintroducing a colliding id inside one batch
+     * would have looked like success here and been a 400 in production.
+     */
+    const { status, body } = await push([
+      envelope(),
+      envelope({ entityId: "22222222-2222-4222-8222-222222222222", clientSeq: 2 }),
+    ]);
+    expect({ status, code: body.code }).toEqual({ status: 400, code: "validation" });
+    expect(String(body.message)).toContain("opId is repeated within this batch");
+  });
+
+  it("refuses an envelope whose protocol disagrees with the request header", async () => {
+    // The one field the whole registry leg hangs on, and the fake never checked it.
+    const { status, body } = await push([envelope({ protocol: 1 })], 2);
+    expect({ status, code: body.code }).toEqual({ status: 400, code: "validation" });
+    expect(String(body.message)).toContain("disagrees with the request header");
+  });
+
+  it("accepts a well-formed registry batch, so the refusals are not refusing everything", async () => {
+    const { status } = await push([
+      envelope(),
+      envelope({ opId: "op-2", entityId: "22222222-2222-4222-8222-222222222222", clientSeq: 2 }),
+    ]);
+    expect(status).toBe(200);
   });
 });
 
@@ -1527,7 +1634,15 @@ describe("the hub is restorable from the service after a machine is lost", () =>
     process.env.STAPLE_HOME = bad.home;
     connect(bad.home, hubId, server, "device-bad", bad.hub);
     setRegistryConsent(bad.home, hubId, true, REGISTRY_DISCLOSURE);
-    seed(bad.home, bad.hub, "renamed-by-mistake", "TRK", "11111111-1111-4111-8111-111111111111");
+    /**
+     * ADOPTS FIRST, which is now the only route to publishing from a second machine —
+     * publish refuses while the service holds anything this machine does not. So the damage
+     * is a rename by a machine that IS current, which is the realistic version of this
+     * scenario and the one the restore has to be able to undo.
+     */
+    await adoptPublishedRegistry(bad.hub, bad.home, { fetchImpl: server.fetch, apply: true });
+    bad.hub.recordRepositoryId("tracker", null);
+    seed(bad.home, bad.hub, "renamed-by-mistake", "TRK2", "11111111-1111-4111-8111-111111111111");
     await publishRegistry(bad.hub, bad.home, { fetchImpl: server.fetch });
     bad.hub.close();
 

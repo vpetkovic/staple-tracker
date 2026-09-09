@@ -371,16 +371,51 @@ What makes it worth a recipe is that it is **irreversible by the one remedy a us
 A restore materialises the fold into the new epoch, so the protocol-2 entity is
 re-materialised and survives. Rolling the epoch does not remove it.
 
-The remedy is operator-side, and it is surgical rather than a purge. Identify the rows:
+The remedy is operator-side, and it is surgical rather than a purge.
+
+**Step 0 — check for an in-flight restore, and stop if there is one.**
 
 ```bash
 npx wrangler d1 execute staple-sync-dev --remote -c wrangler.local.toml --command \
-  "SELECT epoch, seq, entity, entity_id FROM ops
-    WHERE repo_id = '<workspace repo id>' AND entity IN ('registration','crossLink')
-    ORDER BY epoch, seq;"
+  "SELECT restore_id, from_epoch, to_epoch, staged_count, status
+     FROM restores WHERE repo_id = '<workspace repo id>' AND status = 'staging';"
 ```
 
-Then delete exactly those, in every epoch they appear in:
+If that returns a row, **do not delete anything yet.** `stage` resumes from a slice OFFSET
+into the backup's entity list, not from which entities are present, so deleting rows out of
+a staging `to_epoch` makes the next resume re-insert them *and* advance `repos.last_seq`
+again. Drive the restore to completion first (call the restore route until `done`), or delete
+the `restores` row so it cannot resume, and only then continue.
+
+**Step 1 — capture the rows to a file before deleting anything.** `SELECT *`, not a
+four-column projection: a mistyped `repo_id` deletes rows that cannot be reconstructed from
+`epoch, seq, entity, entity_id` alone, because `payload`, `actor`, `client_seq`,
+`created_at` and `server_ts` are gone with them.
+
+```bash
+npx wrangler d1 execute staple-sync-dev --remote -c wrangler.local.toml --json --command \
+  "SELECT * FROM ops
+    WHERE repo_id = '<workspace repo id>' AND entity IN ('registration','crossLink')
+    ORDER BY epoch, seq;" > contaminated-ops.json
+```
+
+Read it and confirm the `repo_id` is the one you meant before going further.
+
+**Step 2 — find the contaminated BACKUPS.** There will usually be several: every restore
+auto-creates a `pre-restore` backup, so any repository that has been restored since the
+operations landed has captured them.
+
+```bash
+npx wrangler d1 execute staple-sync-dev --remote -c wrangler.local.toml --command \
+  "SELECT backup_id, kind, epoch, protocol, created_at
+     FROM backups WHERE repo_id = '<workspace repo id>' AND protocol >= 2;"
+```
+
+`protocol >= 2` is the marker — `captureBackup` stamps the lowest protocol that can replay
+the fold, so a workspace backup carrying a registry entity is the only reason a workspace
+repository would have one stamped 2.
+
+**Step 3 — delete the operations, in every epoch they appear in:**
 
 ```sql
 DELETE FROM ops
@@ -394,10 +429,15 @@ does not disturb cursors, and `repos.last_seq` is deliberately left alone so no 
 ever reused. Devices that had already applied the operations are unaffected: they are the
 only clients that could read them, and a protocol-2 client tolerates their absence.
 
-**Do this before taking a backup you intend to keep**, because a backup captured while the
-rows are present carries them into every future restore. If one already exists, delete that
-backup row too — `DELETE FROM backups WHERE repo_id = '…' AND backup_id = '…'` — rather
-than restoring from it.
+**Step 4 — delete every backup step 2 found**, rather than restoring from it:
+
+```sql
+DELETE FROM backups WHERE repo_id = '<workspace repo id>' AND backup_id = '<id>';
+```
+
+Do this in the same sitting. A backup captured while the rows were present carries them into
+every future restore, so leaving one is leaving the problem behind a route a user can reach
+on their own.
 
 Only if the rows cannot be identified is the answer `DELETE /v1/repos/{repoId}` (purge) and
 a re-provision from a device that still holds the data. That is the outcome this recipe

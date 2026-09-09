@@ -1062,73 +1062,46 @@ the cross-link payload, and resurrection is an ordinary update the fold's plain 
 already handles. A missing `present` reads as present, so edges published before the
 field existed are not lost.
 
-**`workspaces.repository_id` is written when staple OPENS a workspace**, from the manifest
-that is its authority. It is the adoption key, and until STA-283 nothing on a user-facing
+**`workspaces.repository_id` is written by `staple init`**, from the manifest that is its
+authority — measured, not assumed: after clearing the column, `staple ls` and
+`staple ls --ws <slug>` both leave it null and `staple init` restores it. It is the adoption key, and until STA-283 nothing on a user-facing
 path wrote it at all: `Hub.register()` runs before the manifest exists and `connect` never
 touched it. So publish uploaded an empty registry and adoption could not recognise a
-workspace this machine already had. A row whose workspace has not been opened since is
+workspace this machine already had. A row whose workspace has not been re-inited since is
 reconciled at publish, adopt and restore. An identity held by two rows is **reported, not
 published** — two clones or two worktrees of one repository legitimately share one, and
 publishing both would make the registered name flip between them on every pass.
 
-**A machine may only retract an edge when, for both endpoint slugs, the workspace it holds
-under that slug is the same repository the service has a registration for.** Absence of an
-edge locally is not a removal: adoption previews by default, and even on an apply it skips
-an edge naming a workspace that did not land — which happens for an opted-out identity, a
-parked prefix collision, and an entry with no identity. Without a floor, a machine holding
-a strict subset retracts edges it was never in a position to know about, and a shared
-registry converges to the **intersection** of the machines' edges rather than to
-last-write-wins.
+**Publishing a registry is scoped to ONE machine, and a publish REFUSES when the service
+holds a registration this machine does not have and has not opted out of.** The refusal
+names `staple hub registry adopt --apply` as the remedy, because "another machine has
+published here" and "this machine is behind" are indistinguishable from the client and have
+the same answer.
 
-The floor keys on **identity, not slug**, and that distinction is the whole of it. Slugs
-derive from directory names, so two machines holding the same repositories match by
-default — a slug-keyed rule granted edge-deletion authority on a name match, and a machine
-that had cloned both repositories but never applied an adopt destroyed the other machine's
-edge on its first publish. Both sides of the comparison are already in the snapshot the
-diff reads, so it costs no new state. Anything a machine has no standing on is left exactly
-as published and reported, because a person who expected a removal to propagate needs to
-know it did not.
+Two machines sharing a registry is **not supported**, and the reasons are worth stating
+because neither is the accepted "two machines race on a name" — a name race settles once
+both agree:
 
-**Operation ids are `hub:<epoch>:<entity>:<32 hex of entityId, verb, base version and
-payload>`.** Two earlier shapes were wrong in the same way, one level apart. Keyed on the
-entity alone, any second write inside an epoch collided. Keyed on the content, a value
-that RETURNS to an earlier value collided with its own past — `alpha → beta → alpha →
-beta` left the service on `alpha` and reported success for ever. The base version is
-monotonic in the number of operations folded, so no two operations on one entity can
-share an id however often the content cycles. The dedupe role of the id is a backstop
-rather than the mechanism: idempotency comes from re-reading `GET /snapshot` and
-re-deriving the diff, so an operation that already landed is excluded before an id is
-computed.
+- **Edge removal cannot be authorised.** Absence of an edge locally is ambiguous between
+  "removed" and "never had", and *no comparison of the two sides can tell them apart*:
+  `.staple/repository.json` is tracked, so two clones legitimately share a `repository_id`,
+  and slugs are names. Authority needs a record of what a machine KNEW — an applied adopt,
+  or a per-edge ledger — which is hub-local state, i.e. the migration this leg exists to
+  avoid.
+- **`addedAt` could not converge** while it was sent on every update. It is the local row's
+  registration time, so two machines can never agree on it, and every pass appended an
+  operation to a metered log for ever. It is now sent only on the `create`, which makes it
+  first-writer-wins: the registry's own record of when the SET first learned of the
+  workspace.
 
-**There is no hub outbox and no hub migration.** Every workspace sync path assumes
-`sync_outbox`, `sync_state` and `sync_field_writes`; `hub.db` has none of them, and
-adding them would be a journal seam, a `client_seq` allocator, an applied-op ledger
-and a cursor bought for a table with a dozen rows in it. The registry is small and
-**fully re-derivable from current state**, so the operations to publish are computed
-on demand by comparing the hub against the service's current fold. An outbox exists
-to remember intent across a crash; a re-derivable set has no intent to remember. The
-cost is one `GET /snapshot` per publish, bounded by the number of workspaces on one
-machine.
+**So cross-links are additive-only.** Removing one does not propagate, exactly as
+unregistering a workspace does not, and for the reason given there: it would turn a
+reversible local act into an irreversible remote one. A removal is reported to the person
+who made it rather than silently dropped, and adopting brings the edge back. The
+consequence is that two machines publishing one registry can no longer destroy each other's
+edges at all — what remains is the slug name race, which settles.
 
-**The registry identity is adopted, never re-minted.** The hub id names *the
-registry* — one person's set of workspaces — and not the machine; the machine is
-named by `deviceId`, which is separate and already hub-wide. Two machines belonging
-to one person share a hub id on purpose, because that sharing is the mechanism by
-which the second learns what the first has. A replacement machine that minted its own
-would be scoped to an empty repository and would report, truthfully and uselessly,
-that there is nothing to restore. So the id travels out of band alongside the
-enrollment secret, for the same reason: the service has no account model to look
-either of them up in. Replacing an id the machine is already connected under is
-refused, because it would leave the old registry published with nothing pointing at
-it.
-
-**Staple cannot provision the hub.** This page defines no provisioning route and no
-account model, so the Worker has none, and an unknown repository id answers
-`forbidden` on purpose — *"an unknown id is far more likely to be a copied manifest
-than a new repository"*. Every surface that offers to connect a hub must therefore
-render a **"not provisioned on this service"** state that names the out-of-band step,
-rather than a generic failure that reads as a bug. See `worker/README.md`,
-"Provisioning a repository".
+Convergence is a separate ticket.
 
 ### Adoption, not duplication
 

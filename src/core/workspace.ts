@@ -205,9 +205,14 @@ export function initWorkspace(options: {
     /**
      * Read back for the comparison below, so the common case writes nothing.
      *
-     * `recordRepositoryId` is an unconditional UPDATE, and this runs on every workspace
-     * open — including `staple ls`. Writing the same value on every command would dirty
-     * the hub's WAL for no reason.
+     * `recordRepositoryId` is an unconditional UPDATE, and `initWorkspace` runs on every
+     * `staple init` — including the repeat inits that are ordinary in a checkout. Writing
+     * the same value each time would dirty the hub's WAL for no reason.
+     *
+     * NOT "every workspace open": that claim was in this comment and was false. This is
+     * `initWorkspace`; `openWorkspace` in `open.ts` never touches the hub. Measured — after
+     * nulling the column, `staple ls` and `staple ls --ws <slug>` both left it null and
+     * `staple init` restored it.
      */
     const hubRow = hub.get(storedSlug);
 
@@ -282,11 +287,17 @@ export function initWorkspace(options: {
      * `hub.recordRepositoryId(...)` by hand — a hub-internal API no user path invokes —
      * so the proofs were of a column nothing populated.
      *
-     * This is the right place for it: the hub is already open in this scope, the identity
-     * has just been reconciled from the manifest that is its authority, and every command
-     * that touches a workspace comes through here — so a machine that predates this fix
-     * heals the first time anything opens the workspace, with no migration and no repair
-     * command.
+     * This is the right place for it: the hub is already open in this scope and the identity
+     * has just been reconciled from the manifest that is its authority.
+     *
+     * What it does NOT do, and an earlier version of this comment claimed: heal on any
+     * command. This is `initWorkspace`, not `openWorkspace` — `open.ts` never touches the
+     * hub — so a machine that predates this fix heals on the next `staple init` in that
+     * workspace, which is idempotent and adopts rather than creating. Rows whose workspace
+     * is not re-inited are covered by `reconcileRepositoryIds`, which the registry paths
+     * call. Moving the write into `openWorkspace` would make it heal on any command and was
+     * considered; it would put a hub open on every read path including `staple ls`, which is
+     * a cost this ticket has no need to pay.
      *
      * Local row work only. It makes no network call and it is not `connect`; a workspace
      * carrying an identity has consented to nothing. See the comment above and
