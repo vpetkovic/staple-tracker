@@ -45,10 +45,41 @@
  * are the same file." Two spellings of one path compare unequal as strings, so
  * an un-normalised repair would rewrite the row on every single command —
  * turning every read into a hub write, forever.
+ *
+ * ## Why a MOVE and a COPY are not the same repair (STA-285)
+ *
+ * The paragraph above describes the repair as if a stale path could only ever
+ * mean a moved repository. It cannot. `cp -R` and `rsync` produce a second
+ * directory that holds the same slug, the same prefix and the same repository
+ * id, and opening it walked up, found a row naming the OTHER copy, and
+ * repointed. Every command in whichever copy you were standing in stole the
+ * registration back, so the registry did not disagree once — it flapped, and
+ * every read was a hub write.
+ *
+ * S20's host binding cannot see this: `origin_host` is null for every
+ * checkout-backed workspace, and both copies are on one host, so the recorded
+ * fingerprint matches in both. `findRepositoryIdCollisions` cannot see it
+ * either, because it compares REGISTERED paths and there was only ever one
+ * registration. The evidence is here, at the moment of the repoint, and nowhere
+ * else — which is why the decision is here rather than in `repo-identity.ts`.
+ *
+ * The discriminator is whether the registered path is still occupied:
+ *
+ *   - a MOVE vacates it, so re-pointing is the only way the row can be right;
+ *   - a COPY leaves a live workspace database there, so re-pointing takes the
+ *     registration away from a directory that still exists and still claims it.
+ *
+ * {@link classifyRegisteredPath} is that question, and it reports rather than
+ * choosing: "the right answer depends on which copy is the real one, and only a
+ * human knows that" (`findRepositoryIdCollisions`). A second claimant returns
+ * `conflict` with both paths named, nothing is written, and — as with every
+ * other failure here — the local command still works.
  */
 import { existsSync } from "node:fs";
+import { basename, dirname } from "node:path";
 import { Hub } from "./hub.js";
-import { normalizePath } from "./path-migration.js";
+import { LEGACY_WORKSPACE_DIRNAME, WORKSPACE_DIRNAME, normalizePath } from "./path-migration.js";
+import { findRepositoryIdCollisions, readWorkspaceManifest } from "./repo-identity.js";
 
 export type HubRepairOutcome =
   | "current" // the row already points here; nothing written
@@ -77,6 +108,157 @@ export interface HubRepairTarget {
   /** The database that was actually opened. */
   dbPath: string;
   kind?: string;
+}
+
+/**
+ * What is at the path the hub still names, relative to the one just opened.
+ *
+ *   - `vacated` — nothing is there. The workspace moved; re-point.
+ *   - `same-project` — both paths are inside ONE project root, so they are two
+ *     layouts of one workspace rather than two workspaces; re-point.
+ *   - `distinct-identity` — a live workspace, provably a DIFFERENT repository.
+ *     The row is stale because something else moved into the old directory;
+ *     re-point, and leave the newcomer's own row alone.
+ *   - `shared-identity` — a live workspace presenting the SAME repository id.
+ *     Two copies, one registration; report both paths and write nothing.
+ *   - `indistinguishable` — a live workspace, and no identity on either side to
+ *     tell them apart. Report, for the reason given in
+ *     {@link classifyRegisteredPath}.
+ */
+export type RegisteredPathVerdict =
+  | { kind: "vacated" }
+  | { kind: "same-project" }
+  | { kind: "distinct-identity" }
+  | { kind: "shared-identity"; repositoryId: string }
+  | { kind: "indistinguishable" };
+
+/** True for the two verdicts that mean "somebody else still lives there". */
+export function isSecondClaimant(verdict: RegisteredPathVerdict): boolean {
+  return verdict.kind === "shared-identity" || verdict.kind === "indistinguishable";
+}
+
+/**
+ * The project root a workspace database belongs to, or null when it is not in a
+ * project at all (a `--global` workspace lives at `<home>/workspaces/<slug>.db`).
+ */
+function projectRootOf(dbPath: string): string | null {
+  const dir = dirname(dbPath);
+  const enclosing = basename(dir);
+  if (enclosing !== WORKSPACE_DIRNAME && enclosing !== LEGACY_WORKSPACE_DIRNAME) return null;
+  return dirname(dir);
+}
+
+/** Read an identity without letting a broken one become an exception. */
+function identityOf(dbPath: string): string | null {
+  try {
+    return readWorkspaceManifest(dbPath)?.repositoryId ?? null;
+  } catch {
+    /**
+     * `readWorkspaceManifest` refuses a manifest it cannot parse, and that
+     * discipline is right everywhere it matters — every path that MOVES data
+     * reads through it and fails closed. It must not fail closed HERE, where the
+     * question is only "can I prove these two directories are one repository".
+     * An unparseable manifest is not proof, and it is already reported by the
+     * identity surfaces whose job that is. Treating it as an exception would
+     * turn a hand-broken JSON file into a `doctor` check that says nothing
+     * except that a check threw.
+     */
+    return null;
+  }
+}
+
+/**
+ * Is the path the hub registers a moved-away ghost, or a second live claimant?
+ *
+ * ## What it costs, and where
+ *
+ * Nothing at all in the steady state: {@link repairHubRegistration} compares the
+ * two normalised paths first and returns `current` when they agree, which is
+ * every command in a workspace whose row is correct. This function is only
+ * reached when the row DISAGREES — once per move, and once per command inside a
+ * copy until an operator settles it.
+ *
+ * On that branch it costs one `existsSync`, then up to two small file reads. It
+ * deliberately does NOT open the registered database: a manifest is a two-key
+ * JSON file beside it, and opening SQLite to compare `sync_state` would take a
+ * lock on a database another process may be using, for an answer the tracked
+ * file already carries.
+ *
+ * The pathological case is now CHEAPER than the bug it replaces. Two copies used
+ * to cost one hub write per command, forever; they now cost four stat-and-read
+ * syscalls and no write.
+ *
+ * ## Why `existsSync` is not the whole answer
+ *
+ * A directory a workspace moved out of can be occupied again — by another
+ * project, or by the legacy database `staple migrate` deliberately RETAINS at
+ * `.tasks/tasks.db` beside the `.staple/staple.db` it wrote. A presence-only
+ * check would refuse to repair those rows and would keep refusing forever,
+ * breaking both a re-used directory and the crash recovery of a migration. Hence
+ * `same-project`, which is pure path arithmetic, and the identity read, which is
+ * bounded to this branch.
+ *
+ * ## Why an unreadable identity is reported rather than repaired
+ *
+ * The row asserts that this workspace lives at that path. When a live database
+ * is there and nothing proves it is a different repository, the assertion may
+ * still be true, and overwriting it is the silent oscillation this whole change
+ * exists to stop. So the tie goes to reporting: nothing is written, the local
+ * command still works, and a human is shown two paths and asked which one is
+ * real. The cost of being wrong is a stale row and a `doctor` line that names
+ * the fix; the cost of the other default is the bug.
+ */
+export function classifyRegisteredPath(
+  registeredDbPath: string,
+  openedDbPath: string,
+): RegisteredPathVerdict {
+  if (!existsSync(registeredDbPath)) return { kind: "vacated" };
+
+  const registeredRoot = projectRootOf(registeredDbPath);
+  const openedRoot = projectRootOf(openedDbPath);
+  if (registeredRoot !== null && registeredRoot === openedRoot) return { kind: "same-project" };
+
+  const registeredId = identityOf(registeredDbPath);
+  const openedId = identityOf(openedDbPath);
+  /**
+   * The pair, run through S2's own diagnostic rather than a second `===`. It is
+   * pure and takes entries precisely so a caller with two paths in hand can ask
+   * it without a hub, and using it keeps one definition of "these two paths
+   * claim one identity" on the machine.
+   */
+  const [collision] = findRepositoryIdCollisions([
+    { path: registeredDbPath, repositoryId: registeredId },
+    { path: openedDbPath, repositoryId: openedId },
+  ]);
+  if (collision) return { kind: "shared-identity", repositoryId: collision.repositoryId };
+  if (registeredId !== null && openedId !== null) return { kind: "distinct-identity" };
+  return { kind: "indistinguishable" };
+}
+
+/**
+ * One sentence for two surfaces.
+ *
+ * `repairHubRegistration` returns it as `error` and `doctor` prints it as a
+ * failed check's detail, so the wording a script reads out of JSON and the
+ * wording a human reads in the terminal cannot drift apart.
+ */
+export function describeSecondClaimant(input: {
+  slug: string;
+  registered: string;
+  opened: string;
+  verdict: RegisteredPathVerdict;
+}): string {
+  const shared =
+    input.verdict.kind === "shared-identity"
+      ? `Both present repository ${input.verdict.repositoryId}, so one is a copy of the other.`
+      : "Neither presents a repository identity that tells them apart, so a copy cannot be ruled out.";
+  return (
+    `Two directories on this machine claim workspace "${input.slug}": the hub registers ` +
+    `${input.registered}, and this resolved ${input.opened}. Both still hold a workspace database. ` +
+    `${shared} Staple will not choose between them, so the registration was left as it was and ` +
+    "nothing was written. Local commands work in both. Keep the one you mean and either delete the " +
+    "other or give it its own identity with `staple cloud fork-id`."
+  );
 }
 
 /**
@@ -124,6 +306,25 @@ export function repairHubRegistration(target: HubRepairTarget): HubRepairResult 
       const pathBefore = normalizePath(existing.path);
       if (pathBefore === pathAfter) {
         return { ...base, outcome: "current", pathBefore };
+      }
+      /**
+       * STA-285. Everything from here down is the rare branch — the row and the
+       * resolution disagree — so the question "did it move, or was it copied"
+       * costs nothing on the path every other command takes.
+       */
+      const verdict = classifyRegisteredPath(pathBefore, pathAfter);
+      if (isSecondClaimant(verdict)) {
+        return {
+          ...base,
+          outcome: "conflict",
+          pathBefore,
+          error: describeSecondClaimant({
+            slug: target.slug,
+            registered: pathBefore,
+            opened: pathAfter,
+            verdict,
+          }),
+        };
       }
       hub.repointPath({ slug: target.slug, prefix: target.prefix, path: pathAfter, kind: existing.kind });
       return { ...base, outcome: "repointed", pathBefore, changed: true };
@@ -199,6 +400,53 @@ export interface StaleHubRow {
   resolvable: boolean;
   /** True when only the spelling differs and both name the same existing file. */
   spellingOnly: boolean;
+}
+
+/** A registered workspace that already holds the identity another path claims. */
+export interface CopyClaimant {
+  slug: string;
+  /** The registered path, normalised. It exists. */
+  path: string;
+  repositoryId: string;
+}
+
+/**
+ * Is some OTHER live registration already holding this database's identity?
+ *
+ * The question {@link classifyRegisteredPath} answers for the walk-up path, asked
+ * from the other end — by a caller that has a path in hand and has not been
+ * given a row to compare it against. `staple add <copy>` is that caller: it
+ * reaches the registry through `performSetup` -> `initWorkspace` ->
+ * `hub.register()`, whose upsert on `slug` would repoint the row before
+ * `repairHubRegistration` ever saw it.
+ *
+ * Two deliberate differences from the walk-up decision:
+ *
+ *   - it scans every live row rather than one, because `add` does not know which
+ *     slug the directory it was handed will register as until it is opened; and
+ *   - it requires a PROVEN shared identity. The walk-up branch reports an
+ *     unreadable identity because the row it is about to overwrite specifically
+ *     asserts that path. Here the rows are strangers, and refusing `add` because
+ *     some unrelated legacy workspace on the machine has no manifest would be a
+ *     refusal with no evidence behind it.
+ *
+ * Read-only, and only ever on an explicit `add`: one manifest read per live row,
+ * on a command that already opens a database and previews a plan.
+ */
+export function findCopyClaimant(hub: Hub, openedDbPath: string): CopyClaimant | null {
+  const here = normalizePath(openedDbPath);
+  const mine = identityOf(here);
+  if (mine === null) return null;
+
+  for (const entry of hub.list()) {
+    const registered = normalizePath(entry.path);
+    if (registered === here) continue;
+    const verdict = classifyRegisteredPath(registered, here);
+    if (verdict.kind === "shared-identity") {
+      return { slug: entry.slug, path: registered, repositoryId: verdict.repositoryId };
+    }
+  }
+  return null;
 }
 
 export function findRepointableRows(hub: Hub): StaleHubRow[] {

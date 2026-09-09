@@ -37,7 +37,12 @@ import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { effectiveConfig, readConfig, resolveHome, setHomeOverride, stapleHome } from "../config/index.js";
 import { Hub } from "../core/hub.js";
-import { findRepointableRows } from "../core/hub-repair.js";
+import {
+  classifyRegisteredPath,
+  describeSecondClaimant,
+  findRepointableRows,
+  isSecondClaimant,
+} from "../core/hub-repair.js";
 import {
   describeLayout,
   findMigrationRoot,
@@ -658,13 +663,41 @@ function checkWorkspaceHubLink(dir: string): CheckResult {
         data,
       );
     }
-    if (normalizePath(entry.path) !== here) {
+    const registered = normalizePath(entry.path);
+    if (registered !== here) {
+      /**
+       * STA-285. This branch used to say one thing — "normal resolution repairs
+       * this" — and there are two reasons to be standing in it. Resolution DID
+       * decline to repair when the registered path still holds a live workspace
+       * database, and that is a report, not a failed write.
+       *
+       * It is also the only surface that can see this state. The second copy is
+       * not registered, so `hub-registrations` cannot enumerate it and no view
+       * of the hub alone will ever mention it; the evidence exists only for a
+       * command standing in one of the two directories. That is why the check
+       * lives here rather than beside the repointable-row sweep.
+       */
+      const verdict = classifyRegisteredPath(registered, here);
+      if (isSecondClaimant(verdict)) {
+        return result(
+          "workspace-hub-link",
+          "Hub link",
+          "fail",
+          describeSecondClaimant({ slug, registered, opened: here, verdict }),
+          {
+            ...data,
+            secondClaimant: registered,
+            sharedRepositoryId: verdict.kind === "shared-identity" ? verdict.repositoryId : null,
+          },
+        );
+      }
       return result(
         "workspace-hub-link",
         "Hub link",
         "warn",
         `The hub points "${slug}" at ${entry.path}, but it resolves here to ${found.dbPath}. ` +
-          "Normal resolution repairs this; if you are seeing it, the repair could not write to the hub.",
+          "Nothing there claims to be this workspace, so normal resolution repairs it; if you are " +
+          "seeing this, the repair could not write to the hub.",
         data,
       );
     }
