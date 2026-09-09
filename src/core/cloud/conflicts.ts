@@ -58,12 +58,22 @@
  * detection.**
  *
  * So the evidence lives in `sync_field_writes` (migration 011): the newest write
- * of each field of each entity, with the version it moved off, written by BOTH
- * paths that can change a field — `Journal.flush` for a local mutation and
- * {@link screenForConflicts} for an applied remote one. Only the newest write per
- * field is kept, which is all detection asks for, and which bounds the table by
- * live entities rather than by history: nothing time-based ever prunes it, so
- * nothing time-based can expire it.
+ * of each field of each entity, with the version it moved off, written by all
+ * THREE paths by which this database can come to hold a field — `Journal.flush`
+ * for a local mutation, {@link screenForConflicts} for an applied remote one, and
+ * `recordInheritedFieldWrites` for one folded into a snapshot (STA-263). Only the
+ * newest write per field is kept, which is all detection asks for, and which
+ * bounds the table by live entities rather than by history: nothing time-based
+ * ever prunes it, so nothing time-based can expire it.
+ *
+ * The third path needs the SERVER's help and is why it arrived separately. A fold
+ * ships one value per field and cannot say which of them anybody chose, so a
+ * device recording the snapshot's fields wholesale would claim every default the
+ * `create` carried — contesting a `medium` nobody picked. `worker/src/fold.ts`
+ * therefore carries per-field provenance for the keys a NON-CREATE operation
+ * touched, which is the same line `Journal.flush` draws for local writes, and the
+ * result is that a bootstrapped device holds field-for-field what a device
+ * present for the whole log holds.
  *
  * **{@link screenForConflicts} therefore writes as well as reads**, in the
  * caller's transaction, immediately before the apply it screens for. Its name
@@ -622,19 +632,22 @@ function contest(
    * field record does, WITH an attribution, and the conflict id therefore
    * converges across the fleet where it previously could not.
    *
-   * It is not dead. Provenance is not universal and cannot be made so:
+   * STA-263 closed the second of the two cases this branch was left standing for.
+   * A device that bootstrapped from a snapshot used to hold values it had neither
+   * authored nor relayed with no per-field provenance behind them; the fold now
+   * carries it, so an inherited plan is defended by the ordinary field record,
+   * WITH the operation id, exactly like a relayed one.
    *
-   *   - a database upgraded to 011 whose outbox had ALREADY been compacted has
-   *     nothing to backfill from — the evidence was destroyed before the table
-   *     existed, and no migration can reconstruct it;
-   *   - a device that bootstrapped from a snapshot holds values it neither
-   *     authored nor relayed, and the fold ships no per-field provenance.
+   * It is still not dead, because one case cannot be reconstructed by anybody: a
+   * database upgraded to 011 whose outbox had ALREADY been compacted has nothing
+   * to backfill from. The evidence was destroyed before the table existed, and no
+   * migration and no fold can bring it back.
    *
-   * In both, `localOpId` is `null`, the two ORDERS are still retained in full —
-   * and it is the orders, not the operation ids, that a human is being asked to
-   * choose between — and {@link settleOpenFor} is what closes a record whose id
-   * no other device computes. That path is exercised by the "no provenance at
-   * all" case in `test/cloud-scalar-conflict-evidence.test.ts`.
+   * There, `localOpId` is `null`, the two ORDERS are still retained in full — and
+   * it is the orders, not the operation ids, that a human is being asked to choose
+   * between — and {@link settleOpenFor} is what closes a record whose id no other
+   * device computes. That path is exercised by the "no provenance at all" case in
+   * `test/cloud-scalar-conflict-evidence.test.ts`.
    */
   const wholeField = WHOLE[op.entity];
   if (wholeField !== undefined && !localWrites.has(wholeField)) {

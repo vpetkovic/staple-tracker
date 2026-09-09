@@ -208,10 +208,38 @@ export function recordSyncedAt(db: DatabaseSync, at: string = nowIso()): void {
  * applied. The entity versions and the tombstones stay: a deletion that happened
  * here still happened here, and rewinding versions would make the next local
  * operation claim a `baseVersion` it has already used.
+ *
+ * ## `sync_field_writes` is cleared for the same reason, and it has to be
+ *
+ * Every row there is a claim expressed in TWO currencies of the epoch being left
+ * behind — a `base_version` on that epoch's counter, and an `op_id` minted in it.
+ * A restore makes both worthless, and keeping them is not conservative, it is
+ * wrong: measured on a real restore, a re-bootstrapped device held rows at
+ * `base_version 2` naming an epoch-1 operation, and used them to contest an
+ * ordinary post-restore edit from a device that had hydrated fresh. The fresh
+ * device recorded no conflict at all, so the fleet was split over an argument one
+ * side was not having, attributed to an operation from a timeline nobody was on.
+ *
+ * That is exactly the argument three lines above for clearing `sync_applied`, and
+ * the reason the versions are KEPT does not reach here: versions are kept because
+ * of what this device will go on to EMIT, and a field write is never emitted. It
+ * is only ever read, to answer "have I written this field since version X" — and
+ * a stale answer to that question is worse than no answer.
+ *
+ * Not an `epoch` column, which is the other way to fix it. That is a migration for
+ * state that is worthless the instant the epoch moves, no reader would ever ask
+ * for the old epoch's rows, and it would let a table whose whole design property
+ * is *bounded by live entities* start growing with epochs instead.
+ *
+ * What clearing would lose on its own is provenance for work this device has NOT
+ * pushed — the one thing a re-bootstrap explicitly preserves. {@link
+ * replayOutboxFieldWrites} puts exactly that back, and nothing else, once the
+ * snapshot half has finished.
  */
 export function beginBootstrap(db: DatabaseSync, epoch: number): void {
   tx(db, () => {
     db.prepare("DELETE FROM sync_applied").run();
+    db.prepare("DELETE FROM sync_field_writes").run();
     db.prepare(
       "UPDATE sync_state SET cursor = NULL, bootstrap_cursor = NULL, epoch = ? WHERE id = 1",
     ).run(epoch);

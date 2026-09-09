@@ -294,6 +294,152 @@ export function recordFieldWrites(db: DatabaseSync, record: FieldWriteRecord): v
   }
 }
 
+/** One inherited field write, as the snapshot fold computed it. */
+export interface InheritedFieldWrite {
+  /** The payload key as the operation spelled it, which is what `field` stores. */
+  readonly field: string;
+  /** The entity version that write moved off. */
+  readonly baseVersion: number;
+  readonly opId: string;
+  readonly at: string;
+}
+
+/**
+ * Record the provenance a hydrating device INHERITED with a snapshot entity (STA-263).
+ *
+ * The third writer of this table, and the one that closes the last hole in it. A device
+ * that bootstrapped held values it had neither authored nor relayed, so it could not
+ * answer *"have I written this field since the version you claim?"* for any of them and
+ * handed the next stale write whatever it asked for, in silence.
+ *
+ * Separate from {@link recordFieldWrites} for one reason and it is not cosmetic: those
+ * writers record a set of fields that share ONE base version, because they are recording
+ * one operation. These rows come from different operations spread across the whole log
+ * and each carries its own — which is exactly what stops a snapshot from claiming every
+ * field was written at the snapshot's version, the mistake that would contest a `medium`
+ * nobody chose. Collapsing the two functions would mean collapsing that distinction.
+ *
+ * `device_id` is stored NULL. The server's fold does not carry it — nothing reads it,
+ * and migration 011's own backfill leaves it null for the same reason — while `op_id`
+ * IS carried, so a hydrated device names the operation it is defending and reaches the
+ * same conflict id as the device that authored it.
+ */
+export function recordInheritedFieldWrites(
+  db: DatabaseSync,
+  entity: string,
+  entityId: string,
+  writes: readonly InheritedFieldWrite[],
+  priorVersion: number,
+): void {
+  if (writes.length === 0) return;
+  const insert = db.prepare(
+    `INSERT INTO sync_field_writes
+       (entity, entity_id, field, base_version, op_id, device_id, written_at)
+     VALUES (?, ?, ?, ?, ?, NULL, ?)
+     ON CONFLICT (entity, entity_id, field) DO UPDATE SET
+       base_version = excluded.base_version,
+       op_id        = excluded.op_id,
+       device_id    = excluded.device_id,
+       written_at   = excluded.written_at
+      WHERE excluded.base_version >= sync_field_writes.base_version`,
+  );
+  for (const write of writes) {
+    /**
+     * `max(priorVersion, …)`, and `priorVersion` is the entity version this device
+     * held BEFORE the snapshot set it — never the version the snapshot reports.
+     *
+     * On a first bootstrap there is no prior version, so this is the fold's own
+     * per-field number, untouched, and the distinction between a field somebody set
+     * and one that arrived carrying its default survives intact. Reading the version
+     * AFTER `setEntityVersion` would flatten every field to the entity's version and
+     * throw that distinction away — which is the trap this whole ticket exists to
+     * avoid, reintroduced one line later.
+     *
+     * On a RE-bootstrap it matters. `beginBootstrap` deliberately does not rewind
+     * `sync_entity_versions`, so a device carries its old counter into the new epoch
+     * while the fold's numbers restart at zero. Writing the fold's numbers verbatim
+     * would leave every inherited field sitting below the counter that is actually in
+     * use, and therefore defenceless against the first operation to arrive.
+     *
+     * The rule is not invented here: {@link screenForConflicts} records
+     * `max(version, op.baseVersion)` for a relayed operation, for the same reason —
+     * a value arriving on a lower scale than this device counts on is at least as
+     * current as this device is.
+     */
+    insert.run(
+      entity,
+      entityId,
+      write.field,
+      Math.max(priorVersion, write.baseVersion),
+      write.opId,
+      write.at,
+    );
+  }
+}
+
+/**
+ * Put back the provenance for work this device has not pushed yet.
+ *
+ * {@link beginBootstrap} clears `sync_field_writes` because every row in it is
+ * denominated in an epoch that has been replaced. That is right for everything the
+ * server can re-supply and wrong for one thing it cannot: the outbox survives a
+ * re-bootstrap by design — *"its pending local work survives"* — and the fields
+ * those queued operations name are values this device holds and will go on to
+ * defend. Without this, a device that re-bootstrapped with work in flight would
+ * push its own edit and then hand it to the next stale write in silence, which is
+ * the relay defect reached by a third road.
+ *
+ * Replayed in allocation order so the newest write of each field lands last, which
+ * is the same replay migration 011 performs against the same table from the same
+ * source. `base_version IS NOT NULL` excludes creates for the same reason it does
+ * there and in {@link Journal.flush}: a create was never one of "the operations in
+ * between".
+ *
+ * The outbox's `base_version` values are already on the counter this device kept,
+ * because `beginBootstrap` does not rewind it — so unlike the snapshot's numbers
+ * they need no lifting.
+ *
+ * Called AFTER the snapshot half completes, not before it. The ordering is the
+ * whole argument: the server's view of the world is older than an operation this
+ * device has not yet sent, so this device's un-sent work is the last word.
+ */
+export function replayOutboxFieldWrites(db: DatabaseSync): void {
+  const rows = db
+    .prepare(
+      `SELECT op_id, entity, entity_id, base_version, payload, created_at
+         FROM sync_outbox
+        WHERE base_version IS NOT NULL
+        ORDER BY client_seq`,
+    )
+    .all() as Array<{
+    op_id: string;
+    entity: string;
+    entity_id: string;
+    base_version: number;
+    payload: string;
+    created_at: string;
+  }>;
+
+  for (const row of rows) {
+    let payload: unknown;
+    try {
+      payload = JSON.parse(row.payload);
+    } catch {
+      continue;
+    }
+    if (payload === null || typeof payload !== "object" || Array.isArray(payload)) continue;
+    recordFieldWrites(db, {
+      entity: row.entity,
+      entityId: row.entity_id,
+      fields: Object.keys(payload as Record<string, unknown>),
+      baseVersion: row.base_version,
+      opId: row.op_id,
+      deviceId: null,
+      at: row.created_at,
+    });
+  }
+}
+
 export class Journal {
   private scope: JournalScope | null = null;
 

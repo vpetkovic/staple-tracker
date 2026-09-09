@@ -97,6 +97,25 @@ export interface SnapshotEntity {
    */
   readonly verb: string;
   readonly state: Record<string, unknown>;
+  /**
+   * Per-field provenance for the keys somebody SET, keyed as the operation spelled
+   * them. Becomes this device's `sync_field_writes` rows for the entity.
+   *
+   * OPTIONAL, because a Worker older than STA-263 does not send it, and a device
+   * bootstrapping against one is exactly as blind as every device was before — no
+   * worse. It is never synthesised from `state`: the whole point is that the keys
+   * NOT here are the ones nobody chose, and `state` cannot tell them apart.
+   */
+  readonly fieldWrites?: Record<string, SnapshotFieldWrite>;
+}
+
+/** One field's provenance, as the server's fold computed it. */
+export interface SnapshotFieldWrite {
+  /** The entity version the write moved off — `sync_field_writes.base_version`. */
+  readonly baseVersion: number;
+  readonly opId: string;
+  /** The operation's client timestamp — `sync_field_writes.written_at`. */
+  readonly at: string;
 }
 
 export interface SnapshotPage {

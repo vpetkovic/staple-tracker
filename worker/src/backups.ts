@@ -69,7 +69,7 @@ import { type Session, sha256 } from "./auth.js";
 import { entityKey } from "./cursor.js";
 import type { Env } from "./env.js";
 import { SyncError, json } from "./errors.js";
-import { type FoldedEntity, foldLog, materializedVerb } from "./fold.js";
+import { type BackupEntity, foldLog, forBackup, materializedVerb } from "./fold.js";
 import { readJson } from "./http.js";
 import { PROTOCOL_MAX, PROTOCOL_MIN, maxBatchSize, planOf } from "./limits.js";
 import { log, tokenFingerprint } from "./log.js";
@@ -303,7 +303,11 @@ async function captureBackup(
       kind,
       createdAt,
       session.deviceId,
-      JSON.stringify({ label, entities: folded.entities }),
+      // `forBackup` drops the per-field provenance and nothing else. It describes THIS
+      // epoch — versions that restart and operation ids that are re-minted the moment a
+      // restore runs — so it is meaningless on the other side of the one operation a
+      // backup exists to serve. Same fold, one field lighter.
+      JSON.stringify({ label, entities: folded.entities.map(forBackup) }),
     )
     .run();
 
@@ -656,7 +660,7 @@ async function stageRestore(
     .first<{ state: string; schema_version: number }>();
   if (!source) throw new SyncError("not_found", "the backup being restored no longer exists");
 
-  const parsed = JSON.parse(source.state) as { entities: FoldedEntity[] };
+  const parsed = JSON.parse(source.state) as { entities: BackupEntity[] };
   const chunk = parsed.entities.slice(staged, staged + maxBatchSize(planOf(env)));
   if (chunk.length === 0) {
     throw new SyncError("conflict", "the backup holds fewer entities than the restore expects");

@@ -69,6 +69,19 @@ interface StoredLease {
 /** `worker/src/limits.ts`. Reproduced so a bad ttl is refused here too. */
 const DEFAULT_LEASE_TTL_SECONDS = 300;
 const MAX_LEASE_TTL_SECONDS = 3600;
+/**
+ * One field's provenance, as `worker/src/fold.ts::FieldWrite` computes it.
+ *
+ * Present only for keys a NON-CREATE operation carried, which is the whole of STA-263:
+ * a create ships the entity's defaults too, and treating those as decisions would make
+ * a later edit contest a value nobody chose.
+ */
+interface FieldWrite {
+  baseVersion: number;
+  opId: string;
+  at: string;
+}
+
 /** A folded entity, as a backup stores it. `superseded` records the verb. */
 interface FoldedEntity {
   entity: string;
@@ -78,7 +91,18 @@ interface FoldedEntity {
   lastSeq: number;
   superseded: boolean;
   state: Record<string, unknown>;
+  /** Stripped before a backup stores it, exactly as `fold.ts::forBackup` does. */
+  fieldWrites: Record<string, FieldWrite>;
 }
+
+/**
+ * What a backup stores — `worker/src/fold.ts::BackupEntity`.
+ *
+ * Without the provenance, because a restore materialises into a new epoch that restarts
+ * entity versions and re-mints operation ids, so every number in `fieldWrites` would name
+ * a timeline that no longer exists.
+ */
+type BackupEntity = Omit<FoldedEntity, "fieldWrites">;
 
 export interface FakeBackup {
   backupId: string;
@@ -91,7 +115,7 @@ export interface FakeBackup {
   kind: "manual" | "pre-restore";
   createdAt: number;
   createdByDevice: string;
-  entities: FoldedEntity[];
+  entities: BackupEntity[];
 }
 
 export interface FakeRestore {
@@ -688,56 +712,7 @@ export class FakeSyncServer {
       cutoff = this.lastSeq;
     }
 
-    const folded = new Map<
-      string,
-      {
-        entity: string;
-        entityId: string;
-        version: number;
-        deletedAt: number | null;
-        lastSeq: number;
-        /** True when the last surviving write was a `replace`. Mirrors `worker/src/fold.ts`. */
-        superseded: boolean;
-        state: Record<string, unknown>;
-      }
-    >();
-
-    for (const op of this.ops
-      .filter((candidate) => candidate.epoch === this.epoch && candidate.seq <= cutoff)
-      .sort((a, b) => a.seq - b.seq)) {
-      const key = `${op.entity} ${op.entityId}`;
-      let entry = folded.get(key);
-      if (!entry) {
-        entry = {
-          entity: op.entity,
-          entityId: op.entityId,
-          version: 0,
-          deletedAt: null,
-          lastSeq: op.seq,
-          superseded: false,
-          state: {},
-        };
-        folded.set(key, entry);
-      }
-      entry.version += 1;
-      entry.lastSeq = op.seq;
-      if (op.verb === "delete") {
-        entry.deletedAt = op.serverTs;
-        continue;
-      }
-      if (entry.deletedAt !== null) continue;
-      if (op.payload === null || typeof op.payload !== "object" || Array.isArray(op.payload)) {
-        continue;
-      }
-      // Every verb merges the keys it carried and is silent about the rest; only the
-      // record of the verb differs. Mirrors `worker/src/fold.ts` (STA-259).
-      Object.assign(entry.state, op.payload as Record<string, unknown>);
-      entry.superseded = op.verb === "replace";
-    }
-
-    const ordered = [...folded.values()].sort((a, b) =>
-      `${a.entity} ${a.entityId}` < `${b.entity} ${b.entityId}` ? -1 : 1,
-    );
+    const ordered = this.fold(cutoff).entities;
     const remaining = ordered.filter((entry) => `${entry.entity} ${entry.entityId}` > afterKey);
     const hasMore = remaining.length > limit;
     const page = remaining.slice(0, limit);
@@ -766,6 +741,14 @@ export class FakeSyncServer {
         lastSeq: entry.lastSeq,
         verb: entry.deletedAt !== null ? "delete" : entry.superseded ? "replace" : "create",
         state: entry.state,
+        /**
+         * A sibling of `state`, never derived from it (STA-263). The keys NOT here are
+         * the ones only a `create` carried — the entity's defaults — and a device that
+         * treated those as decisions would contest values nobody chose. A BACKUP gets
+         * the opposite treatment: `worker/src/fold.ts::forBackup` strips this, because
+         * a restore re-mints the very versions and operation ids it names.
+         */
+        fieldWrites: entry.fieldWrites,
       })),
       nextCursor: hasMore
         ? b64url(
@@ -784,14 +767,26 @@ export class FakeSyncServer {
     }
   }
 
-  /** The same fold `snapshot` computes, plus the verb, pinned at the watermark. */
-  private foldForBackup(): { entities: FoldedEntity[]; opCount: number; schemaVersion: number } {
+  /**
+   * `worker/src/fold.ts::foldLog`, reproduced.
+   *
+   * ONE fold, called by both the snapshot route and the backup capture, because the
+   * Worker has one and *"a backup computed by a different rule from the one
+   * `GET /snapshot` uses would restore into an epoch that hydrates differently from the
+   * way it was captured"*. This fixture used to hold two copies of it, and a fixture
+   * that disagrees with itself cannot prove the two halves of a bootstrap agree.
+   */
+  private fold(cutoff: number): {
+    entities: FoldedEntity[];
+    opCount: number;
+    schemaVersion: number;
+  } {
     const folded = new Map<string, FoldedEntity>();
     let opCount = 0;
     let schemaVersion = 0;
 
     for (const op of this.ops
-      .filter((candidate) => candidate.epoch === this.epoch && candidate.seq <= this.lastSeq)
+      .filter((candidate) => candidate.epoch === this.epoch && candidate.seq <= cutoff)
       .sort((a, b) => a.seq - b.seq)) {
       opCount += 1;
       if (op.schema > schemaVersion) schemaVersion = op.schema;
@@ -807,6 +802,7 @@ export class FakeSyncServer {
           lastSeq: op.seq,
           superseded: false,
           state: {},
+          fieldWrites: {},
         };
         folded.set(key, entry);
       }
@@ -820,9 +816,23 @@ export class FakeSyncServer {
       if (op.payload === null || typeof op.payload !== "object" || Array.isArray(op.payload)) {
         continue;
       }
-      // As above and as `worker/src/fold.ts`: the keys carried, not the entity (STA-259).
+      // Every verb merges the keys it carried and is silent about the rest; only the
+      // record of the verb differs. Mirrors `worker/src/fold.ts` (STA-259).
       Object.assign(entry.state, op.payload as Record<string, unknown>);
       entry.superseded = op.verb === "replace";
+
+      // And the provenance, for every verb but `create` — the line `Journal.flush`
+      // already draws, and what keeps an entity's defaults from looking chosen
+      // (STA-263). `version` is already incremented, so `- 1` is the version moved off.
+      if (op.verb !== "create") {
+        for (const field of Object.keys(op.payload as Record<string, unknown>)) {
+          entry.fieldWrites[field] = {
+            baseVersion: entry.version - 1,
+            opId: op.opId,
+            at: op.createdAt,
+          };
+        }
+      }
     }
 
     const entities = [...folded.values()].sort((a, b) =>
@@ -832,7 +842,7 @@ export class FakeSyncServer {
   }
 
   private captureBackup(deviceId: string, kind: "manual" | "pre-restore"): Record<string, unknown> {
-    const folded = this.foldForBackup();
+    const folded = this.fold(this.lastSeq);
     const backup: FakeBackup = {
       backupId: `backup-${this.backups.length + 1}`,
       epoch: this.epoch,
@@ -844,7 +854,9 @@ export class FakeSyncServer {
       kind,
       createdAt: Date.now() + this.backups.length,
       createdByDevice: deviceId,
-      entities: folded.entities,
+      // `worker/src/fold.ts::forBackup` — the fold minus this epoch's provenance,
+      // which a restore into a new epoch could only misdescribe.
+      entities: folded.entities.map(({ fieldWrites: _provenance, ...rest }) => rest),
     };
     this.backups.push(backup);
     return this.describeBackup(backup);

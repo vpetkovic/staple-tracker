@@ -52,6 +52,7 @@ async function runRestore(
   token: string,
   backupId: string,
   confirm: string = REPO,
+  device?: string,
 ): Promise<Record<string, unknown>> {
   let body: Record<string, unknown> = { confirm };
   let last: Record<string, unknown> = {};
@@ -60,6 +61,7 @@ async function runRestore(
       method: "POST",
       token,
       body,
+      device,
     });
     expect(response.status).toBe(200);
     last = await jsonOf<Record<string, unknown>>(response);
@@ -194,6 +196,172 @@ describe("restore materialises into the new epoch", () => {
       "issue-3",
     ]);
     expect(snapshot.entities[0]!.state).toEqual({ title: "title for issue-1" });
+  });
+
+  /**
+   * STA-263. A backup stores the fold MINUS its per-field provenance, because the new
+   * epoch restarts entity versions at zero and re-mints operation ids — an old epoch's
+   * `baseVersion` is on a different scale and its `opId` names a row nobody will ever
+   * pull. Carrying it across would let a device defend an inherited value by citing an
+   * operation that does not exist in the timeline it is now on.
+   *
+   * What the restored epoch then has is whatever its OWN materialised operations
+   * leave, and that is not nothing — see the ordered-collection case below. The
+   * guarantee is not *"no provenance"*; it is that **a restore leaves no claim that
+   * can outrank a later write**, because every claim it can leave sits at the floor of
+   * the new epoch.
+   */
+  it("hands a restored epoch no provenance for an entity materialised as a create", async () => {
+    /**
+     * Its own device, and not for style. The rate limiter is keyed on
+     * `repoId:deviceId` and its counter is a binding rather than D1, so it is the one
+     * piece of state that survives the per-test storage isolation. This test is the
+     * most request-hungry in the file — two pushes, two snapshots, a backup and a
+     * restore — and running it under the shared device spends budget the tests after
+     * it need, which surfaces as unrelated 429s three tests later.
+     */
+    const device = "device-prov";
+    const token = await seedRepo(REPO, device);
+    await enableBackup();
+
+    const op = (over: Record<string, unknown>): Record<string, unknown> => ({
+      repoId: REPO,
+      protocol: 1,
+      schema: 10,
+      entity: "issue",
+      entityId: "issue-1",
+      deviceId: device,
+      actor: "opus-prov",
+      createdAt: "2026-09-08T10:00:00.000Z",
+      ...over,
+    });
+
+    await pushOps(
+      [
+        op({ opId: "op-1", clientSeq: 1, verb: "create", baseVersion: null, payload: { title: "kept" } }),
+        op({
+          opId: "op-2",
+          clientSeq: 2,
+          verb: "update",
+          baseVersion: 1,
+          payload: { status: "in_progress" },
+        }),
+      ],
+      { token, device },
+    );
+
+    const before = await jsonOf<{ entities: { fieldWrites: Record<string, unknown> }[] }>(
+      await call(`/v1/repos/${REPO}/snapshot`, { token, device }),
+    );
+    expect(Object.keys(before.entities[0]!.fieldWrites)).toEqual(["status"]);
+
+    const backup = await jsonOf<{ backup: { backupId: string } }>(
+      await call(`/v1/repos/${REPO}/backups`, { method: "POST", token, body: {}, device }),
+    );
+    await runRestore(token, backup.backup.backupId, REPO, device);
+
+    const after = await jsonOf<{
+      epoch: number;
+      entities: { state: Record<string, unknown>; fieldWrites: Record<string, unknown> }[];
+    }>(await call(`/v1/repos/${REPO}/snapshot`, { token, device }));
+
+    expect(after.epoch).toBe(2);
+    // The state survives whole; only the claims on it are gone.
+    expect(after.entities[0]!.state).toEqual({ title: "kept", status: "in_progress" });
+    expect(after.entities[0]!.fieldWrites).toEqual({});
+  });
+
+  /**
+   * The case the test above does NOT cover, and the reason it needed a sibling.
+   *
+   * An ordered collection materialises as a `replace`, not a `create` — that is what
+   * `materializedVerb` is for — and the fold excludes only `create`. So a restored
+   * queue DOES carry provenance in the new epoch, and *"a restore leaves no
+   * provenance"* would have been a false statement with a green test behind it.
+   *
+   * The true statement is narrower and stronger. The restored operation is the
+   * entity's first in the epoch, so the fold records it at `baseVersion 0` — the
+   * floor. `localFieldWrites` selects `base_version >= op.baseVersion`, and every
+   * device hydrates the restored epoch at version 1 before it can write, so no later
+   * operation can be matched by a row sitting at 0. **A restore leaves no claim that
+   * can outrank a later write.**
+   *
+   * And what the row buys is real: the incumbent plan is attributable to the restore
+   * operation, which every device computes identically because it is in the log. The
+   * alternative — excluding it — would push a post-restore conflict on the plan onto
+   * the `WHOLE` floor in `contest`, with `localOpId: null` and a conflict id no other
+   * device reaches.
+   *
+   * There is no cheaper rule that would exclude it. `version > 1` looks like the
+   * elegant fix and is wrong: an ordered collection's FIRST operation is a `replace`
+   * in ordinary use — `QueueStore.recordPlan` never journals a create — so that rule
+   * would strip provenance from the first plan anybody actually chose, and break the
+   * agreement with `Journal.flush` that the whole design rests on.
+   */
+  it("leaves a restored ordered collection a claim at the floor, and no higher", async () => {
+    const device = "device-prov-queue";
+    const token = await seedRepo(REPO, device);
+    await enableBackup();
+
+    await pushOps(
+      [
+        {
+          opId: "q-1",
+          repoId: REPO,
+          protocol: 1,
+          schema: 10,
+          entity: "queue",
+          entityId: "@plan",
+          verb: "replace",
+          baseVersion: 0,
+          payload: { order: ["issue-1", "issue-2"] },
+          deviceId: device,
+          actor: "opus-prov",
+          clientSeq: 1,
+          createdAt: "2026-09-08T10:00:00.000Z",
+        },
+      ],
+      { token, device },
+    );
+
+    // Before the restore the plan is attributed to the device that chose it, at the
+    // floor of ITS epoch — a first `replace` really is an entity's first operation.
+    const before = await jsonOf<{ entities: { fieldWrites: Record<string, unknown> }[] }>(
+      await call(`/v1/repos/${REPO}/snapshot`, { token, device }),
+    );
+    expect(before.entities[0]!.fieldWrites).toEqual({
+      order: { baseVersion: 0, opId: "q-1", at: "2026-09-08T10:00:00.000Z" },
+    });
+
+    const backup = await jsonOf<{ backup: { backupId: string } }>(
+      await call(`/v1/repos/${REPO}/backups`, { method: "POST", token, body: {}, device }),
+    );
+    await runRestore(token, backup.backup.backupId, REPO, device);
+
+    const after = await jsonOf<{
+      epoch: number;
+      entities: {
+        verb: string;
+        version: number;
+        state: Record<string, unknown>;
+        fieldWrites: Record<string, { baseVersion: number; opId: string }>;
+      }[];
+    }>(await call(`/v1/repos/${REPO}/snapshot`, { token, device }));
+
+    expect(after.epoch).toBe(2);
+    expect(after.entities[0]!.verb).toBe("replace");
+    expect(after.entities[0]!.state).toEqual({ order: ["issue-1", "issue-2"] });
+
+    // A claim exists, it names the RESTORE rather than the device that chose the
+    // plan, and it sits at the floor.
+    const claim = after.entities[0]!.fieldWrites.order!;
+    expect(claim.opId).not.toBe("q-1");
+    expect(claim.baseVersion).toBe(0);
+    // Which is the whole guarantee, stated against the number a hydrating device
+    // actually adopts: it comes up holding version 1, so the first write it makes
+    // carries `baseVersion 1`, and `base_version >= 1` cannot select a row at 0.
+    expect(after.entities[0]!.version).toBe(1);
+    expect(claim.baseVersion).toBeLessThan(after.entities[0]!.version);
   });
 
   it("restores the state as it was at the cutoff, discarding what came after", async () => {

@@ -1223,6 +1223,21 @@ function updateRow(
  * it with the server's fold count would make the next local operation claim a
  * `baseVersion` that the receiver has already seen.
  */
+/**
+ * The entity version this device currently holds, or 0 when it holds none.
+ *
+ * Read by the bootstrap immediately BEFORE {@link setEntityVersion}, because the
+ * two answers differ on exactly the path that matters: a re-bootstrap carries a
+ * counter across an epoch change, and inherited provenance has to be expressed on
+ * the counter in use rather than on the fold's restarted one.
+ */
+export function localEntityVersion(db: DatabaseSync, entity: string, entityId: string): number {
+  const row = db
+    .prepare("SELECT version FROM sync_entity_versions WHERE entity = ? AND entity_id = ?")
+    .get(entity, entityId) as { version: number } | undefined;
+  return row?.version ?? 0;
+}
+
 export function setEntityVersion(
   db: DatabaseSync,
   entity: string,

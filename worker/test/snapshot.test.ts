@@ -243,6 +243,129 @@ describe("GET /v1/repos/{repoId}/snapshot", () => {
     });
   });
 
+  /**
+   * STA-263. The fold ships one value per field, which tells a hydrating device WHAT
+   * it holds and nothing about who decided it. Detection asks the applying device
+   * *"have I written this field since the version you claim as your base?"*, and a
+   * device that bootstrapped could not answer for any field — so the next stale write
+   * to an inherited value was taken in silence.
+   *
+   * These pin the answer at the wire, and the ABSENCES matter as much as the entries:
+   * marking every field of the state as written at the snapshot's version would make a
+   * later `priority` edit contest a `medium` nobody ever chose, which is worse than the
+   * silence it replaces.
+   */
+  it("attributes each field to the newest operation that carried it", async () => {
+    await pushOps(
+      [
+        envelope({
+          clientSeq: 1,
+          verb: "create",
+          baseVersion: null,
+          payload: { title: "first", status: "backlog", priority: "medium" },
+        }),
+        envelope({ clientSeq: 2, payload: { status: "in_progress" } }),
+        envelope({ clientSeq: 3, payload: { status: "done", assignee: "opus-s4" } }),
+      ],
+      { token },
+    );
+
+    const body = await jsonOf(await call(`/v1/repos/${REPO}/snapshot`, { token }));
+    const [entity] = body.entities;
+
+    // `baseVersion` counts the operations folded AHEAD of the writer, which is the
+    // number `sync_field_writes.base_version` holds for the same operation applied
+    // from the ordered tail. `status` names its LAST writer, not its first.
+    expect(entity.fieldWrites).toEqual({
+      status: { baseVersion: 2, opId: "op-3", at: "2026-09-05T12:00:00.000Z" },
+      assignee: { baseVersion: 2, opId: "op-3", at: "2026-09-05T12:00:00.000Z" },
+    });
+    // And the state still holds every field, including the ones with no provenance.
+    expect(entity.state.title).toBe("first");
+    expect(entity.state.priority).toBe("medium");
+  });
+
+  it("gives a field only the create carried no provenance at all", async () => {
+    await pushOps(
+      [
+        envelope({
+          clientSeq: 1,
+          verb: "create",
+          baseVersion: null,
+          payload: { title: "first", priority: "medium" },
+        }),
+      ],
+      { token },
+    );
+
+    const body = await jsonOf(await call(`/v1/repos/${REPO}/snapshot`, { token }));
+    // Not "priority: version 1". Empty. A create carries the entity's whole field
+    // inventory, defaults included, and a default is not a decision anybody made —
+    // `Journal.flush` skips creates for exactly this reason and so does this.
+    expect(body.entities[0].fieldWrites).toEqual({});
+    expect(body.entities[0].state.priority).toBe("medium");
+  });
+
+  it("attributes an ordered collection to the `replace` that last set it", async () => {
+    await pushOps(
+      [
+        envelope({
+          clientSeq: 1,
+          entity: "milestone",
+          entityId: "m-1",
+          verb: "create",
+          baseVersion: null,
+          payload: { targetDate: "2026-12-24" },
+        }),
+        envelope({
+          clientSeq: 2,
+          entity: "milestone",
+          entityId: "m-1",
+          verb: "replace",
+          payload: { members: ["b", "a"] },
+        }),
+      ],
+      { token },
+    );
+
+    const body = await jsonOf(await call(`/v1/repos/${REPO}/snapshot`, { token }));
+    // The whole-plan pseudo-field gets ordinary provenance, so a bootstrapped device
+    // defends a plan by naming the operation that made it rather than by falling back
+    // to the version comparison alone.
+    expect(body.entities[0].fieldWrites).toEqual({
+      members: { baseVersion: 1, opId: "op-2", at: "2026-09-05T12:00:00.000Z" },
+    });
+    expect(body.entities[0].state.targetDate).toBe("2026-12-24");
+  });
+
+  it("keeps provenance out of the way of the shape a tail replay pins", async () => {
+    await pushOps(
+      [
+        envelope({
+          clientSeq: 1,
+          entity: "queue",
+          entityId: "queue",
+          verb: "replace",
+          payload: { entries: ["a", "b"], baseRevision: 1 },
+        }),
+      ],
+      { token },
+    );
+
+    const snapshot = await jsonOf(await call(`/v1/repos/${REPO}/snapshot`, { token }));
+    const tail = await jsonOf(await call(`/v1/repos/${REPO}/ops`, { token }));
+    const folded = snapshot.entities[0];
+
+    // `fieldWrites` is a SIBLING of `state`, never a transformation of it. The STA-259
+    // guarantee — a collection arrives identically whichever half of a bootstrap
+    // carried it — is about `verb` and `state`, and neither moved.
+    expect({ verb: folded.verb, payload: folded.state }).toEqual({
+      verb: tail.ops[0].verb,
+      payload: tail.ops[0].payload,
+    });
+    expect(Object.keys(folded.fieldWrites).sort()).toEqual(["baseRevision", "entries"]);
+  });
+
   it("separates entities that share an id across different entity types", async () => {
     await pushOps(
       [

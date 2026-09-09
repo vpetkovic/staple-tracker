@@ -41,7 +41,7 @@ import {
 } from "./cursor.js";
 import type { Env } from "./env.js";
 import { SyncError, json } from "./errors.js";
-import { type FoldedEntity, foldLog, materializedVerb } from "./fold.js";
+import { type FieldWrite, type FoldedEntity, foldLog, materializedVerb } from "./fold.js";
 import { DEFAULT_SNAPSHOT_PAGE, MAX_SNAPSHOT_PAGE } from "./limits.js";
 import { log, tokenFingerprint } from "./log.js";
 
@@ -60,6 +60,15 @@ interface WireEntity {
    */
   verb: string;
   state: Record<string, unknown>;
+  /**
+   * Per-field provenance for the keys somebody SET, keyed as the operation spelled them.
+   *
+   * A sibling of `state`, never a transformation of it — `state` and `verb` are what
+   * STA-259 pinned against the ordered tail, and neither moves. The ABSENT keys are the
+   * point: a field carried only by the entity's `create` has no entry, so a hydrating
+   * device inherits its defaults without acquiring a claim on them. See `fold.ts`.
+   */
+  fieldWrites: Record<string, FieldWrite>;
 }
 
 export async function snapshot(
@@ -157,6 +166,10 @@ export async function snapshot(
  * the corpse would cost two operations for a state nothing reads. A snapshot keeps it: a
  * hydrating device is handed the tombstone AND what the entity looked like, which is what
  * this route has always returned and what its callers already assert.
+ *
+ * `fieldWrites` rides alongside and is the only thing STA-263 added. A RESTORE gets the
+ * opposite treatment — `forBackup` strips it — because a restore rewrites the timeline
+ * the provenance is expressed in, while a bootstrap joins it.
  */
 function toWireEntity(entity: FoldedEntity): WireEntity {
   return {
@@ -167,6 +180,7 @@ function toWireEntity(entity: FoldedEntity): WireEntity {
     lastSeq: entity.lastSeq,
     verb: materializedVerb(entity).verb,
     state: entity.state,
+    fieldWrites: entity.fieldWrites,
   };
 }
 

@@ -285,7 +285,7 @@ replicates — it is this device's record of its relationship to a shared log.
 | `sync_entity_versions` | `(entity, entity_id)` | `version` — bumped once per journaled mutation, in the same transaction as the domain write. This is the `baseVersion` an envelope carries. |
 | `sync_outbox` | `op_id` | `client_seq`, `entity`, `entity_id`, `verb`, `base_version`, `payload`, `actor`, `created_at`, `acknowledged_seq` — `NULL` until the server accepts it |
 | `sync_applied` | `op_id` | `seq`, `applied_at` — the deduplication ledger that makes re-delivery a no-op |
-| `sync_field_writes` | `(entity, entity_id, field)` | `base_version`, `op_id`, `device_id`, `written_at` — the NEWEST write of one field, whoever made it. Written by the journal seam and by the apply path, so a relayed value has provenance. Only the newest is kept, which bounds the table by live entities rather than by history — so nothing time-based prunes it, and detection cannot expire with housekeeping. |
+| `sync_field_writes` | `(entity, entity_id, field)` | `base_version`, `op_id`, `device_id`, `written_at` — the NEWEST write of one field, whoever made it. Written by the journal seam, by the apply path and by a bootstrap, so a relayed value and an inherited one both have provenance and a create-time default has none. Only the newest is kept, which bounds the table by live entities rather than by history — so nothing time-based prunes it, and detection cannot expire with housekeeping. |
 | `sync_tombstones` | `(entity, entity_id)` | `deleted_at`, `device_id`, `op_id` |
 | `sync_conflicts` | `id` | `entity`, `entity_id`, `field`, `base_value`, `local_value`, `remote_value`, `local_op_id`, `remote_op_id`, `local_device_id`, `remote_device_id`, `local_at`, `remote_at`, `detected_at`, `resolved_at`, `resolved_by`, `resolution` |
 | `sync_leases` | `entity_id` | `fencing_token`, `holder`, `device_id`, `server_expires_at`, `acquired_at`, `renewed_at` |
@@ -718,8 +718,9 @@ both apply, and the version bumps twice.
 The second condition is read off `sync_field_writes`, which holds **the newest
 write of each field of each entity** — the version it moved off, and the
 operation and device that made it. Every path that can change a field writes it:
-a locally journaled mutation from the journal seam, and an applied remote
-operation from the apply path. For ordered collections the condition is still
+a locally journaled mutation from the journal seam, an applied remote operation
+from the apply path, and a value folded into a
+[bootstrap snapshot](#per-field-provenance-through-a-snapshot). For ordered collections the condition is still
 [dropped](#ordered-collections-replicate-whole-not-row-by-row), because there is
 one field and the version comparison already carries the whole answer.
 
@@ -742,15 +743,71 @@ Compaction removes rows for **tombstoned entities only** — an update to a
 tombstoned entity is a no-op regardless of arrival order, so those rows could
 never have been evidence for anything.
 
-Two limits are real and neither is hidden. A database upgraded to schema 11 whose
-outbox had already been compacted has nothing to backfill from. And a device that
-**bootstrapped from a snapshot** holds values it neither authored nor relayed:
-the fold ships one value per field with no per-field version, so recording it
-would either understate the provenance or invent one, and inventing one contests
-`priority` against `estimate` — the guarantee the field condition exists to keep.
-In both, `localOpId` is `null`, both values are still retained in full, and the
+One limit is real and it is not hidden: a database upgraded to schema 11 whose
+outbox had already been compacted has nothing to backfill from. There `localOpId`
+is `null`, both values are still retained in full, and the
 [settle rule](#ordered-collections-replicate-whole-not-row-by-row) is what closes
 a record whose id no other device computes.
+
+### Per-field provenance through a snapshot
+
+A device that **bootstrapped from a snapshot** holds values it neither authored
+nor relayed. It used to hold them with no provenance at all, so the next stale
+write to an inherited field was accepted in silence.
+
+Recording the snapshot's fields wholesale would have been *wrong*, not merely
+incomplete. A `create` carries the entity's whole field inventory, defaults
+included, so under that rule a later `priority` edit would contest a `medium`
+nobody ever chose — manufacturing conflicts out of defaults, which is worse than
+the silence it replaces.
+
+So the fold carries it. Each snapshot entity ships `fieldWrites`: for every key a
+**non-`create`** operation touched, the version that write moved off, the
+operation id, and its timestamp. Keys only a `create` carried are absent, which is
+the whole distinction — a key present is one somebody set, a key absent is one
+that arrived carrying its default. That is the same line the journal seam draws
+for local writes, so a bootstrapped device ends up holding field-for-field what a
+device present for the entire log holds, and the two answer detection identically.
+
+`fieldWrites` is a sibling of `state`, not a transformation of it: a collection
+still [arrives identically](#bootstrap-is-a-snapshot-cutoff-plus-the-ordered-tail)
+whichever half of a bootstrap carried it. It is bounded by fields written per
+entity — a subset of the state's own keys — so the fold grows with live data and
+with no term in history, the same bound the field record itself has.
+
+A **backup** stores the fold without it. A restore materialises into a new epoch
+that restarts entity versions and re-mints operation ids, so provenance from the
+old epoch would name a timeline that no longer exists.
+
+The restored epoch then carries whatever its own materialised operations leave,
+and that is not nothing. An entity materialised as a `create` leaves no claim at
+all; an ordered collection materialises as a `replace` — that is what
+`materializedVerb` is for — and leaves one. So the guarantee is not "no
+provenance". It is that **a restore leaves no claim that can outrank a later
+write**: a materialised operation is its entity's first in the epoch, so the claim
+sits at `baseVersion 0`, and every device hydrates the restored epoch at version 1
+before it can write anything, so `base_version >= 1` can never select it. What the
+claim buys is attribution — a plan contested after a restore names the restore
+operation, which every device computes identically, instead of naming nobody.
+
+There is no cheaper rule that would exclude it. "Skip the entity's first
+operation" looks like the tidy generalisation of the create exclusion and is
+wrong: an ordered collection's first operation *is* a `replace` in ordinary use,
+because `QueueStore.recordPlan` never journals a create. That rule would strip
+provenance from the first plan anybody actually chose.
+
+**A re-bootstrap clears the field record.** Every row in it is denominated in the
+epoch being left behind — a `base_version` on that epoch's counter and an `op_id`
+minted in it — and an epoch bump makes both worthless. Keeping them is not
+conservative: a re-bootstrapped device would contest an ordinary post-restore edit
+using a row from the discarded timeline, while the device that made the edit
+recorded no conflict at all. `beginBootstrap` therefore clears it for the same
+reason it already clears `sync_applied`. The versions still stay, because they
+govern what this device will go on to *emit*; a field write is never emitted, only
+read, and a stale answer to "have I written this since version X" is worse than no
+answer. What clearing would lose on its own — provenance for operations still
+sitting in the outbox — is replayed back from the outbox once the snapshot half
+completes, since that is the one thing a re-bootstrap deliberately preserves.
 
 A conflict record retains both sides in full: entity, field, base value, local
 value, remote value, both `opId`s, both `deviceId`s, both timestamps — except
@@ -1197,10 +1254,11 @@ provenance based and its answer to a genuine collision is to withhold the field 
 escalate, never to declare a winner.
 
 One obligation is easy to miss and expensive to miss. Migration 011's invariant is
-that **every** path which can change a field records provenance — the journal flush
-and the apply path both do. An adapter writing Staple rows from an external system
-is a *third* such path, and one that does not write `sync_field_writes` silently
-reopens the relay hole that migration exists to have closed.
+that **every** path which can change a field records provenance — the journal
+flush, the apply path and a bootstrap all do. An adapter writing Staple rows from
+an external system is a *fourth* such path, and one that does not write
+`sync_field_writes` silently reopens the relay hole that migration exists to have
+closed.
 
 Concretely, this page defines no TaskLink field, no external id column, no
 provider adapter and no field-ownership policy. It does not reserve names for

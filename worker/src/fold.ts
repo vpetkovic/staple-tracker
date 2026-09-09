@@ -37,6 +37,50 @@
  * time. It was always a mistake to ask the shape: the answer means guessing about an
  * entity whose only field happens to be called `replaced`, and guessing is how a plan
  * comes back as an object with a `replaced` key instead of as a plan.
+ *
+ * ## Per-field provenance, and the one distinction it exists to make (STA-263)
+ *
+ * A device that hydrates from a snapshot is handed values it neither authored nor
+ * relayed. Conflict detection asks the applying device *"have I written this field
+ * since the version you claim as your base?"*, and a hydrated device had nothing to
+ * answer with, so the next stale write to an inherited field was taken in silence.
+ *
+ * The tempting fix — mark every field of the folded state as written at the snapshot's
+ * version — is WRONG rather than merely coarse. `createIssue` journals ONE `create`
+ * carrying the whole field inventory, `priority: input.priority ?? "medium"` among it,
+ * so under that rule a later `priority` edit would contest a `medium` nobody ever
+ * chose. **Manufacturing conflicts out of defaults is worse than the silence.**
+ *
+ * So the fold has to distinguish a field somebody SET from a field that merely arrived
+ * carrying its default, and the line is one the client already draws for its own
+ * writes: `Journal.flush` records provenance for every verb EXCEPT `create`, because
+ * *"a create carries no base version and was never one of the operations in between"*.
+ * Migration 011's backfill skips creates for the same reason. Here, therefore:
+ *
+ *   **a field has provenance iff some non-`create` operation carried it, and the
+ *   provenance is that of the newest such operation.**
+ *
+ * A create is always an entity's first operation, so "newest non-create writer" is just
+ * "newest writer, unless that writer was the create" — no extra bookkeeping, and the
+ * result is that a hydrated device holds field-for-field the same rows a device present
+ * for the whole log holds. Untouched defaults are absent from both.
+ *
+ * `baseVersion` is `version - 1` at merge time: the number of operations folded ahead of
+ * this one. That is deliberately NOT the operation's own `base_version` column, which is
+ * the sender's claim and may be staler. It is the same number `screenForConflicts`
+ * records as `max(localVersion, op.baseVersion)` when the identical operation arrives in
+ * the ordered tail — which is what makes the two paths agree.
+ *
+ * The bound is unchanged, and that is load-bearing: one entry per key ever carried by a
+ * non-create operation is a strict subset of `state`'s keys, so this grows with live
+ * entities × fields and with no term in history — exactly the bound `sync_field_writes`
+ * has, because it is reconstructing that table.
+ *
+ * The provenance describes the value in `state` and therefore always names the NEWEST
+ * writer of that key, even where two devices are arguing about it. That is not the
+ * server taking a side: *"the server does not detect conflicts"*, the fold is
+ * last-write-wins by construction, and the provenance has to describe the value it is
+ * shipping beside rather than some other one.
  */
 
 import { entityKey } from "./cursor.js";
@@ -44,7 +88,32 @@ import type { Env } from "./env.js";
 import { SyncError } from "./errors.js";
 import { MAX_SNAPSHOT_FOLD_OPS, SNAPSHOT_FOLD_PAGE } from "./limits.js";
 
-export interface FoldedEntity {
+/**
+ * The newest non-`create` write of one field, as `sync_field_writes` would hold it.
+ *
+ * `deviceId` is absent on purpose. `sync_field_writes.device_id` is written and never
+ * read — `localFieldWrites` selects `field, op_id, written_at`, and migration 011's own
+ * backfill stores NULL there — so carrying it would add a column of wire per field for
+ * something no reader consults.
+ */
+export interface FieldWrite {
+  /** The entity version this write moved OFF. See the module comment. */
+  baseVersion: number;
+  opId: string;
+  /** The operation's client timestamp, as sent. Becomes `written_at`. */
+  at: string;
+}
+
+/**
+ * A folded entity as a BACKUP stores it, and as a restore materialises it.
+ *
+ * Everything the fold computes except the per-field provenance, which a restore has no
+ * use for: it writes the fold into a NEW epoch where entity versions restart from zero
+ * and operation ids are re-minted, so an old epoch's `baseVersion` is on a different
+ * scale and its `opId` names a row no device will ever see. Carrying it would be dead
+ * weight in every backup blob and a trap for whoever read it next.
+ */
+export interface BackupEntity {
   entity: string;
   entityId: string;
   /** Operations folded into this entity. A hydrating client's initial version. */
@@ -60,6 +129,19 @@ export interface FoldedEntity {
    */
   superseded: boolean;
   state: Record<string, unknown>;
+}
+
+export interface FoldedEntity extends BackupEntity {
+  /**
+   * Per-field provenance, keyed by the payload key exactly as the operation spelled it —
+   * `estimatedSeconds`, not `estimated_seconds`, which is the spelling
+   * `sync_field_writes.field` stores and the reader canonicalizes.
+   *
+   * Holds ONLY keys carried by a non-`create` operation, which is the whole of STA-263:
+   * a key present here is one somebody set, a key absent is one that arrived carrying
+   * its default. See the module comment.
+   */
+  fieldWrites: Record<string, FieldWrite>;
 }
 
 export interface FoldResult {
@@ -101,7 +183,7 @@ export async function foldLog(
 
   for (;;) {
     const page = await env.DB.prepare(
-      `SELECT seq, entity, entity_id, verb, payload, server_ts, schema_version
+      `SELECT seq, op_id, entity, entity_id, verb, payload, created_at, server_ts, schema_version
          FROM ops
         WHERE repo_id = ?1 AND epoch = ?2 AND seq > ?3 AND seq <= ?4
         ORDER BY seq
@@ -110,10 +192,12 @@ export async function foldLog(
       .bind(repoId, epoch, after, cutoff, SNAPSHOT_FOLD_PAGE)
       .all<{
         seq: number;
+        op_id: string;
         entity: string;
         entity_id: string;
         verb: string;
         payload: string;
+        created_at: string;
         server_ts: number;
         schema_version: number;
       }>();
@@ -144,6 +228,7 @@ export async function foldLog(
           lastSeq: row.seq,
           superseded: false,
           state: {},
+          fieldWrites: {},
         };
         entities.set(key, entry);
       }
@@ -175,6 +260,29 @@ export async function foldLog(
       Object.assign(entry.state, payload as Record<string, unknown>);
       // So the merge is the same for every verb and only the RECORD of the verb differs.
       entry.superseded = row.verb === "replace";
+
+      /**
+       * The same keys again, as provenance — for every verb EXCEPT `create` (STA-263).
+       *
+       * The exclusion is the fix, not an optimization. A create carries the entity's
+       * whole field inventory including the defaults nobody chose, so recording it
+       * would make a later edit contest a `medium` that was never a decision. It is
+       * also precisely what `Journal.flush` does for a locally authored mutation, so
+       * a hydrated device ends up holding the same rows a device that was present for
+       * this log holds — and no others.
+       *
+       * `entry.version` has already been incremented for this row, so `- 1` is the
+       * version the write moved off.
+       */
+      if (row.verb !== "create") {
+        for (const field of Object.keys(payload as Record<string, unknown>)) {
+          entry.fieldWrites[field] = {
+            baseVersion: entry.version - 1,
+            opId: row.op_id,
+            at: row.created_at,
+          };
+        }
+      }
     }
 
     after = page.results[page.results.length - 1]!.seq;
@@ -201,7 +309,7 @@ export async function foldLog(
  * discards later updates to a deleted entity anyway, and reproducing the corpse would
  * mean writing two operations per deleted entity for a state nothing reads.
  */
-export function materializedVerb(entity: FoldedEntity): {
+export function materializedVerb(entity: BackupEntity): {
   verb: string;
   payload: Record<string, unknown>;
 } {
@@ -216,4 +324,19 @@ export function materializedVerb(entity: FoldedEntity): {
   // version of anything, so an `update` would carry a `baseVersion` describing a timeline
   // that does not exist.
   return { verb: entity.superseded ? "replace" : "create", payload: entity.state };
+}
+
+/**
+ * What a BACKUP stores: the fold minus this epoch's per-field provenance.
+ *
+ * A restore materialises these into a new epoch whose entity versions restart at zero
+ * and whose operation ids are freshly minted, so `fieldWrites` would describe a
+ * timeline that no longer exists — the same reason `materializedVerb` emits `create`
+ * rather than `update`. Dropped here rather than ignored at the read side, so a backup
+ * blob never carries bytes nothing will ever read, and so a later reader is not offered
+ * provenance it would be wrong to trust.
+ */
+export function forBackup(entity: FoldedEntity): BackupEntity {
+  const { fieldWrites: _thisEpochsProvenance, ...rest } = entity;
+  return rest;
 }

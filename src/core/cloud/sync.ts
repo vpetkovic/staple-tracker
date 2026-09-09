@@ -30,7 +30,13 @@
  */
 import type { DatabaseSync } from "node:sqlite";
 import { tx } from "../db.js";
-import { bindJournal, type Journal, type OperationEnvelope } from "../journal.js";
+import {
+  bindJournal,
+  recordInheritedFieldWrites,
+  replayOutboxFieldWrites,
+  type Journal,
+  type OperationEnvelope,
+} from "../journal.js";
 import { StapleError, nowIso } from "../types.js";
 import {
   CLIENT_PROTOCOL,
@@ -50,6 +56,7 @@ import {
   ReferentMissing,
   applyToDatabase,
   bumpEntityVersion,
+  localEntityVersion,
   setEntityVersion,
   snapshotToInput,
 } from "./apply.js";
@@ -634,8 +641,44 @@ async function runBootstrap(
         journal.applyRemote(
           { opId: `snap:${cutoffSeq}:${entity.entity} ${entity.entityId}`, seq: entity.lastSeq },
           () => {
+            /**
+             * Read BEFORE `setEntityVersion`, and used below. On a first bootstrap
+             * this is 0; on a re-bootstrap it is the counter this device carried
+             * across the epoch change, which `beginBootstrap` deliberately does not
+             * rewind. `recordInheritedFieldWrites` needs the one from before,
+             * because the one from after is the snapshot's own number.
+             */
+            const priorVersion = localEntityVersion(db, entity.entity, entity.entityId);
             applyToDatabase(db, input);
             setEntityVersion(db, entity.entity, entity.entityId, entity.version);
+            /**
+             * And the provenance for the values just inherited (STA-263).
+             *
+             * Without this a bootstrapped device holds a title somebody chose with no
+             * record anywhere saying so, and hands it to the next stale write in
+             * silence — the relay defect of STA-261, reached by the other road.
+             *
+             * `entity.fieldWrites` names only the fields a non-`create` operation
+             * carried, so the defaults that rode along inside the create acquire no
+             * claim. That distinction is made by the server's fold, and it has to be:
+             * `state` holds one value per field and cannot tell a decision from a
+             * default. An older Worker sends nothing here and the device is left
+             * exactly as blind as it was before, which is the only safe degradation —
+             * synthesising rows from `state` is the failure this ticket exists to
+             * avoid.
+             */
+            recordInheritedFieldWrites(
+              db,
+              entity.entity,
+              entity.entityId,
+              Object.entries(entity.fieldWrites ?? {}).map(([field, write]) => ({
+                field,
+                baseVersion: write.baseVersion,
+                opId: write.opId,
+                at: write.at,
+              })),
+              priorVersion,
+            );
           },
         );
         entities += 1;
@@ -645,6 +688,17 @@ async function runBootstrap(
         // The snapshot half is done. The tail becomes the ordinary cursor and
         // the bootstrap position is cleared, in one statement.
         completeSnapshot(db, page.tailCursor, page.epoch);
+        /**
+         * And the last word goes to work this device has not sent yet.
+         *
+         * `beginBootstrap` cleared the field record because every row in it was
+         * denominated in the epoch being left behind. The outbox was NOT cleared —
+         * it never is — so the fields those queued operations name are values this
+         * device still holds and must still be able to defend. Replayed here rather
+         * than in `beginBootstrap` so that it lands after the server's view: a
+         * snapshot is older than an operation the server has not seen.
+         */
+        replayOutboxFieldWrites(db);
       } else {
         recordSnapshotPage(db, { snapshot: page.nextCursor, tail: page.tailCursor });
       }
