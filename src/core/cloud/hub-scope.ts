@@ -53,8 +53,9 @@
  * consumer treats a problem as "not actionable" rather than as "not connected".
  */
 import { existsSync } from "node:fs";
+import { dirname } from "node:path";
 import { Hub, type WorkspaceEntry } from "../hub.js";
-import { readWorkspaceManifest, workspaceIdentityDir } from "../repo-identity.js";
+import { isCheckoutBacked, readWorkspaceManifest, workspaceIdentityDir } from "../repo-identity.js";
 
 /**
  * One registered workspace, as a hub-wide cloud operation sees it.
@@ -77,7 +78,19 @@ export interface HubWorkspace {
   readonly available: boolean;
   /** Where this workspace's `repository.json` lives. */
   readonly identityDir: string;
-  /** The sync identity, or null when this workspace has never been `init`ed. */
+  /**
+   * True when staple records an identity for this workspace the next time it
+   * opens it — every workspace that is not in a version control checkout.
+   *
+   * A value rather than a sentence, and the reason it is on the ROW is that a
+   * surface has to be able to tell the two absences apart without parsing prose:
+   * a workspace with no identity that will record one on its next open needs no
+   * instruction at all, and one in a checkout genuinely does need `staple init`,
+   * because there the manifest is a committed file rather than something minted
+   * behind the reader. See `repo-identity.ts`, {@link isCheckoutBacked}.
+   */
+  readonly recordsIdentityOnOpen: boolean;
+  /** The sync identity, or null when this workspace has not recorded one. */
   readonly repositoryId: string | null;
   /**
    * Something wrong with this ROW that is not a state — an unreadable manifest,
@@ -159,6 +172,7 @@ export function describeWorkspace(entry: WorkspaceEntry): HubWorkspace {
     kind: entry.kind,
     available,
     identityDir,
+    recordsIdentityOnOpen: !isCheckoutBacked(entry.path),
     repositoryId,
     problem,
   };
@@ -207,11 +221,15 @@ export function skipReasonFor(workspace: HubWorkspace): HubSkipReason | null {
    *
    * A workspace whose disk is not mounted usually has no readable manifest
    * either — the manifest sits beside the database. Testing identity first
-   * therefore reports `no_identity` for it, whose remedy sentence is *"Run
-   * `staple init` in it to record one"* — advice to run a command in a directory
-   * that is not there. That is not merely a worse message; it is an instruction
-   * which, followed on a machine where the volume later mounts at the same path,
-   * would mint a SECOND repository id over a workspace that already had one.
+   * therefore reports `no_identity` for it, and every wording of that answer
+   * describes a directory as though somebody could go and look at it. Worse, the
+   * checkout branch of it names `staple init`, which followed on a machine where
+   * the volume later mounts at the same path would mint a SECOND repository id
+   * over a workspace that already had one.
+   *
+   * It is also the answer with the least evidence behind it: `recordsIdentityOnOpen`
+   * is a walk for a `.git` marker, and on an absent volume nothing above the
+   * missing path is meaningful either.
    *
    * Absence of the disk is the more fundamental fact and the only one that can
    * be established with confidence, so it is reported first.
@@ -231,9 +249,32 @@ export function describeSkip(workspace: HubWorkspace, reason: HubSkipReason): st
         `It is left registered and untouched — an unmounted volume is not a deleted workspace.`
       );
     case "no_identity":
+      /**
+       * Two absences, two sentences, and the old single one was wrong for both.
+       *
+       * It read *"This workspace has no <dir>/repository.json, so it has no sync
+       * identity. Run `staple init` in it to record one"* — said about a
+       * workspace that is REGISTERED, whose database is on this disk, and which
+       * a person is looking at in a list of their own workspaces. "Record one"
+       * reads as "this thing does not exist yet", and the instruction is worse
+       * than useless: `staple init` anywhere but the exact directory registered
+       * here mints a SECOND workspace with a second identity, which is the fork
+       * the manifest exists to prevent.
+       */
+      if (workspace.recordsIdentityOnOpen) {
+        return (
+          `This workspace is registered and its database is on this machine; it has not ` +
+          `recorded a sync identity yet (no ${workspace.identityDir}/repository.json). ` +
+          `Nothing needs creating — staple records one the next time it opens this ` +
+          `workspace, which \`staple cloud connect --ws ${workspace.slug}\` does.`
+        );
+      }
       return (
-        `This workspace has no ${workspace.identityDir}/repository.json, so it has no sync ` +
-        `identity. Run \`staple init\` in it to record one.`
+        `This workspace is registered and its database is on this machine; only its sync ` +
+        `identity is missing (no ${workspace.identityDir}/repository.json). It is inside a ` +
+        `version control checkout, where that file is committed alongside the code rather than ` +
+        `minted behind you, so run \`staple init\` in ${dirname(workspace.identityDir)} to ` +
+        `record one — it adopts this workspace and its data and creates nothing new.`
       );
     case "problem":
       return `This workspace's sync identity could not be read: ${workspace.problem}`;

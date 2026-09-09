@@ -48,11 +48,18 @@
  * endpoint would turn one human's page-open into a heartbeat to Cloudflare every
  * few seconds."*
  */
+import { dirname } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { conflictsSummary } from "./conflicts.js";
 import type { CredentialMechanism } from "./credential-store.js";
 import { listLocalLeases } from "./lease-store.js";
-import { COPIED_HOME_DIAGNOSTIC, describeHostBinding } from "../repo-identity.js";
+import {
+  COPIED_HOME_DIAGNOSTIC,
+  REPOSITORY_MANIFEST_FILENAME,
+  describeHostBinding,
+  isCheckoutBacked,
+  workspaceIdentityDir,
+} from "../repo-identity.js";
 import { describeState, type CloudState, type CloudStatus } from "./status.js";
 import { pendingCount, readSyncState } from "./sync-state.js";
 
@@ -302,7 +309,7 @@ function copiedHomeWarning(db: DatabaseSync): string[] {
 }
 
 /**
- * The report for a workspace that has no sync identity at all.
+ * The report for a workspace that has not recorded a sync identity.
  *
  * A workspace predating repository manifests has no `repository.json` and no
  * `sync_state.repository_id`. It is not "disconnected from something" — there is
@@ -310,21 +317,62 @@ function copiedHomeWarning(db: DatabaseSync): string[] {
  * case out by hand, in two different sentences; this is the one of them.
  *
  * This used to be where a global workspace ended up, permanently and by design.
- * It is not any more (STA-273): a workspace with no repository mints an identity
- * in its own directory inside the staple home, so the only workspaces that reach
- * this report are ones `staple init` has never been run in.
+ * It is not any more (STA-273), and since STA-281 it is not where a workspace in
+ * a plain directory ends up either: anything that is not a version control
+ * checkout records an identity the next time staple opens it. What is left is a
+ * checkout whose manifest was never committed or has been deleted — and there
+ * `staple init` genuinely IS the remedy, because the manifest is a committed file
+ * rather than something staple mints behind the reader on a read.
+ *
+ * Which is why the remedy names a DIRECTORY when it has one. The old wording was
+ * *"Run `staple init` in this workspace to record one"*, said to somebody looking
+ * at a workspace that already exists and is already registered: "record one"
+ * reads as "this does not exist yet", and `init` run in any directory but the one
+ * holding the registered database mints a second workspace with a second
+ * identity. Pass the database path and the sentence can name the one directory
+ * where that command is correct.
  *
  * It carries a `failure` where plain `disconnected` does not, because the two
  * are genuinely different: a disconnected repository can be connected, and this
  * one cannot until it has an identity. That is a thing to do, so it is a remedy.
  */
-export function noIdentityReport(): CloudSurfaceReport {
+/**
+ * What the reader can actually DO about a missing identity, which depends
+ * entirely on how this workspace's identity would travel.
+ *
+ * Never "run `staple init`" for a workspace that records its own identity: there
+ * the file appears on the next open, and `init` run in the wrong directory is how
+ * a second workspace gets minted. The one case where a person must type something
+ * is a checkout, and then the sentence names the directory rather than saying
+ * "this workspace" to somebody who may be standing somewhere else.
+ */
+export function missingIdentityRemedy(dbPath?: string): string {
+  const identityDir = dbPath === undefined ? null : workspaceIdentityDir(dbPath);
+  if (dbPath === undefined || identityDir === null) {
+    return "Open this workspace with staple to record one. Nothing needs to be created.";
+  }
+  if (isCheckoutBacked(dbPath)) {
+    return (
+      `Its identity belongs at ${identityDir}/${REPOSITORY_MANIFEST_FILENAME}. Inside a version ` +
+      `control checkout that file is committed alongside the code rather than minted for you, ` +
+      `so run \`staple init\` in ${dirname(identityDir)} to record one — it adopts this ` +
+      `workspace and its data and creates nothing new.`
+    );
+  }
+  return (
+    `Nothing needs to be created: staple records one at ${identityDir}/` +
+    `${REPOSITORY_MANIFEST_FILENAME} the next time it opens this workspace. If this keeps ` +
+    `saying otherwise, that file could not be written — check the permissions on ${identityDir}.`
+  );
+}
+
+export function noIdentityReport(dbPath?: string): CloudSurfaceReport {
   return {
     state: "disconnected",
     mode: "disconnected",
     detail:
-      "This workspace has no repository identity, so it has no sync identity and cannot be " +
-      "connected.",
+      "This workspace has not recorded a sync identity, so there is nothing for a connection " +
+      "to be about yet. Its data is untouched and every local command works as it did.",
     repositoryId: null,
     endpoint: null,
     deviceId: null,
@@ -345,8 +393,9 @@ export function noIdentityReport(): CloudSurfaceReport {
     failure: {
       code: "no_identity",
       summary:
-        "This workspace has no sync identity, so there is nothing for a connection to be about.",
-      remedy: "Run `staple init` in this workspace to record one.",
+        "This workspace is registered and its data is intact; it has no sync identity, so there " +
+        "is nothing for a connection to be about.",
+      remedy: missingIdentityRemedy(dbPath),
     },
     hint: null,
   };

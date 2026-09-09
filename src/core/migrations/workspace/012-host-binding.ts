@@ -14,10 +14,13 @@ import type { Migration } from "../types.js";
  * ## One nullable column, and why NULL is the interesting value
  *
  * `sync_state.origin_host` is a digest of the machine that minted this
- * workspace's sync identity, written only by workspaces whose identity lives
- * inside the staple home. Every other workspace — every repository-backed one —
- * leaves it NULL, and every check reads NULL as "not host-bound" and does
- * nothing at all.
+ * workspace's sync identity, written by every workspace whose identity cannot
+ * travel without its database. That was home-resident workspaces when this
+ * migration was written and is every workspace outside a version control
+ * checkout since STA-281; the column, its type and its meaning are unchanged,
+ * only the set of workspaces that writes it is wider. Every checkout-backed
+ * workspace leaves it NULL, and every check reads NULL as "not host-bound" and
+ * does nothing at all.
  *
  * That is not a shortcut, it is the semantic. One repository id held by two
  * machines is what a clone IS, and the whole sync design depends on two clones
@@ -30,9 +33,9 @@ import type { Migration } from "../types.js";
  * used — the silent-discard failure `010-sync-metadata.ts` describes for
  * `client_seq_high_water`, arriving by a road nothing was watching.
  *
- * NULL is therefore what keeps the repository path provably unchanged by this
- * migration: a workspace that never writes the column can never be refused by a
- * check that only fires when it is set.
+ * NULL is therefore what keeps the checkout-backed path provably unchanged by
+ * this migration: a workspace that never writes the column can never be refused
+ * by a check that only fires when it is set.
  *
  * ## Why a column and not a file
  *
@@ -56,7 +59,7 @@ import type { Migration } from "../types.js";
  * One `ALTER TABLE ... ADD COLUMN` on a table introduced two migrations ago,
  * with no default and no backfill. An upgraded workspace reads NULL, behaves
  * exactly as it did, and only starts recording anything if it is opened as a
- * home-resident workspace by a build that knows about this column.
+ * host-bound workspace by a build that knows about this column.
  */
 export const migration: Migration = {
   version: 12,

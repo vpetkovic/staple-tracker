@@ -47,6 +47,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { stapleHome } from "../config/home.js";
+import { isInsideCheckout } from "./checkout.js";
 import { hostFingerprint } from "./host-id.js";
 import { StapleError } from "./types.js";
 
@@ -133,6 +134,38 @@ export function workspaceIdentityDir(dbPath: string, home: string = stapleHome()
   const file = resolve(dbPath);
   if (!isHomeResidentWorkspace(file, home)) return dirname(file);
   return join(dirname(file), basename(file, ".db"));
+}
+
+/**
+ * Can this workspace's identity reach another machine WITHOUT its database?
+ *
+ * The one question the rest of this module turns on, and the reason it is one
+ * predicate rather than two is that both consequences follow from the same fact:
+ *
+ *   - **true** — the manifest is a committed file, so a checkout carries it to a
+ *     machine that has no database and adopts. Identity is minted by `init`, the
+ *     first command anybody runs in a fresh checkout, and never by a read; and no
+ *     host is recorded, because one id at two machines is precisely what a clone
+ *     IS.
+ *   - **false** — the directory is the only copy there is. Nothing will ever run
+ *     `init` in it again, so identity is minted at OPEN; and any copy of it
+ *     arrives carrying the database, the cursor and the client-sequence
+ *     allocator, so the machine that minted it is recorded and a second one is
+ *     refused. This is `012-host-binding.ts`'s argument, which was written about
+ *     the staple home and is true of every directory that is not a checkout.
+ *
+ * Home-resident is tested FIRST and short-circuits. A person who keeps `~/.staple`
+ * in version control has committed a database, not published an identity — the
+ * home still travels with everything in it, so it must stay host-bound, and a
+ * `.git` above it must not be allowed to switch the binding off.
+ *
+ * Git is therefore not a gate on identity anywhere: both branches mint one. It
+ * decides only which copy story applies. See `./checkout.ts`.
+ */
+export function isCheckoutBacked(dbPath: string, home?: string): boolean {
+  const resolvedHome = home ?? stapleHome();
+  if (isHomeResidentWorkspace(dbPath, resolvedHome)) return false;
+  return isInsideCheckout(workspaceIdentityDir(dbPath, resolvedHome));
 }
 
 /**
@@ -462,13 +495,16 @@ export function findRepositoryIdCollisions(
 // --------------------------------------------------------- the host binding
 
 /**
- * The machine a home-resident workspace was minted on.
+ * The machine this workspace's identity was minted on.
  *
- * NULL for every repository-backed workspace, and that is the semantic rather
- * than an omission — see `migrations/workspace/012-host-binding.ts`. One
- * repository id at two machines is what a clone IS; one HOME at two machines is
- * a copy, because a home carries the database, the cursors, the sequence
- * allocator and the device credential that a clone deliberately does not.
+ * NULL for every checkout-backed workspace, and that is the semantic rather than
+ * an omission — see `migrations/workspace/012-host-binding.ts`. One repository id
+ * at two machines is what a clone IS; the same DIRECTORY at two machines is a
+ * copy, because it carries the database, the cursors, the sequence allocator and
+ * the device credential that a checkout deliberately does not.
+ *
+ * Recorded for a home-resident workspace since S15, and for every other workspace
+ * that is not in a checkout since STA-281 — see {@link isCheckoutBacked}.
  */
 export function readOriginHost(db: DatabaseSync): string | null {
   const row = db.prepare("SELECT origin_host FROM sync_state WHERE id = 1").get() as
@@ -486,11 +522,11 @@ export function writeOriginHost(db: DatabaseSync, host: string): void {
 }
 
 export type HostBindingStatus =
-  /** No binding recorded: a repository-backed workspace, or one not yet minted. */
+  /** No binding recorded: a checkout-backed workspace, or one not yet minted. */
   | "unbound"
-  /** Recorded on this machine. */
+  /** Recorded on this machine. Moving or renaming the directory here keeps this. */
   | "consistent"
-  /** Recorded on a DIFFERENT machine — this home is a copy. */
+  /** Recorded on a DIFFERENT machine — this workspace is a copy. */
   | "moved";
 
 export interface HostBindingReport {
@@ -510,30 +546,41 @@ export function describeHostBinding(db: DatabaseSync): HostBindingReport {
 }
 
 /**
- * The one wording for "this home was restored somewhere else", used by the
- * refusal and by the status warning so the two can never drift apart.
+ * The one wording for "this workspace was copied here from another machine",
+ * used by the refusal and by the status warning so the two can never drift apart.
+ *
+ * Says "copied here" rather than "restored home" because since STA-281 it is not
+ * only a home: any workspace that is not in a checkout is host-bound, and it can
+ * arrive on a second machine as a restored backup, an rsync, or a directory a
+ * file-sync service put there. All of them are the same event and have the same
+ * two ways out.
  *
  * Names both ways out, because both are legitimate and only a person knows
  * which. Forking is right when both machines are live and are about to become
  * two independent workspaces. Removing the copy is right when this machine was
  * only ever meant to be a restore of a machine that is now gone — and that case
  * is why the refusal is not phrased as an accusation.
+ *
+ * A MOVED workspace never reaches this: the binding is to the machine and never
+ * to the path, so renaming a directory or dragging it across this disk keeps the
+ * same fingerprint and says nothing at all.
  */
 export const COPIED_HOME_DIAGNOSTIC =
   "This workspace's sync identity was minted on a different machine, and its database, cursors " +
-  "and device credential were copied here with it — a restored staple home, not a second " +
-  "device. Two machines synchronizing under one identity and one client-sequence allocator " +
-  "would mint operation ids for different work that the service cannot tell apart, and the " +
-  "loser is discarded silently. Nothing was sent. Run `staple cloud fork-id` to make this " +
-  "machine an independent workspace with its own identity, or remove this copy if the machine " +
-  "it came from is the one that should keep syncing.";
+  "and client-sequence allocator were copied here with it — a restore or a file copy, not a " +
+  "second device. Two machines synchronizing under one identity and one client-sequence " +
+  "allocator would mint operation ids for different work that the service cannot tell apart, " +
+  "and the loser is discarded silently. Nothing was sent. Run `staple cloud fork-id` to make " +
+  "this machine an independent workspace with its own identity, or remove this copy if the " +
+  "machine it came from is the one that should keep syncing.";
 
 /**
  * Refuse before anything moves.
  *
- * Silent on `unbound` and `consistent`, so a repository-backed workspace — which
+ * Silent on `unbound` and `consistent`, so a checkout-backed workspace — which
  * never records a binding — passes through untouched, and so does every machine
- * that actually is the one that minted the identity.
+ * that actually is the one that minted the identity, wherever it has since moved
+ * that directory to.
  */
 export function assertOwnHost(db: DatabaseSync): void {
   if (describeHostBinding(db).status === "moved") {
@@ -565,27 +612,40 @@ export function readWorkspaceManifest(dbPath: string, home?: string): Repository
 }
 
 /**
- * Reconcile identity for any workspace, repository-backed or not.
+ * Reconcile identity for any workspace, checkout-backed or not.
  *
- * For a repository this is `reconcileRepositoryIdentity` with the directory it
- * was always given, and nothing else happens: no directory is created, no host
- * is recorded, and the report's `host` is null.
+ * For a checkout-backed workspace this is `reconcileRepositoryIdentity` with the
+ * directory it was always given, and nothing else happens: no directory is
+ * created, no host is recorded, and the report's `host` is null.
  *
- * For a home-resident workspace it additionally creates the identity directory
- * (inside staple's own home, so creating a file is not a surprise the way it
- * would be inside somebody's repository) and records the machine — but ONLY when
- * nothing is recorded yet. A binding that names another machine is reported and
- * never rewritten: re-binding on sight would erase the single piece of evidence
- * that the home was copied, which is the entire mechanism.
+ * Every other workspace is host-bound — see {@link isCheckoutBacked} for why the
+ * two cases differ, and note that this used to say "home-resident" where it now
+ * says "not checkout-backed". A workspace in a plain directory is in exactly the
+ * position a restored home is in: its copy carries the database, the cursor and
+ * the client-sequence allocator, and there is no clone to tell the two machines
+ * apart. Binding it is the S15 mechanism applied to the case S15 could not see.
+ *
+ * The machine is recorded ONLY when nothing is recorded yet. A binding that names
+ * another machine is reported and never rewritten: re-binding on sight would
+ * erase the single piece of evidence that the workspace was copied, which is the
+ * entire mechanism.
+ *
+ * The identity DIRECTORY is created only for a home-resident workspace, which is
+ * the one case where it does not already exist — `<home>/workspaces/<slug>/`,
+ * inside staple's own home. A workspace in a plain directory already has its
+ * `.staple/` directory, because that is where its database is.
  */
 export function reconcileWorkspaceIdentity(
   db: DatabaseSync,
   dbPath: string,
   home?: string,
 ): WorkspaceIdentityReport {
-  const bound = isHomeResidentWorkspace(dbPath, home ?? stapleHome());
-  const dir = workspaceIdentityDir(dbPath, home);
-  if (bound) mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const resolvedHome = home ?? stapleHome();
+  const bound = !isCheckoutBacked(dbPath, resolvedHome);
+  const dir = workspaceIdentityDir(dbPath, resolvedHome);
+  if (isHomeResidentWorkspace(dbPath, resolvedHome)) {
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+  }
 
   const report = reconcileRepositoryIdentity(db, dir);
   if (!bound) return { ...report, host: null };
@@ -598,6 +658,40 @@ export function reconcileWorkspaceIdentity(
     ...report,
     host: { status: "consistent", recorded: binding.current, current: binding.current },
   };
+}
+
+/**
+ * {@link reconcileWorkspaceIdentity} for the OPEN path, where it must never be
+ * the reason a command fails.
+ *
+ * `openWorkspace` is the door every single command goes through, including the
+ * ones that only read. Minting an identity there is worth doing — for a workspace
+ * that is not checkout-backed it is the ONLY door, because nothing will run
+ * `staple init` in it a second time — but it must not be able to take `staple ls`
+ * down when the manifest is unwritable, the volume is read-only, or somebody has
+ * hand-broken the JSON.
+ *
+ * That is the same judgement `resolveWorkspace` already makes about
+ * `repairHubRegistration`: *"a hub that is missing, locked, or in disagreement
+ * leaves this workspace fully usable and surfaces as a `doctor` check instead."*
+ *
+ * Nothing is weakened by swallowing here, because nothing here is a check. Every
+ * path that MOVES data reads the manifest strictly through
+ * {@link readWorkspaceManifest} — which still refuses a malformed one rather than
+ * reading it as absent — and still calls {@link assertOwnHost}. A failure to mint
+ * leaves the workspace exactly as it was: without an identity, which every cloud
+ * surface already knows how to report.
+ */
+export function tryReconcileWorkspaceIdentity(
+  db: DatabaseSync,
+  dbPath: string,
+  home?: string,
+): WorkspaceIdentityReport | null {
+  try {
+    return reconcileWorkspaceIdentity(db, dbPath, home);
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -616,9 +710,12 @@ export function forkWorkspaceIdentity(
   dbPath: string,
   home?: string,
 ): ForkResult {
-  const bound = isHomeResidentWorkspace(dbPath, home ?? stapleHome());
-  const dir = workspaceIdentityDir(dbPath, home);
-  if (bound) mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const resolvedHome = home ?? stapleHome();
+  const bound = !isCheckoutBacked(dbPath, resolvedHome);
+  const dir = workspaceIdentityDir(dbPath, resolvedHome);
+  if (isHomeResidentWorkspace(dbPath, resolvedHome)) {
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+  }
 
   const result = forkRepositoryId(db, dir);
   if (bound) writeOriginHost(db, hostFingerprint());

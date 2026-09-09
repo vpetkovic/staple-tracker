@@ -139,6 +139,26 @@ function columnsOf(dbPath: string): Record<string, string[]> {
   });
 }
 
+/**
+ * The sync identity this workspace has recorded, or null.
+ *
+ * Read through a `try` because the older fixtures in this matrix predate
+ * `sync_state` entirely, and "the table is not there" is a true answer to the
+ * question rather than a failure of the test.
+ */
+function recordedIdentity(dbPath: string): string | null {
+  return readOnly(dbPath, (db) => {
+    try {
+      const row = db.prepare("SELECT repository_id FROM sync_state WHERE id = 1").get() as
+        | { repository_id: string | null }
+        | undefined;
+      return row?.repository_id ?? null;
+    } catch {
+      return null;
+    }
+  });
+}
+
 function issueCount(dbPath: string): number {
   return readOnly(dbPath, (db) => (db.prepare("SELECT count(*) AS c FROM issues").get() as { c: number }).c);
 }
@@ -298,11 +318,16 @@ describe.skipIf(!built)("the packed runtime against every workspace schema on di
   });
 
   describe("a current-schema workspace is opened and preserved", () => {
-    it("opens with nothing pending, no snapshot, and the same content afterwards", () => {
+    it("opens with nothing pending, no snapshot, and no change to its content", () => {
       installPacked();
       const { repo, db } = currentRepo();
       const columns = columnsOf(db);
-      const before = { content: contentSha(db), rows: contentOver(db, columns) };
+      const before = {
+        content: contentSha(db),
+        rows: contentOver(db, columns),
+        identity: recordedIdentity(db),
+      };
+      expect(before.identity).toBeNull();
 
       const run = launcher(["ls", "--all", "--json"], repo);
 
@@ -310,8 +335,27 @@ describe.skipIf(!built)("the packed runtime against every workspace schema on di
       expect(run.status).toBe(0);
       expect(identifiers(run.stdout)).toEqual(["LEG-1", "LEG-2"]);
       expect(stamp(db)).toBe(String(WORKSPACE_LATEST_VERSION));
-      expect(contentSha(db)).toBe(before.content);
       expect(contentOver(db, columns)).toEqual(before.rows);
+      /**
+       * The one write an open makes, and it is not content: this fixture is a
+       * plain directory rather than a checkout, so the first open RECORDS the
+       * workspace's sync identity (STA-281) — the same thing an open of a
+       * home-resident workspace has done since S15, now that a workspace no
+       * longer needs a checkout to hold an identity at all.
+       *
+       * The assertion this replaces was `contentSha(db) === before.content`,
+       * and what it was protecting is kept intact and made sharper: every
+       * domain table is byte-identical (`contentOver` above), the identity is
+       * the only thing that appeared, and the file SETTLES — a second open
+       * changes nothing whatsoever, so an open is not a source of drift.
+       */
+      const identity = recordedIdentity(db);
+      expect(identity).toMatch(/^[0-9a-f-]{36}$/);
+      expect(contentSha(db)).not.toBe(before.content);
+      const settled = contentSha(db);
+      expect(launcher(["ls", "--all", "--json"], repo).status).toBe(0);
+      expect(contentSha(db)).toBe(settled);
+      expect(recordedIdentity(db)).toBe(identity);
       expect(snapshotsBeside(db)).toEqual([]);
       expect(existsSync(join(dirname(db), SNAPSHOT_DIRNAME))).toBe(false);
       // The installed runtime's own diagnosis agrees: every schema matches.

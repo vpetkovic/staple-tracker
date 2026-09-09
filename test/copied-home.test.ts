@@ -287,10 +287,19 @@ describe("a repository-backed workspace is not host-bound", () => {
    * repository-backed workspace that started refusing to sync because somebody
    * copied a project directory between two machines, which is a thing people do
    * on purpose and which a checkout is entitled to do by design.
+   *
+   * STA-281 made the fixture faithful to that sentence. It used to be a bare
+   * `mkdir`, which was indistinguishable from a repository only because nothing
+   * looked — and "nothing looked" was the bug: a workspace in a plain directory
+   * could never hold an identity, and one that did could never detect a copy.
+   * The directory a checkout is entitled to copy is one that HAS a checkout in
+   * it, so the fixture now has one. A `.git` directory rather than a real
+   * repository, because the check is a marker test and never a subprocess; see
+   * `src/core/checkout.ts`.
    */
   it("is not bound by the real init path either", () => {
     const dir = join(root, "init-path-repo");
-    mkdirSync(dir, { recursive: true });
+    mkdirSync(join(dir, ".git"), { recursive: true });
     const ws = initWorkspace({ dir });
     try {
       expect(ws.repository.host).toBeNull();
@@ -307,6 +316,9 @@ describe("a repository-backed workspace is not host-bound", () => {
   it("records no host, so moving the directory to another machine changes nothing", () => {
     const dir = join(root, "project", ".staple");
     mkdirSync(dir, { recursive: true });
+    // `reconcileRepositoryIdentity` is the low-level door and binds nothing on
+    // any path; the checkout marker is here so the fixture says what it means.
+    mkdirSync(join(root, "project", ".git"), { recursive: true });
     const db = openDb(join(dir, "staple.db"));
     migrateWorkspace(db);
     try {

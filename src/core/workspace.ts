@@ -244,10 +244,14 @@ export function initWorkspace(options: {
      * never synchronize — which made a version control system a requirement for
      * sync by the back door.
      *
-     * What a home-resident workspace gets in addition is a host binding, and it
-     * is not optional: a fixed path inside the home means a restored backup
-     * lands on a second machine as the same identity at the same path, with no
-     * clone to tell them apart. See `repo-identity.ts`, "the host binding".
+     * What a workspace that is NOT checkout-backed gets in addition is a host
+     * binding, and it is not optional: with no checkout to carry the id on its
+     * own, any copy of the workspace arrives carrying the database, the cursors
+     * and the client-sequence allocator too, and there is nothing left to tell
+     * two machines apart. That was first argued about the staple home, whose
+     * fixed path makes a restored backup land as the same identity at the same
+     * place; a plain directory is the same case with a different path. See
+     * `repo-identity.ts`, "the host binding" and {@link isCheckoutBacked}.
      *
      * This is local file and local row work: it makes no network call, and it is
      * not `connect`. A workspace carrying an identity has not consented to

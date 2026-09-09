@@ -5,7 +5,7 @@ import { resolveHome } from "../config/index.js";
 import { defaultBinDir } from "../install/launcher.js";
 import { schemaRepairGuidance } from "../install/schema-repair.js";
 import { openDb, tx } from "./db.js";
-import { isHomeResidentWorkspace, reconcileWorkspaceIdentity } from "./repo-identity.js";
+import { isCheckoutBacked, tryReconcileWorkspaceIdentity } from "./repo-identity.js";
 import { assertNotNewer, describeSchema } from "./migrations/runner.js";
 import type { SchemaState } from "./migrations/types.js";
 import { WORKSPACE_TARGET, inspectWorkspaceSchema, migrateWorkspace } from "./schema.js";
@@ -218,27 +218,35 @@ export function openWorkspace(dbPath: string): OpenedWorkspace {
     throw new StapleError("validation", `Workspace at ${dbPath} is missing slug/prefix metadata`);
   }
   /**
-   * A workspace that lives in the staple home reconciles its identity here, on
-   * every open, and a repository-backed one does not.
+   * A workspace whose identity cannot travel without its database reconciles
+   * that identity here, on every open. A checkout-backed one does not.
    *
-   * The asymmetry is the point. A repository gets its identity from `init`,
-   * which is the first command anybody runs in a fresh checkout, and minting a
-   * file inside somebody's repository on a READ path would be a surprise that no
-   * amount of correctness excuses. A global workspace has no such second ritual
-   * — there is no checkout, no CI, no `init` after the first one — so open is the
-   * only door, and the file lands inside staple's own home where staple already
-   * writes the hub, the credentials and the workspace itself.
+   * The asymmetry is the point, and `isCheckoutBacked` is where it is decided.
+   * A checkout gets its identity from `init`, which is the first command anybody
+   * runs in a fresh clone, and minting a file inside somebody's checkout on a
+   * READ path would be a surprise that no amount of correctness excuses — the
+   * manifest there is a COMMITTED file, so an untracked one is a diff the person
+   * did not ask for. Every other workspace has no such second ritual — no clone,
+   * no CI, no `init` after the first one — so open is the only door it has.
+   *
+   * This used to read `isHomeResidentWorkspace`, and that was the whole of
+   * STA-281: a workspace in a plain directory is not in the staple home and is
+   * not a checkout, so it fell between the two and could never gain an identity
+   * at all. It was then told to run `staple init` to fix that, which in any
+   * directory but the exact one registered mints a SECOND workspace.
    *
    * That is also what upgrades the workspaces that already exist: one that
-   * predates this gains a manifest and a host binding the next time anything
+   * predates manifests gains one, and a host binding, the next time anything
    * opens it, with no data touched and no path changed.
    *
-   * Cheap and idempotent — one `existsSync`, at most one `SELECT` — and it never
-   * rewrites a manifest or a binding that is already there. `openWorkspace` is
-   * not a read-only door in any case: it migrates schemas and writes rollback
-   * snapshots two dozen lines above this.
+   * Cheap and idempotent — a bounded walk of `existsSync`, at most one `SELECT` —
+   * and it never rewrites a manifest or a binding that is already there. Best
+   * effort, too: see `tryReconcileWorkspaceIdentity` on why a workspace on a
+   * read-only volume must still open. `openWorkspace` is not a read-only door in
+   * any case: it migrates schemas and writes rollback snapshots two dozen lines
+   * above this.
    */
-  if (isHomeResidentWorkspace(dbPath)) reconcileWorkspaceIdentity(db, dbPath);
+  if (!isCheckoutBacked(dbPath)) tryReconcileWorkspaceIdentity(db, dbPath);
 
   const opened: OpenedWorkspace = { store: new WorkspaceStore(db, slug, prefix), dbPath };
   if (upgrade) opened.upgrade = upgrade;

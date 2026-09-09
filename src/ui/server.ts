@@ -36,7 +36,11 @@ import { readStoredRepositoryId } from "../core/repo-identity.js";
 import { SurfaceAutoSync } from "../core/cloud/auto-triggers.js";
 import { listConflicts, resolveConflict } from "../core/cloud/conflicts.js";
 import { localCloudStatus } from "../core/cloud/status.js";
-import { cloudSurfaceReport, noIdentityReport } from "../core/cloud/surface.js";
+import {
+  cloudSurfaceReport,
+  missingIdentityRemedy,
+  noIdentityReport,
+} from "../core/cloud/surface.js";
 import { hubCloudReport } from "../core/cloud/hub-surface.js";
 /**
  * S13 (STA-258): the cloud MUTATIONS, which until now had no HTTP surface at all.
@@ -68,6 +72,15 @@ interface StoreHandle {
   slug: string;
   prefix: string;
   store: WorkspaceStore;
+  /**
+   * The database this handle was opened from.
+   *
+   * Carried so a refusal can say something true about WHERE this workspace is:
+   * whether its identity would be recorded on the next open or has to be
+   * committed from a checkout depends on the path, and a message that guessed
+   * would be the wrong advice half the time. See `missingIdentityRemedy`.
+   */
+  dbPath: string;
 }
 
 export interface UiHandle {
@@ -295,7 +308,12 @@ export function startUiServer(options: UiOptions): UiHandle {
         for (const entry of entries) {
           if (!stores.has(entry.slug)) {
             const ws = openWorkspace(entry.path);
-            stores.set(entry.slug, { slug: entry.slug, prefix: entry.prefix, store: ws.store });
+            stores.set(entry.slug, {
+              slug: entry.slug,
+              prefix: entry.prefix,
+              store: ws.store,
+              dbPath: ws.dbPath,
+            });
           }
         }
         const wanted = slug ?? entries[0]?.slug;
@@ -309,7 +327,12 @@ export function startUiServer(options: UiOptions): UiHandle {
     let handle = stores.get("__single__");
     if (!handle) {
       const ws = resolveWorkspace({ db: options.db, ws: options.ws });
-      handle = { slug: ws.store.slug, prefix: ws.store.prefix, store: ws.store };
+      handle = {
+        slug: ws.store.slug,
+        prefix: ws.store.prefix,
+        store: ws.store,
+        dbPath: ws.dbPath,
+      };
       stores.set("__single__", handle);
     }
     return handle;
@@ -572,10 +595,18 @@ export function startUiServer(options: UiOptions): UiHandle {
       repositoryId = null;
     }
     if (repositoryId === null) {
+      /**
+       * The remedy comes from `core/cloud/surface.ts` rather than being worded
+       * here, which is the whole point of that file. It used to read *"Run
+       * `staple init` inside a repository to record one"* — said about a
+       * workspace this server has open, whose data it is serving, and which
+       * therefore plainly exists. Since STA-281 most workspaces record an
+       * identity on their next open and must not be told to run anything at all.
+       */
       throw new StapleError(
         "not_found",
-        "This workspace has no repository identity, so it has no sync identity and cannot be " +
-          "connected. Run `staple init` inside a repository to record one.",
+        `This workspace is registered and its data is intact, but it has no sync identity, so ` +
+          `it cannot be connected. ${missingIdentityRemedy(handle.dbPath)}`,
       );
     }
     return repositoryId;
@@ -819,7 +850,7 @@ export function startUiServer(options: UiOptions): UiHandle {
           res,
           200,
           repositoryId === null
-            ? noIdentityReport()
+            ? noIdentityReport(handle.dbPath)
             : cloudSurfaceReport(localCloudStatus(stapleHome(), repositoryId), handle.store.db),
         );
         return;
