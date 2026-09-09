@@ -524,21 +524,52 @@ function runPublish(argv: string[]): void {
            * the wrong remedy, is two mistakes in the one moment you had their attention.
            */
           const connection = service.requireHubRegistryConnection(home, hubId);
-          if (enabled && !json) {
+          if (enabled) {
             /**
-             * The disclosure, printed BEFORE the flag is written and taken from the
-             * module rather than retyped. `REGISTRY_DISCLOSURE` is the one sentence
-             * and `registryDisclosure()` is the block around it; a surface with its
-             * own wording is a surface whose wording is the one nobody reviewed.
+             * The disclosure, printed BEFORE the flag is written and taken from the module
+             * rather than retyped. `REGISTRY_DISCLOSURE` is the one sentence and
+             * `registryDisclosure()` is the block around it; a surface with its own wording
+             * is a surface whose wording is the one nobody reviewed.
              */
-            console.log(registryDisclosure(connection.endpoint));
+            if (!json) console.log(registryDisclosure(connection.endpoint));
+
+            /**
+             * The agreement gate, and it applies in `--json` MODE TOO.
+             *
+             * This whole branch used to be `if (enabled && !json)`, which made `--json` a
+             * way around both halves at once: `publish --enable --json` granted the
+             * consent having displayed nothing and having asked nothing, with no `--yes`.
+             * The acknowledgement `setRegistryConsent` requires was then supplied by this
+             * command on the caller's behalf — which spends the check rather than
+             * honouring it, exactly as a server filling in a client's argument would.
+             *
+             * A machine consumer gets the sentence in the REFUSAL, so the only way to
+             * reach the grant is to have been told what it discloses and then to say
+             * `--yes` deliberately. That is the same shape as the connect preview: the
+             * disclosure travels out first, and consent comes back referring to it.
+             */
             if (values.yes !== true) {
-              if (!(isInteractive() && confirm("\nPublish this machine's registry?", { default: false }))) {
-                console.error(
-                  isInteractive()
-                    ? "\nDeclined. Nothing has been uploaded and the consent is unchanged."
-                    : "\nNothing was changed. Re-run with --yes to enable publishing.",
-                );
+              const agreed = !json && isInteractive()
+                && confirm("\nPublish this machine's registry?", { default: false });
+              if (!agreed) {
+                if (json) {
+                  console.error(
+                    JSON.stringify({
+                      code: "validation",
+                      message:
+                        "Enabling this consent needs --yes. What it discloses: " +
+                        REGISTRY_DISCLOSURE,
+                      retryable: false,
+                      disclosure: REGISTRY_DISCLOSURE,
+                    }),
+                  );
+                } else {
+                  console.error(
+                    isInteractive()
+                      ? "\nDeclined. Nothing has been uploaded and the consent is unchanged."
+                      : "\nNothing was changed. Re-run with --yes to enable publishing.",
+                  );
+                }
                 process.exitCode = 2;
                 return;
               }
