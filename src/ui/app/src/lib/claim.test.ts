@@ -34,6 +34,8 @@ function claim(overrides: Partial<ClaimActivity> = {}): ClaimActivity {
     lastActivityAt: "2026-09-01T11:15:00.000Z",
     heldSeconds: 7200,
     idleSeconds: 2700,
+    scope: "local",
+    lease: null,
     ...overrides,
   };
 }

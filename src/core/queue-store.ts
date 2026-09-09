@@ -29,7 +29,8 @@
  * carrying `{ currentRevision }` while the server order stands untouched.
  */
 import type { DatabaseSync } from "node:sqlite";
-import { tx } from "./db.js";
+import { insertEvent } from "./event-log.js";
+import type { Journal } from "./journal.js";
 import { parseIdentifier } from "./ids.js";
 import { milestoneDateBounds, MILESTONE_KIND, nearestMilestone, rankBetween, renumberedRanks } from "./milestones.js";
 import type { WorkspaceStore } from "./store.js";
@@ -109,6 +110,14 @@ const ENTRY_SELECT = `SELECT q.issue_id, q.rank, q.added_by, q.added_at, q.note,
 /** The `meta` key holding the plan's revision. Absent means 0; see `revision()`. */
 const QUEUE_REVISION_KEY = "queue_revision";
 
+/**
+ * The entity id the plan replicates under.
+ *
+ * There is exactly one plan per workspace, so it needs a name rather than an id.
+ * A UUID would imply there could be a second.
+ */
+const QUEUE_PLAN_ENTITY_ID = "@plan";
+
 function hasPosition(position: QueuePosition): boolean {
   return position.before !== undefined || position.after !== undefined || position.at !== undefined;
 }
@@ -118,6 +127,16 @@ export class QueueStore {
 
   private get db(): DatabaseSync {
     return this.store.db;
+  }
+
+  /** The connection's one journal seam. Shared with every other store. */
+  private get journal(): Journal {
+    return this.store.journal;
+  }
+
+  /** One logical mutation: one transaction, one journal scope. Re-entrant. */
+  private journaled<T>(fn: () => T): T {
+    return this.store.journaled(fn);
   }
 
   // ---------- guards ----------
@@ -317,10 +336,14 @@ export class QueueStore {
   // ---------- events ----------
 
   /**
-   * The store's INSERT, without a dedup key: none of these is level-triggered.
-   * `issueId` is null for `queue_reordered`, which is a fact about the plan
-   * rather than about any one row — the shape `status_config_changed` uses.
-   * None of these moves a status, so none joins `STATUS_MOVING_EVENT_KINDS`.
+   * One of the four emitters, now delegating to the single writer.
+   *
+   * None of these is level-triggered, so no explicit dedup key is supplied and
+   * `insertEvent` derives one from the enclosing mutation; it used to hardcode
+   * `NULL`. `issueId` is null for `queue_reordered`, which is a fact about the
+   * plan rather than about any one row — the shape `status_config_changed`
+   * uses. None of these moves a status, so none joins
+   * `STATUS_MOVING_EVENT_KINDS`.
    */
   private emit(
     kind: string,
@@ -328,12 +351,38 @@ export class QueueStore {
     actor: string | null,
     payload: Record<string, unknown>,
   ): void {
-    this.db
-      .prepare(
-        `INSERT INTO events (kind, issue_id, actor, payload, dedup_key, created_at)
-         VALUES (?, ?, ?, ?, NULL, ?)`,
-      )
-      .run(kind, issueId, actor, JSON.stringify(payload), nowIso());
+    insertEvent(this.db, { kind, issueId, actor, payload });
+  }
+
+  // ---------- journal ----------
+
+  /**
+   * Declare a plan change as a whole-order `replace`, on the plan.
+   *
+   * The plan is ONE ordered collection with `UNIQUE (rank)` scoped to the whole
+   * table — table-global, not per-container as `milestone_members` at least is —
+   * so it is the worst case in the schema for a per-row merge: two devices each
+   * enqueueing offline produce two rows that cannot both land. The order is the
+   * only shape of this fact that merges, so the order is what replicates.
+   *
+   * It is also what the plan MEANS. A human reordering the queue is not making N
+   * independent statements about N issues; they are saying "this, then this,
+   * then that", and every surface reads it back as one list against one
+   * `queue_revision` CAS token.
+   */
+  private recordPlan(actor: string | null): void {
+    const order = (
+      this.db
+        .prepare("SELECT issue_id FROM queue_entries ORDER BY rank")
+        .all() as Array<{ issue_id: string }>
+    ).map((row) => row.issue_id);
+    this.journal.record({
+      entity: "queue",
+      entityId: QUEUE_PLAN_ENTITY_ID,
+      verb: "replace",
+      payload: { order },
+      actor,
+    });
   }
 
   // ---------- writes ----------
@@ -354,7 +403,7 @@ export class QueueStore {
     actor: string | null = null,
   ): QueuePlan & { replayed: boolean } {
     const issue = this.requireIssue(ref);
-    return tx(this.db, () => {
+    return this.journaled(() => {
       const current = this.entryOf(issue.id);
       if (current !== undefined && !hasPosition(options)) {
         return { ...this.plan(), replayed: true };
@@ -377,6 +426,9 @@ export class QueueStore {
         position: this.positionOf(issue.id),
         revision,
       });
+      // After the replay guard, so re-enqueueing a queued issue with no position
+      // returns `replayed: true` above and mints no second operation.
+      this.recordPlan(actor ?? null);
       return { ...this.plan(), replayed: false };
     });
   }
@@ -388,7 +440,7 @@ export class QueueStore {
     actor: string | null = null,
   ): QueuePlan {
     const issue = this.requireIssue(ref);
-    return tx(this.db, () => {
+    return this.journaled(() => {
       const current = this.entryOf(issue.id);
       if (current === undefined) {
         throw new StapleError("not_found", `${issue.identifier} is not in the queue.`, {
@@ -405,6 +457,7 @@ export class QueueStore {
         reason: "removed",
         revision,
       });
+      this.recordPlan(actor ?? null);
       return this.plan();
     });
   }
@@ -419,7 +472,7 @@ export class QueueStore {
     if (!hasPosition(options)) {
       throw new StapleError("validation", `mv ${issue.identifier} needs one of --before, --after or --at.`);
     }
-    return tx(this.db, () => {
+    return this.journaled(() => {
       const current = this.entryOf(issue.id);
       if (current === undefined) {
         throw new StapleError("not_found", `${issue.identifier} is not in the queue.`, {
@@ -459,6 +512,7 @@ export class QueueStore {
       rank,
       revision,
     });
+    this.recordPlan(actor ?? null);
   }
 
   /**
@@ -473,7 +527,7 @@ export class QueueStore {
     options: { baseRevision?: number } = {},
     actor: string | null = null,
   ): QueuePlan {
-    return tx(this.db, () => {
+    return this.journaled(() => {
       const rows = this.rows();
       const given = refs.map((ref) => this.requireIssue(ref));
       const queued = new Set(rows.map((row) => row.issue_id));
@@ -506,6 +560,7 @@ export class QueueStore {
         order: given.map((issue) => issue.identifier),
         revision,
       });
+      this.recordPlan(actor ?? null);
       return this.plan();
     });
   }
@@ -519,7 +574,7 @@ export class QueueStore {
    * changes nothing and does not bump the revision.
    */
   prune(options: { baseRevision?: number } = {}, actor: string | null = null): QueuePlan {
-    return tx(this.db, () => {
+    return this.journaled(() => {
       const rows = this.rows();
       this.assertBase(options.baseRevision);
       const resolved = rows
@@ -536,6 +591,9 @@ export class QueueStore {
           revision,
         });
       }
+      // One operation for the whole prune, however many rows it dropped: the
+      // plan is one entity, and N events narrating it locally is not N facts.
+      this.recordPlan(actor ?? null);
       return this.plan();
     });
   }

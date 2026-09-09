@@ -4,7 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { resolveHome } from "../config/index.js";
 import { defaultBinDir } from "../install/launcher.js";
 import { schemaRepairGuidance } from "../install/schema-repair.js";
-import { openDb } from "./db.js";
+import { openDb, tx } from "./db.js";
 import { assertNotNewer, describeSchema } from "./migrations/runner.js";
 import type { SchemaState } from "./migrations/types.js";
 import { WORKSPACE_TARGET, inspectWorkspaceSchema, migrateWorkspace } from "./schema.js";
@@ -44,6 +44,24 @@ export function writeMeta(store: WorkspaceStore, key: string, value: string): vo
       "INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
     )
     .run(key, value);
+}
+
+/**
+ * Write several `meta` keys as one transaction.
+ *
+ * `writeMeta` takes no transaction, which is correct for one key and wrong for
+ * two. `initWorkspace` writes `slug` and then `prefix` as two bare statements,
+ * so a crash between them yields a workspace that has a slug and no prefix — and
+ * a workspace with no prefix cannot mint an identifier, which is not a degraded
+ * state but an unusable one.
+ *
+ * Re-entrant via `tx`, so this is safe inside a caller that already holds a
+ * transaction and takes the write lock itself when it does not.
+ */
+export function writeMetaPairs(store: WorkspaceStore, entries: ReadonlyArray<[string, string]>): void {
+  tx(store.db, () => {
+    for (const [key, value] of entries) writeMeta(store, key, value);
+  });
 }
 
 /** `<dir>/snapshots/<file>.schema-<from>.<utc-stamp>-<pid>.db` — unique per process and instant. */

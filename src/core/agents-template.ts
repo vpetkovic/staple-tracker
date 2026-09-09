@@ -343,6 +343,24 @@ Every \`in_progress\` task shows its claim: \`ls\` and \`show\` print
 \`lastActivityAt\`, \`heldSeconds\`, \`idleSeconds\`. That is how you tell an agent
 that is working from one a usage limit killed hours ago.
 
+**\`claim.scope\` tells you how far that claim reaches, and you must read it.**
+
+- \`scope: "local"\` — **this database only.** The claim is real here: it still
+  refuses a second holder on this machine, still refuses through gates and
+  blockers, still logs \`claim_stolen\`. It says **nothing about any other
+  machine**, and another one may be working the same task right now. This is the
+  answer on every workspace that has not been connected to a sync service, which
+  is most of them.
+- \`scope: "lease"\` — a fenced server lease is held and the claim **is** globally
+  exclusive. \`claim.lease\` carries the \`fencingToken\` and the
+  \`serverExpiresAt\` the service decided, so you can confirm it rather than take
+  the word for it. Your own clock has no say in whether it has expired.
+
+Holding \`local\` and acting as though you held \`lease\` is the specific mistake
+this field exists to stop. If you need genuine exclusivity across machines, take
+it explicitly with \`staple cloud lease acquire ${ref}\` and check what comes
+back — do not infer it from a successful \`checkout\`.
+
 Taking over is **explicit and opt-in**:
 
 \`\`\`bash

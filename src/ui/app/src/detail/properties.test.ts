@@ -112,6 +112,8 @@ const claim = (patch: Partial<ClaimActivity> = {}): ClaimActivity => ({
   lastActivityAt: "2026-09-01T22:44:31Z",
   heldSeconds: 300,
   idleSeconds: 45,
+  scope: "local",
+  lease: null,
   ...patch,
 });
 

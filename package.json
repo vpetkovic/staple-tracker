@@ -24,7 +24,9 @@
     "drill:npx": "tsx scripts/drill-npx.ts",
     "dev:ui": "vite --config src/ui/app/vite.config.ts",
     "site": "vite --config vite.site.config.ts",
-    "site:build": "vite build --config vite.site.config.ts"
+    "site:build": "vite build --config vite.site.config.ts",
+    "test:worker": "npm --prefix worker test",
+    "typecheck:worker": "npm --prefix worker run typecheck"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",

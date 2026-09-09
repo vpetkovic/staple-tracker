@@ -232,7 +232,13 @@ describe("tool inventory", () => {
    * moment this ticket is buying. Read-only tools deliberately omit
    * destructiveHint (the MCP spec only defines it when readOnlyHint is false).
    */
-  it("exposes exactly these 40 tools with these annotations and output schemas", async () => {
+  // STA-75: the title said 45 while the array below held 46 and `src/mcp.ts`
+  // registered 46 — the count in the title was simply never updated when the
+  // conflict pair landed, so it asserted nothing and quietly disagreed with
+  // `characterize-mcp-startup` and `package-tarball`, which both pin 46. The
+  // array was always right; only the sentence was stale. Corrected, not moved:
+  // this ticket adds no tool.
+  it("exposes exactly these 46 tools with these annotations and output schemas", async () => {
     const tools = await harness.listTools();
     const inventory = tools.map((t) => ({
       name: t.name,
@@ -464,6 +470,43 @@ describe("tool inventory", () => {
         annotations: { title: "Hub overview", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
         hasOutputSchema: false,
       },
+      // ------ registry cleanup (STA-249) ------
+      // `hub_prune` is NOT readOnlyHint even though a bare call writes nothing:
+      // the same tool with apply:true deletes rows, and an annotation that
+      // depends on an argument is worse than no annotation.
+      {
+        name: "hub_unregister",
+        annotations: {
+          title: "Unregister workspace",
+          readOnlyHint: false,
+          destructiveHint: true,
+          idempotentHint: false,
+          openWorldHint: false,
+        },
+        hasOutputSchema: false,
+      },
+      {
+        name: "hub_prune",
+        annotations: {
+          title: "Prune hub registry",
+          readOnlyHint: false,
+          destructiveHint: true,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
+        hasOutputSchema: false,
+      },
+      {
+        name: "cross_unlink",
+        annotations: {
+          title: "Remove cross-workspace link",
+          readOnlyHint: false,
+          destructiveHint: true,
+          idempotentHint: false,
+          openWorldHint: false,
+        },
+        hasOutputSchema: false,
+      },
       {
         name: "init",
         annotations: {
@@ -646,10 +689,51 @@ describe("tool inventory", () => {
         },
         hasOutputSchema: true,
       },
+      /**
+       * STA-71: the ONE cloud tool, and deliberately the only one.
+       *
+       * Connect, disconnect, revoke and purge are not exposed over MCP. Each is
+       * a human consent decision whose preview or typed confirmation only means
+       * something to a person at a terminal — `docs/sync.md` makes the connect
+       * preview the consent mechanism, and an MCP tool has no human to show it
+       * to. So an agent can ask whether this repository is connected, and
+       * everything that changes that answer needs a person.
+       */
+      {
+        name: "cloud_status",
+        annotations: { title: "Cloud status", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+        hasOutputSchema: true,
+      },
+      /**
+       * The conflict lane's two, and the ONE cloud write an agent may make.
+       *
+       * The paragraph above holds because connect, disconnect, revoke and purge
+       * are consents. Resolving is not: `docs/sync.md` says outright that
+       * *"resolving it is a decision a human or an agent makes on the record"*.
+       * It touches the local database only, spends no credential, and destroys
+       * nothing — the losing value stays on the record — so `destructiveHint` is
+       * false, and `idempotentHint` is true because resolving the same conflict
+       * the same way twice is a no-op by construction rather than by luck.
+       */
+      {
+        name: "conflict_list",
+        annotations: { title: "List conflicts", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+        hasOutputSchema: true,
+      },
+      {
+        name: "conflict_resolve",
+        annotations: {
+          title: "Resolve conflict",
+          readOnlyHint: false,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
+        hasOutputSchema: true,
+      },
     ]);
   });
 
-  it("marks exactly the fourteen read tools readOnlyHint: true", async () => {
+  it("marks exactly the sixteen read tools readOnlyHint: true", async () => {
     const tools = await harness.listTools();
     const readOnly = tools.filter((t) => t.annotations?.readOnlyHint === true).map((t) => t.name);
     expect(readOnly).toEqual([
@@ -672,6 +756,11 @@ describe("tool inventory", () => {
       // nothing — `next_task` resolves the order, it does not claim anything.
       "list_queue",
       "next_task",
+      // STA-71: reading whether this MACHINE has connected the repository is as
+      // read-only as reading a task, and it makes no network request either.
+      "cloud_status",
+      // Listing what two devices disagree about is a read of one local table.
+      "conflict_list",
     ]);
   });
 
@@ -1062,7 +1151,7 @@ describe("tool response shapes (31/31)", () => {
           issueId: UUID,
           actor: CONTRACT_AGENT,
           payload: { identifier: "CON-1", title: "Contract root task", status: "backlog" },
-          dedupKey: null,
+          dedupKey: "<dedup-key>",
           createdAt: ISO,
         },
         {
@@ -1071,7 +1160,7 @@ describe("tool response shapes (31/31)", () => {
           issueId: UUID,
           actor: CONTRACT_AGENT,
           payload: { identifier: "CON-2", title: "Contract idempotent", status: "backlog" },
-          dedupKey: null,
+          dedupKey: "<dedup-key>",
           createdAt: ISO,
         },
         {
@@ -1080,7 +1169,7 @@ describe("tool response shapes (31/31)", () => {
           issueId: UUID,
           actor: CONTRACT_AGENT,
           payload: { identifier: "CON-3", title: "Contract blocker", status: "backlog" },
-          dedupKey: null,
+          dedupKey: "<dedup-key>",
           createdAt: ISO,
         },
         {
@@ -1089,7 +1178,7 @@ describe("tool response shapes (31/31)", () => {
           issueId: UUID,
           actor: CONTRACT_AGENT,
           payload: { identifier: "CON-4", title: "Contract child", status: "backlog" },
-          dedupKey: null,
+          dedupKey: "<dedup-key>",
           createdAt: ISO,
         },
       ],
@@ -1287,6 +1376,12 @@ describe("tool response shapes (31/31)", () => {
       "events_since",
       "cross_link",
       "hub_overview",
+      // STA-249: the three registry-cleanup tools are pinned in
+      // test/hub-unregister-surfaces.test.ts, against the CLI projection of the
+      // same hub rows.
+      "hub_unregister",
+      "hub_prune",
+      "cross_unlink",
       "gate_task",
       "approve_task",
       "request_changes",
@@ -1315,6 +1410,22 @@ describe("tool response shapes (31/31)", () => {
       "move_queue_entry",
       "reorder_queue",
       "prune_queue",
+      // STA-71: the cloud status projection is pinned in test/cloud-connect.test.ts
+      // against the same `localCloudStatus` the CLI and HTTP surfaces render.
+      //
+      // STA-75 moved WHAT it returns without moving the tool: it now emits
+      // `CloudSurfaceReport` verbatim — the same object `staple cloud status
+      // --json` prints and `/api/cloud/status` answers — instead of a nine-field
+      // literal this file used to build for itself. `test/cloud-surfaces.test.ts`
+      // asserts the three payloads equal key-for-key, and `src/mcp.ts` carries an
+      // `Equals<>` proof that the zod schema cannot drift from the type. No tool
+      // was added: the count above is 46 before and after.
+      "cloud_status",
+      // The conflict lane's two are pinned in test/conflict-surfaces.test.ts,
+      // against the CLI and HTTP projections of the same record — including that
+      // no surface will resolve without an explicit choice.
+      "conflict_list",
+      "conflict_resolve",
     ]);
     expect([...covered].sort()).toEqual([...tools].sort());
   });

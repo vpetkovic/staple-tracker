@@ -24,6 +24,16 @@ prefix (`STA-1`, `WOR-3`), so identifiers are unambiguous cross-repository
 references. Cross-workspace `blocks` edges live in the hub; a blocker whose file
 is not on this machine reports *unresolvable → treat as blocked*.
 
+The registry is **derived** state: the authoritative slug and prefix live in the
+workspace file, so a row can be removed (`staple hub unregister`, or
+`staple hub prune` for rows whose file is gone) without losing anything, and a
+workspace still on disk re-registers itself from its own stamped prefix on the
+next resolution. Removing a row never touches the workspace database — the write
+path takes a hub connection and a slug, and is handed no path to reach one with.
+Cross-links are the exception to "derived", since they exist only in the hub:
+unregistering refuses while a link names the workspace rather than dangling or
+silently deleting the edge.
+
 `STAPLE_HOME` relocates the hub — see [configuration.md](configuration.md) for
 the full resolution order.
 

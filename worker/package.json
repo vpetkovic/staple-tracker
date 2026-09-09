@@ -1,0 +1,20 @@
+{
+  "name": "staple-sync-worker",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Cloudflare Worker + D1 operation log for Staple cloud sync. Deployed infrastructure, never published to npm.",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "wrangler types >/dev/null && tsc --noEmit",
+    "dev": "wrangler dev --local --persist-to ./.wrangler/state",
+    "migrate:local": "wrangler d1 migrations apply staple-sync-dev --local",
+    "lint:logs": "node ./scripts/lint-logs.mjs"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "^1.1.4",
+    "typescript": "^5.7.0",
+    "vitest": "^4.1.0",
+    "wrangler": "^4.129.0"
+  }
+}

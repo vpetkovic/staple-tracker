@@ -32,6 +32,26 @@ import type { QueueVerb } from "../core/queue-store.js";
 // beside the workspace ones so the page can say which scope each setting has.
 import { settingDefinitionsFor, settingRegistryView, settingValueView } from "../core/settings-registry.js";
 import { sanitizeSvg } from "../core/svg-sanitize.js";
+import { readStoredRepositoryId } from "../core/repo-identity.js";
+import { SurfaceAutoSync } from "../core/cloud/auto-triggers.js";
+import { listConflicts, resolveConflict } from "../core/cloud/conflicts.js";
+import { localCloudStatus } from "../core/cloud/status.js";
+import { cloudSurfaceReport, noIdentityReport } from "../core/cloud/surface.js";
+/**
+ * S13 (STA-258): the cloud MUTATIONS, which until now had no HTTP surface at all.
+ *
+ * `buildConnectPreview` and `ConsentTicketStore` are the pre-consent half and
+ * neither can reach the network — see `core/cloud/consent.ts` for why the
+ * two-step exchange below is the property and not the ceremony. `connect.js` is
+ * the post-consent half and DOES import `client.ts`; every function it exports
+ * takes an already-shown preview or an existing connection record as its
+ * subject, so importing it here does not give this file a way to reach a service
+ * nobody named.
+ */
+import { buildConnectPreview } from "../core/cloud/preview.js";
+import { ConsentTicketStore } from "../core/cloud/consent.js";
+import { fetchDevices, performConnect, performDisconnect, performRevoke } from "../core/cloud/connect.js";
+import { setConsent } from "../core/cloud/connection.js";
 import { readConfig, stapleHome } from "../config/index.js";
 
 interface UiOptions {
@@ -128,6 +148,28 @@ const QUEUE_VERBS: Record<string, QueueVerb> = {
   "/api/queue/prune": "prune",
 };
 const QUEUE_WRITE_PATHS = new Set(Object.keys(QUEUE_VERBS));
+
+/**
+ * The cloud writes that must NOT arm the post-write sync trigger (S10).
+ *
+ * Every one of them changes this machine's relationship to the service rather
+ * than the tracker's contents: there is no journalled operation behind them for a
+ * sync to carry, so a trigger would produce a request with nothing in it.
+ *
+ * `/api/cloud/disconnect` is the one that would actually be wrong rather than
+ * merely pointless — *"a person who has decided to stop talking to a service must
+ * not need that service's permission to stop"* — and `/api/cloud/consent` is
+ * excluded because the consent route fires its own, deliberately, and only in the
+ * direction that turns automatic sync ON.
+ */
+const CLOUD_LIFECYCLE_WRITES = new Set([
+  "/api/cloud/connect/preview",
+  "/api/cloud/connect",
+  "/api/cloud/disconnect",
+  "/api/cloud/consent",
+  "/api/cloud/devices",
+  "/api/cloud/devices/revoke",
+]);
 
 /**
  * How many events GET /api/events?issue= returns — the newest N, oldest first.
@@ -472,6 +514,77 @@ export function startUiServer(options: UiOptions): UiHandle {
     return raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
   }
 
+  // ------------------------------------------------------------- cloud (S13, STA-258)
+
+  /**
+   * The outstanding connect consents of THIS process. See `core/cloud/consent.ts`
+   * for the whole argument; the short version is that `/api/cloud/connect` has no
+   * endpoint parameter, so the only way to reach a service is to hold a ticket
+   * this server minted while returning the preview that named it.
+   *
+   * One store per server, not per workspace: a ticket already carries the
+   * repository id it was built for, and the redeem path re-derives the preview
+   * from that id rather than from anything the request said.
+   */
+  const consents = new ConsentTicketStore();
+
+  /**
+   * S10: this server's automatic-sync registration, and all of it.
+   *
+   * Contract: `docs/sync.md`, "Three consents" — *"After automatic — bounded
+   * triggers only: startup, post-write, long-running session … Coalesced,
+   * jittered backoff, cancellable, bounded timeout."*
+   *
+   * `resolve` hands over this server's own workspace resolution rather than
+   * duplicating it: `handleFor` already knows about hub mode, and
+   * `readStoredRepositoryId` is the same read `/api/cloud/status` does. A
+   * workspace with no identity returns null and nothing is fired.
+   *
+   * Everything about *whether* it may run lives in `core/cloud/auto.ts`. Nothing
+   * here checks a consent, which is the point of it being one gate rather than
+   * one per surface.
+   */
+  const autoSync = new SurfaceAutoSync({
+    home: () => stapleHome(),
+    resolve: (ws) => {
+      const handle = handleFor(ws);
+      const repositoryId = readStoredRepositoryId(handle.store.db);
+      return repositoryId === null ? null : { db: handle.store.db, repositoryId };
+    },
+  });
+
+  /**
+   * This workspace's sync identity, or a refusal naming why there is none.
+   *
+   * Same read as `/api/cloud/status` — `sync_state.repository_id`, written from
+   * the manifest at open time — and the same failure mode: a workspace old enough
+   * to have no table, or a global workspace that never had a manifest, has no
+   * identity for a connection to be ABOUT. `/api/cloud/status` answers that with
+   * `noIdentityReport()`; a mutation has to refuse, because there is nothing to
+   * mutate.
+   */
+  function requireRepositoryId(handle: StoreHandle): string {
+    let repositoryId: string | null = null;
+    try {
+      repositoryId = readStoredRepositoryId(handle.store.db);
+    } catch {
+      repositoryId = null;
+    }
+    if (repositoryId === null) {
+      throw new StapleError(
+        "not_found",
+        "This workspace has no repository identity, so it has no sync identity and cannot be " +
+          "connected. Run `staple init` inside a repository to record one.",
+      );
+    }
+    return repositoryId;
+  }
+
+  /** The report every cloud mutation answers with, so one round trip both acts and refreshes. */
+  function cloudReport(handle: StoreHandle, repositoryId: string) {
+    return cloudSurfaceReport(localCloudStatus(stapleHome(), repositoryId), handle.store.db);
+  }
+
   const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", "http://localhost");
     try {
@@ -564,7 +677,40 @@ export function startUiServer(options: UiOptions): UiHandle {
            * naming the family by prefix the way the gate routes do would have
            * made two reads cross-origin-writable. The verbs are therefore named.
            */
-          QUEUE_WRITE_PATHS.has(url.pathname)
+          QUEUE_WRITE_PATHS.has(url.pathname) ||
+          /**
+           * Settling a sync conflict. Named, not prefixed, for the same reason
+           * the queue's verbs are: `/api/cloud/conflicts` and
+           * `/api/cloud/status` are reads sharing the prefix, and a family rule
+           * would have made both cross-origin-writable.
+           */
+          url.pathname === "/api/cloud/conflicts/resolve" ||
+          /**
+           * S13 (STA-258): the cloud mutations. Named individually for the same
+           * reason the conflict verb is — `/api/cloud/status` and
+           * `/api/cloud/conflicts` are reads under the same prefix, and a family
+           * rule would make both cross-origin-writable.
+           *
+           * `/api/cloud/devices` is in this list although it READS. It is here
+           * because it LEAVES THE MACHINE: it presents this device's credential
+           * to the endpoint and asks who else is enrolled. The GET default exists
+           * for routes that touch local state, and a route that reaches
+           * Cloudflare belongs behind the Origin check with the writes — a
+           * cross-origin page that could make this server call out has made a
+           * request the user never authorized, whether or not anything changed.
+           *
+           * There is deliberately NO `/api/cloud/purge`. `staple cloud purge`
+           * requires the repository id typed back and STA-256 records that the
+           * server does not yet validate a confirmation on the wire; a one-click
+           * irreversible remote deletion behind a browser session is not a thing
+           * to add while that is true.
+           */
+          url.pathname === "/api/cloud/connect/preview" ||
+          url.pathname === "/api/cloud/connect" ||
+          url.pathname === "/api/cloud/disconnect" ||
+          url.pathname === "/api/cloud/consent" ||
+          url.pathname === "/api/cloud/devices" ||
+          url.pathname === "/api/cloud/devices/revoke"
             ? ["POST"]
             : url.pathname === "/api/settings"
               ? ["GET", "POST"]
@@ -584,6 +730,38 @@ export function startUiServer(options: UiOptions): UiHandle {
           deny(res, 403, "forbidden", `Cross-origin request rejected (Origin: ${req.headers.origin})`);
           return;
         }
+
+        /**
+         * S10: the post-write trigger, registered ONCE, for every mutating route.
+         *
+         * On `finish` rather than inline, which buys two properties that matter
+         * more than the brevity. The response is already on the wire, so the
+         * trigger cannot delay a write no matter what the link is doing — the
+         * page's latency is unchanged whether this machine is in automatic mode or
+         * not. And `res.statusCode` is settled, so a refused or failed write does
+         * not produce a request to Cloudflare: only work that actually happened is
+         * worth telling anybody about.
+         *
+         * `CLOUD_LIFECYCLE_WRITES` is excluded because none of them journals
+         * anything. Connecting, disconnecting and listing devices change this
+         * machine's relationship to the service; there is no new operation for a
+         * sync to carry, and firing one on `disconnect` in particular would be a
+         * request made in the act of stopping.
+         *
+         * KNOWN LIMIT, stated rather than hidden: the workspace is read from the
+         * query string because the body has not been parsed yet and cannot be read
+         * twice. In single-workspace mode — every connected repository today —
+         * that is exact. In hub mode a write that named its workspace only in the
+         * body triggers the default workspace instead; the named one still syncs
+         * on its session tick. Fixing it properly means threading the resolved
+         * handle out of the route, which is not a thin registration.
+         */
+        if (req.method === "POST" && !CLOUD_LIFECYCLE_WRITES.has(url.pathname)) {
+          const ws = url.searchParams.get("ws") ?? undefined;
+          res.once("finish", () => {
+            if (res.statusCode >= 200 && res.statusCode < 300) autoSync.postWrite(ws);
+          });
+        }
       }
 
       if (url.pathname === "/api/bootstrap") {
@@ -592,6 +770,376 @@ export function startUiServer(options: UiOptions): UiHandle {
           mode: options.hub ? "hub" : "workspace",
           workspaces: handles.map((h) => ({ slug: h.slug, prefix: h.prefix })),
         });
+        return;
+      }
+
+      /**
+       * `GET /api/cloud/status` — read-only, and network-free by construction.
+       *
+       * `docs/sync.md`, on what a surface may do before a repository is
+       * connected: *"render 'not connected' and a static hint naming
+       * `staple cloud connect`. Static text. No probe, no reachability check, no
+       * 'we noticed you might want to connect'. The UI does not prompt."*
+       *
+       * So this route exists precisely so the UI does NOT have to guess, and it
+       * deliberately has no `refresh` parameter. `localCloudStatus` reads files;
+       * there is no argument that can make it call out. A polled UI with a
+       * refreshing status endpoint would turn one human's page-open into a
+       * heartbeat to Cloudflare every few seconds, which is a telemetry channel
+       * arrived at by accident — and *"no telemetry, no update check, no
+       * discovery request, ever."*
+       *
+       * GET-only falls out of the method table above, which defaults every route
+       * not named there to GET. This one must never be named there.
+       *
+       * Identity comes from `sync_state.repository_id` rather than the manifest
+       * because the server holds a database handle and not a path. That row is
+       * written from the manifest at open time by `reconcileRepositoryIdentity`,
+       * so it is the same id — and on a workspace old enough not to have the
+       * table, the read fails closed to "disconnected", which is true.
+       */
+      if (url.pathname === "/api/cloud/status") {
+        const handle = handleFor(url.searchParams.get("ws") ?? undefined);
+        let repositoryId: string | null = null;
+        try {
+          repositoryId = readStoredRepositoryId(handle.store.db);
+        } catch {
+          repositoryId = null;
+        }
+        /**
+         * STA-75: both branches now return `CloudSurfaceReport` verbatim — the
+         * same object `cloud_status` returns over MCP and `staple cloud status
+         * --json` prints. This route used to re-map nine fields by hand and word
+         * its own "no sync identity" sentence, and `src/mcp.ts` did both again,
+         * slightly differently. One contract, four renderings; the mapping lives
+         * in `core/cloud/surface.ts` and nowhere else.
+         */
+        json(
+          res,
+          200,
+          repositoryId === null
+            ? noIdentityReport()
+            : cloudSurfaceReport(localCloudStatus(stapleHome(), repositoryId), handle.store.db),
+        );
+        return;
+      }
+
+      /**
+       * `GET /api/cloud/conflicts` — what two devices disagree about.
+       *
+       * A local read of one table, so it is available in every cloud state
+       * including disconnected: a repository that has synced and then been
+       * disconnected still holds its conflicts, and hiding them behind a
+       * connection check would make an unsettled decision invisible for as long
+       * as the credential was gone.
+       */
+      if (url.pathname === "/api/cloud/conflicts") {
+        const handle = handleFor(url.searchParams.get("ws") ?? undefined);
+        const includeResolved = url.searchParams.get("all") === "1";
+        json(res, 200, {
+          conflicts: listConflicts(handle.store.db, { includeResolved }),
+        });
+        return;
+      }
+
+      /**
+       * `POST /api/cloud/conflicts/resolve` — settle one, from the page.
+       *
+       * `{ id, take?: "local" | "remote", value?, actor?, ws? }`. Exactly one of
+       * `take` and `value` — a resolve with neither is a `validation` error
+       * rather than a default, because a default here is the last-write-wins the
+       * whole feature removes.
+       *
+       * No decision is made in this file: the refusals for "already resolved",
+       * "no such conflict" and "custom with no value" all live in
+       * `resolveConflict`, with one wording that every surface repeats.
+       */
+      if (url.pathname === "/api/cloud/conflicts/resolve") {
+        const body = await readBody(req);
+        const handle = handleFor((body.ws as string) ?? undefined);
+        const take = body.take as "local" | "remote" | undefined;
+        if ((take === undefined) === (body.value === undefined)) {
+          deny(
+            res,
+            400,
+            "validation",
+            'Pass exactly one of take ("local" or "remote") and value.',
+          );
+          return;
+        }
+        json(
+          res,
+          200,
+          resolveConflict(handle.store.db, {
+            id: body.id as string,
+            choice: take ?? "custom",
+            value: body.value,
+            actor: (body.actor as string) || "ui",
+          }),
+        );
+        return;
+      }
+
+      /**
+       * `POST /api/cloud/connect/preview` — step one of two, and the only place
+       * an endpoint may be named.
+       *
+       * Local by construction: `buildConnectPreview` parses a URL, reads the
+       * connection record and the device id, and probes the credential store. It
+       * cannot reach the network, because `preview.ts` does not import
+       * `client.ts` — *"the way to keep a consent mechanism from quietly
+       * acquiring a network call is not to remember not to add one; it is to
+       * build it somewhere a network call cannot be written."*
+       *
+       * A POST although it computes rather than commits, because it takes a body
+       * and because it has one local side effect worth the Origin check: probing
+       * the OS keychain writes and deletes a sentinel item, which on macOS can
+       * raise an unlock prompt. That is not a page another origin gets to summon.
+       *
+       * The response carries the preview AND a consent ticket minted from it.
+       * The ticket is the only thing `/api/cloud/connect` will accept, which is
+       * what makes "shown before asked" a property of the wire rather than of the
+       * client.
+       */
+      if (url.pathname === "/api/cloud/connect/preview") {
+        const body = await readBody(req);
+        const handle = handleFor((body.ws as string) ?? undefined);
+        const repositoryId = requireRepositoryId(handle);
+        const endpoint = typeof body.endpoint === "string" ? body.endpoint.trim() : "";
+        if (endpoint === "") {
+          deny(res, 400, "validation", "An endpoint is required to preview a connection.");
+          return;
+        }
+        /**
+         * `credentialFile` is `staple cloud connect --credential-file`, offered
+         * here for the same reason it is offered there: on a machine whose
+         * keychain prompts, or whose keychain the user would rather staple stayed
+         * out of, the honest `0600` file is a legitimate choice. The preview then
+         * SAYS "a 0600 file in your staple home", so the choice is part of what
+         * consent is given to rather than a setting hidden behind it.
+         */
+        const context = { credentialFile: body.credentialFile === true };
+        const preview = buildConnectPreview({
+          home: stapleHome(),
+          repositoryId,
+          endpoint,
+          label: typeof body.label === "string" ? body.label : undefined,
+          credential: { forceFile: context.credentialFile },
+        });
+        json(res, 200, { preview, consent: consents.mint(preview, context) });
+        return;
+      }
+
+      /**
+       * `POST /api/cloud/connect` — step two. **No endpoint. No repository id.**
+       *
+       * `{ consent, digest, token }`, and the absence of the first two fields is
+       * the design. There is no wire spelling for "connect to X": the endpoint is
+       * a field of the PREVIEW RESPONSE and appears in no request this server
+       * accepts. The only thing a connect may carry is an id minted while a
+       * preview was being returned, so the description of what is about to happen
+       * was necessarily delivered to the client first.
+       *
+       * The preview is REBUILT here from local state rather than taken from the
+       * ticket alone, and the two digests are compared: the ticket's (what the
+       * human read) against the rebuilt one (what is true now). A repository that
+       * was connected by another process, or a keychain that locked and pushed the
+       * credential to a `0600` file, changes something the preview asserted, and
+       * consent to a sentence that is no longer true is not consent.
+       *
+       * `token` is the enrollment credential and is the one secret on this route.
+       * It is never stored by this file, never logged, and never echoed: the
+       * response is the connection record and the surface report, and
+       * `CloudConnection` deliberately does not contain the credential.
+       */
+      if (url.pathname === "/api/cloud/connect") {
+        const body = await readBody(req);
+        const handle = handleFor((body.ws as string) ?? undefined);
+        const repositoryId = requireRepositoryId(handle);
+        const enrollmentSecret = typeof body.token === "string" ? body.token : "";
+
+        /**
+         * Redeem first, connect second. `redeem` consumes the ticket, re-derives
+         * the preview THROUGH THE TICKET'S OWN endpoint — the callback is how the
+         * endpoint gets here at all — and refuses on a mismatch. Every refusal on
+         * this path happens before a socket is opened, which is what makes
+         * "nothing was sent" a true sentence in each of those messages.
+         */
+        const { preview, context } = consents.redeem(body.consent, body.digest, (stored, choices) =>
+          buildConnectPreview({
+            home: stapleHome(),
+            repositoryId,
+            endpoint: stored.endpoint.origin,
+            label: stored.label,
+            credential: { forceFile: choices.credentialFile },
+          }),
+        );
+
+        const outcome = await performConnect(preview, {
+          home: stapleHome(),
+          enrollmentSecret,
+          credential: { forceFile: context.credentialFile },
+        });
+
+        json(res, 200, {
+          connection: outcome.connection,
+          capabilities: outcome.capabilities,
+          credentialLocation: outcome.credentialLocation,
+          report: cloudReport(handle, repositoryId),
+        });
+        return;
+      }
+
+      /**
+       * `POST /api/cloud/disconnect` — local, and only local.
+       *
+       * *"Disconnect is local. It removes this device's credential, stops all
+       * later cloud traffic, and preserves the entire local database including
+       * pending outbox operations."* So this route makes NO network call, not
+       * even a courtesy "please forget me": a person who has decided to stop
+       * talking to a service must not need that service's permission to stop.
+       * Revoking the device server-side is the separately named operation below.
+       *
+       * `confirm` is the CLI's `--yes`, restated. Nothing irreversible happens —
+       * the workspace database is untouched — but the credential goes, and a
+       * re-connect needs an enrollment secret the user may not have to hand.
+       */
+      if (url.pathname === "/api/cloud/disconnect") {
+        const body = await readBody(req);
+        const handle = handleFor((body.ws as string) ?? undefined);
+        const repositoryId = requireRepositoryId(handle);
+        if (body.confirm !== true) {
+          deny(
+            res,
+            400,
+            "validation",
+            "Disconnecting removes this machine's credential for this repository. Pass " +
+              "confirm to proceed. Your local database, including pending operations, is not " +
+              "touched.",
+          );
+          return;
+        }
+        const outcome = performDisconnect(stapleHome(), repositoryId);
+        json(res, 200, { ...outcome, report: cloudReport(handle, repositoryId) });
+        return;
+      }
+
+      /**
+       * `POST /api/cloud/consent` — the two later consents, one at a time.
+       *
+       * `{ auto: boolean }` OR `{ backup: boolean }`, and **exactly one**. Two
+       * consents are two decisions; a body carrying both would let one click
+       * spend both, which is the shape `docs/sync.md` separates them to prevent.
+       *
+       * This writes a file in the staple home — `setConsent` — and nothing else.
+       * It is emphatically NOT a workspace setting and never touches
+       * `/api/settings`: the workspace database synchronizes, so an `auto` flag
+       * stored there would replicate and turn one laptop's decision into a fleet
+       * policy. See the header of `core/cloud/connection.ts`.
+       *
+       * `setConsent` refuses `not_found` on an unconnected repository rather than
+       * springing a record into existence, so turning automatic sync on before
+       * connecting is an error and not a silent partial connection.
+       */
+      if (url.pathname === "/api/cloud/consent") {
+        const body = await readBody(req);
+        const handle = handleFor((body.ws as string) ?? undefined);
+        const repositoryId = requireRepositoryId(handle);
+        const named = ["auto", "backup"].filter((key) => body[key] !== undefined);
+        if (named.length !== 1 || typeof body[named[0]!] !== "boolean") {
+          deny(
+            res,
+            400,
+            "validation",
+            "Pass exactly one of auto and backup, as a boolean. They are two separate consents " +
+              "and are changed one decision at a time.",
+          );
+          return;
+        }
+        const key = named[0] as "auto" | "backup";
+        setConsent(stapleHome(), repositoryId, { [key]: body[key] as boolean });
+        json(res, 200, { report: cloudReport(handle, repositoryId) });
+        /**
+         * S10: **this route fires no trigger, in either direction.** It writes one
+         * file and answers, exactly as it did before automatic sync existed.
+         *
+         * Firing one on the way ON was the obvious thing to want — a human just
+         * said "keep this device up to date", and making them wait for a session
+         * tick is a poor first impression. It was written, and then removed,
+         * because S13 pinned this route as silent on purpose (`test/network-
+         * silence.test.ts`, *"Turning a consent on and off is a local file write
+         * and must say nothing to anybody"*), and a lane that quietly relaxed
+         * another lane's assertion to make its own feature feel snappier would be
+         * spending a guarantee it does not own. The route that SPENDS a consent
+         * does one thing; the next trigger — a write, or the session tick — is
+         * what acts on it.
+         *
+         * On the way OFF there is nothing to fire and nothing to send. Stopping is
+         * the absence of requests, and the gate is what produces that absence:
+         * every later trigger reads `auto: false` and returns before
+         * `core/cloud/sync.js` is so much as loaded. A run already in flight is
+         * bounded by its own budget. There is deliberately no "tell the service we
+         * stopped" either — a device that announced its withdrawal would be making
+         * a request in the act of ceasing to make them.
+         */
+        return;
+      }
+
+      /**
+       * `POST /api/cloud/devices` — the server's device list, which is the
+       * authority.
+       *
+       * **This route egresses.** It is the only read on this server that does, it
+       * is a POST for exactly that reason (see the method gate), and it is never
+       * called on mount: the settings section renders its whole connected state
+       * from `/api/cloud/status`, which is network-free, and asks for devices only
+       * when a human presses the button. A panel that listed devices on open would
+       * turn opening settings into a request to Cloudflare — the shape
+       * `docs/sync.md` calls a heartbeat arrived at by accident.
+       */
+      if (url.pathname === "/api/cloud/devices") {
+        const body = await readBody(req);
+        const handle = handleFor((body.ws as string) ?? undefined);
+        const repositoryId = requireRepositoryId(handle);
+        json(res, 200, { devices: await fetchDevices(stapleHome(), repositoryId) });
+        return;
+      }
+
+      /**
+       * `POST /api/cloud/devices/revoke` — end one device's access, from here.
+       *
+       * Revoking THIS device is allowed and is a real thing to want: a stolen
+       * laptop is revoked from the laptop you still have. `performRevoke` reports
+       * it as `self` rather than refusing, and deliberately leaves the local
+       * credential in place — it is already useless, and deleting it would
+       * conflate revoke with disconnect, which the contract insists on keeping
+       * apart.
+       *
+       * `confirm` because this one is not undoable from here: a revoked device
+       * re-enrols with `staple cloud connect` and an enrollment secret, which is
+       * a trip to another machine.
+       */
+      if (url.pathname === "/api/cloud/devices/revoke") {
+        const body = await readBody(req);
+        const handle = handleFor((body.ws as string) ?? undefined);
+        const repositoryId = requireRepositoryId(handle);
+        const deviceId = typeof body.deviceId === "string" ? body.deviceId.trim() : "";
+        if (deviceId === "") {
+          deny(res, 400, "validation", "A deviceId is required.");
+          return;
+        }
+        if (body.confirm !== true) {
+          deny(
+            res,
+            400,
+            "validation",
+            "Revoking ends that device's access on its very next request. Pass confirm to " +
+              "proceed. Its local data and pending work are untouched.",
+          );
+          return;
+        }
+        const outcome = await performRevoke(stapleHome(), repositoryId, deviceId);
+        json(res, 200, { ...outcome, report: cloudReport(handle, repositoryId) });
         return;
       }
 
@@ -1687,6 +2235,17 @@ export function startUiServer(options: UiOptions): UiHandle {
   }
 
   server.listen(options.port, "127.0.0.1", () => {
+    /**
+     * S10: the startup and long-running-session triggers, both of them, here.
+     *
+     * On `listening` rather than at construction, because a server that failed to
+     * bind is not a session and must not have started one. Both calls are silent
+     * on a machine that has not consented — `startup` returns after one
+     * `existsSync` on a fresh install — and the interval is `unref`'d, so a
+     * process that has finished its work is never held open by its own heartbeat.
+     */
+    autoSync.startup();
+    autoSync.startSession();
     const mode = describeMode();
     // The token rides in the URL because that URL is the only way into the page.
     console.log(`staple ui — ${mode} at http://localhost:${boundPort()}/`);
@@ -1697,8 +2256,23 @@ export function startUiServer(options: UiOptions): UiHandle {
     token,
     server,
     close() {
+      /**
+       * S10: FIRST, before the stores are closed.
+       *
+       * A run in flight holds `handle.store.db` and will keep applying pulled
+       * pages to it. Closing the handle underneath it would turn a routine
+       * shutdown into a write against a closed database, and the abort has to
+       * land before that can happen. It also stops the session interval, without
+       * which a `close()` would leave a timer firing at a resolver whose stores
+       * are gone.
+       */
+      autoSync.stop();
       server.closeAllConnections();
       server.close();
+      // Outstanding connect consents die with the process that showed them. A
+      // ticket is a record that somebody was looking at a preview a moment ago,
+      // not a stored permission; see `core/cloud/consent.ts`.
+      consents.clear();
       for (const handle of stores.values()) {
         try {
           handle.store.db.close();

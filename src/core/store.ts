@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
-import { tx } from "./db.js";
+import { insertEvent } from "./event-log.js";
+import { type Journal, journalFor } from "./journal.js";
 import {
   blockersResolvedDedupKey,
   childrenCompleteDedupKey,
@@ -66,6 +67,14 @@ import {
 import { MILESTONE_KIND } from "./milestones.js";
 import { ProjectStore } from "./project-store.js";
 import { QueueStore } from "./queue-store.js";
+/**
+ * `scope.js`, NOT `status.js`. See the header of `cloud/scope.ts`: `status.ts`
+ * statically imports `client.ts`, which owns the only outbound `fetch` in the
+ * runtime, and this module is on the path of `staple ls`. The scope resolver is
+ * split out precisely so the claim payload can name its scope without dragging
+ * the fetch module onto the most-used command in the product.
+ */
+import { claimScopeResolver, type ClaimScopeResolver } from "./cloud/scope.js";
 
 export interface CreateIssueInput {
   title: string;
@@ -340,6 +349,17 @@ function sqlIdList(ids: readonly string[]): string {
 }
 
 /** `awaiting_approval` -> `Awaiting Approval`, so `--label` is optional, not required. */
+/**
+ * The entity id a whole-vocabulary reorder names.
+ *
+ * A reorder is a fact about the ordered collection, not about any one status or
+ * kind — the same reason `queue_reordered` carries a null `issue_id`. It needs
+ * an id because the outbox is keyed by one, and a sentinel that cannot collide
+ * with a real vocabulary id is the honest way to say "all of them": every real
+ * id is validated by `assertVocabularyId`, which rejects `@`.
+ */
+const VOCABULARY_ORDER_ID = "@order";
+
 function defaultLabel(id: string): string {
   return id
     .split("_")
@@ -522,43 +542,39 @@ export class WorkspaceStore {
   /** Per-connection memo. Never read directly — go through `settings()`. */
   private settingsCache: SettingsSnapshot | null = null;
 
-  private txDepth = 0;
-  private savepointSeq = 0;
+  /**
+   * The journal seam for this connection. Shared with `MilestoneStore`,
+   * `QueueStore` and `ProjectStore`, which hold the same `DatabaseSync` — "one
+   * seam" is only true if they share one journal.
+   */
+  get journal(): Journal {
+    return journalFor(this.db);
+  }
 
   /**
-   * A transaction that NESTS, unlike `tx` (whose `BEGIN IMMEDIATE` throws inside
-   * another transaction). Only the settings writers use it, and only because
-   * `applyStatusOps` composes them: "add awaiting_approval, then reorder" is one
-   * intention and must not be able to half-apply, while each op also has to work
-   * on its own from the CLI.
+   * Run one logical mutation: one transaction, one journal scope.
    *
-   * Outermost call takes the real write lock; inner calls take a SAVEPOINT, so a
-   * failing op rolls back its own work and rethrows into the outer rollback.
+   * Every public mutator on this class goes through here. Re-entrant, so a
+   * mutator composing another joins the outer scope instead of splitting the
+   * mutation across two transactions and two operations — the second of which
+   * would be worse than a failure, because it converges wrongly rather than
+   * loudly.
+   */
+  journaled<T>(fn: () => T): T {
+    return this.journal.run(fn);
+  }
+
+  /**
+   * The settings writers' historical name for {@link mutate}.
+   *
+   * It used to carry its own savepoint implementation, because `tx` was not
+   * re-entrant and `applyStatusOps` composes ops — "add awaiting_approval, then
+   * reorder" is one intention and must not half-apply, while each op also has to
+   * work on its own from the CLI. `tx` nests now, so this is the same thing as
+   * every other mutation and the duplicate implementation is gone.
    */
   private atomically<T>(fn: () => T): T {
-    if (this.txDepth > 0) {
-      const savepoint = `staple_cfg_${(this.savepointSeq += 1)}`;
-      this.db.exec(`SAVEPOINT ${savepoint}`);
-      try {
-        const result = fn();
-        this.db.exec(`RELEASE ${savepoint}`);
-        return result;
-      } catch (error) {
-        try {
-          this.db.exec(`ROLLBACK TO ${savepoint}`);
-          this.db.exec(`RELEASE ${savepoint}`);
-        } catch {
-          // the outer transaction is already aborting; it owns the rollback
-        }
-        throw error;
-      }
-    }
-    this.txDepth += 1;
-    try {
-      return tx(this.db, fn);
-    } finally {
-      this.txDepth -= 1;
-    }
+    return this.journaled(fn);
   }
 
   /**
@@ -982,6 +998,13 @@ export class WorkspaceStore {
         actor: actor ?? null,
         payload: { action: "add", id, label, category },
       });
+      this.journal.record({
+        entity: "status",
+        entityId: id,
+        verb: "create",
+        payload: { id, label, category },
+        actor: actor ?? null,
+      });
       return this.requireStatusRow(id);
     });
   }
@@ -997,6 +1020,13 @@ export class WorkspaceStore {
         kind: "status_config_changed",
         actor: actor ?? null,
         payload: { action: "rename", id, from: before.label, to: next },
+      });
+      this.journal.record({
+        entity: "status",
+        entityId: id,
+        verb: "update",
+        payload: { label: next },
+        actor: actor ?? null,
       });
       return this.requireStatusRow(id);
     });
@@ -1022,6 +1052,13 @@ export class WorkspaceStore {
         kind: "status_config_changed",
         actor: actor ?? null,
         payload: { action: "recategorize", id, from: before.category, to: next },
+      });
+      this.journal.record({
+        entity: "status",
+        entityId: id,
+        verb: "update",
+        payload: { category: next },
+        actor: actor ?? null,
       });
       return this.requireStatusRow(id);
     });
@@ -1063,6 +1100,28 @@ export class WorkspaceStore {
         kind: "status_config_changed",
         actor: actor ?? null,
         payload: { action: "reorder", order: normalized },
+      });
+      /**
+       * `update` on the singleton `@order` entity, not `replace`.
+       *
+       * `replace` is not a generic "the whole value changed" verb. It is the
+       * ordered-collection mechanism, it has a defined payload
+       * (`{ entries, baseRevision }` / `{ milestoneId, members, baseRevision }`),
+       * and it exists so that `rank` is never transported and the `UNIQUE` rank
+       * constraints on `queue_entries` and `milestone_members` are structurally
+       * unreachable. Neither of those constraints exists here, and this payload
+       * carries no `baseRevision`, so this was never that verb —
+       * `worker/src/envelope.ts` refuses it for exactly that reason.
+       *
+       * The vocabulary order IS one entity. "The order changed" is an update to
+       * it, and an update payload already carries only what changed.
+       */
+      this.journal.record({
+        entity: "status",
+        entityId: VOCABULARY_ORDER_ID,
+        verb: "update",
+        payload: { order: normalized },
+        actor: actor ?? null,
       });
       return this.getStatuses();
     });
@@ -1135,6 +1194,13 @@ export class WorkspaceStore {
         actor: actor ?? null,
         payload: { action: "remove", id, migrateTo: opts.migrateTo ?? null, migrated },
       });
+      this.journal.record({
+        entity: "status",
+        entityId: id,
+        verb: "delete",
+        payload: { migrateTo: opts.migrateTo ?? null },
+        actor: actor ?? null,
+      });
       return { migrated };
     });
   }
@@ -1161,6 +1227,13 @@ export class WorkspaceStore {
         actor: actor ?? null,
         payload: { action: "add", id, label },
       });
+      this.journal.record({
+        entity: "kind",
+        entityId: id,
+        verb: "create",
+        payload: { id, label },
+        actor: actor ?? null,
+      });
       return this.requireKindRow(id);
     });
   }
@@ -1177,6 +1250,13 @@ export class WorkspaceStore {
         actor: actor ?? null,
         payload: { action: "rename", id, from: before.label, to: next },
       });
+      this.journal.record({
+        entity: "kind",
+        entityId: id,
+        verb: "update",
+        payload: { label: next },
+        actor: actor ?? null,
+      });
       return this.requireKindRow(id);
     });
   }
@@ -1192,6 +1272,16 @@ export class WorkspaceStore {
         kind: "kind_config_changed",
         actor: actor ?? null,
         payload: { action: "reorder", order: normalized },
+      });
+      // `update` on the singleton `@order` entity. Same reasoning as
+      // `reorderStatuses` above: `replace` is the ordered-collection verb and
+      // this is not an ordered collection with a transported rank.
+      this.journal.record({
+        entity: "kind",
+        entityId: VOCABULARY_ORDER_ID,
+        verb: "update",
+        payload: { order: normalized },
+        actor: actor ?? null,
       });
       return this.getKinds();
     });
@@ -1262,6 +1352,13 @@ export class WorkspaceStore {
         kind: "kind_config_changed",
         actor: actor ?? null,
         payload: { action: "remove", id, migrateTo: opts.migrateTo ?? null, migrated },
+      });
+      this.journal.record({
+        entity: "kind",
+        entityId: id,
+        verb: "delete",
+        payload: { migrateTo: opts.migrateTo ?? null },
+        actor: actor ?? null,
       });
       // A default that names a kind which no longer exists is not a setting, it
       // is a dangling pointer; clear it here so `defaultKind()` never has to guess.
@@ -1411,6 +1508,13 @@ export class WorkspaceStore {
         actor: actor ?? null,
         payload: { action: "set", key, from, to: next },
       });
+      this.journal.record({
+        entity: "setting",
+        entityId: key,
+        verb: "update",
+        payload: { value: next },
+        actor: actor ?? null,
+      });
       return settingValueView(definition, next, "workspace");
     });
   }
@@ -1427,6 +1531,13 @@ export class WorkspaceStore {
           kind: "setting_changed",
           actor: actor ?? null,
           payload: { action: "reset", key, from: stored.value, to: definition.default },
+        });
+        this.journal.record({
+          entity: "setting",
+          entityId: key,
+          verb: "delete",
+          payload: {},
+          actor: actor ?? null,
         });
       }
       return settingValueView(definition, definition.default, "default");
@@ -1482,6 +1593,13 @@ export class WorkspaceStore {
 
   // ---------- events ----------
 
+  /**
+   * The fourth of the four emitters, now delegating to the single writer.
+   *
+   * This one already supplied dedup keys for the two level-triggered events
+   * (`blockers_resolved`, `children_complete`), and those still win. Everything
+   * else gets a key derived from the enclosing mutation.
+   */
   private emitEvent(input: {
     kind: string;
     issueId?: string | null;
@@ -1489,20 +1607,7 @@ export class WorkspaceStore {
     payload?: Record<string, unknown>;
     dedupKey?: string | null;
   }): void {
-    // INSERT OR IGNORE + partial unique index = level-triggered dedup.
-    this.db
-      .prepare(
-        `INSERT OR IGNORE INTO events (kind, issue_id, actor, payload, dedup_key, created_at)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        input.kind,
-        input.issueId ?? null,
-        input.actor ?? null,
-        JSON.stringify(input.payload ?? {}),
-        input.dedupKey ?? null,
-        nowIso(),
-      );
+    insertEvent(this.db, input);
   }
 
   listEvents(since = 0, limit = 200): StapleEvent[] {
@@ -1565,7 +1670,7 @@ export class WorkspaceStore {
       throw new StapleError("validation", "unblockOwner/unblockAction require a status in the \"blocked\" category");
     }
 
-    return tx(this.db, () => {
+    return this.journaled(() => {
       // The project is resolved INSIDE the transaction, first, so the lookup and the
       // insert cannot straddle a delete: a project removed between the two would leave
       // a pointer at nothing. Still before the issue number is spent, so an unknown
@@ -1668,6 +1773,74 @@ export class WorkspaceStore {
         actor: input.createdBy ?? null,
         payload: { identifier, title, status },
       });
+      /**
+       * One operation for the whole create, declared after the replay guard so a
+       * replayed idempotency key journals nothing — obligation 5 is "no second
+       * outbound operation", not merely "no second row", and the early return
+       * above is what makes that true here.
+       *
+       * The blocker edges are part of this operation rather than operations of
+       * their own: `blockedBy` is an argument to the create, and a receiver that
+       * applied the issue and the edges separately could observe an issue whose
+       * declared blockers had not arrived.
+       *
+       * The payload is the contract's `issues` field inventory
+       * (`docs/sync.md`, "What synchronizes"), and it has to be. A create is the
+       * only operation that will ever carry these columns: nothing journals an
+       * update for a field that was set once at birth and never touched again, so
+       * a field missing here is a field that never reaches another device at all.
+       * `test/sync-issue-field-coverage.test.ts` reads the `issues` schema and
+       * fails if a column is neither here nor on its documented exclusion list,
+       * so the next column added to this table has to make that decision
+       * explicitly.
+       *
+       * What is deliberately absent, and why:
+       *
+       *   id                     — this is `entityId`, not a payload field
+       *   status_version         — 0 by schema default on every device; it is the
+       *                            optimistic-concurrency token, carried by the
+       *                            operations that move status
+       *   checkout_agent/_at     — never a plain field write. They are the
+       *                            projection of a lease (docs/sync.md, "Claims")
+       *   blocked_transition_at  — local timing state; not in the contract's list
+       *   completed_at,          — null at create by construction; the status
+       *   cancelled_at             transitions that set them journal updates
+       *   gate_* (seven)         — null or 0 at create; every gate transition
+       *                            journals its own update
+       */
+      this.journal.record({
+        entity: "issue",
+        entityId: id,
+        verb: "create",
+        payload: {
+          identifier,
+          title,
+          normalizedTitle: normalized,
+          description: input.description ?? null,
+          status,
+          kind,
+          priority: input.priority ?? "medium",
+          parentId: parent?.id ?? null,
+          depth: parent ? parent.depth + 1 : 0,
+          assignee: input.assignee ?? null,
+          createdBy: input.createdBy ?? null,
+          labels: input.labels ?? [],
+          acceptanceCriteria: input.acceptanceCriteria ?? null,
+          blockParentUntilDone: input.blockParentUntilDone ?? false,
+          unblockOwner: row.unblock_owner,
+          unblockAction: row.unblock_action,
+          originKind: input.originKind ?? "manual",
+          originId: input.originId ?? null,
+          idempotencyKey: input.idempotencyKey ?? null,
+          estimatedSeconds: estimatedSeconds,
+          projectId: project?.id ?? null,
+          startedAt: row.started_at,
+          createdAt: now,
+          updatedAt: now,
+          blockedBy: blockerRows.map((blocker) => blocker.id),
+        },
+        actor: input.createdBy ?? null,
+      });
       // Transition site 1 of 5: a child appearing under a parent changes the
       // child landscape as surely as one moving does. The rule is about state,
       // not about which call produced it — so this is no longer gated on the
@@ -1742,7 +1915,7 @@ export class WorkspaceStore {
 
   /** Replace the full blocked-by set — set replacement, never incremental add. */
   setBlockedBy(ref: string, blockerRefs: string[], actor?: string | null): Issue {
-    return tx(this.db, () => {
+    return this.journaled(() => {
       const row = this.requireRow(ref);
       const blockers = blockerRefs.map((blockerRef) => this.requireRow(blockerRef));
       const deduped = [...new Map(blockers.map((b) => [b.id, b])).values()];
@@ -1759,6 +1932,30 @@ export class WorkspaceStore {
         issueId: row.id,
         actor,
         payload: { identifier: row.identifier, blockedBy: deduped.map((b) => b.identifier) },
+      });
+      /**
+       * One operation carrying the WHOLE blocker set, not a create or delete per
+       * edge. Blockers are set-replacement here — the mutation deletes the whole
+       * set and re-inserts it — and the envelope has to say the same thing, or a
+       * receiver that applied N creates would never learn about the edges that
+       * were removed.
+       *
+       * The entity is the BLOCKED issue, because the blocked issue is what owns
+       * the set. `relations.id` is a local AUTOINCREMENT surrogate and is not
+       * transported; the natural key is the triple the UNIQUE constraint
+       * declares.
+       *
+       * The verb is `update`, not `replace`. `blockedBy` is a set-valued field of
+       * one entity, and `replace` is reserved for the ordered collections whose
+       * transported `rank` would collide — see `reorderStatuses`, and
+       * `worker/src/envelope.ts`, which refuses `replace` for anything else.
+       */
+      this.journal.record({
+        entity: "relation",
+        entityId: row.id,
+        verb: "update",
+        payload: { blockedBy: deduped.map((blocker) => blocker.id) },
+        actor: actor ?? null,
       });
       // Level check: the new set may already be fully resolved.
       this.maybeEmitBlockersResolved(row);
@@ -2296,6 +2493,27 @@ export class WorkspaceStore {
     });
 
     /**
+     * A derived ancestor status is its own operation, on its own entity.
+     *
+     * It looks like part of the mutation that triggered it, and it is not: the
+     * row that changed is a different issue, and a receiver applying the child's
+     * operation would re-derive the parent locally anyway. Journalling it
+     * separately is what makes the two devices agree about the parent even when
+     * their derivation rules differ across a version skew — the operation says
+     * what happened, not what to recompute.
+     *
+     * Declared after the compare-and-swap and gated on it, exactly as the event
+     * is: an operation must never claim a transition that did not land.
+     */
+    this.journal.record({
+      entity: "issue",
+      entityId: ancestor.id,
+      verb: "update",
+      payload: { status: next, derived: DERIVED_MARKERS[target] },
+      actor,
+    });
+
+    /**
      * A derived close is a resolution like any other, so it runs the WHOLE
      * resolution hook rather than a hand-picked half of it (STA-153):
      *
@@ -2701,7 +2919,7 @@ export class WorkspaceStore {
     if (!owner) {
       throw new StapleError("validation", "gate requires --owner: name the human who must approve");
     }
-    return tx(this.db, () => {
+    return this.journaled(() => {
       const row = this.requireRow(ref);
       if (this.isResolvedStatus(row.status)) {
         throw new StapleError(
@@ -2788,6 +3006,24 @@ export class WorkspaceStore {
           previousHolder: row.checkout_agent,
         },
       });
+      /**
+       * Two events, one operation. The pairing of `status_changed` and
+       * `gate_requested` exists so the timing replay and the semantics each have
+       * a home locally; on the wire this is one thing that happened to one
+       * issue, and journalling it twice would make a receiver apply it twice.
+       */
+      this.journal.record({
+        entity: "issue",
+        entityId: row.id,
+        verb: "update",
+        payload: {
+          status: parkedStatus,
+          gateState: "pending",
+          gateOwner: owner,
+          checkoutAgent: null,
+        },
+        actor: actor ?? null,
+      });
       if (opts.comment) {
         this.insertComment(row.id, actor ?? "unknown", actor ? "agent" : "system", opts.comment);
       }
@@ -2835,7 +3071,7 @@ export class WorkspaceStore {
     opts: { children?: readonly string[]; comment?: string } = {},
     actor?: string | null,
   ): Issue {
-    return tx(this.db, () => {
+    return this.journaled(() => {
       const row = this.requireRow(ref);
       if (!isActiveGate(row.gate_state)) {
         throw new StapleError(
@@ -2974,6 +3210,13 @@ export class WorkspaceStore {
           to: next,
         },
       });
+      this.journal.record({
+        entity: "issue",
+        entityId: row.id,
+        verb: "update",
+        payload: { status: next, gateState: "approved", gateResolvedBy: actor ?? null },
+        actor: actor ?? null,
+      });
       if (opts.comment) {
         this.insertComment(row.id, actor ?? "unknown", actor ? "agent" : "system", opts.comment);
       }
@@ -3016,7 +3259,7 @@ export class WorkspaceStore {
         "request-changes requires a comment (-m): say what has to change, or approve instead.",
       );
     }
-    return tx(this.db, () => {
+    return this.journaled(() => {
       const row = this.requireRow(ref);
       if (!isActiveGate(row.gate_state)) {
         throw new StapleError(
@@ -3058,6 +3301,18 @@ export class WorkspaceStore {
         actor,
         payload: { identifier: row.identifier, owner: row.gate_owner, comment },
       });
+      this.journal.record({
+        entity: "issue",
+        entityId: row.id,
+        verb: "update",
+        payload: {
+          status: next,
+          gateState: "changes_requested",
+          gateResolvedBy: actor ?? null,
+          checkoutAgent: null,
+        },
+        actor: actor ?? null,
+      });
       this.insertComment(row.id, actor ?? "unknown", actor ? "agent" : "system", comment);
       this.recomputeAncestorStatuses(updated, actor ?? null);
       return rowToIssue(updated);
@@ -3070,7 +3325,7 @@ export class WorkspaceStore {
     if (patch.status) this.assertConfiguredStatus(patch.status);
     if (patch.kind) this.assertConfiguredKind(patch.kind);
     if (patch.priority) assertPriority(patch.priority);
-    return tx(this.db, () => {
+    return this.journaled(() => {
       const row = this.requireRow(ref);
       if (
         patch.expectedStatusVersion !== undefined &&
@@ -3213,6 +3468,24 @@ export class WorkspaceStore {
         )
         .get(...columns.map((c) => next[c] as never), row.id) as unknown as IssueRow;
 
+      /**
+       * The payload is the CHANGED columns and nothing else — `next` is exactly
+       * the patch this call resolved, which is why it is the right thing to send.
+       *
+       * Full-row payloads would turn every concurrent edit into a conflict on
+       * fields nobody touched: two devices, one renaming and one reprioritizing,
+       * would each claim authority over the other's field and the merge would
+       * have to invent a winner. `status_version` is carried because it is the
+       * optimistic-concurrency token a receiver checks against, not decoration.
+       */
+      this.journal.record({
+        entity: "issue",
+        entityId: row.id,
+        verb: "update",
+        payload: { ...next },
+        actor: actor ?? null,
+      });
+
       if (statusChanging) {
         this.emitEvent({
           kind: "status_changed",
@@ -3273,7 +3546,11 @@ export class WorkspaceStore {
     return newest && newest > checkoutAt ? newest : checkoutAt;
   }
 
-  private claimActivityOfRow(row: IssueRow, now: string = nowIso()): ClaimActivity | null {
+  private claimActivityOfRow(
+    row: IssueRow,
+    now: string = nowIso(),
+    scopes: ClaimScopeResolver = claimScopeResolver(this.db),
+  ): ClaimActivity | null {
     if (!this.isActiveStatus(row.status) || !row.checkout_agent || !row.checkout_at) return null;
     const lastActivityAt = this.lastActivityOf(row.id, row.checkout_agent, row.checkout_at);
     return {
@@ -3282,6 +3559,8 @@ export class WorkspaceStore {
       lastActivityAt,
       heldSeconds: secondsBetween(row.checkout_at, now),
       idleSeconds: secondsBetween(lastActivityAt, now),
+      scope: scopes.scopeOf(row.id),
+      lease: scopes.leaseOf(row.id),
     };
   }
 
@@ -3299,6 +3578,10 @@ export class WorkspaceStore {
     const out = new Map<string, ClaimActivity>();
     if (issueIds.length === 0) return out;
     const now = nowIso();
+    // ONE resolver for the whole page, for the same reason this method exists at
+    // all: per-row scope resolution would be one connection-file read and one
+    // `sync_leases` query per row, which is the N+1 the batching removes.
+    const scopes = claimScopeResolver(this.db);
     const placeholders = issueIds.map(() => "?").join(",");
     const rows = this.db
       .prepare(
@@ -3332,6 +3615,8 @@ export class WorkspaceStore {
         lastActivityAt,
         heldSeconds: secondsBetween(row.checkout_at, now),
         idleSeconds: secondsBetween(lastActivityAt, now),
+        scope: scopes.scopeOf(row.id),
+        lease: scopes.leaseOf(row.id),
       });
     }
     return out;
@@ -4019,7 +4304,7 @@ export class WorkspaceStore {
     for (const status of expected) this.assertConfiguredStatus(status);
     const activeStatus = this.primaryStatusFor("active");
     const stealIfIdleSeconds = assertIdleThreshold(opts.stealIfIdleSeconds, "stealIfIdleSeconds");
-    return tx(this.db, () => {
+    return this.journaled(() => {
       const row = this.requireRow(ref);
       if (this.isActiveStatus(row.status) && row.checkout_agent === agent) {
         return rowToIssue(row); // crash-recovery re-claim
@@ -4187,6 +4472,25 @@ export class WorkspaceStore {
                     stealIfIdleSeconds,
                   },
                 });
+                /**
+                 * A steal and a plain claim are the same operation on the wire:
+                 * the issue is now held by this agent. `claim_stolen` is a local
+                 * timeline distinction, re-derived on apply like every other
+                 * event, and is not a second verb.
+                 */
+                this.journal.record({
+                  entity: "issue",
+                  entityId: row.id,
+                  verb: "update",
+                  payload: {
+                    status: activeStatus,
+                    assignee: agent,
+                    checkoutAgent: agent,
+                    checkoutAt: now,
+                    previousHolder: claim.heldBy,
+                  },
+                  actor: agent,
+                });
                 emitOverride();
                 // Transition site 4 of 5. A takeover is a fresh start by a new
                 // agent; if the epic went quiet in the meantime it must light up
@@ -4223,6 +4527,29 @@ export class WorkspaceStore {
         actor: agent,
         payload: { identifier: row.identifier },
       });
+      /**
+       * One `issue.update`, not one per column. `checkoutIssue` writes status,
+       * assignee, the claim pair, `started_at` and three blocked-descriptor
+       * columns and emits up to two events; the contract names this exact case
+       * as the shape of obligation 2.
+       *
+       * Declared after the claim UPDATE and gated on it, so a refused checkout —
+       * blockers unresolved, wrong status, lost race — journals nothing. It also
+       * means the crash-recovery re-claim above, which returns the row unchanged
+       * before reaching here, mints no operation for a claim that did not move.
+       */
+      this.journal.record({
+        entity: "issue",
+        entityId: row.id,
+        verb: "update",
+        payload: {
+          status: activeStatus,
+          assignee: agent,
+          checkoutAgent: agent,
+          checkoutAt: now,
+        },
+        actor: agent,
+      });
       emitOverride();
       // Transition site 3 of 5, and the one that matters most in practice: a
       // plain `staple checkout` IS how work starts, and its UPDATE above sets
@@ -4243,7 +4570,7 @@ export class WorkspaceStore {
    */
   releaseIssue(ref: string, agent?: string | null, opts: { ifIdleSeconds?: number } = {}): Issue {
     const ifIdleSeconds = assertIdleThreshold(opts.ifIdleSeconds, "ifIdleSeconds");
-    return tx(this.db, () => {
+    return this.journaled(() => {
       const row = this.requireRow(ref);
       if (!this.isActiveStatus(row.status)) {
         throw new StapleError("conflict", `Cannot release: status is "${row.status}"`);
@@ -4302,6 +4629,24 @@ export class WorkspaceStore {
               payload: { identifier: row.identifier },
             },
       );
+      /**
+       * `claim_released_stale` and `release` are two events and one operation,
+       * for the same reason a steal and a claim are: the replicated fact is that
+       * the issue is no longer held, and which local event narrated it is
+       * re-derived on apply.
+       */
+      this.journal.record({
+        entity: "issue",
+        entityId: row.id,
+        verb: "update",
+        payload: {
+          status: updated.status,
+          checkoutAgent: null,
+          checkoutAt: null,
+          previousHolder: claim?.heldBy ?? row.checkout_agent,
+        },
+        actor: agent ?? null,
+      });
       // Transition site 5 of 5, and one STA-79 structurally could not have: a
       // release writes `todo`, which its one-way flip into in_progress had
       // nothing to say about. A recompute must see it, or an epic keeps
@@ -4333,6 +4678,23 @@ export class WorkspaceStore {
       issueId,
       actor: author,
       payload: { commentId: id, preview: body.slice(0, 120) },
+    });
+    /**
+     * The comment is its own entity, not a field of the issue. It is
+     * append-only, it already carries a per-issue `idempotency_key`, and
+     * `deleted_at` is a soft-delete tombstone — so it replicates cleanly on its
+     * own id and a delete replicates as an update rather than a disappearance.
+     *
+     * Comments written as a side effect of `gateIssue`, `approveGate`,
+     * `requestChanges` and `updateIssue` land here too, which is correct: those
+     * are two entities changing in one transaction, and the receiver needs both.
+     */
+    this.journal.record({
+      entity: "comment",
+      entityId: id,
+      verb: "create",
+      payload: { issueId, author, authorType, body, idempotencyKey },
+      actor: author,
     });
     return {
       id,
@@ -4371,7 +4733,7 @@ export class WorkspaceStore {
   ): AddCommentResult {
     if (!body?.trim()) throw new StapleError("validation", "Comment body is required");
     const key = opts.idempotencyKey?.trim() || null;
-    return tx(this.db, () => {
+    return this.journaled(() => {
       const row = this.requireRow(ref);
       if (key) {
         const existing = this.db
@@ -4426,7 +4788,7 @@ export class WorkspaceStore {
     if (!/^[a-z0-9._-]{1,64}$/.test(cleanKey)) {
       throw new StapleError("validation", "Document key must be 1-64 chars of a-z 0-9 . _ -");
     }
-    return tx(this.db, () => {
+    return this.journaled(() => {
       const row = this.requireRow(ref);
       const current = this.db
         .prepare("SELECT current_revision FROM documents WHERE issue_id = ? AND key = ?")
@@ -4462,6 +4824,33 @@ export class WorkspaceStore {
         issueId: row.id,
         actor: opts.author ?? null,
         payload: { key: cleanKey, revision, changeSummary: opts.changeSummary ?? null },
+      });
+      /**
+       * ONE operation, on the revision, not two.
+       *
+       * The write touches two tables, and the split is a pointer and its target:
+       * `document_revisions` holds the immutable body and `documents.current_revision`
+       * points at it. Journalling both would let a receiver apply the pointer
+       * before the body and expose a head revision whose content had not arrived.
+       * The revision carries the head it establishes, so applying it moves both.
+       *
+       * The entity id is `<issueId>/<key>/<revision>`, which is the natural key —
+       * `document_revisions` has no surrogate and, unlike `documents`, no foreign
+       * key to `issues`.
+       */
+      this.journal.record({
+        entity: "documentRevision",
+        entityId: `${row.id}/${cleanKey}/${revision}`,
+        verb: "create",
+        payload: {
+          issueId: row.id,
+          key: cleanKey,
+          revision,
+          body,
+          title: opts.title ?? null,
+          changeSummary: opts.changeSummary ?? null,
+        },
+        actor: opts.author ?? null,
       });
       return { key: cleanKey, revision };
     });
@@ -4543,11 +4932,27 @@ export class WorkspaceStore {
     }));
   }
 
+  /**
+   * Restore an old revision by writing its body as a new one.
+   *
+   * The read and the write are now in ONE transaction. They were not: `getDocument`
+   * took no transaction, `putDocument` took its own, and no `baseRevision` was
+   * passed — so a concurrent write landing between the two was silently
+   * clobbered. It never bit only because nothing called this; the HTTP
+   * `doc_restore` route composes `getDocument` + `putDocument` itself precisely
+   * so it can thread a `baseRevision` through, which is the mitigation this had
+   * no equivalent of.
+   *
+   * Wrapping it closes the window without needing the token: inside one
+   * transaction there is no interleaving to lose.
+   */
   restoreDocumentRevision(ref: string, key: string, revision: number, author?: string): { key: string; revision: number } {
-    const old = this.getDocument(ref, key, revision);
-    return this.putDocument(ref, key, old.body, {
-      author: author ?? null,
-      changeSummary: `restore revision ${revision}`,
+    return this.journaled(() => {
+      const old = this.getDocument(ref, key, revision);
+      return this.putDocument(ref, key, old.body, {
+        author: author ?? null,
+        changeSummary: `restore revision ${revision}`,
+      });
     });
   }
 

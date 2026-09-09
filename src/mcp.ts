@@ -21,6 +21,17 @@ import type { OpenedWorkspace } from "./core/workspace.js";
 import type { VocabularyOp, WorkspaceStore } from "./core/store.js";
 import { MILESTONE_STATES } from "./core/milestones.js";
 import { KIND_APPEARANCE_SOURCES, type KindWithAppearance } from "./core/kind-appearance.js";
+import { dirname } from "node:path";
+import { stapleHome } from "./config/home.js";
+import { readRepositoryManifest } from "./core/repo-identity.js";
+import { SurfaceAutoSync } from "./core/cloud/auto-triggers.js";
+import { listConflicts, resolveConflict } from "./core/cloud/conflicts.js";
+import { localCloudStatus } from "./core/cloud/status.js";
+import {
+  cloudSurfaceReport,
+  noIdentityReport,
+  type CloudSurfaceReport,
+} from "./core/cloud/surface.js";
 import { Hub, notifyHubResolvedSafe } from "./core/hub.js";
 import type { CrossBlockerState } from "./core/hub.js";
 import {
@@ -154,6 +165,79 @@ function resetWorkspaceCache(): void {
 }
 
 const server = new McpServer({ name: "staple", version: "0.1.0" });
+
+/**
+ * S10: this server's automatic-sync registration.
+ *
+ * Contract: `docs/sync.md`, "Three consents" — *"After automatic — bounded
+ * triggers only: startup, post-write, long-running session."* An MCP server is
+ * the canonical long-running session: one process, many writes, an agent at the
+ * other end that will not think to synchronize.
+ *
+ * `resolve` reuses this file's own `workspaceFor`/`storeFor`, and reads the
+ * identity the same way `cloud_status` does. A workspace with no manifest returns
+ * null and nothing fires — which is also what happens on every workspace that has
+ * not consented, one file read later, inside the gate.
+ */
+const autoSync = new SurfaceAutoSync({
+  home: () => stapleHome(),
+  resolve: (ws) => {
+    const manifest = readRepositoryManifest(dirname(workspaceFor(ws).dbPath));
+    return manifest === null ? null : { db: storeFor(ws).db, repositoryId: manifest.repositoryId };
+  },
+});
+
+/**
+ * The post-write trigger, for all forty-six tools, in one place.
+ *
+ * `registerTool` is wrapped ONCE, here, before the first tool is registered, and
+ * the decision of whether a tool is a write is read from the `readOnlyHint`
+ * annotation every tool already declares to the protocol. That annotation is not
+ * decoration — a client uses it to decide whether to ask a human — so a tool that
+ * lies about it has a bigger problem than this trigger, and a tool that tells the
+ * truth needs nothing added to it.
+ *
+ * The alternative was a second `run()` for writes, which meant editing forty-odd
+ * call sites to encode a fact each of them had already stated one line above.
+ * This is a monkey-patch and monkey-patches are usually a smell; it earns its
+ * place by being the only shape in which "every write, and only a write" is one
+ * statement rather than forty-six.
+ *
+ * **Nothing is awaited.** The tool's result is returned untouched and the sync is
+ * fired beside it, so an agent's call is exactly as fast on a connected machine
+ * as on a disconnected one. And a failed tool fires nothing: `run()` reports
+ * failure as `isError` rather than by throwing, so the check is on the value.
+ */
+{
+  type ToolConfig = { annotations?: { readOnlyHint?: boolean } };
+  type ToolCallback = (...args: unknown[]) => unknown;
+  const direct = server.registerTool.bind(server) as unknown as (
+    name: string,
+    config: ToolConfig,
+    cb: ToolCallback,
+  ) => unknown;
+
+  const afterWrite =
+    (cb: ToolCallback): ToolCallback =>
+    (...args: unknown[]) => {
+      const result = cb(...args);
+      const first = args[0] as { ws?: unknown } | undefined;
+      const ws = typeof first?.ws === "string" ? first.ws : undefined;
+      const fire = (value: unknown) => {
+        if ((value as { isError?: boolean } | null)?.isError !== true) autoSync.postWrite(ws);
+        return value;
+      };
+      // Every tool here is synchronous today. Handling a thenable anyway costs one
+      // branch and means the first async tool does not silently lose its trigger.
+      return result instanceof Promise ? result.then(fire) : fire(result);
+    };
+
+  (server as unknown as { registerTool: unknown }).registerTool = (
+    name: string,
+    config: ToolConfig,
+    cb: ToolCallback,
+  ) => direct(name, config, config.annotations?.readOnlyHint === true ? cb : afterWrite(cb));
+}
 
 /**
  * structuredContent must be a JSON object (CallToolResult uses a string record),
@@ -398,6 +482,29 @@ const claimShape = {
   idleSeconds: z
     .number()
     .describe("Seconds since the holder last did anything here — the staleness signal"),
+  /**
+   * STA-75. The field that stops an agent over-claiming exclusivity it does not
+   * have — and the description is the whole mechanism, because this is read by a
+   * model rather than by code with a `switch` in it.
+   */
+  scope: z
+    .enum(["local", "lease"])
+    .describe(
+      'How exclusive this claim actually is. "local" means THIS DATABASE ONLY: no global ' +
+        "exclusivity is claimed and another machine may be holding the same work right now — " +
+        "coordinate before assuming you are the only one on it. \"lease\" means a fenced server " +
+        "lease is held and the claim IS globally exclusive. An unconnected workspace always " +
+        'reports "local", which is not a degraded answer but the true one.',
+    ),
+  lease: z
+    .object({
+      fencingToken: z.number().describe("Monotonic server-issued token; higher always wins"),
+      serverExpiresAt: z
+        .string()
+        .describe("When the SERVICE says the lease expires. Client clocks have no authority here"),
+    })
+    .nullable()
+    .describe('The lease backing scope="lease", so it can be confirmed rather than trusted. Null when scope="local"'),
 };
 type _ClaimShapeMatchesInterface = Expect<
   Equals<z.infer<z.ZodObject<typeof claimShape>>, ClaimActivity>
@@ -1539,6 +1646,124 @@ server.registerTool(
     }),
 );
 
+/**
+ * STA-249 — the three verbs that let an agent clean up after itself.
+ *
+ * `init` registered a workspace and nothing ever removed it, so every scratch
+ * directory an agent initialised stayed in the machine registry forever. These
+ * are on MCP and not just the CLI because the agents doing schema and probe work
+ * are the ones creating the rows, and a capability they cannot reach is one they
+ * will not use.
+ *
+ * All three touch the hub database only. Unregistering a workspace never opens,
+ * moves or deletes the workspace database — see `deleteHubRegistration`, whose
+ * signature is what makes that structural.
+ */
+server.registerTool(
+  "hub_unregister",
+  {
+    description:
+      "Remove ONE workspace from the machine registry, addressed by slug or identifier prefix. Deletes the hub row and releases its prefix for reuse; the workspace database and every file beside it are left untouched, so calling init in that directory registers it again. Refuses while cross-workspace links name the workspace — pass remove_cross_links to delete those edges too, or drop them one at a time with cross_unlink. Use for scratch and temporary workspaces; hub_prune is the bulk form for entries whose path is already gone.",
+    // No `ws`: the registry is machine-global and the target is named here.
+    inputSchema: {
+      workspace: z.string().describe("Workspace slug or identifier prefix, as shown by hub_overview"),
+      remove_cross_links: z
+        .boolean()
+        .optional()
+        .describe("Also delete every cross-workspace link naming this workspace (default false: refuse instead)"),
+    },
+    annotations: {
+      title: "Unregister workspace",
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  ({ workspace, remove_cross_links }) =>
+    run(() => {
+      const hub = Hub.open();
+      try {
+        return hub.unregister(workspace, { withLinks: remove_cross_links === true });
+      } finally {
+        hub.close();
+      }
+    }),
+);
+
+server.registerTool(
+  "hub_prune",
+  {
+    description:
+      "Sweep every registry entry whose recorded path no longer exists on this machine. PREVIEWS BY DEFAULT: without apply it reports what it would remove and writes nothing, so call it once to look and again with apply to act. Rows whose file is present are never candidates. A dead row still named by cross-workspace links is reported under skipped rather than removed, unless remove_cross_links is set. Workspace databases are never touched.",
+    inputSchema: {
+      apply: z
+        .boolean()
+        .optional()
+        .describe("Perform the removal. Omit or false to preview; nothing is written without it"),
+      remove_cross_links: z
+        .boolean()
+        .optional()
+        .describe("Also remove dead rows that cross-workspace links name, deleting those edges"),
+    },
+    // Not readOnlyHint even though the default call writes nothing: the same
+    // tool with apply:true deletes rows, and an annotation that depends on an
+    // argument is worse than no annotation.
+    annotations: {
+      title: "Prune hub registry",
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  ({ apply, remove_cross_links }) =>
+    run(() => {
+      const hub = Hub.open();
+      try {
+        return hub.prune({ apply: apply === true, withLinks: remove_cross_links === true });
+      } finally {
+        hub.close();
+      }
+    }),
+);
+
+server.registerTool(
+  "cross_unlink",
+  {
+    description:
+      "Remove ONE cross-workspace dependency previously created by cross_link. The inverse of that tool, and the non-destructive way out of a hub_unregister that is refusing because links name the workspace. A link that does not exist is not_found, so a mistyped identifier is reported rather than silently succeeding.",
+    inputSchema: {
+      blocker_identifier: z.string(),
+      blocked_identifier: z.string(),
+    },
+    annotations: {
+      title: "Remove cross-workspace link",
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  ({ blocker_identifier, blocked_identifier }) =>
+    run(() => {
+      const hub = Hub.open();
+      try {
+        const removed = hub.removeCrossLink(blocker_identifier, blocked_identifier);
+        if (!removed) {
+          throw new StapleError(
+            "not_found",
+            `No cross-workspace link where ${blocker_identifier.toUpperCase()} blocks ${blocked_identifier.toUpperCase()}. ` +
+              "Call hub_overview to see the links that exist.",
+          );
+        }
+        return removed;
+      } finally {
+        hub.close();
+      }
+    }),
+);
+
 server.registerTool(
   "init",
   {
@@ -2065,8 +2290,201 @@ server.registerTool(
     run(() => storeFor(ws).queue().mutate("prune", { baseRevision: base_revision, all }, requireActor(actor))),
 );
 
+/**
+ * `cloud_status` — and, deliberately, NOTHING ELSE from `staple cloud`.
+ *
+ * Connect, disconnect, revoke and purge are not exposed over MCP, and that is a
+ * decision rather than an omission. `docs/sync.md` makes the connect preview the
+ * consent mechanism: the command shows the endpoint, the repository id and where
+ * the credential will be stored, and *then* asks a human. An MCP tool has no
+ * human to show it to. A `cloud_connect` tool would either skip the preview —
+ * which is the whole privacy claim — or render it into a transcript nobody reads
+ * before the model answers yes on the operator's behalf. Neither is consent.
+ *
+ * Purge is worse again: an irreversible remote deletion, reachable by a model,
+ * behind a confirmation string the model can read off the disclosure it was just
+ * handed. The typed confirmation exists precisely to require a person.
+ *
+ * So an agent can find out whether this repository is connected, and everything
+ * that changes that answer requires a person at a terminal.
+ *
+ * Read-only and network-free: `localCloudStatus` reads files. There is no
+ * `refresh` parameter, because "let the agent probe the endpoint" is how a
+ * silent tracker acquires a heartbeat.
+ */
+/**
+ * The MCP projection of `CloudSurfaceReport`, proven equal to it at compile time.
+ *
+ * This tool used to build its own nine-field object literal, and `/api/cloud/status`
+ * built the same one again — the duplication STA-75 exists to remove. Now both
+ * return the core report verbatim, and `_CloudStatusShapeMatchesInterface` below
+ * makes the schema incapable of drifting from the type: add a field to
+ * `CloudSurfaceReport` without adding it here and `tsc` fails, rather than the
+ * MCP SDK silently stripping it from `structuredContent` at runtime.
+ */
+const cloudStatusShape = {
+  state: z.enum(["disconnected", "manual", "automatic", "offline", "revoked", "auth_failed"]),
+  mode: z
+    .enum(["disconnected", "manual", "automatic"])
+    .describe("What this surface may OFFER — offline/revoked/auth_failed are still connected"),
+  detail: z.string().describe("One human sentence for state. The values below are authoritative"),
+  repositoryId: z.string().nullable(),
+  endpoint: z.string().nullable(),
+  deviceId: z.string().nullable(),
+  label: z.string().nullable(),
+  credentialMechanism: z.enum(["keychain", "secret-tool", "file"]).nullable(),
+  credentialPresent: z.boolean().describe("Whether a credential is retrievable, not merely recorded"),
+  auto: z.boolean().describe("THIS device's automatic-sync consent"),
+  backup: z.boolean().describe("THIS device's backup consent — a separate decision from auto"),
+  connectedAt: z.string().nullable(),
+  checked: z.boolean().describe("True only after a live probe. Always false here: this tool cannot probe"),
+  pending: z.number().describe("Operations journalled locally and not yet acknowledged by the server"),
+  cursor: z.string().nullable().describe("Last successful pull cursor; null before first bootstrap"),
+  epoch: z.number().nullable(),
+  lastSyncAt: z.string().nullable(),
+  conflicts: z.object({ open: z.number(), resolved: z.number() }),
+  leases: z.object({ held: z.number() }).describe("Leases THIS device holds"),
+  warnings: z.array(z.string()),
+  failure: z
+    .object({
+      code: z.enum(["offline", "revoked", "auth_failed", "no_identity"]),
+      summary: z.string(),
+      remedy: z.string().describe("The command that fixes it"),
+    })
+    .nullable()
+    .describe("Present only when there is something to be done about it"),
+  hint: z
+    .string()
+    .nullable()
+    .describe("Static text, and only when disconnected. Never a prompt on a connected repository"),
+};
+type _CloudStatusShapeMatchesInterface = Expect<
+  Equals<z.infer<z.ZodObject<typeof cloudStatusShape>>, CloudSurfaceReport>
+>;
+
+server.registerTool(
+  "cloud_status",
+  {
+    description:
+      "Whether THIS MACHINE has connected this repository to a sync service, and in what mode. States: disconnected (no credential, no endpoint, no cloud state here), manual (connected; nothing syncs until a human runs `staple cloud sync`), automatic (this device consented to background sync), offline, revoked, auth_failed. Reads local files only — it makes no network request and cannot be made to. Connecting, disconnecting, revoking a device and purging remote state are deliberately NOT available as tools: each is a human consent decision whose preview and typed confirmation only mean something to a person at a terminal.",
+    inputSchema: { ws: wsSchema },
+    outputSchema: cloudStatusShape,
+    annotations: { title: "Cloud status", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+  },
+  ({ ws }) =>
+    run(() => {
+      const store = storeFor(ws);
+      const manifest = readRepositoryManifest(dirname(workspaceFor(ws).dbPath));
+      // No manifest means no sync identity — one wording, in core, shared with
+      // the HTTP route that used to spell out its own.
+      if (!manifest) return noIdentityReport();
+      return cloudSurfaceReport(localCloudStatus(stapleHome(), manifest.repositoryId), store.db);
+    }),
+);
+
+/**
+ * `conflict_list` and `conflict_resolve` — the two cloud writes an agent MAY do.
+ *
+ * The reasoning above holds that connect, disconnect, revoke and purge are human
+ * consent decisions and stay off MCP. Resolving a conflict is a different kind of
+ * thing and `docs/sync.md` says so directly: *"resolving it is a decision a human
+ * or an agent makes on the record."* It touches only the local database, makes no
+ * network request, cannot store or spend a credential, and cannot destroy
+ * anything — the losing value stays on the record forever, so the worst outcome
+ * of a wrong call is a field that has to be set again, which is what every other
+ * write tool here can already do.
+ *
+ * What the agent is NOT given is a way to avoid deciding. There is no "resolve
+ * all", no "prefer newest" and no default side, because a bulk apply-the-latest
+ * would be exactly the last-write-wins the whole design removes, wearing an
+ * agent's name instead of the transport's.
+ */
+const conflictShape = {
+  id: z.string(),
+  entity: z.string(),
+  entityId: z.string(),
+  field: z.string(),
+  baseValue: z.unknown().optional(),
+  localValue: z.unknown(),
+  remoteValue: z.unknown(),
+  localDeviceId: z.string().nullable(),
+  remoteDeviceId: z.string().nullable(),
+  localOpId: z.string().nullable(),
+  remoteOpId: z.string().nullable(),
+  localAt: z.string().nullable(),
+  remoteAt: z.string().nullable(),
+  detectedAt: z.string(),
+  resolvedAt: z.string().nullable(),
+  resolvedBy: z.string().nullable(),
+  resolvedValue: z.unknown().optional(),
+  resolvedChoice: z.enum(["local", "remote", "custom"]).nullable(),
+};
+
+server.registerTool(
+  "conflict_list",
+  {
+    description:
+      "Fields two devices changed to different things while offline. Both values are retained in full and NEITHER has been applied — a conflict is data, not an error, and everything else in the repository keeps synchronizing around it. localValue is what this database holds, remoteValue is what arrived and was withheld, baseValue is what they diverged from when that is still recoverable. Reads the local database only; makes no network request. Pass include_resolved for the audit trail of what was already settled and by whom.",
+    inputSchema: { include_resolved: z.boolean().optional(), ws: wsSchema },
+    outputSchema: { items: z.array(z.object(conflictShape)) },
+    annotations: { title: "List conflicts", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+  },
+  ({ include_resolved, ws }) =>
+    run(() => listConflicts(storeFor(ws).db, { includeResolved: include_resolved === true })),
+);
+
+server.registerTool(
+  "conflict_resolve",
+  {
+    description:
+      "Settle one conflict by choosing a value, explicitly. take='local' keeps what this database holds, take='remote' adopts what arrived, and passing value instead writes a third answer. Emits a NEW operation carrying the choice, so every other device converges on it; it never rewrites the two operations that disagreed and never picks a winner on your behalf. Resolving the same conflict the same way twice is a no-op; resolving it a DIFFERENT way after it is settled is refused — edit the field instead, which is its own decision on the record. Resolving an identifier collision frees the contested number, renumbering whichever issue was holding it, and reports that.",
+    inputSchema: {
+      id: z.string(),
+      take: z.enum(["local", "remote"]).optional(),
+      value: z.unknown().optional(),
+      actor: actorSchema,
+      ws: wsSchema,
+    },
+    outputSchema: {
+      conflict: z.object(conflictShape),
+      changed: z.boolean(),
+      renumbered: z.array(z.object({ issueId: z.string(), from: z.string(), to: z.string() })),
+    },
+    annotations: { title: "Resolve conflict", readOnlyHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  ({ id, take, value, actor, ws }) =>
+    run(() => {
+      if (take !== undefined && value !== undefined) {
+        throw new StapleError("validation", "take and value are two different decisions. Pass one.");
+      }
+      if (take === undefined && value === undefined) {
+        throw new StapleError(
+          "validation",
+          'Nothing chosen. Pass take="local", take="remote", or a value to write instead.',
+        );
+      }
+      return resolveConflict(storeFor(ws).db, {
+        id,
+        choice: take ?? "custom",
+        value,
+        actor: requireActor(actor),
+      });
+    }),
+);
+
 const transport = new StdioServerTransport();
 await server.connect(transport);
+/**
+ * S10: startup and the long-running-session tick, after the transport is up.
+ *
+ * After `connect`, not before, so that a server which failed to attach to stdio
+ * has not started a session. Both are silent on a machine that has not consented
+ * — `startup` returns after one `existsSync` on a fresh install — and the
+ * interval is `unref`'d, so it can never be the reason this process outlives the
+ * client that spawned it.
+ */
+autoSync.startup();
+autoSync.startSession();
 const workspaceSource = process.env.STAPLE_DB
   ? `STAPLE_DB ${process.env.STAPLE_DB}`
   : process.env.STAPLE_WS

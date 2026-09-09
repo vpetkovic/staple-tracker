@@ -63,6 +63,25 @@ export const SECONDS = "<seconds>";
  * fixture chose, so `5400` must be pinned as `5400`. Tokenizing it would hide the
  * exact bug this feature can have — a write path that stores the wrong number.
  */
+/**
+ * `events.dedup_key` is derived, so it is volatile — but it must not simply be
+ * dropped from the golden.
+ *
+ * Two shapes are legitimate. A level-triggered event supplies its own
+ * CONTENT-derived key (`blockers_resolved:<id>:<n>:<32 hex>`), which repeats
+ * whenever the same condition is noticed and is what makes the noticing
+ * idempotent. Every other event gets a 32-hex key derived from the enclosing
+ * mutation, which is unique per mutation and therefore unpinnable.
+ *
+ * Tokenized by KEY and format-checked rather than erased: an emitter that went
+ * back to writing NULL — which three of the four did before the seam unified
+ * them — fails here instead of passing silently, which is the entire point of
+ * pinning it.
+ */
+const DEDUP_KEY_KEYS = new Set(["dedupKey", "dedup_key"]);
+const DEDUP_KEY_RE = /^(?:[0-9a-f]{32}|[a-z_]+:[0-9a-f-]+:\d+:[0-9a-f]{32})$/;
+const DEDUP_KEY = "<dedup-key>";
+
 const ELAPSED_SECONDS_KEYS = new Set([
   "heldSeconds",
   "idleSeconds",
@@ -115,6 +134,13 @@ export function normalize(value: unknown, tempRoots: readonly string[] = []): un
       // non-finite reading fails instead of being normalized away.
       if (ELAPSED_SECONDS_KEYS.has(key) && typeof inner === "number") {
         out[key] = Number.isFinite(inner) && inner >= 0 ? SECONDS : `<bad-seconds:${inner}>`;
+        continue;
+      }
+      if (DEDUP_KEY_KEYS.has(key)) {
+        out[key] =
+          typeof inner === "string" && DEDUP_KEY_RE.test(inner)
+            ? DEDUP_KEY
+            : `<bad-dedup-key:${String(inner)}>`;
         continue;
       }
       out[key] = normalize(inner, tempRoots);
@@ -227,6 +253,21 @@ export function claimGolden(over: Record<string, unknown> = {}): Record<string, 
     lastActivityAt: ISO,
     heldSeconds: SECONDS,
     idleSeconds: SECONDS,
+    /**
+     * STA-75. Pinned as the LITERAL `"local"` rather than tokenized, and that is
+     * the assertion: these fixtures are unconnected workspaces, so every claim
+     * they produce is local-only, and `docs/sync.md` is explicit that this must
+     * be stated rather than left for a reader to assume — *"an agent that reads
+     * `local` and behaves as though it read `lease` is the failure this field
+     * exists to prevent."*
+     *
+     * A regression that made an unconnected checkout report `"lease"` — by
+     * defaulting the scope, or by trusting a mirror row without checking the
+     * connection — fails here, on all four surfaces at once. Pass an override
+     * only from a test that has actually forged a connection AND a lease.
+     */
+    scope: "local",
+    lease: null,
     ...over,
   };
 }

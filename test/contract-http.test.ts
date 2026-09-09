@@ -354,6 +354,73 @@ describe("KNOWN: logical errors this surface cannot project", () => {
       "/api/action",
       "/api/agent-context",
       "/api/bootstrap",
+      /**
+       * STA-71. GET-only, read-only, and network-free: it renders whether THIS
+       * MACHINE has connected the repository, from local files, so the page can
+       * say "not connected" as static text rather than probing. It carries no
+       * `refresh` parameter on purpose — a polled UI against a refreshing status
+       * endpoint is a heartbeat to Cloudflare arrived at by accident.
+       * `test/cloud-ui-status.test.ts` pins it, including under network spies.
+       */
+      /**
+       * The conflict pair. `/api/cloud/conflicts` is a GET and a local read of
+       * one table — available in every cloud state including disconnected,
+       * because a repository that has synced and then been disconnected still
+       * holds its unsettled decisions and hiding them would make them invisible
+       * for as long as the credential was gone.
+       *
+       * `/api/cloud/conflicts/resolve` is the POST, and it is named in the
+       * method gate individually rather than by prefix: a `/api/cloud/` family
+       * rule would have made the two reads above cross-origin-writable, which is
+       * the same trap `/api/queue`'s verbs are spelled out to avoid.
+       * `test/conflict-surfaces.test.ts` pins both, against the CLI and MCP
+       * projections of the same record.
+       */
+      "/api/cloud/conflicts",
+      "/api/cloud/conflicts/resolve",
+      /**
+       * S13 (STA-258) — the cloud MUTATIONS, and the largest single addition
+       * this golden has taken. Read the shape before the list.
+       *
+       * `connect` is TWO routes and that is the design, not a decomposition.
+       * `/api/cloud/connect/preview` is the only route on this server that
+       * accepts an endpoint; it builds the preview (locally — `preview.ts`
+       * cannot import `client.ts`) and returns it beside a single-use consent
+       * ticket minted from it. `/api/cloud/connect` then takes the TICKET, and
+       * has no endpoint field and no repository field at all.
+       *
+       * So the endpoint travels in one direction only: out, in a preview
+       * response, and never back in a connect request. A client therefore cannot
+       * reach a service without having first been handed the description of it,
+       * and that is a property of these two route shapes rather than of any
+       * client's diligence — the same kind of guarantee the CLI gets from the
+       * import graph. Collapsing them into one route that took an endpoint would
+       * destroy it at the last surface, which is the review this golden exists
+       * to force. See `src/core/cloud/consent.ts`.
+       *
+       * `/api/cloud/consent` writes the two later consents ONE AT A TIME, into
+       * the staple home and never into the workspace database — the workspace
+       * synchronizes, and an `auto` flag there would let one machine enable
+       * background sync for every machine.
+       *
+       * `/api/cloud/devices` is a POST although it reads, because it LEAVES THE
+       * MACHINE. It is the only route on this server that does so on a read, and
+       * the page never calls it on mount.
+       *
+       * There is deliberately NO `/api/cloud/purge`. `staple cloud purge`
+       * requires the repository id typed back and STA-256 records that the
+       * server does not yet validate a confirmation on the wire; a one-click
+       * irreversible remote deletion behind a browser session is not something to
+       * add while that is true. If it ever appears in this list, that is the
+       * review moment.
+       */
+      "/api/cloud/connect",
+      "/api/cloud/connect/preview",
+      "/api/cloud/consent",
+      "/api/cloud/devices",
+      "/api/cloud/devices/revoke",
+      "/api/cloud/disconnect",
+      "/api/cloud/status",
       "/api/document",
       "/api/events",
       "/api/gate/approve",

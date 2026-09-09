@@ -10,6 +10,7 @@ staple new <title> [--parent R]       staple block <ref> --owner O --action TEXT
 staple ls | show <ref> | tree | board staple link <blocker> <blocked>   (cross-ws)
 staple inbox [--hub] [--assignee A]   staple doc <ref> <key> [--put f --base N]
 staple events [--since N]             staple hub [ls|links|events]
+                                      staple hub unregister <slug|prefix> | prune | unlink
 staple open [--port 4400] [--hub]     staple config [show|set|home]
 staple migrate [--yes]                staple doctor [--json] [--fix --only <check>]
 staple install [status|--rollback]    staple add <path> --yes | discover <root>
@@ -38,6 +39,50 @@ staple checkout <ref> --override -m <why>           take a row out of turn, on t
 
 `staple help` has the full option list. `checkout` is an alias for `start`, and
 `staple ui` is a compatibility alias for `staple open`.
+
+## The machine registry
+
+`staple init` adds a row to `~/.staple/hub.db`; three verbs take one back out.
+
+```bash
+staple hub ls                              # what is registered, and whether its file is there
+staple hub unregister <slug|prefix>        # drop ONE row, releasing its prefix
+staple hub prune                           # preview every row whose path is gone
+staple hub prune --yes                     # …and remove them
+staple hub unlink <blocker> <blocked>      # drop ONE cross-workspace link
+```
+
+**Unregistering removes a registry row and nothing else.** The workspace
+database and every file beside it are left untouched — byte-for-byte, not merely
+present — so nothing is lost by unregistering a workspace you still want. The
+prefix it held becomes available again for the next workspace that derives the
+same base.
+
+**A workspace that is still on disk will register itself again.** The hub is
+*derived* state: the authoritative slug and prefix live in the workspace file,
+and the next staple command run inside that repository re-registers it from
+them. Unregister is for tidying the registry, not for hiding a workspace from
+it. For the rows it is really for — scratch directories that have since been
+deleted — there is nothing left to re-register, so `prune` is permanent.
+
+`prune` previews by default: it prints the rows it would remove, writes nothing,
+exits 0, and names the command that would do it. Only `--yes` removes anything.
+A row is a candidate only when its recorded file is absent; a workspace that is
+present is never touched, whichever of macOS's two spellings its path uses.
+
+Cross-workspace links are the one thing that can refuse an unregistration.
+A link naming a workspace the hub no longer knows would report as an
+unresolvable blocker, which the readiness rule treats as *blocked* — so the
+issue on the other side would be blocked permanently with nothing to explain
+why. Rather than dangle it or delete it silently, staple refuses and lists the
+links (exit 4, `conflict`). Two ways forward: remove them individually with
+`staple hub unlink`, or pass `--with-links` to remove them along with the
+registration. `staple hub prune` applies the same rule per row — an encumbered
+dead row is *kept and reported* while the rest are removed, so one stubborn
+entry cannot block the whole cleanup.
+
+The same three verbs are on MCP as `hub_unregister`, `hub_prune` (which previews
+unless you pass `apply`) and `cross_unlink`.
 
 `staple doctor` is read-only. Its `schema` check names the database schema, the
 running build's schema (and whether that build is a checkout, a bundle or an

@@ -10,6 +10,7 @@ purpose — the content is accurate, the prose is not finished.
 | [continuity.md](continuity.md) | Claims, staleness, takeover, and the takeover drill |
 | [queue.md](queue.md) | The pickup queue: plan vs effective order, the resolver, advisory vs strict, human override, storage — the R2 contract, not yet built |
 | [milestones.md](milestones.md) | Milestones: the `milestone` kind, UTC inclusive dates, ordered membership that never re-parents, count-each-leaf-once progress, queue expansion — the R3 contract, not yet built |
+| [sync.md](sync.md) | Optional cloud sync: what replicates, the operation envelope, ordering, conflicts, leases, the three consents and the zero-network rule — the S contract, not yet built |
 | [cli.md](cli.md) | The command surface, estimates vs actuals, `--json`, exit codes |
 | [web-ui.md](web-ui.md) | `staple open`, the stack, the theme, the auth model |
 | [configuration.md](configuration.md) | The staple home, the bootstrap locator, `config.json` |

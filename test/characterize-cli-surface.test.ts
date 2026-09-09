@@ -320,7 +320,12 @@ describe("flag inventory", () => {
 
     const badSub = cli("hub", "not-a-subcommand");
     expect(badSub.status).toBe(0);
-    expect(badSub.stdout).toBe("usage: staple hub [ls|links|events]\n");
+    // STA-249 added three write verbs; the usage line names them. The flag
+    // tolerance above is unchanged and deliberately so — it fails SAFE for the
+    // new verbs, since a mistyped `--yes` leaves prune previewing and a
+    // mistyped `--with-links` leaves the cross-link cascade off. Every typo
+    // does less, never more.
+    expect(badSub.stdout).toBe("usage: staple hub [ls|links|events|unregister|prune|unlink]\n");
     expect(badSub.stderr).toBe("");
   }, 30_000);
 

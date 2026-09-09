@@ -17,6 +17,8 @@ import { runAddCommand } from "./commands/add.js";
 import { runDiscoverCommand } from "./commands/discover.js";
 import { runMilestoneCommand } from "./commands/milestone.js";
 import { runQueueCommand } from "./commands/queue.js";
+import { runCloudCommand } from "./commands/cloud.js";
+import { CLI_COMMAND_TRIGGERS, runCommandTrigger } from "./core/cloud/auto-triggers.js";
 import { findMigrationRoot, planMigration, runMigration } from "./core/path-migration.js";
 import {
   type ConfigPatch,
@@ -762,6 +764,15 @@ Workspace
               registers ONLY hub rows, only for what you select; never registers
               an ambiguous directory and never initializes anything
   hub [ls|links|events]                 registry, cross-links, cross-workspace events
+  hub unregister <slug|prefix> [--with-links]
+              drop ONE registry row and release its prefix; the workspace database
+              and every file beside it are left untouched, so staple init there
+              registers it again; refuses while cross-workspace links name it
+              unless --with-links removes those too
+  hub prune [--yes] [--with-links]      drop every row whose recorded path is gone;
+              previews and writes nothing without --yes; a dead row named by
+              cross-links is kept and reported unless --with-links
+  hub unlink <blocker> <blocked>        remove ONE cross-workspace link
   doctor [--json] [--dir p] [--home p]  read-only diagnosis of home, config, hub, workspace,
               schema, migration journals, UI port, runtime and assets; exits 1
               when a check fails and prints the exact repair commands
@@ -777,6 +788,42 @@ Workspace
               its value and where it came from (default | workspace)
   settings get <key>                    one setting, e.g. queue.policy
   settings set <key> <value>            write one; queue.policy takes advisory | strict
+
+Cloud (optional, off until you turn it on — see staple cloud --help)
+  cloud [status] [--refresh]            this machine's relationship to a sync service.
+              Local and silent: it reads files and makes NO request. --refresh is
+              the only form that contacts the endpoint
+  cloud connect --endpoint <url> --token <secret> [--yes]
+              show the service, the repository id and where the credential will be
+              stored, then connect once you agree. Nothing is sent before you do,
+              and a successful connection leaves automatic sync OFF
+  cloud sync                            push what this device journaled, then apply what the
+              others did. The only thing that moves data in manual mode; a first run on a
+              fresh clone hydrates the database, and an interrupted run resumes
+  cloud disconnect [--yes]              remove this device's credential and stop all later
+              cloud traffic; local data and pending operations are preserved, the
+              remote state is untouched and other devices are unaffected
+  cloud auto on|off                     THIS device's consent to sync without being asked
+  cloud devices [ls|revoke <id>]        devices registered to this repository; revoking is
+              server-side and effective on that device's next request
+  cloud backup enable|disable           THIS device's consent to keep point-in-time copies
+              on the service. A THIRD consent: neither connecting nor automatic sync
+              turns it on. Disabling stops new backups and deletes none
+  cloud backup create|ls|rm <id>        take, list and delete backups. Disaster recovery,
+              not convergence: none of these moves a cursor or changes what syncs
+  cloud restore <backupId> --confirm <repositoryId>
+              put the repository back to that backup. Takes a pre-restore backup first,
+              re-materialises the contents into a NEW epoch and moves every device onto
+              it. DISCARDS anything synchronized since. Never merges database files
+  cloud conflicts [--all]               fields two devices set to different things. Both
+              values are kept and NEITHER is applied; the rest of the repository keeps
+              synchronizing around it. Local read, no request
+  cloud resolve <id> --take local|remote | --value <text>
+              settle one explicitly. Emits a new operation carrying the choice so the
+              other devices agree; never rewrites what disagreed, never picks for you
+  cloud purge --confirm <repositoryId>  DESTROY the remote state. Separately named because
+              it is not disconnecting; discloses what is stored before it will accept
+              the confirmation, and never touches your local database
 
 Tasks
   new <title> [-d text] [-p prio] [--parent REF] [--assignee A]
@@ -1999,7 +2046,20 @@ function main() {
     }
 
     case "hub": {
-      const sub = rest.filter((arg) => !arg.startsWith("--"))[0] ?? "ls";
+      /**
+       * `hub` still does not call parseArgs, and that is on purpose here.
+       *
+       * The tolerant split is a quirk pinned by characterize-cli-surface.test.ts
+       * ("`hub` swallows unknown flags"); unifying the flag surface is somebody
+       * else's ticket. What matters for the write verbs STA-249 adds is which
+       * way the tolerance fails, and it fails safe in both directions: a
+       * mistyped `--yess` leaves prune in its preview mode, and a mistyped
+       * `--with-linkz` leaves the cross-link cascade off. Every typo does LESS,
+       * never more.
+       */
+      const words = rest.filter((arg) => !arg.startsWith("--"));
+      const flag = (name: string): boolean => rest.includes(`--${name}`);
+      const sub = words[0] ?? "ls";
       const hub = Hub.open();
       try {
         if (sub === "ls") {
@@ -2028,8 +2088,91 @@ function main() {
           for (const event of hub.listHubEvents()) {
             console.log(`${String(event.seq).padStart(4)}  ${event.createdAt.slice(0, 19)}  ${event.kind}  ${JSON.stringify(event.payload)}`);
           }
+        } else if (sub === "unregister") {
+          const target = words[1];
+          if (!target) {
+            throw new StapleError(
+              "validation",
+              "usage: staple hub unregister <slug|prefix> [--with-links]",
+            );
+          }
+          const result = hub.unregister(target, { withLinks: flag("with-links") });
+          if (jsonMode) {
+            outJson(result);
+            break;
+          }
+          const ws = result.workspace;
+          console.log(`Unregistered ${ws.prefix} ${ws.slug} (${ws.path})`);
+          for (const link of result.removedCrossLinks) {
+            console.log(`  removed cross-link ${link.blockerIdentifier} blocks ${link.blockedIdentifier}`);
+          }
+          console.log(`Prefix ${result.prefixReleased} is free again. The workspace database was not touched.`);
+          if (ws.available) {
+            // Honesty about the one thing that surprises people: the hub is
+            // DERIVED state, so a workspace that is still on disk re-registers
+            // itself from the prefix stamped in its own database the next time
+            // anyone runs a command inside it.
+            console.log("Its file is still on disk, so a staple command run in that workspace will register it again.");
+          }
+        } else if (sub === "prune") {
+          const apply = flag("yes");
+          const withLinks = flag("with-links");
+          const result = hub.prune({ apply, withLinks });
+          if (jsonMode) {
+            outJson(result);
+            break;
+          }
+          if (result.removed.length === 0 && result.skipped.length === 0) {
+            console.log("Nothing to prune — every registered workspace is present on this machine.");
+            break;
+          }
+          for (const entry of result.removed.map((r) => r.workspace)) {
+            console.log(
+              `${apply ? "removed     " : "would remove"} ${entry.prefix.padEnd(6)} ${entry.slug.padEnd(20)} ${entry.path}`,
+            );
+          }
+          for (const skip of result.skipped) {
+            console.log(
+              `kept        ${skip.entry.prefix.padEnd(6)} ${skip.entry.slug.padEnd(20)} ${skip.entry.path}`,
+            );
+            for (const link of skip.crossLinks) {
+              console.log(`  cross-link ${link.blockerIdentifier} blocks ${link.blockedIdentifier}`);
+            }
+            console.log("  named by cross-workspace links; re-run with --with-links to remove them too");
+          }
+          if (!apply) {
+            // The `discover` contract: a preview writes nothing, exits 0, and
+            // hands back the exact command that would perform it.
+            console.log("");
+            console.log(`${result.removed.length} row(s) can be pruned. Nothing has been written.`);
+            console.log(`  staple hub prune --yes${withLinks ? " --with-links" : ""}`);
+          }
+        } else if (sub === "unlink") {
+          const blocker = words[1];
+          const blocked = words[2];
+          if (!blocker || !blocked) {
+            throw new StapleError(
+              "validation",
+              "usage: staple hub unlink <blocker-identifier> <blocked-identifier>",
+            );
+          }
+          const removed = hub.removeCrossLink(blocker, blocked);
+          if (!removed) {
+            throw new StapleError(
+              "not_found",
+              `No cross-workspace link where ${blocker.toUpperCase()} blocks ${blocked.toUpperCase()}. ` +
+                "Run `staple hub links` to see the ones that exist.",
+            );
+          }
+          if (jsonMode) {
+            outJson(removed);
+            break;
+          }
+          console.log(
+            `Removed cross-link ${removed.blockerIdentifier} blocks ${removed.blockedIdentifier}  (${removed.blockerWs} → ${removed.blockedWs})`,
+          );
         } else {
-          console.log("usage: staple hub [ls|links|events]");
+          console.log("usage: staple hub [ls|links|events|unregister|prune|unlink]");
         }
       } finally {
         hub.close();
@@ -2083,6 +2226,21 @@ function main() {
      */
     case "queue": {
       runQueueCommand(rest);
+      break;
+    }
+
+    /**
+     * `staple cloud` — connection and credential lifecycle (STA-71). Thin
+     * delegation, like `queue` and `milestone`: the logic, and in particular
+     * every decision about what may touch the network, lives in
+     * `src/commands/cloud.ts` and `src/core/cloud/`.
+     *
+     * The command module handles its own async failures. It is the first
+     * command in the tree that awaits anything, and the top-level `catch`
+     * below is synchronous — see `settle()` there.
+     */
+    case "cloud": {
+      runCloudCommand(rest);
       break;
     }
 
@@ -2175,4 +2333,45 @@ try {
     console.error(error);
   }
   process.exitCode = EXIT_CODES[envelope.code] ?? 1;
+}
+
+/**
+ * S10: the CLI's entire automatic-sync registration.
+ *
+ * Contract: `docs/sync.md`, "Three consents" — *"After automatic — bounded
+ * triggers only … A tracker command never blocks indefinitely on Cloudflare."*
+ *
+ * **After the command, never around it.** Output is printed, `process.exitCode`
+ * is set, and the error envelope is on stderr before this line is reached, so
+ * there is no path by which an automatic sync can change what a script sees from
+ * any of the thirty commands above. That is what makes it safe to have a trigger
+ * on `checkout` at all: the claim is taken and reported exactly as it is today,
+ * and only then does this device mention it to anybody.
+ *
+ * **Silent unless it was asked for.** `runCommandTrigger` returns
+ * `skipped/no-connections` after a single `existsSync` on a machine that has
+ * never connected a repository, and `skipped/manual` after one further file read
+ * on a connected machine that never ran `staple cloud auto on`. Neither path
+ * opens a database and neither loads `core/cloud/sync.js`, so the zero-network
+ * invariant here is structural rather than checked.
+ *
+ * **Only after a command that worked.** A `validation` failure means the argv was
+ * not a command; synchronizing on the strength of it would be a network request
+ * caused by a typo.
+ */
+if (!process.exitCode && CLI_COMMAND_TRIGGERS[process.argv[2] ?? ""] !== undefined) {
+  try {
+    /**
+     * Both guards, deliberately. `runCommandTrigger` absorbs its own failures, so
+     * neither should ever fire — but this is the last statement in the process and
+     * an escape from it would print an unhandled rejection *after* a command that
+     * had already succeeded and reported. Belt and braces is the right amount of
+     * caution for a line whose entire job is to be optional.
+     */
+    void runCommandTrigger(process.argv[2], process.argv.slice(3), {
+      home: stapleHome(),
+    }).catch(() => undefined);
+  } catch {
+    /* an unusable home is `staple doctor`'s to report, not a background sync's */
+  }
 }

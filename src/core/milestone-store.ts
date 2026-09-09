@@ -26,7 +26,8 @@
  * here, and it builds no view.
  */
 import type { DatabaseSync } from "node:sqlite";
-import { tx } from "./db.js";
+import { insertEvent } from "./event-log.js";
+import type { Journal } from "./journal.js";
 import { parseIdentifier } from "./ids.js";
 import {
   MILESTONE_KIND,
@@ -236,6 +237,16 @@ export class MilestoneStore {
     return this.store.db;
   }
 
+  /** The connection's one journal seam. Shared with every other store. */
+  private get journal(): Journal {
+    return this.store.journal;
+  }
+
+  /** One logical mutation: one transaction, one journal scope. Re-entrant. */
+  private journaled<T>(fn: () => T): T {
+    return this.store.journaled(fn);
+  }
+
   // ---------- guards ----------
 
   private assertKindConfigured(): void {
@@ -405,14 +416,48 @@ export class MilestoneStore {
 
   // ---------- events ----------
 
-  /** The store's INSERT, without a dedup key: none of these is level-triggered. */
+  /**
+   * One of the four emitters, now delegating to the single writer.
+   *
+   * None of these is level-triggered, so no explicit dedup key is supplied and
+   * `insertEvent` derives one from the enclosing mutation. It used to hardcode
+   * `NULL`, which left an at-least-once transport one retry away from a
+   * duplicated timeline.
+   */
   private emit(kind: string, issueId: string, actor: string | null, payload: Record<string, unknown>): void {
-    this.db
-      .prepare(
-        `INSERT INTO events (kind, issue_id, actor, payload, dedup_key, created_at)
-         VALUES (?, ?, ?, ?, NULL, ?)`,
-      )
-      .run(kind, issueId, actor, JSON.stringify(payload), nowIso());
+    insertEvent(this.db, { kind, issueId, actor, payload });
+  }
+
+  // ---------- journal ----------
+
+  /**
+   * Declare a membership change as a whole-order `replace`, on the milestone.
+   *
+   * Not one operation per member, and the reason is in the schema.
+   * `milestone_members` has `UNIQUE (milestone_id, rank)` over dense-ish
+   * integers assigned by `renumberedRanks`, so two devices each inserting a
+   * member offline produce rows that collide on arrival — a per-member `create`
+   * would replicate a constraint violation. Sending the resulting ORDER instead
+   * makes the merge a list merge, which is a problem with answers, rather than a
+   * unique-index conflict, which is not.
+   *
+   * It also collapses the four membership mutators into one shape: add, remove,
+   * move and reorder all end with "this milestone's members are now these, in
+   * this order", which is exactly what a receiver needs and all it needs.
+   */
+  private recordMembership(milestoneId: string, actor: string | null): void {
+    const order = (
+      this.db
+        .prepare("SELECT issue_id FROM milestone_members WHERE milestone_id = ? ORDER BY rank")
+        .all(milestoneId) as Array<{ issue_id: string }>
+    ).map((row) => row.issue_id);
+    this.journal.record({
+      entity: "milestone",
+      entityId: milestoneId,
+      verb: "replace",
+      payload: { members: order },
+      actor,
+    });
   }
 
   // ---------- reads ----------
@@ -624,7 +669,7 @@ export class MilestoneStore {
       throw new StapleError("validation", "update requires targetDate or startDate (null clears one).");
     }
     const milestone = this.requireMilestone(ref);
-    return tx(this.db, () => {
+    return this.journaled(() => {
       const meta = this.meta(milestone.id);
       const previous = { targetDate: meta?.target_date ?? null, startDate: meta?.start_date ?? null };
       const next = {
@@ -648,6 +693,13 @@ export class MilestoneStore {
         .prepare("UPDATE milestone_meta SET target_date = ?, start_date = ?, updated_at = ? WHERE issue_id = ?")
         .run(next.targetDate, next.startDate, now, milestone.id);
       this.emit("milestone_updated", milestone.id, actor, { ...next, previous });
+      this.journal.record({
+        entity: "milestone",
+        entityId: milestone.id,
+        verb: "update",
+        payload: { targetDate: next.targetDate, startDate: next.startDate },
+        actor: actor ?? null,
+      });
       return this.view(milestone.id);
     });
   }
@@ -666,7 +718,7 @@ export class MilestoneStore {
     this.assertKindConfigured();
     const milestone = this.requireMilestone(milestoneRef);
     const member = this.requireIssue(ref);
-    return tx(this.db, () => {
+    return this.journaled(() => {
       const current = this.membershipOf(member.id);
       const currentMilestone =
         current === undefined
@@ -693,6 +745,9 @@ export class MilestoneStore {
         revision,
       });
       this.emit("milestone_joined", member.id, actor, { milestone: milestone.identifier, revision });
+      // Declared only on the write path: the idempotent replay above returns
+      // before reaching here, so a repeated add mints no second operation.
+      this.recordMembership(milestone.id, actor ?? null);
       return { ...this.view(milestone.id), replayed: false };
     });
   }
@@ -715,6 +770,7 @@ export class MilestoneStore {
     });
     const revision = this.bumpRevision(milestone.id, nowIso());
     const toPosition = this.positionOf(milestone.id, member.id);
+    this.recordMembership(milestone.id, actor ?? null);
     this.emit("milestone_member_moved", milestone.id, actor, {
       identifier: member.identifier,
       fromPosition,
@@ -734,7 +790,7 @@ export class MilestoneStore {
     this.assertKindConfigured();
     const milestone = this.requireMilestone(milestoneRef);
     const member = this.requireIssue(ref);
-    return tx(this.db, () => {
+    return this.journaled(() => {
       const current = this.membershipOf(member.id);
       if (current === undefined || current.milestone_id !== milestone.id) {
         throw new StapleError("not_found", `${member.identifier} is not a member of ${milestone.identifier}.`, {
@@ -748,6 +804,7 @@ export class MilestoneStore {
       const revision = this.bumpRevision(milestone.id, nowIso());
       this.emit("milestone_member_removed", milestone.id, actor, { identifier: member.identifier, position, revision });
       this.emit("milestone_left", member.id, actor, { milestone: milestone.identifier, revision });
+      this.recordMembership(milestone.id, actor ?? null);
       return this.view(milestone.id);
     });
   }
@@ -769,7 +826,7 @@ export class MilestoneStore {
     if (target === null && !hasPosition(options)) {
       throw new StapleError("validation", `mv ${member.identifier} needs one of --before, --after, --at or --to.`);
     }
-    return tx(this.db, () => {
+    return this.journaled(() => {
       const current = this.membershipOf(member.id);
       if (current === undefined) {
         throw new StapleError("not_found", `${member.identifier} is not a member of any milestone.`, {
@@ -810,6 +867,11 @@ export class MilestoneStore {
       });
       this.emit("milestone_left", member.id, actor, { milestone: from.identifier, revision: fromRevision });
       this.emit("milestone_joined", member.id, actor, { milestone: target.identifier, revision });
+      // Two milestones changed, so two operations: the source lost a member and
+      // the destination gained one, and a receiver that saw only the second
+      // would show the member in both places.
+      this.recordMembership(from.id, actor ?? null);
+      this.recordMembership(target.id, actor ?? null);
       return this.view(target.id);
     });
   }
@@ -823,7 +885,7 @@ export class MilestoneStore {
   ): MilestoneView {
     this.assertKindConfigured();
     const milestone = this.requireMilestone(milestoneRef);
-    return tx(this.db, () => {
+    return this.journaled(() => {
       const rows = this.memberRows(milestone.id);
       const given = refs.map((ref) => this.requireIssue(ref));
       const configured = new Set(rows.map((row) => row.issue_id));
@@ -858,6 +920,7 @@ export class MilestoneStore {
         order: given.map((issue) => issue.identifier),
         revision,
       });
+      this.recordMembership(milestone.id, actor ?? null);
       return this.view(milestone.id);
     });
   }
@@ -896,16 +959,31 @@ export class MilestoneStore {
       return { preview: true, milestone: { title, targetDate, startDate }, members, hierarchyChanges: [] };
     }
 
-    // Three writes, validated above so the later ones cannot fail on input.
-    // createIssue owns its own transaction, which is why they are not one.
-    const issue = this.store.createIssue({
-      title,
-      description: input.description ?? null,
-      kind: MILESTONE_KIND,
-      createdBy: actor,
+    /**
+     * Three writes, now ONE transaction.
+     *
+     * They used to be three, and the comment that stood here said why:
+     * "createIssue owns its own transaction, which is why they are not one." So
+     * a crash between them left a milestone issue with no dates and no member —
+     * a milestone in name only, which every read path then had to tolerate. The
+     * reason was `tx`'s non-re-entrancy, and `tx` nests now, so the reason is
+     * gone and the hole closes without restructuring any of the three.
+     *
+     * The composition also journals correctly by construction: the inner calls
+     * join this scope rather than opening their own, so the create, the dates
+     * and the membership are three operations on two entities committed
+     * together, not three transactions a receiver could see a prefix of.
+     */
+    return this.journaled(() => {
+      const issue = this.store.createIssue({
+        title,
+        description: input.description ?? null,
+        kind: MILESTONE_KIND,
+        createdBy: actor,
+      });
+      if (targetDate !== null || startDate !== null) this.update(issue.id, { targetDate, startDate }, actor);
+      if (epic !== null) this.addMember(issue.id, epic.id, {}, actor);
+      return { ...this.view(issue.id), preview: false, hierarchyChanges: [] };
     });
-    if (targetDate !== null || startDate !== null) this.update(issue.id, { targetDate, startDate }, actor);
-    if (epic !== null) this.addMember(issue.id, epic.id, {}, actor);
-    return { ...this.view(issue.id), preview: false, hierarchyChanges: [] };
   }
 }
