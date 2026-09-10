@@ -60,7 +60,9 @@ export function vocabularyRefusal(repository: Vocabulary, request: Vocabulary): 
 }
 
 /**
- * A backup holding BOTH vocabularies. Only a backup captured before migration 0005 can.
+ * A backup holding BOTH vocabularies. Only a repository contaminated before migration 0005
+ * can produce one — captured before 0005, or after it but before the recovery recipe ran,
+ * since a backup folds the whole log.
  * Refused whatever the repository holds, because restoring it would materialise both
  * into one epoch, which is the contamination this rule exists to prevent.
  */

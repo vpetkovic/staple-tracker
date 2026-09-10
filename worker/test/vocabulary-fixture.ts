@@ -50,8 +50,10 @@ export const VOCABULARY_REFUSALS = {
     },
   },
   /**
-   * A restore of a backup that holds BOTH vocabularies. Only a backup captured before
-   * migration 0005 can: after it, no route can put the two into one log. No
+   * A restore of a backup that holds BOTH vocabularies. Only a repository contaminated
+   * before migration 0005 can produce one — a backup folds the whole log, so leftover
+   * contamination shows up even in a backup captured after 0005, until the recovery recipe
+   * runs. After 0005 no route ADDS a second vocabulary to a log. No
    * `repositoryVocabulary`, because the refusal does not depend on it — a mixed backup
    * is refused whatever the repository holds.
    */

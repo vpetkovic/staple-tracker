@@ -693,8 +693,9 @@ async function beginRestore(
  * refusal costs nothing — and asked again at the top of every stage turn, for a restore
  * that began before the rule existed (see `stageRestore`):
  *
- *   - a backup holding BOTH vocabularies is refused whatever the repository holds. Only
- *     a backup captured before migration 0005 can be one.
+ *   - a backup holding BOTH vocabularies is refused whatever the repository holds. Only a
+ *     repository contaminated before migration 0005 can produce one, whether the backup was
+ *     captured before 0005 or after it, before the recovery recipe was run.
  *   - a backup of the other vocabulary is refused.
  *   - an UNCLAIMED repository is claimed for the backup's vocabulary, here, with the same
  *     guarded statement push uses. Claiming at begin rather than at the first stage is

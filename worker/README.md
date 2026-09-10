@@ -191,7 +191,8 @@ thirteen entities. `repos.vocabulary` (migration `0005`, STA-290) records which 
   repository, workspace operations into a hub repository, and a restore of a backup in
   the other vocabulary. The answer is `409 conflict`, not retryable, with
   `repositoryVocabulary` and `requestVocabulary` in the body. A restore of a backup that
-  holds both (only a backup captured before `0005` can) is refused the same way, with
+  holds both (only a repository contaminated before `0005` can produce one — captured
+  before it, or after it but before the recovery recipe below was run) is refused the same way, with
   `requestVocabulary: "mixed"`. Every refusal happens before anything is written; a
   restore refuses before its undo is captured.
 - **`conflict` rather than a new code** because every client already released maps a code
