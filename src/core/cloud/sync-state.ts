@@ -34,13 +34,22 @@
 import type { DatabaseSync } from "node:sqlite";
 import { tx } from "../db.js";
 import { StapleError, nowIso } from "../types.js";
+import type { SnapshotEntity } from "./wire.js";
 
-/** Where a bootstrap got to. Both fields are opaque server strings. */
+/** Where a bootstrap got to. `snapshot` and `tail` are opaque server strings. */
 export interface BootstrapPosition {
   /** The next snapshot page, or null when every page has been applied. */
   readonly snapshot: string | null;
   /** The pull cursor for the tail this snapshot pinned. */
   readonly tail: string;
+  /**
+   * Entities from pages already committed that could not be applied yet, because
+   * something they name is on a later page (`hydrate.ts`). Persisted with the position
+   * rather than held in memory: the page that delivered them is committed and the
+   * position has moved past it, so a process that died holding them only in memory
+   * would resume past entities it never wrote.
+   */
+  readonly parked?: readonly SnapshotEntity[];
 }
 
 export interface SyncState {
@@ -127,7 +136,24 @@ function parseBootstrap(raw: string | null): BootstrapPosition | null {
   if (typeof record.tail !== "string") return null;
   const snapshot = record.snapshot;
   if (snapshot !== null && typeof snapshot !== "string") return null;
-  return { snapshot: snapshot ?? null, tail: record.tail };
+  const parked = record.parked;
+  if (parked === undefined) return { snapshot: snapshot ?? null, tail: record.tail };
+  if (!Array.isArray(parked) || !parked.every(isParkedEntity)) return null;
+  return { snapshot: snapshot ?? null, tail: record.tail, parked: parked as SnapshotEntity[] };
+}
+
+function isParkedEntity(value: unknown): boolean {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const entity = value as Record<string, unknown>;
+  return (
+    typeof entity.entity === "string" &&
+    typeof entity.entityId === "string" &&
+    typeof entity.version === "number" &&
+    typeof entity.lastSeq === "number" &&
+    typeof entity.verb === "string" &&
+    entity.state !== null &&
+    typeof entity.state === "object"
+  );
 }
 
 function encodeBootstrap(position: BootstrapPosition | null): string | null {

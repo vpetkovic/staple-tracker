@@ -196,29 +196,47 @@ describe("a fresh clone hydrates from the same repository manifest", () => {
 
 // ------------------------------------------------------------------- resume
 
+/**
+ * A device that has synchronized before, whose epoch then moves, with a six-issue
+ * repository waiting for it in the new epoch — so its re-bootstrap is paged.
+ *
+ * The paged, resumable bootstrap is the RE-bootstrap. A first sync reads the whole
+ * snapshot before it writes anything (see "a first sync" below), because the seed has
+ * to know everything the repository holds before it decides what to upload.
+ */
+async function deviceOwingAPagedRebootstrap(): Promise<Device> {
+  // Two entities per snapshot page, advertised by the service, so a six-issue
+  // repository genuinely takes several pages to hydrate.
+  server = new FakeSyncServer({ repositoryId: REPO_ID, maxSnapshotPageSize: 2 });
+  const b = device("device-b", "token-b");
+  await b.sync();
+  // A restore to an empty repository, and then a new machine fills the new epoch.
+  server.bumpEpoch();
+  const c = device("device-c", "token-c");
+  for (let n = 0; n < 6; n += 1) c.store.createIssue({ title: `Issue ${n}` });
+  await c.sync();
+  return b;
+}
+
+/** Die after the first snapshot page. */
+function dyingAfterOneSnapshotPage(): typeof fetch {
+  let pages = 0;
+  return async (input, init) => {
+    if (String(input).includes("/snapshot")) {
+      pages += 1;
+      if (pages > 1) throw new Error("the process died here");
+    }
+    return server.fetch(input, init);
+  };
+}
+
 describe("bootstrap and incremental sync resume from bounded opaque cursors", () => {
   it("resumes a bootstrap that was killed between pages", async () => {
-    // Two entities per snapshot page, advertised by the service, so a six-issue
-    // repository genuinely takes several pages to hydrate.
-    server = new FakeSyncServer({ repositoryId: REPO_ID, maxSnapshotPageSize: 2 });
-    const a = device("device-a", "token-a");
-    for (let n = 0; n < 6; n += 1) a.store.createIssue({ title: `Issue ${n}` });
-    await a.sync();
+    const b = await deviceOwingAPagedRebootstrap();
 
-    const b = device("device-b", "token-b");
-
-    // Die after the first snapshot page. The page that committed is durable and
-    // so is the position; the rest of the bootstrap is not.
-    let pages = 0;
-    const dying: typeof fetch = async (input, init) => {
-      if (String(input).includes("/snapshot")) {
-        pages += 1;
-        if (pages > 1) throw new Error("the process died here");
-      }
-      return server.fetch(input, init);
-    };
-
-    await expect(b.sync({ fetchImpl: dying, pullLimit: 2 })).rejects.toThrow();
+    // The page that committed is durable and so is the position; the rest of the
+    // bootstrap is not.
+    await expect(b.sync({ fetchImpl: dyingAfterOneSnapshotPage(), pullLimit: 2 })).rejects.toThrow();
 
     const midway = readSyncState(b.store.db)!;
     expect(midway.bootstrap, "an interrupted bootstrap records where it got to").not.toBeNull();
@@ -229,6 +247,40 @@ describe("bootstrap and incremental sync resume from bounded opaque cursors", ()
     const report = await b.sync();
     expect(report.bootstrap!.resumed).toBe(true);
     expect(titles(b.store)).toEqual(["Issue 0", "Issue 1", "Issue 2", "Issue 3", "Issue 4", "Issue 5"]);
+  });
+
+  it("writes nothing when a FIRST sync dies mid-snapshot, and completes on the next run", async () => {
+    server = new FakeSyncServer({ repositoryId: REPO_ID, maxSnapshotPageSize: 2 });
+    const a = device("device-a", "token-a");
+    for (let n = 0; n < 6; n += 1) a.store.createIssue({ title: `Issue ${n}` });
+    await a.sync();
+
+    const b = device("device-b", "token-b");
+    b.store.createIssue({ title: "B's own, from before it connected" });
+    await expect(b.sync({ fetchImpl: dyingAfterOneSnapshotPage() })).rejects.toThrow();
+
+    /**
+     * Nothing moved: no position, no cursor, no seed, no repository rows. A first
+     * sync reads the snapshot whole before it writes, so a death halfway through
+     * costs a re-read and never leaves a half-joined database.
+     */
+    const midway = readSyncState(b.store.db)!;
+    expect(midway.bootstrap).toBeNull();
+    expect(midway.cursor).toBeNull();
+    expect(titles(b.store)).toEqual(["B's own, from before it connected"]);
+    expect(b.store.db.prepare("SELECT COUNT(*) AS n FROM meta WHERE key = 'sync_seed'").get()).toEqual({ n: 0 });
+
+    const report = await b.sync();
+    expect(report.seed!.uploadedByEntity.issue).toBe(1);
+    expect(titles(b.store)).toEqual([
+      "B's own, from before it connected",
+      "Issue 0",
+      "Issue 1",
+      "Issue 2",
+      "Issue 3",
+      "Issue 4",
+      "Issue 5",
+    ]);
   });
 
   it("resumes an incremental pull that was killed mid-drain", async () => {
@@ -472,21 +524,10 @@ describe("an epoch is a discontinuity, and it is never a silent reset", () => {
    * the fixture's more generous body.
    */
   it("recovers when the epoch moves under an INTERRUPTED bootstrap", async () => {
-    server = new FakeSyncServer({ repositoryId: REPO_ID, maxSnapshotPageSize: 2 });
+    const b = await deviceOwingAPagedRebootstrap();
     const a = device("device-a", "token-a");
-    for (let n = 0; n < 6; n += 1) a.store.createIssue({ title: `Issue ${n}` });
     await a.sync();
-
-    const b = device("device-b", "token-b");
-    let pages = 0;
-    const dying: typeof fetch = async (input, init) => {
-      if (String(input).includes("/snapshot")) {
-        pages += 1;
-        if (pages > 1) throw new Error("the process died here");
-      }
-      return server.fetch(input, init);
-    };
-    await expect(b.sync({ fetchImpl: dying, pullLimit: 2 })).rejects.toThrow();
+    await expect(b.sync({ fetchImpl: dyingAfterOneSnapshotPage(), pullLimit: 2 })).rejects.toThrow();
     expect(readSyncState(b.store.db)!.bootstrap, "B is mid-bootstrap").not.toBeNull();
 
     // Two restores while B is away, so a client that recovers by guessing
@@ -512,7 +553,7 @@ describe("an epoch is a discontinuity, and it is never a silent reset", () => {
 
     const report = await b.sync({ fetchImpl: workerShaped });
 
-    expect(report.epoch, "B adopted the epoch the service actually has").toBe(3);
+    expect(report.epoch, "B adopted the epoch the service actually has").toBe(4);
     expect(report.bootstrap, "the dead bootstrap was abandoned for a fresh one").not.toBeNull();
     expect(report.bootstrap!.resumed, "and it did NOT resume the superseded one").toBe(false);
     expect(readSyncState(b.store.db)!.bootstrap, "nothing stale is left behind").toBeNull();

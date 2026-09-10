@@ -293,6 +293,11 @@ replicates — it is this device's record of its relationship to a shared log.
 | `sync_devices` | `device_id` | `label`, `last_seen_at`, `revoked_at` — a read cache of the server's device list, never authoritative |
 | `sync_state` | single row | `repository_id`, `epoch`, `cursor`, `head_seq`, `last_sync_at`, `bootstrap_cursor`, `client_seq_high_water` |
 
+One piece of sync bookkeeping is deliberately not a table: the record that a
+database has [seeded](#a-workspaces-history-reaches-the-service-when-it-first-synchronizes)
+its repository is a device-local `meta` row, `sync_seed`, because a table would be a
+migration and a migration moves the `schema` every operation carries.
+
 The entity version lives in a side table rather than as a `version` column on
 each synchronized table for one reason: it is sync metadata, not domain state,
 and putting it beside the domain rows would make every existing schema-equivalence
@@ -492,6 +497,12 @@ Re-entrancy is the trap. A seam that opens its own transaction while
 `atomically()` already holds a savepoint will either deadlock or silently split a
 mutation into two operations, and the second is worse because it converges
 wrongly instead of failing loudly.
+
+**The seam is disarmed until the machine has a device id**, which only `connect`
+mints, so a workspace journals nothing until then — and a journal is a record of what
+changed, never of what exists. What a workspace held before it was armed reaches the
+service by [the seed](#a-workspaces-history-reaches-the-service-when-it-first-synchronizes),
+not by the seam.
 
 ## The operation envelope
 
@@ -729,11 +740,51 @@ devices is mostly self-enforcing — a device cannot edit an entity it has never
 seen, so the edit necessarily sorts after the create — but "mostly" is not a
 guarantee to build an apply loop on.
 
+It was not true of one kind of device: one on a build before
+[the seed](#a-workspaces-history-reaches-the-service-when-it-first-synchronizes),
+which edited issues it had never uploaded. Those edits sit in the log with no create
+behind them until some device seeds or heals, and the create then lands at the END
+of the log — arbitrarily many pages later, beyond the end-of-page retry. An operation
+on an entity this database does not hold, carrying none of the fields only a create
+carries (an issue's identifier, a comment's issue, a project's slug, a status's
+category), is therefore a missing referent — it is never inserted with invented
+values. And a page that fails for a missing referent is answered by **one read of the
+snapshot**, applied in one transaction, after which the tail resumes from the cutoff
+that snapshot pinned: a snapshot folds every operation on an entity into one state
+whatever order they arrived in, so an update followed much later by its create folds
+to a complete entity. This is the timeline the device is already on, so nothing is
+forgotten — the ledger, versions and field record stay, and inherited provenance is
+taken at the fold's own numbers rather than lifted as a re-bootstrap into a new epoch
+lifts it. Once per sync; if the snapshot cannot resolve it either, the sync fails,
+naming the referent.
+
 **Bootstrap is a snapshot cutoff plus the ordered tail.** A hydrating device reads
 a materialized snapshot taken at `seq = C`, then pulls from cursor `C` forward.
 Writes concurrent with the snapshot are in the tail, so nothing is missed and
-nothing is applied twice. Both halves resume from bounded cursors after an
-interruption.
+nothing is applied twice. A re-bootstrap — the one an epoch change forces —
+resumes both halves from bounded cursors after an interruption. A database's
+FIRST synchronization reads the snapshot whole before it writes anything, because
+[the seed](#a-workspaces-history-reaches-the-service-when-it-first-synchronizes)
+has to know everything the repository holds before it decides what to upload; a
+death during that read costs a re-read and leaves nothing half-written. The tail
+after it resumes from its cursor like any other.
+
+**A snapshot is paged for resuming, not for applying.** Pages are ordered by entity
+key, `"<entity> <entityId>"`, which is a stable order a cursor can resume from and
+not a dependency order: `comment …` and `documentRevision …` sort before `issue …`,
+a child issue sorts before its parent whenever its UUID does, and `status @order`
+sorts before every status it orders. So a device applies what it holds in
+dependency order — definitions, then issues parents first, then what names an
+issue, then the collections and orders last — and an entity whose referent is on a
+later page is **parked** rather than failed. Parked entities are stored with the
+bootstrap position, in the same transaction as the page that delivered them, so a
+process that dies between pages resumes still holding them. Only when the whole
+snapshot is in hand does a missing referent fail, whole and loudly, exactly as the
+pull loop fails a page. A vocabulary order is parked until then regardless: applied
+before the last status of its class arrives it would silently skip the ids it
+cannot find, and there is no referent check that could catch that. Before this, a
+fresh device could not hydrate a repository with a single comment in it — the
+comment arrived ahead of its issue on every attempt.
 
 **An epoch is a discontinuity.** `epoch` is an integer stamped on the repository
 and embedded in every cursor. A restore that moves remote state backwards
@@ -787,6 +838,163 @@ against a capability that does not exist:
 no `VACUUM INTO` output, in either direction, for sync or for backup. Operations
 only. A SQLite file copied between machines carries page-level state that has
 nothing to do with what the two repositories agree about.
+
+## A workspace's history reaches the service when it first synchronizes
+
+Every workspace that existed before it connected was written while the journal was
+disarmed — no device id on the machine, so
+[no outbox rows and no version rows](#the-journal-seam-and-what-it-owes). The outbox
+is a record of what changed after arming, not of what exists, so without more a
+connected workspace uploaded none of its history: the first sync reported *"Pushed
+nothing"*, a second device hydrated an empty repository, and the first edit to a
+pre-connect issue reached that device as an operation on an entity it had never
+received, which the pull loop deferred for ever. That is every real workspace,
+because every real workspace predates its connection.
+
+So a database **seeds** the repository: it uploads the state it already holds as
+ordinary operations. The code is `src/core/cloud/seed.ts`; the tests are
+`test/cloud-seed.test.ts`, whose pre-connect data is made through the real CLI in a
+home that has never connected.
+
+**When.** At the first `staple cloud sync` after connecting — by a human, or by
+automatic sync a human turned on — and never at `connect`. Connecting is the
+consent to upload this repository's data, but it is not consent to synchronize now:
+[a successful connection leaves sync manual](#three-consents), and a connected
+workspace in manual mode stays exactly as silent as before. The seed runs inside
+`syncRepository`, which is the only path either kind of sync takes, so it follows
+the same consent rules as every other upload and needs none of its own. `connect`
+says, before anything is sent, what the first sync will upload.
+
+**Exactly once per repository per database.** The seed is one local transaction:
+the operations and a record that it happened commit together, so however the
+process dies it has either seeded or not. The record is a device-local `meta` row,
+`sync_seed`, holding the repository id and what was done. Not a column: a column is
+a workspace migration, the migration number is what every operation carries as
+`schema`, and a device receiving a page stamped above its own schema refuses it
+with `schema_ahead` — one bookkeeping column would make every device on an older
+build refuse every operation this build emits. `meta` keys outside `slug`, `prefix`
+and `setting:*` never replicate, so the row never leaves the machine. It names the
+repository because `staple cloud fork-id` mints a new one, and a fork has received
+nothing, so it owes a seed of its own — which is also what finally makes a fork's
+outbox, dropped by `fork-id`, reach the new repository.
+
+**Resumable.** The upload is the ordinary outbox push: acknowledged operations drop
+out, and a batch whose acknowledgement was lost is re-sent with byte-identical ids
+and absorbed as `duplicate`. Deciding the seed takes one read of the snapshot and
+writes nothing, so a death there costs a re-read.
+
+**What travels.** Everything the repository does not already hold, in an order a
+receiver can apply: settings, statuses and their order, kinds and theirs, projects,
+issues parents first, blocker sets, comments, document revisions, milestones, and
+the plan. A built-in status or kind still carrying the label and category it was
+installed with is not sent — every device holds it already, by construction — and
+a vocabulary order is sent only when it differs from the one a receiver would build
+by appending, which is where a receiver puts an entry it has never seen.
+
+**The first device and a device joining a repository that has data are one rule:**
+*upload every local entity the repository does not hold, and take the repository's
+state for everything it does.* On an empty repository that is everything this
+device holds. Entity ids are UUIDs, so two independent histories share no issue,
+comment or project; what they can share is a name, and names are settled like this:
+
+- **The repository's names win, and this device's yield.** The repository's issue
+  is already `STA-5` on every connected device; this device's `STA-5` has never been
+  seen by anybody. So a local issue whose identifier the repository uses is
+  renumbered to the next number above both — and gets a comment saying so, because
+  the old number is already in somebody's commit message and there is no alias
+  table: the comment travels with the issue, `staple show` prints it, and a search
+  for the old identifier finds it. A project slug the repository uses gets a free
+  suffix. An issue retry key (`idempotency_key`) or a live external origin the
+  repository already holds is cleared on the local duplicate. Each of these happens
+  before anything is applied or uploaded, which keeps every `UNIQUE` index on both
+  sides reachable: a collision left for a receiver would be a constraint failure
+  that fails its page for ever. Without the renumbering, the incoming repository
+  issue took the provisional `STA-5+1` and an identifier conflict opened for a
+  disagreement no two devices were having.
+- **What the repository holds, it keeps.** A status, kind or setting of the same
+  name, and anything a copied database shares by id, takes the repository's value.
+  Every local value that replaces is reported by name, before and after, in the sync
+  output and in `sync_seed`; a value this device never chose — a built-in label
+  still at its default — is not a replacement and is not reported.
+- **What this device adds to a repository collection, it keeps.** A local issue in
+  this device's plan is appended to the repository's plan, and the same for a
+  milestone's members and an issue's blocker set. Those are ordinary `replace` and
+  `update` operations against the repository's version of the collection.
+- **The pre-join journal is replaced by the seed.** A workspace can have been armed
+  for part of its life — any other repository connected on the same machine mints
+  the device id every workspace arms with — and its outbox then holds updates to
+  rows whose create was never journaled, allocated before the creates they need. A
+  push sends in allocation order, so that journal cannot be sent as it stands. The
+  seed carries every local entity's current state, which already contains every
+  effect those operations described, so they are dropped, together with the
+  versions and the field record they counted.
+
+The sync reports which case happened, in these words: *"Uploaded N existing items
+(…). The repository was empty, so this workspace's history is now the
+repository's."* or *"This repository already had data (N items); bootstrapped from
+it, and N items of this workspace's were added (…)."*, followed by every
+renumbering, cleared token, merge and replaced value.
+
+**The operations are ordinary operations**, and fit [the envelope](#the-operation-envelope)
+unchanged: each takes a `client_seq` from `client_seq_high_water` and an id derived
+from the repository, the epoch the database is on, the device and that sequence. The
+seed's operations are `create`s, and a create records no provenance, so a seeded
+entity has no `sync_field_writes` rows — the same line the journal and the server's
+fold draw. Its version is **set** to the number of operations the service will hold
+for it, not bumped: conflict detection compares every device's counter for an
+entity, and only works when they count the same operations, so a counter carried
+from a pre-connect journal or a forked repository would leave this device
+permanently ahead of every device that hydrates the entity, and a counter that is
+ahead stops seeing concurrent edits as conflicts. After a seed, disjoint edits on two
+devices converge and an edit to the same field is contested on both, as anywhere
+else.
+
+**Chunked like any push.** Batches are sized from `capabilities().maxBatchSize`, as
+for every push. D1's 100-bound-parameter cap does not reach them: the Worker binds
+one statement per operation and looks duplicates up through one `json_each`
+parameter.
+
+**What cannot go, and says so.** The service refuses a payload over `maxOpBytes`
+(512 KiB) for the whole batch, so one oversized operation would fail the same push
+on every sync and nothing behind it would ever leave. The seed decides instead. A
+document revision is immutable and nothing names it, so an oversized one is left
+behind and named. Anything else is a row other rows depend on; the seed refuses,
+names it, writes nothing, and the fix is to shorten it and sync again. A revision
+whose issue no longer exists (see Known limits) is named and left behind, because no
+device could place it.
+
+**A database that synchronized under a build that did not seed** is healed once, on
+its first sync by a build that does. It has been synchronizing, so an entity it
+holds and the repository does not may be one a restore rolled back — which the
+restore meant, and re-uploading would undo. A heal therefore sends only what is
+provably this device's and provably missing: an entity nothing ever journaled or
+applied, an entity the repository holds only as updates with no create, and an
+entity with unsent operations and no create anywhere in the outbox. A repository
+issue that arrived while a local one sat on its number gets the number back, its open
+identifier conflict closed on the record. A device that stopped on the old build's
+edits — ones naming rows nobody had uploaded — gets past them on its next sync by
+[reading the snapshot](#ordering-cursors-and-epochs), which the heal has made complete.
+
+**A heal sends what is already queued first, under the ids it was queued with, and
+never gives an operation a new id.** Any unacknowledged operation may have landed
+with its acknowledgement lost — a dropped connection, a killed process, automatic
+sync's budget aborting the request — and only its own id comes back `duplicate`; the
+same operation under a new id is applied a second time, at a later `seq`, over
+whatever landed in between. Measured before this rule: A's edit landed with its
+acknowledgement lost, Y set a newer title, A healed, and the log read A, Y, A — so
+every device that hydrated afterwards got A's older title. Sending the queue first
+also means the survey the heal decides from already counts it. The cost is that a
+queued edit can reach the service ahead of the create the heal sends for the entity it
+names; a receiver that meets it there recovers from the snapshot, and out of order is
+recoverable where applied twice is not.
+
+**Two syncs of one database at once seed once.** A manual `staple cloud sync` can
+overlap an automatic one started by an MCP write or the UI, and nothing but the
+database's write lock serializes them. So the seed decides whether it is owed — and
+whether this is a join or a heal — inside its own transaction, under that lock, and
+the second sync to reach it finds the record and does not seed. Before, the second
+seeded again from state the first had replaced: every entity created twice on the
+service, and this device's counters never agreeing with anyone's again.
 
 ## Deletion is a tombstone
 
@@ -1800,7 +2008,11 @@ reasons that are both small and both load-bearing:
   epic and the wrong one for an adapter, because it makes external-tracker sync
   depend on cloud sync being connected, which is precisely the coupling this
   section exists to prevent. Journalling has to become armed by *any* enabled
-  replication consumer, not by this one.
+  replication consumer, not by this one. And arming alone would not be enough: the
+  journal records what changed after arming, never what already existed, which is
+  why cloud sync [seeds](#a-workspaces-history-reaches-the-service-when-it-first-synchronizes)
+  its repository from the database's rows at the first sync. An adapter needs the
+  same first step, reading rows rather than the journal.
 - **The outbox has one consumer.** `sync_outbox.acknowledged_seq` is a single
   column, written only by the cloud push path; `pending()` means "not yet sent to
   the cloud", and `compact()` deletes rows the cloud has acknowledged. A second

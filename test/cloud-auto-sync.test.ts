@@ -73,6 +73,7 @@ function report(): SyncReport {
     headSeq: 0,
     pending: 0,
     conflicts: 0,
+    seed: null,
     at: new Date().toISOString(),
   };
 }

@@ -56,6 +56,7 @@ import {
 } from "./hub-scope.js";
 import { cloudCodeOf } from "./client.js";
 import { readConnection } from "./connection.js";
+import { describeSeed } from "./seed.js";
 import { syncRepository, type SyncReport, type SyncOptions } from "./sync.js";
 
 export interface HubSyncWorkspaceOutcome {
@@ -249,6 +250,7 @@ function message(error: unknown): string {
 /** One clause per workspace, in the words the single-workspace report uses. */
 function describeSyncRow(report: SyncReport): string {
   const parts: string[] = [];
+  if (report.seed) parts.push(describeSeed(report.seed).summary);
   if (report.bootstrap) {
     parts.push(
       `${report.bootstrap.resumed ? "resumed" : "hydrated"} ${report.bootstrap.entities} entities`,

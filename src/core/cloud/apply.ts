@@ -212,6 +212,45 @@ function encode(value: unknown, encoding: Encoding): unknown {
   return value as never;
 }
 
+function decodeColumn(value: unknown, encoding: Encoding): unknown {
+  if (value === null || value === undefined) return null;
+  if (encoding === "bool") return Number(value) !== 0;
+  if (encoding === "json" && typeof value === "string") {
+    try {
+      return JSON.parse(value) as unknown;
+    } catch {
+      return value;
+    }
+  }
+  return value;
+}
+
+/**
+ * A row as the `create` payload that would reproduce it — the inverse of {@link project}.
+ *
+ * Exported for the seed (`seed.ts`), which uploads rows that were written while nothing
+ * was journaling. Built from the same field maps the applier reads, so every column a
+ * receiver can place is carried and no column a receiver would drop is invented; a
+ * payload key the applier had no column for would be a field that silently never
+ * arrived, which is the failure `test/sync-issue-field-coverage.test.ts` exists to
+ * catch for the seam's own creates.
+ *
+ * Keys are the camelCase payload names, never the column aliases, because that is the
+ * spelling `createIssue` journals and the one the fold's provenance is keyed by.
+ */
+export function payloadFromRow(
+  table: "issues" | "comments" | "projects",
+  row: Record<string, unknown>,
+): Record<string, unknown> {
+  const fields = table === "issues" ? ISSUE_FIELDS : table === "comments" ? COMMENT_FIELDS : PROJECT_FIELDS;
+  const payload: Record<string, unknown> = {};
+  for (const [key, mapped] of Object.entries(fields)) {
+    if (!(mapped.column in row)) continue;
+    payload[key] = decodeColumn(row[mapped.column], mapped.encoding);
+  }
+  return payload;
+}
+
 /** Map a payload onto `(column, value)` pairs, dropping fields with no column. */
 function project(
   payload: Record<string, unknown>,
@@ -408,11 +447,14 @@ function insertIssue(db: DatabaseSync, input: ApplyInput, pairs: Array<[string, 
   if (!values.has("created_at")) values.set("created_at", input.at);
   if (!values.has("updated_at")) values.set("updated_at", input.at);
   if (!values.has("identifier")) {
-    throw new StapleError(
-      "validation",
-      `A remote issue.create for ${input.entityId} carries no identifier. Identifiers are ` +
-        `allocated by the originating device and always travel with the create.`,
-    );
+    /**
+     * An operation on an issue this database does not hold, carrying no identifier, is
+     * not a malformed create: it is an update whose create has not arrived — and only a
+     * create carries the identifier. That is a missing referent, and it is reported as
+     * one so the page defers it and a sync can recover (see `sync.ts`). A build before
+     * the seed produced exactly these, by pushing edits to issues it had never uploaded.
+     */
+    throw new ReferentMissing(`the create of issue ${input.entityId}, which no operation so far has carried`);
   }
 
   const identifier = values.get("identifier") as string;
@@ -618,6 +660,11 @@ function applyComment(db: DatabaseSync, input: ApplyInput): boolean {
     if (pairs.length > 0) updateRow(db, "comments", "id", input.entityId, pairs);
     return true;
   }
+  // A comment this database does not hold, and an operation that does not say which issue
+  // it is on: its create has not arrived. See `insertIssue`.
+  if (typeof (issueId ?? input.payload.issue_id) !== "string") {
+    throw new ReferentMissing(`the create of comment ${input.entityId}, which no operation so far has carried`);
+  }
 
   const values = new Map(pairs);
   values.set("id", input.entityId);
@@ -658,6 +705,16 @@ function applyDocumentRevision(db: DatabaseSync, input: ApplyInput): boolean {
     throw new ReferentMissing(`issue ${issueId} (owner of document ${key})`);
   }
 
+  /**
+   * `author` and `createdAt` are read from the payload when it carries them, and from the
+   * operation otherwise. The operation's actor and time are right for a revision arriving
+   * in the ordered tail, and wrong for one arriving in a snapshot, which has neither: a
+   * snapshot entity is applied with a null actor at the moment of hydration, so every
+   * revision of every document read as written by nobody, just now. A revision is
+   * immutable, so the values it was written with are the only true ones.
+   */
+  const author = typeof payload.author === "string" ? payload.author : input.actor;
+  const createdAt = typeof payload.createdAt === "string" ? payload.createdAt : input.at;
   db.prepare(
     `INSERT INTO document_revisions (issue_id, key, revision, body, author, change_summary, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -667,9 +724,9 @@ function applyDocumentRevision(db: DatabaseSync, input: ApplyInput): boolean {
     key,
     revision,
     typeof payload.body === "string" ? payload.body : "",
-    input.actor,
+    author,
     typeof payload.changeSummary === "string" ? payload.changeSummary : null,
-    input.at,
+    createdAt,
   );
 
   /**
@@ -684,7 +741,7 @@ function applyDocumentRevision(db: DatabaseSync, input: ApplyInput): boolean {
        current_revision = MAX(current_revision, excluded.current_revision),
        title            = COALESCE(excluded.title, title),
        updated_at       = excluded.updated_at`,
-  ).run(issueId, key, revision, typeof payload.title === "string" ? payload.title : null, input.at);
+  ).run(issueId, key, revision, typeof payload.title === "string" ? payload.title : null, createdAt);
   return true;
 }
 
@@ -797,10 +854,17 @@ function applyProject(db: DatabaseSync, input: ApplyInput): boolean {
     if (pairs.length > 0) updateRow(db, "projects", "id", input.entityId, pairs);
     return true;
   }
+  /**
+   * A project this database does not hold, and no slug: its create has not arrived. It
+   * used to be inserted anyway with its UUID for a slug — a row that looked real, named
+   * nobody, and never matched the device that made it. See `insertIssue`.
+   */
+  if (typeof payload.slug !== "string") {
+    throw new ReferentMissing(`the create of project ${input.entityId}, which no operation so far has carried`);
+  }
 
   const values = new Map(pairs);
   values.set("id", input.entityId);
-  if (!values.has("slug")) values.set("slug", input.entityId);
   if (!values.has("name")) values.set("name", values.get("slug"));
   if (!values.has("created_at")) values.set("created_at", input.at);
   if (!values.has("updated_at")) values.set("updated_at", input.at);
@@ -863,6 +927,15 @@ function applyVocabulary(
     | undefined;
 
   if (!exists) {
+    /**
+     * A status is its category — every guard in the store keys off it — and only its
+     * create carries one. A status this database does not hold, arriving without one, is
+     * an update whose create has not arrived; it used to be inserted under a category
+     * that does not exist. See `insertIssue`.
+     */
+    if (table === "workspace_statuses" && typeof category !== "string") {
+      throw new ReferentMissing(`the create of status ${input.entityId}, which no operation so far has carried`);
+    }
     const next = db.prepare(`SELECT COALESCE(MAX(sort_order), 0) + 1000 AS n FROM ${table}`).get() as {
       n: number;
     };

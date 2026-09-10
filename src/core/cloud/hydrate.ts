@@ -1,0 +1,235 @@
+/**
+ * Applying a snapshot's entities in an order a database can take them.
+ *
+ * Contract: `docs/sync.md`, "Bootstrap is a snapshot cutoff plus the ordered tail".
+ *
+ * ## The snapshot is ordered for paging, not for applying
+ *
+ * `GET /snapshot` pages entities by their key, `"<entity> <entityId>"`, because that is
+ * a stable order a cursor can resume from. It is not a dependency order: `comment …`
+ * and `documentRevision …` sort before `issue …`, a child issue sorts before its parent
+ * whenever its UUID does, and `status @order` sorts before every status it orders. A
+ * device hydrating a repository with a single comment in it therefore met the comment
+ * before its issue, the applier refused it as `ReferentMissing`, and the bootstrap
+ * failed on every attempt, with nothing to say why beyond a referent name.
+ *
+ * Asking the service for a different order would change what a snapshot cursor
+ * means on a Worker every client depends on, and it still would not help: a
+ * dependency can sit on a later PAGE than its dependent. So the order is repaired
+ * where the rows are written:
+ *
+ *   - within what is in hand, entities are applied dependencies first
+ *     ({@link orderForHydration});
+ *   - an entity whose referent has not arrived is PARKED rather than failed, and is
+ *     retried as later entities land ({@link hydrate});
+ *   - only when the whole snapshot is in hand does a still-missing referent fail, and
+ *     it fails loudly, naming it — the same rule the pull loop applies to one page.
+ */
+import type { DatabaseSync } from "node:sqlite";
+import { recordInheritedFieldWrites, type Journal } from "../journal.js";
+import { StapleError } from "../types.js";
+import { ReferentMissing, applyToDatabase, localEntityVersion, setEntityVersion, snapshotToInput } from "./apply.js";
+import type { SnapshotEntity } from "./wire.js";
+
+/** The sentinel entity the vocabulary order travels on. Mirrors `store.ts` and `apply.ts`. */
+export const VOCABULARY_ORDER_ID = "@order";
+
+/**
+ * The synthetic ledger id a snapshot entity is applied under.
+ *
+ * Derived from the entity key and the cutoff, so re-applying a re-fetched page is a
+ * ledger hit rather than a second write. It is not an operation id the server ever
+ * issued, and it is never sent anywhere.
+ */
+export function snapshotOpId(cutoffSeq: number, entity: { entity: string; entityId: string }): string {
+  return `snap:${cutoffSeq}:${entity.entity} ${entity.entityId}`;
+}
+
+/**
+ * Where an entity sits in dependency order. Lower applies first.
+ *
+ * 0  nothing else in a workspace is a precondition for it
+ * 1  issues, which everything below may name
+ * 2  entities that name an issue
+ * 3  entities that name a SET of other entities and are wrong if applied early:
+ *    the plan, and a vocabulary order, whose ids an early apply silently skips
+ */
+export function hydrationRank(entity: { entity: string; entityId: string }): number {
+  switch (entity.entity) {
+    case "setting":
+    case "project":
+      return 0;
+    case "status":
+    case "kind":
+      return entity.entityId === VOCABULARY_ORDER_ID ? 3 : 0;
+    case "issue":
+      return 1;
+    case "queue":
+      return 3;
+    default:
+      return 2;
+  }
+}
+
+/** Dependencies first, and parents before children among the issues. */
+export function orderForHydration(entities: readonly SnapshotEntity[]): SnapshotEntity[] {
+  const byRank = [...entities].sort((a, b) => hydrationRank(a) - hydrationRank(b));
+  const issues = byRank.filter((entity) => entity.entity === "issue");
+  if (issues.length < 2) return byRank;
+
+  const byId = new Map(issues.map((issue) => [issue.entityId, issue]));
+  const ordered: SnapshotEntity[] = [];
+  const placed = new Set<string>();
+  const visiting = new Set<string>();
+  const place = (issue: SnapshotEntity): void => {
+    if (placed.has(issue.entityId) || visiting.has(issue.entityId)) return;
+    visiting.add(issue.entityId);
+    const parentId = issue.state.parentId ?? issue.state.parent_id;
+    const parent = typeof parentId === "string" ? byId.get(parentId) : undefined;
+    if (parent) place(parent);
+    visiting.delete(issue.entityId);
+    placed.add(issue.entityId);
+    ordered.push(issue);
+  };
+  for (const issue of issues) place(issue);
+
+  const firstIssue = byRank.findIndex((entity) => entity.entity === "issue");
+  const rest = byRank.filter((entity) => entity.entity !== "issue");
+  return [...rest.slice(0, firstIssue), ...ordered, ...rest.slice(firstIssue)];
+}
+
+/**
+ * Apply ONE snapshot entity: its state, its version, and the provenance it carries.
+ *
+ * Throws {@link ReferentMissing} when something it names has not arrived; the
+ * `applyRemote` savepoint has already rolled back the ledger row and anything written,
+ * so the caller can retry it later as though it had never been tried.
+ */
+export function applySnapshotEntity(
+  db: DatabaseSync,
+  journal: Journal,
+  entity: SnapshotEntity,
+  cutoffSeq: number,
+  at: string,
+  sameTimeline = false,
+): void {
+  const input = snapshotToInput(entity, at);
+  /**
+   * Through `applyRemote` so the write is echo-suppressed: a hydrating device must not
+   * journal an outbound copy of every row it was handed, which would push the entire
+   * repository straight back at the server.
+   */
+  journal.applyRemote({ opId: snapshotOpId(cutoffSeq, entity), seq: entity.lastSeq }, () => {
+    /**
+     * Read BEFORE `setEntityVersion`, and used below. On a first bootstrap this is 0; on
+     * a re-bootstrap it is the counter this device carried across the epoch change,
+     * which `beginBootstrap` deliberately does not rewind. `recordInheritedFieldWrites`
+     * needs the one from before, because the one from after is the snapshot's own number.
+     */
+    /**
+     * Except when this device is re-reading the timeline it is already on (`sameTimeline`,
+     * the recovery in `sync.ts`). Then its counter and the fold's count the same
+     * operations, and lifting every inherited write to the counter would claim each field
+     * was written just now — contesting the next remote edit of a field nobody has touched
+     * in weeks. The fold's own numbers are already on this device's scale; the upsert
+     * keeps whichever claim is newer.
+     */
+    const priorVersion = sameTimeline ? 0 : localEntityVersion(db, entity.entity, entity.entityId);
+    applyToDatabase(db, input);
+    setEntityVersion(db, entity.entity, entity.entityId, entity.version);
+    /**
+     * And the provenance for the values just inherited (STA-263). `fieldWrites` names only
+     * the fields a non-`create` operation carried, so the defaults that rode along inside
+     * a create acquire no claim. An older Worker sends nothing here and the device is left
+     * exactly as blind as it was before, which is the only safe degradation.
+     */
+    recordInheritedFieldWrites(
+      db,
+      entity.entity,
+      entity.entityId,
+      Object.entries(entity.fieldWrites ?? {}).map(([field, write]) => ({
+        field,
+        baseVersion: write.baseVersion,
+        opId: write.opId,
+        at: write.at,
+      })),
+      priorVersion,
+    );
+  });
+}
+
+export interface HydrateOutcome {
+  /** Entities written by this call, including parked ones that finally landed. */
+  readonly applied: number;
+  /** Entities still waiting for a referent. Empty whenever `final` was set. */
+  readonly parked: SnapshotEntity[];
+}
+
+/**
+ * Apply what is in hand, park what cannot land yet, and retry until nothing moves.
+ *
+ * MUST run inside the caller's transaction. `parked` carries entities an earlier page
+ * could not place; they are tried again here, after this page's entities, because a
+ * later page is exactly where their referents come from.
+ *
+ * A vocabulary order is parked until `final` regardless of whether it would apply: it
+ * names every status of its class, and one applied before the last of them has arrived
+ * silently skips the ids it cannot find — the order is then wrong with nothing to say
+ * so. There is no referent check that could catch that, which is why it is a rule.
+ *
+ * With `final` set, anything still parked is a snapshot that cannot be applied
+ * coherently, and it fails whole: *"a partial page is worse than none"* is as true of a
+ * snapshot as of a page.
+ */
+export function hydrate(
+  db: DatabaseSync,
+  journal: Journal,
+  entities: readonly SnapshotEntity[],
+  parked: readonly SnapshotEntity[],
+  cutoffSeq: number,
+  at: string,
+  final: boolean,
+  sameTimeline = false,
+): HydrateOutcome {
+  let applied = 0;
+  let pending = orderForHydration([...entities, ...parked]);
+  let missing: ReferentMissing | null = null;
+
+  for (;;) {
+    const next: SnapshotEntity[] = [];
+    let progressed = false;
+    for (const entity of pending) {
+      if (!final && isVocabularyOrder(entity)) {
+        next.push(entity);
+        continue;
+      }
+      try {
+        applySnapshotEntity(db, journal, entity, cutoffSeq, at, sameTimeline);
+        applied += 1;
+        progressed = true;
+      } catch (error) {
+        if (!(error instanceof ReferentMissing)) throw error;
+        missing = error;
+        next.push(entity);
+      }
+    }
+    pending = next;
+    if (!progressed || pending.length === 0) break;
+  }
+
+  if (final && pending.length > 0) {
+    const first = pending[0]!;
+    throw new StapleError(
+      "validation",
+      `The snapshot's ${first.entity} ${first.entityId} names something the snapshot never ` +
+        `delivered${missing ? `: ${missing.what}` : ""}. Nothing from this snapshot page was ` +
+        `applied and the position did not move, so the next sync retries it.`,
+      { cloudCode: "validation", retryable: false, parked: pending.length },
+    );
+  }
+  return { applied, parked: pending };
+}
+
+function isVocabularyOrder(entity: SnapshotEntity): boolean {
+  return (entity.entity === "status" || entity.entity === "kind") && entity.entityId === VOCABULARY_ORDER_ID;
+}
