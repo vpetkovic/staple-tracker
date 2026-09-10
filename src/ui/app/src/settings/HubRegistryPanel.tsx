@@ -716,7 +716,6 @@ export function HubRegistryPanel(props: HubRegistryPanelProps) {
                         locked={locked}
                         blocked={blocks.restore}
                         onPress={() => actions.onAskRestore(backup)}
-                        variant="ghost"
                       />
                     )}
                   </div>
@@ -765,7 +764,9 @@ export function HubRegistryPanel(props: HubRegistryPanelProps) {
                 </p>
               ) : null}
               <p className="text-[11px] leading-relaxed text-muted-foreground">
-                This machine&apos;s hub is unchanged until you apply the adoption below.
+                {state.adoption !== null && applyLabel(state.adoption.report) !== null
+                  ? "This machine's hub is unchanged until you apply the adoption below. No workspace is removed from it either way."
+                  : "No workspace is removed from this machine's list by a restore."}
               </p>
             </div>
           ) : null}
@@ -973,6 +974,7 @@ export function useHubRegistry(onReport: (report: HubCloudReport) => void): {
         const answer = await restoreHubRegistry(backup);
         report(answer);
         patch({
+          publish: null,
           restoring: null,
           restored: answer.restore,
           backups: answer.backups,
@@ -992,7 +994,7 @@ export function useHubRegistry(onReport: (report: HubCloudReport) => void): {
       void run("apply", async () => {
         const answer = await adoptHubRegistry(adoption.digest);
         report(answer);
-        patch({ adoption: null, applied: answer.adoption });
+        patch({ adoption: null, applied: answer.adoption, publish: null });
       });
     },
     onDismissAdoption: () => patch({ adoption: null }),

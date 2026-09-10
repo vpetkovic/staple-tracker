@@ -542,6 +542,17 @@ describe("backups and restore", () => {
     expect(undoRow.slice(0, undoRow.indexOf("</li>"))).toContain(">undo<");
     // And the adoption of what came back is waiting on its own apply.
     expect(html).toContain("data-hub-registry-apply");
+    expect(html).toContain("unchanged until you apply the adoption below");
+    // With nothing to apply, the line does not point at a button that is not there.
+    const nothing = adoption({ decisions: [], crossLinks: { ...adoption().crossLinks, added: 0, removed: 0 } });
+    const quiet = render(EVERYTHING_ON, {
+      backups: [UNDO, BACKUP],
+      restored: { ...restored, adoption: nothing },
+      adoption: { report: nothing, digest: "d" },
+    });
+    expect(quiet).not.toContain("data-hub-registry-apply");
+    expect(quiet).not.toContain("until you apply");
+    expect(quiet).toContain("No workspace is removed from this machine&#x27;s list by a restore.");
   });
 });
 
