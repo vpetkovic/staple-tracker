@@ -55,7 +55,7 @@
  * page somebody opened to READ their cloud state would be a false alarm on the
  * common path to prevent a small loss on the rare one.
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -482,6 +482,37 @@ function HubStats({ facts }: { facts: readonly CloudFact[] }) {
 }
 
 /**
+ * The collapsed connect form.
+ *
+ * Opens itself when it mounts holding a draft. It remounts every time the
+ * consent screen is cancelled, and the usual reason to cancel is a wrong
+ * endpoint shown back on that screen — so landing on a closed box, with the
+ * draft invisible inside it, would add a step to exactly the correction path.
+ *
+ * The open state is owned here from then on rather than derived from the draft
+ * on every render: deriving it would snap the form shut the moment somebody
+ * cleared the endpoint to retype it.
+ *
+ * The summary keeps the native disclosure triangle — no `flex` on it, which
+ * would replace `display: list-item` and remove the marker. On a phone there is
+ * no hover and no pointer cursor, so the triangle is the only sign this opens.
+ */
+function ConnectDisclosure({ hasDraft, children }: { hasDraft: boolean; children: ReactNode }) {
+  const [open, setOpen] = useState(hasDraft);
+  return (
+    <details
+      data-cloud-setup-form
+      className="rounded-md border px-3 py-2"
+      open={open}
+      onToggle={(event) => setOpen(event.currentTarget.open)}
+    >
+      <summary className="cursor-pointer py-1.5 text-[13px] font-medium">Enter connection details</summary>
+      {children}
+    </details>
+  );
+}
+
+/**
  * The whole surface, as a pure function of a report.
  *
  * Every branch below reads a VALUE — `mode`, `auto`, `backup`, `credentialPresent`
@@ -558,18 +589,17 @@ export function CloudPanel(props: CloudPanelProps) {
           {pending === null ? (
             /*
               Collapsed until asked for. Four fields and a paragraph each were
-              656px of a phone screen for a decision made once per repository —
-              and this workspace's row in the list above already offers Connect.
+              656px of a phone screen for a decision made once per repository.
+              Where there are two or more workspaces, this one's row in the list
+              above also offers Connect; with fewer there is no list, and this is
+              the only way in — which is why the summary keeps its triangle.
 
               A native `<details>` rather than a button that mounts the form:
               the fields stay in the document, so a reader who opens it finds
               exactly the form that was always there, and a half-typed draft is
               not thrown away by closing it.
             */
-            <details data-cloud-setup-form className="rounded-md border px-3 py-2">
-              <summary className="flex min-h-8 cursor-pointer items-center text-[13px] font-medium">
-                Enter connection details
-              </summary>
+            <ConnectDisclosure hasDraft={draft.endpoint !== "" || draft.enrollment !== ""}>
               <div className="mt-3 space-y-3">
                 <ConnectFields
                   idPrefix="cloud"
@@ -592,7 +622,7 @@ export function CloudPanel(props: CloudPanelProps) {
                   </span>
                 </div>
               </div>
-            </details>
+            </ConnectDisclosure>
           ) : (
             /*
               THE CONSENT SCREEN. Everything the CLI prints before it asks, as
@@ -1518,8 +1548,13 @@ function HubWorkspaceList({
               {debris.shared.map((group) => (
                 <li key={group.reason} className="text-[11px] leading-relaxed text-muted-foreground">
                   <span className="font-medium">{joinLabels(group.labels)}</span>
-                  {group.labels.length > 1 ? " are unavailable " : " is unavailable "}
-                  {groups.unreachable.length > 1 ? "for these: " : "for it: "}
+                  {group.labels.length > 1 ? " are unavailable" : " is unavailable"}
+                  {/*
+                    The reasons are per-row sentences written about one workspace
+                    ("It is not connected…"), so the lead-in is distributive —
+                    "on each" — rather than a plural that would disagree with them.
+                  */}
+                  {groups.unreachable.length > 1 ? " on each: " : ": "}
                   {group.reason}
                 </li>
               ))}
@@ -1534,6 +1569,14 @@ function HubWorkspaceList({
   );
 }
 
+/** The badge dot per connection state, from the app's own status palette. */
+const STATE_DOT: Record<HubWorkspaceReport["state"], string> = {
+  automatic: "var(--status-task-done)",
+  manual: "var(--status-task-done)",
+  auth_failed: "var(--status-task-blocked)",
+  disconnected: "var(--status-task-backlog)",
+};
+
 /**
  * One row: a line, its controls, its outcome, and its rationale behind a
  * disclosure.
@@ -1544,14 +1587,6 @@ function HubWorkspaceList({
  * fourth, behind a `<details>` that is closed. Every one of those sentences used
  * to be in position one.
  */
-/** The badge dot per connection state, from the app's own status palette. */
-const STATE_DOT: Record<HubWorkspaceReport["state"], string> = {
-  automatic: "var(--status-task-done)",
-  manual: "var(--status-task-done)",
-  auth_failed: "var(--status-task-blocked)",
-  disconnected: "var(--status-task-backlog)",
-};
-
 function HubRow({
   row,
   view,
@@ -1816,12 +1851,18 @@ function HubRow({
 /**
  * One control on one row.
  *
- * **A disabled control renders, with its reason.** *"Actions are disabled with a
- * stated reason rather than hidden"* — the alternative teaches a reader nothing,
- * and worse, makes an unavailable capability indistinguishable from one the
- * product does not have. `title` carries the reason for a pointer and the
- * sentence is also rendered, because a tooltip is not an explanation on a page
- * somebody is reading to understand the model.
+ * **On a reachable row, a disabled control renders, with its reason.** *"Actions
+ * are disabled with a stated reason rather than hidden"* — the alternative
+ * teaches a reader nothing, and worse, makes an unavailable capability
+ * indistinguishable from one the product does not have. `title` carries the
+ * reason for a pointer and the sentence is also rendered, because a tooltip is
+ * not an explanation on a page somebody is reading to understand the model.
+ *
+ * The one narrowing, agreed with VP: in the "not on this machine" group, a
+ * control whose reason EVERY row shares is not drawn per row, and the group
+ * header states that reason once, naming the controls. The capability is still
+ * named and still explained, so it stays distinguishable from one that does not
+ * exist — see `groupSharedReasons`. A reachable row never goes through this.
  *
  * The two consents are switches and the four verbs are buttons, and that
  * difference is not cosmetic: `auto` and `backup` have a VALUE that persists, and
@@ -1852,7 +1893,7 @@ function HubControl({
         // 24px WCAG 2.5.8 minimum and far under what a phone needs. The negative
         // margin cancels the padding, so the checkbox still lines up with the
         // buttons beside and above it — the target grows, the layout does not.
-        className={`-mx-1.5 flex min-h-8 min-w-8 items-center gap-1.5 rounded-md px-1.5 text-[12px] ${disabled ? "" : "cursor-pointer hover:bg-accent"}`}
+        className={`-mx-1.5 flex min-h-8 min-w-8 items-center gap-1.5 rounded-md px-1.5 text-[12px] ${disabled || locked ? "" : "cursor-pointer hover:bg-accent"}`}
         title={control.disabledReason ?? control.effect}
       >
         <input
@@ -1922,6 +1963,16 @@ export function CloudSection({ ws }: { ws?: string }) {
   const [revoking, setRevoking] = useState<string | null>(null);
   const [confirmDisconnect, setConfirmDisconnect] = useState(false);
   const [workspaces, setWorkspaces] = useState<HubCloudReport | null>(null);
+  /**
+   * Whether the list read has come back, either way. `workspaces` alone cannot
+   * say: a failed read is swallowed to `null`, which is also its value while
+   * loading. The panel waits for both reads before its first paint, because the
+   * hub and the list now render ABOVE this workspace's sections — painting as
+   * soon as the status arrived would drop them in on top of content already on
+   * screen. Both reads are local, so the wait is short; a failed list still
+   * settles, so losing it never takes away the connect form.
+   */
+  const [workspacesSettled, setWorkspacesSettled] = useState(false);
 
   /**
    * The per-row half — S17/S19/S21. One state object, all of it keyed by slug.
@@ -2010,6 +2061,9 @@ export function CloudSection({ ws }: { ws?: string }) {
       .catch(() => {
         // Deliberately silent. The list is additive; the panel is not about it.
         if (live) setWorkspaces(null);
+      })
+      .finally(() => {
+        if (live) setWorkspacesSettled(true);
       });
     return () => {
       live = false;
@@ -2529,7 +2583,7 @@ export function CloudSection({ ws }: { ws?: string }) {
       </Section>
     );
   }
-  if (report === null) return <LoadingState rows={3} />;
+  if (report === null || !workspacesSettled) return <LoadingState rows={3} />;
 
   return (
     <CloudPanel

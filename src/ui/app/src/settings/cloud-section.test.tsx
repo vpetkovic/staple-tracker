@@ -1255,7 +1255,9 @@ describe("the hub states itself above the list (S18/STA-279)", () => {
       html.indexOf("data-cloud-hub-self"),
       html.indexOf("data-cloud-workspaces="),
     );
-    expect(self).toContain("2");
+    // The count as a VALUE in its tile, not the character "2" — which class
+    // names like `grid-cols-2` would satisfy on their own.
+    expect(self).toMatch(/<dd[^>]*>2<\/dd>/);
     // The hub panel carries no connection state at all — that belongs to rows,
     // and putting it here is the conflation the ticket exists to end.
     expect(self).not.toContain("Not connected");
@@ -2002,6 +2004,26 @@ describe("the page leads with the hub and stays short", () => {
     expect(html.indexOf('id="cloud-endpoint"')).toBeGreaterThan(details);
   });
 
+  it("keeps the summary's disclosure triangle", () => {
+    // A \`flex\` summary replaces \`display: list-item\`, which is what draws the
+    // marker. On a phone there is no hover and no pointer cursor, so the triangle
+    // is the only sign the box opens — and with one workspace it is the only way
+    // to connect at all.
+    const html = panel();
+    const summary = html.slice(html.indexOf("<summary", html.indexOf("data-cloud-setup-form")));
+    const classes = summary.slice(summary.indexOf('class="') + 7, summary.indexOf('"', summary.indexOf('class="') + 7));
+    expect(classes.split(/\s+/)).not.toContain("flex");
+  });
+
+  it("opens the connect form by itself when it comes back holding a draft", () => {
+    // Cancelling the consent screen remounts the form, and the usual reason to
+    // cancel is a wrong endpoint. Landing on a closed box would hide the draft.
+    const closed = panel();
+    expect(closed).not.toMatch(/<details data-cloud-setup-form="true"[^>]*\bopen\b/);
+    const withDraft = panel({ draft: { endpoint: "https://sync.example", enrollment: "", label: "", credentialFile: false } });
+    expect(withDraft).toMatch(/<details[^>]*data-cloud-setup-form="true"[^>]*\bopen\b|<details[^>]*\bopen\b[^>]*data-cloud-setup-form="true"/);
+  });
+
   it("never collapses the consent screen", () => {
     // What is being agreed to has to be read, so it is not behind a triangle.
     const html = panel({ pending: { preview: PREVIEW, consent: { id: "c", digest: "d", expiresAt: "x" } } });
@@ -2022,6 +2044,16 @@ describe("the page leads with the hub and stays short", () => {
 
 describe("the not-on-this-machine group states what its rows share once", () => {
   const MISSING = ["autotrigger", "legacyrepo", "qdemo", "r6b"];
+
+  /** The escaping `renderToStaticMarkup` applies, so a sentence can be found in its output. */
+  function escapeHtml(text: string): string {
+    return text
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#x27;");
+  }
 
   /** A workspace whose files are gone but whose credential is still here. */
   function missingButConnected(slug: string): HubWorkspaceReport {
@@ -2067,12 +2099,64 @@ describe("the not-on-this-machine group states what its rows share once", () => 
       controls.filter((control) => control.disabledReason !== null).map((control) => control.label),
     );
 
-    // Rendered: the lone row keeps its Remove, and the group says "for it".
+    // Rendered: the lone row keeps its Remove, and with one row there is no
+    // "on each" — the reason follows the colon directly, as it would on a row.
     const html = panel({ workspaces: hubReport([hubRow(), missingRow("alone")]) });
     expect(html).toContain('data-cloud-workspace-action="alone:remove"');
     expect(html).not.toContain('data-cloud-workspace-action="alone:sync"');
-    expect(html).toContain("for it: ");
-    expect(html).not.toContain("for these: ");
+    // Comments stripped: whether React separates adjacent text nodes with
+    // `<!-- -->` is its business, and the assertion is about the words.
+    const header = html
+      .slice(html.indexOf("data-cloud-workspaces-unreachable-unavailable"))
+      .replace(/<!--.*?-->/g, "");
+    expect(header).toContain(" is unavailable: Its database is not on this machine");
+    expect(html).not.toContain(" on each: ");
+  });
+
+  it("lifts what a mixed group shares, and leaves each row what is its own", () => {
+    /**
+     * Two workspaces gone from this machine but still connected, to different
+     * services. Sync ("its database is not on this machine") and Remove
+     * ("disconnect it first") are the SAME on both, so they lift. Connect says
+     * which service each is already connected to, so it differs — and stays on
+     * its own row. This is the case where lifted and row-specific reasons have
+     * to coexist, which a uniform group cannot exercise.
+     */
+    const connected = (slug: string, endpoint: string): HubWorkspaceReport => ({
+      ...missingRow(slug),
+      repositoryId: `${slug}-id`,
+      state: "manual",
+      mode: "manual",
+      endpoint,
+    });
+    const rows = [connected("one", "https://one.example"), connected("two", "https://two.example")];
+    const { shared } = groupSharedReasons(rows.map((row) => hubRowControls(row)));
+    expect(shared.flatMap((group) => group.labels).sort()).toEqual(["Remove from list", "Sync now"]);
+
+    const html = panel({ workspaces: hubReport([hubRow(), ...rows]) });
+    const headerStart = html.indexOf("data-cloud-workspaces-unreachable-unavailable");
+    const header = html
+      .slice(headerStart, html.indexOf("</ul>", headerStart))
+      .replace(/<!--.*?-->/g, "");
+    expect(header).toContain(" on each: ");
+    expect(header).not.toContain("one.example");
+
+    const rowOf = (slug: string, next: string) =>
+      html.slice(html.indexOf(`data-cloud-workspace="${slug}"`), html.indexOf(next));
+    const one = rowOf("one", 'data-cloud-workspace="two"');
+    const two = rowOf("two", "This workspace ·");
+    // Each row keeps its own Connect reason, and only its own.
+    expect(one).toContain("Already connected to https://one.example");
+    expect(one).not.toContain("two.example");
+    expect(two).toContain("Already connected to https://two.example");
+    // Its live controls are drawn; the lifted ones are not.
+    for (const [slug, row] of [["one", one], ["two", two]] as const) {
+      expect(row).toContain(`data-cloud-workspace-action="${slug}:disconnect"`);
+      expect(row).toContain(`data-cloud-workspace-toggle="${slug}:auto"`);
+      expect(row).toContain(`data-cloud-workspace-action="${slug}:connect"`);
+      expect(row).not.toContain(`data-cloud-workspace-action="${slug}:sync"`);
+      expect(row).not.toContain(`data-cloud-workspace-action="${slug}:remove"`);
+    }
   });
 
   it("states the shared reasons once, and draws only the controls that still work", () => {
@@ -2086,6 +2170,26 @@ describe("the not-on-this-machine group states what its rows share once", () => 
 
     // Once for the group, not once per row.
     expect(html.match(/data-cloud-workspaces-unreachable-unavailable/g)).toHaveLength(1);
+
+    /**
+     * THE HEADER'S TEXT, not just its presence. Once a dead control is no longer
+     * drawn on its row, this header is the ONLY place its reason is stated — so
+     * a header that rendered empty would leave the reason stated nowhere, and a
+     * presence check would stay green. Every lifted reason and the names of the
+     * controls it covers must be in the header, and the reason must not be on
+     * any row.
+     */
+    const { shared } = groupSharedReasons(MISSING.map((slug) => hubRowControls(missingRow(slug))));
+    expect(shared.length).toBeGreaterThan(0);
+    const headerStart = html.indexOf("data-cloud-workspaces-unreachable-unavailable");
+    const headerEnd = html.indexOf("</ul>", headerStart);
+    const header = html.slice(headerStart, headerEnd);
+    const rows = html.slice(headerEnd, html.indexOf("This workspace ·"));
+    for (const group of shared) {
+      expect(header).toContain(escapeHtml(group.reason));
+      expect(header).toContain(escapeHtml(joinLabels(group.labels)));
+      expect(rows).not.toContain(escapeHtml(group.reason));
+    }
 
     for (const slug of MISSING) {
       // Still rendered, and still carrying the control that gets rid of it.

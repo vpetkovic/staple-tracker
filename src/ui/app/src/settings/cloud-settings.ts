@@ -473,9 +473,11 @@ export interface HubRowControl {
   /**
    * Null when the control works. A sentence when it does not.
    *
-   * **Never used to filter.** *"Actions are disabled with a stated reason rather
-   * than hidden"* — a control that disappears leaves a reader unable to tell an
-   * unavailable capability from one that does not exist.
+   * **Never used to filter a reachable row.** *"Actions are disabled with a
+   * stated reason rather than hidden"* — a control that disappears leaves a
+   * reader unable to tell an unavailable capability from one that does not exist.
+   * The one place it filters is the "not on this machine" group, and only for a
+   * reason the group header then states by name — see `groupSharedReasons`.
    */
   disabledReason: string | null;
   /** The current value, for the two consents. Undefined for the four buttons. */
@@ -607,12 +609,17 @@ function rowBlocked(row: HubWorkspaceReport): string | null {
 /**
  * The six controls a row offers, in the order they are drawn.
  *
- * **All six, on every row, always.** Enablement is expressed by
- * `disabledReason` and never by omission, which is the acceptance criterion and
- * also the thing that makes this list teachable: a reader who presses nothing
- * still learns that connecting, syncing and backing up are three separate
- * decisions, because they can see all three and read why two of them are not
- * available yet.
+ * **All six, on every row, always** — this function returns them all, and a
+ * reachable row draws them all. Enablement is expressed by `disabledReason` and
+ * never by omission, which is the acceptance criterion and also the thing that
+ * makes this list teachable: a reader who presses nothing still learns that
+ * connecting, syncing and backing up are three separate decisions, because they
+ * can see all three and read why two of them are not available yet.
+ *
+ * The renderer narrows that for the "not on this machine" group only: a control
+ * whose reason every row in the group shares is stated once in the group header
+ * and not drawn per row (`groupSharedReasons`). The six are still returned here,
+ * so the decision stays per control.
  *
  * ## The three asymmetries worth reading before changing this
  *
