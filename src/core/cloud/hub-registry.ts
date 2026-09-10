@@ -298,7 +298,7 @@ export function adoptRegistry(
   const decisions: AdoptionDecision[] = [];
 
   for (const entry of payload.workspaces) {
-    decisions.push(decide(hub, entry, declined, options, apply));
+    decisions.push(decide(hub, entry, declined, apply));
   }
 
   // Edges last, and only between two slugs this machine now actually has. An
@@ -361,11 +361,21 @@ export function adoptRegistry(
   };
 }
 
+/**
+ * No `options` parameter, and that is the honest signature rather than a silenced one.
+ *
+ * It took `options: AdoptOptions` for exactly one read — `options.locate?.(…)` — and that
+ * went with the `repointed` outcome. `AdoptOptions` now holds only `apply`, which this
+ * already receives as its own argument, so the parameter depended on nothing.
+ *
+ * Removed rather than renamed to `_options`: an underscore would keep the signature saying
+ * this function consults the caller's options when it does not, and this file has been
+ * bitten repeatedly by that gap between what code says and what it does.
+ */
 function decide(
   hub: Hub,
   entry: RegistryEntry,
   declined: Set<string>,
-  options: AdoptOptions,
   apply: boolean,
 ): AdoptionDecision {
   const base = { entry, localSlug: null, conflict: null } as const;
@@ -542,15 +552,33 @@ function decide(
      * the guidance for it was "point this row at it" with nothing to run. `locateAbsent`
      * had been the answer since the first commit of this epic and had no CLI verb until
      * `staple hub registry locate` was added for this sentence.
+     *
+     * ## The clause that used to end this sentence, and why it had to go
+     *
+     * It said *"the placeholder then goes with `staple hub unregister <slug>`"*. That was
+     * true when it was written, because a clone-and-init used to leave the placeholder
+     * beside the new row. It stopped being true in the same round that made `initWorkspace`
+     * TAKE the placeholder over — after which there is no placeholder left to remove, and
+     * following the sentence verbatim destroyed the row it had just attached:
+     *
+     *     $ staple hub unregister website --with-links
+     *       removed cross-link WEB-1 blocks TRA-1
+     *     $ staple hub ls
+     *     TRA  tracker  repo  MISSING        # the row you just attached is gone
+     *
+     * It also freed the prefix and wrote an opt-out, so a later `adopt` reported `skipped`
+     * until `unignore` — and produced the very contradiction this round added a refusal in
+     * `ignore` to forbid, reached by following the product's own printed guidance rather
+     * than by misusing a verb. Two halves of one sentence describing two different builds
+     * is the failure mode this epic keeps finding; this is it in a single clause.
      */
     reason:
       `"${entry.slug}" is registered but its database is not on this machine. Nothing was ` +
       "invented for it. If you already have the workspace somewhere, attach it with " +
       `\`staple hub registry locate ${entry.slug} --path <directory>\` — the identity is checked, ` +
       "so a wrong directory is refused rather than silently attached. If you do not have it " +
-      "yet, clone or copy it and run `staple init` in it, which records the real row against " +
-      `the identity this placeholder is holding; the placeholder then goes with \`staple hub ` +
-      `unregister ${entry.slug}\`.`,
+      "yet, clone or copy it and run `staple init` in it: that takes this row over — same " +
+      "name, same prefix, same identity — so there is nothing left to tidy up afterwards.",
   };
 }
 

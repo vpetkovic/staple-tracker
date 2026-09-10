@@ -281,13 +281,39 @@ export function initWorkspace(options: {
     if (!prefix) {
       prefix = hub.allocatePrefix(storedSlug);
     }
-    if (readMeta(probe, "prefix") === null) {
+    /**
+     * The stamp is ROLLED BACK if the registration refuses, or the directory becomes
+     * permanently un-initable.
+     *
+     * Pre-existing, and found while working here. The stamp lands in the workspace database
+     * and the registration in the hub, so a refusal used to leave the database carrying
+     * `slug`/`prefix` with no hub row — and the next `staple init` READS that stamp
+     * (`readMeta(probe, "prefix")`), so it re-offers the same losing pair and gets the same
+     * refusal. `staple init --slug anything-else` returns the identical original error,
+     * because the stored slug beats the argument. Reproduced on master: the database left
+     * holding `[('prefix','FIRA'), ('slug','first')]` and no way back except deleting it by
+     * hand.
+     *
+     * A compensating delete rather than one transaction, because there is no transaction
+     * that could span both: `probe.db` is the workspace's file and `hub` is a different
+     * database. So the rule is "only un-write what this call wrote" — `stampedHere` is
+     * false for a database that already carried a prefix, and those are left exactly alone.
+     */
+    const stampedHere = readMeta(probe, "prefix") === null;
+    if (stampedHere) {
       writeMetaPairs(probe, [
         ["slug", storedSlug],
         ["prefix", prefix],
       ]);
     }
-    hub.register({ slug: storedSlug, prefix, path: dbPath, kind });
+    try {
+      hub.register({ slug: storedSlug, prefix, path: dbPath, kind });
+    } catch (error) {
+      if (stampedHere) {
+        probe.db.prepare("DELETE FROM meta WHERE key IN ('slug', 'prefix')").run();
+      }
+      throw error;
+    }
     /**
      * Read back for the comparison below, so the common case writes nothing.
      *
