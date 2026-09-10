@@ -12,6 +12,8 @@
  *   1. **One registry, one machine lost.** Publish, back up, lose the machine, adopt on
  *      a replacement, publish damage, restore, adopt. In-process, through the service
  *      module, so it can capture every request body and prove no filesystem path left.
+ *      Step 1.8 injects a response lost after the Worker committed, and shows the lost
+ *      act is not sent again over another machine's newer decision.
  *   2. **Two machines sharing one registry (STA-287).** Two STAPLE_HOMEs, two separate
  *      credential files, and real `git clone`s under DIFFERENT directory names, driven
  *      only through the `staple` CLI. It shows: (a) alternating publishes settle at zero
@@ -309,6 +311,87 @@ async function oneMachineLost(): Promise<void> {
   c.hub.close();
 }
 
+/**
+ * A transport that lets the next push reach the service and then loses the answer: the
+ * Worker commits, and the client sees a connection reset. Only an in-process walk can
+ * inject this, which is why it lives here and not in walk 2.
+ */
+function losingNextPushResponse(): typeof fetch {
+  let lost = false;
+  return async (input, init) => {
+    const response = await recordingFetch(input, init);
+    if (!lost && init?.method === "POST" && String(input).endsWith("/ops")) {
+      lost = true;
+      throw new TypeError("injected: connection reset after the service committed");
+    }
+    return response;
+  };
+}
+
+/**
+ * Walk 1b: a retraction whose response is lost must not be sent again later over another
+ * machine's newer re-link (found in review of #99). Against the real Worker, because
+ * whether the retried operation is a duplicate or a fresh write is decided by the real
+ * opId index and the real fold.
+ */
+async function lostResponse(): Promise<void> {
+  const hubId = randomUUID();
+  const enrollmentSecret = provision(hubId);
+  const X = randomUUID();
+  const Y = randomUUID();
+  const join2 = async (label: string) => {
+    const m = machine(label, hubId);
+    await connectHubRegistry(buildConnectPreview({ home: m.home, repositoryId: hubId, endpoint }), {
+      home: m.home,
+      enrollmentSecret,
+      credential: { forceFile: true },
+    });
+    setRegistryConsent(m.home, hubId, true, REGISTRY_DISCLOSURE);
+    return m;
+  };
+  const linksOnService = async (home: string) =>
+    (await readPublishedRegistry(home, hubId, { fetchImpl: recordingFetch })).registry.crossLinks.length;
+
+  step("1.8 a retraction whose response is lost is not re-sent over a newer re-link");
+  const x = await join2("lost-x");
+  x.hub.registerAbsent({ slug: "lost-one", prefix: "LXO", kind: "repo", repositoryId: X });
+  x.hub.registerAbsent({ slug: "lost-two", prefix: "LXT", kind: "repo", repositoryId: Y });
+  x.hub.addCrossLink("LXO-1", "LXT-1");
+  await publishRegistry(x.hub, x.home, { fetchImpl: recordingFetch });
+  const y = await join2("lost-y");
+  await adoptPublishedRegistry(y.hub, y.home, { apply: true });
+
+  x.hub.removeCrossLink("LXO-1", "LXT-1");
+  let threw = false;
+  try {
+    await publishRegistry(x.hub, x.home, { fetchImpl: losingNextPushResponse() });
+  } catch {
+    threw = true;
+  }
+  const afterLost = await linksOnService(x.home);
+  await adoptPublishedRegistry(y.hub, y.home, { apply: true });
+  y.hub.addCrossLink("LXO-1", "LXT-1");
+  const yRelink = await publishRegistry(y.hub, y.home, { fetchImpl: recordingFetch });
+  const xRetry = await publishRegistry(x.hub, x.home, { fetchImpl: recordingFetch });
+  const finalLinks = await linksOnService(x.home);
+  console.log(
+    JSON.stringify({
+      lostPublishThrew: threw,
+      serviceLinksAfterLostPublish: afterLost,
+      yRelinked: yRelink.relinked.length,
+      xRetry: { published: xRetry.published, retracted: xRetry.retracted.length },
+      serviceLinksAtEnd: finalLinks,
+    }),
+  );
+  check(
+    threw && afterLost === 0 && yRelink.relinked.length === 1 && xRetry.published === 0 && finalLinks === 1,
+    "the lost retraction landed once; X's next publish sent nothing, and Y's newer re-link stands",
+    `threw=${threw} afterLost=${afterLost} yRelinked=${yRelink.relinked.length} xRetry=${xRetry.published} final=${finalLinks}`,
+  );
+  x.hub.close();
+  y.hub.close();
+}
+
 // ======================================================= walk 2: two machines, one registry
 
 interface Machine {
@@ -560,6 +643,7 @@ async function twoMachines(): Promise<void> {
 
 async function main(): Promise<void> {
   await oneMachineLost();
+  await lostResponse();
   await twoMachines();
 }
 

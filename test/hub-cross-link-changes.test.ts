@@ -119,6 +119,37 @@ describe("settling after a publish", () => {
   });
 });
 
+describe("the sent stamp", () => {
+  it("records the epoch and version an act is sent against, and a NEW act clears it", () => {
+    /**
+     * The stamp answers "did this act land?" on the next publish. A new act is a new
+     * decision that no publish has sent, so it must start unstamped. Otherwise it would
+     * inherit the old act's stamp, be judged already sent, and be dropped.
+     */
+    const hub = twoRows();
+    hub.addCrossLink("ONE-1", "TWO-1");
+    hub.removeCrossLink("ONE-1", "TWO-1");
+    const [removal] = hub.listCrossLinkChanges();
+    hub.markCrossLinkChangesSent([{ change: removal!, epoch: 3, version: 7 }]);
+    expect(hub.listCrossLinkChanges()[0]).toMatchObject({ present: false, sentEpoch: 3, sentVersion: 7 });
+
+    hub.addCrossLink("ONE-1", "TWO-1");
+    expect(hub.listCrossLinkChanges()[0]).toMatchObject({ present: true, sentEpoch: null, sentVersion: null });
+    hub.close();
+  });
+
+  it("does not stamp an act made after the publish read the row", () => {
+    const hub = twoRows();
+    hub.addCrossLink("ONE-1", "TWO-1");
+    hub.removeCrossLink("ONE-1", "TWO-1");
+    const seenByPublish = hub.listCrossLinkChanges();
+    hub.addCrossLink("ONE-1", "TWO-1");
+    hub.markCrossLinkChangesSent([{ change: seenByPublish[0]!, epoch: 1, version: 1 }]);
+    expect(hub.listCrossLinkChanges()[0]).toMatchObject({ present: true, sentVersion: null });
+    hub.close();
+  });
+});
+
 describe("`staple hub unlink` records the removal", () => {
   it("through the real CLI, between two repo-local workspaces", () => {
     const root = tempDir("xlink-cli");

@@ -71,6 +71,8 @@ CREATE TABLE cross_link_changes (
   blocked_identifier TEXT NOT NULL,
   present INTEGER NOT NULL CHECK (present IN (0, 1)),
   published INTEGER NOT NULL DEFAULT 0 CHECK (published IN (0, 1)),
+  sent_epoch INTEGER,
+  sent_version INTEGER,
   changed_at TEXT NOT NULL
 );
 `;

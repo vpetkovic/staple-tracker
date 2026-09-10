@@ -39,6 +39,25 @@ import type { Migration } from "../types.js";
  * another machine deliberately re-links later stays re-linked on the service, and this
  * machine keeps its own copy removed, reporting that it did.
  *
+ * ## `sent_epoch` and `sent_version`: exactly once, through a failed publish
+ *
+ * A publish can fail AFTER its operation landed: a later chunk fails, or the Worker
+ * commits and the response is lost. The row is then still unsettled. If the next publish
+ * only asked "does the service still disagree?", it would send the act again, with a
+ * new opId because the entity's version has moved, so the service could not deduplicate
+ * it. It would land over whatever another machine decided after seeing this one's act.
+ *
+ * So just before a row's operation is pushed, the epoch and the entity version it is
+ * sent against are written here. On the next publish, if the service's entity is still
+ * at that epoch and version, the operation did not land, and it is sent again: same base
+ * version, same opId. If the entity has moved, the operation landed, or something newer
+ * happened after this machine read it. Either way, sending it again would overrule a
+ * later act, so the row is settled and nothing is sent. The epoch is part of the check
+ * because a restore starts a new epoch and can reset versions, and an act sent before a
+ * restore must not be replayed over it.
+ *
+ * Both are NULL until a publish sends the row, and a new act on the link resets them.
+ *
  * ## Keyed on the portable identity, never on slugs
  *
  * `link_key` is the cross-link's entity id on the wire: the two workspaces'
@@ -63,6 +82,8 @@ export const migration: Migration = {
   blocked_identifier TEXT NOT NULL,
   present INTEGER NOT NULL CHECK (present IN (0, 1)),
   published INTEGER NOT NULL DEFAULT 0 CHECK (published IN (0, 1)),
+  sent_epoch INTEGER,
+  sent_version INTEGER,
   changed_at TEXT NOT NULL
 )`);
   },

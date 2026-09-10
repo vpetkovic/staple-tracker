@@ -208,12 +208,18 @@ function twoWithLink(): HubRegistryPayload {
 }
 
 /** A recorded change to one link, the shape `Hub.listCrossLinkChanges` returns. */
-function changeFor(key: string, present: boolean): CrossLinkChange {
+function changeFor(
+  key: string,
+  present: boolean,
+  sent: { epoch: number; version: number } | null = null,
+): CrossLinkChange {
   return {
     key,
     ...parseCrossLinkEntityId(key)!,
     present,
     published: false,
+    sentEpoch: sent?.epoch ?? null,
+    sentVersion: sent?.version ?? null,
     changedAt: "2026-09-10T00:00:00.000Z",
   };
 }
@@ -396,6 +402,8 @@ describe("no filesystem path can reach an operation", () => {
       ...identity,
       present: false,
       published: false,
+      sentEpoch: null,
+      sentVersion: null,
       changedAt: "2026-09-10T00:00:00.000Z",
     };
     const diff = diffRegistry(
@@ -719,7 +727,9 @@ describe("what the diff will and will not emit", () => {
       { entityId: LINK_KEY, payload: { format: REGISTRY_PAYLOAD_FORMAT, present: false } },
     ]);
     expect(diff.retracted.map((l) => l.entityId)).toEqual([LINK_KEY]);
-    expect(diff.settled).toEqual([removal]);
+    // Carried by the operation: stamped before the push, settled once it lands.
+    expect(diff.carried).toEqual([{ change: removal, entityId: LINK_KEY, baseVersion: 1 }]);
+    expect(diff.settled).toEqual([]);
 
     /**
      * Published already, and another machine has linked it again since. That link is newer
@@ -729,7 +739,7 @@ describe("what the diff will and will not emit", () => {
     const again = diffRegistry(here, published, { changes: [{ ...removal, published: true }] });
     expect(again.operations).toEqual([]);
     expect(again.retained.map((r) => r.entityId)).toEqual([LINK_KEY]);
-    expect(again.retained[0]!.reason).toContain("linked it again since");
+    expect(again.retained[0]!.reason).toContain("linked again since");
     // And a removal this machine made is not reported as something it lacks.
     expect(again.unadopted.crossLinks).toEqual([]);
   });
@@ -760,7 +770,54 @@ describe("what the diff will and will not emit", () => {
       { verb: "update", payload: { format: REGISTRY_PAYLOAD_FORMAT, present: true }, baseVersion: 2 },
     ]);
     expect(fresh.relinked.map((l) => l.entityId)).toEqual([LINK_KEY]);
-    expect(fresh.settled).toEqual([relink]);
+    expect(fresh.carried).toEqual([{ change: relink, entityId: LINK_KEY, baseVersion: 2 }]);
+  });
+
+  it("resends an act whose earlier push never landed, against the SAME version", () => {
+    /**
+     * Stamped as sent at version 1 in epoch 1, and the service's entity is still at
+     * version 1: the push never landed. It goes again with the same base version, so the
+     * same opId, so if it HAD landed the service would deduplicate it.
+     */
+    const published = publishedStateOf(foldOperations(diffRegistry(twoWithLink(), new Map()).operations));
+    const removal = changeFor(LINK_KEY, false, { epoch: 1, version: 1 });
+    const diff = diffRegistry({ ...twoWithLink(), crossLinks: [] }, published, { changes: [removal], epoch: 1 });
+    expect(diff.operations.map((o) => ({ baseVersion: o.baseVersion, payload: o.payload }))).toEqual([
+      { baseVersion: 1, payload: { format: REGISTRY_PAYLOAD_FORMAT, present: false } },
+    ]);
+    expect(diff.carried).toEqual([{ change: removal, entityId: LINK_KEY, baseVersion: 1 }]);
+    expect(diff.settled).toEqual([]);
+  });
+
+  it("does not resend an act sent before the service moved on, whether it landed or not", () => {
+    /**
+     * Stamped as sent at version 1, and the entity is at version 3 and present: this
+     * machine's retraction landed (version 2) and another machine linked it again
+     * (version 3) after seeing it. Resending would be a new opId over a newer decision.
+     */
+    const created = foldOperations(diffRegistry(twoWithLink(), new Map()).operations);
+    const relinked = publishedStateOf(
+      foldOperations([
+        ...created.map((e) => ({ entity: e.entity, entityId: e.entityId, verb: "create", payload: e.state })),
+        { entity: CROSS_LINK_ENTITY, entityId: LINK_KEY, verb: "update", payload: { format: 1, present: false } },
+        { entity: CROSS_LINK_ENTITY, entityId: LINK_KEY, verb: "update", payload: { format: 1, present: true } },
+      ]),
+    );
+    const removal = changeFor(LINK_KEY, false, { epoch: 1, version: 1 });
+    const diff = diffRegistry({ ...twoWithLink(), crossLinks: [] }, relinked, { changes: [removal], epoch: 1 });
+    expect(diff.operations).toEqual([]);
+    expect(diff.settled).toEqual([removal]);
+    expect(diff.retained[0]!.reason).toContain("linked again since");
+  });
+
+  it("does not resend an act sent in an earlier EPOCH, even at a matching version", () => {
+    // A restore starts a new epoch and can reset versions. An act sent before it must not
+    // be replayed over the restore just because the numbers happen to line up.
+    const published = publishedStateOf(foldOperations(diffRegistry(twoWithLink(), new Map()).operations));
+    const removal = changeFor(LINK_KEY, false, { epoch: 1, version: 1 });
+    const diff = diffRegistry({ ...twoWithLink(), crossLinks: [] }, published, { changes: [removal], epoch: 2 });
+    expect(diff.operations).toEqual([]);
+    expect(diff.settled).toEqual([removal]);
   });
 
   it("forgets a (re)link whose link has since left this machine, and sends nothing for it", () => {
@@ -1202,7 +1259,7 @@ describe("two machines publishing one registry converge (STA-287)", () => {
    * and a link is retracted only by the machine that removed it. So any machine may publish,
    * and these tests drive two real hubs against one service to show that they converge.
    */
-  function twoMachines(): {
+  function twoMachines(options: { maxBatchSize?: number } = {}): {
     a: { home: string; hub: Hub };
     b: { home: string; hub: Hub };
     server: FakeSyncServer;
@@ -1210,7 +1267,7 @@ describe("two machines publishing one registry converge (STA-287)", () => {
   } {
     const a = machine();
     const hubId = a.hub.hubId();
-    const server = serverFor(hubId);
+    const server = serverFor(hubId, options);
     connect(a.home, hubId, server);
     setRegistryConsent(a.home, hubId, true, REGISTRY_DISCLOSURE);
     const b = machine();
@@ -1235,8 +1292,8 @@ describe("two machines publishing one registry converge (STA-287)", () => {
   };
 
   /** Machine A calls the two repositories `alpha`/`beta`; B calls them `*-clone`. Same prefixes. */
-  function withSharedLink() {
-    const t = twoMachines();
+  function withSharedLink(options: { maxBatchSize?: number } = {}) {
+    const t = twoMachines(options);
     t.a.hub.registerAbsent({ slug: "alpha", prefix: "ALP", kind: "repo", repositoryId: ONE });
     t.a.hub.registerAbsent({ slug: "beta", prefix: "BET", kind: "repo", repositoryId: TWO });
     t.a.hub.addCrossLink("ALP-1", "BET-1");
@@ -1430,7 +1487,7 @@ describe("two machines publishing one registry converge (STA-287)", () => {
     // A does not retract it a second time, and its own adopt does not bring it back here.
     const aPublish = await publish(a, server);
     expect(aPublish.published).toBe(0);
-    expect(aPublish.retained[0]!.reason).toContain("linked it again since");
+    expect(aPublish.retained[0]!.reason).toContain("linked again since");
     const aAdopt = await adopt(a, server);
     expect(aAdopt.adoption.crossLinkDecisions.map((d) => d.outcome)).toEqual(["kept_removed"]);
     expect(aAdopt.adoption.crossLinkDecisions[0]!.reason).toContain("staple link ALP-1 BET-1");
@@ -1439,6 +1496,145 @@ describe("two machines publishing one registry converge (STA-287)", () => {
     // Converged, with the link where the latest decision put it.
     expect(await serviceLinks(a, server, hubId)).toEqual(["ALP-1 -> BET-1"]);
     expect((await publish(a, server)).published + (await publish(b, server)).published).toBe(0);
+    a.hub.close();
+    b.hub.close();
+  });
+
+  /**
+   * A publish that fails AFTER its act landed must not send that act again later.
+   *
+   * Found in review of #99. The record used to be settled only after every chunk had
+   * pushed, and the next publish asked only "does the service still disagree?". So an
+   * act that landed before the publish failed stayed owed. If another machine had since
+   * seen it and decided the other way, it was sent again with a new opId, because the
+   * base version had moved, and it overruled that newer decision. The fix settles each
+   * chunk as it lands, and stamps each act with the epoch and version it is sent against,
+   * so the next publish can tell whether it landed. See hub migration 004.
+   */
+  function failingPush(
+    server: FakeSyncServer,
+    failOn: number,
+    mode: "503" | "lost",
+  ): typeof fetch {
+    let pushes = 0;
+    return (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      if (init?.method === "POST" && String(input).endsWith("/ops")) {
+        pushes += 1;
+        if (pushes === failOn) {
+          if (mode === "503") {
+            // Refused before it reached the log: nothing landed.
+            return new Response(JSON.stringify({ code: "unavailable", message: "injected 503" }), {
+              status: 503,
+              headers: { "content-type": "application/json" },
+            });
+          }
+          // The Worker committed it, and the answer never came back.
+          await server.fetch(input, init);
+          throw new TypeError("injected: connection reset after the service committed");
+        }
+      }
+      return server.fetch(input, init);
+    }) as typeof fetch;
+  }
+
+  it("a later chunk failing does not resend the chunk that landed", async () => {
+    // Reviewer's case 1: a 503 on chunk 2, with one operation per chunk.
+    const { a, b, server, hubId } = withSharedLink({ maxBatchSize: 1 });
+    a.hub.addCrossLink("ALP-2", "BET-2");
+    await publish(a, server);
+    await adopt(b, server);
+    expect(linksOf(b.hub)).toHaveLength(2);
+
+    a.hub.removeCrossLink("ALP-1", "BET-1");
+    a.hub.removeCrossLink("ALP-2", "BET-2");
+    process.env.STAPLE_HOME = a.home;
+    await expect(
+      publishRegistry(a.hub, a.home, { fetchImpl: failingPush(server, 2, "503") }),
+    ).rejects.toThrow();
+    /**
+     * Settled chunk by chunk: ALP-1's chunk landed, so its removal is done. ALP-2's chunk
+     * was refused, so its removal is still owed, stamped with the version it was sent at.
+     * The version check below would also catch ALP-1, but this layer shouldn't depend on it.
+     */
+    expect(
+      a.hub.listCrossLinkChanges().map((c) => ({
+        link: c.blockerIdentifier,
+        published: c.published,
+        stamped: c.sentVersion !== null,
+      })),
+    ).toEqual([
+      { link: "ALP-1", published: true, stamped: true },
+      { link: "ALP-2", published: false, stamped: true },
+    ]);
+    // Chunk 1 (ALP-1) landed. B sees it, then decides it wants that link after all.
+    await adopt(b, server);
+    b.hub.addCrossLink("ALP-1", "BET-1");
+    expect((await publish(b, server)).relinked).toHaveLength(1);
+
+    // A's retry sends only what never landed.
+    const retry = await publish(a, server);
+    expect(retry.retracted.map((l) => l.blockerIdentifier)).toEqual(["ALP-2"]);
+    expect(await serviceLinks(a, server, hubId)).toEqual(["ALP-1 -> BET-1"]);
+    // B's next adopt takes ALP-2's removal, which is A's and never landed before, and
+    // keeps ALP-1, B's newer decision, rather than calling it "removed on another machine".
+    const bAdopt = await adopt(b, server);
+    expect(
+      bAdopt.adoption.crossLinkDecisions
+        .filter((d) => d.outcome === "removed")
+        .map((d) => d.link.blockerIdentifier),
+    ).toEqual(["ALP-2"]);
+    expect(linksOf(b.hub)).toEqual(["alpha-clone/ALP-1 -> beta-clone/BET-1"]);
+    a.hub.close();
+    b.hub.close();
+  });
+
+  it("a retraction whose response was lost is not sent again over a newer re-link", async () => {
+    // Reviewer's case 2: a lost response on a single-chunk publish.
+    const { a, b, server, hubId } = withSharedLink();
+    await publish(a, server);
+    await adopt(b, server);
+
+    a.hub.removeCrossLink("ALP-1", "BET-1");
+    process.env.STAPLE_HOME = a.home;
+    await expect(
+      publishRegistry(a.hub, a.home, { fetchImpl: failingPush(server, 1, "lost") }),
+    ).rejects.toThrow();
+    expect(await serviceLinks(a, server, hubId)).toEqual([]); // it did land
+    await adopt(b, server);
+    b.hub.addCrossLink("ALP-1", "BET-1");
+    expect((await publish(b, server)).relinked).toHaveLength(1);
+
+    const retry = await publish(a, server);
+    expect({ published: retry.published, retracted: retry.retracted }).toEqual({ published: 0, retracted: [] });
+    expect(await serviceLinks(a, server, hubId)).toEqual(["ALP-1 -> BET-1"]);
+    // Settled, so it is never owed again: a third publish is still silent.
+    expect((await publish(a, server)).published).toBe(0);
+    a.hub.close();
+    b.hub.close();
+  });
+
+  it("a re-link whose response was lost is not sent again over a newer unlink", async () => {
+    // Reviewer's case 3, the mirror.
+    const { a, b, server, hubId } = withSharedLink();
+    await publish(a, server);
+    await adopt(b, server);
+    a.hub.removeCrossLink("ALP-1", "BET-1");
+    await publish(a, server);
+    await adopt(b, server);
+
+    a.hub.addCrossLink("ALP-1", "BET-1");
+    process.env.STAPLE_HOME = a.home;
+    await expect(
+      publishRegistry(a.hub, a.home, { fetchImpl: failingPush(server, 1, "lost") }),
+    ).rejects.toThrow();
+    expect(await serviceLinks(a, server, hubId)).toEqual(["ALP-1 -> BET-1"]); // it did land
+    await adopt(b, server);
+    b.hub.removeCrossLink("ALP-1", "BET-1");
+    expect((await publish(b, server)).retracted).toHaveLength(1);
+
+    const retry = await publish(a, server);
+    expect({ published: retry.published, relinked: retry.relinked }).toEqual({ published: 0, relinked: [] });
+    expect(await serviceLinks(a, server, hubId)).toEqual([]);
     a.hub.close();
     b.hub.close();
   });

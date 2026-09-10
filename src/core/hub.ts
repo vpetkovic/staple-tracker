@@ -89,6 +89,12 @@ export interface CrossLinkChange extends CrossLinkIdentity {
   readonly key: string;
   readonly present: boolean;
   readonly published: boolean;
+  /**
+   * The service epoch and entity version this act was last pushed against, or null if
+   * no publish has pushed it. See hub migration 004 for how they keep a send exactly-once.
+   */
+  readonly sentEpoch: number | null;
+  readonly sentVersion: number | null;
   /** Also the row's version: settling checks it, so a newer act is never settled by an older publish. */
   readonly changedAt: string;
 }
@@ -894,7 +900,8 @@ export class Hub {
             blocked_identifier, present, published, changed_at)
          VALUES (?,?,?,?,?,?,0,?)
          ON CONFLICT(link_key) DO UPDATE SET
-           present = excluded.present, published = 0, changed_at = excluded.changed_at`,
+           present = excluded.present, published = 0, sent_epoch = NULL, sent_version = NULL,
+           changed_at = excluded.changed_at`,
       )
       .run(
         crossLinkEntityId(identity),
@@ -919,6 +926,8 @@ export class Hub {
       blocked_identifier: string;
       present: number;
       published: number;
+      sent_epoch: number | null;
+      sent_version: number | null;
       changed_at: string;
     }>;
     return rows.map((r) => ({
@@ -929,8 +938,33 @@ export class Hub {
       blockedIdentifier: r.blocked_identifier,
       present: r.present === 1,
       published: r.published === 1,
+      sentEpoch: r.sent_epoch ?? null,
+      sentVersion: r.sent_version ?? null,
       changedAt: r.changed_at,
     }));
+  }
+
+  /**
+   * Record, just BEFORE pushing, the epoch and entity version each act is about to be
+   * sent against. If the publish then fails, the next one can tell from the service's
+   * entity whether this act landed. See hub migration 004.
+   *
+   * The same guard as {@link settleCrossLinkChanges}: a newer act made since the diff
+   * read the row is not stamped with an older act's send.
+   */
+  markCrossLinkChangesSent(
+    sends: readonly { change: CrossLinkChange; epoch: number; version: number }[],
+  ): void {
+    tx(this.db, () => {
+      for (const { change, epoch, version } of sends) {
+        this.db
+          .prepare(
+            `UPDATE cross_link_changes SET sent_epoch = ?, sent_version = ?
+              WHERE link_key = ? AND present = ? AND changed_at = ?`,
+          )
+          .run(epoch, version, change.key, change.present ? 1 : 0, change.changedAt);
+      }
+    });
   }
 
   /**

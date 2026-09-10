@@ -299,11 +299,17 @@ export interface RegistryDiff {
     readonly crossLinks: readonly LinkRef[];
   };
   /**
-   * This machine's recorded link changes that the service will agree with once
-   * {@link operations} land, or already agrees with. `publishRegistry` settles them
-   * after a successful push. See `Hub.settleCrossLinkChanges`.
+   * This machine's recorded link changes that need no operation: the service already
+   * agrees with them, or an earlier publish sent them and the service has moved on
+   * since (see hub migration 004). `publishRegistry` settles these before it pushes.
    */
   readonly settled: readonly CrossLinkChange[];
+  /**
+   * Recorded link changes carried by one of {@link operations}, with the version the
+   * operation is sent against. `publishRegistry` stamps each one as sent just before its
+   * chunk is pushed, and settles it as soon as that chunk has landed.
+   */
+  readonly carried: readonly CarriedChange[];
   /**
    * True when no operation is needed.
    *
@@ -311,6 +317,13 @@ export interface RegistryDiff {
    * routinely non-empty while this is `true`.
    */
   readonly upToDate: boolean;
+}
+
+/** A recorded change and the operation that carries it. */
+export interface CarriedChange {
+  readonly change: CrossLinkChange;
+  readonly entityId: string;
+  readonly baseVersion: number;
 }
 
 /** Local context the diff needs beyond the two registries. */
@@ -327,6 +340,8 @@ export interface DiffContext {
   readonly optedOut?: readonly string[];
   /** `cross_link_changes`: this machine's own link changes. See hub migration 004. */
   readonly changes?: readonly CrossLinkChange[];
+  /** The epoch the snapshot was read at, which the sent-marker check compares against. */
+  readonly epoch?: number;
 }
 
 function refOf(entityId: string, link: { blockerIdentifier: string; blockedIdentifier: string }): LinkRef {
@@ -366,6 +381,21 @@ export function diffRegistry(
   const relinked: LinkRef[] = [];
   const renamed: RenamedEntry[] = [];
   const settled: CrossLinkChange[] = [];
+  const carried: CarriedChange[] = [];
+
+  /**
+   * Was this act already pushed, with the service's entity having moved since?
+   *
+   * An earlier publish stamped the epoch and version it sent the act against (hub
+   * migration 004). If the entity is still there, the operation did not land, and it is
+   * sent again: same base version, same opId. If the entity has moved, the operation
+   * landed, or something newer happened after this machine read it. Sending it again
+   * would overrule that later act with a fresh opId the service can't deduplicate.
+   */
+  const supersededSince = (change: CrossLinkChange, held: PublishedState): boolean =>
+    change.sentVersion !== null &&
+    ((context.epoch !== undefined && change.sentEpoch !== context.epoch) ||
+      held.version !== change.sentVersion);
 
   /** Why an entry can't be published, or null when it can. Shared with the link loop. */
   const refusal = (entry: RegistryEntry): string | null => {
@@ -509,7 +539,7 @@ export function diffRegistry(
           present: true,
         },
       });
-      if (change?.present) settled.push(change);
+      if (change?.present) carried.push({ change, entityId, baseVersion: 0 });
       continue;
     }
     /**
@@ -540,7 +570,7 @@ export function diffRegistry(
      * earlier, and then another machine removed it. Sending it again would undo someone
      * else's removal, and the two machines would take turns on every pass.
      */
-    if (change?.present === true && !change.published) {
+    if (change?.present === true && !change.published && !supersededSince(change, held)) {
       operations.push({
         entity: CROSS_LINK_ENTITY,
         entityId,
@@ -549,9 +579,11 @@ export function diffRegistry(
         payload: { format: REGISTRY_PAYLOAD_FORMAT, present: true },
       });
       relinked.push(refOf(entityId, link));
-      settled.push(change);
+      carried.push({ change, entityId, baseVersion: held.version });
       continue;
     }
+    // A re-link an earlier publish already sent, followed by a newer retraction: settled.
+    if (change?.present === true) settled.push(change);
     retained.push({
       entityId,
       reason:
@@ -596,7 +628,7 @@ export function diffRegistry(
       if (!change.published) settled.push(change);
       continue;
     }
-    if (!change.published) {
+    if (!change.published && !supersededSince(change, held)) {
       operations.push({
         entity: CROSS_LINK_ENTITY,
         entityId: change.key,
@@ -605,19 +637,21 @@ export function diffRegistry(
         payload: { format: REGISTRY_PAYLOAD_FORMAT, present: false },
       });
       retracted.push(refOf(change.key, change));
-      settled.push(change);
+      carried.push({ change, entityId: change.key, baseVersion: held.version });
       continue;
     }
+    // Sent by an earlier publish, and the link is present again since: settled, not re-sent.
+    if (!change.published) settled.push(change);
     /**
-     * This machine's removal was published, and the service holds the link again:
-     * another machine linked it since. That is newer than the removal, so it stands, and
-     * this machine keeps its own copy removed.
+     * This machine's removal has been sent, and the service holds the link again:
+     * another machine linked it after that. That is newer than the removal, so it stands,
+     * and this machine keeps its own copy removed.
      */
     retained.push({
       entityId: change.key,
       reason:
         `The link ${change.blockerIdentifier} -> ${change.blockedIdentifier} was removed on ` +
-        "this machine and that was published, and another machine has linked it again since. " +
+        "this machine and the removal was sent, and the registry has it linked again since. " +
         "It stays linked in the registry and stays removed here. To take it back here, run " +
         `\`staple link ${change.blockerIdentifier} ${change.blockedIdentifier}\`.`,
     });
@@ -656,6 +690,7 @@ export function diffRegistry(
     renamed,
     unadopted: { registrations: unadoptedRegistrations, crossLinks: unadoptedLinks },
     settled,
+    carried,
     upToDate: operations.length === 0,
   };
 }

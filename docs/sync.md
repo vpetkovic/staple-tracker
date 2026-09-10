@@ -1147,6 +1147,18 @@ ever adds:
   copy older than the retraction. It sends nothing, and says so: `adopt --apply` removes
   the copy, and `staple link` followed by a publish shares it again.
 
+**Once holds through a failed publish, too.** A publish can fail after its operation
+landed: a later chunk fails, or the Worker commits and the response is lost. Each
+recorded act is stamped with the epoch and entity version it is sent against just before
+its chunk is pushed, and settled as soon as the chunk lands. On the next publish, an
+entity still at the stamped epoch and version means the operation never landed, so it is
+sent again against the same version, with the same opId. An entity that has moved means it
+landed, or something newer happened after this machine read it. Either way the act is
+settled and **not** sent again, so a retry can never overrule a decision another machine
+made after seeing this one. Measured against real workerd (`scripts/hub-registry-live.ts`,
+step 1.8): a retraction whose response was lost, followed by another machine linking it
+again, leaves the link linked. With the check removed, the retry retracted it a second time.
+
 A removal record is kept after it is published. It is this machine's standing refusal to
 take the link back: an adopt that finds the link present in the registry leaves it removed
 here and says so (`kept_removed`). It is never re-sent, either. If another machine links it

@@ -664,9 +664,14 @@ export interface PublishReport {
  * interrupted halfway through its chunks can be run again unchanged: re-reading the
  * snapshot re-derives the same diff and therefore the same ids.
  *
- * This machine's recorded link changes are settled only after every chunk has landed.
- * If a push fails part-way, the next publish re-derives what is still owed from the
- * snapshot, so nothing is lost and nothing is sent twice.
+ * This machine's recorded link changes are sent exactly once, even through a failed
+ * publish. Each one is stamped with the epoch and entity version it is sent against just
+ * before its chunk is pushed, and settled as soon as that chunk lands. If a later chunk
+ * fails, the chunks that landed are already settled. If the Worker commits and the
+ * response is lost, the next publish sees the entity has moved past the stamp and settles
+ * the change without sending it again, so it can't overrule a newer act another machine
+ * made after seeing this one. If the push never landed, the entity has not moved, and the
+ * change is resent against the same version with the same opId. See hub migration 004.
  */
 export async function publishRegistry(
   hub: Hub,
@@ -693,7 +698,11 @@ export async function publishRegistry(
     duplicateIdentities: identities.duplicates,
     optedOut: hub.listOptOuts().map((o) => o.repositoryId),
     changes: hub.listCrossLinkChanges(),
+    epoch,
   });
+  // Changes that need no operation are true on the service already. Settled up front, so
+  // a push failing below cannot leave them owed.
+  hub.settleCrossLinkChanges(diff.settled);
 
   const report = {
     hubId,
@@ -710,7 +719,6 @@ export async function publishRegistry(
   };
 
   if (diff.operations.length === 0) {
-    hub.settleCrossLinkChanges(diff.settled);
     return {
       ...report,
       published: 0,
@@ -735,6 +743,13 @@ export async function publishRegistry(
   let applied = 0;
   let deduplicated = 0;
   for (const chunk of chunks) {
+    const inChunk = new Set(chunk.map((operation) => operation.entityId));
+    const carried = diff.carried.filter((c) => inChunk.has(c.entityId));
+    // Stamped BEFORE the push: a response lost after the Worker commits must not make the
+    // next publish send this act again. See the function comment.
+    hub.markCrossLinkChangesSent(
+      carried.map((c) => ({ change: c.change, epoch, version: c.baseVersion })),
+    );
     const ops = chunk.map((operation) => {
       clientSeq += 1;
       return toEnvelope(operation, {
@@ -766,9 +781,10 @@ export async function publishRegistry(
       if (result.status === "duplicate") deduplicated += 1;
       else applied += 1;
     }
+    // This chunk landed: its changes are done, whatever happens to the next chunk.
+    hub.settleCrossLinkChanges(carried.map((c) => c.change));
   }
 
-  hub.settleCrossLinkChanges(diff.settled);
   return {
     ...report,
     published: diff.operations.length,
