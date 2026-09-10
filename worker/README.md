@@ -16,7 +16,7 @@ test runner.
 ```bash
 cd worker
 npm install --legacy-peer-deps   # see "Why --legacy-peer-deps" below
-npm test                          # 140 tests, in the Workers runtime, no network
+npm test                          # 208 tests, in the Workers runtime, no network
 npm run typecheck
 npm run lint:logs                 # no console.* outside src/log.ts
 ```
@@ -42,12 +42,13 @@ worker/
     leases.ts          fenced, server-expired leases
     devices.ts         connect, list, revoke
     backups.ts         backup, epoch-safe restore, purge
+    vocabulary.ts      a repository holds a hub registry or a workspace, never both
     fold.ts            the log-to-entity-state fold a backup persists
     cursor.ts          opaque cursors
     errors.ts          the error taxonomy
     limits.ts          everything /v1/capabilities advertises
     log.ts             THE ONLY console.* in this Worker
-  test/                140 tests
+  test/                208 tests
   scripts/lint-logs.mjs
   wrangler.toml        COMMITTED. Placeholders only.
   wrangler.local.toml  GITIGNORED. Real account and database ids.
@@ -111,7 +112,7 @@ See `src/backups.ts`; the short version, because getting it wrong is unrecoverab
 
 ---
 
-## The two designs worth knowing before you edit anything
+## The designs worth knowing before you edit anything
 
 ### Sequence assignment happens in SQL, and there is no Durable Object
 
@@ -124,16 +125,26 @@ put an irreversible `new_sqlite_classes` class migration in a public repository.
 So a push is one `batch()`:
 
 ```
-[0]        SELECT last_seq AS prior_high, epoch FROM repos WHERE repo_id = ?
-[1]        UPDATE repos SET last_seq = last_seq + N WHERE repo_id = ? AND epoch = ?
+[0]        SELECT last_seq AS prior_high, epoch, vocabulary FROM repos WHERE repo_id = ?
+[1]        UPDATE repos SET last_seq = last_seq + N, vocabulary = :v
+             WHERE repo_id = ? AND epoch = :e AND (vocabulary IS NULL OR vocabulary = :v)
 [2..N+1]   INSERT INTO ops (...) SELECT ?, r.last_seq - N + j, r.epoch, ... FROM repos r
-             WHERE r.repo_id = ? AND NOT EXISTS (... o.epoch = r.epoch AND o.op_id = ?)
+             WHERE r.repo_id = ? AND r.epoch = :e AND r.vocabulary = :v
+               AND NOT EXISTS (... o.epoch = r.epoch AND o.op_id = ?)
 ```
 
 Each insert computes its own slot from the reserved window. **Nothing reads a number
 into JavaScript and writes it back** — that is the lost update this shape exists to
 avoid. `RETURNING` is not used: it is undocumented across the entire D1 doc set and
 `results` is documented as empty for writes.
+
+`:v` is the batch's vocabulary (see [A repository holds one vocabulary](#a-repository-holds-one-vocabulary))
+and `:e` the epoch read at authentication. **Every insert is conditioned on the
+reservation having happened**: its `WHERE` is `[1]`'s predicate as it reads after `[1]`
+ran, so an insert lands exactly when `[1]` matched. D1 has no conditional abort, so a
+batch that fails the predicate does not raise — it writes nothing, and `[0]`, read inside
+the same transaction, says why: another vocabulary (a `conflict`) or another epoch
+(`epoch_changed`).
 
 Consequences you must not undo:
 
@@ -163,6 +174,43 @@ The amended derivation already makes cross-epoch collisions impossible. The inde
 scoped anyway, because a client on an older build must be rejected by the database
 rather than silently deduplicated into data loss. Defence in depth on the side where
 the damage is unrecoverable.
+
+### A repository holds one vocabulary
+
+A hub's log holds only `registration` and `crossLink`; a workspace's holds only the other
+thirteen entities. `repos.vocabulary` (migration `0005`, STA-290) records which one:
+`'hub'`, `'workspace'`, or `NULL` for a repository nothing has been written to yet.
+
+- **The first write claims it**, atomically. A push claims it in the `[1]` statement above,
+  in the same batch that reserves its sequence numbers. A restore claims it when it
+  begins. Two concurrent first pushes of different vocabularies are serialized by D1 and
+  exactly one of them writes anything; the other writes no row, reserves no slot and
+  claims nothing. `test/vocabulary.test.ts` holds both batches at a gate until both have
+  passed every earlier check, then releases them.
+- **The other vocabulary is refused at ingest**: registry operations into a workspace
+  repository, workspace operations into a hub repository, and a restore of a backup in
+  the other vocabulary. The answer is `409 conflict`, not retryable, with
+  `repositoryVocabulary` and `requestVocabulary` in the body. A restore of a backup that
+  holds both (only a repository contaminated before `0005` can produce one — captured
+  before it, or after it but before the recovery recipe below was run) is refused the same way, with
+  `requestVocabulary: "mixed"`. Every refusal happens before anything is written; a
+  restore refuses before its undo is captured.
+- **`conflict` rather than a new code** because every client already released maps a code
+  it does not know to `unavailable`, which is retryable. A new code would have turned a
+  permanent refusal into a retry loop on every installed build.
+- **Set once.** No statement in this Worker changes a vocabulary that is already set.
+  Only an operator can, by hand, and the recovery recipe below says when to.
+- **A push pays no extra query.** The vocabulary arrives with the credential in the
+  authentication query, which lets a push refuse early, and the race-free check rides
+  the statements the batch already had. A restore pays one query per call: begin and each
+  stage turn count the backup's registry entities in SQL, and an unclaimed repository
+  costs begin one more statement to claim.
+
+Before `0005` there was no such rule, so a `registration` pushed at a workspace's
+`repoId` was accepted, and every protocol-1 client of that workspace was then refused at
+`/ops` and `/snapshot` with a permanent 426. [If a registry operation lands in a
+WORKSPACE's log](#if-a-registry-operation-lands-in-a-workspaces-log) is the cleanup for a
+repository that was contaminated before the migration ran.
 
 ---
 
@@ -216,7 +264,7 @@ constraints that actually bind are ones this experiment did not remove:
   per day**. That, not batch size, is the real ceiling, and it is the number to design
   against.
 - **30 seconds** of query duration, which applies to the whole batch call.
-- **100 bound parameters per query** — not SQLite's usual 999. The insert binds 15, well
+- **100 bound parameters per query** — not SQLite's usual 999. The insert binds 17, well
   under. This is why the duplicate lookup uses `json_each(?)` with the id list as ONE
   bound parameter instead of `op_id IN (?, ?, …)`, which would break at these sizes.
 
@@ -291,13 +339,23 @@ not invent one. A repository and its first enrollment secret are created out of 
 
 ```sql
 -- enroll_sha256 is SHA-256 of the enrollment secret. Store only the hash.
-INSERT INTO repos (repo_id, epoch, last_seq, last_fencing_token, enroll_sha256, created_at)
-VALUES ('<repository uuid>', 1, 0, 0, X'<sha256 hex>', <unix millis>);
+-- vocabulary: 'workspace' for a workspace's repository. See below.
+INSERT INTO repos (repo_id, epoch, last_seq, last_fencing_token, enroll_sha256, created_at, vocabulary)
+VALUES ('<repository uuid>', 1, 0, 0, X'<sha256 hex>', <unix millis>, 'workspace');
 ```
 
 ```bash
 npx wrangler d1 execute staple-sync-dev --remote -c wrangler.local.toml --file seed.sql
 ```
+
+**Set `vocabulary` when you know what the repository is for.** A repository holds a
+workspace's data (`'workspace'`) or a hub's registry (`'hub'`), never both — see [A
+repository holds one vocabulary](#a-repository-holds-one-vocabulary). Provisioned with the
+column set, the repository refuses the other vocabulary from its very first push. Left
+`NULL` (or omitted from the `INSERT`), it is claimed by whichever vocabulary is written
+first, which is correct as long as the first writer is the one you provisioned it for.
+Setting it explicitly is what makes a mistyped id at the first connect a refusal instead of
+a claim. The column has a `CHECK`, so a typo such as `'Hub'` refuses the `INSERT` itself.
 
 The first device then calls `POST /v1/repos/{repoId}/connect` presenting the enrollment
 secret as its bearer, and receives a device token. Later devices may present either the
@@ -308,17 +366,23 @@ forked workspace.
 
 ### Provisioning a HUB
 
-A hub is a repository. There is no hub table, no hub flag and no separate route, and
-there deliberately is not: a flag would be a second thing to keep in step with the
-entities the log actually contains. So provisioning one is the `INSERT` above, with the
-hub's id in place of a workspace's:
+A hub is a repository. There is no hub table and no separate route. Provisioning one is
+the `INSERT` above with the hub's id in place of a workspace's, and `vocabulary = 'hub'`:
 
 ```sql
 -- The hub id comes from `hub.db`'s meta table: `staple hub registry id` prints it.
 -- It is minted locally by the FIRST machine and adopted by every later one.
-INSERT INTO repos (repo_id, epoch, last_seq, last_fencing_token, enroll_sha256, created_at)
-VALUES ('<hub id>', 1, 0, 0, X'<sha256 hex>', <unix millis>);
+INSERT INTO repos (repo_id, epoch, last_seq, last_fencing_token, enroll_sha256, created_at, vocabulary)
+VALUES ('<hub id>', 1, 0, 0, X'<sha256 hex>', <unix millis>, 'hub');
 ```
+
+`vocabulary` is the one thing that tells a hub's repository from a workspace's
+([A repository holds one vocabulary](#a-repository-holds-one-vocabulary)). Set to `'hub'`,
+the repository refuses workspace operations from its first push, and a workspace can never
+be pointed at it by mistake. Left `NULL`, the hub's first publish claims it, which is
+equally final once it has happened. Either way, after the first write a `registration`
+can no longer land in a workspace's log, and a workspace operation can no longer land in a
+hub's.
 
 Two things follow from there being no provisioning route, and both have to be visible
 in the product rather than discovered:
@@ -355,21 +419,42 @@ The hub's log contains only `registration` and `crossLink` operations, which req
 
 ### If a registry operation lands in a WORKSPACE's log
 
-This Worker has no notion of hub-versus-workspace repository, deliberately — a flag would
-be a second thing to keep in step with what the log actually contains. So a `registration`
-or `crossLink` pushed at a workspace's `repoId` **is accepted**, and from that moment every
-protocol-1 client of that workspace is refused at `/ops` and `/snapshot` with a
-non-retryable 426.
+**This recipe is for contamination that happened BEFORE migration `0005` ran, and only
+for that.** Since `0005` a repository holds one vocabulary and refuses the other at ingest
+([A repository holds one vocabulary](#a-repository-holds-one-vocabulary)): a push of
+registry operations into a workspace repository is a `409 conflict` that writes nothing,
+and so is a restore of a backup that carries them. No route this Worker serves can put a
+`registration` or `crossLink` into a workspace's log any more.
 
-It is not a privilege boundary: it needs a valid device credential for the target, and
-anyone holding one can already push arbitrary operations or restore an old backup. The
-client closes both reachable routes to it — `adoptRegistryIdentity` refuses a hub id that
-names a known workspace or an existing connection, and `push` refuses a batch mixing the
-two vocabularies — so reaching this state now takes deliberate effort.
+Before `0005` there was no such rule. A `registration` or `crossLink` pushed at a
+workspace's `repoId` **was accepted**, and from that moment every protocol-1 client of that
+workspace was refused at `/ops` and `/snapshot` with a non-retryable 426. Rows that landed
+then are still there after the migration, and the migration does not remove them: it only
+classifies the repository. Its backfill calls a log holding both vocabularies
+`'workspace'`, because the registry rows are the contamination, so the workspace's own
+devices can keep pushing while the rows wait for this recipe. What they cannot do is read:
+the 426 on `/ops` and `/snapshot` lasts until the rows are gone.
 
-What makes it worth a recipe is that it is **irreversible by the one remedy a user has**.
-A restore materialises the fold into the new epoch, so the protocol-2 entity is
-re-materialised and survives. Rolling the epoch does not remove it.
+To find the repositories that need it:
+
+```bash
+npx wrangler d1 execute staple-sync-dev --remote -c wrangler.local.toml --command \
+  "SELECT DISTINCT repo_id FROM ops WHERE entity IN ('registration','crossLink')
+      AND repo_id IN (SELECT repo_id FROM repos WHERE vocabulary = 'workspace');"
+```
+
+A workspace whose log held ONLY registry rows when `0005` ran — a mistyped hub id that
+reached a freshly provisioned workspace before its own first push — was classified
+`'hub'`, because its log gave the migration nothing else to go on. Its own devices are then
+refused with `conflict` on their first push. For that case, run the recipe below and then
+step 5.
+
+What made this worth a recipe is that it was **irreversible by the one remedy a user has**.
+A restore materialised the fold into the new epoch, so the protocol-2 entity was
+re-materialised and survived. Since `0005` a restore refuses a backup carrying the other
+vocabulary, or both, before it captures its undo, so a contaminated backup can no longer
+put the rows back. It can no longer be restored at all, though, which is why step 4
+deletes it.
 
 The remedy is operator-side, and it is surgical rather than a purge.
 
@@ -499,25 +584,54 @@ only clients that could read them, and a protocol-2 client tolerates their absen
 DELETE FROM backups WHERE repo_id = '<workspace repo id>' AND backup_id = '<id>';
 ```
 
-Do this in the same sitting. A backup captured while the rows were present carries them into
-every future restore, so leaving one is leaving the problem behind a route a user can reach
-on their own.
+Do this in the same sitting. Since `0005` a restore refuses every one of these with
+`conflict` before it touches anything, so none of them can put the rows back, but none of
+them can be restored at all either. A backup nobody can restore is clutter that looks like
+a rollback point.
 
 Two things to know before you run it. **Some of these will be `kind = 'pre-restore'`, which
-is the documented undo for a restore somebody ran** — deleting one makes that restore
-permanent, and there is no keeping those: step 2 cannot have returned a backup that predates
-the contamination. `captureBackup` stamps `protocolForEntities` over the fold it captured, and
-a fold holding no registry entity stamps `1`, so `protocol >= 2` selects exactly the backups
-that carry the rows — every one of them was captured after the operations landed, and every one
-is a route by which a user restores the contamination into the log on their own. So the price
-is explicit: any restore whose `pre-restore` undo appears in step 2's list stops being
-reversible. Note each `created_at` and tell whoever ran that restore before you delete it. The
+is the documented undo for a restore somebody ran.** That undo already stopped working when
+`0005` was deployed, and there is no keeping it: step 2 cannot have returned a backup that
+predates the contamination. `captureBackup` stamps `protocolForEntities` over the fold it
+captured, and a fold holding no registry entity stamps `1`, so `protocol >= 2` selects
+exactly the backups that carry the rows. Every one of them was captured after the operations
+landed. So the price is explicit: any restore whose `pre-restore` undo appears in step 2's
+list is not reversible. Note each `created_at` and tell whoever ran that restore. The
 backups worth keeping are the ones step 2 does NOT return — the protocol-1 captures from before
 the contamination, which this recipe leaves untouched and which are what a rollback should
 use. And this bypasses `DELETE /backups/{id}`'s in-flight
 guard, which is another reason step 0 has to be settled first: deleting the backup a staging
 restore is reading makes the next `stage` fail with `not_found` and leaves the restore wedged
 exactly as above.
+
+**Step 5 — confirm the repository's vocabulary.** After step 3 the log holds only workspace
+entities, and `repos.vocabulary` must say so:
+
+```bash
+npx wrangler d1 execute staple-sync-dev --remote -c wrangler.local.toml --command \
+  "SELECT vocabulary FROM repos WHERE repo_id = '<workspace repo id>';"
+```
+
+`'workspace'` is the usual answer, because `0005` classified a log holding both
+vocabularies that way. If it says `'hub'`, the log held nothing but the contamination when
+the migration ran, and the workspace's own devices are being refused on every push. Correct
+it by hand. This is the one write to the column this service leaves to an operator:
+
+```sql
+UPDATE repos SET vocabulary = 'workspace'
+ WHERE repo_id = '<workspace repo id>'
+   AND NOT EXISTS (SELECT 1 FROM ops
+                    WHERE repo_id = '<workspace repo id>'
+                      AND entity IN ('registration', 'crossLink'));
+```
+
+The `NOT EXISTS` makes the statement a no-op until step 3 has actually removed the rows, so
+a correction run too early changes nothing.
+
+A restore that BEGAN before `0005` and is still staging is caught too. Every stage turn
+repeats begin's check, so one staging a contaminated backup into a workspace is refused with
+`conflict` on its next turn and stays `staging`. Abandon it with the two-statement form
+under step 0.
 
 Only if the rows cannot be identified is the answer `DELETE /v1/repos/{repoId}` (purge) and
 a re-provision from a device that still holds the data. That is the outcome this recipe

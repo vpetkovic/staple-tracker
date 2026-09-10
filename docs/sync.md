@@ -1295,10 +1295,13 @@ neither category is a bug. Each entry below says which it is.
 7. **An edge tombstoned by a pre-`present` build cannot be resurrected.** *Reported* as
    unpublishable, naming a restore from a backup taken before the deletion as the only
    route.
-8. **The service does not distinguish a hub repository from a workspace repository.** A
-   token for one is a token for that one repository and nothing else, so this is a
-   credential boundary rather than a privilege boundary; the purge recipe in
-   `worker/README.md` is what an operator uses to remove registry operations. *Stated.*
+8. **A repository holds a hub's registry or a workspace's data, never both (STA-290).**
+   `repos.vocabulary` is claimed by the repository's first write, or set when it is
+   provisioned. After that, a push or a restore of the other vocabulary is *refused* with
+   `conflict`, before anything is written, and the client names the remedy: the other
+   vocabulary needs its own repository. Registry operations that reached a workspace's log
+   before migration `0005` are still there. The recovery recipe in `worker/README.md` is
+   what an operator uses to remove them. *Refused*, plus *stated* for the pre-`0005` case.
 9. **Provisioning is out of band.** Staple cannot create the hub's `repos` row: there is
    no provisioning route and no account model. *Refused* with a message that names the
    step and points at `worker/README.md`, rather than failing as a permission error —
@@ -1666,6 +1669,19 @@ inventing a parallel one.
 Only `rate_limited`, `unavailable` and `offline` are retried. Everything else is a
 decision for a human, and retrying it is how a client turns one bad request into a
 sustained one.
+
+**`conflict` also answers a write in the wrong vocabulary (STA-290).** A repository holds
+a hub's registry (`registration`, `crossLink`) or a workspace's data, never both. The
+service records which in `repos.vocabulary` and claims it with the repository's first
+write. After that, a push or a restore of the other vocabulary is refused before anything
+is written, as `conflict` with `repositoryVocabulary` and `requestVocabulary` in the body.
+`requestVocabulary` is `"mixed"` for a backup captured before the rule existed that holds
+both. It reuses `conflict` rather than adding a code on purpose: a client maps a code it
+does not know to `unavailable`, which is retried, so a new code would have made every
+released client retry a permanent refusal. The client names the remedy, which is that the
+other vocabulary needs its own repository, and `isVocabularyRefusal` in
+`src/core/cloud/client.ts` separates this refusal from a lease race. Provisioning and the
+cleanup for a repository contaminated before the rule existed are in `worker/README.md`.
 
 **`Retry-After` is not yet honoured**, and the backoff half of that row is the only
 half that ships. The Worker sends the header, and the client reads it into

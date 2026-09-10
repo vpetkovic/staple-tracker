@@ -16,6 +16,7 @@
 
 import type { Env } from "./env.js";
 import { SyncError } from "./errors.js";
+import { type Vocabulary, storedVocabulary } from "./vocabulary.js";
 
 export interface Session {
   repoId: string;
@@ -24,6 +25,12 @@ export interface Session {
   epoch: number;
   /** The repository's high-water mark at authentication time. Advisory only. */
   lastSeq: number;
+  /**
+   * The vocabulary the repository held at authentication time, or null when unclaimed.
+   * Advisory in exactly the way `epoch` is: it lets a push refuse early without a
+   * statement, and the guard that is actually race-free runs inside the push's batch.
+   */
+  vocabulary: Vocabulary | null;
   /** SHA-256 of the presented token, for `tokenFingerprint` in logs. Never the token. */
   digest: ArrayBuffer;
 }
@@ -52,9 +59,9 @@ export function bearerToken(request: Request): string | null {
 /**
  * Authenticate a request against the device credential table.
  *
- * One query. It joins `repos` so that the epoch and the high-water mark arrive with
- * the credential rather than costing a second round trip — which is what keeps a push
- * at the N+4 statements the wire contract advertises.
+ * One query. It joins `repos` so that the epoch, the high-water mark and the vocabulary
+ * arrive with the credential rather than costing a second round trip — which is what
+ * keeps a push at the N+4 statements the wire contract advertises.
  *
  * Revoked devices are looked up WITHOUT filtering on `revoked_at`, then branched on,
  * so that a revoked device gets `revoked` (403, "re-connect required") rather than a
@@ -74,7 +81,8 @@ export async function authenticate(request: Request, env: Env): Promise<Session>
             d.device_id   AS device_id,
             d.revoked_at  AS revoked_at,
             r.epoch       AS epoch,
-            r.last_seq    AS last_seq
+            r.last_seq    AS last_seq,
+            r.vocabulary  AS vocabulary
        FROM devices d
        JOIN repos   r ON r.repo_id = d.repo_id
       WHERE d.token_sha256 = ?1`,
@@ -86,6 +94,7 @@ export async function authenticate(request: Request, env: Env): Promise<Session>
       revoked_at: number | null;
       epoch: number;
       last_seq: number;
+      vocabulary: string | null;
     }>();
 
   if (!row) {
@@ -100,6 +109,7 @@ export async function authenticate(request: Request, env: Env): Promise<Session>
     deviceId: row.device_id,
     epoch: row.epoch,
     lastSeq: row.last_seq,
+    vocabulary: storedVocabulary(row.vocabulary),
     digest,
   };
 }

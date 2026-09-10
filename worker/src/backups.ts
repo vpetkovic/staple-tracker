@@ -74,11 +74,19 @@ import { type BackupEntity, foldLog, forBackup, materializedVerb } from "./fold.
 import { readJson } from "./http.js";
 import { PROTOCOL_MAX, PROTOCOL_MIN, maxBatchSize, planOf } from "./limits.js";
 import { log, tokenFingerprint } from "./log.js";
+import {
+  type Vocabulary,
+  mixedBackupRefusal,
+  registryEntitiesJson,
+  storedVocabulary,
+  vocabularyRefusal,
+} from "./vocabulary.js";
 
 interface RepoRow {
   epoch: number;
   last_seq: number;
   backup_enabled: number;
+  vocabulary: string | null;
 }
 
 interface BackupRow {
@@ -114,7 +122,7 @@ interface RestoreRow {
  */
 async function readRepo(env: Env, repoId: string): Promise<RepoRow> {
   const row = await env.DB.prepare(
-    `SELECT epoch, last_seq, backup_enabled FROM repos WHERE repo_id = ?1`,
+    `SELECT epoch, last_seq, backup_enabled, vocabulary FROM repos WHERE repo_id = ?1`,
   )
     .bind(repoId)
     .first<RepoRow>();
@@ -619,6 +627,8 @@ async function beginRestore(
     );
   }
 
+  await assertRestorableVocabulary(env, session.repoId, backupId, repo);
+
   const undo = await captureBackup(env, session, repo, "pre-restore", null);
 
   const restoreId = newId();
@@ -671,6 +681,77 @@ async function beginRestore(
 }
 
 /**
+ * A restore writes operations, so it obeys the repository's vocabulary (STA-290).
+ *
+ * Staging materialises the backup's entities as rows straight into D1, without going
+ * through `push.ts`, so the rule has to be applied here too or a restore would be the
+ * one route left that can put registry rows into a workspace's log. That was the
+ * irreversibility the ticket named: a restore used to carry the contamination into the
+ * new epoch.
+ *
+ * Decided at BEGIN, before the undo is captured and before anything is staged, so a
+ * refusal costs nothing — and asked again at the top of every stage turn, for a restore
+ * that began before the rule existed (see `stageRestore`):
+ *
+ *   - a backup holding BOTH vocabularies is refused whatever the repository holds. Only a
+ *     repository contaminated before migration 0005 can produce one, whether the backup was
+ *     captured before 0005 or after it, before the recovery recipe was run.
+ *   - a backup of the other vocabulary is refused.
+ *   - an UNCLAIMED repository is claimed for the backup's vocabulary, here, with the same
+ *     guarded statement push uses. Claiming at begin rather than at the first stage is
+ *     what stops a push of the other vocabulary, arriving while the restore stages, from
+ *     claiming the repository out from under the entities being staged. Once claimed a
+ *     vocabulary is never rewritten, so nothing a later stage turn does needs the check.
+ *   - an empty backup has no vocabulary and claims nothing.
+ *
+ * The backup's vocabulary is counted in SQL over the stored fold, with the registry
+ * names bound as ONE parameter, so `begin` still never parses a backup's state in the
+ * Worker — it did not before this check, and a refusal should not be what starts. One
+ * query per call; a push pays none.
+ */
+async function assertRestorableVocabulary(
+  env: Env,
+  repoId: string,
+  backupId: string,
+  repo: RepoRow,
+): Promise<void> {
+  const counted = await env.DB.prepare(
+    `SELECT COUNT(*) AS total,
+            COALESCE(SUM(json_extract(e.value, '$.entity') IN (SELECT value FROM json_each(?3))), 0)
+              AS registry
+       FROM backups b, json_each(b.state, '$.entities') e
+      WHERE b.repo_id = ?1 AND b.backup_id = ?2`,
+  )
+    .bind(repoId, backupId, registryEntitiesJson())
+    .first<{ total: number; registry: number }>();
+  const total = counted?.total ?? 0;
+  const registry = counted?.registry ?? 0;
+  if (total === 0) return;
+  if (registry > 0 && registry < total) throw mixedBackupRefusal();
+
+  const offered: Vocabulary = registry === total ? "hub" : "workspace";
+  const held = storedVocabulary(repo.vocabulary);
+  if (held === offered) return;
+  if (held !== null) throw vocabularyRefusal(held, offered);
+
+  const claim = await env.DB.prepare(
+    `UPDATE repos SET vocabulary = ?2
+      WHERE repo_id = ?1 AND (vocabulary IS NULL OR vocabulary = ?2)`,
+  )
+    .bind(repoId, offered)
+    .run();
+  if ((claim.meta.changes ?? 0) === 0) {
+    // Claimed by a push between `readRepo` and this statement, and not for this backup.
+    const now = await env.DB.prepare(`SELECT vocabulary FROM repos WHERE repo_id = ?1`)
+      .bind(repoId)
+      .first<{ vocabulary: string | null }>();
+    const winner = storedVocabulary(now?.vocabulary);
+    if (winner === null) throw new SyncError("not_found", "no such repository");
+    throw vocabularyRefusal(winner, offered);
+  }
+}
+
+/**
  * Phase two: write the next chunk of entities into the new epoch.
  *
  * The batch mirrors push's, and for the same reason: the sequence numbers are
@@ -693,6 +774,17 @@ async function stageRestore(
       currentEpoch: repo.epoch,
     });
   }
+
+  /**
+   * Checked again on every turn, not only at begin. For a restore that began after
+   * migration 0005 this is a no-op — begin already claimed or matched the vocabulary,
+   * and a claimed vocabulary is never rewritten. It exists for a restore that BEGAN
+   * before 0005 and is still staging: nothing checked that one, and without this it
+   * would stage a contaminated backup into a workspace's next epoch with the rule in
+   * force. Refused, it stays `staging`; worker/README.md's recovery recipe says how to
+   * abandon it.
+   */
+  await assertRestorableVocabulary(env, session.repoId, restore.from_backup_id, repo);
 
   const source = await env.DB.prepare(
     `SELECT state, schema_version FROM backups WHERE repo_id = ?1 AND backup_id = ?2`,

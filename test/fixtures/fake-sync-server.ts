@@ -11,6 +11,8 @@
  *   - `actor` must be a string, `baseVersion` is required for every verb but
  *     `create`, `repoId` and `deviceId` must match the session
  *   - a batch is validated whole and rejected whole; nothing is partially applied
+ *   - the repository holds ONE vocabulary, claimed by its first push or restore, and
+ *     the other is refused with the Worker's exact 409 (`worker/src/vocabulary.ts`)
  *   - sequence slots are reserved for the WHOLE batch before any row is written,
  *     so a deduplicated operation leaves its slot unused and the log has GAPS
  *   - a `duplicate` result carries the seq of the ORIGINAL application
@@ -138,7 +140,16 @@ export interface FakeServerOptions {
   defaultPullLimit?: number;
   maxSnapshotPageSize?: number;
   protocol?: { min: number; max: number };
+  /**
+   * The repository's vocabulary as PROVISIONED — `repos.vocabulary`, migration 0005.
+   * Omitted is `null`, an unclaimed repository whose first push claims it, which is what
+   * a repository provisioned without the column set is on the real service.
+   */
+  vocabulary?: Vocabulary | null;
 }
+
+/** `worker/src/vocabulary.ts`: which vocabulary a repository's log holds. */
+export type Vocabulary = "hub" | "workspace";
 
 /**
  * The vocabulary, PER PROTOCOL VERSION — mirroring `worker/src/envelope.ts`.
@@ -182,6 +193,28 @@ function minProtocolFor(entity: string): number | null {
   return null;
 }
 
+/** The vocabulary one entity belongs to — `worker/src/vocabulary.ts::vocabularyOf`. */
+function vocabularyOf(entity: string): Vocabulary {
+  return REGISTRY_ENTITIES.has(entity) ? "hub" : "workspace";
+}
+
+/**
+ * The other vocabulary, refused — `worker/src/vocabulary.ts::vocabularyRefusal`, byte for
+ * byte: 409 `conflict`, not retryable, and the same two detail keys. The wording is pinned
+ * against `worker/test/vocabulary-fixture.ts`, which the Worker's own suite reads too.
+ */
+function vocabularyRefusal(repository: Vocabulary, request: Vocabulary): ServerError {
+  const message =
+    repository === "workspace"
+      ? "this repository holds workspace data; the hub registry needs its own repository."
+      : "this repository holds a hub registry; workspace data needs its own repository.";
+  return new ServerError(409, "conflict", `${message} Nothing was written.`, {
+    retryable: false,
+    repositoryVocabulary: repository,
+    requestVocabulary: request,
+  });
+}
+
 class ServerError extends Error {
   constructor(
     readonly status: number,
@@ -214,6 +247,12 @@ export class FakeSyncServer {
   readonly backups: FakeBackup[] = [];
   readonly restores: FakeRestore[] = [];
 
+  /**
+   * `repos.vocabulary` (migration 0005): null until the first push or restore claims it,
+   * and never changed afterwards. Public so a test can read what was claimed.
+   */
+  vocabulary: Vocabulary | null;
+
   private readonly devices: Device[] = [];
   private readonly options: Required<FakeServerOptions>;
 
@@ -226,8 +265,10 @@ export class FakeSyncServer {
       // Matches `worker/src/limits.ts`. `min` did not move with `max`, which is what
       // keeps every protocol-1 client working.
       protocol: { min: 1, max: 2 },
+      vocabulary: null,
       ...options,
     };
+    this.vocabulary = this.options.vocabulary;
   }
 
   /** Register a device and its bearer. The real service does this at `connect`. */
@@ -409,6 +450,8 @@ export class FakeSyncServer {
       this.backups.length = 0;
       this.restores.length = 0;
       this.devices.length = 0;
+      // The Worker deletes the `repos` row itself, vocabulary and all.
+      this.vocabulary = null;
       return this.ok(protocol, { purged: true });
     }
 
@@ -728,6 +771,23 @@ export class FakeSyncServer {
         results: [],
       });
     }
+
+    /**
+     * The repository holds ONE vocabulary — `worker/src/push.ts`, STA-290. The first
+     * non-empty push claims it; after that the other vocabulary is refused before any
+     * slot is reserved or any row written. Without this the fake accepted a registry
+     * push into a workspace repository, which the deployed Worker refuses: a fake more
+     * permissive than the service, in the one dimension this rule exists for.
+     *
+     * The Worker decides a race between two first pushes inside one D1 batch. This fake
+     * is single-threaded and each push runs to completion, so check-then-claim here has
+     * the same outcome the batch guarantees: exactly one claim.
+     */
+    const offered = vocabularyOf(ops[0]!.entity);
+    if (this.vocabulary !== null && this.vocabulary !== offered) {
+      throw vocabularyRefusal(this.vocabulary, offered);
+    }
+    this.vocabulary = offered;
 
     /**
      * Slots are reserved for the whole batch first. A duplicate's slot is then
@@ -1176,6 +1236,7 @@ export class FakeSyncServer {
       if (this.restores.some((candidate) => candidate.status === "staging")) {
         throw new ServerError(409, "conflict", "a restore is already in flight");
       }
+      this.claimForRestore(backup);
       const undo = this.captureBackup(session.deviceId, "pre-restore");
       restore = {
         restoreId: `restore-${this.restores.length + 1}`,
@@ -1215,6 +1276,8 @@ export class FakeSyncServer {
     }
 
     if (restore.staged < restore.entityCount) {
+      // Asked again on every stage turn, as `worker/src/backups.ts::stageRestore` does.
+      this.claimForRestore(backup);
       const chunk = backup.entities.slice(
         restore.staged,
         restore.staged + this.options.maxBatchSize,
@@ -1276,6 +1339,35 @@ export class FakeSyncServer {
       staged: restore.entityCount,
       preRestoreBackupId: restore.preRestoreBackupId,
     });
+  }
+
+  /**
+   * A restore obeys the repository's vocabulary — `worker/src/backups.ts`,
+   * `assertRestorableVocabulary`, decided at BEGIN before the undo is captured:
+   * a backup holding both vocabularies is refused; a backup of the other vocabulary is
+   * refused; an unclaimed repository is claimed for the backup's; an empty backup claims
+   * nothing.
+   */
+  private claimForRestore(backup: FakeBackup): void {
+    const total = backup.entities.length;
+    if (total === 0) return;
+    const registry = backup.entities.filter((entity) => REGISTRY_ENTITIES.has(entity.entity))
+      .length;
+    if (registry > 0 && registry < total) {
+      throw new ServerError(
+        409,
+        "conflict",
+        "this backup holds both hub registry and workspace entities, so restoring it would " +
+          "put both into one repository. It was captured before this service kept the two " +
+          "apart. Nothing was changed.",
+        { retryable: false, requestVocabulary: "mixed" },
+      );
+    }
+    const offered: Vocabulary = registry === total ? "hub" : "workspace";
+    if (this.vocabulary !== null && this.vocabulary !== offered) {
+      throw vocabularyRefusal(this.vocabulary, offered);
+    }
+    this.vocabulary = offered;
   }
 
   // ------------------------------------------------------------------ utils

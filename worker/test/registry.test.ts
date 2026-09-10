@@ -30,9 +30,9 @@ import {
 
 /**
  * The hub's repository. `REPO` is reused as the hub's id because at this layer a hub
- * IS a repository — there is no server-side flag distinguishing one, and there
- * deliberately is not: a flag would be a second thing to keep in step with the
- * entities the log actually contains.
+ * IS a repository. Each test seeds it unclaimed, so its first push claims its
+ * vocabulary (migration 0005, STA-290) — `vocabulary.test.ts` is where that rule and
+ * its refusals are pinned.
  */
 const HUB = REPO;
 
@@ -473,9 +473,9 @@ describe("the fold, the snapshot and the round trip", () => {
   it("refuses a batch that mixes registry and workspace entities", async () => {
     /**
      * A hub's log holds only registry entities and a workspace's holds only the others.
-     * A mixed batch is always a bug, and the specific accident it fences is a
-     * `registration` landing in a WORKSPACE's log — after which every protocol-1 client
-     * of that workspace is refused permanently, with no remedy short of a purge.
+     * A mixed batch is always a bug, refused as `validation` whatever the repository
+     * holds. Across batches the same line is held per repository by `repos.vocabulary`;
+     * see `vocabulary.test.ts`.
      */
     const issueOp = {
       opId: "mixed-issue",
