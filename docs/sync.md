@@ -1667,6 +1667,19 @@ Only `rate_limited`, `unavailable` and `offline` are retried. Everything else is
 decision for a human, and retrying it is how a client turns one bad request into a
 sustained one.
 
+**`conflict` also answers a write in the wrong vocabulary (STA-290).** A repository holds
+a hub's registry (`registration`, `crossLink`) or a workspace's data, never both. The
+service records which in `repos.vocabulary` and claims it with the repository's first
+write. After that, a push or a restore of the other vocabulary is refused before anything
+is written, as `conflict` with `repositoryVocabulary` and `requestVocabulary` in the body.
+`requestVocabulary` is `"mixed"` for a backup captured before the rule existed that holds
+both. It reuses `conflict` rather than adding a code on purpose: a client maps a code it
+does not know to `unavailable`, which is retried, so a new code would have made every
+released client retry a permanent refusal. The client names the remedy, which is that the
+other vocabulary needs its own repository, and `isVocabularyRefusal` in
+`src/core/cloud/client.ts` separates this refusal from a lease race. Provisioning and the
+cleanup for a repository contaminated before the rule existed are in `worker/README.md`.
+
 **`Retry-After` is not yet honoured**, and the backoff half of that row is the only
 half that ships. The Worker sends the header, and the client reads it into
 `detail.retryAfter` where `--json` consumers can see it — and then nothing consumes
