@@ -968,6 +968,28 @@ export class Hub {
   }
 
   /**
+   * Take the sent stamp back off acts whose push is known not to have landed.
+   *
+   * A stamp that survives a push the service refused would describe an act that never
+   * landed. After a restore, "stamped in another epoch" reads as "superseded", and the
+   * act would be settled without ever being sent. Clearing it returns the act to what it
+   * is, a change no publish has delivered. The same guard as the other two writers: a
+   * newer act is never touched.
+   */
+  clearCrossLinkChangesSent(changes: readonly CrossLinkChange[]): void {
+    tx(this.db, () => {
+      for (const change of changes) {
+        this.db
+          .prepare(
+            `UPDATE cross_link_changes SET sent_epoch = NULL, sent_version = NULL
+              WHERE link_key = ? AND present = ? AND changed_at = ?`,
+          )
+          .run(change.key, change.present ? 1 : 0, change.changedAt);
+      }
+    });
+  }
+
+  /**
    * Record that a publish has dealt with these changes: a removal is marked published,
    * and a (re)link is forgotten.
    *

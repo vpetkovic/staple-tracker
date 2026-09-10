@@ -1159,6 +1159,16 @@ made after seeing this one. Measured against real workerd (`scripts/hub-registry
 step 1.8): a retraction whose response was lost, followed by another machine linking it
 again, leaves the link linked. With the check removed, the retry retracted it a second time.
 
+The stamp is kept only for an act that **may** have landed. A push the service refused
+with a 4xx rolled back whole (the Worker's batch is atomic, and every 4xx is decided
+before it or by its predicate), so the stamp is cleared. A 5xx is ambiguous, because a
+step after the commit can still fail, so the publish re-reads once: an entity still at
+the stamped version never took the act, and its stamp is cleared. A cleared act is owed
+like one never tried, and goes out on the next publish, after a restore too. Only a
+possibly-delivered act keeps its stamp through a restore, and then it is settled rather
+than replayed into the new epoch. If it did land, another machine may have seen it and
+decided otherwise, and the restored backup may hold that newer decision.
+
 A removal record is kept after it is published. It is this machine's standing refusal to
 take the link back: an adopt that finds the link present in the registry leaves it removed
 here and says so (`kept_removed`). It is never re-sent, either. If another machine links it

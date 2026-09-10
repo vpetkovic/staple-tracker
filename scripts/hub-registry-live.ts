@@ -13,7 +13,9 @@
  *      a replacement, publish damage, restore, adopt. In-process, through the service
  *      module, so it can capture every request body and prove no filesystem path left.
  *      Step 1.8 injects a response lost after the Worker committed, and shows the lost
- *      act is not sent again over another machine's newer decision.
+ *      act is not sent again over another machine's newer decision. Step 1.9 lets a
+ *      restore land between a snapshot read and the push, and shows the refused act is
+ *      sent after the restore rather than dropped.
  *   2. **Two machines sharing one registry (STA-287).** Two STAPLE_HOMEs, two separate
  *      credential files, and real `git clone`s under DIFFERENT directory names, driven
  *      only through the `staple` CLI. It shows: (a) alternating publishes settle at zero
@@ -388,8 +390,58 @@ async function lostResponse(): Promise<void> {
     "the lost retraction landed once; X's next publish sent nothing, and Y's newer re-link stands",
     `threw=${threw} afterLost=${afterLost} yRelinked=${yRelink.relinked.length} xRetry=${xRetry.published} final=${finalLinks}`,
   );
+
+  step("1.9 a push refused because a restore moved the epoch is sent after the restore");
+  /**
+   * The mirror of 1.8 (second review of #99). The sent stamp is written before the push.
+   * The real Worker refuses a push fenced on an epoch a restore has moved, and writes
+   * nothing. A stamp that survived that refusal would read as "superseded" in the new
+   * epoch, and the removal would be settled without ever being sent.
+   */
+  x.hub.addCrossLink("LXO-2", "LXT-2");
+  await publishRegistry(x.hub, x.home, { fetchImpl: recordingFetch });
+  await setHubBackupConsent(x.home, hubId, true);
+  const backup = await createHubBackup(x.home, hubId, "hub-registry-live 1.9");
+  const z = await join2("lost-z");
+  await setHubBackupConsent(z.home, hubId, true);
+  x.hub.removeCrossLink("LXO-2", "LXT-2");
+  let restored = false;
+  const restoreBeforePush: typeof fetch = async (input, init) => {
+    if (!restored && init?.method === "POST" && String(input).endsWith("/ops")) {
+      restored = true;
+      await restoreRegistry(z.hub, z.home, backup.backupId, { apply: true });
+    }
+    return recordingFetch(input, init);
+  };
+  let refusal = "";
+  try {
+    await publishRegistry(x.hub, x.home, { fetchImpl: restoreBeforePush });
+  } catch (error) {
+    refusal = error instanceof Error ? error.message : String(error);
+  }
+  const has2 = async () =>
+    (await readPublishedRegistry(x.home, hubId, { fetchImpl: recordingFetch })).registry.crossLinks.some(
+      (l) => l.blockerIdentifier === "LXO-2",
+    );
+  const presentAfterRefusal = await has2();
+  const xAfterRestore = await publishRegistry(x.hub, x.home, { fetchImpl: recordingFetch });
+  const presentAtEnd = await has2();
+  console.log(
+    JSON.stringify({
+      refusal: refusal.slice(0, 60),
+      presentAfterRefusal,
+      xAfterRestore: { published: xAfterRestore.published, retracted: xAfterRestore.retracted.length },
+      presentAtEnd,
+    }),
+  );
+  check(
+    refusal.length > 0 && presentAfterRefusal && xAfterRestore.retracted.length === 1 && !presentAtEnd,
+    "the refused removal was not dropped: X's publish after the restore sent it, and the link is gone",
+    `refusal=${JSON.stringify(refusal.slice(0, 60))} presentAfterRefusal=${presentAfterRefusal} retracted=${xAfterRestore.retracted.length} presentAtEnd=${presentAtEnd}`,
+  );
   x.hub.close();
   y.hub.close();
+  z.hub.close();
 }
 
 // ======================================================= walk 2: two machines, one registry

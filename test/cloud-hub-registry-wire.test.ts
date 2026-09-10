@@ -1514,7 +1514,7 @@ describe("two machines publishing one registry converge (STA-287)", () => {
   function failingPush(
     server: FakeSyncServer,
     failOn: number,
-    mode: "503" | "lost",
+    mode: "503" | "503-after-commit" | "lost",
   ): typeof fetch {
     let pushes = 0;
     return (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
@@ -1524,6 +1524,16 @@ describe("two machines publishing one registry converge (STA-287)", () => {
           if (mode === "503") {
             // Refused before it reached the log: nothing landed.
             return new Response(JSON.stringify({ code: "unavailable", message: "injected 503" }), {
+              status: 503,
+              headers: { "content-type": "application/json" },
+            });
+          }
+          if (mode === "503-after-commit") {
+            // The batch committed, and a step after the commit failed: `push.ts` resolves
+            // each operation's seq after `env.DB.batch`, and `index.ts` answers 503 for
+            // any error that isn't a SyncError.
+            await server.fetch(input, init);
+            return new Response(JSON.stringify({ code: "unavailable", message: "injected post-commit 503" }), {
               status: 503,
               headers: { "content-type": "application/json" },
             });
@@ -1553,8 +1563,9 @@ describe("two machines publishing one registry converge (STA-287)", () => {
     ).rejects.toThrow();
     /**
      * Settled chunk by chunk: ALP-1's chunk landed, so its removal is done. ALP-2's chunk
-     * was refused, so its removal is still owed, stamped with the version it was sent at.
-     * The version check below would also catch ALP-1, but this layer shouldn't depend on it.
+     * got a 503, and the re-read found its entity unmoved, so it never landed: its removal
+     * is still owed, and unstamped, like one no publish has tried. The version check below
+     * would also catch ALP-1, but this layer shouldn't depend on it.
      */
     expect(
       a.hub.listCrossLinkChanges().map((c) => ({
@@ -1564,7 +1575,7 @@ describe("two machines publishing one registry converge (STA-287)", () => {
       })),
     ).toEqual([
       { link: "ALP-1", published: true, stamped: true },
-      { link: "ALP-2", published: false, stamped: true },
+      { link: "ALP-2", published: false, stamped: false },
     ]);
     // Chunk 1 (ALP-1) landed. B sees it, then decides it wants that link after all.
     await adopt(b, server);
@@ -1635,6 +1646,116 @@ describe("two machines publishing one registry converge (STA-287)", () => {
     const retry = await publish(a, server);
     expect({ published: retry.published, relinked: retry.relinked }).toEqual({ published: 0, relinked: [] });
     expect(await serviceLinks(a, server, hubId)).toEqual([]);
+    a.hub.close();
+    b.hub.close();
+  });
+
+  /**
+   * The mirror of the three tests above: an act that DEFINITELY never landed must not be
+   * dropped because a restore moved the epoch before the retry (found in the second
+   * review of #99).
+   *
+   * The sent stamp is written before the push. If it survives a push the service
+   * refused, it describes an act that never landed. After a restore, "stamped in another
+   * epoch" then reads as "superseded", and the act was settled without ever being sent:
+   * the link stayed on the service for good, and this machine's report said the removal
+   * "was sent".
+   */
+  async function backupAndRestorer(hubId: string, server: FakeSyncServer, a: { home: string }) {
+    process.env.STAPLE_HOME = a.home;
+    await setHubBackupConsent(a.home, hubId, true, { fetchImpl: server.fetch });
+    const backup = await createHubBackup(a.home, hubId, "link present", { fetchImpl: server.fetch });
+    const c = machine();
+    connect(c.home, hubId, server, "device-c", c.hub);
+    setConsent(c.home, hubId, { backup: true });
+    setRegistryConsent(c.home, hubId, true, REGISTRY_DISCLOSURE);
+    const restore = async (): Promise<void> => {
+      const previous = process.env.STAPLE_HOME;
+      process.env.STAPLE_HOME = c.home;
+      await restoreRegistry(c.hub, c.home, backup.backupId, { fetchImpl: server.fetch, apply: true });
+      process.env.STAPLE_HOME = previous;
+    };
+    return { c, restore };
+  }
+
+  it("a push refused because a restore moved the epoch is sent after the restore", async () => {
+    // Reviewer's repro 1: C's restore completes between A's snapshot read and A's push.
+    const { a, b, server, hubId } = withSharedLink();
+    await publish(a, server);
+    const { c, restore } = await backupAndRestorer(hubId, server, a);
+
+    a.hub.removeCrossLink("ALP-1", "BET-1");
+    let restored = false;
+    const restoreBeforePush = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      if (!restored && init?.method === "POST" && String(input).endsWith("/ops")) {
+        restored = true;
+        await restore();
+      }
+      return server.fetch(input, init);
+    }) as typeof fetch;
+    process.env.STAPLE_HOME = a.home;
+    const refused = await publishRegistry(a.hub, a.home, { fetchImpl: restoreBeforePush }).catch((e) => e);
+    expect(cloudCodeOf(refused)).toBe("epoch_changed");
+    // The service refused the whole batch: nothing landed.
+    expect(await serviceLinks(a, server, hubId)).toEqual(["ALP-1 -> BET-1"]);
+
+    const retry = await publish(a, server);
+    expect(retry.retracted.map((l) => l.blockerIdentifier)).toEqual(["ALP-1"]);
+    expect(await serviceLinks(a, server, hubId)).toEqual([]);
+    a.hub.close();
+    b.hub.close();
+    c.hub.close();
+  });
+
+  it("a push that failed with a 503 and never landed is sent after a restore", async () => {
+    // Reviewer's repro 2: the 503 comes back, and a restore completes before the retry.
+    const { a, b, server, hubId } = withSharedLink();
+    await publish(a, server);
+    const { c, restore } = await backupAndRestorer(hubId, server, a);
+
+    a.hub.removeCrossLink("ALP-1", "BET-1");
+    process.env.STAPLE_HOME = a.home;
+    await expect(
+      publishRegistry(a.hub, a.home, { fetchImpl: failingPush(server, 1, "503") }),
+    ).rejects.toThrow();
+    expect(await serviceLinks(a, server, hubId)).toEqual(["ALP-1 -> BET-1"]);
+    await restore();
+
+    const retry = await publish(a, server);
+    expect(retry.retracted.map((l) => l.blockerIdentifier)).toEqual(["ALP-1"]);
+    expect(await serviceLinks(a, server, hubId)).toEqual([]);
+    a.hub.close();
+    b.hub.close();
+    c.hub.close();
+  });
+
+  it("a 503 after a batch that DID land keeps the stamp, so the act is not resent over a newer decision", async () => {
+    /**
+     * The case the 5xx branch looks for. A 503 does not prove a rollback: the batch can
+     * commit and a later step fail. Here the re-read sees the entity moved past the
+     * stamped version and keeps the stamp. B then sees the removal and links it again,
+     * and A's retry must settle the removal without sending it. Clearing the stamp on
+     * every 5xx would send it again with a fresh opId and undo B's newer link.
+     */
+    const { a, b, server, hubId } = withSharedLink();
+    await publish(a, server);
+    await adopt(b, server);
+
+    a.hub.removeCrossLink("ALP-1", "BET-1");
+    process.env.STAPLE_HOME = a.home;
+    await expect(
+      publishRegistry(a.hub, a.home, { fetchImpl: failingPush(server, 1, "503-after-commit") }),
+    ).rejects.toThrow();
+    expect(await serviceLinks(a, server, hubId)).toEqual([]); // it did land
+    expect(a.hub.listCrossLinkChanges().map((c) => c.sentVersion !== null)).toEqual([true]);
+
+    await adopt(b, server);
+    b.hub.addCrossLink("ALP-1", "BET-1");
+    expect((await publish(b, server)).relinked).toHaveLength(1);
+
+    const retry = await publish(a, server);
+    expect({ published: retry.published, retracted: retry.retracted }).toEqual({ published: 0, retracted: [] });
+    expect(await serviceLinks(a, server, hubId)).toEqual(["ALP-1 -> BET-1"]);
     a.hub.close();
     b.hub.close();
   });

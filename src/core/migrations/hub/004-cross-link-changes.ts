@@ -53,8 +53,15 @@ import type { Migration } from "../types.js";
  * version, same opId. If the entity has moved, the operation landed, or something newer
  * happened after this machine read it. Either way, sending it again would overrule a
  * later act, so the row is settled and nothing is sent. The epoch is part of the check
- * because a restore starts a new epoch and can reset versions, and an act sent before a
- * restore must not be replayed over it.
+ * because a restore starts a new epoch and can reset versions, and an act that may have
+ * landed before a restore must not be replayed over it.
+ *
+ * A stamp is kept only for an act that may have landed. When a push fails in a way that
+ * proves it did not land (the service refused it with a 4xx, or answered 5xx and a
+ * re-read shows the entity unmoved), `publishRegistry` clears the stamp again. Otherwise
+ * a restore before the retry would make the stamp read as "superseded", and an act that
+ * was never delivered would be settled without being sent (`unstampWhatDidNotLand` in
+ * `hub-registry-service.ts`).
  *
  * Both are NULL until a publish sends the row, and a new act on the link resets them.
  *

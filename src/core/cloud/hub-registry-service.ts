@@ -87,11 +87,13 @@ import {
   type HubRegistryPayload,
 } from "./hub-registry.js";
 import {
+  CROSS_LINK_ENTITY,
   REGISTRY_PROTOCOL,
   chunkOperations,
   diffRegistry,
   publishedStateOf,
   registryFromSnapshot,
+  type CarriedChange,
   type LinkRef,
   type RegistryOperation,
   type RenamedEntry,
@@ -667,11 +669,15 @@ export interface PublishReport {
  * This machine's recorded link changes are sent exactly once, even through a failed
  * publish. Each one is stamped with the epoch and entity version it is sent against just
  * before its chunk is pushed, and settled as soon as that chunk lands. If a later chunk
- * fails, the chunks that landed are already settled. If the Worker commits and the
- * response is lost, the next publish sees the entity has moved past the stamp and settles
- * the change without sending it again, so it can't overrule a newer act another machine
- * made after seeing this one. If the push never landed, the entity has not moved, and the
- * change is resent against the same version with the same opId. See hub migration 004.
+ * fails, the chunks that landed are already settled.
+ *
+ * A failed push keeps its stamp only when the act may have landed; see
+ * {@link unstampWhatDidNotLand}. The next publish then settles a stamped act whose entity
+ * has moved, without sending it again, so it can't overrule a newer act another machine
+ * made after seeing this one. A stamped act whose entity has not moved never landed, and
+ * is resent against the same version with the same opId. An act whose stamp was cleared
+ * is simply owed, like one no publish has tried, and is sent on the next publish, after
+ * a restore too. See hub migration 004.
  */
 export async function publishRegistry(
   hub: Hub,
@@ -759,22 +765,28 @@ export async function publishRegistry(
         clientSeq,
       });
     });
-    const response = (await pushOperations(
-      endpoint,
-      {
-        repositoryId: hubId,
-        token,
-        deviceId: connection.deviceId,
-        /**
-         * Fenced on the epoch the snapshot reported. A restore that moved the epoch
-         * between the read and the push makes this diff a statement about a timeline
-         * that no longer exists, and `epoch_changed` is the right answer.
-         */
-        epoch,
-        ops,
-      },
-      { ...options, protocol: REGISTRY_PROTOCOL },
-    )) as { results?: ReadonlyArray<{ status?: string }> };
+    let response: { results?: ReadonlyArray<{ status?: string }> };
+    try {
+      response = (await pushOperations(
+        endpoint,
+        {
+          repositoryId: hubId,
+          token,
+          deviceId: connection.deviceId,
+          /**
+           * Fenced on the epoch the snapshot reported. A restore that moved the epoch
+           * between the read and the push makes this diff a statement about a timeline
+           * that no longer exists, and `epoch_changed` is the right answer.
+           */
+          epoch,
+          ops,
+        },
+        { ...options, protocol: REGISTRY_PROTOCOL },
+      )) as { results?: ReadonlyArray<{ status?: string }> };
+    } catch (error) {
+      await unstampWhatDidNotLand(hub, home, hubId, options, error, carried, epoch);
+      throw error;
+    }
 
     // Counted from the service's answer, not from the batch length. See `applied`.
     for (const result of response.results ?? []) {
@@ -795,6 +807,73 @@ export async function publishRegistry(
     batches: chunks.length,
     upToDate: false,
   };
+}
+
+/**
+ * After a failed push, take the sent stamp off every act in the chunk that is known not
+ * to have landed. Keep it on any act that may have landed.
+ *
+ * The stamp is written before the push. If it survived a push that did not land, the
+ * next publish would read it as "sent", and after a restore "stamped in another epoch"
+ * reads as "superseded". The act would then be settled without ever being sent: the
+ * link stays on the service for good, and this machine reports the removal as sent.
+ *
+ * How the failure is classified, from what the Worker actually does:
+ *
+ *   - **A 4xx from the service.** Every one is decided before `env.DB.batch` writes or by
+ *     its atomic predicate (`epoch_changed`, the vocabulary refusal, `validation`,
+ *     `not_found`, auth, `payload_too_large`, `protocol_unsupported`, `rate_limited`),
+ *     and `worker/src/push.ts` rolls the whole batch back on any failure. Nothing landed,
+ *     so the stamps are cleared.
+ *   - **A 5xx from the service.** Ambiguous. `worker/src/index.ts` answers 503 for any
+ *     error that isn't a `SyncError`, and `push.ts` still has steps AFTER the batch
+ *     commits (resolving each operation's seq), so a 503 can follow a batch that landed.
+ *     So this looks, with one snapshot read: an entity still at the stamped epoch and
+ *     version never took the act, and its stamp is cleared. One that has moved keeps it.
+ *   - **No response at all** (the connection failed). The service may or may not have
+ *     committed. The stamp stays, and the next publish's version check decides.
+ *
+ * So the only stamp that survives a failure belongs to an act that may have been
+ * delivered. For that case alone, a restore before the retry settles the act instead of
+ * sending it. That is the chosen rule, and here is why. If the act landed, another
+ * machine may have seen it and made a newer decision that the restored backup kept.
+ * Sending it again under the new epoch would overrule that decision with an opId the
+ * service can't deduplicate, which is the replay this stamp exists to prevent. What is
+ * given up is a restore racing a lost response to the same act, and the restore is
+ * already the fleet-wide rewind a person chose.
+ *
+ * If the look itself fails, or the epoch has moved by the time it runs, nothing can be
+ * established, so the stamps stay.
+ */
+async function unstampWhatDidNotLand(
+  hub: Hub,
+  home: string,
+  hubId: string,
+  options: Options,
+  error: unknown,
+  carried: readonly CarriedChange[],
+  epoch: number,
+): Promise<void> {
+  if (carried.length === 0) return;
+  const status = error instanceof StapleError ? error.detail?.status : undefined;
+  if (typeof status !== "number") return;
+  if (status < 500) {
+    hub.clearCrossLinkChangesSent(carried.map((c) => c.change));
+    return;
+  }
+  try {
+    const { entities, epoch: now } = await readSnapshotEntities(home, hubId, options);
+    if (now !== epoch) return;
+    const versionOf = (entityId: string): number => {
+      const held = entities.find((e) => e.entity === CROSS_LINK_ENTITY && e.entityId === entityId);
+      return held === undefined ? 0 : (held.version ?? 1);
+    };
+    hub.clearCrossLinkChangesSent(
+      carried.filter((c) => versionOf(c.entityId) === c.baseVersion).map((c) => c.change),
+    );
+  } catch {
+    // Could not look. The stamps stay, which is the safe reading of "may have landed".
+  }
 }
 
 /**
