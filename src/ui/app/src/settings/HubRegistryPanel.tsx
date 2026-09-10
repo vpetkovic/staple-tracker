@@ -799,7 +799,14 @@ export function HubRegistryPanel(props: HubRegistryPanelProps) {
               </div>
             </div>
           ) : null}
-          {state.applied !== null ? <AdoptionView report={state.applied} /> : null}
+          {state.applied !== null ? (
+            <div data-hub-registry-applied className="space-y-2">
+              <AdoptionView report={state.applied} />
+              <Button type="button" size="sm" variant="ghost" onClick={actions.onDismissAdoption}>
+                Close
+              </Button>
+            </div>
+          ) : null}
         </Block>
       </div>
     </Section>
@@ -997,7 +1004,7 @@ export function useHubRegistry(onReport: (report: HubCloudReport) => void): {
         patch({ adoption: null, applied: answer.adoption, publish: null });
       });
     },
-    onDismissAdoption: () => patch({ adoption: null }),
+    onDismissAdoption: () => patch({ adoption: null, applied: null }),
   };
 
   return { state, actions };

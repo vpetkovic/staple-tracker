@@ -473,6 +473,45 @@ registry-driven and a vocabulary category, and pins the unsaved-changes guard,
 the conflict banner's two ways out, and the label, scope, error and
 `aria-current` wiring over every field and button on the surface.
 
+### Cloud: the hub registry
+
+The *Cloud* category (global scope) leads with the hub, then the **Hub
+registry** panel, then the workspace list. The panel is the page's half of
+`staple hub registry`: four tiles for its state (registry id, service,
+publishing, hub backups), then one block per step.
+
+- **Identity.** The hub's registry id, or *None yet*. *Mint an id* is
+  `staple hub registry id`; *Take on an existing id* is `staple hub registry
+  identity`. Replacing an id asks first, and the question is the server's
+  `describeIdentityReplacement` sentence. It is shown whenever there is a
+  previous id, because this machine cannot tell whether that id was used.
+  Unavailable while the hub is connected.
+- **Connection.** A collapsed form for endpoint, enrollment secret, label and
+  credential store. *Review connection* shows the hub's own preview; *Connect*
+  sends only the ticket and the secret. Connected, it offers *Disconnect the
+  hub*, which is local and leaves what was published on the service.
+- **Publish.** The publish switch, with `REGISTRY_DISCLOSURE` from the report,
+  and *Publish now*. The result lists every group the publish report carries:
+  what the service holds that this machine lacks, names that differ between
+  here and the registry, link retractions and re-links, and anything that
+  could not be published.
+- **Backups on the service.** Its own switch, asked of the service first. The
+  list is fetched only when *Show backups* is pressed. *Restore…* on a row
+  shows the CLI's disclosure, and the confirm button names the backup, its
+  epoch and its entity count. The server checks those three against its own
+  list and restores nothing if they differ. Afterwards the panel names the
+  undo copy, marked *undo* in the list, and previews the adoption of what came
+  back.
+- **Adopt.** *Preview adoption* lists one decision per incoming workspace and
+  per link. *Apply N changes to this machine* carries the preview's digest;
+  if the service or this machine's list moved since the preview, it is
+  refused and nothing is written.
+
+Nothing in the panel reaches the service without a press. The routes are the
+eleven `POST /api/hub/registry/*` routes, each named in the method gate.
+`test/network-silence.test.ts` drives every one of them in the state where it
+must not leave the machine.
+
 ## Glyph catalog
 
 Every kind wears one **appearance** record — `{ source, value, label, fallback }`
