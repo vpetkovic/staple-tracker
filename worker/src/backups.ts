@@ -704,8 +704,9 @@ async function beginRestore(
  *   - an empty backup has no vocabulary and claims nothing.
  *
  * The backup's vocabulary is counted in SQL over the stored fold, with the registry
- * names bound as ONE parameter, rather than by parsing the blob here: a large backup's
- * JSON is exactly the CPU the free plan's 10 ms does not have to spare on a refusal.
+ * names bound as ONE parameter, so `begin` still never parses a backup's state in the
+ * Worker — it did not before this check, and a refusal should not be what starts. One
+ * query per call; a push pays none.
  */
 async function assertRestorableVocabulary(
   env: Env,

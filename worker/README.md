@@ -199,9 +199,11 @@ thirteen entities. `repos.vocabulary` (migration `0005`, STA-290) records which 
   permanent refusal into a retry loop on every installed build.
 - **Set once.** No statement in this Worker changes a vocabulary that is already set.
   Only an operator can, by hand, and the recovery recipe below says when to.
-- **It costs no query.** The vocabulary arrives with the credential in the
+- **A push pays no extra query.** The vocabulary arrives with the credential in the
   authentication query, which lets a push refuse early, and the race-free check rides
-  the statements the batch already had.
+  the statements the batch already had. A restore pays one query per call: begin and each
+  stage turn count the backup's registry entities in SQL, and an unclaimed repository
+  costs begin one more statement to claim.
 
 Before `0005` there was no such rule, so a `registration` pushed at a workspace's
 `repoId` was accepted, and every protocol-1 client of that workspace was then refused at
