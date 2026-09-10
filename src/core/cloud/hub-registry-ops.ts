@@ -3,86 +3,84 @@
  *
  * Contract: `docs/sync.md`, "The hub registry is a set, not a map" and "Protocol
  * evolution". Sibling of {@link ./hub-registry.js}, which owns the payload type
- * and the adoption rules; this file owns only the translation to and from the
- * wire and knows nothing about hubs, databases or networks.
+ * and the adoption rules. This file owns only the translation to and from the
+ * wire. It knows nothing about hubs, databases or networks.
  *
  * ## Why the hub becomes a repository rather than growing a storage concept
  *
  * The service is repository-scoped end to end. `worker/src/auth.ts` resolves a
  * token to exactly one `repo_id` and binds it into every subsequent statement, so
  * "cross-repository access is structurally impossible rather than merely
- * checked"; a backup is a fold of one repository's operation log
- * (`worker/src/fold.ts`); a restore materialises that fold into a new epoch of
+ * checked". A backup is a fold of one repository's operation log
+ * (`worker/src/fold.ts`), and a restore materialises that fold into a new epoch of
  * that same log. There is no second storage shape to reach for and no route that
  * takes a blob.
  *
- * So the hub is a repository, scoped by `hub.hubId()` — an identity `hub.ts`
- * already mints and stores in `hub.db`'s `meta` table for exactly this reason:
- * *"it is the thing a backup is OF, and a backup that cannot say what it is a
- * backup of cannot be safely restored"*. Its operation log carries the registry.
- * Then **backup is the existing fold and restore is the existing snapshot**, and
- * this feature adds no persistence mechanism at all — which is the whole reason
- * this shape was chosen over inventing one.
+ * So the hub is a repository, scoped by `hub.hubId()`, and its operation log carries
+ * the registry. Then **backup is the existing fold and restore is the existing
+ * snapshot**, and the registry adds no persistence mechanism to the service.
+ *
+ * ## Publishing is a union
+ *
+ * Any number of machines can publish one registry, and they converge on the same set,
+ * because no publish can destroy data another machine owns (STA-287):
+ *
+ *   - **Registration names are create-only.** `slug`, `prefix`, `kind` and `addedAt` go
+ *     out only on the `create`. The product has no rename operation: nothing in `src`
+ *     updates `workspaces.slug`, and a workspace's stored slug beats its directory name.
+ *     So names diverge only when two machines choose different directory names at
+ *     `staple init`, and first-writer-wins is the right resolution. A difference is
+ *     reported in {@link RegistryDiff.renamed}. It is never sent.
+ *   - **A registration is never deleted.** `staple hub unregister` is local by contract.
+ *   - **A cross-link is retracted only by the machine that removed it.** The removal
+ *     is recorded in `cross_link_changes` (hub migration 004). A machine that merely
+ *     lacks a link never retracts it, and a machine still holding a link another
+ *     machine retracted never puts it back unless it linked it again itself.
+ *
+ * Whatever the service holds that this machine lacks is left alone and reported in
+ * {@link RegistryDiff.unadopted}. A machine that is behind can therefore publish
+ * safely, and `staple hub registry adopt` takes the rest on.
  *
  * ## Two entities, and why the pair rather than one
  *
- * `registration` keyed by `repositoryId`, `crossLink` keyed by its four names.
+ * `registration` keyed by `repositoryId`, `crossLink` keyed by its portable identity.
  * They are separate entities because they have different keys and different
  * lifecycles, and the fold is per entity: one blob entity holding the whole
- * registry would make every publish rewrite every workspace, so two machines
- * editing two different workspaces would each supersede the other's row. The
- * fold is last-write-wins per entity, so the granularity of the entity IS the
- * granularity of the conflict.
+ * registry would make every publish rewrite every workspace. The fold is
+ * last-write-wins per entity, so the granularity of the entity IS the granularity
+ * of the conflict.
  *
- * ## A registration with no `repositoryId` is not publishable
+ * ## An entry with no `repositoryId` is not publishable
  *
  * `RegistryEntry.repositoryId` is nullable, because a workspace that has never
  * recorded a `.staple/repository.json` has no identity yet. Such an entry has no
- * adoption key, and the entity id has to BE the adoption key — anything else and
- * two machines cannot agree that they are talking about the same workspace.
- *
- * Minting one here is precisely the silent fork `repo-identity.ts` exists to
- * prevent: the id would be this machine's invention, the real repository would
- * later record its own, and the registry would hold two rows for one workspace
- * with no way to notice. So the entry is REFUSED rather than skipped quietly, and
- * the caller reports it — `adoptRegistry` already has an `unmatchable` outcome
- * with a sentence for exactly this state, and this is the same fact seen from the
- * sending side.
- *
- * ## The cross-link entity id is an encoding, not a hash
- *
- * The requirement is that the same edge is the same entity on both machines, from
- * the four names alone. A hash would satisfy that and was rejected: it is one-way,
- * so a log row becomes unreadable to a human debugging it, and it introduces a
- * collision probability where none is needed. Percent-encoding each component and
- * joining with `/` is INJECTIVE by construction — `encodeURIComponent` escapes the
- * separator, so distinct four-tuples cannot collide — and it follows the
- * precedent already on the wire: a `document` entity id is `"<issueId>/<key>"`
- * and `apply.ts` splits it back. See {@link crossLinkEntityId}.
- *
- * It also keeps this module free of `node:crypto`, and therefore free of every
- * runtime assumption, which is what lets `worker/test/registry.test.ts` import it
- * and push the real shapes through the real routes instead of re-typing them as a
- * second set of literals that could drift.
+ * adoption key, and the entity id has to BE the adoption key. Minting one here is the
+ * silent fork `repo-identity.ts` exists to prevent. So the entry is reported by name
+ * and not sent, and so is every link with an end in it.
  *
  * ## What cannot be in an emitted operation
  *
- * A path. Not by redaction — {@link RegistrationPayload} is a closed interface
+ * A path. Not by redaction: {@link RegistrationPayload} is a closed interface
  * with no path field, so emitting one is a compile error rather than a review
- * finding, exactly as `hub-registry.ts` arranged for `RegistryEntry`: *"the field
- * does not exist to be forgotten."* Every value in an emitted payload is copied
- * from the {@link HubRegistryPayload} it was given, and
- * `test/cloud-hub-registry-wire.test.ts` pins both halves — the exact key set of
- * every payload, and that a real hub's absolute `workspaces.path` appears nowhere
+ * finding. `test/cloud-hub-registry-wire.test.ts` pins both halves, the exact key set
+ * of every payload, and that a real hub's absolute `workspaces.path` appears nowhere
  * in the serialized batch.
  */
 import { StapleError } from "../types.js";
+import type { CrossLinkChange } from "../hub.js";
 import {
   REGISTRY_PAYLOAD_FORMAT,
   type HubRegistryPayload,
   type RegistryCrossLink,
   type RegistryEntry,
 } from "./hub-registry.js";
+import {
+  crossLinkEntityId,
+  parseCrossLinkEntityId,
+  parseLegacyCrossLinkEntityId,
+} from "./cross-link-key.js";
+
+export { crossLinkEntityId, parseCrossLinkEntityId };
 
 /** The two entity names this module emits. Mirrored in `worker/src/envelope.ts`. */
 export const REGISTRATION_ENTITY = "registration";
@@ -91,79 +89,45 @@ export const CROSS_LINK_ENTITY = "crossLink";
 /**
  * The protocol version the two entities require.
  *
- * A wire widening, declared rather than assumed. `docs/sync.md` used to claim that
- * "new entity kinds" were additive within a protocol version; they are not, because
- * `apply.ts` THROWS on an entity it does not know and only `ReferentMissing` is
- * deferred, so an older device pulling one of these would stall its whole page. See
- * `worker/src/envelope.ts` and the amended "Protocol evolution".
+ * A wire widening, declared rather than assumed: `apply.ts` THROWS on an entity it does
+ * not know, so an older device pulling one of these would stall its whole page. See
+ * `worker/src/envelope.ts` and "Protocol evolution" in `docs/sync.md`.
  */
 export const REGISTRY_PROTOCOL = 2;
 
 /**
- * One workspace, as a `registration` payload.
+ * One workspace, as a `registration` payload. Sent only on the `create`.
  *
- * A CLOSED interface, and that is the point rather than tidiness. There is no
- * `path`, no `lastSeenAt` and no index signature, so a later edit cannot add a
- * filesystem path to this shape without the compiler refusing it.
+ * A CLOSED interface. There is no `path`, no `lastSeenAt` and no index signature, so a
+ * later edit cannot add a filesystem path without the compiler refusing it.
  *
- * `format` rides on every payload rather than being stated once for the log. Ops
- * from different builds interleave in one operation log — that is what a log is —
- * so a single declaration somewhere would describe whichever build wrote it last.
- * Per-op it is one small integer, it survives the fold untouched (every verb
- * merges the keys it carried), and a reader takes the maximum and refuses on it.
+ * `format` rides on every payload rather than being stated once for the log, because
+ * ops from different builds interleave in one log. A reader takes the maximum and
+ * refuses on it.
  */
 export interface RegistrationPayload {
   readonly format: number;
   readonly slug: string;
   readonly prefix: string;
   readonly kind: string;
-  /**
-   * OPTIONAL, and only ever sent on the `create`. See {@link diffRegistry}.
-   *
-   * It is the local row's registration time, so two machines can never agree on it, and
-   * sending it on every update made a shared registry diverge for ever — appending an
-   * operation to a metered log on every pass, on a single workspace with no edges. Sent
-   * once, it is first-writer-wins: the registry's own record of when this SET first
-   * learned of the workspace, which is the only reading that means anything shared.
-   */
-  readonly addedAt?: string;
+  readonly addedAt: string;
 }
 
 /**
- * One edge, as a `crossLink` payload. Also closed, for the same reason.
+ * One edge, as the `crossLink` payload of its `create`. Also closed.
  *
- * ## `present` is a FIELD, and the alternative was un-resurrectable edges
+ * The slugs are for display. The entity id carries the identity, so two machines that
+ * name a workspace differently are still talking about the same edge. Like a
+ * registration's names, they are sent once and never updated.
  *
- * The obvious way to retract an edge is the `delete` verb, and it is wrong here. The
- * fold's tombstone is final by design — *"the tombstone wins regardless of arrival
- * order, which is what makes convergence order-independent"* — and `fold.ts` discards
- * every later operation on a tombstoned entity. That is exactly right for an `issue`,
- * whose id is minted once, because resurrecting one is meaningless.
+ * ## `present` is a FIELD, because a tombstone can't be undone
  *
- * A cross-link's id is **derived from its content**. So "remove a blocker, then put it
- * back" — an ordinary thing a person does — produces the same entity id again, lands on
- * the tombstone, and is silently discarded while the push reports success. The edge
- * could never come back, and a restore would carry the tombstone into the new epoch
- * because `materializedVerb` reproduces a bare `delete`. The epoch bump is not an
- * escape from it.
- *
- * Two other options were considered and rejected:
- *
- *   - **Never retract at all**, mirroring the registration rule. But an edge removed
- *     locally would stay in the published set and `adoptRegistry` would put it back on
- *     the next adopt, so a person could not remove a blocker and have it stay removed.
- *   - **A generation counter in the key**, bumped past existing tombstones. Derivable
- *     from the snapshot, so it needs no local state — but it makes the key no longer a
- *     pure function of the four names, which is the property that lets two machines
- *     agree an edge is the same edge without coordinating.
- *
- * A `present` flag keeps the key pure, keeps retraction expressible, and makes
- * resurrection an ordinary field update that the fold's plain merge already handles.
- * The cost is that a retracted edge stays as a row — which a tombstone also does.
- *
- * **So this wire emits no `delete`, ever, for either entity.** `worker/src/envelope.ts`
- * refuses the verb for both registry entities so that stays true structurally rather
- * than by the client's good manners.
+ * The fold's tombstone is final: `fold.ts` discards every later operation on a
+ * tombstoned entity. A cross-link's id is derived from its content, so "remove a
+ * blocker, then put it back" would land on the tombstone and be dropped. So retraction
+ * is `present: false`, and linking again is an update back to `present: true`, which
+ * the fold's plain merge handles. **This wire emits no `delete`, ever, for either
+ * entity**, and `worker/src/envelope.ts` refuses the verb for both.
  */
 export interface CrossLinkPayload {
   readonly format: number;
@@ -172,7 +136,12 @@ export interface CrossLinkPayload {
   readonly blockedWs: string;
   readonly blockedIdentifier: string;
   readonly type: "blocks";
-  /** False retracts the edge from the published set. See the type comment. */
+  readonly present: true;
+}
+
+/** The only update this wire sends: a link retracted or linked again. */
+export interface CrossLinkPresencePayload {
+  readonly format: number;
   readonly present: boolean;
 }
 
@@ -180,41 +149,31 @@ export interface CrossLinkPayload {
 export interface RegistryOperation {
   readonly entity: typeof REGISTRATION_ENTITY | typeof CROSS_LINK_ENTITY;
   readonly entityId: string;
-  /** Never `delete`. See {@link CrossLinkPayload} for why the verb is not used here. */
+  /** Never `delete`. See {@link CrossLinkPayload}. */
   readonly verb: "create" | "update";
   /**
-   * The folded entity version this operation moves off — 0 for a `create`.
+   * The folded entity version this operation moves off, 0 for a `create`.
    *
-   * Carried on the operation rather than left to the caller because it is part of the
-   * operation's IDENTITY: `hub-registry-service.ts` derives the `opId` from it, which
-   * is what stops a value that repeats over time from colliding with its own earlier
-   * appearance. See that module's `operationId`.
+   * Part of the operation's IDENTITY: `hub-registry-service.ts` derives the `opId` from
+   * it, which is what stops a link retracted and re-linked from colliding with its own
+   * earlier appearance. See that module's `operationId`.
    */
   readonly baseVersion: number;
-  readonly payload: RegistrationPayload | CrossLinkPayload;
+  readonly payload: RegistrationPayload | CrossLinkPayload | CrossLinkPresencePayload;
 }
 
 /**
  * What the service currently holds, as a reader of `GET /snapshot` sees it.
  *
  * Keyed by `${entity} ${entityId}`, which is the same composite the Worker's
- * `entityKey` uses. Only what a diff needs: the folded state and whether the
- * entity is tombstoned.
+ * `entityKey` uses.
  */
 export interface PublishedState {
   readonly entity: string;
   readonly entityId: string;
   readonly state: Record<string, unknown>;
   readonly deleted: boolean;
-  /**
-   * Operations folded into this entity, as the snapshot reports it.
-   *
-   * Load-bearing rather than informational: it is what makes an operation id unique
-   * over TIME. A registry value can legitimately return to an earlier value — a
-   * workspace renamed back, an edge removed and re-added — and an id derived only from
-   * the content would then repeat and be absorbed as a duplicate. The version is
-   * monotonic in the number of operations, so it cannot.
-   */
+  /** Operations folded into this entity. Monotonic, which makes an opId unique over time. */
   readonly version: number;
 }
 
@@ -233,57 +192,10 @@ function key(entity: string, entityId: string): string {
 }
 
 /**
- * The entity id of a cross-link: its four names, each percent-encoded, joined by
- * `/`.
- *
- * Injective, because `encodeURIComponent` escapes `/` and `%`, so no two distinct
- * four-tuples can produce the same string and no component can smuggle a
- * separator. Deterministic across machines because it is a pure function of the
- * names, which is the requirement: the same edge has to be the same entity on
- * both sides or two machines will each hold their own copy of one link.
- *
- * `type` is deliberately NOT in the key. There is one edge type today, and if a
- * second is ever added it belongs in the payload where the fold can update it —
- * putting it in the key would make changing an edge's type a delete plus a create
- * of an unrelated entity.
- */
-export function crossLinkEntityId(link: {
-  blockerWs: string;
-  blockerIdentifier: string;
-  blockedWs: string;
-  blockedIdentifier: string;
-}): string {
-  return [
-    link.blockerWs,
-    link.blockerIdentifier,
-    link.blockedWs,
-    link.blockedIdentifier,
-  ]
-    .map(encodeURIComponent)
-    .join("/");
-}
-
-/** Undo {@link crossLinkEntityId}. Exported for the tests, which assert it inverts. */
-export function parseCrossLinkEntityId(entityId: string): {
-  blockerWs: string;
-  blockerIdentifier: string;
-  blockedWs: string;
-  blockedIdentifier: string;
-} | null {
-  const parts = entityId.split("/");
-  if (parts.length !== 4) return null;
-  const [blockerWs, blockerIdentifier, blockedWs, blockedIdentifier] = parts.map(
-    decodeURIComponent,
-  ) as [string, string, string, string];
-  return { blockerWs, blockerIdentifier, blockedWs, blockedIdentifier };
-}
-
-/**
  * Refuse a payload written in a format this build does not understand.
  *
- * The same refusal, for the same stated reason, as `hub-registry.ts`: *"guessing
- * at a format you do not know produces a registry that is subtly wrong, and a
- * wrong registry is worse than none because it is believed."*
+ * *"Guessing at a format you do not know produces a registry that is subtly wrong, and
+ * a wrong registry is worse than none because it is believed."*
  */
 function assertFormat(format: number): void {
   if (format > REGISTRY_PAYLOAD_FORMAT) {
@@ -321,269 +233,208 @@ export interface UnpublishableEntry {
   readonly reason: string;
 }
 
-/** A published edge this machine declined to retract, and why. */
+/** A local link that cannot be published, and the sentence saying why. */
+export interface UnpublishableLink {
+  readonly link: RegistryCrossLink;
+  readonly reason: string;
+}
+
+/** A published entity this publish left exactly as it is, and why. */
 export interface RetainedEdge {
   readonly entityId: string;
   readonly reason: string;
 }
 
+/** A link, named the way a person reads it. */
+export interface LinkRef {
+  readonly entityId: string;
+  readonly blockerIdentifier: string;
+  readonly blockedIdentifier: string;
+}
+
 /**
- * Published entities this machine has no local counterpart for.
+ * One workspace this machine calls by a different name from the registry.
  *
- * The signal that another machine has published to this registry, or that this machine is
- * simply behind — and the two are indistinguishable from here, which is fine, because the
- * remedy is the same: adopt first.
- *
- * Computed from the snapshot this diff already reads plus the local registry and the
- * opt-out list. **No new state and no extra request.** That matters: the alternative
- * signals all needed a record of what this machine knew, which is hub-local state.
- *
- * An opted-out `repositoryId` is NOT foreign. Removing a row from this machine's list is
- * deliberately local and leaves the entry published, so a machine that removed one must
- * still be able to publish.
- *
- * There are THREE ways a row leaves this machine's list, and the carve-out has to cover all
- * of them. An earlier version of this comment said "the one case", and being wrong about
- * that broke publishing on a SINGLE machine: `Hub.prune()` deleted rows without recording an
- * opt-out, so a pruned row read as foreign, publish blamed another machine, and the remedy
- * it named re-added the row prune had just removed — prune and publish mutually exclusive,
- * in a loop, reachable from MCP's hub hygiene too. `prune` records one now, as `unregister`
- * always did, and `staple hub registry ignore` is the third.
+ * Informational: nothing is sent. The registry keeps the name its first writer chose.
  */
-export interface ForeignEntities {
-  /** Published `registration` ids with no local row and no opt-out. */
-  readonly registrations: readonly { entityId: string; slug: string }[];
+export interface RenamedEntry {
+  /** The `repositoryId`. The identity is shared, and only the name differs. */
+  readonly entityId: string;
+  /** This machine's slug. */
+  readonly local: string;
+  /** The registry's slug. Equal to {@link local} when only the prefix or kind differs. */
+  readonly published: string;
+  /** Present, with {@link publishedPrefix}, only when the two prefixes differ. */
+  readonly localPrefix?: string;
+  readonly publishedPrefix?: string;
+  /** Present, with {@link publishedKind}, only when the two kinds differ. */
+  readonly localKind?: string;
+  readonly publishedKind?: string;
 }
 
 export interface RegistryDiff {
   /** In log order: registrations first, then cross-links. Never a `delete`. */
   readonly operations: readonly RegistryOperation[];
-  /**
-   * What the service holds that this machine does not. Non-empty means **do not publish**
-   * — see {@link ForeignEntities} and `publishRegistry`, which refuses on it.
-   */
-  readonly foreign: ForeignEntities;
-  /** Entries with no `repositoryId`. Reported, never invented. See the header. */
+  /** Entries with no usable `repositoryId`. Reported, never invented. */
   readonly unpublishable: readonly UnpublishableEntry[];
-  /**
-   * Published edges left alone because this machine has no basis for an opinion about
-   * them. See {@link diffRegistry} — absence is not the same as removal.
-   */
+  /** Local links with an end in an unpublishable entry. */
+  readonly unpublishableLinks: readonly UnpublishableLink[];
+  /** Published entities left as they are, each with its reason. */
   readonly retained: readonly RetainedEdge[];
-  /**
-   * Published names this publish is about to REPLACE, one per identity.
-   *
-   * Non-empty means the operation set overwrites a name another machine chose. It is not a
-   * refusal — see the comment at the emit site for why the machine-replacement path
-   * depends on it being allowed — but it must never be silent, which it was: the publish
-   * printed `published: 1, updated: 1` and said nothing about the name it replaced.
-   */
+  /** Links this publish retracts: removed on this machine, still present on the service. */
+  readonly retracted: readonly LinkRef[];
+  /** Links this publish puts back: retracted on the service, linked again on this machine. */
+  readonly relinked: readonly LinkRef[];
+  /** Workspaces this machine names differently from the registry. Nothing is sent for them. */
   readonly renamed: readonly RenamedEntry[];
   /**
-   * True when the service already holds exactly this registry.
+   * What the service holds and this machine does not have. Left untouched. It is what
+   * `staple hub registry adopt` would take on.
    *
-   * NOT the same as "nothing to report". `retained` and `renamed` are routinely non-empty
-   * while this is `true` (a published edge this machine does not have produces a
-   * `retained` entry and no operation), so a consumer keying on this alone silently drops
-   * both. `test/cloud-hub-registry-wire.test.ts` pins the pair for that reason.
+   * An identity this machine unregistered (`registry_optouts`) is not counted, and nor is
+   * a link this machine removed itself. Both absences are this machine's own decision.
+   */
+  readonly unadopted: {
+    readonly registrations: readonly { entityId: string; slug: string }[];
+    readonly crossLinks: readonly LinkRef[];
+  };
+  /**
+   * This machine's recorded link changes that the service will agree with once
+   * {@link operations} land, or already agrees with. `publishRegistry` settles them
+   * after a successful push. See `Hub.settleCrossLinkChanges`.
+   */
+  readonly settled: readonly CrossLinkChange[];
+  /**
+   * True when no operation is needed.
+   *
+   * NOT the same as "nothing to report". `renamed`, `retained` and `unadopted` are
+   * routinely non-empty while this is `true`.
    */
   readonly upToDate: boolean;
 }
 
-/** One published name this machine is about to overwrite. See {@link RegistryDiff.renamed}. */
-export interface RenamedEntry {
-  /** The identity, which is stable across the rename — that is what makes it a rename. */
-  readonly entityId: string;
-  /** The slug the service holds now. Equal to {@link to} when only the prefix changed. */
-  readonly from: string;
-  /** The slug this machine is about to publish. */
-  readonly to: string;
+/** Local context the diff needs beyond the two registries. */
+export interface DiffContext {
   /**
-   * The prefix being replaced, present ONLY when it is actually changing.
+   * Identities held by more than one local row. Parked rather than published.
    *
-   * Separate from the slug because the two diverge independently and the prefix is the
-   * more damaging of the two: it is what every `PREFIX-N` identifier resolves through, and
-   * `allocatePrefix` assigns it in registration order, so two machines can swap prefixes
-   * between the same two workspaces while both slugs match exactly.
+   * Two rows sharing a `repositoryId` are ONE entity on the wire, and two clones or two
+   * `git worktree` checkouts of one repository legitimately share an identity. So
+   * neither row is published and both are named, rather than one picked at random.
    */
-  readonly fromPrefix?: string;
-  /** The prefix this machine is about to publish. Present with {@link fromPrefix}. */
-  readonly toPrefix?: string;
+  readonly duplicateIdentities?: readonly { repositoryId: string; slugs: readonly string[] }[];
+  /** `registry_optouts`: identities this machine removed from its own list. */
+  readonly optedOut?: readonly string[];
+  /** `cross_link_changes`: this machine's own link changes. See hub migration 004. */
+  readonly changes?: readonly CrossLinkChange[];
+}
+
+function refOf(entityId: string, link: { blockerIdentifier: string; blockedIdentifier: string }): LinkRef {
+  return { entityId, blockerIdentifier: link.blockerIdentifier, blockedIdentifier: link.blockedIdentifier };
+}
+
+function isPresent(held: PublishedState): boolean {
+  // Absent `present` reads as present: an edge published before the field existed.
+  return !held.deleted && held.state.present !== false;
 }
 
 /**
- * The operations that would make the service hold this registry.
+ * The operations that make the service hold the union of what it has and what this
+ * machine has, plus the retractions this machine is entitled to send.
  *
- * Derived from current state against the service's current fold, at push time,
- * and deliberately NOT from a hub outbox.
- *
- * ## Why there is no hub outbox and no hub migration
- *
- * Every workspace sync path assumes `sync_outbox`, `sync_state` and
- * `sync_field_writes` (workspace migrations 010/011/012), and `hub.db` has none of
- * them. Adding them would be a large, permanent surface — a journal seam, a
- * client-seq allocator, an applied-op ledger, a cursor, and a migration that every
- * future hub read has to carry — and it would buy nothing here, because the
- * registry is small and **fully re-derivable from current state**. There is no
- * history to replay: what should be on the service is a pure function of what the
- * hub holds right now, so the set of operations to publish is computable on demand
- * by comparing the two. An outbox exists to remember intent across a crash; a
- * re-derivable set has no intent to remember.
- *
- * The cost is one `GET /snapshot` per publish, which is the same read a restore
- * already makes and is bounded by the number of workspaces on one machine.
- *
- * ## A registration is never deleted, and that is the unregister rule
- *
- * `docs/sync.md`: *"`staple hub unregister` removes a row here and nowhere else …
- * Propagating it would turn a reversible local act into an irreversible remote
- * one."* A workspace missing from `local` is therefore left in the published set
- * untouched — the machine that unregistered it records a `registry_optouts` row
- * instead, which never leaves and which adoption consults so the row does not come
- * back HERE. Emitting a delete would be the propagation the contract refuses, and
- * it is not expressible: this function has no branch that produces a `delete` for a
- * registration.
- *
- * Cross-links are **additive-only too**, and for a different reason than registrations: not
- * because propagating a removal would be irreversible, but because no signal available to a
- * diff can establish that this machine ever HAD the edge. See the loop below and
- * {@link CrossLinkPayload}. An earlier version of this line said they were "diffed both
- * ways", which stopped being true when retraction was removed.
- *
- * ## A machine may only retract an edge it could have HAD
- *
- * This is the floor, and without it a publish from an incompletely-adopted machine
- * permanently destroys edges nobody asked it to touch.
- *
- * Absence of an edge locally does not mean somebody removed it. It very often means
- * this machine never had it: `adoptRegistry` **previews by default**, and even on an
- * apply it *"skips an edge naming a workspace that did not land"* — which happens for an
- * opted-out `repositoryId`, a parked prefix collision, and an entry with no identity. So
- * a machine that adopted a preview, or that parked one prefix, or that has not adopted
- * at all, holds a registry that is a strict SUBSET of the published one through no fault
- * of anyone's.
- *
- * A naive `wanted`-minus-`published` retracts every one of those. Combined with a
- * content-derived key that used to tombstone, that made the loss irreversible, and the
- * shared registry converged not to last-write-wins but to the **intersection** of the
- * machines' edges.
- *
- * The rule is the mirror image of adoption's own, and it keys on IDENTITY: **an edge is
- * retractable only when, for both of its endpoint slugs, the workspace this machine has
- * under that slug is the same repository the SERVICE has a registration for.** Then
- * absence is a statement this machine is entitled to make.
- *
- * Keying on the slug alone — which the first version did — grants edge-deletion authority
- * on a name match, and this module's header says exactly why that fails: *"slugs and
- * prefixes are NAMES, and names are exactly what two machines can independently disagree
- * about; the identity is the only thing that means the same thing on both."* Slugs come
- * from directory names, so two machines holding the same repositories match by default,
- * and a machine that had cloned both but never applied an adopt destroyed the other's
- * edge on its first publish.
- *
- * Anything this machine has no standing on is left exactly as published and REPORTED in
- * {@link RegistryDiff.retained}, because a person who expected a removal to propagate
- * needs to know it did not. 
+ * Derived from current state against the service's current fold, at push time.
+ * The registry is small and re-derivable, so one `GET /snapshot` per publish is the
+ * whole cost, and an interrupted publish re-run re-derives the same diff.
  */
 export function diffRegistry(
   local: HubRegistryPayload,
   published: Map<string, PublishedState>,
-  /**
-   * Identities held by more than one local row. Parked rather than published.
-   *
-   * Two rows sharing a `repositoryId` are ONE entity on the wire, so publishing both
-   * emits two operations on one entity and the published slug flips between them on every
-   * pass — `published: 1, upToDate: false` for ever, appending an operation to a paid log
-   * each time. Hub migration 003 asks for exactly this handling: a non-null duplicate is
-   * *"a real problem, but it is a problem to REPORT"*. And it is not always a problem —
-   * two clones or two `git worktree` checkouts of one repository legitimately share an
-   * identity — so the honest move is to publish neither and name both, rather than pick
-   * one and be silently wrong half the time.
-   */
-  duplicateIdentities: readonly { repositoryId: string; slugs: readonly string[] }[] = [],
-  /**
-   * Identities this machine has deliberately removed from its own list.
-   *
-   * `registry_optouts`, which never leaves the machine. Passed in because a published
-   * registration matching one of these is not FOREIGN — it is this machine's own former
-   * row, left published because `staple hub unregister` is local by design.
-   */
-  optedOut: readonly string[] = [],
+  context: DiffContext = {},
 ): RegistryDiff {
   assertFormat(local.format);
-  const duplicated = new Map(duplicateIdentities.map((d) => [d.repositoryId, d.slugs]));
+  const duplicated = new Map(
+    (context.duplicateIdentities ?? []).map((d) => [d.repositoryId, d.slugs]),
+  );
+  const optedOut = new Set(context.optedOut ?? []);
+  const changes = new Map((context.changes ?? []).map((c) => [c.key, c]));
 
   const operations: RegistryOperation[] = [];
   const unpublishable: UnpublishableEntry[] = [];
+  const unpublishableLinks: UnpublishableLink[] = [];
   const retained: RetainedEdge[] = [];
+  const retracted: LinkRef[] = [];
+  const relinked: LinkRef[] = [];
   const renamed: RenamedEntry[] = [];
+  const settled: CrossLinkChange[] = [];
 
-  for (const entry of local.workspaces) {
+  /** Why an entry can't be published, or null when it can. Shared with the link loop. */
+  const refusal = (entry: RegistryEntry): string | null => {
     if (entry.repositoryId === null) {
-      unpublishable.push({
-        entry,
-        reason:
-          `"${entry.slug}" has no sync identity recorded against it, so there is no key another ` +
-          "machine could recognise it by. It is left out of the published registry rather than " +
-          "given an id here: an id minted on this machine would not be the one the repository " +
-          "itself records later, and the registry would then hold two rows for one workspace. " +
-          /**
-           * `staple init`, and ONLY that — MEASURED rather than assumed, because this
-           * remedy has been wrong twice already.
-           *
-           * Round 2 named `connect` or `init` while nothing wrote the column at all. Round 3
-           * named "any command … `staple ls --ws <slug>` is enough", which a test then
-           * pinned. Measured after clearing the column on a real machine:
-           *
-           *     after nulling:  null
-           *     after ls:       null
-           *     after ls --ws:  null
-           *     after re-init:  d15be260
-           *
-           * The narrative stays here rather than in the sentence a person reads; the string
-           * itself is the action and the two things that would stop it working.
-           */
-          `Run \`staple init\` in that workspace's directory, then publish again — it records ` +
-          "the identity and creates nothing new. If that does not fix it, either the " +
-          "workspace's database is not on this machine, or its `.staple/repository.json` is " +
-          "present and unreadable; publish reports which.",
-      });
-      continue;
+      return (
+        `"${entry.slug}" has no sync identity recorded against it, so there is no key another ` +
+        "machine could recognise it by. It is left out of the published registry rather than " +
+        "given an id here: an id minted on this machine would not be the one the repository " +
+        "itself records later, and the registry would then hold two rows for one workspace. " +
+        /**
+         * `staple init`, and ONLY that. Measured after clearing the column on a real
+         * machine: `staple ls` and `staple ls --ws <slug>` both leave it null, and
+         * re-running `staple init` restores it.
+         */
+        `Run \`staple init\` in that workspace's directory, then publish again — it records ` +
+        "the identity and creates nothing new. If that does not fix it, either the " +
+        "workspace's database is not on this machine, or its `.staple/repository.json` is " +
+        "present and unreadable; publish reports which."
+      );
     }
-
-    /**
-     * An identity two local rows share is parked, not published. See the parameter.
-     *
-     * Checked BEFORE the payload is built, so nothing about a duplicated identity reaches
-     * an operation — the flip-flop was the published slug changing on every pass.
-     */
     const sharing = duplicated.get(entry.repositoryId);
     if (sharing !== undefined) {
       const others = sharing.filter((slug) => slug !== entry.slug).map((slug) => `"${slug}"`);
-      unpublishable.push({
-        entry,
-        reason:
-          `"${entry.slug}" shares the sync identity ${entry.repositoryId} with ` +
-          `${others.join(", ")} on this machine, and one identity is one entry in the registry — ` +
-          "publishing both would make the published name flip between them on every pass. Two " +
-          "clones or two git worktrees of one repository legitimately share an identity, so " +
-          "nothing was changed and nothing is wrong with either row. Unregister the ones you do " +
-          "not want listed with `staple hub unregister`, and the survivor publishes next pass.",
+      return (
+        `"${entry.slug}" shares the sync identity ${entry.repositoryId} with ` +
+        `${others.join(", ")} on this machine, and one identity is one entry in the registry. ` +
+        "Two clones or two git worktrees of one repository legitimately share an identity, so " +
+        "nothing was changed and nothing is wrong with either row. Unregister the ones you do " +
+        "not want listed with `staple hub unregister`, and the survivor publishes next pass."
+      );
+    }
+    return null;
+  };
+
+  const bySlug = new Map(local.workspaces.map((w) => [w.slug, w]));
+
+  for (const entry of local.workspaces) {
+    const reason = refusal(entry);
+    if (reason !== null || entry.repositoryId === null) {
+      unpublishable.push({ entry, reason: reason ?? "" });
+      continue;
+    }
+    const held = published.get(key(REGISTRATION_ENTITY, entry.repositoryId));
+
+    if (held === undefined) {
+      operations.push({
+        entity: REGISTRATION_ENTITY,
+        entityId: entry.repositoryId,
+        // `create`: `fold.ts` records no per-field provenance for a create, which is honest
+        // for a first write. Nobody chose these values over others.
+        verb: "create",
+        baseVersion: 0,
+        payload: {
+          format: REGISTRY_PAYLOAD_FORMAT,
+          slug: entry.slug,
+          prefix: entry.prefix,
+          kind: entry.kind,
+          addedAt: entry.addedAt,
+        },
       });
       continue;
     }
 
-    const held = published.get(key(REGISTRATION_ENTITY, entry.repositoryId));
-
     /**
-     * A tombstoned registration is reported, not re-published for ever.
-     *
-     * Nothing emits a registration `delete` and the Worker refuses the verb, so this needs a
-     * pre-rule log to reach — but without it an update lands on the tombstone, `fold.ts`
-     * discards it, and the publish reports success on every pass. The cross-link loop had
-     * this branch and this one did not. Measured: one update per pass, indefinitely.
+     * A tombstoned registration is reported, not re-created for ever. Nothing emits a
+     * registration `delete` and the Worker refuses the verb, so only a log written before
+     * that rule can hold one, and a create on it would be accepted and then discarded.
      */
-    if (held !== undefined && held.deleted) {
+    if (held.deleted) {
       retained.push({
         entityId: entry.repositoryId,
         reason:
@@ -595,156 +446,81 @@ export function diffRegistry(
       continue;
     }
 
-
-    /**
-     * `addedAt` is CREATE-ONLY, and that is a convergence fix rather than a tidy-up.
-     *
-     * It is the local row's registration time — a fact about when THIS machine learned of
-     * the workspace — so two machines can never agree on it. Sent on every update, it made
-     * a shared registry diverge for ever on a single workspace with no cross-links at all:
-     *
-     *     pass 1 A: published=1  stateAddedAt=2026-01-01…
-     *     pass 2 B: published=1  stateAddedAt=2026-02-02…
-     *     pass 3 A: published=1  stateAddedAt=2026-01-01…   (6 ops in 6 passes)
-     *
-     * Every pass appended an operation to a METERED log, and unlike a name race it could
-     * never settle, because neither machine's value is wrong. Sending it only on the create
-     * makes it first-writer-wins — the registry's own "when this set first learned of this
-     * workspace", which is the honest reading of the field once it is shared at all.
-     */
-    const payload: RegistrationPayload =
-      held === undefined
-        ? {
-            format: REGISTRY_PAYLOAD_FORMAT,
-            slug: entry.slug,
-            prefix: entry.prefix,
-            kind: entry.kind,
-            addedAt: entry.addedAt,
-          }
-        : {
-            format: REGISTRY_PAYLOAD_FORMAT,
-            slug: entry.slug,
-            prefix: entry.prefix,
-            kind: entry.kind,
-          };
-    if (held !== undefined && !held.deleted && statesAgree(held.state, payload)) continue;
-
-    /**
-     * Overwriting a published NAME is reported, because it is another machine's name.
-     *
-     * The earlier round of this work claimed the divergence was not refusable because "a
-     * single machine renaming a workspace produces the identical diff". That premise is
-     * false, and the review that said so was right: there is no supported single-machine
-     * rename anywhere in this tree. `grep` finds no `UPDATE workspaces SET slug`; the slug
-     * is written once by `initWorkspace` under `if (!prefix)`, and thereafter the stored
-     * slug beats the directory basename, so renaming a directory changes nothing. The test
-     * that "performed the rename" did it through `recordRepositoryId`, which this tree
-     * itself calls a hub-internal API no user path invokes.
-     *
-     * So `held.state.slug !== entry.slug` on an update means something specific: another
-     * machine published this identity under a different name.
-     *
-     * REPORTED rather than refused, and the reason is not indistinguishability this time —
-     * it is where the divergence comes from. **Do not tighten this into a refusal.** The
-     * names diverge when one machine holds the repository under a different directory name,
-     * and `adoptRegistry` deliberately keeps THIS machine's name ("this machine's stamps
-     * win"). That is the machine-replacement path this whole leg exists to deliver, so a
-     * refusal here would fire on the replacement machine's FIRST publish and break the
-     * recovery rather than protect it.
-     *
-     * Two cheap refusals look available and are not, which is worth recording because both
-     * were proposed and both were wrong. Comparing the two sides cannot establish authority:
-     * a tracked manifest means clones share an identity, and slugs are only names. And
-     * `registry_optouts` does store the slug this machine used to use for an identity — but
-     * only for identities it has REMOVED, so in a divergent-name race, where neither machine
-     * has removed anything, there is no row to consult. "Did this machine previously call
-     * this identity by the name the service holds" is unanswerable in exactly the case that
-     * matters.
-     *
-     * What reporting does NOT buy, said plainly: it does not bound the writes. Two machines
-     * holding the same identity under different names still overwrite each other once per
-     * pass, on a metered log, for ever, and neither is wrong. That is the stated limit of
-     * publishing from two machines — see `docs/sync.md`. The remedy a person can actually
-     * apply is on the losing machine: `staple hub unregister <slug>`, then
-     * `staple hub registry unignore <repositoryId>`, then `staple hub registry adopt
-     * --apply`, which re-adds the row under the published name.
-     */
-    /**
-     * The PREFIX is reported too, and leaving it out was the worse half of the bug.
-     *
-     * This compared `slug` only, and prefix assignment is REGISTRATION-ORDER dependent:
-     * `allocatePrefix` derives a base from the name and appends a letter when it is taken,
-     * so two machines that re-init the same repositories in different orders end up with
-     * the prefixes swapped between them — measured, `live-tracker`/`live-notes` getting
-     * `LIV`/`LIVA` on one machine and `LIVA`/`LIV` on the other.
-     *
-     * A replacement machine in that state publishes SWAPPED prefixes under identical
-     * slugs. With a slug-only check that is `renamed: []` and a report reading
-     * `published: 2, updated: 2` — while the prefix stamped into every identifier those
-     * repositories ever emitted is overwritten in silence. Worse than the slug case,
-     * because a prefix is what `PREFIX-N` resolves through and this tree refuses to
-     * renumber one anywhere else.
-     *
-     * It also made this module's own consent promise false —
-     * *"Publishing reports each name it replaces, so this is visible rather than silent"* —
-     * and by this tree's words in `docs/sync.md`, "slugs and prefixes are names".
-     */
-    const heldSlug = typeof held?.state.slug === "string" ? held.state.slug : null;
-    const heldPrefix = typeof held?.state.prefix === "string" ? held.state.prefix : null;
-    if (held !== undefined && ((heldSlug !== null && heldSlug !== entry.slug) || (heldPrefix !== null && heldPrefix !== entry.prefix))) {
+    // Held: the names are create-only, so this is information and never an operation.
+    const heldSlug = typeof held.state.slug === "string" ? held.state.slug : entry.slug;
+    const heldPrefix = typeof held.state.prefix === "string" ? held.state.prefix : entry.prefix;
+    const heldKind = typeof held.state.kind === "string" ? held.state.kind : entry.kind;
+    if (heldSlug !== entry.slug || heldPrefix !== entry.prefix || heldKind !== entry.kind) {
       renamed.push({
         entityId: entry.repositoryId,
-        from: heldSlug ?? entry.slug,
-        to: entry.slug,
-        ...(heldPrefix !== null && heldPrefix !== entry.prefix
-          ? { fromPrefix: heldPrefix, toPrefix: entry.prefix }
-          : {}),
+        local: entry.slug,
+        published: heldSlug,
+        ...(heldPrefix !== entry.prefix ? { localPrefix: entry.prefix, publishedPrefix: heldPrefix } : {}),
+        ...(heldKind !== entry.kind ? { localKind: entry.kind, publishedKind: heldKind } : {}),
       });
     }
-
-    operations.push({
-      entity: REGISTRATION_ENTITY,
-      entityId: entry.repositoryId,
-      // `create` when the service has never folded this entity, `update` otherwise.
-      // The distinction is not cosmetic: `fold.ts` records per-field provenance for
-      // every verb EXCEPT `create`, so calling a genuine first write an `update`
-      // would claim somebody chose each of these values when they merely arrived.
-      verb: held === undefined ? "create" : "update",
-      baseVersion: held?.version ?? 0,
-      payload,
-    });
   }
 
-  const wanted = new Map<string, CrossLinkPayload>();
+  // ---- cross-links this machine has
+  const wanted = new Set<string>();
   for (const link of local.crossLinks) {
-    wanted.set(crossLinkEntityId(link), {
-      format: REGISTRY_PAYLOAD_FORMAT,
-      blockerWs: link.blockerWs,
-      blockerIdentifier: link.blockerIdentifier,
-      blockedWs: link.blockedWs,
-      blockedIdentifier: link.blockedIdentifier,
-      type: link.type,
-      present: true,
+    const ends = [bySlug.get(link.blockerWs), bySlug.get(link.blockedWs)];
+    const blocked = ends.flatMap((end, index) => {
+      const slug = index === 0 ? link.blockerWs : link.blockedWs;
+      if (end === undefined) return [`"${slug}" is not registered on this machine`];
+      const why = refusal(end);
+      return why === null ? [] : [`"${slug}" can't be published (see its entry)`];
     });
-  }
-
-  for (const [entityId, payload] of wanted) {
+    if (blocked.length > 0 || link.blockerRepositoryId === null || link.blockedRepositoryId === null) {
+      unpublishableLinks.push({
+        link,
+        reason:
+          `The link ${link.blockerIdentifier} -> ${link.blockedIdentifier} is identified by its two ` +
+          "workspaces' sync identities, and " +
+          (blocked.length > 0 ? blocked.join(" and ") : "one of them has none") +
+          ". It is left out until both ends are publishable.",
+      });
+      continue;
+    }
+    const entityId = crossLinkEntityId({
+      blockerRepositoryId: link.blockerRepositoryId,
+      blockerIdentifier: link.blockerIdentifier,
+      blockedRepositoryId: link.blockedRepositoryId,
+      blockedIdentifier: link.blockedIdentifier,
+    });
+    if (wanted.has(entityId)) continue;
+    wanted.add(entityId);
+    const change = changes.get(entityId);
     const held = published.get(key(CROSS_LINK_ENTITY, entityId));
+
+    if (held === undefined) {
+      operations.push({
+        entity: CROSS_LINK_ENTITY,
+        entityId,
+        verb: "create",
+        baseVersion: 0,
+        payload: {
+          format: REGISTRY_PAYLOAD_FORMAT,
+          blockerWs: link.blockerWs,
+          blockerIdentifier: link.blockerIdentifier,
+          blockedWs: link.blockedWs,
+          blockedIdentifier: link.blockedIdentifier,
+          type: link.type,
+          present: true,
+        },
+      });
+      if (change?.present) settled.push(change);
+      continue;
+    }
     /**
-     * A tombstoned edge cannot be resurrected, and saying so beats looping.
-     *
-     * Nothing this module emits tombstones anything any more — retraction is
-     * `present: false`. But a tombstone written by an EARLIER build is still in the log,
-     * and `fold.ts` discards every operation on a tombstoned entity. Emitting an update
-     * would be accepted, acknowledged and dropped, for ever, with the publish reporting
-     * success every pass. Reported as unpublishable instead, with the only remedy there
-     * is.
+     * A tombstoned edge can't be resurrected. Only a log written before `present`
+     * existed can hold one, and an update would be accepted and discarded for ever.
      */
-    if (held !== undefined && held.deleted) {
+    if (held.deleted) {
       retained.push({
         entityId,
         reason:
-          `The link ${payload.blockerIdentifier} -> ${payload.blockedIdentifier} was deleted ` +
+          `The link ${link.blockerIdentifier} -> ${link.blockedIdentifier} was deleted ` +
           "from the published registry by an older build, and a deletion is final in the " +
           "operation log — re-publishing it would be accepted and then discarded. The link is " +
           "intact on this machine. Restoring the registry from a backup taken before the " +
@@ -752,176 +528,153 @@ export function diffRegistry(
       });
       continue;
     }
-    if (held !== undefined && statesAgree(held.state, payload)) continue;
-    operations.push({
-      entity: CROSS_LINK_ENTITY,
-      entityId,
-      verb: held === undefined ? "create" : "update",
-      baseVersion: held?.version ?? 0,
-      payload,
-    });
-  }
-
-  for (const held of published.values()) {
-    if (held.entity !== CROSS_LINK_ENTITY) continue;
-    if (held.deleted) continue;
-    if (wanted.has(held.entityId)) continue;
-    // Already retracted. Nothing to say.
-    if (held.state.present === false) continue;
-
+    if (isPresent(held)) {
+      if (change?.present) settled.push(change);
+      continue;
+    }
     /**
-     * **Cross-links are ADDITIVE-ONLY. Nothing here retracts.**
+     * The service holds this link as RETRACTED, and this machine has it.
      *
-     * The honest consequence of scoping publish to one machine, and it was forced by a run
-     * rather than reasoned to. Two authority tests were tried and both failed:
-     *
-     *   - **slug match** — grants edge-deletion authority on a NAME, and names are exactly
-     *     what two machines can independently disagree about;
-     *   - **identity equality** — gives ZERO protection, because `.staple/repository.json`
-     *     is TRACKED, so two clones legitimately share a `repositoryId` (#92). A machine
-     *     that had cloned both repositories and never applied an adopt satisfied it by
-     *     construction and deleted the other machine's edge on its first publish.
-     *
-     * The deeper reason both failed: **no comparison of the two sides can establish
-     * authority**, because two machines legitimately holding the same repositories are
-     * indistinguishable by identity, by name, and by anything else in the payload.
-     * Authority needs a record of what this machine KNEW — an applied adopt, or a per-edge
-     * ledger — which is hub-local state, i.e. the migration this leg exists to avoid.
-     *
-     * And with `foreign` refusing a publish whenever the service holds a registration this
-     * machine does not have, a deliberately REMOVED edge became indistinguishable from one
-     * never held, so the owner's own removal read as foreign and nothing could retract at
-     * all. Measured, not predicted.
-     *
-     * So removal does not propagate — exactly as it already does not for a REGISTRATION,
-     * and for the reason `docs/sync.md` gives there: *"propagating it would turn a
-     * reversible local act into an irreversible remote one."* A registry where one
-     * collection propagated removals and the other did not would be the surprising design.
-     *
-     * What it buys beyond honesty: two machines publishing one registry can no longer
-     * destroy each other's edges at all.
-     *
-     * Reported rather than silent, because somebody who removed a blocker and expected it
-     * to leave the shared set needs telling that it did not.
+     * Put it back only if this machine linked it again and hasn't published that yet.
+     * Otherwise this copy is older than the retraction: it was adopted, or published
+     * earlier, and then another machine removed it. Sending it again would undo someone
+     * else's removal, and the two machines would take turns on every pass.
      */
-    const names = readEdgeNames(held);
+    if (change?.present === true && !change.published) {
+      operations.push({
+        entity: CROSS_LINK_ENTITY,
+        entityId,
+        verb: "update",
+        baseVersion: held.version,
+        payload: { format: REGISTRY_PAYLOAD_FORMAT, present: true },
+      });
+      relinked.push(refOf(entityId, link));
+      settled.push(change);
+      continue;
+    }
     retained.push({
-      entityId: held.entityId,
+      entityId,
       reason:
-        `The published link ${
-          names === null ? held.entityId : `${names.blockerIdentifier} -> ${names.blockedIdentifier}`
-        } is not on this machine. Removing a cross-workspace link does not propagate — the ` +
-        "same rule as unregistering a workspace, and for the same reason: it would turn a " +
-        "reversible local act into an irreversible remote one. It stays in the published " +
-        "registry, and adopting will bring it back here.",
+        `The link ${link.blockerIdentifier} -> ${link.blockedIdentifier} was removed from the ` +
+        "published registry by another machine, and this machine still has it. Publishing " +
+        "does not put it back, because that would undo someone else's removal. " +
+        "`staple hub registry adopt --apply` removes it here. To keep it and share it again, " +
+        `run \`staple link ${link.blockerIdentifier} ${link.blockedIdentifier}\` and publish.`,
     });
   }
 
-  /**
-   * What the service holds and this machine does not.
-   *
-   * Registrations are matched on the entity id, which IS the `repositoryId`, so this is an
-   * identity comparison rather than a name one. Cross-links are matched on the entity id
-   * too, which is an encoding of the four names — so an edge the service holds under names
-   * this machine does not use reads as foreign, which is the honest answer.
-   */
-  const optedOutSet = new Set(optedOut);
+  // ---- cross-links this machine removed, and (re)links whose link has since gone
+  const localKeys = new Set(
+    local.crossLinks.flatMap((l) =>
+      l.blockerRepositoryId === null || l.blockedRepositoryId === null
+        ? []
+        : [
+            crossLinkEntityId({
+              blockerRepositoryId: l.blockerRepositoryId,
+              blockerIdentifier: l.blockerIdentifier,
+              blockedRepositoryId: l.blockedRepositoryId,
+              blockedIdentifier: l.blockedIdentifier,
+            }),
+          ],
+    ),
+  );
+  for (const change of changes.values()) {
+    if (wanted.has(change.key)) continue;
+    if (change.present) {
+      /**
+       * A (re)link whose link is no longer on this hub: `unregister --with-links` took it
+       * without recording a removal. There is nothing left to share, so it is forgotten.
+       * A link still here but held back (an end parked as a duplicate identity) keeps its
+       * record for when it becomes publishable.
+       */
+      if (!localKeys.has(change.key)) settled.push(change);
+      continue;
+    }
+    const held = published.get(key(CROSS_LINK_ENTITY, change.key));
+    if (held === undefined || !isPresent(held)) {
+      // Nothing on the service to retract, so the removal is already true there.
+      if (!change.published) settled.push(change);
+      continue;
+    }
+    if (!change.published) {
+      operations.push({
+        entity: CROSS_LINK_ENTITY,
+        entityId: change.key,
+        verb: "update",
+        baseVersion: held.version,
+        payload: { format: REGISTRY_PAYLOAD_FORMAT, present: false },
+      });
+      retracted.push(refOf(change.key, change));
+      settled.push(change);
+      continue;
+    }
+    /**
+     * This machine's removal was published, and the service holds the link again:
+     * another machine linked it since. That is newer than the removal, so it stands, and
+     * this machine keeps its own copy removed.
+     */
+    retained.push({
+      entityId: change.key,
+      reason:
+        `The link ${change.blockerIdentifier} -> ${change.blockedIdentifier} was removed on ` +
+        "this machine and that was published, and another machine has linked it again since. " +
+        "It stays linked in the registry and stays removed here. To take it back here, run " +
+        `\`staple link ${change.blockerIdentifier} ${change.blockedIdentifier}\`.`,
+    });
+  }
+
+  // ---- what the service holds and this machine doesn't
   const localIds = new Set(
     local.workspaces.map((w) => w.repositoryId).filter((id): id is string => id !== null),
   );
-  const foreignRegistrations: { entityId: string; slug: string }[] = [];
+  const unadoptedRegistrations: { entityId: string; slug: string }[] = [];
+  const unadoptedLinks: LinkRef[] = [];
   for (const held of published.values()) {
     if (held.deleted) continue;
     if (held.entity === REGISTRATION_ENTITY) {
-      if (localIds.has(held.entityId) || optedOutSet.has(held.entityId)) continue;
-      foreignRegistrations.push({
+      if (localIds.has(held.entityId) || optedOut.has(held.entityId)) continue;
+      unadoptedRegistrations.push({
         entityId: held.entityId,
         slug: typeof held.state.slug === "string" ? held.state.slug : "(unnamed)",
       });
       continue;
     }
-    /**
-     * Cross-links are NOT counted as foreign, and that is deliberate.
-     *
-     * An edge the service holds and this machine does not is either another machine's or one
-     * this machine removed — indistinguishable, for the reason the retraction comment above
-     * gives. Since nothing retracts any more, neither case can do damage, so refusing a
-     * publish over it would block a legitimate machine for no benefit.
-     *
-     * A published REGISTRATION with no local row and no opt-out is different: it is the one
-     * signal that says another machine is publishing here, and it is what the refusal is for.
-     */
+    // Links: present, in the key this build writes, not here, and not removed here.
+    if (!isPresent(held) || wanted.has(held.entityId) || changes.has(held.entityId)) continue;
+    const identity = parseCrossLinkEntityId(held.entityId);
+    if (identity === null) continue;
+    unadoptedLinks.push(refOf(held.entityId, identity));
   }
 
   return {
     operations,
     unpublishable,
+    unpublishableLinks,
     retained,
+    retracted,
+    relinked,
     renamed,
-    foreign: { registrations: foreignRegistrations },
+    unadopted: { registrations: unadoptedRegistrations, crossLinks: unadoptedLinks },
+    settled,
     upToDate: operations.length === 0,
   };
 }
 
 /**
- * The four names of a published edge, from its state with the key as the fallback.
- *
- * The key is an encoding of the names, so it can always answer — which matters for a row
- * whose payload a mixed-fleet fold left partial.
- */
-function readEdgeNames(held: PublishedState): {
-  blockerWs: string;
-  blockerIdentifier: string;
-  blockedWs: string;
-  blockedIdentifier: string;
-} | null {
-  const fromId = parseCrossLinkEntityId(held.entityId);
-  if (fromId === null) return null;
-  return {
-    blockerWs: strOr(held.state.blockerWs, fromId.blockerWs),
-    blockerIdentifier: strOr(held.state.blockerIdentifier, fromId.blockerIdentifier),
-    blockedWs: strOr(held.state.blockedWs, fromId.blockedWs),
-    blockedIdentifier: strOr(held.state.blockedIdentifier, fromId.blockedIdentifier),
-  };
-}
-
-/**
- * Does the service already hold this payload?
- *
- * Compares only the keys the payload carries, because that is what an operation
- * asserts: `fold.ts` is explicit that *"every verb here merges its payload's keys
- * over the state and is silent about every key it did not mention"*. A folded
- * state holding an extra key from a NEWER build is therefore not a disagreement,
- * and treating it as one would make an older machine re-publish on every pass,
- * for ever, deleting nothing and fixing nothing.
- */
-function statesAgree(state: Record<string, unknown>, payload: object): boolean {
-  for (const [field, value] of Object.entries(payload)) {
-    if (state[field] !== value) return false;
-  }
-  return true;
-}
-
-/**
  * A folded snapshot, back to a registry.
  *
- * The inverse of {@link diffRegistry} over the two collections, and it has to be an
- * inverse rather than an approximation: this is what a restore feeds to
- * `adoptRegistry`, so a lossy read here would adopt a registry that is not the one
- * that was published — and a wrong registry is believed.
+ * The inverse of {@link diffRegistry} over the two collections: this is what a restore
+ * and an adopt feed to `adoptRegistry`, so a lossy read here would adopt a registry
+ * that is not the one that was published.
  *
  * `capturedAt` is supplied by the CALLER and is the moment this machine read the
- * service, not the moment the publishing machine exported. The service's fold has
- * no single capture time — it is a fold of a log written over days by possibly
- * several machines — and picking one operation's `createdAt` would name the newest
- * edit while claiming to describe the whole set. The honest available fact is when
- * it was read.
+ * service. The fold has no single capture time, because several machines wrote it.
  *
- * A tombstoned entity is skipped, not surfaced. A deleted cross-link is an edge
- * that is not there, and there is no "absent edge" for a registry to express;
- * contrast a deleted ISSUE, which `fold.ts` returns precisely because a device
- * that already has it must be told to remove it. Nothing adopts edges it was not
- * given, so silence is the correct materialisation.
+ * A tombstoned entity is skipped. A link with `present: false` goes to
+ * `retractedCrossLinks`, which is how a removal made on one machine reaches another.
+ * A link under the slug key an earlier build wrote lands in `crossLinks` with null
+ * `repositoryId`s. Adoption can't place it and says so, but it is never dropped
+ * silently and never an error.
  */
 export function registryFromSnapshot(args: {
   hubId: string;
@@ -930,6 +683,7 @@ export function registryFromSnapshot(args: {
 }): HubRegistryPayload {
   const workspaces: RegistryEntry[] = [];
   const crossLinks: RegistryCrossLink[] = [];
+  const retractedCrossLinks: RegistryCrossLink[] = [];
   let format = REGISTRY_PAYLOAD_FORMAT;
 
   for (const entity of args.entities) {
@@ -939,10 +693,7 @@ export function registryFromSnapshot(args: {
 
     if (entity.entity === REGISTRATION_ENTITY) {
       workspaces.push({
-        // The entity id IS the adoption key. Read from there rather than from the
-        // payload, because the key is what the fold guarantees is stable and what
-        // both machines agreed the entity was; a `repositoryId` field in the state
-        // would be a second copy able to disagree with it.
+        // The entity id IS the adoption key, and the fold guarantees it is stable.
         repositoryId: entity.entityId,
         slug: str(entity.state.slug),
         prefix: str(entity.state.prefix),
@@ -953,32 +704,30 @@ export function registryFromSnapshot(args: {
     }
     if (entity.entity !== CROSS_LINK_ENTITY) continue;
 
-    /**
-     * Read from the PAYLOAD, with the entity id as the fallback.
-     *
-     * The two are redundant by construction — the id is an encoding of these four
-     * names — and the payload is preferred because it is what the publishing build
-     * actually said. The fallback exists for a row whose payload a mixed-fleet fold
-     * left partial, and it is derivable precisely because the encoding is injective.
-     */
-    /**
-     * A retracted edge is not in the registry.
-     *
-     * `present === false` is the retraction; anything else — including the field being
-     * absent, which is how every edge published before this field existed reads — is
-     * present. Defaulting absence to PRESENT is the safe direction: an older payload
-     * describes an edge somebody created, and dropping it would silently lose edges on
-     * upgrade.
-     */
-    if (entity.state.present === false) continue;
-
-    const fromId = parseCrossLinkEntityId(entity.entityId);
-    if (fromId === null) continue;
+    const present = entity.state.present !== false;
+    const identity = parseCrossLinkEntityId(entity.entityId);
+    if (identity !== null) {
+      // The identity is read from the KEY, which is what both machines agreed the entity is.
+      (present ? crossLinks : retractedCrossLinks).push({
+        blockerRepositoryId: identity.blockerRepositoryId,
+        blockerWs: str(entity.state.blockerWs),
+        blockerIdentifier: identity.blockerIdentifier,
+        blockedRepositoryId: identity.blockedRepositoryId,
+        blockedWs: str(entity.state.blockedWs),
+        blockedIdentifier: identity.blockedIdentifier,
+        type: "blocks",
+      });
+      continue;
+    }
+    const legacy = parseLegacyCrossLinkEntityId(entity.entityId);
+    if (legacy === null || !present) continue;
     crossLinks.push({
-      blockerWs: strOr(entity.state.blockerWs, fromId.blockerWs),
-      blockerIdentifier: strOr(entity.state.blockerIdentifier, fromId.blockerIdentifier),
-      blockedWs: strOr(entity.state.blockedWs, fromId.blockedWs),
-      blockedIdentifier: strOr(entity.state.blockedIdentifier, fromId.blockedIdentifier),
+      blockerRepositoryId: null,
+      blockerWs: strOr(entity.state.blockerWs, legacy.blockerWs),
+      blockerIdentifier: strOr(entity.state.blockerIdentifier, legacy.blockerIdentifier),
+      blockedRepositoryId: null,
+      blockedWs: strOr(entity.state.blockedWs, legacy.blockedWs),
+      blockedIdentifier: strOr(entity.state.blockedIdentifier, legacy.blockedIdentifier),
       type: "blocks",
     });
   }
@@ -993,6 +742,7 @@ export function registryFromSnapshot(args: {
     capturedAt: args.capturedAt,
     workspaces,
     crossLinks,
+    retractedCrossLinks,
   };
 }
 

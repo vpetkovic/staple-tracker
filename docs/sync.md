@@ -1015,7 +1015,7 @@ So the hub publishes a set:
 | In a hub backup | Not in a hub backup |
 |---|---|
 | `repository_id`, `slug`, `prefix`, `kind`, `added_at` per workspace | `path` — the original objection, and it stands |
-| `cross_links`, both ends, by slug and identifier | `last_seen_at`, `hub_events`, `registry_optouts`, `meta.schema_version` |
+| `cross_links`, each end by its workspace's `repository_id` and the issue identifier, with the slugs for display | `last_seen_at`, `hub_events`, `registry_optouts`, `cross_link_changes`, `meta.schema_version` |
 | The hub's own id | **Any task. There is no issues table in `hub.db`.** |
 
 That last row is the one to say out loud, because a person will reasonably assume
@@ -1050,8 +1050,8 @@ Two entity kinds, at protocol 2:
 
 | Entity | Key | Payload |
 |---|---|---|
-| `registration` | the workspace's `repository_id` | `format`, `slug`, `prefix`, `kind`, `addedAt` |
-| `crossLink` | its four names, each percent-encoded, joined with `/` | `format`, `blockerWs`, `blockerIdentifier`, `blockedWs`, `blockedIdentifier`, `type` |
+| `registration` | the workspace's `repository_id` | `format`, `slug`, `prefix`, `kind`, `addedAt`, all on the `create` only |
+| `crossLink` | `rid/` + the blocker's `repository_id`, blocker identifier, blocked `repository_id`, blocked identifier, each percent-encoded, joined with `/` | on the `create`: `format`, `blockerWs`, `blockerIdentifier`, `blockedWs`, `blockedIdentifier`, `type`, `present: true`; on an `update`: `format` and `present` only |
 
 They are two entities rather than one blob because the fold is per entity and is
 last-write-wins: one entity holding the whole registry would make every publish
@@ -1069,6 +1069,19 @@ follows the `document` precedent, whose key is already `"<issueId>/<key>"`. The 
 `type` is deliberately not in the key, so changing an edge's type is an update rather
 than a delete plus an unrelated create.
 
+**The key contains no slug** (STA-287). A slug comes from a directory name, so two
+machines holding the same repositories under different directory names disagree about
+every slug. Keyed on slugs, their links were unrelated entities, and neither machine
+could adopt the other's. Keyed on the two repositories' identities, a link is the same
+entity on both. The slugs stay in the create's payload so a person reading the log can
+tell what the link is. They are the first publisher's names, never updated.
+
+A PR #94 build keyed links on the four slugs and identifiers. Those entities are still
+in logs it wrote. They have four components and this key has five, so they can never
+be misread as this build's. Publishing ignores them. Adoption reports each one as
+skipped, saying the machine that has the link publishes it again under the new key on
+its next publish. Neither side crashes on one or loops over it.
+
 **A `registration` with no `repository_id` is not publishable.** The entity id *is*
 the adoption key, and minting one locally is the fork the manifest exists to prevent
 — the real repository would record its own id later and the registry would hold two
@@ -1080,10 +1093,12 @@ A tombstone is final in the fold, which is right for an `issue` whose id is mint
 and wrong for an entity whose id is **derived from its content**. Removing a cross-link
 and adding it back produces the same entity id, lands on the tombstone, and is discarded
 while the push reports success — and a restore carries the tombstone into the new epoch,
-so the epoch bump is not an escape. Retraction is therefore a field: `present: false` on
-the cross-link payload, and resurrection is an ordinary update the fold's plain merge
-already handles. A missing `present` reads as present, so edges published before the
-field existed are not lost.
+so the epoch bump is not an escape. Retraction is therefore a field: an `update` to
+`present: false`, and linking again is an `update` back to `present: true`, which the
+fold's plain merge already handles. A missing `present` reads as present, so edges
+published before the field existed are not lost. The `opId` includes the entity's base
+version, so a link removed and linked again any number of times never collides with
+its own earlier operations.
 
 **`workspaces.repository_id` is written by `staple init`**, from the manifest that is its
 authority — measured, not assumed: after clearing the column, `staple ls` and
@@ -1095,110 +1110,78 @@ reconciled at publish, adopt and restore. An identity held by two rows is **repo
 published** — two clones or two worktrees of one repository legitimately share one, and
 publishing both would make the registered name flip between them on every pass.
 
-**Publishing a registry is scoped to ONE machine, and a publish REFUSES when the service
-holds a registration this machine does not have and has not opted out of.** The refusal does
-not guess at the remedy: it PREVIEWS the adoption of what the service holds — `adoptRegistry`
-previews by default, writes nothing and makes no request — and prints that preview's own
-sentence for each foreign entry, then names the escape the entry actually has.
+### Publishing is a union: any number of machines, one converged registry
 
-There are two escapes, because there are two kinds of foreign entry. One that would LAND on
-adoption — nothing here holds its identity, its prefix or its name — is answered by `staple
-hub registry adopt --apply`, because "another machine has published here" and "this machine
-is behind" are indistinguishable from the client and have the same answer. One that would
-PARK is not: adoption refuses a prefix or slug collision rather than renumbering, because a
-prefix is stamped into its workspace database and into every `<prefix>-N` it has ever
-written. For those the refusal says so by count and names the two things that do work —
-resolve the collision in the owning repository, or tell this machine to leave the entry out
-of its own list with `staple hub registry ignore <repositoryId>`.
+Any number of machines can publish to one registry. They converge on the same set, and
+a machine that is behind can publish safely (STA-287). A publish never refuses a machine
+for lacking something the service holds. Before STA-287 it did, because a publish could
+destroy another machine's data. Every destructive path is gone now, so a publish only
+ever adds:
 
-Naming `adopt --apply` for every reason, which is what the first version of this refusal did,
-**dead-ends**: adoption registers an absent row only after clearing the prefix and slug
-checks, so a collision writes nothing, the entry stays foreign for ever, publish keeps
-refusing, and the named remedy is the thing the operator just ran. The opt-out set is no
-accidental way out either — it is keyed on `repositoryId` and there is no local row to
-unregister — which is why `ignore` has to be named explicitly rather than left to be found.
+- **Names are create-only.** A registration's `slug`, `prefix`, `kind` and `addedAt`
+  are sent once, on the `create`, and never updated. That is correct, not merely
+  convenient: staple has no rename operation. No statement in `src` updates
+  `workspaces.slug`, and a workspace's stored slug beats its directory name. So two
+  machines disagree about a name only when they chose different directory names at
+  `staple init`, and the first name the registry learned is the right one to keep.
+  (If two machines' very first publishes cross in flight, the fold keeps the create it
+  applies last. Either way, nothing changes the names afterwards.) A machine that calls a
+  workspace something else is told so in `renamed` ("this machine calls it
+  `alpha-clone`; the registry calls it `alpha`"), and nothing is sent. Measured before
+  this rule: two machines alternating publishes emitted one operation per pass, 8 in 8
+  passes, for ever. Measured after it, against real workerd: `[3, 0, 0, 0, 0, 0]`, the
+  first machine's creates and then nothing from either.
+- **A registration is never deleted.** `staple hub unregister` is local. See below.
+- **A cross-link is retracted only by the machine that removed it.** `Hub.removeCrossLink`,
+  which is what `staple hub unlink` and MCP's `cross_unlink` both call, records
+  the removal in `cross_link_changes` (hub migration 004), keyed on the link's portable
+  identity. The next publish sends `present: false` for a recorded removal the service
+  holds as present, once. A machine that merely *lacks* a link sends nothing. It may never
+  have adopted the link, or it may have parked the workspace at one end, and absence is
+  not a decision. That authority rule is why a publish cannot destroy anyone's link.
+- **A retracted link is put back only by a machine that linked it again.**
+  `Hub.addCrossLink` (`staple link`, MCP's `cross_link`, and the UI's cross-workspace
+  blockers) records a (re)link. The next publish
+  sends `present: true` for it if the service holds the link as retracted, and then
+  forgets the record. A machine that still holds a link another machine retracted has a
+  copy older than the retraction. It sends nothing, and says so: `adopt --apply` removes
+  the copy, and `staple link` followed by a publish shares it again.
 
-Two machines sharing a registry is **not supported**, and the reasons are worth stating
-because a name race does NOT settle here — see the measurement below, and note that adoption
-deliberately refuses to converge a name, so there is nothing that would make it settle:
+A removal record is kept after it is published. It is this machine's standing refusal to
+take the link back: an adopt that finds the link present in the registry leaves it removed
+here and says so (`kept_removed`). It is never re-sent, either. If another machine links it
+again later, that is a newer decision, so it stands in the registry, and this machine keeps
+its own copy removed. `staple link` on this machine is what takes it back.
 
-- **Edge removal cannot be authorised.** Absence of an edge locally is ambiguous between
-  "removed" and "never had", and *no comparison of the two sides can tell them apart*:
-  `.staple/repository.json` is tracked, so two clones legitimately share a `repository_id`,
-  and slugs are names. Authority needs a record of what a machine KNEW — an applied adopt,
-  or a per-edge ledger — which is hub-local state, i.e. the migration this leg exists to
-  avoid.
-- **`addedAt` could not converge** while it was sent on every update. It is the local row's
-  registration time, so two machines can never agree on it, and every pass appended an
-  operation to a metered log for ever. It is now sent only on the `create`, which makes it
-  first-writer-wins: the registry's own record of when the SET first learned of the
-  workspace.
+What the service holds that this machine lacks is left alone and **reported**:
+`unadopted` on the publish report, printed as "the service holds N entries this machine
+doesn't have — `staple hub registry adopt` previews taking them on". An identity this
+machine unregistered, and a link it removed, are not counted, because those absences are
+this machine's own decisions.
 
-**So cross-links are additive-only.** Removing one does not propagate, exactly as
-unregistering a workspace does not, and for the reason given there: it would turn a
-reversible local act into an irreversible remote one. A removal is reported to the person
-who made it rather than silently dropped, and adopting brings the edge back. The consequence
-is that two machines publishing one registry can no longer destroy each other's edges at all.
+Adoption carries a removal the other way. A link the registry holds as `present: false`
+that this machine still has is removed here by `adopt --apply` (`removed`), unless this
+machine linked it again since and has not published that yet (`kept_linked`). Taking a
+retraction on does not record a removal here, so if another machine links it again later,
+the next adopt brings it back.
 
-**What remains does NOT settle, and this page said it did.** Two machines holding clones
-under different directory names get different slugs for one shared `repository_id` — the
-ordinary case, since a slug derives from the directory. `foreign` is empty every pass,
-because it is an identity comparison, so both machines publish an update to the same entity
-for ever. Measured, one workspace, no cross-links:
+The whole cycle, measured against real workerd with two homes and two real clones under
+different directory names (`scripts/hub-registry-live.ts`, walk 2): A's link reaches B
+between B's own names; A's `hub unlink` reaches B, and B's stale copy is neither
+re-published nor brought back by a second adopt; A's re-link reaches B; B's unlink
+reaches A; A linking it again after that stands in the registry while B keeps its own
+removal; and B, while behind, publishes without touching anything of A's.
 
-```
-pass 1 A: published=1 foreign=0 log=1 slug=alpha
-pass 2 B: published=1 foreign=0 log=2 slug=alpha-clone
-...
-pass 8 B: published=1 foreign=0 log=8 slug=alpha-clone
-total ops in 8 passes: 8
-```
-
-That is **one metered operation per publish, indefinitely** — the same shape as the
-`addedAt` divergence above, and it cannot be fixed the same way, because a name is a fact
-each machine legitimately holds rather than a timestamp one of them recorded first.
-`prefix` and `kind` behave identically.
-
-This page previously added *"it is also not refusable: a single machine renaming a workspace
-produces exactly the same diff"*, and **that was false**. There is no supported
-single-machine rename anywhere in staple: no statement in the tree updates
-`workspaces.slug`, the slug is written once when a workspace is first initialised, and from
-then on the stored slug beats the directory basename — so renaming the directory changes
-nothing. A differing slug on an existing identity therefore means precisely one thing, that
-another machine published it, and it could be refused.
-
-It is **reported instead of refused**, and the reason is not ambiguity — it is the
-machine-replacement path. **Do not tighten this into a refusal.** Adoption deliberately
-keeps this machine's name — *this machine's stamps win* — so a rebuilt machine that
-restored a repository into a differently named directory legitimately holds a different
-slug from the one the lost machine published. A refusal on divergence would fire on that
-machine's very first publish and refuse exactly the recovery this whole feature exists to
-serve. The acceptance criterion is *"the hub is restorable from the service after a machine
-is lost"*; a refusal here would make the last step of restoring it fail.
-
-Two cheap refusals look available and are not. Comparing the two sides cannot establish
-authority, because a tracked manifest means clones share an identity and slugs are only
-names. And the opt-out table's stored slug — which does record what this machine used to
-call an identity — only exists for identities this machine has REMOVED, so in a
-divergent-name race, where neither machine has removed anything, there is no opt-out row to
-consult at all. The question "did this machine previously call this identity by the name the
-service holds" is unanswerable in precisely the case that matters. So `publishRegistry` reports every name it replaces
-(`renamed: { entityId, from, to }[]`, printed by `staple hub registry publish` and present in
-its `--json`), and the disclosure at the point of consent says that the overwrite happens,
-that this machine always wins its own publish, and that a machine rebuilt from the registry
-inherits whichever name won last. The loss is allowed and visible rather than prevented and
-misdescribed.
-
-The same applies to edges: a `crossLink`'s entity id encodes the two SLUGS, so **two machines
-with different directory names can never share a cross-link at all** — each publishes edges
-under its own names and adoption skips the other's, because it cannot resolve their
-endpoints.
-
-So the accepted limitation is stated as measured rather than as hoped: publishing is scoped
-to one machine, a second machine publishing to the same registry costs one operation per
-publish for ever and cannot exchange cross-links, and `registryDisclosure()` says so at the
-point the consent is granted. Convergence — a name authority and an edge authority — is a
-separate ticket.
+**A link lands on this machine only where it can.** Adoption matches each end to a local
+workspace **by `repository_id`**, never by slug. The identifier must then carry the prefix
+this machine holds that repository under. A repository initialised separately on two
+machines can get two prefixes, because a prefix is derived from the directory name when
+the workspace is first initialised: a clone in `tracker/` gets `TRA` and a clone in
+`staple-tracker/` gets `STA`. Then the registry's `TRA-3` names no issue here. **That is a fact about the data, not a defect, and it is the rule:** the
+link is reported as skipped with that reason, and staple does not renumber a prefix to
+make it fit. The same holds for an identifier the local workspace does not contain, an
+end whose workspace did not land here, and a link that would close a cycle. Each is
+skipped with its own sentence, and the preview runs the same checks as the apply.
 
 ### Adoption, not duplication
 
@@ -1244,7 +1227,9 @@ filesystem. That is `staple discover`'s job, and an adoption that guessed would 
 a registry pointed at a directory nobody checked.
 
 Adoption **never deletes a local row**. An incoming set is another machine's
-knowledge, not an instruction about what this machine should stop having.
+knowledge, not an instruction about what this machine should stop having. The one thing
+it removes is a cross-link another machine retracted, and only when this machine has
+not linked it again since. See "Publishing is a union" above for the link rules.
 
 ### Unregistering is local, and deliberately does not propagate
 
@@ -1261,27 +1246,31 @@ other machine, and the surface says so rather than implying otherwise. Removing
 an entry from a shared registry is a purge-shaped operation and is **not** offered
 yet; see the note on purge.
 
+`--with-links` (and `staple hub prune --with-links`) removes the links naming that
+workspace from this hub, and does **not** record them as removals. They go because the
+row went, not because anyone decided the links should stop existing. So they stay in the
+published registry, and they come back here if the workspace is registered here again and
+this machine adopts. `staple hub unlink` is the verb that removes a link everywhere.
+
 ### Every limitation of the hub registry, in one place
 
 The rule this list exists to keep: a limitation is either **refused in code, with a message
 naming what to do instead**, or **stated here and at the point of consent**. Anything in
 neither category is a bug. Each entry below says which it is.
 
-1. **Two machines publishing to one registry concurrently is not supported.** *Refused*
-   when the second machine holds less than the service does — the refusal previews the
-   adoption and names `staple hub registry adopt --apply` for entries that would land and
-   `staple hub registry ignore <repositoryId>` for entries that would park. *Stated* for
-   the case that is not refused: two machines holding the same workspaces under different
-   directory names overwrite each other's name once per publish, on a metered log, for
-   ever. The overwrite is reported (`renamed`), the disclosure says this machine always
-   wins and that a rebuilt machine inherits whichever name won last. Sequential use — one
-   machine at a time, a replacement adopting what the last one published — is the
-   supported shape and is what the acceptance criterion asks for.
-2. **Two machines with different directory names cannot exchange cross-workspace links at
-   all.** A `crossLink`'s entity id encodes the two slugs. *Stated*, here and at consent.
-3. **A workspace with no `.staple/repository.json` cannot be published.** *Refused*, per
-   entry, naming `staple init` in that workspace — measured to be the only command that
-   records the identity.
+1. **A workspace keeps the first name the registry learned.** Names are create-only, so a
+   machine that calls a workspace something else never changes the published name.
+   *Reported* on every publish (`renamed`: "this machine calls it X; the registry calls it
+   Y"), and *stated* at the point of consent. Nothing is overwritten and nothing is billed
+   for it: two machines alternating publishes emit no operations after their creates.
+2. **A link lands on a machine only where its identifiers mean something there.** Each end
+   is matched by `repository_id`. If this machine holds that repository under a different
+   prefix, or its workspace has no such issue, the link is *reported* as skipped with that
+   reason on adopt. Staple never renumbers a prefix to make it fit. See "Publishing is a
+   union".
+3. **A workspace with no `.staple/repository.json` cannot be published**, and neither can
+   a link with an end in one. *Refused*, per entry, naming `staple init` in that workspace —
+   measured to be the only command that records the identity.
 4. **Two local rows sharing one identity** (two clones or worktrees of one repository) are
    parked rather than published, because one identity is one registry entry. *Refused*,
    naming `staple hub unregister`.
@@ -1289,24 +1278,32 @@ neither category is a bug. Each entry below says which it is.
    *Refused*, naming the only two performable resolutions: `staple hub registry ignore
    <repositoryId>`, or `staple hub unregister <slug>` followed by adopting again. There is
    no rename verb and no re-stamp verb, and the refusal says so rather than implying one.
-6. **Removals never propagate** — not a workspace, not a cross-link. *Stated*, with the
-   reason (it would turn a reversible local act into an irreversible remote one), and
-   *reported* per entry when a publish leaves something behind.
+   It no longer blocks publishing: the parked entry is reported as one this machine
+   doesn't have.
+6. **A workspace removal never propagates; a link removal propagates from the machine that
+   made it.** `staple hub unregister` stays local, for the reason above. `staple hub unlink`
+   is recorded and published once, and a machine that merely lacks a link never retracts
+   it. *Stated* here and at consent, and *reported* on the publish that sends it
+   (`retracted`) and on the adopt that applies it (`removed`, `kept_removed`, `kept_linked`).
 7. **An edge tombstoned by a pre-`present` build cannot be resurrected.** *Reported* as
    unpublishable, naming a restore from a backup taken before the deletion as the only
    route.
-8. **A repository holds a hub's registry or a workspace's data, never both (STA-290).**
+8. **A link published by a PR #94 build, under slug names, can't be placed.** *Reported* by
+   adopt as skipped, naming what fixes it: the machine that has the link re-publishes it
+   under the repositories' identities on its next publish. Publishing ignores the old
+   entity, so it never loops.
+9. **A repository holds a hub's registry or a workspace's data, never both (STA-290).**
    `repos.vocabulary` is claimed by the repository's first write, or set when it is
    provisioned. After that, a push or a restore of the other vocabulary is *refused* with
    `conflict`, before anything is written, and the client names the remedy: the other
    vocabulary needs its own repository. Registry operations that reached a workspace's log
    before migration `0005` are still there. The recovery recipe in `worker/README.md` is
    what an operator uses to remove them. *Refused*, plus *stated* for the pre-`0005` case.
-9. **Provisioning is out of band.** Staple cannot create the hub's `repos` row: there is
+10. **Provisioning is out of band.** Staple cannot create the hub's `repos` row: there is
    no provisioning route and no account model. *Refused* with a message that names the
    step and points at `worker/README.md`, rather than failing as a permission error —
    which is what the wire genuinely returns.
-10. **Adoption never searches the filesystem.** A workspace the hub does not know about
+11. **Adoption never searches the filesystem.** A workspace the hub does not know about
     lands `absent`; attaching it is `staple hub registry locate <slug> --path <dir>`, which
     refuses unless the directory's own identity matches. *Refused*, naming the verb.
 
@@ -1395,6 +1392,14 @@ What it does not upload is stated at the same moment, because a person will
 reasonably get it wrong about a thing called "the hub": no filesystem paths, no
 tasks, and not the list of workspaces this machine has removed —
 `registry_optouts` never leaves, which is what keeps `staple hub unregister` local.
+`cross_link_changes` never leaves either: a link this machine unlinked or linked again
+reaches the registry as that link's `present` flag, and the record of who did it stays
+here.
+
+The same block says what publishing from more than one machine does: names are sent once
+and never overwritten, nothing another machine published is removed, a link leaves the
+registry only when the machine that removed it publishes, and adopt takes on whatever this
+machine lacks.
 
 Granting it requires the caller to hand the disclosure back to the setter, verbatim, as
 evidence that it rendered one. That is not authentication — the constant is exported and
@@ -1813,11 +1818,15 @@ Honest gaps, so nobody discovers them the hard way.
   operator can read every issue body. Stated in
   [Trust boundaries](#trust-boundaries) and repeated here because it is the single
   most important thing to know before connecting.
-- **The hub does not synchronize.** Cross-workspace `blocks` edges and the
-  identifier-prefix registry stay machine-local derived state in the first
-  release, so a cross-workspace blocker resolved on one machine is not visible on
-  another. `unresolvable → treat as blocked` ([architecture.md](architecture.md))
-  is still the behaviour.
+- **The hub does not synchronize by itself.** Cross-workspace `blocks` edges and the
+  identifier-prefix registry are machine-local until a person publishes them with
+  `staple hub registry publish` and another machine adopts them with
+  `staple hub registry adopt --apply`, both explicit, under the fourth consent (see
+  ["The hub registry is a set, not a map"](#the-hub-registry-is-a-set-not-a-map)).
+  A blocker's *status* lives in its workspace, so a cross-workspace blocker resolved on
+  one machine is visible on another only once that workspace has synced there too.
+  `unresolvable → treat as blocked` ([architecture.md](architecture.md)) is still the
+  behaviour for a blocker whose workspace is not on this machine.
 
   `staple cloud connect --all` does **not** change this, and the distinction is
   worth stating because the command reads as though it might. It is a **fan-out
@@ -1847,10 +1856,10 @@ Honest gaps, so nobody discovers them the hard way.
 - **`document_revisions` has no foreign key to `issues`.** Orphaned revisions are
   already reachable locally today; sync does not introduce the hazard and does not
   fix it either.
-- **`cross_links` is repository state trapped in a machine-local file.** A
+- **`cross_links` is repository state kept in a machine-local file.** A
   cross-workspace dependency is a fact about two repositories, but it lives in the
-  hub, which does not synchronize. Naming the tension is all this release does
-  about it.
+  hub. The hub registry is how it leaves the machine: published and adopted
+  explicitly, never ridden along in either repository's own sync.
 - **Ordered-collection conflicts are all-or-nothing.** Two humans reordering the
   queue offline get two whole plans and pick one. There is no per-row merge, on
   purpose.

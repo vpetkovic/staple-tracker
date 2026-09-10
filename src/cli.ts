@@ -773,7 +773,9 @@ Workspace
   hub prune [--yes] [--with-links]      drop every row whose recorded path is gone;
               previews and writes nothing without --yes; a dead row named by
               cross-links is kept and reported unless --with-links
-  hub unlink <blocker> <blocked>        remove ONE cross-workspace link
+  hub unlink <blocker> <blocked>        remove ONE cross-workspace link; the removal is
+              recorded, so the next registry publish removes it from the registry
+              too and an adopt here does not bring it back
   hub registry [status|id]              this machine's hub on a sync service: is it
               connected, and is publishing on. Local files only; no request.
   hub registry identity <hubId>         take on the registry identity another machine
@@ -782,9 +784,12 @@ Workspace
               connect the HUB itself as a repository; publishing stays OFF
   hub registry publish [--enable|--disable]
               grant or withdraw the consent to publish this machine's workspace
-              LIST; with neither flag, publish it now. Granting prints exactly what
-              is uploaded. No other consent implies this one.
-  hub registry adopt [--apply]          adopt the registry the service holds; previews
+              LIST; with neither flag, publish it now. Only ever adds: names are sent
+              once, and nothing another machine published is removed, so any number
+              of machines can publish one registry. Granting prints exactly what is
+              uploaded. No other consent implies this one.
+  hub registry adopt [--apply]          adopt the registry the service holds: its
+              workspaces, its links, and the links other machines removed; previews
               and writes nothing to this hub without --apply
   hub registry backup <enable|disable|create|ls|rm>
               point-in-time copies of the registry — a further decision

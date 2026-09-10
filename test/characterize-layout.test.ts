@@ -348,12 +348,15 @@ describe("the machine home", () => {
       "index:cross_links_blocked_idx",
       "index:cross_links_blocker_idx",
       "index:hub_events_dedup_uq",
+      // Hub migration 004 (STA-287): this machine's own cross-link changes.
+      "index:sqlite_autoindex_cross_link_changes_1",
       "index:sqlite_autoindex_cross_links_1",
       "index:sqlite_autoindex_meta_1",
       "index:sqlite_autoindex_registry_optouts_1",
       "index:sqlite_autoindex_workspaces_1",
       "index:sqlite_autoindex_workspaces_2",
       "index:workspaces_repository_id_idx",
+      "table:cross_link_changes",
       "table:cross_links",
       "table:hub_events",
       "table:meta",
@@ -368,14 +371,15 @@ describe("the machine home", () => {
     // on this side.
     //
     // GOLDEN, moved by S22 (STA-283): version 2 -> 3. Hub migration 003 adds
-    // `workspaces.repository_id` and `registry_optouts`.
+    // `workspaces.repository_id` and `registry_optouts`. Moved again by STA-287:
+    // 3 -> 4. Hub migration 004 adds `cross_link_changes`.
     //
     // `schema_version` is still the only key a FRESHLY INITIALISED hub holds —
     // slug and prefix remain authoritative in each workspace file, not here. It
     // is no longer the only key the hub can ever hold: `hub_id` is minted, once,
     // the first time something asks the hub to identify itself (a hub backup).
     // Lazily on purpose, so that no existing hub grows one until it is used.
-    expect(metaRows(join(home, "hub.db"))).toEqual([{ key: "schema_version", value: "3" }]);
+    expect(metaRows(join(home, "hub.db"))).toEqual([{ key: "schema_version", value: "4" }]);
   }, 30_000);
 
   it("mints ~/.staple/ui-token at 0600 the first time the UI is asked for", () => {

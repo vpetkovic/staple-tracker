@@ -1,59 +1,61 @@
 /**
- * The hub registry leg, end to end, against a REAL deployed service.
+ * The hub registry leg, end to end, against a REAL service: a deployed Worker, or
+ * `wrangler dev --local` (real workerd with a real local D1).
  *
- * Not in the vitest suite, and deliberately: it makes real network calls and needs a
- * `repos` row that only an operator can create. It is committed because the one thing
- * neither test suite can prove is that the deployed Worker behaves like Miniflare and
- * like `FakeSyncServer` — and this epic has already produced four green suites that
- * proved nothing.
+ * Not in the vitest suite, and deliberately: it makes real network calls and needs
+ * `repos` rows that only an operator can create. It is committed because the one thing
+ * neither test suite can prove is that the running Worker behaves like Miniflare and
+ * like `FakeSyncServer`.
  *
- * It IS re-runnable against the same seeded hub id, and step 2 is where that is earned:
- * each run mints fresh identities, so the previous run's registrations are foreign to
- * this one and the scope refusal would stop the publish. Step 2 therefore performs the
- * escape the refusal names — `ignore` each identity this machine does not have — rather
- * than the header asserting repeatability the code did not have. It did not have it: a
- * second unmodified run used to exit 1 at step 2 before reaching a single assertion.
+ * Two walks:
  *
- * ## What it proves that the suites cannot
+ *   1. **One registry, one machine lost.** Publish, back up, lose the machine, adopt on
+ *      a replacement, publish damage, restore, adopt. In-process, through the service
+ *      module, so it can capture every request body and prove no filesystem path left.
+ *   2. **Two machines sharing one registry (STA-287).** Two STAPLE_HOMEs, two separate
+ *      credential files, and real `git clone`s under DIFFERENT directory names, driven
+ *      only through the `staple` CLI. It shows: (a) alternating publishes settle at zero
+ *      operations, (b) a cross-link is shared across different directory names, (c) a
+ *      `hub unlink` propagates and no adopt brings the link back, (d) re-linking works
+ *      from either machine, (e) a machine that is behind publishes safely and loses
+ *      nothing of the other's.
  *
- * `worker/test/registry.test.ts` runs inside workerd against Miniflare's D1.
- * `test/cloud-hub-registry-wire.test.ts` runs under Node against an in-process fake.
- * Both read the same shapes from `worker/test/registry-fixture.ts`, so they cannot
- * disagree with each other — but they could both disagree with what is deployed.
- * This drives the real client module over HTTPS to the real Worker and asserts on
- * what comes back.
+ * It exits non-zero if any assertion fails. The previous version printed `FAILED:` and
+ * exited 0.
  *
- * ## Before running it
+ * ## Running it
  *
- * The hub's `repos` row must exist. Staple cannot create it — see
- * `worker/README.md`, "Provisioning a HUB". Additive INSERT only; there is no
- * destructive Cloudflare operation anywhere in this script and none may be added.
- *
- * It publishes, adopts and RESTORES, so it refuses to run against this machine's own hub id
- * or against a workspace repository id — see `refuseRealHub`.
+ * Every repository it touches is provisioned fresh on each run, with an additive
+ * `INSERT` through `wrangler d1 execute`. Nothing else is written to the service's
+ * database and nothing is deleted, so the script can be re-run against the same service
+ * as often as you like. `STAPLE_LIVE_D1` is the argument list that points `wrangler d1
+ * execute staple-sync-dev` at the service's database:
  *
  * ```sh
- * HUB_ID=$(uuidgen | tr 'A-Z' 'a-z')
- * SECRET=$(openssl rand -hex 32)
- * DIGEST=$(printf '%s' "$SECRET" | shasum -a 256 | cut -d' ' -f1)
- * cat > /tmp/seed-hub.sql <<SQL
- * INSERT INTO repos (repo_id, epoch, last_seq, last_fencing_token, enroll_sha256, created_at)
- * VALUES ('$HUB_ID', 1, 0, 0, X'$DIGEST', $(date +%s)000);
- * SQL
- * npx wrangler d1 execute staple-sync-dev --remote -c wrangler.local.toml --file /tmp/seed-hub.sql
+ * # Local workerd, on its own port and its own state directory:
+ * cd worker
+ * npx wrangler d1 migrations apply staple-sync-dev --local --persist-to /tmp/live-d1
+ * npx wrangler dev --local --port 8797 --persist-to /tmp/live-d1 &
+ * cd ..
+ * STAPLE_HUB_ENDPOINT=http://127.0.0.1:8797 \
+ * STAPLE_LIVE_D1="--local --persist-to /tmp/live-d1" \
+ *   npx tsx scripts/hub-registry-live.ts
  *
+ * # A deployed dev Worker:
  * STAPLE_HUB_ENDPOINT=https://<worker>.workers.dev \
- * STAPLE_HUB_ID=$HUB_ID \
- * STAPLE_HUB_ENROLL=$SECRET \
+ * STAPLE_LIVE_D1="--remote -c wrangler.local.toml" \
  *   npx tsx scripts/hub-registry-live.ts
  * ```
  *
- * Every identifier is read from the environment. Nothing real is committed here,
- * because this repository is public.
+ * Every identifier is minted per run or read from the environment. Nothing real is
+ * committed here, because this repository is public.
  */
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { Hub } from "../src/core/hub.js";
 import { initWorkspace } from "../src/core/workspace.js";
 import { buildConnectPreview } from "../src/core/cloud/preview.js";
@@ -72,157 +74,90 @@ import {
   setRegistryConsent,
 } from "../src/core/cloud/hub-registry-service.js";
 
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+const WORKER_DIR = join(REPO_ROOT, "worker");
+const TSX = join(REPO_ROOT, "node_modules/tsx/dist/cli.mjs");
+const CLI = join(REPO_ROOT, "src/cli.ts");
+
 const endpoint = required("STAPLE_HUB_ENDPOINT");
-const hubId = required("STAPLE_HUB_ID");
-const enrollmentSecret = required("STAPLE_HUB_ENROLL");
+const d1Args = required("STAPLE_LIVE_D1").split(/\s+/).filter((a) => a.length > 0);
 
 function required(name: string): string {
   const value = process.env[name];
   if (!value || value.trim().length === 0) {
-    console.error(
-      `${name} is required. See this file's header for the provisioning recipe.\n` +
-        "Nothing was sent.",
-    );
+    console.error(`${name} is required. See this file's header for how to run it. Nothing was sent.`);
     process.exit(2);
   }
   return value.trim();
 }
 
-/**
- * Refuse to run against a hub id that this machine's own hub is using.
- *
- * The script publishes, adopts and RESTORES — which rewinds the registry on the
- * service and affects every machine on that hub id. Pointed at a real hub by a copied
- * command line, it would do all of that to somebody's actual workspace list.
- */
-function refuseRealHub(): void {
-  const previous = process.env.STAPLE_HOME;
-  delete process.env.STAPLE_HOME;
-  try {
-    /**
-     * `openReadOnly`, NOT `open`. `Hub.open()` MIGRATES and converts the journal to WAL, so
-     * the guard was creating `~/.staple/hub.db` on a machine that had none — a check with a
-     * side effect on the thing it is protecting.
-     */
-    const hub = Hub.openReadOnly();
-    const mine = hub.storedHubId();
-    /**
-     * Also refuse a WORKSPACE's `repositoryId`. The hub id travels by hand next to
-     * repository ids, so a mispaste is ordinary — and pushing registry operations into a
-     * workspace's log is precisely the incident `worker/README.md`'s recipe exists to clean
-     * up. Cheaper to refuse here than to document the cleanup and then cause it.
-     */
-    const asWorkspace = hub.findByRepositoryId(hubId);
-    hub.close();
-    if (asWorkspace !== undefined) {
-      console.error(
-        `STAPLE_HUB_ID is the sync identity of the workspace "${asWorkspace.slug}" on this ` +
-          "machine, not a hub id. Publishing registry operations into a workspace's log " +
-          "permanently 426s every protocol-1 client of it. Nothing was sent.",
-      );
-      process.exit(2);
-    }
-    if (mine === hubId) {
-      console.error(
-        `STAPLE_HUB_ID is this machine's REAL hub identity. This script publishes, retracts ` +
-          "and restores, so it will not run against it. Provision a throwaway hub id and use " +
-          "that. Nothing was sent.",
-      );
-      process.exit(2);
-    }
-  } catch {
-    // No hub on this machine at all. Nothing to protect.
-  } finally {
-    if (previous === undefined) delete process.env.STAPLE_HOME;
-    else process.env.STAPLE_HOME = previous;
+/** Every temporary directory this run made. All removed at the end, pass or fail. */
+const scratch: string[] = [];
+function tempRoot(label: string): string {
+  const dir = mkdtempSync(join(tmpdir(), `staple-hublive-${label}-`));
+  scratch.push(dir);
+  return dir;
+}
+
+/** Every assertion's outcome. The exit code is computed from this and nothing else. */
+const failures: string[] = [];
+function check(ok: boolean, pass: string, fail: string): void {
+  if (ok) console.log(`PASS — ${pass}`);
+  else {
+    console.log(`FAIL — ${fail}`);
+    failures.push(fail);
   }
 }
-refuseRealHub();
 
-const homes: string[] = [];
+function step(what: string): void {
+  console.log(`\n=== ${what}`);
+}
 
 /**
- * Every request body this process actually sent, captured at the transport.
- *
- * The path assertion at the end used to serialise `diffRegistry(exportRegistry(...))`,
- * which cannot contain a path for ANY input — `RegistryEntry` has no path field, so
- * `exportRegistry` has already dropped it. The tautology moved one function earlier when
- * it was "fixed" rather than being removed.
- *
- * The only honest subject is what left the process. This wraps the global `fetch`, so the
- * bytes inspected are the bytes the deployed Worker received, from the machine whose hub
- * rows carry REAL absolute paths.
+ * Create a repository on the service: an additive `INSERT` of a `repos` row and the
+ * digest of a fresh enrollment secret. The same recipe as `worker/README.md`,
+ * "Provisioning a repository". Returns the secret, which never leaves this process
+ * except as the `--token` of a connect.
  */
+function provision(repoId: string): string {
+  const secret = randomBytes(32).toString("hex");
+  const digest = createHash("sha256").update(secret).digest("hex");
+  const sql =
+    "INSERT INTO repos (repo_id, epoch, last_seq, last_fencing_token, enroll_sha256, created_at) " +
+    `VALUES ('${repoId}', 1, 0, 0, X'${digest}', ${Date.now()});`;
+  const result = spawnSync("npx", ["wrangler", "d1", "execute", "staple-sync-dev", ...d1Args, "--command", sql], {
+    cwd: WORKER_DIR,
+    encoding: "utf8",
+  });
+  if (result.status !== 0) {
+    throw new Error(`provisioning ${repoId} failed:\n${result.stdout}\n${result.stderr}`);
+  }
+  return secret;
+}
+
+// =============================================================== walk 1: one machine lost
+
 const sentBodies: string[] = [];
+/**
+ * Every request body walk 1 sent, captured at the transport. The path assertion checks
+ * what actually left the process, from the machine whose hub rows carry REAL absolute
+ * paths, and not a payload type that structurally cannot hold one.
+ */
 const recordingFetch: typeof fetch = async (input, init) => {
   if (typeof init?.body === "string") sentBodies.push(init.body);
   return globalThis.fetch(input as Parameters<typeof fetch>[0], init);
 };
 
-/** A machine: its own staple home and its own hub, with the shared registry identity. */
-/**
- * Leave behind what an EARLIER RUN of this script published, the way the product says to.
- *
- * Every run mints fresh temporary homes and therefore fresh `repositoryId`s, so on any run
- * after the first the service holds registrations this machine has neither got nor opted
- * out of — which is exactly what `dd29ef2`'s scope refusal refuses. The header used to
- * claim the script was re-runnable and it was not: run two exited 1 before any assertion.
- *
- * This is called before EVERY publish rather than once, and that is not defensiveness — the
- * first version of this fix guarded only step 2, and run two then failed at the replacement
- * machine's publish instead, where an earlier run's `live-other` also collides on prefix so
- * adoption parks it rather than adopting it. Measured, by running the script twice; the
- * one-call version would have shipped with the same false "re-runnable" claim one step
- * further along.
- *
- * It sends nothing: `registry_optouts` is local, and the read it does is a snapshot GET the
- * publish would have made anyway.
- */
-async function ignoreEarlierRuns(
-  c: { home: string; hub: Hub },
-  hubId: string,
-  label: string,
-): Promise<void> {
-  const held = await readPublishedRegistry(c.home, hubId, { fetchImpl: recordingFetch });
-  const mine = new Set(
-    c.hub.list().map((r) => r.repositoryId).filter((id): id is string => id !== null),
-  );
-  const strangers = held.registry.workspaces
-    .filter((w) => w.repositoryId !== null && !mine.has(w.repositoryId))
-    .map((w) => ({ repositoryId: w.repositoryId as string, slug: w.slug }));
-  for (const s of strangers) c.hub.addOptOut(s.repositoryId, s.slug, "ignored");
-  console.log(
-    strangers.length === 0
-      ? `${label}: no earlier run's entries on this hub id; publishing directly`
-      : `${label}: ignored ${strangers.length} entr(ies) from an earlier run, the way the ` +
-        `refusal says to: ${JSON.stringify(strangers.map((s) => s.slug))}`,
-  );
-}
-
-function machine(label: string): { home: string; hub: Hub } {
-  const home = mkdtempSync(join(tmpdir(), `staple-hublive-${label}-`));
-  homes.push(home);
+function machine(label: string, hubId: string): { home: string; hub: Hub } {
+  const home = tempRoot(label);
   process.env.STAPLE_HOME = home;
   const hub = Hub.open();
-  // Adopted, not minted. A machine scoped to a freshly minted id reads an empty
-  // repository and reports, truthfully and uselessly, that there is nothing to restore.
+  // Adopted, not minted: every machine joins the same registry identity.
   adoptRegistryIdentity(home, hub, hubId);
   return { home, hub };
 }
 
-/**
- * A workspace brought up the way a person brings one up.
- *
- * `initWorkspace` is what `staple init` calls. It creates the database, registers the hub
- * row, reconciles the identity from the manifest and records it on that row — and there is
- * **no `hub.recordRepositoryId` call anywhere in this script**, deliberately.
- *
- * The previous version wrote that column by hand, so the whole live proof was of a column
- * nothing populated: `workspaces.repository_id` had no writer on any user-facing path, and
- * on a real machine `publish` uploaded an empty registry. The script being green was the
- * evidence that hid it. Returns the identity `initWorkspace` established, so the
- * assertions can check the wire carried the real one.
- */
+/** A workspace brought up the way `staple init` brings one up. Returns its identity. */
 function register(home: string, slug: string): string {
   const dir = join(home, "ws", slug);
   mkdirSync(dir, { recursive: true });
@@ -231,370 +166,407 @@ function register(home: string, slug: string): string {
   return opened.repository.repositoryId;
 }
 
-function step(n: number, what: string): void {
-  console.log(`\n=== ${n}. ${what}`);
-}
+async function oneMachineLost(): Promise<void> {
+  const hubId = randomUUID();
+  const enrollmentSecret = provision(hubId);
+  const safe = (value: unknown) => JSON.stringify(value, null, 2).replaceAll(hubId, "<hub id>");
+  // Absent rows carry invented identities; `register` gets real ones from `initWorkspace`.
+  const EDGE_A = randomUUID();
+  const EDGE_B = randomUUID();
 
-/** Redact the hub id out of anything printed, so a paste of the output is safe. */
-function safe(value: unknown): string {
-  return JSON.stringify(value, null, 2).replaceAll(hubId, "<hub id>");
-}
-
-async function main(): Promise<void> {
-  // Only the two ABSENT rows need invented ids; the real workspaces get theirs from
-  // `initWorkspace`, which is the whole point of this script no longer faking the column.
-  const WS_C = "cccccccc-0000-4000-8000-000000000003";
-  const WS_D = "dddddddd-0000-4000-8000-000000000004";
-
-  step(1, "connect the hub as a repository");
-  const a = machine("first");
+  step("1.1 connect the hub as a repository");
+  const a = machine("first", hubId);
   const trackerId = register(a.home, "live-tracker");
   const otherId = register(a.home, "live-other");
-  console.log(
-    `identities recorded by initWorkspace: ${safe([trackerId.slice(0, 8), otherId.slice(0, 8)])}`,
-  );
-  // A workspace with no identity, so the unpublishable report is exercised for real.
   const nameless = join(a.home, "ws", "live-nameless");
   mkdirSync(nameless, { recursive: true });
   writeFileSync(join(nameless, "staple.db"), "");
   a.hub.register({ slug: "live-nameless", prefix: "LVN", path: join(nameless, "staple.db"), kind: "repo" });
-
-  const preview = buildConnectPreview({ home: a.home, repositoryId: hubId, endpoint });
-  const connected = await connectHubRegistry(preview, {
+  const connected = await connectHubRegistry(buildConnectPreview({ home: a.home, repositoryId: hubId, endpoint }), {
     home: a.home,
     enrollmentSecret,
     credential: { forceFile: true },
   });
-  console.log(
-    safe({
-      endpoint: connected.connection.endpoint,
-      deviceId: connected.connection.deviceId,
-      protocol: connected.connection.protocol,
-      capabilities: connected.capabilities,
-      // Every consent off, as a connect leaves them.
-      consents: {
-        auto: connected.connection.auto,
-        backup: connected.connection.backup,
-        registry: connected.connection.registry,
-      },
-    }),
+  check(
+    connected.connection.registry !== true && connected.connection.backup !== true,
+    "connecting leaves every consent off",
+    "connecting turned a consent on",
   );
 
-  step(2, "publish the registry (refused first, to prove the consent gates egress)");
+  step("1.2 publish: refused without consent, then published");
+  let refused = false;
   try {
     await publishRegistry(a.hub, a.home, { fetchImpl: recordingFetch });
-    throw new Error("published without consent — this is a bug");
-  } catch (error) {
-    console.log(`refused: ${error instanceof Error ? error.message.slice(0, 120) : error}…`);
+  } catch {
+    refused = true;
   }
-  /**
-   * The disclosure is RENDERED and then handed back, which is what `setRegistryConsent`
-   * now requires when enabling. A script is a surface too, and it does not get an
-   * exemption from showing what it is agreeing to.
-   */
+  check(refused, "publishing without the consent is refused before any push", "published without consent");
   console.log(registryDisclosure(endpoint));
   setRegistryConsent(a.home, hubId, true, REGISTRY_DISCLOSURE);
-
-  /**
-   * A PREVIOUS RUN'S registrations are foreign to this one, and clearing them is a step.
-   *
-   * The header claimed this script was re-runnable and it was not: every run mints fresh
-   * temporary homes and therefore fresh `repositoryId`s, so on the second run the service
-   * holds four registrations this machine has neither got nor opted out of — which is
-   * exactly what the scope refusal added in `dd29ef2` refuses. A second unmodified run
-   * exited 1 at this step, before any assertion, with *"The service holds 4 workspace
-   * entries this machine does not have"*. Both the header's "re-runnable" and step 8's
-   * superset justification were written before that refusal landed and were false after it.
-   *
-   * Rather than delete the claim, the script now does what the refusal tells a person to
-   * do: `ignore` each identity it does not have. That makes the run genuinely repeatable
-   * AND turns the documented escape into something this script proves live, which it did
-   * not before. It is additive, local, and sends nothing.
-   */
-  await ignoreEarlierRuns(a, hubId, "first machine");
-
   const published = await publishRegistry(a.hub, a.home, { fetchImpl: recordingFetch });
-  console.log(
-    safe({
-      published: published.published,
-      created: published.created,
-      updated: published.updated,
-      applied: published.applied,
-      deduplicated: published.deduplicated,
-      retained: published.retained.length,
-      batches: published.batches,
-      epoch: published.epoch,
-      unpublishable: published.unpublishable.map((u) => u.entry.slug),
-    }),
+  console.log(safe({ published: published.published, applied: published.applied, unpublishable: published.unpublishable.map((u) => u.entry.slug) }));
+  check(
+    published.published === 2 && published.applied === 2 && published.unpublishable.length === 1,
+    "two workspaces published, the one with no identity reported by name",
+    `published=${published.published} applied=${published.applied} unpublishable=${published.unpublishable.length}`,
   );
 
-  step(3, "GET /snapshot — read the registry back off the real service");
-  const readBack = await readPublishedRegistry(a.home, hubId, { fetchImpl: recordingFetch });
-  console.log(safe(readBack.registry));
-
-  step(4, "cross-links: additive-only, and a local removal does NOT propagate");
-  /**
-   * REWRITTEN. This step used to publish an edge, `removeCrossLink` it, publish again, and
-   * assert the service showed zero edges — a claim about retraction, which no longer exists.
-   * At the previous head it failed deterministically (`afterRetract` 1, exit 1), so the
-   * "live-verified" claim for that commit was not true. The step was written from the design
-   * of an earlier round and never re-run against the code it was describing.
-   *
-   * What it asserts now is the behaviour that IS there: an edge publishes, a local removal
-   * emits nothing and leaves the service unchanged, and the removal is REPORTED to the
-   * person who made it rather than silently dropped.
-   *
-   * Registered ABSENT on purpose: `Hub.addCrossLink` only opens a workspace database when the
-   * row is `available`, so absent rows exercise the real cross-link path — the content-derived
-   * key, the fold, the backup, the restore — without two more workspaces carrying real issues.
-   */
-  a.hub.registerAbsent({ slug: "live-edge-a", prefix: "LEA", kind: "repo", repositoryId: WS_C });
-  a.hub.registerAbsent({ slug: "live-edge-b", prefix: "LEB", kind: "repo", repositoryId: WS_D });
+  step("1.3 a link, removed and linked again: the removal propagates, and so does the re-link");
+  a.hub.registerAbsent({ slug: "live-edge-a", prefix: "LEA", kind: "repo", repositoryId: EDGE_A });
+  a.hub.registerAbsent({ slug: "live-edge-b", prefix: "LEB", kind: "repo", repositoryId: EDGE_B });
   a.hub.addCrossLink("LEA-1", "LEB-2");
   const withEdge = await publishRegistry(a.hub, a.home, { fetchImpl: recordingFetch });
-  console.log(
-    `published with edge: ${safe({ published: withEdge.published, applied: withEdge.applied, deduplicated: withEdge.deduplicated })}`,
-  );
-  const edgesAfterPublish = (
-    await readPublishedRegistry(a.home, hubId, { fetchImpl: recordingFetch })
-  ).registry.crossLinks.map((l) => `${l.blockerIdentifier}->${l.blockedIdentifier}`);
-  console.log(`service edges: ${safe(edgesAfterPublish)}`);
-
+  const edgesOnService = async () =>
+    (await readPublishedRegistry(a.home, hubId, { fetchImpl: recordingFetch })).registry.crossLinks.length;
+  const afterCreate = await edgesOnService();
   a.hub.removeCrossLink("LEA-1", "LEB-2");
   const afterRemoval = await publishRegistry(a.hub, a.home, { fetchImpl: recordingFetch });
-  const edgesAfterRemoval = (
-    await readPublishedRegistry(a.home, hubId, { fetchImpl: recordingFetch })
-  ).registry.crossLinks.length;
-  console.log(
-    `after local removal: ${safe({
-      published: afterRemoval.published,
-      retained: afterRemoval.retained.length,
-      serviceEdges: edgesAfterRemoval,
-    })}`,
-  );
-  const additiveOnly =
-    edgesAfterPublish.length === 1 &&
-    afterRemoval.published === 0 &&
-    edgesAfterRemoval === 1 &&
-    afterRemoval.retained.length === 1 &&
-    afterRemoval.retained[0]!.reason.includes("does not propagate");
-  console.log(
-    additiveOnly
-      ? "PASS — the edge published, the local removal sent nothing, the service kept it, and " +
-          "the removal was reported"
-      : `FAIL — published=${afterRemoval.published} serviceEdges=${edgesAfterRemoval} ` +
-          `retained=${afterRemoval.retained.length}`,
-  );
-
-  // Re-adding locally is a no-op against the service, because it never left.
+  const edgesAfterRemoval = await edgesOnService();
   a.hub.addCrossLink("LEA-1", "LEB-2");
-  const afterReadd = await publishRegistry(a.hub, a.home, { fetchImpl: recordingFetch });
+  const afterRelink = await publishRegistry(a.hub, a.home, { fetchImpl: recordingFetch });
+  const edgesAfterRelink = await edgesOnService();
+  const settled = await publishRegistry(a.hub, a.home, { fetchImpl: recordingFetch });
   console.log(
-    `after re-adding locally: ${safe({ published: afterReadd.published, upToDate: afterReadd.upToDate })}`,
+    safe({
+      create: { published: withEdge.published, serviceEdges: afterCreate },
+      unlink: { retracted: afterRemoval.retracted.length, serviceEdges: edgesAfterRemoval },
+      relink: { relinked: afterRelink.relinked.length, serviceEdges: edgesAfterRelink },
+      again: { published: settled.published, deduplicated: settled.deduplicated },
+    }),
   );
-  const readdClean = afterReadd.published === 0 && afterReadd.upToDate;
-  console.log(
-    readdClean
-      ? "PASS — re-adding converges to zero operations rather than churning the log"
-      : `FAIL — re-add published ${afterReadd.published}`,
+  check(
+    afterCreate === 1 && afterRemoval.retracted.length === 1 && edgesAfterRemoval === 0 &&
+      afterRelink.relinked.length === 1 && edgesAfterRelink === 1 && settled.upToDate,
+    "created, retracted, linked again, and then nothing left to send",
+    "the link did not go create -> retract -> re-link -> settled",
   );
 
-  step(5, "POST /backups — the fold, persisted");
+  step("1.4 back up the registry");
   await setHubBackupConsent(a.home, hubId, true);
   const backup = await createHubBackup(a.home, hubId, "hub-registry-live");
-  console.log(safe(backup));
-  console.log(
-    safe((await listHubBackups(a.home, hubId)).map((b) => ({ id: b.backupId, kind: b.kind, protocol: b.protocol }))),
-  );
+  console.log(safe((await listHubBackups(a.home, hubId)).map((b) => ({ id: b.backupId, kind: b.kind }))));
   a.hub.close();
 
-  step(6, "a replacement machine adopts the registry it never had");
-  const b = machine("replacement");
-  await connectHubRegistry(
-    buildConnectPreview({ home: b.home, repositoryId: hubId, endpoint }),
-    { home: b.home, enrollmentSecret, credential: { forceFile: true } },
-  );
-  console.log(`before: ${safe(b.hub.list().map((r) => r.slug))}`);
+  step("1.5 a replacement machine adopts the registry it never had");
+  const b = machine("replacement", hubId);
+  await connectHubRegistry(buildConnectPreview({ home: b.home, repositoryId: hubId, endpoint }), {
+    home: b.home,
+    enrollmentSecret,
+    credential: { forceFile: true },
+  });
   const adopted = await adoptPublishedRegistry(b.hub, b.home, { apply: true });
-  /**
-   * ASSERTED, which it was not before — step 6 is the ticket's actual acceptance criterion
-   * (a replacement machine learns what the lost one had) and it previously only failed by
-   * accident at step 7.
-   */
-  const adoptedSlugs = b.hub.list().map((r) => r.slug).sort();
-  const adoptOk =
-    adoptedSlugs.length === 4 &&
-    adoptedSlugs.join(",") === "live-edge-a,live-edge-b,live-other,live-tracker" &&
-    b.hub.list().every((r) => r.repositoryId !== null) &&
-    adopted.adoption.dryRun === false;
-  console.log(
-    adoptOk
-      ? `PASS — the replacement machine adopted all four rows with identities: ${safe(adoptedSlugs)}`
-      : `FAIL — adopted ${safe(adoptedSlugs)} dryRun=${adopted.adoption.dryRun}`,
-  );
+  const ids = new Set(b.hub.list().map((r) => r.repositoryId));
   console.log(
     safe({
       decisions: adopted.adoption.decisions.map((d) => ({ slug: d.entry.slug, outcome: d.outcome })),
       crossLinks: adopted.adoption.crossLinks,
-      rows: b.hub.list().map((r) => ({ slug: r.slug, prefix: r.prefix, available: r.available })),
     }),
   );
+  check(
+    [trackerId, otherId, EDGE_A, EDGE_B].every((id) => ids.has(id)) && b.hub.listCrossLinks().length === 1,
+    "the replacement machine holds all four workspaces, by identity, and the link",
+    `replacement holds ${safe([...ids])} and ${b.hub.listCrossLinks().length} link(s)`,
+  );
 
-  step(7, "publish damage, then restore the backup and adopt what comes back");
+  step("1.6 damage (another machine unlinks by mistake), then restore the backup and adopt");
   setRegistryConsent(b.home, hubId, true, REGISTRY_DISCLOSURE);
-  // The identity moves to a new slug — a real second write to one registration, and the
-  // case that a content-addressed opId exists to let land.
-  /**
-   * The damage: machine B publishes a DIFFERENT name for the same repository. Registered
-   * absent under the identity machine A recorded, which is what a second machine holding a
-   * clone under another directory name looks like.
-   */
-  /**
-   * ONE row holds the identity, under a new name.
-   *
-   * The first version added a second row with the same `repositoryId`, which the
-   * duplicate-identity rule now correctly parks — so `damage published: 0` and the restore
-   * assertion below passed against no damage at all. That is the vacuous-assertion class
-   * this whole review keeps finding, so the step now asserts the damage LANDED.
-   */
-  b.hub.unregister("live-tracker");
-  b.hub.registerAbsent({
-    slug: "renamed-by-mistake",
-    prefix: "RBM",
-    kind: "repo",
-    repositoryId: trackerId,
-  });
-  await ignoreEarlierRuns(b, hubId, "replacement machine");
+  b.hub.removeCrossLink("LEA-1", "LEB-2");
   const damaged = await publishRegistry(b.hub, b.home, { fetchImpl: recordingFetch });
-  console.log(`damage published: ${safe({ published: damaged.published, updated: damaged.updated })}`);
-  if (damaged.published === 0) {
-    throw new Error(
-      "the damage step published nothing, so the restore assertion below would pass against " +
-        "an unchanged service. Refusing to report a pass on that.",
-    );
-  }
-  console.log(
-    `service now says: ${safe((await readPublishedRegistry(b.home, hubId, { fetchImpl: recordingFetch })).registry.workspaces.map((w) => w.slug))}`,
-  );
-
-  const c = machine("restorer");
-  await connectHubRegistry(
-    buildConnectPreview({ home: c.home, repositoryId: hubId, endpoint }),
-    { home: c.home, enrollmentSecret, credential: { forceFile: true } },
-  );
+  check(damaged.retracted.length === 1, "the damage landed: the link is retracted on the service", "the damage step retracted nothing, so the restore would prove nothing");
+  const c = machine("restorer", hubId);
+  await connectHubRegistry(buildConnectPreview({ home: c.home, repositoryId: hubId, endpoint }), {
+    home: c.home,
+    enrollmentSecret,
+    credential: { forceFile: true },
+  });
   await setHubBackupConsent(c.home, hubId, true);
-  /**
-   * BOTH consents. A restore mutates the published registry, so it is behind the publish
-   * consent as well as the backup one — it used to need only `backup`, which meant
-   * `publish --disable` left a machine able to replace everything on the service.
-   */
   setRegistryConsent(c.home, hubId, true, REGISTRY_DISCLOSURE);
   const restored = await restoreRegistry(c.hub, c.home, backup.backupId, { apply: true });
   console.log(
     safe({
-      turns: restored.turns,
       fromEpoch: restored.fromEpoch,
       toEpoch: restored.toEpoch,
-      entityCount: restored.entityCount,
-      preRestoreBackupId: restored.preRestoreBackupId,
-      registry: restored.registry.workspaces.map((w) => w.slug),
-      decisions: restored.adoption.decisions.map((d) => ({ slug: d.entry.slug, outcome: d.outcome })),
+      links: restored.registry.crossLinks.map((l) => `${l.blockerIdentifier}->${l.blockedIdentifier}`),
       rows: c.hub.list().map((r) => r.slug),
     }),
   );
+  check(
+    restored.registry.crossLinks.length === 1 && c.hub.listCrossLinks().length === 1 &&
+      restored.registry.workspaces.find((w) => w.repositoryId === trackerId)?.slug === "live-tracker",
+    "the restore brought the retracted link back, and the restoring machine adopted it",
+    "the restore did not bring the link back",
+  );
 
-  step(8, "assertions");
-  /**
-   * A SUPERSET check, because this script is re-runnable and each run mints new identities.
-   *
-   * Every run creates fresh temporary homes, so `initWorkspace` mints new `repositoryId`s
-   * and publishes new `registration` entities into the same hub log. Two runs against one
-   * seeded hub id therefore leave two registrations per slug — which is correct behaviour
-   * (they ARE different repositories) and made an equality assertion fail on the second
-   * run. Asserting the slugs this run created are PRESENT keeps the script honest without
-   * requiring a freshly provisioned hub id every time.
-   */
-  const slugs = [...new Set(restored.registry.workspaces.map((w) => w.slug))].sort();
-  const expected = ["live-edge-a", "live-edge-b", "live-other", "live-tracker"];
-  // The identities on the wire are the ones initWorkspace established, not invented ones.
-  const publishedIds = restored.registry.workspaces.map((w) => w.repositoryId);
-  const realIdsTravelled = publishedIds.includes(trackerId) && publishedIds.includes(otherId);
-  console.log(realIdsTravelled ? "PASS — the identities initWorkspace recorded are the ones published" : "FAIL — published ids do not match what initWorkspace recorded");
-  /**
-   * Keyed on IDENTITY, not on slug presence.
-   *
-   * The superset check alone gutted this step in the very re-run case that motivated it: a
-   * previous run's registration survives under slug `live-tracker`, so a restore that
-   * silently failed to rewind THIS run's `renamed-by-mistake` would still find the slug
-   * present and pass. The registration `entityId` IS the `repositoryId`, so asking what
-   * slug THIS run's identity carries is unambiguous whatever else is in the log.
-   */
-  const trackerSlugNow = restored.registry.workspaces.find((w) => w.repositoryId === trackerId)?.slug;
-  const rewound = trackerSlugNow === "live-tracker";
-  console.log(
-    rewound
-      ? "PASS — the restore rewound this run's identity back to live-tracker"
-      : `FAIL — this run's identity reads as "${String(trackerSlugNow)}", so the restore did not rewind it`,
-  );
-  const missing = expected.filter((slug) => !slugs.includes(slug));
-  const ok = missing.length === 0 && rewound;
-  console.log(
-    ok
-      ? `PASS — restored every slug this run published ${JSON.stringify(expected)}`
-      : `FAIL — missing ${JSON.stringify(missing)} from ${JSON.stringify(slugs)}`,
-  );
-  /**
-   * No path in what was PUSHED.
-   *
-   * The earlier version of this check serialized `restored.registry` — a
-   * `HubRegistryPayload`, which has no path field at all, so `registryFromSnapshot` would
-   * have dropped any path before the check ever saw it. It could not fail. The meaningful
-   * subject is the operation batch this machine emitted, which is what actually left the
-   * process, so that is what is checked here.
-   */
-  /**
-   * The REQUEST BODIES, not a payload type that structurally cannot hold a path.
-   *
-   * Machine `a` is the one whose hub rows carry real absolute paths — `register()` writes
-   * `join(home, "ws", slug, "staple.db")` — so its pushes are the meaningful subject. The
-   * assertion can fail: if `RegistrationPayload` ever grew a path field, or if a slug were
-   * built from a path, these bytes would contain `homes[0]`.
-   */
+  step("1.7 no filesystem path in what was pushed");
   const pushed = sentBodies.filter((body) => body.includes('"registration"'));
-  if (pushed.length === 0) {
-    throw new Error("captured no push body, so the path assertion proves nothing");
-  }
-  const leaked = homes.filter((home) => sentBodies.some((body) => body.includes(home)));
-  console.log(
-    leaked.length === 0
-      ? `PASS — no filesystem path in ${sentBodies.length} request bodies actually sent ` +
-          `(${pushed.length} carrying registrations)`
-      : `FAIL — leaked ${leaked}`,
+  const leaked = [a.home, b.home, c.home].filter((home) => sentBodies.some((body) => body.includes(home)));
+  check(
+    pushed.length > 0 && leaked.length === 0,
+    `no path in ${sentBodies.length} request bodies (${pushed.length} carrying registrations)`,
+    pushed.length === 0 ? "captured no push body, so the path check proves nothing" : `leaked ${leaked.join(", ")}`,
   );
-
   b.hub.close();
   c.hub.close();
-  if (!ok || leaked.length > 0 || !additiveOnly || !readdClean || !adoptOk || !realIdsTravelled) {
-    throw new Error("one or more assertions failed — see the FAIL lines above");
+}
+
+// ======================================================= walk 2: two machines, one registry
+
+interface Machine {
+  readonly label: string;
+  readonly home: string;
+  readonly env: Record<string, string>;
+}
+
+/** Two machines: each its own HOME, its own STAPLE_HOME, and so its own credential files. */
+function twoMachineRig(): { root: string; A: Machine; B: Machine; origins: string } {
+  const root = tempRoot("union");
+  const make = (label: string): Machine => {
+    const base = join(root, label);
+    mkdirSync(join(base, "home"), { recursive: true });
+    return {
+      label,
+      home: join(base, "home"),
+      env: {
+        PATH: process.env.PATH ?? "",
+        HOME: base,
+        STAPLE_HOME: join(base, "home"),
+        STAPLE_AGENT: `live-${label}`,
+        NODE_NO_WARNINGS: "1",
+      },
+    };
+  };
+  const origins = join(root, "origins");
+  mkdirSync(origins, { recursive: true });
+  return { root, A: make("A"), B: make("B"), origins };
+}
+
+/** `staple <args>` on a machine, printed as a transcript line. Returns stdout. */
+function staple(m: Machine, cwd: string, args: string[], options: { quiet?: boolean; allowFail?: boolean } = {}): string {
+  const result = spawnSync(process.execPath, [TSX, CLI, ...args], { cwd, env: m.env, encoding: "utf8" });
+  const shown = args.map((a) => (a.length > 40 ? `${a.slice(0, 8)}…` : a)).join(" ");
+  console.log(`\n[${m.label}] ${cwd.split("/").pop()}$ staple ${shown}`);
+  if (!options.quiet) {
+    const out = result.stdout.trim();
+    if (out.length > 0) console.log(out.split("\n").map((l) => `  ${l}`).join("\n"));
   }
+  if (result.status !== 0 && !options.allowFail) {
+    throw new Error(`staple ${shown} exited ${result.status}:\n${result.stdout}\n${result.stderr}`);
+  }
+  return result.stdout;
+}
+
+function stapleJson<T>(m: Machine, cwd: string, args: string[]): T {
+  return JSON.parse(staple(m, cwd, [...args, "--json"], { quiet: true })) as T;
+}
+
+function git(m: Machine, cwd: string, args: string[]): void {
+  const result = spawnSync("git", ["-c", "user.name=live", "-c", "user.email=live@example.invalid", ...args], {
+    cwd,
+    env: m.env,
+    encoding: "utf8",
+  });
+  console.log(`\n[${m.label}] ${cwd.split("/").pop()}$ git ${args.join(" ")}`);
+  if (result.status !== 0) throw new Error(`git ${args.join(" ")} failed:\n${result.stderr}`);
+}
+
+interface PublishJson {
+  published: number;
+  retracted: unknown[];
+  relinked: unknown[];
+  retained: { reason: string }[];
+  renamed: { local: string; published: string }[];
+  unadopted: { registrations: { slug: string }[]; crossLinks: { blockerIdentifier: string; blockedIdentifier: string }[] };
+  upToDate: boolean;
+}
+interface AdoptJson {
+  registry: { workspaces: { slug: string; repositoryId: string }[]; crossLinks: { blockerIdentifier: string; blockedIdentifier: string }[] };
+  adoption: { crossLinks: Record<string, number>; crossLinkDecisions: { outcome: string; reason: string }[] };
+}
+interface LinkJson {
+  blockerWs: string;
+  blockerIdentifier: string;
+  blockedWs: string;
+  blockedIdentifier: string;
+}
+
+async function twoMachines(): Promise<void> {
+  const { A, B, origins } = twoMachineRig();
+  const links = (m: Machine, cwd: string) =>
+    stapleJson<LinkJson[]>(m, cwd, ["hub", "links"]).map(
+      (l) => `${l.blockerWs}/${l.blockerIdentifier} -> ${l.blockedWs}/${l.blockedIdentifier}`,
+    );
+  step("2.0 two machines, two homes, real git clones under different directory names");
+  for (const name of ["alpha", "beta", "gamma"]) git(A, origins, ["init", "--bare", "-b", "main", `${name}.git`]);
+  const aDir = (name: string) => join(A.home, "..", name);
+  const bDir = (name: string) => join(B.home, "..", name);
+  for (const name of ["alpha", "beta"]) {
+    git(A, join(A.home, ".."), ["clone", join(origins, `${name}.git`), name]);
+    staple(A, aDir(name), ["init", "--yes"], { quiet: true });
+    git(A, aDir(name), ["add", ".staple"]);
+    git(A, aDir(name), ["commit", "-m", "track the staple identity"]);
+    git(A, aDir(name), ["push", "origin", "HEAD:main"]);
+  }
+  /**
+   * Workspaces sync through the service, so B gets A's issues the way a person's second
+   * machine would. Each repository is provisioned fresh, and connected BEFORE its issues
+   * are written: only a connected workspace journals what it will push.
+   */
+  const identityOf = (dir: string) =>
+    (JSON.parse(readFileSync(join(dir, ".staple", "repository.json"), "utf8")) as { repositoryId: string }).repositoryId;
+  const wsSecret = new Map<string, string>();
+  for (const name of ["alpha", "beta"]) {
+    wsSecret.set(name, provision(identityOf(aDir(name))));
+    staple(A, aDir(name), ["cloud", "connect", "--endpoint", endpoint, "--token", wsSecret.get(name)!, "--yes", "--credential-file"], { quiet: true });
+  }
+  staple(A, aDir("alpha"), ["new", "alpha work"]);
+  staple(A, aDir("beta"), ["new", "beta work"]);
+  staple(A, aDir("beta"), ["new", "more beta work"]);
+  for (const name of ["alpha", "beta"]) staple(A, aDir(name), ["cloud", "sync"]);
+  staple(A, aDir("beta"), ["ls"]);
+
+  const hubId = (stapleJson<{ hubId: string }>(A, aDir("alpha"), ["hub", "registry", "id"])).hubId;
+  const hubSecret = provision(hubId);
+  staple(A, aDir("alpha"), ["hub", "registry", "connect", "--endpoint", endpoint, "--token", hubSecret, "--yes", "--credential-file"], { quiet: true });
+  staple(A, aDir("alpha"), ["hub", "registry", "publish", "--enable", "--yes"], { quiet: true });
+  staple(A, aDir("alpha"), ["link", "ALP-1", "BET-1"]);
+
+  for (const name of ["alpha", "beta"]) {
+    git(B, join(B.home, ".."), ["clone", join(origins, `${name}.git`), `${name}-clone`]);
+    staple(B, bDir(`${name}-clone`), ["init", "--yes"], { quiet: true });
+    staple(B, bDir(`${name}-clone`), ["cloud", "connect", "--endpoint", endpoint, "--token", wsSecret.get(name)!, "--yes", "--credential-file"], { quiet: true });
+    staple(B, bDir(`${name}-clone`), ["cloud", "sync"]);
+  }
+  staple(B, bDir("alpha-clone"), ["ls"]);
+  staple(B, bDir("alpha-clone"), ["hub", "registry", "identity", hubId, "--yes"], { quiet: true });
+  staple(B, bDir("alpha-clone"), ["hub", "registry", "connect", "--endpoint", endpoint, "--token", hubSecret, "--yes", "--credential-file"], { quiet: true });
+  staple(B, bDir("alpha-clone"), ["hub", "registry", "publish", "--enable", "--yes"], { quiet: true });
+  staple(A, aDir("alpha"), ["hub", "ls"]);
+  staple(B, bDir("alpha-clone"), ["hub", "ls"]);
+
+  step("2.a alternating publishes converge to zero operations");
+  const passes: number[] = [];
+  for (let pass = 1; pass <= 6; pass += 1) {
+    const [m, cwd] = pass % 2 === 1 ? [A, aDir("alpha")] : [B, bDir("alpha-clone")];
+    const report = stapleJson<PublishJson>(m, cwd, ["hub", "registry", "publish"]);
+    passes.push(report.published);
+    console.log(`  pass ${pass} (${m.label}): published=${report.published} renamed=${report.renamed.map((r) => `${r.local}~${r.published}`).join(",") || "-"}`);
+  }
+  staple(B, bDir("alpha-clone"), ["hub", "registry", "publish"]);
+  check(
+    JSON.stringify(passes) === JSON.stringify([3, 0, 0, 0, 0, 0]),
+    `ops per pass ${JSON.stringify(passes)}: A's three creates, then nothing from either machine`,
+    `ops per pass ${JSON.stringify(passes)}, expected [3,0,0,0,0,0]`,
+  );
+
+  step("2.b a cross-link is shared across different directory names");
+  staple(B, bDir("alpha-clone"), ["hub", "registry", "adopt"]);
+  const adoptedB = stapleJson<AdoptJson>(B, bDir("alpha-clone"), ["hub", "registry", "adopt", "--apply"]);
+  staple(B, bDir("alpha-clone"), ["hub", "links"]);
+  const bLinks = links(B, bDir("alpha-clone"));
+  const afterAdopt = stapleJson<PublishJson>(B, bDir("alpha-clone"), ["hub", "registry", "publish"]);
+  check(
+    adoptedB.adoption.crossLinks.added === 1 &&
+      JSON.stringify(bLinks) === JSON.stringify(["alpha-clone/ALP-1 -> beta-clone/BET-1"]) &&
+      afterAdopt.published === 0,
+    "B adopted A's link between its OWN names (alpha-clone -> beta-clone), and it is the same entity: B publishes nothing",
+    `B added=${adoptedB.adoption.crossLinks.added} links=${JSON.stringify(bLinks)} publish=${afterAdopt.published}`,
+  );
+
+  step("2.c `hub unlink` on A propagates, and B's adopt does not bring it back");
+  staple(A, aDir("alpha"), ["hub", "unlink", "ALP-1", "BET-1"]);
+  const aRetract = stapleJson<PublishJson>(A, aDir("alpha"), ["hub", "registry", "publish"]);
+  console.log(`  A publish: published=${aRetract.published} retracted=${aRetract.retracted.length}`);
+  // B still holds its adopted copy. Publishing it back would undo A's removal.
+  staple(B, bDir("alpha-clone"), ["hub", "registry", "publish"]);
+  const bStale = stapleJson<PublishJson>(B, bDir("alpha-clone"), ["hub", "registry", "publish"]);
+  staple(B, bDir("alpha-clone"), ["hub", "registry", "adopt", "--apply"]);
+  const bAfter = links(B, bDir("alpha-clone"));
+  const bAgain = stapleJson<AdoptJson>(B, bDir("alpha-clone"), ["hub", "registry", "adopt", "--apply"]);
+  const serviceLinks = bAgain.registry.crossLinks.length;
+  check(
+    aRetract.retracted.length === 1 && bStale.published === 0 && bAfter.length === 0 &&
+      bAgain.adoption.crossLinkDecisions.length === 0 && serviceLinks === 0 && links(B, bDir("alpha-clone")).length === 0,
+    "A retracted it; B's stale copy was not sent back; B's adopt removed it; a second adopt brought nothing back",
+    `retracted=${aRetract.retracted.length} bStale=${bStale.published} bLinks=${JSON.stringify(bAfter)} again=${bAgain.adoption.crossLinkDecisions.length} service=${serviceLinks}`,
+  );
+
+  step("2.d re-linking works, from the machine that removed it and from the other one");
+  staple(A, aDir("alpha"), ["link", "ALP-1", "BET-1"]);
+  staple(A, aDir("alpha"), ["hub", "registry", "publish"]);
+  const bBack = stapleJson<AdoptJson>(B, bDir("alpha-clone"), ["hub", "registry", "adopt", "--apply"]);
+  const relinkedOnB = links(B, bDir("alpha-clone"));
+  // Now B removes it, A takes that on, and A links it again.
+  staple(B, bDir("alpha-clone"), ["hub", "unlink", "ALP-1", "BET-1"]);
+  staple(B, bDir("alpha-clone"), ["hub", "registry", "publish"]);
+  staple(A, aDir("alpha"), ["hub", "registry", "adopt", "--apply"]);
+  const aAfterB = links(A, aDir("alpha"));
+  staple(A, aDir("alpha"), ["link", "ALP-1", "BET-1"]);
+  staple(A, aDir("alpha"), ["hub", "registry", "publish"]);
+  staple(B, bDir("alpha-clone"), ["hub", "registry", "adopt", "--apply"]);
+  // B removed it itself, so B keeps its copy removed; the registry has A's newer link.
+  const bKept = links(B, bDir("alpha-clone"));
+  const bKeptJson = stapleJson<AdoptJson>(B, bDir("alpha-clone"), ["hub", "registry", "adopt"]);
+  check(
+    bBack.adoption.crossLinks.added === 1 && relinkedOnB.length === 1 && aAfterB.length === 0 &&
+      bKept.length === 0 && bKeptJson.registry.crossLinks.length === 1 &&
+      bKeptJson.adoption.crossLinkDecisions.map((d) => d.outcome).join() === "kept_removed",
+    "A's re-link reached B; B's unlink reached A; A's re-link after that stands in the registry, and B keeps its own removal",
+    `bBack=${bBack.adoption.crossLinks.added} relinkedOnB=${relinkedOnB.length} aAfterB=${aAfterB.length} bKept=${bKept.length} decisions=${bKeptJson.adoption.crossLinkDecisions.map((d) => d.outcome).join()}`,
+  );
+  // B takes it back deliberately, which is the remedy the report names.
+  staple(B, bDir("alpha-clone"), ["link", "ALP-1", "BET-1"]);
+
+  step("2.e a machine that is behind publishes safely and loses nothing of A's");
+  git(A, join(A.home, ".."), ["clone", join(origins, "gamma.git"), "gamma"]);
+  staple(A, aDir("gamma"), ["init", "--yes"], { quiet: true });
+  staple(A, aDir("gamma"), ["new", "gamma work"]);
+  staple(A, aDir("gamma"), ["link", "BET-2", "GAM-1"]);
+  staple(A, aDir("alpha"), ["hub", "registry", "publish"]);
+  // B has not adopted any of that.
+  staple(B, bDir("alpha-clone"), ["hub", "registry", "publish"]);
+  const bBehind = stapleJson<PublishJson>(B, bDir("alpha-clone"), ["hub", "registry", "publish"]);
+  const aView = stapleJson<AdoptJson>(A, aDir("alpha"), ["hub", "registry", "adopt"]);
+  const aFinal = stapleJson<PublishJson>(A, aDir("alpha"), ["hub", "registry", "publish"]);
+  check(
+    bBehind.published === 0 &&
+      bBehind.unadopted.registrations.map((r) => r.slug).join() === "gamma" &&
+      aView.registry.workspaces.some((w) => w.slug === "gamma") &&
+      aView.registry.crossLinks.some((l) => l.blockerIdentifier === "BET-2" && l.blockedIdentifier === "GAM-1") &&
+      aFinal.published === 0,
+    "B, behind, published and the service still holds all of A's (gamma and BET-2 -> GAM-1); A has nothing to re-send",
+    `bBehind=${bBehind.published} unadopted=${JSON.stringify(bBehind.unadopted)} aFinal=${aFinal.published}`,
+  );
+
+  step("2.f and B catches up, after which neither machine has anything to say");
+  staple(B, bDir("alpha-clone"), ["hub", "registry", "adopt", "--apply"]);
+  staple(B, bDir("alpha-clone"), ["hub", "links"]);
+  const endA = stapleJson<PublishJson>(A, aDir("alpha"), ["hub", "registry", "publish"]);
+  const endB = stapleJson<PublishJson>(B, bDir("alpha-clone"), ["hub", "registry", "publish"]);
+  check(
+    endA.published === 0 && endB.published === 0 && endB.unadopted.registrations.length === 0 && endB.unadopted.crossLinks.length === 0,
+    "converged: zero operations from either machine, and B lacks nothing",
+    `endA=${endA.published} endB=${endB.published} unadopted=${JSON.stringify(endB.unadopted)}`,
+  );
+}
+
+async function main(): Promise<void> {
+  await oneMachineLost();
+  await twoMachines();
 }
 
 /**
- * Clean up first, THEN exit — and set `exitCode` rather than calling `process.exit`.
- *
- * The previous shape was `.catch(… process.exit(1)).finally(cleanup)`, and it printed
- * `FAILED: …` while the shell saw **exit 0**: `process.exit` inside the `catch` did not win
- * against the pending `finally`, so the failing status was lost. A proof script that reports a
- * failure and exits 0 is the worst possible version of this file — every caller, including a
- * future CI job, would read it as a pass.
+ * Clean up first, THEN set the exit code. `process.exit` inside a `catch` used to lose
+ * against a pending `finally`, so a run that printed `FAILED:` exited 0.
  */
 main()
-  .then(() => 0)
+  .then(() => (failures.length === 0 ? 0 : 1))
   .catch((error) => {
     console.error(`\nFAILED: ${error instanceof Error ? error.message : String(error)}`);
     return 1;
   })
   .then((code) => {
-    for (const home of homes) rmSync(home, { recursive: true, force: true });
+    for (const dir of scratch) rmSync(dir, { recursive: true, force: true });
+    if (code !== 0 && failures.length > 0) console.error(`\n${failures.length} assertion(s) failed:\n- ${failures.join("\n- ")}`);
+    console.log(code === 0 ? "\nALL PASSED" : "\nFAILED");
     process.exitCode = code;
   });

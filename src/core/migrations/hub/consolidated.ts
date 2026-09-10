@@ -3,7 +3,7 @@
  * Regenerate with: npx tsx scripts/regen-migration-snapshots.ts
  *
  * The `sqlite_master` dump of a hub database that walked migrations
- * 001, 002, 003. Executed verbatim by the runner when — and only when —
+ * 001, 002, 003, 004. Executed verbatim by the runner when — and only when —
  * version detection proved the file has no tables at all.
  *
  * No `IF NOT EXISTS` anywhere, deliberately: reaching this text with tables
@@ -61,5 +61,16 @@ CREATE TABLE registry_optouts (
   slug TEXT NOT NULL,
   reason TEXT NOT NULL DEFAULT 'unregistered',
   created_at TEXT NOT NULL
+);
+
+CREATE TABLE cross_link_changes (
+  link_key TEXT PRIMARY KEY,
+  blocker_repository_id TEXT NOT NULL,
+  blocker_identifier TEXT NOT NULL,
+  blocked_repository_id TEXT NOT NULL,
+  blocked_identifier TEXT NOT NULL,
+  present INTEGER NOT NULL CHECK (present IN (0, 1)),
+  published INTEGER NOT NULL DEFAULT 0 CHECK (published IN (0, 1)),
+  changed_at TEXT NOT NULL
 );
 `;

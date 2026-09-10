@@ -487,8 +487,10 @@ describe("cross-links only land between workspaces this machine now has", () => 
         ],
         crossLinks: [
           {
+            blockerRepositoryId: "repo-api",
             blockerWs: "api",
             blockerIdentifier: "API-1",
+            blockedRepositoryId: "repo-web",
             blockedWs: "web",
             blockedIdentifier: "WEB-1",
             type: "blocks",
@@ -497,11 +499,89 @@ describe("cross-links only land between workspaces this machine now has", () => 
       },
       { apply: true },
     );
+    const links = hub.listCrossLinks();
     hub.close();
     // An imported edge naming an absent workspace reads as an unresolvable
     // blocker, and unresolvable counts as BLOCKED — it would wedge WEB-1 with
     // nothing on any surface to say why.
-    expect(report.crossLinks).toEqual({ added: 0, skipped: 1 });
+    expect(report.crossLinks).toMatchObject({ added: 0, skipped: 1 });
+    expect(links).toEqual([]);
+    // And the report says which end is missing, by the name the registry uses for it.
+    expect(report.crossLinkDecisions[0]!.reason).toContain('the blocker end, "api"');
+  });
+
+  it("matches each end BY IDENTITY, so a link lands between this machine's own names", () => {
+    const hub = openHub();
+    hub.registerAbsent({ slug: "api-here", prefix: "API", kind: "repo", repositoryId: "repo-api" });
+    hub.registerAbsent({ slug: "web-here", prefix: "WEB", kind: "repo", repositoryId: "repo-web" });
+    const report = adoptRegistry(
+      hub,
+      {
+        format: REGISTRY_PAYLOAD_FORMAT,
+        hubId: "h",
+        capturedAt: "x",
+        workspaces: [],
+        crossLinks: [
+          {
+            blockerRepositoryId: "repo-api",
+            blockerWs: "api",
+            blockerIdentifier: "API-1",
+            blockedRepositoryId: "repo-web",
+            blockedWs: "web",
+            blockedIdentifier: "WEB-1",
+            type: "blocks",
+          },
+        ],
+      },
+      { apply: true },
+    );
+    const links = hub.listCrossLinks().map((l) => `${l.blockerWs}/${l.blockerIdentifier} -> ${l.blockedWs}/${l.blockedIdentifier}`);
+    // An adopted link is not a change this machine made, so it records none.
+    const changes = hub.listCrossLinkChanges();
+    hub.close();
+    expect(report.crossLinks).toMatchObject({ added: 1, skipped: 0 });
+    expect(links).toEqual(["api-here/API-1 -> web-here/WEB-1"]);
+    expect(changes).toEqual([]);
+  });
+
+  it("refuses an identifier that does not exist in the local workspace, and says so", () => {
+    /**
+     * A real workspace, so the apply's identifier check runs. The registry names WEB-9 and
+     * this machine's `web` has no WEB-9. The preview runs the same check, so it agrees.
+     */
+    const hub = openHub();
+    const web = join(dir, "web");
+    mkdirSync(web, { recursive: true });
+    const opened = initWorkspace({ dir: web, slug: "web", kind: "repo" });
+    const webId = opened.repository.repositoryId;
+    opened.store.db.close();
+    const webPrefix = hub.get("web")!.prefix;
+    hub.registerAbsent({ slug: "api", prefix: "API", kind: "repo", repositoryId: "repo-api" });
+    const payload: HubRegistryPayload = {
+      format: REGISTRY_PAYLOAD_FORMAT,
+      hubId: "h",
+      capturedAt: "x",
+      workspaces: [],
+      crossLinks: [
+        {
+          blockerRepositoryId: "repo-api",
+          blockerWs: "api",
+          blockerIdentifier: "API-1",
+          blockedRepositoryId: webId,
+          blockedWs: "web",
+          blockedIdentifier: `${webPrefix}-9`,
+          type: "blocks",
+        },
+      ],
+    };
+    const preview = adoptRegistry(hub, payload);
+    const applied = adoptRegistry(hub, payload, { apply: true });
+    const links = hub.listCrossLinks();
+    hub.close();
+    expect(preview.crossLinkDecisions.map((d) => d.outcome)).toEqual(["skipped"]);
+    expect(applied.crossLinkDecisions.map((d) => d.outcome)).toEqual(["skipped"]);
+    expect(applied.crossLinkDecisions[0]!.reason).toContain(`${webPrefix}-9`);
+    expect(links).toEqual([]);
   });
 });
 
@@ -756,8 +836,10 @@ describe("BREAK: the adopt preview must agree with the apply", () => {
       ],
       crossLinks: [
         {
+          blockerRepositoryId: A,
           blockerWs: "tracker",
           blockerIdentifier: "TRA-1",
+          blockedRepositoryId: B,
           blockedWs: "website",
           blockedIdentifier: "WEB-1",
           type: "blocks",
@@ -776,7 +858,7 @@ describe("BREAK: the adopt preview must agree with the apply", () => {
      *     apply:   {"added": 1, "skipped": 0}
      */
     const preview = adoptRegistry(openHubClosing(), twoAbsentAndAnEdge());
-    expect(preview.crossLinks).toEqual({ added: 1, skipped: 0 });
+    expect(preview.crossLinks).toMatchObject({ added: 1, skipped: 0 });
     expect(describeAdoption(preview)).toContain("1 cross-workspace link would be imported");
 
     // And the apply agrees, which is the whole assertion.
@@ -794,10 +876,10 @@ describe("BREAK: the adopt preview must agree with the apply", () => {
     const payload = twoAbsentAndAnEdge();
     const orphan: HubRegistryPayload = {
       ...payload,
-      crossLinks: [{ ...payload.crossLinks[0]!, blockedWs: "nowhere" }],
+      crossLinks: [{ ...payload.crossLinks[0]!, blockedWs: "nowhere", blockedRepositoryId: "repo-nowhere" }],
     };
     const preview = adoptRegistry(openHubClosing(), orphan);
-    expect(preview.crossLinks).toEqual({ added: 0, skipped: 1 });
+    expect(preview.crossLinks).toMatchObject({ added: 0, skipped: 1 });
   });
 
   it("says an opt-out WOULD be retired on a preview, and retires nothing", () => {

@@ -74,6 +74,7 @@ import {
   locateAbsent,
   type AdoptionDecision,
   type AdoptionReport,
+  type CrossLinkOutcome,
 } from "../core/cloud/hub-registry.js";
 
 /**
@@ -649,13 +650,13 @@ function runPublish(argv: string[]): void {
                    * The WHOLE disclosure reaches a machine consumer, not just the sentence.
                    *
                    * `disclosure` is the one-sentence core, and it was all `--json` ever got.
-                   * The block around it is where the costs are — that publishing is scoped
-                   * to one machine, that two machines naming a workspace differently
-                   * overwrite each other on a metered log for ever, that this machine always
-                   * wins, and what is actually refused. So "the cost is stated at the point
-                   * of consent" was true only on a TTY, in the command whose own fix was
-                   * titled "--json was a way around the publish consent's agreement gate".
-                   * Same principle, one field further out.
+                   * The block around it is the rest of what a person agrees to: what is and
+                   * is not uploaded, and what publishing from several machines does (names
+                   * sent once, nothing another machine published removed, adopt takes on
+                   * what this machine lacks). So "stated at the point of consent" was true
+                   * only on a TTY, in the command whose own fix was titled "--json was a way
+                   * around the publish consent's agreement gate". Same principle, one field
+                   * further out.
                    */
                   console.error(
                     JSON.stringify({
@@ -724,23 +725,17 @@ function runPublish(argv: string[]): void {
           console.log(JSON.stringify(report, null, 2));
           return;
         }
+        const unadopted =
+          report.unadopted.registrations.length + report.unadopted.crossLinks.length;
         if (report.upToDate) {
           /**
-           * "as it is" is only true when nothing was RETAINED.
-           *
-           * `upToDate` means no operation was needed, which is not the same as the service
-           * matching this machine: a removed cross-link, or an entry parked as a duplicate,
-           * leaves a real difference that this wire will never send. Saying "as it is" there
-           * is false, and a `--json` consumer keying on `upToDate` concludes convergence.
+           * "Already published" means the service holds everything this machine can say.
+           * The lines below still apply: a different name, a link left alone, or entries
+           * this machine lacks are all normal with `upToDate` true.
            */
-          if (report.retained.length === 0 && report.unpublishable.length === 0) {
-            console.log("Already published. The service holds this machine's registry as it is.");
-          } else {
-            console.log(
-              "Nothing to send. The service does not match this machine exactly — see below; " +
-                "those differences are not ones this machine can publish.",
-            );
-          }
+          console.log(
+            "Nothing to send. The service already holds everything this machine can publish.",
+          );
         } else {
           console.log(
             `Published ${report.published} operation(s) in ${report.batches} batch(es): ` +
@@ -761,49 +756,63 @@ function runPublish(argv: string[]): void {
             process.exitCode = 4;
           }
         }
+        const links = (refs: readonly { blockerIdentifier: string; blockedIdentifier: string }[]) =>
+          refs.map((r) => `${r.blockerIdentifier} -> ${r.blockedIdentifier}`).join(", ");
+        if (report.retracted.length > 0) {
+          console.log(`  removed from the registry: ${links(report.retracted)}`);
+        }
+        if (report.relinked.length > 0) {
+          console.log(`  linked again in the registry: ${links(report.relinked)}`);
+        }
         /**
-         * The names this publish took away from another machine.
-         *
-         * Printed on its own, before `retained`, because it is the only thing in this
-         * report that describes a LOSS on the service rather than something left alone.
-         * `published: 1, updated: 1` was the whole of what a person used to see when a
-         * workspace's published name was replaced.
-         *
-         * Not a refusal — the overwrite has to be allowed, or a rebuilt machine could
-         * never publish under its own directory names — so this is what makes it honest.
+         * Informational only. Names are create-only, so nothing was sent for these and
+         * nothing was overwritten. The registry keeps the name its first writer chose.
          */
         if (report.renamed.length > 0) {
           console.log("");
-          console.log(`${report.renamed.length} published name(s) were REPLACED by this machine:`);
+          console.log(
+            `${report.renamed.length} workspace(s) have a different name here from the registry's. ` +
+              "Nothing was changed on either side:",
+          );
           for (const item of report.renamed) {
             console.log(`  ${item.entityId}`);
-            if (item.from !== item.to) {
-              console.log(`    name:   was "${item.from}" on the service, now "${item.to}"`);
+            if (item.local !== item.published) {
+              console.log(`    this machine calls it "${item.local}"; the registry calls it "${item.published}"`);
             }
-            /**
-             * Called out separately and named PREFIX, because it is the more damaging half.
-             * Prefixes are assigned in registration order, so a replacement machine that
-             * re-inits in a different order can swap them between two workspaces with both
-             * slugs matching — and a prefix is what every `PREFIX-N` resolves through.
-             */
-            if (item.fromPrefix !== undefined) {
+            if (item.localPrefix !== undefined) {
               console.log(
-                `    prefix: was ${item.fromPrefix} on the service, now ${item.toPrefix}` +
-                  `  — every ${item.fromPrefix}-N identifier was written against the old one`,
+                `    prefix ${item.localPrefix} here; ${item.publishedPrefix} in the registry, so ` +
+                  `${item.publishedPrefix}-N links from other machines don't land here`,
               );
             }
+            if (item.localKind !== undefined) {
+              console.log(`    kind ${item.localKind} here; ${item.publishedKind} in the registry`);
+            }
           }
-          console.log(
-            "  If another machine publishes here too, it will change them back on its next " +
-              "publish and each pass costs an operation. See `staple hub registry publish " +
-              "--enable` for what that costs.",
-          );
         }
         if (report.retained.length > 0) {
           console.log("");
-          console.log(`${report.retained.length} published link(s) left exactly as they were:`);
+          console.log(
+            report.retained.length === 1
+              ? "1 published entry was left exactly as it was:"
+              : `${report.retained.length} published entries were left exactly as they were:`,
+          );
           for (const item of report.retained) {
             console.log(`  ${item.reason}`);
+          }
+        }
+        if (unadopted > 0) {
+          console.log("");
+          console.log(
+            `The service holds ${unadopted} entr${unadopted === 1 ? "y" : "ies"} this machine doesn't have. ` +
+              `Publishing left ${unadopted === 1 ? "it" : "them"} alone. \`staple hub registry adopt\` ` +
+              `previews taking ${unadopted === 1 ? "it" : "them"} on:`,
+          );
+          for (const r of report.unadopted.registrations) {
+            console.log(`  workspace "${r.slug}"  ${r.entityId}`);
+          }
+          for (const l of report.unadopted.crossLinks) {
+            console.log(`  link ${l.blockerIdentifier} -> ${l.blockedIdentifier}`);
           }
         }
         if (report.unpublishable.length > 0) {
@@ -812,6 +821,13 @@ function runPublish(argv: string[]): void {
           for (const item of report.unpublishable) {
             console.log(`  ${item.entry.slug}`);
             console.log(`    ${item.reason}`);
+          }
+        }
+        if (report.unpublishableLinks.length > 0) {
+          console.log("");
+          console.log(`${report.unpublishableLinks.length} link(s) could not be published:`);
+          for (const item of report.unpublishableLinks) {
+            console.log(`  ${item.reason}`);
           }
         }
       })
@@ -843,14 +859,18 @@ function renderDecisions(
     console.log(`  ${outcomeLabel(decision)}  ${decision.entry.slug}`);
     console.log(`    ${decision.reason}`);
   }
-  if (report.crossLinks.added + report.crossLinks.skipped > 0) {
+  /**
+   * Every link line except `current`, each with its own sentence. A link that is already
+   * here needs no line, and the summary above counts it. A skipped or kept-removed link
+   * is exactly what a person needs to read, and the reason says why.
+   */
+  const linkLines = report.crossLinkDecisions.filter((d) => d.outcome !== "current");
+  if (linkLines.length > 0) {
     console.log("");
-    console.log(
-      // "to import" on a preview: the count is what WOULD be added, and this line sat two
-      // lines above "Nothing was written." saying "imported". See `describeAdoption`.
-      `  cross-workspace links: ${report.crossLinks.added} ${report.dryRun ? "to import" : "imported"}` +
-        `, ${report.crossLinks.skipped} skipped`,
-    );
+    console.log("  cross-workspace links:");
+    for (const decision of linkLines) {
+      console.log(`    ${linkOutcomeLabel(decision.outcome, report.dryRun)}  ${decision.reason}`);
+    }
   }
   if (report.dryRun) {
     console.log("");
@@ -883,6 +903,19 @@ function renderDecisions(
     }
     console.log("Nothing was written. Re-run with --apply to make these changes.");
   }
+}
+
+/** A fixed-width label per link outcome, in the tense of the report. */
+function linkOutcomeLabel(outcome: CrossLinkOutcome, preview: boolean): string {
+  const labels: Record<CrossLinkOutcome, string> = {
+    added: preview ? "to link     " : "linked      ",
+    current: "current     ",
+    skipped: "skipped     ",
+    removed: preview ? "to remove   " : "removed     ",
+    kept_removed: "kept removed",
+    kept_linked: "kept linked ",
+  };
+  return labels[outcome];
 }
 
 /** A fixed-width label per outcome, so a column of them reads as a column. */

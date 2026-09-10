@@ -92,11 +92,13 @@ import {
   diffRegistry,
   publishedStateOf,
   registryFromSnapshot,
+  type LinkRef,
   type RegistryOperation,
   type RenamedEntry,
   type RetainedEdge,
   type SnapshotEntityLike,
   type UnpublishableEntry,
+  type UnpublishableLink,
 } from "./hub-registry-ops.js";
 import { buildConnectPreview, type ConnectPreview } from "./preview.js";
 import { reconcileRepositoryIds, type RegistryIdentityReconciliation } from "./hub-scope.js";
@@ -135,51 +137,16 @@ export function registryDisclosure(endpoint: string): string {
   lines.push("them. Turning it off later stops this machine publishing; it does not delete what");
   lines.push("has already been published.");
   lines.push("");
-  /**
-   * The measured cost of a SECOND machine, stated at the point of consent.
-   *
-   * Publishing is scoped to one machine, and the two ways a second one degrades were measured
-   * rather than reasoned about: a differing directory name means one metered operation per
-   * publish for ever (8 ops in 8 passes, alternating, `foreign` empty throughout), and a
-   * cross-link's entity id encodes the two slugs, so two machines with different directory
-   * names cannot exchange edges at all.
-   *
-   * ## Two corrections this paragraph needed
-   *
-   * It used to justify itself with *"Neither is refusable — a single machine renaming a
-   * workspace produces the identical diff"*, and that is FALSE: there is no supported
-   * single-machine rename in this tree at all (no `UPDATE workspaces SET slug`; the slug is
-   * written once by `initWorkspace` and then beats the directory basename). The real reason
-   * for reporting rather than refusing is different and is at the emit site in
-   * `hub-registry-ops.ts`: the divergence arises in the machine-REPLACEMENT path, because
-   * adoption deliberately keeps this machine's name, so refusing would block the recovery
-   * this feature exists to perform.
-   *
-   * And the closer used to read as a guarantee that the two bullets above it were
-   * PREVENTED, when they describe precisely the case that is not refused. The refusal is
-   * `foreign.registrations.length > 0` — the service holding a registration this machine
-   * has neither got nor ignored — so two machines that hold the SAME workspaces are both
-   * allowed to publish, which is the case the bullets are about. It also never said who
-   * wins, never named `adopt` (the only thing that clears the refusal), and never said that
-   * a rebuilt machine inherits whichever name happened to win last.
-   */
-  lines.push("Publishing is scoped to ONE machine, and that is a limit rather than a warning:");
-  lines.push("if a second machine also publishes to this registry, then for any workspace the");
-  lines.push("two of them name differently:");
-  lines.push("  - each publish overwrites the other's name, for ever, one billed operation");
-  lines.push("    each time. This machine always wins its own publish; nothing converges it,");
-  lines.push("    and a machine rebuilt from the registry inherits whichever name won last.");
-  lines.push("  - the two cannot exchange cross-workspace links at all, because a link is");
-  lines.push("    identified by the two workspace names and those differ.");
-  lines.push("Publishing reports each name it replaces, so this is visible rather than silent.");
-  lines.push("");
-  lines.push("What IS refused: publishing from a machine that is missing a workspace the");
-  lines.push("service holds. Run `staple hub registry adopt --apply` to take it on, or");
-  lines.push("`staple hub registry ignore <repositoryId>` to leave it out deliberately —");
-  lines.push("nothing else clears that refusal. Two machines holding the SAME workspaces are");
-  lines.push("both allowed to publish, which is exactly the case above. Sequential use — one");
-  lines.push("machine at a time, and a replacement adopting what the last one published — is");
-  lines.push("the supported shape. See docs/sync.md.");
+  lines.push("More than one machine can publish to the same registry. Publishing only adds:");
+  lines.push("  - a workspace's name, prefix and kind are sent once, when the registry first");
+  lines.push("    learns of it. If another machine calls it something else, the registry keeps");
+  lines.push("    the first name, and publishing reports the difference instead of changing it.");
+  lines.push("  - nothing another machine published is ever removed. A cross-workspace link");
+  lines.push("    leaves the registry only when the machine that removes it with");
+  lines.push("    `staple hub unlink` publishes that removal. A machine that simply does not");
+  lines.push("    have a link, or a workspace, leaves it alone.");
+  lines.push("Anything the service holds that this machine lacks is reported by publish, and");
+  lines.push("`staple hub registry adopt` takes it on. See docs/sync.md.");
   return lines.join("\n");
 }
 
@@ -260,9 +227,8 @@ export function hubRepositoryId(hub: Hub): string {
  * never will be one.
  *
  * Closing it would mean keeping a hub-local list of identities this machine has
- * published under. That is hub-local sync state, which is the migration this whole leg
- * was built to avoid, bought to improve the wording of one confirmation dialog. Not
- * worth it.
+ * published under: another hub migration, bought only to improve the wording of one
+ * confirmation dialog. Not worth it.
  *
  * So the honest handling is at the surface, and it is a requirement rather than a
  * suggestion: **whenever `previousHubId` is non-null, say unconditionally that anything
@@ -292,11 +258,11 @@ export function adoptRegistryIdentity(
    * stops being able to sync, with its credential gone.
    *
    * It is also the only way, in practice, to get a `registration` operation into a
-   * WORKSPACE's log. The Worker has no notion of hub-versus-workspace repository, so it
-   * would accept one — and from then on every protocol-1 client of W is refused at
-   * `/ops` and `/snapshot` with a non-retryable 426, permanently. `worker/src/envelope.ts`
-   * now refuses a batch that mixes the two vocabularies, which closes the accidental
-   * version of that; this closes the door it came through.
+   * WORKSPACE's log, and a Worker that has not already recorded W's log as a workspace's
+   * would accept one. From then on every protocol-1 client of W is refused at `/ops` and
+   * `/snapshot` with a non-retryable 426, permanently. `worker/src/envelope.ts` refuses a
+   * batch that mixes the two vocabularies, which closes the accidental version of that;
+   * this closes the door it came through, whatever the Worker knows.
    *
    * Checked against the REGISTRY and against the connection directory, because the two
    * answer different questions: a workspace may be registered here without ever having
@@ -636,7 +602,7 @@ export interface PublishReport {
   readonly hubId: string;
   readonly endpoint: string;
   readonly epoch: number;
-  /** Operations sent. Zero when the service already held this registry. */
+  /** Operations sent. Zero when the service already held everything this machine can say. */
   readonly published: number;
   readonly created: number;
   readonly updated: number;
@@ -646,34 +612,39 @@ export interface PublishReport {
    * Operations the SERVICE said it applied, and ones it deduplicated.
    *
    * Read off the push response rather than assumed from what was sent, because
-   * `published` is intent and this is outcome. A `duplicate` is how both of this
-   * module's operation-id bugs manifested: the service answers with the original
-   * operation's `seq` and a status the contract calls a success, and a report built from
-   * the batch length says "1 published" while nothing changed. So the two numbers are
-   * carried separately and a non-zero `deduplicated` is worth surfacing — with the
-   * snapshot diff excluding everything that already landed, it should always be zero,
-   * which is exactly what makes it a useful alarm.
+   * `published` is intent and this is outcome. The snapshot diff excludes everything
+   * that already landed, so `deduplicated` should always be zero. A non-zero value
+   * means an operation id collided with its own past, and it is surfaced as an alarm.
    */
   readonly applied: number;
   readonly deduplicated: number;
-  /** Entries with no sync identity. Reported, never invented. */
+  /** Entries with no usable sync identity. Reported, never invented. */
   readonly unpublishable: readonly UnpublishableEntry[];
-  /** Published edges this machine had no basis to retract, and tombstoned ones. */
+  /** Local links with an end in one of those entries. */
+  readonly unpublishableLinks: readonly UnpublishableLink[];
+  /** Published entities this publish left as they are, each with the reason. */
   readonly retained: readonly RetainedEdge[];
+  /** Links removed on this machine that this publish retracted from the registry. */
+  readonly retracted: readonly LinkRef[];
+  /** Links linked again on this machine that this publish put back into the registry. */
+  readonly relinked: readonly LinkRef[];
   /**
-   * Published names this publish REPLACED, one per identity.
-   *
-   * Here because the overwrite is allowed and must therefore be visible. Without it the
-   * command printed `published: 1, updated: 1` and said nothing at all about the name it
-   * had just taken away from another machine — the one loss in this feature that had no
-   * report attached to it.
+   * Workspaces this machine names differently from the registry. Informational: names
+   * are create-only, so nothing was sent and the registry keeps its first writer's name.
    */
   readonly renamed: readonly RenamedEntry[];
   /**
+   * What the service holds that this machine does not have. Left untouched.
+   * `staple hub registry adopt` takes it on.
+   */
+  readonly unadopted: {
+    readonly registrations: readonly { entityId: string; slug: string }[];
+    readonly crossLinks: readonly LinkRef[];
+  };
+  /**
    * What resolving each row's identity from its manifest changed, and what it could not
-   * establish. Reported because an unreadable manifest or a duplicated identity is the
-   * reason a workspace is missing from what was published, and a person needs the cause
-   * rather than the absence.
+   * establish. An unreadable manifest or a duplicated identity is the reason a workspace
+   * is missing from what was published, and a person needs the cause.
    */
   readonly identities: RegistryIdentityReconciliation;
   readonly upToDate: boolean;
@@ -682,22 +653,20 @@ export interface PublishReport {
 /**
  * Publish the registry: read what the service holds, derive the difference, push it.
  *
- * The op set is derived HERE, at push time, and there is no hub outbox and no hub
- * migration. `hub-registry-ops.ts` records why in full; the short version is that the
- * registry is fully re-derivable from current state, so there is no intent to remember
- * across a crash and therefore nothing for an outbox to be.
+ * Publishing is a union (STA-287, `hub-registry-ops.ts`). Nothing here refuses a machine
+ * for being behind. Whatever the service holds that this machine lacks is left alone
+ * and reported in `unadopted`, because no operation this machine can emit removes it:
+ * names are create-only, registrations are never deleted, and a link is retracted only
+ * by the machine that removed it.
  *
  * `opId` is derived from the epoch, the entity, the entity id, the verb, the base
- * version and the payload — NOT from a counter. See {@link operationId} for the two
- * earlier versions of that derivation and why each was wrong; this paragraph used to
- * describe the FIRST of them, contradicting the function a hundred lines below, which is
- * the sort of drift that makes a comment worse than no comment.
+ * version and the payload, NOT from a counter (see {@link operationId}). So a publish
+ * interrupted halfway through its chunks can be run again unchanged: re-reading the
+ * snapshot re-derives the same diff and therefore the same ids.
  *
- * The retry property is what it buys: a publish interrupted halfway through its chunks
- * can be run again unchanged, because re-reading the snapshot re-derives the same diff
- * and therefore byte-identical ids. A `client_seq`-derived id, which is what a workspace
- * uses, would need the allocator `hub.db` does not have — and re-minting one across a
- * crash is the documented route to silent data loss.
+ * This machine's recorded link changes are settled only after every chunk has landed.
+ * If a push fails part-way, the next publish re-derives what is still owed from the
+ * snapshot, so nothing is lost and nothing is sent twice.
  */
 export async function publishRegistry(
   hub: Hub,
@@ -711,122 +680,45 @@ export async function publishRegistry(
   const endpoint = parseEndpoint(connection.endpoint);
 
   /**
-   * Resolve every row's identity from its manifest BEFORE exporting.
-   *
-   * `workspaces.repository_id` is the adoption key and had no writer on any user-facing
-   * path until STA-283, so on a real machine `exportRegistry` published an empty
-   * registry and reported every workspace unpublishable — while naming remedies the
-   * person had already performed. `initWorkspace` records it, and this covers rows
-   * whose workspace has not been opened since.
+   * Resolve every row's identity from its manifest BEFORE exporting. The column is the
+   * key everything on this leg turns on, and rows whose workspace has not been re-inited
+   * since STA-283 would otherwise publish as unidentifiable.
    *
    * Local file reads and local row writes. No workspace database is opened.
    */
   const identities = reconcileRepositoryIds(hub);
   const local = exportRegistry(hub);
   const { entities, epoch } = await readSnapshotEntities(home, hubId, options);
-  const diff = diffRegistry(
-    local,
-    publishedStateOf(entities),
-    identities.duplicates,
-    hub.listOptOuts().map((o) => o.repositoryId),
-  );
+  const diff = diffRegistry(local, publishedStateOf(entities), {
+    duplicateIdentities: identities.duplicates,
+    optedOut: hub.listOptOuts().map((o) => o.repositoryId),
+    changes: hub.listCrossLinkChanges(),
+  });
 
-  /**
-   * **Publishing is scoped to ONE machine, and this is the refusal that makes that true.**
-   *
-   * Two machines sharing a registry does not work, in two independent ways that are not the
-   * accepted "two machines race on a name":
-   *
-   *   - **Edge retraction cannot be authorised.** Absence of an edge locally is ambiguous
-   *     between "removed" and "never had", and no comparison of the two sides can tell them
-   *     apart: `.staple/repository.json` is TRACKED, so two clones legitimately share a
-   *     `repositoryId` (#92), and slugs are names. Authority needs a record of what this
-   *     machine KNEW — an applied adopt, or a per-edge ledger — which is hub-local state,
-   *     i.e. the migration this whole leg exists to avoid.
-   *   - **`addedAt` could not converge** until it was made create-only. A name race settles
-   *     once both machines agree; that one could not, because neither value was wrong.
-   *
-   * So a publish requires this machine to be CURRENT with the service and refuses
-   * otherwise. That is not a partial convergence story dressed up — it is a narrower
-   * capability, stated. What it buys beyond honesty: a machine that IS current has had every
-   * published edge, so absence really is removal, which is what makes the retraction floor
-   * safe at all.
-   *
-   * The residual is a narrow race rather than the systematic loss it replaces — two machines
-   * that are both current can interleave a read and a push. `docs/sync.md` records it, and
-   * convergence is a separate ticket.
-   */
-  if (diff.foreign.registrations.length > 0) {
-    /**
-     * The refusal says WHY each entry is foreign, and names an escape that exists.
-     *
-     * The first version told the operator to run `adopt --apply` whatever the reason — and
-     * that DEAD-ENDS: `adoptRegistry` registers an absent row only after clearing the prefix
-     * and slug checks, so a collision returns `outcome: "conflict"` and writes nothing. The
-     * entry stays foreign for ever, publish keeps refusing, and the named remedy is the thing
-     * the operator just did. There is no way out through the opt-out set either, because
-     * that is keyed on `repositoryId` and there is no local row to unregister.
-     *
-     * So the reason is established rather than guessed, by previewing the adoption of what
-     * the service holds — `adoptRegistry` previews by default, writes nothing, makes no
-     * request, and already has a sentence for every outcome. An entry that would land says
-     * "adopt"; one that would park says what actually unblocks it.
-     */
-    const preview = adoptRegistry(hub, registryFromSnapshot({ hubId, capturedAt: nowIso(), entities }));
-    const byId = new Map(preview.decisions.map((d) => [d.entry.repositoryId, d]));
-    const lines = diff.foreign.registrations.map((r) => {
-      const decision = byId.get(r.entityId);
-      return `  "${r.slug}" — ${decision?.reason ?? "not present on this machine."}`;
-    });
-    const adoptable = diff.foreign.registrations.filter(
-      (r) => (byId.get(r.entityId)?.outcome ?? "absent") === "absent",
-    ).length;
-    const parked = diff.foreign.registrations.length - adoptable;
-
-    throw cloudError(
-      "conflict",
-      `The service holds ${diff.foreign.registrations.length} workspace ` +
-        `entr${diff.foreign.registrations.length === 1 ? "y" : "ies"} this machine does not ` +
-        "have, so nothing was sent — publishing a registry is scoped to ONE machine.\n\n" +
-        `${lines.join("\n")}\n\n` +
-        (adoptable > 0
-          ? "Run `staple hub registry adopt --apply` to take on what the service holds, then " +
-            "publish again.\n"
-          : "") +
-        (parked > 0
-          ? `${parked} of these will NOT be fixed by adopting — adoption parks a name ` +
-            "collision rather than renumbering, because a prefix is stamped into every " +
-            "identifier its workspace has ever emitted. Resolve it in the owning repository, " +
-            "or tell this machine to leave the entry out of its own list with " +
-            "`staple hub registry ignore <repositoryId>`.\n"
-          : "") +
-        "\nIf you did not expect another machine to be publishing here: two machines sharing " +
-        "one registry is not supported. See docs/sync.md.",
-      {
-        foreignRegistrations: diff.foreign.registrations.length,
-        adoptable,
-        parked,
-      },
-    );
-  }
+  const report = {
+    hubId,
+    endpoint: connection.endpoint,
+    epoch,
+    unpublishable: diff.unpublishable,
+    unpublishableLinks: diff.unpublishableLinks,
+    retained: diff.retained,
+    retracted: diff.retracted,
+    relinked: diff.relinked,
+    renamed: diff.renamed,
+    unadopted: diff.unadopted,
+    identities,
+  };
 
   if (diff.operations.length === 0) {
+    hub.settleCrossLinkChanges(diff.settled);
     return {
-      hubId,
-      endpoint: connection.endpoint,
-      epoch,
+      ...report,
       published: 0,
       created: 0,
       updated: 0,
       batches: 0,
       applied: 0,
       deduplicated: 0,
-      unpublishable: diff.unpublishable,
-      retained: diff.retained,
-      // Always empty on this branch: `upToDate` means no operations, and a rename IS an
-      // operation. Carried rather than omitted so the field is never absent.
-      renamed: diff.renamed,
-      identities,
       upToDate: true,
     };
   }
@@ -861,8 +753,7 @@ export async function publishRegistry(
         /**
          * Fenced on the epoch the snapshot reported. A restore that moved the epoch
          * between the read and the push makes this diff a statement about a timeline
-         * that no longer exists, and `epoch_changed` is the right answer — publishing
-         * into the new one would resurrect rows the restore had just removed.
+         * that no longer exists, and `epoch_changed` is the right answer.
          */
         epoch,
         ops,
@@ -870,35 +761,22 @@ export async function publishRegistry(
       { ...options, protocol: REGISTRY_PROTOCOL },
     )) as { results?: ReadonlyArray<{ status?: string }> };
 
-    /**
-     * The response is READ, not discarded.
-     *
-     * `published` is what was sent; these are what the service says it did. The
-     * distinction is not pedantic — a `duplicate` is precisely how both operation-id
-     * bugs in this module presented, and a report that counted the batch length
-     * announced success while nothing had changed. Counting the answer means the next
-     * such bug is visible in the report rather than only in the service's state.
-     */
+    // Counted from the service's answer, not from the batch length. See `applied`.
     for (const result of response.results ?? []) {
       if (result.status === "duplicate") deduplicated += 1;
       else applied += 1;
     }
   }
 
+  hub.settleCrossLinkChanges(diff.settled);
   return {
-    hubId,
-    endpoint: connection.endpoint,
-    epoch,
+    ...report,
     published: diff.operations.length,
     created: diff.operations.filter((o) => o.verb === "create").length,
     updated: diff.operations.filter((o) => o.verb === "update").length,
     applied,
     deduplicated,
-    retained: diff.retained,
-    renamed: diff.renamed,
     batches: chunks.length,
-    unpublishable: diff.unpublishable,
-    identities,
     upToDate: false,
   };
 }
@@ -916,11 +794,13 @@ export async function publishRegistry(
  *
  * **Second version: hash the content.** That fixed "same entity, different content" and
  * introduced "same content, different POINT IN TIME", which is the same bug displaced.
- * A registry value can legitimately return to a value it held before — a workspace
- * renamed back, an edge retracted and re-added — and the id then repeats, collides with
- * its own earlier appearance, and is dropped. Reproduced as
- * `alpha → beta → alpha → beta`: the fourth operation collided with the second, the
- * service kept `alpha`, and every subsequent publish reported `published: 1` for ever.
+ * A registry value can legitimately return to a value it held before, and the id then
+ * repeats, collides with its own earlier appearance, and is dropped. It was reproduced on
+ * a registration's slug (`alpha → beta → alpha → beta`: the fourth operation collided
+ * with the second) back when names were still updated. Names are create-only now, and
+ * the value that cycles is a link's `present`, which flips between two values on every
+ * unlink and re-link. `test/cloud-hub-registry-wire.test.ts` walks
+ * `unlink → link → unlink → link` through the fake service for exactly this.
  *
  * **This version adds the base VERSION**, which is monotonic in the number of operations
  * folded into the entity, so no two operations on one entity can share an id however
@@ -941,8 +821,8 @@ export async function publishRegistry(
  * operation MEANS rather than what it happens to carry.
  *
  * Fixed length by construction, which retires a guard the readable version needed: a
- * cross-link entity id is four percent-encoded names and could exceed the Worker's
- * 128-character cap on `opId` by itself.
+ * cross-link entity id is two UUIDs and two identifiers, at least 80 characters, and
+ * could exceed the Worker's 128-character cap on `opId` by itself.
  */
 function operationId(operation: RegistryOperation, epoch: number): string {
   // Keys sorted, so an id cannot change because a payload was built in a different
@@ -1207,18 +1087,12 @@ export async function restoreRegistry(
   const call = { repositoryId: hubId, token, deviceId: connection.deviceId, backupId };
 
   /**
-   * NO foreign check here, and that is a decision rather than an omission.
-   *
-   * Rewinding a registry another machine published to is real harm — but a restore is
-   * precisely the operation whose legitimate case is a machine that is NOT current: a
-   * replacement machine has an empty hub, so every published entry is foreign, and a foreign
-   * refusal would block the acceptance criterion this whole leg exists for. The two cases
-   * cannot be told apart for the same reason edge authority cannot.
-   *
-   * So restore is fenced by consent and confirmation instead — the publish consent above,
-   * the backup consent, and a CLI notice that states the fleet-wide effect in the words
-   * `runRestore` prints. Informing rather than refusing is the honest trade where refusing
-   * would break recovery.
+   * Restore is the one operation in this leg that removes what other machines published:
+   * it rewinds the whole registry to the backup. It is not refused for a machine that
+   * lacks entries, because a replacement machine with an empty hub is exactly the machine
+   * that legitimately restores. So it is fenced by consent and confirmation instead: the
+   * publish consent above, the backup consent, and a CLI notice that states the
+   * fleet-wide effect in the words `runRestore` prints.
    */
   // Same reason as `adoptPublishedRegistry`: the adoption at the end of this keys on the
   // column, so it has to be right before the restore starts.

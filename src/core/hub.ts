@@ -8,6 +8,7 @@ import { migrateHub } from "./schema.js";
 import { derivePrefixBase, parseIdentifier, prefixSuffixForAttempt } from "./ids.js";
 import { openWorkspace } from "./open.js";
 import { RESOLVED_STATUSES, StapleError, nowIso } from "./types.js";
+import { crossLinkEntityId, type CrossLinkIdentity } from "./cloud/cross-link-key.js";
 
 /** Best-effort cross-workspace fan-out after a resolution; never throws. */
 export function notifyHubResolvedSafe(workspaceSlug: string, identifier: string): void {
@@ -75,6 +76,21 @@ export interface CrossLink {
   blockedWs: string;
   blockedIdentifier: string;
   type: "blocks";
+}
+
+/**
+ * This machine's latest act on one cross-link, keyed on its portable identity.
+ *
+ * Hub migration 004 explains why publishing needs it. `present: false` is a removal
+ * made here, and it is kept after it is published as this machine's refusal to take the
+ * link back. `present: true` is a (re)link made here that no publish has shared yet.
+ */
+export interface CrossLinkChange extends CrossLinkIdentity {
+  readonly key: string;
+  readonly present: boolean;
+  readonly published: boolean;
+  /** Also the row's version: settling checks it, so a newer act is never settled by an older publish. */
+  readonly changedAt: string;
 }
 
 export interface CrossBlockerState {
@@ -727,18 +743,11 @@ export class Hub {
         /**
          * Record the opt-out, exactly as {@link unregister} does (STA-283).
          *
-         * These two are the only row deleters in the tree and only one of them did this,
-         * which broke publishing on a SINGLE machine: a pruned row leaves the service
-         * holding a `registration` with no local row and no opt-out, which is precisely
-         * what `hub-registry-ops.ts` treats as FOREIGN — so `staple hub registry publish`
-         * refused, blamed another machine, and named `adopt --apply` as the remedy, which
-         * re-added the row that prune had just removed. Prune and publish became mutually
-         * exclusive, in a loop, and it is reachable from MCP's hub hygiene too.
-         *
-         * The opt-out is the right record because prune IS an unregister — the same
-         * decision, reached by noticing the path is gone rather than by naming the row. It
-         * is also what makes the removal survive the next adopt, which is the property
-         * `registry_optouts` exists for.
+         * These two are the only row deleters in the tree. Prune IS an unregister, the
+         * same decision reached by noticing the path is gone rather than by naming the
+         * row, so it records the same thing. The opt-out is what makes the removal survive
+         * the next adopt, and what stops publish from listing the pruned workspace as one
+         * this machine doesn't have.
          */
         if (candidate.entry.repositoryId !== null) {
           this.addOptOut(candidate.entry.repositoryId, candidate.entry.slug, "pruned");
@@ -768,8 +777,40 @@ export class Hub {
    * blocker blocks blocked, across workspace files. Both identifiers must
    * resolve to registered workspaces; existence inside each file is validated
    * when the file is present (best-effort by design).
+   *
+   * This is a person's act, so it is recorded as this machine's latest change to
+   * the link (hub migration 004). It clears a removal made here, and it is what
+   * lets the next registry publish put back a link the service holds as retracted.
+   * Adoption uses {@link adoptCrossLink} instead, because a link arriving from the
+   * service is not a decision made on this machine.
    */
   addCrossLink(blockerIdentifier: string, blockedIdentifier: string): CrossLink {
+    return this.insertCrossLink(blockerIdentifier, blockedIdentifier, true);
+  }
+
+  /**
+   * Take on a link the published registry holds. Same checks as {@link addCrossLink},
+   * but nothing is recorded: publishing it back would only restate what the service
+   * already says.
+   */
+  adoptCrossLink(blockerIdentifier: string, blockedIdentifier: string): CrossLink {
+    return this.insertCrossLink(blockerIdentifier, blockedIdentifier, false);
+  }
+
+  /**
+   * Whether {@link addCrossLink} would accept this link, without writing anything.
+   *
+   * Runs the same resolution, identifier check and cycle check, so an adopt preview
+   * refuses exactly what the apply would refuse.
+   */
+  checkCrossLink(blockerIdentifier: string, blockedIdentifier: string): void {
+    this.validateCrossLink(blockerIdentifier, blockedIdentifier);
+  }
+
+  private validateCrossLink(
+    blockerIdentifier: string,
+    blockedIdentifier: string,
+  ): { blocker: { entry: WorkspaceEntry; identifier: string }; blocked: { entry: WorkspaceEntry; identifier: string } } {
     const blocker = this.resolveIdentifier(blockerIdentifier);
     const blocked = this.resolveIdentifier(blockedIdentifier);
     if (blocker.entry.slug === blocked.entry.slug) {
@@ -792,20 +833,133 @@ export class Hub {
     // close a cross-file loop unless a hub edge participates in it too — a
     // documented prototype simplification).
     this.assertNoCrossCycle(blocker.identifier, blocked.identifier);
-    this.db
-      .prepare(
-        `INSERT OR IGNORE INTO cross_links
-           (blocker_ws, blocker_identifier, blocked_ws, blocked_identifier, type, created_at)
-         VALUES (?,?,?,?, 'blocks', ?)`,
-      )
-      .run(blocker.entry.slug, blocker.identifier, blocked.entry.slug, blocked.identifier, nowIso());
-    return {
+    return { blocker, blocked };
+  }
+
+  private insertCrossLink(
+    blockerIdentifier: string,
+    blockedIdentifier: string,
+    record: boolean,
+  ): CrossLink {
+    const { blocker, blocked } = this.validateCrossLink(blockerIdentifier, blockedIdentifier);
+    const link: CrossLink = {
       blockerWs: blocker.entry.slug,
       blockerIdentifier: blocker.identifier,
       blockedWs: blocked.entry.slug,
       blockedIdentifier: blocked.identifier,
       type: "blocks",
     };
+    tx(this.db, () => {
+      this.db
+        .prepare(
+          `INSERT OR IGNORE INTO cross_links
+             (blocker_ws, blocker_identifier, blocked_ws, blocked_identifier, type, created_at)
+           VALUES (?,?,?,?, 'blocks', ?)`,
+        )
+        .run(link.blockerWs, link.blockerIdentifier, link.blockedWs, link.blockedIdentifier, nowIso());
+      if (record) this.recordCrossLinkChange(link, true);
+    });
+    return link;
+  }
+
+  /**
+   * The portable identity of a local link, or null when either workspace has no
+   * recorded `repositoryId`. A link like that was never publishable, so it has
+   * nothing to record.
+   */
+  crossLinkIdentityOf(link: {
+    blockerWs: string;
+    blockerIdentifier: string;
+    blockedWs: string;
+    blockedIdentifier: string;
+  }): CrossLinkIdentity | null {
+    const blockerRepositoryId = this.findBySlug(link.blockerWs)?.repositoryId ?? null;
+    const blockedRepositoryId = this.findBySlug(link.blockedWs)?.repositoryId ?? null;
+    if (blockerRepositoryId === null || blockedRepositoryId === null) return null;
+    return {
+      blockerRepositoryId,
+      blockerIdentifier: link.blockerIdentifier,
+      blockedRepositoryId,
+      blockedIdentifier: link.blockedIdentifier,
+    };
+  }
+
+  private recordCrossLinkChange(link: CrossLink, present: boolean): void {
+    const identity = this.crossLinkIdentityOf(link);
+    if (identity === null) return;
+    this.db
+      .prepare(
+        `INSERT INTO cross_link_changes
+           (link_key, blocker_repository_id, blocker_identifier, blocked_repository_id,
+            blocked_identifier, present, published, changed_at)
+         VALUES (?,?,?,?,?,?,0,?)
+         ON CONFLICT(link_key) DO UPDATE SET
+           present = excluded.present, published = 0, changed_at = excluded.changed_at`,
+      )
+      .run(
+        crossLinkEntityId(identity),
+        identity.blockerRepositoryId,
+        identity.blockerIdentifier,
+        identity.blockedRepositoryId,
+        identity.blockedIdentifier,
+        present ? 1 : 0,
+        nowIso(),
+      );
+  }
+
+  /** Every cross-link change this machine has recorded. See {@link CrossLinkChange}. */
+  listCrossLinkChanges(): CrossLinkChange[] {
+    const rows = this.db
+      .prepare("SELECT * FROM cross_link_changes ORDER BY changed_at, link_key")
+      .all() as Array<{
+      link_key: string;
+      blocker_repository_id: string;
+      blocker_identifier: string;
+      blocked_repository_id: string;
+      blocked_identifier: string;
+      present: number;
+      published: number;
+      changed_at: string;
+    }>;
+    return rows.map((r) => ({
+      key: r.link_key,
+      blockerRepositoryId: r.blocker_repository_id,
+      blockerIdentifier: r.blocker_identifier,
+      blockedRepositoryId: r.blocked_repository_id,
+      blockedIdentifier: r.blocked_identifier,
+      present: r.present === 1,
+      published: r.published === 1,
+      changedAt: r.changed_at,
+    }));
+  }
+
+  /**
+   * Record that a publish has dealt with these changes: a removal is marked published,
+   * and a (re)link is forgotten.
+   *
+   * Each row is settled only if it still holds the act the publish saw (`present` and
+   * `changedAt`). A link or unlink made while the publish was in flight is newer than
+   * what was sent, so it is left for the next publish.
+   */
+  settleCrossLinkChanges(changes: readonly CrossLinkChange[]): void {
+    tx(this.db, () => {
+      for (const change of changes) {
+        if (change.present) {
+          this.db
+            .prepare(
+              "DELETE FROM cross_link_changes WHERE link_key = ? AND present = 1 AND changed_at = ?",
+            )
+            .run(change.key, change.changedAt);
+        } else {
+          this.db
+            .prepare(
+              `UPDATE cross_link_changes SET published = 1
+                WHERE link_key = ? AND present = 0 AND changed_at = ?`,
+            )
+            .run(change.key, change.changedAt);
+        }
+      }
+    });
   }
 
   private assertNoCrossCycle(newBlocker: string, newBlocked: string): void {
@@ -841,8 +995,29 @@ export class Hub {
    * were unblocking still refuses. The caller turns undefined into not_found.
    *
    * (Until this ticket the method had no caller on any surface at all.)
+   *
+   * The removal is recorded (hub migration 004), so every caller records it:
+   * `staple hub unlink`, MCP and the UI. That record is what lets the next registry
+   * publish retract the link, and what stops an adopt from bringing it back here.
    */
   removeCrossLink(blockerIdentifier: string, blockedIdentifier: string): CrossLink | undefined {
+    return this.deleteCrossLink(blockerIdentifier, blockedIdentifier, true);
+  }
+
+  /**
+   * Remove a link because the published registry retracted it. Unlike
+   * {@link removeCrossLink}, nothing is recorded: this machine did not decide to remove
+   * it, so it must not refuse the link if another machine links it again.
+   */
+  dropRetractedCrossLink(blockerIdentifier: string, blockedIdentifier: string): CrossLink | undefined {
+    return this.deleteCrossLink(blockerIdentifier, blockedIdentifier, false);
+  }
+
+  private deleteCrossLink(
+    blockerIdentifier: string,
+    blockedIdentifier: string,
+    record: boolean,
+  ): CrossLink | undefined {
     const blocker = blockerIdentifier.toUpperCase();
     const blocked = blockedIdentifier.toUpperCase();
     return tx(this.db, () => {
@@ -855,13 +1030,15 @@ export class Hub {
       this.db
         .prepare("DELETE FROM cross_links WHERE blocker_identifier = ? AND blocked_identifier = ?")
         .run(blocker, blocked);
-      return {
+      const link: CrossLink = {
         blockerWs: row.blocker_ws,
         blockerIdentifier: row.blocker_identifier,
         blockedWs: row.blocked_ws,
         blockedIdentifier: row.blocked_identifier,
-        type: "blocks" as const,
+        type: "blocks",
       };
+      if (record) this.recordCrossLinkChange(link, false);
+      return link;
     });
   }
 
