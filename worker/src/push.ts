@@ -13,6 +13,10 @@
  * Nothing reads a number into JavaScript and writes it back, which is the lost update
  * this shape exists to avoid. `RETURNING` is not used anywhere: it is undocumented
  * across the entire D1 doc set and `results` is documented as empty for writes.
+ *
+ * The same reservation claims the repository's vocabulary (STA-290), and every insert
+ * is conditioned on the reservation having happened, so a batch either reserves, claims
+ * and writes, or does none of the three. See `applyBatch`.
  */
 
 import type { Session } from "./auth.js";
@@ -22,6 +26,12 @@ import { REGISTRY_ENTITIES, type Envelope, validateEnvelope } from "./envelope.j
 import { readJson } from "./http.js";
 import { maxBatchSize, planOf } from "./limits.js";
 import { log, tokenFingerprint } from "./log.js";
+import {
+  type Vocabulary,
+  storedVocabulary,
+  vocabularyOf,
+  vocabularyRefusal,
+} from "./vocabulary.js";
 
 interface PushResult {
   opId: string;
@@ -37,7 +47,7 @@ export async function push(
   startedAt: number,
 ): Promise<Response> {
   const body = await readJson(request);
-  const ops = parseBatch(body, env, session, protocol);
+  const { ops, vocabulary } = parseBatch(body, env, session, protocol);
 
   // The epoch a client may optionally fence its push on. Additive and optional, which
   // a protocol version permits. When present it is checked here for a clean 409 AND
@@ -52,8 +62,9 @@ export async function push(
   }
 
   // An empty batch is a legal no-op. It costs no statements and is the honest answer
-  // to a client whose outbox drained between deciding to push and pushing.
-  if (ops.length === 0) {
+  // to a client whose outbox drained between deciding to push and pushing. It has no
+  // vocabulary, so it claims none: `vocabulary` is null exactly when the batch is empty.
+  if (vocabulary === null) {
     return json({
       protocol,
       epoch: session.epoch,
@@ -62,8 +73,19 @@ export async function push(
     });
   }
 
+  /**
+   * The vocabulary, refused early when authentication already knows the answer.
+   *
+   * This costs no statement, and it is not the guard that matters: a request that
+   * authenticated against an unclaimed repository passes it whatever it carries, and the
+   * batch in `applyBatch` is what decides that race.
+   */
+  if (session.vocabulary !== null && session.vocabulary !== vocabulary) {
+    throw vocabularyRefusal(session.vocabulary, vocabulary);
+  }
+
   const now = Date.now();
-  const results = await applyBatch(env, session, ops, now);
+  const results = await applyBatch(env, session, ops, vocabulary, now);
   const response = await describe(env, session, ops, results);
 
   log({
@@ -89,7 +111,7 @@ function parseBatch(
   env: Env,
   session: Session,
   protocol: number,
-): Envelope[] {
+): { ops: Envelope[]; vocabulary: Vocabulary | null } {
   if (!Array.isArray(body.ops)) {
     throw new SyncError("validation", "ops must be an array");
   }
@@ -113,21 +135,15 @@ function parseBatch(
    *
    * A hub's log holds only `registration` and `crossLink`; a workspace's holds only the
    * other thirteen. Nothing legitimate produces a batch containing both, because nothing
-   * legitimate has both a hub and a workspace in hand at once.
+   * legitimate has both a hub and a workspace in hand at once. Refused here, in memory,
+   * as `validation`, because it is wrong whatever the repository holds.
    *
-   * What it fences is a specific, expensive accident. This service has no notion of
-   * hub-versus-workspace repository, and deliberately should not — a flag would be a
-   * second thing to keep in step with what the log actually contains. So a `registration`
-   * pushed at a workspace's `repoId` is accepted, and from that moment every protocol-1
-   * client of that workspace is refused at `/ops` and `/snapshot` with a non-retryable
-   * 426, permanently, with no remedy short of a purge. The reachable route to that was a
-   * mistyped hub id on the client, which `adoptRegistryIdentity` now refuses; this closes
-   * the other half, cheaply and in memory, with no extra query.
-   *
-   * It is NOT a claim that a repository's kind is enforced — a batch of registry
-   * operations alone still lands wherever the credential points. Making that structural
-   * would need a per-push read of what the log already holds, which is a query per push
-   * against the ceiling this service is built around.
+   * It is also what gives a non-empty batch exactly ONE vocabulary, which is the thing
+   * `applyBatch` claims and checks against `repos.vocabulary` (STA-290). That
+   * per-repository rule is the structural half: a batch of registry operations alone no
+   * longer lands wherever the credential points. It costs no query either — the
+   * repository's vocabulary arrives with the credential, and the race-free check rides
+   * statements the batch already had.
    */
   const registry = ops.filter((op) => REGISTRY_ENTITIES.has(op.entity)).length;
   if (registry > 0 && registry < ops.length) {
@@ -151,41 +167,67 @@ function parseBatch(
     seen.add(op.opId);
   }
 
-  return ops;
+  return { ops, vocabulary: ops[0] === undefined ? null : vocabularyOf(ops[0].entity) };
 }
 
 /**
  * The atomic batch: `N + 2` statements, all-or-nothing.
  *
  * Returns the per-operation applied/deduplicated flags and the pre-push watermark.
+ *
+ * ## The reservation is the one decision, and every insert is conditioned on it
+ *
+ * `[1]` reserves the window only when the repository is still on the session's epoch
+ * AND holds this batch's vocabulary or none yet, and it claims the vocabulary in the
+ * same statement. Each insert then requires the repository to be on that epoch and to
+ * hold that vocabulary AFTERWARDS. The two predicates are the same predicate seen from
+ * either side of the claim, so an insert lands exactly when `[1]` matched:
+ *
+ *   - Two first pushes of different vocabularies race. D1 runs one batch to the end
+ *     before the other starts. The first claims; the second's `[1]` matches nothing, its
+ *     inserts match nothing, and it writes no row, reserves no slot and claims nothing.
+ *   - A restore moved the epoch after authentication. `[1]` matches nothing, and neither
+ *     does any insert. This used to rely on the inserts' computed seqs colliding with
+ *     rows that already exist, which does not happen when the window falls on slots
+ *     that deduplication left unused — the rows then landed, unreserved, in the new
+ *     epoch below its watermark.
+ *
+ * Neither outcome raises inside the batch, because D1 has no conditional abort, so both
+ * are read afterwards from `[0]`: the repository row as it stood before this batch, read
+ * inside the same transaction and therefore exactly what `[1]` tested.
  */
 async function applyBatch(
   env: Env,
   session: Session,
   ops: Envelope[],
+  vocabulary: Vocabulary,
   now: number,
 ): Promise<{ priorHigh: number; epoch: number; applied: boolean[] }> {
   const n = ops.length;
 
   const statements: D1PreparedStatement[] = [
-    // [0] The pre-push watermark, read INSIDE the transaction. The value from
-    //     authentication is not good enough: another push may have landed since.
-    env.DB.prepare(`SELECT last_seq AS prior_high, epoch FROM repos WHERE repo_id = ?1`).bind(
-      session.repoId,
-    ),
-
-    // [1] Reserve N slots. One statement, so two concurrent pushes cannot reserve the
-    //     same window. Fenced on the epoch read at authentication time: if a restore
-    //     moved the epoch since, this matches nothing, the inserts below then compute
-    //     seqs that already exist, and the primary key rolls the whole batch back.
+    // [0] The repository as it stood before this batch, read INSIDE the transaction. The
+    //     values from authentication are not good enough: another push, a claim or a
+    //     restore may have landed since.
     env.DB.prepare(
-      `UPDATE repos SET last_seq = last_seq + ?2 WHERE repo_id = ?1 AND epoch = ?3`,
-    ).bind(session.repoId, n, session.epoch),
+      `SELECT last_seq AS prior_high, epoch, vocabulary FROM repos WHERE repo_id = ?1`,
+    ).bind(session.repoId),
+
+    // [1] Reserve N slots and claim the vocabulary. One statement, so two concurrent
+    //     pushes can neither reserve the same window nor claim different vocabularies.
+    //     `SET vocabulary = ?4` never changes a set value: the WHERE admits only NULL or
+    //     the same value.
+    env.DB.prepare(
+      `UPDATE repos SET last_seq = last_seq + ?2, vocabulary = ?4
+        WHERE repo_id = ?1 AND epoch = ?3
+          AND (vocabulary IS NULL OR vocabulary = ?4)`,
+    ).bind(session.repoId, n, session.epoch, vocabulary),
   ];
 
   // [2..N+1] One insert per operation, each computing its own slot from the reserved
   //          window as (window_end - N) + j. `j` is a bound literal, so no statement
-  //          depends on a value that passed through JavaScript.
+  //          depends on a value that passed through JavaScript. 17 bound parameters,
+  //          against D1's cap of 100 per statement.
   const insert = env.DB.prepare(
     `INSERT INTO ops (repo_id, seq, epoch, op_id, device_id, entity, entity_id, verb,
                       base_version, payload, actor, client_seq, schema_version,
@@ -193,6 +235,8 @@ async function applyBatch(
      SELECT ?1, r.last_seq - ?2 + ?3, r.epoch, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15
        FROM repos r
       WHERE r.repo_id = ?1
+        AND r.epoch = ?16
+        AND r.vocabulary = ?17
         AND NOT EXISTS (
               SELECT 1 FROM ops o
                WHERE o.repo_id = ?1
@@ -218,6 +262,8 @@ async function applyBatch(
         op.schema,
         op.createdAt,
         now,
+        session.epoch, // ?16 the epoch `[1]` reserved in
+        vocabulary, // ?17 the vocabulary `[1]` claimed or found
       ),
     );
   }
@@ -227,9 +273,9 @@ async function applyBatch(
     batch = await env.DB.batch(statements);
   } catch (err) {
     // The batch rolled back entirely — `repos.last_seq` is unchanged and no row was
-    // written, so the client may retry the identical batch safely. The one cause worth
-    // distinguishing is an epoch that moved under the reservation, which surfaces here
-    // as a primary-key collision rather than as a clean signal.
+    // written, so the client may retry the identical batch safely. An epoch that moved
+    // under the reservation no longer surfaces here (see above), but one that moved
+    // after this batch failed for another reason is still worth naming as what it is.
     const current = await env.DB.prepare(`SELECT epoch FROM repos WHERE repo_id = ?1`)
       .bind(session.repoId)
       .first<{ epoch: number }>();
@@ -242,10 +288,27 @@ async function applyBatch(
     throw err;
   }
 
-  const head = batch[0]?.results?.[0] as { prior_high: number; epoch: number } | undefined;
+  const head = batch[0]?.results?.[0] as
+    | { prior_high: number; epoch: number; vocabulary: string | null }
+    | undefined;
   if (!head) {
     // The repository row is gone: purged between authentication and this statement.
     throw new SyncError("not_found", "repository is not known to this server");
+  }
+
+  // `[1]`'s predicate, read back from the row it tested. When either half fails, `[1]`
+  // matched nothing and neither did any insert, so nothing was reserved, claimed or
+  // written, and the refusal says which half. Vocabulary first: it is permanent, while an
+  // epoch change is answered by a re-bootstrap that would only reach the same refusal.
+  const held = storedVocabulary(head.vocabulary);
+  if (held !== null && held !== vocabulary) {
+    throw vocabularyRefusal(held, vocabulary);
+  }
+  if (head.epoch !== session.epoch) {
+    throw new SyncError("epoch_changed", "epoch moved during the push; re-bootstrap", {
+      currentEpoch: head.epoch,
+      mustRebootstrap: true,
+    });
   }
 
   return {
