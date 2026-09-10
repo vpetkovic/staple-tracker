@@ -160,6 +160,67 @@ export function cloudError(
   });
 }
 
+/**
+ * The service refused to write one vocabulary into a repository that holds the other
+ * (STA-290, `worker/src/vocabulary.ts`).
+ *
+ * A hub's repository holds only its registry and a workspace's holds only its data. The
+ * Worker records which in `repos.vocabulary`, claimed by the first write, and answers
+ * the other vocabulary with `conflict` carrying `repositoryVocabulary` and
+ * `requestVocabulary` — `"mixed"` for a restore of a backup captured before the rule
+ * existed, which holds both.
+ *
+ * `conflict` on the wire, deliberately: every released client maps an UNKNOWN code to
+ * `unavailable`, which is retryable, so a new code would have made this permanent
+ * refusal a retry loop on every installed build. The detail keys are what tell it apart
+ * from a lease race, and this is the one place that reads them.
+ */
+export function vocabularyRefusalMessage(
+  origin: string,
+  repositoryVocabulary: unknown,
+  requestVocabulary: unknown,
+): string {
+  if (requestVocabulary === "mixed") {
+    return (
+      `That backup on ${origin} holds both hub registry entries and workspace data. It was ` +
+      "captured while this repository was contaminated, before the service kept the two " +
+      "apart, and restoring it would write the contamination back, so the service refused. " +
+      "Nothing was changed. Restore a backup taken before the contamination or after the " +
+      "cleanup (worker/README.md, \"If a registry operation lands in a WORKSPACE's log\")."
+    );
+  }
+  const holdsWorkspace =
+    repositoryVocabulary === "workspace" ||
+    (repositoryVocabulary !== "hub" && requestVocabulary === "hub");
+  if (holdsWorkspace) {
+    return (
+      `That repository on ${origin} holds a workspace's data, not a hub registry, so the hub ` +
+      "registry cannot be written into it. The hub registry needs its own repository: whoever " +
+      "runs the service provisions one for this hub's id (worker/README.md, \"Provisioning a " +
+      "HUB\"). Nothing was written, and the workspace's data is untouched."
+    );
+  }
+  return (
+    `That repository on ${origin} holds a hub's workspace registry, not a workspace's data, ` +
+    "so workspace data cannot be written into it. A workspace needs its own repository: " +
+    "whoever runs the service provisions one (worker/README.md, \"Provisioning a " +
+    "repository\"). Nothing was written, and the hub registry is untouched."
+  );
+}
+
+function isVocabularyDetail(value: unknown): boolean {
+  return value === "hub" || value === "workspace" || value === "mixed";
+}
+
+/** Was this failure the service refusing the other vocabulary, rather than a lease race? */
+export function isVocabularyRefusal(error: unknown): boolean {
+  return (
+    cloudCodeOf(error) === "conflict" &&
+    error instanceof StapleError &&
+    isVocabularyDetail(error.detail?.requestVocabulary)
+  );
+}
+
 export interface RequestOptions {
   timeoutMs?: number;
   /** Injected in tests. Defaults to the global `fetch`; there is no other one. */
@@ -294,11 +355,28 @@ async function request<T>(call: Call): Promise<T> {
       "holder",
       "expiresAt",
       "currentFencingToken",
+      // STA-290's refusal: which vocabulary the repository holds and which was offered.
+      "repositoryVocabulary",
+      "requestVocabulary",
     ]) {
       if (body[key] !== undefined) detail[key] = body[key];
     }
     const retryAfter = response.headers.get("retry-after");
     if (retryAfter !== null) detail.retryAfter = retryAfter;
+    // The vocabulary refusal gets a sentence a person can act on, naming the remedy on
+    // this side — an operator provisions a separate repository — instead of the
+    // service's terse one. The service's own text stays in the detail for `--json`.
+    if (code === "conflict" && isVocabularyDetail(body.requestVocabulary)) {
+      throw cloudError(
+        "conflict",
+        vocabularyRefusalMessage(
+          call.endpoint.origin,
+          body.repositoryVocabulary,
+          body.requestVocabulary,
+        ),
+        { ...detail, serverMessage: message },
+      );
+    }
     throw cloudError(code, message, detail);
   }
 
