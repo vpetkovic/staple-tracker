@@ -89,6 +89,7 @@ import {
   type LeaseSummary,
 } from "../core/cloud/lease.js";
 import { runHeartbeat } from "../core/cloud/lease-heartbeat.js";
+import { describeSeed, workspaceHoldings } from "../core/cloud/seed.js";
 import { syncRepository, type SyncReport } from "../core/cloud/sync.js";
 import { localCloudStatus, refreshCloudStatus, type CloudStatus } from "../core/cloud/status.js";
 import {
@@ -310,6 +311,16 @@ function noIdentity(dbPath: string, consequence: string): StapleError {
  * The refusal belongs on the paths that move something, and it is spelled out
  * there.
  */
+/** What `connect` tells a human the first sync will upload. A local read. */
+function holdingsFor(options: { db?: string; ws?: string }): { total: number; summary: string } {
+  const opened = resolveWorkspace(options);
+  try {
+    return workspaceHoldings(opened.store.db);
+  } finally {
+    opened.store.db.close();
+  }
+}
+
 function repositoryIdFor(options: { db?: string; ws?: string }): string {
   const opened = resolveWorkspace(options);
   try {
@@ -515,6 +526,7 @@ function runConnect(argv: string[]): void {
   }
 
   const repositoryId = repositoryIdFor(values);
+  const holdings = holdingsFor(values);
 
   if (!values.endpoint) {
     throw new StapleError(
@@ -581,7 +593,13 @@ function runConnect(argv: string[]): void {
     }).then((outcome) => {
       if (json) {
         // The connection record, which by construction has no token in it.
-        console.log(JSON.stringify({ connection: outcome.connection, capabilities: outcome.capabilities }, null, 2));
+        console.log(
+          JSON.stringify(
+            { connection: outcome.connection, capabilities: outcome.capabilities, existingItems: holdings.total },
+            null,
+            2,
+          ),
+        );
         return;
       }
       console.log("");
@@ -589,6 +607,12 @@ function runConnect(argv: string[]): void {
       console.log(`  device       ${outcome.connection.deviceId}  (${outcome.connection.label})`);
       console.log(`  credential   stored in ${outcome.credentialLocation}`);
       console.log("");
+      if (holdings.total > 0) {
+        console.log(
+          `This workspace already holds ${holdings.summary}. The first \`staple cloud sync\` uploads ` +
+            "whatever of it the repository does not have yet; nothing has been sent.",
+        );
+      }
       console.log("Automatic sync is OFF. Nothing leaves this machine until you run `staple cloud sync`.");
       console.log("Turn it on for THIS device with `staple cloud auto on`.");
     }),
@@ -1053,6 +1077,12 @@ function runSync(argv: string[]): void {
  */
 function renderSyncReport(report: SyncReport): string {
   const lines: string[] = [];
+
+  if (report.seed) {
+    const { summary, details } = describeSeed(report.seed);
+    lines.push(summary);
+    for (const detail of details) lines.push(`  ${detail}`);
+  }
 
   if (report.bootstrap) {
     const b = report.bootstrap;

@@ -96,6 +96,27 @@ export interface JournalIntent {
   readonly actor?: string | null;
 }
 
+/**
+ * One seeded operation: an entity's current state, journaled because the service
+ * does not hold it yet. See {@link Journal.seed}.
+ */
+export interface SeedIntent {
+  readonly entity: SyncEntity;
+  readonly entityId: string;
+  readonly verb: SyncVerb;
+  readonly payload: Record<string, unknown>;
+  readonly actor: string | null;
+  /**
+   * The operation's `createdAt`. A receiver falls back to it for every time column the
+   * payload does not carry (`apply.ts` says so on {@link ApplyInput.at}), so a seed
+   * stamps each operation with the time its state was written rather than with the
+   * moment it was seeded.
+   */
+  readonly at: string;
+  /** How many operations the service already holds for this entity; 0 for a new one. */
+  readonly serviceVersion: number;
+}
+
 /** The protocol this build speaks. */
 export const SYNC_PROTOCOL = 1;
 
@@ -683,6 +704,167 @@ export class Journal {
       throw new Error("sync_state has no row: the journal is armed without an identity.");
     }
     return row.client_seq_high_water;
+  }
+
+  // ------------------------------------------------------------------- seed
+
+  /**
+   * Journal the state a workspace already held, as ordinary operations (the seed).
+   *
+   * Everything a device held before it first synchronized was written while the seam
+   * was disarmed, or while it was armed but talking to nobody, so the outbox either
+   * has no record of it or has a partial one. {@link seedRepository} decides WHAT has
+   * to travel; this is only the allocation, kept here so that `client_seq`, the
+   * operation id and the entity version are still produced in exactly one file.
+   *
+   * Each intent is an ordinary operation and fits the model unchanged: one client
+   * sequence from `client_seq_high_water`, an id derived from the repository, the
+   * epoch this database is on, the device and that sequence — so a retried push of a
+   * seed is absorbed like any other retry.
+   *
+   * ## The version is SET, not bumped, and that is the point
+   *
+   * `serviceVersion` is how many operations the service already holds for the entity.
+   * After this operation it holds one more, and conflict detection only works when
+   * every device's counter for an entity counts the same operations (see the
+   * `sync.ts` note on echoes). A local counter carried over from a pre-connect journal,
+   * or from a repository this workspace was forked from, counts operations the service
+   * never received, so bumping it would leave this device permanently ahead of every
+   * device that hydrates the entity from the service — and a counter that is ahead
+   * stops seeing concurrent edits as conflicts.
+   *
+   * ## A create records no provenance; a merge does
+   *
+   * `create` is the verb for an entity the service does not hold, and like every create
+   * it leaves nothing in `sync_field_writes` — the same line {@link flush} draws and the
+   * server's fold draws. Any row already there for such an entity describes a write the
+   * service never received, so it is removed. The other verbs appear only for a
+   * collection the service already holds and that gained local members on joining; they
+   * are real edits of a real base and are recorded exactly as `flush` records one.
+   */
+  seed(intents: readonly SeedIntent[]): number {
+    if (intents.length === 0) return 0;
+    if (this.deviceId === null) {
+      throw new Error("journal.seed on a journal with no device: the seed is written by sync only.");
+    }
+    const state = this.state();
+    if (!state?.repository_id) {
+      throw new Error("journal.seed on a workspace with no repository identity.");
+    }
+    const setVersion = this.db.prepare(
+      `INSERT INTO sync_entity_versions (entity, entity_id, version) VALUES (?, ?, ?)
+       ON CONFLICT (entity, entity_id) DO UPDATE SET version = excluded.version`,
+    );
+    const clearProvenance = this.db.prepare(
+      "DELETE FROM sync_field_writes WHERE entity = ? AND entity_id = ?",
+    );
+    const insert = this.db.prepare(
+      `INSERT INTO sync_outbox
+         (op_id, client_seq, entity, entity_id, verb, base_version, payload, actor, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    for (const intent of intents) {
+      setVersion.run(intent.entity, intent.entityId, intent.serviceVersion + 1);
+      const clientSeq = this.allocateClientSeq();
+      const opId = deriveOpId(state.repository_id, state.epoch, this.deviceId, clientSeq);
+      const create = intent.verb === "create";
+      insert.run(
+        opId,
+        clientSeq,
+        intent.entity,
+        intent.entityId,
+        intent.verb,
+        create ? null : intent.serviceVersion,
+        JSON.stringify(intent.payload),
+        intent.actor,
+        intent.at,
+      );
+      if (create) {
+        clearProvenance.run(intent.entity, intent.entityId);
+      } else {
+        recordFieldWrites(this.db, {
+          entity: intent.entity,
+          entityId: intent.entityId,
+          fields: Object.keys(intent.payload),
+          baseVersion: intent.serviceVersion,
+          opId,
+          deviceId: this.deviceId,
+          at: intent.at,
+        });
+      }
+    }
+    return intents.length;
+  }
+
+  /**
+   * Drop the unsent operations for one entity, because a seeded create now carries
+   * everything they said.
+   *
+   * Only unacknowledged rows, and their provenance with them. A seeded `create` is the
+   * entity's whole current state, so an unsent update to it describes a value the
+   * create already holds — and sending both would put the update FIRST in the log,
+   * ahead of the create it needs, which is the one order a receiver cannot apply.
+   */
+  discardUnsent(entity: string, entityId: string): number {
+    const rows = this.db
+      .prepare(
+        `SELECT op_id FROM sync_outbox
+          WHERE entity = ? AND entity_id = ? AND acknowledged_seq IS NULL`,
+      )
+      .all(entity, entityId) as Array<{ op_id: string }>;
+    const forget = this.db.prepare("DELETE FROM sync_field_writes WHERE op_id = ?");
+    for (const row of rows) forget.run(row.op_id);
+    this.db
+      .prepare(
+        "DELETE FROM sync_outbox WHERE entity = ? AND entity_id = ? AND acknowledged_seq IS NULL",
+      )
+      .run(entity, entityId);
+    return rows.length;
+  }
+
+  /**
+   * Move every unsent operation allocated at or before `throughSeq` to the END of the
+   * allocation order, re-deriving its id.
+   *
+   * Used by a heal, which seeds what a database synchronized under an earlier build
+   * never sent. Its unsent operations were allocated before the seed and a push sends
+   * in allocation order, so without this an unsent `queue.replace` naming a
+   * pre-connect issue would reach the service ahead of that issue's create — an
+   * operation on an entity nobody has, which a pulling device defers for ever.
+   *
+   * Re-deriving the id is safe exactly because these rows are unacknowledged: the id
+   * is a function of the client sequence, and nothing has been told the old one. The
+   * provenance row that named the old id is renamed with it, so a conflict detected
+   * against this write still names an operation that exists.
+   */
+  resequenceUnsent(throughSeq: number): number {
+    if (this.deviceId === null) return 0;
+    const state = this.state();
+    if (!state?.repository_id) return 0;
+    const rows = this.db
+      .prepare(
+        `SELECT op_id FROM sync_outbox
+          WHERE acknowledged_seq IS NULL AND client_seq <= ?
+          ORDER BY client_seq`,
+      )
+      .all(throughSeq) as Array<{ op_id: string }>;
+    const move = this.db.prepare("UPDATE sync_outbox SET client_seq = ?, op_id = ? WHERE op_id = ?");
+    const rename = this.db.prepare("UPDATE sync_field_writes SET op_id = ? WHERE op_id = ?");
+    for (const row of rows) {
+      const clientSeq = this.allocateClientSeq();
+      const opId = deriveOpId(state.repository_id, state.epoch, this.deviceId, clientSeq);
+      move.run(clientSeq, opId, row.op_id);
+      rename.run(opId, row.op_id);
+    }
+    return rows.length;
+  }
+
+  /** The client sequence most recently allocated. */
+  clientSeqHighWater(): number {
+    const row = this.db
+      .prepare("SELECT client_seq_high_water AS n FROM sync_state WHERE id = 1")
+      .get() as { n: number } | undefined;
+    return row?.n ?? 0;
   }
 
   // ------------------------------------------------------------- compaction

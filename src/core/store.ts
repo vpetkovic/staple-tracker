@@ -4693,7 +4693,13 @@ export class WorkspaceStore {
       entity: "comment",
       entityId: id,
       verb: "create",
-      payload: { issueId, author, authorType, body, idempotencyKey },
+      /**
+       * `createdAt` travels. A comment arriving in the ordered tail could take its time
+       * from the operation, but one arriving in a SNAPSHOT has no operation behind it,
+       * and without this every hydrated comment read as written at the moment of
+       * hydration — the whole thread collapsed onto one instant.
+       */
+      payload: { issueId, author, authorType, body, idempotencyKey, createdAt: now },
       actor: author,
     });
     return {
@@ -4849,6 +4855,10 @@ export class WorkspaceStore {
           body,
           title: opts.title ?? null,
           changeSummary: opts.changeSummary ?? null,
+          // For the same reason a comment carries `createdAt`: a snapshot has no
+          // operation to take them from. See `applyDocumentRevision`.
+          author: opts.author ?? null,
+          createdAt: now,
         },
         actor: opts.author ?? null,
       });

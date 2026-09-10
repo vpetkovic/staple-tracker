@@ -31,13 +31,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { tx } from "../db.js";
 import { assertOwnHost } from "../repo-identity.js";
-import {
-  bindJournal,
-  recordInheritedFieldWrites,
-  replayOutboxFieldWrites,
-  type Journal,
-  type OperationEnvelope,
-} from "../journal.js";
+import { bindJournal, replayOutboxFieldWrites, type Journal, type OperationEnvelope } from "../journal.js";
 import { StapleError, nowIso } from "../types.js";
 import {
   CLIENT_PROTOCOL,
@@ -53,15 +47,10 @@ import {
 import { readConnection } from "./connection.js";
 import { credentialStoreFor } from "./credential-store.js";
 import { parseEndpoint, type CloudEndpoint } from "./endpoint.js";
-import {
-  ReferentMissing,
-  applyToDatabase,
-  bumpEntityVersion,
-  localEntityVersion,
-  setEntityVersion,
-  snapshotToInput,
-} from "./apply.js";
+import { ReferentMissing, applyToDatabase, bumpEntityVersion } from "./apply.js";
 import { applyConflictOperation, countOpenConflicts, screenForConflicts } from "./conflicts.js";
+import { hydrate } from "./hydrate.js";
+import { seedOwed, seedRepository, type RepositorySurvey, type SeedReport } from "./seed.js";
 import {
   acknowledgeOperation,
   advanceCursor,
@@ -78,6 +67,7 @@ import {
   type PullPage,
   type PushResponse,
   type RemoteOperation,
+  type SnapshotEntity,
   type SnapshotPage,
 } from "./wire.js";
 
@@ -113,6 +103,13 @@ export interface SyncReport {
   readonly pending: number;
   /** Unresolved conflict records after this sync. */
   readonly conflicts: number;
+  /**
+   * What this sync uploaded of the state the workspace already held, or null when the
+   * seed was not owed. Non-null exactly once per repository per database: on the first
+   * sync, or on the first sync by a build that seeds of a database that had synchronized
+   * without seeding.
+   */
+  readonly seed: SeedReport | null;
   readonly at: string;
 }
 
@@ -318,6 +315,31 @@ export async function syncRepository(
   const capabilities = await negotiate(session, options);
 
   /**
+   * The seed, when this database owes one — before the push, so the push sends it.
+   *
+   * It needs to know what the service already holds, which is one full read of the
+   * snapshot, and it is here rather than in `connect` for the consent reason: this
+   * function is reached only by `staple cloud sync` or by automatic sync a human turned
+   * on, so the seed follows exactly the rules every other upload follows, and a
+   * connected workspace in manual mode stays as silent after connecting as before it.
+   */
+  let seed: SeedReport | null = null;
+  let joined: BootstrapReport | null = null;
+  if (seedOwed(db, repositoryId)) {
+    const survey = await surveyRepository(session, capabilities, options);
+    const mode = state.cursor === null && state.epoch === 0 ? "join" : "heal";
+    seed = seedRepository(db, journal, {
+      repositoryId,
+      survey,
+      mode,
+      maxOpBytes: capabilities.maxOpBytes,
+    });
+    if (mode === "join") {
+      joined = { entities: survey.entities.length, pages: survey.pages, cutoffSeq: survey.cutoffSeq, resumed: false };
+    }
+  }
+
+  /**
    * Push, and re-bootstrap once if the epoch moved under it.
    *
    * Without this the device deadlocks, and silently. *"A device presenting a
@@ -358,12 +380,55 @@ export async function syncRepository(
     epoch: after.epoch,
     pushed,
     pulled: pull.pulled,
-    bootstrap: pull.bootstrap ?? forcedBootstrap,
+    bootstrap: pull.bootstrap ?? forcedBootstrap ?? joined,
     headSeq: after.headSeq,
     pending: pendingCount(db),
     conflicts,
+    seed,
     at: nowIso(),
   };
+}
+
+/**
+ * Read the whole snapshot without applying any of it: what the service holds, at one
+ * pinned cutoff, with the tail cursor that cutoff pinned.
+ *
+ * The cutoff is fixed by the first page and carried in every later cursor, so every
+ * page describes the same instant, exactly as for a bootstrap. Reading nothing into the
+ * database is the point — the seed decides what to write only once it knows everything
+ * the service holds, and it writes all of it in one transaction.
+ */
+async function surveyRepository(
+  session: Session,
+  capabilities: Capabilities,
+  options: SyncOptions,
+): Promise<RepositorySurvey> {
+  const entities: SnapshotEntity[] = [];
+  let cursor: string | null = null;
+  let pages = 0;
+  for (;;) {
+    const page = (await attempt(
+      () =>
+        fetchSnapshotPage(
+          session.endpoint,
+          {
+            repositoryId: session.repositoryId,
+            token: session.token,
+            deviceId: session.deviceId,
+            cursor,
+            limit: capabilities.maxSnapshotPageSize,
+          },
+          options,
+        ),
+      options,
+    )) as SnapshotPage;
+    pages += 1;
+    entities.push(...page.entities);
+    if (page.nextCursor === null) {
+      return { epoch: page.epoch, cutoffSeq: page.cutoffSeq, tailCursor: page.tailCursor, entities, pages };
+    }
+    cursor = page.nextCursor;
+  }
 }
 
 // ---------------------------------------------------------------------- push
@@ -613,6 +678,7 @@ async function runBootstrap(
   const start = requireSyncState(db);
   const resumed = start.bootstrap !== null;
   let cursor = start.bootstrap?.snapshot ?? null;
+  let parked: readonly SnapshotEntity[] = start.bootstrap?.parked ?? [];
   let entities = 0;
   let pages = 0;
   let cutoffSeq = 0;
@@ -639,72 +705,23 @@ async function runBootstrap(
     pages += 1;
 
     /**
-     * One transaction per page: the entities, the versions and the position all
-     * commit together. A kill anywhere inside leaves the previous page's
-     * position, and the page is simply re-fetched — the fold is deterministic
-     * for a pinned cutoff, so a re-fetched page is byte-identical.
+     * One transaction per page: the entities, the versions, the position and whatever
+     * had to be parked all commit together. A kill anywhere inside leaves the previous
+     * page's position and parked set, and the page is simply re-fetched — the fold is
+     * deterministic for a pinned cutoff, so a re-fetched page is byte-identical.
+     *
+     * The page is applied in dependency order, not in the order it arrived, and an
+     * entity whose referent is on a later page is parked until it lands; see
+     * `hydrate.ts` for why the snapshot's own order cannot be applied as it stands.
      */
     const at = nowIso();
+    const final = page.nextCursor === null;
     tx(db, () => {
-      for (const entity of page.entities) {
-        const input = snapshotToInput(entity, at);
-        /**
-         * Through `applyRemote` so the write is echo-suppressed: a hydrating
-         * device must not journal an outbound copy of every row it was handed,
-         * which would push the entire repository straight back at the server.
-         *
-         * The synthetic op id is derived from the entity key and the cutoff, so
-         * re-applying a re-fetched page is a ledger hit rather than a second
-         * write. It is not an operation id the server ever issued, and it is
-         * never sent anywhere.
-         */
-        journal.applyRemote(
-          { opId: `snap:${cutoffSeq}:${entity.entity} ${entity.entityId}`, seq: entity.lastSeq },
-          () => {
-            /**
-             * Read BEFORE `setEntityVersion`, and used below. On a first bootstrap
-             * this is 0; on a re-bootstrap it is the counter this device carried
-             * across the epoch change, which `beginBootstrap` deliberately does not
-             * rewind. `recordInheritedFieldWrites` needs the one from before,
-             * because the one from after is the snapshot's own number.
-             */
-            const priorVersion = localEntityVersion(db, entity.entity, entity.entityId);
-            applyToDatabase(db, input);
-            setEntityVersion(db, entity.entity, entity.entityId, entity.version);
-            /**
-             * And the provenance for the values just inherited (STA-263).
-             *
-             * Without this a bootstrapped device holds a title somebody chose with no
-             * record anywhere saying so, and hands it to the next stale write in
-             * silence — the relay defect of STA-261, reached by the other road.
-             *
-             * `entity.fieldWrites` names only the fields a non-`create` operation
-             * carried, so the defaults that rode along inside the create acquire no
-             * claim. That distinction is made by the server's fold, and it has to be:
-             * `state` holds one value per field and cannot tell a decision from a
-             * default. An older Worker sends nothing here and the device is left
-             * exactly as blind as it was before, which is the only safe degradation —
-             * synthesising rows from `state` is the failure this ticket exists to
-             * avoid.
-             */
-            recordInheritedFieldWrites(
-              db,
-              entity.entity,
-              entity.entityId,
-              Object.entries(entity.fieldWrites ?? {}).map(([field, write]) => ({
-                field,
-                baseVersion: write.baseVersion,
-                opId: write.opId,
-                at: write.at,
-              })),
-              priorVersion,
-            );
-          },
-        );
-        entities += 1;
-      }
+      const outcome = hydrate(db, journal, page.entities, parked, cutoffSeq, at, final);
+      entities += outcome.applied;
+      parked = outcome.parked;
 
-      if (page.nextCursor === null) {
+      if (final) {
         // The snapshot half is done. The tail becomes the ordinary cursor and
         // the bootstrap position is cleared, in one statement.
         completeSnapshot(db, page.tailCursor, page.epoch);
@@ -720,11 +737,11 @@ async function runBootstrap(
          */
         replayOutboxFieldWrites(db);
       } else {
-        recordSnapshotPage(db, { snapshot: page.nextCursor, tail: page.tailCursor });
+        recordSnapshotPage(db, { snapshot: page.nextCursor, tail: page.tailCursor, parked });
       }
     });
 
-    if (page.nextCursor === null) break;
+    if (final) break;
     cursor = page.nextCursor;
   }
 

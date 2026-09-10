@@ -212,6 +212,45 @@ function encode(value: unknown, encoding: Encoding): unknown {
   return value as never;
 }
 
+function decodeColumn(value: unknown, encoding: Encoding): unknown {
+  if (value === null || value === undefined) return null;
+  if (encoding === "bool") return Number(value) !== 0;
+  if (encoding === "json" && typeof value === "string") {
+    try {
+      return JSON.parse(value) as unknown;
+    } catch {
+      return value;
+    }
+  }
+  return value;
+}
+
+/**
+ * A row as the `create` payload that would reproduce it — the inverse of {@link project}.
+ *
+ * Exported for the seed (`seed.ts`), which uploads rows that were written while nothing
+ * was journaling. Built from the same field maps the applier reads, so every column a
+ * receiver can place is carried and no column a receiver would drop is invented; a
+ * payload key the applier had no column for would be a field that silently never
+ * arrived, which is the failure `test/sync-issue-field-coverage.test.ts` exists to
+ * catch for the seam's own creates.
+ *
+ * Keys are the camelCase payload names, never the column aliases, because that is the
+ * spelling `createIssue` journals and the one the fold's provenance is keyed by.
+ */
+export function payloadFromRow(
+  table: "issues" | "comments" | "projects",
+  row: Record<string, unknown>,
+): Record<string, unknown> {
+  const fields = table === "issues" ? ISSUE_FIELDS : table === "comments" ? COMMENT_FIELDS : PROJECT_FIELDS;
+  const payload: Record<string, unknown> = {};
+  for (const [key, mapped] of Object.entries(fields)) {
+    if (!(mapped.column in row)) continue;
+    payload[key] = decodeColumn(row[mapped.column], mapped.encoding);
+  }
+  return payload;
+}
+
 /** Map a payload onto `(column, value)` pairs, dropping fields with no column. */
 function project(
   payload: Record<string, unknown>,
@@ -658,6 +697,16 @@ function applyDocumentRevision(db: DatabaseSync, input: ApplyInput): boolean {
     throw new ReferentMissing(`issue ${issueId} (owner of document ${key})`);
   }
 
+  /**
+   * `author` and `createdAt` are read from the payload when it carries them, and from the
+   * operation otherwise. The operation's actor and time are right for a revision arriving
+   * in the ordered tail, and wrong for one arriving in a snapshot, which has neither: a
+   * snapshot entity is applied with a null actor at the moment of hydration, so every
+   * revision of every document read as written by nobody, just now. A revision is
+   * immutable, so the values it was written with are the only true ones.
+   */
+  const author = typeof payload.author === "string" ? payload.author : input.actor;
+  const createdAt = typeof payload.createdAt === "string" ? payload.createdAt : input.at;
   db.prepare(
     `INSERT INTO document_revisions (issue_id, key, revision, body, author, change_summary, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -667,9 +716,9 @@ function applyDocumentRevision(db: DatabaseSync, input: ApplyInput): boolean {
     key,
     revision,
     typeof payload.body === "string" ? payload.body : "",
-    input.actor,
+    author,
     typeof payload.changeSummary === "string" ? payload.changeSummary : null,
-    input.at,
+    createdAt,
   );
 
   /**
@@ -684,7 +733,7 @@ function applyDocumentRevision(db: DatabaseSync, input: ApplyInput): boolean {
        current_revision = MAX(current_revision, excluded.current_revision),
        title            = COALESCE(excluded.title, title),
        updated_at       = excluded.updated_at`,
-  ).run(issueId, key, revision, typeof payload.title === "string" ? payload.title : null, input.at);
+  ).run(issueId, key, revision, typeof payload.title === "string" ? payload.title : null, createdAt);
   return true;
 }
 
