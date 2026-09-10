@@ -2012,7 +2012,10 @@ describe("the page leads with the hub and stays short", () => {
     const html = panel();
     const summary = html.slice(html.indexOf("<summary", html.indexOf("data-cloud-setup-form")));
     const classes = summary.slice(summary.indexOf('class="') + 7, summary.indexOf('"', summary.indexOf('class="') + 7));
-    expect(classes.split(/\s+/)).not.toContain("flex");
+    // Any display utility replaces \`list-item\` — \`block\` and \`inline-flex\` kill
+    // the marker as surely as \`flex\` does — so none is allowed on it.
+    const DISPLAY = ["flex", "inline-flex", "block", "inline-block", "inline", "grid", "inline-grid", "contents", "flow-root", "table", "hidden"];
+    for (const utility of DISPLAY) expect(classes.split(/\s+/)).not.toContain(utility);
   });
 
   it("opens the connect form by itself when it comes back holding a draft", () => {
@@ -2021,7 +2024,37 @@ describe("the page leads with the hub and stays short", () => {
     const closed = panel();
     expect(closed).not.toMatch(/<details data-cloud-setup-form="true"[^>]*\bopen\b/);
     const withDraft = panel({ draft: { endpoint: "https://sync.example", enrollment: "", label: "", credentialFile: false } });
-    expect(withDraft).toMatch(/<details[^>]*data-cloud-setup-form="true"[^>]*\bopen\b|<details[^>]*\bopen\b[^>]*data-cloud-setup-form="true"/);
+    const opened = /<details[^>]*data-cloud-setup-form="true"[^>]*\bopen\b|<details[^>]*\bopen\b[^>]*data-cloud-setup-form="true"/;
+    expect(withDraft).toMatch(opened);
+    // Either half of a draft counts: a pasted secret is a draft too.
+    const secretOnly = panel({ draft: { endpoint: "", enrollment: "secret", label: "", credentialFile: false } });
+    expect(secretOnly).toMatch(opened);
+  });
+
+  it("waits for both reads before painting, and a failed list still counts as read", () => {
+    /**
+     * The hub and list render ABOVE this workspace's sections, so painting on
+     * the status alone would drop them in on top of content already on screen.
+     * This suite deliberately has no DOM environment, so — like the mount-request
+     * test above — it pins the effect's shape rather than mounting it.
+     */
+    const file = source("CloudSection.tsx");
+    const listRead = file.slice(file.indexOf("getCloudWorkspaces()"), file.indexOf("}, []);", file.indexOf("getCloudWorkspaces()")));
+    // Settled in \`finally\`, so a rejected read settles too — losing the list must
+    // never take away the connect form.
+    expect(listRead).toMatch(/\.finally\(\(\) => \{\s*if \(live\) setWorkspacesSettled\(true\);/);
+    expect(file).toContain("if (report === null || !workspacesSettled) return <LoadingState");
+  });
+
+  it("does not make a toggle look pressable while another row is busy", () => {
+    const workspaces = hubReport([hubRow(), hubRow({ slug: "bravo", repositoryId: "b" })]);
+    const label = (html: string) => {
+      const at = html.indexOf('data-cloud-workspace-toggle="alpha:auto"');
+      return html.slice(html.lastIndexOf("<label", at), at);
+    };
+    expect(label(panel({ workspaces }))).toContain("cursor-pointer");
+    const busy = panel({ workspaces, hub: { ...IDLE_HUB, busy: { slug: "bravo", action: "sync" } } });
+    expect(label(busy)).not.toContain("cursor-pointer");
   });
 
   it("never collapses the consent screen", () => {
