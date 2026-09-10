@@ -677,6 +677,32 @@ describe("a restore keeps the rule", () => {
     expect((await repoRow()).vocabulary).toBe("workspace");
   });
 
+  it("refuses a stage turn of a restore that began before the rule existed", async () => {
+    await pushOps([registration(1)], { token, protocol: 2 });
+    await enableBackup();
+    const hubBackup = await backup();
+    await env.DB.prepare(`DELETE FROM ops WHERE repo_id = ?1`).bind(REPO).run();
+    await env.DB.prepare(`UPDATE repos SET vocabulary = NULL WHERE repo_id = ?1`)
+      .bind(REPO)
+      .run();
+    const begun = await jsonOf(await beginRestore(hubBackup));
+    // What a pre-0005 begin leaves: a staging restore of hub entities into a repository
+    // that is, in fact, a workspace. Nothing at begin ever looked.
+    await env.DB.prepare(`UPDATE repos SET vocabulary = 'workspace' WHERE repo_id = ?1`)
+      .bind(REPO)
+      .run();
+
+    const turn = await call(`/v1/repos/${REPO}/backups/${hubBackup}/restore`, {
+      method: "POST",
+      token,
+      protocol: 2,
+      body: { confirm: REPO, restoreId: begun.restoreId },
+    });
+    expect(await answer(turn)).toEqual(VOCABULARY_REFUSALS.hubIntoWorkspace);
+    // Not one entity reached the epoch being built.
+    expect((await opsIn()).filter((r) => r.epoch === 2)).toEqual([]);
+  });
+
   it("restores a workspace backup into its own workspace repository as before", async () => {
     await pushOps([issue(1)], { token });
     await enableBackup(1);

@@ -344,6 +344,34 @@ describe("a restore keeps the rule, in the fake as in the Worker", () => {
     expect(server.vocabulary).toBe("hub");
     expect(await rawPush(server, [issue(9)], 1)).toEqual(VOCABULARY_REFUSALS.workspaceIntoHub);
   });
+
+  it("asks again on every stage turn, as the Worker does", async () => {
+    const server = serverWith();
+    await rawPush(server, [registration(1)], 2);
+    const hubBackup = await enableAndBackUp(server, 2);
+    server.ops.length = 0;
+    server.vocabulary = null;
+    const begun = (await rawRestore(server, hubBackup)).body as { restoreId: string };
+    // A restore that began before the rule existed, into what is really a workspace.
+    server.vocabulary = "workspace";
+
+    const turn = await server.fetch(
+      `${ENDPOINT}/v1/repos/${REPO_ID}/backups/${hubBackup}/restore`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${TOKEN}`,
+          "Staple-Protocol": "2",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ confirm: REPO_ID, restoreId: begun.restoreId }),
+      },
+    );
+    expect({ status: turn.status, body: await turn.json() }).toEqual(
+      VOCABULARY_REFUSALS.hubIntoWorkspace,
+    );
+    expect(server.ops.filter((op) => op.epoch === 2)).toEqual([]);
+  });
 });
 
 // ---------------------------------------------------- the paths a person runs

@@ -1276,6 +1276,8 @@ export class FakeSyncServer {
     }
 
     if (restore.staged < restore.entityCount) {
+      // Asked again on every stage turn, as `worker/src/backups.ts::stageRestore` does.
+      this.claimForRestore(backup);
       const chunk = backup.entities.slice(
         restore.staged,
         restore.staged + this.options.maxBatchSize,

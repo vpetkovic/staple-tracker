@@ -690,7 +690,8 @@ async function beginRestore(
  * new epoch.
  *
  * Decided at BEGIN, before the undo is captured and before anything is staged, so a
- * refusal costs nothing:
+ * refusal costs nothing — and asked again at the top of every stage turn, for a restore
+ * that began before the rule existed (see `stageRestore`):
  *
  *   - a backup holding BOTH vocabularies is refused whatever the repository holds. Only
  *     a backup captured before migration 0005 can be one.
@@ -771,6 +772,17 @@ async function stageRestore(
       currentEpoch: repo.epoch,
     });
   }
+
+  /**
+   * Checked again on every turn, not only at begin. For a restore that began after
+   * migration 0005 this is a no-op — begin already claimed or matched the vocabulary,
+   * and a claimed vocabulary is never rewritten. It exists for a restore that BEGAN
+   * before 0005 and is still staging: nothing checked that one, and without this it
+   * would stage a contaminated backup into a workspace's next epoch with the rule in
+   * force. Refused, it stays `staging`; worker/README.md's recovery recipe says how to
+   * abandon it.
+   */
+  await assertRestorableVocabulary(env, session.repoId, restore.from_backup_id, repo);
 
   const source = await env.DB.prepare(
     `SELECT state, schema_version FROM backups WHERE repo_id = ?1 AND backup_id = ?2`,
