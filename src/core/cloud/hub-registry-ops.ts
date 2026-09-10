@@ -394,10 +394,21 @@ export interface RegistryDiff {
 export interface RenamedEntry {
   /** The identity, which is stable across the rename — that is what makes it a rename. */
   readonly entityId: string;
-  /** The name the service holds now. */
+  /** The slug the service holds now. Equal to {@link to} when only the prefix changed. */
   readonly from: string;
-  /** The name this machine is about to publish. */
+  /** The slug this machine is about to publish. */
   readonly to: string;
+  /**
+   * The prefix being replaced, present ONLY when it is actually changing.
+   *
+   * Separate from the slug because the two diverge independently and the prefix is the
+   * more damaging of the two: it is what every `PREFIX-N` identifier resolves through, and
+   * `allocatePrefix` assigns it in registration order, so two machines can swap prefixes
+   * between the same two workspaces while both slugs match exactly.
+   */
+  readonly fromPrefix?: string;
+  /** The prefix this machine is about to publish. Present with {@link fromPrefix}. */
+  readonly toPrefix?: string;
 }
 
 /**
@@ -634,11 +645,21 @@ export function diffRegistry(
      * machine published this identity under a different name.
      *
      * REPORTED rather than refused, and the reason is not indistinguishability this time —
-     * it is where the divergence comes from. The names diverge when one machine holds the
-     * repository under a different directory name, and `adoptRegistry` deliberately keeps
-     * THIS machine's name ("this machine's stamps win"). That is the machine-replacement
-     * path this whole leg exists to deliver, so refusing here would block the recovery
-     * rather than protect it.
+     * it is where the divergence comes from. **Do not tighten this into a refusal.** The
+     * names diverge when one machine holds the repository under a different directory name,
+     * and `adoptRegistry` deliberately keeps THIS machine's name ("this machine's stamps
+     * win"). That is the machine-replacement path this whole leg exists to deliver, so a
+     * refusal here would fire on the replacement machine's FIRST publish and break the
+     * recovery rather than protect it.
+     *
+     * Two cheap refusals look available and are not, which is worth recording because both
+     * were proposed and both were wrong. Comparing the two sides cannot establish authority:
+     * a tracked manifest means clones share an identity, and slugs are only names. And
+     * `registry_optouts` does store the slug this machine used to use for an identity — but
+     * only for identities it has REMOVED, so in a divergent-name race, where neither machine
+     * has removed anything, there is no row to consult. "Did this machine previously call
+     * this identity by the name the service holds" is unanswerable in exactly the case that
+     * matters.
      *
      * What reporting does NOT buy, said plainly: it does not bound the writes. Two machines
      * holding the same identity under different names still overwrite each other once per
@@ -648,11 +669,36 @@ export function diffRegistry(
      * `staple hub registry unignore <repositoryId>`, then `staple hub registry adopt
      * --apply`, which re-adds the row under the published name.
      */
-    if (held !== undefined && typeof held.state.slug === "string" && held.state.slug !== entry.slug) {
+    /**
+     * The PREFIX is reported too, and leaving it out was the worse half of the bug.
+     *
+     * This compared `slug` only, and prefix assignment is REGISTRATION-ORDER dependent:
+     * `allocatePrefix` derives a base from the name and appends a letter when it is taken,
+     * so two machines that re-init the same repositories in different orders end up with
+     * the prefixes swapped between them — measured, `live-tracker`/`live-notes` getting
+     * `LIV`/`LIVA` on one machine and `LIVA`/`LIV` on the other.
+     *
+     * A replacement machine in that state publishes SWAPPED prefixes under identical
+     * slugs. With a slug-only check that is `renamed: []` and a report reading
+     * `published: 2, updated: 2` — while the prefix stamped into every identifier those
+     * repositories ever emitted is overwritten in silence. Worse than the slug case,
+     * because a prefix is what `PREFIX-N` resolves through and this tree refuses to
+     * renumber one anywhere else.
+     *
+     * It also made this module's own consent promise false —
+     * *"Publishing reports each name it replaces, so this is visible rather than silent"* —
+     * and by this tree's words in `docs/sync.md`, "slugs and prefixes are names".
+     */
+    const heldSlug = typeof held?.state.slug === "string" ? held.state.slug : null;
+    const heldPrefix = typeof held?.state.prefix === "string" ? held.state.prefix : null;
+    if (held !== undefined && ((heldSlug !== null && heldSlug !== entry.slug) || (heldPrefix !== null && heldPrefix !== entry.prefix))) {
       renamed.push({
         entityId: entry.repositoryId,
-        from: held.state.slug,
+        from: heldSlug ?? entry.slug,
         to: entry.slug,
+        ...(heldPrefix !== null && heldPrefix !== entry.prefix
+          ? { fromPrefix: heldPrefix, toPrefix: entry.prefix }
+          : {}),
       });
     }
 

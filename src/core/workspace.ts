@@ -4,11 +4,15 @@ import { stapleHome } from "../config/home.js";
 import { openDb } from "./db.js";
 import { migrateWorkspace } from "./schema.js";
 import { WorkspaceStore } from "./store.js";
-import { Hub } from "./hub.js";
+import { ABSENT_PATH, Hub } from "./hub.js";
 import { type OpenedWorkspace, openWorkspace, readMeta, writeMetaPairs } from "./open.js";
 import { writeAgentsGuide } from "./agents-template.js";
 import { writeWorkspaceGitignore } from "./workspace-gitignore.js";
-import { reconcileWorkspaceIdentity, type WorkspaceIdentityReport } from "./repo-identity.js";
+import {
+  reconcileWorkspaceIdentity,
+  readWorkspaceManifest,
+  type WorkspaceIdentityReport,
+} from "./repo-identity.js";
 import { repairHubRegistration } from "./hub-repair.js";
 import {
   assertResolvable,
@@ -206,9 +210,78 @@ export function initWorkspace(options: {
     const probe = new WorkspaceStore(db, slug, "");
 
     let prefix = readMeta(probe, "prefix");
-    const storedSlug = readMeta(probe, "slug") ?? slug;
+    let storedSlug = readMeta(probe, "slug") ?? slug;
+
+    /**
+     * A CLONE OF A WORKSPACE THE REGISTRY ALREADY LISTS TAKES THAT ROW, rather than
+     * minting a second identity for it (STA-283).
+     *
+     * ## The dead end this closes, which is the acceptance criterion's last step
+     *
+     * `adoptRegistry` lands a placeholder row for every listed workspace whose database is
+     * not here: real slug, real prefix, real `repository_id`, `path` absent. Getting the
+     * repository back is then `git clone` — and a clone carries the TRACKED
+     * `.staple/repository.json` and NOT the gitignored database, so the person runs
+     * `staple init` in it. Before this block, both of the things they could try failed:
+     *
+     *   - same-named clone: `allocatePrefix("website")` saw WEB held by the placeholder,
+     *     returned WEBA, and `register` then refused —
+     *     `error(conflict): Workspace "website" is registered with prefix WEB, not WEBA`.
+     *     A hard dead end, in the COMMON case.
+     *   - differently-named clone: init succeeded and minted prefix TRAA as a THIRD row, so
+     *     the machine held `tracker` (no database) and `tracker-checkout` (the real one)
+     *     for one repository — a duplicated identity, which `diffRegistry` then correctly
+     *     parks and refuses to publish.
+     *
+     * Measured, both of them, by running the whole path against a real Worker rather than
+     * by reasoning about it. `staple hub registry locate` cannot help here either: it
+     * repoints an EXISTING database, and a fresh clone does not have one.
+     *
+     * ## Why the manifest is the right key, and why this is not a guess
+     *
+     * The identity comes from `.staple/repository.json`, which `repo-identity.ts` is
+     * emphatic is the copy that survives cloning — so "this directory is that registry
+     * entry" is a fact read off a tracked file, not an inference from a name. The row is
+     * only taken when it has NO database of its own, which is what makes it a placeholder
+     * rather than a live workspace; a second live clone still gets its own row and is
+     * reported as a duplicate identity, exactly as before.
+     *
+     * The prefix in particular must come from here rather than from allocation: it is
+     * stamped into every `PREFIX-N` the lost machine ever wrote, and the whole registry
+     * refuses to renumber for that reason. Allocating a fresh one would silently orphan
+     * every identifier in the issue history.
+     */
+    if (!prefix) {
+      const cloned = readWorkspaceManifest(dbPath)?.repositoryId ?? null;
+      const listed = cloned === null ? undefined : hub.findByRepositoryId(cloned);
+      if (listed && listed.path === ABSENT_PATH) {
+        /**
+         * An explicit `--slug` that disagrees is REFUSED, not quietly overridden.
+         *
+         * Taking the row's name would ignore what they typed; taking their name would need
+         * the row's prefix under a different slug, which is the collision that started
+         * this. So it says which row it found and names both ways forward.
+         */
+        if (options.slug !== undefined && slugify(options.slug) !== listed.slug) {
+          throw new StapleError(
+            "conflict",
+            `This repository is already in the hub as "${listed.slug}" (prefix ${listed.prefix}), ` +
+              `listed by a registry this machine adopted, and you asked for ` +
+              `"${slugify(options.slug)}". Its identifiers are all ${listed.prefix}-N, so it ` +
+              `cannot be renumbered. Run \`staple init\` with no --slug to take that row, or ` +
+              `\`staple hub unregister ${listed.slug}\` first if you really want a new name — ` +
+              "which leaves the published entry pointing at a workspace this machine no longer has.",
+          );
+        }
+        storedSlug = listed.slug;
+        prefix = listed.prefix;
+      }
+    }
+
     if (!prefix) {
       prefix = hub.allocatePrefix(storedSlug);
+    }
+    if (readMeta(probe, "prefix") === null) {
       writeMetaPairs(probe, [
         ["slug", storedSlug],
         ["prefix", prefix],

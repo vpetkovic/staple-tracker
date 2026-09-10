@@ -1167,12 +1167,22 @@ then on the stored slug beats the directory basename — so renaming the directo
 nothing. A differing slug on an existing identity therefore means precisely one thing, that
 another machine published it, and it could be refused.
 
-It is **reported instead of refused**, for a reason that is about the recovery path rather
-than about ambiguity. Adoption deliberately keeps this machine's name — *this machine's
-stamps win* — so a rebuilt machine that restored a repository into a differently named
-directory legitimately holds a different slug from the one the lost machine published.
-Refusing on divergence would refuse exactly the machine replacement this whole feature
-exists to serve, on its first publish. So `publishRegistry` reports every name it replaces
+It is **reported instead of refused**, and the reason is not ambiguity — it is the
+machine-replacement path. **Do not tighten this into a refusal.** Adoption deliberately
+keeps this machine's name — *this machine's stamps win* — so a rebuilt machine that
+restored a repository into a differently named directory legitimately holds a different
+slug from the one the lost machine published. A refusal on divergence would fire on that
+machine's very first publish and refuse exactly the recovery this whole feature exists to
+serve. The acceptance criterion is *"the hub is restorable from the service after a machine
+is lost"*; a refusal here would make the last step of restoring it fail.
+
+Two cheap refusals look available and are not. Comparing the two sides cannot establish
+authority, because a tracked manifest means clones share an identity and slugs are only
+names. And the opt-out table's stored slug — which does record what this machine used to
+call an identity — only exists for identities this machine has REMOVED, so in a
+divergent-name race, where neither machine has removed anything, there is no opt-out row to
+consult at all. The question "did this machine previously call this identity by the name the
+service holds" is unanswerable in precisely the case that matters. So `publishRegistry` reports every name it replaces
 (`renamed: { entityId, from, to }[]`, printed by `staple hub registry publish` and present in
 its `--json`), and the disclosure at the point of consent says that the overwrite happens,
 that this machine always wins its own publish, and that a machine rebuilt from the registry

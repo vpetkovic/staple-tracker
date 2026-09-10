@@ -452,6 +452,57 @@ describe("status and id", () => {
     expect(human).toContain("pruned");
     expect(human).toContain("staple hub registry unignore");
   }, 60_000);
+
+  /**
+   * `ignore` must not write the contradiction the C1 invariant forbids.
+   *
+   * `Hub.recordRepositoryId` retires an opt-out the moment an identity binds to a row, so
+   * "an opt-out never coexists with a registered row for the same identity" is the rule.
+   * This verb wrote one straight past it, and its own usage text sends the reader to "the
+   * `repositoryId` of a row in `staple hub ls --json`" — i.e. at live rows. The result was
+   * one command reporting a single row as both registered and not registered:
+   *
+   *     workspaces   2 registered, 1 cross-workspace link(s)
+   *     not adopted  - 22d08ff6-…  (not registered here) (ignored)
+   *
+   * It could not self-heal either: `initWorkspace` and `reconcileRepositoryIds` only call
+   * `recordRepositoryId` when the value CHANGES, and for a row already holding its identity
+   * it does not. So the write is the only place to catch it.
+   */
+  it("refuses to ignore an identity this machine actually has, and names unregister", () => {
+    adoptIdentity();
+    connectHub({ registry: true });
+    const identity = "33333333-3333-4333-8333-333333333333";
+    withTestHub((hub) => {
+      hub.registerAbsent({ slug: "mine", prefix: "MIN", kind: "repo", repositoryId: identity });
+    });
+
+    const refused = staple("hub", "registry", "ignore", identity);
+    expect(refused.status).not.toBe(0);
+    expect(refused.stderr).toContain("registered on this machine right now");
+    expect(refused.stderr).toContain('as "mine"');
+    // The remedy has to be the verb that actually removes a workspace.
+    expect(refused.stderr).toContain("staple hub unregister mine");
+    expect(refused.stderr).toContain("Nothing was changed");
+
+    // And nothing was written: no opt-out, so status cannot contradict itself.
+    const report = JSON.parse(staple("hub", "registry", "status", "--json").stdout);
+    expect(report.ignored).toEqual([]);
+    expect(report.registered).toBe(1);
+    expect(refused.violations).toEqual([]);
+  }, 60_000);
+
+  it("still ignores an identity this machine does NOT have, which is what the verb is for", () => {
+    adoptIdentity();
+    connectHub({ registry: true });
+    const stranger = "44444444-4444-4444-8444-444444444444";
+    const ok = staple("hub", "registry", "ignore", stranger);
+    expect(ok.status).toBe(0);
+    const report = JSON.parse(staple("hub", "registry", "status", "--json").stdout);
+    expect(report.ignored).toEqual([
+      { repositoryId: stranger, slug: "(not registered here)", reason: "ignored" },
+    ]);
+  }, 60_000);
 });
 
 // ------------------------------------------------------------------- refusals

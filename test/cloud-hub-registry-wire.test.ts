@@ -707,6 +707,80 @@ describe("what the diff will and will not emit", () => {
     expect(diff.foreign.registrations).toEqual([]);
   });
 
+  /**
+   * A replaced PREFIX is reported, and it is the more damaging half.
+   *
+   * `allocatePrefix` derives a base from the slug and appends a letter when it is taken, so
+   * the assignment is REGISTRATION-ORDER dependent. Two machines that re-init the same two
+   * repositories in different orders end up with the prefixes swapped between them —
+   * `tracker`/`notes` getting `TRA`/`TRAA` on one and `TRAA`/`TRA` on the other — with both
+   * SLUGS matching exactly. A slug-only comparison reports `renamed: []` and the publish
+   * says `published: 2, updated: 2`, while the prefix every `PREFIX-N` identifier resolves
+   * through is overwritten in silence.
+   */
+  it("reports a replaced PREFIX even when the slug is identical", () => {
+    const one = "11111111-1111-4111-8111-111111111111";
+    const two = "22222222-2222-4222-8222-222222222222";
+    const base = {
+      format: REGISTRY_PAYLOAD_FORMAT,
+      hubId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      capturedAt: "2026-09-09T12:00:00.000Z",
+      crossLinks: [],
+    } as const;
+    // Machine 1 registered `tracker` first, so it got TRA.
+    const asPublished: HubRegistryPayload = {
+      ...base,
+      workspaces: [
+        { repositoryId: one, slug: "tracker", prefix: "TRA", kind: "repo", addedAt: "2026-01-01T00:00:00.000Z" },
+        { repositoryId: two, slug: "trailers", prefix: "TRAA", kind: "repo", addedAt: "2026-01-01T00:00:00.000Z" },
+      ],
+    };
+    const published = publishedStateOf(
+      foldOperations(diffRegistry(asPublished, new Map()).operations),
+    );
+
+    // Machine 2 registered `trailers` first, so the two prefixes are swapped. Same slugs.
+    const here: HubRegistryPayload = {
+      ...base,
+      workspaces: [
+        { repositoryId: one, slug: "tracker", prefix: "TRAA", kind: "repo", addedAt: "2026-01-01T00:00:00.000Z" },
+        { repositoryId: two, slug: "trailers", prefix: "TRA", kind: "repo", addedAt: "2026-01-01T00:00:00.000Z" },
+      ],
+    };
+    const diff = diffRegistry(here, published);
+
+    expect(diff.renamed).toEqual([
+      { entityId: one, from: "tracker", to: "tracker", fromPrefix: "TRA", toPrefix: "TRAA" },
+      { entityId: two, from: "trailers", to: "trailers", fromPrefix: "TRAA", toPrefix: "TRA" },
+    ]);
+    // Reported, and still published — the overwrite is allowed, never silent.
+    expect(diff.operations).toHaveLength(2);
+  });
+
+  it("omits the prefix fields when only the slug moved", () => {
+    // So a consumer can tell the two apart, and the prefix warning is not cried wolf.
+    const identity = "11111111-1111-4111-8111-111111111111";
+    const asPublished: HubRegistryPayload = {
+      format: REGISTRY_PAYLOAD_FORMAT,
+      hubId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      capturedAt: "2026-09-09T12:00:00.000Z",
+      workspaces: [
+        { repositoryId: identity, slug: "alpha", prefix: "ALP", kind: "repo", addedAt: "2026-01-01T00:00:00.000Z" },
+      ],
+      crossLinks: [],
+    };
+    const published = publishedStateOf(
+      foldOperations(diffRegistry(asPublished, new Map()).operations),
+    );
+    const here: HubRegistryPayload = {
+      ...asPublished,
+      workspaces: [{ ...asPublished.workspaces[0]!, slug: "alpha-clone" }],
+    };
+    const diff = diffRegistry(here, published);
+    expect(diff.renamed).toEqual([{ entityId: identity, from: "alpha", to: "alpha-clone" }]);
+    expect(diff.renamed[0]).not.toHaveProperty("fromPrefix");
+  });
+
   it("says nothing about a rename when the name has not changed", () => {
     // The guard against a report that cries wolf: a first publish creates rather than
     // replaces, and a re-publish of an unchanged registry emits nothing at all.

@@ -777,7 +777,21 @@ function runPublish(argv: string[]): void {
           console.log(`${report.renamed.length} published name(s) were REPLACED by this machine:`);
           for (const item of report.renamed) {
             console.log(`  ${item.entityId}`);
-            console.log(`    was "${item.from}" on the service, now "${item.to}"`);
+            if (item.from !== item.to) {
+              console.log(`    name:   was "${item.from}" on the service, now "${item.to}"`);
+            }
+            /**
+             * Called out separately and named PREFIX, because it is the more damaging half.
+             * Prefixes are assigned in registration order, so a replacement machine that
+             * re-inits in a different order can swap them between two workspaces with both
+             * slugs matching — and a prefix is what every `PREFIX-N` resolves through.
+             */
+            if (item.fromPrefix !== undefined) {
+              console.log(
+                `    prefix: was ${item.fromPrefix} on the service, now ${item.toPrefix}` +
+                  `  — every ${item.fromPrefix}-N identifier was written against the old one`,
+              );
+            }
           }
           console.log(
             "  If another machine publishes here too, it will change them back on its next " +
@@ -815,7 +829,14 @@ function runPublish(argv: string[]): void {
  * empty and never a code, which is what makes this printable rather than a lookup
  * table maintained here.
  */
-function renderDecisions(report: AdoptionReport, describe: (r: AdoptionReport) => string): void {
+/**
+ * @param after What has ALREADY happened, for the footer. See the `dryRun` branch.
+ */
+function renderDecisions(
+  report: AdoptionReport,
+  describe: (r: AdoptionReport) => string,
+  after: "nothing" | "service_already_restored" = "nothing",
+): void {
   console.log(describe(report));
   if (report.decisions.length > 0) console.log("");
   for (const decision of report.decisions) {
@@ -833,6 +854,33 @@ function renderDecisions(report: AdoptionReport, describe: (r: AdoptionReport) =
   }
   if (report.dryRun) {
     console.log("");
+    /**
+     * The footer has to know what already happened, and this is why it takes a parameter.
+     *
+     * `restore --yes` without `--apply` performs the whole DESTRUCTIVE half — the service is
+     * rewound to a new epoch, everything published since is discarded, a pre-restore backup
+     * is minted — and then only the LOCAL adoption is previewed. This footer said "Nothing
+     * was written. Re-run with --apply to make these changes", four lines under
+     * `Restored on the service: epoch 1 -> 2`. Both halves were wrong: something very
+     * large was written, and the invited re-run performs a SECOND destructive restore.
+     *
+     * `runRestore`'s own docstring claimed "`--apply` gates only the LOCAL half, and the
+     * wording says so." It did not, because this function could not tell an adopt preview
+     * from a restore aftermath. Now it is told.
+     */
+    if (after === "service_already_restored") {
+      console.log(
+        "The service HAS been restored — that half is done and is not a preview. What was " +
+          "not written is this machine's own hub: the rows above are what adopting would " +
+          "change here.",
+      );
+      console.log(
+        "  Re-run with --apply AND --yes to apply them locally. Note that doing so restores " +
+          "the service again, which is safe but costs another epoch; the undo id printed " +
+          "above is from this run.",
+      );
+      return;
+    }
     console.log("Nothing was written. Re-run with --apply to make these changes.");
   }
 }
@@ -1145,7 +1193,8 @@ function runRestore(argv: string[]): void {
         }
         console.log("");
         const { describeAdoption } = await import("../core/cloud/hub-registry.js");
-        renderDecisions(report.adoption, describeAdoption);
+        // The service half is already done by the time we get here — see the footer.
+        renderDecisions(report.adoption, describeAdoption, "service_already_restored");
       })
       .finally(() => hub.close()),
     json,
@@ -1187,6 +1236,40 @@ function runIgnore(argv: string[], ignoring: boolean): void {
   const hub = openHub();
   try {
     if (ignoring) {
+      /**
+       * REFUSED on a live row, because this is the exact contradiction the C1 fix forbids.
+       *
+       * `Hub.recordRepositoryId` retires an opt-out the moment an identity binds to a row,
+       * so "an opt-out never coexists with a registered row for the same identity" is the
+       * invariant. This verb wrote one straight past it — and the usage text above points
+       * the user at "the `repositoryId` of a row in `staple hub ls --json`", i.e. at live
+       * rows, so it was an easy thing to do by following the instructions.
+       *
+       * What that produced, in one command's output about one row:
+       *
+       *     workspaces   2 registered, 1 cross-workspace link(s)
+       *     not adopted  - 22d08ff6-…  (not registered here) (ignored)
+       *
+       * And it did not self-heal, because `initWorkspace` and `reconcileRepositoryIds` only
+       * call `recordRepositoryId` when the value CHANGES — and for a row that already holds
+       * its identity it does not change. So the write is the only place to catch it.
+       *
+       * `unregister` is the verb that actually removes a workspace from this machine, and it
+       * records the opt-out itself. Naming it is the whole remedy.
+       */
+      const live = hub.findByRepositoryId(target.trim());
+      if (live) {
+        throw new StapleError(
+          "conflict",
+          `${target.trim()} is registered on this machine right now, as "${live.slug}"` +
+            `${live.available ? "" : " (its database is not on this machine)"}. Ignoring is for ` +
+            "an identity this machine does NOT have — the two together would say both things " +
+            "about one workspace, and `staple hub registry status` would report it as " +
+            "registered and not-registered at once. Nothing was changed. To stop listing it " +
+            `here, run \`staple hub unregister ${live.slug}\`, which removes the row and ` +
+            "records the opt-out for you.",
+        );
+      }
       hub.addOptOut(target.trim(), values.slug ?? "(not registered here)", "ignored");
       if (json) console.log(JSON.stringify({ repositoryId: target.trim(), ignored: true }));
       else {
@@ -1382,10 +1465,38 @@ function runDisconnect(argv: string[]): void {
           }
           console.log("\nDisconnected this machine's hub.");
           if (!outcome.credentialRemoved) {
+            /**
+             * Both remedies here are ones a person can actually run against a HUB.
+             *
+             * This used to name `staple cloud devices revoke`, which cannot reach a hub at
+             * all: it resolves its target through `repositoryIdFor`, which reads a
+             * WORKSPACE manifest, and no flag retargets it. So the one instruction offered
+             * to somebody whose hub credential is stuck — the security-relevant case — was
+             * unperformable by any argv.
+             *
+             * Re-connecting is the real server-side answer, and it is not a workaround:
+             * the device id is persisted in the staple home, and the Worker's enrollment
+             * upserts on `(repo_id, device_id)` with
+             * `DO UPDATE SET token_sha256 = excluded.token_sha256`. So a new connect
+             * REPLACES the token this credential holds, which is what makes the stuck copy
+             * useless whether or not it was ever deleted.
+             */
             console.error(
-              "! the credential could not be removed from the store; remove it by hand, and " +
-                "revoke the device with `staple cloud devices revoke` if you want it dead " +
-                "server-side too",
+              "! the credential could not be removed from the store (a locked keychain does " +
+                "this). The connection record is gone, so this machine will not use it — but " +
+                "the secret is still in the store and still valid server-side.",
+            );
+            console.error("  To finish:");
+            console.error(
+              "    1. remove it from your keychain by hand (search for the hub id above), and",
+            );
+            console.error(
+              "    2. run `staple hub registry connect` again — that re-enrolls this same " +
+                "device and REPLACES the token, so the copy you could not delete stops working.",
+            );
+            console.error(
+              "  `staple cloud devices revoke` cannot do this: it targets a workspace's " +
+                "repository, not the hub.",
             );
             process.exitCode = 4;
           }

@@ -308,37 +308,40 @@ describe("flag inventory", () => {
   }, 40_000);
 
   /**
-   * QUIRK (A6): `hub` parses nothing. Any flag is silently swallowed, --db and
-   * --ws are ignored (the hub is machine-global by design, but the flags are
-   * still accepted without complaint), and an unrecognised SUBCOMMAND prints a
-   * usage line to STDOUT and exits 0 rather than failing validation.
+   * QUIRK (A6), HALF FIXED: `hub` still swallows unknown FLAGS, and an unknown
+   * SUBCOMMAND is now a refusal rather than a usage line on stdout with exit 0.
+   *
+   * ## Why the flag half stays and the subcommand half went
+   *
+   * The flag tolerance is defended by "every typo does less, never more": a mistyped
+   * `--yes` leaves `prune` previewing, and a mistyped `--with-links` leaves the cross-link
+   * cascade off. That argument is sound and the behaviour is unchanged.
+   *
+   * It does NOT extend to the subcommand, and STA-283 is where that became visible.
+   * Printing usage to stdout with `process.exitCode` left at 0 means
+   * `staple hub prun --yes && next-step` runs the next step — the typo did MORE, not less,
+   * which is the exact opposite of the property the tolerance is justified by. A `--json`
+   * caller also got a bare usage line on stdout where an error envelope belonged. Every
+   * sibling group in that switch already threw here; `hub` was the one that did not.
    */
-  it("KNOWN: `hub` swallows unknown flags and exits 0 on an unknown subcommand", () => {
+  it("KNOWN: `hub` swallows unknown flags, but REFUSES an unknown subcommand", () => {
     const flagged = cli("hub", "--zzz-not-a-real-flag");
     expect(flagged.status).toBe(0);
     expect(flagged.stderr).toBe("");
 
-    const badSub = cli("hub", "not-a-subcommand");
-    expect(badSub.status).toBe(0);
-    // STA-249 added three write verbs; the usage line names them. The flag
-    // tolerance above is unchanged and deliberately so — it fails SAFE for the
-    // new verbs, since a mistyped `--yes` leaves prune previewing and a
-    // mistyped `--with-links` leaves the cross-link cascade off. Every typo
-    // does less, never more.
     /**
-     * GOLDEN MOVED (STA-283): `registry` joins the usage line.
+     * GOLDEN MOVED (STA-283): exit 2 and stderr, where it was exit 0 and stdout.
      *
-     * The flag tolerance this test pins is UNCHANGED and still applies to plain `hub`,
-     * which is why the assertion above still passes. `hub registry` deliberately does NOT
-     * inherit it — it parses strictly, because the "every typo does less" argument does
-     * not transfer to a command group that publishes to a service: a swallowed
-     * `--disable` would leave publishing on, and a swallowed `--apply` is the only thing
-     * between a preview and a write. See `test/cloud-hub-registry-cli.test.ts`.
+     * The usage line itself is unchanged apart from `registry` joining it. What moved is
+     * the channel and the exit code, and those are the parts a script reads.
      */
-    expect(badSub.stdout).toBe(
-      "usage: staple hub [ls|links|events|unregister|prune|unlink|registry]\n",
+    const badSub = cli("hub", "not-a-subcommand");
+    expect(badSub.status).toBe(2);
+    expect(badSub.stdout).toBe("");
+    expect(badSub.stderr).toContain('Unknown hub subcommand "not-a-subcommand"');
+    expect(badSub.stderr).toContain(
+      "usage: staple hub [ls|links|events|unregister|prune|unlink|registry]",
     );
-    expect(badSub.stderr).toBe("");
   }, 30_000);
 
   /**

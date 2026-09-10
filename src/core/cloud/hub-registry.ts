@@ -305,7 +305,31 @@ export function adoptRegistry(
   // edge naming a workspace that did not land would read as an unresolvable
   // blocker, and `crossBlockersOf` treats unresolvable as BLOCKED — so importing
   // it would wedge a live issue on the other side with nothing to say why.
+  /**
+   * A PREVIEW counts the rows the decisions WOULD create, not the ones on disk now.
+   *
+   * `hub.list()` alone was wrong in exactly the case this feature exists for. On a fresh
+   * replacement machine every workspace is `absent`, so in preview mode no row exists yet
+   * and every edge between two of them counted as skipped — while `--apply` then imported
+   * it. Measured on the headline path:
+   *
+   *     preview: {"added": 0, "skipped": 1}   ->  "0 cross-workspace links would be imported"
+   *     apply:   {"added": 1, "skipped": 0}   ->  "1 cross-workspace link imported"
+   *
+   * The preview IS the consent gate for `--apply`, so a preview that under-reports what
+   * apply will do is the one kind of preview that matters. Fixing the tense (which this
+   * round did) left the NUMBER wrong, which is worse: a confident wrong count reads as
+   * information.
+   *
+   * The union is what apply will actually see. Only `absent` adds anything: it is the one
+   * outcome that CREATES a row, under `entry.slug`. `current` and `adopted` already have
+   * theirs, so `hub.list()` holds them in both modes; `unmatchable`, `declined` and
+   * `conflict` deliberately end with no row at all.
+   */
   const known = new Set(hub.list().map((w) => w.slug));
+  for (const decision of decisions) {
+    if (decision.outcome === "absent") known.add(decision.entry.slug);
+  }
   let added = 0;
   let skipped = 0;
   for (const link of payload.crossLinks) {
@@ -384,10 +408,23 @@ function decide(
   if (held) {
     const stale = declined.has(entry.repositoryId);
     if (stale && apply) hub.clearOptOut(entry.repositoryId);
-    // Said out loud, because silently stepping over it is how it stayed invisible.
-    const retired = stale
-      ? ` The earlier opt-out on this identity was retired: the workspace is registered here again.`
-      : "";
+    /**
+     * Said out loud, because silently stepping over it is how it stayed invisible — and in
+     * the TENSE that matches what actually happened.
+     *
+     * The clear is gated on `apply`; the sentence was not, so a preview claimed the
+     * opt-out "was retired" while the count was unchanged and the report ended "Nothing was
+     * written." Same defect class as the cross-link count two functions below, and the fix
+     * for that one landed on its half of the sentence and not on this one.
+     *
+     * This is the read-repair path for every machine that has pruned since STA-283, so it
+     * is a normal outcome rather than a corner.
+     */
+    const retired = !stale
+      ? ""
+      : apply
+        ? " The earlier opt-out on this identity was retired: the workspace is registered here again."
+        : " An earlier opt-out on this identity would be retired, because the workspace is registered here again.";
     const learned = held.slug !== entry.slug || held.kind !== entry.kind;
     if (!learned) {
       return {

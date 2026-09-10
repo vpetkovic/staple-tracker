@@ -2220,7 +2220,23 @@ function main() {
             `Removed cross-link ${removed.blockerIdentifier} blocks ${removed.blockedIdentifier}  (${removed.blockerWs} → ${removed.blockedWs})`,
           );
         } else {
-          console.log("usage: staple hub [ls|links|events|unregister|prune|unlink|registry]");
+          /**
+           * THROWN, not printed (STA-283).
+           *
+           * This was `console.log(usage)` with no exit code, so `staple hub prun --yes`
+           * refused and still exited 0 — meaning `staple hub prun --yes && next-step` ran
+           * the next step, and a `--json` caller got a bare usage line on stdout where an
+           * error envelope belonged. Every sibling group in this switch throws a
+           * `validation` StapleError here; this was the one that did not.
+           *
+           * Inside the existing `try { … } finally { hub.close() }`, so the handle still
+           * closes on the refusal.
+           */
+          throw new StapleError(
+            "validation",
+            `Unknown hub subcommand "${sub}". ` +
+              "usage: staple hub [ls|links|events|unregister|prune|unlink|registry]",
+          );
         }
       } finally {
         hub.close();
