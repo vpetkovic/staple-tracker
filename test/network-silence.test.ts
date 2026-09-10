@@ -1239,6 +1239,33 @@ describe("the UI server serves the whole page, connected or not, and calls nobod
         // be empty and the emptiness check fires before the confirmation check.
         ["/api/hub/disconnect", {}, 409],
         ["/api/hub/disconnect", { confirm: true }, 409],
+        /**
+         * S22 (STA-283). The hub's own publish consent, and it belongs on this
+         * list more obviously than anything else here: it is the switch that
+         * decides whether this machine may describe its whole workspace list to
+         * a service, so a request made while GRANTING it would be the disclosure
+         * happening before the consent.
+         *
+         * Two different refusals, and pinning both is the point.
+         *
+         * **Enabling is 409** (`validation`): `setRegistryConsent` refuses
+         * without the disclosure handed back verbatim, and this body carries
+         * none. That check fires before it looks at the connection at all.
+         *
+         * **Withdrawing is 404** (`not_found`): no acknowledgement is needed to
+         * turn this off — making revocation harder than granting is the wrong
+         * asymmetry — so it gets as far as the connection, which this machine's
+         * hub does not have.
+         *
+         * Both are established from local files, which is what is being pinned:
+         * a route that resolved an endpoint before working out it had nothing to
+         * record would break the invariant on exactly the machine least likely
+         * to be watching. The 409 arrived here by *changing* from 404 when the
+         * acknowledgement argument landed upstream, which is this list's status
+         * column earning its keep on its first outing.
+         */
+        ["/api/hub/consent", { registry: true }, 409],
+        ["/api/hub/consent", { registry: false }, 404],
       ];
       for (let round = 0; round < 3; round += 1) {
         for (const [route, body, expected] of CLOUD_WRITES) {

@@ -88,6 +88,21 @@ import { buildHubConnectPreview, type HubConnectEntry } from "../core/cloud/hub-
 import { performHubConnect, performHubDisconnect } from "../core/cloud/hub-connect.js";
 import { syncAllWorkspaces } from "../core/cloud/hub-sync.js";
 /**
+ * S22 (STA-283): the hub's own consent.
+ *
+ * ONE name is taken, and deliberately not the disclosure constant: this route
+ * forwards the acknowledgement the CLIENT sent rather than supplying one, so
+ * having the sentence in scope here would be an invitation to satisfy the check
+ * on the client's behalf. See the route for why that would spend the check
+ * rather than honour it.
+ *
+ * Importing `hub-registry-service.js` does NOT give this file a way to publish
+ * anything. Every egress path in that module begins with
+ * `requireRegistryConsent`, and `setRegistryConsent` writes one file in the
+ * staple home and makes no request.
+ */
+import { setRegistryConsent } from "../core/cloud/hub-registry-service.js";
+/**
  * S13 (STA-258): the cloud MUTATIONS, which until now had no HTTP surface at all.
  *
  * `buildConnectPreview` and `ConsentTicketStore` are the pre-consent half and
@@ -279,6 +294,15 @@ const CLOUD_LIFECYCLE_WRITES = new Set([
   "/api/hub/connect",
   "/api/hub/sync",
   "/api/hub/disconnect",
+  /**
+   * S22 (STA-283). Writes one file in the staple home and journals nothing, so a
+   * post-write trigger behind it would produce a request with nothing in it —
+   * and the same argument `/api/cloud/consent` is on this list for applies with
+   * more force: this consent is the one that decides whether the registry may be
+   * published at all, and firing a sync in the act of granting it would be a
+   * request made before the thing the consent authorizes.
+   */
+  "/api/hub/consent",
 ]);
 
 /**
@@ -1118,7 +1142,14 @@ export function startUiServer(options: UiOptions): UiHandle {
           url.pathname === "/api/hub/connect/preview" ||
           url.pathname === "/api/hub/connect" ||
           url.pathname === "/api/hub/sync" ||
-          url.pathname === "/api/hub/disconnect"
+          url.pathname === "/api/hub/disconnect" ||
+          /**
+           * S22 (STA-283). Named like its five siblings and never by prefix. It
+           * writes the consent that gates publishing this machine's workspace
+           * list, so a cross-origin page able to POST it could turn on the one
+           * disclosure the product asks for most explicitly.
+           */
+          url.pathname === "/api/hub/consent"
             ? ["POST"]
             : url.pathname === "/api/settings"
               ? ["GET", "POST"]
@@ -2531,6 +2562,139 @@ export function startUiServer(options: UiOptions): UiHandle {
             ),
           ),
         );
+        return;
+      }
+
+      /**
+       * `POST /api/hub/consent` — the HUB's own consent. S22 (STA-283).
+       *
+       * `{ registry: boolean }`, keyed by `hub.storedHubId()`, and it resolves no
+       * workspace at all.
+       *
+       * ## Why this is a new route rather than a fourth key on the two that exist
+       *
+       * It was very nearly one. `/api/cloud/consent` and
+       * `/api/cloud/workspace/consent` both take `["auto", "backup"]` and refuse
+       * a body naming more than one, and adding `"registry"` to those two
+       * literals is a two-character change that would have worked in hub mode.
+       *
+       * It would have been the wrong-subject defect this whole file is careful
+       * about, in its purest form. `/api/cloud/consent` resolves through
+       * `handleFor(body.ws)`, and **in single-workspace mode `handleFor` ignores
+       * its argument** and returns the workspace the server was started on. A
+       * consent that belongs to the HUB, posted there, would be written into
+       * `~/.staple/cloud/<that workspace's repositoryId>.json` — silently, on the
+       * ordinary `staple ui` configuration, under a key naming the wrong thing
+       * entirely. `/api/cloud/workspace/consent` is no better: it is keyed by
+       * `hubRepositoryId(workspace)` by construction.
+       *
+       * So the hub's consent goes where the hub's other verbs go, and its
+       * subject is legible from its name.
+       *
+       * ## No network call, and the reason it cannot become one
+       *
+       * `setRegistryConsent` writes one file in the staple home. Unlike
+       * `setBackupConsent` it asks the server nothing, because this consent has
+       * one half rather than two: there is no wire spelling for "this machine may
+       * describe itself", and every operation it gates is an ordinary push the
+       * credential already authorizes. It is enforced entirely on this side, by
+       * `requireRegistryConsent` at the head of every egress path in
+       * `hub-registry-service.ts`.
+       *
+       * ## Refuses on an unconnected hub rather than creating a record
+       *
+       * Inherited from `setConsent`, and the surface disables the switch rather
+       * than letting it error — but the route refuses regardless, because a
+       * client is not the surface. *"Before a repository is connected, no cloud
+       * setting, credential or request may exist at all"*, and `at all` is not
+       * satisfied by a file recording a consent for a connection that is not
+       * there.
+       */
+      if (url.pathname === "/api/hub/consent") {
+        const body = await readBody(req);
+        if (typeof body.registry !== "boolean") {
+          deny(
+            res,
+            400,
+            "validation",
+            "Pass registry as a boolean. It is the hub's own consent — whether this machine may " +
+              "publish its workspace registry — and it is separate from every workspace's " +
+              "connect, automatic sync and backup consents.",
+          );
+          return;
+        }
+        /**
+         * `storedHubId()`, never `hubId()`. The latter MINTS, and a route that
+         * minted a permanent identity while refusing the request would leave a
+         * value behind that nothing asked for. A hub with no stored id has never
+         * been connected, so the refusal below is the right answer anyway.
+         */
+        const hub = Hub.openReadOnly();
+        let hubId: string | null;
+        try {
+          hubId = hub.storedHubId();
+        } finally {
+          hub.close();
+        }
+        if (hubId === null) {
+          throw new StapleError(
+            "not_found",
+            "This machine's hub has no identity yet, so it has never been connected and there " +
+              "is no connection for this consent to be recorded against. Connect the hub first.",
+          );
+        }
+
+        /**
+         * ─── THE ACKNOWLEDGEMENT CROSSES THE WIRE, AND THAT IS THE POINT ─────
+         *
+         * `setRegistryConsent` refuses to ENABLE unless handed the disclosure
+         * verbatim — evidence that the caller had the sentence in hand. It is
+         * not authentication; a caller can look the constant up. What it removes
+         * is *"somebody adds a toggle, wires it to the setter, and nobody
+         * notices the screen was never built."*
+         *
+         * That argument means nothing here if this route supplies the constant
+         * itself. A server that passed `REGISTRY_DISCLOSURE` on the client's
+         * behalf would satisfy the check while proving exactly nothing about
+         * whether anything was ever displayed — the check would have been
+         * spent, not honoured. It is the same failure `/api/cloud/connect` would
+         * have if it accepted an `endpoint`: a property that holds inside the
+         * process, discarded at the last surface.
+         *
+         * **So the CLIENT sends it back, and this route forwards what the client
+         * sent — never a constant of its own.** The browser's only source for
+         * the sentence is `report.self.registry.disclosure`, which it can only
+         * have by fetching the report that draws the panel. A caller that never
+         * had the panel cannot produce the string, and `setRegistryConsent`
+         * refuses it. The disclosure therefore travels OUT in a report and back
+         * IN on the grant, which is the same one-way-then-back shape the connect
+         * preview and its ticket have.
+         *
+         * Withdrawing carries nothing, because `setRegistryConsent` requires
+         * nothing to withdraw: making it harder to turn off than on is the wrong
+         * asymmetry in a revocation that has to work offline.
+         */
+        const acknowledgement =
+          typeof body.disclosure === "string" ? body.disclosure : undefined;
+        const outcome = setRegistryConsent(
+          stapleHome(),
+          hubId,
+          body.registry,
+          acknowledgement,
+        );
+        json(res, 200, {
+          outcome: outcomeOf(
+            "",
+            "registry",
+            "ok",
+            outcome.enabled
+              ? "Publishing this machine's workspace registry is on. What that discloses is " +
+                "stated above the switch, and is unchanged by turning it on."
+              : "Publishing this machine's workspace registry is off. Nothing about your " +
+                "workspace list leaves this machine.",
+          ),
+          report: hubCloudReport(stapleHome()),
+        });
         return;
       }
 

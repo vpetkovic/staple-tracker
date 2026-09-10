@@ -316,6 +316,9 @@ describe("KNOWN: logical errors this surface cannot project", () => {
   it("pins the exact API surface, read out of the server source", () => {
     // GOLDEN, moved by S18 (STA-279): 52 -> 53. One addition, `/api/hub/backup`
     // — the first route whose subject is the hub itself rather than a workspace.
+    // GOLDEN, moved by S22 (STA-283): 57 -> 58. One addition, `/api/hub/consent`
+    // — the hub's own publish consent, which is a route rather than a fourth key
+    // on the two that exist because those are keyed by a repository id.
     // GOLDEN, moved again by S18 (STA-279), closing its last acceptance
     // criterion: 53 -> 57. Four additions, the HUB-WIDE VERBS —
     // `/api/hub/connect/preview`, `/api/hub/connect`, `/api/hub/sync` and
@@ -636,6 +639,25 @@ describe("KNOWN: logical errors this surface cannot project", () => {
        */
       "/api/hub/connect",
       "/api/hub/connect/preview",
+      /**
+       * S22 (STA-283) — the HUB's own consent, and the fourth consent overall.
+       *
+       * It is a new route rather than a fourth key on `/api/cloud/consent` or
+       * `/api/cloud/workspace/consent`, and that is the review. Both of those are
+       * keyed by a REPOSITORY id, and the first resolves its workspace through
+       * `handleFor`, which in single-workspace mode ignores the `ws` it is handed
+       * and answers with the workspace the server booted on. A hub-scoped consent
+       * sent either way would be written under the wrong subject — silently, on
+       * the ordinary configuration. If `"registry"` ever appears in either of
+       * those two `["auto", "backup"]` literals, that is the review moment.
+       *
+       * Writes one file in the staple home and makes NO request: unlike backup,
+       * this consent has one half rather than two, because there is no wire
+       * spelling for "this machine may describe itself". It is enforced entirely
+       * on this side by `requireRegistryConsent` at the head of every egress path
+       * in `hub-registry-service.ts`.
+       */
+      "/api/hub/consent",
       "/api/hub/disconnect",
       "/api/hub/sync",
       "/api/hub/unregister",

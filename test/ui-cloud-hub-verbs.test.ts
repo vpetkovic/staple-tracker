@@ -1023,6 +1023,173 @@ describe("every hub-wide verb answers with a per-workspace table and a refreshed
   });
 });
 
+// ------------------------------------------- the hub's own consent (S22/STA-283)
+
+describe("the hub's publish consent is the hub's, not a workspace's", () => {
+  /**
+   * **THE WRONG-SUBJECT TEST**, and the reason this is a route rather than a
+   * fourth key on the two consent routes that already exist.
+   *
+   * Adding `"registry"` to `/api/cloud/consent`'s `["auto", "backup"]` literal
+   * was a two-character change that would have worked in hub mode. In
+   * single-workspace mode — which is how `staple ui` runs — `handleFor` ignores
+   * its argument and returns the workspace the server booted on, so the hub's
+   * consent would have been written into `alpha`'s connection record. The server
+   * here IS started on `alpha`, so that is exactly what this file can catch.
+   */
+  it("is not reachable through either per-workspace consent route", async () => {
+    await connectRow("alpha");
+
+    for (const [route, body] of [
+      ["/api/cloud/consent", { registry: true }],
+      ["/api/cloud/workspace/consent", { slug: "alpha", registry: true }],
+    ] as Array<[string, Record<string, unknown>]>) {
+      const response = await post(route, body);
+      expect(response.status, `${route} accepted a registry consent`).toBeGreaterThanOrEqual(400);
+    }
+
+    // And nothing was written under alpha's repository id, which is the effect
+    // the widening would have had.
+    const record = readConnection(home, idOf("alpha"))!;
+    expect((record as unknown as Record<string, unknown>).registry).not.toBe(true);
+  });
+
+  it("refuses on a hub that has never been connected, rather than creating a record", async () => {
+    /**
+     * `setRegistryConsent` inherits `setConsent`'s refusal: the zero-network
+     * invariant is *"before a repository is connected, no cloud setting,
+     * credential or request may exist at all"*, and `at all` is not satisfied by
+     * a file recording a consent for a connection that is not there. The hub in
+     * this suite is never connected, so this is the state under test.
+     */
+    const response = await post("/api/hub/consent", { registry: true });
+    expect(response.status).toBeGreaterThanOrEqual(400);
+    expect(seen, "asking about a consent reached the service").toEqual([]);
+  });
+
+  /**
+   * Give the hub an identity, so the route gets past its own "no hub id yet"
+   * refusal and reaches `setRegistryConsent`.
+   *
+   * `hubId()` MINTS, which is exactly what neither the polled report nor the
+   * route may do — and is fine here, because a test standing in for a machine
+   * whose hub has been used is the one caller that should. Idempotent after the
+   * first call.
+   */
+  function ensureHubId(): string {
+    const hub = Hub.open();
+    try {
+      return hub.hubId();
+    } finally {
+      hub.close();
+    }
+  }
+
+  /**
+   * **THE ACKNOWLEDGEMENT SURVIVES THE HTTP BOUNDARY.**
+   *
+   * `setRegistryConsent` refuses to ENABLE unless handed the disclosure
+   * verbatim — evidence the caller had the sentence in hand, removing the case
+   * where *"somebody adds a toggle, wires it to the setter, and nobody notices
+   * the screen was never built"*.
+   *
+   * That check is worth nothing over HTTP if the ROUTE supplies the constant.
+   * A server passing it on the client's behalf satisfies the check while
+   * proving exactly nothing — the same failure `/api/cloud/connect` would have
+   * if it accepted an `endpoint`. So the route forwards what the client sent,
+   * and this pins both halves: an enable with no acknowledgement is refused,
+   * and the server does not have the sentence in scope to supply one.
+   *
+   * The hub in this suite is never connected, so every enable here refuses. The
+   * assertion is therefore on WHICH refusal: `validation` for a missing
+   * acknowledgement, which `setRegistryConsent` raises before it looks at the
+   * connection at all.
+   */
+  it("refuses to enable without the disclosure handed back, and supplies none itself", async () => {
+    ensureHubId();
+    const response = await post("/api/hub/consent", { registry: true });
+    expect(response.status).toBeGreaterThanOrEqual(400);
+    const refusal = (await response.json()) as { message: string };
+    expect(refusal.message).toContain("verbatim");
+
+    /**
+     * The source half, and the one no request can make: the route must not have
+     * the constant available to satisfy the check with. If `REGISTRY_DISCLOSURE`
+     * is ever imported into `src/ui/server.ts`, the acknowledgement stops
+     * meaning "a surface displayed this" and starts meaning nothing.
+     */
+    const server = readFileSync(new URL("../src/ui/server.ts", import.meta.url).pathname, "utf8");
+    const code = server.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+    expect(code).not.toContain("REGISTRY_DISCLOSURE");
+    expect(code).not.toContain("names, prefixes and identities");
+    // It forwards the client's value instead.
+    expect(code).toContain("body.disclosure");
+  });
+
+  it("refuses an acknowledgement that is not the disclosure", async () => {
+    ensureHubId();
+    const response = await post("/api/hub/consent", {
+      registry: true,
+      disclosure: "I promise I showed something",
+    });
+    expect(response.status).toBeGreaterThanOrEqual(400);
+    expect(((await response.json()) as { message: string }).message).toContain("verbatim");
+  });
+
+  it("needs no acknowledgement to WITHDRAW, because revocation must not be harder", async () => {
+    ensureHubId();
+    /**
+     * Making it harder to turn off than on is the wrong asymmetry in a
+     * revocation that has to work offline. This hub is unconnected, so the
+     * refusal is `not_found` — about the connection, never about a missing
+     * acknowledgement, which is the distinction being pinned.
+     */
+    const response = await post("/api/hub/consent", { registry: false });
+    expect(response.status).toBeGreaterThanOrEqual(400);
+    expect(((await response.json()) as { message: string }).message).not.toContain("verbatim");
+  });
+
+  it("refuses a body that does not name the consent as a boolean", async () => {
+    for (const body of [{}, { registry: "yes" }, { auto: true }, { registry: null }]) {
+      const response = await post("/api/hub/consent", body);
+      expect(response.status, JSON.stringify(body)).toBe(400);
+    }
+  });
+
+  it("is POST-only and refuses a cross-origin POST", async () => {
+    const get405 = await get("/api/hub/consent");
+    expect(get405.status).toBe(405);
+    expect(get405.headers.get("allow")).toBe("POST");
+
+    const cross = await fetch(`${origin}/api/hub/consent`, {
+      method: "POST",
+      headers: {
+        "x-staple-token": token,
+        "content-type": "application/json",
+        origin: "http://evil.example",
+      },
+      body: JSON.stringify({ registry: true }),
+    });
+    expect(cross.status).toBe(403);
+  });
+
+  it("carries the disclosure on the report, before anything is granted", async () => {
+    /**
+     * The sentence has to be on screen BEFORE the switch is flipped, on a
+     * machine that has never connected anything — which is the state this suite
+     * is in. If it only appeared once connected, the one moment it is needed is
+     * the moment it would be missing.
+     */
+    const report = (await (await get("/api/cloud/workspaces")).json()) as {
+      self: { registry: { connected: boolean; consent: boolean; disclosure: string } };
+    };
+    expect(report.self.registry.connected).toBe(false);
+    expect(report.self.registry.consent).toBe(false);
+    expect(report.self.registry.disclosure).toContain("names, prefixes and identities");
+    expect(report.self.registry.disclosure).toContain("sit together");
+  });
+});
+
 // ------------------------------------------------------------ the gates
 
 describe("the gates these four routes inherit", () => {

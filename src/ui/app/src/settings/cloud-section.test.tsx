@@ -56,6 +56,7 @@ import {
   hubRowControls,
   hubRowRationale,
   hubRowSummary,
+  hubRegistryControl,
   hubRowActed,
   hubRowView,
   hubUnreachableDescription,
@@ -148,6 +149,7 @@ const IDLE_HUB: HubPanelState = {
   busy: null,
   refreshing: false,
   backingUp: false,
+  consenting: false,
   outcomes: {},
   connecting: null,
   removing: null,
@@ -190,6 +192,7 @@ function panel(overrides: Partial<CloudPanelProps> = {}): string {
       onHubSync: NOOP,
       onHubAskDisconnect: NOOP,
       onHubDisconnect: NOOP,
+      onHubRegistryConsent: NOOP,
     },
     revoking: null,
     confirmDisconnect: false,
@@ -597,6 +600,14 @@ function hubReport(rows: HubWorkspaceReport[]): HubCloudReport {
         "It does not contain any tasks — each workspace is backed up separately.",
       backupContents: ["Which workspaces exist, and what each one is called."],
       backupExclusions: ["No tasks."],
+      registry: {
+        connected: false,
+        endpoint: null,
+        disclosure:
+          "a machine that publishes its registry tells the service the names, prefixes and " +
+          "identities of every workspace on it, and that they sit together.",
+        consent: false,
+      },
     },
     endpoints: [
       ...new Set(rows.map((row) => row.endpoint).filter((value): value is string => value !== null)),
@@ -1782,6 +1793,119 @@ describe("the two outcome surfaces do not contradict each other", () => {
       FAN_OUT,
     );
     expect(reverse.outcomes).toEqual({});
+  });
+});
+
+describe("the hub's publish consent (S22/STA-283)", () => {
+  const withRegistry = (registry: Partial<HubCloudReport["self"]["registry"]>): HubCloudReport => {
+    const base = hubReport([hubRow(), hubRow({ slug: "bravo", repositoryId: "b" })]);
+    return { ...base, self: { ...base.self, registry: { ...base.self.registry, ...registry } } };
+  };
+
+  it("shows the disclosure before the switch, and from the report rather than a local copy", () => {
+    const html = panel({ workspaces: withRegistry({ connected: true, endpoint: "https://s.example" }) });
+    expect(html).toContain("data-cloud-hub-registry");
+    expect(html).toContain("data-cloud-hub-registry-disclosure");
+    /**
+     * The three things a person is actually giving up. Rendered by default —
+     * not behind a `<details>`, not in a `title` — because this is the sentence
+     * that pays for the invariant `hub-scope.ts` gave up, and a disclosure
+     * behind a triangle is a disclosure most people do not read.
+     */
+    expect(html).toContain("names, prefixes and identities");
+    expect(html).toContain("sit together");
+
+    /**
+     * THE SOURCE ASSERTION. The browser cannot import `src/core`, so the only
+     * ways to get this sentence on screen are "from the report" and "retyped".
+     * A retyped copy would render identically on the day it was added and drift
+     * silently thereafter, which no rendered check could catch.
+     */
+    const file = source("CloudSection.tsx");
+    /**
+     * Scanned with COMMENTS STRIPPED. The rule is "no second copy on a render
+     * path", and a doc comment quoting the sentence so a reader knows what is at
+     * stake is documentation rather than a second copy — it cannot reach a
+     * screen. Scanning the raw file would forbid explaining the thing, which is
+     * the opposite of what this codebase does everywhere else.
+     */
+    const code = file.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+    expect(code).not.toContain("names, prefixes and identities");
+    expect(code).toContain("report.self.registry.disclosure");
+    // And the stripper really removed something, so the assertion is not vacuous.
+    expect(file).toContain("names, prefixes and identities");
+  });
+
+  it("is disabled with a reason when the hub itself is not connected", () => {
+    const report = withRegistry({ connected: false });
+    const control = hubRegistryControl(report);
+    expect(control.value).toBe(false);
+    /**
+     * `setRegistryConsent` refuses `not_found` on an unconnected hub rather than
+     * springing a record into existence, so a switch that flipped and then threw
+     * would be offering a decision the product cannot store.
+     */
+    expect(control.disabledReason).toContain("not connected");
+
+    const html = panel({ workspaces: report });
+    // Still rendered, with its reason — never hidden. Compared on a substring
+    // rather than the whole sentence because the markup escapes the apostrophe.
+    expect(html).toContain("data-cloud-hub-registry-toggle");
+    expect(html).toContain("The hub itself is not connected to a service on this machine");
+    expect(html).toContain("It is a separate connection from each workspace");
+  });
+
+  it("binds to the VALUE on the report, never to a sentence", () => {
+    expect(hubRegistryControl(withRegistry({ connected: true, consent: true })).value).toBe(true);
+    expect(hubRegistryControl(withRegistry({ connected: true, consent: false })).value).toBe(false);
+    const html = panel({ workspaces: withRegistry({ connected: true, consent: true }) });
+    expect(html).toContain('aria-checked="true"');
+  });
+
+  it("is a switch on the HUB, and never a fourth toggle on a row", () => {
+    const html = panel({ workspaces: withRegistry({ connected: true }) });
+    // In the hub panel…
+    expect(html.indexOf("data-cloud-hub-registry")).toBeLessThan(
+      html.indexOf("data-cloud-workspaces="),
+    );
+    // …and nowhere in the list. The other three consents are per workspace; this
+    // one is singular, because there is one registry.
+    const list = html.slice(html.indexOf("data-cloud-workspaces="));
+    expect(list).not.toContain("data-cloud-hub-registry");
+    for (const row of [hubRow(), hubRow({ slug: "bravo", repositoryId: "b" })]) {
+      expect(hubRowControls(row).map((control) => control.action)).not.toContain("registry");
+    }
+  });
+
+  it("takes no slug, because the hub is not one of the rows", () => {
+    const file = source("CloudSection.tsx");
+    expect(file).toContain("onHubRegistryConsent: (enabled: boolean, disclosure: string) => void;");
+    expect(file).not.toMatch(/onHubRegistryConsent: \(slug/);
+  });
+
+  it("hands back the sentence it rendered, from the report and not a literal", () => {
+    /**
+     * `setRegistryConsent` refuses to enable without the disclosure verbatim —
+     * evidence that whoever is granting this had it in hand. The check only
+     * survives the HTTP boundary because the CLIENT supplies it; a server that
+     * passed the constant on the client's behalf would satisfy the check while
+     * proving nothing.
+     *
+     * So the switch must send the value it just rendered, and the only place it
+     * can get that is the report. A literal typed into this component would be
+     * both a second copy and a way to grant the consent having displayed
+     * nothing — which is precisely the failure the argument exists to remove.
+     */
+    const file = source("CloudSection.tsx");
+    expect(file).toContain("onConsent(event.target.checked, report.self.registry.disclosure)");
+
+    const client = readFileSync(fileURLToPath(new URL("../lib/api.ts", import.meta.url)), "utf8");
+    const clientCode = client.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+    // The client forwards its argument and never carries the sentence itself.
+    expect(clientCode).not.toContain("names, prefixes and identities");
+    expect(clientCode).toContain("disclosure");
+    // Withdrawing carries no acknowledgement: revocation must not be harder.
+    expect(clientCode).toContain("enabled ? { disclosure } : {}");
   });
 });
 

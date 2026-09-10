@@ -65,6 +65,7 @@ import {
   HUB_BACKUP_CONTENTS,
   HUB_BACKUP_EXCLUSIONS,
   HUB_BACKUP_HEADLINE,
+  REGISTRY_DISCLOSURE,
 } from "./hub-registry.js";
 import type { CloudMode } from "./surface.js";
 
@@ -218,6 +219,69 @@ export interface HubSelfReport {
   backupHeadline: string;
   backupContents: readonly string[];
   backupExclusions: readonly string[];
+  /**
+   * The HUB's own connection to a sync service — S22 (STA-283).
+   *
+   * Distinct from every workspace's connection and from `counts`: this is the
+   * hub as a subject, connected under `hub.storedHubId()`, which is what the
+   * registry publish/restore path acts through. A machine can have nine
+   * connected workspaces and an unconnected hub, or the reverse.
+   *
+   * ## Three fields, and the two that are missing are the point
+   *
+   * Every one of these comes from `readConnection(home, hubId)` — a file in the
+   * staple home, the same read this module already does per row. There is
+   * deliberately **no `epoch` and no `lastPublishedAt`**.
+   *
+   * `hubCloudReport` makes no authenticated round trip. That is the property
+   * {@link HubConnectionState} protects by omitting `offline` and `revoked`, and
+   * the one `hub-scope.ts` calls its single most important guarantee. An `epoch`
+   * is only knowable from a push or snapshot RESPONSE, so a field for it would
+   * force either a request inside a polled read or a local cache of remote
+   * state. `lastPublishedAt` is worse: there is no hub-local sync state to
+   * record it in, deliberately, and adding one is a hub migration bought to
+   * improve one line of a panel.
+   *
+   * If a surface needs an epoch, it belongs on the OUTCOME of a publish or a
+   * restore, where a round trip actually happened — the same place
+   * {@link HubWorkspaceOutcome} puts its `detail`.
+   */
+  registry: {
+    /** A connection record exists under the hub's id. False is "never connected". */
+    connected: boolean;
+    endpoint: string | null;
+    /**
+     * The sentence that must appear wherever this consent is granted.
+     *
+     * **Carried on the report rather than imported by the client**, exactly like
+     * `backupHeadline` above and for the identical reason stated there:
+     * *"whatever decides the payload decides the sentence."* The browser cannot
+     * import `src/core` at all, so a client-side copy would be a second wording
+     * with nothing holding it in step.
+     *
+     * Taken from `hub-registry.ts`, the LEAF — which imports only `../types.js`
+     * and a `Hub` type — and never from `hub-registry-service.ts`, which reaches
+     * `client.ts`. `hubCloudReport` is called by a route the settings page
+     * POLLS, and putting the transport into a polled read's import graph is the
+     * precise setup `hub-preview.ts` was split out of `hub-connect.ts` to
+     * prevent.
+     *
+     * It briefly lived in two places, here and in the service, pinned equal by a
+     * test. One declaration in a leaf is better than two that cannot drift, and
+     * this is now that.
+     */
+    disclosure: string;
+    /**
+     * This machine's publish consent, `connection.registry === true`.
+     *
+     * False whenever `connected` is false, and not because it is defaulted:
+     * `setRegistryConsent` refuses `not_found` on an unconnected hub rather than
+     * springing a record into existence, so there is nowhere for a true to live.
+     * A surface must therefore disable the toggle rather than merely let it
+     * error.
+     */
+    consent: boolean;
+  };
 }
 
 export interface HubCloudReport {
@@ -254,7 +318,12 @@ export interface HubCloudReport {
 export interface HubWorkspaceOutcome {
   /** The workspace acted on, as the server resolved it. */
   slug: string;
-  action: "connect" | "sync" | "auto" | "backup" | "disconnect" | "remove";
+  /**
+   * S22 (STA-283) added `registry` — the HUB's own consent, and the first member
+   * of this union whose subject is not a workspace. It arrives with the empty
+   * slug, like the hub backup receipt, because the hub is not a row.
+   */
+  action: "connect" | "sync" | "auto" | "backup" | "disconnect" | "remove" | "registry";
   status: "ok" | "skipped" | "failed";
   /**
    * One sentence about THIS workspace. Rendered for a human, never parsed —
@@ -284,6 +353,13 @@ export interface HubReportOptions {
    * developer's own registry.
    */
   crossLinks?: number;
+  /**
+   * Injected in tests, alongside `workspaces`, for the reason `crossLinks` is: a
+   * caller that replaced the enumeration has no hub file for the hub's own
+   * connection to be read from, and a report that went to disk anyway would make
+   * those tests depend on the developer's own registry.
+   */
+  registry?: HubSelfReport["registry"];
 }
 
 /**
@@ -323,6 +399,7 @@ export function hubCloudReport(home: string, options: HubReportOptions = {}): Hu
       backupHeadline: HUB_BACKUP_HEADLINE,
       backupContents: HUB_BACKUP_CONTENTS,
       backupExclusions: HUB_BACKUP_EXCLUSIONS,
+      registry: options.registry ?? readHubRegistryState(home),
     },
     endpoints,
   };
@@ -335,6 +412,63 @@ export function hubCloudReport(home: string, options: HubReportOptions = {}): Hu
  * page that failed to render because a registry was missing would be a worse
  * answer than a zero.
  */
+/**
+ * The hub's own connection state — S22 (STA-283). Local files only.
+ *
+ * Reads through `storedHubId()` and **never `hubId()`**, and the difference is
+ * the whole reason that pair exists: `hubId()` MINTS when there is none, and
+ * this function is called by a report the settings page POLLS. A polled read
+ * that minted an identity would write a permanent id into `meta` as a side
+ * effect of somebody looking at a panel — the same class of mistake
+ * `Hub.openReadOnly()` was introduced for.
+ *
+ * Never throws, for the reason {@link countCrossLinks} does not: a machine with
+ * no hub file has no hub connection, and a settings page that failed to render
+ * because a registry was missing is a worse answer than "not connected".
+ */
+function readHubRegistryState(home: string): HubSelfReport["registry"] {
+  const absent = {
+    connected: false,
+    endpoint: null,
+    disclosure: REGISTRY_DISCLOSURE,
+    consent: false,
+  };
+  let hubId: string | null;
+  try {
+    const hub = Hub.openReadOnly();
+    try {
+      hubId = hub.storedHubId();
+    } finally {
+      hub.close();
+    }
+  } catch {
+    return absent;
+  }
+  if (hubId === null) return absent;
+
+  try {
+    const connection = readConnection(home, hubId);
+    if (connection === null) return absent;
+    return {
+      connected: true,
+      endpoint: connection.endpoint,
+      disclosure: REGISTRY_DISCLOSURE,
+      consent: connection.registry === true,
+    };
+  } catch {
+    /**
+     * A hub connection record that will not parse. Reported as NOT CONNECTED
+     * rather than propagated, which is the one place this differs from a
+     * workspace row — a row has a `skip`/`skipDetail` pair to carry the problem
+     * and this block has nowhere to put it. The consequence is bounded and
+     * safe in the right direction: the panel offers to connect rather than
+     * offering a consent toggle over a record nobody can read, and
+     * `setRegistryConsent` would refuse on that record anyway.
+     */
+    return absent;
+  }
+}
+
 function countCrossLinks(): number {
   try {
     const hub = Hub.openReadOnly();
