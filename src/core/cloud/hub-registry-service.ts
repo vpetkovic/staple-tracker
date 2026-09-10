@@ -83,12 +83,10 @@ import {
   adoptRegistry,
   describeIdentityReplacement,
   exportRegistry,
-  type AdoptOptions,
   type AdoptionReport,
   type HubRegistryPayload,
 } from "./hub-registry.js";
 import {
-  CROSS_LINK_ENTITY,
   REGISTRY_PROTOCOL,
   chunkOperations,
   diffRegistry,
