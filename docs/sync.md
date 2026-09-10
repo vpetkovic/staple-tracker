@@ -1295,10 +1295,13 @@ neither category is a bug. Each entry below says which it is.
 7. **An edge tombstoned by a pre-`present` build cannot be resurrected.** *Reported* as
    unpublishable, naming a restore from a backup taken before the deletion as the only
    route.
-8. **The service does not distinguish a hub repository from a workspace repository.** A
-   token for one is a token for that one repository and nothing else, so this is a
-   credential boundary rather than a privilege boundary; the purge recipe in
-   `worker/README.md` is what an operator uses to remove registry operations. *Stated.*
+8. **A repository holds a hub's registry or a workspace's data, never both (STA-290).**
+   `repos.vocabulary` is claimed by the repository's first write, or set when it is
+   provisioned. After that, a push or a restore of the other vocabulary is *refused* with
+   `conflict`, before anything is written, and the client names the remedy: the other
+   vocabulary needs its own repository. Registry operations that reached a workspace's log
+   before migration `0005` are still there. The recovery recipe in `worker/README.md` is
+   what an operator uses to remove them. *Refused*, plus *stated* for the pre-`0005` case.
 9. **Provisioning is out of band.** Staple cannot create the hub's `repos` row: there is
    no provisioning route and no account model. *Refused* with a message that names the
    step and points at `worker/README.md`, rather than failing as a permission error —
