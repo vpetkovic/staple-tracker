@@ -740,6 +740,24 @@ devices is mostly self-enforcing — a device cannot edit an entity it has never
 seen, so the edit necessarily sorts after the create — but "mostly" is not a
 guarantee to build an apply loop on.
 
+It was not true of one kind of device: one on a build before
+[the seed](#a-workspaces-history-reaches-the-service-when-it-first-synchronizes),
+which edited issues it had never uploaded. Those edits sit in the log with no create
+behind them until some device seeds or heals, and the create then lands at the END
+of the log — arbitrarily many pages later, beyond the end-of-page retry. An operation
+on an entity this database does not hold, carrying none of the fields only a create
+carries (an issue's identifier, a comment's issue, a project's slug, a status's
+category), is therefore a missing referent — it is never inserted with invented
+values. And a page that fails for a missing referent is answered by **one read of the
+snapshot**, applied in one transaction, after which the tail resumes from the cutoff
+that snapshot pinned: a snapshot folds every operation on an entity into one state
+whatever order they arrived in, so an update followed much later by its create folds
+to a complete entity. This is the timeline the device is already on, so nothing is
+forgotten — the ledger, versions and field record stay, and inherited provenance is
+taken at the fold's own numbers rather than lifted as a re-bootstrap into a new epoch
+lifts it. Once per sync; if the snapshot cannot resolve it either, the sync fails,
+naming the referent.
+
 **Bootstrap is a snapshot cutoff plus the ordered tail.** A hydrating device reads
 a materialized snapshot taken at `seq = C`, then pulls from cursor `C` forward.
 Writes concurrent with the snapshot are in the tail, so nothing is missed and
@@ -954,7 +972,9 @@ applied, an entity the repository holds only as updates with no create, and an
 entity with unsent operations and no create anywhere in the outbox. Its remaining
 unsent operations are moved behind the upload, and a repository issue that arrived
 while a local one sat on its number gets the number back, its open identifier
-conflict closed on the record.
+conflict closed on the record. A device that stopped on the old build's edits — ones
+naming rows nobody had uploaded — gets past them on its next sync by
+[reading the snapshot](#ordering-cursors-and-epochs), which the heal has made complete.
 
 ## Deletion is a tombstone
 

@@ -1026,6 +1026,13 @@ function sameList(a: readonly string[], b: readonly string[]): boolean {
   return a.length === b.length && a.every((item, index) => item === b[index]);
 }
 
+/** Every item of `part` is in `whole`, in the same relative order. */
+function isSubsequence(part: readonly string[], whole: readonly string[]): boolean {
+  let at = 0;
+  for (const item of whole) if (at < part.length && part[at] === item) at += 1;
+  return at === part.length;
+}
+
 /**
  * Seed this database's state into the repository. ONE transaction, and the marker is
  * in it, so the seed happens exactly once per repository per database however the
@@ -1215,8 +1222,17 @@ export function seedRepository(db: DatabaseSync, journal: Journal, args: SeedArg
         const theirs = stringList(held.state[field]);
         const additions = local.filter((id) => seededIssues.has(id) && !theirs.includes(id));
         const result = [...theirs, ...additions];
-        if (!sameList(local, result)) {
-          replaced.push({ entity, entityId, label, field, local: [...local], repository: result });
+        /**
+         * Replaced only if something of this device's did not survive: an item it had that
+         * the result lacks, or two of its items now in the other order. The repository's
+         * own items appearing around this device's is not a replacement — that is what
+         * joining it means.
+         */
+        if (!isSubsequence(local, result)) {
+          // Every one of these collections is a list of issues; a report names them the
+          // way a human does.
+          const shown = (ids: readonly string[]) => ids.map((id) => identifierOf(db, id));
+          replaced.push({ entity, entityId, label, field, local: shown(local), repository: shown(result) });
         }
         if (additions.length === 0) return;
         applyToDatabase(db, { entity, entityId, verb, payload: { [field]: result }, actor: null, deviceId: null, at: now, opId: null });

@@ -28,6 +28,8 @@ import type { WorkspaceStore } from "../src/core/store.js";
 import { writeConnection } from "../src/core/cloud/connection.js";
 import { credentialStoreFor } from "../src/core/cloud/credential-store.js";
 import { listConflicts } from "../src/core/cloud/conflicts.js";
+import { hydrate } from "../src/core/cloud/hydrate.js";
+import { ReferentMissing, applyToDatabase } from "../src/core/cloud/apply.js";
 import { describeSeed, readSeedMarker, workspaceHoldings } from "../src/core/cloud/seed.js";
 import { syncRepository, type SyncOptions, type SyncReport } from "../src/core/cloud/sync.js";
 import { readSyncState } from "../src/core/cloud/sync-state.js";
@@ -526,6 +528,8 @@ describe("a device joining a repository that already has data", () => {
     );
     expect(told.details).toContain(`renumbered ${prefix}-1 -> ${prefix}-6: the repository already had a ${prefix}-1`);
     expect(told.details).toContain("appended this workspace's items to the plan");
+    // B's plan item survived, after the repository's: nothing of B's was replaced.
+    expect(report.seed!.replaced).toEqual([]);
 
     // The repository's issues keep the numbers every other device already uses.
     expect(listConflicts(b.db), "no identifier was contested").toHaveLength(0);
@@ -565,12 +569,48 @@ describe("a device joining a repository that already has data", () => {
     expect(shape(b.db)).toEqual(shape(a.db));
   });
 
+  it("reports a plan it held in another order, and takes the repository's", async () => {
+    const server = new FakeSyncServer({ repositoryId });
+    const a = onTemplate(server, "device-a");
+    bindJournal(a.db, null);
+    a.store.addComment(`${prefix}-2`, "handoff, A's", "a", "agent", { idempotencyKey: "handoff-1" });
+    bindJournal(a.db, "device-a");
+    await a.sync();
+
+    // A copied database: the same issues by id, with the plan reordered before joining,
+    // and its own comment under a retry key A's comment on the same issue already uses.
+    const bHome = machine("device-b");
+    const dir = copyOfTemplate();
+    staple(dir, tmp("b-cli-home"), ["queue", "reorder", `${prefix}-4,${prefix}-2`]);
+    const b = connect(server, dir, "device-b", bHome);
+    bindJournal(b.db, null);
+    b.store.addComment(`${prefix}-2`, "handoff, B's", "b", "agent", { idempotencyKey: "handoff-1" });
+    bindJournal(b.db, "device-b");
+    const report = await b.sync();
+
+    expect(report.seed!.uploadedByEntity).toEqual({ comment: 1 });
+    expect(report.seed!.cleared).toEqual([
+      expect.objectContaining({ entity: "comment", field: "idempotencyKey", value: "handoff-1" }),
+    ]);
+    expect(report.seed!.replaced).toEqual([
+      expect.objectContaining({
+        entity: "queue",
+        field: "order",
+        local: [`${prefix}-4`, `${prefix}-2`],
+        repository: [`${prefix}-2`, `${prefix}-4`],
+      }),
+    ]);
+    await a.sync();
+    expect(shape(b.db)).toEqual(shape(a.db));
+  });
+
   it("yields a project slug and a retry key the repository already holds, instead of wedging either side", async () => {
     const server = new FakeSyncServer({ repositoryId });
     const a = onTemplate(server, "device-a");
     bindJournal(a.db, null);
     const aProject = a.store.projects().create({ name: "Web" }, "a");
     a.store.createIssue({ title: "Nightly report", idempotencyKey: "nightly-2026-09-10", createdBy: "a" });
+    a.store.createIssue({ title: "Imported", originKind: "github", originId: "octo/repo#42", createdBy: "a" });
     bindJournal(a.db, "device-a");
     await a.sync();
 
@@ -578,6 +618,7 @@ describe("a device joining a repository that already has data", () => {
     bindJournal(b.db, null);
     const bProject = b.store.projects().create({ name: "Web" }, "b");
     b.store.createIssue({ title: "Nightly report, B's", idempotencyKey: "nightly-2026-09-10", createdBy: "b" });
+    b.store.createIssue({ title: "Imported, B's copy", originKind: "github", originId: "octo/repo#42", createdBy: "b" });
     bindJournal(b.db, "device-b");
     const report = await b.sync();
 
@@ -587,7 +628,10 @@ describe("a device joining a repository that already has data", () => {
     expect(report.seed!.cleared).toContainEqual(
       expect.objectContaining({ field: "idempotencyKey", value: "nightly-2026-09-10" }),
     );
+    // Two live imports of one external item: the repository's keeps the link.
+    expect(report.seed!.cleared).toContainEqual(expect.objectContaining({ field: "originId", value: "octo/repo#42" }));
     await a.sync();
+    expect(count(a.db, "SELECT COUNT(*) AS n FROM issues WHERE origin_id = 'octo/repo#42'")).toBe(1);
     expect(a.db.prepare("SELECT slug FROM projects ORDER BY slug").all()).toEqual([{ slug: "web" }, { slug: "web-2" }]);
     expect((a.db.prepare("SELECT slug FROM projects WHERE id = ?").get(aProject.id) as { slug: string }).slug).toBe("web");
   });
@@ -676,9 +720,14 @@ describe("a database that synchronized under a build that did not seed", () => {
     bindJournal(b.db, null);
     b.store.createIssue({ title: "B's pre-connect issue", createdBy: "b" });
     b.store.createIssue({ title: "B's second pre-connect issue", createdBy: "b" });
+    b.store.createIssue({ title: "B's third, edited once armed", createdBy: "b" });
     bindJournal(b.db, "device-b");
     const own = id(b.db, `${prefix}-1`);
     const second = id(b.db, `${prefix}-2`);
+    const third = id(b.db, `${prefix}-3`);
+    // Armed now, so this edit is journaled — as an update to an issue whose create never
+    // was. The old build pushed exactly that: the service holds updates and no create.
+    b.store.updateIssue(`${prefix}-3`, { priority: "high" }, "b");
 
     // What the old build did: synchronize without seeding. Emulated by a marker that
     // says the seed already happened, removed again once the sync is done.
@@ -694,11 +743,16 @@ describe("a database that synchronized under a build that did not seed", () => {
 
     const healed = await b.sync();
     expect(healed.seed!.mode).toBe("heal");
-    expect(healed.seed!.uploadedByEntity.issue).toBe(2);
-    expect(healed.seed!.renamed.map((r) => [r.from, r.to])).toEqual([[`${prefix}-1`, `${prefix}-3`]]);
+    expect(healed.seed!.uploadedByEntity.issue).toBe(3);
+    expect(healed.seed!.renamed.map((r) => [r.from, r.to])).toEqual([[`${prefix}-1`, `${prefix}-4`]]);
     expect(count(b.db, "SELECT COUNT(*) AS n FROM issues WHERE identifier LIKE '%+%'")).toBe(0);
     expect(listConflicts(b.db).filter((c) => c.resolvedAt === null)).toHaveLength(0);
-    expect((b.db.prepare("SELECT identifier FROM issues WHERE id = ?").get(own) as { identifier: string }).identifier).toBe(`${prefix}-3`);
+    expect((b.db.prepare("SELECT identifier FROM issues WHERE id = ?").get(own) as { identifier: string }).identifier).toBe(`${prefix}-4`);
+    // The issue the service held only as an update now has its create, as that entity's
+    // second operation on the service.
+    expect(
+      (b.db.prepare("SELECT version FROM sync_entity_versions WHERE entity = 'issue' AND entity_id = ?").get(third) as { version: number }).version,
+    ).toBe(2);
     // The unsent update travelled inside the create, which is the entity's first and
     // only operation on the service — so that is the version this device holds.
     expect(
@@ -708,9 +762,22 @@ describe("a database that synchronized under a build that did not seed", () => {
       (b.db.prepare("SELECT version FROM sync_entity_versions WHERE entity = 'issue' AND entity_id = ?").get(second) as { version: number }).version,
     ).toBe(1);
 
-    await a.sync();
+    /**
+     * A was connected all along, so its tail holds the old build's update to B's third
+     * issue many operations ahead of the create the heal just sent. One operation per
+     * page puts them on different pages, beyond the reach of the pull loop's end-of-page
+     * retry: the page fails, and the sync answers it with one read of the snapshot.
+     */
+    const recovered = await a.sync({ pullLimit: 1 });
+    expect(recovered.bootstrap, "the stuck tail was answered by the snapshot").not.toBeNull();
     expect(shape(a.db)).toEqual(shape(b.db));
     expect((await b.sync()).seed).toBeNull();
+
+    // And a device arriving now hydrates the issue the service used to hold as an update
+    // with no create — which a bootstrap refuses, for want of an identifier.
+    const d = onClone(server, "device-d");
+    await d.sync();
+    expect(shape(d.db)).toEqual(shape(a.db));
   });
 
   it("moves its unsent edits behind the upload, so none reaches the service ahead of what it names", async () => {
@@ -788,6 +855,70 @@ describe("a paged bootstrap applies a snapshot in an order a database can take",
     const report = await b.sync();
     expect(report.bootstrap!.resumed).toBe(true);
     expect(shape(b.db)).toEqual(shape(c.db));
+  });
+});
+
+describe("an update whose create never arrived", () => {
+  /**
+   * What a build before the seed pushed for every pre-connect row it edited. Each of
+   * these used to be written anyway — an issue refused with a validation error that no
+   * sync could recover from, a comment as a raw NOT NULL failure, a project with its UUID
+   * for a slug, a status under a category that does not exist. Each is a missing
+   * referent: the page defers it, and a sync recovers by reading the snapshot.
+   */
+  it("is a missing referent, and nothing is invented for it", () => {
+    const server = new FakeSyncServer({ repositoryId });
+    const a = onClone(server, "device-a");
+    const at = "2026-09-10T00:00:00.000Z";
+    const orphan = (entity: string, entityId: string, payload: Record<string, unknown>) => () =>
+      applyToDatabase(a.db, { entity, entityId, verb: "update", payload, actor: null, deviceId: "old", at, opId: "op" });
+
+    expect(orphan("issue", "3f0c0000-0000-4000-8000-000000000001", { priority: "high" })).toThrow(ReferentMissing);
+    expect(orphan("comment", "3f0c0000-0000-4000-8000-000000000002", { deletedAt: at })).toThrow(ReferentMissing);
+    expect(orphan("project", "3f0c0000-0000-4000-8000-000000000003", { name: "Renamed" })).toThrow(ReferentMissing);
+    expect(orphan("status", "review", { label: "Review" })).toThrow(ReferentMissing);
+    expect(count(a.db, "SELECT COUNT(*) AS n FROM projects")).toBe(0);
+    expect(count(a.db, "SELECT COUNT(*) AS n FROM workspace_statuses WHERE id = 'review'")).toBe(0);
+  });
+});
+
+describe("re-reading the timeline a device is already on", () => {
+  /**
+   * The recovery a stuck tail takes reads the snapshot of the SAME epoch, so the fold's
+   * per-field numbers and this device's counter count the same operations. Lifting each
+   * inherited write to the counter, as a re-bootstrap into a new epoch must, would claim
+   * `priority` was written at version 3 when it was written at 1 — and contest a later
+   * edit made by a device that had seen that write.
+   */
+  it("keeps inherited provenance at the fold's own numbers", async () => {
+    const server = new FakeSyncServer({ repositoryId });
+    const a = onClone(server, "device-a");
+    const issue = a.store.createIssue({ title: "Held already", createdBy: "a" });
+    await a.sync();
+    a.db.prepare("UPDATE sync_entity_versions SET version = 3 WHERE entity = 'issue' AND entity_id = ?").run(issue.id);
+
+    const folded = {
+      entity: "issue",
+      entityId: issue.id,
+      version: 3,
+      deletedAt: null,
+      lastSeq: 3,
+      verb: "create",
+      state: { identifier: issue.identifier, title: "Held already", priority: "high" },
+      fieldWrites: { priority: { baseVersion: 1, opId: "op-that-set-priority", at: "2026-09-10T00:00:00.000Z" } },
+    };
+    const baseOf = () =>
+      (a.db.prepare("SELECT base_version FROM sync_field_writes WHERE entity_id = ? AND field = 'priority'").get(issue.id) as { base_version: number }).base_version;
+
+    a.db.exec("BEGIN");
+    hydrate(a.db, bindJournal(a.db, "device-a"), [folded], [], 3, "2026-09-10T00:00:00.000Z", true, true);
+    expect(baseOf(), "same timeline: the fold's number").toBe(1);
+    a.db.exec("ROLLBACK");
+
+    a.db.exec("BEGIN");
+    hydrate(a.db, bindJournal(a.db, "device-a"), [folded], [], 4, "2026-09-10T00:00:00.000Z", true, false);
+    expect(baseOf(), "a new epoch: lifted to the counter this device keeps").toBe(3);
+    a.db.exec("ROLLBACK");
   });
 });
 

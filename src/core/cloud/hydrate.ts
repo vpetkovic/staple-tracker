@@ -111,6 +111,7 @@ export function applySnapshotEntity(
   entity: SnapshotEntity,
   cutoffSeq: number,
   at: string,
+  sameTimeline = false,
 ): void {
   const input = snapshotToInput(entity, at);
   /**
@@ -125,7 +126,15 @@ export function applySnapshotEntity(
      * which `beginBootstrap` deliberately does not rewind. `recordInheritedFieldWrites`
      * needs the one from before, because the one from after is the snapshot's own number.
      */
-    const priorVersion = localEntityVersion(db, entity.entity, entity.entityId);
+    /**
+     * Except when this device is re-reading the timeline it is already on (`sameTimeline`,
+     * the recovery in `sync.ts`). Then its counter and the fold's count the same
+     * operations, and lifting every inherited write to the counter would claim each field
+     * was written just now — contesting the next remote edit of a field nobody has touched
+     * in weeks. The fold's own numbers are already on this device's scale; the upsert
+     * keeps whichever claim is newer.
+     */
+    const priorVersion = sameTimeline ? 0 : localEntityVersion(db, entity.entity, entity.entityId);
     applyToDatabase(db, input);
     setEntityVersion(db, entity.entity, entity.entityId, entity.version);
     /**
@@ -180,6 +189,7 @@ export function hydrate(
   cutoffSeq: number,
   at: string,
   final: boolean,
+  sameTimeline = false,
 ): HydrateOutcome {
   let applied = 0;
   let pending = orderForHydration([...entities, ...parked]);
@@ -194,7 +204,7 @@ export function hydrate(
         continue;
       }
       try {
-        applySnapshotEntity(db, journal, entity, cutoffSeq, at);
+        applySnapshotEntity(db, journal, entity, cutoffSeq, at, sameTimeline);
         applied += 1;
         progressed = true;
       } catch (error) {

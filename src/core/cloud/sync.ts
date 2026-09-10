@@ -587,6 +587,9 @@ async function pullEverything(
   try {
     return await pullOnce(db, journal, session, capabilities, options);
   } catch (error) {
+    if (error instanceof StapleError && error.detail?.referentMissing === true) {
+      return recoverFromSnapshot(db, journal, session, capabilities, options);
+    }
     if (cloudCodeOf(error) !== "epoch_changed") throw error;
 
     /**
@@ -614,6 +617,48 @@ async function pullEverything(
     const pulled = await drainTail(db, journal, session, capabilities, options);
     return { pulled, bootstrap: { ...redone, resumed: false } };
   }
+}
+
+/**
+ * A tail page that cannot be applied because it names what no earlier operation created:
+ * read the snapshot instead, once.
+ *
+ * *"A device cannot edit an entity it has never seen, so the edit necessarily sorts after
+ * the create"* was true of every device but one kind: a device on a build before the
+ * seed, which edited issues it had never uploaded. Their creates arrive only once some
+ * device seeds or heals, and then at the END of the log — arbitrarily many pages after
+ * the edits that name them, where the pull loop's end-of-page retry can never reach. A
+ * device already connected when those edits were pushed stops at them, on every sync.
+ *
+ * The snapshot does not have that problem: it folds every operation on an entity into
+ * one state whatever order they arrived in, so an update followed much later by its
+ * create folds to a complete entity. So the page's failure is answered by one read of
+ * the snapshot, applied in one transaction as a join is (`seed.ts`), after which the
+ * tail resumes from the cutoff that snapshot pinned. Nothing is forgotten: the ledger,
+ * the versions and the field record are kept, because this is the timeline the device is
+ * already on, and inherited provenance is taken at the fold's own numbers.
+ *
+ * Once per sync. If the snapshot cannot resolve it either — the create exists nowhere —
+ * that failure is thrown, naming the referent, exactly as the page's would have been.
+ */
+async function recoverFromSnapshot(
+  db: DatabaseSync,
+  journal: Journal,
+  session: Session,
+  capabilities: Capabilities,
+  options: SyncOptions,
+): Promise<PullOutcome> {
+  const survey = await surveyRepository(session, capabilities, options);
+  tx(db, () => {
+    hydrate(db, journal, survey.entities, [], survey.cutoffSeq, nowIso(), true, true);
+    completeSnapshot(db, survey.tailCursor, survey.epoch);
+    replayOutboxFieldWrites(db);
+  });
+  const pulled = await drainTail(db, journal, session, capabilities, options);
+  return {
+    pulled,
+    bootstrap: { entities: survey.entities.length, pages: survey.pages, cutoffSeq: survey.cutoffSeq, resumed: false },
+  };
 }
 
 /**
@@ -871,7 +916,7 @@ function applyPage(
           `Operation ${op.opId} (${op.entity}.${op.verb} on ${op.entityId}) names something this ` +
             `page never delivered: ${error.what}. The whole page was rolled back and nothing was ` +
             `applied; the cursor did not move, so the next sync retries it.`,
-          { cloudCode: "validation", retryable: false },
+          { cloudCode: "validation", retryable: false, referentMissing: true },
         );
       }
     }

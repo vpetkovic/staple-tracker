@@ -447,11 +447,14 @@ function insertIssue(db: DatabaseSync, input: ApplyInput, pairs: Array<[string, 
   if (!values.has("created_at")) values.set("created_at", input.at);
   if (!values.has("updated_at")) values.set("updated_at", input.at);
   if (!values.has("identifier")) {
-    throw new StapleError(
-      "validation",
-      `A remote issue.create for ${input.entityId} carries no identifier. Identifiers are ` +
-        `allocated by the originating device and always travel with the create.`,
-    );
+    /**
+     * An operation on an issue this database does not hold, carrying no identifier, is
+     * not a malformed create: it is an update whose create has not arrived — and only a
+     * create carries the identifier. That is a missing referent, and it is reported as
+     * one so the page defers it and a sync can recover (see `sync.ts`). A build before
+     * the seed produced exactly these, by pushing edits to issues it had never uploaded.
+     */
+    throw new ReferentMissing(`the create of issue ${input.entityId}, which no operation so far has carried`);
   }
 
   const identifier = values.get("identifier") as string;
@@ -657,6 +660,11 @@ function applyComment(db: DatabaseSync, input: ApplyInput): boolean {
     if (pairs.length > 0) updateRow(db, "comments", "id", input.entityId, pairs);
     return true;
   }
+  // A comment this database does not hold, and an operation that does not say which issue
+  // it is on: its create has not arrived. See `insertIssue`.
+  if (typeof (issueId ?? input.payload.issue_id) !== "string") {
+    throw new ReferentMissing(`the create of comment ${input.entityId}, which no operation so far has carried`);
+  }
 
   const values = new Map(pairs);
   values.set("id", input.entityId);
@@ -846,10 +854,17 @@ function applyProject(db: DatabaseSync, input: ApplyInput): boolean {
     if (pairs.length > 0) updateRow(db, "projects", "id", input.entityId, pairs);
     return true;
   }
+  /**
+   * A project this database does not hold, and no slug: its create has not arrived. It
+   * used to be inserted anyway with its UUID for a slug — a row that looked real, named
+   * nobody, and never matched the device that made it. See `insertIssue`.
+   */
+  if (typeof payload.slug !== "string") {
+    throw new ReferentMissing(`the create of project ${input.entityId}, which no operation so far has carried`);
+  }
 
   const values = new Map(pairs);
   values.set("id", input.entityId);
-  if (!values.has("slug")) values.set("slug", input.entityId);
   if (!values.has("name")) values.set("name", values.get("slug"));
   if (!values.has("created_at")) values.set("created_at", input.at);
   if (!values.has("updated_at")) values.set("updated_at", input.at);
@@ -912,6 +927,15 @@ function applyVocabulary(
     | undefined;
 
   if (!exists) {
+    /**
+     * A status is its category — every guard in the store keys off it — and only its
+     * create carries one. A status this database does not hold, arriving without one, is
+     * an update whose create has not arrived; it used to be inserted under a category
+     * that does not exist. See `insertIssue`.
+     */
+    if (table === "workspace_statuses" && typeof category !== "string") {
+      throw new ReferentMissing(`the create of status ${input.entityId}, which no operation so far has carried`);
+    }
     const next = db.prepare(`SELECT COALESCE(MAX(sort_order), 0) + 1000 AS n FROM ${table}`).get() as {
       n: number;
     };
