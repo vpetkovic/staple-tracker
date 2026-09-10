@@ -806,9 +806,17 @@ describe("a database that synchronized under a build that did not seed", () => {
     const healed = await b.sync();
     expect(healed.seed!.resequenced).toBe(1);
 
+    // In the log, the edit now follows the create it names.
+    const seqOf = (predicate: (op: (typeof server.ops)[number]) => boolean) => server.ops.find(predicate)!.seq;
+    expect(seqOf((op) => op.entity === "relation" && op.entityId === blocked.id && op.verb === "update")).toBeGreaterThan(
+      seqOf((op) => op.entity === "issue" && op.entityId === mine.id && op.verb === "create"),
+    );
+
     // One operation per page, so the pull loop's end-of-page retry cannot rescue an
-    // operation that arrived ahead of its referent.
-    await a.sync({ pullLimit: 1 });
+    // operation that arrived ahead of its referent — and nothing had to be rescued: the
+    // tail applied as it stood, without falling back to the snapshot.
+    const pulled = await a.sync({ pullLimit: 1 });
+    expect(pulled.bootstrap).toBeNull();
     expect(
       (a.db.prepare("SELECT blocker_id FROM relations WHERE blocked_id = ? ORDER BY blocker_id").all(blocked.id) as Array<{ blocker_id: string }>)
         .map((row) => row.blocker_id)
