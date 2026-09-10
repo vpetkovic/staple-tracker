@@ -227,11 +227,12 @@ export interface HubSelfReport {
    * registry publish/restore path acts through. A machine can have nine
    * connected workspaces and an unconnected hub, or the reverse.
    *
-   * ## Three fields, and the two that are missing are the point
+   * ## Local fields only, and the two that are missing are the point
    *
-   * Every one of these comes from `readConnection(home, hubId)` — a file in the
-   * staple home, the same read this module already does per row. There is
-   * deliberately **no `epoch` and no `lastPublishedAt`**.
+   * `hubId` is a row in `hub.db`'s `meta`; every other field comes from
+   * `readConnection(home, hubId)` — a file in the staple home, the same read this
+   * module already does per row. There is deliberately **no `epoch` and no
+   * `lastPublishedAt`**.
    *
    * `hubCloudReport` makes no authenticated round trip. That is the property
    * {@link HubConnectionState} protects by omitting `offline` and `revoked`, and

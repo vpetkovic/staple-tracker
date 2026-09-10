@@ -1506,7 +1506,7 @@ export interface HubCloudReport {
      * The HUB's own connection — S22 (STA-283). Mirrors `HubSelfReport.registry`
      * in src/core/cloud/hub-surface.ts.
      *
-     * Three fields, all locally establishable. There is deliberately no `epoch`
+     * Every field is locally establishable. There is deliberately no `epoch`
      * and no `lastPublishedAt`: `hubCloudReport` makes no authenticated round
      * trip, and an epoch is only knowable from a push or snapshot response. A
      * mirror that grew either would be a type promising the page information the
