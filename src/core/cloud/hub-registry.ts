@@ -50,7 +50,9 @@
  * derived state; it does not get to overrule a stamp.
  */
 import { StapleError, nowIso } from "../types.js";
+import { parseIdentifier } from "../ids.js";
 import type { Hub, WorkspaceEntry } from "../hub.js";
+import { crossLinkEntityId } from "./cross-link-key.js";
 
 /**
  * The payload format number.
@@ -73,10 +75,23 @@ export interface RegistryEntry {
   readonly addedAt: string;
 }
 
-/** A cross-workspace edge. Slugs and identifiers only; both ends are names. */
+/**
+ * A cross-workspace edge.
+ *
+ * Its identity is the two `repositoryId`s and the two identifiers (see
+ * `cross-link-key.ts`). The slugs are there for display. On a registry read from the
+ * service they are the names the first machine to publish the link used, and they may
+ * differ from this machine's.
+ *
+ * A null `repositoryId` means that end can't be identified. Either the local workspace
+ * never recorded an identity, or the entity was published under slug names by a build
+ * from before STA-287. Neither kind can be published or adopted, and both are reported.
+ */
 export interface RegistryCrossLink {
+  readonly blockerRepositoryId: string | null;
   readonly blockerWs: string;
   readonly blockerIdentifier: string;
+  readonly blockedRepositoryId: string | null;
   readonly blockedWs: string;
   readonly blockedIdentifier: string;
   readonly type: "blocks";
@@ -97,7 +112,14 @@ export interface HubRegistryPayload {
   readonly hubId: string;
   readonly capturedAt: string;
   readonly workspaces: readonly RegistryEntry[];
+  /** Links that are in the registry. */
   readonly crossLinks: readonly RegistryCrossLink[];
+  /**
+   * Links the registry holds as removed (`present: false`). Only set on a registry read
+   * from the service, because adoption needs them to carry a removal made on another
+   * machine to this one. A local export has none.
+   */
+  readonly retractedCrossLinks?: readonly RegistryCrossLink[];
 }
 
 /**
@@ -177,11 +199,13 @@ export const HUB_BACKUP_HEADLINE =
  * caller that wants one.
  */
 export function exportRegistry(hub: Hub): HubRegistryPayload {
+  const rows = hub.list();
+  const identityOf = new Map(rows.map((row) => [row.slug, row.repositoryId]));
   return {
     format: REGISTRY_PAYLOAD_FORMAT,
     hubId: hub.hubId(),
     capturedAt: nowIso(),
-    workspaces: hub.list().map((entry) => ({
+    workspaces: rows.map((entry) => ({
       repositoryId: entry.repositoryId,
       slug: entry.slug,
       prefix: entry.prefix,
@@ -189,8 +213,10 @@ export function exportRegistry(hub: Hub): HubRegistryPayload {
       addedAt: entry.addedAt,
     })),
     crossLinks: hub.listCrossLinks().map((link) => ({
+      blockerRepositoryId: identityOf.get(link.blockerWs) ?? null,
       blockerWs: link.blockerWs,
       blockerIdentifier: link.blockerIdentifier,
+      blockedRepositoryId: identityOf.get(link.blockedWs) ?? null,
       blockedWs: link.blockedWs,
       blockedIdentifier: link.blockedIdentifier,
       type: "blocks" as const,
@@ -202,7 +228,7 @@ export function exportRegistry(hub: Hub): HubRegistryPayload {
 export type AdoptionOutcome =
   /** A local row already holds this identity and already agrees. Nothing written. */
   | "current"
-  /** A local row holds this identity; the registry learned its slug or kind. */
+  /** A local row holds this identity under a different slug or kind. Reported; nothing written. */
   | "adopted"
   /**
    * Known, not here. A row with an identity, a name and no path.
@@ -240,14 +266,47 @@ export interface AdoptionDecision {
   } | null;
 }
 
+/** What adoption did with one link the registry holds, or holds as removed. */
+export type CrossLinkOutcome =
+  /** Linked here. On a preview: would be. */
+  | "added"
+  /** Already linked here. Nothing written. */
+  | "current"
+  /** Could not land here. The reason says why, and it is never a guess. */
+  | "skipped"
+  /** Another machine removed it from the registry, so it was removed here. On a preview: would be. */
+  | "removed"
+  /** This machine removed it, so adopting does not bring it back. */
+  | "kept_removed"
+  /** Removed from the registry, but re-linked here since and not yet published. Kept. */
+  | "kept_linked";
+
+export interface CrossLinkDecision {
+  readonly link: RegistryCrossLink;
+  readonly outcome: CrossLinkOutcome;
+  /** A sentence, for every outcome. Never empty, never a code. */
+  readonly reason: string;
+}
+
 export interface AdoptionReport {
   readonly hubId: string;
   readonly capturedAt: string;
   readonly decisions: readonly AdoptionDecision[];
+  /** Counts of {@link crossLinkDecisions} by outcome. On a preview, what the apply would do. */
   readonly crossLinks: {
     readonly added: number;
     readonly skipped: number;
+    readonly current: number;
+    readonly removed: number;
+    readonly keptRemoved: number;
+    readonly keptLinked: number;
   };
+  /**
+   * One decision per link that concerns this machine: every link the registry holds, plus
+   * every removed link this machine still has. A removed link that isn't here gets no line,
+   * because nothing about it concerns this machine.
+   */
+  readonly crossLinkDecisions: readonly CrossLinkDecision[];
   /** True when nothing was written — a preview. */
   readonly dryRun: boolean;
 }
@@ -301,64 +360,220 @@ export function adoptRegistry(
     decisions.push(decide(hub, entry, declined, apply));
   }
 
-  // Edges last, and only between two slugs this machine now actually has. An
-  // edge naming a workspace that did not land would read as an unresolvable
-  // blocker, and `crossBlockersOf` treats unresolvable as BLOCKED — so importing
-  // it would wedge a live issue on the other side with nothing to say why.
-  /**
-   * A PREVIEW counts the rows the decisions WOULD create, not the ones on disk now.
-   *
-   * `hub.list()` alone was wrong in exactly the case this feature exists for. On a fresh
-   * replacement machine every workspace is `absent`, so in preview mode no row exists yet
-   * and every edge between two of them counted as skipped — while `--apply` then imported
-   * it. Measured on the headline path:
-   *
-   *     preview: {"added": 0, "skipped": 1}   ->  "0 cross-workspace links would be imported"
-   *     apply:   {"added": 1, "skipped": 0}   ->  "1 cross-workspace link imported"
-   *
-   * The preview IS the consent gate for `--apply`, so a preview that under-reports what
-   * apply will do is the one kind of preview that matters. Fixing the tense (which this
-   * round did) left the NUMBER wrong, which is worse: a confident wrong count reads as
-   * information.
-   *
-   * The union is what apply will actually see. Only `absent` adds anything: it is the one
-   * outcome that CREATES a row, under `entry.slug`. `current` and `adopted` already have
-   * theirs, so `hub.list()` holds them in both modes; `unmatchable`, `declined` and
-   * `conflict` deliberately end with no row at all.
-   */
-  const known = new Set(hub.list().map((w) => w.slug));
-  for (const decision of decisions) {
-    if (decision.outcome === "absent") known.add(decision.entry.slug);
-  }
-  let added = 0;
-  let skipped = 0;
-  for (const link of payload.crossLinks) {
-    if (!known.has(link.blockerWs) || !known.has(link.blockedWs)) {
-      skipped += 1;
-      continue;
-    }
-    if (apply) {
-      try {
-        hub.addCrossLink(link.blockerIdentifier, link.blockedIdentifier);
-        added += 1;
-      } catch {
-        // A cycle, or an identifier the local workspace does not have. Both are
-        // the incoming machine's business to fix; neither is worth aborting an
-        // import that has already adopted rows correctly.
-        skipped += 1;
-      }
-    } else {
-      added += 1;
-    }
-  }
+  const crossLinkDecisions = adoptCrossLinks(hub, payload, decisions, apply);
+  const count = (outcome: CrossLinkOutcome) =>
+    crossLinkDecisions.filter((d) => d.outcome === outcome).length;
 
   return {
     hubId: payload.hubId,
     capturedAt: payload.capturedAt,
     decisions,
-    crossLinks: { added, skipped },
+    crossLinks: {
+      added: count("added"),
+      skipped: count("skipped"),
+      current: count("current"),
+      removed: count("removed"),
+      keptRemoved: count("kept_removed"),
+      keptLinked: count("kept_linked"),
+    },
+    crossLinkDecisions,
     dryRun: !apply,
   };
+}
+
+/** One end of a link, resolved to the local workspace that holds it. */
+type EndResolution =
+  | { readonly ok: true; readonly slug: string }
+  | { readonly ok: false; readonly reason: string };
+
+/**
+ * The link half of adoption. Runs after the workspace decisions, so an apply sees the
+ * rows they created.
+ *
+ * Each end is matched to a local workspace BY `repositoryId`, never by slug. That is
+ * what lets a link cross between two machines that named the same repositories'
+ * directories differently. Then the identifier's prefix has to be the prefix this
+ * machine holds that repository under. A repository initialised independently on two
+ * machines can get two prefixes, and then `ALP-3` names nothing here. This is a fact
+ * about the data, so it is reported as the reason, never repaired: staple does not
+ * renumber a prefix.
+ *
+ * Links ending in a workspace that did not land are skipped too. `crossBlockersOf`
+ * reads a blocker it cannot resolve as BLOCKED, so importing one would wedge a live
+ * issue with nothing to say why.
+ */
+function adoptCrossLinks(
+  hub: Hub,
+  payload: HubRegistryPayload,
+  decisions: readonly AdoptionDecision[],
+  apply: boolean,
+): CrossLinkDecision[] {
+  /**
+   * Which local workspaces hold each identity, including, on a PREVIEW, the rows the
+   * workspace decisions WOULD create. A preview that counted only the rows on disk
+   * would call every link between two absent workspaces skipped while the apply imports
+   * it, and the preview is the consent gate for the apply.
+   */
+  const holders = new Map<string, { slug: string; prefix: string }[]>();
+  const hold = (repositoryId: string | null, slug: string, prefix: string) => {
+    if (repositoryId === null) return;
+    const list = holders.get(repositoryId) ?? [];
+    if (!list.some((h) => h.slug === slug)) list.push({ slug, prefix });
+    holders.set(repositoryId, list);
+  };
+  for (const row of hub.list()) hold(row.repositoryId, row.slug, row.prefix);
+  if (!apply) {
+    for (const d of decisions) {
+      if (d.outcome === "absent") hold(d.entry.repositoryId, d.entry.slug, d.entry.prefix);
+    }
+  }
+  const decisionFor = new Map(decisions.map((d) => [d.entry.repositoryId, d]));
+  const changes = new Map(hub.listCrossLinkChanges().map((c) => [c.key, c]));
+  const localLinks = new Set(
+    hub.listCrossLinks().map((l) => `${l.blockerIdentifier} ${l.blockedIdentifier}`),
+  );
+
+  const resolveEnd = (
+    side: "blocker" | "blocked",
+    repositoryId: string,
+    publishedSlug: string,
+    identifier: string,
+  ): EndResolution => {
+    const candidates = holders.get(repositoryId) ?? [];
+    if (candidates.length === 0) {
+      const decision = decisionFor.get(repositoryId);
+      return {
+        ok: false,
+        reason:
+          `the ${side} end, "${publishedSlug}", is not on this machine's list` +
+          (decision === undefined
+            ? ", and the registry has no workspace entry for it."
+            : ` (its workspace entry above: ${decision.outcome}).`),
+      };
+    }
+    const prefix = parseIdentifier(identifier)?.prefix ?? null;
+    const match = candidates.find((c) => c.prefix === prefix);
+    if (match !== undefined) return { ok: true, slug: match.slug };
+    const held = candidates.map((c) => `"${c.slug}" under prefix ${c.prefix}`).join(" and ");
+    return {
+      ok: false,
+      reason:
+        `this machine holds the ${side} end's repository as ${held}, and the link names ` +
+        `${identifier}. The repository was initialised here separately and given a different ` +
+        `prefix, so ${identifier} names no issue here. Staple never renumbers a prefix, so ` +
+        "the link stays in the registry and does not land on this machine.",
+    };
+  };
+
+  const out: CrossLinkDecision[] = [];
+  const skip = (link: RegistryCrossLink, reason: string) =>
+    out.push({
+      link,
+      outcome: "skipped",
+      reason: `${link.blockerIdentifier} -> ${link.blockedIdentifier} was not linked here: ${reason}`,
+    });
+
+  for (const link of payload.crossLinks) {
+    if (link.blockerRepositoryId === null || link.blockedRepositoryId === null) {
+      skip(
+        link,
+        `it was published by an older build of staple under the workspace names ` +
+          `"${link.blockerWs}" and "${link.blockedWs}". Names differ between machines, so this ` +
+          "machine can't tell which workspaces they mean. The machine that has the link " +
+          "publishes it again under the repositories' identities the next time it runs " +
+          "`staple hub registry publish`.",
+      );
+      continue;
+    }
+    const blocker = resolveEnd("blocker", link.blockerRepositoryId, link.blockerWs, link.blockerIdentifier);
+    const blocked = resolveEnd("blocked", link.blockedRepositoryId, link.blockedWs, link.blockedIdentifier);
+    if (!blocker.ok || !blocked.ok) {
+      skip(link, [blocker, blocked].flatMap((e) => (e.ok ? [] : [e.reason])).join(" Also, "));
+      continue;
+    }
+    const label = `${link.blockerIdentifier} -> ${link.blockedIdentifier}`;
+    if (localLinks.has(`${link.blockerIdentifier} ${link.blockedIdentifier}`)) {
+      out.push({ link, outcome: "current", reason: `${label} is already linked here.` });
+      continue;
+    }
+    const change = changes.get(
+      crossLinkEntityId({
+        blockerRepositoryId: link.blockerRepositoryId,
+        blockerIdentifier: link.blockerIdentifier,
+        blockedRepositoryId: link.blockedRepositoryId,
+        blockedIdentifier: link.blockedIdentifier,
+      }),
+    );
+    if (change !== undefined && !change.present) {
+      out.push({
+        link,
+        outcome: "kept_removed",
+        reason:
+          `${label} was removed on this machine, so adopting did not bring it back. It is still ` +
+          "linked in the registry, where another machine can see it. To take it back here, " +
+          `run \`staple link ${link.blockerIdentifier} ${link.blockedIdentifier}\`.`,
+      });
+      continue;
+    }
+    /**
+     * The apply's own checks run on a preview too, whenever both ends are already
+     * registered here. An end the adoption has yet to create has no database on this
+     * machine, so the apply can't check it either.
+     */
+    const endsRegistered =
+      hub.findBySlug(blocker.slug) !== undefined && hub.findBySlug(blocked.slug) !== undefined;
+    try {
+      if (apply) hub.adoptCrossLink(link.blockerIdentifier, link.blockedIdentifier);
+      else if (endsRegistered) hub.checkCrossLink(link.blockerIdentifier, link.blockedIdentifier);
+    } catch (error) {
+      skip(link, error instanceof Error ? error.message : String(error));
+      continue;
+    }
+    out.push({
+      link,
+      outcome: "added",
+      reason: apply ? `${label} was linked here.` : `${label} would be linked here.`,
+    });
+  }
+
+  for (const link of payload.retractedCrossLinks ?? []) {
+    if (link.blockerRepositoryId === null || link.blockedRepositoryId === null) continue;
+    if (!localLinks.has(`${link.blockerIdentifier} ${link.blockedIdentifier}`)) continue;
+    const blocker = resolveEnd("blocker", link.blockerRepositoryId, link.blockerWs, link.blockerIdentifier);
+    const blocked = resolveEnd("blocked", link.blockedRepositoryId, link.blockedWs, link.blockedIdentifier);
+    // The identifiers matched a local link, but the repositories did not. This isn't the same link.
+    if (!blocker.ok || !blocked.ok) continue;
+    const label = `${link.blockerIdentifier} -> ${link.blockedIdentifier}`;
+    const change = changes.get(
+      crossLinkEntityId({
+        blockerRepositoryId: link.blockerRepositoryId,
+        blockerIdentifier: link.blockerIdentifier,
+        blockedRepositoryId: link.blockedRepositoryId,
+        blockedIdentifier: link.blockedIdentifier,
+      }),
+    );
+    if (change !== undefined && change.present && !change.published) {
+      out.push({
+        link,
+        outcome: "kept_linked",
+        reason:
+          `${label} was removed from the registry, but it was linked again on this machine ` +
+          "since and that has not been published yet. It was kept. `staple hub registry publish` " +
+          "shares it again.",
+      });
+      continue;
+    }
+    if (apply) hub.dropRetractedCrossLink(link.blockerIdentifier, link.blockedIdentifier);
+    out.push({
+      link,
+      outcome: "removed",
+      reason:
+        `${label} was removed from the registry on another machine, so it ` +
+        `${apply ? "was" : "would be"} removed here too. To keep it, link it again with ` +
+        `\`staple link ${link.blockerIdentifier} ${link.blockedIdentifier}\` and publish.`,
+    });
+  }
+  return out;
 }
 
 /**
@@ -403,9 +618,8 @@ function decide(
    * that was sitting in the hub.
    *
    * Two things made it worse than a wrong label. The `learned` branch below became
-   * unreachable for those rows, so they could never pick up a slug or kind change from
-   * the registry — the divergence this epic chose to REPORT rather than refuse, silently
-   * disabled for exactly the rows most likely to need it. And the state was
+   * unreachable for those rows, so a name that differed from the registry's was never
+   * reported for exactly the rows most likely to have one. And the state was
    * undiscoverable: `listOptOuts` had no CLI surface at all.
    *
    * Asking the hub first is the fix, not a workaround, because a registered row and an
@@ -655,11 +869,18 @@ export function describeAdoption(report: AdoptionReport): string {
    * Worker rather than by reading the code; the workspace half of the sentence describes
    * decisions and was always fine, and the edge half is the one that claimed an act.
    */
-  const verb = report.dryRun ? "would be imported" : "imported";
-  const links =
-    report.crossLinks.added + report.crossLinks.skipped === 0
-      ? ""
-      : ` ${say(report.crossLinks.added, "cross-workspace link")} ${verb}` +
-        (report.crossLinks.skipped > 0 ? `, ${report.crossLinks.skipped} skipped.` : ".");
-  return `${head}.${links}${report.dryRun ? " Nothing was written." : ""}`;
+  const would = report.dryRun;
+  const c = report.crossLinks;
+  const linkParts: string[] = [];
+  if (c.added > 0) linkParts.push(`${say(c.added, "cross-workspace link")} ${would ? "would be imported" : "imported"}`);
+  if (c.removed > 0) {
+    const also = would ? "would also be removed" : c.removed === 1 ? "was also removed" : "were also removed";
+    linkParts.push(`${say(c.removed, "link")} removed on another machine ${also} here`);
+  }
+  if (c.current > 0) linkParts.push(`${say(c.current, "link")} already here`);
+  if (c.keptRemoved > 0) linkParts.push(`${say(c.keptRemoved, "link")} kept removed, as this machine removed ${c.keptRemoved === 1 ? "it" : "them"}`);
+  if (c.keptLinked > 0) linkParts.push(`${say(c.keptLinked, "link")} kept, as ${c.keptLinked === 1 ? "it was" : "they were"} linked again here since`);
+  if (c.skipped > 0) linkParts.push(`${c.skipped} skipped`);
+  const links = linkParts.length === 0 ? "" : ` ${linkParts.join(", ")}.`;
+  return `${head}.${links}${would ? " Nothing was written." : ""}`;
 }

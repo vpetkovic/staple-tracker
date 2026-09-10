@@ -29,16 +29,16 @@
  *
  * ## The contents are deliberately awkward
  *
- * A slug that looks like an absolute path, a slug with a slash and a percent sign in
- * it, unicode, and a workspace with no `repositoryId`. The path-like slugs are the
- * interesting ones: they must survive untouched, because a slug is a NAME the person
- * chose and publishing it is the point — while the hub's real `workspaces.path`
- * column must appear nowhere. A serializer that "protected" the user by scrubbing
- * anything path-shaped would corrupt these, and one that leaked the path column would
- * be caught by the other assertion. Both are pinned.
+ * A slug that looks like an absolute path, identifiers with a slash and a percent sign
+ * in them, and a workspace with no `repositoryId` plus a link that ends in it. The
+ * path-like slug is the interesting one: it must survive untouched, because a slug is
+ * a NAME the person chose and publishing it is the point, while the hub's real
+ * `workspaces.path` column must appear nowhere. A serializer that "protected" the user
+ * by scrubbing anything path-shaped would corrupt it, and one that leaked the path
+ * column would be caught by the other assertion. Both are pinned.
  */
 
-/** A registry as `exportRegistry` produces it, with two entries and two edges. */
+/** A registry as `exportRegistry` produces it: three entries, three edges, two of each publishable. */
 export const FIXTURE_REGISTRY = {
   format: 1,
   hubId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
@@ -72,19 +72,34 @@ export const FIXTURE_REGISTRY = {
   ],
   crossLinks: [
     {
+      blockerRepositoryId: "11111111-1111-4111-8111-111111111111",
       blockerWs: "staple-tracker",
       blockerIdentifier: "STA-283",
+      blockedRepositoryId: "22222222-2222-4222-8222-222222222222",
       blockedWs: "/Users/someone/projects/qde",
       blockedIdentifier: "QDE-42",
       type: "blocks",
     },
     {
-      // Slash and percent in a component, to pin that the entity id encoding is
+      // Slash and percent in the identifiers, to pin that the entity id encoding is
       // injective rather than merely usually-unambiguous.
-      blockerWs: "a/b",
+      blockerRepositoryId: "22222222-2222-4222-8222-222222222222",
+      blockerWs: "/Users/someone/projects/qde",
       blockerIdentifier: "A%2FB-1",
-      blockedWs: "wörk—space",
-      blockedIdentifier: "WS-7",
+      blockedRepositoryId: "11111111-1111-4111-8111-111111111111",
+      blockedWs: "staple-tracker",
+      blockedIdentifier: "WS/7",
+      type: "blocks",
+    },
+    {
+      // An end in the workspace with no identity. NOT publishable: the key is the two
+      // repositories' identities, and one of them has none. Absent from FIXTURE_OPS.
+      blockerRepositoryId: "11111111-1111-4111-8111-111111111111",
+      blockerWs: "staple-tracker",
+      blockerIdentifier: "STA-1",
+      blockedRepositoryId: null,
+      blockedWs: "no-identity-yet",
+      blockedIdentifier: "NIY-1",
       type: "blocks",
     },
   ],
@@ -130,9 +145,11 @@ export const FIXTURE_OPS = [
   },
   {
     entity: "crossLink",
-    // `encodeURIComponent` per component, joined with `/`. The blocked workspace's
-    // slashes are escaped, which is what makes the join injective.
-    entityId: "staple-tracker/STA-283/%2FUsers%2Fsomeone%2Fprojects%2Fqde/QDE-42",
+    // `rid/` then the two repositories' identities and the two identifiers, each
+    // `encodeURIComponent`ed, joined with `/`. The slugs are NOT in the key: they are
+    // names, and two machines can disagree about them (STA-287).
+    entityId:
+      "rid/11111111-1111-4111-8111-111111111111/STA-283/22222222-2222-4222-8222-222222222222/QDE-42",
     verb: "create",
     baseVersion: 0,
     payload: {
@@ -147,15 +164,18 @@ export const FIXTURE_OPS = [
   },
   {
     entity: "crossLink",
-    entityId: "a%2Fb/A%252FB-1/w%C3%B6rk%E2%80%94space/WS-7",
+    // The `/` and `%` inside the identifiers are escaped, which is what makes the join
+    // injective.
+    entityId:
+      "rid/22222222-2222-4222-8222-222222222222/A%252FB-1/11111111-1111-4111-8111-111111111111/WS%2F7",
     verb: "create",
     baseVersion: 0,
     payload: {
       format: 1,
-      blockerWs: "a/b",
+      blockerWs: "/Users/someone/projects/qde",
       blockerIdentifier: "A%2FB-1",
-      blockedWs: "wörk—space",
-      blockedIdentifier: "WS-7",
+      blockedWs: "staple-tracker",
+      blockedIdentifier: "WS/7",
       type: "blocks",
       present: true,
     },
@@ -176,26 +196,28 @@ export const FIXTURE_OPS = [
 export const FIXTURE_FOLDED_STATE = [
   {
     entity: "crossLink",
-    entityId: "a%2Fb/A%252FB-1/w%C3%B6rk%E2%80%94space/WS-7",
-    state: {
-      format: 1,
-      blockerWs: "a/b",
-      blockerIdentifier: "A%2FB-1",
-      blockedWs: "wörk—space",
-      blockedIdentifier: "WS-7",
-      type: "blocks",
-      present: true,
-    },
-  },
-  {
-    entity: "crossLink",
-    entityId: "staple-tracker/STA-283/%2FUsers%2Fsomeone%2Fprojects%2Fqde/QDE-42",
+    entityId:
+      "rid/11111111-1111-4111-8111-111111111111/STA-283/22222222-2222-4222-8222-222222222222/QDE-42",
     state: {
       format: 1,
       blockerWs: "staple-tracker",
       blockerIdentifier: "STA-283",
       blockedWs: "/Users/someone/projects/qde",
       blockedIdentifier: "QDE-42",
+      type: "blocks",
+      present: true,
+    },
+  },
+  {
+    entity: "crossLink",
+    entityId:
+      "rid/22222222-2222-4222-8222-222222222222/A%252FB-1/11111111-1111-4111-8111-111111111111/WS%2F7",
+    state: {
+      format: 1,
+      blockerWs: "/Users/someone/projects/qde",
+      blockerIdentifier: "A%2FB-1",
+      blockedWs: "staple-tracker",
+      blockedIdentifier: "WS/7",
       type: "blocks",
       present: true,
     },
@@ -227,12 +249,14 @@ export const FIXTURE_FOLDED_STATE = [
 /**
  * What {@link FIXTURE_REGISTRY} becomes after a publish and a read back.
  *
- * Two differences from {@link FIXTURE_REGISTRY}, and both are the design rather than
+ * Three differences from {@link FIXTURE_REGISTRY}, and all are the design rather than
  * loss:
  *
- *  - The `repositoryId: null` workspace is gone. It was never publishable, and the
- *    publishing machine was told so by name instead of having something invented for
- *    it.
+ *  - The `repositoryId: null` workspace is gone, and so is the link that ends in it.
+ *    Neither was publishable, and the publishing machine was told so by name instead of
+ *    having something invented for it.
+ *  - `retractedCrossLinks` is there, empty. A registry read back from the service says
+ *    which links it holds as removed, so a removal can reach another machine.
  *  - `capturedAt` is whatever the READING machine supplied. The service's fold has no
  *    single capture time — it is a fold of a log several machines may have written —
  *    so the honest available fact is when it was read. The round-trip assertions
@@ -264,20 +288,26 @@ export const FIXTURE_ROUND_TRIPPED = {
   ],
   crossLinks: [
     {
-      blockerWs: "a/b",
-      blockerIdentifier: "A%2FB-1",
-      blockedWs: "wörk—space",
-      blockedIdentifier: "WS-7",
-      type: "blocks",
-    },
-    {
+      blockerRepositoryId: "11111111-1111-4111-8111-111111111111",
       blockerWs: "staple-tracker",
       blockerIdentifier: "STA-283",
+      blockedRepositoryId: "22222222-2222-4222-8222-222222222222",
       blockedWs: "/Users/someone/projects/qde",
       blockedIdentifier: "QDE-42",
       type: "blocks",
     },
+    {
+      blockerRepositoryId: "22222222-2222-4222-8222-222222222222",
+      blockerWs: "/Users/someone/projects/qde",
+      blockerIdentifier: "A%2FB-1",
+      blockedRepositoryId: "11111111-1111-4111-8111-111111111111",
+      blockedWs: "staple-tracker",
+      blockedIdentifier: "WS/7",
+      type: "blocks",
+    },
   ],
+  // A registry read from the service also says what it holds as REMOVED. None here.
+  retractedCrossLinks: [],
 } as const;
 
 /**

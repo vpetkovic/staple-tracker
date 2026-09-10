@@ -252,16 +252,15 @@ describe("publishing is reachable only through its own consent", () => {
     /**
      * The WHOLE disclosure, not only the headline sentence.
      *
-     * `disclosure` is one sentence about what is uploaded. Everything that makes this a
-     * decision rather than a notice is in the block: that publishing is scoped to one
-     * machine, that a second machine naming a workspace differently costs a billed
-     * operation on every pass for ever, that this machine always wins, and what is
-     * actually refused. `--json` used to get the sentence and none of that, so "the cost
-     * is stated at the point of consent" held on a TTY only.
+     * `disclosure` is one sentence about what is uploaded. The rest of what a person is
+     * agreeing to is in the block: that several machines can publish to one registry, that
+     * a name is sent once and never overwritten, that nothing another machine published is
+     * removed, and that adopt takes on what this machine lacks. `--json` used to get the
+     * sentence and none of that, so "stated at the point of consent" held on a TTY only.
      */
-    expect(refusal.disclosureBlock).toContain("Publishing is scoped to ONE machine");
-    expect(refusal.disclosureBlock).toContain("each time");
-    expect(refusal.disclosureBlock).toContain("staple hub registry adopt --apply");
+    expect(refusal.disclosureBlock).toContain("More than one machine can publish to the same registry");
+    expect(refusal.disclosureBlock).toContain("sent once");
+    expect(refusal.disclosureBlock).toContain("staple hub registry adopt");
     // From index 1: the block capitalises the sentence's first letter, so the rest of it
     // is what the two share verbatim. The point is that the block CONTAINS the sentence
     // rather than paraphrasing it — one wording, reviewed once.
@@ -278,7 +277,7 @@ describe("publishing is reachable only through its own consent", () => {
     const grant = JSON.parse(granted.stdout);
     expect(grant.enabled).toBe(true);
     expect(grant.disclosure).toBe(REGISTRY_DISCLOSURE);
-    expect(grant.disclosureBlock).toContain("Publishing is scoped to ONE machine");
+    expect(grant.disclosureBlock).toContain("More than one machine can publish to the same registry");
   }, 90_000);
 
   it("refuses to record the consent on a hub that is not connected", () => {

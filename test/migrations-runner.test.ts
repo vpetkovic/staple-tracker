@@ -128,9 +128,10 @@ describe("version detection", () => {
     // GOLDEN, moved by S22 (STA-283): the HUB target 2 -> 3, and the workspace
     // target deliberately unmoved at 12. Hub 003 is the first migration in this
     // series that the workspace did not also need, which is exactly the
-    // divergence this assertion exists to make visible.
+    // divergence this assertion exists to make visible. Moved again by STA-287:
+    // hub 3 -> 4 (004-cross-link-changes), workspace still 12.
     expect(latestVersion(WORKSPACE_TARGET)).toBe(12);
-    expect(latestVersion(HUB_TARGET)).toBe(3);
+    expect(latestVersion(HUB_TARGET)).toBe(4);
   });
 });
 

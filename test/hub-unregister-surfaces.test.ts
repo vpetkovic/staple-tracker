@@ -208,8 +208,9 @@ describe("staple hub unregister and cross-workspace links", () => {
     expect(cli(home, ["new", "consumer", "--ws", "downstream"]).status).toBe(0);
     blocker = "UPS-1";
     blocked = "DOW-1";
-    // No CLI verb creates a cross-link, so the MCP one does — which also proves
-    // the two surfaces agree about the same hub rows.
+    // The link itself is created through MCP's `cross_link` below, not the CLI's
+    // `staple link <blocker> <blocked>`. Both call `Hub.addCrossLink`, so using the
+    // other surface here also proves the two agree about the same hub rows.
   });
   afterAll(() => removeDir(home));
 

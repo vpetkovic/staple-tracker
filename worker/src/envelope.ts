@@ -63,8 +63,9 @@ const ENTITIES_BY_PROTOCOL: ReadonlyArray<readonly [number, ReadonlySet<string>]
    *
    * `registration` is keyed by the workspace's `repositoryId`, the clone-surviving
    * UUID that is the only thing two machines can agree names the same workspace.
-   * `crossLink` is keyed by its four names, percent-encoded and joined — injective,
-   * so the same edge is the same entity on both machines.
+   * `crossLink` is keyed by its two workspaces' `repositoryId`s and its two issue
+   * identifiers, percent-encoded and joined. That is injective, and it contains no slug,
+   * so the same edge is the same entity on two machines that name a workspace differently.
    */
   [2, new Set(["registration", "crossLink"])],
 ];
@@ -248,7 +249,7 @@ export function validateEnvelope(
    * A tombstone is FINAL in the fold — every later operation on a deleted entity is
    * discarded — and that is right for an `issue`, whose id is minted once, because
    * resurrecting one is meaningless. A registry entity's id is **derived from its
-   * content**: a `crossLink`'s key is its four names, and a `registration`'s is the
+   * content**: a `crossLink`'s key is its two repositories and two identifiers, and a `registration`'s is the
    * workspace's `repositoryId`. So removing an edge and adding it back produces the same
    * entity id, lands on the tombstone, and is silently dropped while the push reports
    * success — and a restore carries the tombstone into the new epoch, because
