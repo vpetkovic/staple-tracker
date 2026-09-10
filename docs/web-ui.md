@@ -484,8 +484,10 @@ publishing, hub backups), then one block per step.
   `staple hub registry id`; *Take on an existing id* is `staple hub registry
   identity`. Replacing an id asks first, and the question is the server's
   `describeIdentityReplacement` sentence. It is shown whenever there is a
-  previous id, because this machine cannot tell whether that id was used.
-  Unavailable while the hub is connected.
+  previous id, because this machine cannot tell whether that id was used. The
+  yes names the id the warning was about. If another tab or the CLI changed the
+  stored id in the meantime, it is refused. Unavailable while the hub is
+  connected.
 - **Connection.** A collapsed form for endpoint, enrollment secret, label and
   credential store. *Review connection* shows the hub's own preview; *Connect*
   sends only the ticket and the secret. Connected, it offers *Disconnect the
@@ -503,9 +505,11 @@ publishing, hub backups), then one block per step.
   undo copy, marked *undo* in the list, and previews the adoption of what came
   back.
 - **Adopt.** *Preview adoption* lists one decision per incoming workspace and
-  per link. *Apply N changes to this machine* carries the preview's digest;
-  if the service or this machine's list moved since the preview, it is
-  refused and nothing is written.
+  per link. *Apply N changes to this machine* carries the preview's digest.
+  The server reads the service once, checks that read against the digest and
+  applies that same read. If anything moved since the preview, it refuses and
+  writes nothing. The count includes clearing a stale opt-out on a row that is
+  already here, and that row shows its sentence.
 
 Nothing in the panel reaches the service without a press. The routes are the
 eleven `POST /api/hub/registry/*` routes, each named in the method gate.

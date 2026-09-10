@@ -90,8 +90,12 @@ export interface HubRegistryState {
   identity: {
     open: boolean;
     draft: string;
-    /** The server asked before replacing an identity. `notice` is what it said. */
-    confirm: { hubId: string; notice: string } | null;
+    /**
+     * The server asked before replacing an identity. `notice` is what it said, and
+     * `previousHubId` is the id it said it about — the confirm carries it back, and the
+     * server refuses if that is no longer the stored one.
+     */
+    confirm: { hubId: string; notice: string; previousHubId: string | null } | null;
     outcome: HubIdentityOutcome | null;
   };
   connectDraft: ConnectDraft;
@@ -108,10 +112,13 @@ export interface HubRegistryState {
   restoring: RemoteBackup | null;
   /** What the last restore did on the service. */
   restored: HubRestoreReport | null;
-  /** An adoption preview, from the adopt button or from a restore, waiting on an apply. */
-  adoption: { report: AdoptionReport; digest: string } | null;
-  /** The last applied adoption. */
-  applied: AdoptionReport | null;
+  /**
+   * An adoption preview, from the adopt button or from a restore, waiting on an apply.
+   * `retiring` is the server's `retiresOptOuts`: identities whose opt-out the apply clears.
+   */
+  adoption: { report: AdoptionReport; digest: string; retiring: readonly string[] } | null;
+  /** The last applied adoption, with the opt-outs it cleared. */
+  applied: { report: AdoptionReport; retiring: readonly string[] } | null;
 }
 
 export const IDLE_REGISTRY: HubRegistryState = {
@@ -284,7 +291,15 @@ function Disclosure({
  * its outcome, and its sentence wherever the sentence says something the label does
  * not. Used for the adopt preview, the restore's preview, and what an apply did.
  */
-export function AdoptionView({ report }: { report: AdoptionReport }) {
+export function AdoptionView({
+  report,
+  retiring,
+}: {
+  report: AdoptionReport;
+  /** Identities whose stale opt-out this adoption clears. Their rows keep their sentence. */
+  retiring: readonly string[];
+}) {
+  const clears = (id: string | null) => id !== null && retiring.includes(id);
   return (
     <div data-hub-registry-adoption={report.dryRun ? "preview" : "applied"} className="space-y-2">
       <p className="text-[12px] leading-relaxed">{adoptionSummary(report)}</p>
@@ -302,8 +317,13 @@ export function AdoptionView({ report }: { report: AdoptionReport }) {
               <span className="text-[10px] uppercase text-muted-foreground">
                 {decisionLabel(decision, report.dryRun)}
               </span>
+              {clears(decision.entry.repositoryId) ? (
+                <span className="text-[10px] uppercase text-muted-foreground">
+                  {report.dryRun ? "opt-out to clear" : "opt-out cleared"}
+                </span>
+              ) : null}
             </div>
-            {showsReason(decision.outcome) ? (
+            {showsReason(decision.outcome) || clears(decision.entry.repositoryId) ? (
               <p className="text-[11px] leading-relaxed wrap-anywhere text-muted-foreground">{decision.reason}</p>
             ) : null}
           </li>
@@ -764,7 +784,7 @@ export function HubRegistryPanel(props: HubRegistryPanelProps) {
                 </p>
               ) : null}
               <p className="text-[11px] leading-relaxed text-muted-foreground">
-                {state.adoption !== null && applyLabel(state.adoption.report) !== null
+                {state.adoption !== null && applyLabel(state.adoption.report, state.adoption.retiring) !== null
                   ? "This machine's hub is unchanged until you apply the adoption below. No workspace is removed from it either way."
                   : "No workspace is removed from this machine's list by a restore."}
               </p>
@@ -778,9 +798,9 @@ export function HubRegistryPanel(props: HubRegistryPanelProps) {
           <Blocked reason={beyondConnection(blocks.adopt)} />
           {state.adoption !== null ? (
             <div data-hub-registry-adopt-preview className="space-y-2">
-              <AdoptionView report={state.adoption.report} />
+              <AdoptionView report={state.adoption.report} retiring={state.adoption.retiring} />
               <div className="flex flex-wrap items-center gap-2">
-                {applyLabel(state.adoption.report) === null ? (
+                {applyLabel(state.adoption.report, state.adoption.retiring) === null ? (
                   <p className="text-[12px] text-muted-foreground">Nothing to apply: this machine already has all it can take.</p>
                 ) : (
                   <Button
@@ -790,7 +810,7 @@ export function HubRegistryPanel(props: HubRegistryPanelProps) {
                     disabled={locked || state.busy !== null}
                     onClick={actions.onApply}
                   >
-                    {state.busy === "apply" ? "Applying…" : applyLabel(state.adoption.report)}
+                    {state.busy === "apply" ? "Applying…" : applyLabel(state.adoption.report, state.adoption.retiring)}
                   </Button>
                 )}
                 <Button type="button" size="sm" variant="ghost" disabled={state.busy !== null} onClick={actions.onDismissAdoption}>
@@ -801,7 +821,7 @@ export function HubRegistryPanel(props: HubRegistryPanelProps) {
           ) : null}
           {state.applied !== null ? (
             <div data-hub-registry-applied className="space-y-2">
-              <AdoptionView report={state.applied} />
+              <AdoptionView report={state.applied.report} retiring={state.applied.retiring} />
               <Button type="button" size="sm" variant="ghost" onClick={actions.onDismissAdoption}>
                 Close
               </Button>
@@ -888,7 +908,12 @@ export function useHubRegistry(onReport: (report: HubCloudReport) => void): {
         const answer = await adoptHubIdentity(hubId);
         report(answer);
         if (answer.needsConfirm && answer.notice !== null) {
-          patch({ identity: { ...state.identity, confirm: { hubId: answer.hubId, notice: answer.notice } } });
+          patch({
+            identity: {
+              ...state.identity,
+              confirm: { hubId: answer.hubId, notice: answer.notice, previousHubId: answer.previousHubId },
+            },
+          });
           return;
         }
         patch({
@@ -903,7 +928,7 @@ export function useHubRegistry(onReport: (report: HubCloudReport) => void): {
       const confirm = state.identity.confirm;
       if (confirm === null) return;
       void run("identity", async () => {
-        const answer = await adoptHubIdentity(confirm.hubId, true);
+        const answer = await adoptHubIdentity(confirm.hubId, confirm.previousHubId);
         report(answer);
         patch({
           identity: {
@@ -985,7 +1010,7 @@ export function useHubRegistry(onReport: (report: HubCloudReport) => void): {
           restoring: null,
           restored: answer.restore,
           backups: answer.backups,
-          adoption: { report: answer.restore.adoption, digest: answer.digest },
+          adoption: { report: answer.restore.adoption, digest: answer.digest, retiring: answer.retiresOptOuts },
           applied: null,
         });
       }),
@@ -993,7 +1018,10 @@ export function useHubRegistry(onReport: (report: HubCloudReport) => void): {
       void run("adopt", async () => {
         const answer = await adoptHubRegistry();
         report(answer);
-        patch({ adoption: { report: answer.adoption, digest: answer.digest }, applied: null });
+        patch({
+          adoption: { report: answer.adoption, digest: answer.digest, retiring: answer.retiresOptOuts },
+          applied: null,
+        });
       }),
     onApply: () => {
       const adoption = state.adoption;
@@ -1001,7 +1029,11 @@ export function useHubRegistry(onReport: (report: HubCloudReport) => void): {
       void run("apply", async () => {
         const answer = await adoptHubRegistry(adoption.digest);
         report(answer);
-        patch({ adoption: null, applied: answer.adoption, publish: null });
+        patch({
+          adoption: null,
+          applied: { report: answer.adoption, retiring: answer.retiresOptOuts },
+          publish: null,
+        });
       });
     },
     onDismissAdoption: () => patch({ adoption: null, applied: null }),

@@ -61,6 +61,19 @@ const provisioned = new Set<string>();
 
 const IDS = new Map<string, string>();
 
+/**
+ * Snapshot reads the UI server made, and a hook that runs BEFORE one is answered.
+ * The hook is how a test makes the service move between two reads of one request —
+ * another machine publishing mid-apply — which no amount of sequencing from outside
+ * the request can do.
+ */
+let snapshotReads = 0;
+let beforeSnapshot: ((read: number) => Promise<void>) | null = null;
+
+const CHARLIE = "5b2c7a10-1111-4111-8111-00000000ca11";
+const DELTA = "6c3d8b21-2222-4222-8222-00000000de17";
+let otherMachines = 0;
+
 function post(path: string, body: Record<string, unknown>, headers: Record<string, string> = {}) {
   return fetch(`${origin}${path}`, {
     method: "POST",
@@ -116,6 +129,10 @@ async function serviceHandler(req: IncomingMessage, res: ServerResponse): Promis
     }
     return send(403, { code: "forbidden", message: "not a member of this repository" });
   }
+  if (req.method === "GET" && url.pathname.endsWith("/snapshot")) {
+    snapshotReads += 1;
+    if (beforeSnapshot !== null) await beforeSnapshot(snapshotReads);
+  }
   const headers: Record<string, string> = {};
   for (const [key, value] of Object.entries(req.headers)) {
     if (typeof value === "string") headers[key] = value;
@@ -158,6 +175,58 @@ function hubRow(slug: string) {
     return hub.get(slug) ?? null;
   } finally {
     hub.close();
+  }
+}
+
+/**
+ * Another machine, publishing workspaces this one does not have. Done through the
+ * service module in-process, with its own staple home, its own hub and its own device,
+ * which is what a second machine is. Publishing is a union (STA-287), so it only has to
+ * hold what it adds.
+ */
+async function publishFromOtherMachine(rows: Array<{ slug: string; prefix: string; id: string }>) {
+  const hubId = storedHubId()!;
+  otherMachines += 1;
+  const deviceId = `device-other-${otherMachines}`;
+  const deviceToken = `stpl_other_${otherMachines}`;
+  const otherHome = mkdtempSync(join(tmpdir(), "staple-hubregui-other-"));
+  const previous = process.env.STAPLE_HOME;
+  process.env.STAPLE_HOME = otherHome;
+  try {
+    const other = Hub.open();
+    try {
+      other.adoptHubId(hubId);
+      for (const row of rows) {
+        const dir = join(otherHome, "ws", row.slug);
+        mkdirSync(dir, { recursive: true });
+        writeFileSync(join(dir, "staple.db"), "");
+        other.register({ slug: row.slug, prefix: row.prefix, path: join(dir, "staple.db"), kind: "repo" });
+        other.recordRepositoryId(row.slug, row.id);
+      }
+      credentialStoreFor(otherHome, "file").write(hubId, deviceToken);
+      writeConnection(otherHome, {
+        schemaVersion: 1,
+        repositoryId: hubId,
+        endpoint,
+        deviceId,
+        label: "other",
+        credentialMechanism: "file",
+        connectedAt: "2026-09-10T00:00:00.000Z",
+        auto: false,
+        backup: false,
+        registry: false,
+        protocol: REGISTRY_PROTOCOL,
+      });
+      setConsent(otherHome, hubId, { registry: true });
+      fake!.enroll(deviceId, deviceToken);
+      const report = await publishRegistry(other, otherHome, { fetchImpl: fake!.fetch });
+      expect(report.published).toBeGreaterThanOrEqual(1);
+    } finally {
+      other.close();
+    }
+  } finally {
+    process.env.STAPLE_HOME = previous;
+    rmSync(otherHome, { recursive: true, force: true });
   }
 }
 
@@ -277,7 +346,11 @@ describe("identity", () => {
 
   it("refuses a workspace's sync identity as a hub id, and changes nothing", async () => {
     const before = storedHubId();
-    const refused = await post("/api/hub/registry/identity", { hubId: IDS.get("bravo"), confirm: true });
+    const refused = await post("/api/hub/registry/identity", {
+      hubId: IDS.get("bravo"),
+      confirm: true,
+      previousHubId: before,
+    });
     expect(refused.status).toBe(409);
     expect(storedHubId()).toBe(before);
   });
@@ -303,7 +376,7 @@ describe("identity", () => {
       previousHubId: string | null;
       notice: string | null;
       report: Report;
-    }>("/api/hub/registry/identity", { hubId: replacement, confirm: true });
+    }>("/api/hub/registry/identity", { hubId: replacement, confirm: true, previousHubId: original });
     expect(replaced.adopted).toBe(true);
     expect(replaced.previousHubId).toBe(original);
     // Unconditional: this id was never connected or published, and the notice is
@@ -315,10 +388,52 @@ describe("identity", () => {
     // Reversible, which is what keeps this a confirmation rather than a refusal.
     const back = await postJson<{ adopted: boolean; previousHubId: string | null }>(
       "/api/hub/registry/identity",
-      { hubId: original, confirm: true },
+      { hubId: original, confirm: true, previousHubId: replacement },
     );
     expect(back).toMatchObject({ adopted: true, previousHubId: replacement });
     expect(storedHubId()).toBe(original);
+  });
+
+  /**
+   * The yes is to the warning that was shown. A warning about identity X, confirmed
+   * after another tab or the CLI replaced X with Y, would replace Y without anybody
+   * having been told what replacing Y orphans.
+   */
+  it("refuses a confirmation whose warning named an identity that is no longer stored", async () => {
+    const original = storedHubId()!;
+    const wanted = "9d4e0000-0000-4000-8000-0000000000aa";
+    const asked = await postJson<{ previousHubId: string }>("/api/hub/registry/identity", { hubId: wanted });
+    expect(asked.previousHubId).toBe(original);
+
+    const elsewhere = "5e1f0000-0000-4000-8000-00000000e15e";
+    const hub = Hub.open();
+    try {
+      hub.adoptHubId(elsewhere, { force: true });
+    } finally {
+      hub.close();
+    }
+    const refused = await post("/api/hub/registry/identity", {
+      hubId: wanted,
+      confirm: true,
+      previousHubId: asked.previousHubId,
+    });
+    expect(refused.status).toBe(409);
+    const message = ((await refused.json()) as { message: string }).message;
+    expect(message).toContain(elsewhere);
+    expect(message).toContain(original);
+    expect(storedHubId(), "a stale confirmation replaced the identity").toBe(elsewhere);
+
+    // A confirmation that names nothing is not a confirmation of anything.
+    const unnamed = await post("/api/hub/registry/identity", { hubId: wanted, confirm: true });
+    expect(unnamed.status).toBe(400);
+    expect(storedHubId()).toBe(elsewhere);
+
+    const back = Hub.open();
+    try {
+      back.adoptHubId(original, { force: true });
+    } finally {
+      back.close();
+    }
   });
 
   it("refuses a blank id as a validation error", async () => {
@@ -481,63 +596,9 @@ describe("publish, backups, adopt and restore against the service", () => {
     expect(listed.restoreNotice.bullets.length).toBeGreaterThanOrEqual(3);
   });
 
-  /**
-   * A second machine, publishing a workspace this one does not have. Done through the
-   * service module in-process with its own staple home and its own hub, which is what
-   * a second machine is.
-   */
   it("sees what another machine published", async () => {
-    const hubId = storedHubId()!;
-    const mine = new Map(["alpha", "bravo"].map((slug) => [slug, hubRow(slug)!]));
-    const otherHome = mkdtempSync(join(tmpdir(), "staple-hubregui-other-"));
-    const previous = process.env.STAPLE_HOME;
-    process.env.STAPLE_HOME = otherHome;
-    try {
-      const other = Hub.open();
-      try {
-        other.adoptHubId(hubId);
-        // The same two workspaces under the same names and prefixes as this machine,
-        // so the only difference between the two lists is the third one.
-        const rows = [
-          ...(["alpha", "bravo"] as const).map((slug) => {
-            const row = mine.get(slug)!;
-            return { slug, prefix: row.prefix, kind: row.kind, id: IDS.get(slug)! };
-          }),
-          { slug: "charlie", prefix: "CHA", kind: "repo", id: "5b2c7a10-1111-4111-8111-00000000ca11" },
-        ];
-        for (const row of rows) {
-          const dir = join(otherHome, "ws", row.slug);
-          mkdirSync(dir, { recursive: true });
-          writeFileSync(join(dir, "staple.db"), "");
-          other.register({ slug: row.slug, prefix: row.prefix, path: join(dir, "staple.db"), kind: row.kind });
-          other.recordRepositoryId(row.slug, row.id);
-        }
-        credentialStoreFor(otherHome, "file").write(hubId, "stpl_other_device");
-        writeConnection(otherHome, {
-          schemaVersion: 1,
-          repositoryId: hubId,
-          endpoint,
-          deviceId: "device-other",
-          label: "other",
-          credentialMechanism: "file",
-          connectedAt: "2026-09-10T00:00:00.000Z",
-          auto: false,
-          backup: false,
-          registry: false,
-          protocol: REGISTRY_PROTOCOL,
-        });
-        setConsent(otherHome, hubId, { registry: true });
-        fake!.enroll("device-other", "stpl_other_device");
-        const report = await publishRegistry(other, otherHome, { fetchImpl: fake!.fetch });
-        expect(report.published).toBeGreaterThanOrEqual(1);
-      } finally {
-        other.close();
-      }
-    } finally {
-      process.env.STAPLE_HOME = previous;
-      rmSync(otherHome, { recursive: true, force: true });
-    }
-    expect(fake!.ops.some((op) => op.entityId === "5b2c7a10-1111-4111-8111-00000000ca11")).toBe(true);
+    await publishFromOtherMachine([{ slug: "charlie", prefix: "CHA", id: CHARLIE }]);
+    expect(fake!.ops.some((op) => op.entityId === CHARLIE)).toBe(true);
   });
 
   let adoptDigest = "";
@@ -574,7 +635,74 @@ describe("publish, backups, adopt and restore against the service", () => {
     });
     expect(applied.adoption.dryRun).toBe(false);
     const charlie = hubRow("charlie");
-    expect(charlie?.repositoryId).toBe("5b2c7a10-1111-4111-8111-00000000ca11");
+    expect(charlie?.repositoryId).toBe(CHARLIE);
+  });
+
+  /**
+   * THE APPLY IS THE PREVIEW, even when the service moves during the request.
+   *
+   * An apply that read the service once to check the digest and again to write would
+   * write whatever landed between the two — here a workspace another machine publishes
+   * while the apply is in flight — without anybody having been shown it. One read, one
+   * payload, both checked and applied.
+   */
+  it("applies what it previewed even when another machine publishes during the apply", async () => {
+    const previewed = await postJson<{ digest: string }>("/api/hub/registry/adopt", {});
+    snapshotReads = 0;
+    beforeSnapshot = async (read) => {
+      if (read === 2) await publishFromOtherMachine([{ slug: "delta", prefix: "DEL", id: DELTA }]);
+    };
+    let applied: { adoption: { decisions: Array<{ entry: { slug: string } }> } };
+    try {
+      applied = await postJson("/api/hub/registry/adopt", { apply: true, digest: previewed.digest });
+    } finally {
+      beforeSnapshot = null;
+    }
+    expect(applied.adoption.decisions.map((d) => d.entry.slug)).not.toContain("delta");
+    expect(hubRow("delta"), "an unpreviewed workspace was written").toBeNull();
+    // The service did move; the next preview shows it, and only then can it be applied.
+    if (!fake!.ops.some((op) => op.entityId === DELTA)) {
+      await publishFromOtherMachine([{ slug: "delta", prefix: "DEL", id: DELTA }]);
+    }
+    const next = await postJson<{ adoption: { decisions: Array<{ entry: { slug: string } }> } }>(
+      "/api/hub/registry/adopt",
+      {},
+    );
+    expect(next.adoption.decisions.map((d) => d.entry.slug)).toContain("delta");
+  });
+
+  /**
+   * "Nothing to apply" must not be said about an apply that would still write.
+   *
+   * A `current` row whose identity also carries an opt-out — the contradiction a prune
+   * before STA-283 left behind — is cleared by applying. The route names every identity
+   * whose opt-out applying would retire, so the page can count it and say so.
+   */
+  it("names a stale opt-out that applying would clear, and applying clears it", async () => {
+    const bravo = IDS.get("bravo")!;
+    const hub = Hub.open();
+    try {
+      hub.addOptOut(bravo, "bravo", "pruned");
+    } finally {
+      hub.close();
+    }
+    const previewed = await postJson<{
+      adoption: { decisions: Array<{ entry: { repositoryId: string | null }; outcome: string }> };
+      digest: string;
+      retiresOptOuts: string[];
+    }>("/api/hub/registry/adopt", {});
+    expect(previewed.retiresOptOuts).toEqual([bravo]);
+    expect(previewed.adoption.decisions.find((d) => d.entry.repositoryId === bravo)?.outcome).toBe("current");
+
+    await postJson("/api/hub/registry/adopt", { apply: true, digest: previewed.digest });
+    const after = Hub.open();
+    try {
+      expect(after.listOptOuts().map((o) => o.repositoryId)).not.toContain(bravo);
+    } finally {
+      after.close();
+    }
+    const again = await postJson<{ retiresOptOuts: string[] }>("/api/hub/registry/adopt", {});
+    expect(again.retiresOptOuts).toEqual([]);
   });
 
   it("refuses a restore without confirm, with the CLI's disclosure, and restores nothing", async () => {

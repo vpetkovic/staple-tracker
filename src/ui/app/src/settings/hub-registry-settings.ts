@@ -194,10 +194,16 @@ export function showsReason(outcome: AdoptionDecision["outcome"] | CrossLinkDeci
   return outcome !== "current";
 }
 
-/** How many things applying this adoption would change on this machine. */
-export function adoptionChanges(report: AdoptionReport): number {
+/**
+ * How many things applying this adoption would change on this machine.
+ *
+ * `retiring` is the server's list of identities whose stale opt-out applying clears
+ * (`retiresOptOuts` on the adopt and restore answers). Those rows are `current` — the
+ * outcome says "nothing to do" — and the apply still writes, so they count.
+ */
+export function adoptionChanges(report: AdoptionReport, retiring: readonly string[]): number {
   const listed = report.decisions.filter((decision) => decision.outcome === "absent").length;
-  return listed + report.crossLinks.added + report.crossLinks.removed;
+  return listed + report.crossLinks.added + report.crossLinks.removed + retiring.length;
 }
 
 /** The adoption in one line: counts per outcome, in the report's own tense. */
@@ -227,8 +233,8 @@ export function adoptionSummary(report: AdoptionReport): string {
 }
 
 /** The apply button: what it changes, counted, or null when there is nothing to apply. */
-export function applyLabel(report: AdoptionReport): string | null {
-  const changes = adoptionChanges(report);
+export function applyLabel(report: AdoptionReport, retiring: readonly string[]): string | null {
+  const changes = adoptionChanges(report, retiring);
   return changes === 0 ? null : `Apply ${plural(changes, "change")} to this machine`;
 }
 

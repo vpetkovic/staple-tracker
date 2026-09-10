@@ -319,7 +319,12 @@ describe("identity", () => {
   it("shows the server's orphan notice before the yes, from the state and not a literal", () => {
     const notice = "ORPHAN-NOTICE-FROM-THE-SERVER naming the previous id";
     const html = render(report({ hubId: HUB_ID }), {
-      identity: { open: true, draft: "other", confirm: { hubId: "other-id-123456", notice }, outcome: null },
+      identity: {
+        open: true,
+        draft: "other",
+        confirm: { hubId: "other-id-123456", notice, previousHubId: HUB_ID },
+        outcome: null,
+      },
     });
     expect(html).toContain("data-destructive-confirm");
     expect(html).toContain(notice);
@@ -337,6 +342,15 @@ describe("identity", () => {
       identity: { ...IDLE_REGISTRY.identity, outcome: { kind: "adopted", hubId: HUB_ID, notice: null } },
     });
     expect(first).not.toContain("data-hub-registry-orphan-notice");
+  });
+
+  it("confirms the identity its warning named, and nothing else", () => {
+    // The server refuses a yes whose warning was about an id that is no longer stored,
+    // so the confirm has to say which id that was.
+    expect(code("HubRegistryPanel.tsx")).toContain("adoptHubIdentity(confirm.hubId, confirm.previousHubId)");
+    const client = code("../lib/api.ts");
+    const call = client.slice(client.indexOf("export const adoptHubIdentity"), client.indexOf("export const previewHubRegistryConnect"));
+    expect(call).toContain("confirm: true, previousHubId");
   });
 
   it("never words the orphan notice itself", () => {
@@ -534,7 +548,7 @@ describe("backups and restore", () => {
       backups: [UNDO, BACKUP],
       restoreNotice: NOTICE,
       restored,
-      adoption: { report: restored.adoption, digest: "d" },
+      adoption: { report: restored.adoption, digest: "d", retiring: [] },
     });
     expect(html).toContain("Restored on the service: epoch 3 → 4, 7 entities.");
     expect(html).toContain(`Undo: restore ${UNDO.backupId}`);
@@ -548,7 +562,7 @@ describe("backups and restore", () => {
     const quiet = render(EVERYTHING_ON, {
       backups: [UNDO, BACKUP],
       restored: { ...restored, adoption: nothing },
-      adoption: { report: nothing, digest: "d" },
+      adoption: { report: nothing, digest: "d", retiring: [] },
     });
     expect(quiet).not.toContain("data-hub-registry-apply");
     expect(quiet).not.toContain("until you apply");
@@ -560,7 +574,7 @@ describe("backups and restore", () => {
 
 describe("adopt", () => {
   it("lists one decision per incoming workspace and per link, with the reasons that say something", () => {
-    const html = renderToStaticMarkup(<AdoptionView report={adoption()} />);
+    const html = renderToStaticMarkup(<AdoptionView report={adoption()} retiring={[]} />);
     for (const slug of ["alpha", "charlie", "delta", "echo"]) {
       expect(html).toContain(`data-hub-registry-decision="${slug}"`);
     }
@@ -583,16 +597,38 @@ describe("adopt", () => {
   });
 
   it("counts what applying would change, and offers nothing to apply when it would change nothing", () => {
-    expect(adoptionChanges(adoption())).toBe(3);
-    expect(applyLabel(adoption())).toBe("Apply 3 changes to this machine");
+    expect(adoptionChanges(adoption(), [])).toBe(3);
+    expect(applyLabel(adoption(), [])).toBe("Apply 3 changes to this machine");
     const nothing = adoption({
       decisions: adoption().decisions.filter((decision) => decision.outcome !== "absent"),
       crossLinks: { added: 0, skipped: 0, current: 0, removed: 0, keptRemoved: 1, keptLinked: 0 },
     });
-    expect(applyLabel(nothing)).toBeNull();
-    const html = render(CONNECTED, { adoption: { report: nothing, digest: "d" } });
+    expect(applyLabel(nothing, [])).toBeNull();
+    const html = render(CONNECTED, { adoption: { report: nothing, digest: "d", retiring: [] } });
     expect(html).not.toContain("data-hub-registry-apply");
     expect(html).toContain("Nothing to apply");
+  });
+
+  /**
+   * "Nothing to apply" is a claim about the write, and a `current` row can still be
+   * written: applying clears an opt-out its identity should never have had. The server
+   * names those identities; the label counts them and the row shows its sentence.
+   */
+  it("counts clearing a stale opt-out, and shows that row's sentence", () => {
+    const nothing = adoption({
+      decisions: adoption().decisions.filter((decision) => decision.outcome === "current"),
+      crossLinks: { added: 0, skipped: 0, current: 0, removed: 0, keptRemoved: 0, keptLinked: 0 },
+      crossLinkDecisions: [],
+    });
+    expect(applyLabel(nothing, [])).toBeNull();
+    expect(applyLabel(nothing, ["r-a"])).toBe("Apply 1 change to this machine");
+    const html = render(CONNECTED, { adoption: { report: nothing, digest: "d", retiring: ["r-a"] } });
+    expect(html).toContain("data-hub-registry-apply");
+    expect(html).not.toContain("Nothing to apply");
+    expect(html).toContain("ALPHA-CURRENT-SENTENCE");
+    expect(html).toContain("opt-out to clear");
+    const view = renderToStaticMarkup(<AdoptionView report={nothing} retiring={[]} />);
+    expect(view).not.toContain("ALPHA-CURRENT-SENTENCE");
   });
 
   it("applies with the preview's digest, and only that", () => {
@@ -603,7 +639,7 @@ describe("adopt", () => {
   });
 
   it("speaks in the past tense once applied", () => {
-    const html = renderToStaticMarkup(<AdoptionView report={adoption({ dryRun: false })} />);
+    const html = renderToStaticMarkup(<AdoptionView report={adoption({ dryRun: false })} retiring={[]} />);
     expect(html).toContain('data-hub-registry-adoption="applied"');
     expect(html).toContain(">listed<");
     expect(html).not.toContain("will be");

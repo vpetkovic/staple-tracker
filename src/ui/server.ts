@@ -47,7 +47,7 @@ import {
   type HubWorkspaceOutcome,
   type HubWorkspaceReport,
 } from "../core/cloud/hub-surface.js";
-import { exportRegistry } from "../core/cloud/hub-registry.js";
+import { adoptRegistry, exportRegistry } from "../core/cloud/hub-registry.js";
 /**
  * S17/S19/S21 (STA-278, STA-280, STA-282): the per-row half of the cloud surface.
  *
@@ -83,7 +83,7 @@ import { exportRegistry } from "../core/cloud/hub-registry.js";
  * `test/ui-cloud-workspace-actions.test.ts` drives them in single-workspace mode
  * for that reason and no other.
  */
-import { listHubWorkspaces, type HubWorkspace } from "../core/cloud/hub-scope.js";
+import { listHubWorkspaces, reconcileRepositoryIds, type HubWorkspace } from "../core/cloud/hub-scope.js";
 import { buildHubConnectPreview, type HubConnectEntry } from "../core/cloud/hub-preview.js";
 import { performHubConnect, performHubDisconnect } from "../core/cloud/hub-connect.js";
 import { syncAllWorkspaces } from "../core/cloud/hub-sync.js";
@@ -102,7 +102,6 @@ import { syncAllWorkspaces } from "../core/cloud/hub-sync.js";
  * staple home and makes no request.
  */
 import {
-  adoptPublishedRegistry,
   adoptRegistryIdentity,
   buildHubRegistryPreview,
   connectHubRegistry,
@@ -110,6 +109,7 @@ import {
   describeIdentityReplacement,
   listHubBackups,
   publishRegistry,
+  readPublishedRegistry,
   requireHubRegistryConnection,
   requireRegistryConsent,
   restoreRegistry,
@@ -359,6 +359,28 @@ export const HUB_RESTORE_NOTICE: { readonly headline: string; readonly bullets: 
     "your local hub is only changed if you apply the adoption that follows",
   ],
 };
+
+/**
+ * The identities whose opt-out applying this adoption would retire.
+ *
+ * An opt-out and a registered row for one identity are contradictory records, and
+ * `adoptRegistry` clears the opt-out when it applies (`decide` in
+ * `src/core/cloud/hub-registry.ts`: a row holds the identity AND it is declined). That
+ * write happens on a `current` row, whose outcome says "nothing to do", so without this
+ * list the page announced "Nothing to apply" about an apply that still writes.
+ *
+ * The rule is `decide`'s, restated over the same two reads — a row holds the identity,
+ * and the opt-out list names it — and `test/ui-hub-registry.test.ts` applies an
+ * adoption this names and asserts the opt-out is gone, so the two cannot disagree
+ * without a failing test.
+ */
+function optOutsAdoptionRetires(hub: Hub, report: AdoptionReport): string[] {
+  const optedOut = new Set(hub.listOptOuts().map((optOut) => optOut.repositoryId));
+  return report.decisions.flatMap((decision) => {
+    const id = decision.entry.repositoryId;
+    return id !== null && optedOut.has(id) && hub.findByRepositoryId(id) !== undefined ? [id] : [];
+  });
+}
 
 /**
  * A fingerprint of an adoption PREVIEW, which is what an apply has to hand back.
@@ -2896,6 +2918,25 @@ export function startUiServer(options: UiOptions): UiHandle {
           );
           return;
         }
+        /**
+         * A confirmation names the identity its warning was about, and is refused if that
+         * is no longer the stored one. The warning is `describeIdentityReplacement` of a
+         * PARTICULAR id; a yes given to it after another tab or `staple hub registry
+         * identity` replaced that id would replace a different one, whose orphan notice
+         * nobody was shown.
+         */
+        const confirming = body.confirm === true;
+        if (confirming && body.previousHubId !== null && typeof body.previousHubId !== "string") {
+          deny(
+            res,
+            400,
+            "validation",
+            "A confirmed replacement names the identity its warning was about, as previousHubId " +
+              "(null when there was none). Ask again without confirm to be shown it. Nothing " +
+              "was changed.",
+          );
+          return;
+        }
         const hub = Hub.open();
         let answer: {
           hubId: string;
@@ -2906,7 +2947,16 @@ export function startUiServer(options: UiOptions): UiHandle {
         };
         try {
           const previous = hub.storedHubId();
-          if (previous !== null && previous !== wanted && body.confirm !== true) {
+          if (confirming && body.previousHubId !== previous) {
+            throw new StapleError(
+              "conflict",
+              `This hub's identity is now ${previous ?? "unset"}, and the warning you confirmed ` +
+                `was about ${String(body.previousHubId)} — it was changed from somewhere else ` +
+                "while the warning was on screen. Nothing was changed. Take the id on again to " +
+                "see what replacing the current one means.",
+            );
+          }
+          if (previous !== null && previous !== wanted && !confirming) {
             answer = {
               hubId: wanted,
               adopted: false,
@@ -3192,6 +3242,7 @@ export function startUiServer(options: UiOptions): UiHandle {
           return {
             restore,
             digest: adoptionDigest(restore.adoption),
+            retiresOptOuts: optOutsAdoptionRetires(hub, restore.adoption),
             backups: await listHubBackups(stapleHome(), hubId),
           };
         });
@@ -3222,10 +3273,26 @@ export function startUiServer(options: UiOptions): UiHandle {
           );
           return;
         }
-        const answer = await withRegistryHub(async (hub) => {
-          const preview = await adoptPublishedRegistry(hub, stapleHome(), { apply: false });
-          const seen = adoptionDigest(preview.adoption);
-          if (!apply) return { ...preview, digest: seen };
+        const answer = await withRegistryHub(async (hub, hubId) => {
+          /**
+           * ONE READ OF THE SERVICE, and both the check and the write come from it.
+           *
+           * This was `adoptPublishedRegistry` twice — preview, compare, then apply — and
+           * each call read the service. A publish from another machine landing between
+           * the two reads was written without having been previewed:
+           * `test/ui-hub-registry.test.ts` publishes a workspace from inside the second
+           * read and watched it land. So this is `adoptPublishedRegistry`'s own three
+           * steps, with the read done once: reconcile the identity column first (the
+           * adoption keys on it), read, then preview and apply the SAME payload. Nothing
+           * awaits between the preview and the apply, so this machine's hub cannot move
+           * between them either.
+           */
+          reconcileRepositoryIds(hub);
+          const { registry } = await readPublishedRegistry(stapleHome(), hubId);
+          const preview = adoptRegistry(hub, registry);
+          const seen = adoptionDigest(preview);
+          const retiresOptOuts = optOutsAdoptionRetires(hub, preview);
+          if (!apply) return { registry, adoption: preview, digest: seen, retiresOptOuts };
           if (seen !== digest) {
             throw new StapleError(
               "conflict",
@@ -3234,8 +3301,8 @@ export function startUiServer(options: UiOptions): UiHandle {
                 "Preview the adoption again.",
             );
           }
-          const applied = await adoptPublishedRegistry(hub, stapleHome(), { apply: true });
-          return { ...applied, digest: seen };
+          const applied = adoptRegistry(hub, registry, { apply: true });
+          return { registry, adoption: applied, digest: seen, retiresOptOuts };
         });
         json(res, 200, { ...answer, report: hubCloudReport(stapleHome()) });
         return;

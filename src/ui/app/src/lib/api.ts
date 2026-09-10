@@ -587,11 +587,16 @@ export const mintHubIdentity = () => hubWrite<HubIdentityMintResult>("/api/hub/r
 /**
  * Take on an identity another machine published under. Local.
  *
- * Without `confirm`, replacing an existing id only ASKS: the answer carries
- * `needsConfirm` and the orphan notice, and nothing changes.
+ * Without `previousHubId`, replacing an existing id only ASKS: the answer carries
+ * `needsConfirm`, the orphan notice and the id it is about, and nothing changes. With
+ * it, this confirms THAT warning: the server refuses if the stored id is no longer the
+ * one the warning named.
  */
-export const adoptHubIdentity = (hubId: string, confirm = false) =>
-  hubWrite<HubIdentityResult>("/api/hub/registry/identity", { hubId, ...(confirm ? { confirm: true } : {}) });
+export const adoptHubIdentity = (hubId: string, previousHubId?: string | null) =>
+  hubWrite<HubIdentityResult>(
+    "/api/hub/registry/identity",
+    previousHubId === undefined ? { hubId } : { hubId, confirm: true, previousHubId },
+  );
 
 /** Step one of connecting the hub. Local, and the only call here that names an endpoint. */
 export const previewHubRegistryConnect = (target: {

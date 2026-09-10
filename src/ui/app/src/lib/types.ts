@@ -2097,6 +2097,8 @@ export interface HubBackupsResult {
 export interface HubRestoreResult {
   restore: HubRestoreReport;
   digest: string;
+  /** Identities whose stale opt-out applying the adoption would clear. */
+  retiresOptOuts: string[];
   backups: RemoteBackup[];
   report: HubCloudReport;
 }
@@ -2106,5 +2108,10 @@ export interface HubAdoptResult {
   adoption: AdoptionReport;
   registry: HubRegistryPayload;
   digest: string;
+  /**
+   * Identities whose stale opt-out this apply clears — on a `current` row, whose
+   * outcome alone would say there is nothing to write.
+   */
+  retiresOptOuts: string[];
   report: HubCloudReport;
 }
