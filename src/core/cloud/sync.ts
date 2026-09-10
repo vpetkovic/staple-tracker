@@ -50,7 +50,7 @@ import { parseEndpoint, type CloudEndpoint } from "./endpoint.js";
 import { ReferentMissing, applyToDatabase, bumpEntityVersion } from "./apply.js";
 import { applyConflictOperation, countOpenConflicts, screenForConflicts } from "./conflicts.js";
 import { hydrate } from "./hydrate.js";
-import { seedOwed, seedRepository, type RepositorySurvey, type SeedReport } from "./seed.js";
+import { seedModeOf, seedOwed, seedRepository, type RepositorySurvey, type SeedReport } from "./seed.js";
 import {
   acknowledgeOperation,
   advanceCursor,
@@ -323,22 +323,6 @@ export async function syncRepository(
    * on, so the seed follows exactly the rules every other upload follows, and a
    * connected workspace in manual mode stays as silent after connecting as before it.
    */
-  let seed: SeedReport | null = null;
-  let joined: BootstrapReport | null = null;
-  if (seedOwed(db, repositoryId)) {
-    const survey = await surveyRepository(session, capabilities, options);
-    const mode = state.cursor === null && state.epoch === 0 ? "join" : "heal";
-    seed = seedRepository(db, journal, {
-      repositoryId,
-      survey,
-      mode,
-      maxOpBytes: capabilities.maxOpBytes,
-    });
-    if (mode === "join") {
-      joined = { entities: survey.entities.length, pages: survey.pages, cutoffSeq: survey.cutoffSeq, resumed: false };
-    }
-  }
-
   /**
    * Push, and re-bootstrap once if the epoch moved under it.
    *
@@ -356,15 +340,52 @@ export async function syncRepository(
    * has.
    */
   let forcedBootstrap: BootstrapReport | null = null;
-  let pushed: SyncReport["pushed"];
-  try {
-    pushed = await pushPending(db, journal, session, capabilities, options);
-  } catch (error) {
-    if (cloudCodeOf(error) !== "epoch_changed") throw error;
-    beginBootstrap(db, epochFrom(error) ?? state.epoch + 1);
-    forcedBootstrap = await runBootstrap(db, journal, session, capabilities, options);
-    pushed = await pushPending(db, journal, session, capabilities, options);
+  const pushed = { attempted: 0, applied: 0, duplicate: 0 };
+  const pushAll = async (): Promise<void> => {
+    let sent: SyncReport["pushed"];
+    try {
+      sent = await pushPending(db, journal, session, capabilities, options);
+    } catch (error) {
+      if (cloudCodeOf(error) !== "epoch_changed") throw error;
+      beginBootstrap(db, epochFrom(error) ?? requireSyncState(db).epoch + 1);
+      forcedBootstrap = await runBootstrap(db, journal, session, capabilities, options);
+      sent = await pushPending(db, journal, session, capabilities, options);
+    }
+    pushed.attempted += sent.attempted;
+    pushed.applied += sent.applied;
+    pushed.duplicate += sent.duplicate;
+  };
+
+  let seed: SeedReport | null = null;
+  let joined: BootstrapReport | null = null;
+  if (seedOwed(db, repositoryId)) {
+    /**
+     * A heal sends what is already queued FIRST, under the ids it was queued with.
+     *
+     * A database that has been synchronizing can hold operations whose push landed and
+     * whose acknowledgement did not — a dropped connection, a killed process, automatic
+     * sync's budget aborting the request. Sent again under the same id, such an
+     * operation comes back `duplicate` and is acknowledged; the heal must not give any
+     * of them a new id, because a new id is applied a second time, at a later seq, on top
+     * of whatever landed in between (see `seed.ts`). Sending them before the survey also
+     * means the survey sees them, so the heal counts them in every version it stamps.
+     *
+     * A join does not: a database that has never synchronized has sent nothing, and its
+     * whole pre-join journal is replaced by the seed.
+     */
+    if (seedModeOf(db) === "heal") await pushAll();
+    const survey = await surveyRepository(session, capabilities, options);
+    seed = seedRepository(db, journal, {
+      repositoryId,
+      survey,
+      maxOpBytes: capabilities.maxOpBytes,
+    });
+    if (seed?.mode === "join") {
+      joined = { entities: survey.entities.length, pages: survey.pages, cutoffSeq: survey.cutoffSeq, resumed: false };
+    }
   }
+
+  await pushAll();
 
   const pull = await pullEverything(db, journal, session, capabilities, options);
 

@@ -113,8 +113,6 @@ export interface SeedReport {
   readonly cleared: readonly SeedCleared[];
   readonly replaced: readonly SeedReplaced[];
   readonly skipped: readonly SeedSkipped[];
-  /** Unsent operations moved behind the seed (a heal only). */
-  readonly resequenced: number;
   readonly at: string;
 }
 
@@ -241,9 +239,6 @@ export function describeSeed(seed: SeedReport): { summary: string; details: stri
     }
   }
   for (const item of seed.skipped) details.push(`not uploaded: ${item.label} — ${item.reason}`);
-  if (seed.resequenced > 0) {
-    details.push(`${seed.resequenced} unsent ${seed.resequenced === 1 ? "operation" : "operations"} now follow the upload`);
-  }
   return { summary, details };
 }
 
@@ -983,9 +978,19 @@ function replacedValues(db: DatabaseSync, index: SurveyIndex): SeedReplaced[] {
 export interface SeedArgs {
   readonly repositoryId: string;
   readonly survey: RepositorySurvey;
-  readonly mode: SeedMode;
   /** `capabilities().maxOpBytes`: the largest payload the service will take. */
   readonly maxOpBytes: number;
+}
+
+/**
+ * `join` when this database has never synchronized with any repository, else `heal`.
+ * Read from `sync_state`, inside the seed's own transaction — see {@link seedRepository}.
+ */
+export function seedModeOf(db: DatabaseSync): SeedMode {
+  const row = db.prepare("SELECT cursor, epoch FROM sync_state WHERE id = 1").get() as
+    | { cursor: string | null; epoch: number }
+    | undefined;
+  return row === undefined || (row.cursor === null && row.epoch === 0) ? "join" : "heal";
 }
 
 /** A local collection before the repository's version of it was applied. */
@@ -1038,9 +1043,24 @@ function isSubsequence(part: readonly string[], whole: readonly string[]): boole
  * in it, so the seed happens exactly once per repository per database however the
  * process dies.
  */
-export function seedRepository(db: DatabaseSync, journal: Journal, args: SeedArgs): SeedReport {
-  const { repositoryId, survey, mode } = args;
+export function seedRepository(db: DatabaseSync, journal: Journal, args: SeedArgs): SeedReport | null {
+  const { repositoryId, survey } = args;
   return tx(db, () => {
+    /**
+     * Owed is decided HERE, under the write lock, and not only by the caller before its
+     * survey. Two processes can sync one database at once — a manual `staple cloud
+     * sync` overlapping an MCP post-write or a UI startup automatic sync — and nothing
+     * serializes them but this transaction. Both found the seed owed before their
+     * surveys; without this check the second seeded again from a state the first had
+     * already replaced, deleting its unsent outbox and every version row and journaling
+     * every entity a second time under new ids. Measured: eight creates on the service
+     * for four entities, and this device's counters never again agreeing with anyone's.
+     *
+     * The mode is read here for the same reason: whether this database has synchronized
+     * is a fact about now, not about the moment the caller looked.
+     */
+    if (!seedOwed(db, repositoryId)) return null;
+    const mode = seedModeOf(db);
     const now = nowIso();
     const index = new SurveyIndex(survey);
     const renamed: SeedRename[] = [];
@@ -1284,17 +1304,24 @@ export function seedRepository(db: DatabaseSync, journal: Journal, args: SeedArg
       );
     }
 
-    let resequenced = 0;
-    if (mode === "heal") {
-      for (const intent of sendable) {
-        if (intent.verb === "create") journal.discardUnsent(intent.entity, intent.entityId);
-      }
-      const floor = journal.clientSeqHighWater();
-      journal.seed(sendable);
-      resequenced = journal.resequenceUnsent(floor);
-    } else {
-      journal.seed(sendable);
-    }
+    /**
+     * A heal never gives an operation already in the outbox a new id. Any unacknowledged
+     * row may have LANDED — its acknowledgement lost to a dropped connection, a killed
+     * process, or automatic sync's budget aborting the request — and a retry under its
+     * own id comes back `duplicate`, while the same operation under a new id is applied
+     * a second time, at a later seq, over whatever landed in between. So the caller
+     * sends the queue BEFORE the heal (`sync.ts`), and what the seed allocates here
+     * simply follows it.
+     *
+     * That means an edit this device queued before healing can reach the service ahead
+     * of the create the heal sends for the entity it names. A receiver that meets it
+     * there defers it to the end of the page and, if the create is on a later page,
+     * answers the page with one read of the snapshot, which folds the two into a whole
+     * entity (`sync.ts`, `recoverFromSnapshot`). Out of order is recoverable; applied
+     * twice is not. The same holds for a write another process journals between that
+     * push and this transaction: it keeps its id and follows the push like any other.
+     */
+    journal.seed(sendable);
 
     const uploadedByEntity: Record<string, number> = {};
     let uploaded = 0;
@@ -1316,7 +1343,6 @@ export function seedRepository(db: DatabaseSync, journal: Journal, args: SeedArg
       cleared,
       replaced,
       skipped,
-      resequenced,
       at: now,
     };
     writeSeedMarker(db, report);

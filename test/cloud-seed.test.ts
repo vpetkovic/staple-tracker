@@ -753,14 +753,14 @@ describe("a database that synchronized under a build that did not seed", () => {
     expect(
       (b.db.prepare("SELECT version FROM sync_entity_versions WHERE entity = 'issue' AND entity_id = ?").get(third) as { version: number }).version,
     ).toBe(2);
-    // The unsent update travelled inside the create, which is the entity's first and
-    // only operation on the service — so that is the version this device holds.
+    // The queued update went first, under the id it was queued with, and the create
+    // follows it as the entity's second operation on the service.
     expect(
       b.db.prepare("SELECT verb FROM sync_outbox WHERE entity = 'issue' AND entity_id = ? ORDER BY client_seq").all(second),
-    ).toEqual([{ verb: "create" }]);
+    ).toEqual([{ verb: "update" }, { verb: "create" }]);
     expect(
       (b.db.prepare("SELECT version FROM sync_entity_versions WHERE entity = 'issue' AND entity_id = ?").get(second) as { version: number }).version,
-    ).toBe(1);
+    ).toBe(2);
 
     /**
      * A was connected all along, so its tail holds the old build's update to B's third
@@ -780,7 +780,7 @@ describe("a database that synchronized under a build that did not seed", () => {
     expect(shape(d.db)).toEqual(shape(a.db));
   });
 
-  it("moves its unsent edits behind the upload, so none reaches the service ahead of what it names", async () => {
+  it("sends its queued edits first under their own ids, and a device meeting one ahead of its create recovers", async () => {
     const server = new FakeSyncServer({ repositoryId });
     const a = onClone(server, "device-a");
     const blocked = a.store.createIssue({ title: "A's blocked issue", createdBy: "a" });
@@ -798,30 +798,155 @@ describe("a database that synchronized under a build that did not seed", () => {
 
     /**
      * An edit to an entity the repository DOES hold — A's blocker set — that names one it
-     * does not. The edit was allocated before the seed, and a push sends in allocation
-     * order; left where it is, it reaches the service ahead of the create it names.
+     * does not. It is sent before the heal's create for that issue, under the id it was
+     * queued with: its push could have landed with the acknowledgement lost, and only the
+     * same id comes back `duplicate` rather than being applied twice.
      */
     b.store.setBlockedBy(blocked.id, [blocker.id, mine.id], "b");
+    const queued = (b.db.prepare("SELECT op_id FROM sync_outbox WHERE acknowledged_seq IS NULL").get() as { op_id: string }).op_id;
 
-    const healed = await b.sync();
-    expect(healed.seed!.resequenced).toBe(1);
-
-    // In the log, the edit now follows the create it names.
+    await b.sync();
     const seqOf = (predicate: (op: (typeof server.ops)[number]) => boolean) => server.ops.find(predicate)!.seq;
-    expect(seqOf((op) => op.entity === "relation" && op.entityId === blocked.id && op.verb === "update")).toBeGreaterThan(
+    expect(server.ops.some((op) => op.opId === queued), "sent under its own id").toBe(true);
+    expect(seqOf((op) => op.opId === queued)).toBeLessThan(
       seqOf((op) => op.entity === "issue" && op.entityId === mine.id && op.verb === "create"),
     );
 
-    // One operation per page, so the pull loop's end-of-page retry cannot rescue an
-    // operation that arrived ahead of its referent — and nothing had to be rescued: the
-    // tail applied as it stood, without falling back to the snapshot.
+    // One operation per page, so the edit and the create it names are on different pages
+    // and the end-of-page retry cannot reach: the page is answered by the snapshot.
     const pulled = await a.sync({ pullLimit: 1 });
-    expect(pulled.bootstrap).toBeNull();
+    expect(pulled.bootstrap, "recovered from the snapshot").not.toBeNull();
     expect(
       (a.db.prepare("SELECT blocker_id FROM relations WHERE blocked_id = ? ORDER BY blocker_id").all(blocked.id) as Array<{ blocker_id: string }>)
         .map((row) => row.blocker_id)
         .sort(),
     ).toEqual([blocker.id, mine.id].sort());
+  });
+});
+
+describe("the version a seeded entity is stamped with", () => {
+  /**
+   * Every device's counter for an entity has to count the same operations, so a seeded
+   * entity's counter is SET to the number the service will hold — never bumped from
+   * whatever this device counted before, which can include operations no service has
+   * (a forked repository's, a journal the service never received).
+   */
+  it("is the service's count plus the create, whatever this device counted before", async () => {
+    const server = new FakeSyncServer({ repositoryId });
+    const a = onClone(server, "device-a");
+    await a.sync();
+    const issue = a.store.createIssue({ title: "Counted too high here", createdBy: "a" });
+    a.db.prepare("UPDATE sync_entity_versions SET version = 7 WHERE entity = 'issue' AND entity_id = ?").run(issue.id);
+
+    const journal = bindJournal(a.db, "device-a");
+    a.db.exec("BEGIN");
+    journal.seed([
+      { entity: "issue", entityId: issue.id, verb: "create", payload: { identifier: issue.identifier }, actor: null, at: "2026-09-10T00:00:00.000Z", serviceVersion: 2 },
+    ]);
+    const version = (a.db.prepare("SELECT version FROM sync_entity_versions WHERE entity = 'issue' AND entity_id = ?").get(issue.id) as { version: number }).version;
+    a.db.exec("ROLLBACK");
+    expect(version).toBe(3);
+  });
+});
+
+// ------------------------------------------------------------ overlapping syncs
+
+describe("two syncs of one database at once", () => {
+  /**
+   * A manual `staple cloud sync` overlapping an MCP post-write or UI startup automatic
+   * sync: two connections to one file, both owing the seed when they start. Nothing
+   * serializes them across processes except the database's own write lock.
+   */
+  it("seeds once, and every device's counters agree afterwards", async () => {
+    const server = new FakeSyncServer({ repositoryId });
+    const early = onClone(server, "device-early");
+    await early.sync();
+
+    const aHome = machine("device-a");
+    const dir = copyOfTemplate();
+    const a = connect(server, dir, "device-a", aHome);
+    const second = openWorkspace(dbPathOf(dir)).store.db;
+    open.push(second);
+    bindJournal(second, "device-a");
+    const reports = await Promise.all([
+      a.sync(),
+      syncRepository(second, repositoryId, { home: aHome, fetchImpl: server.fetch, sleep: async () => undefined }),
+    ]);
+
+    expect(reports.filter((report) => report.seed !== null), "exactly one of them seeded").toHaveLength(1);
+    const creates = server.ops.filter((op) => op.verb === "create").map((op) => `${op.entity} ${op.entityId}`);
+    expect(new Set(creates).size, "no entity was created twice").toBe(creates.length);
+
+    const late = onClone(server, "device-late");
+    await late.sync();
+    await early.sync();
+    const versions = (db: DatabaseSync) =>
+      db.prepare("SELECT entity_id, version FROM sync_entity_versions WHERE entity = 'issue' ORDER BY entity_id").all();
+    expect(versions(a.db)).toEqual(versions(late.db));
+    expect(versions(early.db)).toEqual(versions(late.db));
+
+    // And so detection works as it does anywhere: a same-field edit is contested on both sides.
+    a.store.updateIssue(`${prefix}-3`, { title: "A's title" }, "a");
+    late.store.updateIssue(`${prefix}-3`, { title: "late's title" }, "late");
+    await a.sync();
+    await late.sync();
+    await a.sync();
+    expect(listConflicts(a.db).filter((c) => c.field === "title")).toHaveLength(1);
+    expect(listConflicts(late.db).filter((c) => c.field === "title")).toHaveLength(1);
+  });
+});
+
+describe("a heal after a push whose acknowledgement was lost", () => {
+  /**
+   * The acknowledgement of a push that landed can be lost — a network drop, a killed
+   * process, automatic sync's budget aborting the request — and a retry of the same
+   * operation id comes back `duplicate`. An operation sent again under a NEW id is
+   * applied again, at a later seq, over whatever landed in between.
+   */
+  it("sends the queued operation again under its own id, so a newer edit from elsewhere stands", async () => {
+    const server = new FakeSyncServer({ repositoryId });
+    const oldBuild = async (device: Device, extra: Partial<SyncOptions> = {}) => {
+      device.db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('sync_seed', ?)").run(JSON.stringify({ repositoryId }));
+      try {
+        return await device.sync(extra);
+      } finally {
+        device.db.prepare("DELETE FROM meta WHERE key = 'sync_seed'").run();
+      }
+    };
+    const a = onClone(server, "device-a");
+    const issue = a.store.createIssue({ title: "original", createdBy: "a" });
+    await oldBuild(a);
+    const y = onClone(server, "device-y");
+    await oldBuild(y);
+
+    a.store.updateIssue(issue.identifier, { title: "A's older title" }, "a");
+    const lossy: typeof fetch = async (input, init) => {
+      const response = await server.fetch(input, init);
+      if ((init?.method ?? "GET") === "POST" && String(input).endsWith("/ops")) {
+        throw new TypeError("fetch failed: the response was lost");
+      }
+      return response;
+    };
+    await expect(oldBuild(a, { fetchImpl: lossy, attempts: 1 })).rejects.toThrow();
+    expect(count(a.db, "SELECT COUNT(*) AS n FROM sync_outbox WHERE acknowledged_seq IS NULL")).toBe(1);
+
+    await oldBuild(y);
+    y.store.updateIssue(issue.identifier, { title: "Y's newer title" }, "y");
+    await oldBuild(y);
+
+    // A upgrades: its first sync on this build heals.
+    const healed = await a.sync();
+    expect(healed.seed!.mode).toBe("heal");
+    expect(healed.pushed.duplicate, "the lost push came back as a duplicate of itself").toBe(1);
+
+    const edits = server.ops.filter((op) => op.entityId === issue.id && op.verb === "update");
+    expect(edits.map((op) => op.deviceId)).toEqual(["device-a", "device-y"]);
+    await y.sync();
+    const fresh = onClone(server, "device-fresh");
+    await fresh.sync();
+    const title = (db: DatabaseSync) => (db.prepare("SELECT title FROM issues WHERE id = ?").get(issue.id) as { title: string }).title;
+    expect(title(fresh.db)).toBe("Y's newer title");
+    expect(title(y.db)).toBe("Y's newer title");
   });
 });
 

@@ -969,12 +969,32 @@ holds and the repository does not may be one a restore rolled back — which the
 restore meant, and re-uploading would undo. A heal therefore sends only what is
 provably this device's and provably missing: an entity nothing ever journaled or
 applied, an entity the repository holds only as updates with no create, and an
-entity with unsent operations and no create anywhere in the outbox. Its remaining
-unsent operations are moved behind the upload, and a repository issue that arrived
-while a local one sat on its number gets the number back, its open identifier
-conflict closed on the record. A device that stopped on the old build's edits — ones
-naming rows nobody had uploaded — gets past them on its next sync by
+entity with unsent operations and no create anywhere in the outbox. A repository
+issue that arrived while a local one sat on its number gets the number back, its open
+identifier conflict closed on the record. A device that stopped on the old build's
+edits — ones naming rows nobody had uploaded — gets past them on its next sync by
 [reading the snapshot](#ordering-cursors-and-epochs), which the heal has made complete.
+
+**A heal sends what is already queued first, under the ids it was queued with, and
+never gives an operation a new id.** Any unacknowledged operation may have landed
+with its acknowledgement lost — a dropped connection, a killed process, automatic
+sync's budget aborting the request — and only its own id comes back `duplicate`; the
+same operation under a new id is applied a second time, at a later `seq`, over
+whatever landed in between. Measured before this rule: A's edit landed with its
+acknowledgement lost, Y set a newer title, A healed, and the log read A, Y, A — so
+every device that hydrated afterwards got A's older title. Sending the queue first
+also means the survey the heal decides from already counts it. The cost is that a
+queued edit can reach the service ahead of the create the heal sends for the entity it
+names; a receiver that meets it there recovers from the snapshot, and out of order is
+recoverable where applied twice is not.
+
+**Two syncs of one database at once seed once.** A manual `staple cloud sync` can
+overlap an automatic one started by an MCP write or the UI, and nothing but the
+database's write lock serializes them. So the seed decides whether it is owed — and
+whether this is a join or a heal — inside its own transaction, under that lock, and
+the second sync to reach it finds the record and does not seed. Before, the second
+seeded again from state the first had replaced: every entity created twice on the
+service, and this device's counters never agreeing with anyone's again.
 
 ## Deletion is a tombstone
 
