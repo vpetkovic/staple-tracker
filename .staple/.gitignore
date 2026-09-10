@@ -1,0 +1,18 @@
+# Staple keeps this repository's task state here.
+#
+# The DATABASE is machine-local: it carries WAL sidecars, absolute-path history
+# and per-machine identifiers, and two people committing it would conflict on
+# every task. It is ignored.
+#
+# AGENTS.md is NOT ignored. It is the working protocol for this repository and
+# it is meant to travel with the repo, so a fresh clone (and any agent that
+# lands in one) has the protocol before anyone runs `staple init`.
+#
+# repository.json is NOT ignored either. It holds this repository's sync identity
+# — a UUID and a format number, nothing secret — and it has to travel with the
+# repo, because a fresh clone has no database to recover it from.
+*.db
+*.db-wal
+*.db-shm
+!AGENTS.md
+!repository.json

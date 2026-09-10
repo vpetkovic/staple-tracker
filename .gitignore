@@ -151,7 +151,17 @@ vite.config.ts.timestamp-*
 # checkout that predates the path migration stays clean. Note this is THIS
 # repository ignoring its own dogfooded workspace — `staple init` still does not
 # write a `.gitignore` rule into the repositories it initializes.
-.staple/
+#
+# Everything under `.staple/` is ignored EXCEPT the three files that must travel
+# with the repository: `repository.json` is the tracker's sync identity (a UUID
+# and a format number, nothing secret), and a fresh clone has no database to
+# recover it from; `AGENTS.md` is the working protocol an agent landing in a
+# clone needs before anyone runs `staple init`; and `.staple/.gitignore` keeps
+# the database and its WAL sidecars ignored from inside the directory too.
+.staple/*
+!.staple/.gitignore
+!.staple/AGENTS.md
+!.staple/repository.json
 .tasks/
 *.db
 *.db-wal
