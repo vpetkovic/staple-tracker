@@ -39,6 +39,7 @@ import type {
   RemoteDevice,
 } from "@/lib/types";
 import { CloudPanel, type CloudPanelProps, type HubPanelState, type HubWideState } from "./CloudSection";
+import { IDLE_REGISTRY, type HubRegistryActions } from "./HubRegistryPanel";
 import {
   CLOUD_CATEGORY,
   CLOUD_CATEGORY_ID,
@@ -79,6 +80,9 @@ import {
 
 const source = (file: string): string =>
   readFileSync(fileURLToPath(new URL(`./${file}`, import.meta.url)), "utf8");
+/** A file with its comments stripped, so an assertion about code is not satisfied by prose. */
+const code_ = (file: string): string =>
+  source(file).replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
 
 const DISCONNECTED: CloudSurfaceReport = {
   state: "disconnected",
@@ -150,13 +154,37 @@ const IDLE_HUB: HubPanelState = {
   busy: null,
   refreshing: false,
   backingUp: false,
-  consenting: false,
   outcomes: {},
   connecting: null,
   removing: null,
   disconnecting: null,
   error: null,
   wide: IDLE_WIDE,
+};
+
+/** The hub registry panel's handlers — STA-289. Nothing in this file presses them. */
+const REGISTRY_NOOPS: HubRegistryActions = {
+  onConsent: NOOP,
+  onMint: NOOP,
+  onIdentityOpen: NOOP,
+  onIdentityDraft: NOOP,
+  onIdentitySubmit: NOOP,
+  onIdentityConfirm: NOOP,
+  onConnectDraft: NOOP,
+  onConnectPreview: NOOP,
+  onConnectCancel: NOOP,
+  onConnect: NOOP,
+  onAskDisconnect: NOOP,
+  onDisconnect: NOOP,
+  onPublish: NOOP,
+  onBackupConsent: NOOP,
+  onBackups: NOOP,
+  onBackupCreate: NOOP,
+  onAskRestore: NOOP,
+  onRestore: NOOP,
+  onAdoptPreview: NOOP,
+  onApply: NOOP,
+  onDismissAdoption: NOOP,
 };
 
 function panel(overrides: Partial<CloudPanelProps> = {}): string {
@@ -193,8 +221,9 @@ function panel(overrides: Partial<CloudPanelProps> = {}): string {
       onHubSync: NOOP,
       onHubAskDisconnect: NOOP,
       onHubDisconnect: NOOP,
-      onHubRegistryConsent: NOOP,
     },
+    registry: IDLE_REGISTRY,
+    registryActions: REGISTRY_NOOPS,
     revoking: null,
     confirmDisconnect: false,
     onPreview: NOOP,
@@ -602,12 +631,14 @@ function hubReport(rows: HubWorkspaceReport[]): HubCloudReport {
       backupContents: ["Which workspaces exist, and what each one is called."],
       backupExclusions: ["No tasks."],
       registry: {
+        hubId: null,
         connected: false,
         endpoint: null,
         disclosure:
           "a machine that publishes its registry tells the service the names, prefixes and " +
           "identities of every workspace on it, and that they sit together.",
         consent: false,
+        backup: false,
       },
     },
     endpoints: [
@@ -1246,15 +1277,28 @@ describe("the hub states itself above the list (S18/STA-279)", () => {
     expect(self).toContain("Registered elsewhere");
   });
 
+  it("draws the hub's own refusals, which no row can carry (STA-289)", () => {
+    // A failed hub backup is stored under the EMPTY slug. No row matches it, so
+    // before this it was drawn nowhere — the press failed and the page said nothing.
+    const workspaces = hubReport([hubRow(), hubRow({ slug: "bravo", repositoryId: "b" })]);
+    const html = panel({ workspaces, hub: { ...IDLE_HUB, error: { slug: "", message: "HUB-BACKUP-REFUSAL" } } });
+    const self = html.slice(html.indexOf("data-cloud-hub-self"), html.indexOf("data-hub-registry="));
+    expect(self).toContain("data-cloud-hub-error");
+    expect(self).toContain("HUB-BACKUP-REFUSAL");
+    // A row's refusal stays on its row.
+    const row = panel({ workspaces, hub: { ...IDLE_HUB, error: { slug: "bravo", message: "ROW-REFUSAL" } } });
+    expect(row).not.toContain("data-cloud-hub-error");
+  });
+
   it("states the hub rather than the open workspace", () => {
     const html = panel({
       report: DISCONNECTED,
       workspaces: hubReport([hubRow(), hubRow({ slug: "bravo", repositoryId: "b" })]),
     });
-    const self = html.slice(
-      html.indexOf("data-cloud-hub-self"),
-      html.indexOf("data-cloud-workspaces="),
-    );
+    // Ends where the hub REGISTRY panel begins (STA-289): that one is the hub's own
+    // connection to a service, which is a different subject from the workspaces'.
+    const self = html.slice(html.indexOf("data-cloud-hub-self"), html.indexOf("data-hub-registry="));
+    expect(self.length).toBeGreaterThan(0);
     // The count as a VALUE in its tile, not the character "2" — which class
     // names like `grid-cols-2` would satisfy on their own.
     expect(self).toMatch(/<dd[^>]*>2<\/dd>/);
@@ -1823,8 +1867,11 @@ describe("the hub's publish consent (S22/STA-283)", () => {
      * ways to get this sentence on screen are "from the report" and "retyped".
      * A retyped copy would render identically on the day it was added and drift
      * silently thereafter, which no rendered check could catch.
+     *
+     * STA-289 moved the switch into `HubRegistryPanel.tsx`, beside the Publish
+     * button it unlocks, so that is the file scanned.
      */
-    const file = source("CloudSection.tsx");
+    const file = source("HubRegistryPanel.tsx");
     /**
      * Scanned with COMMENTS STRIPPED. The rule is "no second copy on a render
      * path", and a doc comment quoting the sentence so a reader knows what is at
@@ -1851,11 +1898,15 @@ describe("the hub's publish consent (S22/STA-283)", () => {
     expect(control.disabledReason).toContain("not connected");
 
     const html = panel({ workspaces: report });
-    // Still rendered, with its reason — never hidden. Compared on a substring
-    // rather than the whole sentence because the markup escapes the apostrophe.
+    // Still rendered, disabled, with its reason — never hidden. Since STA-289 the
+    // reason is stated ONCE for the whole registry panel, because the Publish
+    // button, the backup switch and adopt share it; three copies of one sentence
+    // is the noise this page is supposed to be free of.
     expect(html).toContain("data-cloud-hub-registry-toggle");
-    expect(html).toContain("The hub itself is not connected to a service on this machine");
-    expect(html).toContain("It is a separate connection from each workspace");
+    const toggle = html.slice(html.lastIndexOf("<input", html.indexOf("data-cloud-hub-registry-toggle")));
+    expect(toggle.slice(0, toggle.indexOf(">"))).toMatch(/\sdisabled(=""|[\s>])/);
+    expect(html).toContain("data-hub-registry-shared-block");
+    expect(html).toContain("need a registry identity first");
   });
 
   it("binds to the VALUE on the report, never to a sentence", () => {
@@ -1881,9 +1932,11 @@ describe("the hub's publish consent (S22/STA-283)", () => {
   });
 
   it("takes no slug, because the hub is not one of the rows", () => {
-    const file = source("CloudSection.tsx");
-    expect(file).toContain("onHubRegistryConsent: (enabled: boolean, disclosure: string) => void;");
-    expect(file).not.toMatch(/onHubRegistryConsent: \(slug/);
+    // STA-289 moved the handler with the switch, into the registry panel's actions.
+    const file = source("HubRegistryPanel.tsx");
+    expect(file).toContain("onConsent: (enabled: boolean, disclosure: string) => void;");
+    expect(file).not.toMatch(/onConsent: \(slug/);
+    expect(source("CloudSection.tsx")).not.toContain("onHubRegistryConsent");
   });
 
   it("hands back the sentence it rendered, from the report and not a literal", () => {
@@ -1899,8 +1952,10 @@ describe("the hub's publish consent (S22/STA-283)", () => {
      * both a second copy and a way to grant the consent having displayed
      * nothing — which is precisely the failure the argument exists to remove.
      */
-    const file = source("CloudSection.tsx");
+    const file = source("HubRegistryPanel.tsx");
     expect(file).toContain("onConsent(event.target.checked, report.self.registry.disclosure)");
+    // And the handler sends the value it was handed, to the one route that takes it.
+    expect(code_("HubRegistryPanel.tsx")).toContain("setHubRegistryConsent(enabled, disclosure)");
 
     const client = readFileSync(fileURLToPath(new URL("../lib/api.ts", import.meta.url)), "utf8");
     const clientCode = client.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");

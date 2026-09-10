@@ -9,7 +9,7 @@
  * both read and write routes pin their HTTP method.
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -47,7 +47,7 @@ import {
   type HubWorkspaceOutcome,
   type HubWorkspaceReport,
 } from "../core/cloud/hub-surface.js";
-import { exportRegistry } from "../core/cloud/hub-registry.js";
+import { adoptRegistry, exportRegistry } from "../core/cloud/hub-registry.js";
 /**
  * S17/S19/S21 (STA-278, STA-280, STA-282): the per-row half of the cloud surface.
  *
@@ -83,7 +83,7 @@ import { exportRegistry } from "../core/cloud/hub-registry.js";
  * `test/ui-cloud-workspace-actions.test.ts` drives them in single-workspace mode
  * for that reason and no other.
  */
-import { listHubWorkspaces, type HubWorkspace } from "../core/cloud/hub-scope.js";
+import { listHubWorkspaces, reconcileRepositoryIds, type HubWorkspace } from "../core/cloud/hub-scope.js";
 import { buildHubConnectPreview, type HubConnectEntry } from "../core/cloud/hub-preview.js";
 import { performHubConnect, performHubDisconnect } from "../core/cloud/hub-connect.js";
 import { syncAllWorkspaces } from "../core/cloud/hub-sync.js";
@@ -101,7 +101,22 @@ import { syncAllWorkspaces } from "../core/cloud/hub-sync.js";
  * `requireRegistryConsent`, and `setRegistryConsent` writes one file in the
  * staple home and makes no request.
  */
-import { setRegistryConsent } from "../core/cloud/hub-registry-service.js";
+import {
+  adoptRegistryIdentity,
+  buildHubRegistryPreview,
+  connectHubRegistry,
+  createHubBackup,
+  describeIdentityReplacement,
+  listHubBackups,
+  publishRegistry,
+  readPublishedRegistry,
+  requireHubRegistryConnection,
+  requireRegistryConsent,
+  restoreRegistry,
+  setHubBackupConsent,
+  setRegistryConsent,
+} from "../core/cloud/hub-registry-service.js";
+import type { AdoptionReport } from "../core/cloud/hub-registry.js";
 /**
  * S13 (STA-258): the cloud MUTATIONS, which until now had no HTTP surface at all.
  *
@@ -303,7 +318,100 @@ const CLOUD_LIFECYCLE_WRITES = new Set([
    * request made before the thing the consent authorizes.
    */
   "/api/hub/consent",
+  /**
+   * STA-289: the rest of the hub registry leg. None of them journals a WORKSPACE
+   * operation — they change the hub's identity, its connection, its consents, what
+   * the service holds, or `hub.db` — so a post-write trigger behind any of them would
+   * sync the DEFAULT workspace (the trigger reads `ws` from the query string, and
+   * these have none) about nothing. Publish and restore would be actively wrong: a
+   * workspace sync fired in the act of rewinding the registry is a second, unrelated
+   * request riding on the most destructive one.
+   */
+  "/api/hub/registry/identity/mint",
+  "/api/hub/registry/identity",
+  "/api/hub/registry/connect/preview",
+  "/api/hub/registry/connect",
+  "/api/hub/registry/disconnect",
+  "/api/hub/registry/publish",
+  "/api/hub/registry/backup/consent",
+  "/api/hub/registry/backups",
+  "/api/hub/registry/backup/create",
+  "/api/hub/registry/restore",
+  "/api/hub/registry/adopt",
 ]);
+
+/**
+ * What the page shows before a hub restore — the CLI's own disclosure (`runRestore` in
+ * `src/commands/hub-registry.ts`), carried to the page on the backup list and repeated
+ * in the refusal a confirm-less restore gets.
+ *
+ * The headline and the three bullets about the SERVICE are the CLI's words verbatim;
+ * `test/ui-hub-registry.test.ts` runs the CLI and compares, so the two cannot drift.
+ * The last bullet is the one sentence that has to differ, because the CLI names a flag:
+ * here the local half is the separate "apply" press that follows.
+ */
+export const HUB_RESTORE_NOTICE: { readonly headline: string; readonly bullets: readonly string[] } = {
+  headline: "Restoring rewinds the registry ON THE SERVICE to this backup.",
+  bullets: [
+    "the service moves to a new epoch; work published since is discarded",
+    "every machine on this hub id is affected, not just this one",
+    "a pre-restore copy is taken first, and this prints its id",
+    "your local hub is only changed if you apply the adoption that follows",
+  ],
+};
+
+/**
+ * The identities whose opt-out applying this adoption would retire.
+ *
+ * An opt-out and a registered row for one identity are contradictory records, and
+ * `adoptRegistry` clears the opt-out when it applies (`decide` in
+ * `src/core/cloud/hub-registry.ts`: a row holds the identity AND it is declined). That
+ * write happens on a `current` row, whose outcome says "nothing to do", so without this
+ * list the page announced "Nothing to apply" about an apply that still writes.
+ *
+ * The rule is `decide`'s, restated over the same two reads — a row holds the identity,
+ * and the opt-out list names it — and `test/ui-hub-registry.test.ts` applies an
+ * adoption this names and asserts the opt-out is gone, so the two cannot disagree
+ * without a failing test.
+ */
+function optOutsAdoptionRetires(hub: Hub, report: AdoptionReport): string[] {
+  const optedOut = new Set(hub.listOptOuts().map((optOut) => optOut.repositoryId));
+  return report.decisions.flatMap((decision) => {
+    const id = decision.entry.repositoryId;
+    return id !== null && optedOut.has(id) && hub.findByRepositoryId(id) !== undefined ? [id] : [];
+  });
+}
+
+/**
+ * A fingerprint of an adoption PREVIEW, which is what an apply has to hand back.
+ *
+ * The same one-way-then-back shape as the connect ticket, sized to what adoption is:
+ * it only ever writes `hub.db` and never deletes, so a digest is enough — the apply
+ * re-previews, compares, and refuses if what the service holds or this machine's list
+ * moved while the screen was up. Consent to a list of decisions that is no longer the
+ * list is not consent.
+ *
+ * `capturedAt` is the one field two previews of the same state disagree on, so it is
+ * the one field left out. Everything else — each decision, its sentence, the
+ * cross-link counts and decisions, whatever the report grows — is in, with keys
+ * sorted, so a restore's preview and the adopt route's preview of the same state
+ * produce the same digest.
+ */
+function adoptionDigest(report: AdoptionReport): string {
+  const canonical = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(canonical);
+    if (value !== null && typeof value === "object") {
+      return Object.fromEntries(
+        Object.entries(value as Record<string, unknown>)
+          .filter(([key]) => key !== "capturedAt")
+          .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+          .map(([key, inner]) => [key, canonical(inner)]),
+      );
+    }
+    return value;
+  };
+  return createHash("sha256").update(JSON.stringify(canonical(report))).digest("hex");
+}
 
 /**
  * How many events GET /api/events?issue= returns — the newest N, oldest first.
@@ -944,6 +1052,37 @@ export function startUiServer(options: UiOptions): UiHandle {
   }
 
   /**
+   * The hub, opened for one registry route, with its stored identity — or a
+   * refusal that mints nothing. STA-289.
+   *
+   * The service module addresses the hub through `hubRepositoryId(hub)`, which is
+   * `hub.hubId()`, which MINTS when there is no id. So a publish, an adopt or a
+   * connect preview on a hub with no identity would invent one on its way to
+   * failing, and a later "take on the identity another machine published under"
+   * would then have to replace an id nobody chose. The CLI's `requireHubId` refuses
+   * up front for the same reason; this is that, for the page.
+   *
+   * The handle is closed however `work` ends, including across its awaits.
+   */
+  async function withRegistryHub<T>(work: (hub: Hub, hubId: string) => Promise<T> | T): Promise<T> {
+    const hub = Hub.open();
+    try {
+      const hubId = hub.storedHubId();
+      if (hubId === null) {
+        throw new StapleError(
+          "not_found",
+          "This machine's hub has no registry identity yet, so there is nothing to connect, " +
+            "publish, back up, restore or adopt. Mint one for an operator to provision, or take " +
+            "on the identity another machine published under. Nothing was changed.",
+        );
+      }
+      return await work(hub, hubId);
+    } finally {
+      hub.close();
+    }
+  }
+
+  /**
    * Why a hub-wide connect has nothing to do, stated per row.
    *
    * *"Refuse with a stated reason when the fan-out would be empty, rather than
@@ -1149,7 +1288,30 @@ export function startUiServer(options: UiOptions): UiHandle {
            * list, so a cross-origin page able to POST it could turn on the one
            * disclosure the product asks for most explicitly.
            */
-          url.pathname === "/api/hub/consent"
+          url.pathname === "/api/hub/consent" ||
+          /**
+           * STA-289: the rest of the hub registry leg, eleven routes, each named.
+           *
+           * Named rather than matched by a `/api/hub/registry/` prefix for the
+           * reason every hub route above is: a family rule would pin the next READ
+           * added under that prefix as cross-origin-writable. Seven of these leave
+           * the machine (connect, publish, backup consent, the backup list, backup
+           * create, restore, and adopt's read of the service), and a POST behind the Origin
+           * check is where a route that reaches a service belongs — a cross-origin
+           * page that could make this server rewind a registry has made the most
+           * destructive request on the page without anybody pressing anything.
+           */
+          url.pathname === "/api/hub/registry/identity/mint" ||
+          url.pathname === "/api/hub/registry/identity" ||
+          url.pathname === "/api/hub/registry/connect/preview" ||
+          url.pathname === "/api/hub/registry/connect" ||
+          url.pathname === "/api/hub/registry/disconnect" ||
+          url.pathname === "/api/hub/registry/publish" ||
+          url.pathname === "/api/hub/registry/backup/consent" ||
+          url.pathname === "/api/hub/registry/backups" ||
+          url.pathname === "/api/hub/registry/backup/create" ||
+          url.pathname === "/api/hub/registry/restore" ||
+          url.pathname === "/api/hub/registry/adopt"
             ? ["POST"]
             : url.pathname === "/api/settings"
               ? ["GET", "POST"]
@@ -2695,6 +2857,454 @@ export function startUiServer(options: UiOptions): UiHandle {
           ),
           report: hubCloudReport(stapleHome()),
         });
+        return;
+      }
+
+      /**
+       * ─── THE HUB REGISTRY LEG — STA-289 ──────────────────────────────────────
+       *
+       * Identity, connect, disconnect, publish, hub backups, restore and adopt: the
+       * rest of what `staple hub registry` does, so the publish switch above stops
+       * being permanently disabled on a machine that never opened a terminal.
+       *
+       * Every one of these addresses the hub through `hub.storedHubId()` and the
+       * service module, and none goes near `handleFor` — in single-workspace mode
+       * that ignores its argument and returns the workspace the server booted on, so
+       * a hub-scoped write through it would land under that workspace's id.
+       * `test/ui-hub-registry.test.ts` runs the whole leg in that mode and asserts
+       * the workspace's id never gains a connection.
+       *
+       * None of them mints an identity except the one route named for it. The
+       * service's `hubRepositoryId` is `hub.hubId()`, which mints, so each route
+       * refuses on a hub with no stored id BEFORE the service is called — see
+       * `withRegistryHub`.
+       */
+
+      /** `POST /api/hub/registry/identity/mint` — `staple hub registry id`. Local. */
+      if (url.pathname === "/api/hub/registry/identity/mint") {
+        const hub = Hub.open();
+        let hubId: string;
+        let minted: boolean;
+        try {
+          minted = hub.storedHubId() === null;
+          hubId = hub.hubId();
+        } finally {
+          hub.close();
+        }
+        json(res, 200, { hubId, minted, report: hubCloudReport(stapleHome()) });
+        return;
+      }
+
+      /**
+       * `POST /api/hub/registry/identity` — take on an identity another machine
+       * published under. Local. `{ hubId, confirm? }`.
+       *
+       * Replacing an existing id asks first: without `confirm` the answer is 200
+       * with `needsConfirm` and the core's own orphan notice, and nothing changes.
+       * The notice is stated whenever there is a previous id, and never branched on
+       * whether that id was used — a disconnect leaves no evidence either way, so
+       * "was it used" is the one thing this machine cannot know.
+       */
+      if (url.pathname === "/api/hub/registry/identity") {
+        const body = await readBody(req);
+        const wanted = typeof body.hubId === "string" ? body.hubId.trim() : "";
+        if (wanted === "") {
+          deny(
+            res,
+            400,
+            "validation",
+            "A hub id is required. It comes from the machine that published the registry, or " +
+              "from wherever it was kept with the enrollment secret. Nothing was changed.",
+          );
+          return;
+        }
+        /**
+         * A confirmation names the identity its warning was about, and is refused if that
+         * is no longer the stored one. The warning is `describeIdentityReplacement` of a
+         * PARTICULAR id; a yes given to it after another tab or `staple hub registry
+         * identity` replaced that id would replace a different one, whose orphan notice
+         * nobody was shown.
+         */
+        const confirming = body.confirm === true;
+        if (confirming && body.previousHubId !== null && typeof body.previousHubId !== "string") {
+          deny(
+            res,
+            400,
+            "validation",
+            "A confirmed replacement names the identity its warning was about, as previousHubId " +
+              "(null when there was none). Ask again without confirm to be shown it. Nothing " +
+              "was changed.",
+          );
+          return;
+        }
+        const hub = Hub.open();
+        let answer: {
+          hubId: string;
+          adopted: boolean;
+          needsConfirm: boolean;
+          previousHubId: string | null;
+          notice: string | null;
+        };
+        try {
+          const previous = hub.storedHubId();
+          if (confirming && body.previousHubId !== previous) {
+            throw new StapleError(
+              "conflict",
+              `This hub's identity is now ${previous ?? "unset"}, and the warning you confirmed ` +
+                `was about ${String(body.previousHubId)} — it was changed from somewhere else ` +
+                "while the warning was on screen. Nothing was changed. Take the id on again to " +
+                "see what replacing the current one means.",
+            );
+          }
+          if (previous !== null && previous !== wanted && !confirming) {
+            answer = {
+              hubId: wanted,
+              adopted: false,
+              needsConfirm: true,
+              previousHubId: previous,
+              notice: describeIdentityReplacement(previous),
+            };
+          } else {
+            const outcome = adoptRegistryIdentity(stapleHome(), hub, wanted);
+            answer = {
+              hubId: wanted,
+              adopted: outcome.adopted,
+              needsConfirm: false,
+              previousHubId: outcome.previousHubId,
+              notice:
+                outcome.adopted && outcome.previousHubId !== null
+                  ? describeIdentityReplacement(outcome.previousHubId)
+                  : null,
+            };
+          }
+        } finally {
+          hub.close();
+        }
+        json(res, 200, { ...answer, report: hubCloudReport(stapleHome()) });
+        return;
+      }
+
+      /**
+       * `POST /api/hub/registry/connect/preview` — step one, and the only registry
+       * route that may name an endpoint. Local: `buildHubRegistryPreview` is
+       * `buildConnectPreview` pointed at the hub id, and `preview.ts` cannot reach
+       * the network. The ticket comes from the same `ConsentTicketStore` every
+       * connect on this server uses.
+       */
+      if (url.pathname === "/api/hub/registry/connect/preview") {
+        const body = await readBody(req);
+        const endpoint = typeof body.endpoint === "string" ? body.endpoint.trim() : "";
+        if (endpoint === "") {
+          deny(res, 400, "validation", "An endpoint is required to preview the hub's connection.");
+          return;
+        }
+        const credentialFile = body.credentialFile === true;
+        const preview = await withRegistryHub((hub) =>
+          buildHubRegistryPreview({
+            home: stapleHome(),
+            hub,
+            endpoint,
+            label: typeof body.label === "string" ? body.label : undefined,
+            credential: { forceFile: credentialFile },
+          }),
+        );
+        json(res, 200, {
+          preview,
+          consent: consents.mint(preview, { credentialFile }),
+          report: hubCloudReport(stapleHome()),
+        });
+        return;
+      }
+
+      /**
+       * `POST /api/hub/registry/connect` — step two. **No endpoint, no repositoryId.**
+       *
+       * `{ consent, digest, token }`, exactly `/api/cloud/connect`'s shape and for
+       * its reason: the endpoint is a field of the PREVIEW RESPONSE and of the
+       * ticket, and appears in no request this route reads. Two refusals the
+       * workspace route does not need:
+       *
+       *  - a blank secret is refused BEFORE the ticket is redeemed, so the retry
+       *    can use the same confirmation;
+       *  - a ticket minted for anything but this hub's id is refused inside the
+       *    rebuild. The ticket store is shared with every workspace connect on this
+       *    server, so without the check a workspace's preview could be redeemed
+       *    here — and the digest would then refuse it with a sentence about
+       *    "connection state changed", which is true and the wrong sentence.
+       */
+      if (url.pathname === "/api/hub/registry/connect") {
+        const body = await readBody(req);
+        const enrollmentSecret = typeof body.token === "string" ? body.token : "";
+        if (enrollmentSecret.trim() === "") {
+          deny(
+            res,
+            400,
+            "validation",
+            "An enrollment credential is required: the secret whoever runs the service created " +
+              "with the hub's repository row. Nothing was sent, and the confirmation you were " +
+              "issued is still valid.",
+          );
+          return;
+        }
+        const outcome = await withRegistryHub((hub, hubId) => {
+          const { preview, context } = consents.redeem(body.consent, body.digest, (stored, choices) => {
+            if (stored.repositoryId !== hubId) {
+              throw new StapleError(
+                "validation",
+                "That confirmation was issued for a different subject — a workspace's connection, " +
+                  "or this hub under another identity — so it cannot connect this machine's hub. " +
+                  "Nothing was sent. Review the hub's connection again.",
+              );
+            }
+            return buildHubRegistryPreview({
+              home: stapleHome(),
+              hub,
+              endpoint: stored.endpoint.origin,
+              label: stored.label,
+              credential: { forceFile: choices.credentialFile },
+            });
+          });
+          return connectHubRegistry(preview, {
+            home: stapleHome(),
+            enrollmentSecret,
+            credential: { forceFile: context.credentialFile },
+          });
+        });
+        json(res, 200, {
+          connection: outcome.connection,
+          capabilities: outcome.capabilities,
+          credentialLocation: outcome.credentialLocation,
+          report: hubCloudReport(stapleHome()),
+        });
+        return;
+      }
+
+      /**
+       * `POST /api/hub/registry/disconnect` — `staple hub registry disconnect`.
+       * Local, and only local: `performDisconnect` pointed at the hub id. What was
+       * published stays published; the identity stays too, so re-connecting later
+       * reaches the same registry.
+       */
+      if (url.pathname === "/api/hub/registry/disconnect") {
+        const body = await readBody(req);
+        if (body.confirm !== true) {
+          deny(
+            res,
+            400,
+            "validation",
+            "Disconnecting the hub removes this machine's credential for its registry. Pass " +
+              "confirm to proceed. The published registry is not deleted, other machines are " +
+              "unaffected, and every workspace is untouched.",
+          );
+          return;
+        }
+        const outcome = await withRegistryHub((_hub, hubId) => performDisconnect(stapleHome(), hubId));
+        json(res, 200, { ...outcome, report: hubCloudReport(stapleHome()) });
+        return;
+      }
+
+      /**
+       * `POST /api/hub/registry/publish` — EGRESSES. `publishRegistry` begins with
+       * the publish consent, so on a hub that has not granted it this refuses from
+       * the connection record before a request is built.
+       */
+      if (url.pathname === "/api/hub/registry/publish") {
+        const publish = await withRegistryHub((hub) => publishRegistry(hub, stapleHome()));
+        json(res, 200, { publish, report: hubCloudReport(stapleHome()) });
+        return;
+      }
+
+      /**
+       * `POST /api/hub/registry/backup/consent` — `{ enabled }`. EGRESSES when
+       * enabling, because the server owns half of this consent and is asked first;
+       * withdrawing is local first and tells the service best-effort, returning a
+       * warning rather than failing when it cannot.
+       */
+      if (url.pathname === "/api/hub/registry/backup/consent") {
+        const body = await readBody(req);
+        if (typeof body.enabled !== "boolean") {
+          deny(
+            res,
+            400,
+            "validation",
+            "Pass enabled as a boolean. Hub backup is its own decision, separate from publishing.",
+          );
+          return;
+        }
+        const enabled = body.enabled;
+        const backup = await withRegistryHub((_hub, hubId) =>
+          setHubBackupConsent(stapleHome(), hubId, enabled),
+        );
+        json(res, 200, { backup, report: hubCloudReport(stapleHome()) });
+        return;
+      }
+
+      /**
+       * `POST /api/hub/registry/backups` — the service's hub backups. EGRESSES, so
+       * it is a POST behind the Origin check although it reads, like
+       * `/api/cloud/devices`, and the page asks only when a button is pressed.
+       * Carries the restore disclosure, so the page has it before it offers one.
+       */
+      if (url.pathname === "/api/hub/registry/backups") {
+        const backups = await withRegistryHub((_hub, hubId) => listHubBackups(stapleHome(), hubId));
+        json(res, 200, {
+          backups,
+          restoreNotice: HUB_RESTORE_NOTICE,
+          report: hubCloudReport(stapleHome()),
+        });
+        return;
+      }
+
+      /** `POST /api/hub/registry/backup/create` — `{ label? }`. EGRESSES: take one, then list. */
+      if (url.pathname === "/api/hub/registry/backup/create") {
+        const body = await readBody(req);
+        const label =
+          typeof body.label === "string" && body.label.trim() !== "" ? body.label.trim() : null;
+        const answer = await withRegistryHub(async (_hub, hubId) => {
+          const backup = await createHubBackup(stapleHome(), hubId, label);
+          return { backup, backups: await listHubBackups(stapleHome(), hubId) };
+        });
+        json(res, 200, {
+          ...answer,
+          restoreNotice: HUB_RESTORE_NOTICE,
+          report: hubCloudReport(stapleHome()),
+        });
+        return;
+      }
+
+      /**
+       * `POST /api/hub/registry/restore` — the most destructive registry action.
+       * EGRESSES. `{ backupId, epoch, entityCount, confirm }`.
+       *
+       * ## Confirmed over the enumeration, not over a yes
+       *
+       * The body carries the three facts the confirmation showed — which backup,
+       * its epoch, how many entities — and the service's own list is read and
+       * compared before anything moves. A backup that is not there, or whose facts
+       * differ from what was agreed to, is refused and nothing is restored.
+       *
+       * ## The service half only
+       *
+       * `restoreRegistry` with `apply: false`: the service is rewound and the
+       * adoption of what came back is PREVIEWED. Applying it locally is the adopt
+       * route with this response's `digest`, one more press — never a second restore,
+       * which would cost another epoch. The undo is `preRestoreBackupId`, an
+       * ordinary backup restorable by this same route.
+       */
+      if (url.pathname === "/api/hub/registry/restore") {
+        const body = await readBody(req);
+        const backupId = typeof body.backupId === "string" ? body.backupId.trim() : "";
+        const epoch = body.epoch;
+        const entityCount = body.entityCount;
+        if (backupId === "" || typeof epoch !== "number" || typeof entityCount !== "number") {
+          deny(
+            res,
+            400,
+            "validation",
+            "A restore names the backup, its epoch and its entity count — the facts its " +
+              "confirmation showed. Nothing was changed, here or on the service.",
+          );
+          return;
+        }
+        if (body.confirm !== true) {
+          deny(
+            res,
+            400,
+            "validation",
+            `${HUB_RESTORE_NOTICE.headline} ${HUB_RESTORE_NOTICE.bullets.join("; ")}. Pass ` +
+              "confirm to proceed. Nothing was changed, here or on the service.",
+          );
+          return;
+        }
+        const answer = await withRegistryHub(async (hub, hubId) => {
+          // Both consents, checked from the record BEFORE the list is asked for, so a
+          // restore that is going to be refused is refused without a request.
+          // `restoreRegistry` checks them again; this is ordering, not the fence.
+          requireRegistryConsent(requireHubRegistryConnection(stapleHome(), hubId));
+          const listed = await listHubBackups(stapleHome(), hubId);
+          const target = listed.find((backup) => backup.backupId === backupId);
+          if (!target) {
+            throw new StapleError(
+              "not_found",
+              `The service holds no hub backup ${backupId}. Nothing was restored. Show the ` +
+                "backups again and pick one from what it lists.",
+            );
+          }
+          if (target.epoch !== epoch || target.entityCount !== entityCount) {
+            throw new StapleError(
+              "conflict",
+              `Backup ${backupId} is epoch ${target.epoch} with ${target.entityCount} entities, and ` +
+                `the confirmation was for epoch ${epoch} with ${entityCount}. It no longer ` +
+                "describes what would be restored, so nothing was. Show the backups again.",
+            );
+          }
+          const restore = await restoreRegistry(hub, stapleHome(), backupId, { apply: false });
+          return {
+            restore,
+            digest: adoptionDigest(restore.adoption),
+            retiresOptOuts: optOutsAdoptionRetires(hub, restore.adoption),
+            backups: await listHubBackups(stapleHome(), hubId),
+          };
+        });
+        json(res, 200, { ...answer, report: hubCloudReport(stapleHome()) });
+        return;
+      }
+
+      /**
+       * `POST /api/hub/registry/adopt` — `{ apply?, digest? }`. Reads the service
+       * (EGRESSES) and writes only `hub.db`.
+       *
+       * Without `apply` it previews: one decision per incoming entry, and the digest
+       * an apply must hand back. With `apply` it previews AGAIN, compares, and only
+       * then applies — so the decisions a person agreed to are the decisions that
+       * are written, or nothing is.
+       */
+      if (url.pathname === "/api/hub/registry/adopt") {
+        const body = await readBody(req);
+        const apply = body.apply === true;
+        const digest = typeof body.digest === "string" ? body.digest : "";
+        if (apply && digest === "") {
+          deny(
+            res,
+            400,
+            "validation",
+            "Applying an adoption carries the digest of the preview it was shown, so what is " +
+              "written is what was agreed to. Preview the adoption first. Nothing was written.",
+          );
+          return;
+        }
+        const answer = await withRegistryHub(async (hub, hubId) => {
+          /**
+           * ONE READ OF THE SERVICE, and both the check and the write come from it.
+           *
+           * This was `adoptPublishedRegistry` twice — preview, compare, then apply — and
+           * each call read the service. A publish from another machine landing between
+           * the two reads was written without having been previewed:
+           * `test/ui-hub-registry.test.ts` publishes a workspace from inside the second
+           * read and watched it land. So this is `adoptPublishedRegistry`'s own three
+           * steps, with the read done once: reconcile the identity column first (the
+           * adoption keys on it), read, then preview and apply the SAME payload. Nothing
+           * awaits between the preview and the apply, so this machine's hub cannot move
+           * between them either.
+           */
+          reconcileRepositoryIds(hub);
+          const { registry } = await readPublishedRegistry(stapleHome(), hubId);
+          const preview = adoptRegistry(hub, registry);
+          const seen = adoptionDigest(preview);
+          const retiresOptOuts = optOutsAdoptionRetires(hub, preview);
+          if (!apply) return { registry, adoption: preview, digest: seen, retiresOptOuts };
+          if (seen !== digest) {
+            throw new StapleError(
+              "conflict",
+              "What the service holds, or this machine's list, changed since that preview was " +
+                "shown, so it no longer describes what adopting would do. Nothing was written. " +
+                "Preview the adoption again.",
+            );
+          }
+          const applied = adoptRegistry(hub, registry, { apply: true });
+          return { registry, adoption: applied, digest: seen, retiresOptOuts };
+        });
+        json(res, 200, { ...answer, report: hubCloudReport(stapleHome()) });
         return;
       }
 

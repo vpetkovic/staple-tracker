@@ -23,11 +23,21 @@ import type {
   ErrorEnvelope,
   Graph,
   HubActionResult,
+  HubAdoptResult,
+  HubBackupConsentResult,
   HubBackupResult,
+  HubBackupsResult,
   HubCloudReport,
   HubConnectPreviewResponse,
   HubConnectPreviewResult,
   HubFanOutResult,
+  HubIdentityMintResult,
+  HubIdentityResult,
+  HubPublishResult,
+  HubRegistryConnectPreviewResult,
+  HubRegistryConnectResult,
+  HubRegistryDisconnectResult,
+  HubRestoreResult,
   HubUnregisterPreviewResult,
   InboxRow,
   IssueDetail,
@@ -40,6 +50,7 @@ import type {
   ProjectRemoval,
   ProjectRow,
   QueueView,
+  RemoteBackup,
   RemoteDevice,
   StapleEvent,
   VocabularyOp,
@@ -554,6 +565,95 @@ export const setHubRegistryConsent = (enabled: boolean, disclosure?: string) =>
      */
     ...(enabled ? { disclosure } : {}),
   });
+
+// ---------- the hub registry leg (STA-289) ----------
+
+/**
+ * The hub's own leg to a sync service: identity, connect, publish, hub backups,
+ * restore, adopt. Every call takes no slug and no `ws`, because the subject is the
+ * hub, and the server addresses it through `hub.storedHubId()`.
+ *
+ * ## What leaves the machine
+ *
+ * `connectHubRegistry`, `publishHubRegistry`, `setHubBackupConsent` (when turning
+ * it on), `listHubBackups`, `createHubBackup`, `restoreHubRegistry` and
+ * `adoptHubRegistry`. **None is called on mount**; each is behind its own press.
+ * The identity calls, the connect preview and the disconnect are local.
+ */
+
+/** Mint this hub's identity, or answer the one it already has. Local. */
+export const mintHubIdentity = () => hubWrite<HubIdentityMintResult>("/api/hub/registry/identity/mint", {});
+
+/**
+ * Take on an identity another machine published under. Local.
+ *
+ * Without `previousHubId`, replacing an existing id only ASKS: the answer carries
+ * `needsConfirm`, the orphan notice and the id it is about, and nothing changes. With
+ * it, this confirms THAT warning: the server refuses if the stored id is no longer the
+ * one the warning named.
+ */
+export const adoptHubIdentity = (hubId: string, previousHubId?: string | null) =>
+  hubWrite<HubIdentityResult>(
+    "/api/hub/registry/identity",
+    previousHubId === undefined ? { hubId } : { hubId, confirm: true, previousHubId },
+  );
+
+/** Step one of connecting the hub. Local, and the only call here that names an endpoint. */
+export const previewHubRegistryConnect = (target: {
+  endpoint: string;
+  label?: string;
+  credentialFile?: boolean;
+}) => hubWrite<HubRegistryConnectPreviewResult>("/api/hub/registry/connect/preview", target);
+
+/**
+ * Step two. EGRESSES. The ticket, its digest and the secret — no endpoint and no
+ * repository id, because the route has neither field: it connects what the
+ * preview showed or nothing.
+ */
+export const connectHubRegistry = (target: { consent: ConsentTicket; token: string }) =>
+  hubWrite<HubRegistryConnectResult>("/api/hub/registry/connect", {
+    consent: target.consent.id,
+    digest: target.consent.digest,
+    token: target.token,
+  });
+
+/** Local: removes the hub's credential. What was published stays published. */
+export const disconnectHubRegistry = () =>
+  hubWrite<HubRegistryDisconnectResult>("/api/hub/registry/disconnect", { confirm: true });
+
+/** EGRESSES. Needs the publish consent, which the server checks from the record first. */
+export const publishHubRegistry = () => hubWrite<HubPublishResult>("/api/hub/registry/publish", {});
+
+/** EGRESSES when enabling: the service owns half of this consent and is asked first. */
+export const setHubBackupConsent = (enabled: boolean) =>
+  hubWrite<HubBackupConsentResult>("/api/hub/registry/backup/consent", { enabled });
+
+/** EGRESSES. The service's hub backups, and the disclosure a restore is shown with. */
+export const listHubBackups = () => hubWrite<HubBackupsResult>("/api/hub/registry/backups", {});
+
+/** EGRESSES. Take a hub backup, then list. */
+export const createHubBackup = (label?: string) =>
+  hubWrite<HubBackupsResult>("/api/hub/registry/backup/create", label ? { label } : {});
+
+/**
+ * EGRESSES, and rewinds the registry for every machine on this hub id. Carries the
+ * three facts the confirmation showed; the server compares them with its own list
+ * and restores nothing if they differ.
+ */
+export const restoreHubRegistry = (backup: Pick<RemoteBackup, "backupId" | "epoch" | "entityCount">) =>
+  hubWrite<HubRestoreResult>("/api/hub/registry/restore", {
+    backupId: backup.backupId,
+    epoch: backup.epoch,
+    entityCount: backup.entityCount,
+    confirm: true,
+  });
+
+/**
+ * EGRESSES (a read of the service) and writes only `hub.db`. Without a digest it
+ * previews; with one it applies exactly that preview or refuses.
+ */
+export const adoptHubRegistry = (digest?: string) =>
+  hubWrite<HubAdoptResult>("/api/hub/registry/adopt", digest ? { apply: true, digest } : {});
 
 export const getIssues = (params: { ws?: string; assignee?: string } = {}) =>
   request<IssueRow[]>(`/api/issues${qs(params)}`);

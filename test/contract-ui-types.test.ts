@@ -43,7 +43,15 @@ import type { CloudSurfaceReport } from "../src/core/cloud/surface.js";
 import type { HubCloudReport, HubWorkspaceOutcome } from "../src/core/cloud/hub-surface.js";
 import type { HubConnectPreview } from "../src/core/cloud/hub-preview.js";
 import type { ConnectPreview } from "../src/core/cloud/preview.js";
-import type { RemoteDevice } from "../src/core/cloud/client.js";
+import type { RemoteBackup, RemoteDevice } from "../src/core/cloud/client.js";
+import type { AdoptionReport } from "../src/core/cloud/hub-registry.js";
+import type { HubRestoreReport, PublishReport } from "../src/core/cloud/hub-registry-service.js";
+import type {
+  AdoptionReport as UiAdoptionReport,
+  HubRestoreReport as UiHubRestoreReport,
+  PublishReport as UiPublishReport,
+  RemoteBackup as UiRemoteBackup,
+} from "../src/ui/app/src/lib/types.js";
 import type {
   ClaimActivity as UiClaimActivity,
   ClaimLease as UiClaimLease,
@@ -166,6 +174,25 @@ type _HubWorkspaceOutcomeMatches = Expect<Equals<HubWorkspaceOutcome, UiHubWorks
  */
 type _HubConnectPreviewMatches = Expect<Equals<HubConnectPreview, UiHubConnectPreview>>;
 
+/**
+ * STA-289: the hub registry leg on the page. Four types, each a thing a person agrees
+ * to or decides from, which is this file's rule.
+ *
+ * `AdoptionReport` is the adopt preview, and an apply is agreed to over it: one
+ * decision per incoming workspace and one per link. A mirror that dropped
+ * `crossLinkDecisions` would be a consent screen that stopped listing the links it
+ * removes. `HubRestoreReport` carries that preview for a restore, plus the undo id.
+ * `RemoteBackup` is what a restore is confirmed over — its id, epoch and entity
+ * count travel back and the server compares them with its own list. And
+ * `PublishReport` changed shape in STA-287 while this was being built (no refusal,
+ * `unadopted` instead, `renamed` reworded): pinned, the next such change fails here
+ * rather than rendering a blank group.
+ */
+type _AdoptionReportMatches = Expect<Equals<AdoptionReport, UiAdoptionReport>>;
+type _HubRestoreReportMatches = Expect<Equals<HubRestoreReport, UiHubRestoreReport>>;
+type _RemoteBackupMatches = Expect<Equals<RemoteBackup, UiRemoteBackup>>;
+type _PublishReportMatches = Expect<Equals<PublishReport, UiPublishReport>>;
+
 describe("the browser app's mirror of the wire vocabulary", () => {
   /**
    * The assertions above are types, and types are erased — so `vitest` would
@@ -190,6 +217,10 @@ describe("the browser app's mirror of the wire vocabulary", () => {
       true satisfies _HubCloudReportMatches,
       true satisfies _HubWorkspaceOutcomeMatches,
       true satisfies _HubConnectPreviewMatches,
+      true satisfies _AdoptionReportMatches,
+      true satisfies _HubRestoreReportMatches,
+      true satisfies _RemoteBackupMatches,
+      true satisfies _PublishReportMatches,
     ];
     // GOLDEN, moved by S13 (STA-258): 4 -> 6. The two additions are the connect
     // preview and the device row; see the comment above them.
@@ -206,6 +237,8 @@ describe("the browser app's mirror of the wire vocabulary", () => {
     // and this does: the envelope is a shape this repository invented, and this
     // is the disclosure a human agrees to before one secret is offered to N
     // services.
-    expect(proofs).toHaveLength(9);
+    // GOLDEN, moved by STA-289: 9 -> 13. The hub registry leg's adoption preview,
+    // restore report, backup row and publish report; see the comment above them.
+    expect(proofs).toHaveLength(13);
   });
 });

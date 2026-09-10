@@ -316,6 +316,8 @@ describe("KNOWN: logical errors this surface cannot project", () => {
   it("pins the exact API surface, read out of the server source", () => {
     // GOLDEN, moved by S18 (STA-279): 52 -> 53. One addition, `/api/hub/backup`
     // — the first route whose subject is the hub itself rather than a workspace.
+    // GOLDEN, moved by STA-289: 58 -> 69. Eleven additions, the hub registry leg
+    // under `/api/hub/registry/`; see the block beside them below.
     // GOLDEN, moved by S22 (STA-283): 57 -> 58. One addition, `/api/hub/consent`
     // — the hub's own publish consent, which is a route rather than a fourth key
     // on the two that exist because those are keyed by a repository id.
@@ -659,6 +661,32 @@ describe("KNOWN: logical errors this surface cannot project", () => {
        */
       "/api/hub/consent",
       "/api/hub/disconnect",
+      /**
+       * STA-289 — the rest of the hub registry leg, eleven routes under
+       * `/api/hub/registry/`, each a POST named in the method gate and in
+       * `CLOUD_LIFECYCLE_WRITES`, none matched by prefix.
+       *
+       * Their subject is the hub, addressed by `hub.storedHubId()` through the
+       * service module and never through `handleFor`. None mints an identity except
+       * `identity/mint`. `connect/preview` is the only one that may name an
+       * endpoint, and `connect` redeems its ticket with no endpoint or repositoryId
+       * field. `restore` takes the backup id, epoch and entity count its
+       * confirmation showed and refuses if the service's list disagrees; `adopt`
+       * applies only with the digest of the preview it was shown. Seven of them
+       * reach the service, so none is on the page's mount path —
+       * `test/network-silence.test.ts` drives each in its refusing form.
+       */
+      "/api/hub/registry/adopt",
+      "/api/hub/registry/backup/consent",
+      "/api/hub/registry/backup/create",
+      "/api/hub/registry/backups",
+      "/api/hub/registry/connect",
+      "/api/hub/registry/connect/preview",
+      "/api/hub/registry/disconnect",
+      "/api/hub/registry/identity",
+      "/api/hub/registry/identity/mint",
+      "/api/hub/registry/publish",
+      "/api/hub/registry/restore",
       "/api/hub/sync",
       "/api/hub/unregister",
       "/api/inbox",
