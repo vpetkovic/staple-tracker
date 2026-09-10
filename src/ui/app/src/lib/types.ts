@@ -1519,6 +1519,11 @@ export interface HubCloudReport {
      * existence, so there is nowhere for a true to live.
      */
     registry: {
+      /**
+       * The hub's registry identity, or null when it has none — STA-289. Read with
+       * `storedHubId()`, so a page that looks at this never mints one.
+       */
+      hubId: string | null;
       connected: boolean;
       endpoint: string | null;
       /**
@@ -1529,6 +1534,11 @@ export interface HubCloudReport {
        */
       disclosure: string;
       consent: boolean;
+      /**
+       * This machine's hub BACKUP consent — STA-289. The local half only; the
+       * service's half is learned from a button that asks, never from this read.
+       */
+      backup: boolean;
     };
   };
   /** Sorted and deduped. A hub spanning two services is legitimate. */
@@ -1814,4 +1824,287 @@ export interface RemoteDevice {
 /** What every cloud mutation answers with: the act's outcome, plus the refreshed report. */
 export interface CloudMutationResult {
   report: CloudSurfaceReport;
+}
+
+// ─── THE HUB REGISTRY LEG — STA-289 ──────────────────────────────────────────
+//
+// Mirrors of what `src/core/cloud/hub-registry.ts`, `hub-registry-ops.ts`,
+// `hub-scope.ts`, `client.ts` and `hub-registry-service.ts` return, for the
+// eleven `/api/hub/registry/*` routes. The four a person agrees to something
+// over, or reads to decide what to do next — the adoption preview, the restore
+// report, the backup a restore is confirmed against, and the publish report —
+// are pinned equal to core by `test/contract-ui-types.test.ts`.
+
+/** One workspace in a registry. Mirrors `RegistryEntry`. */
+export interface RegistryEntry {
+  readonly repositoryId: string | null;
+  readonly slug: string;
+  readonly prefix: string;
+  readonly kind: string;
+  readonly addedAt: string;
+}
+
+/** One cross-workspace link in a registry. Mirrors `RegistryCrossLink`. */
+export interface RegistryCrossLink {
+  /** Null when that end cannot be identified; such a link is reported, never adopted. */
+  readonly blockerRepositoryId: string | null;
+  readonly blockerWs: string;
+  readonly blockerIdentifier: string;
+  readonly blockedRepositoryId: string | null;
+  readonly blockedWs: string;
+  readonly blockedIdentifier: string;
+  readonly type: "blocks";
+}
+
+/** Mirrors `HubRegistryPayload`. */
+export interface HubRegistryPayload {
+  readonly format: number;
+  readonly hubId: string;
+  readonly capturedAt: string;
+  readonly workspaces: readonly RegistryEntry[];
+  readonly crossLinks: readonly RegistryCrossLink[];
+  /** Only on a registry read from the service: links it holds as removed. */
+  readonly retractedCrossLinks?: readonly RegistryCrossLink[];
+}
+
+/** What adoption does with one incoming workspace. Mirrors `AdoptionOutcome`. */
+export type AdoptionOutcome = "current" | "adopted" | "absent" | "declined" | "conflict" | "unmatchable";
+
+/** Mirrors `AdoptionDecision`. `reason` is a sentence for every outcome, never a code. */
+export interface AdoptionDecision {
+  readonly entry: RegistryEntry;
+  readonly outcome: AdoptionOutcome;
+  readonly reason: string;
+  readonly localSlug: string | null;
+  readonly conflict: {
+    readonly field: "prefix" | "slug";
+    readonly value: string;
+    readonly heldBySlug: string;
+    readonly heldByRepositoryId: string | null;
+  } | null;
+}
+
+/** What adoption does with one link. Mirrors `CrossLinkOutcome`. */
+export type CrossLinkOutcome = "added" | "current" | "skipped" | "removed" | "kept_removed" | "kept_linked";
+
+/** Mirrors `CrossLinkDecision`. */
+export interface CrossLinkDecision {
+  readonly link: RegistryCrossLink;
+  readonly outcome: CrossLinkOutcome;
+  readonly reason: string;
+}
+
+/**
+ * Mirrors `AdoptionReport`. **A preview of this is what an apply is agreed to**, so it
+ * is pinned: one decision per incoming workspace and one per link, and a mirror that
+ * dropped either list would be a consent screen that stopped listing what it changes.
+ */
+export interface AdoptionReport {
+  readonly hubId: string;
+  readonly capturedAt: string;
+  readonly decisions: readonly AdoptionDecision[];
+  readonly crossLinks: {
+    readonly added: number;
+    readonly skipped: number;
+    readonly current: number;
+    readonly removed: number;
+    readonly keptRemoved: number;
+    readonly keptLinked: number;
+  };
+  readonly crossLinkDecisions: readonly CrossLinkDecision[];
+  /** True when nothing was written. */
+  readonly dryRun: boolean;
+}
+
+/**
+ * One hub backup on the service. Mirrors `RemoteBackup` in src/core/cloud/client.ts.
+ *
+ * A restore is confirmed over `backupId`, `epoch` and `entityCount` from one of these,
+ * and the server refuses if its own list disagrees — so a mirror that lost a field
+ * would make the confirmation name something the server then checks against nothing.
+ */
+export interface RemoteBackup {
+  backupId: string;
+  epoch: number;
+  cutoffSeq: number;
+  entityCount: number;
+  opCount: number;
+  schemaVersion: number;
+  protocol: number;
+  /** `manual` for one a person took; `pre-restore` for the undo a restore takes. */
+  kind: string;
+  createdAt: number;
+  createdByDevice: string;
+}
+
+/** Mirrors `HubRestoreReport`. The service half is done; `adoption` is a preview. */
+export interface HubRestoreReport {
+  readonly hubId: string;
+  readonly backupId: string;
+  readonly fromEpoch: number | null;
+  readonly toEpoch: number | null;
+  readonly entityCount: number;
+  /** The undo: an ordinary hub backup, restorable the same way. */
+  readonly preRestoreBackupId: string | null;
+  readonly turns: number;
+  readonly registry: HubRegistryPayload;
+  readonly adoption: AdoptionReport;
+}
+
+/** A workspace that could not be published. Mirrors `UnpublishableEntry`. */
+export interface UnpublishableEntry {
+  readonly entry: RegistryEntry;
+  readonly reason: string;
+}
+
+/** A link that could not be published. Mirrors `UnpublishableLink`. */
+export interface UnpublishableLink {
+  readonly link: RegistryCrossLink;
+  readonly reason: string;
+}
+
+/** Mirrors `RetainedEdge`. */
+export interface RetainedEdge {
+  readonly entityId: string;
+  readonly reason: string;
+}
+
+/** Mirrors `LinkRef`. */
+export interface LinkRef {
+  readonly entityId: string;
+  readonly blockerIdentifier: string;
+  readonly blockedIdentifier: string;
+}
+
+/**
+ * "This machine calls it X; the registry calls it Y." Mirrors `RenamedEntry`.
+ * Informational only: names are create-only, so nothing was overwritten.
+ */
+export interface RenamedEntry {
+  readonly entityId: string;
+  readonly local: string;
+  readonly published: string;
+  readonly localPrefix?: string;
+  readonly publishedPrefix?: string;
+  readonly localKind?: string;
+  readonly publishedKind?: string;
+}
+
+/** Mirrors `RegistryIdentityReconciliation` in src/core/cloud/hub-scope.ts. */
+export interface RegistryIdentityReconciliation {
+  readonly updated: readonly { slug: string; repositoryId: string }[];
+  readonly problems: readonly { slug: string; problem: string }[];
+  readonly duplicates: readonly { repositoryId: string; slugs: readonly string[] }[];
+}
+
+/** What one publish did. Mirrors `PublishReport` in src/core/cloud/hub-registry-service.ts. */
+export interface PublishReport {
+  readonly hubId: string;
+  readonly endpoint: string;
+  readonly epoch: number;
+  readonly published: number;
+  readonly created: number;
+  readonly updated: number;
+  readonly batches: number;
+  readonly applied: number;
+  /** Should always be zero; non-zero means the service may not match this machine. */
+  readonly deduplicated: number;
+  readonly unpublishable: readonly UnpublishableEntry[];
+  readonly unpublishableLinks: readonly UnpublishableLink[];
+  readonly retained: readonly RetainedEdge[];
+  readonly retracted: readonly LinkRef[];
+  readonly relinked: readonly LinkRef[];
+  readonly renamed: readonly RenamedEntry[];
+  /** What the service holds that this machine lacks. Adopting takes it on. */
+  readonly unadopted: {
+    readonly registrations: readonly { entityId: string; slug: string }[];
+    readonly crossLinks: readonly LinkRef[];
+  };
+  readonly identities: RegistryIdentityReconciliation;
+  readonly upToDate: boolean;
+}
+
+/** What the page shows before a restore: the CLI's disclosure, carried by the server. */
+export interface HubRestoreNotice {
+  readonly headline: string;
+  readonly bullets: readonly string[];
+}
+
+/** `POST /api/hub/registry/identity/mint`. */
+export interface HubIdentityMintResult {
+  hubId: string;
+  minted: boolean;
+  report: HubCloudReport;
+}
+
+/**
+ * `POST /api/hub/registry/identity`. `needsConfirm` means nothing changed yet and
+ * `notice` is the orphan disclosure to show before asking again with `confirm`.
+ */
+export interface HubIdentityResult {
+  hubId: string;
+  adopted: boolean;
+  needsConfirm: boolean;
+  previousHubId: string | null;
+  /** The orphan notice, whenever a previous id is being or was replaced. */
+  notice: string | null;
+  report: HubCloudReport;
+}
+
+/** `POST /api/hub/registry/connect/preview`. */
+export interface HubRegistryConnectPreviewResult {
+  preview: ConnectPreview;
+  consent: ConsentTicket;
+  report: HubCloudReport;
+}
+
+/** `POST /api/hub/registry/connect`. */
+export interface HubRegistryConnectResult {
+  connection: { endpoint: string; deviceId: string; repositoryId: string };
+  credentialLocation: string;
+  report: HubCloudReport;
+}
+
+/** `POST /api/hub/registry/disconnect`. */
+export interface HubRegistryDisconnectResult {
+  wasConnected: boolean;
+  credentialRemoved: boolean;
+  recordRemoved: boolean;
+  report: HubCloudReport;
+}
+
+/** `POST /api/hub/registry/publish`. */
+export interface HubPublishResult {
+  publish: PublishReport;
+  report: HubCloudReport;
+}
+
+/** `POST /api/hub/registry/backup/consent`. */
+export interface HubBackupConsentResult {
+  backup: { enabled: boolean; serverAcknowledged: boolean; warning: string | null };
+  report: HubCloudReport;
+}
+
+/** `POST /api/hub/registry/backups`, and `backup/create` with the new one on it. */
+export interface HubBackupsResult {
+  backups: RemoteBackup[];
+  restoreNotice: HubRestoreNotice;
+  report: HubCloudReport;
+  backup?: RemoteBackup;
+}
+
+/** `POST /api/hub/registry/restore`. `digest` is what applying the adoption locally hands back. */
+export interface HubRestoreResult {
+  restore: HubRestoreReport;
+  digest: string;
+  backups: RemoteBackup[];
+  report: HubCloudReport;
+}
+
+/** `POST /api/hub/registry/adopt`, preview or apply. */
+export interface HubAdoptResult {
+  adoption: AdoptionReport;
+  registry: HubRegistryPayload;
+  digest: string;
+  report: HubCloudReport;
 }

@@ -1266,7 +1266,78 @@ describe("the UI server serves the whole page, connected or not, and calls nobod
          */
         ["/api/hub/consent", { registry: true }, 409],
         ["/api/hub/consent", { registry: false }, 404],
+        /**
+         * STA-289, the rest of the hub registry leg — every route on it, in the form
+         * this machine can reach: a hub WITH an identity (the first entry below mints
+         * one, after the no-identity block that follows this list has run) and
+         * WITHOUT a connection.
+         *
+         * Four of these are local by construction and answer 200 or a body-shape
+         * 400: minting (idempotent after the first), asking to replace the identity
+         * (which only asks), previewing the hub's connection (`preview.ts` cannot
+         * reach the network), and disconnecting (nothing is connected, so it reports
+         * that). The connect confirm is here in its refused forms — a made-up ticket
+         * and an absent one — exactly as its workspace twins are.
+         *
+         * The other six leave the machine when they work, and are here in the state
+         * where they must NOT: nothing is connected, so each refuses from the
+         * connection record, and a route that resolved an endpoint before finding
+         * that out would break the invariant on the machine least likely to be
+         * watching. A restore without `confirm` refuses on the body before that.
+         */
+        ["/api/hub/registry/identity/mint", {}, 200],
+        ["/api/hub/registry/identity", { hubId: "7c1f3a2e-0000-4000-8000-00000000c0de" }, 200],
+        ["/api/hub/registry/identity", { hubId: " " }, 400],
+        ["/api/hub/registry/connect/preview", { endpoint: "https://sync.example.com", credentialFile: true }, 200],
+        ["/api/hub/registry/connect/preview", { credentialFile: true }, 400],
+        ["/api/hub/registry/connect", { consent: "made-up", digest: "made-up", token: "enrollment-secret" }, 404],
+        ["/api/hub/registry/connect", { endpoint: "https://sync.example.com", token: "enrollment-secret" }, 409],
+        ["/api/hub/registry/connect", { token: " " }, 400],
+        ["/api/hub/registry/disconnect", {}, 400],
+        ["/api/hub/registry/disconnect", { confirm: true }, 200],
+        ["/api/hub/registry/publish", {}, 404],
+        ["/api/hub/registry/backup/consent", { enabled: true }, 404],
+        ["/api/hub/registry/backup/consent", { enabled: false }, 404],
+        ["/api/hub/registry/backups", {}, 404],
+        ["/api/hub/registry/backup/create", { label: "x" }, 404],
+        ["/api/hub/registry/restore", { backupId: "b", epoch: 1, entityCount: 1 }, 400],
+        ["/api/hub/registry/restore", { backupId: "b", epoch: 1, entityCount: 1, confirm: true }, 404],
+        ["/api/hub/registry/adopt", {}, 404],
+        ["/api/hub/registry/adopt", { apply: true }, 400],
+        ["/api/hub/registry/adopt", { apply: true, digest: "0".repeat(64) }, 404],
       ];
+
+      /**
+       * STA-289: the same egressing registry routes on a hub with NO identity at all,
+       * once, before the loop — which is the state a fresh install is in. Each must
+       * refuse from `hub.db` alone, and none may mint an identity on its way to
+       * refusing: the service addresses the hub through `hub.hubId()`, which mints,
+       * so a route that reached it first would leave this machine an id nobody chose.
+       */
+      for (const [route, body] of [
+        ["/api/hub/registry/connect/preview", { endpoint: "https://sync.example.com", credentialFile: true }],
+        ["/api/hub/registry/connect", { consent: "made-up", digest: "made-up", token: "enrollment-secret" }],
+        ["/api/hub/registry/disconnect", { confirm: true }],
+        ["/api/hub/registry/publish", {}],
+        ["/api/hub/registry/backup/consent", { enabled: true }],
+        ["/api/hub/registry/backups", {}],
+        ["/api/hub/registry/backup/create", {}],
+        ["/api/hub/registry/restore", { backupId: "b", epoch: 1, entityCount: 1, confirm: true }],
+        ["/api/hub/registry/adopt", {}],
+      ] as Array<[string, Record<string, unknown>]>) {
+        const res = await fetch(`${origin}${route}`, {
+          method: "POST",
+          headers: { "x-staple-token": token, "content-type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        const payload = (await res.json()) as { message: string };
+        expect(res.status, `${route} answered ${res.status}: ${JSON.stringify(payload)}`).toBe(404);
+        expect(payload.message).toMatch(/no registry identity/i);
+      }
+      const unminted = (await (
+        await fetch(`${origin}/api/cloud/workspaces`, { headers: { "x-staple-token": token } })
+      ).json()) as { self: { registry: { hubId: string | null } } };
+      expect(unminted.self.registry.hubId, "a refusing registry route minted an identity").toBeNull();
       for (let round = 0; round < 3; round += 1) {
         for (const [route, body, expected] of CLOUD_WRITES) {
           const res = await fetch(`${origin}${route}`, {

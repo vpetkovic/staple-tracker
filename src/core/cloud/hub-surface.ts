@@ -247,6 +247,15 @@ export interface HubSelfReport {
    * {@link HubWorkspaceOutcome} puts its `detail`.
    */
   registry: {
+    /**
+     * The hub's registry identity, or null when it has none — STA-289.
+     *
+     * `storedHubId()`, never `hubId()`: that one MINTS, and this is read by a route the
+     * settings page polls. It is on the report because the page has to say which identity
+     * the hub has before it offers to mint one or take on another, and the id is a local
+     * fact — a row in `hub.db`'s `meta` — so reading it asks nobody anything.
+     */
+    hubId: string | null;
     /** A connection record exists under the hub's id. False is "never connected". */
     connected: boolean;
     endpoint: string | null;
@@ -281,6 +290,14 @@ export interface HubSelfReport {
      * error.
      */
     consent: boolean;
+    /**
+     * This machine's HUB BACKUP consent, `connection.backup === true` — STA-289.
+     *
+     * The local half of `setHubBackupConsent`, read from the same connection record as
+     * `consent`. The server's half (`repos.backup_enabled`) is not knowable without a
+     * round trip and is deliberately not here; the page learns it from a button that asks.
+     */
+    backup: boolean;
   };
 }
 
@@ -427,12 +444,6 @@ export function hubCloudReport(home: string, options: HubReportOptions = {}): Hu
  * because a registry was missing is a worse answer than "not connected".
  */
 function readHubRegistryState(home: string): HubSelfReport["registry"] {
-  const absent = {
-    connected: false,
-    endpoint: null,
-    disclosure: REGISTRY_DISCLOSURE,
-    consent: false,
-  };
   let hubId: string | null;
   try {
     const hub = Hub.openReadOnly();
@@ -442,18 +453,28 @@ function readHubRegistryState(home: string): HubSelfReport["registry"] {
       hub.close();
     }
   } catch {
-    return absent;
+    hubId = null;
   }
+  const absent = {
+    hubId,
+    connected: false,
+    endpoint: null,
+    disclosure: REGISTRY_DISCLOSURE,
+    consent: false,
+    backup: false,
+  };
   if (hubId === null) return absent;
 
   try {
     const connection = readConnection(home, hubId);
     if (connection === null) return absent;
     return {
+      hubId,
       connected: true,
       endpoint: connection.endpoint,
       disclosure: REGISTRY_DISCLOSURE,
       consent: connection.registry === true,
+      backup: connection.backup === true,
     };
   } catch {
     /**
