@@ -50,6 +50,7 @@ import {
   counterFacts,
   describeDevice,
   groupDisabledReasons,
+  groupSharedReasons,
   hubFanOutSummary,
   hubGroups,
   hubListDescription,
@@ -1962,5 +1963,172 @@ describe("nothing hub-wide happens without a press", () => {
     expect(client).not.toContain("/api/cloud/purge");
     // And the scan really is looking at the client: it has the routes it should.
     expect(client).toContain("/api/hub/disconnect");
+  });
+});
+
+/**
+ * THE LAYOUT — VP: "improve the layout of the cloud settings for better UX both
+ * on mobile and desktop".
+ *
+ * Measured before this change on a phone (390px), with seven registered
+ * workspaces of which five were not on the machine: 3,957px of scroll, 38 of 50
+ * controls disabled, and the current workspace's connect form first at 656px —
+ * above the hub. These pin the shape that fixes that, and the properties it had
+ * to keep.
+ */
+describe("the page leads with the hub and stays short", () => {
+  it("puts the hub and the list before this workspace's own sections", () => {
+    const html = panel({
+      report: DISCONNECTED,
+      workspaces: hubReport([hubRow(), hubRow({ slug: "bravo", repositoryId: "b" })]),
+    });
+    const hub = html.indexOf("data-cloud-hub-self");
+    const list = html.indexOf("data-cloud-workspaces=");
+    const own = html.indexOf("This workspace · Not connected");
+    expect(hub).toBeGreaterThan(-1);
+    expect(list).toBeGreaterThan(hub);
+    expect(own).toBeGreaterThan(list);
+  });
+
+  it("collapses the connect form, and keeps it in the document", () => {
+    const html = panel();
+    const details = html.indexOf("<details data-cloud-setup-form");
+    expect(details).toBeGreaterThan(-1);
+    // Closed: no `open` attribute on it.
+    expect(html).not.toMatch(/<details data-cloud-setup-form="true"[^>]*\bopen\b/);
+    // The form is inside it rather than removed — a reader who opens it finds
+    // exactly the form that was always there.
+    expect(html.indexOf("data-cloud-preview")).toBeGreaterThan(details);
+    expect(html.indexOf('id="cloud-endpoint"')).toBeGreaterThan(details);
+  });
+
+  it("never collapses the consent screen", () => {
+    // What is being agreed to has to be read, so it is not behind a triangle.
+    const html = panel({ pending: { preview: PREVIEW, consent: { id: "c", digest: "d", expiresAt: "x" } } });
+    expect(html).not.toContain("data-cloud-setup-form");
+    expect(html).toContain("data-cloud-connect");
+    expect(html).toContain("AUTOMATIC SYNC STAYS OFF");
+  });
+
+  it("renders the hub's counts as tiles, with each term before its value", () => {
+    const html = panel({ workspaces: hubReport([hubRow(), missingRow("gone")]) });
+    const stats = html.slice(html.indexOf("data-cloud-hub-stats"), html.indexOf("</dl>"));
+    expect(stats).toContain("Registered elsewhere");
+    // The number sits above its label on screen, but the markup keeps the order
+    // a `<dl>` requires and a screen reader reads: term, then definition.
+    expect(stats.indexOf("<dt")).toBeLessThan(stats.indexOf("<dd"));
+  });
+});
+
+describe("the not-on-this-machine group states what its rows share once", () => {
+  const MISSING = ["autotrigger", "legacyrepo", "qdemo", "r6b"];
+
+  /** A workspace whose files are gone but whose credential is still here. */
+  function missingButConnected(slug: string): HubWorkspaceReport {
+    return {
+      ...missingRow(slug),
+      repositoryId: `${slug}-id`,
+      state: "manual",
+      mode: "manual",
+      endpoint: "https://sync.example",
+    };
+  }
+
+  it("lifts a reason only when every row in the group carries it", () => {
+    const rows = [...MISSING.map(missingRow), missingButConnected("still-connected")];
+    const perRow = rows.map((row) => hubRowControls(row));
+    const { shared, covers } = groupSharedReasons(perRow);
+
+    // Every lifted pair really is on every row, with that exact reason.
+    for (const group of shared) {
+      for (const controls of perRow) {
+        expect(controls.some((control) => control.disabledReason === group.reason)).toBe(true);
+      }
+    }
+    // And nothing that differs anywhere is lifted: a control is covered only if
+    // every row disables that same action for that same reason.
+    for (const controls of perRow) {
+      for (const control of controls.filter(covers)) {
+        for (const other of perRow) {
+          expect(
+            other.some((o) => o.action === control.action && o.disabledReason === control.disabledReason),
+          ).toBe(true);
+        }
+      }
+    }
+  });
+
+  it("lifts every reason from a group of one, because the group is that row", () => {
+    const controls = hubRowControls(missingRow("alone"));
+    const { shared, covers } = groupSharedReasons([controls]);
+    // Every disabled control is covered, and every live one is not.
+    for (const control of controls) expect(covers(control)).toBe(control.disabledReason !== null);
+    expect(shared.flatMap((group) => group.labels)).toEqual(
+      controls.filter((control) => control.disabledReason !== null).map((control) => control.label),
+    );
+
+    // Rendered: the lone row keeps its Remove, and the group says "for it".
+    const html = panel({ workspaces: hubReport([hubRow(), missingRow("alone")]) });
+    expect(html).toContain('data-cloud-workspace-action="alone:remove"');
+    expect(html).not.toContain('data-cloud-workspace-action="alone:sync"');
+    expect(html).toContain("for it: ");
+    expect(html).not.toContain("for these: ");
+  });
+
+  it("states the shared reasons once, and draws only the controls that still work", () => {
+    const html = panel({
+      workspaces: hubReport([
+        hubRow(),
+        hubRow({ slug: "bravo", repositoryId: "b", state: "disconnected", mode: "disconnected", endpoint: null }),
+        ...MISSING.map(missingRow),
+      ]),
+    });
+
+    // Once for the group, not once per row.
+    expect(html.match(/data-cloud-workspaces-unreachable-unavailable/g)).toHaveLength(1);
+
+    for (const slug of MISSING) {
+      // Still rendered, and still carrying the control that gets rid of it.
+      expect(html).toContain(`data-cloud-workspace="${slug}"`);
+      expect(html).toContain(`data-cloud-workspace-action="${slug}:remove"`);
+      // The dead controls the group heading now explains are not drawn per row.
+      expect(html).not.toContain(`data-cloud-workspace-action="${slug}:sync"`);
+      expect(html).not.toContain(`data-cloud-workspace-toggle="${slug}:auto"`);
+    }
+  });
+
+  it("keeps every reachable row's six controls — the STA-280 criterion", () => {
+    const html = panel({
+      workspaces: hubReport([
+        hubRow(),
+        hubRow({ slug: "bravo", repositoryId: "b", state: "disconnected", mode: "disconnected", endpoint: null }),
+        ...MISSING.map(missingRow),
+      ]),
+    });
+    for (const slug of ["alpha", "bravo"]) {
+      for (const verb of ["connect", "sync", "disconnect", "remove"]) {
+        expect(html).toContain(`data-cloud-workspace-action="${slug}:${verb}"`);
+      }
+      for (const consent of ["auto", "backup"]) {
+        expect(html).toContain(`data-cloud-workspace-toggle="${slug}:${consent}"`);
+      }
+    }
+  });
+
+  it("keeps a row's own reason on its own row", () => {
+    // A missing workspace that is still connected: Remove is refused because it
+    // would strand a credential. The other debris rows can be removed, so that
+    // reason is not the group's — it is this row's, and it must stay here.
+    const html = panel({
+      workspaces: hubReport([hubRow(), ...MISSING.map(missingRow), missingButConnected("zulu")]),
+    });
+    const row = html.slice(
+      html.indexOf('data-cloud-workspace="zulu"'),
+      html.indexOf("This workspace ·"),
+    );
+    expect(row).toContain('data-cloud-workspace-action="zulu:remove"');
+    expect(row).toContain("data-cloud-workspace-unavailable");
+    // Its disconnect is live — the credential is on this machine — so it is drawn.
+    expect(row).toContain('data-cloud-workspace-action="zulu:disconnect"');
   });
 });

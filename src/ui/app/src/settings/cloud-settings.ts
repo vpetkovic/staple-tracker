@@ -760,6 +760,60 @@ export function groupDisabledReasons(
   return [...grouped].map(([reason, labels]) => ({ reason, labels }));
 }
 
+/**
+ * The reasons EVERY row in a group shares, lifted out of the rows — so the
+ * group states them once.
+ *
+ * The same rule as {@link groupDisabledReasons}, applied one level up. Within a
+ * row, one sentence that covers four controls is printed once; across the
+ * "not on this machine" group it was printed once per row, five rows deep, and
+ * every one of those rows also drew five controls that could not be pressed.
+ * On a phone that was 1,325px of screen for workspaces whose only live action
+ * is Remove.
+ *
+ * A pair is shared only when every row carries that action with exactly that
+ * reason. A row whose reason differs — a missing workspace that is still
+ * connected, whose Remove is refused because it would strand a credential —
+ * keeps its own sentence on its own row, because that is information the group
+ * heading does not have.
+ *
+ * A group of one lifts everything, because the group IS that row: its heading
+ * already says the workspace is not on this machine, so five dead controls
+ * under it only repeat the heading. (The first cut exempted a lone row on the
+ * theory that "shared" needs two to mean anything. It protected nothing — no
+ * test renders a lone debris row — and it left the commonest case, one stray
+ * workspace, at its full height.)
+ *
+ * Keyed by action rather than by a joined `action + reason` string: each row
+ * carries each action once, so the action alone identifies the pair, and there
+ * is no separator character to get wrong.
+ */
+export function groupSharedReasons(rows: readonly (readonly HubRowControl[])[]): {
+  shared: Array<{ reason: string; labels: string[] }>;
+  covers: (control: HubRowControl) => boolean;
+} {
+  const byAction = new Map<HubRowAction, string>();
+  const [first, ...rest] = rows;
+  if (first !== undefined) {
+    for (const control of first) {
+      const reason = control.disabledReason;
+      if (reason === null) continue;
+      const everywhere = rest.every((row) =>
+        row.some((other) => other.action === control.action && other.disabledReason === reason),
+      );
+      if (everywhere) byAction.set(control.action, reason);
+    }
+  }
+  const shared = groupDisabledReasons(
+    (first ?? []).filter((control) => byAction.has(control.action)),
+  );
+  return {
+    shared,
+    covers: (control) =>
+      control.disabledReason !== null && byAction.get(control.action) === control.disabledReason,
+  };
+}
+
 /** "Sync now, Automatic sync, Backup and Disconnect" — an Oxford-free list. */
 export function joinLabels(labels: readonly string[]): string {
   if (labels.length <= 1) return labels[0] ?? "";

@@ -105,6 +105,7 @@ import {
   counterFacts,
   describeDevice,
   groupDisabledReasons,
+  groupSharedReasons,
   hubFanOutSummary,
   hubGroups,
   hubListDescription,
@@ -456,6 +457,31 @@ function Facts({ facts }: { facts: readonly CloudFact[] }) {
 }
 
 /**
+ * The hub's counts, as tiles — the same facts `Facts` would list, read at a
+ * glance.
+ *
+ * Its own component rather than a variant of `Facts`, because `Facts` also
+ * renders the connect consent screen, where each value is a sentence that has
+ * to be read in full and a tile would truncate it. These values are all single
+ * numbers, which is the one case a tile is the better shape for.
+ */
+function HubStats({ facts }: { facts: readonly CloudFact[] }) {
+  if (facts.length === 0) return null;
+  return (
+    <dl data-cloud-hub-stats className="grid grid-cols-2 gap-2 md:grid-cols-4">
+      {facts.map((fact) => (
+        // Term first, as a `<dl>` group requires and a screen reader reads it;
+        // the number is lifted above its label visually, not in the markup.
+        <div key={fact.label} className="flex flex-col-reverse rounded-md border px-3 py-2">
+          <dt className="text-[11px] leading-snug text-muted-foreground">{fact.label}</dt>
+          <dd className="text-lg leading-tight font-semibold tabular-nums">{fact.value}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+/**
  * The whole surface, as a pure function of a report.
  *
  * Every branch below reads a VALUE — `mode`, `auto`, `backup`, `credentialPresent`
@@ -469,8 +495,36 @@ export function CloudPanel(props: CloudPanelProps) {
 
   return (
     <div data-cloud-section data-mode={report.mode} className="space-y-6">
+      {/*
+        FIRST, and outside the `connected` branch, deliberately.
+
+        This category is global scope: its subject is the MACHINE, and the hub is
+        the object that stands for the machine. Every section below the list is
+        about the one workspace the dialog was opened on, which is also a row in
+        the list — so leading with it put a single workspace's form above the
+        thing VP named as primary, 656px down on a phone.
+
+        The case the hub and list exist for is also precisely the one where the
+        current workspace is NOT connected and five others are — a person looking
+        at "Not connected" and wondering whether they connected anything. Hiding
+        the list until the current workspace happens to be connected would make
+        it invisible exactly when it answers the question.
+      */}
+      <HubSelfPanel
+        report={props.workspaces}
+        hub={props.hub}
+        actions={props.hubActions}
+        outcome={props.hub.outcomes[""]}
+      />
+      <HubWorkspaceList
+        report={props.workspaces}
+        currentRepositoryId={report.repositoryId}
+        hub={props.hub}
+        actions={props.hubActions}
+      />
+
       <Section
-        title={connected ? "Connected" : "Not connected"}
+        title={connected ? "This workspace · Connected" : "This workspace · Not connected"}
         description={report.detail}
         error={props.error}
       >
@@ -502,28 +556,43 @@ export function CloudPanel(props: CloudPanelProps) {
           }
         >
           {pending === null ? (
-            <>
-              <ConnectFields
-                idPrefix="cloud"
-                draft={draft}
-                problem={formProblem}
-                onDraft={props.onDraft}
-              />
-              <div className="flex items-center gap-2">
-                <Button
-                  type="button"
-                  size="sm"
-                  data-cloud-preview
-                  disabled={formProblem !== null || busy !== null}
-                  onClick={props.onPreview}
-                >
-                  {busy === "preview" ? "Reading…" : "Review connection"}
-                </Button>
-                <span className="text-[12px] text-muted-foreground">
-                  Nothing is sent until you confirm what this shows.
-                </span>
+            /*
+              Collapsed until asked for. Four fields and a paragraph each were
+              656px of a phone screen for a decision made once per repository —
+              and this workspace's row in the list above already offers Connect.
+
+              A native `<details>` rather than a button that mounts the form:
+              the fields stay in the document, so a reader who opens it finds
+              exactly the form that was always there, and a half-typed draft is
+              not thrown away by closing it.
+            */
+            <details data-cloud-setup-form className="rounded-md border px-3 py-2">
+              <summary className="flex min-h-8 cursor-pointer items-center text-[13px] font-medium">
+                Enter connection details
+              </summary>
+              <div className="mt-3 space-y-3">
+                <ConnectFields
+                  idPrefix="cloud"
+                  draft={draft}
+                  problem={formProblem}
+                  onDraft={props.onDraft}
+                />
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    data-cloud-preview
+                    disabled={formProblem !== null || busy !== null}
+                    onClick={props.onPreview}
+                  >
+                    {busy === "preview" ? "Reading…" : "Review connection"}
+                  </Button>
+                  <span className="text-[12px] text-muted-foreground">
+                    Nothing is sent until you confirm what this shows.
+                  </span>
+                </div>
               </div>
-            </>
+            </details>
           ) : (
             /*
               THE CONSENT SCREEN. Everything the CLI prints before it asks, as
@@ -690,30 +759,6 @@ export function CloudPanel(props: CloudPanelProps) {
           </Section>
         </>
       ) : null}
-
-      {/*
-        OUTSIDE the `connected` branch, deliberately.
-
-        Every other section on this page is about the workspace the dialog was
-        opened on, so they are all behind that branch. This one is about the
-        MACHINE, and the case it exists for is precisely the one where the
-        current workspace is NOT connected and five others are — a person looking
-        at "Not connected" and wondering whether they connected anything. Hiding
-        the list until the current workspace happens to be connected would make
-        it invisible exactly when it answers the question.
-      */}
-      <HubSelfPanel
-        report={props.workspaces}
-        hub={props.hub}
-        actions={props.hubActions}
-        outcome={props.hub.outcomes[""]}
-      />
-      <HubWorkspaceList
-        report={props.workspaces}
-        currentRepositoryId={report.repositoryId}
-        hub={props.hub}
-        actions={props.hubActions}
-      />
     </div>
   );
 }
@@ -784,7 +829,7 @@ function HubSelfPanel({
   return (
     <Section title="This hub" description={hubSelfSummary(report)}>
       <div data-cloud-hub-self>
-        <Facts facts={hubSelfFacts(report)} />
+        <HubStats facts={hubSelfFacts(report)} />
         {/*
           Not a dismissible hint, and not a tooltip. A person will reasonably
           read "back up the hub" as "back up my work", and it is not — there is
@@ -1401,7 +1446,7 @@ function HubWorkspaceList({
   const groups = hubGroups(report, { currentRepositoryId });
   const byslug = new Map(report.workspaces.map((row) => [row.slug, row]));
 
-  const renderRow = (view: HubRowView) => {
+  const renderRow = (view: HubRowView, omit?: (control: HubRowControl) => boolean) => {
     const row = byslug.get(view.slug);
     if (!row) return null;
     return (
@@ -1411,9 +1456,20 @@ function HubWorkspaceList({
         view={view}
         hub={hub}
         actions={actions}
+        omit={omit}
       />
     );
   };
+
+  // What every debris row shares, stated once for the group — see
+  // `groupSharedReasons`. Reachable rows are never passed through this: each of
+  // them keeps all six controls, which is the STA-280 criterion.
+  const debris = groupSharedReasons(
+    groups.unreachable.flatMap((view) => {
+      const row = byslug.get(view.slug);
+      return row ? [hubRowControls(row, { current: view.current })] : [];
+    }),
+  );
 
   return (
     <Section title="Workspaces on this machine" description={hubListDescription(report)}>
@@ -1435,7 +1491,7 @@ function HubWorkspaceList({
       </div>
 
       <ul data-cloud-workspaces className="m-0 list-none space-y-2 p-0">
-        {groups.reachable.map(renderRow)}
+        {groups.reachable.map((view) => renderRow(view))}
       </ul>
 
       {/*
@@ -1457,7 +1513,21 @@ function HubWorkspaceList({
           <p className="mb-2 text-[11px] leading-relaxed text-muted-foreground">
             {hubUnreachableDescription(groups.unreachable.length)}
           </p>
-          <ul className="m-0 list-none space-y-2 p-0">{groups.unreachable.map(renderRow)}</ul>
+          {debris.shared.length > 0 ? (
+            <ul data-cloud-workspaces-unreachable-unavailable className="m-0 mb-2 list-none space-y-0.5 p-0">
+              {debris.shared.map((group) => (
+                <li key={group.reason} className="text-[11px] leading-relaxed text-muted-foreground">
+                  <span className="font-medium">{joinLabels(group.labels)}</span>
+                  {group.labels.length > 1 ? " are unavailable " : " is unavailable "}
+                  {groups.unreachable.length > 1 ? "for these: " : "for it: "}
+                  {group.reason}
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          <ul className="m-0 list-none space-y-2 p-0">
+            {groups.unreachable.map((view) => renderRow(view, debris.covers))}
+          </ul>
         </div>
       ) : null}
     </Section>
@@ -1474,18 +1544,34 @@ function HubWorkspaceList({
  * fourth, behind a `<details>` that is closed. Every one of those sentences used
  * to be in position one.
  */
+/** The badge dot per connection state, from the app's own status palette. */
+const STATE_DOT: Record<HubWorkspaceReport["state"], string> = {
+  automatic: "var(--status-task-done)",
+  manual: "var(--status-task-done)",
+  auth_failed: "var(--status-task-blocked)",
+  disconnected: "var(--status-task-backlog)",
+};
+
 function HubRow({
   row,
   view,
   hub,
   actions,
+  omit,
 }: {
   row: HubWorkspaceReport;
   view: HubRowView;
   hub: HubPanelState;
   actions: HubActions;
+  /**
+   * Controls whose reason the enclosing GROUP already states. Supplied only for
+   * the "not on this machine" group; a reachable row always draws all six.
+   */
+  omit?: (control: HubRowControl) => boolean;
 }) {
-  const controls = hubRowControls(row, { current: view.current });
+  const controls = hubRowControls(row, { current: view.current }).filter(
+    (control) => !omit?.(control),
+  );
   const disabledReasons = groupDisabledReasons(controls);
   const outcome = hub.outcomes[row.slug];
   const busyHere = hub.busy?.slug === row.slug ? hub.busy.action : null;
@@ -1509,7 +1595,19 @@ function HubRow({
           {row.slug}
         </span>
         {view.current ? <span className="text-[11px] text-muted-foreground">(this one)</span> : null}
-        <span className="text-[11px] text-muted-foreground">{view.state}</span>
+        {/*
+          A badge, so a column of rows can be scanned by state. Coloured from
+          `row.state` — the value — and never from `view.state`, the sentence,
+          which is for reading and not for deciding.
+        */}
+        <span className="inline-flex items-center gap-1 rounded-full border px-1.5 text-[11px] text-muted-foreground">
+          <span
+            aria-hidden
+            className="size-1.5 rounded-full"
+            style={{ background: STATE_DOT[row.state] }}
+          />
+          {view.state}
+        </span>
         {view.marks.map((mark) => (
           <span key={mark} className="rounded border px-1 text-[10px] text-muted-foreground">
             {mark}
@@ -1749,7 +1847,12 @@ function HubControl({
       <label
         data-cloud-workspace-control={control.action}
         data-disabled={disabled ? "true" : "false"}
-        className="flex items-center gap-1.5 text-[12px]"
+        // The LABEL is the target, and it is the height of the row's buttons: a
+        // 14px checkbox was the only thing a thumb could hit, which is under the
+        // 24px WCAG 2.5.8 minimum and far under what a phone needs. The negative
+        // margin cancels the padding, so the checkbox still lines up with the
+        // buttons beside and above it — the target grows, the layout does not.
+        className={`-mx-1.5 flex min-h-8 min-w-8 items-center gap-1.5 rounded-md px-1.5 text-[12px] ${disabled ? "" : "cursor-pointer hover:bg-accent"}`}
         title={control.disabledReason ?? control.effect}
       >
         <input
@@ -1761,7 +1864,7 @@ function HubControl({
           checked={control.value === true}
           disabled={disabled || locked}
           onChange={(event) => actions.onConsent(slug, control.action as "auto" | "backup", event.target.checked)}
-          className="accent-primary size-3.5"
+          className="accent-primary size-4"
         />
         <span className={disabled ? "text-muted-foreground" : undefined}>{control.label}</span>
       </label>
