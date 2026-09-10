@@ -306,6 +306,224 @@ enrollment secret or an existing device token. An unknown `repoId` fails closed 
 copied manifest than a new repository, and auto-creating turns that into a silently
 forked workspace.
 
+### Provisioning a HUB
+
+A hub is a repository. There is no hub table, no hub flag and no separate route, and
+there deliberately is not: a flag would be a second thing to keep in step with the
+entities the log actually contains. So provisioning one is the `INSERT` above, with the
+hub's id in place of a workspace's:
+
+```sql
+-- The hub id comes from `hub.db`'s meta table: `staple hub registry id` prints it.
+-- It is minted locally by the FIRST machine and adopted by every later one.
+INSERT INTO repos (repo_id, epoch, last_seq, last_fencing_token, enroll_sha256, created_at)
+VALUES ('<hub id>', 1, 0, 0, X'<sha256 hex>', <unix millis>);
+```
+
+Two things follow from there being no provisioning route, and both have to be visible
+in the product rather than discovered:
+
+**1. `forbidden` on a hub's first connect means "not provisioned", and the product must
+say so.** It is the same wire answer as "you are not a member", and it always will be —
+`devices.ts` answers `forbidden` for an unknown `repoId` precisely so that a caller
+cannot enumerate which repository ids this server knows about. What makes the
+translation safe for a hub specifically is that a hub id is minted locally and never
+typed by a human, so "you fat-fingered the id" is not one of the readings. The client
+maps it to a named state that spells out this `INSERT` (`HUB_NOT_PROVISIONED` in
+`src/core/cloud/hub-registry-service.ts`). Do not replace that with a generic failure;
+it reads as a bug in Staple, and the remedy is an operator action nobody would guess.
+
+**2. The hub id has to reach the second machine out of band, alongside the enrollment
+secret.** A replacement machine mints its own hub id on first use, and a machine scoped
+to a freshly minted id reads an empty repository — so "restorable after a machine is
+lost" would be false however good the rest of the mechanism was. The id is not a secret
+and the enrollment secret is, but neither is derivable from anything, and losing either
+costs the same recovery. Keep them together.
+
+The hub's log contains only `registration` and `crossLink` operations, which require
+**protocol 2**. Consequences worth knowing before you deploy:
+
+- A hub backup is stamped `protocol = 2`, and `POST /backups/{id}/restore` refuses it
+  when the request negotiated protocol 1 — otherwise the epoch moves, the pre-restore
+  capture is spent, and the device that asked is left on a timeline it cannot hydrate.
+- An ordinary workspace backup is still stamped `protocol = 1`, because the stamp is
+  the lowest protocol that can REPLAY the backup rather than the ceiling of the Worker
+  that took it. A Worker rolled back one version can still restore one.
+- `GET /ops` and `GET /snapshot` on a hub refuse a protocol-1 request outright, rather
+  than filtering the registry entities out of it. Filtering would advance the cursor
+  past operations that were never delivered.
+
+### If a registry operation lands in a WORKSPACE's log
+
+This Worker has no notion of hub-versus-workspace repository, deliberately — a flag would
+be a second thing to keep in step with what the log actually contains. So a `registration`
+or `crossLink` pushed at a workspace's `repoId` **is accepted**, and from that moment every
+protocol-1 client of that workspace is refused at `/ops` and `/snapshot` with a
+non-retryable 426.
+
+It is not a privilege boundary: it needs a valid device credential for the target, and
+anyone holding one can already push arbitrary operations or restore an old backup. The
+client closes both reachable routes to it — `adoptRegistryIdentity` refuses a hub id that
+names a known workspace or an existing connection, and `push` refuses a batch mixing the
+two vocabularies — so reaching this state now takes deliberate effort.
+
+What makes it worth a recipe is that it is **irreversible by the one remedy a user has**.
+A restore materialises the fold into the new epoch, so the protocol-2 entity is
+re-materialised and survives. Rolling the epoch does not remove it.
+
+The remedy is operator-side, and it is surgical rather than a purge.
+
+**Step 0 — check for an in-flight restore, and stop if there is one.**
+
+```bash
+npx wrangler d1 execute staple-sync-dev --remote -c wrangler.local.toml --command \
+  "SELECT restore_id, from_epoch, to_epoch, staged_count, status
+     FROM restores WHERE repo_id = '<workspace repo id>' AND status = 'staging';"
+```
+
+If that returns a row, **do not delete anything yet, and do not delete the `restores` row.**
+
+**That `SELECT` is a fence in name only, and the recipe does not pretend otherwise.** It is a
+point-in-time read and nothing in this service locks a repository: `beginRestore` refuses only
+while a `status = 'staging'` row already exists, so any device holding a valid credential can
+start a restore in the gap between your `SELECT` and your `DELETE`, and the answer you read is
+stale the moment you have it. Treat it as information rather than protection — re-run it
+immediately before you delete, revoke the device credentials for the duration if the repository
+is live (`DELETE /v1/repos/{repoId}/devices/{deviceId}`, which holds until somebody re-connects
+with the enrollment secret), and rely on the epoch predicate in step 3, which is the part that
+stays correct even if a restore begins mid-recipe.
+
+`stage` resumes from a slice offset computed from `stagedCount`, which is a bare `COUNT(*)`
+of the target epoch rather than a per-restore ledger. Two consequences, both measured:
+
+- **Deleting the `restores` row loses data silently.** The next restore picks the same
+  `toEpoch = repo.epoch + 1` and its in-flight guard reads the now-empty `restores` table, so
+  the orphaned staged rows still count. Reproduced: the row deleted with 25 orphan ops
+  staged, a new restore of a 30-entity backup staged only 5, then committed
+  `status: "committed", done: true, staged: 30` — **25 of 30 entities skipped on the
+  disaster-recovery path, reported as success.** If you must abandon a restore, delete its
+  staged operations in the same statement:
+  ```sql
+  DELETE FROM ops WHERE repo_id = '<repo id>' AND epoch = <to_epoch>;
+  DELETE FROM restores WHERE repo_id = '<repo id>' AND restore_id = '<restore id>';
+  ```
+  (`status = 'abandoned'` exists in the schema, but nothing writes it and there is no abandon
+  route, so it is not a remedy — do not set it and expect anything to honour it.)
+- **Deleting contaminated `ops` out of a staging epoch wedges the restore permanently.** The
+  count-based window shifts past the deleted row for ever: every poll inserts nothing,
+  `staged` never reaches `entityCount`, and `repos.last_seq` climbs unbounded. And because
+  nothing writes `'abandoned'`, the wedged row then blocks every future `beginRestore` with
+  `conflict`, for ever.
+
+**So: drive the restore to completion first** — call the restore route until it answers
+`done` — and only then continue with the steps below. That is the remedy that loses nothing,
+**and it is only available while the commit can still apply.** `commitRestore`'s second guard
+is `guard_seq`: if any operation landed in `from_epoch` after the restore began, the commit
+refuses, and it refuses for good — the intruding row is in neither the backup being restored
+nor the pre-restore fold, so nothing can make committing safe later. Nothing gates writes while
+a restore stages, either: `POST /ops` has no in-flight check at all, so on a repository with a
+live device `done` can be unreachable however many times you poll for it.
+
+**When `done` is unreachable, abandon the restore rather than driving it** — which is the
+two-statement form above, the staged operations in `to_epoch` and the `restores` row deleted in
+the same sitting, never the row on its own. Stop the writers before you retry or the next
+attempt ends the same way: revoking the device credentials is the only fence this service
+actually offers. Then take a fresh backup and begin the restore again, which is what the commit
+refusal itself tells the caller to do. Abandoning deletes nothing that a device wrote: the
+repository stays on `from_epoch` with the concurrent operations intact. What it gives up is the
+restore — the state you were rolling back to is reachable again only once the writers are quiet
+long enough for one begin-to-commit round to finish.
+
+**Step 1 — capture the rows to a file before deleting anything.** `SELECT *`, not a
+four-column projection: a mistyped `repo_id` deletes rows that cannot be reconstructed from
+`epoch, seq, entity, entity_id` alone, because `payload`, `actor`, `client_seq`,
+`created_at` and `server_ts` are gone with them.
+
+```bash
+npx wrangler d1 execute staple-sync-dev --remote -c wrangler.local.toml --json --command \
+  "SELECT * FROM ops
+    WHERE repo_id = '<workspace repo id>' AND entity IN ('registration','crossLink')
+    ORDER BY epoch, seq;" > contaminated-ops.json
+```
+
+Read it and confirm the `repo_id` is the one you meant before going further.
+
+**Step 2 — find the contaminated BACKUPS.** There will usually be several: every restore
+auto-creates a `pre-restore` backup, so any repository that has been restored since the
+operations landed has captured them.
+
+```bash
+npx wrangler d1 execute staple-sync-dev --remote -c wrangler.local.toml --command \
+  "SELECT backup_id, kind, epoch, protocol, created_at
+     FROM backups WHERE repo_id = '<workspace repo id>' AND protocol >= 2;"
+```
+
+`protocol >= 2` is the marker — `captureBackup` stamps the lowest protocol that can replay
+the fold, so a workspace backup carrying a registry entity is the only reason a workspace
+repository would have one stamped 2.
+
+**Step 3 — delete the operations, in every epoch a device can read them from:**
+
+```sql
+DELETE FROM ops
+ WHERE repo_id = '<workspace repo id>'
+   AND entity IN ('registration', 'crossLink')
+   AND epoch <= (SELECT epoch FROM repos WHERE repo_id = '<workspace repo id>');
+```
+
+**The epoch predicate is what keeps this delete out of an epoch a restore is filling**, and it
+is not a belt-and-braces addition to step 0 — it is the part that holds when step 0's read went
+stale. `repos.epoch` is the live epoch and a restore stages into `repo.epoch + 1`, so
+`epoch <= (SELECT epoch …)` covers every epoch a device can read and excludes exactly the one
+under construction. Without it the delete punches a hole in `stagedCount`, which is a bare
+`COUNT(*)` of the target epoch rather than a per-restore ledger, while `stage` resumes at
+`entities.slice(staged, staged + maxBatchSize)` — so the window steps past the deleted position
+for ever, `staged` never reaches `entity_count`, `commitRestore` is therefore never reached at
+all, and the `status = 'staging'` row that survives answers every future `beginRestore` with
+`conflict`. One `DELETE` run at the wrong moment is a repository that can never be restored
+again.
+
+Contamination inside a staging epoch is not left behind by excluding it: those rows are
+materialised from the backup, so they become reachable only if that restore commits, and once
+it has, `repos.epoch` has moved and running this same statement again removes them.
+
+`seq` gaps are legal and expected — a slot reserved for a deduplicated operation already
+goes unused, and `WHERE seq > cursor` is gap-tolerant by construction — so removing rows
+does not disturb cursors, and `repos.last_seq` is deliberately left alone so no `seq` is
+ever reused. Devices that had already applied the operations are unaffected: they are the
+only clients that could read them, and a protocol-2 client tolerates their absence.
+
+**Step 4 — delete every backup step 2 found**, rather than restoring from it:
+
+```sql
+DELETE FROM backups WHERE repo_id = '<workspace repo id>' AND backup_id = '<id>';
+```
+
+Do this in the same sitting. A backup captured while the rows were present carries them into
+every future restore, so leaving one is leaving the problem behind a route a user can reach
+on their own.
+
+Two things to know before you run it. **Some of these will be `kind = 'pre-restore'`, which
+is the documented undo for a restore somebody ran** — deleting one makes that restore
+permanent, and there is no keeping those: step 2 cannot have returned a backup that predates
+the contamination. `captureBackup` stamps `protocolForEntities` over the fold it captured, and
+a fold holding no registry entity stamps `1`, so `protocol >= 2` selects exactly the backups
+that carry the rows — every one of them was captured after the operations landed, and every one
+is a route by which a user restores the contamination into the log on their own. So the price
+is explicit: any restore whose `pre-restore` undo appears in step 2's list stops being
+reversible. Note each `created_at` and tell whoever ran that restore before you delete it. The
+backups worth keeping are the ones step 2 does NOT return — the protocol-1 captures from before
+the contamination, which this recipe leaves untouched and which are what a rollback should
+use. And this bypasses `DELETE /backups/{id}`'s in-flight
+guard, which is another reason step 0 has to be settled first: deleting the backup a staging
+restore is reading makes the next `stage` fail with `not_found` and leaves the restore wedged
+exactly as above.
+
+Only if the rows cannot be identified is the answer `DELETE /v1/repos/{repoId}` (purge) and
+a re-provision from a device that still holds the data. That is the outcome this recipe
+exists to avoid; "no remedy short of a purge" with no documented purge is the difference
+between an incident and a dead repository.
+
 ### Never
 
 No `wrangler delete`, no `wrangler d1 delete`, no destructive subcommand against any

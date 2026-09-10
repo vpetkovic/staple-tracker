@@ -48,10 +48,11 @@ import {
   forkWorkspaceIdentity,
   readWorkspaceManifest,
 } from "../core/repo-identity.js";
+import { Hub } from "../core/hub.js";
 import { resolveWorkspace } from "../core/workspace.js";
 import { StapleError, errorEnvelope } from "../core/types.js";
 import { confirm, isInteractive } from "../onboarding/prompts.js";
-import { setConsent } from "../core/cloud/connection.js";
+import { readConnection, setConsent } from "../core/cloud/connection.js";
 import {
   fetchDevices,
   performConnect,
@@ -254,8 +255,12 @@ const EXIT_CODES: Record<string, number> = { validation: 2, not_found: 3, confli
  * retry bit that every other surface agrees on. This is the price of being the
  * first async command in the tree, and it is paid here rather than by making
  * cli.ts async underneath thirty commands that are fine as they are.
+ *
+ * EXPORTED for `hub-registry.ts` (STA-283), which is the second async command
+ * group and needs exactly this. Shared rather than copied: the reasoning above is
+ * the whole value, and a second copy of it is a second thing to keep true.
  */
-function settle(work: Promise<void>, json: boolean): void {
+export function settle(work: Promise<void>, json: boolean): void {
   void work.catch((error: unknown) => {
     const envelope = errorEnvelope(error);
     if (json) {
@@ -706,6 +711,30 @@ function runConnectAll(values: {
   );
 }
 
+/**
+ * Does this machine hold a connection record for its own HUB?
+ *
+ * Read-only and never throws. A hub with no identity, no hub file at all, or a connection
+ * record this build cannot parse all answer "do not mention it": the question being asked is
+ * only whether to name a remedy, and guessing wrong towards silence is better than telling
+ * somebody to disconnect something that is not there. `staple hub registry status` is the
+ * command that reports the record properly, including when it is unreadable.
+ */
+function hubRegistryConnectionExists(home: string): boolean {
+  try {
+    const hub = Hub.openReadOnly();
+    try {
+      const hubId = hub.storedHubId();
+      if (hubId === null) return false;
+      return readConnection(home, hubId) !== null;
+    } finally {
+      hub.close();
+    }
+  } catch {
+    return false;
+  }
+}
+
 function runDisconnect(argv: string[]): void {
   const { values } = parseArgs({ args: argv, options: { ...withAll, yes: { type: "boolean" } } });
   const json = values.json === true;
@@ -753,6 +782,28 @@ function runDisconnect(argv: string[]): void {
         (outcome.failed > 0 ? `, ${outcome.failed} failed` : "") +
         `. No network call was made, and no local data was touched.`,
     );
+    /**
+     * The HUB'S OWN connection is not a workspace, so this fan-out does not reach it.
+     *
+     * `performHubDisconnect` iterates `listHubWorkspaces()` and keys each removal on that
+     * workspace's `repositoryId`. STA-283 added a connection record keyed on the HUB id,
+     * in the same `cloud/` directory and with the same 0600 credential beside it — so
+     * after that feature, "N disconnected" stopped meaning "every credential on this
+     * machine is gone". The comment above this one describes a decommissioning script that
+     * "moved on believing every credential was gone"; that is exactly the reader this line
+     * is for, and this PR is what made the belief wrong.
+     *
+     * Named only when the record is actually there, because a remedy for a thing you do
+     * not have is noise. Local and cheap: a read-only hub open and one file read, on a
+     * path that has already enumerated every workspace.
+     */
+    if (hubRegistryConnectionExists(home)) {
+      console.log("");
+      console.log(
+        "  This machine's HUB also has its own connection, and it is not a workspace — so " +
+          "it was NOT disconnected here. Remove it with: staple hub registry disconnect",
+      );
+    }
     if (outcome.failed > 0) {
       console.log("");
       /**
@@ -1420,8 +1471,32 @@ function runResolve(argv: string[]): void {
 }
 
 function runDevices(argv: string[]): void {
-  const sub = argv[0] === "revoke" ? "revoke" : "ls";
-  const rest = argv[0] === "ls" || argv[0] === "revoke" ? argv.slice(1) : argv;
+  /**
+   * A TYPO IS REFUSED, and here the typo target is the DESTRUCTIVE verb (STA-283).
+   *
+   * This is the third instance of one shape, found by sweeping for it rather than by
+   * meeting it: `hub registry backup` had it, `cloud backup` had it, and this one is the
+   * worst of the three. Any present-but-wrong first word became `ls`, so
+   * `staple cloud devices remove dev_abc` — or `revok`, or `rm`, or `delete` — made an
+   * authenticated GET against the paid service, printed a device table, and exited 0. The
+   * operator's natural reading of that is "the revoke worked". It failed in both
+   * directions at once: it did not revoke, and it did not say so.
+   *
+   * A BARE `staple cloud devices` still means `ls`, which is the deliberate no-argument
+   * default and the one of the two verbs that changes nothing. A leading `-` is a flag, so
+   * it is the no-argument case too.
+   */
+  const subs = new Set(["ls", "revoke"]);
+  const first = argv[0];
+  if (first !== undefined && !first.startsWith("-") && !subs.has(first)) {
+    throw new StapleError(
+      "validation",
+      `Unknown devices subcommand "${first}". ` +
+        "usage: staple cloud devices [ls|revoke <deviceId>]",
+    );
+  }
+  const sub = first === "revoke" ? "revoke" : "ls";
+  const rest = first !== undefined && subs.has(first) ? argv.slice(1) : argv;
   const { values, positionals } = parseArgs({
     args: rest,
     allowPositionals: true,
@@ -1556,6 +1631,26 @@ function runPurge(argv: string[]): void {
  */
 function runBackup(argv: string[]): void {
   const subs = new Set(["enable", "disable", "create", "ls", "rm"]);
+  /**
+   * A TYPO IS REFUSED, not silently treated as `ls` (STA-283).
+   *
+   * `staple cloud backup enabel` used to fall through to `ls`, which is a network call
+   * against a paid service that reports success — doing something the person did not ask
+   * for and telling them it worked. `hub registry backup` documents having fixed exactly
+   * this, in the sibling file, and this instance survived; found by sweeping for the shape
+   * rather than for the symptom.
+   *
+   * A BARE `staple cloud backup` still means `ls`, because that is a choice rather than a
+   * mistake, and listing is the only one of the five that changes nothing.
+   */
+  const first = argv[0];
+  if (first !== undefined && !first.startsWith("-") && !subs.has(first)) {
+    throw new StapleError(
+      "validation",
+      `Unknown backup subcommand "${first}". ` +
+        "usage: staple cloud backup [enable|disable|create|ls|rm <backupId>]",
+    );
+  }
   const sub = argv[0] && subs.has(argv[0]) ? argv[0] : "ls";
   const rest = argv[0] && subs.has(argv[0]) ? argv.slice(1) : argv;
 

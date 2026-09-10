@@ -418,13 +418,84 @@ export class Hub {
    * lazily so that no existing hub grows one until something actually asks.
    */
   hubId(): string {
-    const row = this.db.prepare("SELECT value FROM meta WHERE key = 'hub_id'").get() as
-      | { value: string }
-      | undefined;
-    if (row?.value) return row.value;
+    const stored = this.storedHubId();
+    if (stored !== null) return stored;
     const minted = randomUUID();
     this.db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('hub_id', ?)").run(minted);
     return minted;
+  }
+
+  /**
+   * The stored hub id, or null when this hub has never needed one.
+   *
+   * Separate from {@link hubId} because reading and MINTING are different acts, and
+   * several callers need the first without the second. Adoption is the one that
+   * matters: a machine about to take on an existing registry identity has to be able
+   * to ask whether it already has one, and asking through `hubId()` would mint the
+   * very value it was checking for the absence of.
+   */
+  storedHubId(): string | null {
+    const row = this.db.prepare("SELECT value FROM meta WHERE key = 'hub_id'").get() as
+      | { value: string }
+      | undefined;
+    return row?.value ?? null;
+  }
+
+  /**
+   * Take on an existing hub identity, rather than minting a fresh one.
+   *
+   * ## Why this has to exist, and what it means about what a hub id is
+   *
+   * `hubId()` mints, which is right for the first machine and wrong for every later
+   * one. A replacement machine that minted its own id would be scoped to an empty
+   * repository on the service and could never read what the lost machine published —
+   * so "restorable after a machine is lost" would be false no matter how good the
+   * rest of the mechanism was.
+   *
+   * Which forces the question of what the id actually identifies, and the honest
+   * answer is **the registry, not the machine**. It names one person's set of
+   * workspaces; the machine is named by `deviceId`, which already exists, is already
+   * hub-wide, and is already separate. Two machines belonging to one person share a
+   * hub id on purpose — that sharing is the entire mechanism by which the second
+   * learns what the first has.
+   *
+   * That makes this exactly `repo-identity.ts`'s story one level up: the identity is
+   * adopted from outside, never re-minted, because *"an unknown id is far more likely
+   * to be a copied manifest than a new repository"* and a second id for one thing is
+   * a fork nothing later reports.
+   *
+   * ## The refusal
+   *
+   * Refuses when a DIFFERENT id is already stored, because replacing one silently is
+   * how a machine ends up orphaning a registry it was already publishing to — the old
+   * log keeps existing, nothing points at it, and the workspaces recorded there are
+   * simply gone from every surface. Idempotent for the same id, so a repeated adopt is
+   * not an error.
+   *
+   * `force` exists because the refusal is sometimes wrong: an id that was minted
+   * lazily and never used names nothing, and refusing to replace it would be refusing
+   * on the strength of a value that has never left the machine. The caller decides,
+   * because the caller is the one that can see whether a connection record exists for
+   * the old id — see `hub-registry-service.ts`, `adoptRegistryIdentity`.
+   */
+  adoptHubId(hubId: string, options: { force?: boolean } = {}): void {
+    const trimmed = hubId.trim();
+    if (trimmed.length === 0) {
+      throw new StapleError("validation", "A hub id is required. Nothing was changed.");
+    }
+    const stored = this.storedHubId();
+    if (stored === trimmed) return;
+    if (stored !== null && options.force !== true) {
+      throw new StapleError(
+        "conflict",
+        `This machine's hub already has the identity ${stored}, and adopting ${trimmed} would ` +
+          "point it at a different registry. Whatever was published under the old identity would " +
+          "still exist on the service with nothing pointing at it. Nothing was changed.",
+      );
+    }
+    this.db
+      .prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('hub_id', ?)")
+      .run(trimmed);
   }
 
   /** The row holding this sync identity, if this machine has one. */
@@ -447,6 +518,31 @@ export class Hub {
     this.db
       .prepare("UPDATE workspaces SET repository_id = ? WHERE slug = ?")
       .run(repositoryId, slug);
+    /**
+     * Binding an identity to a live row retires any opt-out about it (STA-283).
+     *
+     * The invariant this keeps is "an opt-out never coexists with a registered row for
+     * the same identity", and it is worth stating because the two are contradictory
+     * records of the same fact: the opt-out says this machine does not want that
+     * workspace, and the row says it has it.
+     *
+     * Nothing cleared one before, and `adoptRegistry`'s `declined` branch asked the
+     * opt-out set BEFORE it asked the hub — so a workspace that came back was declined
+     * for ever, and could never learn a slug or kind change from the registry either.
+     * Pruning a row therefore bought a publish fix with a permanent, invisible adoption
+     * failure.
+     *
+     * This is the right seam because it is where an identity becomes bound to a row that
+     * is actually here: `initWorkspace` on the next command inside the repository, and
+     * `reconcileRepositoryIds`. It also matches what `unregister` already documents about
+     * a workspace whose directory still exists — the row "lasts until someone runs a
+     * command in it", and after this so does the opt-out, which is the same decision
+     * reached the same way.
+     *
+     * Only for a real identity. `recordRepositoryId(slug, null)` is how a row FORGETS
+     * its identity, and forgetting is not wanting it back.
+     */
+    if (repositoryId !== null) this.clearOptOut(repositoryId);
   }
 
   /**
@@ -471,7 +567,12 @@ export class Hub {
         `INSERT INTO workspaces (slug, prefix, path, kind, added_at, last_seen_at, repository_id)
          VALUES (?,?,?,?,?,NULL,?)`,
       )
-      .run(entry.slug, entry.prefix, ABSENT_PATH, entry.kind, entry.addedAt ?? nowIso(), entry.repositoryId);
+            /**
+       * `||`, not `??`. An empty string is not a timestamp, and `??` passes it through — from
+       * the hub column into `exportRegistry`, onto the wire, into a backup, through a restore
+       * and into a second machine's adopt. `||` treats it as absent, which it is.
+       */
+      .run(entry.slug, entry.prefix, ABSENT_PATH, entry.kind, entry.addedAt || nowIso(), entry.repositoryId);
   }
 
   /**
@@ -623,6 +724,25 @@ export class Hub {
         deleteHubRegistration(this.db, candidate.entry.slug, {
           withLinks: options.withLinks === true,
         });
+        /**
+         * Record the opt-out, exactly as {@link unregister} does (STA-283).
+         *
+         * These two are the only row deleters in the tree and only one of them did this,
+         * which broke publishing on a SINGLE machine: a pruned row leaves the service
+         * holding a `registration` with no local row and no opt-out, which is precisely
+         * what `hub-registry-ops.ts` treats as FOREIGN — so `staple hub registry publish`
+         * refused, blamed another machine, and named `adopt --apply` as the remedy, which
+         * re-added the row that prune had just removed. Prune and publish became mutually
+         * exclusive, in a loop, and it is reachable from MCP's hub hygiene too.
+         *
+         * The opt-out is the right record because prune IS an unregister — the same
+         * decision, reached by noticing the path is gone rather than by naming the row. It
+         * is also what makes the removal survive the next adopt, which is the property
+         * `registry_optouts` exists for.
+         */
+        if (candidate.entry.repositoryId !== null) {
+          this.addOptOut(candidate.entry.repositoryId, candidate.entry.slug, "pruned");
+        }
       }
       removed.push(result);
     }

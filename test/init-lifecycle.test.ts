@@ -304,3 +304,78 @@ describe("the legacy-migration consent surface", () => {
     expect(diskTree(dir)).toEqual(before);
   }, 60_000);
 });
+
+/**
+ * A REFUSED `staple init` must leave the directory initable.
+ *
+ * The stamp goes into the workspace database and the registration into the hub, so a
+ * registration refusal used to leave the database carrying `slug`/`prefix` and no hub row.
+ * The next `staple init` READS that stamp, re-offers the same losing pair, and gets the
+ * same refusal — and because the stored slug beats the argument,
+ * `staple init --slug anything-else` returns the identical original error. The only escape
+ * was deleting `.staple/staple.db` by hand.
+ *
+ * Pre-existing on master; found while changing this function for STA-283 and fixed with a
+ * compensating delete, because the two databases cannot share a transaction.
+ */
+describe("`staple init` leaves nothing behind when it refuses", () => {
+  it("a directory that loses a prefix race can still be initialised", () => {
+    // First workspace takes the slug `race` and the prefix RAC.
+    const first = repo("race");
+    expect(cli(first, ["init", "--slug", "race"]).status).toBe(0);
+
+    // A DIFFERENT directory that would derive the same slug. `allocatePrefix` sees RAC
+    // taken and offers RACA, and `hub.register` then refuses because the slug `race` is
+    // already registered with RAC.
+    const second = repo("race-two");
+    const refused = cli(second, ["init", "--slug", "race"]);
+    expect(refused.status).not.toBe(0);
+    expect(refused.stderr).toContain("is registered with prefix RAC");
+
+    // THE ASSERTION: the database it created carries no stamp, so it is not wedged.
+    const dbPath = join(second, ".staple", "staple.db");
+    expect(existsSync(dbPath)).toBe(true);
+    const db = new DatabaseSync(dbPath);
+    try {
+      const rows = db
+        .prepare("SELECT key FROM meta WHERE key IN ('slug', 'prefix') ORDER BY key")
+        .all() as Array<{ key: string }>;
+      expect(rows).toEqual([]);
+    } finally {
+      db.close();
+    }
+
+    // And the escape actually works, which is the property a person cares about.
+    const retry = cli(second, ["init", "--slug", "race-two"]);
+    expect(retry.status).toBe(0);
+    const listed = JSON.parse(cli(second, ["hub", "ls", "--json"]).stdout) as Array<{
+      slug: string;
+    }>;
+    expect(listed.map((r) => r.slug).sort()).toContain("race-two");
+  }, 90_000);
+
+  it("does not disturb a database that already carried a stamp", () => {
+    // The rollback must only un-write what that call wrote. A workspace that is already
+    // initialised keeps its stamp even when a later init refuses for another reason.
+    const dir = repo("keeper");
+    expect(cli(dir, ["init", "--slug", "keeper"]).status).toBe(0);
+    const dbPath = join(dir, ".staple", "staple.db");
+
+    const db = new DatabaseSync(dbPath);
+    try {
+      const before = db.prepare("SELECT key, value FROM meta WHERE key IN ('slug','prefix') ORDER BY key").all();
+      db.close();
+      // Re-init is idempotent and must succeed, leaving the stamp exactly as it was.
+      expect(cli(dir, ["init"]).status).toBe(0);
+      const again = new DatabaseSync(dbPath);
+      try {
+        const after = again.prepare("SELECT key, value FROM meta WHERE key IN ('slug','prefix') ORDER BY key").all();
+        expect(after).toEqual(before);
+      } finally {
+        again.close();
+      }
+    } catch (error) {
+      throw error;
+    }
+  }, 90_000);
+});

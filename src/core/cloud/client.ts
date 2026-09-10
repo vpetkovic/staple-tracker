@@ -164,6 +164,22 @@ export interface RequestOptions {
   timeoutMs?: number;
   /** Injected in tests. Defaults to the global `fetch`; there is no other one. */
   fetchImpl?: typeof fetch;
+  /**
+   * The wire protocol to declare, when it is not {@link CLIENT_PROTOCOL}.
+   *
+   * Exists for exactly one caller: the hub registry leg, whose two entity kinds
+   * require protocol 2 (`hub-registry-ops.ts`, `REGISTRY_PROTOCOL`).
+   *
+   * **`CLIENT_PROTOCOL` deliberately did NOT move to 2 with it.** A client that
+   * declared 2 on every request would be refused outright — 426, before any write —
+   * by any Worker that has not yet been redeployed, turning a hub feature into a
+   * total sync outage on every repository on the machine. So the floor stays where
+   * every deployed Worker can meet it, and only the traffic that genuinely needs the
+   * newer vocabulary asks for it. A per-call override is the smallest way to say
+   * that; a module-level mutable default would make it a property of the process
+   * rather than of the request.
+   */
+  protocol?: number;
 }
 
 interface Call extends RequestOptions {
@@ -190,7 +206,9 @@ async function request<T>(call: Call): Promise<T> {
   const doFetch = call.fetchImpl ?? globalThis.fetch;
   const url = endpointUrl(call.endpoint, call.path);
 
-  const headers: Record<string, string> = { "Staple-Protocol": String(CLIENT_PROTOCOL) };
+  const headers: Record<string, string> = {
+    "Staple-Protocol": String(call.protocol ?? CLIENT_PROTOCOL),
+  };
   if (call.token) headers.Authorization = `Bearer ${call.token}`;
   if (call.deviceId) headers["Staple-Device"] = call.deviceId;
 
@@ -258,9 +276,16 @@ async function request<T>(call: Call): Promise<T> {
     // is the difference between "pick another task" and "pick another task, and
     // here is who to chase if you think that is wrong". Dropping them would have
     // left a non-retryable conflict with nothing actionable in it.
+    // `requiredProtocol` and `entity` are the registry widening's extras (STA-283).
+    // A `protocol_unsupported` that carries only `{min, max}` tells a human their
+    // client is out of range; carrying the version an operation needed and the entity
+    // that needed it tells them WHICH feature the upgrade is for, which is the
+    // difference between "upgrade something" and "the hub registry needs protocol 2".
     for (const key of [
       "min",
       "max",
+      "requiredProtocol",
+      "entity",
       "epoch",
       "currentEpoch",
       "maxBytes",
@@ -404,7 +429,10 @@ export function pushOperations(
   options: RequestOptions = {},
 ): Promise<unknown> {
   const body: Record<string, unknown> = {
-    protocol: CLIENT_PROTOCOL,
+    // The same number the header carries. `validateEnvelope` requires every
+    // envelope's `protocol` to equal the request header's, so a push that overrode
+    // one and not the other would be refused as a disagreement.
+    protocol: options.protocol ?? CLIENT_PROTOCOL,
     deviceId: args.deviceId,
     ops: args.ops,
   };

@@ -120,6 +120,14 @@ export async function performConnect(
      */
     auto: false,
     backup: false,
+    /**
+     * FALSE, for the same reason and on the same terms as the two above. Publishing
+     * the hub registry is a fourth consent and nothing about connecting implies it —
+     * it discloses the names, prefixes and identities of every workspace on this
+     * machine, and that they sit together, which connecting one repository says
+     * nothing about. Not inherited on a re-connect either.
+     */
+    registry: false,
     protocol: result.protocol,
   };
 

@@ -1196,9 +1196,20 @@ describe("tool response shapes (31/31)", () => {
   });
 
   it("hub_overview", () => {
-    // GOLDEN, moved by S22 (STA-283): each workspace row gained `repositoryId`.
-    // The tool COUNT is unmoved at 46 — this is a field on an existing shape,
-    // not a new tool.
+    /**
+     * GOLDEN, moved TWICE by STA-283, and the second move is the interesting one.
+     *
+     * First it gained the `repositoryId` field. Then the value changed from `null` to a
+     * real uuid — because until this ticket **nothing on any user-facing path wrote
+     * `workspaces.repository_id`**. `Hub.register()` runs before the manifest exists and
+     * `performConnect` never touched the column, so every hub row on every real machine
+     * reported `null`. This golden was pinning that bug: two workspaces, both initialised
+     * the ordinary way, both reporting no sync identity.
+     *
+     * `openWorkspace` now records it after reconciling the identity from the manifest, so
+     * the honest value here is a uuid. The tool COUNT is unmoved at 46 — this was a field
+     * on an existing shape and then a corrected value, never a new tool.
+     */
     //
     // Passed through rather than stripped, deliberately. `workspaces` here is
     // `hub.list()` verbatim, and a projection that dropped one column would be a
@@ -1216,7 +1227,7 @@ describe("tool response shapes (31/31)", () => {
           addedAt: ISO,
           lastSeenAt: ISO,
           available: true,
-          repositoryId: null,
+          repositoryId: UUID,
         },
         {
           slug: "contract-two",
@@ -1226,7 +1237,7 @@ describe("tool response shapes (31/31)", () => {
           addedAt: ISO,
           lastSeenAt: ISO,
           available: true,
-          repositoryId: null,
+          repositoryId: UUID,
         },
       ],
       crossLinks: [

@@ -8,8 +8,38 @@
 
 import type { Env, Plan } from "./env.js";
 
+/**
+ * The supported wire protocol range.
+ *
+ * `min` stays at 1, and that is the whole reason a bump is affordable: every
+ * existing client keeps working unchanged, because `negotiateProtocol` accepts
+ * anything in `[min, max]` and a missing header still means `min`. Nothing is
+ * retired here — the contract's promise is *"the current version and the one before
+ * it for at least one release cycle"*, and this is that cycle.
+ *
+ * ## Why 2 exists, when the change is "only" two new entity kinds
+ *
+ * Because the contract's claim that new entity kinds are additive within a version
+ * is false against the client that exists. `src/core/cloud/apply.ts` throws on an
+ * entity it does not know and the pull loop defers only `ReferentMissing`, so an
+ * older device handed a `registration` operation fails the page and stops
+ * converging — with a message about an unknown entity, which reads as corruption
+ * rather than as "upgrade". See `envelope.ts` for the full reasoning and
+ * `docs/sync.md`, "Protocol evolution", which has been corrected to match.
+ *
+ * What the bump buys is one specific thing: a protocol-1 client cannot PUSH a
+ * registry entity and cannot be HANDED one either — `pull.ts` and `snapshot.ts`
+ * refuse the page with 426 and the supported range rather than serving something
+ * the client will throw on. The failure moves from the applying device's fold, deep
+ * inside a transaction, to the request boundary, with the remedy in the response.
+ *
+ * The client does NOT raise its floor to match. `CLIENT_PROTOCOL` stays 1 for
+ * workspace traffic and only the hub registry leg declares 2, because a client that
+ * sent 2 for everything would be refused outright by any Worker not yet redeployed
+ * — turning a hub feature into a total sync outage on every repository.
+ */
 export const PROTOCOL_MIN = 1;
-export const PROTOCOL_MAX = 1;
+export const PROTOCOL_MAX = 2;
 
 /**
  * The binding constraint on batch size is D1's queries-per-Worker-invocation limit:
@@ -45,9 +75,15 @@ export const DEFAULT_PULL_LIMIT = 200;
 
 /**
  * The whole request body ceiling, checked from `Content-Length` before the body is
- * parsed. Sized as (maxBatchSize x maxOpBytes) plus envelope slack, then capped: the
+ * parsed. Sized as (maxBatchSize x maxOpBytes) plus envelope slack, and NOTHING caps it
+ * further — this comment used to say "then capped", which described no code: there is no
+ * `Math.min` here, so the free plan's ceiling really is 25 x 512 KiB + 64 KiB ≈ 13.1 MB.
+ *
+ * The reason that is safe is not a smaller number, it is WHERE the check happens. The
  * free plan allows 10 ms of CPU per request, and a limit enforced after
- * `await request.json()` is enforced too late to help.
+ * `await request.json()` is enforced too late to help; this one is read off
+ * `Content-Length` by `assertBodySize` before anything parses a byte. The real ceiling on
+ * work is `maxBatchSize`, which the push path enforces per operation.
  */
 export function maxBodyBytes(plan: Plan): number {
   return PLAN_LIMITS[plan].maxBatchSize * MAX_OP_BYTES + 64 * 1024;

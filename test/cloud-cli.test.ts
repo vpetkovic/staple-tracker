@@ -260,6 +260,37 @@ describe("devices", () => {
     forgeConnection();
     expect(staple("cloud", "devices", "revoke").stderr).toMatch(/usage: staple cloud devices revoke/);
   });
+
+  /**
+   * A MISSPELLED `revoke` must not become a network `ls` (STA-283).
+   *
+   * `const sub = argv[0] === "revoke" ? "revoke" : "ls"` swallowed every wrong word, so
+   * `staple cloud devices remove dev_abc` made an authenticated GET against the paid
+   * service, printed a device table and exited 0 — which an operator reads as "the revoke
+   * worked". It did not revoke and it did not say so.
+   *
+   * Third instance of one shape: `hub registry backup` and `cloud backup` had it too. Here
+   * the word being fat-fingered is the DESTRUCTIVE one, which is what makes it the worst of
+   * the three.
+   */
+  it("refuses a misspelled subcommand instead of listing devices over the network", () => {
+    forgeConnection();
+    for (const typo of ["remove", "rm", "revok", "delete"]) {
+      const result = staple("cloud", "devices", typo, "dev_abc");
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain(`Unknown devices subcommand "${typo}"`);
+      expect(result.stderr).toContain("staple cloud devices [ls|revoke <deviceId>]");
+      // The tell that it did not fall through: no device table on stdout.
+      expect(result.stdout).toBe("");
+    }
+  });
+
+  it("still treats a BARE `devices` as ls, because that is a choice and not a mistake", () => {
+    forgeConnection();
+    // Reaches the network and fails there rather than being refused as a bad subcommand,
+    // which is how we know the no-argument default survived the refusal above.
+    expect(staple("cloud", "devices").stderr).not.toContain("Unknown devices subcommand");
+  });
 });
 
 /**

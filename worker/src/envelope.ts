@@ -9,26 +9,104 @@
  */
 
 import { SyncError } from "./errors.js";
-import { MAX_OP_BYTES } from "./limits.js";
+import { MAX_OP_BYTES, PROTOCOL_MAX, PROTOCOL_MIN } from "./limits.js";
 
-/** The vocabulary from docs/sync.md. Additive within a protocol version. */
-const ENTITIES = new Set([
-  "issue",
-  "comment",
-  "document",
-  "documentRevision",
-  "relation",
-  "project",
-  "status",
-  "kind",
-  "setting",
-  "milestone",
-  "queue",
-  "lease",
-  "conflict",
-]);
+/**
+ * The vocabulary from docs/sync.md, PER PROTOCOL VERSION.
+ *
+ * This used to be one set with the comment *"additive within a protocol version"*.
+ * That claim came from the contract, and the contract was wrong about entities. It
+ * is true of FIELDS — an unknown field is stored verbatim and re-emitted, which is
+ * what makes a mixed fleet round-trip — but the applying side of an unknown ENTITY
+ * is `src/core/cloud/apply.ts`, whose `default` branch throws:
+ *
+ *     `Operation names entity "…", which this build does not know. Upgrade staple;
+ *      nothing was applied.`
+ *
+ * and the pull loop defers only `ReferentMissing`. So an older device pulling a log
+ * containing an entity added after its release does not ignore it — it fails the
+ * page and stops converging. `apply.ts` says as much about `lease` and `conflict`,
+ * which it no-ops deliberately *"so that a newer device pushing one cannot stall an
+ * older device's whole page"*: the throw is the known-bad outcome, and those two
+ * were special-cased out of it one at a time.
+ *
+ * Widening the vocabulary is therefore a protocol change, not an additive one, and
+ * it is declared as one. `registration` and `crossLink` require protocol 2, so a
+ * protocol-1 client cannot push them and — see `pull.ts` and `snapshot.ts` — cannot
+ * be handed them either. It gets 426 with the supported range, which names the
+ * remedy, instead of a 400 about an entity it has never heard of.
+ */
+const ENTITIES_BY_PROTOCOL: ReadonlyArray<readonly [number, ReadonlySet<string>]> = [
+  [
+    1,
+    new Set([
+      "issue",
+      "comment",
+      "document",
+      "documentRevision",
+      "relation",
+      "project",
+      "status",
+      "kind",
+      "setting",
+      "milestone",
+      "queue",
+      "lease",
+      "conflict",
+    ]),
+  ],
+  /**
+   * The hub registry (STA-283). The hub is a repository scoped by its own
+   * `hub.hubId()`, and these two entities are its whole log — so `backup` is the
+   * existing fold and `restore` is the existing snapshot, with no new storage
+   * concept anywhere in this service.
+   *
+   * `registration` is keyed by the workspace's `repositoryId`, the clone-surviving
+   * UUID that is the only thing two machines can agree names the same workspace.
+   * `crossLink` is keyed by its four names, percent-encoded and joined — injective,
+   * so the same edge is the same entity on both machines.
+   */
+  [2, new Set(["registration", "crossLink"])],
+];
+
+/** The registry entities, named once so three files can ask about them. */
+export const REGISTRY_ENTITIES: ReadonlySet<string> = new Set(["registration", "crossLink"]);
+
+/**
+ * The lowest protocol that admits this entity, or null when no version does.
+ *
+ * Consulted by `pull.ts`, `snapshot.ts` and `backups.ts` as well as by validation,
+ * so there is exactly one table saying which entity belongs to which version. Two
+ * tables would drift, and the way they would drift is a route serving an entity the
+ * validator would have refused.
+ */
+export function minProtocolFor(entity: string): number | null {
+  for (const [protocol, entities] of ENTITIES_BY_PROTOCOL) {
+    if (entities.has(entity)) return protocol;
+  }
+  return null;
+}
+
+/** The highest protocol any of these entities requires. 1 for an empty list. */
+export function protocolForEntities(entities: Iterable<{ entity: string }>): number {
+  let required = 1;
+  for (const row of entities) {
+    const min = minProtocolFor(row.entity);
+    if (min !== null && min > required) required = min;
+  }
+  return required;
+}
 
 const VERBS = new Set(["create", "update", "delete", "replace", "renumber"]);
+
+/**
+ * The only entities a `replace` or a `renumber` may name.
+ *
+ * Named sets rather than inline comparisons so the explicit registry assertion
+ * below cannot be read as duplicating them. See there for why it is not.
+ */
+const REPLACEABLE = new Set(["queue", "milestone"]);
+const RENUMBERABLE = new Set(["issue"]);
 
 export interface Envelope {
   opId: string;
@@ -105,8 +183,28 @@ export function validateEnvelope(
   }
 
   const entity = str(op.entity, `${at}.entity`, index);
-  if (!ENTITIES.has(entity)) {
+  const entityProtocol = minProtocolFor(entity);
+  if (entityProtocol === null) {
     throw new SyncError("validation", `${at}.entity is not a known entity`, { index });
+  }
+  /**
+   * A known entity from a LATER protocol than this request negotiated.
+   *
+   * `protocol_unsupported` (426) rather than `validation` (400), and carrying the
+   * version that would admit it. The two answers are read differently by a human:
+   * 400 says "you sent nonsense", which invites a look at the emitter, while 426
+   * says "raise your protocol", which is the actual remedy. It is also the code the
+   * contract already reserves for exactly this — *"a client outside that range is
+   * refused with `protocol_unsupported`, carrying the supported range, before any
+   * write"* — and this refusal happens in the same place, before any statement is
+   * prepared.
+   */
+  if (entityProtocol > protocol) {
+    throw new SyncError(
+      "protocol_unsupported",
+      `${at}.entity requires a newer protocol than this request negotiated`,
+      { index, min: PROTOCOL_MIN, max: PROTOCOL_MAX, requiredProtocol: entityProtocol },
+    );
   }
 
   const verb = str(op.verb, `${at}.verb`, index);
@@ -116,13 +214,61 @@ export function validateEnvelope(
   // Ordered collections replicate whole and nothing else does. There is no per-row
   // queue or membership operation on the wire, by design: rank is never transported,
   // so the UNIQUE rank constraints are structurally unreachable.
-  if (verb === "replace" && entity !== "queue" && entity !== "milestone") {
+  /**
+   * The registry entities FIRST, so the by-name refusal is reachable.
+   *
+   * It used to sit after the two allowlist checks, which fire for these entities anyway — so
+   * the by-name branch was unreachable on both the Worker and the fake, and the message a
+   * client actually saw was always "is only for ordered collections". The PR body defended
+   * the redundancy as "not dead code"; it was dead code, probed live.
+   *
+   * Ordering it first makes the specific message the one that appears, which is the point: a
+   * registry entity is not an ordered collection that happens to be missing from a list, and
+   * telling somebody it is sends them looking in the wrong place.
+   */
+  if (REGISTRY_ENTITIES.has(entity) && (verb === "replace" || verb === "renumber")) {
+    throw new SyncError(
+      "validation",
+      `${at}.verb '${verb}' is never valid for a registry entity`,
+      { index },
+    );
+  }
+  if (verb === "replace" && !REPLACEABLE.has(entity)) {
     throw new SyncError("validation", `${at}.verb 'replace' is only for ordered collections`, {
       index,
     });
   }
-  if (verb === "renumber" && entity !== "issue") {
+  if (verb === "renumber" && !RENUMBERABLE.has(entity)) {
     throw new SyncError("validation", `${at}.verb 'renumber' is only for issues`, { index });
+  }
+  /**
+   * `delete` is refused for a registry entity too, and this one is a correctness fence
+   * rather than a tidiness rule.
+   *
+   * A tombstone is FINAL in the fold — every later operation on a deleted entity is
+   * discarded — and that is right for an `issue`, whose id is minted once, because
+   * resurrecting one is meaningless. A registry entity's id is **derived from its
+   * content**: a `crossLink`'s key is its four names, and a `registration`'s is the
+   * workspace's `repositoryId`. So removing an edge and adding it back produces the same
+   * entity id, lands on the tombstone, and is silently dropped while the push reports
+   * success — and a restore carries the tombstone into the new epoch, because
+   * `materializedVerb` reproduces a bare `delete`. The epoch bump is not an escape.
+   *
+   * So retraction is a FIELD (`present: false` on a cross-link) and this vocabulary has
+   * no delete at all. Refused here rather than merely not emitted, because the client is
+   * not the only thing that can push and "we do not send that" is not an invariant.
+   *
+   * The restore path is unaffected and deliberately so: `backups.ts` stages materialised
+   * operations straight into D1 without going through this validator, which is what lets
+   * a backup taken before this rule still be restored faithfully, tombstones included.
+   */
+  if (REGISTRY_ENTITIES.has(entity) && verb === "delete") {
+    throw new SyncError(
+      "validation",
+      `${at}.verb 'delete' is never valid for a registry entity — a retraction is a field, ` +
+        "because a tombstone on a content-derived key can never be undone",
+      { index },
+    );
   }
 
   // `baseVersion` is null for `create` and an integer otherwise. The server records it
