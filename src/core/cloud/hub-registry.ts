@@ -204,9 +204,18 @@ export type AdoptionOutcome =
   | "current"
   /** A local row holds this identity; the registry learned its slug or kind. */
   | "adopted"
-  /** No row held it, but a present workspace does. The row now points at it. */
-  | "repointed"
-  /** Known, not here. A row with an identity, a name and no path. */
+  /**
+   * Known, not here. A row with an identity, a name and no path.
+   *
+   * There used to be a `repointed` outcome between these two — "no row held it, but a
+   * present workspace does" — reachable only by passing `adoptRegistry` a `locate`
+   * callback, which no surface ever supplied. It is gone rather than left advertised,
+   * because an outcome the product cannot produce is a promise to whoever reads the
+   * type. Its two real cases both have verbs now: `reconcileRepositoryIds` runs before
+   * every adoption and fills the identity in from the manifest, so a registered clone
+   * matches as `current` or `adopted`; and a clone the hub does not know about lands
+   * `absent`, whose sentence names `staple hub registry locate`.
+   */
   | "absent"
   /** This machine asked not to have this one back. */
   | "declined"
@@ -247,10 +256,13 @@ export interface AdoptOptions {
   /** Preview by default. Nothing is written unless this is true. */
   apply?: boolean;
   /**
-   * Where to look for a workspace that is on this machine but not in the
-   * registry. Injected in tests; production passes the hub's own view.
+   * There was a `locate` callback here, and it is gone with the `repointed` outcome it
+   * produced. Nothing ever supplied it — the comment on it said "injected in tests;
+   * production passes the hub's own view", and production passed nothing. Finding a
+   * workspace by `repositoryId` is a filesystem scan, which is `staple discover`'s job;
+   * attaching one the operator has already found is `staple hub registry locate`, which
+   * calls {@link locateAbsent} and checks the identity before it writes.
    */
-  locate?: (repositoryId: string) => { path: string; prefix: string; slug: string } | null;
 }
 
 function assertPayload(payload: HubRegistryPayload): void {
@@ -286,14 +298,38 @@ export function adoptRegistry(
   const decisions: AdoptionDecision[] = [];
 
   for (const entry of payload.workspaces) {
-    decisions.push(decide(hub, entry, declined, options, apply));
+    decisions.push(decide(hub, entry, declined, apply));
   }
 
   // Edges last, and only between two slugs this machine now actually has. An
   // edge naming a workspace that did not land would read as an unresolvable
   // blocker, and `crossBlockersOf` treats unresolvable as BLOCKED — so importing
   // it would wedge a live issue on the other side with nothing to say why.
+  /**
+   * A PREVIEW counts the rows the decisions WOULD create, not the ones on disk now.
+   *
+   * `hub.list()` alone was wrong in exactly the case this feature exists for. On a fresh
+   * replacement machine every workspace is `absent`, so in preview mode no row exists yet
+   * and every edge between two of them counted as skipped — while `--apply` then imported
+   * it. Measured on the headline path:
+   *
+   *     preview: {"added": 0, "skipped": 1}   ->  "0 cross-workspace links would be imported"
+   *     apply:   {"added": 1, "skipped": 0}   ->  "1 cross-workspace link imported"
+   *
+   * The preview IS the consent gate for `--apply`, so a preview that under-reports what
+   * apply will do is the one kind of preview that matters. Fixing the tense (which this
+   * round did) left the NUMBER wrong, which is worse: a confident wrong count reads as
+   * information.
+   *
+   * The union is what apply will actually see. Only `absent` adds anything: it is the one
+   * outcome that CREATES a row, under `entry.slug`. `current` and `adopted` already have
+   * theirs, so `hub.list()` holds them in both modes; `unmatchable`, `declined` and
+   * `conflict` deliberately end with no row at all.
+   */
   const known = new Set(hub.list().map((w) => w.slug));
+  for (const decision of decisions) {
+    if (decision.outcome === "absent") known.add(decision.entry.slug);
+  }
   let added = 0;
   let skipped = 0;
   for (const link of payload.crossLinks) {
@@ -325,11 +361,21 @@ export function adoptRegistry(
   };
 }
 
+/**
+ * No `options` parameter, and that is the honest signature rather than a silenced one.
+ *
+ * It took `options: AdoptOptions` for exactly one read — `options.locate?.(…)` — and that
+ * went with the `repointed` outcome. `AdoptOptions` now holds only `apply`, which this
+ * already receives as its own argument, so the parameter depended on nothing.
+ *
+ * Removed rather than renamed to `_options`: an underscore would keep the signature saying
+ * this function consults the caller's options when it does not, and this file has been
+ * bitten repeatedly by that gap between what code says and what it does.
+ */
 function decide(
   hub: Hub,
   entry: RegistryEntry,
   declined: Set<string>,
-  options: AdoptOptions,
   apply: boolean,
 ): AdoptionDecision {
   const base = { entry, localSlug: null, conflict: null } as const;
@@ -344,25 +390,60 @@ function decide(
     };
   }
 
-  if (declined.has(entry.repositoryId)) {
-    return {
-      ...base,
-      outcome: "declined",
-      reason:
-        `"${entry.slug}" was removed from this machine's list, so it was not brought back. It is ` +
-        "still registered on the machine that published this. Undo with `staple hub restore-entry`.",
-    };
-  }
-
+  /**
+   * The LOCAL ROW IS ASKED FIRST, and an opt-out only speaks about an identity that is
+   * genuinely absent (STA-283).
+   *
+   * This used to be the other way round, and the order was the bug. `registry_optouts`
+   * records "this machine does not want that identity back", nothing ever cleared one,
+   * and so a workspace that legitimately returned — same identity, row present, path
+   * live — was declined for ever. Reproduced: after `prune` recorded a `"pruned"`
+   * opt-out and the workspace was re-initialised, `adopt` still answered
+   * `outcome=declined  reason="keep" was removed from this machine's list`, about a row
+   * that was sitting in the hub.
+   *
+   * Two things made it worse than a wrong label. The `learned` branch below became
+   * unreachable for those rows, so they could never pick up a slug or kind change from
+   * the registry — the divergence this epic chose to REPORT rather than refuse, silently
+   * disabled for exactly the rows most likely to need it. And the state was
+   * undiscoverable: `listOptOuts` had no CLI surface at all.
+   *
+   * Asking the hub first is the fix, not a workaround, because a registered row and an
+   * opt-out for one identity are contradictory records of the same fact, and the row is
+   * the one backed by a file on disk. `Hub.recordRepositoryId` now retires the opt-out at
+   * the moment of binding; clearing it here as well repairs hubs that already hold the
+   * contradiction, which every machine that has pruned since STA-283 does.
+   */
   const held = hub.findByRepositoryId(entry.repositoryId);
   if (held) {
+    const stale = declined.has(entry.repositoryId);
+    if (stale && apply) hub.clearOptOut(entry.repositoryId);
+    /**
+     * Said out loud, because silently stepping over it is how it stayed invisible — and in
+     * the TENSE that matches what actually happened.
+     *
+     * The clear is gated on `apply`; the sentence was not, so a preview claimed the
+     * opt-out "was retired" while the count was unchanged and the report ended "Nothing was
+     * written." Same defect class as the cross-link count two functions below, and the fix
+     * for that one landed on its half of the sentence and not on this one.
+     *
+     * This is the read-repair path for every machine that has pruned since STA-283, so it
+     * is a normal outcome rather than a corner.
+     */
+    const retired = !stale
+      ? ""
+      : apply
+        ? " The earlier opt-out on this identity was retired: the workspace is registered here again."
+        : " An earlier opt-out on this identity would be retired, because the workspace is registered here again.";
     const learned = held.slug !== entry.slug || held.kind !== entry.kind;
     if (!learned) {
       return {
         ...base,
         outcome: "current",
         localSlug: held.slug,
-        reason: `"${held.slug}" is already registered here as the same workspace. Nothing to do.`,
+        reason:
+          `"${held.slug}" is already registered here as the same workspace. Nothing to do.` +
+          retired,
       };
     }
     return {
@@ -371,29 +452,20 @@ function decide(
       localSlug: held.slug,
       reason:
         `Already here as "${held.slug}"; the published list calls it "${entry.slug}". Matched by ` +
-        "sync identity and left where it is — this machine's name and path are unchanged.",
+        "sync identity and left where it is — this machine's name and path are unchanged." +
+        retired,
     };
   }
 
-  // Not registered here under that identity. Is it on disk anyway?
-  const found = options.locate?.(entry.repositoryId) ?? null;
-  if (found) {
-    if (apply) {
-      hub.repointPath({
-        slug: found.slug,
-        prefix: found.prefix,
-        path: found.path,
-        kind: entry.kind,
-      });
-      hub.recordRepositoryId(found.slug, entry.repositoryId);
-    }
+  if (declined.has(entry.repositoryId)) {
     return {
       ...base,
-      outcome: "repointed",
-      localSlug: found.slug,
+      outcome: "declined",
       reason:
-        `Found on this machine as "${found.slug}" and matched by sync identity, so the registry ` +
-        "now points at the copy you already have rather than registering it a second time.",
+        `"${entry.slug}" was removed from this machine's list, so it was not brought back. It is ` +
+        "still registered on the machine that published this. Undo it with " +
+        `\`staple hub registry unignore ${entry.repositoryId}\` and adopt again, or leave it out ` +
+        "by doing nothing.",
     };
   }
 
@@ -409,12 +481,24 @@ function decide(
         heldBySlug: prefixHolder.slug,
         heldByRepositoryId: prefixHolder.repositoryId,
       },
+      /**
+       * The remedy names two things a person can actually run.
+       *
+       * It used to say "Re-stamp one of them in its own repository, then adopt again",
+       * and there is no re-stamp verb — deliberately, because the prefix is stamped into
+       * every identifier ever written. So the sentence described an operation the product
+       * does not have, which is worse than describing a hard choice honestly. These two
+       * are the whole of what is possible, and both are reversible.
+       */
       reason:
         `Prefix ${entry.prefix} is already held here by "${prefixHolder.slug}", which is a ` +
         `different workspace. "${entry.slug}" was not added, and neither one was renumbered: the ` +
         `prefix is stamped into its workspace database and into every ${entry.prefix}-N ever ` +
-        "written, so renaming either would break references no migration can reach. Re-stamp one " +
-        "of them in its own repository, then adopt again.",
+        "written, so renumbering either would break references no migration can reach. Two ways " +
+        `out: keep what you have and leave the published one out for good with \`staple hub ` +
+        `registry ignore ${entry.repositoryId}\`, or give up the local row with \`staple hub ` +
+        `unregister ${prefixHolder.slug}\` and adopt again, which lands "${entry.slug}" under ` +
+        `${entry.prefix}. \`staple hub registry status\` lists anything you have ignored.`,
     };
   }
   const slugHolder = hub.list().find((w) => w.slug === entry.slug);
@@ -428,9 +512,21 @@ function decide(
         heldBySlug: slugHolder.slug,
         heldByRepositoryId: slugHolder.repositoryId,
       },
+      /**
+       * "Rename one of them" named nothing that exists.
+       *
+       * There is no supported rename: `grep` finds no `UPDATE workspaces SET slug` in this
+       * tree, the slug is written once by `initWorkspace`, and the stored slug then beats
+       * the directory basename — so renaming the directory changes nothing either. Same
+       * correction as the prefix conflict above, and the same two performable escapes.
+       */
       reason:
         `The name "${entry.slug}" is already taken here by a different workspace, so the ` +
-        "published one was not added. Rename one of them, then adopt again.",
+        "published one was not added, and nothing was renamed — staple has no rename verb, " +
+        "because the name is stamped in the workspace itself. Two ways out: leave the " +
+        `published one out for good with \`staple hub registry ignore ${entry.repositoryId}\`, ` +
+        `or give up the local row with \`staple hub unregister ${slugHolder.slug}\` and adopt ` +
+        "again.",
     };
   }
 
@@ -447,9 +543,42 @@ function decide(
     ...base,
     outcome: "absent",
     localSlug: entry.slug,
+    /**
+     * Both cases, each naming a verb that exists.
+     *
+     * This used to describe only the clone-it-again case. The other one — the workspace is
+     * already on this machine, somewhere the hub does not know about — is the ordinary
+     * state of a rebuilt box that restored some repositories by hand before adopting, and
+     * the guidance for it was "point this row at it" with nothing to run. `locateAbsent`
+     * had been the answer since the first commit of this epic and had no CLI verb until
+     * `staple hub registry locate` was added for this sentence.
+     *
+     * ## The clause that used to end this sentence, and why it had to go
+     *
+     * It said *"the placeholder then goes with `staple hub unregister <slug>`"*. That was
+     * true when it was written, because a clone-and-init used to leave the placeholder
+     * beside the new row. It stopped being true in the same round that made `initWorkspace`
+     * TAKE the placeholder over — after which there is no placeholder left to remove, and
+     * following the sentence verbatim destroyed the row it had just attached:
+     *
+     *     $ staple hub unregister website --with-links
+     *       removed cross-link WEB-1 blocks TRA-1
+     *     $ staple hub ls
+     *     TRA  tracker  repo  MISSING        # the row you just attached is gone
+     *
+     * It also freed the prefix and wrote an opt-out, so a later `adopt` reported `skipped`
+     * until `unignore` — and produced the very contradiction this round added a refusal in
+     * `ignore` to forbid, reached by following the product's own printed guidance rather
+     * than by misusing a verb. Two halves of one sentence describing two different builds
+     * is the failure mode this epic keeps finding; this is it in a single clause.
+     */
     reason:
       `"${entry.slug}" is registered but its database is not on this machine. Nothing was ` +
-      "invented for it — clone or copy the workspace, then point this row at it.",
+      "invented for it. If you already have the workspace somewhere, attach it with " +
+      `\`staple hub registry locate ${entry.slug} --path <directory>\` — the identity is checked, ` +
+      "so a wrong directory is refused rather than silently attached. If you do not have it " +
+      "yet, clone or copy it and run `staple init` in it: that takes this row over — same " +
+      "name, same prefix, same identity — so there is nothing left to tidy up afterwards.",
   };
 }
 
@@ -509,7 +638,7 @@ export function describeAdoption(report: AdoptionReport): string {
   for (const d of report.decisions) tally.set(d.outcome, (tally.get(d.outcome) ?? 0) + 1);
   const say = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
   const parts: string[] = [];
-  const adopted = (tally.get("adopted") ?? 0) + (tally.get("repointed") ?? 0);
+  const adopted = tally.get("adopted") ?? 0;
   if (adopted > 0) parts.push(`${say(adopted, "workspace")} matched to what is already here`);
   if (tally.get("current")) parts.push(`${tally.get("current")} already current`);
   if (tally.get("absent")) parts.push(`${say(tally.get("absent")!, "workspace")} listed but not on this machine`);
@@ -517,10 +646,20 @@ export function describeAdoption(report: AdoptionReport): string {
   if (tally.get("declined")) parts.push(`${tally.get("declined")} previously removed here`);
   if (tally.get("unmatchable")) parts.push(`${tally.get("unmatchable")} with no sync identity`);
   const head = parts.length === 0 ? "Nothing to adopt" : parts.join(", ");
+  /**
+   * "would be imported" on a PREVIEW, because "imported" there is a false statement.
+   *
+   * A dry run counts the edges it would add — `added += 1` without applying — so this
+   * sentence used to read *"1 cross-workspace link imported. Nothing was written."*,
+   * contradicting itself in eight words. Caught by reading a real preview against a real
+   * Worker rather than by reading the code; the workspace half of the sentence describes
+   * decisions and was always fine, and the edge half is the one that claimed an act.
+   */
+  const verb = report.dryRun ? "would be imported" : "imported";
   const links =
     report.crossLinks.added + report.crossLinks.skipped === 0
       ? ""
-      : ` ${say(report.crossLinks.added, "cross-workspace link")} imported` +
+      : ` ${say(report.crossLinks.added, "cross-workspace link")} ${verb}` +
         (report.crossLinks.skipped > 0 ? `, ${report.crossLinks.skipped} skipped.` : ".");
   return `${head}.${links}${report.dryRun ? " Nothing was written." : ""}`;
 }

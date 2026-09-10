@@ -7,8 +7,11 @@
  *   hub registry connect --endpoint U --token S [--label L] [--yes] [--credential-file]
  *   hub registry publish [--enable|--disable] consent, or publish now with neither flag
  *   hub registry adopt [--apply]              read the service's registry and adopt it
+ *   hub registry locate <slug> --path <dir>   local: attach an absent row to a copy here
+ *   hub registry ignore|unignore <repoId>     local: leave an identity out, or stop doing so
  *   hub registry backup <enable|disable|create|ls|rm <id>>
  *   hub registry restore <backupId> [--apply]
+ *   hub registry disconnect [--yes]           local: drop this machine's credential
  *
  * Every subcommand takes `--json`.
  *
@@ -29,15 +32,20 @@
  * for its reason: *"the transport is loaded only via `await import()` after the
  * consent gate"*.
  *
- * What that buys, precisely, and it is worth being exact because it is easy to
- * overclaim: `staple ls` already reaches `client.ts` statically through
- * `commands/cloud.ts`, so this file cannot make the CLI's import graph pure and
- * does not pretend to. What it can do is add no new static edge, and keep the two
- * genuinely local verbs — `status` and `id` — on a path that never loads the
- * transport at all. The enforceable property is the one the contract states and
- * the one `test/cloud-hub-registry-cli.test.ts` asserts with a real subprocess
- * spy: **no command that is not supposed to talk to the network makes a call.**
- * That is proven by running the CLI, not by reading it.
+ * What that buys, precisely, and it is worth being exact because the first version of
+ * this paragraph overclaimed. `staple ls` already reaches `client.ts` statically through
+ * `commands/cloud.ts`, so this file cannot make the CLI's import graph pure and does not
+ * pretend to — and NOR are `status` and `id` on a transport-free path, as this comment
+ * used to say: `import { settle } from "./cloud.js"` at the top pulls `status.ts`, which
+ * pulls `client.ts`. That claim was false when written.
+ *
+ * What the deferral does buy is real and narrower: no NEW static edge to the service
+ * module, so the registry leg's transport is loaded only when a registry verb that needs
+ * it runs. The enforceable property is the one the contract states and the one
+ * `test/cloud-hub-registry-cli.test.ts` asserts with a real subprocess spy: **no command
+ * that is not supposed to talk to the network makes a call.** That is proven by running
+ * the CLI, not by reading it — which is the only reason the false claim above was
+ * harmless rather than load-bearing.
  *
  * ## Which of these can talk to the network
  *
@@ -47,9 +55,15 @@
  * withdrawing it works with the network down — which is the point, since a consent
  * you cannot withdraw offline is not really revocable.
  */
+import { existsSync, statSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { parseArgs } from "node:util";
 import { stapleHome } from "../config/home.js";
 import { Hub } from "../core/hub.js";
+import { readMeta } from "../core/open.js";
+import { readWorkspaceManifest } from "../core/repo-identity.js";
+import { WorkspaceStore } from "../core/store.js";
 import { StapleError } from "../core/types.js";
 import { readConnection } from "../core/cloud/connection.js";
 import { confirm, isInteractive } from "../onboarding/prompts.js";
@@ -57,6 +71,7 @@ import { settle } from "./cloud.js";
 import {
   REGISTRY_DISCLOSURE,
   describeIdentityReplacement,
+  locateAbsent,
   type AdoptionDecision,
   type AdoptionReport,
 } from "../core/cloud/hub-registry.js";
@@ -73,7 +88,8 @@ async function loadService() {
 }
 
 const USAGE =
-  "usage: staple hub registry [status|id|identity|connect|publish|adopt|backup|restore]";
+  "usage: staple hub registry " +
+  "[status|id|identity|connect|disconnect|publish|adopt|locate|backup|restore|ignore|unignore]";
 
 export function runHubRegistryCommand(argv: string[]): void {
   const sub = argv[0] && !argv[0].startsWith("-") ? argv[0] : "status";
@@ -96,6 +112,14 @@ export function runHubRegistryCommand(argv: string[]): void {
       return runBackup(rest);
     case "restore":
       return runRestore(rest);
+    case "ignore":
+      return runIgnore(rest, true);
+    case "unignore":
+      return runIgnore(rest, false);
+    case "locate":
+      return runLocate(rest);
+    case "disconnect":
+      return runDisconnect(rest);
     default:
       throw new StapleError("validation", `Unknown subcommand "${sub}". ${USAGE}`);
   }
@@ -178,6 +202,24 @@ function runStatus(argv: string[]): void {
       backupConsent: connection?.backup === true,
       registered: hub.list().length,
       crossLinks: hub.listCrossLinks().length,
+      /**
+       * Identities this machine has opted out of, and why (STA-283).
+       *
+       * On `status` because an opt-out SUPPRESSES adoption, and a suppression nobody can
+       * see is worse than one they can. `registry_optouts` existed from hub migration 003
+       * with two readers, no CLI verb, no `--json` field and no status line, so a `prune`
+       * — reachable from MCP's hub hygiene, so an agent can cause it — silently declined
+       * that identity on every future adopt with the reason buried in an `adopt` decision
+       * nobody had a reason to run.
+       *
+       * Reported even when the hub has no registry identity, because `unregister` and
+       * `prune` both write these whether or not this machine ever connected.
+       */
+      ignored: hub.listOptOuts().map((o) => ({
+        repositoryId: o.repositoryId,
+        slug: o.slug,
+        reason: o.reason,
+      })),
     };
 
     if (json) {
@@ -185,10 +227,22 @@ function runStatus(argv: string[]): void {
       return;
     }
 
+    /** The opt-out list, printed wherever we get to — see `report.ignored`. */
+    const printIgnored = (): void => {
+      if (report.ignored.length === 0) return;
+      console.log("");
+      console.log(`not adopted   ${report.ignored.length} identity/identities this machine opted out of`);
+      for (const o of report.ignored) {
+        console.log(`  - ${o.repositoryId}  ${o.slug} (${o.reason})`);
+      }
+      console.log("  Bring one back with: staple hub registry unignore <repositoryId>");
+    };
+
     if (hubId === null) {
       console.log("This machine's hub has no registry identity yet.");
       console.log("  - `staple hub registry id` mints one, for an operator to provision");
       console.log("  - `staple hub registry identity <hubId>` takes on an existing one");
+      printIgnored();
       return;
     }
     console.log(`hub id        ${hubId}`);
@@ -196,6 +250,7 @@ function runStatus(argv: string[]): void {
     console.log(`publishing    ${report.publishConsent ? "on" : "OFF"}`);
     console.log(`hub backup    ${report.backupConsent ? "on" : "off"}`);
     console.log(`workspaces    ${report.registered} registered, ${report.crossLinks} cross-workspace link(s)`);
+    printIgnored();
     if (!report.connected) {
       console.log("");
       console.log("  Connect with: staple hub registry connect --endpoint <url> --token <secret>");
@@ -282,23 +337,50 @@ function runIdentity(argv: string[]): void {
   const hub = openHub();
   try {
     const previous = hub.storedHubId();
-    if (previous !== null && previous !== target.trim() && !json) {
-      console.log(`This machine's hub currently has the identity ${previous}.`);
-      console.log("");
-      /**
-       * The shared sentence, unconditional. Printed from the constant rather than written
-       * here so the settings page cannot word it differently — and stated as a fact about
-       * the id rather than a warning about a state, because the state is not observable:
-       * a disconnect leaves no evidence that the old id was ever used.
-       */
-      console.log(describeIdentityReplacement(previous));
+    /**
+     * The gate is OUTSIDE `!json`; only the printing is inside.
+     *
+     * This whole block used to be `... && !json`, which meant machine mode skipped both
+     * the orphan notice and the `--yes` gate — so `identity <new> --json` replaced the
+     * identity silently, exit 0, and the notice I was told to make unconditional was
+     * false in exactly the mode a script uses. Third instance of the same shape in this
+     * file; `runConnect` is the one that had it right.
+     */
+    if (previous !== null && previous !== target.trim()) {
+      if (!json) {
+        console.log(`This machine's hub currently has the identity ${previous}.`);
+        console.log("");
+        /**
+         * The shared sentence. Printed from the constant rather than written here so the
+         * settings page cannot word it differently — and stated as a fact about the id
+         * rather than a warning about a state, because the state is not observable: a
+         * disconnect leaves no evidence that the old id was ever used.
+         */
+        console.log(describeIdentityReplacement(previous));
+      }
       if (values.yes !== true) {
-        if (!(isInteractive() && confirm(`\nAdopt ${target.trim()} instead?`, { default: false }))) {
-          console.error(
-            isInteractive()
-              ? "\nDeclined. The identity is unchanged."
-              : "\nNothing was changed. Re-run with --yes to adopt.",
-          );
+        const agreed =
+          !json && isInteractive() && confirm(`\nAdopt ${target.trim()} instead?`, { default: false });
+        if (!agreed) {
+          if (json) {
+            // The notice travels in the refusal, so a machine caller cannot reach the
+            // replacement without having received it first.
+            console.error(
+              JSON.stringify({
+                code: "validation",
+                message: `Replacing a registry identity needs --yes. ${describeIdentityReplacement(previous)}`,
+                retryable: false,
+                previousHubId: previous,
+                notice: describeIdentityReplacement(previous),
+              }),
+            );
+          } else {
+            console.error(
+              isInteractive()
+                ? "\nDeclined. The identity is unchanged."
+                : "\nNothing was changed. Re-run with --yes to adopt.",
+            );
+          }
           process.exitCode = 2;
           hub.close();
           return;
@@ -321,7 +403,17 @@ function runIdentity(argv: string[]): void {
         .then(({ adoptRegistryIdentity }) => {
           const outcome = adoptRegistryIdentity(home, hub, target.trim());
           if (json) {
-            console.log(JSON.stringify({ hubId: target.trim(), ...outcome }));
+            console.log(
+              JSON.stringify({
+                hubId: target.trim(),
+                ...outcome,
+                // The notice rides on the success too, not only the refusal: a machine
+                // that passed --yes still has to be able to record what it did.
+                ...(outcome.previousHubId === null
+                  ? {}
+                  : { notice: describeIdentityReplacement(outcome.previousHubId) }),
+              }),
+            );
             return;
           }
           if (!outcome.adopted) {
@@ -553,6 +645,18 @@ function runPublish(argv: string[]): void {
                 && confirm("\nPublish this machine's registry?", { default: false });
               if (!agreed) {
                 if (json) {
+                  /**
+                   * The WHOLE disclosure reaches a machine consumer, not just the sentence.
+                   *
+                   * `disclosure` is the one-sentence core, and it was all `--json` ever got.
+                   * The block around it is where the costs are — that publishing is scoped
+                   * to one machine, that two machines naming a workspace differently
+                   * overwrite each other on a metered log for ever, that this machine always
+                   * wins, and what is actually refused. So "the cost is stated at the point
+                   * of consent" was true only on a TTY, in the command whose own fix was
+                   * titled "--json was a way around the publish consent's agreement gate".
+                   * Same principle, one field further out.
+                   */
                   console.error(
                     JSON.stringify({
                       code: "validation",
@@ -561,6 +665,7 @@ function runPublish(argv: string[]): void {
                         REGISTRY_DISCLOSURE,
                       retryable: false,
                       disclosure: REGISTRY_DISCLOSURE,
+                      disclosureBlock: registryDisclosure(connection.endpoint),
                     }),
                   );
                 } else {
@@ -583,7 +688,15 @@ function runPublish(argv: string[]): void {
             : setRegistryConsent(home, hubId, false);
           if (json) {
             console.log(
-              JSON.stringify({ enabled: outcome.enabled, disclosure: REGISTRY_DISCLOSURE }),
+              JSON.stringify({
+                enabled: outcome.enabled,
+                disclosure: REGISTRY_DISCLOSURE,
+                // On the grant too, so a consumer that stores what it agreed to stores all
+                // of it rather than the headline.
+                ...(outcome.enabled
+                  ? { disclosureBlock: registryDisclosure(connection.endpoint) }
+                  : {}),
+              }),
             );
             return;
           }
@@ -612,11 +725,26 @@ function runPublish(argv: string[]): void {
           return;
         }
         if (report.upToDate) {
-          console.log(`Already published. The service holds this machine's registry as it is.`);
+          /**
+           * "as it is" is only true when nothing was RETAINED.
+           *
+           * `upToDate` means no operation was needed, which is not the same as the service
+           * matching this machine: a removed cross-link, or an entry parked as a duplicate,
+           * leaves a real difference that this wire will never send. Saying "as it is" there
+           * is false, and a `--json` consumer keying on `upToDate` concludes convergence.
+           */
+          if (report.retained.length === 0 && report.unpublishable.length === 0) {
+            console.log("Already published. The service holds this machine's registry as it is.");
+          } else {
+            console.log(
+              "Nothing to send. The service does not match this machine exactly — see below; " +
+                "those differences are not ones this machine can publish.",
+            );
+          }
         } else {
           console.log(
             `Published ${report.published} operation(s) in ${report.batches} batch(es): ` +
-              `${report.created} new, ${report.updated} changed, ${report.retracted} link(s) retracted.`,
+              `${report.created} new, ${report.updated} changed.`,
           );
           /**
            * Surfaced, and it should always be zero. The snapshot diff excludes anything
@@ -632,6 +760,44 @@ function runPublish(argv: string[]): void {
             );
             process.exitCode = 4;
           }
+        }
+        /**
+         * The names this publish took away from another machine.
+         *
+         * Printed on its own, before `retained`, because it is the only thing in this
+         * report that describes a LOSS on the service rather than something left alone.
+         * `published: 1, updated: 1` was the whole of what a person used to see when a
+         * workspace's published name was replaced.
+         *
+         * Not a refusal — the overwrite has to be allowed, or a rebuilt machine could
+         * never publish under its own directory names — so this is what makes it honest.
+         */
+        if (report.renamed.length > 0) {
+          console.log("");
+          console.log(`${report.renamed.length} published name(s) were REPLACED by this machine:`);
+          for (const item of report.renamed) {
+            console.log(`  ${item.entityId}`);
+            if (item.from !== item.to) {
+              console.log(`    name:   was "${item.from}" on the service, now "${item.to}"`);
+            }
+            /**
+             * Called out separately and named PREFIX, because it is the more damaging half.
+             * Prefixes are assigned in registration order, so a replacement machine that
+             * re-inits in a different order can swap them between two workspaces with both
+             * slugs matching — and a prefix is what every `PREFIX-N` resolves through.
+             */
+            if (item.fromPrefix !== undefined) {
+              console.log(
+                `    prefix: was ${item.fromPrefix} on the service, now ${item.toPrefix}` +
+                  `  — every ${item.fromPrefix}-N identifier was written against the old one`,
+              );
+            }
+          }
+          console.log(
+            "  If another machine publishes here too, it will change them back on its next " +
+              "publish and each pass costs an operation. See `staple hub registry publish " +
+              "--enable` for what that costs.",
+          );
         }
         if (report.retained.length > 0) {
           console.log("");
@@ -663,7 +829,14 @@ function runPublish(argv: string[]): void {
  * empty and never a code, which is what makes this printable rather than a lookup
  * table maintained here.
  */
-function renderDecisions(report: AdoptionReport, describe: (r: AdoptionReport) => string): void {
+/**
+ * @param after What has ALREADY happened, for the footer. See the `dryRun` branch.
+ */
+function renderDecisions(
+  report: AdoptionReport,
+  describe: (r: AdoptionReport) => string,
+  after: "nothing" | "service_already_restored" = "nothing",
+): void {
   console.log(describe(report));
   if (report.decisions.length > 0) console.log("");
   for (const decision of report.decisions) {
@@ -673,11 +846,41 @@ function renderDecisions(report: AdoptionReport, describe: (r: AdoptionReport) =
   if (report.crossLinks.added + report.crossLinks.skipped > 0) {
     console.log("");
     console.log(
-      `  cross-workspace links: ${report.crossLinks.added} imported, ${report.crossLinks.skipped} skipped`,
+      // "to import" on a preview: the count is what WOULD be added, and this line sat two
+      // lines above "Nothing was written." saying "imported". See `describeAdoption`.
+      `  cross-workspace links: ${report.crossLinks.added} ${report.dryRun ? "to import" : "imported"}` +
+        `, ${report.crossLinks.skipped} skipped`,
     );
   }
   if (report.dryRun) {
     console.log("");
+    /**
+     * The footer has to know what already happened, and this is why it takes a parameter.
+     *
+     * `restore --yes` without `--apply` performs the whole DESTRUCTIVE half — the service is
+     * rewound to a new epoch, everything published since is discarded, a pre-restore backup
+     * is minted — and then only the LOCAL adoption is previewed. This footer said "Nothing
+     * was written. Re-run with --apply to make these changes", four lines under
+     * `Restored on the service: epoch 1 -> 2`. Both halves were wrong: something very
+     * large was written, and the invited re-run performs a SECOND destructive restore.
+     *
+     * `runRestore`'s own docstring claimed "`--apply` gates only the LOCAL half, and the
+     * wording says so." It did not, because this function could not tell an adopt preview
+     * from a restore aftermath. Now it is told.
+     */
+    if (after === "service_already_restored") {
+      console.log(
+        "The service HAS been restored — that half is done and is not a preview. What was " +
+          "not written is this machine's own hub: the rows above are what adopting would " +
+          "change here.",
+      );
+      console.log(
+        "  Re-run with --apply AND --yes to apply them locally. Note that doing so restores " +
+          "the service again, which is safe but costs another epoch; the undo id printed " +
+          "above is from this run.",
+      );
+      return;
+    }
     console.log("Nothing was written. Re-run with --apply to make these changes.");
   }
 }
@@ -687,7 +890,6 @@ function outcomeLabel(decision: AdoptionDecision): string {
   const labels: Record<AdoptionDecision["outcome"], string> = {
     current: "current    ",
     adopted: "adopted    ",
-    repointed: "re-pointed ",
     absent: "absent     ",
     declined: "skipped    ",
     conflict: "PARKED     ",
@@ -734,8 +936,24 @@ function runAdopt(argv: string[]): void {
 /** `hub registry backup` — point-in-time copies of the registry, a further consent. */
 function runBackup(argv: string[]): void {
   const subs = new Set(["enable", "disable", "create", "ls", "rm"]);
-  const sub = argv[0] && subs.has(argv[0]) ? argv[0] : "ls";
-  const rest = argv[0] && subs.has(argv[0]) ? argv.slice(1) : argv;
+  /**
+   * A typo is REFUSED, not silently treated as `ls`.
+   *
+   * Defaulting an unrecognised word to `ls` made `backup enabel` a network call that
+   * listed backups — doing something the person did not ask for, against a paid service,
+   * and reporting success. A bare `backup` still means `ls`, because that is a choice
+   * rather than a mistake.
+   */
+  const first = argv[0];
+  if (first !== undefined && !first.startsWith("-") && !subs.has(first)) {
+    throw new StapleError(
+      "validation",
+      `Unknown backup subcommand "${first}". ` +
+        "usage: staple hub registry backup [enable|disable|create|ls|rm <backupId>]",
+    );
+  }
+  const sub = first && subs.has(first) ? first : "ls";
+  const rest = first && subs.has(first) ? argv.slice(1) : argv;
 
   const { values, positionals } = parseArgs({
     args: rest,
@@ -802,6 +1020,68 @@ function runBackup(argv: string[]): void {
         if (!target) {
           throw new StapleError("validation", "usage: staple hub registry backup rm <backupId>");
         }
+
+        /**
+         * The gate `rm` never had, in EITHER mode.
+         *
+         * `--yes` was declared in this function's options and never read — which is worse
+         * than omitting it, because an operator who types it habitually got no error and no
+         * confirmation. Found by grepping for declared-but-unread options rather than for
+         * `!json`, since there was no `!json` here to find.
+         *
+         * It composes into real damage with the restore path: `runRestore` prints
+         * "undo with: staple hub registry restore <preRestoreBackupId>", and one unconfirmed
+         * `backup rm` of that id destroys the only undo for an epoch-rewinding, fleet-wide
+         * restore — previously exiting 0 having printed nothing.
+         *
+         * `cloud.ts` gates the workspace twin the same way, and this now matches it.
+         */
+        if (values.yes !== true) {
+          /**
+           * The notice makes NO REQUEST, and the first version of it did.
+           *
+           * It called `listHubBackups` to report whether the doomed backup was a
+           * `pre-restore` copy — which is useful, and put a network call inside a gate whose
+           * whole job is to refuse BEFORE anything is sent. The subprocess test caught it as
+           * exit 4 rather than 2, which is the right way to find out.
+           *
+           * So the pre-restore case is covered by wording that does not need to know:
+           * whatever this id is, saying what a pre-restore copy would mean costs nothing and
+           * is true of the ones that matter most.
+           */
+          const lines = [
+            `Deleting hub backup ${target}.`,
+            "  - a backup is the only way back to a moment; this destroys that one",
+            "  - if it is a PRE-RESTORE copy, it is the undo for a restore somebody ran, and",
+            "    deleting it makes that restore permanent. `backup ls` shows each one's kind.",
+            "  - it does not affect the registry itself, or any other backup",
+          ];
+          if (!json) for (const line of lines) console.log(line);
+          const agreed =
+            !json && isInteractive() && confirm(`\nDelete backup ${target}?`, { default: false });
+          if (!agreed) {
+            if (json) {
+              console.error(
+                JSON.stringify({
+                  code: "validation",
+                  message: `Deleting a hub backup needs --yes. ${lines.join(" ")}`,
+                  retryable: false,
+                  backupId: target,
+                  notice: lines,
+                }),
+              );
+            } else {
+              console.error(
+                isInteractive()
+                  ? "\nDeclined. The backup is intact."
+                  : "\nNothing was deleted. Re-run with --yes.",
+              );
+            }
+            process.exitCode = 2;
+            return;
+          }
+        }
+
         await service.deleteHubBackup(home, hubId, target);
         if (json) console.log(JSON.stringify({ backupId: target, deleted: true }));
         else console.log(`Deleted hub backup ${target}.`);
@@ -846,17 +1126,48 @@ function runRestore(argv: string[]): void {
   const home = stapleHome();
   const { hub } = withHub((h) => requireHubId(h, "restore into"));
 
-  if (!json && values.yes !== true) {
-    console.log("Restoring rewinds the registry ON THE SERVICE to this backup.");
-    console.log("  - the service moves to a new epoch; work published since is discarded");
-    console.log("  - a pre-restore copy is taken first, and this prints its id");
-    console.log("  - your local hub is only changed if you pass --apply");
-    if (!(isInteractive() && confirm(`\nRestore from ${target}?`, { default: false }))) {
-      console.error(
-        isInteractive()
-          ? "\nDeclined. Nothing was changed, here or on the service."
-          : "\nNothing was changed. Re-run with --yes to restore.",
-      );
+  /**
+   * The gate is OUTSIDE `!json`, and this is the instance that mattered most.
+   *
+   * It used to be `if (!json && values.yes !== true)`, so `restore <id> --json` skipped
+   * the whole disclosure AND the confirmation and went straight to the remote restore —
+   * which moves the epoch, discards everything published since the backup, and affects
+   * every machine on that hub id. Only the unrelated backup-consent check stood in the
+   * way, and anyone who has taken a backup has that consent. A destructive, fleet-wide,
+   * one-keystroke operation with no confirmation is precisely what `cloud.ts` refuses to
+   * let `disconnect --purge` be.
+   *
+   * `--apply` gates only the LOCAL half, and the wording says so: by the time an
+   * adoption is shown the service has already moved.
+   */
+  const restoreNotice = [
+    "Restoring rewinds the registry ON THE SERVICE to this backup.",
+    "  - the service moves to a new epoch; work published since is discarded",
+    "  - every machine on this hub id is affected, not just this one",
+    "  - a pre-restore copy is taken first, and this prints its id",
+    "  - your local hub is only changed if you pass --apply",
+  ];
+  if (values.yes !== true) {
+    if (!json) for (const line of restoreNotice) console.log(line);
+    const agreed =
+      !json && isInteractive() && confirm(`\nRestore from ${target}?`, { default: false });
+    if (!agreed) {
+      if (json) {
+        console.error(
+          JSON.stringify({
+            code: "validation",
+            message: `Restoring needs --yes. ${restoreNotice.join(" ")}`,
+            retryable: false,
+            notice: restoreNotice,
+          }),
+        );
+      } else {
+        console.error(
+          isInteractive()
+            ? "\nDeclined. Nothing was changed, here or on the service."
+            : "\nNothing was changed. Re-run with --yes to restore.",
+        );
+      }
       process.exitCode = 2;
       hub.close();
       return;
@@ -882,9 +1193,319 @@ function runRestore(argv: string[]): void {
         }
         console.log("");
         const { describeAdoption } = await import("../core/cloud/hub-registry.js");
-        renderDecisions(report.adoption, describeAdoption);
+        // The service half is already done by the time we get here — see the footer.
+        renderDecisions(report.adoption, describeAdoption, "service_already_restored");
       })
       .finally(() => hub.close()),
     json,
   );
+}
+
+/**
+ * `hub registry ignore <repositoryId>` / `unignore <repositoryId>` — this machine's own
+ * opt-out list, made reachable.
+ *
+ * `registry_optouts` has existed since hub migration 003 and had no CLI verb, which left two
+ * things unreachable. The publish refusal can now name a real escape for an entry adoption
+ * PARKS — a prefix collision adoption will not renumber, which otherwise made publishing
+ * permanently impossible with no local way out, because the opt-out set is keyed on
+ * `repositoryId` and there is no local row to `hub unregister`. And `adoptRegistry`'s
+ * `declined` outcome said "undo with ..." and named nothing that existed.
+ *
+ * Local only, and it never leaves the machine — that is the whole point of the table, and
+ * what makes `staple hub unregister` a local act rather than a propagated delete.
+ */
+function runIgnore(argv: string[], ignoring: boolean): void {
+  const { values, positionals } = parseArgs({
+    args: argv,
+    allowPositionals: true,
+    options: { json: { type: "boolean" }, slug: { type: "string" } },
+  });
+  const json = values.json === true;
+  const target = positionals[0];
+  const verb = ignoring ? "ignore" : "unignore";
+  if (!target) {
+    throw new StapleError(
+      "validation",
+      `usage: staple hub registry ${verb} <repositoryId>\n` +
+        "The id is the one `staple hub registry publish` names in its refusal, or the " +
+        "`repositoryId` of a row in `staple hub ls --json`.",
+    );
+  }
+
+  const hub = openHub();
+  try {
+    if (ignoring) {
+      /**
+       * REFUSED on a live row, because this is the exact contradiction the C1 fix forbids.
+       *
+       * `Hub.recordRepositoryId` retires an opt-out the moment an identity binds to a row,
+       * so "an opt-out never coexists with a registered row for the same identity" is the
+       * invariant. This verb wrote one straight past it — and the usage text above points
+       * the user at "the `repositoryId` of a row in `staple hub ls --json`", i.e. at live
+       * rows, so it was an easy thing to do by following the instructions.
+       *
+       * What that produced, in one command's output about one row:
+       *
+       *     workspaces   2 registered, 1 cross-workspace link(s)
+       *     not adopted  - 22d08ff6-…  (not registered here) (ignored)
+       *
+       * And it did not self-heal, because `initWorkspace` and `reconcileRepositoryIds` only
+       * call `recordRepositoryId` when the value CHANGES — and for a row that already holds
+       * its identity it does not change. So the write is the only place to catch it.
+       *
+       * `unregister` is the verb that actually removes a workspace from this machine, and it
+       * records the opt-out itself. Naming it is the whole remedy.
+       */
+      const live = hub.findByRepositoryId(target.trim());
+      if (live) {
+        throw new StapleError(
+          "conflict",
+          `${target.trim()} is registered on this machine right now, as "${live.slug}"` +
+            `${live.available ? "" : " (its database is not on this machine)"}. Ignoring is for ` +
+            "an identity this machine does NOT have — the two together would say both things " +
+            "about one workspace, and `staple hub registry status` would report it as " +
+            "registered and not-registered at once. Nothing was changed. To stop listing it " +
+            `here, run \`staple hub unregister ${live.slug}\`, which removes the row and ` +
+            "records the opt-out for you.",
+        );
+      }
+      hub.addOptOut(target.trim(), values.slug ?? "(not registered here)", "ignored");
+      if (json) console.log(JSON.stringify({ repositoryId: target.trim(), ignored: true }));
+      else {
+        console.log(`This machine will leave ${target.trim()} out of its own registry.`);
+        console.log("  - it stays published, and stays on every other machine");
+        console.log("  - adopting will not bring it back here until you `unignore` it");
+        console.log("  - nothing was sent; this is a local list that never leaves the machine");
+      }
+      return;
+    }
+    const cleared = hub.clearOptOut(target.trim());
+    if (json) console.log(JSON.stringify({ repositoryId: target.trim(), cleared }));
+    else if (cleared) {
+      console.log(`${target.trim()} is no longer ignored. The next adopt may bring it back.`);
+    } else {
+      console.log(`${target.trim()} was not on this machine's ignore list. Nothing changed.`);
+    }
+  } finally {
+    hub.close();
+  }
+}
+
+/**
+ * `hub registry locate <slug> --path <dir>` — attach an absent row to a copy on this machine.
+ *
+ * ## Why this verb had to exist before this PR could land
+ *
+ * `locateAbsent` has been in `hub-registry.ts` since the first commit of this epic, complete
+ * with the three refusals that make it safe to offer, and NOTHING called it. That made the
+ * `absent` decision a dead end: adoption registered a placeholder row and told the operator
+ * to "point this row at it", naming no way to do so. Restoring a registry onto a machine that
+ * already holds some of the clones is the ordinary case, so the dead end was on the main
+ * recovery path rather than at the edge of it.
+ *
+ * ## Why it takes a path instead of searching
+ *
+ * A crawl is `staple discover`, it is slow, and it guesses. This verb is for the operator who
+ * already knows where the workspace is — and `locateAbsent` then refuses unless the directory's
+ * own identity matches the row's, because *"the operator cannot be expected to"* check that
+ * and pointing a registry row at the wrong repository is silent and durable.
+ *
+ * The identity and the prefix are read from the candidate itself, never taken as arguments:
+ * they are facts about that directory, and accepting them from the command line would let a
+ * confident typo satisfy the very check that exists to catch it.
+ */
+function runLocate(argv: string[]): void {
+  const { values, positionals } = parseArgs({
+    args: argv,
+    allowPositionals: true,
+    options: { json: { type: "boolean" }, path: { type: "string" } },
+  });
+  const json = values.json === true;
+  const slug = positionals[0];
+  if (!slug || values.path === undefined) {
+    throw new StapleError(
+      "validation",
+      "usage: staple hub registry locate <slug> --path <directory>\n" +
+        "The slug is the one `staple hub registry adopt` listed as absent, and the directory is " +
+        "the workspace's own root — the one holding `.staple/`. The identity is read from there " +
+        "and must match, so a wrong directory is refused rather than attached.",
+    );
+  }
+
+  const hub = openHub();
+  try {
+    const dbPath = resolveWorkspaceDb(values.path);
+    const found = probeCandidate(dbPath);
+    const row = locateAbsent(hub, slug, {
+      path: dbPath,
+      prefix: found.prefix,
+      repositoryId: found.repositoryId,
+    });
+    if (json) {
+      console.log(JSON.stringify({ slug: row.slug, path: row.path, prefix: row.prefix }, null, 2));
+      return;
+    }
+    console.log(`"${row.slug}" now points at ${row.path}`);
+    console.log("  - nothing was renumbered, and no request was made");
+    console.log("  - `staple hub ls` should now show it as available");
+  } finally {
+    hub.close();
+  }
+}
+
+/**
+ * A workspace root, or the database inside one, resolved to the database path.
+ *
+ * Both spellings are accepted because both are things a person reasonably types, and the
+ * error when neither exists names the layout rather than the failed `open`.
+ */
+function resolveWorkspaceDb(given: string): string {
+  const direct = resolve(given);
+  if (existsSync(direct) && statSync(direct).isFile()) return direct;
+  const nested = join(direct, ".staple", "staple.db");
+  if (existsSync(nested)) return nested;
+  throw new StapleError(
+    "not_found",
+    `No staple workspace at ${direct}. Expected either the workspace root (holding ` +
+      "`.staple/staple.db`) or that database file itself. Nothing was changed.",
+  );
+}
+
+/**
+ * The candidate's own prefix and identity, read WITHOUT migrating it.
+ *
+ * Read-only for the same reason `discovery.ts` is: a directory being offered as a candidate
+ * is something to check, not something to convert to WAL or migrate. A refusal must be able
+ * to leave the stranger's database exactly as it was.
+ */
+function probeCandidate(dbPath: string): { prefix: string; repositoryId: string | null } {
+  const repositoryId = readWorkspaceManifest(dbPath)?.repositoryId ?? null;
+  const db = new DatabaseSync(dbPath, { readOnly: true });
+  try {
+    const prefix = readMeta(new WorkspaceStore(db, "", ""), "prefix");
+    if (prefix === null) {
+      throw new StapleError(
+        "conflict",
+        `The database at ${dbPath} has no prefix stamped in it, so it is not a workspace this ` +
+          "registry row could be pointing at. Nothing was changed.",
+      );
+    }
+    return { prefix, repositoryId };
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * `hub registry disconnect` — the verb `adoptRegistryIdentity`'s refusal names.
+ *
+ * It said "Disconnect it first" and there was nothing to run: `staple cloud disconnect`
+ * resolves a WORKSPACE manifest through `repositoryIdFor`, so it cannot reach a hub, and the
+ * only escape was deleting `~/.staple/cloud/<hubId>.json` by hand.
+ *
+ * `performDisconnect` is already keyed by repository id, so this is that function pointed at
+ * the hub's own identity. Local and offline by contract — *"a person who has decided to stop
+ * talking to a service must not need that service's permission to stop"* — so it makes no
+ * request, and what was published stays published.
+ */
+function runDisconnect(argv: string[]): void {
+  const { values } = parseArgs({
+    args: argv,
+    options: { json: { type: "boolean" }, yes: { type: "boolean" } },
+  });
+  const json = values.json === true;
+  const home = stapleHome();
+  const { hub, value: hubId } = withHub((h) => requireHubId(h, "disconnect"));
+
+  try {
+    if (values.yes !== true) {
+      const lines = [
+        `Disconnecting this machine's hub (${hubId}).`,
+        "  - the credential for it is removed from this machine",
+        "  - the published registry is NOT deleted, and other machines are unaffected",
+        "  - your local hub, and every workspace, is untouched",
+        "  - re-connecting later needs the enrollment secret again",
+      ];
+      if (!json) for (const line of lines) console.log(line);
+      const agreed =
+        !json && isInteractive() && confirm("\nDisconnect the hub?", { default: false });
+      if (!agreed) {
+        if (json) {
+          console.error(
+            JSON.stringify({
+              code: "validation",
+              message: `Disconnecting the hub needs --yes. ${lines.join(" ")}`,
+              retryable: false,
+              notice: lines,
+            }),
+          );
+        } else {
+          console.error(
+            isInteractive() ? "\nDeclined. Still connected." : "\nRe-run with --yes to disconnect.",
+          );
+        }
+        process.exitCode = 2;
+        return;
+      }
+    }
+
+    settle(
+      loadService()
+        .then(async () => {
+          const { performDisconnect } = await import("../core/cloud/connect.js");
+          const outcome = performDisconnect(home, hubId);
+          if (json) {
+            console.log(JSON.stringify({ hubId, ...outcome }));
+            return;
+          }
+          if (!outcome.wasConnected) {
+            console.log("This machine's hub was not connected. Nothing changed.");
+            return;
+          }
+          console.log("\nDisconnected this machine's hub.");
+          if (!outcome.credentialRemoved) {
+            /**
+             * Both remedies here are ones a person can actually run against a HUB.
+             *
+             * This used to name `staple cloud devices revoke`, which cannot reach a hub at
+             * all: it resolves its target through `repositoryIdFor`, which reads a
+             * WORKSPACE manifest, and no flag retargets it. So the one instruction offered
+             * to somebody whose hub credential is stuck — the security-relevant case — was
+             * unperformable by any argv.
+             *
+             * Re-connecting is the real server-side answer, and it is not a workaround:
+             * the device id is persisted in the staple home, and the Worker's enrollment
+             * upserts on `(repo_id, device_id)` with
+             * `DO UPDATE SET token_sha256 = excluded.token_sha256`. So a new connect
+             * REPLACES the token this credential holds, which is what makes the stuck copy
+             * useless whether or not it was ever deleted.
+             */
+            console.error(
+              "! the credential could not be removed from the store (a locked keychain does " +
+                "this). The connection record is gone, so this machine will not use it — but " +
+                "the secret is still in the store and still valid server-side.",
+            );
+            console.error("  To finish:");
+            console.error(
+              "    1. remove it from your keychain by hand (search for the hub id above), and",
+            );
+            console.error(
+              "    2. run `staple hub registry connect` again — that re-enrolls this same " +
+                "device and REPLACES the token, so the copy you could not delete stops working.",
+            );
+            console.error(
+              "  `staple cloud devices revoke` cannot do this: it targets a workspace's " +
+                "repository, not the hub.",
+            );
+            process.exitCode = 4;
+          }
+        })
+        .finally(() => hub.close()),
+      json,
+    );
+  } catch (error) {
+    hub.close();
+    throw error;
+  }
 }

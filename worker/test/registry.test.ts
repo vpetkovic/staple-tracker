@@ -287,7 +287,13 @@ describe("the verbs a registry entity may never take", () => {
           "validation",
           400,
         );
-        expect(String(body.message)).toContain("ops[0].verb");
+        /**
+         * The SPECIFIC message, not just "ops[0].verb" — which the generic allowlist message
+         * also satisfies, so this assertion used to pass while the by-name branch was
+         * unreachable. It was ordered after the allowlist checks, which fire for these
+         * entities anyway. Probed live; now ordered first.
+         */
+        expect(String(body.message)).toContain("never valid for a registry entity");
       });
     }
   }
@@ -440,6 +446,28 @@ describe("the fold, the snapshot and the round trip", () => {
     );
     expect(entity.state.present).toBe(true);
     expect(entity.version).toBe(3);
+  });
+
+  it("refuses a repeated opId within one batch", async () => {
+    /**
+     * The Worker's own intra-batch duplicate fence, which had no test on either side.
+     *
+     * It matters most for THIS vocabulary: a duplicate is answered with the ORIGINAL
+     * operation's seq and a `duplicate` status the contract calls a success, which is the
+     * exact presentation of both operation-id bugs in `hub-registry-service.ts`. Inside one
+     * batch it is refused instead, so a colliding id is loud rather than absorbed.
+     */
+    const body = await expectError(
+      await pushOps([op(0), op(1, { opId: "reg-op-1" })], { token, protocol: 2, repoId: HUB }),
+      "validation",
+      400,
+    );
+    expect(String(body.message)).toContain("opId is repeated within this batch");
+
+    const count = await env.DB.prepare(`SELECT COUNT(*) AS n FROM ops WHERE repo_id = ?1`)
+      .bind(HUB)
+      .first<{ n: number }>();
+    expect(count!.n).toBe(0);
   });
 
   it("refuses a batch that mixes registry and workspace entities", async () => {

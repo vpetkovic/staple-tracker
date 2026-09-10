@@ -23,11 +23,12 @@
  *  - **The round trip is property-style over generated registries**, not one fixture,
  *    and it goes through the fake's real fold rather than a local re-implementation.
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Hub } from "../src/core/hub.js";
+import { initWorkspace } from "../src/core/workspace.js";
 import { StapleError } from "../src/core/types.js";
 import { cloudCodeOf, cloudError } from "../src/core/cloud/client.js";
 import {
@@ -527,9 +528,25 @@ describe("what the diff will and will not emit", () => {
     const diff = diffRegistry(registry, new Map());
     expect(diff.operations).toEqual([]);
     expect(diff.unpublishable).toHaveLength(1);
-    // A sentence, naming the workspace and the remedy — not a code and not a silence.
+    /**
+     * A sentence naming the workspace and a remedy THAT WORKS — not a code, not a silence,
+     * and not the old wording, which said "connect that workspace, or run `staple init` in
+     * it" to a person who had already done both. Nothing populated the column those
+     * remedies were supposed to fill; the identity is recorded when staple OPENS the
+     * workspace, so that is what the message now says.
+     */
     expect(diff.unpublishable[0]!.reason).toContain("nameless");
+    /**
+     * The remedy has been wrong twice, so this pins the MEASURED one.
+     *
+     * Round 2's wording named `connect` or `staple init` when nothing wrote the column at
+     * all. Round 3's named "any command … `staple ls --ws <slug>` is enough" — and this test
+     * pinned that false string, which is how a wrong remedy acquired a passing assertion.
+     * Measured: after nulling the column, `staple ls` left it null, `staple ls --ws <slug>`
+     * left it null, `staple init` restored it.
+     */
     expect(diff.unpublishable[0]!.reason).toContain("staple init");
+    expect(diff.unpublishable[0]!.reason).not.toContain("staple ls --ws");
   });
 
   it("NEVER deletes a registration, even when the workspace is gone locally", () => {
@@ -554,7 +571,20 @@ describe("what the diff will and will not emit", () => {
     expect([...new Set(diff.operations.map((o) => o.verb))].sort()).not.toContain("delete");
   });
 
-  it("RETRACTS a cross-link with a field rather than deleting it", () => {
+  it("NEVER retracts a cross-link: removal does not propagate", () => {
+    /**
+     * Measured, not reasoned to. Two authority tests were tried and both failed:
+     *
+     *   - slug match — grants edge-deletion authority on a NAME;
+     *   - identity equality — ZERO protection, because `.staple/repository.json` is TRACKED,
+     *     so two clones legitimately share a `repositoryId` (#92). A clone that never applied
+     *     an adopt satisfied it by construction and deleted the other machine's edge.
+     *
+     * No comparison of the two sides can establish authority, because two machines
+     * legitimately holding the same repositories are indistinguishable by identity, by name,
+     * and by anything else in the payload. So cross-links are additive-only, exactly as
+     * registrations are, and for the reason `docs/sync.md` gives there.
+     */
     const link = {
       blockerWs: "one",
       blockerIdentifier: "ONE-1",
@@ -566,12 +596,6 @@ describe("what the diff will and will not emit", () => {
       format: REGISTRY_PAYLOAD_FORMAT,
       hubId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
       capturedAt: "2026-09-09T12:00:00.000Z",
-      /**
-       * BOTH endpoint workspaces, deliberately. A machine may only retract an edge whose
-       * two workspaces it actually has — and an earlier version of this test registered
-       * only "one", so the floor correctly declined and the test failed. Keeping the
-       * realistic setup is the point: the floor is not an obstacle to work around.
-       */
       workspaces: [
         { repositoryId: "11111111-1111-4111-8111-111111111111", slug: "one", prefix: "ONE", kind: "repo", addedAt: "2026-01-01T00:00:00.000Z" },
         { repositoryId: "22222222-2222-4222-8222-222222222222", slug: "two", prefix: "TWO", kind: "repo", addedAt: "2026-01-01T00:00:00.000Z" },
@@ -580,44 +604,309 @@ describe("what the diff will and will not emit", () => {
     };
     const published = publishedStateOf(foldOperations(diffRegistry(base, new Map()).operations));
 
+    // Removed locally, by the machine that owns the registry, with both workspaces present.
     const diff = diffRegistry({ ...base, crossLinks: [] }, published);
-    expect(diff.operations).toEqual([
-      {
-        entity: CROSS_LINK_ENTITY,
-        entityId: crossLinkEntityId(link),
-        // An `update`, never a `delete` — see `CrossLinkPayload`. The whole payload
-        // travels, so re-folding it yields the same edge with `present: false`.
-        verb: "update",
-        baseVersion: 1,
-        payload: {
-          format: REGISTRY_PAYLOAD_FORMAT,
-          blockerWs: "one",
-          blockerIdentifier: "ONE-1",
-          blockedWs: "two",
-          blockedIdentifier: "TWO-1",
-          type: "blocks",
-          present: false,
-        },
-      },
+    expect(diff.operations).toEqual([]);
+    expect(diff.retained).toHaveLength(1);
+    expect(diff.retained[0]!.reason).toContain("does not propagate");
+    expect(diff.retained[0]!.reason).toContain("adopting will bring it back");
+  });
+
+  it("`upToDate` is true WITH a non-empty `retained`, and the pair is the contract", () => {
+    /**
+     * The normal outcome for a machine that is not the only publisher, pinned as a PAIR.
+     *
+     * `upToDate` is `operations.length === 0` and nothing more. An edge the service holds
+     * and this machine does not produces a `retained` entry and NO operation — additive
+     * only, see the test above — so `upToDate: true` alongside a non-empty `retained` is
+     * not an edge case, it is what a second machine sees every pass.
+     *
+     * Asserted as one object rather than two separate expectations, because the defect
+     * this guards is reading either field alone: a `--json` consumer keying on `upToDate`
+     * silently drops the retained set, and anyone "fixing" `upToDate` to mean "nothing to
+     * report" would have to fail this line to do it. A previous fix touched only the
+     * printed sentence, which left both readings of the machine-readable shape open.
+     */
+    const link = {
+      blockerWs: "one",
+      blockerIdentifier: "ONE-1",
+      blockedWs: "two",
+      blockedIdentifier: "TWO-1",
+      type: "blocks" as const,
+    };
+    const workspaces = [
+      { repositoryId: "11111111-1111-4111-8111-111111111111", slug: "one", prefix: "ONE", kind: "repo" as const, addedAt: "2026-01-01T00:00:00.000Z" },
+      { repositoryId: "22222222-2222-4222-8222-222222222222", slug: "two", prefix: "TWO", kind: "repo" as const, addedAt: "2026-01-01T00:00:00.000Z" },
+    ];
+    const publisher: HubRegistryPayload = {
+      format: REGISTRY_PAYLOAD_FORMAT,
+      hubId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      capturedAt: "2026-09-09T12:00:00.000Z",
+      workspaces,
+      crossLinks: [link],
+    };
+    const published = publishedStateOf(
+      foldOperations(diffRegistry(publisher, new Map()).operations),
+    );
+
+    // This machine: the same two workspaces, adopted, and no edge — it has never applied
+    // an adopt that would have brought the link across, so there is nothing foreign
+    // either and publishing is allowed.
+    const here: HubRegistryPayload = { ...publisher, crossLinks: [] };
+    const diff = diffRegistry(here, published);
+
+    expect({
+      upToDate: diff.upToDate,
+      retained: diff.retained.map((r) => r.entityId),
+    }).toEqual({ upToDate: true, retained: [crossLinkEntityId(link)] });
+    expect(diff.operations).toEqual([]);
+    expect(diff.foreign.registrations).toEqual([]);
+  });
+
+  /**
+   * Overwriting another machine's published NAME is reported, because it is allowed.
+   *
+   * The overwrite has to be allowed: adoption keeps this machine's name by design, so a
+   * rebuilt machine that restored a repository into a differently named directory
+   * legitimately holds a different slug from the one the lost machine published. Refusing
+   * would refuse the machine replacement this feature exists for, on its first publish.
+   *
+   * So the requirement is that it is never SILENT. Before this, the only thing a person
+   * saw was `published: 1, updated: 1` — the one loss in this feature with no report
+   * attached. Note that an earlier round justified reporting-not-refusing with "a single
+   * machine renaming a workspace produces the identical diff", which is false: nothing in
+   * the tree updates `workspaces.slug`. The test below is deliberately about a SECOND
+   * machine, because that is the only way the state arises.
+   */
+  it("reports every published name it replaces, with the name it replaced", () => {
+    const identity = "11111111-1111-4111-8111-111111111111";
+    const asPublished: HubRegistryPayload = {
+      format: REGISTRY_PAYLOAD_FORMAT,
+      hubId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      capturedAt: "2026-09-09T12:00:00.000Z",
+      workspaces: [
+        { repositoryId: identity, slug: "alpha", prefix: "ALP", kind: "repo", addedAt: "2026-01-01T00:00:00.000Z" },
+      ],
+      crossLinks: [],
+    };
+    const published = publishedStateOf(
+      foldOperations(diffRegistry(asPublished, new Map()).operations),
+    );
+
+    // The replacement machine holds the same repository — same tracked identity — cloned
+    // into a directory called `alpha-clone`.
+    const here: HubRegistryPayload = {
+      ...asPublished,
+      workspaces: [{ ...asPublished.workspaces[0]!, slug: "alpha-clone" }],
+    };
+    const diff = diffRegistry(here, published);
+
+    expect(diff.renamed).toEqual([{ entityId: identity, from: "alpha", to: "alpha-clone" }]);
+    // Reported, not refused: the operation is still emitted, as an update.
+    expect(diff.operations.map((o) => o.verb)).toEqual(["update"]);
+    expect(diff.foreign.registrations).toEqual([]);
+  });
+
+  /**
+   * A replaced PREFIX is reported, and it is the more damaging half.
+   *
+   * `allocatePrefix` derives a base from the slug and appends a letter when it is taken, so
+   * the assignment is REGISTRATION-ORDER dependent. Two machines that re-init the same two
+   * repositories in different orders end up with the prefixes swapped between them —
+   * `tracker`/`notes` getting `TRA`/`TRAA` on one and `TRAA`/`TRA` on the other — with both
+   * SLUGS matching exactly. A slug-only comparison reports `renamed: []` and the publish
+   * says `published: 2, updated: 2`, while the prefix every `PREFIX-N` identifier resolves
+   * through is overwritten in silence.
+   */
+  it("reports a replaced PREFIX even when the slug is identical", () => {
+    const one = "11111111-1111-4111-8111-111111111111";
+    const two = "22222222-2222-4222-8222-222222222222";
+    const base = {
+      format: REGISTRY_PAYLOAD_FORMAT,
+      hubId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      capturedAt: "2026-09-09T12:00:00.000Z",
+      crossLinks: [],
+    } as const;
+    // Machine 1 registered `tracker` first, so it got TRA.
+    const asPublished: HubRegistryPayload = {
+      ...base,
+      workspaces: [
+        { repositoryId: one, slug: "tracker", prefix: "TRA", kind: "repo", addedAt: "2026-01-01T00:00:00.000Z" },
+        { repositoryId: two, slug: "trailers", prefix: "TRAA", kind: "repo", addedAt: "2026-01-01T00:00:00.000Z" },
+      ],
+    };
+    const published = publishedStateOf(
+      foldOperations(diffRegistry(asPublished, new Map()).operations),
+    );
+
+    // Machine 2 registered `trailers` first, so the two prefixes are swapped. Same slugs.
+    const here: HubRegistryPayload = {
+      ...base,
+      workspaces: [
+        { repositoryId: one, slug: "tracker", prefix: "TRAA", kind: "repo", addedAt: "2026-01-01T00:00:00.000Z" },
+        { repositoryId: two, slug: "trailers", prefix: "TRA", kind: "repo", addedAt: "2026-01-01T00:00:00.000Z" },
+      ],
+    };
+    const diff = diffRegistry(here, published);
+
+    expect(diff.renamed).toEqual([
+      { entityId: one, from: "tracker", to: "tracker", fromPrefix: "TRA", toPrefix: "TRAA" },
+      { entityId: two, from: "trailers", to: "trailers", fromPrefix: "TRAA", toPrefix: "TRA" },
+    ]);
+    // Reported, and still published — the overwrite is allowed, never silent.
+    expect(diff.operations).toHaveLength(2);
+  });
+
+  it("omits the prefix fields when only the slug moved", () => {
+    // So a consumer can tell the two apart, and the prefix warning is not cried wolf.
+    const identity = "11111111-1111-4111-8111-111111111111";
+    const asPublished: HubRegistryPayload = {
+      format: REGISTRY_PAYLOAD_FORMAT,
+      hubId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      capturedAt: "2026-09-09T12:00:00.000Z",
+      workspaces: [
+        { repositoryId: identity, slug: "alpha", prefix: "ALP", kind: "repo", addedAt: "2026-01-01T00:00:00.000Z" },
+      ],
+      crossLinks: [],
+    };
+    const published = publishedStateOf(
+      foldOperations(diffRegistry(asPublished, new Map()).operations),
+    );
+    const here: HubRegistryPayload = {
+      ...asPublished,
+      workspaces: [{ ...asPublished.workspaces[0]!, slug: "alpha-clone" }],
+    };
+    const diff = diffRegistry(here, published);
+    expect(diff.renamed).toEqual([{ entityId: identity, from: "alpha", to: "alpha-clone" }]);
+    expect(diff.renamed[0]).not.toHaveProperty("fromPrefix");
+  });
+
+  it("says nothing about a rename when the name has not changed", () => {
+    // The guard against a report that cries wolf: a first publish creates rather than
+    // replaces, and a re-publish of an unchanged registry emits nothing at all.
+    const registry = FIXTURE_REGISTRY as HubRegistryPayload;
+    const first = diffRegistry(registry, new Map());
+    expect(first.renamed).toEqual([]);
+
+    const published = publishedStateOf(foldOperations(first.operations));
+    const again = diffRegistry(registry, published);
+    expect({ renamed: again.renamed, upToDate: again.upToDate }).toEqual({
+      renamed: [],
+      upToDate: true,
+    });
+  });
+
+  it("a CLONE cannot destroy another machine's edge — the reproduced case", () => {
+    /**
+     * The exact scenario identity equality passed by construction: machine B has genuinely
+     * cloned both repositories, so its `repositoryId`s ARE machine A's (the manifest is
+     * tracked), its slugs match, and it has no edge because it never applied an adopt.
+     */
+    const link = {
+      blockerWs: "alpha",
+      blockerIdentifier: "ALP-1",
+      blockedWs: "beta",
+      blockedIdentifier: "BET-1",
+      type: "blocks" as const,
+    };
+    const a: HubRegistryPayload = {
+      format: REGISTRY_PAYLOAD_FORMAT,
+      hubId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      capturedAt: "2026-09-09T12:00:00.000Z",
+      workspaces: [
+        { repositoryId: "11111111-1111-4111-8111-111111111111", slug: "alpha", prefix: "ALP", kind: "repo", addedAt: "2026-01-01T00:00:00.000Z" },
+        { repositoryId: "22222222-2222-4222-8222-222222222222", slug: "beta", prefix: "BET", kind: "repo", addedAt: "2026-01-01T00:00:00.000Z" },
+      ],
+      crossLinks: [link],
+    };
+    const published = publishedStateOf(foldOperations(diffRegistry(a, new Map()).operations));
+
+    const clone: HubRegistryPayload = { ...a, crossLinks: [] };
+    const diff = diffRegistry(clone, published);
+    expect(
+      diff.operations.filter(
+        (o) => o.entity === CROSS_LINK_ENTITY && (o.payload as { present?: boolean }).present === false,
+      ),
+    ).toEqual([]);
+    // And the clone is not blocked from publishing either — it has nothing foreign.
+    expect(diff.foreign.registrations).toEqual([]);
+  });
+
+  it("`addedAt` is create-only, so two machines converge instead of alternating forever", () => {
+    /**
+     * REGRESSION. `addedAt` is the LOCAL row's registration time, so two machines can never
+     * agree on it — and sent on every update it made a shared registry diverge for ever on a
+     * single workspace with no cross-links, appending an operation to a METERED log every
+     * pass. Unlike a name race it could never settle, because neither value is wrong.
+     *
+     * Measured before the fix: 6 operations in 6 passes, `stateAddedAt` alternating.
+     */
+    const id = "11111111-1111-4111-8111-111111111111";
+    const reg = (addedAt: string): HubRegistryPayload => ({
+      format: REGISTRY_PAYLOAD_FORMAT,
+      hubId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      capturedAt: "2026-09-09T12:00:00.000Z",
+      workspaces: [{ repositoryId: id, slug: "alpha", prefix: "ALP", kind: "repo", addedAt }],
+      crossLinks: [],
+    });
+    const first = reg("2026-01-01T00:00:00.000Z");
+    const second = reg("2026-02-02T00:00:00.000Z");
+
+    let entities = foldOperations(diffRegistry(first, new Map()).operations);
+    let total = 1;
+    for (let pass = 2; pass <= 6; pass += 1) {
+      const diff = diffRegistry(pass % 2 === 0 ? second : first, publishedStateOf(entities));
+      total += diff.operations.length;
+      if (diff.operations.length > 0) {
+        entities = foldOperations([
+          ...entities.map((e) => ({
+            entity: e.entity,
+            entityId: e.entityId,
+            verb: "create",
+            payload: e.state,
+          })),
+          ...diff.operations,
+        ]);
+      }
+    }
+    // One operation, ever: the create. Was six.
+    expect(total).toBe(1);
+    // And the value the FIRST writer set is the one that stands.
+    expect(entities[0]!.state.addedAt).toBe("2026-01-01T00:00:00.000Z");
+  });
+
+  it("refuses to publish when the service holds a registration this machine lacks", () => {
+    /**
+     * The gate that scopes publishing to one machine. A published registration with no local
+     * row and no opt-out is the one signal that says another machine is publishing here — or
+     * that this machine is behind, which has the same remedy.
+     */
+    const a: HubRegistryPayload = {
+      format: REGISTRY_PAYLOAD_FORMAT,
+      hubId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      capturedAt: "2026-09-09T12:00:00.000Z",
+      workspaces: [
+        { repositoryId: "11111111-1111-4111-8111-111111111111", slug: "alpha", prefix: "ALP", kind: "repo", addedAt: "2026-01-01T00:00:00.000Z" },
+        { repositoryId: "22222222-2222-4222-8222-222222222222", slug: "beta", prefix: "BET", kind: "repo", addedAt: "2026-01-01T00:00:00.000Z" },
+      ],
+      crossLinks: [],
+    };
+    const published = publishedStateOf(foldOperations(diffRegistry(a, new Map()).operations));
+
+    const behind: HubRegistryPayload = { ...a, workspaces: [a.workspaces[0]!] };
+    expect(diffRegistry(behind, published).foreign.registrations).toEqual([
+      { entityId: "22222222-2222-4222-8222-222222222222", slug: "beta" },
     ]);
 
-    // And it can come back. Under the `delete` verb this was silently discarded for ever.
-    const retracted = publishedStateOf(
-      foldOperations([...diffRegistry(base, new Map()).operations, ...diff.operations]),
-    );
-    const readd = diffRegistry(base, retracted);
-    expect(readd.operations).toHaveLength(1);
-    expect(readd.operations[0]!.verb).toBe("update");
-    expect((readd.operations[0]!.payload as { present: boolean }).present).toBe(true);
-    // A registry rebuilt from the retracted state has no edge; rebuilt after the re-add
-    // it has it again.
+    // An identity this machine deliberately unregistered is its OWN doing, not foreign —
+    // otherwise `staple hub unregister` would permanently block publishing.
     expect(
-      registryFromSnapshot({
-        hubId: base.hubId,
-        capturedAt: base.capturedAt,
-        entities: foldOperations([...diffRegistry(base, new Map()).operations, ...diff.operations]),
-      }).crossLinks,
+      diffRegistry(behind, published, [], ["22222222-2222-4222-8222-222222222222"]).foreign
+        .registrations,
     ).toEqual([]);
+
+    // And the machine whose registry it is is not blocked.
+    expect(diffRegistry(a, published).foreign.registrations).toEqual([]);
   });
 
   it("uses create for a first write and update for a later one", () => {
@@ -696,6 +985,103 @@ describe("what the diff will and will not emit", () => {
   });
 });
 
+describe("a workspace initialised the ordinary way is publishable", () => {
+  /**
+   * THE regression this file was missing, and the reason it was missing is the finding.
+   *
+   * Every other test here, and the live script, called `hub.recordRepositoryId(...)`
+   * directly — a hub-internal API no user-facing path invokes. So they proved the wire
+   * works when `workspaces.repository_id` is populated, and nothing populated it:
+   * `Hub.register()` runs BEFORE the manifest exists, and `performConnect` never touched
+   * the column. On a real machine `publish` uploaded an empty registry and reported every
+   * workspace unpublishable, naming remedies the person had already performed.
+   *
+   * So this test uses `openWorkspace` — the real path every command goes through — and
+   * calls `recordRepositoryId` nowhere. If the column stops being written, it fails.
+   */
+  it("publishes a workspace created by openWorkspace, with no hub-internal writes", async () => {
+    const home = mkdtempSync(join(tmpdir(), "staple-hubreal-"));
+    dirs.push(home);
+    const previous = process.env.STAPLE_HOME;
+    process.env.STAPLE_HOME = home;
+    try {
+      // A workspace brought up exactly as `staple init` brings one up.
+      const repoDir = join(home, "projects", "alpha");
+      mkdirSync(repoDir, { recursive: true });
+      // `initWorkspace` is what `staple init` calls, and it is the function that now
+      // records the identity on the hub row after reconciling it from the manifest.
+      const opened = initWorkspace({ dir: repoDir, kind: "repo" });
+      const identity = opened.repository.repositoryId;
+      opened.store.db.close();
+      expect(identity).toMatch(/^[0-9a-f-]{36}$/);
+
+      const hub = Hub.open();
+      const hubId = hub.hubId();
+      const server = serverFor(hubId);
+      connect(home, hubId, server);
+      setRegistryConsent(home, hubId, true, REGISTRY_DISCLOSURE);
+
+      // The column the whole feature keys on, written by the ordinary open.
+      expect(hub.list().map((r) => r.repositoryId)).toEqual([identity]);
+
+      const report = await publishRegistry(hub, home, { fetchImpl: server.fetch });
+      expect(report.unpublishable).toEqual([]);
+      expect(report.published).toBe(1);
+      expect(report.applied).toBe(1);
+      expect(server.ops.map((o) => o.entityId)).toEqual([identity]);
+
+      // And it reads back as the workspace it is, which is what a restore depends on.
+      const readBack = await readPublishedRegistry(home, hubId, { fetchImpl: server.fetch });
+      expect(readBack.registry.workspaces).toEqual([
+        expect.objectContaining({ repositoryId: identity, slug: "alpha" }),
+      ]);
+      hub.close();
+    } finally {
+      if (previous === undefined) delete process.env.STAPLE_HOME;
+      else process.env.STAPLE_HOME = previous;
+    }
+  }, 30_000);
+
+  it("parks an identity two rows share rather than flip-flopping the published name", () => {
+    /**
+     * Two rows sharing a `repositoryId` are ONE entity on the wire, so publishing both
+     * emits two operations on one entity and the published slug alternates on every pass —
+     * `published: 1, upToDate: false` for ever, one operation appended to a paid log each
+     * time. Migration 003 asks for it to be REPORTED, and #92 documents two clones or two
+     * worktrees of one repository as legitimate, so neither is published and both are named.
+     */
+    const shared = "11111111-1111-4111-8111-111111111111";
+    const registry: HubRegistryPayload = {
+      format: REGISTRY_PAYLOAD_FORMAT,
+      hubId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      capturedAt: "2026-09-09T12:00:00.000Z",
+      workspaces: [
+        { repositoryId: shared, slug: "checkout-a", prefix: "CKA", kind: "repo", addedAt: "2026-01-01T00:00:00.000Z" },
+        { repositoryId: shared, slug: "checkout-b", prefix: "CKB", kind: "repo", addedAt: "2026-01-02T00:00:00.000Z" },
+        { repositoryId: "22222222-2222-4222-8222-222222222222", slug: "solo", prefix: "SOL", kind: "repo", addedAt: "2026-01-03T00:00:00.000Z" },
+      ],
+      crossLinks: [],
+    };
+
+    const diff = diffRegistry(registry, new Map(), [
+      { repositoryId: shared, slugs: ["checkout-a", "checkout-b"] },
+    ]);
+
+    // Neither of the sharing rows is published; the unrelated one still is.
+    expect(diff.operations.map((o) => o.entityId)).toEqual([
+      "22222222-2222-4222-8222-222222222222",
+    ]);
+    expect(diff.unpublishable.map((u) => u.entry.slug).sort()).toEqual([
+      "checkout-a",
+      "checkout-b",
+    ]);
+    // Both reasons name the OTHER row, and say the sharing is legitimate rather than broken.
+    expect(diff.unpublishable[0]!.reason).toContain('"checkout-b"');
+    expect(diff.unpublishable[0]!.reason).toContain("legitimately share an identity");
+    expect(diff.unpublishable[0]!.reason).toContain("staple hub unregister");
+  });
+});
+
 describe("a value that returns to an earlier value still lands", () => {
   it("survives alpha -> beta -> alpha -> beta without a collision", async () => {
     /**
@@ -771,97 +1157,382 @@ describe("a value that returns to an earlier value still lands", () => {
   });
 });
 
-describe("a machine may only retract an edge it could have had", () => {
-  /** A registry with two workspaces and one edge between them. */
-  function withEdge(hubId: string): HubRegistryPayload {
+describe("publishing is scoped to one machine, and says so", () => {
+  /**
+   * The retract-authority block that used to live here is gone, and its removal is the
+   * finding rather than a cleanup.
+   *
+   * It pinned a floor keyed on identity equality, with a comment claiming the scenario was
+   * "a machine that had cloned both but never applied an adopt" — and then handed that
+   * machine identities a clone can never have. The assertion was adjacent to the bug it was
+   * supposed to prevent. Nothing retracts now, so there is no authority question to pin;
+   * what replaces it is the refusal below and the additive-only rule above.
+   */
+  it("refuses rather than retracting when it is not the only publisher", async () => {
+    const a = machine();
+    const hubId = a.hub.hubId();
+    const server = serverFor(hubId);
+    connect(a.home, hubId, server);
+    setRegistryConsent(a.home, hubId, true, REGISTRY_DISCLOSURE);
+    seed(a.home, a.hub, "tracker", "TRK", "11111111-1111-4111-8111-111111111111");
+    seed(a.home, a.hub, "qde", "QDE", "22222222-2222-4222-8222-222222222222", "global");
+    await publishRegistry(a.hub, a.home, { fetchImpl: server.fetch });
+    a.hub.close();
+
+    // A second machine holding only ONE of the two, which is what "behind" looks like.
+    const b = machine();
+    process.env.STAPLE_HOME = b.home;
+    connect(b.home, hubId, server, "device-b", b.hub);
+    setRegistryConsent(b.home, hubId, true, REGISTRY_DISCLOSURE);
+    seed(b.home, b.hub, "tracker", "TRK", "11111111-1111-4111-8111-111111111111");
+
+    const before = server.ops.length;
+    const error = await publishRegistry(b.hub, b.home, { fetchImpl: server.fetch }).catch((e) => e);
+    expect(cloudCodeOf(error)).toBe("conflict");
+    expect((error as Error).message).toContain('"qde"');
+    expect((error as Error).message).toContain("adopt --apply");
+    expect((error as Error).message).toContain("scoped to ONE machine");
+    // NOTHING was sent — the refusal is before the push, not a report after it.
+    expect(server.ops.length).toBe(before);
+    b.hub.close();
+  });
+
+  it("names the real escape when adoption would PARK rather than adopt", async () => {
+    /**
+     * The dead-end. `adoptRegistry` registers an absent row only after clearing the prefix and
+     * slug checks, so a collision returns `outcome: "conflict"` and writes NOTHING — the entry
+     * stays foreign for ever, publish keeps refusing, and the first version of the refusal told
+     * the operator to run the very thing that had just failed. There is no way out through the
+     * opt-out set either, because that is keyed on `repositoryId` and there is no local row to
+     * `hub unregister`.
+     *
+     * So the refusal establishes the reason by previewing the adoption, and names an escape
+     * that exists.
+     */
+    const a = machine();
+    const hubId = a.hub.hubId();
+    const server = serverFor(hubId);
+    connect(a.home, hubId, server);
+    setRegistryConsent(a.home, hubId, true, REGISTRY_DISCLOSURE);
+    seed(a.home, a.hub, "qde", "QDE", "22222222-2222-4222-8222-222222222222");
+    await publishRegistry(a.hub, a.home, { fetchImpl: server.fetch });
+    a.hub.close();
+
+    // B already owns prefix QDE for a DIFFERENT repository, so adoption parks it.
+    const b = machine();
+    process.env.STAPLE_HOME = b.home;
+    connect(b.home, hubId, server, "device-b", b.hub);
+    setRegistryConsent(b.home, hubId, true, REGISTRY_DISCLOSURE);
+    seed(b.home, b.hub, "something-else", "QDE", "99999999-9999-4999-8999-999999999999");
+
+    // Adopting genuinely does not fix it: the decision is `conflict` and nothing is written.
+    const adopted = await adoptPublishedRegistry(b.hub, b.home, {
+      fetchImpl: server.fetch,
+      apply: true,
+    });
+    expect(adopted.adoption.decisions.map((d) => d.outcome)).toContain("conflict");
+    expect(b.hub.list().map((r) => r.slug)).toEqual(["something-else"]);
+
+    const error = await publishRegistry(b.hub, b.home, { fetchImpl: server.fetch }).catch((e) => e);
+    expect(cloudCodeOf(error)).toBe("conflict");
+    // The reason is the ADOPTION's own sentence about the prefix, not "run adopt".
+    expect((error as Error).message).toContain("Prefix QDE is already held here");
+    // And an escape that exists, which the first version did not have.
+    expect((error as Error).message).toContain("will NOT be fixed by adopting");
+    expect((error as Error).message).toContain("staple hub registry ignore");
+    b.hub.close();
+  });
+
+  it("an ignored entry stops being foreign, so publishing works again", async () => {
+    // The escape the refusal names has to actually work, or it is a second dead end.
+    const a = machine();
+    const hubId = a.hub.hubId();
+    const server = serverFor(hubId);
+    connect(a.home, hubId, server);
+    setRegistryConsent(a.home, hubId, true, REGISTRY_DISCLOSURE);
+    seed(a.home, a.hub, "qde", "QDE", "22222222-2222-4222-8222-222222222222");
+    await publishRegistry(a.hub, a.home, { fetchImpl: server.fetch });
+    a.hub.close();
+
+    const b = machine();
+    process.env.STAPLE_HOME = b.home;
+    connect(b.home, hubId, server, "device-b", b.hub);
+    setRegistryConsent(b.home, hubId, true, REGISTRY_DISCLOSURE);
+    seed(b.home, b.hub, "something-else", "QDE", "99999999-9999-4999-8999-999999999999");
+
+    await expect(publishRegistry(b.hub, b.home, { fetchImpl: server.fetch })).rejects.toThrow();
+
+    // `staple hub registry ignore` — an opt-out for an identity with no local row.
+    b.hub.addOptOut("22222222-2222-4222-8222-222222222222", "(not registered here)", "ignored");
+    const report = await publishRegistry(b.hub, b.home, { fetchImpl: server.fetch });
+    expect(report.published).toBe(1);
+    b.hub.close();
+  });
+
+  it("a PRUNED row does not make publishing impossible on one machine", async () => {
+    /**
+     * REGRESSION, and it broke the single-machine configuration this scope reduction makes the
+     * only supported one. `Hub.unregister` records an opt-out; `Hub.prune` deleted rows and
+     * recorded none — and those are the only two row deleters in the tree. So a pruned row left
+     * a published registration with no local row and no opt-out, which is FOREIGN: publish
+     * refused, blamed another machine, and named `adopt --apply`, which re-added the row prune
+     * had just removed. Mutually exclusive, in a loop, and reachable from MCP.
+     */
+    const { home, hub } = machine();
+    const hubId = hub.hubId();
+    const server = serverFor(hubId);
+    connect(home, hubId, server);
+    setRegistryConsent(home, hubId, true, REGISTRY_DISCLOSURE);
+    const keptPath = seed(home, hub, "one", "ONE", "11111111-1111-4111-8111-111111111111");
+    const goingPath = seed(home, hub, "two", "TWO", "22222222-2222-4222-8222-222222222222");
+    await publishRegistry(hub, home, { fetchImpl: server.fetch });
+    expect(server.ops).toHaveLength(2);
+
+    // The workspace's database goes away, and prune notices.
+    rmSync(goingPath, { force: true });
+    expect(existsSync(keptPath)).toBe(true);
+    const pruned = hub.prune({ apply: true });
+    expect(pruned.removed.map((r) => r.workspace.slug)).toEqual(["two"]);
+    // The opt-out prune now records, which is what stops the row reading as foreign.
+    expect(hub.listOptOuts().map((o) => ({ id: o.repositoryId, reason: o.reason }))).toEqual([
+      { id: "22222222-2222-4222-8222-222222222222", reason: "pruned" },
+    ]);
+
+    // Publishing still works, and says nothing about another machine.
+    const after = await publishRegistry(hub, home, { fetchImpl: server.fetch });
+    expect(after.upToDate).toBe(true);
+    hub.close();
+  });
+
+  it("lets a machine publish once it has adopted what the service holds", async () => {
+    // The refusal has to be escapable by the documented remedy, or it is a wall.
+    const a = machine();
+    const hubId = a.hub.hubId();
+    const server = serverFor(hubId);
+    connect(a.home, hubId, server);
+    setRegistryConsent(a.home, hubId, true, REGISTRY_DISCLOSURE);
+    seed(a.home, a.hub, "tracker", "TRK", "11111111-1111-4111-8111-111111111111");
+    seed(a.home, a.hub, "qde", "QDE", "22222222-2222-4222-8222-222222222222", "global");
+    await publishRegistry(a.hub, a.home, { fetchImpl: server.fetch });
+    a.hub.close();
+
+    const b = machine();
+    process.env.STAPLE_HOME = b.home;
+    connect(b.home, hubId, server, "device-b", b.hub);
+    setRegistryConsent(b.home, hubId, true, REGISTRY_DISCLOSURE);
+    await adoptPublishedRegistry(b.hub, b.home, { fetchImpl: server.fetch, apply: true });
+
+    const report = await publishRegistry(b.hub, b.home, { fetchImpl: server.fetch });
+    expect(report.upToDate).toBe(true);
+    b.hub.close();
+  });
+});
+
+describe("the fake refuses what the Worker refuses", () => {
+  /**
+   * The three refusals mirrored into `FakeSyncServer` had NO test on either side, which is
+   * the same gap in miniature: a mirror nobody exercises is a mirror nobody notices going
+   * stale. These drive the fake directly, because the fake is the subject.
+   *
+   * The Worker's own copies are pinned in `worker/test/registry.test.ts`.
+   */
+  function envelope(overrides: Record<string, unknown> = {}): Record<string, unknown> {
     return {
-      format: REGISTRY_PAYLOAD_FORMAT,
-      hubId,
-      capturedAt: "2026-09-09T12:00:00.000Z",
-      workspaces: [
-        { repositoryId: "11111111-1111-4111-8111-111111111111", slug: "one", prefix: "ONE", kind: "repo", addedAt: "2026-01-01T00:00:00.000Z" },
-        { repositoryId: "22222222-2222-4222-8222-222222222222", slug: "two", prefix: "TWO", kind: "repo", addedAt: "2026-01-01T00:00:00.000Z" },
-      ],
-      crossLinks: [
-        {
-          blockerWs: "one",
-          blockerIdentifier: "ONE-1",
-          blockedWs: "two",
-          blockedIdentifier: "TWO-1",
-          type: "blocks",
-        },
-      ],
+      opId: "op-1",
+      repoId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      protocol: 2,
+      schema: 0,
+      entity: "registration",
+      entityId: "11111111-1111-4111-8111-111111111111",
+      verb: "create",
+      baseVersion: null,
+      payload: { format: 1, slug: "one", prefix: "ONE", kind: "repo", addedAt: "x" },
+      deviceId: "device-a",
+      actor: "",
+      clientSeq: 1,
+      createdAt: "2026-09-09T12:00:00.000Z",
+      ...overrides,
     };
   }
 
-  it("does not retract an edge naming a workspace it does not have", () => {
-    /**
-     * THE assertion for the third critical. A machine whose registry is a strict SUBSET
-     * of the published one is not a corner case: `adoptRegistry` previews by default, and
-     * even on an apply it skips an edge naming a workspace that did not land — which
-     * happens for an opted-out identity, a parked prefix collision, and an entry with no
-     * identity at all.
-     *
-     * Without the floor, that machine's next publish retracted every one of those edges,
-     * and the shared registry converged to the INTERSECTION of the machines' edges rather
-     * than to last-write-wins.
-     */
+  async function push(
+    ops: Record<string, unknown>[],
+    protocol = 2,
+  ): Promise<{ status: number; body: Record<string, unknown> }> {
     const hubId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
-    const full = withEdge(hubId);
-    const published = publishedStateOf(foldOperations(diffRegistry(full, new Map()).operations));
-
-    // This machine adopted nothing — the empty hub a replacement machine starts with.
-    const empty: HubRegistryPayload = { ...full, workspaces: [], crossLinks: [] };
-    const diff = diffRegistry(empty, published);
-    expect(diff.operations).toEqual([]);
-    expect(diff.retained).toHaveLength(1);
-    expect(diff.retained[0]!.reason).toContain("does not have registered");
-
-    // And a machine that has only ONE of the two endpoints is equally not entitled.
-    const half: HubRegistryPayload = {
-      ...full,
-      workspaces: [full.workspaces[0]!],
-      crossLinks: [],
-    };
-    expect(diffRegistry(half, published).operations.filter((o) => o.entity === CROSS_LINK_ENTITY))
-      .toEqual([]);
-  });
-
-  it("DOES retract an edge whose two workspaces are both here", () => {
-    // The negative tests above would also pass if retraction never happened at all.
-    const hubId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
-    const full = withEdge(hubId);
-    const published = publishedStateOf(foldOperations(diffRegistry(full, new Map()).operations));
-
-    const removed: HubRegistryPayload = { ...full, crossLinks: [] };
-    const diff = diffRegistry(removed, published);
-    expect(diff.operations).toHaveLength(1);
-    expect((diff.operations[0]!.payload as { present: boolean }).present).toBe(false);
-    expect(diff.retained).toEqual([]);
-  });
-
-  it("reports a tombstone from an older build instead of looping on it", () => {
-    /**
-     * Nothing emits a delete any more, but tombstones written by an earlier build are in
-     * the log for good, and the fold discards every operation on a deleted entity. An
-     * update would be accepted, acknowledged and dropped, and the publish would report
-     * success on every pass for ever. Reported as retained, with the only remedy there is.
-     */
-    const hubId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
-    const full = withEdge(hubId);
-    const tombstoned = publishedStateOf([
-      {
-        entity: CROSS_LINK_ENTITY,
-        entityId: crossLinkEntityId(full.crossLinks[0]!),
-        deletedAt: 1,
-        state: {},
-        version: 2,
+    const server = new FakeSyncServer({ repositoryId: hubId });
+    server.enroll("device-a", "tok");
+    const response = await server.fetch(`https://sync.test/v1/repos/${hubId}/ops`, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer tok",
+        "Staple-Protocol": String(protocol),
+        "Content-Type": "application/json",
       },
+      body: JSON.stringify({ protocol, deviceId: "device-a", ops }),
+    });
+    return { status: response.status, body: (await response.json()) as Record<string, unknown> };
+  }
+
+  it("refuses `delete` for a registry entity", async () => {
+    const { status, body } = await push([envelope({ verb: "delete", baseVersion: 1, payload: {} })]);
+    expect({ status, code: body.code }).toEqual({ status: 400, code: "validation" });
+    expect(String(body.message)).toContain("never valid for a registry entity");
+  });
+
+  /**
+   * The epoch fence is an INTEGER on this side too, which had no test on EITHER side.
+   *
+   * `worker/src/push.ts` runs `body.epoch` through `intOrThrow` — `typeof "number"` AND
+   * `Number.isInteger` — and refuses `validation`/400 before a statement is prepared. The
+   * fake mirrors it, and the worker half is now pinned in `worker/test/push.test.ts`. A
+   * client that sent a fractional fence, or the string form of one, has to be refused the
+   * same way here, or the fake would let it through and the deployed service would not.
+   *
+   * The fence cannot be sent through the `push` helper above, which does not carry one, so
+   * this builds the request itself in the same shape.
+   */
+  async function pushFencedOn(
+    epoch: unknown,
+  ): Promise<{ status: number; body: Record<string, unknown> }> {
+    const hubId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const server = new FakeSyncServer({ repositoryId: hubId });
+    server.enroll("device-a", "tok");
+    const response = await server.fetch(`https://sync.test/v1/repos/${hubId}/ops`, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer tok",
+        "Staple-Protocol": "2",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ protocol: 2, deviceId: "device-a", epoch, ops: [] }),
+    });
+    return { status: response.status, body: (await response.json()) as Record<string, unknown> };
+  }
+
+  // `1.5` and `Infinity` are the values a bare `typeof === "number"` would let past, and
+  // `NaN` reaches a server as `null` because JSON has no NaN — asserted rather than assumed.
+  for (const [label, value] of [
+    ["a fraction", 1.5],
+    ["a numeric string", "1"],
+    ["null", null],
+    ["NaN, which serialises to null", NaN],
+  ] as const) {
+    it(`refuses an epoch fence that is ${label}`, async () => {
+      const { status, body } = await pushFencedOn(value);
+      expect({ status, code: body.code }).toEqual({ status: 400, code: "validation" });
+      expect(body.message).toBe("epoch must be an integer");
+    });
+  }
+
+  it("accepts an integer fence that matches, so the refusals are not refusing everything", async () => {
+    const { status } = await pushFencedOn(1);
+    expect(status).toBe(200);
+  });
+
+  /**
+   * `replace` and `renumber`, for both registry entities, asserting on the SPECIFIC
+   * message.
+   *
+   * These verbs had no coverage here at all — only `delete` did — and the by-name check
+   * they exercise sat AFTER the ordered-collection and issue allowlists in the fake, which
+   * refuse these entities anyway because neither name is in either list. So the branch was
+   * unreachable and a generic "is only for ordered collections" was what a client saw.
+   * `worker/src/envelope.ts` orders the by-name refusal first for exactly that reason and
+   * `worker/test/registry.test.ts` pins it there; this is the same pair of loops against
+   * the fake, so the two cannot drift apart again without one of them going red.
+   */
+  for (const entity of ["registration", "crossLink"] as const) {
+    for (const verb of ["replace", "renumber"] as const) {
+      it(`refuses ${verb} on ${entity}`, async () => {
+        const { status, body } = await push([
+          envelope({ entity, verb, baseVersion: 1, payload: { members: ["a"] } }),
+        ]);
+        expect({ status, code: body.code }).toEqual({ status: 400, code: "validation" });
+        expect(String(body.message)).toContain("never valid for a registry entity");
+      });
+    }
+  }
+
+  it("still gives the allowlist message for a NON-registry entity", async () => {
+    // The other half of the ordering: putting the by-name check first must not swallow the
+    // two allowlists, which are what refuse `replace` on a comment and `renumber` on
+    // anything but an issue.
+    const replaced = await push([
+      envelope({ entity: "comment", entityId: "c-1", verb: "replace", baseVersion: 1, payload: {} }),
     ]);
-    const diff = diffRegistry(full, tombstoned);
-    expect(diff.operations.filter((o) => o.entity === CROSS_LINK_ENTITY)).toEqual([]);
-    expect(diff.retained).toHaveLength(1);
-    expect(diff.retained[0]!.reason).toContain("deletion is final");
+    expect({ status: replaced.status, code: replaced.body.code }).toEqual({
+      status: 400,
+      code: "validation",
+    });
+    expect(String(replaced.body.message)).toContain("only for ordered collections");
+
+    const renumbered = await push([
+      envelope({ entity: "comment", entityId: "c-1", verb: "renumber", baseVersion: 1, payload: {} }),
+    ]);
+    expect(String(renumbered.body.message)).toContain("only for issues");
+  });
+
+  it("echoes the negotiated protocol in the push response, never a constant", async () => {
+    /**
+     * The fake answered `{"protocol":1}` to every push, so a protocol-2 registry push read
+     * back a protocol-1 body while the deployed Worker echoes what the request negotiated
+     * (`worker/src/push.ts` returns `ops[0].protocol`, which validation has already forced
+     * to equal the header).
+     */
+    const registry = await push([envelope()], 2);
+    expect({ status: registry.status, protocol: registry.body.protocol }).toEqual({
+      status: 200,
+      protocol: 2,
+    });
+
+    const workspace = await push(
+      [envelope({ protocol: 1, entity: "issue", entityId: "issue-1", payload: { title: "t" } })],
+      1,
+    );
+    expect({ status: workspace.status, protocol: workspace.body.protocol }).toEqual({
+      status: 200,
+      protocol: 1,
+    });
+  });
+
+  it("refuses a batch mixing registry and workspace entities", async () => {
+    const { status, body } = await push([
+      envelope(),
+      envelope({ opId: "op-2", entity: "issue", entityId: "issue-1", clientSeq: 2, payload: { title: "t" } }),
+    ]);
+    expect({ status, code: body.code }).toEqual({ status: 400, code: "validation" });
+    expect(String(body.message)).toContain("may not mix hub registry entities");
+  });
+
+  it("refuses a repeated opId within one batch", async () => {
+    /**
+     * The one that matters most: the fake answers a duplicate with the ORIGINAL seq and
+     * `status: "duplicate"`, which is the exact presentation of both operation-id bugs in
+     * `hub-registry-service.ts`. A regression reintroducing a colliding id inside one batch
+     * would have looked like success here and been a 400 in production.
+     */
+    const { status, body } = await push([
+      envelope(),
+      envelope({ entityId: "22222222-2222-4222-8222-222222222222", clientSeq: 2 }),
+    ]);
+    expect({ status, code: body.code }).toEqual({ status: 400, code: "validation" });
+    expect(String(body.message)).toContain("opId is repeated within this batch");
+  });
+
+  it("refuses an envelope whose protocol disagrees with the request header", async () => {
+    // The one field the whole registry leg hangs on, and the fake never checked it.
+    const { status, body } = await push([envelope({ protocol: 1 })], 2);
+    expect({ status, code: body.code }).toEqual({ status: 400, code: "validation" });
+    expect(String(body.message)).toContain("disagrees with the request header");
+  });
+
+  it("accepts a well-formed registry batch, so the refusals are not refusing everything", async () => {
+    const { status } = await push([
+      envelope(),
+      envelope({ opId: "op-2", entityId: "22222222-2222-4222-8222-222222222222", clientSeq: 2 }),
+    ]);
+    expect(status).toBe(200);
   });
 });
 
@@ -1109,7 +1780,7 @@ describe("publishing against a service with the worker's semantics", () => {
     hub.close();
   });
 
-  it("is refused by a protocol-1 service, and says which version it needed", async () => {
+  it("is refused by a protocol-1 service, before anything is sent", async () => {
     const { home, hub } = machine();
     const hubId = hub.hubId();
     // A Worker that has not been redeployed. This is the honest failure for a machine
@@ -1122,6 +1793,15 @@ describe("publishing against a service with the worker's semantics", () => {
     const error = await publishRegistry(hub, home, { fetchImpl: server.fetch }).catch((e) => e);
     expect(cloudCodeOf(error)).toBe("protocol_unsupported");
     expect(server.ops).toEqual([]);
+    /**
+     * The title used to promise "and says which version it needed" while asserting only
+     * the code. It does not, and cannot from here: this refusal comes from the header
+     * range check in `negotiateProtocol`, which knows nothing about entities. The version
+     * an OPERATION needed is reported by `assertServable` on the read paths and by
+     * `connectHubRegistry`'s pre-flight — which is where a person actually meets this, and
+     * which names redeployment. Asserted there rather than promised here.
+     */
+    expect((error as { detail?: Record<string, unknown> }).detail?.requiredProtocol).toBeUndefined();
     hub.close();
   });
 
@@ -1361,7 +2041,15 @@ describe("the hub is restorable from the service after a machine is lost", () =>
     process.env.STAPLE_HOME = bad.home;
     connect(bad.home, hubId, server, "device-bad", bad.hub);
     setRegistryConsent(bad.home, hubId, true, REGISTRY_DISCLOSURE);
-    seed(bad.home, bad.hub, "renamed-by-mistake", "TRK", "11111111-1111-4111-8111-111111111111");
+    /**
+     * ADOPTS FIRST, which is now the only route to publishing from a second machine —
+     * publish refuses while the service holds anything this machine does not. So the damage
+     * is a rename by a machine that IS current, which is the realistic version of this
+     * scenario and the one the restore has to be able to undo.
+     */
+    await adoptPublishedRegistry(bad.hub, bad.home, { fetchImpl: server.fetch, apply: true });
+    bad.hub.recordRepositoryId("tracker", null);
+    seed(bad.home, bad.hub, "renamed-by-mistake", "TRK2", "11111111-1111-4111-8111-111111111111");
     await publishRegistry(bad.hub, bad.home, { fetchImpl: server.fetch });
     bad.hub.close();
 
@@ -1375,7 +2063,14 @@ describe("the hub is restorable from the service after a machine is lost", () =>
     const c = machine();
     process.env.STAPLE_HOME = c.home;
     connect(c.home, hubId, server, "device-c", c.hub);
+    /**
+     * BOTH consents. A restore mutates the published registry — it moves the epoch and
+     * discards everything published since the backup — so it is behind the publish consent as
+     * well as the backup one. It used to need only `backup`, which meant
+     * `publish --disable` left a machine fully able to replace everything on the service.
+     */
     setConsent(c.home, hubId, { backup: true });
+    setRegistryConsent(c.home, hubId, true, REGISTRY_DISCLOSURE);
 
     const report = await restoreRegistry(c.hub, c.home, backup.backupId, {
       fetchImpl: server.fetch,

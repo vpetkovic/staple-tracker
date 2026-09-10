@@ -303,6 +303,27 @@ export class FakeSyncServer {
     });
   }
 
+  /**
+   * A 200 whose body's `protocol` is the version THIS REQUEST negotiated.
+   *
+   * Every success in this fixture goes through here, so `protocol` can only come from
+   * `negotiate()`. It used to be the literal `1` in fourteen bodies — `pull` and
+   * `snapshot` were threaded and nothing else was — so a protocol-2 registry push got
+   * `{"protocol":1}` back from the fake while the deployed Worker echoes 2, and every
+   * lease, backup, restore and consent response said 1 whatever the client asked for.
+   * The Worker's handlers take `protocol` as a parameter and put it in the body
+   * (`worker/src/leases.ts`, `worker/src/backups.ts`, `worker/src/devices.ts`); this is
+   * the same thing in one place, so a fifteenth route cannot be given a literal without
+   * going out of its way.
+   *
+   * `GET /v1/capabilities` is deliberately NOT routed through here: its `protocol` is
+   * the supported RANGE object rather than a negotiated version, exactly as
+   * `worker/src/limits.ts::capabilities` builds it.
+   */
+  private ok(protocol: number, body: Record<string, unknown>): Response {
+    return this.json(200, { protocol, ...body });
+  }
+
   private async route(
     url: URL,
     method: string,
@@ -324,9 +345,15 @@ export class FakeSyncServer {
     if (!match) throw new ServerError(404, "not_found", "no such route");
 
     const repoId = decodeURIComponent(match[1]!);
+    /**
+     * Protocol BEFORE credential, matching `worker/src/index.ts`'s stated order:
+     * *"TLS -> protocol -> route -> body size -> authenticate"*. The fake authenticated
+     * first, which `worker/test/limits.test.ts` pins the opposite of on purpose — *"refuses
+     * an unsupported version before authentication, so it is not an auth oracle"*.
+     */
+    const protocol = this.negotiate(headers);
     const session = this.authenticate(repoId, headers);
     const tail = match[2] ?? "";
-    const protocol = this.negotiate(headers);
 
     if (tail === "/ops" && method === "POST") {
       return this.push(session, JSON.parse(String(body)) as Record<string, unknown>, protocol);
@@ -344,16 +371,15 @@ export class FakeSyncServer {
         throw new ServerError(400, "validation", "enabled must be a boolean");
       }
       this.backupEnabled = parsed.enabled;
-      return this.json(200, { protocol: 1, backupEnabled: this.backupEnabled });
+      return this.ok(protocol, { backupEnabled: this.backupEnabled });
     }
     if (tail === "/backups" && method === "POST") {
       this.assertBackupConsent();
-      return this.json(200, { protocol: 1, backup: this.captureBackup(session.deviceId, "manual") });
+      return this.ok(protocol, { backup: this.captureBackup(session.deviceId, "manual") });
     }
     if (tail === "/backups" && method === "GET") {
       this.assertBackupConsent();
-      return this.json(200, {
-        protocol: 1,
+      return this.ok(protocol, {
         epoch: this.epoch,
         backups: [...this.backups]
           .sort((a, b) => b.createdAt - a.createdAt)
@@ -367,7 +393,7 @@ export class FakeSyncServer {
       const index = this.backups.findIndex((backup) => backup.backupId === id);
       if (index < 0) throw new ServerError(404, "not_found", "no such backup");
       this.backups.splice(index, 1);
-      return this.json(200, { protocol: 1, backupId: id, deleted: true });
+      return this.ok(protocol, { backupId: id, deleted: true });
     }
     if (backupMatch && backupMatch[2] && method === "POST") {
       this.assertBackupConsent();
@@ -383,11 +409,13 @@ export class FakeSyncServer {
       this.backups.length = 0;
       this.restores.length = 0;
       this.devices.length = 0;
-      return this.json(200, { protocol: 1, purged: true });
+      return this.ok(protocol, { purged: true });
     }
 
     if (tail === "/devices" && method === "GET") {
-      return this.json(200, {
+      // `protocol` was absent from this body entirely, while `worker/src/devices.ts`
+      // sends it like every other route.
+      return this.ok(protocol, {
         devices: this.devices.map((device) => ({
           deviceId: device.deviceId,
           label: null,
@@ -403,12 +431,14 @@ export class FakeSyncServer {
       const entityId = lease[1] ? decodeURIComponent(lease[1]) : null;
       const text = body === undefined || body === null ? "{}" : String(body);
       const payload = JSON.parse(text) as Record<string, unknown>;
-      if (entityId === null && method === "POST") return this.acquireLease(session, payload);
+      if (entityId === null && method === "POST") {
+        return this.acquireLease(session, payload, protocol);
+      }
       if (entityId !== null && lease[2] && method === "POST") {
-        return this.renewLease(session, entityId, payload);
+        return this.renewLease(session, entityId, payload, protocol);
       }
       if (entityId !== null && !lease[2] && method === "DELETE") {
-        return this.releaseLease(session, entityId, payload);
+        return this.releaseLease(session, entityId, payload, protocol);
       }
     }
     throw new ServerError(404, "not_found", "no such route");
@@ -524,6 +554,7 @@ export class FakeSyncServer {
   private acquireLease(
     session: { deviceId: string },
     body: Record<string, unknown>,
+    protocol: number,
   ): Response {
     const entityId = String(body.entityId ?? "");
     const holder = String(body.holder ?? "");
@@ -556,7 +587,7 @@ export class FakeSyncServer {
       expiresAt: now + ttl * 1000,
     };
     this.leases.set(entityId, lease);
-    return this.json(200, { protocol: 1, lease: this.leaseWire(lease) });
+    return this.ok(protocol, { lease: this.leaseWire(lease) });
   }
 
   /**
@@ -567,6 +598,7 @@ export class FakeSyncServer {
     session: { deviceId: string },
     entityId: string,
     body: Record<string, unknown>,
+    protocol: number,
   ): Response {
     const fencingToken = body.fencingToken;
     if (typeof fencingToken !== "number" || !Number.isInteger(fencingToken)) {
@@ -590,7 +622,7 @@ export class FakeSyncServer {
 
     lease.renewedAt = now;
     lease.expiresAt = now + ttl * 1000;
-    return this.json(200, { protocol: 1, lease: this.leaseWire(lease) });
+    return this.ok(protocol, { lease: this.leaseWire(lease) });
   }
 
   /** `DELETE /leases/{entityId}`, presenting the token. */
@@ -598,6 +630,7 @@ export class FakeSyncServer {
     session: { deviceId: string },
     entityId: string,
     body: Record<string, unknown>,
+    protocol: number,
   ): Response {
     const fencingToken = body.fencingToken;
     if (typeof fencingToken !== "number" || !Number.isInteger(fencingToken)) {
@@ -610,7 +643,7 @@ export class FakeSyncServer {
       });
     }
     this.leases.delete(entityId);
-    return this.json(200, { protocol: 1, released: true, entityId });
+    return this.ok(protocol, { released: true, entityId });
   }
 
   // ------------------------------------------------------------------- push
@@ -626,19 +659,70 @@ export class FakeSyncServer {
         maxBatchSize: this.options.maxBatchSize,
       });
     }
+    /**
+     * The epoch fence is an INTEGER when present. `worker/src/push.ts` runs it through
+     * `intOrThrow`, so `null` and `"1"` are both `validation` there — and the fake ignored
+     * anything that was not already a number, so a client sending either passed here.
+     */
+    if (body.epoch !== undefined) {
+      if (typeof body.epoch !== "number" || !Number.isInteger(body.epoch)) {
+        throw new ServerError(400, "validation", "epoch must be an integer");
+      }
+    }
     if (typeof body.epoch === "number" && body.epoch !== this.epoch) {
+      /**
+       * `currentEpoch` ONLY. The Worker sends exactly that field
+       * (`worker/src/push.ts`), and this fake used to send `epoch` alongside it — which is
+       * the literal anti-pattern `worker/test/registry-fixture.ts` names: *"a fixture
+       * answering with both field names while the real service sent one."* A client reading
+       * the wrong one worked here and failed in production.
+       */
       throw new ServerError(409, "epoch_changed", "epoch has moved; re-bootstrap", {
         currentEpoch: this.epoch,
-        epoch: this.epoch,
       });
     }
 
     // Validated WHOLE, before a single row is written.
     const ops = body.ops.map((raw, index) => this.validate(raw, index, session, protocol));
 
+    /**
+     * A batch may not mix the registry vocabulary with the workspace one — mirroring
+     * `worker/src/push.ts`. A hub's log holds only registry entities and a workspace's
+     * holds only the others, so a mixed batch is always a bug.
+     */
+    const registryCount = ops.filter((op) => REGISTRY_ENTITIES.has(op.entity)).length;
+    if (registryCount > 0 && registryCount < ops.length) {
+      throw new ServerError(
+        400,
+        "validation",
+        "a batch may not mix hub registry entities with workspace entities",
+      );
+    }
+
+    /**
+     * A repeated `opId` within one batch is refused, not absorbed — mirroring
+     * `worker/src/push.ts`.
+     *
+     * This is the one worth having most. The fake answers a duplicate with the ORIGINAL
+     * seq and `status: "duplicate"`, which is the exact presentation of both operation-id
+     * bugs in `hub-registry-service.ts`: accepted, acknowledged, never applied. A
+     * regression that reintroduced a colliding id inside one batch would have looked like
+     * success here and been a 400 in production.
+     */
+    const seenIds = new Set<string>();
+    for (const [index, op] of ops.entries()) {
+      if (seenIds.has(op.opId)) {
+        throw new ServerError(
+          400,
+          "validation",
+          `ops[${index}].opId is repeated within this batch`,
+        );
+      }
+      seenIds.add(op.opId);
+    }
+
     if (ops.length === 0) {
-      return this.json(200, {
-        protocol: 1,
+      return this.ok(protocol, {
         epoch: this.epoch,
         serverHighWatermark: this.lastSeq,
         results: [],
@@ -668,8 +752,7 @@ export class FakeSyncServer {
       return { opId: op.opId, status: "applied" as const, seq };
     });
 
-    return this.json(200, {
-      protocol: 1,
+    return this.ok(protocol, {
       epoch: this.epoch,
       serverHighWatermark: priorHigh + ops.length,
       results,
@@ -706,6 +789,24 @@ export class FakeSyncServer {
     if (str(op.deviceId, "deviceId") !== session.deviceId) {
       throw new ServerError(403, "forbidden", `${at}.deviceId does not match the credential`);
     }
+    /**
+     * `op.protocol` must equal the request header's — `worker/src/envelope.ts` refuses a
+     * mismatch as `validation`, and the fake never checked it at all.
+     *
+     * This is the one envelope field the whole registry leg hangs on: `pushOperations` sets
+     * the body's `protocol` and the header from the same value precisely because the Worker
+     * requires them to agree. Unmirrored, a client that overrode one and not the other
+     * passed every test here and was refused by the deployed service.
+     */
+    const opProtocol = int(op.protocol, "protocol");
+    if (opProtocol !== protocol) {
+      throw new ServerError(
+        400,
+        "validation",
+        `${at}.protocol disagrees with the request header`,
+      );
+    }
+
     const entity = str(op.entity, "entity");
     const entityProtocol = minProtocolFor(entity);
     if (entityProtocol === null) {
@@ -725,6 +826,26 @@ export class FakeSyncServer {
     }
     const verb = str(op.verb, "verb");
     if (!VERBS.has(verb)) throw new ServerError(400, "validation", `${at}.verb is not a known verb`);
+    /**
+     * The registry entities BY NAME, and FIRST — the order `worker/src/envelope.ts` uses.
+     *
+     * This check used to sit after the two allowlist checks below, which refuse these
+     * entities anyway because neither name appears in either list. So the by-name branch
+     * never ran, and the message a client actually saw was always "is only for ordered
+     * collections". Ordered first, the specific message is the one that appears, which is
+     * the point: a registry entity is not an ordered collection that happens to be missing
+     * from a list, and telling somebody it is sends them looking in the wrong place.
+     *
+     * `test/cloud-hub-registry-wire.test.ts` asserts on that specific message for both
+     * entities and both verbs, so the ordering is pinned rather than merely written down.
+     */
+    if (REGISTRY_ENTITIES.has(entity) && (verb === "replace" || verb === "renumber")) {
+      throw new ServerError(
+        400,
+        "validation",
+        `${at}.verb '${verb}' is never valid for a registry entity`,
+      );
+    }
     if (verb === "replace" && entity !== "queue" && entity !== "milestone") {
       throw new ServerError(
         400,
@@ -735,15 +856,18 @@ export class FakeSyncServer {
     if (verb === "renumber" && entity !== "issue") {
       throw new ServerError(400, "validation", `${at}.verb 'renumber' is only for issues`);
     }
-    // Explicit and by name, mirroring the same redundant assertion in
-    // `worker/src/envelope.ts`: the two checks above refuse these entities only
-    // because neither name is in either allowlist, which is an accident of the
-    // allowlists rather than a statement about the registry.
-    if (REGISTRY_ENTITIES.has(entity) && (verb === "replace" || verb === "renumber")) {
+    /**
+     * `delete` too — mirroring `worker/src/envelope.ts`.
+     *
+     * A tombstone on a content-derived key can never be undone, so retraction is a field.
+     * Un-mirrored, a regression emitting `verb: "delete"` instead of `present: false` went
+     * GREEN here and 400'd the whole batch in production.
+     */
+    if (REGISTRY_ENTITIES.has(entity) && verb === "delete") {
       throw new ServerError(
         400,
         "validation",
-        `${at}.verb '${verb}' is never valid for a registry entity`,
+        `${at}.verb 'delete' is never valid for a registry entity — a retraction is a field`,
       );
     }
 
@@ -756,6 +880,17 @@ export class FakeSyncServer {
 
     if (op.payload === null || typeof op.payload !== "object") {
       throw new ServerError(400, "validation", `${at}.payload must be an object or an array`);
+    }
+    /**
+     * The per-operation cap, ENFORCED — it was advertised by `/v1/capabilities` and never
+     * checked, so a 700 KiB operation applied here and 413s against the Worker.
+     */
+    const payloadBytes = Buffer.byteLength(JSON.stringify(op.payload), "utf8");
+    if (payloadBytes > 512 * 1024) {
+      throw new ServerError(413, "payload_too_large", `${at}.payload exceeds the documented cap`, {
+        maxBytes: 512 * 1024,
+        bytes: payloadBytes,
+      });
     }
 
     return {
@@ -799,8 +934,7 @@ export class FakeSyncServer {
 
     this.assertServable(rows, protocol);
 
-    return this.json(200, {
-      protocol,
+    return this.ok(protocol, {
       epoch: this.epoch,
       serverHighWatermark: this.lastSeq,
       // The version this REQUEST negotiated, not a constant — `worker/src/pull.ts`.
@@ -843,10 +977,7 @@ export class FakeSyncServer {
         ? `${page[page.length - 1]!.entity} ${page[page.length - 1]!.entityId}`
         : afterKey;
 
-    return this.json(200, {
-      // The version this REQUEST negotiated, like `worker/src/snapshot.ts`. `pull` was
-      // fixed to echo it and this was missed.
-      protocol,
+    return this.ok(protocol, {
       epoch: this.epoch,
       cutoffSeq: cutoff,
       tailCursor: b64url(JSON.stringify({ v: 1, r: session.repoId, e: this.epoch, s: cutoff })),
@@ -1058,8 +1189,7 @@ export class FakeSyncServer {
         status: "staging",
       };
       this.restores.push(restore);
-      return this.json(200, {
-        protocol: 1,
+      return this.ok(protocol, {
         restoreId: restore.restoreId,
         status: "staging",
         done: false,
@@ -1073,8 +1203,7 @@ export class FakeSyncServer {
 
     if (!restore) throw new ServerError(404, "not_found", "no such restore");
     if (restore.status === "committed") {
-      return this.json(200, {
-        protocol: 1,
+      return this.ok(protocol, {
         restoreId: restore.restoreId,
         status: "committed",
         done: true,
@@ -1115,8 +1244,7 @@ export class FakeSyncServer {
         });
         restore.staged += 1;
       }
-      return this.json(200, {
-        protocol: 1,
+      return this.ok(protocol, {
         restoreId: restore.restoreId,
         status: "staging",
         done: false,
@@ -1137,8 +1265,7 @@ export class FakeSyncServer {
     }
     this.epoch = restore.toEpoch;
     restore.status = "committed";
-    return this.json(200, {
-      protocol: 1,
+    return this.ok(protocol, {
       restoreId: restore.restoreId,
       status: "committed",
       done: true,
@@ -1182,9 +1309,10 @@ export class FakeSyncServer {
       throw new ServerError(400, "cursor_invalid", "cursor is from another repository");
     }
     if (cursor.e !== this.epoch) {
+      // `currentEpoch` only — the push path was fixed and this one was missed. The Worker
+      // sends exactly one field; sending both lets a client read the wrong name and pass.
       throw new ServerError(409, "epoch_changed", "cursor is from a superseded epoch", {
         currentEpoch: this.epoch,
-        epoch: this.epoch,
       });
     }
   }

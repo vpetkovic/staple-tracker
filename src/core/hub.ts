@@ -518,6 +518,31 @@ export class Hub {
     this.db
       .prepare("UPDATE workspaces SET repository_id = ? WHERE slug = ?")
       .run(repositoryId, slug);
+    /**
+     * Binding an identity to a live row retires any opt-out about it (STA-283).
+     *
+     * The invariant this keeps is "an opt-out never coexists with a registered row for
+     * the same identity", and it is worth stating because the two are contradictory
+     * records of the same fact: the opt-out says this machine does not want that
+     * workspace, and the row says it has it.
+     *
+     * Nothing cleared one before, and `adoptRegistry`'s `declined` branch asked the
+     * opt-out set BEFORE it asked the hub — so a workspace that came back was declined
+     * for ever, and could never learn a slug or kind change from the registry either.
+     * Pruning a row therefore bought a publish fix with a permanent, invisible adoption
+     * failure.
+     *
+     * This is the right seam because it is where an identity becomes bound to a row that
+     * is actually here: `initWorkspace` on the next command inside the repository, and
+     * `reconcileRepositoryIds`. It also matches what `unregister` already documents about
+     * a workspace whose directory still exists — the row "lasts until someone runs a
+     * command in it", and after this so does the opt-out, which is the same decision
+     * reached the same way.
+     *
+     * Only for a real identity. `recordRepositoryId(slug, null)` is how a row FORGETS
+     * its identity, and forgetting is not wanting it back.
+     */
+    if (repositoryId !== null) this.clearOptOut(repositoryId);
   }
 
   /**
@@ -542,7 +567,12 @@ export class Hub {
         `INSERT INTO workspaces (slug, prefix, path, kind, added_at, last_seen_at, repository_id)
          VALUES (?,?,?,?,?,NULL,?)`,
       )
-      .run(entry.slug, entry.prefix, ABSENT_PATH, entry.kind, entry.addedAt ?? nowIso(), entry.repositoryId);
+            /**
+       * `||`, not `??`. An empty string is not a timestamp, and `??` passes it through — from
+       * the hub column into `exportRegistry`, onto the wire, into a backup, through a restore
+       * and into a second machine's adopt. `||` treats it as absent, which it is.
+       */
+      .run(entry.slug, entry.prefix, ABSENT_PATH, entry.kind, entry.addedAt || nowIso(), entry.repositoryId);
   }
 
   /**
@@ -694,6 +724,25 @@ export class Hub {
         deleteHubRegistration(this.db, candidate.entry.slug, {
           withLinks: options.withLinks === true,
         });
+        /**
+         * Record the opt-out, exactly as {@link unregister} does (STA-283).
+         *
+         * These two are the only row deleters in the tree and only one of them did this,
+         * which broke publishing on a SINGLE machine: a pruned row leaves the service
+         * holding a `registration` with no local row and no opt-out, which is precisely
+         * what `hub-registry-ops.ts` treats as FOREIGN — so `staple hub registry publish`
+         * refused, blamed another machine, and named `adopt --apply` as the remedy, which
+         * re-added the row that prune had just removed. Prune and publish became mutually
+         * exclusive, in a loop, and it is reachable from MCP's hub hygiene too.
+         *
+         * The opt-out is the right record because prune IS an unregister — the same
+         * decision, reached by noticing the path is gone rather than by naming the row. It
+         * is also what makes the removal survive the next adopt, which is the property
+         * `registry_optouts` exists for.
+         */
+        if (candidate.entry.repositoryId !== null) {
+          this.addOptOut(candidate.entry.repositoryId, candidate.entry.slug, "pruned");
+        }
       }
       removed.push(result);
     }

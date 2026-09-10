@@ -580,7 +580,13 @@ async function pullOnce(
 
 function epochFrom(error: unknown): number | null {
   if (!(error instanceof StapleError)) return null;
-  const epoch = error.detail?.epoch ?? error.detail?.currentEpoch;
+  /**
+   * `currentEpoch` FIRST. Every `SyncError("epoch_changed", …)` in `worker/src/` carries
+   * `currentEpoch` and none carries `epoch`, so the old order preferred a spelling only the
+   * test fake emitted — which is exactly backwards from *"where they disagree the Worker
+   * wins"*. Both are still read, so a service using either is understood.
+   */
+  const epoch = error.detail?.currentEpoch ?? error.detail?.epoch;
   return typeof epoch === "number" ? epoch : null;
 }
 

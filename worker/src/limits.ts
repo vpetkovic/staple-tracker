@@ -75,9 +75,15 @@ export const DEFAULT_PULL_LIMIT = 200;
 
 /**
  * The whole request body ceiling, checked from `Content-Length` before the body is
- * parsed. Sized as (maxBatchSize x maxOpBytes) plus envelope slack, then capped: the
+ * parsed. Sized as (maxBatchSize x maxOpBytes) plus envelope slack, and NOTHING caps it
+ * further — this comment used to say "then capped", which described no code: there is no
+ * `Math.min` here, so the free plan's ceiling really is 25 x 512 KiB + 64 KiB ≈ 13.1 MB.
+ *
+ * The reason that is safe is not a smaller number, it is WHERE the check happens. The
  * free plan allows 10 ms of CPU per request, and a limit enforced after
- * `await request.json()` is enforced too late to help.
+ * `await request.json()` is enforced too late to help; this one is read off
+ * `Content-Length` by `assertBodySize` before anything parses a byte. The real ceiling on
+ * work is `maxBatchSize`, which the push path enforces per operation.
  */
 export function maxBodyBytes(plan: Plan): number {
   return PLAN_LIMITS[plan].maxBatchSize * MAX_OP_BYTES + 64 * 1024;

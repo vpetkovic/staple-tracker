@@ -37,7 +37,13 @@ import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { effectiveConfig, readConfig, resolveHome, setHomeOverride, stapleHome } from "../config/index.js";
 import { Hub } from "../core/hub.js";
-import { findRepointableRows } from "../core/hub-repair.js";
+import {
+  classifyRegisteredPath,
+  describeSecondClaimant,
+  findRepointableRows,
+  isSecondClaimant,
+  releaseSlugCommand,
+} from "../core/hub-repair.js";
 import {
   describeLayout,
   findMigrationRoot,
@@ -635,7 +641,24 @@ function checkWorkspaceHubLink(dir: string): CheckResult {
     hub = Hub.openReadOnly();
     const entry = hub.findBySlug(slug);
     const here = normalizePath(found.dbPath);
-    const data = { slug, prefix, dbPath: here, registeredPath: entry?.path ?? null };
+    /**
+     * `registeredPath` is the raw stored spelling, which is the fact about the
+     * hub; `registeredPathNormalized` is what every comparison here uses, and the
+     * two differ on a real macOS hub holding the `/var` spelling. Both are
+     * present on every branch that reports `data` at all, and so are the two
+     * STA-285 keys, so a consumer does not have to test the status to know the
+     * shape.
+     */
+    const data = {
+      slug,
+      prefix,
+      dbPath: here,
+      registeredPath: entry?.path ?? null,
+      registeredPathNormalized: entry ? normalizePath(entry.path) : null,
+      secondClaimant: null as string | null,
+      sharedRepositoryId: null as string | null,
+      unreadableReason: null as string | null,
+    };
 
     if (!entry) {
       return result(
@@ -658,13 +681,59 @@ function checkWorkspaceHubLink(dir: string): CheckResult {
         data,
       );
     }
-    if (normalizePath(entry.path) !== here) {
+    const registered = normalizePath(entry.path);
+    if (registered !== here) {
+      /**
+       * STA-285. This branch used to say one thing — "normal resolution repairs
+       * this" — and there are two reasons to be standing in it. Resolution DID
+       * decline to repair when the registered path still holds a live workspace
+       * database, and that is a report, not a failed write.
+       *
+       * It is also the only surface that can see this state. The second copy is
+       * not registered, so `hub-registrations` cannot enumerate it and no view
+       * of the hub alone will ever mention it; the evidence exists only for a
+       * command standing in one of the two directories. That is why the check
+       * lives here rather than beside the repointable-row sweep.
+       */
+      const verdict = classifyRegisteredPath(registered, here, slug);
+      if (isSecondClaimant(verdict)) {
+        return result(
+          "workspace-hub-link",
+          "Hub link",
+          "fail",
+          describeSecondClaimant({ slug, registered, opened: here, verdict }),
+          {
+            ...data,
+            secondClaimant: registered,
+            sharedRepositoryId:
+              verdict.kind === "same-workspace" ? verdict.sharedRepositoryId : null,
+            unreadableReason: verdict.kind === "unreadable" ? verdict.reason : null,
+          },
+          /**
+           * Not a `--fix`, and it must not become one: repointing the row would be
+           * doctor picking which copy is real, which is the one thing this check
+           * exists to refuse. But a failure with no executable way out is worse
+           * than the state it reports, so the handle carries the command that
+           * releases the slug and lets the operator choose. Same shape the
+           * `workspace` check uses for `staple migrate`.
+           */
+          {
+            id: "workspace-hub-link",
+            description:
+              "Not a doctor fix — Staple will not take a registration from a path it cannot rule " +
+              "out. Move one aside, or release the slug and re-register the one you want (refused " +
+              "while cross-workspace links name it; the re-created row carries no repository_id):",
+            command: releaseSlugCommand(slug),
+          },
+        );
+      }
       return result(
         "workspace-hub-link",
         "Hub link",
         "warn",
         `The hub points "${slug}" at ${entry.path}, but it resolves here to ${found.dbPath}. ` +
-          "Normal resolution repairs this; if you are seeing it, the repair could not write to the hub.",
+          "Nothing there claims to be this workspace, so normal resolution repairs it; if you are " +
+          "seeing this, the repair could not write to the hub.",
         data,
       );
     }

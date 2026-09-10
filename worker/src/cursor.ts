@@ -5,9 +5,15 @@
  * synthesised. It is base64url over JSON here purely because that is cheap; the
  * encoding is an implementation detail and the `v` field exists so it can change.
  *
- * It is NOT signed. Every field is re-validated against the authenticated session
- * before it is used, and a forged cursor can therefore only ask for rows the caller is
- * already entitled to. An HMAC would add a secret to rotate and remove no threat.
+ * It is NOT signed, and it does not need to be — but the reason is narrower than "every
+ * field is re-validated", which is what this comment used to say and is not what the code
+ * does. The SCOPING fields are re-checked: `assertCursorScope` compares `r` and `e` against
+ * the session and refuses a mismatch. The rest (`s`, `c`, `k`) are shape-checked only. What
+ * makes that safe is that no query is ever bound to a value out of the cursor's scope
+ * fields — `pull.ts` and `snapshot.ts` bind `session.repoId` and `session.epoch` — so the
+ * unchecked fields can only move a bound INSIDE a range the caller already owns. A forged
+ * cursor can waste the caller's own bandwidth; it cannot name another repository's rows.
+ * An HMAC would add a secret to rotate and remove no threat.
  */
 
 import { SyncError } from "./errors.js";
@@ -153,12 +159,33 @@ function b64urlDecode(raw: string): string {
  * ## The one live consequence, and why it is harmless
  *
  * A snapshot cursor issued before this change carries a `k` built with a NUL. Compared
- * against keys built with a space, that stale `k` is LOWER than the same entity's new
- * key (0x00 < 0x20), so a bootstrap in flight across the deploy re-serves the entity it
- * had just been given. Re-serving a snapshot entity is idempotent — a device applies by
- * `(entity, entityId)` and the fold is a pure function of the log — so the cost is one
- * duplicated page of work, once, for a bootstrap that happened to straddle a deploy.
- * The alternative was leaving a file nobody can review or grep.
+ * against keys built with a space, that stale `k` sorts below **every** new key for the
+ * same entity (0x00 < 0x20), so a bootstrap in flight across the deploy re-walks the whole
+ * served range for that entity — NOT "one duplicated page of work", which is what an
+ * earlier version of this comment claimed and which was wrong.
+ *
+ * It is still bounded and still idempotent: the range is the snapshot's own pinned cutoff,
+ * a device applies by `(entity, entityId)`, and the fold is a pure function of the log. So
+ * the cost is one repeated pass for a bootstrap that happened to straddle a deploy, and
+ * the alternative was leaving a file nobody can review or grep.
+ *
+ * **The diff of this file used to be invisible, and that is now fixed at the root.** The
+ * PRE-IMAGE at the merge base still contains the NUL, so git classified the whole diff as
+ * binary — `+0/-0`, nothing in `gh pr diff`, nothing in the GitHub UI — and the net-new code
+ * here was unreviewable in the pull request that introduced it.
+ * `test/source-hygiene.test.ts` fails on a NUL at HEAD and can do nothing about history, so
+ * `.gitattributes` now marks source as `diff`, which forces a textual diff whatever the
+ * bytes.
+ *
+ * The verification is the SHAPE of the output, not a line count — a count is stale the next
+ * time anybody edits this file, and one written here has already been wrong once. Run:
+ *
+ *     git diff --numstat origin/master...HEAD -- worker/src/cursor.ts
+ *
+ * A binary-classified file prints `-` for both columns (and `git diff` prints `Binary files
+ * differ`); a textual one prints two integers. Two integers is the fix. Confirming the
+ * pre-image is still the reason this is needed:
+ * `git show <merge-base>:worker/src/cursor.ts | LC_ALL=C tr -dc '\000' | wc -c` is 2.
  */
 export function entityKey(entity: string, entityId: string): string {
   return `${entity} ${entityId}`;

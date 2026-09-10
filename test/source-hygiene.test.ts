@@ -59,6 +59,25 @@ describe("source files are text, not binary", () => {
     expect(offenders).toEqual([]);
   });
 
+  it("marks source as `diff` so a stray byte cannot hide a file from review", () => {
+    /**
+     * The other half of this guard, and the half the assertion above cannot reach.
+     *
+     * That one fails on a NUL at HEAD. It can do nothing about a NUL in a diff's PRE-IMAGE —
+     * and that is what actually cost a review: `worker/src/cursor.ts` held the byte at the
+     * merge base, so even after the fix `git diff` reported `Binary files differ` and roughly
+     * 1.9 KiB of net-new Worker code was invisible in the pull request that introduced it.
+     *
+     * `.gitattributes` marking source as `diff` forces a textual diff whatever the content,
+     * which closes the class rather than the instance. Asserted here because it is a few lines
+     * in a file nobody opens, and deleting them would silently restore the hazard.
+     */
+    const attributes = readFileSync(".gitattributes", "utf8");
+    for (const extension of ["ts", "tsx", "mjs", "md"]) {
+      expect(attributes, extension).toMatch(new RegExp(`\\*\\.${extension}\\s+diff`));
+    }
+  });
+
   it("finds the files it is supposed to be checking", () => {
     /**
      * The guard on the guard. `git ls-files` with the wrong pattern, or run from the

@@ -1,7 +1,8 @@
-import { env } from "cloudflare:test";
+import { SELF, env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   DEVICE,
+  ORIGIN,
   OTHER_REPO,
   REPO,
   bumpEpoch,
@@ -244,6 +245,127 @@ describe("POST /v1/repos/{repoId}/ops — epoch scoping", () => {
       body: { protocol: 1, deviceId: DEVICE, epoch: 99, ops: [envelope({ clientSeq: 1 })] },
     });
     await expectError(response, "epoch_changed", 409);
+  });
+});
+
+describe("POST /v1/repos/{repoId}/ops — the epoch fence is an integer or absent", () => {
+  /**
+   * `push.ts` runs `body.epoch` through `intOrThrow`, which demands BOTH
+   * `typeof value === "number"` and `Number.isInteger(value)`. Every other test in this
+   * file fences on a whole number, so a guard that had decayed to the type half alone
+   * would still pass all of them: a fractional or infinite fence would sail past it and
+   * be compared against the repository's epoch instead of being refused.
+   *
+   * Which is why every case here asserts the code and the status TOGETHER. The two
+   * outcomes are distinguishable in the response and only in the response: a refused
+   * fence is `validation`/400, raised before a statement is prepared, while a fence that
+   * reached the comparison is `epoch_changed`/409.
+   */
+
+  /** The op count for the repository, to show a refusal wrote nothing. */
+  async function opCount(): Promise<number> {
+    const row = await env.DB.prepare(`SELECT COUNT(*) AS n FROM ops WHERE repo_id = ?1`)
+      .bind(REPO)
+      .first<{ n: number }>();
+    return row!.n;
+  }
+
+  /** A push whose body is raw bytes rather than an object the `call` helper stringifies. */
+  async function pushRawBody(raw: string): Promise<Response> {
+    return SELF.fetch(`${ORIGIN}/v1/repos/${REPO}/ops`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Staple-Protocol": "1",
+        "Staple-Device": DEVICE,
+        "Content-Type": "application/json",
+        "Content-Length": String(new TextEncoder().encode(raw).length),
+      },
+      body: raw,
+    });
+  }
+
+  /** A push fencing on `value`, exactly as a client's `JSON.stringify` would send it. */
+  async function pushFencedOn(value: unknown): Promise<Response> {
+    return call(`/v1/repos/${REPO}/ops`, {
+      method: "POST",
+      token,
+      body: { protocol: 1, deviceId: DEVICE, epoch: value, ops: [envelope({ clientSeq: 1 })] },
+    });
+  }
+
+  it("refuses a fractional epoch instead of comparing it", async () => {
+    const body = await expectError(await pushFencedOn(1.5), "validation", 400);
+    expect(body.message).toBe("epoch must be an integer");
+    expect(body.retryable).toBe(false);
+    expect(await opCount()).toBe(0);
+  });
+
+  it("refuses a numeric string, because the fence is a number and not its spelling", async () => {
+    // `"1"` is the shape a client that read the epoch out of a URL or an env var sends,
+    // and it is the one a loose `==` comparison would have accepted.
+    const body = await expectError(await pushFencedOn("1"), "validation", 400);
+    expect(body.message).toBe("epoch must be an integer");
+    expect(await opCount()).toBe(0);
+  });
+
+  it("refuses an explicit null, which is not the same as omitting the field", async () => {
+    const body = await expectError(await pushFencedOn(null), "validation", 400);
+    expect(body.message).toBe("epoch must be an integer");
+    expect(await opCount()).toBe(0);
+  });
+
+  it("refuses NaN in the form it can actually arrive in, which is `null`", async () => {
+    // JSON has no NaN, so there is no such thing as a request body carrying one. What a
+    // real client produces is `null` — asserted here rather than assumed, because the
+    // whole point of this case is what reaches the handler and not what the caller wrote.
+    expect(JSON.stringify({ epoch: NaN })).toBe('{"epoch":null}');
+    const body = await expectError(await pushFencedOn(NaN), "validation", 400);
+    expect(body.message).toBe("epoch must be an integer");
+    expect(await opCount()).toBe(0);
+  });
+
+  it("refuses a body with a bare NaN token, which is not JSON at all", async () => {
+    // The other way a client could try: hand-built JSON. It never reaches the epoch
+    // guard, because `readJson` refuses the body first — worth pinning so the absence of
+    // an `epoch must be an integer` message here is not read as a hole.
+    const response = await pushRawBody(
+      `{"protocol":1,"deviceId":"${DEVICE}","epoch":NaN,"ops":[]}`,
+    );
+    const body = await expectError(response, "validation", 400);
+    expect(body.message).toBe("request body is not valid JSON");
+    expect(await opCount()).toBe(0);
+  });
+
+  it("refuses Infinity, which arrives as a literal too large for a double", async () => {
+    // `JSON.stringify(Infinity)` is `null`, so a client cannot serialise one — but
+    // `JSON.parse` PRODUCES one from an overflowing literal, so a hand-built body can put
+    // an actual `Infinity` in front of the guard. Asserted, again, rather than assumed.
+    expect((JSON.parse('{"epoch":1e999}') as { epoch: number }).epoch).toBe(
+      Number.POSITIVE_INFINITY,
+    );
+
+    const response = await pushRawBody(
+      `{"protocol":1,"deviceId":"${DEVICE}","epoch":1e999,"ops":[${JSON.stringify(
+        envelope({ clientSeq: 1 }),
+      )}]}`,
+    );
+    const body = await expectError(response, "validation", 400);
+    expect(body.message).toBe("epoch must be an integer");
+    expect(await opCount()).toBe(0);
+  });
+
+  it("accepts a push that omits the epoch, because the fence is optional", async () => {
+    // `undefined` is the ONE value that skips the check: the field is additive and
+    // optional (`push.ts`), so a client that does not fence must not be refused. This is
+    // the other half of the guard — without it, "refuse anything that is not an integer"
+    // could be over-tightened into refusing the common case.
+    const response = await pushOps([envelope({ clientSeq: 1 })], { token });
+    expect(response.status).toBe(200);
+
+    const body = await jsonOf(response);
+    expect(body.epoch).toBe(1);
+    expect(body.results[0].status).toBe("applied");
   });
 });
 

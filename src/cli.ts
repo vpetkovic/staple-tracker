@@ -2094,7 +2094,17 @@ function main() {
        * Handed the raw `rest` rather than `words`, because it needs its flags.
        */
       if (sub === "registry") {
-        runHubRegistryCommand(rest.slice(rest.indexOf("registry") + 1));
+        /**
+         * Everything after the FIRST positional word, flags included, wherever they sat.
+         *
+         * `rest.slice(rest.indexOf("registry") + 1)` dropped any flag written to the LEFT
+         * of `registry` — so `staple hub --disable registry publish` silently lost
+         * `--disable` and attempted a publish instead of withdrawing a consent. That is
+         * failing UNSAFE, in exactly the case the comment above cites for parsing
+         * strictly. Splitting on the word's position in the original argv keeps every flag.
+         */
+        const at = rest.indexOf("registry");
+        runHubRegistryCommand([...rest.slice(0, at), ...rest.slice(at + 1)]);
         break;
       }
 
@@ -2210,7 +2220,23 @@ function main() {
             `Removed cross-link ${removed.blockerIdentifier} blocks ${removed.blockedIdentifier}  (${removed.blockerWs} → ${removed.blockedWs})`,
           );
         } else {
-          console.log("usage: staple hub [ls|links|events|unregister|prune|unlink|registry]");
+          /**
+           * THROWN, not printed (STA-283).
+           *
+           * This was `console.log(usage)` with no exit code, so `staple hub prun --yes`
+           * refused and still exited 0 — meaning `staple hub prun --yes && next-step` ran
+           * the next step, and a `--json` caller got a bare usage line on stdout where an
+           * error envelope belonged. Every sibling group in this switch throws a
+           * `validation` StapleError here; this was the one that did not.
+           *
+           * Inside the existing `try { … } finally { hub.close() }`, so the handle still
+           * closes on the refusal.
+           */
+          throw new StapleError(
+            "validation",
+            `Unknown hub subcommand "${sub}". ` +
+              "usage: staple hub [ls|links|events|unregister|prune|unlink|registry]",
+          );
         }
       } finally {
         hub.close();
@@ -2365,8 +2391,21 @@ try {
   const envelope = errorEnvelope(normalized);
   if (jsonMode) {
     console.error(JSON.stringify(envelope));
-  } else if (error instanceof StapleError) {
-    console.error(`error(${error.code}): ${error.message}`);
+  } else if (normalized instanceof StapleError) {
+    /**
+     * `normalized`, not `error`.
+     *
+     * The normalisation above already turns a `parseArgs` failure into a `validation`
+     * `StapleError` and the exit code came from it — but this branch tested the ORIGINAL, so
+     * every usage error fell through to `console.error(error)` and printed a raw Node stack
+     * trace. Tree-wide: `staple ls --bogus` did it too, and `--json` was always fine.
+     *
+     * It bit hardest where two sibling commands spell a consent differently —
+     * `hub registry publish --enable` versus `hub registry backup enable` — so
+     * `backup --enable` is the natural typo and it stack-traced instead of saying what was
+     * wrong.
+     */
+    console.error(`error(${normalized.code}): ${normalized.message}`);
   } else {
     console.error(error);
   }

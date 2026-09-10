@@ -34,7 +34,12 @@ import { StapleError } from "../core/types.js";
 import { planSetup } from "../onboarding/setup.js";
 import { normalizePath } from "../core/path-migration.js";
 import { Hub } from "../core/hub.js";
-import { repairHubRegistration } from "../core/hub-repair.js";
+import {
+  findCopyClaimant,
+  releaseSlugCommand,
+  repairHubRegistration,
+  type CopyClaimant,
+} from "../core/hub-repair.js";
 import { performSetup, type InitReport } from "./init.js";
 
 export interface AddPreview {
@@ -103,6 +108,7 @@ export function previewAdd(path: string): AddPreview {
   // The hub half of the preview, read-only.
   let hubNote = "register the workspace in the hub";
   let noop = false;
+  let claimant: CopyClaimant | null = null;
   if (plan.action === "open") {
     const dbPath = plan.layout.currentPath;
     let hub: Hub | null = null;
@@ -113,6 +119,11 @@ export function previewAdd(path: string): AddPreview {
       if (match) {
         hubNote = `refresh last_seen_at for "${match.slug}" (already registered here)`;
         noop = true;
+      } else {
+        // Not registered HERE. So either this is a workspace the hub has not
+        // seen (register it), one that moved (repoint it), or a copy of one it
+        // already has somewhere else — which is the case that must not proceed.
+        claimant = findCopyClaimant(hub, dbPath);
       }
     } catch {
       // No hub yet, or an unreadable one. Registering is still the plan.
@@ -124,6 +135,48 @@ export function previewAdd(path: string): AddPreview {
       }
     }
     changes.push(hubNote);
+  }
+
+  /**
+   * STA-285: refuse a second copy, and refuse it HERE.
+   *
+   * `add` is documented as idempotent for a moved project, and it is: a move
+   * vacates the old path, so nothing claims the identity and this stays null.
+   * A copy is the other thing, and `add` cannot report it the way normal
+   * resolution does — `applyAdd` calls `performSetup`, and `initWorkspace`
+   * registers unconditionally, so by the time its `repairHubRegistration` ran
+   * the row would already have been repointed by `hub.register()`'s upsert and
+   * the repair would find nothing to disagree with. The refusal has to come
+   * before the first write, which means the preview.
+   *
+   * A refusal rather than a warning because `add` is an explicit act on a path
+   * the operator typed: it is allowed to fail, and telling them which two
+   * directories answer to one slug is the only useful answer. `conflict` is the
+   * code `previewAdd` already uses for a state it will not resolve on its own.
+   *
+   * It refuses on the SLUG, not on the repository id, so a second clone or a
+   * `git worktree` of the same repository still adds cleanly: those share a
+   * committed `repository.json` by design and each carries its own slug, so
+   * nothing would be taken from anybody.
+   */
+  if (claimant) {
+    const because =
+      claimant.unreadableReason !== null
+        ? // Not "a copy": we could not read the registered path to find out, and
+          // that is not a licence to take its row either.
+          `and what is at that path could not be read to rule that out: ${claimant.unreadableReason}.`
+        : `and a workspace answering to that slug is still there.` +
+          (claimant.sharedRepositoryId !== null
+            ? ` Both also present repository ${claimant.sharedRepositoryId}.`
+            : "");
+    throw new StapleError(
+      "conflict",
+      `${plan.layout.currentPath} is stamped with slug "${claimant.slug}", which the hub already ` +
+        `registers at ${claimant.path} — ${because} Registering this one would take the registration ` +
+        "away from it, and Staple will not choose between two copies. Keep the one you mean, or run " +
+        `\`${releaseSlugCommand(claimant.slug)}\` first to register this one instead.`,
+      { path: dir, claimant },
+    );
   }
 
   return {

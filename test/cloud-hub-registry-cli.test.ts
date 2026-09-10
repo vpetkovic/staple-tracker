@@ -18,7 +18,7 @@
  * and the disclosure the person never agreed to is already true.
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -58,6 +58,18 @@ interface Run {
  * its loader and therefore before any module could capture an unpatched `fetch`.
  */
 function staple(...args: string[]): Run {
+  return stapleIn(home, ...args);
+}
+
+/**
+ * The same invocation, from a chosen directory.
+ *
+ * `staple init` is directory-sensitive — it registers the workspace it is standing in — so
+ * the `locate` tests need a real workspace somewhere other than the staple home. Everything
+ * else about the child is identical, spy included, so a `locate` that reached the network
+ * would still be caught.
+ */
+function stapleIn(cwd: string, ...args: string[]): Run {
   rmSync(logPath, { force: true });
   const result = spawnSync(process.execPath, [TSX, CLI, ...args], {
     env: {
@@ -69,7 +81,7 @@ function staple(...args: string[]): Run {
       STAPLE_NETWORK_SPY_LOG: logPath,
     },
     encoding: "utf8",
-    cwd: home,
+    cwd,
   });
   const stderr = result.stderr ?? "";
   // The guard. Without it a broken invocation is indistinguishable from a silent one.
@@ -109,6 +121,26 @@ function connectHub(consents: Partial<Pick<CloudConnection, "auto" | "backup" | 
     registry: consents.registry ?? false,
     protocol: 1,
   });
+}
+
+/**
+ * Do something to the hub the CLI will read, under the same home the CLI uses.
+ *
+ * `Hub.open()` reads the real staple home, so the seam is the environment variable — and
+ * it is restored afterwards, because these tests also run the CLI as a subprocess and a
+ * leaked `STAPLE_HOME` would point the next test's hub at the previous test's directory.
+ */
+function withTestHub<T>(fn: (hub: Hub) => T): T {
+  const previous = process.env.STAPLE_HOME;
+  process.env.STAPLE_HOME = home;
+  const hub = Hub.open();
+  try {
+    return fn(hub);
+  } finally {
+    hub.close();
+    if (previous === undefined) delete process.env.STAPLE_HOME;
+    else process.env.STAPLE_HOME = previous;
+  }
 }
 
 /** Give this machine's hub the shared registry identity, the way `identity` does. */
@@ -215,20 +247,38 @@ describe("publishing is reachable only through its own consent", () => {
 
     const refused = staple("hub", "registry", "publish", "--enable", "--json");
     expect(refused.status).toBe(2);
-    expect(JSON.parse(refused.stderr).disclosure).toBe(REGISTRY_DISCLOSURE);
+    const refusal = JSON.parse(refused.stderr);
+    expect(refusal.disclosure).toBe(REGISTRY_DISCLOSURE);
+    /**
+     * The WHOLE disclosure, not only the headline sentence.
+     *
+     * `disclosure` is one sentence about what is uploaded. Everything that makes this a
+     * decision rather than a notice is in the block: that publishing is scoped to one
+     * machine, that a second machine naming a workspace differently costs a billed
+     * operation on every pass for ever, that this machine always wins, and what is
+     * actually refused. `--json` used to get the sentence and none of that, so "the cost
+     * is stated at the point of consent" held on a TTY only.
+     */
+    expect(refusal.disclosureBlock).toContain("Publishing is scoped to ONE machine");
+    expect(refusal.disclosureBlock).toContain("each time");
+    expect(refusal.disclosureBlock).toContain("staple hub registry adopt --apply");
+    // From index 1: the block capitalises the sentence's first letter, so the rest of it
+    // is what the two share verbatim. The point is that the block CONTAINS the sentence
+    // rather than paraphrasing it — one wording, reviewed once.
+    expect(refusal.disclosureBlock).toContain(REGISTRY_DISCLOSURE.slice(1));
     // The consent was NOT recorded.
     expect(JSON.parse(staple("hub", "registry", "status", "--json").stdout).publishConsent).toBe(
       false,
     );
     expect(refused.violations).toEqual([]);
 
-    // With --yes it goes through, and the response still carries the sentence.
+    // With --yes it goes through, and the response still carries both.
     const granted = staple("hub", "registry", "publish", "--enable", "--json", "--yes");
     expect(granted.status).toBe(0);
-    expect(JSON.parse(granted.stdout)).toEqual({
-      enabled: true,
-      disclosure: REGISTRY_DISCLOSURE,
-    });
+    const grant = JSON.parse(granted.stdout);
+    expect(grant.enabled).toBe(true);
+    expect(grant.disclosure).toBe(REGISTRY_DISCLOSURE);
+    expect(grant.disclosureBlock).toContain("Publishing is scoped to ONE machine");
   }, 90_000);
 
   it("refuses to record the consent on a hub that is not connected", () => {
@@ -374,15 +424,184 @@ describe("status and id", () => {
       backupConsent: true,
       registered: 0,
       crossLinks: 0,
+      // An opt-out SUPPRESSES adoption, so it belongs on the status a panel reads.
+      // `registry_optouts` shipped with two readers and no surface at all — no verb, no
+      // `--json` field, no status line — so a `prune` silently declined that identity on
+      // every future adopt and nothing could show it.
+      ignored: [],
     });
     // No `epoch` and no `lastPublishedAt`: both need an authenticated round trip, and a
     // status command that made one would be a poll that costs money and fails offline.
     expect(Object.keys(report)).not.toContain("epoch");
     expect(Object.keys(report)).not.toContain("lastPublishedAt");
   }, 60_000);
+
+  it("shows an opt-out on status, so a suppressed adoption is discoverable", () => {
+    adoptIdentity();
+    connectHub({ registry: true, backup: true });
+    withTestHub((hub) => hub.addOptOut("11111111-1111-4111-8111-111111111111", "gone", "pruned"));
+
+    const report = JSON.parse(staple("hub", "registry", "status", "--json").stdout);
+    expect(report.ignored).toEqual([
+      { repositoryId: "11111111-1111-4111-8111-111111111111", slug: "gone", reason: "pruned" },
+    ]);
+
+    // And on the human surface, with a verb that exists.
+    const human = staple("hub", "registry", "status").stdout;
+    expect(human).toContain("11111111-1111-4111-8111-111111111111");
+    expect(human).toContain("pruned");
+    expect(human).toContain("staple hub registry unignore");
+  }, 60_000);
+
+  /**
+   * `ignore` must not write the contradiction the C1 invariant forbids.
+   *
+   * `Hub.recordRepositoryId` retires an opt-out the moment an identity binds to a row, so
+   * "an opt-out never coexists with a registered row for the same identity" is the rule.
+   * This verb wrote one straight past it, and its own usage text sends the reader to "the
+   * `repositoryId` of a row in `staple hub ls --json`" — i.e. at live rows. The result was
+   * one command reporting a single row as both registered and not registered:
+   *
+   *     workspaces   2 registered, 1 cross-workspace link(s)
+   *     not adopted  - 22d08ff6-…  (not registered here) (ignored)
+   *
+   * It could not self-heal either: `initWorkspace` and `reconcileRepositoryIds` only call
+   * `recordRepositoryId` when the value CHANGES, and for a row already holding its identity
+   * it does not. So the write is the only place to catch it.
+   */
+  it("refuses to ignore an identity this machine actually has, and names unregister", () => {
+    adoptIdentity();
+    connectHub({ registry: true });
+    const identity = "33333333-3333-4333-8333-333333333333";
+    withTestHub((hub) => {
+      hub.registerAbsent({ slug: "mine", prefix: "MIN", kind: "repo", repositoryId: identity });
+    });
+
+    const refused = staple("hub", "registry", "ignore", identity);
+    expect(refused.status).not.toBe(0);
+    expect(refused.stderr).toContain("registered on this machine right now");
+    expect(refused.stderr).toContain('as "mine"');
+    // The remedy has to be the verb that actually removes a workspace.
+    expect(refused.stderr).toContain("staple hub unregister mine");
+    expect(refused.stderr).toContain("Nothing was changed");
+
+    // And nothing was written: no opt-out, so status cannot contradict itself.
+    const report = JSON.parse(staple("hub", "registry", "status", "--json").stdout);
+    expect(report.ignored).toEqual([]);
+    expect(report.registered).toBe(1);
+    expect(refused.violations).toEqual([]);
+  }, 60_000);
+
+  it("still ignores an identity this machine does NOT have, which is what the verb is for", () => {
+    adoptIdentity();
+    connectHub({ registry: true });
+    const stranger = "44444444-4444-4444-8444-444444444444";
+    const ok = staple("hub", "registry", "ignore", stranger);
+    expect(ok.status).toBe(0);
+    const report = JSON.parse(staple("hub", "registry", "status", "--json").stdout);
+    expect(report.ignored).toEqual([
+      { repositoryId: stranger, slug: "(not registered here)", reason: "ignored" },
+    ]);
+  }, 60_000);
 });
 
 // ------------------------------------------------------------------- refusals
+
+describe("--json is not a way around any agreement gate", () => {
+  /**
+   * The shape, grepped rather than hunted: `&& !json` wrapping a block that contains BOTH
+   * a disclosure and a `--yes` check. Three instances existed; one was fixed in isolation
+   * and the other two shipped. `runConnect` was the one that had it right all along —
+   * only the printing inside `!json`, the gate outside.
+   */
+  it("`identity` will not replace an identity in machine mode without --yes", () => {
+    adoptIdentity();
+    const other = "88888888-8888-4888-8888-888888888888";
+
+    const refused = staple("hub", "registry", "identity", other, "--json");
+    expect(refused.status).toBe(2);
+    const envelope = JSON.parse(refused.stderr);
+    expect(envelope.previousHubId).toBe(HUB_ID);
+    // The orphan notice was given to me as a hard requirement to state unconditionally.
+    // In machine mode it was not stated at all, and there was no field to carry it.
+    expect(envelope.notice).toContain("stays on the service");
+    expect(envelope.notice).toContain(HUB_ID);
+    // Unchanged.
+    expect(JSON.parse(staple("hub", "registry", "status", "--json").stdout).hubId).toBe(HUB_ID);
+    expect(refused.violations).toEqual([]);
+
+    // With --yes it goes through, and the notice rides on the success too.
+    const done = staple("hub", "registry", "identity", other, "--json", "--yes");
+    expect(done.status).toBe(0);
+    const result = JSON.parse(done.stdout);
+    expect(result).toMatchObject({ hubId: other, adopted: true, previousHubId: HUB_ID });
+    expect(result.notice).toContain("stays on the service");
+  }, 120_000);
+
+  it("`restore` will not rewind the service in machine mode without --yes", () => {
+    /**
+     * The most dangerous of the three. `restore <id> --json` skipped the entire
+     * "rewinds the registry ON THE SERVICE / the service moves to a new epoch; work
+     * published since is discarded" screen AND the confirmation, and went straight to the
+     * remote restore — which affects every machine on that hub id. Only the unrelated
+     * backup-consent check stood in the way, and anyone who has taken a backup has that.
+     *
+     * Backup consent is GRANTED here, deliberately, so the test exercises the state a real
+     * user is in rather than one where an unrelated gate hides the hole.
+     */
+    adoptIdentity();
+    connectHub({ backup: true });
+
+    const refused = staple("hub", "registry", "restore", "some-backup-id", "--json");
+    expect(refused.status).toBe(2);
+    const envelope = JSON.parse(refused.stderr);
+    expect(envelope.notice.join(" ")).toContain("moves to a new epoch");
+    expect(envelope.notice.join(" ")).toContain("every machine on this hub id is affected");
+    // NOTHING was sent. The gate is before the first request, which is the whole point of
+    // a confirmation on a destructive fleet-wide operation.
+    expect(refused.violations).toEqual([]);
+  }, 60_000);
+});
+
+describe("backup rm is gated, in both modes", () => {
+  it("refuses without --yes, and its --yes is no longer dead code", () => {
+    /**
+     * `runBackup` declared `yes: { type: "boolean" }` and NEVER READ IT, and `rm` had no
+     * confirmation in either mode — exit 0, nothing printed. A declared-but-unread option is
+     * worse than an absent one: an operator who types `--yes` habitually got no error and no
+     * gate.
+     *
+     * Found by grepping for declared-but-unread OPTIONS rather than for `!json`, because
+     * there was no `!json` here for the previous grep to catch.
+     *
+     * It composes into real damage with `runRestore`, which prints
+     * "undo with: staple hub registry restore <preRestoreBackupId>" — one unconfirmed
+     * `backup rm` of that id destroys the only undo for an epoch-rewinding, fleet-wide
+     * restore.
+     */
+    adoptIdentity();
+    connectHub({ backup: true });
+
+    const refused = staple("hub", "registry", "backup", "rm", "some-backup-id", "--json");
+    expect(refused.status).toBe(2);
+    const envelope = JSON.parse(refused.stderr);
+    expect(envelope.notice.join(" ")).toContain("only way back to a moment");
+    expect(envelope.backupId).toBe("some-backup-id");
+    // NOTHING was sent: the gate is before the request, like every other destructive verb.
+    expect(refused.violations).toEqual([]);
+  }, 60_000);
+
+  it("refuses an unknown backup subcommand instead of falling through to `ls`", () => {
+    // `backup enabel` used to fall through to `ls` and make a NETWORK CALL — doing something
+    // the person did not ask for, against a paid service, and reporting success.
+    adoptIdentity();
+    connectHub({ backup: true });
+    const result = staple("hub", "registry", "backup", "enabel");
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("Unknown backup subcommand");
+    expect(result.violations).toEqual([]);
+  }, 60_000);
+});
 
 describe("refusals name the remedy", () => {
   it("refuses to connect before an identity has been adopted", () => {
@@ -405,7 +624,9 @@ describe("refusals name the remedy", () => {
     const result = staple("hub", "registry", "publsh");
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("Unknown subcommand");
-    expect(result.stderr).toContain("status|id|identity|connect|publish");
+    expect(result.stderr).toContain("status|id|identity|connect|disconnect|publish");
+    // The three verbs added this round, so the usage line and the dispatch cannot drift.
+    expect(result.stderr).toContain("ignore|unignore");
   }, 60_000);
 
   it("does NOT inherit `hub`'s flag tolerance", () => {
@@ -437,5 +658,99 @@ describe("refusals name the remedy", () => {
     expect(result.stderr).toContain("usage: staple hub registry restore <backupId>");
     expect(result.stderr).toContain("staple hub registry backup ls");
     expect(result.violations).toEqual([]);
+  }, 60_000);
+});
+
+// -------------------------------------------------------------------- locate
+
+/**
+ * `locate` is the verb that makes the `absent` adoption outcome performable.
+ *
+ * `locateAbsent` existed from the first commit of this epic, with all three of its refusals,
+ * and nothing called it — so adoption told people to "point this row at it" and named no way
+ * to do so. Restoring a registry onto a machine that already holds some of the clones is the
+ * ordinary recovery case, so the dead end was on the main path rather than at the edge.
+ *
+ * These tests use a REAL `staple init` workspace rather than a hand-built row, because the
+ * whole safety property is that the candidate directory's own identity is read and compared.
+ * A fixture that supplied the identity would test the comparison against itself.
+ */
+describe("locate attaches an absent row to a copy on this machine", () => {
+  /** A real workspace on disk, returning its directory and the identity it stamped. */
+  function initWorkspaceAt(name: string): { dir: string; slug: string; repositoryId: string } {
+    const dir = join(home, "..", `ws-${name}-${process.pid}`);
+    mkdirSync(dir, { recursive: true });
+    const init = stapleIn(dir, "init", "--slug", name, "--yes", "--json");
+    if (init.status !== 0) throw new Error(`init failed for ${name}: ${init.stderr}`);
+    const row = withTestHub((hub) => hub.get(name));
+    if (!row) throw new Error(`init did not register ${name}`);
+    if (row.repositoryId === null) throw new Error(`init recorded no identity for ${name}`);
+    return { dir, slug: name, repositoryId: row.repositoryId };
+  }
+
+  it("attaches when the directory's own identity matches the row", () => {
+    const ws = initWorkspaceAt("alpha");
+    // Turn the real row into the placeholder an adopt would have left: same identity, no path.
+    const prefix = withTestHub((hub) => {
+      const before = hub.get(ws.slug)!;
+      hub.unregister(ws.slug);
+      hub.registerAbsent({
+        slug: before.slug,
+        prefix: before.prefix,
+        kind: before.kind,
+        repositoryId: ws.repositoryId,
+      });
+      return before.prefix;
+    });
+    expect(withTestHub((hub) => hub.get(ws.slug)!.available)).toBe(false);
+
+    const run = stapleIn(home, "hub", "registry", "locate", ws.slug, "--path", ws.dir, "--json");
+    expect(run.status).toBe(0);
+    const out = JSON.parse(run.stdout);
+    expect(out.slug).toBe(ws.slug);
+    expect(out.prefix).toBe(prefix);
+    // The row now points at a file that is really there.
+    expect(withTestHub((hub) => hub.get(ws.slug)!.available)).toBe(true);
+    // Local by construction. Attaching a row this machine already has needs nobody's
+    // permission and must not cost a request.
+    expect(run.violations).toEqual([]);
+  }, 120_000);
+
+  it("REFUSES a directory that is a different repository, and changes nothing", () => {
+    const ws = initWorkspaceAt("beta");
+    const other = initWorkspaceAt("gamma");
+    withTestHub((hub) => {
+      const before = hub.get(ws.slug)!;
+      hub.unregister(ws.slug);
+      hub.registerAbsent({
+        slug: before.slug,
+        prefix: before.prefix,
+        kind: before.kind,
+        repositoryId: ws.repositoryId,
+      });
+    });
+
+    const run = stapleIn(home, "hub", "registry", "locate", ws.slug, "--path", other.dir);
+    expect(run.status).not.toBe(0);
+    expect(run.stderr).toContain("different repository");
+    // The refusal is the point: pointing a registry row at the wrong repository is silent,
+    // durable, and found later as two workspaces that will not agree.
+    expect(withTestHub((hub) => hub.get(ws.slug)!.available)).toBe(false);
+    expect(run.violations).toEqual([]);
+  }, 120_000);
+
+  it("names the layout when the path is not a workspace at all", () => {
+    const run = stapleIn(home, "hub", "registry", "locate", "nope", "--path", join(home, "empty"));
+    expect(run.status).not.toBe(0);
+    expect(run.stderr).toContain(".staple/staple.db");
+    expect(run.stderr).toContain("Nothing was changed");
+    expect(run.violations).toEqual([]);
+  }, 60_000);
+
+  it("refuses without a --path rather than guessing, and names the verb", () => {
+    const run = stapleIn(home, "hub", "registry", "locate", "nope");
+    expect(run.status).not.toBe(0);
+    expect(run.stderr).toContain("usage: staple hub registry locate <slug> --path <directory>");
+    expect(run.violations).toEqual([]);
   }, 60_000);
 });

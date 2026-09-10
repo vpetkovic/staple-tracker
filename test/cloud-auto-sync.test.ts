@@ -827,4 +827,49 @@ describe("the gate cannot reach the network, and that is structural", () => {
     expect(staticValueImports).not.toContain("./client.js");
     expect(source).toMatch(/await import\("\.\/sync\.js"\)/);
   });
+
+  /**
+   * The same discipline for the hub registry command group (STA-283).
+   *
+   * `src/commands/hub-registry.ts` is statically imported by `src/cli.ts`, so it is
+   * evaluated on every invocation including `staple ls`. It may reach the transport only
+   * through `await import()`; a static `import { publishRegistry }` would add a second
+   * static edge from the CLI entry point to `client.ts` and nothing else in the tree would
+   * notice — the runtime spy in `test/cloud-hub-registry-cli.test.ts` proves no CALL is
+   * made, which is the property that matters, but it would stay green while the graph
+   * quietly widened.
+   */
+  it("`commands/hub-registry.ts` reaches the registry service only through `await import()`", () => {
+    const source = readFileSync(
+      new URL("../src/commands/hub-registry.ts", import.meta.url).pathname,
+      "utf8",
+    );
+    const staticValueImports = [
+      ...source.matchAll(/(?:^|\n)import\s+(?!type\s)[^;]*?from\s+"([^"]+)"/g),
+    ].map((m) => m[1]!);
+    expect(staticValueImports).not.toContain("../core/cloud/hub-registry-service.js");
+    expect(staticValueImports).not.toContain("../core/cloud/client.js");
+    expect(staticValueImports).not.toContain("../core/cloud/sync.js");
+    expect(source).toMatch(/await import\(|import\("\.\.\/core\/cloud\/hub-registry-service\.js"\)/);
+    // The guard on the guard: the regex above must have found imports at all.
+    expect(staticValueImports.length).toBeGreaterThan(3);
+  });
+
+  /**
+   * And the two leaf modules stay leaves.
+   *
+   * `hub-registry.ts` holds `REGISTRY_DISCLOSURE`, which `hub-surface.ts` renders — and
+   * `hub-surface.ts` is reached by a route the settings page POLLS. If the leaf ever
+   * acquired the transport, every poll would evaluate the module that captures `fetch`.
+   * That is why the constant lives there rather than beside the code that spends it.
+   */
+  it("`hub-registry.ts` and `hub-registry-ops.ts` cannot reach `client.ts`", () => {
+    for (const leaf of ["hub-registry.ts", "hub-registry-ops.ts"]) {
+      const graph = reachable(join(CLOUD, leaf));
+      expect([...graph].filter((f) => /\/client\.ts$/.test(f)), leaf).toEqual([]);
+      for (const file of graph) {
+        expect(readFileSync(file, "utf8"), `${leaf} -> ${file}`).not.toMatch(/\bfetch\s*\(/);
+      }
+    }
+  });
 });
