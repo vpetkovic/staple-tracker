@@ -408,8 +408,17 @@ async function twoMachines(): Promise<void> {
   }
   /**
    * Workspaces sync through the service, so B gets A's issues the way a person's second
-   * machine would. Each repository is provisioned fresh, and connected BEFORE its issues
-   * are written: only a connected workspace journals what it will push.
+   * machine would. Each repository is provisioned fresh.
+   *
+   * The ORDER is deliberate: each workspace is connected BEFORE its issues are written.
+   * That works around a real workspace-sync gap, the first-connect upload gap, and it is
+   * not arbitrary. An unconnected workspace journals nothing (`src/core/journal.ts`,
+   * "Disarmed by default"), and nothing seeds a workspace's existing data into the outbox
+   * when it connects. So issues written before `staple cloud connect` never upload:
+   * measured in this script's first run, where A's `cloud sync` said "Pushed nothing —
+   * this device had no unsent operations" and B's clone came up with no issues. The gap
+   * is being fixed in its own PR, outside the hub registry. Until that lands, keep this
+   * order.
    */
   const identityOf = (dir: string) =>
     (JSON.parse(readFileSync(join(dir, ".staple", "repository.json"), "utf8")) as { repositoryId: string }).repositoryId;
