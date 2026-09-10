@@ -383,6 +383,16 @@ npx wrangler d1 execute staple-sync-dev --remote -c wrangler.local.toml --comman
 
 If that returns a row, **do not delete anything yet, and do not delete the `restores` row.**
 
+**That `SELECT` is a fence in name only, and the recipe does not pretend otherwise.** It is a
+point-in-time read and nothing in this service locks a repository: `beginRestore` refuses only
+while a `status = 'staging'` row already exists, so any device holding a valid credential can
+start a restore in the gap between your `SELECT` and your `DELETE`, and the answer you read is
+stale the moment you have it. Treat it as information rather than protection — re-run it
+immediately before you delete, revoke the device credentials for the duration if the repository
+is live (`DELETE /v1/repos/{repoId}/devices/{deviceId}`, which holds until somebody re-connects
+with the enrollment secret), and rely on the epoch predicate in step 3, which is the part that
+stays correct even if a restore begins mid-recipe.
+
 `stage` resumes from a slice offset computed from `stagedCount`, which is a bare `COUNT(*)`
 of the target epoch rather than a per-restore ledger. Two consequences, both measured:
 
@@ -406,8 +416,23 @@ of the target epoch rather than a per-restore ledger. Two consequences, both mea
   `conflict`, for ever.
 
 **So: drive the restore to completion first** — call the restore route until it answers
-`done` — and only then continue with the steps below. That is the only remedy that loses
-nothing.
+`done` — and only then continue with the steps below. That is the remedy that loses nothing,
+**and it is only available while the commit can still apply.** `commitRestore`'s second guard
+is `guard_seq`: if any operation landed in `from_epoch` after the restore began, the commit
+refuses, and it refuses for good — the intruding row is in neither the backup being restored
+nor the pre-restore fold, so nothing can make committing safe later. Nothing gates writes while
+a restore stages, either: `POST /ops` has no in-flight check at all, so on a repository with a
+live device `done` can be unreachable however many times you poll for it.
+
+**When `done` is unreachable, abandon the restore rather than driving it** — which is the
+two-statement form above, the staged operations in `to_epoch` and the `restores` row deleted in
+the same sitting, never the row on its own. Stop the writers before you retry or the next
+attempt ends the same way: revoking the device credentials is the only fence this service
+actually offers. Then take a fresh backup and begin the restore again, which is what the commit
+refusal itself tells the caller to do. Abandoning deletes nothing that a device wrote: the
+repository stays on `from_epoch` with the concurrent operations intact. What it gives up is the
+restore — the state you were rolling back to is reachable again only once the writers are quiet
+long enough for one begin-to-commit round to finish.
 
 **Step 1 — capture the rows to a file before deleting anything.** `SELECT *`, not a
 four-column projection: a mistyped `repo_id` deletes rows that cannot be reconstructed from
@@ -437,13 +462,30 @@ npx wrangler d1 execute staple-sync-dev --remote -c wrangler.local.toml --comman
 the fold, so a workspace backup carrying a registry entity is the only reason a workspace
 repository would have one stamped 2.
 
-**Step 3 — delete the operations, in every epoch they appear in:**
+**Step 3 — delete the operations, in every epoch a device can read them from:**
 
 ```sql
 DELETE FROM ops
  WHERE repo_id = '<workspace repo id>'
-   AND entity IN ('registration', 'crossLink');
+   AND entity IN ('registration', 'crossLink')
+   AND epoch <= (SELECT epoch FROM repos WHERE repo_id = '<workspace repo id>');
 ```
+
+**The epoch predicate is what keeps this delete out of an epoch a restore is filling**, and it
+is not a belt-and-braces addition to step 0 — it is the part that holds when step 0's read went
+stale. `repos.epoch` is the live epoch and a restore stages into `repo.epoch + 1`, so
+`epoch <= (SELECT epoch …)` covers every epoch a device can read and excludes exactly the one
+under construction. Without it the delete punches a hole in `stagedCount`, which is a bare
+`COUNT(*)` of the target epoch rather than a per-restore ledger, while `stage` resumes at
+`entities.slice(staged, staged + maxBatchSize)` — so the window steps past the deleted position
+for ever, `staged` never reaches `entity_count`, `commitRestore` is therefore never reached at
+all, and the `status = 'staging'` row that survives answers every future `beginRestore` with
+`conflict`. One `DELETE` run at the wrong moment is a repository that can never be restored
+again.
+
+Contamination inside a staging epoch is not left behind by excluding it: those rows are
+materialised from the backup, so they become reachable only if that restore commits, and once
+it has, `repos.epoch` has moved and running this same statement again removes them.
 
 `seq` gaps are legal and expected — a slot reserved for a deduplicated operation already
 goes unused, and `WHERE seq > cursor` is gap-tolerant by construction — so removing rows
@@ -463,8 +505,16 @@ on their own.
 
 Two things to know before you run it. **Some of these will be `kind = 'pre-restore'`, which
 is the documented undo for a restore somebody ran** — deleting one makes that restore
-permanent, so check `created_at` against the restore you care about and keep the ones that
-predate the contamination if you can. And this bypasses `DELETE /backups/{id}`'s in-flight
+permanent, and there is no keeping those: step 2 cannot have returned a backup that predates
+the contamination. `captureBackup` stamps `protocolForEntities` over the fold it captured, and
+a fold holding no registry entity stamps `1`, so `protocol >= 2` selects exactly the backups
+that carry the rows — every one of them was captured after the operations landed, and every one
+is a route by which a user restores the contamination into the log on their own. So the price
+is explicit: any restore whose `pre-restore` undo appears in step 2's list stops being
+reversible. Note each `created_at` and tell whoever ran that restore before you delete it. The
+backups worth keeping are the ones step 2 does NOT return — the protocol-1 captures from before
+the contamination, which this recipe leaves untouched and which are what a rollback should
+use. And this bypasses `DELETE /backups/{id}`'s in-flight
 guard, which is another reason step 0 has to be settled first: deleting the backup a staging
 restore is reading makes the next `stage` fail with `not_found` and leaves the restore wedged
 exactly as above.

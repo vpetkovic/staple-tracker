@@ -95,6 +95,7 @@ import {
   publishedStateOf,
   registryFromSnapshot,
   type RegistryOperation,
+  type RenamedEntry,
   type RetainedEdge,
   type SnapshotEntityLike,
   type UnpublishableEntry,
@@ -143,19 +144,44 @@ export function registryDisclosure(endpoint: string): string {
    * rather than reasoned about: a differing directory name means one metered operation per
    * publish for ever (8 ops in 8 passes, alternating, `foreign` empty throughout), and a
    * cross-link's entity id encodes the two slugs, so two machines with different directory
-   * names cannot exchange edges at all. Neither is refusable — a single machine renaming a
-   * workspace produces the identical diff — so the honest place for it is here, where
-   * somebody is deciding.
+   * names cannot exchange edges at all.
+   *
+   * ## Two corrections this paragraph needed
+   *
+   * It used to justify itself with *"Neither is refusable — a single machine renaming a
+   * workspace produces the identical diff"*, and that is FALSE: there is no supported
+   * single-machine rename in this tree at all (no `UPDATE workspaces SET slug`; the slug is
+   * written once by `initWorkspace` and then beats the directory basename). The real reason
+   * for reporting rather than refusing is different and is at the emit site in
+   * `hub-registry-ops.ts`: the divergence arises in the machine-REPLACEMENT path, because
+   * adoption deliberately keeps this machine's name, so refusing would block the recovery
+   * this feature exists to perform.
+   *
+   * And the closer used to read as a guarantee that the two bullets above it were
+   * PREVENTED, when they describe precisely the case that is not refused. The refusal is
+   * `foreign.registrations.length > 0` — the service holding a registration this machine
+   * has neither got nor ignored — so two machines that hold the SAME workspaces are both
+   * allowed to publish, which is the case the bullets are about. It also never said who
+   * wins, never named `adopt` (the only thing that clears the refusal), and never said that
+   * a rebuilt machine inherits whichever name happened to win last.
    */
-  lines.push("Publishing is scoped to ONE machine. If a second machine publishes to the same");
-  lines.push("registry:");
-  lines.push("  - and it holds a workspace under a different directory name, the two overwrite");
-  lines.push("    each other's name on every publish, for ever — one billed operation each");
-  lines.push("    time. Nothing converges it.");
-  lines.push("  - it cannot exchange cross-workspace links with this one, because a link is");
+  lines.push("Publishing is scoped to ONE machine, and that is a limit rather than a warning:");
+  lines.push("if a second machine also publishes to this registry, then for any workspace the");
+  lines.push("two of them name differently:");
+  lines.push("  - each publish overwrites the other's name, for ever, one billed operation");
+  lines.push("    each time. This machine always wins its own publish; nothing converges it,");
+  lines.push("    and a machine rebuilt from the registry inherits whichever name won last.");
+  lines.push("  - the two cannot exchange cross-workspace links at all, because a link is");
   lines.push("    identified by the two workspace names and those differ.");
-  lines.push("Publishing from a second machine is refused while it holds less than the service");
-  lines.push("does. See docs/sync.md for what is and is not supported.");
+  lines.push("Publishing reports each name it replaces, so this is visible rather than silent.");
+  lines.push("");
+  lines.push("What IS refused: publishing from a machine that is missing a workspace the");
+  lines.push("service holds. Run `staple hub registry adopt --apply` to take it on, or");
+  lines.push("`staple hub registry ignore <repositoryId>` to leave it out deliberately —");
+  lines.push("nothing else clears that refusal. Two machines holding the SAME workspaces are");
+  lines.push("both allowed to publish, which is exactly the case above. Sequential use — one");
+  lines.push("machine at a time, and a replacement adopting what the last one published — is");
+  lines.push("the supported shape. See docs/sync.md.");
   return lines.join("\n");
 }
 
@@ -637,6 +663,15 @@ export interface PublishReport {
   /** Published edges this machine had no basis to retract, and tombstoned ones. */
   readonly retained: readonly RetainedEdge[];
   /**
+   * Published names this publish REPLACED, one per identity.
+   *
+   * Here because the overwrite is allowed and must therefore be visible. Without it the
+   * command printed `published: 1, updated: 1` and said nothing at all about the name it
+   * had just taken away from another machine — the one loss in this feature that had no
+   * report attached to it.
+   */
+  readonly renamed: readonly RenamedEntry[];
+  /**
    * What resolving each row's identity from its manifest changed, and what it could not
    * establish. Reported because an unreadable manifest or a duplicated identity is the
    * reason a workspace is missing from what was published, and a person needs the cause
@@ -790,6 +825,9 @@ export async function publishRegistry(
       deduplicated: 0,
       unpublishable: diff.unpublishable,
       retained: diff.retained,
+      // Always empty on this branch: `upToDate` means no operations, and a rename IS an
+      // operation. Carried rather than omitted so the field is never absent.
+      renamed: diff.renamed,
       identities,
       upToDate: true,
     };
@@ -859,6 +897,7 @@ export async function publishRegistry(
     applied,
     deduplicated,
     retained: diff.retained,
+    renamed: diff.renamed,
     batches: chunks.length,
     unpublishable: diff.unpublishable,
     identities,
@@ -1086,17 +1125,18 @@ export async function deleteHubBackup(
 }
 
 /**
- * `locate` is accepted and NO SURFACE SUPPLIES IT YET.
+ * Every outcome this can return is one a person can reach from a terminal.
  *
- * Stated because "plumbed but never supplied" is the kind of thing that reads as wired. It is
- * `adoptRegistry`'s hook for finding a workspace that is on this machine but not registered,
- * and it is what produces the `repointed` outcome — so **`repointed` is unreachable from the
- * CLI today**: a machine holding a clone it has not registered gets `absent` instead, whose
- * sentence names `staple init` and `staple hub unregister`, both of which exist.
+ * That was not true until STA-288 was folded in here. `adoptRegistry` took a `locate`
+ * callback, no surface supplied it, and the `repointed` outcome it produced was therefore
+ * unreachable while being advertised in the exported type — "plumbed but never supplied",
+ * which reads as wired. Both are gone.
  *
- * Kept rather than removed because the parameter is `adoptRegistry`'s to own and removing it
- * would make wiring a locator later a wider change. Supplying one needs a scan for a
- * workspace by `repositoryId`, which is `discover`'s territory and a separate ticket.
+ * What replaced it is not a smaller product. {@link reconcileRepositoryIds} runs below,
+ * before the adoption, so a clone this machine has registered matches on the identity
+ * column and comes back `current` or `adopted`; a clone the hub does not know about comes
+ * back `absent`, and `staple hub registry locate <slug> --path <dir>` attaches it, refusing
+ * unless the directory's own identity matches the row's.
  */
 export interface HubRestoreReport {
   readonly hubId: string;
@@ -1142,7 +1182,7 @@ export async function restoreRegistry(
   hub: Hub,
   home: string,
   backupId: string,
-  options: Options & { apply?: boolean; actor?: string | null; locate?: AdoptOptions["locate"] } = {},
+  options: Options & { apply?: boolean; actor?: string | null } = {},
 ): Promise<HubRestoreReport> {
   const hubId = hubRepositoryId(hub);
   const connection = requireHubRegistryConnection(home, hubId);
@@ -1233,7 +1273,6 @@ export async function restoreRegistry(
   const { registry } = await readPublishedRegistry(home, hubId, options);
   const adoption = adoptRegistry(hub, registry, {
     ...(options.apply === undefined ? {} : { apply: options.apply }),
-    ...(options.locate === undefined ? {} : { locate: options.locate }),
   });
 
   return {
@@ -1263,7 +1302,7 @@ export async function restoreRegistry(
 export async function adoptPublishedRegistry(
   hub: Hub,
   home: string,
-  options: Options & { apply?: boolean; locate?: AdoptOptions["locate"] } = {},
+  options: Options & { apply?: boolean } = {},
 ): Promise<{ registry: HubRegistryPayload; adoption: AdoptionReport }> {
   const hubId = hubRepositoryId(hub);
   /**
@@ -1276,7 +1315,6 @@ export async function adoptPublishedRegistry(
   const { registry } = await readPublishedRegistry(home, hubId, options);
   const adoption = adoptRegistry(hub, registry, {
     ...(options.apply === undefined ? {} : { apply: options.apply }),
-    ...(options.locate === undefined ? {} : { locate: options.locate }),
   });
   return { registry, adoption };
 }

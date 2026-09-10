@@ -2,10 +2,17 @@
  * The hub registry leg, end to end, against a REAL deployed service.
  *
  * Not in the vitest suite, and deliberately: it makes real network calls and needs a
- * `repos` row that only an operator can create. It is committed and re-runnable
- * because the one thing neither test suite can prove is that the deployed Worker
- * behaves like Miniflare and like `FakeSyncServer` — and this epic has already
- * produced four green suites that proved nothing.
+ * `repos` row that only an operator can create. It is committed because the one thing
+ * neither test suite can prove is that the deployed Worker behaves like Miniflare and
+ * like `FakeSyncServer` — and this epic has already produced four green suites that
+ * proved nothing.
+ *
+ * It IS re-runnable against the same seeded hub id, and step 2 is where that is earned:
+ * each run mints fresh identities, so the previous run's registrations are foreign to
+ * this one and the scope refusal would stop the publish. Step 2 therefore performs the
+ * escape the refusal names — `ignore` each identity this machine does not have — rather
+ * than the header asserting repeatability the code did not have. It did not have it: a
+ * second unmodified run used to exit 1 at step 2 before reaching a single assertion.
  *
  * ## What it proves that the suites cannot
  *
@@ -153,6 +160,45 @@ const recordingFetch: typeof fetch = async (input, init) => {
 };
 
 /** A machine: its own staple home and its own hub, with the shared registry identity. */
+/**
+ * Leave behind what an EARLIER RUN of this script published, the way the product says to.
+ *
+ * Every run mints fresh temporary homes and therefore fresh `repositoryId`s, so on any run
+ * after the first the service holds registrations this machine has neither got nor opted
+ * out of — which is exactly what `dd29ef2`'s scope refusal refuses. The header used to
+ * claim the script was re-runnable and it was not: run two exited 1 before any assertion.
+ *
+ * This is called before EVERY publish rather than once, and that is not defensiveness — the
+ * first version of this fix guarded only step 2, and run two then failed at the replacement
+ * machine's publish instead, where an earlier run's `live-other` also collides on prefix so
+ * adoption parks it rather than adopting it. Measured, by running the script twice; the
+ * one-call version would have shipped with the same false "re-runnable" claim one step
+ * further along.
+ *
+ * It sends nothing: `registry_optouts` is local, and the read it does is a snapshot GET the
+ * publish would have made anyway.
+ */
+async function ignoreEarlierRuns(
+  c: { home: string; hub: Hub },
+  hubId: string,
+  label: string,
+): Promise<void> {
+  const held = await readPublishedRegistry(c.home, hubId, { fetchImpl: recordingFetch });
+  const mine = new Set(
+    c.hub.list().map((r) => r.repositoryId).filter((id): id is string => id !== null),
+  );
+  const strangers = held.registry.workspaces
+    .filter((w) => w.repositoryId !== null && !mine.has(w.repositoryId))
+    .map((w) => ({ repositoryId: w.repositoryId as string, slug: w.slug }));
+  for (const s of strangers) c.hub.addOptOut(s.repositoryId, s.slug, "ignored");
+  console.log(
+    strangers.length === 0
+      ? `${label}: no earlier run's entries on this hub id; publishing directly`
+      : `${label}: ignored ${strangers.length} entr(ies) from an earlier run, the way the ` +
+        `refusal says to: ${JSON.stringify(strangers.map((s) => s.slug))}`,
+  );
+}
+
 function machine(label: string): { home: string; hub: Hub } {
   const home = mkdtempSync(join(tmpdir(), `staple-hublive-${label}-`));
   homes.push(home);
@@ -248,6 +294,25 @@ async function main(): Promise<void> {
    */
   console.log(registryDisclosure(endpoint));
   setRegistryConsent(a.home, hubId, true, REGISTRY_DISCLOSURE);
+
+  /**
+   * A PREVIOUS RUN'S registrations are foreign to this one, and clearing them is a step.
+   *
+   * The header claimed this script was re-runnable and it was not: every run mints fresh
+   * temporary homes and therefore fresh `repositoryId`s, so on the second run the service
+   * holds four registrations this machine has neither got nor opted out of — which is
+   * exactly what the scope refusal added in `dd29ef2` refuses. A second unmodified run
+   * exited 1 at this step, before any assertion, with *"The service holds 4 workspace
+   * entries this machine does not have"*. Both the header's "re-runnable" and step 8's
+   * superset justification were written before that refusal landed and were false after it.
+   *
+   * Rather than delete the claim, the script now does what the refusal tells a person to
+   * do: `ignore` each identity it does not have. That makes the run genuinely repeatable
+   * AND turns the documented escape into something this script proves live, which it did
+   * not before. It is additive, local, and sends nothing.
+   */
+  await ignoreEarlierRuns(a, hubId, "first machine");
+
   const published = await publishRegistry(a.hub, a.home, { fetchImpl: recordingFetch });
   console.log(
     safe({
@@ -399,6 +464,7 @@ async function main(): Promise<void> {
     kind: "repo",
     repositoryId: trackerId,
   });
+  await ignoreEarlierRuns(b, hubId, "replacement machine");
   const damaged = await publishRegistry(b.hub, b.home, { fetchImpl: recordingFetch });
   console.log(`damage published: ${safe({ published: damaged.published, updated: damaged.updated })}`);
   if (damaged.published === 0) {

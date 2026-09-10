@@ -1560,6 +1560,26 @@ function runPurge(argv: string[]): void {
  */
 function runBackup(argv: string[]): void {
   const subs = new Set(["enable", "disable", "create", "ls", "rm"]);
+  /**
+   * A TYPO IS REFUSED, not silently treated as `ls` (STA-283).
+   *
+   * `staple cloud backup enabel` used to fall through to `ls`, which is a network call
+   * against a paid service that reports success — doing something the person did not ask
+   * for and telling them it worked. `hub registry backup` documents having fixed exactly
+   * this, in the sibling file, and this instance survived; found by sweeping for the shape
+   * rather than for the symptom.
+   *
+   * A BARE `staple cloud backup` still means `ls`, because that is a choice rather than a
+   * mistake, and listing is the only one of the five that changes nothing.
+   */
+  const first = argv[0];
+  if (first !== undefined && !first.startsWith("-") && !subs.has(first)) {
+    throw new StapleError(
+      "validation",
+      `Unknown backup subcommand "${first}". ` +
+        "usage: staple cloud backup [enable|disable|create|ls|rm <backupId>]",
+    );
+  }
   const sub = argv[0] && subs.has(argv[0]) ? argv[0] : "ls";
   const rest = argv[0] && subs.has(argv[0]) ? argv.slice(1) : argv;
 

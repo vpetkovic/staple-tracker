@@ -420,10 +420,28 @@ export function releaseSlugCommand(slug: string): string {
  * end of them. Naming `unlink` first is deliberate: the destructive flag should be
  * a choice somebody makes, not the first thing they read.
  *
- * The re-registration that follows also drops `workspaces.repository_id`, because
- * `repointPath`'s insert does not carry that column — it is set only by cloud
- * registry adoption, so a workspace that had been adopted needs adopting again.
- * Recoverable, and worth knowing before rather than after.
+ * The re-registration that follows leaves `workspaces.repository_id` NULL, because
+ * `repointPath`'s insert does not carry that column and the row it re-creates is a
+ * fresh one. That column is the registry's adoption key, and since STA-283 three
+ * things write it, all through `Hub.recordRepositoryId`:
+ *
+ *   - `initWorkspace` (`src/core/workspace.ts`), from the manifest it has just
+ *     reconciled — so the next `staple init` in that workspace restores it;
+ *   - `reconcileRepositoryIds` (`src/core/cloud/hub-scope.ts`), which reads every
+ *     row's manifest and which `publishRegistry` and `adoptPublishedRegistry` both
+ *     call before they do anything else;
+ *   - `adoptRegistry` (`src/core/cloud/hub-registry.ts`), when it matches an incoming
+ *     entry to a workspace it located on this machine.
+ *
+ * (`Hub.registerAbsent` also writes the column, but only for a row that has no path
+ * on this machine, which is not this case.)
+ *
+ * So this is NOT "needs adopting again": the identity is re-learned from
+ * `.staple/repository.json`, which is the authority, by whichever of those runs next.
+ * The part worth knowing before rather than after is the OPT-OUT — `unregister`
+ * records one against the identity it just dropped, so adoption will decline the
+ * workspace until something binds the identity to a live row again, at which point
+ * `recordRepositoryId` retires it. Recoverable, and it heals on its own.
  */
 const RELEASE_SLUG_CAVEAT =
   "If cross-workspace links name it, that is refused until you remove them with `staple hub unlink` " +
@@ -476,8 +494,12 @@ export function describeSecondClaimant(input: {
  *
  * Never throws. Writes only when the stored path differs from the resolved one,
  * which is what keeps the steady state free of locks: the overwhelmingly common
- * case is a row that already agrees, and that case performs one indexed SELECT
- * and stops.
+ * case is a row that already agrees, and that case opens the hub, performs one
+ * SELECT on its primary key, and stops. (The hub open is not free — `Hub.open`
+ * runs `openDb` and the migration check — and on the walk-up door this call is
+ * what introduces it, so do not read "one SELECT" as "no hub". What the narrowing
+ * buys is the absence of a WRITE, and therefore of a write lock, in the steady
+ * state.)
  *
  * (That is a deliberate narrowing of the plan's "may update … `last_seen_at`":
  * refreshing a timestamp on every read would make every `staple ls` a hub write,

@@ -7,8 +7,11 @@
  *   hub registry connect --endpoint U --token S [--label L] [--yes] [--credential-file]
  *   hub registry publish [--enable|--disable] consent, or publish now with neither flag
  *   hub registry adopt [--apply]              read the service's registry and adopt it
+ *   hub registry locate <slug> --path <dir>   local: attach an absent row to a copy here
+ *   hub registry ignore|unignore <repoId>     local: leave an identity out, or stop doing so
  *   hub registry backup <enable|disable|create|ls|rm <id>>
  *   hub registry restore <backupId> [--apply]
+ *   hub registry disconnect [--yes]           local: drop this machine's credential
  *
  * Every subcommand takes `--json`.
  *
@@ -52,9 +55,15 @@
  * withdrawing it works with the network down — which is the point, since a consent
  * you cannot withdraw offline is not really revocable.
  */
+import { existsSync, statSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { parseArgs } from "node:util";
 import { stapleHome } from "../config/home.js";
 import { Hub } from "../core/hub.js";
+import { readMeta } from "../core/open.js";
+import { readWorkspaceManifest } from "../core/repo-identity.js";
+import { WorkspaceStore } from "../core/store.js";
 import { StapleError } from "../core/types.js";
 import { readConnection } from "../core/cloud/connection.js";
 import { confirm, isInteractive } from "../onboarding/prompts.js";
@@ -62,6 +71,7 @@ import { settle } from "./cloud.js";
 import {
   REGISTRY_DISCLOSURE,
   describeIdentityReplacement,
+  locateAbsent,
   type AdoptionDecision,
   type AdoptionReport,
 } from "../core/cloud/hub-registry.js";
@@ -79,7 +89,7 @@ async function loadService() {
 
 const USAGE =
   "usage: staple hub registry " +
-  "[status|id|identity|connect|disconnect|publish|adopt|backup|restore|ignore|unignore]";
+  "[status|id|identity|connect|disconnect|publish|adopt|locate|backup|restore|ignore|unignore]";
 
 export function runHubRegistryCommand(argv: string[]): void {
   const sub = argv[0] && !argv[0].startsWith("-") ? argv[0] : "status";
@@ -106,6 +116,8 @@ export function runHubRegistryCommand(argv: string[]): void {
       return runIgnore(rest, true);
     case "unignore":
       return runIgnore(rest, false);
+    case "locate":
+      return runLocate(rest);
     case "disconnect":
       return runDisconnect(rest);
     default:
@@ -190,6 +202,24 @@ function runStatus(argv: string[]): void {
       backupConsent: connection?.backup === true,
       registered: hub.list().length,
       crossLinks: hub.listCrossLinks().length,
+      /**
+       * Identities this machine has opted out of, and why (STA-283).
+       *
+       * On `status` because an opt-out SUPPRESSES adoption, and a suppression nobody can
+       * see is worse than one they can. `registry_optouts` existed from hub migration 003
+       * with two readers, no CLI verb, no `--json` field and no status line, so a `prune`
+       * — reachable from MCP's hub hygiene, so an agent can cause it — silently declined
+       * that identity on every future adopt with the reason buried in an `adopt` decision
+       * nobody had a reason to run.
+       *
+       * Reported even when the hub has no registry identity, because `unregister` and
+       * `prune` both write these whether or not this machine ever connected.
+       */
+      ignored: hub.listOptOuts().map((o) => ({
+        repositoryId: o.repositoryId,
+        slug: o.slug,
+        reason: o.reason,
+      })),
     };
 
     if (json) {
@@ -197,10 +227,22 @@ function runStatus(argv: string[]): void {
       return;
     }
 
+    /** The opt-out list, printed wherever we get to — see `report.ignored`. */
+    const printIgnored = (): void => {
+      if (report.ignored.length === 0) return;
+      console.log("");
+      console.log(`not adopted   ${report.ignored.length} identity/identities this machine opted out of`);
+      for (const o of report.ignored) {
+        console.log(`  - ${o.repositoryId}  ${o.slug} (${o.reason})`);
+      }
+      console.log("  Bring one back with: staple hub registry unignore <repositoryId>");
+    };
+
     if (hubId === null) {
       console.log("This machine's hub has no registry identity yet.");
       console.log("  - `staple hub registry id` mints one, for an operator to provision");
       console.log("  - `staple hub registry identity <hubId>` takes on an existing one");
+      printIgnored();
       return;
     }
     console.log(`hub id        ${hubId}`);
@@ -208,6 +250,7 @@ function runStatus(argv: string[]): void {
     console.log(`publishing    ${report.publishConsent ? "on" : "OFF"}`);
     console.log(`hub backup    ${report.backupConsent ? "on" : "off"}`);
     console.log(`workspaces    ${report.registered} registered, ${report.crossLinks} cross-workspace link(s)`);
+    printIgnored();
     if (!report.connected) {
       console.log("");
       console.log("  Connect with: staple hub registry connect --endpoint <url> --token <secret>");
@@ -602,6 +645,18 @@ function runPublish(argv: string[]): void {
                 && confirm("\nPublish this machine's registry?", { default: false });
               if (!agreed) {
                 if (json) {
+                  /**
+                   * The WHOLE disclosure reaches a machine consumer, not just the sentence.
+                   *
+                   * `disclosure` is the one-sentence core, and it was all `--json` ever got.
+                   * The block around it is where the costs are — that publishing is scoped
+                   * to one machine, that two machines naming a workspace differently
+                   * overwrite each other on a metered log for ever, that this machine always
+                   * wins, and what is actually refused. So "the cost is stated at the point
+                   * of consent" was true only on a TTY, in the command whose own fix was
+                   * titled "--json was a way around the publish consent's agreement gate".
+                   * Same principle, one field further out.
+                   */
                   console.error(
                     JSON.stringify({
                       code: "validation",
@@ -610,6 +665,7 @@ function runPublish(argv: string[]): void {
                         REGISTRY_DISCLOSURE,
                       retryable: false,
                       disclosure: REGISTRY_DISCLOSURE,
+                      disclosureBlock: registryDisclosure(connection.endpoint),
                     }),
                   );
                 } else {
@@ -632,7 +688,15 @@ function runPublish(argv: string[]): void {
             : setRegistryConsent(home, hubId, false);
           if (json) {
             console.log(
-              JSON.stringify({ enabled: outcome.enabled, disclosure: REGISTRY_DISCLOSURE }),
+              JSON.stringify({
+                enabled: outcome.enabled,
+                disclosure: REGISTRY_DISCLOSURE,
+                // On the grant too, so a consumer that stores what it agreed to stores all
+                // of it rather than the headline.
+                ...(outcome.enabled
+                  ? { disclosureBlock: registryDisclosure(connection.endpoint) }
+                  : {}),
+              }),
             );
             return;
           }
@@ -697,6 +761,30 @@ function runPublish(argv: string[]): void {
             process.exitCode = 4;
           }
         }
+        /**
+         * The names this publish took away from another machine.
+         *
+         * Printed on its own, before `retained`, because it is the only thing in this
+         * report that describes a LOSS on the service rather than something left alone.
+         * `published: 1, updated: 1` was the whole of what a person used to see when a
+         * workspace's published name was replaced.
+         *
+         * Not a refusal — the overwrite has to be allowed, or a rebuilt machine could
+         * never publish under its own directory names — so this is what makes it honest.
+         */
+        if (report.renamed.length > 0) {
+          console.log("");
+          console.log(`${report.renamed.length} published name(s) were REPLACED by this machine:`);
+          for (const item of report.renamed) {
+            console.log(`  ${item.entityId}`);
+            console.log(`    was "${item.from}" on the service, now "${item.to}"`);
+          }
+          console.log(
+            "  If another machine publishes here too, it will change them back on its next " +
+              "publish and each pass costs an operation. See `staple hub registry publish " +
+              "--enable` for what that costs.",
+          );
+        }
         if (report.retained.length > 0) {
           console.log("");
           console.log(`${report.retained.length} published link(s) left exactly as they were:`);
@@ -737,7 +825,10 @@ function renderDecisions(report: AdoptionReport, describe: (r: AdoptionReport) =
   if (report.crossLinks.added + report.crossLinks.skipped > 0) {
     console.log("");
     console.log(
-      `  cross-workspace links: ${report.crossLinks.added} imported, ${report.crossLinks.skipped} skipped`,
+      // "to import" on a preview: the count is what WOULD be added, and this line sat two
+      // lines above "Nothing was written." saying "imported". See `describeAdoption`.
+      `  cross-workspace links: ${report.crossLinks.added} ${report.dryRun ? "to import" : "imported"}` +
+        `, ${report.crossLinks.skipped} skipped`,
     );
   }
   if (report.dryRun) {
@@ -751,7 +842,6 @@ function outcomeLabel(decision: AdoptionDecision): string {
   const labels: Record<AdoptionDecision["outcome"], string> = {
     current: "current    ",
     adopted: "adopted    ",
-    repointed: "re-pointed ",
     absent: "absent     ",
     declined: "skipped    ",
     conflict: "PARKED     ",
@@ -1116,6 +1206,111 @@ function runIgnore(argv: string[], ignoring: boolean): void {
     }
   } finally {
     hub.close();
+  }
+}
+
+/**
+ * `hub registry locate <slug> --path <dir>` — attach an absent row to a copy on this machine.
+ *
+ * ## Why this verb had to exist before this PR could land
+ *
+ * `locateAbsent` has been in `hub-registry.ts` since the first commit of this epic, complete
+ * with the three refusals that make it safe to offer, and NOTHING called it. That made the
+ * `absent` decision a dead end: adoption registered a placeholder row and told the operator
+ * to "point this row at it", naming no way to do so. Restoring a registry onto a machine that
+ * already holds some of the clones is the ordinary case, so the dead end was on the main
+ * recovery path rather than at the edge of it.
+ *
+ * ## Why it takes a path instead of searching
+ *
+ * A crawl is `staple discover`, it is slow, and it guesses. This verb is for the operator who
+ * already knows where the workspace is — and `locateAbsent` then refuses unless the directory's
+ * own identity matches the row's, because *"the operator cannot be expected to"* check that
+ * and pointing a registry row at the wrong repository is silent and durable.
+ *
+ * The identity and the prefix are read from the candidate itself, never taken as arguments:
+ * they are facts about that directory, and accepting them from the command line would let a
+ * confident typo satisfy the very check that exists to catch it.
+ */
+function runLocate(argv: string[]): void {
+  const { values, positionals } = parseArgs({
+    args: argv,
+    allowPositionals: true,
+    options: { json: { type: "boolean" }, path: { type: "string" } },
+  });
+  const json = values.json === true;
+  const slug = positionals[0];
+  if (!slug || values.path === undefined) {
+    throw new StapleError(
+      "validation",
+      "usage: staple hub registry locate <slug> --path <directory>\n" +
+        "The slug is the one `staple hub registry adopt` listed as absent, and the directory is " +
+        "the workspace's own root — the one holding `.staple/`. The identity is read from there " +
+        "and must match, so a wrong directory is refused rather than attached.",
+    );
+  }
+
+  const hub = openHub();
+  try {
+    const dbPath = resolveWorkspaceDb(values.path);
+    const found = probeCandidate(dbPath);
+    const row = locateAbsent(hub, slug, {
+      path: dbPath,
+      prefix: found.prefix,
+      repositoryId: found.repositoryId,
+    });
+    if (json) {
+      console.log(JSON.stringify({ slug: row.slug, path: row.path, prefix: row.prefix }, null, 2));
+      return;
+    }
+    console.log(`"${row.slug}" now points at ${row.path}`);
+    console.log("  - nothing was renumbered, and no request was made");
+    console.log("  - `staple hub ls` should now show it as available");
+  } finally {
+    hub.close();
+  }
+}
+
+/**
+ * A workspace root, or the database inside one, resolved to the database path.
+ *
+ * Both spellings are accepted because both are things a person reasonably types, and the
+ * error when neither exists names the layout rather than the failed `open`.
+ */
+function resolveWorkspaceDb(given: string): string {
+  const direct = resolve(given);
+  if (existsSync(direct) && statSync(direct).isFile()) return direct;
+  const nested = join(direct, ".staple", "staple.db");
+  if (existsSync(nested)) return nested;
+  throw new StapleError(
+    "not_found",
+    `No staple workspace at ${direct}. Expected either the workspace root (holding ` +
+      "`.staple/staple.db`) or that database file itself. Nothing was changed.",
+  );
+}
+
+/**
+ * The candidate's own prefix and identity, read WITHOUT migrating it.
+ *
+ * Read-only for the same reason `discovery.ts` is: a directory being offered as a candidate
+ * is something to check, not something to convert to WAL or migrate. A refusal must be able
+ * to leave the stranger's database exactly as it was.
+ */
+function probeCandidate(dbPath: string): { prefix: string; repositoryId: string | null } {
+  const repositoryId = readWorkspaceManifest(dbPath)?.repositoryId ?? null;
+  const db = new DatabaseSync(dbPath, { readOnly: true });
+  try {
+    const prefix = readMeta(new WorkspaceStore(db, "", ""), "prefix");
+    if (prefix === null) {
+      throw new StapleError(
+        "conflict",
+        `The database at ${dbPath} has no prefix stamped in it, so it is not a workspace this ` +
+          "registry row could be pointing at. Nothing was changed.",
+      );
+    }
+    return { prefix, repositoryId };
+  } finally {
+    db.close();
   }
 }
 

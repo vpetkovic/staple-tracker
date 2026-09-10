@@ -118,9 +118,21 @@ export function findWorkspaceDb(startDir: string): string | null {
  * harness that lands in a repo and sees `.staple/`. A global workspace lives at
  * `~/.staple/workspaces/<slug>.db` — no repo to arrive in, and a single shared
  * `workspaces/AGENTS.md` would describe none of the workspaces beside it.
- * Note this writes only inside staple's own `.staple/` directory, which init
- * creates in the same breath; it never touches the repo's own harness or
- * instruction files.
+ *
+ * In a REPO workspace everything init writes lands in the directory that holds the
+ * database, because every writer here is handed `dirname(dbPath)`: `.staple/` on
+ * the current layout, and `.tasks/` for one still on the legacy layout it adopts
+ * (see below). So the claim is not "always inside `.staple/`", which was in this
+ * comment and is false — `staple init` in a repository whose state is at
+ * `.tasks/tasks.db` writes `.tasks/AGENTS.md`, `.tasks/.gitignore` and
+ * `.tasks/repository.json` (reproduced). A GLOBAL workspace gets neither guide nor
+ * ignore file, and its manifest is not beside the database either: it goes to
+ * `<home>/workspaces/<slug>/`, for the collision reason `workspaceIdentityDir`
+ * gives.
+ *
+ * What holds in every case, and is the property that matters, is that init writes
+ * only inside staple's own directories: it never touches the repo's own harness or
+ * instruction files, and never the repository's root `.gitignore`.
  *
  * **Legacy adoption.** In a repository that still stores its state at
  * `.tasks/tasks.db`, init opens *that* database rather than creating a new one
@@ -138,7 +150,8 @@ export function initWorkspace(options: {
   slug?: string;
   kind?: "repo" | "global";
   /**
-   * Write `.staple/.gitignore` beside the database (repo workspaces only).
+   * Write a `.gitignore` beside the database, in whichever directory holds it
+   * (`.staple/`, or `.tasks/` for an adopted legacy workspace; repo workspaces only).
    * Defaults to true; `staple init --no-gitignore` is the way to decline.
    * See `./workspace-gitignore.ts` for why this is a per-directory ignore file
    * and not an edit to the repository's own root `.gitignore`.
@@ -212,11 +225,14 @@ export function initWorkspace(options: {
      * NOT "every workspace open": that claim was in this comment and was false. This is
      * `initWorkspace`; `openWorkspace` in `open.ts` never touches the hub. Measured — after
      * nulling the column, `staple ls` and `staple ls --ws <slug>` both left it null and
-     * `staple init` restored it.
+     * `staple init` restored it. (Those two commands do OPEN the hub — `resolveWorkspace`
+     * below looks a slug up in it and repairs the registration through it — they just never
+     * write this column.)
      */
     const hubRow = hub.get(storedSlug);
 
-    // openDb() has already created the .staple dir, so the guide has somewhere to land.
+    // openDb() has already created the directory that holds the database — `.staple/`, or
+    // `.tasks/` for an adopted legacy workspace — so the guide has somewhere to land.
     const guide =
       kind === "repo" ? writeAgentsGuide(dirname(dbPath), { slug: storedSlug, prefix }) : null;
 
@@ -224,8 +240,9 @@ export function initWorkspace(options: {
      * The ignore file is the second half of the change A5 flagged and left open:
      * the guide is only defensible beside the database if the database itself
      * stops being committable, and the guide is only useful if the ignore rule
-     * spares it. Both live inside `.staple/`, both are written here, and neither
-     * ever overwrites an existing file.
+     * spares it. Both land in the directory that holds the database — `.staple/`,
+     * or `.tasks/` when this init adopted a legacy workspace — both are written
+     * here, and neither ever overwrites an existing file.
      *
      * Global workspaces get neither — they live under the machine home, where
      * there is no repository and nothing to ignore.
@@ -295,9 +312,21 @@ export function initWorkspace(options: {
      * hub — so a machine that predates this fix heals on the next `staple init` in that
      * workspace, which is idempotent and adopts rather than creating. Rows whose workspace
      * is not re-inited are covered by `reconcileRepositoryIds`, which the registry paths
-     * call. Moving the write into `openWorkspace` would make it heal on any command and was
-     * considered; it would put a hub open on every read path including `staple ls`, which is
-     * a cost this ticket has no need to pay.
+     * call.
+     *
+     * Moving the write into `openWorkspace` would make it heal on any command and was
+     * considered. The reason not to is NOT "it would put a hub open on every read path
+     * including `staple ls`" — that claim was here and is false. `resolveWorkspace`, further
+     * down this file, already opens the hub on both of the doors this would care about: `--ws`
+     * reads the path out of it, and the walk-up path calls `repairHubRegistration`, which
+     * opens it and will WRITE. Reproduced: after `staple hub unregister repo`, a bare
+     * `staple ls` inside the workspace put the row back — with `repository_id` null.
+     *
+     * What moving the write would actually cost is a hub open on the ONE door that
+     * deliberately has none (`--db` / `STAPLE_DB`, an explicit pointer at a copy or a
+     * fixture), a hub WRITE on paths that today only read, and a hub import in `open.ts`,
+     * which has none — it is the one layer here that knows nothing about the registry, and
+     * that is worth more than healing a column one `staple init` restores.
      *
      * Local row work only. It makes no network call and it is not `connect`; a workspace
      * carrying an identity has consented to nothing. See the comment above and
@@ -357,15 +386,19 @@ export function resolveWorkspace(options: { db?: string; ws?: string } = {}): Op
    * one idempotent repair operation with the stored slug, prefix, kind, and
    * canonical database path."
    *
-   * This is the ONLY door that repairs, and deliberately so — `--db` is usually
-   * an explicit pointer at a copy or a fixture, and `--ws` reads the path out of
-   * the hub in the first place. See the module header of `./hub-repair.ts`.
+   * Of resolution's three doors this is the only one that repairs, and
+   * deliberately so — `--db` is usually an explicit pointer at a copy or a
+   * fixture, and `--ws` reads the path out of the hub in the first place. That is
+   * a statement about RESOLUTION, not about the function: `staple add` and
+   * `staple discover` call `repairHubRegistration` themselves, each from evidence
+   * of its own (`src/commands/add.ts`, `src/commands/discover.ts`). See the module
+   * header of `./hub-repair.ts`.
    *
    * `repairHubRegistration` never throws and writes only when the stored path
-   * actually differs, so the common case costs one indexed SELECT and the
-   * failure case costs nothing at all: a hub that is missing, locked, or in
-   * disagreement leaves this workspace fully usable and surfaces as a `doctor`
-   * check instead. That is the plan's edge case "Hub repair fails | Local
+   * actually differs, so the common case costs a hub open and one SELECT by slug —
+   * the hub's primary key — and the failure case costs nothing at all: a hub that
+   * is missing, locked, or in disagreement leaves this workspace fully usable and
+   * surfaces as a `doctor` check instead. That is the plan's edge case "Hub repair fails | Local
    * project becomes unusable | Keep local workspace operations available and
    * report repair through doctor", and it is why the result is dropped here
    * rather than logged: a warning on every `staple ls` would be noise the user

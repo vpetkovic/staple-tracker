@@ -370,8 +370,34 @@ export interface RegistryDiff {
    * them. See {@link diffRegistry} — absence is not the same as removal.
    */
   readonly retained: readonly RetainedEdge[];
-  /** True when the service already holds exactly this registry. */
+  /**
+   * Published names this publish is about to REPLACE, one per identity.
+   *
+   * Non-empty means the operation set overwrites a name another machine chose. It is not a
+   * refusal — see the comment at the emit site for why the machine-replacement path
+   * depends on it being allowed — but it must never be silent, which it was: the publish
+   * printed `published: 1, updated: 1` and said nothing about the name it replaced.
+   */
+  readonly renamed: readonly RenamedEntry[];
+  /**
+   * True when the service already holds exactly this registry.
+   *
+   * NOT the same as "nothing to report". `retained` and `renamed` are routinely non-empty
+   * while this is `true` (a published edge this machine does not have produces a
+   * `retained` entry and no operation), so a consumer keying on this alone silently drops
+   * both. `test/cloud-hub-registry-wire.test.ts` pins the pair for that reason.
+   */
   readonly upToDate: boolean;
+}
+
+/** One published name this machine is about to overwrite. See {@link RegistryDiff.renamed}. */
+export interface RenamedEntry {
+  /** The identity, which is stable across the rename — that is what makes it a rename. */
+  readonly entityId: string;
+  /** The name the service holds now. */
+  readonly from: string;
+  /** The name this machine is about to publish. */
+  readonly to: string;
 }
 
 /**
@@ -479,6 +505,7 @@ export function diffRegistry(
   const operations: RegistryOperation[] = [];
   const unpublishable: UnpublishableEntry[] = [];
   const retained: RetainedEdge[] = [];
+  const renamed: RenamedEntry[] = [];
 
   for (const entry of local.workspaces) {
     if (entry.repositoryId === null) {
@@ -590,6 +617,45 @@ export function diffRegistry(
             kind: entry.kind,
           };
     if (held !== undefined && !held.deleted && statesAgree(held.state, payload)) continue;
+
+    /**
+     * Overwriting a published NAME is reported, because it is another machine's name.
+     *
+     * The earlier round of this work claimed the divergence was not refusable because "a
+     * single machine renaming a workspace produces the identical diff". That premise is
+     * false, and the review that said so was right: there is no supported single-machine
+     * rename anywhere in this tree. `grep` finds no `UPDATE workspaces SET slug`; the slug
+     * is written once by `initWorkspace` under `if (!prefix)`, and thereafter the stored
+     * slug beats the directory basename, so renaming a directory changes nothing. The test
+     * that "performed the rename" did it through `recordRepositoryId`, which this tree
+     * itself calls a hub-internal API no user path invokes.
+     *
+     * So `held.state.slug !== entry.slug` on an update means something specific: another
+     * machine published this identity under a different name.
+     *
+     * REPORTED rather than refused, and the reason is not indistinguishability this time —
+     * it is where the divergence comes from. The names diverge when one machine holds the
+     * repository under a different directory name, and `adoptRegistry` deliberately keeps
+     * THIS machine's name ("this machine's stamps win"). That is the machine-replacement
+     * path this whole leg exists to deliver, so refusing here would block the recovery
+     * rather than protect it.
+     *
+     * What reporting does NOT buy, said plainly: it does not bound the writes. Two machines
+     * holding the same identity under different names still overwrite each other once per
+     * pass, on a metered log, for ever, and neither is wrong. That is the stated limit of
+     * publishing from two machines — see `docs/sync.md`. The remedy a person can actually
+     * apply is on the losing machine: `staple hub unregister <slug>`, then
+     * `staple hub registry unignore <repositoryId>`, then `staple hub registry adopt
+     * --apply`, which re-adds the row under the published name.
+     */
+    if (held !== undefined && typeof held.state.slug === "string" && held.state.slug !== entry.slug) {
+      renamed.push({
+        entityId: entry.repositoryId,
+        from: held.state.slug,
+        to: entry.slug,
+      });
+    }
+
     operations.push({
       entity: REGISTRATION_ENTITY,
       entityId: entry.repositoryId,
@@ -745,6 +811,7 @@ export function diffRegistry(
     operations,
     unpublishable,
     retained,
+    renamed,
     foreign: { registrations: foreignRegistrations },
     upToDate: operations.length === 0,
   };

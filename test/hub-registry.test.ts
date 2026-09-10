@@ -163,25 +163,77 @@ describe("adoption matches by identity rather than minting a second registration
     expect(row.repositoryId).toBe("repo-web");
   });
 
-  it("repoints onto a copy already on disk rather than registering it twice", () => {
+  /**
+   * The copy already on disk is matched by the IDENTITY COLUMN, and by nothing else.
+   *
+   * This replaces a test that proved a `repointed` outcome by passing `adoptRegistry` a
+   * `locate` callback. That callback was the only way to reach the outcome and no surface
+   * ever supplied one, so the test proved a capability the product did not have — the
+   * exact shape this epic has been bitten by. Both are gone.
+   *
+   * What actually makes a clone on this machine match is `reconcileRepositoryIds`, which
+   * `adoptPublishedRegistry` runs BEFORE adopting. So the two states worth pinning are
+   * the one where the column is filled (matches) and the one where it is not (parks, and
+   * says something performable).
+   */
+  it("matches a copy on disk once its identity is recorded, without registering it twice", () => {
     const hub = openHub();
-    const dbPath = seed(hub, "api", "API", null);
+    seed(hub, "api", "API", "repo-api");
     const report = adoptRegistry(
       hub,
       payloadOf([
         { repositoryId: "repo-api", slug: "api", prefix: "API", kind: "repo", addedAt: "x" },
       ]),
-      {
-        apply: true,
-        locate: (id) => (id === "repo-api" ? { path: dbPath, prefix: "API", slug: "api" } : null),
-      },
+      { apply: true },
     );
     const rows = hub.list();
     hub.close();
 
-    expect(report.decisions[0]!.outcome).toBe("repointed");
+    expect(report.decisions[0]!.outcome).toBe("current");
     expect(rows).toHaveLength(1);
     expect(rows[0]!.repositoryId).toBe("repo-api");
+  });
+
+  it("parks a copy whose identity is NOT recorded, and names verbs that exist", () => {
+    const hub = openHub();
+    // The state a machine is in before `reconcileRepositoryIds` has run: the workspace is
+    // here, holding the prefix, but the hub does not know what it calls itself.
+    seed(hub, "api", "API", null);
+    const report = adoptRegistry(
+      hub,
+      payloadOf([
+        { repositoryId: "repo-api", slug: "api", prefix: "API", kind: "repo", addedAt: "x" },
+      ]),
+      { apply: true },
+    );
+    const rows = hub.list();
+    hub.close();
+
+    // Parked, not renumbered and not duplicated — the local stamp is untouchable.
+    expect(report.decisions[0]!.outcome).toBe("conflict");
+    expect(rows).toHaveLength(1);
+    const reason = report.decisions[0]!.reason;
+    expect(reason).toContain("staple hub registry ignore repo-api");
+    expect(reason).toContain("staple hub unregister api");
+    // The remedy that used to be here named an operation the product does not have.
+    expect(reason).not.toContain("Re-stamp");
+  });
+
+  it("has no outcome that only a test can produce", () => {
+    // `repointed` was reachable solely through an `AdoptOptions.locate` callback that no
+    // surface supplied. An advertised outcome the product cannot reach is a promise to
+    // whoever reads the type, so both the outcome and the hook are gone.
+    const hub = openHub();
+    seed(hub, "api", "API", "repo-api");
+    const report = adoptRegistry(
+      hub,
+      payloadOf([
+        { repositoryId: "repo-api", slug: "api", prefix: "API", kind: "repo", addedAt: "x" },
+      ]),
+    );
+    hub.close();
+    expect(report.decisions.map((d) => d.outcome)).not.toContain("repointed");
+    expect(describeAdoption(report)).not.toContain("re-pointed");
   });
 });
 
@@ -449,5 +501,121 @@ describe("cross-links only land between workspaces this machine now has", () => 
     // blocker, and unresolvable counts as BLOCKED — it would wedge WEB-1 with
     // nothing on any surface to say why.
     expect(report.crossLinks).toEqual({ added: 0, skipped: 1 });
+  });
+});
+
+/**
+ * BREAK: an opt-out must not outlive the row it was about.
+ *
+ * `registry_optouts` records "this machine does not want that identity back", and
+ * nothing in the tree ever cleared one. That is fine while the workspace stays
+ * gone, and wrong the moment it comes back: the row is present and current, and
+ * adoption still declined it — for ever, invisibly, because `decide` asked the
+ * opt-out set before it asked the hub.
+ *
+ * The damage is not only the wrong `declined` label. A declined entry never reaches
+ * the `learned` branch, so a workspace with a stale opt-out could never pick up a
+ * slug or kind change from the registry either — which is the divergence this epic
+ * chose to REPORT rather than refuse, silently disabled for exactly those rows.
+ */
+describe("BREAK: a returning workspace must not stay declined for ever", () => {
+  it("prefers the live local row over a stale opt-out, and clears the contradiction", () => {
+    const hub = openHub();
+    const dbPath = seed(hub, "doomed", "DOO", "repo-doomed");
+    // Prune only touches rows whose path is gone, so take the file away first.
+    rmSync(dbPath, { force: true });
+    const pruned = hub.prune({ apply: true });
+    expect(pruned.removed.map((r) => r.workspace.slug)).toEqual(["doomed"]);
+    expect(hub.listOptOuts().map((o) => o.reason)).toEqual(["pruned"]);
+
+    // The workspace legitimately comes back: same identity, same name.
+    seed(hub, "doomed", "DOO", "repo-doomed");
+
+    const report = adoptRegistry(
+      hub,
+      {
+        format: REGISTRY_PAYLOAD_FORMAT,
+        hubId: "hub-elsewhere",
+        capturedAt: "2026-01-01T00:00:00.000Z",
+        workspaces: [
+          { repositoryId: "repo-doomed", slug: "doomed", prefix: "DOO", kind: "repo", addedAt: "x" },
+        ],
+        crossLinks: [],
+      },
+      { apply: true },
+    );
+    const remaining = hub.listOptOuts();
+    hub.close();
+
+    expect(report.decisions[0]!.outcome).toBe("current");
+    // And the contradiction is gone, rather than being stepped over every adopt.
+    expect(remaining).toEqual([]);
+  });
+
+  it("still declines when the row really is absent, which is the property opt-out exists for", () => {
+    const hub = openHub();
+    seed(hub, "scratch", "SCR", "repo-scratch");
+    hub.unregister("scratch");
+
+    const report = adoptRegistry(
+      hub,
+      {
+        format: REGISTRY_PAYLOAD_FORMAT,
+        hubId: "hub-elsewhere",
+        capturedAt: "2026-01-01T00:00:00.000Z",
+        workspaces: [
+          { repositoryId: "repo-scratch", slug: "scratch", prefix: "SCR", kind: "repo", addedAt: "x" },
+        ],
+        crossLinks: [],
+      },
+      { apply: true },
+    );
+    const remaining = hub.listOptOuts().map((o) => o.repositoryId);
+    hub.close();
+
+    expect(report.decisions[0]!.outcome).toBe("declined");
+    // Not cleared: there is no local row, so nothing contradicts it.
+    expect(remaining).toEqual(["repo-scratch"]);
+  });
+
+  it("names a verb that exists when it declines", () => {
+    const hub = openHub();
+    seed(hub, "scratch", "SCR", "repo-scratch");
+    hub.unregister("scratch");
+    const report = adoptRegistry(hub, {
+      format: REGISTRY_PAYLOAD_FORMAT,
+      hubId: "hub-elsewhere",
+      capturedAt: "2026-01-01T00:00:00.000Z",
+      workspaces: [
+        { repositoryId: "repo-scratch", slug: "scratch", prefix: "SCR", kind: "repo", addedAt: "x" },
+      ],
+      crossLinks: [],
+    });
+    hub.close();
+    const reason = report.decisions[0]!.reason;
+    // The remedy has to be something a CLI user can type. `Hub.clearOptOut` is not.
+    expect(reason).toContain("staple hub registry unignore repo-scratch");
+    expect(reason).not.toContain("clearOptOut");
+    expect(reason).not.toContain("no CLI verb");
+  });
+
+  it("clears the opt-out when a workspace re-records its identity, not only on adopt", () => {
+    const hub = openHub();
+    seed(hub, "back", "BAK", "repo-back");
+    hub.unregister("back");
+    expect(hub.listOptOuts()).toHaveLength(1);
+
+    // What `initWorkspace` does on the next command run inside that repository.
+    hub.register({
+      slug: "back",
+      prefix: "BAK",
+      path: join(dir, "ws", "back", "staple.db"),
+      kind: "repo",
+    });
+    hub.recordRepositoryId("back", "repo-back");
+    const remaining = hub.listOptOuts();
+    hub.close();
+
+    expect(remaining).toEqual([]);
   });
 });

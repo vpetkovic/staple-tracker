@@ -518,6 +518,31 @@ export class Hub {
     this.db
       .prepare("UPDATE workspaces SET repository_id = ? WHERE slug = ?")
       .run(repositoryId, slug);
+    /**
+     * Binding an identity to a live row retires any opt-out about it (STA-283).
+     *
+     * The invariant this keeps is "an opt-out never coexists with a registered row for
+     * the same identity", and it is worth stating because the two are contradictory
+     * records of the same fact: the opt-out says this machine does not want that
+     * workspace, and the row says it has it.
+     *
+     * Nothing cleared one before, and `adoptRegistry`'s `declined` branch asked the
+     * opt-out set BEFORE it asked the hub — so a workspace that came back was declined
+     * for ever, and could never learn a slug or kind change from the registry either.
+     * Pruning a row therefore bought a publish fix with a permanent, invisible adoption
+     * failure.
+     *
+     * This is the right seam because it is where an identity becomes bound to a row that
+     * is actually here: `initWorkspace` on the next command inside the repository, and
+     * `reconcileRepositoryIds`. It also matches what `unregister` already documents about
+     * a workspace whose directory still exists — the row "lasts until someone runs a
+     * command in it", and after this so does the opt-out, which is the same decision
+     * reached the same way.
+     *
+     * Only for a real identity. `recordRepositoryId(slug, null)` is how a row FORGETS
+     * its identity, and forgetting is not wanting it back.
+     */
+    if (repositoryId !== null) this.clearOptOut(repositoryId);
   }
 
   /**

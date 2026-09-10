@@ -537,13 +537,36 @@ present in the log — the epoch bump is non-truncating, so the originals are
 epoch mechanism exists to make safe.
 
 **The hub registry derives its ids differently, and has to.** `clientSeq` lives in
-`sync_state`, and `hub.db` has no `sync_state` — so a hub operation id is
-content-addressed instead: `hub:<epoch>:<entity>:<32 hex of entityId, verb and
-payload>`. It keeps the property that matters, which is that a retry regenerates a
-byte-identical id, and it gets it from what the operation *says* rather than from a
-counter nothing allocates. Keyed on the entity alone it would be unique per entity
-per epoch rather than per operation, and a second write to one registration would be
-absorbed as a duplicate and read as an acknowledgement.
+`sync_state`, and `hub.db` has no `sync_state` — so a hub operation id is derived from
+the operation itself: `hub:<epoch>:<entity>:<32 hex of entityId, verb, baseVersion and
+payload>`, where `baseVersion` is the number of operations the service has already folded
+into that entity. It keeps the property that matters, which is that a retry regenerates a
+byte-identical id.
+
+**The `baseVersion` term is load-bearing, and it is not this machine's number.** Keyed on
+the entity alone the id would be unique per entity per epoch rather than per operation, and
+a second write to one registration would be absorbed as a duplicate and read as an
+acknowledgement. Hashing the payload closes that and opens the same hole displaced in time:
+a registry value can legitimately return to a value it held before — a workspace renamed
+back, an edge retracted and re-added — so a slug going `alpha → beta → alpha` re-derives the
+first id, collides with its own earlier appearance, and the write is dropped while the push
+reports success. `baseVersion` is monotonic in the number of operations folded into the
+entity, so no two operations on one entity can share an id however often the content cycles.
+
+Which means the id *does* depend on a counter — the service's, not one nothing allocates.
+The Worker's fold counts operations per entity (`entry.version += 1` per row in
+`worker/src/fold.ts`), `GET /snapshot` reports that count as the entity's `version`, and the
+publishing client reads it back off the snapshot it already fetches in order to compute the
+diff, then carries it on the operation as `baseVersion` — 0 for a `create`, because nothing
+has been folded yet. The allocation is remote and the read is local, which is exactly what
+keeps retries safe: a retry re-reads the snapshot, re-derives the same diff, and so derives
+the same base version and a byte-identical id.
+
+The dedupe role of the id is a **backstop rather than the mechanism**, which is worth saying
+because the version that hashed only the content was designed as though it were the
+mechanism. Idempotency comes from `publishRegistry` re-reading `GET /snapshot` and
+re-deriving the diff: an operation that already landed is excluded before an id is computed
+at all. The id only has to be unique; being reproducible is what makes a retried batch cheap.
 
 `clientSeq` is a per-device monotonic counter allocated inside the same
 transaction as the domain write. Its home is
@@ -1073,10 +1096,27 @@ published** — two clones or two worktrees of one repository legitimately share
 publishing both would make the registered name flip between them on every pass.
 
 **Publishing a registry is scoped to ONE machine, and a publish REFUSES when the service
-holds a registration this machine does not have and has not opted out of.** The refusal
-names `staple hub registry adopt --apply` as the remedy, because "another machine has
-published here" and "this machine is behind" are indistinguishable from the client and have
-the same answer.
+holds a registration this machine does not have and has not opted out of.** The refusal does
+not guess at the remedy: it PREVIEWS the adoption of what the service holds — `adoptRegistry`
+previews by default, writes nothing and makes no request — and prints that preview's own
+sentence for each foreign entry, then names the escape the entry actually has.
+
+There are two escapes, because there are two kinds of foreign entry. One that would LAND on
+adoption — nothing here holds its identity, its prefix or its name — is answered by `staple
+hub registry adopt --apply`, because "another machine has published here" and "this machine
+is behind" are indistinguishable from the client and have the same answer. One that would
+PARK is not: adoption refuses a prefix or slug collision rather than renumbering, because a
+prefix is stamped into its workspace database and into every `<prefix>-N` it has ever
+written. For those the refusal says so by count and names the two things that do work —
+resolve the collision in the owning repository, or tell this machine to leave the entry out
+of its own list with `staple hub registry ignore <repositoryId>`.
+
+Naming `adopt --apply` for every reason, which is what the first version of this refusal did,
+**dead-ends**: adoption registers an absent row only after clearing the prefix and slug
+checks, so a collision writes nothing, the entry stays foreign for ever, publish keeps
+refusing, and the named remedy is the thing the operator just ran. The opt-out set is no
+accidental way out either — it is keyed on `repositoryId` and there is no local row to
+unregister — which is why `ignore` has to be named explicitly rather than left to be found.
 
 Two machines sharing a registry is **not supported**, and the reasons are worth stating
 because a name race does NOT settle here — see the measurement below, and note that adoption
@@ -1116,10 +1156,28 @@ total ops in 8 passes: 8
 
 That is **one metered operation per publish, indefinitely** — the same shape as the
 `addedAt` divergence above, and it cannot be fixed the same way, because a name is a fact
-each machine legitimately holds rather than a timestamp one of them recorded first. It is
-also not refusable: a single machine renaming a workspace produces exactly the same diff, and
-nothing available to a stateless comparison tells the two apart. `prefix` and `kind` behave
-identically.
+each machine legitimately holds rather than a timestamp one of them recorded first.
+`prefix` and `kind` behave identically.
+
+This page previously added *"it is also not refusable: a single machine renaming a workspace
+produces exactly the same diff"*, and **that was false**. There is no supported
+single-machine rename anywhere in staple: no statement in the tree updates
+`workspaces.slug`, the slug is written once when a workspace is first initialised, and from
+then on the stored slug beats the directory basename — so renaming the directory changes
+nothing. A differing slug on an existing identity therefore means precisely one thing, that
+another machine published it, and it could be refused.
+
+It is **reported instead of refused**, for a reason that is about the recovery path rather
+than about ambiguity. Adoption deliberately keeps this machine's name — *this machine's
+stamps win* — so a rebuilt machine that restored a repository into a differently named
+directory legitimately holds a different slug from the one the lost machine published.
+Refusing on divergence would refuse exactly the machine replacement this whole feature
+exists to serve, on its first publish. So `publishRegistry` reports every name it replaces
+(`renamed: { entityId, from, to }[]`, printed by `staple hub registry publish` and present in
+its `--json`), and the disclosure at the point of consent says that the overwrite happens,
+that this machine always wins its own publish, and that a machine rebuilt from the registry
+inherits whichever name won last. The loss is allowed and visible rather than prevented and
+misdescribed.
 
 The same applies to edges: a `crossLink`'s entity id encodes the two SLUGS, so **two machines
 with different directory names can never share a cross-link at all** — each publishes edges
@@ -1138,19 +1196,42 @@ A new machine matches an incoming entry on `repository_id`, the clone-surviving
 UUID from the tracked `.staple/repository.json`. Slugs and prefixes are names,
 and names are exactly what two machines can independently disagree about.
 
+Every adoption begins by filling `workspaces.repository_id` in from each
+workspace's own manifest, so a clone this machine has registered is recognised by
+identity before any name is compared.
+
 - **Already registered here under that identity** — adopted. This machine's name
   and path stay as they are.
-- **On disk here but not registered** — the row is repointed at the copy you
-  already have.
 - **Not here at all** — the row lands with **no path**. It states that the
-  workspace is registered elsewhere and offers to be located; nothing is invented
-  for it, because a registry that points at the wrong directory is believed.
+  workspace is registered elsewhere; nothing is invented for it, because a registry
+  that points at the wrong directory is believed. If you already have the
+  workspace, `staple hub registry locate <slug> --path <dir>` attaches it — and
+  **refuses** unless that directory's own `repository.json` holds the row's
+  identity, because the one moment somebody offers the wrong directory is the
+  moment they are unsure where it went. If you do not have it yet, clone it and run
+  `staple init`, which registers the real row against the identity the placeholder
+  is holding.
 - **Prefix or slug already held by a different identity** — the entry is parked
   and named, and **nothing is renumbered**. A prefix is stamped into the workspace
   database and into every `PREFIX-N` that database ever emitted, including in
   commit messages and handoffs no migration can reach. The hub is derived state
-  and does not overrule a stamp. Resolution is a human act in the owning
-  repository.
+  and does not overrule a stamp. There is no rename verb and no re-stamp verb, so
+  the parked entry has exactly two resolutions and the refusal names both: keep
+  what you have and leave the published entry out for good with
+  `staple hub registry ignore <repositoryId>`, or give up the local row with
+  `staple hub unregister <slug>` and adopt again.
+- **Previously removed here** — declined, because `registry_optouts` says this
+  machine does not want it back. Undone with
+  `staple hub registry unignore <repositoryId>`. A **live local row always wins
+  over an opt-out**, and re-recording a workspace's identity retires the opt-out:
+  the two are contradictory records of one fact, and the row is the one backed by a
+  file on disk. Everything currently opted out is listed by
+  `staple hub registry status`, because a suppression nobody can see is worse than
+  one they can.
+
+There is no outcome in which adoption goes looking for a workspace by scanning the
+filesystem. That is `staple discover`'s job, and an adoption that guessed would be
+a registry pointed at a directory nobody checked.
 
 Adoption **never deletes a local row**. An incoming set is another machine's
 knowledge, not an instruction about what this machine should stop having.
@@ -1169,6 +1250,52 @@ the identity in `registry_optouts`, which never leaves. The entry remains on eve
 other machine, and the surface says so rather than implying otherwise. Removing
 an entry from a shared registry is a purge-shaped operation and is **not** offered
 yet; see the note on purge.
+
+### Every limitation of the hub registry, in one place
+
+The rule this list exists to keep: a limitation is either **refused in code, with a message
+naming what to do instead**, or **stated here and at the point of consent**. Anything in
+neither category is a bug. Each entry below says which it is.
+
+1. **Two machines publishing to one registry concurrently is not supported.** *Refused*
+   when the second machine holds less than the service does — the refusal previews the
+   adoption and names `staple hub registry adopt --apply` for entries that would land and
+   `staple hub registry ignore <repositoryId>` for entries that would park. *Stated* for
+   the case that is not refused: two machines holding the same workspaces under different
+   directory names overwrite each other's name once per publish, on a metered log, for
+   ever. The overwrite is reported (`renamed`), the disclosure says this machine always
+   wins and that a rebuilt machine inherits whichever name won last. Sequential use — one
+   machine at a time, a replacement adopting what the last one published — is the
+   supported shape and is what the acceptance criterion asks for.
+2. **Two machines with different directory names cannot exchange cross-workspace links at
+   all.** A `crossLink`'s entity id encodes the two slugs. *Stated*, here and at consent.
+3. **A workspace with no `.staple/repository.json` cannot be published.** *Refused*, per
+   entry, naming `staple init` in that workspace — measured to be the only command that
+   records the identity.
+4. **Two local rows sharing one identity** (two clones or worktrees of one repository) are
+   parked rather than published, because one identity is one registry entry. *Refused*,
+   naming `staple hub unregister`.
+5. **A prefix or slug collision on adoption is never resolved by renumbering or renaming.**
+   *Refused*, naming the only two performable resolutions: `staple hub registry ignore
+   <repositoryId>`, or `staple hub unregister <slug>` followed by adopting again. There is
+   no rename verb and no re-stamp verb, and the refusal says so rather than implying one.
+6. **Removals never propagate** — not a workspace, not a cross-link. *Stated*, with the
+   reason (it would turn a reversible local act into an irreversible remote one), and
+   *reported* per entry when a publish leaves something behind.
+7. **An edge tombstoned by a pre-`present` build cannot be resurrected.** *Reported* as
+   unpublishable, naming a restore from a backup taken before the deletion as the only
+   route.
+8. **The service does not distinguish a hub repository from a workspace repository.** A
+   token for one is a token for that one repository and nothing else, so this is a
+   credential boundary rather than a privilege boundary; the purge recipe in
+   `worker/README.md` is what an operator uses to remove registry operations. *Stated.*
+9. **Provisioning is out of band.** Staple cannot create the hub's `repos` row: there is
+   no provisioning route and no account model. *Refused* with a message that names the
+   step and points at `worker/README.md`, rather than failing as a permission error —
+   which is what the wire genuinely returns.
+10. **Adoption never searches the filesystem.** A workspace the hub does not know about
+    lands `absent`; attaching it is `staple hub registry locate <slug> --path <dir>`, which
+    refuses unless the directory's own identity matches. *Refused*, naming the verb.
 
 ## Three consents
 
