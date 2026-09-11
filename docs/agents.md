@@ -181,7 +181,7 @@ and you will never see `out_of_order`.
 **`dequeue_task`** `{ref}`, **`move_queue_entry`** `{ref, before?|after?|at?}`,
 **`reorder_queue`** `{order}` (every entry, once, atomically) and
 **`prune_queue`** (drop the resolved entries). A stale `base_revision` is
-refused with `revision_conflict` — the one retryable code — and the server order
+refused with `revision_conflict` — the one retryable code a tracker write returns — and the server order
 stands. **Reordering the plan is a human's job**: a queue mutation is an
 actor-attributed event, so an agent that reorders is visible rather than
 forbidden, and you should not reorder work you were told to do.

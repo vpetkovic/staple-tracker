@@ -302,7 +302,7 @@ per-workspace effective orders"*.)
 The plan carries a monotonic **`revision`** (`meta.queue_revision`, starting at
 `0`), bumped by every mutation including a renumber. Every read that returns the
 plan returns it; every mutation accepts an optional `baseRevision` and is
-refused with **`revision_conflict`** (exit 7, the one retryable code) when it
+refused with **`revision_conflict`** (exit 7, the one retryable code a tracker write returns) when it
 does not match — the same rule revisioned documents follow. A refused reorder
 changes nothing: the server order stands, the caller re-reads it and decides
 again. The web editor always sends the base; the CLI sends it with `--base N`

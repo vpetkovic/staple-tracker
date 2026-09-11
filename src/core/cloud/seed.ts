@@ -38,8 +38,9 @@ import { tx } from "../db.js";
 import { newId } from "../ids.js";
 import { replayOutboxFieldWrites, type Journal, type SeedIntent, type SyncEntity } from "../journal.js";
 import { WORKSPACE_SETTING_META_PREFIX } from "../settings-registry.js";
-import { BUILTIN_KIND_SEED, BUILTIN_STATUS_SEED, StapleError, nowIso } from "../types.js";
+import { BUILTIN_KIND_SEED, BUILTIN_STATUS_SEED, nowIso } from "../types.js";
 import { COMMENT_COLUMNS, ISSUE_COLUMNS, PROJECT_COLUMNS, applyToDatabase, payloadFromRow } from "./apply.js";
+import { cloudError } from "./errors.js";
 import { VOCABULARY_ORDER_ID, hydrate } from "./hydrate.js";
 import { completeSnapshot } from "./sync-state.js";
 import type { SnapshotEntity } from "./wire.js";
@@ -1296,11 +1297,11 @@ export function seedRepository(db: DatabaseSync, journal: Journal, args: SeedArg
         });
         continue;
       }
-      throw new StapleError(
-        "validation",
+      throw cloudError(
+        "payload_too_large",
         `${intent.entity} ${label} is ${bytes} bytes, and the service takes at most ${args.maxOpBytes} ` +
           `per operation. Nothing was uploaded and nothing was changed. Shorten it and run sync again.`,
-        { cloudCode: "payload_too_large", retryable: false, entity: intent.entity, entityId: intent.entityId },
+        { entity: intent.entity, entityId: intent.entityId },
       );
     }
 

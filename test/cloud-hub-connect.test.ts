@@ -425,16 +425,15 @@ describe("partial failure is the normal case", () => {
     expect(rows.charlie!.status).toBe("connected");
 
     /**
-     * The failure carries the SERVICE's own code and message.
+     * The failure carries the SERVICE's own code and message — the one that
+     * says "this repository was provisioned with a different enrollment secret".
      *
-     * `code` is staple's four-value space, which folds `forbidden`,
-     * `cursor_invalid` and `payload_too_large` all into `validation` so exit
-     * codes stay coherent. That is fine for one workspace and useless in a
-     * twelve-row table, so `cloudCode` carries the code the service actually
-     * sent — which is the one that says "this repository was provisioned with a
-     * different enrollment secret".
+     * In both fields since STA-251. `code` used to be staple's four-value space,
+     * which folded `forbidden`, `cursor_invalid` and `payload_too_large` all into
+     * `validation`; only `cloudCode` said which. `cloudCode` stays, and is what
+     * tells this row from one that failed on a local check.
      */
-    expect(rows.bravo!.code).toBe("validation");
+    expect(rows.bravo!.code).toBe("forbidden");
     expect(rows.bravo!.cloudCode).toBe("forbidden");
     expect(rows.bravo!.reason).toContain("not a member of this repository");
 

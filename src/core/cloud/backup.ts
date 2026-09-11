@@ -51,7 +51,7 @@
  * `test/cloud-backup-restore.test.ts` pins that.
  */
 import type { DatabaseSync } from "node:sqlite";
-import { StapleError } from "../types.js";
+import { StapleError, errorEnvelope, type ErrorEnvelope } from "../types.js";
 import { WORKSPACE_SCHEMA_VERSION } from "../schema.js";
 import {
   type RemoteBackup,
@@ -110,6 +110,15 @@ export interface ConsentOutcome {
   /** Whether the server agreed. False only on the disable path; see below. */
   readonly serverAcknowledged: boolean;
   readonly warning: string | null;
+  /**
+   * The code of the failure the warning reports, or null when there is none.
+   *
+   * The failure is not thrown — withdrawing a consent finishes offline, and the local
+   * half has already happened — but its code is not discarded either: the command exits
+   * with it (`exitCodeFor`), so an unreachable service is `offline`, exit 21, and a
+   * transient one `unavailable`, exit 20, the same as any other command meeting them.
+   */
+  readonly warningCode: ErrorEnvelope["code"] | null;
 }
 
 /**
@@ -155,13 +164,13 @@ export async function setBackupConsent(
   if (enabled) {
     await setRemoteBackupConsent(parseEndpoint(connection.endpoint), call, options);
     setConsent(home, repositoryId, { backup: true });
-    return { enabled: true, serverAcknowledged: true, warning: null };
+    return { enabled: true, serverAcknowledged: true, warning: null, warningCode: null };
   }
 
   setConsent(home, repositoryId, { backup: false });
   try {
     await setRemoteBackupConsent(parseEndpoint(connection.endpoint), call, options);
-    return { enabled: false, serverAcknowledged: true, warning: null };
+    return { enabled: false, serverAcknowledged: true, warning: null, warningCode: null };
   } catch (error) {
     return {
       enabled: false,
@@ -170,6 +179,7 @@ export async function setBackupConsent(
         `Backup is now off on this machine and this device will not create another. The ` +
         `service could not be told, so its own flag may still be set: ` +
         `${error instanceof Error ? error.message : String(error)}`,
+      warningCode: errorEnvelope(error).code,
     };
   }
 }

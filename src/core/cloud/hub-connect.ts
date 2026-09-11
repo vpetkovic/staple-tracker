@@ -96,17 +96,13 @@ export interface HubConnectWorkspaceOutcome {
   code: string | null;
   /**
    * The SERVICE's own code — `forbidden`, `offline`, `rate_limited` — when the
-   * failure came from the wire. Null otherwise.
+   * failure came from the cloud layer. Null otherwise.
    *
-   * Reported alongside `code` rather than instead of it because the two answer
-   * different questions, and the fan-out is the surface where the difference
-   * finally matters. `client.ts` maps every cloud code into staple's four-value
-   * space to keep exit codes coherent, and in that space `forbidden`,
-   * `cursor_invalid`, `payload_too_large` and `protocol_unsupported` are all
-   * `validation`. For one workspace that is fine: the message says which. For
-   * twelve rows in a table it is not — "validation" against a row tells a person
-   * nothing they can act on, while `forbidden` tells them precisely that THIS
-   * repository was provisioned with a different enrollment secret.
+   * Since STA-251 it equals `code` whenever it is set: a connect failure's
+   * StapleError code IS the service's code, so `forbidden` reads `forbidden` in
+   * both and tells a person precisely that THIS repository was provisioned with a
+   * different enrollment secret. What this field adds is the null, which marks a
+   * row that failed on a local check rather than on the service's answer.
    */
   cloudCode: string | null;
 }

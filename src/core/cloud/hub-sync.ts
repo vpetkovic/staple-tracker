@@ -74,15 +74,15 @@ export interface HubSyncWorkspaceOutcome {
   code: string | null;
   /**
    * The SERVICE's own code — `offline`, `revoked`, `rate_limited`,
-   * `epoch_changed` — when the failure came from the wire. Null otherwise.
+   * `epoch_changed` — when the failure came from the cloud layer. Null otherwise.
    *
-   * The difference matters far more here than for one workspace. `client.ts`
-   * folds every cloud code into staple's four-value space so that exit codes stay
-   * coherent, and in that space `offline`, `rate_limited`, `unavailable` and
-   * `conflict` are all `conflict`. A twelve-row table in which three failures all
-   * read "conflict" is a table nobody can act on; one that says `offline`,
-   * `offline`, `revoked` says exactly which two are a network problem and which
-   * one needs a re-connect.
+   * Since STA-251 it equals `code` whenever it is set: a sync failure's
+   * StapleError code IS the service's code. What this field adds is the null — a
+   * row that failed on a local check, such as an unreadable connection record,
+   * has a `code` and no `cloudCode`, so a reader can tell "the service refused"
+   * from "this machine refused" without knowing which codes the two share. A
+   * twelve-row table that says `offline`, `offline`, `revoked` says exactly which
+   * two are a network problem and which one needs a re-connect.
    */
   cloudCode: string | null;
 }

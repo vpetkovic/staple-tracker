@@ -945,7 +945,25 @@ export type StapleErrorCode =
    * `detail.expected` names what to take instead. Retrying never clears it;
    * taking the expected item does, which is why it is not retryable.
    */
-  | "out_of_order";
+  | "out_of_order"
+  /**
+   * The cloud sync taxonomy (STA-251, `docs/sync.md`, "Error taxonomy"). A sync failure
+   * carries the service's own code, never the nearest store code: `validation`,
+   * `not_found` and `conflict` above are shared with it, and these are the rest.
+   * `src/core/cloud/errors.ts` builds them; `offline` is the client-side one, a request
+   * that never reached the service.
+   */
+  | "auth"
+  | "forbidden"
+  | "revoked"
+  | "epoch_changed"
+  | "cursor_invalid"
+  | "payload_too_large"
+  | "schema_ahead"
+  | "protocol_unsupported"
+  | "rate_limited"
+  | "unavailable"
+  | "offline";
 
 export class StapleError extends Error {
   readonly code: StapleErrorCode;
@@ -959,13 +977,28 @@ export class StapleError extends Error {
 }
 
 /**
- * Retry contract. Only revision_conflict is worth retrying: put_document tells
- * the caller to re-read and merge, which is a retry with new input. A checkout
- * conflict is NOT retryable — pick a different task. Unknown (non-StapleError)
- * failures are NOT retryable either: a caller honoring the bit must never be
- * told to loop on a deterministic failure it can't classify.
+ * Retry contract. Of the store's codes only revision_conflict is worth retrying:
+ * put_document tells the caller to re-read and merge, which is a retry with new
+ * input. A checkout conflict is NOT retryable — pick a different task.
+ *
+ * Of the sync codes, the three the protocol marks retryable: `rate_limited` and
+ * `unavailable` from the service, `offline` from the client (`docs/sync.md`,
+ * "Error taxonomy"). Everything else there is a decision for a human.
+ *
+ * Unknown (non-StapleError) failures are NOT retryable: a caller honoring the bit
+ * must never be told to loop on a deterministic failure it can't classify.
  */
-const RETRYABLE_ERROR_CODES: readonly StapleErrorCode[] = ["revision_conflict"];
+const RETRYABLE_ERROR_CODES: readonly StapleErrorCode[] = [
+  "revision_conflict",
+  "rate_limited",
+  "unavailable",
+  "offline",
+];
+
+/** The retry bit for one code. The one reading of {@link RETRYABLE_ERROR_CODES}. */
+export function isRetryableErrorCode(code: StapleErrorCode | "unknown"): boolean {
+  return code !== "unknown" && RETRYABLE_ERROR_CODES.includes(code);
+}
 
 export interface ErrorEnvelope {
   code: StapleErrorCode | "unknown";
@@ -981,7 +1014,7 @@ export function errorEnvelope(error: unknown): ErrorEnvelope {
       code: error.code,
       message: error.message,
       ...(error.detail ? { detail: error.detail } : {}),
-      retryable: RETRYABLE_ERROR_CODES.includes(error.code),
+      retryable: isRetryableErrorCode(error.code),
     };
   }
   return {

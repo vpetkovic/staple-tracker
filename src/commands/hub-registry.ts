@@ -68,6 +68,7 @@ import { StapleError } from "../core/types.js";
 import { readConnection } from "../core/cloud/connection.js";
 import { confirm, isInteractive } from "../onboarding/prompts.js";
 import { settle } from "./cloud.js";
+import { EXIT_CODES, exitCodeFor } from "./exit-codes.js";
 import {
   REGISTRY_DISCLOSURE,
   describeIdentityReplacement,
@@ -556,7 +557,10 @@ function runConnect(argv: string[]): void {
            */
           if (isNotProvisioned(error) && !json) {
             console.error(`\nerror(forbidden): ${(error as Error).message}`);
-            process.exitCode = 4;
+            // The code's own exit, the same one `--json` gets from `settle`. This was 4
+            // (`conflict`) while the JSON path exited 2 (`validation`, the code the
+            // client used to fold `forbidden` into): one refusal, two exit codes.
+            process.exitCode = EXIT_CODES.forbidden;
             return;
           }
           throw error;
@@ -1012,7 +1016,8 @@ function runBackup(argv: string[]): void {
           }
           if (outcome.warning) {
             console.error(`\n! ${outcome.warning}`);
-            process.exitCode = 4;
+            // The swallowed failure's own exit, as `staple cloud backup disable` does.
+            process.exitCode = exitCodeFor(outcome.warningCode ?? "unknown");
           }
           return;
         }

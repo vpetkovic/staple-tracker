@@ -29,6 +29,18 @@
  * client as a `fetchImpl`, so `test/fixtures/network-spy.ts` stays satisfied:
  * nothing here is a network primitive.
  */
+import { randomUUID } from "node:crypto";
+import { isRetryable, type ErrorCode } from "../../worker/src/errors.js";
+import { SYNC_WIRE_CODES } from "./error-contract.js";
+
+/**
+ * The `retryable` an error body carries — `SyncError.toResponse` in `worker/src/errors.ts`
+ * puts it in every one, looked up from the code. False for a code the Worker does not have,
+ * which only a test injecting a made-up code can produce.
+ */
+function retryableOnWire(code: string): boolean {
+  return (SYNC_WIRE_CODES as string[]).includes(code) && isRetryable(code as ErrorCode);
+}
 
 export interface StoredOp {
   seq: number;
@@ -149,6 +161,12 @@ export interface FakeServerOptions {
    * a repository provisioned without the column set is on the real service.
    */
   vocabulary?: Vocabulary | null;
+  /**
+   * The repository's enrollment secret, which `POST /connect` accepts from a first machine
+   * (`worker/src/devices.ts`). Omitted is a repository with none: only an existing device
+   * token enrolls another device, as on the real service when `enroll_sha256` is null.
+   */
+  enrollmentSecret?: string | null;
 }
 
 /** `worker/src/vocabulary.ts`: which vocabulary a repository's log holds. */
@@ -242,8 +260,19 @@ export class FakeSyncServer {
   lastSeq = 0;
   /** Requests served, by route. Tests assert on batching and page counts. */
   readonly calls: string[] = [];
-  /** Set to make the next N matching requests fail transiently. */
-  failNext: { route: string; times: number; status: number; code: string } | null = null;
+  /**
+   * Set to make the next N matching requests fail. The body is the Worker's error shape —
+   * `{ code, message, retryable, ...detail }` — and `headers` are sent as the Worker sends
+   * its own, such as the `retry-after` on `rate_limited` (`worker/src/http.ts`).
+   */
+  failNext: {
+    route: string;
+    times: number;
+    status: number;
+    code: string;
+    detail?: Record<string, unknown>;
+    headers?: Record<string, string>;
+  } | null = null;
 
   /** The server-side half of the third consent. Off until something turns it on. */
   backupEnabled = false;
@@ -269,6 +298,7 @@ export class FakeSyncServer {
       // keeps every protocol-1 client working.
       protocol: { min: 1, max: 2 },
       vocabulary: null,
+      enrollmentSecret: null,
       ...options,
     };
     this.vocabulary = this.options.vocabulary;
@@ -319,10 +349,16 @@ export class FakeSyncServer {
 
       if (this.failNext && this.failNext.route === route && this.failNext.times > 0) {
         this.failNext.times -= 1;
-        return this.json(this.failNext.status, {
-          code: this.failNext.code,
-          message: "transient",
-        });
+        return this.json(
+          this.failNext.status,
+          {
+            code: this.failNext.code,
+            message: "transient",
+            retryable: retryableOnWire(this.failNext.code),
+            ...this.failNext.detail,
+          },
+          this.failNext.headers,
+        );
       }
 
       try {
@@ -332,6 +368,7 @@ export class FakeSyncServer {
           return this.json(error.status, {
             code: error.code,
             message: error.message,
+            retryable: retryableOnWire(error.code),
             ...error.extra,
           });
         }
@@ -340,10 +377,10 @@ export class FakeSyncServer {
     }) as typeof fetch;
   }
 
-  private json(status: number, body: unknown): Response {
+  private json(status: number, body: unknown, headers: Record<string, string> = {}): Response {
     return new Response(JSON.stringify(body), {
       status,
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", ...headers },
     });
   }
 
@@ -368,6 +405,18 @@ export class FakeSyncServer {
     return this.json(200, { protocol, ...body });
   }
 
+  /** `worker/src/limits.ts::capabilities` — the unscoped route's body, and connect's. */
+  private capabilities(): Record<string, unknown> {
+    return {
+      protocol: this.options.protocol,
+      maxBatchSize: this.options.maxBatchSize,
+      maxOpBytes: 512 * 1024,
+      maxPullLimit: this.options.maxPullLimit,
+      defaultPullLimit: this.options.defaultPullLimit,
+      maxSnapshotPageSize: this.options.maxSnapshotPageSize,
+    };
+  }
+
   private async route(
     url: URL,
     method: string,
@@ -375,14 +424,7 @@ export class FakeSyncServer {
     body: unknown,
   ): Promise<Response> {
     if (url.pathname === "/v1/capabilities") {
-      return this.json(200, {
-        protocol: this.options.protocol,
-        maxBatchSize: this.options.maxBatchSize,
-        maxOpBytes: 512 * 1024,
-        maxPullLimit: this.options.maxPullLimit,
-        defaultPullLimit: this.options.defaultPullLimit,
-        maxSnapshotPageSize: this.options.maxSnapshotPageSize,
-      });
+      return this.json(200, this.capabilities());
     }
 
     const match = /^\/v1\/repos\/([^/]+)(\/.*)?$/.exec(url.pathname);
@@ -396,8 +438,13 @@ export class FakeSyncServer {
      * an unsupported version before authentication, so it is not an auth oracle"*.
      */
     const protocol = this.negotiate(headers);
-    const session = this.authenticate(repoId, headers);
     const tail = match[2] ?? "";
+    // Repository-scoped but pre-credential, exactly as `worker/src/index.ts` routes it:
+    // the caller has no device token yet, so the route authenticates for itself.
+    if (tail === "/connect" && method === "POST") {
+      return this.connect(repoId, headers, body, protocol);
+    }
+    const session = this.authenticate(repoId, headers);
 
     if (tail === "/ops" && method === "POST") {
       return this.push(session, JSON.parse(String(body)) as Record<string, unknown>, protocol);
@@ -552,10 +599,15 @@ export class FakeSyncServer {
     }
   }
 
+  /**
+   * The credential first, then its scope — the order of `worker/src/index.ts`, which
+   * runs `authenticate` (`auth`, `revoked`) before `assertRepoScope` (`forbidden`).
+   *
+   * The fake used to check the path's repository first, so a bad credential presented to
+   * an unknown repository was `forbidden` here and `auth` on the service: the one
+   * dimension where the code a client is told is the whole of the test.
+   */
   private authenticate(repoId: string, headers: Headers): { repoId: string; deviceId: string } {
-    if (repoId !== this.options.repositoryId) {
-      throw new ServerError(403, "forbidden", "not a member of this repository");
-    }
     const auth = headers.get("authorization") ?? "";
     const token = auth.startsWith("Bearer ") ? auth.slice("Bearer ".length) : "";
     const device = this.devices.find((candidate) => candidate.token === token);
@@ -563,7 +615,52 @@ export class FakeSyncServer {
     if (device.revoked === true) {
       throw new ServerError(403, "revoked", "this device was revoked; re-connect required");
     }
+    if (repoId !== this.options.repositoryId) {
+      throw new ServerError(403, "forbidden", "credential is not scoped to this repository");
+    }
     return { repoId, deviceId: device.deviceId };
+  }
+
+  /**
+   * `POST /v1/repos/{repoId}/connect` — `worker/src/devices.ts::connect`.
+   *
+   * The bearer is an ENROLLMENT credential: the repository's enrollment secret, or a
+   * non-revoked device token. An unknown repository and a wrong credential are both
+   * `forbidden`, deliberately, so an unauthenticated caller cannot enumerate which ids the
+   * service knows. Re-connecting an existing device replaces its token and un-revokes it,
+   * because re-connect is the remedy `revoked` names.
+   */
+  private connect(repoId: string, headers: Headers, body: unknown, protocol: number): Response {
+    const raw = /^Bearer[ ]+(.+)$/i.exec((headers.get("authorization") ?? "").trim())?.[1];
+    if (!raw) throw new ServerError(401, "auth", "missing enrollment credential");
+    if (repoId !== this.options.repositoryId) {
+      throw new ServerError(403, "forbidden", "not a member of this repository");
+    }
+    const byDevice = this.devices.some((device) => device.token === raw && device.revoked !== true);
+    const bySecret = this.options.enrollmentSecret !== null && raw === this.options.enrollmentSecret;
+    if (!byDevice && !bySecret) {
+      throw new ServerError(403, "forbidden", "not a member of this repository");
+    }
+    const parsed = JSON.parse(String(body ?? "{}")) as Record<string, unknown>;
+    if (typeof parsed.deviceId !== "string" || parsed.deviceId.length === 0) {
+      throw new ServerError(400, "validation", "deviceId must be a non-empty string");
+    }
+    const deviceId = parsed.deviceId;
+    const token = `stpl_${randomUUID().replace(/-/g, "")}`;
+    const existing = this.devices.find((device) => device.deviceId === deviceId);
+    if (existing) {
+      existing.token = token;
+      existing.revoked = false;
+    } else {
+      this.devices.push({ deviceId, token });
+    }
+    return this.ok(protocol, {
+      repoId,
+      deviceId,
+      epoch: this.epoch,
+      token,
+      capabilities: this.capabilities(),
+    });
   }
 
   // ----------------------------------------------------------------- leases

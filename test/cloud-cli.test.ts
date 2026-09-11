@@ -326,23 +326,23 @@ describe("sync", () => {
   it("an unreachable endpoint is a bounded failure, not a hang", () => {
     forgeConnection();
     const result = staple("cloud", "sync", "--json");
-    expect(result.status).not.toBe(0);
     const envelope = JSON.parse(result.stderr) as {
       code: string;
       retryable: boolean;
       detail?: { cloudCode?: string; retryable?: boolean };
     };
     /**
-     * The true code and the true retry bit are in `detail`, not at the top
-     * level. `StapleErrorCode` is a closed union with no `offline` member and
-     * exactly one retryable code, so the connect lane preserved both in `detail`
-     * rather than widening a shared union mid-wave. This asserts that decision
-     * rather than working around it: a `--json` consumer gets the truth, and the
-     * shell gets a sensible exit status.
+     * The true code and the true retry bit, at the top level and with their own
+     * exit code (STA-251). Before, `StapleErrorCode` had no `offline` member, so
+     * this was a non-retryable `conflict`, exit 4, with the truth only in
+     * `detail`. `detail` still repeats both, for a `--json` consumer that reads
+     * them from there.
      */
+    expect(result.status).toBe(21);
+    expect(envelope.code).toBe("offline");
+    expect(envelope.retryable).toBe(true);
     expect(envelope.detail?.cloudCode).toBe("offline");
     expect(envelope.detail?.retryable).toBe(true);
-    expect(envelope.retryable).toBe(false);
   });
 
   it("leaves the local database readable and unchanged after a failed sync", () => {
