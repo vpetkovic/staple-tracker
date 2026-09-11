@@ -837,7 +837,9 @@ async function stageRestore(
         entity.entityId,
         verb,
         JSON.stringify(payload),
-        `restore:${restore.restore_id}`,
+        // The original creator when the backup kept one (`fold.ts`, `createdBy`), so the new
+        // epoch attributes what it restores as the old one did; the restore otherwise.
+        entity.createdBy ?? `restore:${restore.restore_id}`,
         // `client_seq` is a RECORD of which allocation produced an operation, never an
         // allocator. These rows were not allocated by any device's counter, so the
         // ordinal within the restore is the honest value — and writing a device's real
@@ -849,7 +851,10 @@ async function stageRestore(
         // schema its DATA was written under — not the one the restoring device happens
         // to be running.
         source.schema_version,
-        createdAt,
+        // The entity's own create time when the backup recorded one, so the new epoch's
+        // fold hands a hydrating device the time the thing was written rather than the
+        // moment it was restored (`fold.ts`, `BackupEntity.createdAt`).
+        entity.createdAt ?? createdAt,
         now,
         restore.from_epoch,
         /**

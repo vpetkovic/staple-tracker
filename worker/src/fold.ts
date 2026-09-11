@@ -106,6 +106,13 @@ export interface FieldWrite {
   opId: string;
   /** The operation's client timestamp, as sent. Becomes `written_at`. */
   at: string;
+  /**
+   * Where in the log this write sits. A hydrating device compares it with the seq of a
+   * local claim on the same value — two devices giving two issues one identifier, two
+   * projects one slug — so that it settles the claim exactly as a device that read the
+   * ordered tail did: the earlier claim keeps the value.
+   */
+  seq: number;
 }
 
 /**
@@ -133,9 +140,32 @@ export interface BackupEntity {
    */
   superseded: boolean;
   state: Record<string, unknown>;
+  /**
+   * The client timestamp of the `create` this state descends from, or null when the log
+   * holds no create for it (an entity only ever updated — which a build before the seed
+   * produced). Carried because a snapshot has no operation of its own to take a time
+   * from: without it, a comment or a document revision whose payload did not carry its
+   * own `createdAt` — every one written before that field was journaled — was stamped on
+   * a hydrating device with the moment it hydrated, while a device that read the same
+   * create in the ordered tail stamped it with this. A restore writes it back as the
+   * restored operation's time, so the fold of the new epoch carries it too.
+   */
+  createdAt?: string | null;
+  /**
+   * The actor of that create, for the same reason: a document revision written before
+   * its payload carried its own `author` was attributed on a hydrating device to nobody,
+   * and on a device reading the tail to whoever this names.
+   */
+  createdBy?: string | null;
 }
 
 export interface FoldedEntity extends BackupEntity {
+  /**
+   * The seq of the `create` this state descends from, or null when there is none. This
+   * epoch's number, so a backup does not keep it (`forBackup`): a restore re-mints every
+   * seq. See {@link FieldWrite.seq} for what it is compared with.
+   */
+  createdSeq: number | null;
   /**
    * Per-field provenance, keyed by the payload key exactly as the operation spelled it —
    * `estimatedSeconds`, not `estimated_seconds`, which is the spelling
@@ -166,13 +196,27 @@ export interface FoldResult {
  *                            collection is assigned WHOLE, which is the supersede. The
  *                            verb is recorded so a restore can reproduce it.
  *   delete                 — record a tombstone; later updates become no-ops
+ *   create after a delete  — the entity begins again: the tombstone is lifted and the
+ *                            state restarts from this create's payload
  *
- * The tombstone wins regardless of arrival order, which is what makes convergence
- * order-independent, and it is RETURNED rather than omitted: a device handed silence
- * about a deleted entity cannot tell it from one it has never heard of. That matters
- * more for a restore than for a bootstrap, because a re-bootstrapping device keeps
- * its local rows — so an unmaterialised tombstone means a deleted issue quietly
- * coming back to life on every device that still has it.
+ * The tombstone wins over every later update regardless of arrival order, which is what
+ * makes convergence order-independent, and it is RETURNED rather than omitted: a device
+ * handed silence about a deleted entity cannot tell it from one it has never heard of.
+ * That matters more for a restore than for a bootstrap, because a re-bootstrapping
+ * device keeps its local rows — so an unmaterialised tombstone means a deleted issue
+ * quietly coming back to life on every device that still has it.
+ *
+ * ## Why a create is the one thing a tombstone yields to
+ *
+ * A tombstone exists to stop a LATE update — one made before its author saw the delete —
+ * from resurrecting what was deleted. A create is not late: it is somebody deciding,
+ * after the delete, that the entity exists again, and for an entity keyed by a name
+ * rather than a UUID that is an ordinary thing to do. Removing a status and adding it
+ * back, or resetting a setting and setting it again, reuses the key. Treating the
+ * tombstone as final dropped the second create on every device that hydrated from here,
+ * while every device that read the ordered tail applied it — the two halves of a
+ * bootstrap disagreeing about whether `blocked` is a status. The client's applier makes
+ * the identical exception (`apply.ts`), so both halves agree again.
  */
 export async function foldLog(
   env: Env,
@@ -187,7 +231,7 @@ export async function foldLog(
 
   for (;;) {
     const page = await env.DB.prepare(
-      `SELECT seq, op_id, entity, entity_id, verb, payload, created_at, server_ts, schema_version
+      `SELECT seq, op_id, entity, entity_id, verb, payload, actor, created_at, server_ts, schema_version
          FROM ops
         WHERE repo_id = ?1 AND epoch = ?2 AND seq > ?3 AND seq <= ?4
         ORDER BY seq
@@ -201,6 +245,7 @@ export async function foldLog(
         entity_id: string;
         verb: string;
         payload: string;
+        actor: string | null;
         created_at: string;
         server_ts: number;
         schema_version: number;
@@ -233,6 +278,9 @@ export async function foldLog(
           superseded: false,
           state: {},
           fieldWrites: {},
+          createdSeq: null,
+          createdAt: null,
+          createdBy: null,
         };
         entities.set(key, entry);
       }
@@ -243,6 +291,19 @@ export async function foldLog(
       if (row.verb === "delete") {
         entry.deletedAt = row.server_ts;
         continue;
+      }
+      if (row.verb === "create") {
+        if (entry.deletedAt !== null) {
+          // The entity begins again (see the module comment). Nothing of the deleted one
+          // survives into it: not its fields, not their provenance, not its verb.
+          entry.deletedAt = null;
+          entry.state = {};
+          entry.fieldWrites = {};
+          entry.superseded = false;
+        }
+        entry.createdSeq = row.seq;
+        entry.createdAt = row.created_at;
+        entry.createdBy = row.actor;
       }
       if (entry.deletedAt !== null) continue;
 
@@ -284,6 +345,7 @@ export async function foldLog(
             baseVersion: entry.version - 1,
             opId: row.op_id,
             at: row.created_at,
+            seq: row.seq,
           };
         }
       }
@@ -341,6 +403,6 @@ export function materializedVerb(entity: BackupEntity): {
  * provenance it would be wrong to trust.
  */
 export function forBackup(entity: FoldedEntity): BackupEntity {
-  const { fieldWrites: _thisEpochsProvenance, ...rest } = entity;
+  const { fieldWrites: _thisEpochsProvenance, createdSeq: _thisEpochsSeq, ...rest } = entity;
   return rest;
 }

@@ -75,6 +75,17 @@ interface WireEntity {
    * device inherits its defaults without acquiring a claim on them. See `fold.ts`.
    */
   fieldWrites: Record<string, FieldWrite>;
+  /**
+   * The seq and client time of the `create` this state descends from; null when the log
+   * holds none. Both are what a device reading the ordered tail would have had from the
+   * create itself: the time is the one a comment or revision without its own `createdAt`
+   * is stamped with, and the seq is how two claims on one identifier or slug are settled
+   * the way the tail settles them. Additive: an older client ignores both.
+   */
+  createdSeq: number | null;
+  createdAt: string | null;
+  /** The actor of that create; what a revision or comment without its own author takes. */
+  createdBy: string | null;
 }
 
 export async function snapshot(
@@ -216,6 +227,9 @@ function toWireEntity(entity: FoldedEntity): WireEntity {
     verb: materializedVerb(entity).verb,
     state: entity.state,
     fieldWrites: entity.fieldWrites,
+    createdSeq: entity.createdSeq,
+    createdAt: entity.createdAt ?? null,
+    createdBy: entity.createdBy ?? null,
   };
 }
 

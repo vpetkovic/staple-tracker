@@ -277,8 +277,8 @@ describe("GET /v1/repos/{repoId}/snapshot", () => {
     // number `sync_field_writes.base_version` holds for the same operation applied
     // from the ordered tail. `status` names its LAST writer, not its first.
     expect(entity.fieldWrites).toEqual({
-      status: { baseVersion: 2, opId: "op-3", at: "2026-09-05T12:00:00.000Z" },
-      assignee: { baseVersion: 2, opId: "op-3", at: "2026-09-05T12:00:00.000Z" },
+      status: { baseVersion: 2, opId: "op-3", at: "2026-09-05T12:00:00.000Z", seq: 3 },
+      assignee: { baseVersion: 2, opId: "op-3", at: "2026-09-05T12:00:00.000Z", seq: 3 },
     });
     // And the state still holds every field, including the ones with no provenance.
     expect(entity.state.title).toBe("first");
@@ -333,7 +333,7 @@ describe("GET /v1/repos/{repoId}/snapshot", () => {
     // defends a plan by naming the operation that made it rather than by falling back
     // to the version comparison alone.
     expect(body.entities[0].fieldWrites).toEqual({
-      members: { baseVersion: 1, opId: "op-2", at: "2026-09-05T12:00:00.000Z" },
+      members: { baseVersion: 1, opId: "op-2", at: "2026-09-05T12:00:00.000Z", seq: 2 },
     });
     expect(body.entities[0].state.targetDate).toBe("2026-12-24");
   });
@@ -482,5 +482,60 @@ describe("GET /v1/repos/{repoId}/snapshot — paging", () => {
       "payload_too_large",
       413,
     );
+  });
+});
+
+describe("the fold's record of each entity's create", () => {
+  /**
+   * A tombstone turns away every late update, and yields to a create: somebody deciding,
+   * after the delete, that the entity exists again — a status removed and added back, a
+   * setting reset and set. Final, the second create was dropped here and applied by every
+   * client reading the tail, and the two halves of a bootstrap disagreed.
+   */
+  it("begins an entity again when a create follows its delete, and forgets the old one", async () => {
+    await pushOps(
+      [
+        envelope({ clientSeq: 1, entity: "status", entityId: "qa", verb: "create", baseVersion: null, payload: { label: "QA", category: "review", note: "old" } }),
+        envelope({ clientSeq: 2, entity: "status", entityId: "qa", verb: "update", baseVersion: 1, payload: { label: "QA!" } }),
+        envelope({ clientSeq: 3, entity: "status", entityId: "qa", verb: "delete", baseVersion: 2, payload: {} }),
+        envelope({ clientSeq: 4, entity: "status", entityId: "qa", verb: "update", baseVersion: 2, payload: { label: "late" } }),
+        envelope({ clientSeq: 5, entity: "status", entityId: "qa", verb: "create", baseVersion: null, payload: { label: "Quality", category: "review" } }),
+      ],
+      { token },
+    );
+    const body = await jsonOf(await call(`/v1/repos/${REPO}/snapshot`, { token }));
+    const [entity] = body.entities;
+    expect(entity.deletedAt).toBeNull();
+    expect(entity.verb).toBe("create");
+    // The new life only: not the old note, not the late label, no inherited provenance.
+    expect(entity.state).toEqual({ label: "Quality", category: "review" });
+    expect(entity.fieldWrites).toEqual({});
+    expect(entity.version).toBe(5);
+    expect(entity.createdSeq).toBe(5);
+  });
+
+  it("carries the create's seq, time and actor, and each field write's seq", async () => {
+    await pushOps(
+      [
+        envelope({ clientSeq: 1, verb: "create", baseVersion: null, payload: { title: "t" }, actor: "writer", createdAt: "2026-08-01T09:30:00.000Z" }),
+        envelope({ clientSeq: 2, payload: { title: "u" }, actor: "editor", createdAt: "2026-08-02T09:30:00.000Z" }),
+      ],
+      { token },
+    );
+    const body = await jsonOf(await call(`/v1/repos/${REPO}/snapshot`, { token }));
+    const [entity] = body.entities;
+    expect(entity.createdSeq).toBe(1);
+    expect(entity.createdAt).toBe("2026-08-01T09:30:00.000Z");
+    expect(entity.createdBy).toBe("writer");
+    expect(entity.fieldWrites.title.seq).toBe(2);
+  });
+
+  it("says nothing about a create the log does not hold", async () => {
+    await pushOps([envelope({ clientSeq: 1, payload: { title: "an edit with no create" } })], { token });
+    const body = await jsonOf(await call(`/v1/repos/${REPO}/snapshot`, { token }));
+    const [entity] = body.entities;
+    expect(entity.createdSeq).toBeNull();
+    expect(entity.createdAt).toBeNull();
+    expect(entity.createdBy).toBeNull();
   });
 });
