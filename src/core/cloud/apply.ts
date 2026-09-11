@@ -52,9 +52,16 @@ import {
   settingMetaKey,
   type SettingDefinition,
 } from "../settings-registry.js";
-import { moveIdentifier, recordIdentifierMove } from "../identifier-moves.js";
+import { aliasedIssueId, moveIdentifier, recordIdentifierMove } from "../identifier-moves.js";
 import { StapleError, normalizeTitle, nowIso } from "../types.js";
-import { holderYields, oweSettlement, ownClaimSeq } from "./claims.js";
+import { holderYields, oweSettlement, ownClaimSeq, ownOriginClaimSeq } from "./claims.js";
+import {
+  isDefined,
+  recordRemovalTarget,
+  removalTarget,
+  usableTarget,
+  type VocabularyEntity,
+} from "../vocabulary-targets.js";
 import type { RemoteOperation, SnapshotEntity } from "./wire.js";
 
 /**
@@ -124,6 +131,9 @@ const ISSUE_FIELDS: Record<string, Column> = {
   gateResolvedAt: col("gate_resolved_at"),
   gateReleased: col("gate_released", "bool"),
   startedAt: col("started_at"),
+  // When the issue entered its current blocked cycle: written with the transition, and
+  // travelling with it (`test/cloud-blocked-transition.test.ts`).
+  blockedTransitionAt: col("blocked_transition_at"),
   completedAt: col("completed_at"),
   cancelledAt: col("cancelled_at"),
   checkoutAgent: col("checkout_agent"),
@@ -425,11 +435,11 @@ export function applyToDatabase(db: DatabaseSync, input: ApplyInput): boolean {
     case "project":
       return applyProject(db, input);
     case "status":
-      return applyVocabulary(db, input, "workspace_statuses");
+      return settingsMoved(db, applyVocabulary(db, input, "workspace_statuses"));
     case "kind":
-      return applyVocabulary(db, input, "workspace_kinds");
+      return settingsMoved(db, applyVocabulary(db, input, "workspace_kinds"));
     case "setting":
-      return applySetting(db, input);
+      return settingsMoved(db, applySetting(db, input));
     case "milestone":
       return applyMilestone(db, input);
     case "queue":
@@ -460,11 +470,77 @@ export function applyToDatabase(db: DatabaseSync, input: ApplyInput): boolean {
 
 // ------------------------------------------------------------------ entities
 
+/**
+ * A removal's target, recorded, and every issue still holding what it removes moved there.
+ *
+ * The issues the removing device held were moved by it, each its own operation. What is
+ * left is what it could not see: an issue another device moved into it concurrently. It
+ * goes where the removal says (`vocabulary-targets.ts`) — on every device, so none holds a
+ * status or kind it does not define — and when that move was this device's own, this
+ * device journals where it went, so the log agrees.
+ */
+function moveOffRemoved(db: DatabaseSync, input: ApplyInput, entity: VocabularyEntity): void {
+  const row = db.prepare(`SELECT ${entity === "status" ? "category" : "NULL AS category"} FROM ${entity === "status" ? "workspace_statuses" : "workspace_kinds"} WHERE id = ?`).get(input.entityId) as
+    | { category: string | null }
+    | undefined;
+  const category = row?.category ?? (typeof input.payload.category === "string" ? input.payload.category : null);
+  const named = typeof input.payload.migrateTo === "string" ? input.payload.migrateTo : null;
+  const held = removalTarget(db, entity, input.entityId);
+  const to = usableTarget(db, entity, input.entityId, named ?? held?.to ?? null, category);
+  if (to === null) return;
+  recordRemovalTarget(db, entity, input.entityId, to, false);
+  const column = entity === "status" ? "status" : "kind";
+  const holding = db.prepare(`SELECT id FROM issues WHERE ${column} = ?`).all(input.entityId) as Array<{ id: string }>;
+  for (const issue of holding) {
+    db.prepare(`UPDATE issues SET ${column} = ? WHERE id = ?`).run(to, issue.id);
+    if (held?.own === true || ownClaimSeq(db, "issue", issue.id, [column]) !== null) {
+      oweSettlement(db, { entity: "issue", entityId: issue.id, field: column, from: input.entityId });
+    }
+  }
+}
+
+/**
+ * An issue write naming a status or kind this database has removed goes where the removal
+ * said instead — the other half of {@link moveOffRemoved}, for a move that arrives after
+ * the removal. When the removal was this device's, it journals where the issue went.
+ */
+function redirectRemoved(db: DatabaseSync, input: ApplyInput, pairs: Array<[string, unknown]>): void {
+  for (const [index, [column, value]] of pairs.entries()) {
+    if ((column !== "status" && column !== "kind") || typeof value !== "string") continue;
+    const entity: VocabularyEntity = column;
+    if (isDefined(db, entity, value)) continue;
+    const removed = removalTarget(db, entity, value);
+    if (removed === null) continue;
+    const to = usableTarget(db, entity, value, removed.to, null);
+    if (to === null) continue;
+    pairs[index] = [column, to];
+    if (removed.own) oweSettlement(db, { entity: "issue", entityId: input.entityId, field: column, from: value });
+  }
+}
+
+/**
+ * The vocabulary or a setting changed under the store, so the revision its memo keys on
+ * moves (`WorkspaceStore.settings`, `meta.settings_revision`).
+ *
+ * The store bumps it on every change it makes itself; the applier did not, so a store on
+ * the same database — a UI or MCP server, or the command that just synced — went on
+ * serving the vocabulary from before the sync. Placing an entry then read the old numbers
+ * behind the order and put it first instead of last (`test/cloud-vocabulary-sort-order.test.ts`).
+ */
+export function settingsMoved(db: DatabaseSync, applied: boolean): boolean {
+  db.prepare(
+    `INSERT INTO meta (key, value) VALUES ('settings_revision', '1')
+     ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(meta.value AS INTEGER) + 1 AS TEXT)`,
+  ).run();
+  return applied;
+}
+
 function applyIssue(db: DatabaseSync, input: ApplyInput): boolean {
   if (input.verb === "delete") return tombstone(db, input, "issues", "id");
 
   const { payload } = input;
   const pairs = project(payload, ISSUE_COLUMNS);
+  redirectRemoved(db, input, pairs);
 
   const exists = db.prepare("SELECT 1 AS hit FROM issues WHERE id = ?").get(input.entityId) as
     | { hit: number }
@@ -641,7 +717,9 @@ function identifierOwner(db: DatabaseSync, identifier: string): string | null {
 function provisionalIdentifier(db: DatabaseSync, identifier: string): string {
   for (let n = 1; n < 1000; n += 1) {
     const candidate = `${identifier}+${n}`;
-    if (identifierOwner(db, candidate) === null) return candidate;
+    // Nor one an issue here has held and moved off: that string still finds that issue
+    // (`identifier-moves.ts`), and a link or a note made through it means that issue.
+    if (identifierOwner(db, candidate) === null && aliasedIssueId(db, candidate) === null) return candidate;
   }
   throw new StapleError("conflict", `Could not find a free identifier near ${identifier}.`);
 }
@@ -861,7 +939,7 @@ function settleIssueKeys(db: DatabaseSync, input: ApplyInput, values: Map<string
       .get(kind, originId, input.entityId) as { id: string } | undefined;
     if (holder) {
       const fields = ["originKind", "origin_kind", "originId", "origin_id", "status"];
-      if (holderYields(db, "issue", holder.id, fields, claimSeqOf(input, fields))) {
+      if (holderYields(db, "issue", holder.id, fields, claimSeqOf(input, fields), ownOriginClaimSeq)) {
         db.prepare("UPDATE issues SET origin_id = NULL WHERE id = ?").run(holder.id);
         oweSettlement(db, { entity: "issue", entityId: holder.id, field: "originId", from: originId });
       } else {
@@ -873,21 +951,6 @@ function settleIssueKeys(db: DatabaseSync, input: ApplyInput, values: Map<string
 
 function issueExists(db: DatabaseSync, id: string): boolean {
   return (db.prepare("SELECT 1 AS hit FROM issues WHERE id = ?").get(id) as { hit: number } | undefined) !== undefined;
-}
-
-/**
- * Whether this is the create of a comment or revision whose payload does not carry its own
- * `createdAt` (an older build's), applied with the time of that create: an operation, or a
- * snapshot entity from a service that sent `createdAt` (it sends `createdSeq` with it).
- *
- * That time is the one every device that did not write it holds. The device that did held
- * its own clock's reading — an older build's store dated the row, then journaled the
- * operation with a second reading, a millisecond or two later (measured live, 56ff1f4). A
- * newer applier re-reading the snapshot once (`APPLIER_VERSION` in `sync.ts`) brings that
- * row level with every other device.
- */
-function datesTheCreate(input: ApplyInput): boolean {
-  return input.verb === "create" && typeof input.seq === "number" && typeof input.payload.createdAt !== "string";
 }
 
 function applyComment(db: DatabaseSync, input: ApplyInput): boolean {
@@ -905,7 +968,13 @@ function applyComment(db: DatabaseSync, input: ApplyInput): boolean {
 
   if (exists) {
     const values = new Map(pairs);
-    if (datesTheCreate(input)) values.set("created_at", input.at);
+    /**
+     * Who wrote a comment and when are its create's, and a comment this database holds has
+     * had its create: its time is not taken from the operation or the snapshot here. A
+     * restore stages the whole state as a new `create` under its own actor and instant, and
+     * a snapshot of a restored epoch can only say what the restore said — taken for the
+     * create's time, it rewrote the true time on every device that held the row.
+     */
     settleCommentKey(db, input, values);
     if (values.size > 0) updateRow(db, "comments", "id", input.entityId, [...values]);
     return true;
@@ -990,7 +1059,8 @@ function applyDocumentRevision(db: DatabaseSync, input: ApplyInput): boolean {
    * in the ordered tail, and wrong for one arriving in a snapshot, which has neither: a
    * snapshot entity is applied with a null actor at the moment of hydration, so every
    * revision of every document read as written by nobody, just now. A revision is
-   * immutable, so the values it was written with are the only true ones.
+   * immutable, so the values it was written with are the only true ones — and a revision
+   * this database already holds keeps them (`DO NOTHING`), whatever a restore restages.
    */
   const author = typeof payload.author === "string" ? payload.author : input.actor;
   const createdAt = typeof payload.createdAt === "string" ? payload.createdAt : input.at;
@@ -1007,14 +1077,6 @@ function applyDocumentRevision(db: DatabaseSync, input: ApplyInput): boolean {
     typeof payload.changeSummary === "string" ? payload.changeSummary : null,
     createdAt,
   );
-  if (datesTheCreate(input)) {
-    db.prepare("UPDATE document_revisions SET created_at = ? WHERE issue_id = ? AND key = ? AND revision = ?").run(
-      input.at,
-      issueId,
-      key,
-      revision,
-    );
-  }
 
   /**
    * The head only ever moves forward. A revision arriving out of order — which
@@ -1090,13 +1152,46 @@ function writeBlockers(
   for (const id of ids) {
     if (!issueExists(db, id)) throw new ReferentMissing(`issue ${id} (blocker of ${blockedId})`);
   }
-  db.prepare("DELETE FROM relations WHERE blocked_id = ? AND type = 'blocks'").run(blockedId);
-  const insert = db.prepare(
+  /**
+   * Each edge's own author and time: as the operation describes it (`edges`, which every
+   * build since this one sends), else as this database already holds it, else the
+   * operation's. The set is replaced — an edge it no longer names goes — but an edge it
+   * still names is not re-made: re-inserted with the operation's actor and time, the
+   * device that seeded the repository rewrote its own edges when its seed came back, and
+   * every other device dated all of an issue's edges with one instant.
+   */
+  const described =
+    input.payload.edges !== null && typeof input.payload.edges === "object" && !Array.isArray(input.payload.edges)
+      ? (input.payload.edges as Record<string, { createdBy?: unknown; createdAt?: unknown }>)
+      : {};
+  const held = new Map(
+    (
+      db.prepare("SELECT blocker_id, created_by, created_at FROM relations WHERE blocked_id = ? AND type = 'blocks'").all(blockedId) as Array<{
+        blocker_id: string;
+        created_by: string | null;
+        created_at: string;
+      }>
+    ).map((row) => [row.blocker_id, row]),
+  );
+  const remove = db.prepare("DELETE FROM relations WHERE blocker_id = ? AND blocked_id = ? AND type = 'blocks'");
+  for (const id of held.keys()) if (!ids.includes(id)) remove.run(id, blockedId);
+  const upsert = db.prepare(
     `INSERT INTO relations (blocker_id, blocked_id, type, created_by, created_at)
      VALUES (?, ?, 'blocks', ?, ?)
-     ON CONFLICT (blocker_id, blocked_id, type) DO NOTHING`,
+     ON CONFLICT (blocker_id, blocked_id, type) DO UPDATE SET created_by = excluded.created_by, created_at = excluded.created_at`,
   );
-  for (const id of ids) insert.run(id, blockedId, input.actor, input.at);
+  for (const id of ids) {
+    const facts = described[id];
+    const kept = held.get(id);
+    const createdAt = typeof facts?.createdAt === "string" ? facts.createdAt : (kept?.created_at ?? input.at);
+    const createdBy =
+      facts !== undefined && (typeof facts.createdBy === "string" || facts.createdBy === null)
+        ? facts.createdBy
+        : kept !== undefined
+          ? kept.created_by
+          : input.actor;
+    upsert.run(id, blockedId, createdBy, createdAt);
+  }
 }
 
 /**
@@ -1259,6 +1354,7 @@ function applyVocabulary(
      * folds the delete.
      */
     writeTombstone(db, input);
+    moveOffRemoved(db, input, table === "workspace_statuses" ? "status" : "kind");
     db.prepare(`DELETE FROM ${table} WHERE id = ?`).run(input.entityId);
     return true;
   }

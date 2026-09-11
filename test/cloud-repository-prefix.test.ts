@@ -128,6 +128,9 @@ describe("the first device declares its prefix, and a joining clone takes it", (
     await a.sync();
     const note = a.db.prepare("SELECT body FROM comments WHERE issue_id = ?").get(mine.id) as { body: string };
     expect(note.body).toContain("Renumbered from STA-1 to TRA-3");
+    // True where it is read, on A as on C: it names the workspace, not "this machine".
+    expect(note.body).toContain("A reference to STA-1 made in that workspace before");
+    expect(note.body).not.toContain("this machine");
   });
 });
 

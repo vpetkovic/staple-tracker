@@ -29,6 +29,7 @@
  * `GET /devices` is authenticated, is a read, mutates nothing, and returns
  * something worth having anyway.
  */
+import { readAutoSyncState } from "./auto-state.js";
 import { connectionIsPrivate, readConnection } from "./connection.js";
 import type { CredentialMechanism } from "./credential-store.js";
 import { credentialStoreFor, fileCredentialIsPrivate } from "./credential-store.js";
@@ -95,6 +96,8 @@ function disconnected(repositoryId: string): CloudStatus {
 
 export interface LocalStatusOptions {
   platform?: NodeJS.Platform;
+  /** The clock a pending automatic-sync wait is measured against. Injected in tests. */
+  now?: number;
   /** Injected in tests so no real keychain is consulted. */
   credentialStore?: { read(repositoryId: string): string | null; mechanism: CredentialMechanism };
 }
@@ -144,6 +147,14 @@ export function localCloudStatus(
   }
   if (connectionIsPrivate(home, repositoryId, options.platform) === false) {
     warnings.push("The connection record is readable by other users on this machine.");
+  }
+  // A wait automatic sync is keeping — the service asked, or runs failed — shown, not silent.
+  const waitingUntil = connection.auto ? readAutoSyncState(home, repositoryId).nextEligibleAt : null;
+  if (waitingUntil !== null && Date.parse(waitingUntil) > (options.now ?? Date.now())) {
+    warnings.push(
+      `Automatic sync is waiting until ${waitingUntil} before it tries again. A manual ` +
+        "`staple cloud sync` goes ahead now, and clears the wait when it succeeds.",
+    );
   }
 
   const state: CloudState = credential === null ? "auth_failed" : connection.auto ? "automatic" : "manual";

@@ -10,6 +10,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { FakeSyncServer } from "./fixtures/fake-sync-server.js";
+import { OlderBuildDevice } from "./fixtures/older-build.js";
 import { Fleet, type Machine } from "./fixtures/sync-machines.js";
 
 const REPO = "5eed0000-0000-4000-8000-0000000000c3";
@@ -88,8 +89,9 @@ describe("notes and authorship on the plan and on milestone members", () => {
     expect(plan(b.db)).toEqual(plan(a.db));
   });
 
-  it("survive two concurrent reorders and the resolution that settles them, which carries only the order", async () => {
-    fleet = new Fleet(new FakeSyncServer({ repositoryId: REPO }), REPO);
+  it("survive two concurrent reorders, the resolution that settles them, and an order from an older build", async () => {
+    const server = new FakeSyncServer({ repositoryId: REPO });
+    fleet = new Fleet(server, REPO);
     const a = fleet.machine("a");
     await a.sync();
     const b = fleet.machine("b");
@@ -117,6 +119,20 @@ describe("notes and authorship on the plan and on milestone members", () => {
 
     for (const machine of [a, b]) expect(notes(machine.db)).toEqual(before);
     expect(plan(a.db)).toEqual(plan(b.db));
+
+    // A build from before `entries` sends the order alone: every device keeps what it holds
+    // for each entry, and only the order moves.
+    const schema = Number((a.db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as { value: string }).value);
+    const version = (a.db.prepare("SELECT version FROM sync_entity_versions WHERE entity = 'queue'").get() as { version: number }).version;
+    await new OlderBuildDevice(server, REPO, "device-old", schema).push([
+      { entity: "queue", entityId: "@plan", verb: "replace", payload: { order: [ids[0]!, ids[1]!, ids[2]!] }, baseVersion: version },
+    ]);
+    await a.sync();
+    await b.sync();
+    for (const machine of [a, b]) {
+      expect(notes(machine.db), machine.label).toEqual(before);
+      expect(plan(machine.db).map((row) => (row as { issue_id: string }).issue_id), machine.label).toEqual(ids);
+    }
   });
 
   it("travel with a joining device's own entries when they are appended to the repository's plan", async () => {

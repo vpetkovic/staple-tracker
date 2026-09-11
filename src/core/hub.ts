@@ -934,24 +934,28 @@ export class Hub {
     blockerIdentifier: string,
     blockedIdentifier: string,
   ): { blocker: { entry: WorkspaceEntry; identifier: string }; blocked: { entry: WorkspaceEntry; identifier: string } } {
-    const blocker = this.resolveIdentifier(blockerIdentifier);
-    const blocked = this.resolveIdentifier(blockedIdentifier);
-    if (blocker.entry.slug === blocked.entry.slug) {
+    const typed = [this.resolveIdentifier(blockerIdentifier), this.resolveIdentifier(blockedIdentifier)];
+    if (typed[0]!.entry.slug === typed[1]!.entry.slug) {
       throw new StapleError(
         "validation",
-        `Both issues are in workspace "${blocker.entry.slug}" — use the workspace-local blocked-by instead`,
+        `Both issues are in workspace "${typed[0]!.entry.slug}" — use the workspace-local blocked-by instead`,
       );
     }
-    for (const side of [blocker, blocked]) {
-      if (side.entry.available) {
-        const ws = openWorkspace(side.entry.path);
-        try {
-          ws.store.getIssue(side.identifier);
-        } finally {
-          ws.store.db.close();
-        }
+    /**
+     * Each end under the identifier its issue holds NOW, not the one that was typed. A
+     * stand-in (`TRA-2+1`) or an identifier the issue has since moved off still finds it
+     * (`identifier-moves.ts`), but stored as typed it named no issue anybody keys on — a
+     * cross blocker nobody saw — and the next issue handed that string took the link.
+     */
+    const [blocker, blocked] = typed.map((side) => {
+      if (!side.entry.available) return side;
+      const ws = openWorkspace(side.entry.path);
+      try {
+        return { entry: side.entry, identifier: ws.store.getIssue(side.identifier).identifier };
+      } finally {
+        ws.store.db.close();
       }
-    }
+    }) as [typeof typed[0], typeof typed[1]];
     // Cross-file cycle guard over the hub edges (workspace-local edges cannot
     // close a cross-file loop unless a hub edge participates in it too — a
     // documented prototype simplification).

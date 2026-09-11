@@ -17,7 +17,7 @@ import type { FakeSyncServer } from "./fake-sync-server.js";
 export interface OlderBuildOp {
   readonly entity: string;
   readonly entityId: string;
-  readonly verb: "create" | "update";
+  readonly verb: "create" | "update" | "replace";
   readonly payload: Record<string, unknown>;
   readonly baseVersion?: number | null;
   /** When the operation was written. Now, unless a test needs a time it can tell apart. */

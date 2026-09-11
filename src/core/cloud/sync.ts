@@ -46,6 +46,7 @@ import {
   type CloudErrorCode,
   type RequestOptions,
 } from "./client.js";
+import { readAutoSyncState, writeAutoSyncState } from "./auto-state.js";
 import { readConnection } from "./connection.js";
 import { credentialStoreFor } from "./credential-store.js";
 import { parseEndpoint, type CloudEndpoint } from "./endpoint.js";
@@ -184,6 +185,48 @@ function recordApplierVersion(db: DatabaseSync): void {
     APPLIER_VERSION_KEY,
     String(APPLIER_VERSION),
   );
+}
+
+/**
+ * Whether a snapshot was served by a Worker whose fold this applier's generation needs.
+ *
+ * The client ships within minutes of a merge and the Worker whenever it is deployed, so
+ * for a while an upgraded device reads a snapshot from the Worker before this build — one
+ * that folds a delete as final even after a re-create, and says nothing of each create.
+ * Re-reading that one deleted, on every upgraded device, a status removed and added back,
+ * and then recorded the catch-up as done, so the new Worker never got to repair it. What
+ * tells the two apart is on every entity: `createdSeq`, which the new fold always sends (a
+ * number, or null) and the old one never does. An empty snapshot says nothing either way,
+ * and has nothing to repair.
+ */
+function servedByCurrentFold(entities: readonly SnapshotEntity[]): boolean | null {
+  if (entities.length === 0) return null;
+  return entities.every((entity) => Object.prototype.hasOwnProperty.call(entity, "createdSeq"));
+}
+
+/** Set when this sync applied a snapshot from the older fold; read once, at the end. */
+const hydratedFromOlderFold = new WeakMap<DatabaseSync, true>();
+
+function noteFold(db: DatabaseSync, entities: readonly SnapshotEntity[]): void {
+  if (servedByCurrentFold(entities) === false) hydratedFromOlderFold.set(db, true);
+}
+
+/**
+ * One entity of the snapshot, to ask whether the service folds creates yet — so a device
+ * that owes a re-read pays one small request per sync, not a whole snapshot, until the
+ * Worker that can repair it is live.
+ */
+async function serviceFoldsCreates(session: Session, options: SyncOptions): Promise<boolean> {
+  const page = (await attempt(
+    () =>
+      fetchSnapshotPage(
+        session.endpoint,
+        { repositoryId: session.repositoryId, token: session.token, deviceId: session.deviceId, cursor: null, limit: 1 },
+        options,
+      ),
+    options,
+  )) as SnapshotPage;
+  return servedByCurrentFold(page.entities) !== false;
 }
 
 /**
@@ -417,9 +460,9 @@ export async function syncRepository(
 
   const session = openSession(options.home, repositoryId);
   const state = requireSyncState(db);
-  // Decided before the seed or the pull moves the cursor: a database that has never
-  // synchronized is hydrated by this applier and owes nothing.
-  const catchUpOwed = state.cursor !== null && applierVersionOf(db) < APPLIER_VERSION;
+  // Read before the pull records anything. A database this sync hydrates — a first sync, a
+  // join, a re-bootstrap — owes nothing more once it has (`hydrated`, below).
+  const catchUpOwed = applierVersionOf(db) < APPLIER_VERSION;
 
   if (state.repositoryId !== repositoryId) {
     throw new StapleError(
@@ -506,6 +549,7 @@ export async function syncRepository(
     const mode = seedModeOf(db);
     if (mode === "heal") await pushAll();
     const survey = await surveyRepository(session, capabilities, options);
+    noteFold(db, survey.entities);
     /**
      * A joining workspace takes its repository's prefix (`repository-prefix.ts`) — refused
      * here, before the seed writes anything, when another workspace on this machine holds
@@ -541,15 +585,36 @@ export async function syncRepository(
   if (pendingCount(db) > 0) await pushAll();
 
   let caughtUp: BootstrapReport | null = null;
-  if (catchUpOwed && pull.bootstrap === null) {
+  const hydrated = pull.bootstrap !== null || forcedBootstrap !== null || joined !== null;
+  if (catchUpOwed && !hydrated && (await serviceFoldsCreates(session, options))) {
     caughtUp = (await recoverFromSnapshot(db, journal, session, capabilities, options, `applier-${APPLIER_VERSION}`)).bootstrap;
   }
-  recordApplierVersion(db);
+  /**
+   * Recorded only when what this database holds came through the fold this applier needs.
+   * A snapshot from the older one — hydrated from, joined on, or re-read — leaves it owed,
+   * and taken back if it was recorded, so the first sync after the new Worker is live
+   * repairs it (`servedByCurrentFold`).
+   */
+  if (hydratedFromOlderFold.get(db) === true) {
+    db.prepare("DELETE FROM meta WHERE key = ?").run(APPLIER_VERSION_KEY);
+  } else if (!catchUpOwed || hydrated || caughtUp !== null) {
+    recordApplierVersion(db);
+  }
+  hydratedFromOlderFold.delete(db);
   // And any identifier record an older build left open after applying its settlement.
   closeSettledIdentifierConflicts(db);
 
   const after = requireSyncState(db);
   recordSyncedAt(db);
+  /**
+   * A sync that worked is the answer to whatever automatic sync was waiting out — a
+   * service's `Retry-After`, or its own failures — so the wait ends here, whichever surface
+   * ran it. Left in place, it outlived every manual sync and was cleared only by reconnecting.
+   */
+  const waiting = readAutoSyncState(options.home, repositoryId);
+  if (waiting.nextEligibleAt !== null || waiting.consecutiveFailures > 0) {
+    writeAutoSyncState(options.home, repositoryId, { ...waiting, consecutiveFailures: 0, nextEligibleAt: null });
+  }
   // The identifiers this sync moved, carried to this machine's hub cross-links (`hub-follow.ts`).
   carryIdentifierMovesToHub(db, options.home);
 
@@ -911,6 +976,7 @@ async function recoverFromSnapshot(
   ledger = "snap",
 ): Promise<PullOutcome> {
   const survey = await surveyRepository(session, capabilities, options);
+  noteFold(db, survey.entities);
   tx(db, () => {
     hydrate(db, journal, survey.entities, [], survey.cutoffSeq, nowIso(), true, true, ledger);
     completeSnapshot(db, survey.tailCursor, survey.epoch);
@@ -1025,6 +1091,7 @@ async function runBootstrap(
     const at = nowIso();
     const final = page.nextCursor === null;
     tx(db, () => {
+      noteFold(db, page.entities);
       const outcome = hydrate(db, journal, page.entities, parked, cutoffSeq, at, final);
       entities += outcome.applied;
       parked = outcome.parked;

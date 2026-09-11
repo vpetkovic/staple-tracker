@@ -28,6 +28,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { recordInheritedFieldWrites, type Journal } from "../journal.js";
 import { ReferentMissing, applyToDatabase, localEntityVersion, setEntityVersion, snapshotToInput } from "./apply.js";
+import { withoutOpenContests } from "./conflicts.js";
 import { cloudError } from "./errors.js";
 import type { SnapshotEntity } from "./wire.js";
 
@@ -163,7 +164,13 @@ export function applySnapshotEntity(
      * keeps whichever claim is newer.
      */
     const priorVersion = sameTimeline ? 0 : localEntityVersion(db, entity.entity, entity.entityId);
-    applyToDatabase(db, input);
+    /**
+     * On the timeline it is already on, a device may hold values an open record here is
+     * still about, and the fold holds the other side of each: those are withheld, as the
+     * screen withholds them from an operation (`withoutOpenContests`).
+     */
+    const screened = sameTimeline ? withoutOpenContests(db, input) : { input, keeps: () => true };
+    if (screened.input !== null) applyToDatabase(db, screened.input);
     setEntityVersion(db, entity.entity, entity.entityId, entity.version);
     /**
      * And the provenance for the values just inherited (STA-263). `fieldWrites` names only
@@ -175,7 +182,9 @@ export function applySnapshotEntity(
       db,
       entity.entity,
       entity.entityId,
-      Object.entries(entity.fieldWrites ?? {}).map(([field, write]) => ({
+      Object.entries(entity.fieldWrites ?? {})
+        .filter(([field]) => screened.keeps(field))
+        .map(([field, write]) => ({
         field,
         baseVersion: write.baseVersion,
         opId: write.opId,

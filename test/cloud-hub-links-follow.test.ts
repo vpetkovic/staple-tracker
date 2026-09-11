@@ -193,3 +193,49 @@ describe("hub cross-links follow a renumbered issue", () => {
     expect(links(a)).toEqual([{ blocker: moved, blocked: other }]);
   });
 });
+
+/**
+ * A link made through a stand-in names the issue, not the stand-in.
+ *
+ * `staple link TRA-2+1 OTH-1` stored `TRA-2+1` verbatim: every reader keyed on the issue's
+ * current identifier (`crossBlockersOf`, `get_task`, the UI's detail) found no blocker on
+ * it, so it read as ready to pick up; and the next issue to collide on TRA-2 was handed
+ * the same stand-in string, the link followed THAT issue's renumber, and `TRA-2+1` began
+ * to find it. The link is stored under the issue's current identifier, and a stand-in is
+ * never handed out twice.
+ */
+describe("a hub link made through a stand-in", () => {
+  it("stays on the issue it was made on when another device collides on the same number", async () => {
+    fleet = new Fleet(new FakeSyncServer({ repositoryId: REPO }), REPO);
+    const a = fleet.machine("a");
+    a.store.createIssue({ title: "The shared base" });
+    await a.sync();
+    const b = fleet.machine("b");
+    await b.sync();
+    const c = fleet.machine("c");
+    await c.sync();
+    const other = otherWorkspace(a);
+
+    a.store.createIssue({ title: "TRA-2, on A" });
+    const onB = b.store.createIssue({ title: "TRA-2, on B" });
+    const onC = c.store.createIssue({ title: "TRA-2, on C" });
+    await a.sync();
+    await b.sync();
+    await a.sync();
+    // A met B's issue under a stand-in, and links through it.
+    a.use();
+    expect(a.store.getIssue("TRA-2+1").id).toBe(onB.id);
+    link(a, "TRA-2+1", other);
+    const settledB = identifierOf(a.db, onB.id);
+    expect(links(a)).toEqual([{ blocker: settledB, blocked: other }]);
+
+    await c.sync();
+    await a.sync();
+    a.use();
+    // Still B's issue, under the number B settled on — not C's, however C's claim lands here.
+    expect(identifierOf(a.db, onB.id)).toBe(settledB);
+    expect(links(a)).toEqual([{ blocker: settledB, blocked: other }]);
+    expect(a.store.getIssue("TRA-2+1").id).toBe(onB.id);
+    expect(identifierOf(a.db, onC.id)).not.toBe(settledB);
+  });
+});

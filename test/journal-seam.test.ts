@@ -275,7 +275,14 @@ describe("exactly one operation per logical mutation", () => {
     const relations = added.filter((row) => row.entity === "relation");
     expect(relations).toHaveLength(1);
     expect(relations[0]!.verb).toBe("update");
-    expect(JSON.parse(relations[0]!.payload)).toEqual({ blockedBy: [one.id, two.id] });
+    // With who made each edge and when beside the set (`cloud/apply.ts`, `writeBlockers`).
+    expect(JSON.parse(relations[0]!.payload)).toEqual({
+      blockedBy: [one.id, two.id],
+      edges: {
+        [one.id]: { createdBy: "agent-a", createdAt: expect.any(String) },
+        [two.id]: { createdBy: "agent-a", createdAt: expect.any(String) },
+      },
+    });
   });
 
   /**

@@ -50,6 +50,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { SyncOptions, SyncReport } from "./sync.js";
 import {
+  AUTO_SYNC_MAX_RETRY_AFTER_MS,
   autoSyncBackoffMs,
   autoSyncGate,
   type AutoSyncSkip,
@@ -124,9 +125,9 @@ function retryAfterFrom(error: unknown, now: number): number {
   const raw = (error as { detail?: Record<string, unknown> } | null)?.detail?.retryAfter;
   if (typeof raw !== "string" && typeof raw !== "number") return 0;
   const text = String(raw).trim();
-  if (/^\d+$/.test(text)) return Number(text) * 1000;
-  const at = Date.parse(text);
-  return Number.isNaN(at) ? 0 : Math.max(0, at - now);
+  const asked = /^\d+$/.test(text) ? Number(text) * 1000 : Date.parse(text) - now;
+  // Bounded, and never NaN or Infinity (`AUTO_SYNC_MAX_RETRY_AFTER_MS`).
+  return Number.isNaN(asked) ? 0 : Math.min(Math.max(0, asked), AUTO_SYNC_MAX_RETRY_AFTER_MS);
 }
 
 function messageOf(error: unknown): string {

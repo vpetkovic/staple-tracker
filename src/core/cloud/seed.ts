@@ -321,13 +321,23 @@ function isComplete(entity: SnapshotEntity): boolean {
 
 class SurveyIndex {
   readonly byKey = new Map<string, SnapshotEntity>();
+  /**
+   * The live items the repository holds: what "the repository is empty" asks about.
+   *
+   * Not the repository's prefix declaration. Every first device sends one, the empty ones
+   * too (`repository-prefix.ts`), and it is not data: counted, a repository an empty device
+   * joined first looked like one holding data, and the next device's join — the one with
+   * the real work — gave up its own vocabulary order and its removals of built-ins.
+   */
   readonly live: number;
 
   constructor(readonly survey: RepositorySurvey) {
     let live = 0;
     for (const entity of survey.entities) {
       this.byKey.set(keyOf(entity.entity, entity.entityId), entity);
-      if (entity.deletedAt === null) live += 1;
+      if (entity.deletedAt !== null) continue;
+      if (entity.entity === "setting" && entity.entityId === REPOSITORY_PREFIX_SETTING) continue;
+      live += 1;
     }
     this.live = live;
   }
@@ -532,7 +542,11 @@ function inventory(db: DatabaseSync, now: string, skipped: SeedSkipped[]): Local
       entity: "relation",
       entityId: blockedId,
       label: `blockers of ${identifierOf(db, blockedId)}`,
-      payload: { blockedBy: set.map((edge) => edge.blocker_id) },
+      payload: {
+        blockedBy: set.map((edge) => edge.blocker_id),
+        // Each edge's own author and time, so no device dates them with the seed's.
+        edges: Object.fromEntries(set.map((edge) => [edge.blocker_id, { createdBy: edge.created_by, createdAt: edge.created_at }])),
+      },
       actor: set[set.length - 1]!.created_by,
       at: latest(set.map((edge) => edge.created_at), now),
     });
@@ -753,9 +767,9 @@ function adoptRepositoryPrefix(
     note.run(
       newId(),
       issue.id,
-      `Renumbered from ${issue.identifier} to ${moved} when this workspace joined repository ${repositoryId}, ` +
-        `whose issues are numbered ${to}-N. A reference to ${issue.identifier} written on this machine before ` +
-        `then means this issue.`,
+      `Renumbered from ${issue.identifier} to ${moved} when the workspace it was created in joined repository ` +
+        `${repositoryId}, whose issues are numbered ${to}-N. A reference to ${issue.identifier} made in that ` +
+        `workspace before ${now} means this issue.`,
       now,
     );
     renamed.push({ entity: "issue", entityId: issue.id, label: moved, field: "identifier", from: issue.identifier, to: moved });
@@ -882,9 +896,10 @@ function yieldToRepository(
       note.run(
         newId(),
         issue.id,
-        `Renumbered from ${issue.identifier} to ${to} when this workspace joined repository ` +
-          `${repositoryId}: the repository already had an issue numbered ${issue.identifier}. ` +
-          `A reference to ${issue.identifier} written on this machine before then means this issue.`,
+        `Renumbered from ${issue.identifier} to ${to} when the workspace it was created in joined repository ` +
+          `${repositoryId}, which already had an issue numbered ${issue.identifier}. A reference to ` +
+          `${issue.identifier} made in that workspace before ${now} means this issue; anywhere else, ` +
+          `${issue.identifier} is the repository's.`,
         now,
       );
       report.renamed.push({

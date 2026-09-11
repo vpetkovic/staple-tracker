@@ -75,6 +75,14 @@ export function recordIdentifierMove(db: DatabaseSync, move: IdentifierMove): vo
 export function aliasedIssueId(db: DatabaseSync, identifier: string): string | null {
   const held = db.prepare("SELECT 1 AS hit FROM issues WHERE identifier = ?").get(identifier);
   if (held) return null;
+  return formerHolderOf(db, identifier);
+}
+
+/**
+ * The issue that moved off this identifier here, whether or not another issue holds it
+ * now — what a search for an identifier somebody wrote down should also find.
+ */
+export function formerHolderOf(db: DatabaseSync, identifier: string): string | null {
   const row = db.prepare("SELECT value FROM meta WHERE key = ?").get(`${ALIAS_PREFIX}${identifier}`) as
     | { value: string }
     | undefined;

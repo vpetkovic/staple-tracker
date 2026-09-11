@@ -119,13 +119,24 @@ describe("two devices creating an issue offline under the same number", () => {
     expect(b.store.getIssue("TRA-2").id).toBe(onA.id);
     const settled = identifierOf(b.db, onB.id);
     expect(b.store.getIssue(settled).id).toBe(onB.id);
+    // And a search for the number it was created under finds it — `ls -q`, `list_tasks q`
+    // — alongside the issue that holds that number now; on A, so does the stand-in.
+    expect(b.store.listIssues({ q: "tra-2" }).map((issue) => issue.id)).toEqual(expect.arrayContaining([onA.id, onB.id]));
+    a.use();
+    expect(a.store.listIssues({ q: "TRA-2+1" }).map((issue) => issue.id)).toEqual([onB.id]);
+    b.use();
     const note = b.db
       .prepare("SELECT body, author_type FROM comments WHERE issue_id = ?")
       .get(onB.id) as { body: string; author_type: string };
     expect(note.author_type).toBe("system");
     expect(note.body).toContain(`Renumbered from TRA-2 to ${settled}`);
-    // And the note is on every device, because it travelled as an operation.
+    // And the note is on every device, because it travelled as an operation — so every
+    // sentence of it is true on every device, A's included, where TRA-2 is A's own issue.
     expect(a.db.prepare("SELECT COUNT(*) AS n FROM comments WHERE issue_id = ?").get(onB.id)).toEqual({ n: 1 });
+    const noteOnA = (a.db.prepare("SELECT body FROM comments WHERE issue_id = ?").get(onB.id) as { body: string }).body;
+    expect(noteOnA).toBe(note.body);
+    expect(noteOnA).not.toContain("this machine");
+    expect(noteOnA).toContain("on the device where this issue was created means this issue; anywhere else, TRA-2 is the other one.");
     // A's record of the stand-in was closed by the renumber that settled it — by B's actor,
     // at the settled number — as it applied, not left for the end of the sync to sweep.
     const renumber = fleet!.server.ops.find((op) => op.entityId === onB.id && op.verb === "renumber")!;

@@ -687,6 +687,14 @@ function contest(
       remoteAt: op.createdAt,
       detectedAt,
     });
+    if (named.name === wholeField) {
+      keepEntries(
+        db,
+        conflictId(op.entity, op.entityId, named.name, side.opId, op.opId),
+        heldEntries(db, op.entity, op.entityId),
+        op.payload.entries,
+      );
+    }
   }
 
   if (contested.size === 0) return input;
@@ -715,6 +723,100 @@ function contest(
   }
 
   return contentful ? { ...input, payload: kept } : null;
+}
+
+// ------------------------------------------------- the entries a plan record keeps
+
+/**
+ * Who added each entry of a plan or a milestone, when, and its note — keyed by issue id,
+ * the shape its operations carry as `entries`.
+ *
+ * A record of a contested plan holds the two ORDERS, because the order is what somebody
+ * is asked to choose between. The entries are not what is contested, but they are what a
+ * resolution has to write back: resolved from the orders alone, "keep mine" put every
+ * entry back without its note, on every device. So each side's entries are kept beside
+ * the record, device-local in `meta` (`conflict_entries:<id>`), written when it is
+ * detected and forgotten once it is closed.
+ */
+type Entries = Record<string, { addedBy: string; addedAt: string; note: string | null }>;
+
+function entriesKey(conflictId: string): string {
+  return `conflict_entries:${conflictId}`;
+}
+
+function heldEntries(db: DatabaseSync, entity: string, entityId: string): Entries {
+  const rows = (
+    entity === "queue"
+      ? db.prepare("SELECT issue_id, added_by, added_at, note FROM queue_entries").all()
+      : db.prepare("SELECT issue_id, added_by, added_at, note FROM milestone_members WHERE milestone_id = ?").all(entityId)
+  ) as Array<{ issue_id: string; added_by: string; added_at: string; note: string | null }>;
+  return Object.fromEntries(rows.map((row) => [row.issue_id, { addedBy: row.added_by, addedAt: row.added_at, note: row.note }]));
+}
+
+function keepEntries(db: DatabaseSync, conflictId: string, local: Entries, remote: unknown): void {
+  const theirs = remote !== null && typeof remote === "object" && !Array.isArray(remote) ? remote : {};
+  db.prepare("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT (key) DO NOTHING").run(
+    entriesKey(conflictId),
+    JSON.stringify({ local, remote: theirs }),
+  );
+}
+
+/** The entries a resolution to `chosen` writes: each chosen issue's, from the side chosen. */
+function entriesFor(db: DatabaseSync, conflict: ConflictRecord, choice: ResolutionChoice, chosen: unknown): Entries | null {
+  const row = db.prepare("SELECT value FROM meta WHERE key = ?").get(entriesKey(conflict.id)) as { value: string } | undefined;
+  if (row === undefined || !Array.isArray(chosen)) return null;
+  const kept = JSON.parse(row.value) as { local: Entries; remote: Entries };
+  const from = choice === "local" ? kept.local : choice === "remote" ? kept.remote : { ...kept.remote, ...kept.local };
+  const picked: Entries = {};
+  for (const id of chosen) {
+    if (typeof id === "string" && from[id] !== undefined) picked[id] = from[id]!;
+  }
+  return picked;
+}
+
+/** Forget the entries of every record that is closed now. */
+function forgetClosedEntries(db: DatabaseSync): void {
+  db.prepare(
+    `DELETE FROM meta WHERE key LIKE 'conflict_entries:%'
+       AND substr(key, 18) IN (SELECT id FROM sync_conflicts WHERE resolved_at IS NOT NULL)`,
+  ).run();
+}
+
+// ------------------------------------------- a snapshot re-read on this timeline
+
+/**
+ * A snapshot entity, less every value a record on this device is still open about.
+ *
+ * A device re-reading the snapshot of the timeline it is already on — the applier
+ * catch-up, or the recovery of a stuck tail (`sync.ts`) — is handed the fold, and the fold
+ * holds the last write of every value: for anything contested here, the other side.
+ * Applied as it came, it replaced the value this device holds while the record went on
+ * asking which of the two to keep; resolving it "local" then wrote back a value the
+ * device no longer had. So what an open record is about is withheld from the re-read,
+ * exactly as the screen withholds it from an operation: a field on its own, or a plan or
+ * a milestone's members whole. `keeps` answers for the provenance the entity carries.
+ */
+export function withoutOpenContests(
+  db: DatabaseSync,
+  input: ApplyInput,
+): { input: ApplyInput | null; keeps: (key: string) => boolean } {
+  const contested = new Set(
+    (
+      db
+        .prepare("SELECT field FROM sync_conflicts WHERE entity = ? AND entity_id = ? AND resolved_at IS NULL")
+        .all(input.entity, input.entityId) as Array<{ field: string }>
+    ).map((row) => row.field),
+  );
+  if (contested.size === 0) return { input, keeps: () => true };
+  const whole = WHOLE[input.entity];
+  if (whole !== undefined && contested.has(whole)) return { input: null, keeps: () => false };
+  const keeps = (key: string): boolean => {
+    const named = policy(input.entity, key);
+    if (!named) return true;
+    return !contested.has(named.name) && !(named.derivedFrom !== undefined && contested.has(named.derivedFrom));
+  };
+  const payload = Object.fromEntries(Object.entries(input.payload).filter(([key]) => keeps(key)));
+  return { input: { ...input, payload }, keeps };
 }
 
 function entityVersion(db: DatabaseSync, entity: string, entityId: string): number {
@@ -952,8 +1054,11 @@ function decide(db: DatabaseSync, request: ResolveRequest): ResolveOutcome {
       writes.push(assignment);
     }
 
+    // A plan or a milestone's members go back with each entry's author, time and note.
+    const entries = WHOLE[conflict.entity] === conflict.field ? entriesFor(db, conflict, request.choice, chosen) : null;
     for (const write of writes) {
-      const payload = { [conflict.field]: write.value };
+      const payload: Record<string, unknown> = { [conflict.field]: write.value };
+      if (entries !== null) payload.entries = entries;
       applyToDatabase(db, {
         entity: conflict.entity,
         entityId: write.entityId,
@@ -975,6 +1080,7 @@ function decide(db: DatabaseSync, request: ResolveRequest): ResolveOutcome {
 
     close(db, conflict.id, at, actor, chosen);
     settleOpenFor(db, conflict.entity, conflict.entityId, conflict.field, at, actor, chosen);
+    forgetClosedEntries(db);
 
     /**
      * The decision replicates as its own operation so that every other device
@@ -1198,6 +1304,7 @@ export function applyConflictOperation(db: DatabaseSync, op: RemoteOperation): b
    * deciding device could not have named — see {@link settleOpenFor}.
    */
   settleOpenFor(db, entity, targetId, field, at, resolvedBy, value);
+  forgetClosedEntries(db);
   return true;
 }
 

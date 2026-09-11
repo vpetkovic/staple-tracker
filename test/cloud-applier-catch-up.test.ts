@@ -10,6 +10,7 @@
  */
 import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
+import { listConflicts, resolveConflict } from "../src/core/cloud/conflicts.js";
 import { FakeSyncServer } from "./fixtures/fake-sync-server.js";
 import { Fleet } from "./fixtures/sync-machines.js";
 
@@ -61,6 +62,108 @@ describe("a database an older build applied", () => {
 
     // Once: the next sync re-reads nothing.
     expect((await v.sync()).caughtUp).toBeNull();
+  });
+
+  /**
+   * The re-read applies the fold, and the fold holds the last write of every value — the
+   * other side of any disagreement still open here. Applied unscreened, it replaced the
+   * value this device holds while the record kept asking which to keep; and a plan's
+   * record held its order alone, so resolving it "local" put the entries back without the
+   * note this device had written, on every device.
+   */
+  it("leaves a value a conflict here is still about as it was, and a local resolution keeps the note", async () => {
+    fleet = new Fleet(new FakeSyncServer({ repositoryId: REPO }), REPO);
+    const a = fleet.machine("a");
+    const shared = a.store.createIssue({ title: "Shared" });
+    await a.sync();
+    const b = fleet.machine("b");
+    await b.sync();
+
+    const fromA = a.store.createIssue({ title: "A's" });
+    a.store.queue().enqueue(fromA.id, { note: "A's reason" }, "alice");
+    a.store.updateIssue(shared.id, { title: "Shared, as A put it" });
+    const fromB = b.store.createIssue({ title: "B's" });
+    b.store.queue().enqueue(fromB.id, { note: "B's reason" }, "bob");
+    b.store.updateIssue(shared.id, { title: "Shared, as B put it" });
+    await a.sync();
+    await b.sync();
+    await a.sync();
+    const open = listConflicts(a.db).filter((conflict) => conflict.resolvedAt === null);
+    expect(open.map((conflict) => conflict.field).sort()).toEqual(["order", "title"]);
+    const planOnA = plan(a.db);
+    expect(planOnA).toEqual([{ issue_id: fromA.id, added_by: "alice", note: "A's reason" }]);
+
+    a.db.prepare("DELETE FROM meta WHERE key = 'sync_applier_version'").run();
+    expect((await a.sync()).caughtUp).not.toBeNull();
+    // Still what this device holds, and still asked about.
+    expect(plan(a.db)).toEqual(planOnA);
+    expect(a.db.prepare("SELECT title FROM issues WHERE id = ?").get(shared.id)).toEqual({ title: "Shared, as A put it" });
+    expect(listConflicts(a.db).filter((conflict) => conflict.resolvedAt === null)).toHaveLength(2);
+
+    a.use();
+    for (const conflict of open) resolveConflict(a.db, { id: conflict.id, choice: "local", actor: "alice" });
+    await a.sync();
+    await b.sync();
+    const fresh = fleet.machine("fresh");
+    await fresh.sync();
+    for (const machine of [a, b, fresh]) {
+      expect(plan(machine.db), machine.label).toEqual(planOnA);
+      expect(machine.db.prepare("SELECT title FROM issues WHERE id = ?").get(shared.id), machine.label).toEqual({
+        title: "Shared, as A put it",
+      });
+      expect(listConflicts(machine.db).filter((conflict) => conflict.resolvedAt === null), machine.label).toEqual([]);
+    }
+  });
+
+  /**
+   * The client ships within minutes of a merge; the Worker whenever it is deployed. The
+   * Worker from before this build folds a delete as final, so a status removed and added
+   * back is deleted in its snapshot — and a re-read of that snapshot deleted a live status on
+   * every upgraded device, then recorded the catch-up as done, so the new Worker never got
+   * to repair it. The catch-up now waits for a snapshot that carries the new fold, and a
+   * device that hydrated from the old one owes it too.
+   */
+  it("waits for the Worker that folds creates, and then repairs what the older one served", async () => {
+    const server = new FakeSyncServer({ repositoryId: REPO });
+    server.legacyFold = true;
+    fleet = new Fleet(server, REPO);
+    const o = fleet.machine("o");
+    const rep = o.store.createIssue({ title: "Ends in r1" });
+    o.store.addStatus({ id: "r1", category: "review", label: "R1" });
+    await o.sync();
+    o.store.removeStatus("r1");
+    o.store.addStatus({ id: "r1", category: "review", label: "R1 again" });
+    o.store.updateIssue(rep.id, { status: "r1" });
+    await o.sync();
+    // As an older applier left it: no record that a newer one has looked.
+    o.db.prepare("DELETE FROM meta WHERE key = 'sync_applier_version'").run();
+
+    const status = (machine: { db: DatabaseSync }): unknown =>
+      machine.db.prepare("SELECT s.label, i.status FROM issues i LEFT JOIN workspace_statuses s ON s.id = i.status WHERE i.id = ?").get(rep.id);
+    const version = (machine: { db: DatabaseSync }): unknown =>
+      machine.db.prepare("SELECT value FROM meta WHERE key = 'sync_applier_version'").get();
+
+    // Upgraded while the older Worker serves: nothing is re-read, nothing is lost.
+    expect((await o.sync()).caughtUp).toBeNull();
+    expect(status(o)).toEqual({ label: "R1 again", status: "r1" });
+    expect(version(o)).toBeUndefined();
+    // A device that hydrates in that window gets what the older fold says, and owes a re-read.
+    const d2 = fleet.machine("d2");
+    await d2.sync();
+    expect(version(d2)).toBeUndefined();
+
+    // The new Worker is deployed on the same log. Both repair, once.
+    server.legacyFold = false;
+    expect((await o.sync()).caughtUp).not.toBeNull();
+    expect((await d2.sync()).caughtUp).not.toBeNull();
+    const fresh = fleet.machine("fresh");
+    await fresh.sync();
+    for (const machine of [o, d2, fresh]) {
+      expect(status(machine), machine.label).toEqual({ label: "R1 again", status: "r1" });
+      expect(version(machine), machine.label).toEqual({ value: "2" });
+    }
+    expect((await o.sync()).caughtUp).toBeNull();
+    expect((await d2.sync()).caughtUp).toBeNull();
   });
 
   it("is not re-read when this build hydrated it", async () => {

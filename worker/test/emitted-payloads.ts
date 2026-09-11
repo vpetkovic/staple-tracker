@@ -101,6 +101,7 @@ export const EMITTED_PAYLOADS: ReadonlyArray<{
       "gateResolvedAt": null,
       "gateReleased": false,
       "startedAt": null,
+      "blockedTransitionAt": null,
       "completedAt": null,
       "cancelledAt": null,
       "checkoutAgent": null,
@@ -139,7 +140,7 @@ export const EMITTED_PAYLOADS: ReadonlyArray<{
     "entity": "kind",
     "verb": "delete",
     "payload": {
-      "migrateTo": null
+      "migrateTo": "milestone"
     }
   },
   {
@@ -279,7 +280,13 @@ export const EMITTED_PAYLOADS: ReadonlyArray<{
     "payload": {
       "blockedBy": [
         "00000000-0000-4000-8000-000000000000"
-      ]
+      ],
+      "edges": {
+        "00000000-0000-4000-8000-000000000001": {
+          "createdBy": "past",
+          "createdAt": "2026-09-10T00:00:00.000Z"
+        }
+      }
     }
   },
   {
@@ -288,7 +295,13 @@ export const EMITTED_PAYLOADS: ReadonlyArray<{
     "payload": {
       "blockedBy": [
         "00000000-0000-4000-8000-000000000000"
-      ]
+      ],
+      "edges": {
+        "00000000-0000-4000-8000-000000000001": {
+          "createdBy": "emitter",
+          "createdAt": "2026-09-10T00:00:00.000Z"
+        }
+      }
     }
   },
   {
@@ -323,7 +336,7 @@ export const EMITTED_PAYLOADS: ReadonlyArray<{
     "entity": "status",
     "verb": "delete",
     "payload": {
-      "migrateTo": null
+      "migrateTo": "todo"
     }
   },
   {

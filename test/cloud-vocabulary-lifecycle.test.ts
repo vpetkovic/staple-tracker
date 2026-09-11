@@ -197,9 +197,49 @@ describe("a built-in removed before connecting", () => {
     c.store.removeStatus("awaiting_approval");
     const report = await c.sync();
     expect(statuses(c.db)).toEqual(statuses(a.db));
+    // And the store on the same database sees it, not the vocabulary from before the seed.
+    expect(c.store.getStatuses().map((status) => status.id)).toContain("awaiting_approval");
     expect(report.seed?.replaced).toContainEqual(
       expect.objectContaining({ label: "status awaiting_approval", field: "present", local: false, repository: true }),
     );
+  });
+});
+
+describe("a repository an empty device joined first", () => {
+  /**
+   * The empty device's join sends one operation: the repository's prefix, declared
+   * (`repository-prefix.ts`). That is not data. Counted as data, the next device — the one
+   * with the real work — took the "the repository holds entries but no order" branch: its
+   * own kind order moved to the end and its pre-connect removal of a built-in was undone,
+   * on its own machine, and every device converged on that.
+   */
+  it("takes the next device's vocabulary whole: its order, and the built-ins it removed", async () => {
+    fleet = new Fleet(new FakeSyncServer({ repositoryId: REPO }), REPO);
+    const laptop = fleet.machine("laptop");
+    const joined = await laptop.sync();
+    expect(joined.seed?.uploaded).toBe(0);
+
+    const workstation = fleet.connect("workstation", fleet.prepare("workstation"));
+    const first = workstation.store.createIssue({ title: "Real work" });
+    workstation.store.createIssue({ title: "More real work", kind: "bug" });
+    workstation.store.queue().enqueue(first.id, { note: "First, and why" }, "alice");
+    workstation.store.addKind({ id: "milestone" });
+    const ids = (kinds(workstation.db) as Array<{ id: string }>).map((row) => row.id);
+    workstation.store.applyKindOps([{ op: "reorder", ids: ["milestone", ...ids.filter((id) => id !== "milestone")] }]);
+    workstation.store.removeStatus("in_review");
+    const kindOrder = kinds(workstation.db);
+    const statusOrder = statuses(workstation.db);
+    expect((kindOrder as Array<{ id: string }>)[0]!.id).toBe("milestone");
+
+    const report = await workstation.sync();
+    expect(report.seed?.replaced).toEqual([]);
+    await laptop.sync();
+    const fresh = fleet.machine("fresh");
+    await fresh.sync();
+    for (const machine of [workstation, laptop, fresh]) {
+      expect(kinds(machine.db), machine.label).toEqual(kindOrder);
+      expect(statuses(machine.db), machine.label).toEqual(statusOrder);
+    }
   });
 });
 

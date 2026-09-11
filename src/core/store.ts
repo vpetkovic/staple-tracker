@@ -1,6 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { insertEvent } from "./event-log.js";
-import { aliasedIssueId } from "./identifier-moves.js";
+import { aliasedIssueId, formerHolderOf } from "./identifier-moves.js";
 import { REPOSITORY_PREFIX_SETTING } from "./cloud/repository-prefix.js";
 import { type Journal, journalFor } from "./journal.js";
 import {
@@ -67,6 +67,7 @@ import {
   type KindWithAppearance,
 } from "./kind-appearance.js";
 import { MILESTONE_KIND } from "./milestones.js";
+import { fallbackTarget, recordRemovalTarget } from "./vocabulary-targets.js";
 import { ProjectStore } from "./project-store.js";
 import { QueueStore } from "./queue-store.js";
 /**
@@ -1205,7 +1206,14 @@ export class WorkspaceStore {
         this.requireStatusRow(target);
         migrated = this.migrateVocabularyRows("status", id, target, actor);
       }
+      /**
+       * Every removal names where its issues go, even one nothing here held: another device
+       * may be moving an issue into it right now, and that issue goes where this removal says
+       * (`vocabulary-targets.ts`).
+       */
+      const target = opts.migrateTo?.trim() || fallbackTarget(this.db, "status", id, row.category);
       this.db.prepare("DELETE FROM workspace_statuses WHERE id = ?").run(id);
+      if (target) recordRemovalTarget(this.db, "status", id, target, true);
       this.bumpSettingsRevision();
       this.emitEvent({
         kind: "status_config_changed",
@@ -1216,7 +1224,7 @@ export class WorkspaceStore {
         entity: "status",
         entityId: id,
         verb: "delete",
-        payload: { migrateTo: opts.migrateTo ?? null },
+        payload: { migrateTo: target ?? null },
         actor: actor ?? null,
       });
       return { migrated };
@@ -1420,7 +1428,10 @@ export class WorkspaceStore {
         this.requireKindRow(target);
         migrated = this.migrateVocabularyRows("kind", id, target, actor);
       }
+      // As `removeStatus`: the removal names where an issue moved into it elsewhere goes.
+      const target = opts.migrateTo?.trim() || fallbackTarget(this.db, "kind", id, null);
       this.db.prepare("DELETE FROM workspace_kinds WHERE id = ?").run(id);
+      if (target) recordRemovalTarget(this.db, "kind", id, target, true);
       this.bumpSettingsRevision();
       this.emitEvent({
         kind: "kind_config_changed",
@@ -1431,7 +1442,7 @@ export class WorkspaceStore {
         entity: "kind",
         entityId: id,
         verb: "delete",
-        payload: { migrateTo: opts.migrateTo ?? null },
+        payload: { migrateTo: target ?? null },
         actor: actor ?? null,
       });
       // A default that names a kind which no longer exists is not a setting, it
@@ -1904,7 +1915,8 @@ export class WorkspaceStore {
        *                            operations that move status
        *   checkout_agent/_at     — never a plain field write. They are the
        *                            projection of a lease (docs/sync.md, "Claims")
-       *   blocked_transition_at  — local timing state; not in the contract's list
+       *   blocked_transition_at  — null at create; every transition into or out of
+       *                            a blocked status journals it
        *   completed_at,          — null at create by construction; the status
        *   cancelled_at             transitions that set them journal updates
        *   gate_* (seven)         — null or 0 at create; every gate transition
@@ -1940,6 +1952,7 @@ export class WorkspaceStore {
           createdAt: now,
           updatedAt: now,
           blockedBy: blockerRows.map((blocker) => blocker.id),
+          ...(blockerRows.length > 0 ? { edges: this.edgeFactsOf(id) } : {}),
         },
         actor: input.createdBy ?? null,
       });
@@ -1972,6 +1985,18 @@ export class WorkspaceStore {
   }
 
   // ---------- relations ----------
+
+  /**
+   * Who made each of an issue's blocking edges and when, keyed by blocker id: the `edges`
+   * a blocker set travels with, so every device holds the edges this one does rather than
+   * dating them all with the operation (`writeBlockers` in `cloud/apply.ts`).
+   */
+  private edgeFactsOf(blockedId: string): Record<string, { createdBy: string | null; createdAt: string }> {
+    const rows = this.db
+      .prepare("SELECT blocker_id, created_by, created_at FROM relations WHERE blocked_id = ? AND type = 'blocks'")
+      .all(blockedId) as Array<{ blocker_id: string; created_by: string | null; created_at: string }>;
+    return Object.fromEntries(rows.map((row) => [row.blocker_id, { createdBy: row.created_by, createdAt: row.created_at }]));
+  }
 
   private insertEdge(blockerId: string, blockedId: string, createdBy: string | null): void {
     this.db
@@ -2056,7 +2081,7 @@ export class WorkspaceStore {
         entity: "relation",
         entityId: row.id,
         verb: "update",
-        payload: { blockedBy: deduped.map((blocker) => blocker.id) },
+        payload: { blockedBy: deduped.map((blocker) => blocker.id), edges: this.edgeFactsOf(row.id) },
         actor: actor ?? null,
       });
       // Level check: the new set may already be fully resolved.
@@ -2611,7 +2636,12 @@ export class WorkspaceStore {
       entity: "issue",
       entityId: ancestor.id,
       verb: "update",
-      payload: { status: next, derived: DERIVED_MARKERS[target] },
+      payload: {
+        status: next,
+        derived: DERIVED_MARKERS[target],
+        // The blocked cycle this transition began or ended travels with it.
+        ...("blocked_transition_at" in columns ? { blockedTransitionAt: columns.blocked_transition_at } : {}),
+      },
       actor,
     });
 
@@ -3123,6 +3153,7 @@ export class WorkspaceStore {
           gateState: "pending",
           gateOwner: owner,
           checkoutAgent: null,
+          blockedTransitionAt: null,
         },
         actor: actor ?? null,
       });
@@ -3316,7 +3347,12 @@ export class WorkspaceStore {
         entity: "issue",
         entityId: row.id,
         verb: "update",
-        payload: { status: next, gateState: "approved", gateResolvedBy: actor ?? null },
+        payload: {
+          status: next,
+          gateState: "approved",
+          gateResolvedBy: actor ?? null,
+          blockedTransitionAt: updated.blocked_transition_at,
+        },
         actor: actor ?? null,
       });
       if (opts.comment) {
@@ -3412,6 +3448,7 @@ export class WorkspaceStore {
           gateState: "changes_requested",
           gateResolvedBy: actor ?? null,
           checkoutAgent: null,
+          blockedTransitionAt: null,
         },
         actor: actor ?? null,
       });
@@ -4589,6 +4626,7 @@ export class WorkspaceStore {
                     assignee: agent,
                     checkoutAgent: agent,
                     checkoutAt: now,
+                    blockedTransitionAt: null,
                     previousHolder: claim.heldBy,
                   },
                   actor: agent,
@@ -4649,6 +4687,7 @@ export class WorkspaceStore {
           assignee: agent,
           checkoutAgent: agent,
           checkoutAt: now,
+          blockedTransitionAt: null,
         },
         actor: agent,
       });
@@ -5117,9 +5156,15 @@ export class WorkspaceStore {
       }
     }
     if (filters.q) {
-      where.push("(title LIKE ? OR identifier LIKE ? OR description LIKE ?)");
+      /**
+       * And the issue an identifier used to name here, when `q` is exactly one: a number an
+       * issue was renumbered off, or a stand-in it held (`identifier-moves.ts`). Searching
+       * for the identifier somebody wrote down finds the issue it meant, beside whichever
+       * issue holds that number now.
+       */
+      where.push("(title LIKE ? OR identifier LIKE ? OR description LIKE ? OR id = ?)");
       const like = `%${filters.q}%`;
-      params.push(like, like, like);
+      params.push(like, like, like, formerHolderOf(this.db, filters.q.trim().toUpperCase()));
     }
     /**
      * The status rank is GENERATED from the workspace's configuration (STA-140)

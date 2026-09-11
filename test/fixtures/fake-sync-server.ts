@@ -293,6 +293,14 @@ export class FakeSyncServer {
     headers?: Record<string, string>;
   } | null = null;
 
+  /**
+   * Serve the fold as the Worker deployed before this build does (df002809): a delete is
+   * final, a create after it is a late write the tombstone turns away, and a snapshot
+   * entity carries no `createdSeq`, `createdAt` or `createdBy`, nor a `seq` on its field
+   * writes. Settable at any time, which is how a test deploys the new Worker on the same log.
+   */
+  legacyFold = false;
+
   /** The server-side half of the third consent. Off until something turns it on. */
   backupEnabled = false;
   readonly backups: FakeBackup[] = [];
@@ -1231,11 +1239,11 @@ export class FakeSyncServer {
          * the opposite treatment: `worker/src/fold.ts::forBackup` strips this, because
          * a restore re-mints the very versions and operation ids it names.
          */
-        fieldWrites: entry.fieldWrites,
-        // `worker/src/snapshot.ts::toWireEntity`.
-        createdSeq: entry.createdSeq,
-        createdAt: entry.createdAt,
-        createdBy: entry.createdBy,
+        fieldWrites: this.legacyFold
+          ? Object.fromEntries(Object.entries(entry.fieldWrites).map(([field, { seq: _seq, ...write }]) => [field, write]))
+          : entry.fieldWrites,
+        // `worker/src/snapshot.ts::toWireEntity` — absent altogether on the older Worker.
+        ...(this.legacyFold ? {} : { createdSeq: entry.createdSeq, createdAt: entry.createdAt, createdBy: entry.createdBy }),
       })),
       nextCursor: hasMore
         ? b64url(
@@ -1302,7 +1310,9 @@ export class FakeSyncServer {
         entry.deletedAt = op.serverTs;
         continue;
       }
-      // A create after a delete begins the entity again — `worker/src/fold.ts`.
+      // A create after a delete begins the entity again — `worker/src/fold.ts`. Not on the
+      // Worker from before this build, where the tombstone turned it away.
+      if (this.legacyFold && entry.deletedAt !== null) continue;
       if (op.verb === "create") {
         if (entry.deletedAt !== null) {
           entry.deletedAt = null;
@@ -1311,8 +1321,10 @@ export class FakeSyncServer {
           entry.superseded = false;
         }
         entry.createdSeq = op.seq;
-        entry.createdAt = op.createdAt;
-        entry.createdBy = op.actor;
+        // Not a restore's own actor and instant — `worker/src/fold.ts`.
+        const restored = typeof op.actor === "string" && op.actor.startsWith("restore:");
+        entry.createdAt = restored ? null : op.createdAt;
+        entry.createdBy = restored ? null : op.actor;
       }
       if (entry.deletedAt !== null) continue;
       if (op.payload === null || typeof op.payload !== "object" || Array.isArray(op.payload)) {
@@ -1366,7 +1378,11 @@ export class FakeSyncServer {
       createdByDevice: deviceId,
       // `worker/src/fold.ts::forBackup` — the fold minus this epoch's provenance,
       // which a restore into a new epoch could only misdescribe.
-      entities: folded.entities.map(({ fieldWrites: _provenance, createdSeq: _seq, ...rest }) => rest),
+      // A backup the Worker before this build made keeps no create time or actor either,
+      // so restoring it stages every entity under the restore's (`legacyFold`).
+      entities: folded.entities.map(({ fieldWrites: _provenance, createdSeq: _seq, ...rest }) =>
+        this.legacyFold ? { ...rest, createdAt: null, createdBy: null } : rest,
+      ),
     };
     this.backups.push(backup);
     return this.describeBackup(backup);

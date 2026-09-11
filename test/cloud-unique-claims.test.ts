@@ -119,4 +119,34 @@ describe("unique values two devices claimed offline", () => {
       });
     }
   });
+
+  it("the earlier holder of a live origin keeps it through a move between two open statuses", async () => {
+    fleet = new Fleet(new FakeSyncServer({ repositoryId: REPO }), REPO);
+    const a = fleet.machine("a");
+    await a.sync();
+    const b = fleet.machine("b");
+    await b.sync();
+
+    // A imports first; B imports the same external issue again, meets A's import in the
+    // log, and gives its own up.
+    const held = a.store.createIssue({ title: "Imported on A", originKind: "github", originId: "acme/web#51" }).id;
+    await a.sync();
+    const again = b.store.createIssue({ title: "Imported again on B", originKind: "github", originId: "acme/web#51" }).id;
+    await b.sync();
+    // A moves its issue from backlog to todo before it has seen B's import. That is not a
+    // claim on the origin: A's claim is still its import, which is earlier than B's.
+    a.store.updateIssue(held, { status: "todo" });
+    await a.sync();
+    await b.sync();
+    const fresh = fleet.machine("fresh");
+    await fresh.sync();
+
+    for (const machine of [a, b, fresh]) {
+      expect(row(machine.db, "SELECT origin_id AS o, status FROM issues WHERE id = ?", held), machine.label).toEqual({
+        o: "acme/web#51",
+        status: "todo",
+      });
+      expect(row(machine.db, "SELECT origin_id AS o FROM issues WHERE id = ?", again), machine.label).toEqual({ o: null });
+    }
+  });
 });

@@ -298,10 +298,11 @@ describe("every payload a real emitter sends is a JSON object", () => {
       server.ops
         .filter((op) => `${op.entity}.${op.verb}` === combo)
         .map((op) => Object.keys(op.payload as Record<string, unknown>).sort().join(","));
-    // The plan's order, with who queued each entry, when and why beside it; a conflict
-    // resolution carries the order alone, and the applier keeps what it holds for the rest.
-    expect(new Set(listKey("queue.replace"))).toEqual(new Set(["entries,order", "order"]));
-    expect(new Set(listKey("relation.update"))).toEqual(new Set(["blockedBy"]));
+    // The plan's order, with who queued each entry, when and why beside it — a conflict
+    // resolution too, from the side it chose (conflicts.ts, "the entries a plan record keeps").
+    expect(new Set(listKey("queue.replace"))).toEqual(new Set(["entries,order"]));
+    // A blocker set, with who made each edge and when beside it.
+    expect(new Set(listKey("relation.update"))).toEqual(new Set(["blockedBy,edges"]));
     expect(listKey("status.update")).toContain("order");
     expect(listKey("kind.update")).toContain("order");
     expect(listKey("milestone.replace").every((keys) => keys.split(",").includes("members"))).toBe(true);

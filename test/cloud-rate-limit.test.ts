@@ -11,8 +11,10 @@
  * switched on, and moves the fake's clock by exactly what the client sleeps.
  */
 import { afterEach, describe, expect, it } from "vitest";
+import { AUTO_SYNC_MAX_RETRY_AFTER_MS } from "../src/core/cloud/auto.js";
 import { AutoSyncScheduler } from "../src/core/cloud/auto-sync.js";
 import { readAutoSyncState } from "../src/core/cloud/auto-state.js";
+import { localCloudStatus } from "../src/core/cloud/status.js";
 import { setConsent } from "../src/core/cloud/connection.js";
 import { StapleError } from "../src/core/types.js";
 import { syncRepository } from "../src/core/cloud/sync.js";
@@ -154,4 +156,49 @@ describe("automatic sync, which has a budget and waits between runs instead", ()
     // The jittered backoff after one failure is at most 7.5 s; the service asked for 60.
     expect(Date.parse(state.nextEligibleAt!) - clock.now).toBeGreaterThanOrEqual(60_000);
   });
+
+  /**
+   * The service's number, taken as given, set the next run a year out for `Retry-After:
+   * 31536000` — surviving a manual sync, shown nowhere, cleared only by reconnecting — and
+   * threw a RangeError inside the scheduler for anything past 1e14 seconds, which no Date
+   * can hold. It is bounded now, shown by `cloud status`, and cleared by a sync that works.
+   */
+  for (const [label, retryAfter] of [
+    ["a year", "31536000"],
+    ["more seconds than a date can hold", "100000000000000"],
+    ["a date past the end of time", "Tue, 01 Jan 275760 00:00:00 GMT"],
+    ["garbage", "soon, probably"],
+  ] as const) {
+    it(`bounds a Retry-After of ${label}, says so in status, and a working sync clears it`, async () => {
+      const clock = { now: Date.parse("2026-09-10T12:00:00.000Z") };
+      const server = new FakeSyncServer({ repositoryId: REPO });
+      server.now = () => clock.now;
+      fleet = new Fleet(server, REPO);
+      const a = fleet.machine("a");
+      await a.sync();
+      a.store.createIssue({ title: "Waiting" });
+      setConsent(a.home, REPO, { auto: true });
+      server.failNext = { route: "POST /v1/repos/:id/ops", times: 1, status: 429, code: "rate_limited", headers: { "retry-after": retryAfter } };
+
+      const scheduler = new AutoSyncScheduler({
+        home: a.home,
+        now: () => clock.now,
+        syncImpl: syncRepository,
+        fetchImpl: server.fetch,
+      });
+      const outcome = await scheduler.request({ db: a.db, repositoryId: REPO }, "startup");
+      expect(outcome.status).toBe("failed");
+      const waited = Date.parse(readAutoSyncState(a.home, REPO).nextEligibleAt!) - clock.now;
+      expect(waited).toBeGreaterThan(0);
+      expect(waited).toBeLessThanOrEqual(AUTO_SYNC_MAX_RETRY_AFTER_MS);
+
+      const status = localCloudStatus(a.home, REPO, { now: clock.now });
+      expect(status.warnings.join("\n")).toContain(readAutoSyncState(a.home, REPO).nextEligibleAt!);
+
+      // A manual sync goes ahead, and once it has worked there is nothing left to wait for.
+      await a.sync();
+      expect(readAutoSyncState(a.home, REPO).nextEligibleAt).toBeNull();
+      expect(localCloudStatus(a.home, REPO, { now: clock.now }).warnings).toEqual([]);
+    });
+  }
 });
