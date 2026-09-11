@@ -4,7 +4,7 @@ import { stapleHome } from "../config/home.js";
 import { openDb } from "./db.js";
 import { migrateWorkspace } from "./schema.js";
 import { WorkspaceStore } from "./store.js";
-import { ABSENT_PATH, Hub } from "./hub.js";
+import { Hub, describeAbsentRow, isAbsentRow } from "./hub.js";
 import { type OpenedWorkspace, openWorkspace, readMeta, writeMetaPairs } from "./open.js";
 import { writeAgentsGuide } from "./agents-template.js";
 import { writeWorkspaceGitignore } from "./workspace-gitignore.js";
@@ -254,7 +254,7 @@ export function initWorkspace(options: {
     if (!prefix) {
       const cloned = readWorkspaceManifest(dbPath)?.repositoryId ?? null;
       const listed = cloned === null ? undefined : hub.findByRepositoryId(cloned);
-      if (listed && listed.path === ABSENT_PATH) {
+      if (listed && isAbsentRow(listed)) {
         /**
          * An explicit `--slug` that disagrees is REFUSED, not quietly overridden.
          *
@@ -464,6 +464,13 @@ export function resolveWorkspace(options: { db?: string; ws?: string } = {}): Op
       const entry = hub.get(options.ws);
       if (!entry) {
         throw new StapleError("not_found", `No workspace "${options.ws}" in the hub. Run staple hub ls.`);
+      }
+      // `openWorkspace("")` refuses with "No workspace at ." and says to run init there,
+      // which names the current directory for a row that has no directory at all.
+      // `absentRow` in the detail lets a surface that rewrites `not_found` (MCP's
+      // `asMcpResolutionError`) tell this apart from an unregistered slug.
+      if (isAbsentRow(entry)) {
+        throw new StapleError("not_found", describeAbsentRow(entry.slug), { absentRow: entry.slug });
       }
       return openWorkspace(entry.path);
     } finally {

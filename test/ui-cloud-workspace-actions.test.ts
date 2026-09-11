@@ -579,6 +579,46 @@ describe("the list is enumerated on every read", () => {
     }
   });
 
+  it("describes an absent row by its recorded id, and refuses it without naming a directory", async () => {
+    /**
+     * A row adopted from a registry and not on this machine is stored with `path: ""`.
+     * Its identity used to be resolved from the filesystem, and `""` is the server's
+     * working directory, so the row took `<parent of cwd>/repository.json`'s id if
+     * one was there, and the refusal below named that parent directory.
+     */
+    const recorded = "33333333-3333-4333-8333-333333333333";
+    const hub = Hub.open();
+    try {
+      hub.registerAbsent({ slug: "faraway", prefix: "FAR", kind: "repo", repositoryId: recorded });
+      hub.registerAbsent({ slug: "nameless", prefix: "NAM", kind: "repo", repositoryId: null });
+    } finally {
+      hub.close();
+    }
+    try {
+      const list = (await (await get("/api/cloud/workspaces")).json()) as {
+        workspaces: Array<{ slug: string; repositoryId: string | null; available: boolean; skipDetail: string | null }>;
+      };
+      const faraway = list.workspaces.find((row) => row.slug === "faraway")!;
+      expect(faraway).toMatchObject({ repositoryId: recorded, available: false });
+      expect(faraway.skipDetail).toContain("staple hub registry locate faraway");
+
+      const response = await post("/api/cloud/workspace/consent", { slug: "nameless", auto: true });
+      expect(response.status).toBe(404);
+      const { message } = (await response.json()) as { message: string };
+      expect(message).toContain("not on this machine");
+      expect(message).not.toContain("repository.json");
+      expect(message).not.toContain("Connecting it records one");
+    } finally {
+      const cleanup = Hub.open();
+      try {
+        cleanup.unregister("faraway");
+        cleanup.unregister("nameless");
+      } finally {
+        cleanup.close();
+      }
+    }
+  });
+
   it("carries the two fields a control needs, on every row", async () => {
     const answer = (await (await get("/api/cloud/workspaces")).json()) as {
       workspaces: Array<{ slug: string; recordsIdentityOnOpen: boolean; actionable: boolean }>;

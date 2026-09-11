@@ -1096,6 +1096,14 @@ describe("a row says what it is in one line, with the paragraph behind a disclos
     expect(hubRowSummary(row)).not.toContain("unmounted volume");
   });
 
+  it("names no database for an absent row, which has no path", () => {
+    // `path: ""` is how the hub stores a row adopted from a registry and not yet on this machine.
+    const row = hubRow({ ...missingRow("remote"), path: "" });
+    const rationale = hubRowRationale(row)!;
+    expect(rationale).not.toContain("Database:");
+    expect(rationale).toContain(row.skipDetail!);
+  });
+
   it("renders the rationale inside a details element, closed", () => {
     const html = panel({ workspaces: hubReport([hubRow(), missingRow("qdemo")]) });
     expect(html).toContain("data-cloud-workspace-details");

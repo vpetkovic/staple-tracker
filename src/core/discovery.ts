@@ -35,6 +35,7 @@
  */
 import { readdirSync, realpathSync, statSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
+import { isAbsentRow } from "./hub.js";
 import { describeLayout, journalPathFor, normalizePath, type MigrationJournal } from "./path-migration.js";
 import { existsSync } from "node:fs";
 import { readMeta } from "./open.js";
@@ -380,6 +381,22 @@ export function classifyCandidates(
         reason:
           `the hub registers "${candidate.slug}" with prefix ${existing.prefix}, but this database is ` +
           `stamped ${candidate.prefix} — two different workspaces have collided on a name`,
+      };
+    }
+    /**
+     * An absent row holds no path, so there is nothing to compare with `here` and no
+     * registered path to report. Normalising its `""` gave the current directory, and
+     * the reason read "registered at , which is not here". Registering goes through
+     * `repairHubRegistration`, which attaches it only when the identity matches.
+     */
+    if (existing && isAbsentRow(existing)) {
+      return {
+        ...base,
+        state: "moved",
+        registrable: true,
+        reason:
+          "in the hub from an adopted registry with no database on this machine; registering " +
+          "attaches it here if its sync identity matches",
       };
     }
     if (existing) {

@@ -7,6 +7,7 @@ import { openDb, tx } from "./db.js";
 import { migrateHub } from "./schema.js";
 import { derivePrefixBase, parseIdentifier, prefixSuffixForAttempt } from "./ids.js";
 import { openWorkspace } from "./open.js";
+import { readWorkspaceManifest } from "./repo-identity.js";
 import { RESOLVED_STATUSES, StapleError, nowIso } from "./types.js";
 import { crossLinkEntityId, type CrossLinkIdentity } from "./cloud/cross-link-key.js";
 
@@ -29,9 +30,15 @@ export function notifyHubResolvedSafe(workspaceSlug: string, identifier: string)
  *
  * Empty rather than null because `workspaces.path` is `NOT NULL` and has been
  * since version 1, and widening it would mean every existing reader learning
- * about a second spelling of "no path". Empty string is already falsy, already
- * unequal to every real path, and `existsSync("")` is false — so `available`
- * comes out correct with no special case anywhere.
+ * about a second spelling of "no path".
+ *
+ * **It is not a path, and it must never reach a path function.** `existsSync("")`
+ * is false, but `resolve("")`, `normalizePath("")` and everything built on them —
+ * `workspaceIdentityDir`, `readWorkspaceManifest`, `isCheckoutBacked` — read `""`
+ * as the process's current directory. A consumer that handed this row's path to
+ * any of them used to work on wherever the command was standing: identity came
+ * from `<parent of cwd>/repository.json`, and `doctor --fix` repointed absent
+ * rows at the current directory. Ask {@link isAbsentRow} first, every time.
  *
  * The alternative was to invent a plausible path for an absent workspace. That
  * is precisely the failure mode the absent row exists to avoid: a registry that
@@ -39,6 +46,81 @@ export function notifyHubResolvedSafe(workspaceSlug: string, identifier: string)
  * repair, prune and `--ws` at a directory that has nothing to do with it.
  */
 export const ABSENT_PATH = "";
+
+/**
+ * Is this a row this machine knows OF but does not have?
+ *
+ * Such a row has no path, so there is no directory to read an identity from, to
+ * normalise, or to compare with another path. Its identity is the
+ * `repository_id` the hub recorded, and that column is the only fact about it.
+ */
+export function isAbsentRow(entry: { readonly path: string }): boolean {
+  return entry.path === ABSENT_PATH;
+}
+
+/**
+ * What an absent row is, and the two ways to get it onto this machine, for any
+ * surface that has to explain one.
+ *
+ * It names no directory, because the row has none. The two verbs are the ones
+ * that attach an absent row: `locate` checks the identity against the recorded
+ * one, and `init` in a clone takes the row over (see `initWorkspace`).
+ */
+/**
+ * Why the workspace at `openedDbPath` may not take over this absent row, or null
+ * when it may.
+ *
+ * It may only when it presents the identity the row recorded, which is
+ * `locateAbsent`'s rule (`src/core/cloud/hub-registry.ts`). An absent row keyed on
+ * slug alone is a registry entry for a repository this machine hasn't got, and
+ * a row attached to the wrong repository is silent and durable: the next
+ * `initWorkspace` or `reconcileRepositoryIds` overwrites the recorded id with the
+ * newcomer's, and the next publish sends the registry's name under the wrong
+ * identity. So {@link Hub.register} (`init`, `add`, a path migration), walk-up
+ * repair, `discover` and `doctor`'s hub-link check all ask this one function.
+ *
+ * A row with no recorded identity has nothing to check a candidate against, so it
+ * is refused too, as `locateAbsent` refuses it. The sentence names only the
+ * opened path; the row has none.
+ */
+export function absentRowRefusal(
+  row: { readonly slug: string; readonly repositoryId: string | null },
+  openedDbPath: string,
+): string | null {
+  let presented: string | null;
+  try {
+    presented = readWorkspaceManifest(openedDbPath)?.repositoryId ?? null;
+  } catch {
+    // An unreadable manifest presents no identity. It is refused, never matched.
+    presented = null;
+  }
+  if (row.repositoryId !== null && presented === row.repositoryId) return null;
+  const listed = `"${row.slug}" is in this machine's hub from an adopted registry, with no database here`;
+  if (row.repositoryId === null) {
+    return (
+      `${listed} and no recorded sync identity, so nothing confirms that ${openedDbPath} is it. ` +
+      "The hub row was left as it was. Run `staple hub unregister " +
+      `${row.slug}\` first if this workspace should take the name.`
+    );
+  }
+  return (
+    `${listed}, as sync identity ${row.repositoryId}, and ${openedDbPath} presents ` +
+    `${presented === null ? "no sync identity" : presented}. It was not attached, because a ` +
+    "registry row attached to the wrong repository does not report itself later. The hub row " +
+    `was left as it was. If this is a different workspace, \`staple hub unregister ${row.slug}\` ` +
+    "frees the name for it."
+  );
+}
+
+export function describeAbsentRow(slug: string): string {
+  return (
+    `"${slug}" is in this machine's hub from an adopted registry, but its database is not on ` +
+    `this machine. If you already have it somewhere, attach it with \`staple hub registry ` +
+    `locate ${slug} --path <directory>\`, which checks its identity first. If you don't, clone ` +
+    "or copy it and run `staple init` in it, which takes this row over under the same name, " +
+    "prefix and identity."
+  );
+}
 
 export interface WorkspaceEntry {
   slug: string;
@@ -304,13 +386,32 @@ export class Hub {
   register(entry: { slug: string; prefix: string; path: string; kind: string }): void {
     tx(this.db, () => {
       const existing = this.db
-        .prepare("SELECT slug, prefix FROM workspaces WHERE slug = ?")
-        .get(entry.slug) as { slug: string; prefix: string } | undefined;
+        .prepare("SELECT slug, prefix, path, repository_id FROM workspaces WHERE slug = ?")
+        .get(entry.slug) as
+        | { slug: string; prefix: string; path: string; repository_id: string | null }
+        | undefined;
       if (existing && existing.prefix !== entry.prefix) {
         throw new StapleError(
           "conflict",
           `Workspace "${entry.slug}" is registered with prefix ${existing.prefix}, not ${entry.prefix}`,
         );
+      }
+      /**
+       * The upsert below keys on the slug and never looks at identity, which is right
+       * for a row that already has a path: that is the same workspace moving. It is
+       * wrong for an absent row. That row is a registry entry for a repository this
+       * machine has not got, and `staple init` or `staple add` in a different
+       * repository that happens to share the slug and prefix used to take it over. The
+       * caller then recorded the newcomer's id over the one the registry holds. Every
+       * register goes through here, so the refusal can't be skipped by a door that
+       * forgot to ask.
+       */
+      if (existing && existing.path === ABSENT_PATH) {
+        const refusal = absentRowRefusal(
+          { slug: existing.slug, repositoryId: existing.repository_id },
+          entry.path,
+        );
+        if (refusal !== null) throw new StapleError("conflict", refusal, { absentRow: existing.slug });
       }
       this.db
         .prepare(
@@ -348,7 +449,7 @@ export class Hub {
       kind: row.kind,
       addedAt: row.added_at,
       lastSeenAt: row.last_seen_at,
-      available: row.path !== ABSENT_PATH && existsSync(row.path),
+      available: !isAbsentRow(row) && existsSync(row.path),
       repositoryId: row.repository_id ?? null,
     };
   }
@@ -424,7 +525,7 @@ export class Hub {
       kind: r.kind,
       addedAt: r.added_at,
       lastSeenAt: r.last_seen_at,
-      available: r.path !== ABSENT_PATH && existsSync(r.path),
+      available: !isAbsentRow(r) && existsSync(r.path),
       repositoryId: r.repository_id ?? null,
     }));
   }

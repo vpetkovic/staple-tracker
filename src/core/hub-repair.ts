@@ -107,13 +107,13 @@
 import { existsSync } from "node:fs";
 import { basename, dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { Hub } from "./hub.js";
+import { Hub, absentRowRefusal, isAbsentRow, type WorkspaceEntry } from "./hub.js";
 import { LEGACY_WORKSPACE_DIRNAME, WORKSPACE_DIRNAME, normalizePath } from "./path-migration.js";
 import { findRepositoryIdCollisions, readWorkspaceManifest } from "./repo-identity.js";
 
 export type HubRepairOutcome =
   | "current" // the row already points here; nothing written
-  | "repointed" // a stale path was updated
+  | "repointed" // a stale path was updated, or an absent row was attached here
   | "registered" // the row was missing and has been restored
   | "conflict" // the registry disagrees; nothing written
   | "unavailable"; // the hub itself could not be opened
@@ -122,7 +122,10 @@ export interface HubRepairResult {
   outcome: HubRepairOutcome;
   slug: string;
   prefix: string;
-  /** The path the hub held before, normalised; null when there was no row. */
+  /**
+   * The path the hub held before, normalised; null when there was no row, and
+   * when the row was an absent one, which holds no path at all.
+   */
   pathBefore: string | null;
   /** The canonical path this resolution proves. */
   pathAfter: string;
@@ -489,6 +492,29 @@ export function describeSecondClaimant(input: {
   );
 }
 
+/** The absent row a database's own slug stamp would land on, and whether it may. */
+export interface AdoptedRowMatch {
+  readonly row: WorkspaceEntry;
+  /** `absentRowRefusal`'s sentence, or null when the identities match. */
+  readonly refusal: string | null;
+}
+
+/**
+ * Would registering this database land on an absent row?
+ *
+ * {@link findCopyClaimant}'s question for the other kind of row. `hub.register()`
+ * keys its upsert on the slug the database is stamped with, so that is the row this
+ * reads. `Hub.register` enforces the answer; `staple add` asks first, so its preview
+ * can name the row and say whether the identity matches before anything is written.
+ */
+export function findAdoptedRow(hub: Hub, openedDbPath: string): AdoptedRowMatch | null {
+  const probe = probeSlugAt(normalizePath(openedDbPath));
+  if (!probe.read || probe.slug === null) return null;
+  const row = hub.findBySlug(probe.slug);
+  if (!row || !isAbsentRow(row)) return null;
+  return { row, refusal: absentRowRefusal(row, openedDbPath) };
+}
+
 /**
  * Bring one hub row in line with a workspace that has just been opened.
  *
@@ -526,12 +552,34 @@ export function repairHubRegistration(target: HubRepairTarget): HubRepairResult 
       return {
         ...base,
         outcome: "conflict",
-        pathBefore: normalizePath(existing.path),
+        pathBefore: isAbsentRow(existing) ? null : normalizePath(existing.path),
         error:
           `Workspace "${target.slug}" is registered in the hub with prefix ${existing.prefix}, but the ` +
           `database at ${target.dbPath} is stamped ${target.prefix}. Staple will not renumber either one. ` +
           "Local commands still work; `--ws` and hub views follow the registered path. Run `staple doctor`.",
       };
+    }
+
+    /**
+     * An absent row: this machine knows of the workspace from an adopted registry and
+     * has no path for it. Its `""` used to go through `normalizePath`, which made it the
+     * current directory. That directory always exists and never opens as a database, so
+     * every absent row read as an UNREADABLE second claimant, and walk-up repair and
+     * `staple discover` refused to attach it and named the current directory as the
+     * reason.
+     *
+     * There is nothing at a path it doesn't have, so the only question is whether this
+     * workspace is the one the row names. That's the rule `locateAbsent` applies. The slug
+     * and prefix already agree, and the identity has to agree too, because a row attached
+     * to the wrong repository is silent and durable.
+     */
+    if (existing && isAbsentRow(existing)) {
+      const refusal = absentRowRefusal(existing, pathAfter);
+      if (refusal !== null) {
+        return { ...base, outcome: "conflict", pathBefore: null, error: refusal };
+      }
+      hub.repointPath({ slug: target.slug, prefix: target.prefix, path: pathAfter, kind: existing.kind });
+      return { ...base, outcome: "repointed", pathBefore: null, changed: true };
     }
 
     if (existing) {
@@ -675,6 +723,12 @@ export function findCopyClaimant(hub: Hub, openedDbPath: string): CopyClaimant |
 
   const entry = hub.findBySlug(slug);
   if (!entry) return null; // the slug is free; registering takes nothing
+  // An absent row has no directory, so no live workspace is there to take it from.
+  // Normalising its `""` made the current directory the "claimant", unreadable
+  // because a directory never opens as a database, and `add` refused for that reason.
+  // Whether THIS workspace may take the row is an identity question, and
+  // {@link findAdoptedRow} and `Hub.register` answer it.
+  if (isAbsentRow(entry)) return null;
 
   const registered = normalizePath(entry.path);
   if (registered === here) return null; // already this row's path
@@ -692,6 +746,12 @@ export function findCopyClaimant(hub: Hub, openedDbPath: string): CopyClaimant |
 export function findRepointableRows(hub: Hub): StaleHubRow[] {
   const rows: StaleHubRow[] = [];
   for (const entry of hub.list()) {
+    /**
+     * An absent row has no path to respell. Normalising its `""` gave the current
+     * directory, which exists, so the row came out `resolvable` and
+     * `doctor --fix --only hub-registrations` pointed it at wherever doctor was run.
+     */
+    if (isAbsentRow(entry)) continue;
     const normalized = normalizePath(entry.path);
     if (normalized === entry.path) continue;
     rows.push({
