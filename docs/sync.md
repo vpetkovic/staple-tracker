@@ -147,7 +147,37 @@ hub concern: relations, the plan and milestone membership store issue UUIDs
 external origin, the claim is the write that makes the issue a live holder — its create,
 a change of its origin, or a reopen from done or cancelled. A move between two open
 statuses is not: taken for one, the earlier holder's backlog-to-todo beat a later import
-elsewhere, and both gave the origin up (`test/cloud-unique-claims.test.ts`).
+elsewhere, and both gave the origin up. A reopen says so in its own operation (`reopens`):
+inferred from the device's own outbox, a reopen of an issue another device had closed was
+not counted, and the devices never agreed who held the origin
+(`test/cloud-unique-claims.test.ts`).
+
+**A number that moved under a caller.** A settlement moves this device's issue off a number
+another device claimed first, and the number then names that other issue. Something that
+learned the number before and uses it after would reach the other issue without knowing.
+So:
+
+- **A process that resolved the number once keeps what it resolved.** `staple wait` resolves
+  its argument once and waits on that issue by its id, answering with the identifier it
+  holds now (and `renumberedWhileWaiting` in `--json`). The UI's open issue is pinned to its
+  id once loaded, and its buttons and the palette's commands post the id.
+- **A write whose caller provably meant the issue that moved is refused**, naming the
+  number to use: a `done`, `release`, status change, comment or document by a number whose
+  former issue is checked out by this actor (and the one it names now is not), and a lease
+  renewal or release by a number whose former issue holds this device's lease. Nothing is
+  written (`WorkspaceStore.requireTarget`, `leasedIssue` in `cloud/lease.ts`).
+- **Anything else by that number is answered with what happened**: "TRA-2 was renumbered here
+  at <time>; your earlier TRA-2 is now TRA-4, and TRA-2 now names another issue." — on the
+  CLI's stdout, as `renumbered` in its `--json`, and on MCP in the tool result itself (a
+  text block, and `renumbered` on an object result), never on stderr alone
+  (`RenumberNotice` in `identifier-moves.ts`).
+
+A settlement comment is worded to be true on every device, however many created the number:
+the repository keeps the one created first, every other is renumbered by the device that
+created it, and a reference made before the move on the device where the issue was created
+means this issue. `staple hub unlink` accepts an old number or a stand-in as `link` does, and
+a published link naming a stand-in this machine cannot place is skipped for that reason
+(`test/cloud-renumber-holders.test.ts`, `test/cloud-hub-links-follow.test.ts`).
 
 ### The prefix is the repository's; the slug is the machine's
 
@@ -989,6 +1019,18 @@ millisecond among them): the server never had it, and cannot know better. A devi
 hydrating the restored epoch cannot learn what the backup never kept, and is not told the
 restore wrote it (`test/cloud-old-build-times.test.ts`, worker `backups.test.ts`).
 
+**A log too large for the service to fold is folded here.** The Worker folds at most
+`MAX_SNAPSHOT_FOLD_OPS` operations (20,000) for a snapshot and refuses past it, so on a large
+repository a new device could not join, a clone with work of its own could not seed, and a
+device upgraded to this build failed every sync after its push and pull had landed, because
+its re-read is a snapshot. The operations are all there, and the pull route serves them in
+pages with no fold. So when the service refuses a snapshot as too large (`maxSnapshotFoldOps`
+in the refusal), the device pulls the whole ordered tail and folds it itself by the Worker's
+rules (`src/core/cloud/tail-fold.ts`), and applies the result exactly as a snapshot — the
+same hydration, claims in log order, the same screen on a re-read — with the cutoff at the
+last operation read. The refusal is not retried, and it never fails a sync
+(`test/cloud-large-log.test.ts`; proven past 20,000 on real workerd in the PR).
+
 **A newer applier re-reads the snapshot once.** Nothing re-sends an operation a device
 has already applied, so what an older build's applier dropped — who queued each plan
 entry and its note, a built-in deleted elsewhere, the record a settlement closes —
@@ -1145,8 +1187,22 @@ from the seed, a create and `setBlockedBy`. The applier writes each edge from th
 keeps an edge it already holds as it holds it, else takes the operation's: it used to
 delete and re-insert the whole set with the operation's actor and time, so the seeding
 device rewrote the times of its own edges when its seed came back (measured: 19 of them,
-by 1–3 ms) and every other device dated all of an issue's edges with one instant
-(`test/cloud-relation-provenance.test.ts`).
+by 1–3 ms) and every other device dated all of an issue's edges with one instant. A set
+from a build that sends no `edges` is given its facts by the device that applies it in the
+ordered tail — the operation's actor and time for an edge it added — and that device
+journals the edges as it now holds them, so the fold carries them to a device that
+hydrates, which has no operation to take them from (`test/cloud-relation-provenance.test.ts`).
+
+**Every field travels in one spelling, and every write of a status move travels whole.**
+The journal names each field once, by its field name (`oneSpelling`), and the fold treats
+`updated_at` and `updatedAt` as one field, keeping the one written last; a device reading
+an older Worker's snapshot keeps the spelling written last by its provenance. Measured
+before: after a vocabulary migration, a stale `updated_at` won on every fresh device. A
+status move — derived for an ancestor, a gate, an approval, a send-back, a checkout —
+journals every column it wrote, `status_version` and `updated_at` included; journaled as
+`{ status, derived }` those changed on the moving device only. A project's create and
+updates carry its own `createdAt` and `updatedAt` (`test/cloud-field-spelling.test.ts`,
+`test/cloud-derived-moves.test.ts`, `test/cloud-project-times.test.ts`).
 
 **The first device and a device joining a repository that has data are one rule:**
 *upload every local entity the repository does not hold, and take the repository's
@@ -1334,6 +1390,15 @@ because `client_seq_high_water` lives outside the outbox
 never be the thing that decides what the next operation id will be.
 
 ## Conflicts are preserved, never resolved silently
+
+**A resolution converges on every device, for every field that can conflict** — an issue
+field, the plan, a milestone's members and dates, a status or kind label, the status and
+kind order, a setting, a project name — resolved either way. A setting's record holds the
+setting's value, not the envelope it is stored in (resolved "local", the envelope was
+written back and every device held it twice wrapped), and a resolution writes a field under
+its field name (`targetDate`, which the milestone applier reads; under the column's
+spelling, a milestone date resolved on one device changed on none)
+(`test/cloud-conflict-resolution-matrix.test.ts`).
 
 **No path applies last-write-wins.** Not for `updated_at`, not for `seq`, not for
 "the server is authoritative". A conflict is data, and resolving it is a decision
@@ -2280,7 +2345,8 @@ reads it — delta-seconds or an HTTP date — into `detail.retryAfter` and acts
   capped at five minutes) or the `Retry-After`, whichever is later — the `Retry-After`
   bounded at fifteen minutes, because taken as given `Retry-After: 31536000` put the next
   run a year out and anything past about 1e14 seconds threw inside the scheduler. A wait
-  it is keeping shows in `staple cloud status`, and any sync that works ends it.
+  it is keeping shows in `staple cloud status` and, per workspace, in `staple cloud status
+  --all` (`autoWaitingUntil`), and any sync that works ends it.
 
 The tests drive the real client against the fake service with the Worker's limit switched
 on, on a clock the test moves by exactly what the client sleeps
