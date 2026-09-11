@@ -56,6 +56,7 @@ import {
 } from "../core/path-migration.js";
 import { hubSchemaState, workspaceSchemaState } from "../core/schema.js";
 import { findWorkspace } from "../core/workspace.js";
+import { recordedRepositoryPrefix } from "../core/cloud/repository-prefix.js";
 import { readMeta, snapshotPathFor } from "../core/open.js";
 import { WorkspaceStore } from "../core/store.js";
 import { StapleError } from "../core/types.js";
@@ -1061,6 +1062,50 @@ function checkQueue(dir: string): CheckResult {
 }
 
 /**
+ * Does this workspace number its issues the way its repository does?
+ *
+ * A workspace takes its repository's prefix once, when it joins (`cloud/repository-prefix.ts`),
+ * and nothing re-stamps it afterwards: a prefix is in every identifier the workspace ever
+ * printed. So a workspace that disagrees — joined on a build that did not take the prefix,
+ * or raced another device to be first — is reported here rather than repointed, with both
+ * prefixes, so a person can see which identifiers are this machine's alone.
+ */
+function checkRepositoryPrefix(dir: string): CheckResult {
+  const id = "repository-prefix";
+  const title = "Repository prefix";
+  let found;
+  try {
+    found = findWorkspace(dir);
+  } catch {
+    return result(id, title, "skip", "The current workspace does not resolve.", { dir });
+  }
+  if (!found) return result(id, title, "skip", `No staple workspace at or above ${dir}.`, { dir });
+  const db = readOnlyDb(found.dbPath);
+  try {
+    const local = (db.prepare("SELECT value FROM meta WHERE key = 'prefix'").get() as { value: string } | undefined)?.value ?? null;
+    const recorded = recordedRepositoryPrefix(db);
+    const data = { dbPath: found.dbPath, workspacePrefix: local, repositoryPrefix: recorded };
+    if (recorded === null) {
+      return result(id, title, "skip", "This workspace has not synchronized with a repository that declares a prefix.", data);
+    }
+    if (local === recorded) {
+      return result(id, title, "pass", `This workspace numbers its issues ${local}-N, as its repository does.`, data);
+    }
+    return result(
+      id,
+      title,
+      "warn",
+      `This workspace numbers its issues ${local}-N, and its repository numbers them ${recorded}-N. Issues created ` +
+        `here get ${local} identifiers the other devices do not share. Staple does not re-stamp a workspace after ` +
+        `it has joined — its prefix is in every identifier it has printed — so this is reported, not repaired.`,
+      data,
+    );
+  } finally {
+    db.close();
+  }
+}
+
+/**
  * Can the UI bind its configured port?
  *
  * A child process, because there is no synchronous bind API and this CLI's
@@ -1205,6 +1250,7 @@ export function runDiagnostics(options: { dir?: string } = {}): DoctorReport {
     guard("migration-journal", "Migration journal", () => checkMigrationJournal(dir)),
     guard("orphan-workspaces", "Unregistered databases", () => checkOrphanWorkspaces(dir)),
     guard("queue", "Pickup queue", () => checkQueue(dir)),
+    guard("repository-prefix", "Repository prefix", () => checkRepositoryPrefix(dir)),
     guard("ui-port", "UI port", checkUiPort),
     guard("runtime", "Installed runtime", checkRuntime),
     guard("ui-assets", "UI bundle", checkUiAssets),

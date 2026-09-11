@@ -446,16 +446,20 @@ export class MilestoneStore {
    * this order", which is exactly what a receiver needs and all it needs.
    */
   private recordMembership(milestoneId: string, actor: string | null): void {
-    const order = (
-      this.db
-        .prepare("SELECT issue_id FROM milestone_members WHERE milestone_id = ? ORDER BY rank")
-        .all(milestoneId) as Array<{ issue_id: string }>
-    ).map((row) => row.issue_id);
+    const rows = this.db
+      .prepare("SELECT issue_id, added_by, added_at, note FROM milestone_members WHERE milestone_id = ? ORDER BY rank")
+      .all(milestoneId) as Array<{ issue_id: string; added_by: string; added_at: string; note: string | null }>;
     this.journal.record({
       entity: "milestone",
       entityId: milestoneId,
       verb: "replace",
-      payload: { members: order },
+      // Who added each member, when, and its note ride beside the order; see `recordPlan`.
+      payload: {
+        members: rows.map((row) => row.issue_id),
+        entries: Object.fromEntries(
+          rows.map((row) => [row.issue_id, { addedBy: row.added_by, addedAt: row.added_at, note: row.note }]),
+        ),
+      },
       actor,
     });
   }

@@ -106,6 +106,9 @@
  */
 import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
+import { stapleHome } from "../../config/home.js";
+import { carryIdentifierMovesToHub } from "../hub-follow.js";
+import { moveIdentifier } from "../identifier-moves.js";
 import { journalFor, recordFieldWrites, type SyncEntity, type SyncVerb } from "../journal.js";
 import { settingMetaKey } from "../settings-registry.js";
 import { StapleError, nowIso } from "../types.js";
@@ -114,6 +117,7 @@ import {
   ISSUE_COLUMNS,
   PROJECT_COLUMNS,
   applyToDatabase,
+  operationToInput,
   splitDocumentKey,
   type ApplyInput,
 } from "./apply.js";
@@ -513,16 +517,9 @@ export function screenForConflicts(
   op: RemoteOperation,
   localDeviceId: string | null,
 ): ApplyInput | null {
-  const input: ApplyInput = {
-    entity: op.entity,
-    entityId: op.entityId,
-    verb: op.verb,
-    payload: op.payload,
-    actor: op.actor === "" ? null : op.actor,
-    deviceId: op.deviceId,
-    at: op.createdAt,
-    opId: op.opId,
-  };
+  // The same record the applier builds, so what a screened operation carries — its seq
+  // above all, which settles claims on unique values (`claims.ts`) — cannot drift.
+  const input: ApplyInput = operationToInput(op);
 
   /**
    * A device cannot disagree with itself.
@@ -901,6 +898,15 @@ function resolutionVerb(entity: string, field: string): SyncVerb {
  *      disagreed is touched. History is appended to.
  */
 export function resolveConflict(db: DatabaseSync, request: ResolveRequest): ResolveOutcome {
+  const outcome = decide(db, request);
+  // A settled identifier moved an issue; this machine's hub cross-links follow it.
+  if (outcome.renumbered.length > 0 || (outcome.changed && outcome.conflict.field === "identifier")) {
+    carryIdentifierMovesToHub(db, stapleHome());
+  }
+  return outcome;
+}
+
+function decide(db: DatabaseSync, request: ResolveRequest): ResolveOutcome {
   const journal = journalFor(db);
 
   return journal.run(() => {
@@ -1132,7 +1138,7 @@ function freeIdentifier(
    * the OPERATION for the move is journaled by the caller's assignment loop,
    * which states the whole allocation in one place.
    */
-  db.prepare("UPDATE issues SET identifier = ? WHERE id = ?").run(replacement, holder.id);
+  moveIdentifier(db, holder.id, replacement);
   return [{ issueId: holder.id, from: chosen, to: replacement }];
 }
 

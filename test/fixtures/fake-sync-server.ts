@@ -97,6 +97,8 @@ interface FieldWrite {
   baseVersion: number;
   opId: string;
   at: string;
+  /** The write's place in the log — `worker/src/fold.ts::FieldWrite.seq`. */
+  seq: number;
 }
 
 /** A folded entity, as a backup stores it. `superseded` records the verb. */
@@ -110,6 +112,12 @@ interface FoldedEntity {
   state: Record<string, unknown>;
   /** Stripped before a backup stores it, exactly as `fold.ts::forBackup` does. */
   fieldWrites: Record<string, FieldWrite>;
+  /** The seq of the create this state descends from — stripped from a backup like `fieldWrites`. */
+  createdSeq: number | null;
+  /** The client time of that create. Kept in a backup, and restored as the op's time. */
+  createdAt: string | null;
+  /** The actor of that create. Kept in a backup, and restored as the op's actor. */
+  createdBy: string | null;
 }
 
 /**
@@ -119,7 +127,7 @@ interface FoldedEntity {
  * entity versions and re-mints operation ids, so every number in `fieldWrites` would name
  * a timeline that no longer exists.
  */
-type BackupEntity = Omit<FoldedEntity, "fieldWrites">;
+type BackupEntity = Omit<FoldedEntity, "fieldWrites" | "createdSeq">;
 
 export interface FakeBackup {
   backupId: string;
@@ -167,6 +175,16 @@ export interface FakeServerOptions {
    * token enrolls another device, as on the real service when `enroll_sha256` is null.
    */
   enrollmentSecret?: string | null;
+  /**
+   * The per-device request limit — `worker/src/http.ts::assertRateLimit` and the
+   * `SYNC_LIMITER` binding in `worker/wrangler.toml` (120 per 60 s, keyed on
+   * `${repoId}:${deviceId}`, answered with 429 `rate_limited` and `Retry-After: 60`).
+   * Off unless given, because the binding is absent in the Worker's own local tests too.
+   * Counted on {@link FakeSyncServer.now}, so a test moves time by moving that clock.
+   */
+  rateLimit?: { requests: number; windowMs: number; retryAfterSeconds: number } | null;
+  /** The per-operation payload cap, advertised and enforced. The Worker's is 512 KiB on every plan. */
+  maxOpBytes?: number;
 }
 
 /** `worker/src/vocabulary.ts`: which vocabulary a repository's log holds. */
@@ -242,6 +260,7 @@ class ServerError extends Error {
     readonly code: string,
     message: string,
     readonly extra: Record<string, unknown> = {},
+    readonly headers: Record<string, string> = {},
   ) {
     super(message);
   }
@@ -299,6 +318,8 @@ export class FakeSyncServer {
       protocol: { min: 1, max: 2 },
       vocabulary: null,
       enrollmentSecret: null,
+      rateLimit: null,
+      maxOpBytes: 512 * 1024,
       ...options,
     };
     this.vocabulary = this.options.vocabulary;
@@ -370,11 +391,40 @@ export class FakeSyncServer {
             message: error.message,
             retryable: retryableOnWire(error.code),
             ...error.extra,
-          });
+          }, error.headers);
         }
         throw error;
       }
     }) as typeof fetch;
+  }
+
+  /** Requests refused by the rate limit, for assertions. */
+  rateLimited = 0;
+  private readonly requestTimes = new Map<string, number[]>();
+
+  /**
+   * `worker/src/http.ts::assertRateLimit`, after authentication as `worker/src/index.ts`
+   * orders it. A sliding window over this fixture's own clock.
+   */
+  private assertRateLimit(repoId: string, deviceId: string): void {
+    const limit = this.options.rateLimit;
+    if (!limit) return;
+    const key = `${repoId}:${deviceId}`;
+    const now = this.now();
+    const recent = (this.requestTimes.get(key) ?? []).filter((at) => at > now - limit.windowMs);
+    if (recent.length >= limit.requests) {
+      this.requestTimes.set(key, recent);
+      this.rateLimited += 1;
+      throw new ServerError(
+        429,
+        "rate_limited",
+        "request rate exceeded for this device",
+        {},
+        { "retry-after": String(limit.retryAfterSeconds) },
+      );
+    }
+    recent.push(now);
+    this.requestTimes.set(key, recent);
   }
 
   private json(status: number, body: unknown, headers: Record<string, string> = {}): Response {
@@ -410,7 +460,7 @@ export class FakeSyncServer {
     return {
       protocol: this.options.protocol,
       maxBatchSize: this.options.maxBatchSize,
-      maxOpBytes: 512 * 1024,
+      maxOpBytes: this.options.maxOpBytes,
       maxPullLimit: this.options.maxPullLimit,
       defaultPullLimit: this.options.defaultPullLimit,
       maxSnapshotPageSize: this.options.maxSnapshotPageSize,
@@ -445,6 +495,7 @@ export class FakeSyncServer {
       return this.connect(repoId, headers, body, protocol);
     }
     const session = this.authenticate(repoId, headers);
+    this.assertRateLimit(session.repoId, session.deviceId);
 
     if (tail === "/ops" && method === "POST") {
       return this.push(session, JSON.parse(String(body)) as Record<string, unknown>, protocol);
@@ -1063,9 +1114,9 @@ export class FakeSyncServer {
      * checked, so a 700 KiB operation applied here and 413s against the Worker.
      */
     const payloadBytes = Buffer.byteLength(JSON.stringify(op.payload), "utf8");
-    if (payloadBytes > 512 * 1024) {
+    if (payloadBytes > this.options.maxOpBytes) {
       throw new ServerError(413, "payload_too_large", `${at}.payload exceeds the documented cap`, {
-        maxBytes: 512 * 1024,
+        maxBytes: this.options.maxOpBytes,
         bytes: payloadBytes,
       });
     }
@@ -1181,6 +1232,10 @@ export class FakeSyncServer {
          * a restore re-mints the very versions and operation ids it names.
          */
         fieldWrites: entry.fieldWrites,
+        // `worker/src/snapshot.ts::toWireEntity`.
+        createdSeq: entry.createdSeq,
+        createdAt: entry.createdAt,
+        createdBy: entry.createdBy,
       })),
       nextCursor: hasMore
         ? b64url(
@@ -1235,6 +1290,9 @@ export class FakeSyncServer {
           superseded: false,
           state: {},
           fieldWrites: {},
+          createdSeq: null,
+          createdAt: null,
+          createdBy: null,
         };
         folded.set(key, entry);
       }
@@ -1243,6 +1301,18 @@ export class FakeSyncServer {
       if (op.verb === "delete") {
         entry.deletedAt = op.serverTs;
         continue;
+      }
+      // A create after a delete begins the entity again — `worker/src/fold.ts`.
+      if (op.verb === "create") {
+        if (entry.deletedAt !== null) {
+          entry.deletedAt = null;
+          entry.state = {};
+          entry.fieldWrites = {};
+          entry.superseded = false;
+        }
+        entry.createdSeq = op.seq;
+        entry.createdAt = op.createdAt;
+        entry.createdBy = op.actor;
       }
       if (entry.deletedAt !== null) continue;
       if (op.payload === null || typeof op.payload !== "object" || Array.isArray(op.payload)) {
@@ -1262,6 +1332,7 @@ export class FakeSyncServer {
             baseVersion: entry.version - 1,
             opId: op.opId,
             at: op.createdAt,
+            seq: op.seq,
           };
         }
       }
@@ -1295,7 +1366,7 @@ export class FakeSyncServer {
       createdByDevice: deviceId,
       // `worker/src/fold.ts::forBackup` — the fold minus this epoch's provenance,
       // which a restore into a new epoch could only misdescribe.
-      entities: folded.entities.map(({ fieldWrites: _provenance, ...rest }) => rest),
+      entities: folded.entities.map(({ fieldWrites: _provenance, createdSeq: _seq, ...rest }) => rest),
     };
     this.backups.push(backup);
     return this.describeBackup(backup);
@@ -1463,10 +1534,11 @@ export class FakeSyncServer {
           verb,
           baseVersion: verb === "create" ? null : 0,
           payload,
-          actor: `restore:${restore.restoreId}`,
+          actor: entity.createdBy ?? `restore:${restore.restoreId}`,
           clientSeq: restore.staged + 1,
           schema: backup.schemaVersion,
-          createdAt: new Date().toISOString(),
+          // `worker/src/backups.ts`: the entity's own create time when the backup kept one.
+          createdAt: entity.createdAt ?? new Date().toISOString(),
           serverTs: Date.now(),
         });
         restore.staged += 1;

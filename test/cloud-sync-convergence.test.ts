@@ -26,7 +26,6 @@ import { bindJournal } from "../src/core/journal.js";
 import { writeStoredRepositoryId } from "../src/core/repo-identity.js";
 import { migrateWorkspace } from "../src/core/schema.js";
 import { WorkspaceStore } from "../src/core/store.js";
-import { listConflicts } from "../src/core/cloud/conflicts.js";
 import { writeConnection } from "../src/core/cloud/connection.js";
 import { credentialStoreFor } from "../src/core/cloud/credential-store.js";
 import { syncRepository, type SyncReport } from "../src/core/cloud/sync.js";
@@ -131,15 +130,11 @@ function shape(store: WorkspaceStore): unknown {
  * Move a hydrated device's provisional identifier counter clear of the other's.
  *
  * `meta.next_issue_number` *"never synchronizes: it is a local provisional
- * allocator"*, and `docs/sync.md` resolves the resulting collisions by making the
- * server the allocator — *"the server assigns the canonical number from the
- * repository's own counter and returns it in the push response"*. The deployed
- * Worker implements no such allocator and its push response carries only
- * `{opId, status, seq}`, so that renumbering does not happen yet.
- *
- * This stands in for it, so the convergence scenarios below test convergence
- * rather than re-testing the identifier gap. The gap itself has its own test at
- * the bottom of this file, where it is asserted rather than papered over.
+ * allocator"*, so two devices creating offline mint the same numbers, and the one whose
+ * claim lands second renumbers its own issue (`src/core/cloud/claims.ts`). That is
+ * correct and tested in `test/cloud-identifier-allocation.test.ts`; here it would only
+ * move identifiers under scenarios that are about other fields converging, so the
+ * counters are kept apart instead.
  */
 function reserveNumbers(store: WorkspaceStore, from: number): void {
   store.db
@@ -386,22 +381,14 @@ describe("convergence across the entities that are not issues", () => {
   });
 });
 
-// ------------------------------------------------------------- the known gap
+// ------------------------------------------------------------- the allocator
 
-describe("offline identifier collisions are recorded, not silently resolved", () => {
-  /**
-   * This asserts a GAP, deliberately.
-   *
-   * `docs/sync.md` makes the server the identifier allocator, so this collision
-   * is supposed to be impossible. The deployed Worker implements no allocator, so
-   * it happens. The applier's answer is the contract's general rule rather than
-   * an invented one: *"No path applies last-write-wins"* — the contested value is
-   * recorded on both sides, the entity is applied under a provisional identifier
-   * so no issue is lost, and the decision goes to the conflict lane.
-   *
-   * When the server-side allocator lands, this test should start failing with
-   * zero conflicts, and that failure is the signal to delete it.
-   */
+/**
+ * Two devices minting one number offline is settled without anybody: the earlier claim in
+ * the log keeps it and the later one is renumbered by its own device. That is
+ * `test/cloud-identifier-allocation.test.ts`. What stays here is the allocator's local half.
+ */
+describe("the local allocator after a bootstrap", () => {
   it("hydration leaves the local allocator clear of the rows it just applied", async () => {
     const server = new FakeSyncServer({ repositoryId: REPO_ID });
     const a = device(server, "device-a");
@@ -420,64 +407,5 @@ describe("offline identifier collisions are recorded, not silently resolved", ()
      */
     const fresh = b.store.createIssue({ title: "First local issue on B" });
     expect(fresh.identifier).toBe("TST-3");
-  });
-
-  it("keeps both issues and records the contested identifier", async () => {
-    const server = new FakeSyncServer({ repositoryId: REPO_ID });
-    const a = device(server, "device-a");
-    a.store.createIssue({ title: "The shared base" });
-    await a.sync();
-
-    const b = device(server, "device-b");
-    await b.sync();
-
-    // Both devices now sit at TST-1 and both allocators are at 2. Both go
-    // offline and both create — the case no local rule can prevent, and the one
-    // the contract's server-side allocator was supposed to.
-    const onA = a.store.createIssue({ title: "Created offline on A" });
-    const onB = b.store.createIssue({ title: "Created offline on B" });
-    expect(onA.identifier).toBe("TST-2");
-    expect(onB.identifier).toBe("TST-2");
-
-    await a.sync();
-    await b.sync();
-    await a.sync();
-
-    for (const store of [a.store, b.store]) {
-      // Nothing was lost: three issues, keyed on the UUIDs that are the real
-      // identity. A last-write-wins on `identifier` would have dropped one.
-      expect((store.db.prepare("SELECT COUNT(*) AS n FROM issues").get() as { n: number }).n).toBe(3);
-
-      /**
-       * Read through the typed contract rather than off the columns, because
-       * the columns now carry the same convention every other conflict uses:
-       * `local_*` is what THIS database holds and `remote_*` is what arrived.
-       * For a collision that makes the provisional the local value — it is what
-       * the row here now carries — and the contested number the remote one. The
-       * two were the other way round while the op and device columns already
-       * followed the convention, so one row described opposite sides of itself.
-       */
-      const conflicts = listConflicts(store.db);
-      expect(conflicts).toHaveLength(1);
-      expect(conflicts[0]!.entity).toBe("issue");
-      expect(conflicts[0]!.field).toBe("identifier");
-      // Both sides on the record: the value that was wanted, and the one used.
-      expect(conflicts[0]!.remoteValue).toBe("TST-2");
-      expect(conflicts[0]!.localValue).not.toBe("TST-2");
-    }
-
-    /**
-     * And the honest part: the two devices do NOT agree about which issue is
-     * `TST-2`. They agree about every issue's identity, title and fields — the
-     * things that carry meaning — and they disagree about one display
-     * allocation, which is recorded as a conflict for a human to settle rather
-     * than silently decided by whichever device synced last.
-     */
-    const identifierOf = (store: WorkspaceStore, id: string): string =>
-      (store.db.prepare("SELECT identifier FROM issues WHERE id = ?").get(id) as {
-        identifier: string;
-      }).identifier;
-    expect(identifierOf(a.store, onA.id)).toBe("TST-2");
-    expect(identifierOf(b.store, onA.id)).not.toBe("TST-2");
   });
 });

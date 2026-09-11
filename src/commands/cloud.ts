@@ -1053,7 +1053,16 @@ function runSync(argv: string[]): void {
   const pullLimit = pullLimitAll;
 
   settle(
-    syncRepository(opened.store.db, manifest.repositoryId, { home, pullLimit })
+    syncRepository(opened.store.db, manifest.repositoryId, {
+      home,
+      pullLimit,
+      // On stderr, so `--json` stays one document on stdout.
+      onServiceWait: (ms, code) =>
+        console.error(
+          `${code === "rate_limited" ? "The service is rate-limiting this device" : "The service is unavailable"} ` +
+            `and asked for ${Math.ceil(ms / 1000)}s; waiting, then continuing. Nothing already sent is sent twice.`,
+        ),
+    })
       .then((report) => {
         if (json) {
           console.log(JSON.stringify(report, null, 2));
@@ -1090,6 +1099,13 @@ function renderSyncReport(report: SyncReport): string {
         `${b.pages} ${b.pages === 1 ? "page" : "pages"}.`,
     );
   }
+  if (report.caughtUp) {
+    lines.push(
+      `Re-read the repository once (${report.caughtUp.entities} ` +
+        `${report.caughtUp.entities === 1 ? "entity" : "entities"}): an earlier build of staple applied this ` +
+        `database's state, and dropped parts of it this build applies.`,
+    );
+  }
 
   const { attempted, applied, duplicate } = report.pushed;
   lines.push(
@@ -1107,6 +1123,13 @@ function renderSyncReport(report: SyncReport): string {
           ? `, and skipped ${report.pulled.alreadyApplied} already applied here`
           : ""),
   );
+
+  for (const op of report.withheld) {
+    lines.push(
+      `  ! not sent: ${op.entity} ${op.entityId} is ${op.bytes} bytes and the service takes at most ` +
+        `${op.maxBytes}. It was taken out of the queue so the rest could go; it is still here.`,
+    );
+  }
 
   lines.push("");
   lines.push(`  service    ${report.endpoint}`);

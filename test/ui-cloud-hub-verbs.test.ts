@@ -178,8 +178,19 @@ async function serviceHandler(req: IncomingMessage, res: ServerResponse): Promis
     });
   }
   if (url.pathname.endsWith("/ops")) {
-    for await (const _ of req) void _;
-    return send(200, { protocol: 1, epoch: 1, serverHighWatermark: 0, results: [] });
+    // Every operation in an accepted batch gets its result, as on the real service: a first
+    // sync of an empty workspace still sends one, the repository's prefix
+    // (`src/core/cloud/repository-prefix.ts`), and a batch answered with no results is
+    // one the client refuses to mark sent.
+    let raw = "";
+    for await (const chunk of req) raw += String(chunk);
+    const ops = ((JSON.parse(raw || "{}") as { ops?: Array<{ opId: string }> }).ops ?? []);
+    return send(200, {
+      protocol: 1,
+      epoch: 1,
+      serverHighWatermark: ops.length,
+      results: ops.map((op, index) => ({ opId: op.opId, status: "applied", seq: index + 1 })),
+    });
   }
   send(404, { code: "not_found", message: "no such route" });
 }

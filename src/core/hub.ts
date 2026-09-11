@@ -337,6 +337,14 @@ export class Hub {
     return new Hub(db, path);
   }
 
+  /** The hub of a staple home named explicitly — for code handed a home, like sync. */
+  static openAt(home: string): Hub {
+    const path = join(home, "hub.db");
+    const db = openDb(path);
+    migrateHub(db);
+    return new Hub(db, path);
+  }
+
   /**
    * A hub opened for reading only, with no migration and no WAL conversion.
    *
@@ -867,15 +875,23 @@ export class Hub {
 
   /** Resolve an identifier like GAR-42 to its owning workspace entry. */
   resolveIdentifier(identifier: string): { entry: WorkspaceEntry; identifier: string } {
-    const parsed = parseIdentifier(identifier);
-    if (!parsed) {
+    /**
+     * A provisional identifier — `STA-5+1`, which sync gives an issue whose number
+     * another device also minted — is `PREFIX-N` plus a suffix. The prefix is still what
+     * names the workspace, so the suffix is carried through rather than refused.
+     */
+    const upper = identifier.trim().toUpperCase();
+    const plus = upper.indexOf("+");
+    const suffix = plus < 0 ? "" : upper.slice(plus);
+    const parsed = parseIdentifier(plus < 0 ? upper : upper.slice(0, plus));
+    if (!parsed || (suffix !== "" && !/^\+\d+$/.test(suffix))) {
       throw new StapleError("validation", `"${identifier}" is not an identifier (expected PREFIX-N)`);
     }
     const entry = this.list().find((w) => w.prefix === parsed.prefix);
     if (!entry) {
       throw new StapleError("not_found", `No workspace with prefix ${parsed.prefix} in the hub`);
     }
-    return { entry, identifier: `${parsed.prefix}-${parsed.number}` };
+    return { entry, identifier: `${parsed.prefix}-${parsed.number}${suffix}` };
   }
 
   // ---------- cross-workspace links ----------
@@ -941,6 +957,97 @@ export class Hub {
     // documented prototype simplification).
     this.assertNoCrossCycle(blocker.identifier, blocked.identifier);
     return { blocker, blocked };
+  }
+
+  /**
+   * Re-stamp one workspace row with the prefix its database now carries.
+   *
+   * Only for a workspace that has just taken its repository's prefix on joining
+   * (`cloud/repository-prefix.ts`), after `assertHubCanTakePrefix` found no other row
+   * holding it. The database is authoritative and was re-stamped first; this keeps the
+   * derived row in step. There is no user-facing verb for it, on purpose.
+   *
+   * Through the gate {@link Hub.register} goes through: a row with a path is the
+   * workspace under that slug, and an absent row is another repository's unless
+   * `openedDbPath` presents the identity it recorded ({@link absentRowRefusal}). That
+   * is refused, and nothing is written.
+   */
+  restampPrefix(slug: string, prefix: string, openedDbPath: string): void {
+    tx(this.db, () => {
+      const row = this.db.prepare("SELECT slug, path, repository_id FROM workspaces WHERE slug = ?").get(slug) as
+        | { slug: string; path: string; repository_id: string | null }
+        | undefined;
+      if (!row) return;
+      if (isAbsentRow(row)) {
+        const refusal = absentRowRefusal({ slug: row.slug, repositoryId: row.repository_id }, openedDbPath);
+        if (refusal !== null) throw new StapleError("conflict", refusal, { absentRow: row.slug });
+      }
+      this.db.prepare("UPDATE workspaces SET prefix = ? WHERE slug = ?").run(prefix, slug);
+    });
+  }
+
+  /**
+   * Carry one workspace's identifier moves onto the cross-links that name its issues.
+   *
+   * A cross-link names each end by identifier (`cross_links`, and the registry's link
+   * key), and an identifier can move after a link was made: sync renumbers an issue two
+   * devices numbered alike, a joining workspace yields numbers its repository already
+   * uses, a conflict resolution moves an incumbent aside. Left alone, the link then names
+   * whatever issue holds the old number next — a different issue — or nothing.
+   *
+   * Each move rewrites the links made BEFORE it on that workspace's side (a link made
+   * after the move, naming the old number, means the issue that holds it now). And it is
+   * recorded as this machine's acts on the registry: the link under its old key removed,
+   * the link under its new key added — so a publish retracts the stale key rather than
+   * leaving it for another machine to adopt, and the new one reaches everyone.
+   */
+  followIdentifierMoves(
+    slug: string,
+    moves: readonly { from: string; to: string; at: string }[],
+  ): number {
+    let followed = 0;
+    tx(this.db, () => {
+      for (const move of moves) {
+        for (const side of ["blocker", "blocked"] as const) {
+          const rows = this.db
+            .prepare(
+              `SELECT * FROM cross_links
+                WHERE ${side}_ws = ? AND ${side}_identifier = ? AND created_at <= ?`,
+            )
+            .all(slug, move.from, move.at) as Array<{
+            id: number;
+            blocker_ws: string;
+            blocker_identifier: string;
+            blocked_ws: string;
+            blocked_identifier: string;
+            created_at: string;
+          }>;
+          for (const row of rows) {
+            const before: CrossLink = {
+              blockerWs: row.blocker_ws,
+              blockerIdentifier: row.blocker_identifier,
+              blockedWs: row.blocked_ws,
+              blockedIdentifier: row.blocked_identifier,
+              type: "blocks",
+            };
+            const after: CrossLink =
+              side === "blocker" ? { ...before, blockerIdentifier: move.to } : { ...before, blockedIdentifier: move.to };
+            this.db.prepare("DELETE FROM cross_links WHERE id = ?").run(row.id);
+            this.db
+              .prepare(
+                `INSERT OR IGNORE INTO cross_links
+                   (blocker_ws, blocker_identifier, blocked_ws, blocked_identifier, type, created_at)
+                 VALUES (?,?,?,?, 'blocks', ?)`,
+              )
+              .run(after.blockerWs, after.blockerIdentifier, after.blockedWs, after.blockedIdentifier, row.created_at);
+            this.recordCrossLinkChange(before, false);
+            this.recordCrossLinkChange(after, true);
+            followed += 1;
+          }
+        }
+      }
+    });
+    return followed;
   }
 
   private insertCrossLink(

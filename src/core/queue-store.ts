@@ -371,16 +371,24 @@ export class QueueStore {
    * `queue_revision` CAS token.
    */
   private recordPlan(actor: string | null): void {
-    const order = (
-      this.db
-        .prepare("SELECT issue_id FROM queue_entries ORDER BY rank")
-        .all() as Array<{ issue_id: string }>
-    ).map((row) => row.issue_id);
+    const rows = this.db
+      .prepare("SELECT issue_id, added_by, added_at, note FROM queue_entries ORDER BY rank")
+      .all() as Array<{ issue_id: string; added_by: string; added_at: string; note: string | null }>;
     this.journal.record({
       entity: "queue",
       entityId: QUEUE_PLAN_ENTITY_ID,
       verb: "replace",
-      payload: { order },
+      /**
+       * `entries` beside `order`, never inside it: the order is the contested value and
+       * is compared whole, so a note written on one device must not make two identical
+       * orders disagree. See `entryFor` in `cloud/apply.ts`.
+       */
+      payload: {
+        order: rows.map((row) => row.issue_id),
+        entries: Object.fromEntries(
+          rows.map((row) => [row.issue_id, { addedBy: row.added_by, addedAt: row.added_at, note: row.note }]),
+        ),
+      },
       actor,
     });
   }

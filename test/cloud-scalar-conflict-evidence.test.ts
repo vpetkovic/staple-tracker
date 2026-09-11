@@ -202,7 +202,7 @@ describe("a device defends a field it relayed as hard as one it authored", () =>
     await b.sync();
     expect(titleOf(b, issueId)).toBe("Title from A");
     // B journaled nothing for it, and never will. This is what the outbox knew.
-    expect(count(b, "sync_outbox")).toBe(0);
+    expect(count(b, `sync_outbox WHERE entity_id = '${issueId}'`)).toBe(0);
 
     c.store.updateIssue(issueId, { title: "Title from C" });
     await c.sync();

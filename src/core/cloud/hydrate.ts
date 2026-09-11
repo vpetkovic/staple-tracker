@@ -41,8 +41,12 @@ export const VOCABULARY_ORDER_ID = "@order";
  * ledger hit rather than a second write. It is not an operation id the server ever
  * issued, and it is never sent anywhere.
  */
-export function snapshotOpId(cutoffSeq: number, entity: { entity: string; entityId: string }): string {
-  return `snap:${cutoffSeq}:${entity.entity} ${entity.entityId}`;
+export function snapshotOpId(
+  cutoffSeq: number,
+  entity: { entity: string; entityId: string },
+  ledger = "snap",
+): string {
+  return `${ledger}:${cutoffSeq}:${entity.entity} ${entity.entityId}`;
 }
 
 /**
@@ -71,9 +75,32 @@ export function hydrationRank(entity: { entity: string; entityId: string }): num
   }
 }
 
-/** Dependencies first, and parents before children among the issues. */
+/**
+ * Where an entity's claim on its unique value sits in the log: the seq of the last write
+ * of that value when some operation after the create set it, else the create's seq.
+ * `Infinity` from a service too old to say, which leaves those in the snapshot's order.
+ */
+function claimSeq(entity: SnapshotEntity): number {
+  const field = entity.entity === "issue" ? "identifier" : entity.entity === "project" ? "slug" : null;
+  const written = field ? entity.fieldWrites?.[field]?.seq : undefined;
+  if (typeof written === "number") return written;
+  return typeof entity.createdSeq === "number" ? entity.createdSeq : Number.POSITIVE_INFINITY;
+}
+
+/**
+ * Dependencies first, parents before children among the issues, and within each group
+ * the earlier claim first.
+ *
+ * The last is what makes a hydrating device settle two claims on one identifier or slug
+ * the way a device reading the ordered tail did. The applier gives the value to whoever
+ * holds it and a stand-in to whoever arrives second (`claims.ts`), so arriving in log
+ * order is the whole of agreeing with the log. Applied in key order instead — the order
+ * the snapshot is paged in, a function of the UUIDs — a fresh device gave `STA-5` to
+ * whichever of two issues happened to sort first, and disagreed with every other device
+ * about which issue `STA-5` is.
+ */
 export function orderForHydration(entities: readonly SnapshotEntity[]): SnapshotEntity[] {
-  const byRank = [...entities].sort((a, b) => hydrationRank(a) - hydrationRank(b));
+  const byRank = [...entities].sort((a, b) => hydrationRank(a) - hydrationRank(b) || claimSeq(a) - claimSeq(b));
   const issues = byRank.filter((entity) => entity.entity === "issue");
   if (issues.length < 2) return byRank;
 
@@ -112,6 +139,7 @@ export function applySnapshotEntity(
   cutoffSeq: number,
   at: string,
   sameTimeline = false,
+  ledger = "snap",
 ): void {
   const input = snapshotToInput(entity, at);
   /**
@@ -119,7 +147,7 @@ export function applySnapshotEntity(
    * journal an outbound copy of every row it was handed, which would push the entire
    * repository straight back at the server.
    */
-  journal.applyRemote({ opId: snapshotOpId(cutoffSeq, entity), seq: entity.lastSeq }, () => {
+  journal.applyRemote({ opId: snapshotOpId(cutoffSeq, entity, ledger), seq: entity.lastSeq }, () => {
     /**
      * Read BEFORE `setEntityVersion`, and used below. On a first bootstrap this is 0; on
      * a re-bootstrap it is the counter this device carried across the epoch change,
@@ -190,6 +218,12 @@ export function hydrate(
   at: string,
   final: boolean,
   sameTimeline = false,
+  /**
+   * The namespace of the synthetic ledger ids. A re-read of a snapshot this device has
+   * already applied at the same cutoff — the applier catch-up in `sync.ts` — needs ids of
+   * its own, or every entity is a ledger hit and nothing is re-applied.
+   */
+  ledger = "snap",
 ): HydrateOutcome {
   let applied = 0;
   let pending = orderForHydration([...entities, ...parked]);
@@ -204,7 +238,7 @@ export function hydrate(
         continue;
       }
       try {
-        applySnapshotEntity(db, journal, entity, cutoffSeq, at, sameTimeline);
+        applySnapshotEntity(db, journal, entity, cutoffSeq, at, sameTimeline, ledger);
         applied += 1;
         progressed = true;
       } catch (error) {

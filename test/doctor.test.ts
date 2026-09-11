@@ -116,6 +116,7 @@ describe("the JSON contract", () => {
       "migration-journal",
       "orphan-workspaces",
       "queue",
+      "repository-prefix",
       "ui-port",
       "runtime",
       "ui-assets",
@@ -240,7 +241,7 @@ describe("read-only by default", () => {
     expect(workspace.detail).toContain("Ambiguous workspace");
     expect(workspace.data.ambiguous).toBe(true);
     // Every other check still ran — a guard per check, not one try around the run.
-    expect(parsed.checks).toHaveLength(17);
+    expect(parsed.checks).toHaveLength(18);
     expect(parsed.checks.find((c) => c.id === "node-runtime")!.status).toBe("pass");
   }, 60_000);
 });

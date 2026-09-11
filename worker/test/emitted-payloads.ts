@@ -42,10 +42,13 @@ export const EMITTED_PAYLOADS: ReadonlyArray<{
     "payload": {
       "resolvedAt": "2026-09-10T00:00:00.000Z",
       "resolvedBy": "vp",
-      "value": "TST-13",
-      "entity": "issue",
-      "targetId": "00000000-0000-4000-8000-000000000000",
-      "field": "identifier"
+      "value": [
+        "00000000-0000-4000-8000-000000000000",
+        "00000000-0000-4000-8000-000000000000"
+      ],
+      "entity": "queue",
+      "targetId": "@plan",
+      "field": "order"
     }
   },
   {
@@ -110,7 +113,7 @@ export const EMITTED_PAYLOADS: ReadonlyArray<{
     "entity": "issue",
     "verb": "renumber",
     "payload": {
-      "identifier": "TST-13"
+      "identifier": "TST-14"
     }
   },
   {
@@ -172,6 +175,13 @@ export const EMITTED_PAYLOADS: ReadonlyArray<{
       "members": [
         "00000000-0000-4000-8000-000000000000"
       ],
+      "entries": {
+        "00000000-0000-4000-8000-000000000001": {
+          "addedBy": "past",
+          "addedAt": "2026-09-10T00:00:00.000Z",
+          "note": null
+        }
+      },
       "targetDate": null,
       "startDate": "2026-01-01"
     }
@@ -182,7 +192,14 @@ export const EMITTED_PAYLOADS: ReadonlyArray<{
     "payload": {
       "members": [
         "00000000-0000-4000-8000-000000000000"
-      ]
+      ],
+      "entries": {
+        "00000000-0000-4000-8000-000000000001": {
+          "addedBy": "emitter",
+          "addedAt": "2026-09-10T00:00:00.000Z",
+          "note": null
+        }
+      }
     }
   },
   {
@@ -224,7 +241,14 @@ export const EMITTED_PAYLOADS: ReadonlyArray<{
     "payload": {
       "order": [
         "00000000-0000-4000-8000-000000000000"
-      ]
+      ],
+      "entries": {
+        "00000000-0000-4000-8000-000000000001": {
+          "addedBy": "past",
+          "addedAt": "2026-09-10T00:00:00.000Z",
+          "note": null
+        }
+      }
     }
   },
   {
@@ -234,7 +258,19 @@ export const EMITTED_PAYLOADS: ReadonlyArray<{
       "order": [
         "00000000-0000-4000-8000-000000000000",
         "00000000-0000-4000-8000-000000000000"
-      ]
+      ],
+      "entries": {
+        "00000000-0000-4000-8000-000000000001": {
+          "addedBy": "past",
+          "addedAt": "2026-09-10T00:00:00.000Z",
+          "note": null
+        },
+        "00000000-0000-4000-8000-000000000002": {
+          "addedBy": "emitter",
+          "addedAt": "2026-09-10T00:00:00.000Z",
+          "note": null
+        }
+      }
     }
   },
   {

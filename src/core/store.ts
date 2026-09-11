@@ -1,5 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { insertEvent } from "./event-log.js";
+import { aliasedIssueId } from "./identifier-moves.js";
+import { REPOSITORY_PREFIX_SETTING } from "./cloud/repository-prefix.js";
 import { type Journal, journalFor } from "./journal.js";
 import {
   blockersResolvedDedupKey,
@@ -534,8 +536,23 @@ export class WorkspaceStore {
   constructor(
     readonly db: DatabaseSync,
     readonly slug: string,
-    readonly prefix: string,
+    private readonly openedPrefix: string,
   ) {}
+
+  /**
+   * The prefix this workspace mints identifiers under, read from the database each time.
+   *
+   * Not the value it was opened with: joining a repository re-stamps the workspace with the
+   * repository's prefix (`cloud/repository-prefix.ts`), and that can happen in another
+   * process while this one — a UI or MCP server — keeps running. A remembered prefix would
+   * mint the old one from then on, into a repository that has settled on the new one.
+   * A closed store mints nothing, and answers with the prefix it was opened with.
+   */
+  get prefix(): string {
+    if (!this.db.isOpen) return this.openedPrefix;
+    const row = this.db.prepare("SELECT value FROM meta WHERE key = 'prefix'").get() as { value: string } | undefined;
+    return row?.value ?? this.openedPrefix;
+  }
 
   // ---------- workspace settings: statuses and kinds (STA-140) ----------
 
@@ -691,6 +708,9 @@ export class WorkspaceStore {
       values.set(definition.key, { value: decoded.value, version: decoded.version });
       stored.delete(definition.key);
     }
+    // The repository's prefix rides a setting key so older builds preserve it unread
+    // (`cloud/repository-prefix.ts`); this one knows it, and it is not a workspace setting.
+    stored.delete(REPOSITORY_PREFIX_SETTING);
     for (const key of stored.keys()) unknownSettingKeys.push(key);
 
     const snapshot: SettingsSnapshot = {
@@ -1005,6 +1025,7 @@ export class WorkspaceStore {
         payload: { id, label, category },
         actor: actor ?? null,
       });
+      this.journalPlacement("status", input.after, actor);
       return this.requireStatusRow(id);
     });
   }
@@ -1182,10 +1203,7 @@ export class WorkspaceStore {
           throw new StapleError("validation", "--migrate-to must name a different status");
         }
         this.requireStatusRow(target);
-        const result = this.db
-          .prepare("UPDATE issues SET status = ?, updated_at = ? WHERE status = ?")
-          .run(target, nowIso(), id);
-        migrated = Number(result.changes);
+        migrated = this.migrateVocabularyRows("status", id, target, actor);
       }
       this.db.prepare("DELETE FROM workspace_statuses WHERE id = ?").run(id);
       this.bumpSettingsRevision();
@@ -1203,6 +1221,64 @@ export class WorkspaceStore {
       });
       return { migrated };
     });
+  }
+
+  /**
+   * An entry added `--after` another is placed there on every device, not only this one.
+   *
+   * A `create` says nothing about position — a receiver puts a status it has never seen at
+   * the end, which is right for an entry added at the end and wrong for every other. So an
+   * entry placed anywhere else also journals the whole order, as the `@order` update a
+   * reorder sends; the receiver applies the create, then the order. An entry added at the
+   * end sends no order: the end is where every receiver already puts it, and an order sent
+   * for nothing would contest another device's concurrent, unrelated reorder.
+   */
+  private journalPlacement(entity: "status" | "kind", after: string | null | undefined, actor: string | null | undefined): void {
+    if (after === undefined || after === null) return;
+    this.settingsCache = null;
+    const order = (entity === "status" ? this.settings().statuses : this.settings().kinds).map((row) => row.id);
+    if (order[order.length - 1] !== undefined && order.indexOf(after) === order.length - 2) return;
+    this.journal.record({
+      entity,
+      entityId: VOCABULARY_ORDER_ID,
+      verb: "update",
+      payload: { order },
+      actor: actor ?? null,
+    });
+  }
+
+  /**
+   * Move every issue carrying a vocabulary entry being removed onto `target`.
+   *
+   * A bare column rewrite — no events, no status transitions, for the reason given on
+   * `removeStatus` — but each moved issue IS journaled, as the one field that changed. The
+   * applier on every other device deliberately does not re-run the migration from the
+   * delete's `migrateTo` (a second authority over rows the origin decided about), so it
+   * relies on these; before they were written, every other device kept those issues on a
+   * status or kind that no longer existed there.
+   */
+  private migrateVocabularyRows(
+    column: "status" | "kind",
+    from: string,
+    target: string,
+    actor: string | null | undefined,
+  ): number {
+    const ids = (
+      this.db.prepare(`SELECT id FROM issues WHERE ${column} = ?`).all(from) as Array<{ id: string }>
+    ).map((row) => row.id);
+    const now = nowIso();
+    const update = this.db.prepare(`UPDATE issues SET ${column} = ?, updated_at = ? WHERE id = ?`);
+    for (const issueId of ids) {
+      update.run(target, now, issueId);
+      this.journal.record({
+        entity: "issue",
+        entityId: issueId,
+        verb: "update",
+        payload: { [column]: target, updatedAt: now },
+        actor: actor ?? null,
+      });
+    }
+    return ids.length;
   }
 
   addKind(input: { id: string; label?: string; after?: string | null }, actor?: string | null): WorkspaceKind {
@@ -1234,6 +1310,7 @@ export class WorkspaceStore {
         payload: { id, label },
         actor: actor ?? null,
       });
+      this.journalPlacement("kind", input.after, actor);
       return this.requireKindRow(id);
     });
   }
@@ -1341,10 +1418,7 @@ export class WorkspaceStore {
         }
         if (target === id) throw new StapleError("validation", "--migrate-to must name a different kind");
         this.requireKindRow(target);
-        const result = this.db
-          .prepare("UPDATE issues SET kind = ?, updated_at = ? WHERE kind = ?")
-          .run(target, nowIso(), id);
-        migrated = Number(result.changes);
+        migrated = this.migrateVocabularyRows("kind", id, target, actor);
       }
       this.db.prepare("DELETE FROM workspace_kinds WHERE id = ?").run(id);
       this.bumpSettingsRevision();
@@ -1508,10 +1582,16 @@ export class WorkspaceStore {
         actor: actor ?? null,
         payload: { action: "set", key, from, to: next },
       });
+      /**
+       * `create` when the setting's last word here was a reset: after a delete, only a
+       * create brings an entity back, on this device and in the service's fold alike
+       * (`cloud/apply.ts`, `worker/src/fold.ts`). Sent as an `update`, a setting reset and
+       * then set again stayed reset on every device that hydrated from the snapshot.
+       */
       this.journal.record({
         entity: "setting",
         entityId: key,
-        verb: "update",
+        verb: this.journal.isTombstoned("setting", key) ? "create" : "update",
         payload: { value: next },
         actor: actor ?? null,
       });
@@ -1572,11 +1652,33 @@ export class WorkspaceStore {
       | IssueRow
       | undefined;
     if (byId) return byId;
+    /**
+     * The identifier exactly as stored, before any parsing. Sync gives an incoming issue
+     * a provisional `STA-5+1` when two devices minted `STA-5`, and a `+` is not in the
+     * `PREFIX-N` grammar — so without this an issue could be shown in `ls` and then not
+     * be found by the identifier `ls` printed.
+     */
+    const exact = this.db.prepare("SELECT * FROM issues WHERE identifier = ?").get(trimmed.toUpperCase()) as
+      | IssueRow
+      | undefined;
+    if (exact) return exact;
     const parsed = parseIdentifier(trimmed) ?? parseIdentifier(`${this.prefix}-${trimmed}`);
-    if (parsed) {
-      return this.db
-        .prepare("SELECT * FROM issues WHERE identifier = ?")
-        .get(`${parsed.prefix}-${parsed.number}`) as unknown as IssueRow | undefined;
+    const canonical = parsed ? `${parsed.prefix}-${parsed.number}` : null;
+    if (canonical !== null) {
+      const row = this.db.prepare("SELECT * FROM issues WHERE identifier = ?").get(canonical) as unknown as
+        | IssueRow
+        | undefined;
+      if (row) return row;
+    }
+    /**
+     * An identifier this issue used to carry, before sync or a conflict resolution moved
+     * it — only when no issue carries it now (`identifier-moves.ts`). Without this, the
+     * `TST-2+1` somebody copied into a handoff stopped naming anything the moment the
+     * issue was given its settled number.
+     */
+    const aliased = aliasedIssueId(this.db, trimmed.toUpperCase()) ?? (canonical ? aliasedIssueId(this.db, canonical) : null);
+    if (aliased) {
+      return this.db.prepare("SELECT * FROM issues WHERE id = ?").get(aliased) as unknown as IssueRow | undefined;
     }
     return undefined;
   }

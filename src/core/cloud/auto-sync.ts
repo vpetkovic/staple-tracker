@@ -112,6 +112,23 @@ function codeOf(error: unknown): string | null {
   return typeof code === "string" ? code : null;
 }
 
+/**
+ * A `rate_limited` refusal's `Retry-After`, in milliseconds, or 0.
+ *
+ * Read here from the error's detail rather than imported from `sync.ts`, which this
+ * module must not load until a run is allowed (see the module comment). Delta-seconds
+ * or an HTTP date, as the header allows.
+ */
+function retryAfterFrom(error: unknown, now: number): number {
+  if (codeOf(error) !== "rate_limited") return 0;
+  const raw = (error as { detail?: Record<string, unknown> } | null)?.detail?.retryAfter;
+  if (typeof raw !== "string" && typeof raw !== "number") return 0;
+  const text = String(raw).trim();
+  if (/^\d+$/.test(text)) return Number(text) * 1000;
+  const at = Date.parse(text);
+  return Number.isNaN(at) ? 0 : Math.max(0, at - now);
+}
+
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -266,6 +283,12 @@ export class AutoSyncScheduler {
          * backoff window.
          */
         attempts: 1,
+        /**
+         * And no waiting inside the run on a `Retry-After`: the run has a budget, and a
+         * service asking for a minute is answered by scheduling the next run no sooner
+         * than that — see the backoff below.
+         */
+        rateLimitWaitMs: 0,
         timeoutMs: decision.bound.budgetMs,
         fetchImpl: this.guard(controller.signal),
       });
@@ -300,12 +323,18 @@ export class AutoSyncScheduler {
        */
       const failed = outcome.status !== "cancelled";
       const failures = failed ? readAutoSyncState(home, target.repositoryId).consecutiveFailures + 1 : 0;
+      /**
+       * Never sooner than the service asked. The jittered backoff starts at five
+       * seconds, and a rate-limited service says how long it wants — sixty, from the
+       * deployed Worker — so the next trigger waits for whichever is later.
+       */
+      const asked = retryAfterFrom(error, this.now());
       this.persist(target.repositoryId, {
         lastAttemptAt: new Date(startedAt).toISOString(),
         lastOkAt: readAutoSyncState(home, target.repositoryId).lastOkAt,
         consecutiveFailures: failed ? failures : 0,
         nextEligibleAt: failed
-          ? new Date(this.now() + autoSyncBackoffMs(failures, this.random)).toISOString()
+          ? new Date(this.now() + Math.max(autoSyncBackoffMs(failures, this.random), asked)).toISOString()
           : null,
         lastOutcome: `${outcome.status} after ${ms}ms (${trigger})`,
       });
