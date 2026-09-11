@@ -66,7 +66,13 @@ function staleHubPathCount(hubDb: string, oldHome: string): number {
   try {
     const db = new DatabaseSync(hubDb);
     try {
-      const rows = db.prepare("SELECT path FROM workspaces").all() as Array<{ path: string }>;
+      /**
+       * `''` is an absent row (`ABSENT_PATH` in `src/core/hub.ts`, spelled out here
+       * because this layer does not import the hub). It has no path, and
+       * `resolve('')` is the current directory, so a move run from inside the old
+       * home counted every absent row as left behind.
+       */
+      const rows = db.prepare("SELECT path FROM workspaces WHERE path <> ''").all() as Array<{ path: string }>;
       return rows.filter((row) => isWithin(oldHome, resolve(row.path))).length;
     } finally {
       db.close();

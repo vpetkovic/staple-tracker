@@ -54,7 +54,7 @@
  */
 import { existsSync } from "node:fs";
 import { dirname } from "node:path";
-import { Hub, type WorkspaceEntry } from "../hub.js";
+import { Hub, describeAbsentRow, isAbsentRow, type WorkspaceEntry } from "../hub.js";
 import { isCheckoutBacked, readWorkspaceManifest, workspaceIdentityDir } from "../repo-identity.js";
 
 /**
@@ -76,11 +76,18 @@ export interface HubWorkspace {
   readonly kind: string;
   /** `existsSync(path)`, and nothing more. See {@link HubWorkspace.problem}. */
   readonly available: boolean;
-  /** Where this workspace's `repository.json` lives. */
-  readonly identityDir: string;
+  /**
+   * Where this workspace's `repository.json` lives, or null for an absent row.
+   *
+   * Null rather than a directory because an absent row has no path to derive
+   * one from, and deriving it from `""` produces the parent of whatever
+   * directory the process is standing in — see `hub.ts`, `ABSENT_PATH`.
+   */
+  readonly identityDir: string | null;
   /**
    * True when staple records an identity for this workspace the next time it
    * opens it — every workspace that is not in a version control checkout.
+   * False for an absent row: there is nothing on this machine to open.
    *
    * A value rather than a sentence, and the reason it is on the ROW is that a
    * surface has to be able to tell the two absences apart without parsing prose:
@@ -90,7 +97,12 @@ export interface HubWorkspace {
    * behind the reader. See `repo-identity.ts`, {@link isCheckoutBacked}.
    */
   readonly recordsIdentityOnOpen: boolean;
-  /** The sync identity, or null when this workspace has not recorded one. */
+  /**
+   * The sync identity, or null when this workspace has not recorded one.
+   *
+   * Read from the manifest for a row with a path. For an absent row it is the
+   * `repository_id` the hub recorded, which is the only identity such a row has.
+   */
   readonly repositoryId: string | null;
   /**
    * Something wrong with this ROW that is not a state — an unreadable manifest,
@@ -140,6 +152,27 @@ export function listHubWorkspaces(): HubWorkspace[] {
  * any caller that already holds a {@link WorkspaceEntry}.
  */
 export function describeWorkspace(entry: WorkspaceEntry): HubWorkspace {
+  /**
+   * An absent row touches no file. Its identity is the column the hub recorded when
+   * it was adopted, and every path function below would read its `""` as the current
+   * directory — which made `<parent of cwd>/repository.json`, wherever that happened
+   * to be, override the recorded id, and `reconcileRepositoryIds` then wrote the stray
+   * id into the row.
+   */
+  if (isAbsentRow(entry)) {
+    return {
+      slug: entry.slug,
+      prefix: entry.prefix,
+      path: entry.path,
+      kind: entry.kind,
+      available: false,
+      identityDir: null,
+      recordsIdentityOnOpen: false,
+      repositoryId: entry.repositoryId,
+      problem: null,
+    };
+  }
+
   const identityDir = workspaceIdentityDir(entry.path);
   /**
    * Re-derived rather than trusting `entry.available`. `Hub.list()` computes it
@@ -221,6 +254,12 @@ export interface RegistryIdentityReconciliation {
  *
  * Opens no workspace database: it reads manifests, through {@link describeWorkspace},
  * which is the whole reason that function resolves identity the way it does.
+ *
+ * An absent row has no manifest to read, so `describeWorkspace` hands back the id this
+ * row already holds and nothing here writes to it. Before that, its `""` path resolved
+ * to the current directory and this function copied `<parent of cwd>/repository.json`
+ * into the row: two absent rows then shared one stray id, publish parked both as
+ * duplicates, and every link between them was skipped by publish and by adopt.
  */
 export function reconcileRepositoryIds(hub: Hub): RegistryIdentityReconciliation {
   const updated: { slug: string; repositoryId: string }[] = [];
@@ -320,6 +359,8 @@ export function skipReasonFor(workspace: HubWorkspace): HubSkipReason | null {
 export function describeSkip(workspace: HubWorkspace, reason: HubSkipReason): string {
   switch (reason) {
     case "unavailable":
+      // An absent row has no path to put in the parentheses, and nothing to mount.
+      if (isAbsentRow(workspace)) return describeAbsentRow(workspace.slug);
       return (
         `The workspace database is not on this machine right now (${workspace.path}). ` +
         `It is left registered and untouched — an unmounted volume is not a deleted workspace.`
@@ -336,7 +377,12 @@ export function describeSkip(workspace: HubWorkspace, reason: HubSkipReason): st
        * than useless: `staple init` anywhere but the exact directory registered
        * here mints a SECOND workspace with a second identity, which is the fork
        * the manifest exists to prevent.
+       *
+       * Both sentences name the identity directory, which an absent row does not
+       * have. `skipReasonFor` answers `unavailable` for every absent row first, so
+       * this guard is only reached by a caller that passed the reason in by hand.
        */
+      if (workspace.identityDir === null) return describeAbsentRow(workspace.slug);
       if (workspace.recordsIdentityOnOpen) {
         return (
           `This workspace is registered and its database is on this machine; it has not ` +

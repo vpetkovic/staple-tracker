@@ -38,6 +38,7 @@ import {
   type CloudConnection,
 } from "../src/core/cloud/connection.js";
 import { credentialStoreFor } from "../src/core/cloud/credential-store.js";
+import { describeWorkspace, reconcileRepositoryIds } from "../src/core/cloud/hub-scope.js";
 import {
   REGISTRY_PAYLOAD_FORMAT,
   exportRegistry,
@@ -2643,6 +2644,122 @@ describe("the hub is restorable from the service after a machine is lost", () =>
     expect(b.hub.list().map((r) => ({ slug: r.slug, prefix: r.prefix }))).toEqual([
       { slug: "something-else", prefix: "TRK" },
     ]);
+    b.hub.close();
+  });
+});
+
+describe("an absent row's identity is the one the hub recorded, wherever the process stands", () => {
+  /**
+   * An adopted row that is not on this machine yet is stored with `path = ""`. Every
+   * path function in node reads `""` as the process's current directory, so resolving
+   * that row's identity from the filesystem used to read `<parent of cwd>/repository.json`
+   * and take whatever id it found there. `/tmp/repository.json` was one such stray file,
+   * and with it present every test in this file that uses absent rows failed from a
+   * worktree under `/tmp/`: 14 of 92.
+   *
+   * These tests recreate that on purpose. A `repository.json` holding a different id
+   * sits in the parent of a directory the test changes into, so an absent row that
+   * touches the filesystem for identity picks that id up, and one that doesn't never
+   * sees it.
+   */
+  const STRAY = "99999999-9999-4999-8999-999999999999";
+  let previousCwd: string;
+  /** The directory each test stands in. Its parent holds the stray manifest. */
+  let trapCwd: string;
+
+  beforeEach(() => {
+    previousCwd = process.cwd();
+    const parent = mkdtempSync(join(tmpdir(), "staple-absent-cwd-"));
+    dirs.push(parent);
+    writeFileSync(join(parent, "repository.json"), `${JSON.stringify({ repositoryId: STRAY, format: 1 })}\n`);
+    trapCwd = join(parent, "cwd");
+    mkdirSync(trapCwd);
+    process.chdir(trapCwd);
+  });
+
+  afterEach(() => {
+    process.chdir(previousCwd);
+  });
+
+  function twoMachinesWithAbsentRows() {
+    const a = machine();
+    const hubId = a.hub.hubId();
+    const server = serverFor(hubId);
+    connect(a.home, hubId, server);
+    setRegistryConsent(a.home, hubId, true, REGISTRY_DISCLOSURE);
+    const b = machine();
+    connect(b.home, hubId, server, "device-b", b.hub);
+    setRegistryConsent(b.home, hubId, true, REGISTRY_DISCLOSURE);
+    a.hub.registerAbsent({ slug: "alpha", prefix: "ALP", kind: "repo", repositoryId: ONE });
+    a.hub.registerAbsent({ slug: "beta", prefix: "BET", kind: "repo", repositoryId: TWO });
+    a.hub.addCrossLink("ALP-1", "BET-1");
+    b.hub.registerAbsent({ slug: "alpha-clone", prefix: "ALP", kind: "repo", repositoryId: ONE });
+    b.hub.registerAbsent({ slug: "beta-clone", prefix: "BET", kind: "repo", repositoryId: TWO });
+    return { a, b, server, hubId };
+  }
+
+  it("describes an absent row by its recorded id, with no identity directory at all", () => {
+    const { hub } = machine();
+    hub.registerAbsent({ slug: "alpha", prefix: "ALP", kind: "repo", repositoryId: ONE });
+    const described = describeWorkspace(hub.get("alpha")!);
+    expect(described).toMatchObject({
+      available: false,
+      identityDir: null,
+      recordsIdentityOnOpen: false,
+      repositoryId: ONE,
+      problem: null,
+    });
+    hub.close();
+  });
+
+  it("does not report a problem for an absent row when the stray manifest will not parse", () => {
+    writeFileSync(join(trapCwd, "..", "repository.json"), "{ not json");
+    const { hub } = machine();
+    hub.registerAbsent({ slug: "alpha", prefix: "ALP", kind: "repo", repositoryId: ONE });
+    expect(describeWorkspace(hub.get("alpha")!).problem).toBeNull();
+    expect(reconcileRepositoryIds(hub).problems).toEqual([]);
+    hub.close();
+  });
+
+  it("publishes the absent rows and their link under the recorded ids", async () => {
+    const { a, server, hubId } = twoMachinesWithAbsentRows();
+    process.env.STAPLE_HOME = a.home;
+    const report = await publishRegistry(a.hub, a.home, { fetchImpl: server.fetch });
+
+    // Two registrations and one link, and none of them held back.
+    expect(report.published).toBe(3);
+    expect(report.unpublishable).toEqual([]);
+    expect(report.unpublishableLinks).toEqual([]);
+    // The rows still carry the ids the hub recorded, not the stray file's.
+    expect(a.hub.list().map((r) => [r.slug, r.repositoryId])).toEqual([
+      ["alpha", ONE],
+      ["beta", TWO],
+    ]);
+    const { registry } = await readPublishedRegistry(a.home, hubId, { fetchImpl: server.fetch });
+    expect(registry.workspaces.map((w) => w.repositoryId).sort()).toEqual([ONE, TWO]);
+    expect(registry.crossLinks.map((l) => [l.blockerRepositoryId, l.blockedRepositoryId])).toEqual([[ONE, TWO]]);
+    a.hub.close();
+  });
+
+  it("adopts a link between two absent rows instead of skipping it", async () => {
+    const { a, b, server } = twoMachinesWithAbsentRows();
+    // A publishes from a directory with no stray file above it, so only B's adopt is under test.
+    process.chdir(previousCwd);
+    process.env.STAPLE_HOME = a.home;
+    await publishRegistry(a.hub, a.home, { fetchImpl: server.fetch });
+    process.chdir(trapCwd);
+
+    process.env.STAPLE_HOME = b.home;
+    const adopted = await adoptPublishedRegistry(b.hub, b.home, { fetchImpl: server.fetch, apply: true });
+    expect(adopted.adoption.crossLinks).toMatchObject({ added: 1, skipped: 0 });
+    expect(b.hub.listCrossLinks().map((l) => `${l.blockerWs}/${l.blockerIdentifier} -> ${l.blockedWs}/${l.blockedIdentifier}`)).toEqual([
+      "alpha-clone/ALP-1 -> beta-clone/BET-1",
+    ]);
+    expect(b.hub.list().map((r) => [r.slug, r.repositoryId])).toEqual([
+      ["alpha-clone", ONE],
+      ["beta-clone", TWO],
+    ]);
+    a.hub.close();
     b.hub.close();
   });
 });

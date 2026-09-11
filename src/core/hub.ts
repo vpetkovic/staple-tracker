@@ -29,9 +29,15 @@ export function notifyHubResolvedSafe(workspaceSlug: string, identifier: string)
  *
  * Empty rather than null because `workspaces.path` is `NOT NULL` and has been
  * since version 1, and widening it would mean every existing reader learning
- * about a second spelling of "no path". Empty string is already falsy, already
- * unequal to every real path, and `existsSync("")` is false — so `available`
- * comes out correct with no special case anywhere.
+ * about a second spelling of "no path".
+ *
+ * **It is not a path, and it must never reach a path function.** `existsSync("")`
+ * is false, but `resolve("")`, `normalizePath("")` and everything built on them —
+ * `workspaceIdentityDir`, `readWorkspaceManifest`, `isCheckoutBacked` — read `""`
+ * as the process's current directory. A consumer that handed this row's path to
+ * any of them used to work on wherever the command was standing: identity came
+ * from `<parent of cwd>/repository.json`, and `doctor --fix` repointed absent
+ * rows at the current directory. Ask {@link isAbsentRow} first, every time.
  *
  * The alternative was to invent a plausible path for an absent workspace. That
  * is precisely the failure mode the absent row exists to avoid: a registry that
@@ -39,6 +45,35 @@ export function notifyHubResolvedSafe(workspaceSlug: string, identifier: string)
  * repair, prune and `--ws` at a directory that has nothing to do with it.
  */
 export const ABSENT_PATH = "";
+
+/**
+ * Is this a row this machine knows OF but does not have?
+ *
+ * Such a row has no path, so there is no directory to read an identity from, to
+ * normalise, or to compare with another path. Its identity is the
+ * `repository_id` the hub recorded, and that column is the only fact about it.
+ */
+export function isAbsentRow(entry: { readonly path: string }): boolean {
+  return entry.path === ABSENT_PATH;
+}
+
+/**
+ * What an absent row is, and the two ways to get it onto this machine, for any
+ * surface that has to explain one.
+ *
+ * It names no directory, because the row has none. The two verbs are the ones
+ * that attach an absent row: `locate` checks the identity against the recorded
+ * one, and `init` in a clone takes the row over (see `initWorkspace`).
+ */
+export function describeAbsentRow(slug: string): string {
+  return (
+    `"${slug}" is in this machine's hub from an adopted registry, but its database is not on ` +
+    `this machine. If you already have it somewhere, attach it with \`staple hub registry ` +
+    `locate ${slug} --path <directory>\`, which checks its identity first. If you don't, clone ` +
+    "or copy it and run `staple init` in it, which takes this row over under the same name, " +
+    "prefix and identity."
+  );
+}
 
 export interface WorkspaceEntry {
   slug: string;
@@ -348,7 +383,7 @@ export class Hub {
       kind: row.kind,
       addedAt: row.added_at,
       lastSeenAt: row.last_seen_at,
-      available: row.path !== ABSENT_PATH && existsSync(row.path),
+      available: !isAbsentRow(row) && existsSync(row.path),
       repositoryId: row.repository_id ?? null,
     };
   }
@@ -424,7 +459,7 @@ export class Hub {
       kind: r.kind,
       addedAt: r.added_at,
       lastSeenAt: r.last_seen_at,
-      available: r.path !== ABSENT_PATH && existsSync(r.path),
+      available: !isAbsentRow(r) && existsSync(r.path),
       repositoryId: r.repository_id ?? null,
     }));
   }

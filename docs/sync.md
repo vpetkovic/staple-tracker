@@ -1314,7 +1314,12 @@ authority — measured, not assumed: after clearing the column, `staple ls` and
 path wrote it at all: `Hub.register()` runs before the manifest exists and `connect` never
 touched it. So publish uploaded an empty registry and adoption could not recognise a
 workspace this machine already had. A row whose workspace has not been re-inited since is
-reconciled at publish, adopt and restore. An identity held by two rows is **reported, not
+reconciled at publish, adopt and restore. A row adopted from the registry and not yet on
+this machine is left alone: it has no path and no manifest, so the id it was adopted with
+is its identity. Its stored path is `""`, which every path function reads as the current
+directory, so nothing resolves it. When it was resolved, a stray `repository.json` in the
+parent of wherever the command ran replaced the recorded id, and links between such rows
+were skipped. An identity held by two rows is **reported, not
 published** — two clones or two worktrees of one repository legitimately share one, and
 publishing both would make the registered name flip between them on every pass.
 
@@ -1433,7 +1438,11 @@ identity before any name is compared.
   identity, because the one moment somebody offers the wrong directory is the
   moment they are unsure where it went. If you do not have it yet, clone it and run
   `staple init`, which registers the real row against the identity the placeholder
-  is holding.
+  is holding. A workspace database that is already stamped with the row's slug and
+  prefix is attached by any command run inside it, and by `staple discover`, under
+  `locate`'s rule: only when its `repository.json` holds the row's identity.
+  Otherwise the row stays absent, and `staple doctor`'s hub-link check names both
+  identities.
 - **Prefix or slug already held by a different identity** — the entry is parked
   and named, and **nothing is renumbered**. A prefix is stamped into the workspace
   database and into every `PREFIX-N` that database ever emitted, including in

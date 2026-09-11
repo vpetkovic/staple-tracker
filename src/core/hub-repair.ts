@@ -107,13 +107,13 @@
 import { existsSync } from "node:fs";
 import { basename, dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { Hub } from "./hub.js";
+import { Hub, isAbsentRow, type WorkspaceEntry } from "./hub.js";
 import { LEGACY_WORKSPACE_DIRNAME, WORKSPACE_DIRNAME, normalizePath } from "./path-migration.js";
 import { findRepositoryIdCollisions, readWorkspaceManifest } from "./repo-identity.js";
 
 export type HubRepairOutcome =
   | "current" // the row already points here; nothing written
-  | "repointed" // a stale path was updated
+  | "repointed" // a stale path was updated, or an absent row was attached here
   | "registered" // the row was missing and has been restored
   | "conflict" // the registry disagrees; nothing written
   | "unavailable"; // the hub itself could not be opened
@@ -122,7 +122,10 @@ export interface HubRepairResult {
   outcome: HubRepairOutcome;
   slug: string;
   prefix: string;
-  /** The path the hub held before, normalised; null when there was no row. */
+  /**
+   * The path the hub held before, normalised; null when there was no row, and
+   * when the row was an absent one, which holds no path at all.
+   */
   pathBefore: string | null;
   /** The canonical path this resolution proves. */
   pathAfter: string;
@@ -490,6 +493,36 @@ export function describeSecondClaimant(input: {
 }
 
 /**
+ * Why the workspace at `openedDbPath` will not be attached to this absent row, or
+ * null when it will.
+ *
+ * It attaches only when it presents the identity the row recorded, which is
+ * `locateAbsent`'s rule (`src/core/cloud/hub-registry.ts`). Walk-up repair and
+ * `doctor`'s hub-link check both ask this, so the check that writes and the check
+ * that reports can't disagree. The sentence names only the opened path; the row has
+ * none.
+ */
+export function absentRowRefusal(row: WorkspaceEntry, openedDbPath: string): string | null {
+  const presented = identityOf(openedDbPath);
+  if (row.repositoryId !== null && presented === row.repositoryId) return null;
+  const listed = `"${row.slug}" is in this machine's hub from an adopted registry, with no database here`;
+  if (row.repositoryId === null) {
+    return (
+      `${listed} and no recorded sync identity, so nothing confirms that ${openedDbPath} is it. ` +
+      "It was not attached and nothing was written. Run `staple init` in that workspace to " +
+      "register it from its own stamp."
+    );
+  }
+  return (
+    `${listed}, as sync identity ${row.repositoryId}, and ${openedDbPath} presents ` +
+    `${presented === null ? "no sync identity" : presented}. It was not attached, because a ` +
+    "registry row attached to the wrong repository does not report itself later, and nothing " +
+    `was written. If this is a different workspace, \`${releaseSlugCommand(row.slug)}\` frees ` +
+    `the name for it. ${RELEASE_SLUG_CAVEAT}`
+  );
+}
+
+/**
  * Bring one hub row in line with a workspace that has just been opened.
  *
  * Never throws. Writes only when the stored path differs from the resolved one,
@@ -526,12 +559,34 @@ export function repairHubRegistration(target: HubRepairTarget): HubRepairResult 
       return {
         ...base,
         outcome: "conflict",
-        pathBefore: normalizePath(existing.path),
+        pathBefore: isAbsentRow(existing) ? null : normalizePath(existing.path),
         error:
           `Workspace "${target.slug}" is registered in the hub with prefix ${existing.prefix}, but the ` +
           `database at ${target.dbPath} is stamped ${target.prefix}. Staple will not renumber either one. ` +
           "Local commands still work; `--ws` and hub views follow the registered path. Run `staple doctor`.",
       };
+    }
+
+    /**
+     * An absent row: this machine knows of the workspace from an adopted registry and
+     * has no path for it. Its `""` used to go through `normalizePath`, which made it the
+     * current directory. That directory always exists and never opens as a database, so
+     * every absent row read as an UNREADABLE second claimant, and walk-up repair and
+     * `staple discover` refused to attach it and named the current directory as the
+     * reason.
+     *
+     * There is nothing at a path it doesn't have, so the only question is whether this
+     * workspace is the one the row names. That's the rule `locateAbsent` applies. The slug
+     * and prefix already agree, and the identity has to agree too, because a row attached
+     * to the wrong repository is silent and durable.
+     */
+    if (existing && isAbsentRow(existing)) {
+      const refusal = absentRowRefusal(existing, pathAfter);
+      if (refusal !== null) {
+        return { ...base, outcome: "conflict", pathBefore: null, error: refusal };
+      }
+      hub.repointPath({ slug: target.slug, prefix: target.prefix, path: pathAfter, kind: existing.kind });
+      return { ...base, outcome: "repointed", pathBefore: null, changed: true };
     }
 
     if (existing) {
@@ -675,6 +730,10 @@ export function findCopyClaimant(hub: Hub, openedDbPath: string): CopyClaimant |
 
   const entry = hub.findBySlug(slug);
   if (!entry) return null; // the slug is free; registering takes nothing
+  // An absent row has no directory, so no live workspace is there to take it from.
+  // Normalising its `""` made the current directory the "claimant", unreadable
+  // because a directory never opens as a database, and `add` refused.
+  if (isAbsentRow(entry)) return null;
 
   const registered = normalizePath(entry.path);
   if (registered === here) return null; // already this row's path
@@ -692,6 +751,12 @@ export function findCopyClaimant(hub: Hub, openedDbPath: string): CopyClaimant |
 export function findRepointableRows(hub: Hub): StaleHubRow[] {
   const rows: StaleHubRow[] = [];
   for (const entry of hub.list()) {
+    /**
+     * An absent row has no path to respell. Normalising its `""` gave the current
+     * directory, which exists, so the row came out `resolvable` and
+     * `doctor --fix --only hub-registrations` pointed it at wherever doctor was run.
+     */
+    if (isAbsentRow(entry)) continue;
     const normalized = normalizePath(entry.path);
     if (normalized === entry.path) continue;
     rows.push({

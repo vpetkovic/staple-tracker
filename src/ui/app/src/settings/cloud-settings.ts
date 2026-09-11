@@ -541,7 +541,9 @@ export function hubRowSummary(row: HubWorkspaceReport): string {
 export function hubRowRationale(row: HubWorkspaceReport): string | null {
   const parts: string[] = [];
   if (row.skipDetail !== null) parts.push(row.skipDetail);
-  parts.push(`Database: ${row.path}`);
+  // `""` is a row adopted from a registry with no database on this machine. It has
+  // no path to name, and its `skipDetail` already says so.
+  if (row.path !== "") parts.push(`Database: ${row.path}`);
   if (row.repositoryId !== null) parts.push(`Sync identity: ${row.repositoryId}`);
   if (row.deviceId !== null) {
     parts.push(`This machine is device ${row.deviceId}${row.label ? ` (${row.label})` : ""}.`);

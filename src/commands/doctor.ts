@@ -36,8 +36,9 @@ import { accessSync, constants, existsSync, statSync, statfsSync } from "node:fs
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { effectiveConfig, readConfig, resolveHome, setHomeOverride, stapleHome } from "../config/index.js";
-import { Hub } from "../core/hub.js";
+import { Hub, isAbsentRow } from "../core/hub.js";
 import {
+  absentRowRefusal,
   classifyRegisteredPath,
   describeSecondClaimant,
   findRepointableRows,
@@ -353,8 +354,13 @@ function checkHubRegistrations(): CheckResult {
     // Two slugs, one file. The hub can hold one path per logical workspace, so
     // this is either two clones (the plan allows it, last opened wins) or a
     // genuine duplicate registration.
+    //
+    // Absent rows are skipped: they hold no path, and normalising two of them
+    // gave the current directory twice, which failed this check as one path
+    // under two slugs.
     const byPath = new Map<string, string[]>();
     for (const entry of entries) {
+      if (isAbsentRow(entry)) continue;
       const key = normalizePath(entry.path);
       byPath.set(key, [...(byPath.get(key) ?? []), entry.slug]);
     }
@@ -397,16 +403,32 @@ function checkHubRegistrations(): CheckResult {
       );
     }
     if (missing.length > 0) {
-      return result(
-        "hub-registrations",
-        "Hub registrations",
-        "warn",
-        `${missing.length} registered workspace(s) are not on this machine right now: ` +
-          missing.map((m) => `${m.slug} (${m.path})`).join(", ") +
-          ". That is normal for another machine's clone; it is a problem if the repository moved — " +
-          "run `staple ls` inside it once and resolution will repair the row.",
-        data,
-      );
+      /**
+       * Two kinds of row, two sentences. A row with a path names it, and the path
+       * is the evidence. An absent row came from an adopted registry and has no
+       * path, so printing one gave "alpha ()". What it needs is the verb that
+       * attaches it.
+       */
+      const absent = missing.filter((m) => isAbsentRow(m));
+      const gone = missing.filter((m) => !isAbsentRow(m));
+      const sentences: string[] = [];
+      if (gone.length > 0) {
+        sentences.push(
+          `${gone.length} registered workspace(s) are not on this machine right now: ` +
+            gone.map((m) => `${m.slug} (${m.path})`).join(", ") +
+            ". That is normal for another machine's clone; it is a problem if the repository moved — " +
+            "run `staple ls` inside it once and resolution will repair the row.",
+        );
+      }
+      if (absent.length > 0) {
+        sentences.push(
+          `${absent.length} workspace(s) came from an adopted registry and have no database on ` +
+            `this machine: ${absent.map((m) => m.slug).join(", ")}. ` +
+            "`staple hub registry locate <slug> --path <directory>` attaches one you already have, " +
+            "and `staple init` in a clone takes its row over.",
+        );
+      }
+      return result("hub-registrations", "Hub registrations", "warn", sentences.join(" "), data);
     }
     return result(
       "hub-registrations",
@@ -649,12 +671,15 @@ function checkWorkspaceHubLink(dir: string): CheckResult {
      * STA-285 keys, so a consumer does not have to test the status to know the
      * shape.
      */
+    // An absent row has no registered path, and normalising its `""` would report
+    // the current directory as one.
+    const registeredHere = entry !== undefined && !isAbsentRow(entry) ? entry : undefined;
     const data = {
       slug,
       prefix,
       dbPath: here,
-      registeredPath: entry?.path ?? null,
-      registeredPathNormalized: entry ? normalizePath(entry.path) : null,
+      registeredPath: registeredHere?.path ?? null,
+      registeredPathNormalized: registeredHere ? normalizePath(registeredHere.path) : null,
       secondClaimant: null as string | null,
       sharedRepositoryId: null as string | null,
       unreadableReason: null as string | null,
@@ -678,6 +703,26 @@ function checkWorkspaceHubLink(dir: string): CheckResult {
         `The hub registers "${slug}" with prefix ${entry.prefix}, but ${found.dbPath} is stamped ${prefix}. ` +
           "Staple will not renumber either one — two workspaces have collided on a slug. " +
           "Re-init one of them under a different --slug.",
+        data,
+      );
+    }
+    /**
+     * An absent row: the hub knows this slug from an adopted registry and has no path
+     * for it. Walk-up repair attaches it here when the identity matches, and refuses
+     * otherwise. `absentRowRefusal` makes that decision for both, so this check says
+     * what repair did. It used to normalise `""` to the current directory, and
+     * `classifyRegisteredPath` then called that directory an unreadable second claimant.
+     */
+    if (isAbsentRow(entry)) {
+      const refusal = absentRowRefusal(entry, here);
+      if (refusal !== null) return result("workspace-hub-link", "Hub link", "fail", refusal, data);
+      return result(
+        "workspace-hub-link",
+        "Hub link",
+        "warn",
+        `The hub lists "${slug}" from an adopted registry with no database on this machine, and ` +
+          `it resolves here to ${found.dbPath} with the identity the hub recorded. Normal ` +
+          "resolution attaches it here; if you are seeing this, the repair could not write to the hub.",
         data,
       );
     }

@@ -13,7 +13,7 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { Hub, notifyHubResolvedSafe } from "../core/hub.js";
+import { Hub, describeAbsentRow, notifyHubResolvedSafe } from "../core/hub.js";
 import { openWorkspace, resolveWorkspace } from "../core/workspace.js";
 import {
   StapleError,
@@ -907,10 +907,18 @@ export function startUiServer(options: UiOptions): UiHandle {
     throw new StapleError(
       "not_found",
       `"${workspace.slug}" has no sync identity, so there is no connection for this to act on. ` +
-        (workspace.recordsIdentityOnOpen
-          ? "Connecting it records one; nothing else needs doing first."
-          : `It is inside a version control checkout, where ${workspace.identityDir}/repository.json ` +
-            "is committed alongside the code rather than minted behind you."),
+        /**
+         * An absent row has no identity directory, and neither sentence below is
+         * true of it: nothing here can be opened to record an id, and it is in no
+         * checkout. Deriving one from its `""` path named the parent of the
+         * server's working directory.
+         */
+        (workspace.identityDir === null
+          ? describeAbsentRow(workspace.slug)
+          : workspace.recordsIdentityOnOpen
+            ? "Connecting it records one; nothing else needs doing first."
+            : `It is inside a version control checkout, where ${workspace.identityDir}/repository.json ` +
+              "is committed alongside the code rather than minted behind you."),
     );
   }
 
