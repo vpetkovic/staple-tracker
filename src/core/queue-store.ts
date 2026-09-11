@@ -158,9 +158,14 @@ export class QueueStore {
     }
   }
 
+  /**
+   * Every issue a plan write names — the entry, and a `--before`/`--after` neighbour — and
+   * refused through a number this device's issue moved off while that one may be meant
+   * (`WorkspaceStore.writeTarget`).
+   */
   private requireIssue(ref: string): Issue {
     this.assertLocalRef(ref);
-    return this.store.getIssue(ref);
+    return this.store.writeTarget(ref);
   }
 
   // ---------- revision ----------

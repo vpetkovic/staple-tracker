@@ -1,8 +1,9 @@
 import type { DatabaseSync } from "node:sqlite";
 import { insertEvent } from "./event-log.js";
-import { aliasedIssueId, formerHolderOf, formerMove, noteRenumber } from "./identifier-moves.js";
+import { RENUMBER_GUARD_MS, aliasedIssueId, formerHolderOf, formerMove, noteRenumber, renumbersAcknowledged } from "./identifier-moves.js";
+import { readLocalLease } from "./cloud/lease-store.js";
 import { REPOSITORY_PREFIX_SETTING } from "./cloud/repository-prefix.js";
-import { type Journal, journalFor } from "./journal.js";
+import { type Journal, journalFor, resolveDeviceId } from "./journal.js";
 import {
   blockersResolvedDedupKey,
   childrenCompleteDedupKey,
@@ -29,6 +30,7 @@ import {
   type QueuedBy,
   REQUIRED_STATUS_CATEGORIES,
   RESOLVED_CATEGORIES,
+  holdsLiveOrigin,
   StapleError,
   type StapleEvent,
   type StatusCategory,
@@ -1696,27 +1698,67 @@ export class WorkspaceStore {
   }
 
   /**
-   * A write's target, refused when the caller provably meant the issue that moved.
+   * A write's target — refused when the number it was named by is one this device's own issue
+   * moved off, and the caller may well have meant that issue.
    *
-   * An agent holds its checkout by the identifier it was given. If sync renumbered that issue
-   * in between, the identifier now names another issue, and a `done`, `release`, status
-   * change or comment by it would land there. The checkout is the proof of what was meant:
-   * when the issue that moved off this identifier is checked out by this actor and the one
-   * holding it now is not, the write is refused and names the identifier to use.
+   * Sync renumbers an issue two devices numbered alike (`cloud/claims.ts`), and the number
+   * then names the other one. Whoever learned the number before the move — an agent between
+   * `checkout` and `done`, a handoff, a script — and writes through it after would write to
+   * the wrong issue. Who is writing proves nothing: the actor is `$STAPLE_AGENT`, or `$USER`,
+   * or whatever `--agent` said, and the step that learned the number and the step that
+   * writes need not agree. What the issue that moved says about itself does:
+   *
+   *   - it is checked out, by any agent, or leased by this device — somebody is working on
+   *     it by some name, and that name may be this one; or
+   *   - it moved within {@link RENUMBER_GUARD_MS} — anything that learned the number
+   *     yesterday may still be using it.
+   *
+   * Either way the write is refused, naming both issues, and nothing is written. It goes
+   * through when the caller names the issue by id — which no renumber changes — or
+   * acknowledges the move (`--ack-renumber`, `acknowledgeRenumber`); then the number means
+   * the issue that holds it now, with the notice every read of it leaves
+   * (`noteIfRenumbered`). Outside the window, with no checkout or lease, that is also what
+   * happens without asking.
    */
-  private requireTarget(ref: string, actor: string | null | undefined): IssueRow {
+  private requireTarget(ref: string): IssueRow {
     const row = this.requireRow(ref);
-    if (!actor) return row;
+    if (renumbersAcknowledged()) return row;
     const moved = this.renumberedFrom(ref, row);
-    if (moved === null || moved.issueId === row.id || row.checkout_agent === actor) return row;
+    if (moved === null || moved.issueId === row.id) return row;
     const meant = this.db.prepare("SELECT * FROM issues WHERE id = ?").get(moved.issueId) as unknown as IssueRow | undefined;
-    if (!meant || meant.checkout_agent !== actor) return row;
+    if (!meant) return row;
+    const reasons: string[] = [];
+    if (meant.checkout_agent !== null) reasons.push(`it is checked out by ${meant.checkout_agent}`);
+    const lease = readLocalLease(this.db, meant.id);
+    const device = resolveDeviceId();
+    if (lease !== null && (device === null || lease.deviceId === device)) reasons.push("this device holds its lease");
+    const at = Date.parse(moved.at);
+    if (!Number.isNaN(at) && Date.now() - at < RENUMBER_GUARD_MS) reasons.push("it moved less than a day ago");
+    if (reasons.length === 0) return row;
     throw new StapleError(
       "conflict",
-      `${moved.identifier} was renumbered here at ${moved.at}: the issue you have checked out is now ` +
-        `${meant.identifier}, and ${moved.identifier} names another issue. Nothing was written. Use ${meant.identifier}.`,
-      { renumbered: { from: moved.identifier, to: meant.identifier, at: moved.at, issueId: meant.id } },
+      `${moved.identifier} was renumbered here at ${moved.at}. The issue that held it, "${meant.title}", is now ` +
+        `${meant.identifier} (${meant.id}); ${moved.identifier} now names "${row.title}" (${row.id}). ` +
+        `Nothing was written, because you may mean the first: ${reasons.join(", and ")}. ` +
+        `Name the issue by its id, or pass --ack-renumber (MCP: acknowledgeRenumber) to write to ${moved.identifier} as it is now.`,
+      {
+        renumbered: {
+          from: moved.identifier,
+          at: moved.at,
+          movedIssue: { id: meant.id, identifier: meant.identifier, title: meant.title },
+          nowNames: { id: row.id, identifier: row.identifier, title: row.title },
+          reasons,
+        },
+      },
     );
+  }
+
+  /**
+   * The issue a write by another store names — {@link requireTarget}'s refusal included — for
+   * the milestone, plan and project stores, whose writes take an issue reference too.
+   */
+  writeTarget(ref: string): Issue {
+    return rowToIssue(this.requireTarget(ref));
   }
 
   /**
@@ -1905,7 +1947,7 @@ export class WorkspaceStore {
 
       let parent: IssueRow | null = null;
       if (input.parent) {
-        parent = this.requireRow(input.parent);
+        parent = this.requireTarget(input.parent);
         if (parent.depth + 1 > MAX_TREE_DEPTH) {
           throw new StapleError("validation", `Tree depth cap (${MAX_TREE_DEPTH}) exceeded`);
         }
@@ -1930,7 +1972,7 @@ export class WorkspaceStore {
         }
       }
 
-      const blockerRows = (input.blockedBy ?? []).map((ref) => this.requireRow(ref));
+      const blockerRows = (input.blockedBy ?? []).map((ref) => this.requireTarget(ref));
 
       const id = newId();
       const number = this.nextIssueNumber();
@@ -2148,8 +2190,8 @@ export class WorkspaceStore {
   /** Replace the full blocked-by set — set replacement, never incremental add. */
   setBlockedBy(ref: string, blockerRefs: string[], actor?: string | null): Issue {
     return this.journaled(() => {
-      const row = this.requireTarget(ref, actor);
-      const blockers = blockerRefs.map((blockerRef) => this.requireRow(blockerRef));
+      const row = this.requireTarget(ref);
+      const blockers = blockerRefs.map((blockerRef) => this.requireTarget(blockerRef));
       const deduped = [...new Map(blockers.map((b) => [b.id, b])).values()];
       this.assertNoCycle(
         row.id,
@@ -3165,7 +3207,7 @@ export class WorkspaceStore {
       throw new StapleError("validation", "gate requires --owner: name the human who must approve");
     }
     return this.journaled(() => {
-      const row = this.requireTarget(ref, actor);
+      const row = this.requireTarget(ref);
       if (this.isResolvedStatus(row.status)) {
         throw new StapleError(
           "conflict",
@@ -3312,7 +3354,7 @@ export class WorkspaceStore {
     actor?: string | null,
   ): Issue {
     return this.journaled(() => {
-      const row = this.requireTarget(ref, actor);
+      const row = this.requireTarget(ref);
       if (!isActiveGate(row.gate_state)) {
         throw new StapleError(
           "conflict",
@@ -3328,7 +3370,7 @@ export class WorkspaceStore {
         const descendants = new Set(this.descendantIds(row.id));
         const released: string[] = [];
         for (const childRef of opts.children) {
-          const child = this.requireRow(childRef);
+          const child = this.requireTarget(childRef);
           if (!descendants.has(child.id)) {
             throw new StapleError(
               "validation",
@@ -3500,7 +3542,7 @@ export class WorkspaceStore {
       );
     }
     return this.journaled(() => {
-      const row = this.requireTarget(ref, actor);
+      const row = this.requireTarget(ref);
       if (!isActiveGate(row.gate_state)) {
         throw new StapleError(
           "conflict",
@@ -3561,7 +3603,7 @@ export class WorkspaceStore {
     if (patch.kind) this.assertConfiguredKind(patch.kind);
     if (patch.priority) assertPriority(patch.priority);
     return this.journaled(() => {
-      const row = this.requireTarget(ref, actor);
+      const row = this.requireTarget(ref);
       if (
         patch.expectedStatusVersion !== undefined &&
         patch.expectedStatusVersion !== row.status_version
@@ -3718,8 +3760,7 @@ export class WorkspaceStore {
        * (`cloud/claims.ts`), and only the operation knows the status it moved from — a
        * device that inferred it from its own outbox missed every close another device made.
        */
-      const reopens =
-        statusChanging && categoryBefore !== null && categoryAfter !== null && RESOLVED_CATEGORIES.includes(categoryBefore) && !RESOLVED_CATEGORIES.includes(categoryAfter);
+      const reopens = statusChanging && !holdsLiveOrigin(row.status) && holdsLiveOrigin(statusAfter);
       this.journal.record({
         entity: "issue",
         entityId: row.id,
@@ -4547,7 +4588,7 @@ export class WorkspaceStore {
     const activeStatus = this.primaryStatusFor("active");
     const stealIfIdleSeconds = assertIdleThreshold(opts.stealIfIdleSeconds, "stealIfIdleSeconds");
     return this.journaled(() => {
-      const row = this.requireTarget(ref, agent);
+      const row = this.requireTarget(ref);
       if (this.isActiveStatus(row.status) && row.checkout_agent === agent) {
         return rowToIssue(row); // crash-recovery re-claim
       }
@@ -4802,7 +4843,7 @@ export class WorkspaceStore {
   releaseIssue(ref: string, agent?: string | null, opts: { ifIdleSeconds?: number } = {}): Issue {
     const ifIdleSeconds = assertIdleThreshold(opts.ifIdleSeconds, "ifIdleSeconds");
     return this.journaled(() => {
-      const row = this.requireTarget(ref, agent);
+      const row = this.requireTarget(ref);
       if (!this.isActiveStatus(row.status)) {
         throw new StapleError("conflict", `Cannot release: status is "${row.status}"`);
       }
@@ -4971,7 +5012,7 @@ export class WorkspaceStore {
     if (!body?.trim()) throw new StapleError("validation", "Comment body is required");
     const key = opts.idempotencyKey?.trim() || null;
     return this.journaled(() => {
-      const row = this.requireTarget(ref, author);
+      const row = this.requireTarget(ref);
       if (key) {
         const existing = this.db
           .prepare("SELECT * FROM comments WHERE issue_id = ? AND idempotency_key = ?")
@@ -5026,7 +5067,7 @@ export class WorkspaceStore {
       throw new StapleError("validation", "Document key must be 1-64 chars of a-z 0-9 . _ -");
     }
     return this.journaled(() => {
-      const row = this.requireTarget(ref, opts.author);
+      const row = this.requireTarget(ref);
       const current = this.db
         .prepare("SELECT current_revision FROM documents WHERE issue_id = ? AND key = ?")
         .get(row.id, cleanKey) as { current_revision: number } | undefined;

@@ -27,7 +27,7 @@
  */
 import type { DatabaseSync } from "node:sqlite";
 import { recordInheritedFieldWrites, type Journal } from "../journal.js";
-import { ReferentMissing, applyToDatabase, localEntityVersion, setEntityVersion, snapshotToInput } from "./apply.js";
+import { ReferentMissing, applyToDatabase, localEntityVersion, noteLoggedOriginClaim, setEntityVersion, snapshotToInput } from "./apply.js";
 import { withoutOpenContests } from "./conflicts.js";
 import { cloudError } from "./errors.js";
 import type { SnapshotEntity } from "./wire.js";
@@ -143,6 +143,8 @@ export function applySnapshotEntity(
   ledger = "snap",
 ): void {
   const input = snapshotToInput(entity, at);
+  // Where its claim on an external origin sits in the log, for the settlement of a later one.
+  noteLoggedOriginClaim(db, `${ledger}:${cutoffSeq}`, entity);
   /**
    * Through `applyRemote` so the write is echo-suppressed: a hydrating device must not
    * journal an outbound copy of every row it was handed, which would push the entire

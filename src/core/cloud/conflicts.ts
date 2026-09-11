@@ -1002,6 +1002,9 @@ export function countOpenConflicts(db: DatabaseSync): number {
  * is, and a receiver that treats it as an ordinary update would be right by
  * accident rather than by contract.
  */
+/** The entities whose row records when it last changed (`updated_at`). */
+const STAMPED: ReadonlySet<string> = new Set(["issue", "project", "milestone"]);
+
 function resolutionVerb(entity: string, field: string): SyncVerb {
   if (WHOLE[entity] === field) return "replace";
   if (entity === "issue" && field === "identifier") return "renumber";
@@ -1087,6 +1090,12 @@ function decide(db: DatabaseSync, request: ResolveRequest): ResolveOutcome {
     for (const write of writes) {
       const payload: Record<string, unknown> = { [wireKey(conflict.field)]: write.value };
       if (entries !== null) payload.entries = entries;
+      /**
+       * A resolution is a write, and an entity that says when it last changed says so at
+       * the decision. Until then each side held its own edit's time; without this they held
+       * them for ever, the one column the decision did not name (`test/sync-mutation-convergence.test.ts`).
+       */
+      if (STAMPED.has(conflict.entity)) payload.updatedAt = at;
       applyToDatabase(db, {
         entity: conflict.entity,
         entityId: write.entityId,

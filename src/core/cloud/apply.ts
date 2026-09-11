@@ -53,7 +53,7 @@ import {
   type SettingDefinition,
 } from "../settings-registry.js";
 import { aliasedIssueId, moveIdentifier, recordIdentifierMove } from "../identifier-moves.js";
-import { StapleError, normalizeTitle, nowIso } from "../types.js";
+import { ORIGIN_RELEASING_STATUSES, StapleError, holdsLiveOrigin, normalizeTitle, nowIso } from "../types.js";
 import { holderYields, oweSettlement, ownClaimSeq, ownOriginClaimSeq } from "./claims.js";
 import {
   isDefined,
@@ -82,7 +82,7 @@ export class ReferentMissing extends Error {
 
 type Encoding = "raw" | "json" | "bool";
 
-interface Column {
+export interface Column {
   readonly column: string;
   readonly encoding: Encoding;
 }
@@ -100,7 +100,7 @@ function col(column: string, encoding: Encoding = "raw"): Column {
  * operations already carry them as fields and refusing them would drop a claim
  * on the floor; when the lease lane lands, it projects onto the same two columns.
  */
-const ISSUE_FIELDS: Record<string, Column> = {
+export const ISSUE_FIELDS: Record<string, Column> = {
   identifier: col("identifier"),
   title: col("title"),
   normalizedTitle: col("normalized_title"),
@@ -142,7 +142,7 @@ const ISSUE_FIELDS: Record<string, Column> = {
   updatedAt: col("updated_at"),
 };
 
-const COMMENT_FIELDS: Record<string, Column> = {
+export const COMMENT_FIELDS: Record<string, Column> = {
   issueId: col("issue_id"),
   author: col("author"),
   authorType: col("author_type"),
@@ -152,7 +152,7 @@ const COMMENT_FIELDS: Record<string, Column> = {
   createdAt: col("created_at"),
 };
 
-const PROJECT_FIELDS: Record<string, Column> = {
+export const PROJECT_FIELDS: Record<string, Column> = {
   slug: col("slug"),
   name: col("name"),
   kind: col("kind"),
@@ -161,6 +161,22 @@ const PROJECT_FIELDS: Record<string, Column> = {
   createdAt: col("created_at"),
   updatedAt: col("updated_at"),
 };
+
+/** A milestone's own row: its dates and when it last changed. `members_revision` is local. */
+export const MILESTONE_FIELDS: Record<string, Column> = {
+  targetDate: col("target_date"),
+  startDate: col("start_date"),
+  updatedAt: col("updated_at"),
+};
+
+/**
+ * The issue columns computed from other synchronized columns: `normalized_title` from
+ * `title`, `depth` from the parent's depth. Never part of a change a device journals —
+ * no provenance, never contested — and never read from an operation by this build: the
+ * applier computes them from what it wrote (`docs/sync.md`, "Derived columns").
+ */
+export const DERIVED_ISSUE_FIELDS: ReadonlySet<string> = new Set(["normalizedTitle", "depth"]);
+const DERIVED_ISSUE_COLUMNS: ReadonlySet<string> = new Set(["normalized_title", "depth"]);
 
 /**
  * The payload keys the applier understands for each table.
@@ -224,7 +240,7 @@ function encode(value: unknown, encoding: Encoding): unknown {
   return value as never;
 }
 
-function decodeColumn(value: unknown, encoding: Encoding): unknown {
+export function decodeColumn(value: unknown, encoding: Encoding): unknown {
   if (value === null || value === undefined) return null;
   if (encoding === "bool") return Number(value) !== 0;
   if (encoding === "json" && typeof value === "string") {
@@ -287,13 +303,36 @@ export function refreshedIssuePayload(
   return out;
 }
 
+/**
+ * A payload naming one field in both spellings, with the column's spelling kept.
+ *
+ * Only a restored create from before one spelling carries both (`oneSpelling` in
+ * `journal.ts`): an older build journaled a create by field name and every later edit by
+ * column, the service's fold kept both keys, and a backup and every epoch restored from it
+ * holds both with no history to say which came last. The column's is the edit — only an
+ * edit ever wrote that spelling — so it is the later value, and it wins wherever such a
+ * payload is read: here, in the snapshot applier (`latestSpelling`), in the service's fold
+ * and in the tail fold (`worker/src/fold.ts`, `tail-fold.ts`).
+ */
+export function columnSpellingWins(payload: Record<string, unknown>): Record<string, unknown> {
+  let out: Record<string, unknown> | null = null;
+  for (const key of Object.keys(payload)) {
+    if (!key.includes("_")) continue;
+    const camel = key.replace(/_([a-z])/g, (_, letter: string) => letter.toUpperCase());
+    if (camel === key || !(camel in payload)) continue;
+    out ??= { ...payload };
+    delete out[camel];
+  }
+  return out ?? payload;
+}
+
 /** Map a payload onto `(column, value)` pairs, dropping fields with no column. */
 function project(
   payload: Record<string, unknown>,
   columns: Record<string, Column>,
 ): Array<[string, unknown]> {
   const pairs: Array<[string, unknown]> = [];
-  for (const [key, value] of Object.entries(payload)) {
+  for (const [key, value] of Object.entries(columnSpellingWins(payload))) {
     const mapped = columns[key];
     if (!mapped) continue;
     pairs.push([mapped.column, encode(value, mapped.encoding)]);
@@ -332,6 +371,12 @@ export interface ApplyInput {
    * no time (`worker/src/fold.ts`) — and not a moment of hydration.
    */
   readonly atIsCreate?: boolean;
+  /**
+   * For a snapshot entity, the time of the last write the fold records for it — what a device
+   * reading that write in the tail used for a time the payload does not carry, where `at` is
+   * the create's (`applyMilestone`).
+   */
+  readonly lastWriteAt?: string | null;
 }
 
 function restoreActor(actor: string | null | undefined): boolean {
@@ -413,10 +458,42 @@ function latestSpelling(entity: SnapshotEntity): Record<string, unknown> {
     if (!(camel in state) || !(key in state)) continue;
     const [snakeSeq, snakeAt] = rank(key);
     const [camelSeq, camelAt] = rank(camel);
-    const snakeLater = snakeSeq !== camelSeq ? snakeSeq > camelSeq : snakeAt > camelAt;
+    // With no history to tell them apart — a restored create — the column's spelling is the
+    // edit, and the later value (`columnSpellingWins`).
+    const snakeLater = snakeSeq !== camelSeq ? snakeSeq > camelSeq : snakeAt !== camelAt ? snakeAt > camelAt : true;
     delete state[snakeLater ? camel : key];
   }
   return state;
+}
+
+/**
+ * A milestone's `updatedAt` as the fold holds it, unless a later write did not carry one — an
+ * older build's, which a device reading the tail dates by the write's own time. Then it goes,
+ * and `applyMilestone` takes that write's time (`lastWriteAt`) as the tail did.
+ */
+function currentUpdatedAt(entity: SnapshotEntity, payload: Record<string, unknown>): Record<string, unknown> {
+  if (entity.entity !== "milestone") return payload;
+  const writes = Object.entries(entity.fieldWrites ?? {});
+  const seqOf = (field: string): number | null => {
+    const seq = entity.fieldWrites?.[field]?.seq;
+    return typeof seq === "number" ? seq : null;
+  };
+  const carried = seqOf("updatedAt") ?? seqOf("updated_at") ?? (typeof entity.createdSeq === "number" ? entity.createdSeq : null);
+  const last = writes.reduce((highest, [, write]) => (typeof write.seq === "number" ? Math.max(highest, write.seq) : highest), -1);
+  if (carried === null || last <= carried) return payload;
+  const { updatedAt: _stale, updated_at: _staleColumn, ...rest } = payload;
+  return rest;
+}
+
+/** The time of the latest write the fold records for an entity: highest seq, else latest time. */
+function lastWriteAt(entity: SnapshotEntity): string | null {
+  let best: { seq: number; at: string } | null = null;
+  for (const write of Object.values(entity.fieldWrites ?? {})) {
+    if (typeof write.at !== "string") continue;
+    const seq = typeof write.seq === "number" ? write.seq : -1;
+    if (best === null || seq > best.seq || (seq === best.seq && write.at > best.at)) best = { seq, at: write.at };
+  }
+  return best?.at ?? null;
 }
 
 export function snapshotToInput(entity: SnapshotEntity, at: string): ApplyInput {
@@ -428,7 +505,7 @@ export function snapshotToInput(entity: SnapshotEntity, at: string): ApplyInput 
     entity: entity.entity,
     entityId: entity.entityId,
     verb: entity.verb,
-    payload: latestSpelling(entity),
+    payload: currentUpdatedAt(entity, latestSpelling(entity)),
     // The create's actor, when the service sent it: the author a device reading that
     // create in the tail would give a revision or comment whose payload names none.
     actor: typeof entity.createdBy === "string" && entity.createdBy !== "" ? entity.createdBy : null,
@@ -437,14 +514,18 @@ export function snapshotToInput(entity: SnapshotEntity, at: string): ApplyInput 
      * The time of the entity's own create when the service sent it, which is the time a
      * device reading that create in the ordered tail uses for every column the payload
      * does not carry — a comment or revision written before its payload carried its own
-     * `createdAt`, above all. The moment of hydration only when the service did not say,
-     * and for a tombstone, whose time is when this device learned of the delete.
+     * `createdAt`, above all. An entity the log holds no create of — a milestone's dates
+     * and members, the plan — takes the time of its last write, which is what a device
+     * reading that write in the tail used; never the moment of hydration, which no other
+     * device shares. That only for a tombstone, whose time is when this device learned of
+     * the delete, and for an older Worker that sends neither.
      */
-    at: entity.verb !== "delete" && typeof entity.createdAt === "string" ? entity.createdAt : at,
+    at: entity.verb === "delete" ? at : typeof entity.createdAt === "string" ? entity.createdAt : (lastWriteAt(entity) ?? at),
     opId: null,
     seq: typeof entity.createdSeq === "number" ? entity.createdSeq : null,
     fieldSeqs,
     atIsCreate: entity.verb !== "delete" && typeof entity.createdAt === "string",
+    lastWriteAt: lastWriteAt(entity),
   };
 }
 
@@ -592,7 +673,8 @@ function applyIssue(db: DatabaseSync, input: ApplyInput): boolean {
   if (input.verb === "delete") return tombstone(db, input, "issues", "id");
 
   const { payload } = input;
-  const pairs = project(payload, ISSUE_COLUMNS);
+  // A derived column is computed here from what is written, never taken from the operation.
+  const pairs = project(payload, ISSUE_COLUMNS).filter(([column]) => !DERIVED_ISSUE_COLUMNS.has(column));
   redirectRemoved(db, input, pairs);
 
   const exists = db.prepare("SELECT 1 AS hit FROM issues WHERE id = ?").get(input.entityId) as
@@ -616,6 +698,7 @@ function applyIssue(db: DatabaseSync, input: ApplyInput): boolean {
     displaceIdentifierHolder(db, input, pairs);
     const values = new Map(pairs);
     settleIssueKeys(db, input, values);
+    deriveIssueColumns(db, values);
     updateRow(db, "issues", "id", input.entityId, [...values]);
     const after = identifierOf(db, input.entityId);
     if (before !== null && after !== null && before !== after) {
@@ -660,8 +743,7 @@ function insertIssue(db: DatabaseSync, input: ApplyInput, pairs: Array<[string, 
   const values = new Map(pairs);
   values.set("id", input.entityId);
 
-  const title = (values.get("title") ?? "") as string;
-  if (!values.has("normalized_title")) values.set("normalized_title", normalizeTitle(title));
+  deriveIssueColumns(db, values, true);
   if (!values.has("created_at")) values.set("created_at", input.at);
   if (!values.has("updated_at")) values.set("updated_at", input.at);
   if (!values.has("identifier")) {
@@ -707,6 +789,27 @@ function insertIssue(db: DatabaseSync, input: ApplyInput, pairs: Array<[string, 
   ).run(...(([...values.values()] as never[]) satisfies never[]));
 
   advanceIssueNumber(db, values.get("identifier") as string);
+}
+
+/**
+ * The derived columns of an issue write, computed from the columns it writes: the
+ * normalized title from the title, the depth from the parent's. An update that writes
+ * neither source leaves them as they are; an insert always has both. `values` has had any
+ * incoming derived value removed (`applyIssue`), so what a sender computed — or forgot
+ * to, as a conflict resolution once did — never decides what this device holds.
+ */
+function deriveIssueColumns(db: DatabaseSync, values: Map<string, unknown>, inserting = false): void {
+  if (inserting || values.has("title")) {
+    values.set("normalized_title", normalizeTitle(String(values.get("title") ?? "")));
+  }
+  if (inserting || values.has("parent_id")) {
+    const parentId = values.get("parent_id");
+    const parent =
+      typeof parentId === "string"
+        ? (db.prepare("SELECT depth FROM issues WHERE id = ?").get(parentId) as { depth: number } | undefined)
+        : undefined;
+    values.set("depth", parent === undefined ? 0 : parent.depth + 1);
+  }
 }
 
 /**
@@ -976,30 +1079,76 @@ function settleIssueKeys(db: DatabaseSync, input: ApplyInput, values: Map<string
   const originId = read("origin_id");
   const status = read("status");
   const touchesOrigin = values.has("origin_kind") || values.has("origin_id") || values.has("status");
-  if (
-    touchesOrigin &&
-    typeof kind === "string" &&
-    kind !== "manual" &&
-    typeof originId === "string" &&
-    status !== "done" &&
-    status !== "cancelled"
-  ) {
+  if (touchesOrigin && typeof kind === "string" && kind !== "manual" && typeof originId === "string" && holdsLiveOrigin(status)) {
     const holder = db
       .prepare(
         `SELECT id FROM issues
-          WHERE origin_kind = ? AND origin_id = ? AND status NOT IN ('done','cancelled') AND id <> ?`,
+          WHERE origin_kind = ? AND origin_id = ? AND id <> ?
+            AND status NOT IN (SELECT value FROM json_each(?))`,
       )
-      .get(kind, originId, input.entityId) as { id: string } | undefined;
+      .get(kind, originId, input.entityId, JSON.stringify(ORIGIN_RELEASING_STATUSES)) as { id: string } | undefined;
     if (holder) {
-      const fields = ["originKind", "origin_kind", "originId", "origin_id", "status"];
-      if (holderYields(db, "issue", holder.id, fields, claimSeqOf(input, fields), ownOriginClaimSeq)) {
+      /**
+       * Where each claim sits in the log. An operation's is its seq; a snapshot entity's is
+       * its last write of the origin or reopen (`ORIGIN_CLAIM_FIELDS`), else its create. The
+       * holder's is this device's own claim (`ownOriginClaimSeq`), or — for a holder a
+       * snapshot handed this device — where the snapshot says its claim is
+       * (`noteLoggedOriginClaim`). Without the second a hydrating device knew no claim of the
+       * holder's, so the holder always kept the origin: an issue an older build reopened
+       * after another device's import took it back on a fresh device, while every device
+       * that read the tail had given it to the import.
+       */
+      const incoming = claimSeqOf(input, ORIGIN_CLAIM_FIELDS);
+      const own = ownOriginClaimSeq(db, holder.id);
+      const holderClaim = (_db: DatabaseSync, id: string): number | null => {
+        const logged = loggedOriginClaim(db, id);
+        return own === null ? logged : logged === null ? own : Math.max(own, logged);
+      };
+      if (holderYields(db, "issue", holder.id, ORIGIN_CLAIM_FIELDS, incoming, holderClaim)) {
         db.prepare("UPDATE issues SET origin_id = NULL WHERE id = ?").run(holder.id);
-        oweSettlement(db, { entity: "issue", entityId: holder.id, field: "originId", from: originId });
+        // Settled by the device that made the later claim, and only by it (`claims.ts`).
+        if (own !== null && incoming !== null && own > incoming) {
+          oweSettlement(db, { entity: "issue", entityId: holder.id, field: "originId", from: originId });
+        }
       } else {
         values.set("origin_id", null);
       }
     }
   }
+}
+
+/** The fields whose last write is an issue's claim on its origin: the origin itself, or a reopen. */
+const ORIGIN_CLAIM_FIELDS: readonly string[] = ["originKind", "origin_kind", "originId", "origin_id", "reopens"];
+
+/**
+ * Where the snapshot a device is hydrating from puts each issue's claim on its origin, for
+ * the issues it has applied so far. Kept for one snapshot — keyed by it — because a seq means
+ * nothing across epochs.
+ */
+const loggedOriginClaims = new WeakMap<DatabaseSync, { snapshot: string; claims: Map<string, number> }>();
+
+/**
+ * Record where a snapshot entity's origin claim sits in the log (`hydrate.ts`): its last
+ * write of the origin or a reopen — the service's fold records a reopen whether or not the
+ * operation said so (`reopensOrigin`, `worker/src/fold.ts`) — else its create.
+ */
+export function noteLoggedOriginClaim(db: DatabaseSync, snapshot: string, entity: SnapshotEntity): void {
+  if (entity.entity !== "issue" || entity.verb === "delete") return;
+  let held = loggedOriginClaims.get(db);
+  if (!held || held.snapshot !== snapshot) {
+    held = { snapshot, claims: new Map() };
+    loggedOriginClaims.set(db, held);
+  }
+  const written = ORIGIN_CLAIM_FIELDS.map((field) => entity.fieldWrites?.[field]?.seq).filter(
+    (seq): seq is number => typeof seq === "number",
+  );
+  const claim = written.length > 0 ? Math.max(...written) : typeof entity.createdSeq === "number" ? entity.createdSeq : null;
+  if (claim === null) held.claims.delete(entity.entityId);
+  else held.claims.set(entity.entityId, claim);
+}
+
+function loggedOriginClaim(db: DatabaseSync, issueId: string): number | null {
+  return loggedOriginClaims.get(db)?.claims.get(issueId) ?? null;
 }
 
 function issueExists(db: DatabaseSync, id: string): boolean {
@@ -1563,9 +1712,25 @@ function applyMilestone(db: DatabaseSync, input: ApplyInput): boolean {
   const hasMembers = Array.isArray(members);
   const hasTarget = "targetDate" in input.payload;
   const hasStart = "startDate" in input.payload;
-  if (!hasMembers && !hasTarget && !hasStart) return false;
+  const hasUpdated = typeof input.payload.updatedAt === "string";
+  if (!hasMembers && !hasTarget && !hasStart && !hasUpdated) return false;
 
   if (!issueExists(db, input.entityId)) throw new ReferentMissing(`milestone ${input.entityId}`);
+  /**
+   * When the milestone last changed, as the device that changed it wrote it: the payload's
+   * `updatedAt`, which every build since this one sends (`journal.ts`, the row diff). An
+   * older build's operation says nothing, and its time in the log stands in — the
+   * operation's own time in the tail, the last write's in a snapshot (`snapshotToInput`),
+   * never the moment this device happened to apply it.
+   */
+  const updatedAt = hasUpdated ? (input.payload.updatedAt as string) : (input.lastWriteAt ?? input.at);
+  if (hasUpdated && !hasMembers && !hasTarget && !hasStart) {
+    db.prepare(
+      `INSERT INTO milestone_meta (issue_id, updated_at) VALUES (?, ?)
+       ON CONFLICT (issue_id) DO UPDATE SET updated_at = excluded.updated_at`,
+    ).run(input.entityId, updatedAt);
+    return true;
+  }
 
   if (hasMembers) {
     const ids = members.filter((id): id is string => typeof id === "string");
@@ -1605,7 +1770,7 @@ function applyMilestone(db: DatabaseSync, input: ApplyInput): boolean {
        VALUES (?, 1, ?)
        ON CONFLICT (issue_id) DO UPDATE SET
          members_revision = members_revision + 1, updated_at = excluded.updated_at`,
-    ).run(input.entityId, input.at);
+    ).run(input.entityId, updatedAt);
   }
 
   if (hasTarget || hasStart) {
@@ -1628,7 +1793,7 @@ function applyMilestone(db: DatabaseSync, input: ApplyInput): boolean {
       input.entityId,
       typeof target === "string" ? target : null,
       typeof start === "string" ? start : null,
-      input.at,
+      updatedAt,
       hasTarget ? 1 : 0,
       hasStart ? 1 : 0,
     );

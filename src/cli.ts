@@ -45,7 +45,7 @@ import { GENERIC_KIND_FALLBACK } from "./core/kind-appearance.js";
 import { Hub, notifyHubResolvedSafe } from "./core/hub.js";
 import { runInstallCommand } from "./install/index.js";
 import { dataVersion } from "./core/db.js";
-import { takeRenumberNotices } from "./core/identifier-moves.js";
+import { acknowledgeRenumbers, takeRenumberNotices } from "./core/identifier-moves.js";
 import {
   DEFAULT_ISSUE_KIND,
   ISSUE_STATUSES,
@@ -213,7 +213,9 @@ function gateCue(gate: IssueGate | null, queuedBy: QueuedBy | null): string {
   return "";
 }
 
-function getStore(values: { db?: string; ws?: string }) {
+function getStore(values: { db?: string; ws?: string; "ack-renumber"?: boolean }) {
+  // A number this command uses may have moved, and the caller says it knows (`WorkspaceStore.requireTarget`).
+  if (values["ack-renumber"] === true) acknowledgeRenumbers();
   const opened = resolveWorkspace({ db: values.db, ws: values.ws });
   // One place, so every command that renders a row can draw a configured status
   // (STA-140) without being handed the store just to look up a glyph.
@@ -395,11 +397,12 @@ function completeWithHub(
   status: IssueStatus,
   comment?: string,
   estimatedSeconds?: number | null,
+  actor: string = agentName(),
 ) {
   const updated = store.updateIssue(
     ref,
     { status, comment, ...(estimatedSeconds === undefined ? {} : { estimatedSeconds }) },
-    agentName(),
+    actor,
   );
   notifyHubResolvedSafe(store.slug, updated.identifier);
   return updated;
@@ -865,13 +868,18 @@ Flow
               --override takes a row out of turn under queue.policy = strict and
               records who did it and why (the reason is mandatory). It never
               bypasses a blocker, a gate or a live claim
-  done <ref> [-m comment]               complete (+ cross-workspace fan-out)
-  cancel <ref> [-m comment]
-  status <ref> <status> [--estimate <dur>|--no-estimate]
+  done <ref> [--agent A] [-m comment]   complete (+ cross-workspace fan-out)
+  cancel <ref> [--agent A] [-m comment]
+  status <ref> <status> [--agent A] [--estimate <dur>|--no-estimate]
               any status, guards enforced; --estimate also re-records the
               estimate (same status = estimate-only write), --no-estimate clears
-  release <ref> [--if-stale <dur>]      give a claim back -> todo; --if-stale frees
-              a claim whose holder has been silent at least <dur> (any caller)
+  release <ref> [--agent A] [--if-stale <dur>]
+              give a claim back -> todo; --if-stale frees a claim whose holder
+              has been silent at least <dur> (any caller)
+              --agent names who acts, as on checkout; else $STAPLE_AGENT, else $USER
+  --ack-renumber  on any write: a number sync renumbered on this device is refused
+              while the issue that left it is checked out, leased here, or moved
+              under a day ago — this writes to whatever holds it now. Or use the id
   block <ref> --owner O --action TEXT   mark blocked with an unblock descriptor
   blocked-by <ref> [R1,R2|--none]       replace the dependency set
   wait <ref> [--timeout S] [--interval MS]
@@ -1021,6 +1029,7 @@ function main() {
     db: { type: "string" as const },
     ws: { type: "string" as const },
     json: { type: "boolean" as const },
+    "ack-renumber": { type: "boolean" as const },
   };
 
   switch (command) {
@@ -1352,7 +1361,7 @@ function main() {
       const { values, positionals } = parseArgs({
         args: rest,
         allowPositionals: true,
-        options: { ...common, message: { type: "string", short: "m" } },
+        options: { ...common, agent: { type: "string" }, message: { type: "string", short: "m" } },
       });
       const { store } = getStore(values);
       const issue = completeWithHub(
@@ -1360,6 +1369,8 @@ function main() {
         positionals[0]!,
         command === "done" ? "done" : "cancelled",
         values.message,
+        undefined,
+        agentName(values.agent),
       );
       if (values.json) {
         outJson(issue);
@@ -1375,6 +1386,7 @@ function main() {
         allowPositionals: true,
         options: {
           ...common,
+          agent: { type: "string" },
           estimate: { type: "string" },
           "no-estimate": { type: "boolean" },
         },
@@ -1391,11 +1403,11 @@ function main() {
       const estimatedSeconds = estimateOption(values.estimate, values["no-estimate"]);
       const issue =
         target === "done" || target === "cancelled"
-          ? completeWithHub(store, positionals[0]!, target, undefined, estimatedSeconds)
+          ? completeWithHub(store, positionals[0]!, target, undefined, estimatedSeconds, agentName(values.agent))
           : store.updateIssue(
               positionals[0]!,
               { status: target, ...(estimatedSeconds === undefined ? {} : { estimatedSeconds }) },
-              agentName(),
+              agentName(values.agent),
             );
       if (values.json) {
         outJson(issue);
@@ -1409,11 +1421,11 @@ function main() {
       const { values, positionals } = parseArgs({
         args: rest,
         allowPositionals: true,
-        options: { ...common, "if-stale": { type: "string" } },
+        options: { ...common, agent: { type: "string" }, "if-stale": { type: "string" } },
       });
       const { store } = getStore(values);
       const stale = values["if-stale"];
-      const released = store.releaseIssue(positionals[0]!, agentName(), {
+      const released = store.releaseIssue(positionals[0]!, agentName(values.agent), {
         ifIdleSeconds: stale === undefined ? undefined : parseDuration(stale, "if-stale"),
       });
       if (values.json) {

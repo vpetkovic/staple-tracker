@@ -265,13 +265,18 @@ export class MilestoneStore {
     }
   }
 
-  private requireIssue(ref: string): Issue {
+  /**
+   * An issue a milestone call names. For a write — the milestone, a member, a neighbour, the
+   * epic it is made from — refused through a number this device's issue moved off while that
+   * one may be meant (`WorkspaceStore.writeTarget`); a read is answered with the notice.
+   */
+  private requireIssue(ref: string, forWrite = true): Issue {
     this.assertLocalRef(ref);
-    return this.store.getIssue(ref);
+    return forWrite ? this.store.writeTarget(ref) : this.store.getIssue(ref);
   }
 
-  private requireMilestone(ref: string): Issue {
-    const issue = this.requireIssue(ref);
+  private requireMilestone(ref: string, forWrite = true): Issue {
+    const issue = this.requireIssue(ref, forWrite);
     if (issue.kind !== MILESTONE_KIND) {
       throw new StapleError(
         "validation",
@@ -616,7 +621,7 @@ export class MilestoneStore {
   /** One milestone, one shape. `validation` for a non-milestone, `not_found` for nothing. */
   get(ref: string): MilestoneView {
     this.assertKindConfigured();
-    return this.view(this.requireMilestone(ref).id);
+    return this.view(this.requireMilestone(ref, false).id);
   }
 
   /**
@@ -652,7 +657,7 @@ export class MilestoneStore {
 
   /** The effective milestone of an issue: its own direct membership, else the nearest ancestor's. */
   milestoneOf(ref: string): string | null {
-    const issue = this.requireIssue(ref);
+    const issue = this.requireIssue(ref, false);
     for (const id of [issue.id, ...this.ancestorIds(issue.id)]) {
       const membership = this.membershipOf(id);
       if (membership) {

@@ -48,8 +48,17 @@ import { stapleHome } from "../config/home.js";
 import { connectionPath } from "./cloud/connection.js";
 import { readDeviceId } from "./cloud/device.js";
 import { cloudError } from "./cloud/errors.js";
+import { armRowCapture, ensureRowCapture, takeRowChanges, type RowChange } from "./cloud/row-diff.js";
 import { tx } from "./db.js";
-import { nowIso } from "./types.js";
+import { normalizeTitle, nowIso } from "./types.js";
+
+/**
+ * The issue fields derived from others (`DERIVED_ISSUE_FIELDS` in `cloud/apply.ts`, which
+ * this module cannot import at load time without a cycle through the applier).
+ */
+const DERIVED_FIELDS: ReadonlySet<string> = new Set(["normalizedTitle", "depth"]);
+/** Both spellings, for provenance a snapshot or an older build's operation names by column. */
+const DERIVED_ISSUE_KEYS: ReadonlySet<string> = new Set([...DERIVED_FIELDS, "normalized_title"]);
 
 /** Every entity an operation can name. Closed set — see docs/sync.md. */
 export const SYNC_ENTITIES = [
@@ -325,7 +334,9 @@ export interface FieldWriteRecord {
  * newest write refreshes its attribution rather than being ignored.
  */
 export function recordFieldWrites(db: DatabaseSync, record: FieldWriteRecord): void {
-  if (record.fields.length === 0) return;
+  // A derived column is nobody's write, on every path that records one (`docs/sync.md`, "Derived columns").
+  const fields = record.entity === "issue" ? record.fields.filter((field) => !DERIVED_ISSUE_KEYS.has(field)) : record.fields;
+  if (fields.length === 0) return;
   const insert = db.prepare(
     `INSERT INTO sync_field_writes
        (entity, entity_id, field, base_version, op_id, device_id, written_at)
@@ -337,7 +348,7 @@ export function recordFieldWrites(db: DatabaseSync, record: FieldWriteRecord): v
        written_at   = excluded.written_at
       WHERE excluded.base_version >= sync_field_writes.base_version`,
   );
-  for (const field of record.fields) {
+  for (const field of fields) {
     insert.run(
       record.entity,
       record.entityId,
@@ -387,6 +398,7 @@ export function recordInheritedFieldWrites(
   writes: readonly InheritedFieldWrite[],
   priorVersion: number,
 ): void {
+  if (entity === "issue") writes = writes.filter((write) => !DERIVED_ISSUE_KEYS.has(write.field));
   if (writes.length === 0) return;
   const insert = db.prepare(
     `INSERT INTO sync_field_writes
@@ -624,10 +636,21 @@ export class Journal {
 
     const scope = new JournalScope(randomUUID(), false);
     this.scope = scope;
+    /**
+     * With a device to journal for, the rows the mutation touches are read before and after
+     * (`cloud/row-diff.ts`): every synchronized column it changed travels, whether or not the
+     * mutation named it. Armed and disarmed inside the transaction, so a throw rolls the
+     * capture back with everything else.
+     */
+    const capturing = this.deviceId !== null;
+    if (capturing) ensureRowCapture(this.db);
     try {
       return tx(this.db, () => {
+        if (capturing) armRowCapture(this.db, true, true);
         const result = fn();
-        this.flush(scope);
+        const changes = capturing ? takeRowChanges(this.db) : [];
+        if (capturing) armRowCapture(this.db, false);
+        this.flush(scope, changes);
         return result;
       });
     } finally {
@@ -662,9 +685,12 @@ export class Journal {
       const outer = this.scope;
       const scope = new JournalScope(op.opId, true);
       this.scope = scope;
+      // What an applied operation writes is somebody else's change: nothing of it is journaled.
+      const capturing = armRowCapture(this.db, false);
       try {
         return apply();
       } finally {
+        if (capturing) armRowCapture(this.db, true);
         this.scope = outer;
       }
     });
@@ -681,11 +707,13 @@ export class Journal {
    * takes the version bump and the sequence allocation with it and the next
    * attempt derives the same id from the same inputs.
    */
-  private flush(scope: JournalScope): void {
-    if (scope.intents.size === 0) return;
+  private flush(scope: JournalScope, changes: readonly RowChange[] = []): void {
     if (this.deviceId === null) return;
+    if (scope.intents.size === 0 && changes.length === 0) return;
     const state = this.state();
     if (!state?.repository_id) return;
+    this.mergeRowChanges(scope, changes);
+    if (scope.intents.size === 0) return;
 
     const createdAt = nowIso();
     /**
@@ -780,6 +808,46 @@ export class Journal {
           )
           .run(intent.entity, intent.entityId, createdAt, this.deviceId, opId);
       }
+    }
+  }
+
+  /**
+   * Fold what the rows say changed into what the mutation declared (`cloud/row-diff.ts`).
+   *
+   * Every synchronized column the mutation changed joins its entity's operation with the
+   * value the row now holds — over a value the declaration named, since the row is what the
+   * mutation left. An entity the mutation changed and declared nothing about gets an
+   * operation of its own: an `update`, or a `create` for a row it inserted, attributed to
+   * the mutation's actor. A declared `delete` is left as it is.
+   *
+   * A derived issue column is never part of the change (`docs/sync.md`, "Derived
+   * columns"): no provenance, never contested, and ignored by this build's applier, which
+   * computes it. What an issue operation does carry, as the row holds it, is a copy for the
+   * builds from before this one, whose applier reads it — the normalized title beside any
+   * title, and the depth on a create.
+   */
+  private mergeRowChanges(scope: JournalScope, changes: readonly RowChange[]): void {
+    const actor = [...scope.intents.values()].find((intent) => intent.actor !== null)?.actor ?? null;
+    for (const change of changes) {
+      const key = `${change.entity}\u0000${change.entityId}`;
+      const existing = scope.intents.get(key);
+      if (existing?.verb === "delete") continue;
+      scope.intents.set(
+        key,
+        existing
+          ? { ...existing, payload: { ...existing.payload, ...change.fields } }
+          : { entity: change.entity, entityId: change.entityId, verb: change.created ? "create" : "update", payload: { ...change.fields }, actor },
+      );
+    }
+    for (const [key, intent] of scope.intents) {
+      if (intent.entity !== "issue" || intent.verb === "delete") continue;
+      const payload = Object.fromEntries(Object.entries(intent.payload).filter(([field]) => !DERIVED_FIELDS.has(field)));
+      if (typeof payload.title === "string") payload.normalizedTitle = normalizeTitle(payload.title);
+      if (intent.verb === "create") {
+        const row = this.db.prepare("SELECT depth FROM issues WHERE id = ?").get(intent.entityId) as { depth: number } | undefined;
+        if (row) payload.depth = row.depth;
+      }
+      scope.intents.set(key, { ...intent, payload });
     }
   }
 

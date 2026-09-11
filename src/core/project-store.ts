@@ -304,7 +304,8 @@ export class ProjectStore {
    */
   assign(issueRef: string, project: string | null, actor: string | null): Issue {
     return this.journaled(() => {
-      const issue = this.store.getIssue(issueRef);
+      // Refused through a number an issue here moved off while that one may be meant (`writeTarget`).
+      const issue = this.store.writeTarget(issueRef);
       const target = project === null || project.trim() === "" ? null : rowToProject(this.requireRow(project));
       const nextId = target?.id ?? null;
       if (nextId === issue.projectId) return issue;

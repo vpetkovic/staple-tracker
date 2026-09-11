@@ -33,7 +33,7 @@ import {
   type CloudSurfaceReport,
 } from "./core/cloud/surface.js";
 import { Hub, notifyHubResolvedSafe } from "./core/hub.js";
-import { takeRenumberNotices } from "./core/identifier-moves.js";
+import { takeRenumberNotices, withRenumberAcknowledged } from "./core/identifier-moves.js";
 import type { CrossBlockerState } from "./core/hub.js";
 import {
   COMMENT_AUTHOR_TYPES,
@@ -217,7 +217,7 @@ const autoSync = new SurfaceAutoSync({
  * failure as `isError` rather than by throwing, so the check is on the value.
  */
 {
-  type ToolConfig = { annotations?: { readOnlyHint?: boolean } };
+  type ToolConfig = { annotations?: { readOnlyHint?: boolean }; inputSchema?: Record<string, unknown> };
   type ToolCallback = (...args: unknown[]) => unknown;
   const direct = server.registerTool.bind(server) as unknown as (
     name: string,
@@ -265,11 +265,36 @@ const autoSync = new SurfaceAutoSync({
       return result instanceof Promise ? result.then(attach) : attach(result);
     };
 
+  /**
+   * Every write takes `acknowledgeRenumber`: the caller knows a number it uses may have moved
+   * on this device, and means the issue that holds it now. Without it a write through a
+   * number this device's issue moved off is refused while that issue may be the one meant
+   * (`WorkspaceStore.requireTarget`); naming the issue by id needs no acknowledgement.
+   */
+  const acknowledging =
+    (cb: ToolCallback): ToolCallback =>
+    (...args: unknown[]) =>
+      withRenumberAcknowledged((args[0] as { acknowledgeRenumber?: unknown } | undefined)?.acknowledgeRenumber === true, () => cb(...args));
+  const ACKNOWLEDGE = z
+    .boolean()
+    .optional()
+    .describe(
+      "Write through an issue number even if it was renumbered on this device and the issue that moved off it may be the one you mean. Prefer naming the issue by its id.",
+    );
+
   (server as unknown as { registerTool: unknown }).registerTool = (
     name: string,
     config: ToolConfig,
     cb: ToolCallback,
-  ) => direct(name, config, withNotices(config.annotations?.readOnlyHint === true ? cb : afterWrite(cb)));
+  ) =>
+    config.annotations?.readOnlyHint === true
+      ? direct(name, config, withNotices(cb))
+      : direct(
+          name,
+          // A tool that takes no arguments names no issue, and keeps the signature it has.
+          config.inputSchema === undefined ? config : { ...config, inputSchema: { ...config.inputSchema, acknowledgeRenumber: ACKNOWLEDGE } },
+          withNotices(afterWrite(acknowledging(cb))),
+        );
 }
 
 /**

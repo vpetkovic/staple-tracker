@@ -269,6 +269,28 @@ export const OPEN_STATUSES: readonly BuiltinIssueStatus[] = [
 export const RESOLVED_STATUSES: readonly BuiltinIssueStatus[] = ["done", "cancelled"];
 
 /**
+ * The statuses an issue gives up its external origin in: the one definition of a LIVE
+ * origin, which is an origin on an issue in any other status.
+ *
+ * It is the definition every workspace database already enforces — `issues_live_origin_uq`
+ * is unique over `status NOT IN ('done','cancelled')` — and it has to be the one the
+ * settlement of two claims (`cloud/apply.ts`, `settleIssueKeys`), a reopen
+ * (`WorkspaceStore.updateIssue`), the seed and the service's fold use too: when one of them
+ * read the CATEGORY instead, an issue in a custom cancelled-category status still held its
+ * origin by the index, moving it out counted as a claim by the other rule, and both claims
+ * gave the origin up on every device. A category cannot be the definition without a schema
+ * migration — a partial index cannot read another table — and a migration moves the schema
+ * every operation carries, which every device on an older build refuses (`schema_ahead`).
+ * `test/cloud-live-origin.test.ts` holds the index and this list to each other.
+ */
+export const ORIGIN_RELEASING_STATUSES: readonly string[] = ["done", "cancelled"];
+
+/** True when an issue in `status` holds its external origin live (see {@link ORIGIN_RELEASING_STATUSES}). */
+export function holdsLiveOrigin(status: unknown): boolean {
+  return typeof status === "string" && !ORIGIN_RELEASING_STATUSES.includes(status);
+}
+
+/**
  * Built-in open statuses in list rank — the server-side twin of the UI mirror's
  * `OPEN_STATUS_ORDER`, which is where this constant used to live alone. The
  * per-workspace answer is `WorkspaceStore.openStatusOrder()`; this is the seed.

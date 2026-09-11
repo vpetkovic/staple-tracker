@@ -269,7 +269,79 @@ export function beginBootstrap(db: DatabaseSync, epoch: number): void {
     db.prepare(
       "UPDATE sync_state SET cursor = NULL, bootstrap_cursor = NULL, epoch = ? WHERE id = 1",
     ).run(epoch);
+    // A tail read part-way belongs to the epoch being left.
+    clearTailSurvey(db);
   });
+}
+
+// ------------------------------------------------------------ the tail survey
+
+const TAIL_SURVEY_KEY = "sync_tail_survey";
+
+/**
+ * How far this device has read the ordered tail to fold it itself (`tail-fold.ts`), when a
+ * read was stopped part-way: the repository and epoch it is of, the cursor to go on from,
+ * and what the pages so far folded to.
+ *
+ * A log too large for the service to fold is read whole, page by page, and on a large one
+ * that takes longer than an automatic sync's budget and more requests than the service's
+ * rate limit allows a minute. Kept, a stopped read is resumed by the next sync from the page
+ * it stopped at; before, every run started again from the first page and none finished.
+ *
+ * In `meta`, which never synchronizes, rather than in a table: a table would be a migration,
+ * and a migration moves the schema every operation carries. Valid for as long as its epoch
+ * is — the log only grows within one — and dropped when the epoch moves
+ * ({@link beginBootstrap}) or the read it describes is applied.
+ */
+export interface TailSurveyProgress {
+  readonly repositoryId: string;
+  readonly epoch: number;
+  readonly cursor: string | null;
+  readonly pages: number;
+  readonly operations: number;
+  readonly cutoffSeq: number;
+  readonly folded: readonly unknown[];
+}
+
+export function readTailSurvey(db: DatabaseSync, repositoryId: string): TailSurveyProgress | null {
+  const row = db.prepare("SELECT value FROM meta WHERE key = ?").get(TAIL_SURVEY_KEY) as { value: string } | undefined;
+  if (!row) return null;
+  try {
+    const saved = JSON.parse(row.value) as TailSurveyProgress;
+    if (saved.repositoryId !== repositoryId || !Array.isArray(saved.folded) || typeof saved.epoch !== "number") return null;
+    return saved;
+  } catch {
+    return null;
+  }
+}
+
+export function writeTailSurvey(db: DatabaseSync, progress: TailSurveyProgress): void {
+  db.prepare(
+    `INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+  ).run(TAIL_SURVEY_KEY, JSON.stringify(progress));
+}
+
+export function clearTailSurvey(db: DatabaseSync): void {
+  db.prepare("DELETE FROM meta WHERE key = ?").run(TAIL_SURVEY_KEY);
+}
+
+/**
+ * Where this device's reading of the log stands, as one comparable value: its cursor, its
+ * bootstrap position and how much of the tail it has folded. A run of automatic sync that
+ * moved it made progress, whether or not it finished (`auto-sync.ts`).
+ */
+export function syncProgressMark(db: DatabaseSync): string {
+  try {
+    const state = db.prepare("SELECT cursor, bootstrap_cursor FROM sync_state WHERE id = 1").get() as
+      | { cursor: string | null; bootstrap_cursor: string | null }
+      | undefined;
+    const survey = db.prepare("SELECT json_extract(value, '$.operations') AS operations FROM meta WHERE key = ?").get(TAIL_SURVEY_KEY) as
+      | { operations: number | null }
+      | undefined;
+    return JSON.stringify([state?.cursor ?? null, state?.bootstrap_cursor ?? null, survey?.operations ?? null]);
+  } catch {
+    return "";
+  }
 }
 
 /**

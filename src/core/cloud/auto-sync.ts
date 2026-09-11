@@ -57,6 +57,7 @@ import {
   type AutoSyncTrigger,
 } from "./auto.js";
 import { readAutoSyncState, writeAutoSyncState, type AutoSyncState } from "./auto-state.js";
+import { syncProgressMark } from "./sync-state.js";
 
 export type AutoSyncOutcome =
   | { readonly status: "skipped"; readonly reason: AutoSyncSkip }
@@ -65,6 +66,16 @@ export type AutoSyncOutcome =
   | { readonly status: "timeout"; readonly ms: number }
   /** `stop()` fired, or the surface shut down mid-run. */
   | { readonly status: "cancelled"; readonly ms: number }
+  /**
+   * Stopped part-way — the budget elapsed, or the service asked it to wait — having moved
+   * this device's reading of the log on, which the next run continues from. Not a failure.
+   */
+  | {
+      readonly status: "progressed";
+      readonly stoppedBy: "timeout" | "failed";
+      readonly code: string | null;
+      readonly ms: number;
+    }
   | {
       readonly status: "failed";
       /** The cloud error code when there was one — `offline`, `unavailable`, … */
@@ -253,6 +264,9 @@ export class AutoSyncScheduler {
 
     const controller = new AbortController();
     this.controller = controller;
+    // Where this device's reading of the log stands, to tell a stopped run that got
+    // somewhere from one that did not.
+    const mark = syncProgressMark(target.db);
     /**
      * A distinct object, so the catch below can tell "the budget elapsed" from
      * "somebody closed the window" by identity rather than by re-reading
@@ -309,11 +323,39 @@ export class AutoSyncScheduler {
       return { status: "synced", report, ms };
     } catch (error) {
       const ms = this.now() - startedAt;
-      const outcome: AutoSyncOutcome = !controller.signal.aborted
+      const stopped: AutoSyncOutcome = !controller.signal.aborted
         ? { status: "failed", code: codeOf(error), message: messageOf(error), ms }
         : controller.signal.reason === budgetElapsed
           ? { status: "timeout", ms }
           : { status: "cancelled", ms };
+      const asked = retryAfterFrom(error, this.now());
+
+      /**
+       * A run the budget or the service stopped part-way, having moved this device's reading
+       * of the log on, is progress and not a failure: a large log is more pages than one
+       * run's budget, or the service's rate limit, allows, and what was read is kept for the
+       * next run (`surveyFromTail` in `sync.ts`, the pull's cursor). Counted as a failure,
+       * it pushed the backoff out and reported failing on every run of a device that was
+       * getting there. It waits no less than the service asked, and no more.
+       */
+      if ((stopped.status === "timeout" || stopped.status === "failed") && syncProgressMark(target.db) !== mark) {
+        const outcome: AutoSyncOutcome = {
+          status: "progressed",
+          stoppedBy: stopped.status,
+          code: stopped.status === "failed" ? stopped.code : null,
+          ms,
+        };
+        this.persist(target.repositoryId, {
+          lastAttemptAt: new Date(startedAt).toISOString(),
+          lastOkAt: readAutoSyncState(home, target.repositoryId).lastOkAt,
+          consecutiveFailures: 0,
+          nextEligibleAt: asked > 0 ? new Date(this.now() + asked).toISOString() : null,
+          lastOutcome: `progressed after ${ms}ms (${trigger}); the next run goes on from there`,
+        });
+        this.debug?.(`${trigger} progressed after ${ms}ms`);
+        return outcome;
+      }
+      const outcome = stopped;
 
       /**
        * A cancellation is not a failure and must not push the backoff out.
@@ -329,7 +371,6 @@ export class AutoSyncScheduler {
        * seconds, and a rate-limited service says how long it wants — sixty, from the
        * deployed Worker — so the next trigger waits for whichever is later.
        */
-      const asked = retryAfterFrom(error, this.now());
       this.persist(target.repositoryId, {
         lastAttemptAt: new Date(startedAt).toISOString(),
         lastOkAt: readAutoSyncState(home, target.repositoryId).lastOkAt,

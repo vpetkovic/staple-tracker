@@ -31,6 +31,13 @@
  */
 import { randomUUID } from "node:crypto";
 import { isRetryable, type ErrorCode } from "../../worker/src/errors.js";
+import { columnSpellingWins } from "../../src/core/cloud/apply.js";
+import { ORIGIN_RELEASING_STATUSES } from "../../src/core/types.js";
+
+/** `reopensOrigin` in `worker/src/fold.ts`, which this fixture cannot import without the Worker's types. */
+function reopensOrigin(before: unknown, after: unknown): boolean {
+  return typeof before === "string" && typeof after === "string" && ORIGIN_RELEASING_STATUSES.includes(before) && !ORIGIN_RELEASING_STATUSES.includes(after);
+}
 import { SYNC_WIRE_CODES } from "./error-contract.js";
 
 /**
@@ -415,6 +422,11 @@ export class FakeSyncServer {
 
   /** Requests refused by the rate limit, for assertions. */
   rateLimited = 0;
+
+  /** Start (or stop) limiting the request rate — after a test has populated the repository. */
+  limitRate(limit: FakeServerOptions["rateLimit"]): void {
+    this.options.rateLimit = limit ?? null;
+  }
   private readonly requestTimes = new Map<string, number[]>();
 
   /**
@@ -1346,7 +1358,9 @@ export class FakeSyncServer {
       // record of the verb differs. Mirrors `worker/src/fold.ts` (STA-259).
       // One field, whichever spelling wrote it — `worker/src/fold.ts`. Not on the Worker
       // from before this build, which kept both.
-      for (const key of this.legacyFold ? [] : Object.keys(op.payload as Record<string, unknown>)) {
+      // A payload in both spellings keeps the column's — `columnSpellingWins`, `worker/src/fold.ts`.
+      const carried = this.legacyFold ? (op.payload as Record<string, unknown>) : columnSpellingWins(op.payload as Record<string, unknown>);
+      for (const key of this.legacyFold ? [] : Object.keys(carried)) {
         const other = key.includes("_")
           ? key.replace(/_([a-z])/g, (_, letter: string) => letter.toUpperCase())
           : key.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
@@ -1355,21 +1369,19 @@ export class FakeSyncServer {
           delete entry.fieldWrites[other];
         }
       }
-      Object.assign(entry.state, op.payload as Record<string, unknown>);
+      const statusBefore = entry.state.status;
+      Object.assign(entry.state, carried);
       entry.superseded = op.verb === "replace";
 
       // And the provenance, for every verb but `create` — the line `Journal.flush`
       // already draws, and what keeps an entity's defaults from looking chosen
       // (STA-263). `version` is already incremented, so `- 1` is the version moved off.
       if (op.verb !== "create") {
-        for (const field of Object.keys(op.payload as Record<string, unknown>)) {
-          entry.fieldWrites[field] = {
-            baseVersion: entry.version - 1,
-            opId: op.opId,
-            at: op.createdAt,
-            seq: op.seq,
-          };
-        }
+        const write = { baseVersion: entry.version - 1, opId: op.opId, at: op.createdAt, seq: op.seq };
+        for (const field of Object.keys(carried)) entry.fieldWrites[field] = write;
+        // A reopen, recorded by the fold — `reopensOrigin`, `worker/src/fold.ts`. Not on the
+        // Worker from before this build.
+        if (!this.legacyFold && op.entity === "issue" && reopensOrigin(statusBefore, carried.status)) entry.fieldWrites.reopens = write;
       }
     }
 

@@ -39,7 +39,7 @@ import { moveIdentifier } from "../identifier-moves.js";
 import { newId } from "../ids.js";
 import { replayOutboxFieldWrites, type Journal, type SeedIntent, type SyncEntity } from "../journal.js";
 import { WORKSPACE_SETTING_META_PREFIX } from "../settings-registry.js";
-import { BUILTIN_KIND_SEED, BUILTIN_STATUS_SEED, nowIso } from "../types.js";
+import { BUILTIN_KIND_SEED, BUILTIN_STATUS_SEED, holdsLiveOrigin, nowIso } from "../types.js";
 import { COMMENT_COLUMNS, ISSUE_COLUMNS, PROJECT_COLUMNS, applyToDatabase, payloadFromRow } from "./apply.js";
 import { settleOwedClaims } from "./claims.js";
 import { cloudError } from "./errors.js";
@@ -69,6 +69,8 @@ export interface RepositorySurvey {
   readonly pages: number;
   /** True when the service could not fold a log this large and the tail was folded here. */
   readonly fromTail?: boolean;
+  /** How many operations of that tail an earlier, stopped read had already folded. */
+  readonly resumedFrom?: number;
 }
 
 export interface SeedItem {
@@ -390,6 +392,16 @@ interface LocalEntity {
 
 type Row = Record<string, unknown>;
 
+/**
+ * One field of a folded state, by its payload name. A state naming it in both spellings —
+ * a restored create from before one spelling — is read by the column's, the edit
+ * (`columnSpellingWins`, `apply.ts`).
+ */
+function field(state: Record<string, unknown>, name: string): unknown {
+  const column = name.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
+  return column in state ? state[column] : state[name];
+}
+
 function str(value: unknown): string | null {
   return typeof value === "string" ? value : null;
 }
@@ -645,6 +657,8 @@ function inventory(db: DatabaseSync, now: string, skipped: SeedSkipped[]): Local
     if (meta) {
       payload.targetDate = meta.target_date;
       payload.startDate = meta.start_date;
+      // When it last changed, as this device holds it (`applyMilestone`).
+      payload.updatedAt = meta.updated_at;
     }
     out.push({
       entity: "milestone",
@@ -675,7 +689,7 @@ function inventory(db: DatabaseSync, now: string, skipped: SeedSkipped[]): Local
 
 // -------------------------------------------------------------------- yields
 
-const DONE_STATUSES = new Set(["done", "cancelled"]);
+// A live origin by the one definition (`holdsLiveOrigin`, `types.ts`).
 
 /** The unique display keys and dedup tokens the repository's live entities hold. */
 interface Claims {
@@ -698,12 +712,12 @@ function claimsOf(index: SurveyIndex): Claims {
     const s = issue.state;
     const identifier = str(s.identifier);
     if (identifier) claims.identifiers.set(identifier, issue.entityId);
-    const key = str(s.idempotencyKey ?? s.idempotency_key);
+    const key = str(field(s, "idempotencyKey"));
     if (key) claims.issueKeys.set(key, issue.entityId);
-    const originKind = str(s.originKind ?? s.origin_kind);
-    const originId = str(s.originId ?? s.origin_id);
+    const originKind = str(field(s, "originKind"));
+    const originId = str(field(s, "originId"));
     const status = str(s.status);
-    if (originKind && originKind !== "manual" && originId && !DONE_STATUSES.has(status ?? "")) {
+    if (originKind && originKind !== "manual" && originId && holdsLiveOrigin(status ?? "")) {
       claims.origins.set(`${originKind}\n${originId}`, issue.entityId);
     }
   }
@@ -712,8 +726,8 @@ function claimsOf(index: SurveyIndex): Claims {
     if (slug) claims.slugs.set(slug, project.entityId);
   }
   for (const comment of index.liveOf("comment")) {
-    const issueId = str(comment.state.issueId ?? comment.state.issue_id);
-    const key = str(comment.state.idempotencyKey ?? comment.state.idempotency_key);
+    const issueId = str(field(comment.state, "issueId"));
+    const key = str(field(comment.state, "idempotencyKey"));
     if (issueId && key) claims.commentKeys.set(`${issueId}\n${key}`, comment.entityId);
   }
   return claims;
@@ -846,7 +860,7 @@ function yieldToRepository(
         });
       }
     }
-    if (issue.origin_kind !== "manual" && issue.origin_id !== null && !DONE_STATUSES.has(issue.status)) {
+    if (issue.origin_kind !== "manual" && issue.origin_id !== null && holdsLiveOrigin(issue.status)) {
       const owner = claims.origins.get(`${issue.origin_kind}\n${issue.origin_id}`);
       if (owner !== undefined && owner !== issue.id) {
         db.prepare("UPDATE issues SET origin_id = NULL WHERE id = ?").run(issue.id);

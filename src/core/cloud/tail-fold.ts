@@ -21,9 +21,11 @@
  * claims in log order, the conflict screen on a re-read, the tail after the cutoff — is
  * unchanged. The cutoff is the last operation read; the tail resumes after it.
  */
+import { holdsLiveOrigin } from "../types.js";
+import { columnSpellingWins } from "./apply.js";
 import type { RemoteOperation, SnapshotEntity, SnapshotFieldWrite } from "./wire.js";
 
-interface Entry {
+export interface Entry {
   entity: string;
   entityId: string;
   version: number;
@@ -43,79 +45,117 @@ function otherSpelling(key: string): string {
   return key;
 }
 
-/** Fold operations, in any order, into the entities a snapshot at their highest seq holds. */
-export function foldOperations(ops: readonly RemoteOperation[]): SnapshotEntity[] {
-  const entities = new Map<string, Entry>();
-  for (const op of [...ops].sort((a, b) => a.seq - b.seq)) {
-    const key = `${op.entity} ${op.entityId}`;
-    let entry = entities.get(key);
-    if (!entry) {
-      entry = {
-        entity: op.entity,
-        entityId: op.entityId,
-        version: 0,
-        deletedAt: null,
-        lastSeq: op.seq,
-        superseded: false,
-        state: {},
-        fieldWrites: {},
-        createdSeq: null,
-        createdAt: null,
-        createdBy: null,
-      };
-      entities.set(key, entry);
-    }
-    entry.version += 1;
-    entry.lastSeq = op.seq;
-    if (op.verb === "delete") {
-      entry.deletedAt = typeof op.serverTs === "number" ? op.serverTs : Date.parse(op.createdAt);
-      continue;
-    }
-    if (op.verb === "create") {
-      if (entry.deletedAt !== null) {
-        entry.deletedAt = null;
-        entry.state = {};
-        entry.fieldWrites = {};
-        entry.superseded = false;
+/**
+ * The fold, one page at a time — so a device reading a long log can stop and go on later.
+ *
+ * Pages of the ordered tail arrive in seq order, and folding each onto what the earlier ones
+ * left is the same as folding them all at once. What has been folded so far is plain data
+ * (`saved`), so a sync the budget or the service's rate limit stopped part-way keeps it
+ * (`sync.ts`, the tail survey), and the next resumes from the page it stopped at instead
+ * of from the start of the log.
+ */
+export class TailFold {
+  private readonly entries: Map<string, Entry>;
+
+  constructor(saved: readonly Entry[] = []) {
+    this.entries = new Map(saved.map((entry) => [`${entry.entity} ${entry.entityId}`, entry]));
+  }
+
+  /** Fold operations that come after everything folded so far. */
+  add(ops: readonly RemoteOperation[]): void {
+    for (const op of [...ops].sort((a, b) => a.seq - b.seq)) {
+      const key = `${op.entity} ${op.entityId}`;
+      let entry = this.entries.get(key);
+      if (!entry) {
+        entry = {
+          entity: op.entity,
+          entityId: op.entityId,
+          version: 0,
+          deletedAt: null,
+          lastSeq: op.seq,
+          superseded: false,
+          state: {},
+          fieldWrites: {},
+          createdSeq: null,
+          createdAt: null,
+          createdBy: null,
+        };
+        this.entries.set(key, entry);
       }
-      entry.createdSeq = op.seq;
-      const restored = typeof op.actor === "string" && op.actor.startsWith("restore:");
-      entry.createdAt = restored ? null : op.createdAt;
-      entry.createdBy = restored ? null : op.actor;
-    }
-    if (entry.deletedAt !== null) continue;
-    const payload = op.payload;
-    if (payload === null || typeof payload !== "object" || Array.isArray(payload)) continue;
-    for (const field of Object.keys(payload)) {
-      const other = otherSpelling(field);
-      if (other !== field) {
-        delete entry.state[other];
-        delete entry.fieldWrites[other];
+      entry.version += 1;
+      entry.lastSeq = op.seq;
+      if (op.verb === "delete") {
+        entry.deletedAt = typeof op.serverTs === "number" ? op.serverTs : Date.parse(op.createdAt);
+        continue;
       }
-    }
-    Object.assign(entry.state, payload);
-    entry.superseded = op.verb === "replace";
-    if (op.verb !== "create") {
-      for (const field of Object.keys(payload)) {
-        entry.fieldWrites[field] = { baseVersion: entry.version - 1, opId: op.opId, at: op.createdAt, seq: op.seq };
+      if (op.verb === "create") {
+        if (entry.deletedAt !== null) {
+          entry.deletedAt = null;
+          entry.state = {};
+          entry.fieldWrites = {};
+          entry.superseded = false;
+        }
+        entry.createdSeq = op.seq;
+        const restored = typeof op.actor === "string" && op.actor.startsWith("restore:");
+        entry.createdAt = restored ? null : op.createdAt;
+        entry.createdBy = restored ? null : op.actor;
+      }
+      if (entry.deletedAt !== null) continue;
+      const payload = op.payload;
+      if (payload === null || typeof payload !== "object" || Array.isArray(payload)) continue;
+      // A payload in both spellings keeps the column's (`columnSpellingWins`, `apply.ts`).
+      const carried = columnSpellingWins(payload);
+      for (const field of Object.keys(carried)) {
+        const other = otherSpelling(field);
+        if (other !== field) {
+          delete entry.state[other];
+          delete entry.fieldWrites[other];
+        }
+      }
+      const statusBefore = entry.state.status;
+      Object.assign(entry.state, carried);
+      entry.superseded = op.verb === "replace";
+      if (op.verb !== "create") {
+        const write = { baseVersion: entry.version - 1, opId: op.opId, at: op.createdAt, seq: op.seq };
+        for (const field of Object.keys(carried)) entry.fieldWrites[field] = write;
+        // A reopen, as the service's fold records it (`reopensOrigin`, `worker/src/fold.ts`).
+        if (op.entity === "issue" && !holdsLiveOrigin(statusBefore) && holdsLiveOrigin(carried.status) && typeof statusBefore === "string") {
+          entry.fieldWrites.reopens = write;
+        }
       }
     }
   }
-  return [...entities.values()]
-    .sort((a, b) => (`${a.entity} ${a.entityId}` < `${b.entity} ${b.entityId}` ? -1 : 1))
-    .map((entry) => ({
-      entity: entry.entity,
-      entityId: entry.entityId,
-      version: entry.version,
-      deletedAt: entry.deletedAt,
-      lastSeq: entry.lastSeq,
-      verb: entry.deletedAt !== null ? "delete" : entry.superseded ? "replace" : "create",
-      state: entry.state,
-      fieldWrites: entry.fieldWrites,
-      createdSeq: entry.createdSeq,
-      createdAt: entry.createdAt,
-      createdBy: entry.createdBy,
-    }));
+
+  /** What has been folded so far, as plain data. */
+  saved(): Entry[] {
+    return [...this.entries.values()];
+  }
+
+  /** The entities a snapshot at the highest seq folded holds. */
+  entities(): SnapshotEntity[] {
+    return [...this.entries.values()]
+      .sort((a, b) => (`${a.entity} ${a.entityId}` < `${b.entity} ${b.entityId}` ? -1 : 1))
+      .map((entry) => ({
+        entity: entry.entity,
+        entityId: entry.entityId,
+        version: entry.version,
+        deletedAt: entry.deletedAt,
+        lastSeq: entry.lastSeq,
+        verb: entry.deletedAt !== null ? "delete" : entry.superseded ? "replace" : "create",
+        state: entry.state,
+        fieldWrites: entry.fieldWrites,
+        createdSeq: entry.createdSeq,
+        createdAt: entry.createdAt,
+        createdBy: entry.createdBy,
+      }));
+  }
+}
+
+/** Fold operations, in any order, into the entities a snapshot at their highest seq holds. */
+export function foldOperations(ops: readonly RemoteOperation[]): SnapshotEntity[] {
+  const fold = new TailFold();
+  fold.add(ops);
+  return fold.entities();
 }
 
 /** Whether a request was refused because the log is too large for the service to fold. */

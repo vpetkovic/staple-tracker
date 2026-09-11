@@ -56,18 +56,21 @@ import { closeSettledIdentifierConflicts, settleOwedClaims } from "./claims.js";
 import { assertHubCanTakePrefix, prefixToAdopt, restampHubPrefix } from "./prefix-hub.js";
 import { applyConflictOperation, countOpenConflicts, screenForConflicts } from "./conflicts.js";
 import { hydrate } from "./hydrate.js";
-import { foldOperations, refusedAsTooLargeToFold } from "./tail-fold.js";
+import { TailFold, refusedAsTooLargeToFold, type Entry } from "./tail-fold.js";
 import { seedModeOf, seedOwed, seedRepository, type RepositorySurvey, type SeedReport } from "./seed.js";
 import {
   acknowledgeOperation,
   advanceCursor,
   beginBootstrap,
+  clearTailSurvey,
   completeSnapshot,
   pendingCount,
   recordHeadSeq,
   recordSnapshotPage,
+  readTailSurvey,
   recordSyncedAt,
   requireSyncState,
+  writeTailSurvey,
 } from "./sync-state.js";
 import {
   toWireEnvelope,
@@ -175,7 +178,7 @@ const DEFAULT_ATTEMPTS = 3;
  * state converges on what the log says. Raised whenever the applier learns to apply
  * something it used to drop.
  */
-export const APPLIER_VERSION = 2;
+export const APPLIER_VERSION = 3;
 const APPLIER_VERSION_KEY = "sync_applier_version";
 
 function applierVersionOf(db: DatabaseSync): number {
@@ -550,7 +553,7 @@ export async function syncRepository(
      */
     const mode = seedModeOf(db);
     if (mode === "heal") await pushAll();
-    const survey = await surveyRepository(session, capabilities, options);
+    const survey = await surveyRepository(db, session, capabilities, options);
     noteFold(db, survey.entities);
     /**
      * A joining workspace takes its repository's prefix (`repository-prefix.ts`) — refused
@@ -565,6 +568,8 @@ export async function syncRepository(
       maxOpBytes: capabilities.maxOpBytes,
       adoptPrefix,
     });
+    // The tail read the survey resumed, if it was one, is spent.
+    clearTailSurvey(db);
     if (seed?.prefix) restampHubPrefix(options.home, db, seed.prefix.to);
     if (seed?.mode === "join") {
       joined = { entities: survey.entities.length, pages: survey.pages, cutoffSeq: survey.cutoffSeq, resumed: false, ...(survey.fromTail ? { fromTail: true } : {}) };
@@ -650,6 +655,7 @@ export async function syncRepository(
  * the service holds, and it writes all of it in one transaction.
  */
 async function surveyRepository(
+  db: DatabaseSync,
   session: Session,
   capabilities: Capabilities,
   options: SyncOptions,
@@ -658,7 +664,7 @@ async function surveyRepository(
     return await surveySnapshot(session, capabilities, options);
   } catch (error) {
     if (!(error instanceof TooLargeToFold)) throw error;
-    return surveyFromTail(session, capabilities, options);
+    return surveyFromTail(db, session, capabilities, options);
   }
 }
 
@@ -689,32 +695,71 @@ function snapshotPage(session: Session, cursor: string | null, limit: number, op
  * fold on the service, and folded here by the Worker's rules (`tail-fold.ts`). The cutoff
  * is the last operation read, and the tail resumes after it.
  */
-async function surveyFromTail(session: Session, capabilities: Capabilities, options: SyncOptions): Promise<RepositorySurvey> {
-  const ops: RemoteOperation[] = [];
-  let cursor: string | null = null;
-  let pages = 0;
-  let epoch = 0;
-  let tailCursor: string | null = null;
-  for (;;) {
-    const page = (await attempt(
-      () =>
-        pullOperations(
-          session.endpoint,
-          { repositoryId: session.repositoryId, token: session.token, deviceId: session.deviceId, cursor, limit: capabilities.maxPullLimit },
-          options,
-        ),
-      options,
-    )) as PullPage;
-    pages += 1;
-    epoch = page.epoch;
-    ops.push(...page.ops);
-    cursor = page.nextCursor;
-    tailCursor = page.nextCursor;
-    if (!page.hasMore || page.ops.length === 0) break;
+async function surveyFromTail(
+  db: DatabaseSync,
+  session: Session,
+  capabilities: Capabilities,
+  options: SyncOptions,
+): Promise<RepositorySurvey> {
+  /**
+   * Resumed from where an earlier read stopped (`readTailSurvey`): a large log is more
+   * pages than an automatic sync's budget, or the service's rate limit, allows one run, and
+   * a read that started again from the first page on every run never finished.
+   */
+  const saved = readTailSurvey(db, session.repositoryId);
+  const fold = new TailFold((saved?.folded ?? []) as Entry[]);
+  let cursor: string | null = saved?.cursor ?? null;
+  let pages = saved?.pages ?? 0;
+  let operations = saved?.operations ?? 0;
+  let epoch = saved?.epoch ?? 0;
+  let cutoffSeq = saved?.cutoffSeq ?? 0;
+  let unsaved = 0;
+  const keep = (): void => {
+    if (unsaved === 0) return;
+    writeTailSurvey(db, { repositoryId: session.repositoryId, epoch, cursor, pages, operations, cutoffSeq, folded: fold.saved() });
+    unsaved = 0;
+  };
+  try {
+    for (;;) {
+      const page = (await attempt(
+        () =>
+          pullOperations(
+            session.endpoint,
+            { repositoryId: session.repositoryId, token: session.token, deviceId: session.deviceId, cursor, limit: capabilities.maxPullLimit },
+            options,
+          ),
+        options,
+      )) as PullPage;
+      pages += 1;
+      epoch = page.epoch;
+      fold.add(page.ops);
+      operations += page.ops.length;
+      cutoffSeq = page.ops.reduce((highest, op) => Math.max(highest, op.seq), cutoffSeq);
+      cursor = page.nextCursor;
+      unsaved += 1;
+      if (!page.hasMore || page.ops.length === 0) break;
+      // Kept every few pages as well as when stopped, for a process that is killed outright.
+      if (unsaved >= TAIL_SURVEY_KEEP_EVERY) keep();
+    }
+  } catch (error) {
+    // Kept for the next sync — unless the epoch moved, which ends the log it describes.
+    if (cloudCodeOf(error) === "epoch_changed") clearTailSurvey(db);
+    else keep();
+    throw error;
   }
-  const cutoffSeq = ops.reduce((highest, op) => Math.max(highest, op.seq), 0);
-  return { epoch, cutoffSeq, tailCursor: tailCursor!, entities: foldOperations(ops), pages, fromTail: true };
+  return {
+    epoch,
+    cutoffSeq,
+    tailCursor: cursor!,
+    entities: fold.entities(),
+    pages,
+    fromTail: true,
+    ...(saved !== null ? { resumedFrom: saved.operations } : {}),
+  };
 }
+
+/** How many pages a tail read goes between keeping what it has read (`surveyFromTail`). */
+const TAIL_SURVEY_KEEP_EVERY = 10;
 
 async function surveySnapshot(
   session: Session,
@@ -1030,10 +1075,11 @@ async function recoverFromSnapshot(
   options: SyncOptions,
   ledger = "snap",
 ): Promise<PullOutcome> {
-  const survey = await surveyRepository(session, capabilities, options);
+  const survey = await surveyRepository(db, session, capabilities, options);
   noteFold(db, survey.entities);
   tx(db, () => {
     hydrate(db, journal, survey.entities, [], survey.cutoffSeq, nowIso(), true, true, ledger);
+    clearTailSurvey(db);
     completeSnapshot(db, survey.tailCursor, survey.epoch);
     replayOutboxFieldWrites(db);
     settleOwedClaims(db, journal);
@@ -1124,11 +1170,12 @@ async function runBootstrap(
        * folded here (`tail-fold.ts`) and applied as one snapshot, in one transaction.
        * Before, a repository past `MAX_SNAPSHOT_FOLD_OPS` could not reach a new machine.
        */
-      const survey = await surveyFromTail(session, capabilities, options);
+      const survey = await surveyFromTail(db, session, capabilities, options);
       noteFold(db, survey.entities);
       const at = nowIso();
       tx(db, () => {
         const outcome = hydrate(db, journal, survey.entities, parked, survey.cutoffSeq, at, true);
+        clearTailSurvey(db);
         entities += outcome.applied;
         settleOwedClaims(db, journal);
         completeSnapshot(db, survey.tailCursor, survey.epoch);

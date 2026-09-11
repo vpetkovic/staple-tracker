@@ -151,8 +151,9 @@ export function formerMove(db: DatabaseSync, identifier: string): { issueId: str
  * handoff, a script — would reach a different issue and never know. So every resolution of
  * an identifier with a move off it recorded here leaves a notice, and the surfaces put it in
  * the response the caller reads: the CLI on stdout and in `--json`, MCP in the tool
- * result (`takeRenumberNotices`). Where the caller provably meant the issue that moved — it
- * holds that issue's checkout — the store refuses instead (`WorkspaceStore.requireTarget`).
+ * result (`takeRenumberNotices`). A write through such a number, while the issue that moved
+ * may be the one meant — checked out, leased here, or moved within the day — is refused
+ * instead (`WorkspaceStore.requireTarget`).
  */
 export interface RenumberNotice {
   /** The identifier as the caller used it. */
@@ -181,4 +182,40 @@ export function noteRenumber(notice: Omit<RenumberNotice, "message">): void {
 /** Every notice since the last call, oldest first — and forget them. */
 export function takeRenumberNotices(): RenumberNotice[] {
   return pendingNotices.splice(0, pendingNotices.length);
+}
+
+/**
+ * How long after a renumber a write through the number the issue left is refused: a day.
+ *
+ * Long enough to cover the work that learned the old number before the move — an agent
+ * between `checkout` and `done`, a handoff written this morning, a script's variable — and
+ * short enough that, once everybody has moved on, the number is simply the issue that holds
+ * it now, with the notice (`WorkspaceStore.requireTarget`, `docs/sync.md`).
+ */
+export const RENUMBER_GUARD_MS = 24 * 60 * 60 * 1000;
+
+let acknowledged = 0;
+
+/**
+ * Run `fn` with a caller's acknowledgement that a number it uses may have moved: its writes
+ * go to whichever issue holds the number now, with the notice, instead of being refused.
+ * `staple --ack-renumber`, and `acknowledgeRenumber` on an MCP write.
+ */
+export function withRenumberAcknowledged<T>(on: boolean, fn: () => T): T {
+  if (!on) return fn();
+  acknowledged += 1;
+  try {
+    return fn();
+  } finally {
+    acknowledged -= 1;
+  }
+}
+
+/** For a process that runs one command: the acknowledgement holds for all of it. */
+export function acknowledgeRenumbers(): void {
+  acknowledged += 1;
+}
+
+export function renumbersAcknowledged(): boolean {
+  return acknowledged > 0;
 }

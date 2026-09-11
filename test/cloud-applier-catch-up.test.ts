@@ -11,6 +11,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { listConflicts, resolveConflict } from "../src/core/cloud/conflicts.js";
+import { APPLIER_VERSION } from "../src/core/cloud/sync.js";
 import { FakeSyncServer } from "./fixtures/fake-sync-server.js";
 import { Fleet } from "./fixtures/sync-machines.js";
 
@@ -33,6 +34,34 @@ function statusIds(db: DatabaseSync): string[] {
 }
 
 describe("a database an older build applied", () => {
+  /**
+   * An applier from before this build took the normalized title from the operation — and a
+   * conflict resolution sent none, so it stayed at the losing title — and dated a
+   * milestone by the moment it hydrated. Its re-read computes the one and takes the other
+   * from the log (`APPLIER_VERSION` 3).
+   */
+  it("is re-read into the derived columns and the log's times this build computes", async () => {
+    fleet = new Fleet(new FakeSyncServer({ repositoryId: REPO }), REPO);
+    const a = fleet.machine("a");
+    a.store.addKind({ id: "milestone", label: "Milestone" });
+    const issue = a.store.createIssue({ title: "Renamed later" });
+    const view = a.store.milestones().create({ title: "M", targetDate: "2026-12-01" }, "alice") as { milestone: { identifier: string } };
+    const milestone = a.store.getIssue(view.milestone.identifier).id;
+    await a.sync();
+    const v = fleet.machine("v");
+    await v.sync();
+    const derived = (db: DatabaseSync): unknown => ({
+      title: db.prepare("SELECT normalized_title FROM issues WHERE id = ?").get(issue.id),
+      milestone: db.prepare("SELECT updated_at FROM milestone_meta WHERE issue_id = ?").get(milestone),
+    });
+    v.db.prepare("UPDATE issues SET normalized_title = 'the losing title' WHERE id = ?").run(issue.id);
+    v.db.prepare("UPDATE milestone_meta SET updated_at = '2099-01-01T00:00:00.000Z' WHERE issue_id = ?").run(milestone);
+    v.db.prepare("DELETE FROM meta WHERE key = 'sync_applier_version'").run();
+
+    expect((await v.sync()).caughtUp).not.toBeNull();
+    expect(derived(v.db)).toEqual(derived(a.db));
+  });
+
   it("is re-read once on its first sync by this build, and holds what the log says", async () => {
     fleet = new Fleet(new FakeSyncServer({ repositoryId: REPO }), REPO);
     const a = fleet.machine("a");
@@ -160,7 +189,7 @@ describe("a database an older build applied", () => {
     await fresh.sync();
     for (const machine of [o, d2, fresh]) {
       expect(status(machine), machine.label).toEqual({ label: "R1 again", status: "r1" });
-      expect(version(machine), machine.label).toEqual({ value: "2" });
+      expect(version(machine), machine.label).toEqual({ value: String(APPLIER_VERSION) });
     }
     expect((await o.sync()).caughtUp).toBeNull();
     expect((await d2.sync()).caughtUp).toBeNull();
