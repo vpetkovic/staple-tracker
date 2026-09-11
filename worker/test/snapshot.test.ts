@@ -582,6 +582,44 @@ describe("the fold's record of each entity's create", () => {
     expect(byId.moved.fieldWrites.reopens).toBeUndefined();
   });
 
+  it("keeps both of two revisions written as one number: the earlier at it, the later next", async () => {
+    const revision = (clientSeq: number, body: string, author: string) =>
+      envelope({
+        clientSeq,
+        entity: "documentRevision",
+        verb: "create",
+        baseVersion: null,
+        entityId: "issue-1/plan/1",
+        payload: { issueId: "issue-1", key: "plan", revision: 1, body, author, createdAt: `2026-09-11T00:00:0${clientSeq}.000Z`, changeSummary: null },
+      });
+    await pushOps([revision(1, "A's plan", "alice"), revision(2, "B's plan", "bob")], { token });
+    const body = await jsonOf(await call(`/v1/repos/${REPO}/snapshot`, { token }));
+    const revisions = body.entities
+      .filter((entity: any) => entity.entity === "documentRevision")
+      .map((entity: any) => [entity.entityId, entity.state.revision, entity.state.body]);
+    expect(revisions).toEqual([
+      ["issue-1/plan/1", 1, "A's plan"],
+      ["issue-1/plan/2", 2, "B's plan"],
+    ]);
+    const moved = body.entities.find((entity: any) => entity.entityId === "issue-1/plan/2");
+    expect(moved.state.changeSummary).toMatch(/^renumbered from r1 to r2/);
+  });
+
+  it("forgets a status's place in an earlier order when it is created again", async () => {
+    await pushOps(
+      [
+        envelope({ clientSeq: 1, entity: "status", verb: "create", baseVersion: null, entityId: "zz", payload: { label: "ZZ", category: "review" } }),
+        envelope({ clientSeq: 2, entity: "status", entityId: "@order", payload: { order: ["todo", "zz", "done"] } }),
+        envelope({ clientSeq: 3, entity: "status", verb: "delete", entityId: "zz", payload: {} }),
+        envelope({ clientSeq: 4, entity: "status", verb: "create", baseVersion: null, entityId: "zz", payload: { label: "ZZ", category: "review" } }),
+      ],
+      { token },
+    );
+    const body = await jsonOf(await call(`/v1/repos/${REPO}/snapshot`, { token }));
+    const order = body.entities.find((entity: any) => entity.entity === "status" && entity.entityId === "@order");
+    expect(order.state.order).toEqual(["todo", "done"]);
+  });
+
   it("says nothing about a create the log does not hold", async () => {
     await pushOps([envelope({ clientSeq: 1, payload: { title: "an edit with no create" } })], { token });
     const body = await jsonOf(await call(`/v1/repos/${REPO}/snapshot`, { token }));
