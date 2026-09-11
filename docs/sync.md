@@ -299,11 +299,11 @@ entity's own primary key.
 | `issues` | `id` | `identifier`, `title`, `normalized_title`, `description`, `status`, `status_version`, `priority`, `parent_id`, `depth`, `assignee`, `created_by`, `labels`, `acceptance_criteria`, `block_parent_until_done`, `unblock_owner`, `unblock_action`, `origin_kind`, `origin_id`, `idempotency_key`, `estimated_seconds`, `kind`, `project_id`, `gate_state`, `gate_owner`, `gate_requested_by`, `gate_requested_at`, `gate_resolved_by`, `gate_resolved_at`, `gate_released`, `started_at`, `blocked_transition_at`, `completed_at`, `cancelled_at`, `created_at`, `updated_at` |
 | `comments` | `id` | `issue_id`, `author`, `author_type`, `body`, `idempotency_key`, `deleted_at`, `created_at` |
 | `documents` | `(issue_id, key)` | `current_revision`, `title`, `updated_at` |
-| `document_revisions` | `(issue_id, key, revision)` | `body`, `author`, `change_summary`, `created_at` — immutable once written, except that one written under a number an earlier revision holds in the log is moved to the next free number (below) |
+| `document_revisions` | `(issue_id, key, revision)` | `body`, `author`, `change_summary`, `created_at` — immutable once written, except that its number is where the log places it ([below](#conflicts-are-preserved-never-resolved-silently)) |
 | `relations` | `(blocker_id, blocked_id, type)` | `created_by`, `created_at` — `relations.id` is a local `AUTOINCREMENT` and does **not** travel |
 | `projects` | `id` | `slug`, `name`, `kind`, `source_kind`, `source`, `created_at`, `updated_at` |
-| `workspace_statuses` | `id` | `label`, `category`, `sort_order`, `is_builtin` |
-| `workspace_kinds` | `id` | `label`, `sort_order`, `is_builtin` |
+| `workspace_statuses` | `id` | `label`, `category`, `sort_order`, `is_builtin` (as `isBuiltin` on a create, below) |
+| `workspace_kinds` | `id` | `label`, `sort_order`, `is_builtin` (as `isBuiltin` on a create, below) |
 | `milestone_meta` | `issue_id` | `target_date`, `start_date`, `updated_at` — `members_revision` is derived, see below |
 | `meta` | `key` | **only** rows matching `setting:*` — the repository's prefix travels as one of them, `setting:repository.prefix` ([above](#the-prefix-is-the-repositorys-the-slug-is-the-machines)); `slug` and `prefix` themselves are this workspace's own |
 
@@ -312,6 +312,17 @@ allowlist and the default is deny. `setting:*` includes keys this build has no
 definition for: `unknownSettingKeys()` already preserves them unread, and sync
 carries them through unchanged for the same reason — an older device round-tripping
 a workspace must not delete a newer device's settings.
+
+**A status or kind's create says whether it is a built-in** (`isBuiltin`). Every device
+holds the built-ins from its own migrations, so one removed and added back arrived, on a
+device hydrating afterwards, over the built-in it already had — and stayed a built-in there
+alone, while the device that did it and every device that read the removal in the tail held
+the one added back as the workspace's own. The store sends `isBuiltin: false` on every add,
+the seed sends each row's own value (and treats a built-in as implied only while it still
+is one), and the applier writes it over the row it holds. A create from a build before this
+one says nothing, so the service's fold says `isBuiltin: false` for a status or kind created
+after its delete, and so do the tail fold and the test service
+(`test/cloud-builtin-readd.test.ts`, and the registry in `test/sync-mutation-convergence.test.ts`).
 
 `projects.source` is **redacted per row, keyed on its sibling column**. When
 `source_kind = 'local'` it holds an absolute filesystem path, which discloses the
@@ -792,7 +803,8 @@ write's time in a snapshot (`lastWriteAt`) — a fresh device used to date every
 the moment it hydrated. A conflict resolution is a write, and an issue, a project or a
 milestone it settles says so at the decision (`updatedAt`), where each side used to keep its
 own edit's time for good. An applier generation raised for these (`APPLIER_VERSION` 3)
-re-reads the snapshot once on every device, which repairs what an older applier wrote.
+re-reads the snapshot once on every device, which repairs what an older applier wrote; 4
+does the same for [revision numbers](#conflicts-are-preserved-never-resolved-silently).
 
 ## The operation envelope
 
@@ -1174,7 +1186,11 @@ applier is newer reads the snapshot once on the timeline the device is already o
 same read a stuck tail recovers with, under ledger ids of its own so an entity already
 applied at that cutoff is applied again — and says so. A database this applier hydrated
 records the generation as it goes and is never re-read
-(`test/cloud-applier-catch-up.test.ts`).
+(`test/cloud-applier-catch-up.test.ts`). Generation 4 re-reads every document revision into
+the log's placement: a device that joined from a fold that merged two revisions into one row,
+one whose older build dated what it applied by the operation, and one an earlier re-read gave
+copies under new numbers, all hold what a fresh device holds after it
+(`test/cloud-document-revisions.test.ts`).
 
 **The re-read waits for the Worker that folds creates.** The client ships within minutes
 of a merge and the Worker whenever it is deployed. The Worker before this build folds a
@@ -1222,6 +1238,37 @@ and a device that re-bootstraps into it hydrates nothing while the old rows sit
 there being retained for forensics that nobody asked for. The two options a
 restore may take are *append compensating operations* or *bump the epoch and
 re-materialise*; "bump the epoch" on its own is not one of them.
+
+### A restore rewinds
+
+A restore puts the repository back to a backup, and every device follows it there. The new
+epoch's snapshot says what the repository holds; what it does not say is everything pushed
+to the old epoch after the backup. A device that held such a row used to keep it through its
+re-bootstrap, while a device joining afterwards never had it — one repository, two answers,
+for good. So once a device has read the new epoch's snapshot whole, it rewinds with the
+repository (`src/core/cloud/rewind.ts`):
+
+- **What was pushed after the backup is gone.** A row the new epoch does not hold, that was
+  pushed — this device's own, acknowledged, or one it applied from the log — is removed on
+  every device that re-bootstraps into the new epoch, with what hangs off it: an issue's
+  comments, documents, blockers, milestone and plan entries. That is the rewind, which is
+  what a restore is for — undoing damage. A built-in status or kind the new epoch says
+  nothing about is put back as every device's migrations install it, and the vocabulary is
+  in the order a device hydrating the new epoch holds it. Document revisions are settled by
+  the read itself ([above](#conflicts-are-preserved-never-resolved-silently)).
+- **Work that was never pushed is kept, and reaches every device.** An entity with an
+  operation in this device's outbox that no service acknowledged is kept, with whatever it
+  names that the new epoch lacks — a comment's issue, an issue's parent, project, status and
+  kind — and sent into the new epoch: its queued operations as they are, and a `create` of
+  each kept entity the queue holds no create of, the whole entity as this device holds it,
+  as a heal sends one ([below](#a-workspaces-history-reaches-the-service-when-it-first-synchronizes)).
+  A restore never silently discards a device's unsent work. A device that made the restore
+  has moved its epoch already, so its next sync reads the new epoch before it pushes, and
+  the rewind sees that work before it is sent.
+
+Every device, and a fresh one, then holds the same (`test/cloud-restore-rewind.test.ts`, in
+the service's fold and the tail fold). A row nothing ever journaled or applied is not the
+rewind's: it was never on any timeline, and the heal is what sends it.
 
 ### What the server cannot do
 
@@ -1553,20 +1600,49 @@ its field name (`targetDate`, which the milestone applier reads; under the colum
 spelling, a milestone date resolved on one device changed on none)
 (`test/cloud-conflict-resolution-matrix.test.ts`).
 
-**Two revisions written as one number both survive, settled by the log.** A document
+**Two revisions written as one number both survive, placed by the log.** A document
 revision is immutable once written, and its number is its document's next, decided on the
 device that writes it — so two devices that each write revision N before seeing the other's
 send two different revision N's. Each device used to keep the first to arrive and the
 service's fold the last, so one writer's text existed only on its own device, and no record
-said so. Now the earlier write in the log keeps N, as for identifiers, and the later is the
-document's next free revision on every device — its body, author and time kept, and
-"renumbered from rN to rM: written at the same time as another rN, which the repository's log
-holds first" added to its change summary — in the applier, the service's fold and the tail
-fold alike (`applyDocumentRevision`, `settleRevision`). A device whose own revision is the
-later one moves it and sends it again under its new number, so a device on an older build,
-which keeps whatever reached it first under a number, receives the text too. Nothing is
-dropped, and the document's head is its highest revision
-(`test/cloud-document-revisions.test.ts`, and the registry in
+said so. Now there is one placement, and every reader of the log uses it — the applier, the
+service's fold, the tail fold and the test service all call `placeRevision`
+(`src/core/cloud/revision-placement.ts`, which the Worker imports as it stands):
+
+- **Taken in log order, each revision is the first free number from the one it claimed
+  upward.** Its body, author and time are kept, and when it moved, "renumbered from rN to rM:
+  written at the same time as another rN, which the repository's log holds first" is added to
+  its change summary.
+- **A revision the log already holds is not a second one.** It is the same revision when it
+  has the same body, and the same author where both have one — never by its time: a build
+  before this one dated a revision it applied by the operation, a millisecond off the time it
+  carries, and compared by time, every revision such a device held read as another and was
+  copied under a new number. It is matched at or above the number it was written as (a
+  revision sent again under the number it moved to says that number in its summary); below
+  it is an earlier revision, and a document put back to an earlier text is a new revision.
+- **Only this device's own revisions the log has not reached yield** — written here and not
+  sent, or sent and given a later seq. When an earlier revision in the log takes a number
+  one of them holds, every one of them is placed again after it, in the order they were
+  written, by the same rule, and each that moved is sent again under its new number, so a
+  device on an older build, which keeps whatever reached it first under a number, receives
+  the text too. Before, the one in the way alone went past the highest, and a writer with
+  two revisions in flight held them backwards, its older text as the current document.
+- **A snapshot is the log's placement.** Joining, re-bootstrapping or re-reading, a
+  revision's number is the one the log settled on, and it replaces what this device held
+  there: a revision it holds that matches by content moves to that number and takes the
+  log's time, author and summary, with no copy and no renumber. Once the read is complete,
+  its own revisions the log has not reached are placed after the log's, and one it holds
+  that the log does not is dropped (not by a join, whose rows are the workspace's own, nor
+  from a fold before this build). Before, a device that joined from a fold which had merged
+  two same-number revisions into one row kept that row on its re-read and moved the log's
+  earlier text up as if it were the newer.
+- **The head is the highest revision, dated by it.** `documents.updated_at` is the highest
+  revision's time, not the last one applied: a revision sent again under its new number
+  arrives after the ones above it, and stamped the document with its older time on every
+  device reading the tail.
+
+Nothing is dropped, and every device and a fresh one hold the same numbers
+(`test/cloud-document-revisions.test.ts`, worker `snapshot.test.ts`, and the registry in
 `test/sync-mutation-convergence.test.ts`).
 
 **No path applies last-write-wins.** Not for `updated_at`, not for `seq`, not for
