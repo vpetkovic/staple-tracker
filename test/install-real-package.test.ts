@@ -19,8 +19,9 @@
  * The tarball case packs its own `.tgz` from the same payload via `npm pack`.
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { createServer as createNetServer } from "node:net";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -272,4 +273,101 @@ describe("upgrade and rollback with the real artifact", () => {
     // No earlier version exists, so there is honestly nothing to roll back to.
     expect(() => rollbackRuntime({ home, binDir })).toThrow(/no previous version/);
   });
+});
+
+describe("the installed launcher passes signals on to the runtime it started", () => {
+  /**
+   * The launcher is a Node process that starts the runtime as its child. A
+   * terminal's Ctrl-C and launchd both signal the whole process group, so the
+   * runtime hears those directly. `kill <pid>` from another terminal signals the
+   * launcher alone. When the launcher did not forward it, the launcher died and
+   * the runtime carried on as an orphan, still holding its port.
+   */
+  const LISTENING = /staple ui — .* at http:\/\/localhost:(\d+)\//;
+
+  function childrenOf(pid: number): number[] {
+    const listed = spawnSync("pgrep", ["-P", String(pid)], { encoding: "utf8" });
+    return listed.stdout.split("\n").filter(Boolean).map(Number);
+  }
+
+  function running(pid: number): boolean {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async function portIsFree(port: number): Promise<boolean> {
+    const probe = createNetServer();
+    return new Promise((resolveFree) => {
+      probe.once("error", () => resolveFree(false));
+      probe.listen(port, "127.0.0.1", () => probe.close(() => resolveFree(true)));
+    });
+  }
+
+  it.each([
+    ["SIGTERM", "the launcher's pid alone", 143],
+    ["SIGINT", "the launcher's pid alone", 130],
+    ["SIGHUP", "the launcher's pid alone", 129],
+    // A terminal's Ctrl-C: both processes hear it, and the runtime then gets
+    // the forwarded copy as well. It must still be one clean shutdown.
+    ["SIGINT", "the whole process group", 130],
+  ] as const)(
+    "%s sent to %s stops the runtime and frees its port (exit %i)",
+    async (signal, target, expected) => {
+      install(distPackage);
+      const repo = join(scratch, "repo-signal");
+      mkdirSync(repo, { recursive: true });
+      const env = { ...process.env, STAPLE_HOME: home, NODE_NO_WARNINGS: "1" };
+      expect(spawnSync(join(binDir, "staple"), ["init"], { cwd: repo, env, encoding: "utf8" }).status).toBe(0);
+
+      const group = target === "the whole process group";
+      const launcher = spawn(join(binDir, "staple"), ["open", "--port", "0", "--no-browser"], {
+        cwd: repo,
+        env,
+        detached: group,
+      });
+      let stdout = "";
+      let stderr = "";
+      launcher.stdout.on("data", (chunk) => (stdout += String(chunk)));
+      launcher.stderr.on("data", (chunk) => (stderr += String(chunk)));
+      const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolveExit) =>
+        launcher.on("exit", (code, exitSignal) => resolveExit({ code, signal: exitSignal })),
+      );
+      let runtimePids: number[] = [];
+      try {
+        const deadline = Date.now() + 25_000;
+        while (!LISTENING.test(stdout) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 25));
+        const port = Number(LISTENING.exec(stdout)?.[1]);
+        expect(port).toBeGreaterThan(0);
+        runtimePids = childrenOf(launcher.pid!);
+        expect(runtimePids).toHaveLength(1);
+
+        if (group) process.kill(-launcher.pid!, signal);
+        else launcher.kill(signal); // the launcher's pid only
+
+        // Bounded here, inside the test's own timeout, so the cleanup below
+        // always runs even if the launcher never exits.
+        const outcome = await Promise.race([
+          exited,
+          new Promise<"still running">((r) => setTimeout(() => r("still running"), 15_000)),
+        ]);
+        expect(outcome).toEqual({ code: expected, signal: null });
+        const gone = Date.now() + 10_000;
+        while (running(runtimePids[0]!) && Date.now() < gone) await new Promise((r) => setTimeout(r, 25));
+        expect(running(runtimePids[0]!)).toBe(false);
+        expect(await portIsFree(port)).toBe(true);
+        // SIGHUP has no handler in `staple open` and ends it by default; the
+        // other two go through its shutdown exactly once.
+        if (signal !== "SIGHUP") expect(stderr.match(/shutting down/g)).toHaveLength(1);
+      } finally {
+        // Never leak an orphan into the rest of the suite, whatever failed above.
+        for (const pid of runtimePids) if (running(pid)) process.kill(pid, "SIGKILL");
+        if (launcher.exitCode === null && launcher.signalCode === null) launcher.kill("SIGKILL");
+      }
+    },
+    60_000,
+  );
 });

@@ -122,7 +122,7 @@ function launcherSource(): string {
 // <home>/${RUNTIME_DIRNAME}/${CURRENT_FILENAME}, then execs the selected runtime.
 // Contains no absolute path into the home, so \`staple config home --move\`
 // needs no change here.
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { constants, homedir as osHomeDir } from "node:os";
 import { isAbsolute, join, posix, win32 } from "node:path";
@@ -175,16 +175,27 @@ if (typeof current.entrypoint !== "string" || isAbsolute(current.entrypoint)) {
 }
 const entry = join(runtime, ...current.entrypoint.split("/"));
 
-const result = spawnSync(process.execPath, [entry, ...process.argv.slice(2)], { stdio: "inherit" });
-if (result.error) {
-  die("could not start " + entry + ": " + result.error.message);
+const child = spawn(process.execPath, [entry, ...process.argv.slice(2)], { stdio: "inherit" });
+
+// Pass on the signals a user or a supervisor sends to THIS pid, so a
+// \`kill <pid>\` of the launcher stops the runtime instead of orphaning it with
+// its port still bound. A terminal's Ctrl-C reaches both processes already;
+// the runtime's handlers absorb the forwarded copy as the repeat it is.
+for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
+  process.on(signal, () => {
+    try { child.kill(signal); } catch { /* already gone, or not a signal this platform sends */ }
+  });
 }
-if (result.signal) {
-  // Report the signal the way a shell does, so \`staple\` in a pipeline behaves
-  // like the runtime it fronts rather than swallowing a Ctrl-C into exit 0.
-  process.exit(128 + (constants.signals[result.signal] ?? 0));
-}
-process.exit(result.status ?? 1);
+
+child.on("error", (error) => die("could not start " + entry + ": " + error.message));
+child.on("exit", (code, signal) => {
+  if (signal) {
+    // Report the signal the way a shell does, so \`staple\` in a pipeline behaves
+    // like the runtime it fronts rather than swallowing a Ctrl-C into exit 0.
+    process.exit(128 + (constants.signals[signal] ?? 0));
+  }
+  process.exit(code ?? 1);
+});
 `;
 }
 

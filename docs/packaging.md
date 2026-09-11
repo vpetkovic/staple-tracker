@@ -137,6 +137,12 @@ execs that entrypoint. So a home move needs no change to the launcher, and an
 upgrade needs no rewrite of it. It refuses to overwrite a `staple` on the
 launcher path that it did not write.
 
+The runtime runs as the launcher's child with the same stdin, stdout and stderr,
+and the launcher exits with the runtime's exit code, or 128 + the signal number
+if a signal ended the runtime. It passes SIGINT, SIGTERM and SIGHUP on to the
+runtime, so `kill <launcher pid>` stops the runtime and frees its port instead
+of leaving it running as an orphan. With no runtime installed it exits 70.
+
 **PATH is a separate consent.** `--yes` covers the home and the launcher
 directory. Editing a shell profile additionally requires `--update-path`, and
 writes a marked `# >>> staple >>>` block that a second install will not
