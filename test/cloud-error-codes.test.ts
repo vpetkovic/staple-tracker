@@ -322,6 +322,22 @@ describe("the fake answers in the Worker's exact shape, in the dimension under t
     });
   });
 
+  it("answers its own refusals in that shape too, not only the injected ones", async () => {
+    const server = new FakeSyncServer({ repositoryId: "shape" });
+    const fake = await server.fetch(`${endpoint}/v1/repos/shape/devices`, {
+      headers: { authorization: "Bearer a-token-nobody-issued" },
+    });
+    const body = (await fake.json()) as Record<string, unknown>;
+    // The wording is each side's own; the keys and the retry bit are the contract.
+    const worker = (await new SyncError("auth", "invalid credential").toResponse().json()) as Record<string, unknown>;
+    expect({ status: fake.status, keys: Object.keys(body).sort(), code: body.code, retryable: body.retryable }).toEqual({
+      status: statusFor("auth"),
+      keys: Object.keys(worker).sort(),
+      code: "auth",
+      retryable: false,
+    });
+  });
+
   /**
    * The Worker authenticates the credential before it checks the credential's scope
    * (`worker/src/index.ts`: `authenticate`, then `assertRepoScope`), so a bad credential
