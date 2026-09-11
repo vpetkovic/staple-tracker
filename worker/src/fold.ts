@@ -87,6 +87,7 @@
  * shipping beside rather than some other one.
  */
 
+import { type FoldedRevisionEntry, settleRevisionCreate } from "../../src/core/cloud/revision-placement.js";
 import { entityKey } from "./cursor.js";
 import type { Env } from "./env.js";
 import { SyncError } from "./errors.js";
@@ -305,6 +306,10 @@ export async function foldLog(
           entry.fieldWrites = {};
           entry.superseded = false;
           forgetPlace(entities.get(entityKey(row.entity, VOCABULARY_ORDER_ID)), row.entity, row.entity_id);
+          // Nor is a status or kind created again the built-in it may have been: every device
+          // that read the delete in the log holds the one added back, and a create from a build
+          // before this one does not say so itself (`applyVocabulary`, `src/core/cloud/apply.ts`).
+          if (row.entity === "status" || row.entity === "kind") entry.state.isBuiltin = false;
         }
         entry.createdSeq = row.seq;
         /**
@@ -453,15 +458,16 @@ export function reopensOrigin(before: unknown, after: unknown): boolean {
  * A document revision written as a number another revision already holds, in the log.
  *
  * Two devices that each write revision N of one document before seeing the other's make two
- * `create`s of `<issue>/<key>/N` with different bodies. The earlier in the log keeps N; the
- * later is the next free revision of that document — its body, author and time kept, and the
- * move said in its change summary — exactly as every device applying the log places it
- * (`applyDocumentRevision` in `src/core/cloud/apply.ts`). Before, the fold kept the last one's
- * fields, so the first writer's text existed only on its own device. A create naming the same
- * revision (the same body, author and time) is that revision again, not a second one.
+ * `create`s of `<issue>/<key>/N` with different bodies. Taken in log order, each revision is
+ * the first number from the one it claimed upward that no revision before it holds — its
+ * body, author and time kept, and the move said in its change summary — by the one placement
+ * every reader of the log uses (`placeRevision`, `src/core/cloud/revision-placement.ts`),
+ * imported here as it stands so the service cannot place a revision differently from a
+ * device. A create of a revision the log already holds at or above the number it was written
+ * as — the same body, and the same author where both have one — adds nothing.
  */
 export function settleRevision<T extends { entity_id: string; payload: string; seq: number }>(
-  entities: Map<string, { entity: string; entityId: string; deletedAt: number | null; state: Record<string, unknown> }>,
+  entities: Map<string, FoldedRevisionEntry>,
   row: T,
 ): T | null {
   let payload: Record<string, unknown>;
@@ -470,51 +476,10 @@ export function settleRevision<T extends { entity_id: string; payload: string; s
   } catch {
     return row;
   }
-  const held = entities.get(entityKey("documentRevision", row.entity_id));
-  if (held === undefined || held.deletedAt !== null || sameRevision(held.state, payload)) return row;
-  const slash = row.entity_id.lastIndexOf("/");
-  const document = row.entity_id.slice(0, slash + 1);
-  const from = Number(row.entity_id.slice(slash + 1));
-  let highest = from;
-  for (const entry of entities.values()) {
-    if (entry.entity !== "documentRevision" || entry.deletedAt !== null || !entry.entityId.startsWith(document)) continue;
-    // The same revision, held under the number it was moved to: nothing new.
-    if (sameRevision(entry.state, payload)) return null;
-    const revision = Number(entry.entityId.slice(document.length));
-    if (Number.isInteger(revision) && revision > highest) highest = revision;
-  }
-  const to = highest + 1;
-  return {
-    ...row,
-    entity_id: `${document}${to}`,
-    payload: JSON.stringify({ ...payload, revision: to, changeSummary: renumberedSummary(payload.changeSummary, from, to) }),
-  };
-}
-
-/** The same revision: the same body, and the same author and time where both say. */
-export function sameRevision(held: Record<string, unknown>, incoming: Record<string, unknown>): boolean {
-  if (held.body !== incoming.body) return false;
-  for (const field of ["author", "createdAt"]) {
-    if (typeof incoming[field] === "string" && typeof held[field] === "string" && incoming[field] !== held[field]) return false;
-  }
-  return true;
-}
-
-/**
- * A renumbered revision's change summary: its own, and what happened to its number — from
- * the number it was written as, whatever it was moved through on the way, so every device
- * says the same thing about it.
- */
-export function renumberedSummary(summary: unknown, from: number, to: number): string {
-  let own = typeof summary === "string" ? summary : "";
-  let written = from;
-  const moved = /^(?:([\s\S]*) — )?renumbered from r(\d+) to r\d+: written at the same time as another r\2, which the repository's log holds first$/.exec(own);
-  if (moved) {
-    own = moved[1] ?? "";
-    written = Number(moved[2]);
-  }
-  const kept = own.trim() !== "" ? `${own} — ` : "";
-  return `${kept}renumbered from r${written} to r${to}: written at the same time as another r${written}, which the repository's log holds first`;
+  const settled = settleRevisionCreate(entities.values(), row.entity_id, payload);
+  if (settled === null) return null;
+  if (settled.entityId === row.entity_id && settled.payload === payload) return row;
+  return { ...row, entity_id: settled.entityId, payload: JSON.stringify(settled.payload) };
 }
 
 /** The entity id a vocabulary's order travels on (`src/core/store.ts`). */

@@ -507,8 +507,9 @@ describe("the fold's record of each entity's create", () => {
     const [entity] = body.entities;
     expect(entity.deletedAt).toBeNull();
     expect(entity.verb).toBe("create");
-    // The new life only: not the old note, not the late label, no inherited provenance.
-    expect(entity.state).toEqual({ label: "Quality", category: "review" });
+    // The new life only: not the old note, not the late label, no inherited provenance — and,
+    // a status, not the built-in it may have been.
+    expect(entity.state).toEqual({ label: "Quality", category: "review", isBuiltin: false });
     expect(entity.fieldWrites).toEqual({});
     expect(entity.version).toBe(5);
     expect(entity.createdSeq).toBe(5);
@@ -605,6 +606,60 @@ describe("the fold's record of each entity's create", () => {
     expect(moved.state.changeSummary).toMatch(/^renumbered from r1 to r2/);
   });
 
+  /**
+   * The placement every device uses (`placeRevision`, `src/core/cloud/revision-placement.ts`):
+   * in log order, each revision takes the first free number from the one it claimed; one the
+   * log already holds at or above that number — by body and author, never by time — adds
+   * nothing; a document put back to an earlier text is a new revision.
+   */
+  it("places revisions as every device does: in log order, first free from the claim, matched by content", async () => {
+    let clientSeq = 0;
+    const revision = (claimed: number, body: string, author: string, createdAt: string, changeSummary: string | null = null) => {
+      clientSeq += 1;
+      return envelope({
+        clientSeq,
+        entity: "documentRevision",
+        verb: "create",
+        baseVersion: null,
+        entityId: `issue-1/spec/${claimed}`,
+        payload: { issueId: "issue-1", key: "spec", revision: claimed, body, author, createdAt, changeSummary },
+      });
+    };
+    const moved = (from: number, to: number) =>
+      `renumbered from r${from} to r${to}: written at the same time as another r${from}, which the repository's log holds first`;
+    await pushOps(
+      [
+        revision(1, "v1", "alice", "2026-09-11T00:00:01.000Z"),
+        revision(2, "A's edit", "alice", "2026-09-11T00:00:02.000Z"),
+        // Three in flight on another device, each on the last.
+        revision(2, "B's first", "bob", "2026-09-11T00:00:03.000Z"),
+        revision(3, "B's second", "bob", "2026-09-11T00:00:04.000Z"),
+        revision(4, "B's third", "bob", "2026-09-11T00:00:05.000Z"),
+        // Its device sends each again under the number it moved it to.
+        revision(3, "B's first", "bob", "2026-09-11T00:00:03.000Z", moved(2, 3)),
+        revision(4, "B's second", "bob", "2026-09-11T00:00:04.000Z", moved(3, 4)),
+        revision(5, "B's third", "bob", "2026-09-11T00:00:05.000Z", moved(4, 5)),
+        // r1 again, dated a millisecond off by a build that took the operation's time.
+        revision(1, "v1", "alice", "2026-09-11T00:00:01.001Z"),
+        // And the document put back to its first text: a revision of its own.
+        revision(6, "v1", "alice", "2026-09-11T00:00:06.000Z"),
+      ],
+      { token },
+    );
+    const body = await jsonOf(await call(`/v1/repos/${REPO}/snapshot`, { token }));
+    const revisions = body.entities
+      .filter((entity: any) => entity.entity === "documentRevision")
+      .map((entity: any) => [entity.entityId, entity.state.body, entity.state.createdAt, entity.state.changeSummary]);
+    expect(revisions).toEqual([
+      ["issue-1/spec/1", "v1", "2026-09-11T00:00:01.000Z", null],
+      ["issue-1/spec/2", "A's edit", "2026-09-11T00:00:02.000Z", null],
+      ["issue-1/spec/3", "B's first", "2026-09-11T00:00:03.000Z", moved(2, 3)],
+      ["issue-1/spec/4", "B's second", "2026-09-11T00:00:04.000Z", moved(3, 4)],
+      ["issue-1/spec/5", "B's third", "2026-09-11T00:00:05.000Z", moved(4, 5)],
+      ["issue-1/spec/6", "v1", "2026-09-11T00:00:06.000Z", null],
+    ]);
+  });
+
   it("forgets a status's place in an earlier order when it is created again", async () => {
     await pushOps(
       [
@@ -618,6 +673,22 @@ describe("the fold's record of each entity's create", () => {
     const body = await jsonOf(await call(`/v1/repos/${REPO}/snapshot`, { token }));
     const order = body.entities.find((entity: any) => entity.entity === "status" && entity.entityId === "@order");
     expect(order.state.order).toEqual(["todo", "done"]);
+  });
+
+  it("says a status or kind created again after a delete is not a built-in, when its create does not", async () => {
+    await pushOps(
+      [
+        envelope({ clientSeq: 1, entity: "kind", verb: "delete", entityId: "spike", payload: {} }),
+        envelope({ clientSeq: 2, entity: "kind", verb: "create", baseVersion: null, entityId: "spike", payload: { id: "spike", label: "Spike" } }),
+        envelope({ clientSeq: 3, entity: "kind", verb: "create", baseVersion: null, entityId: "research", payload: { id: "research", label: "Research" } }),
+      ],
+      { token },
+    );
+    const body = await jsonOf(await call(`/v1/repos/${REPO}/snapshot`, { token }));
+    const kind = (id: string) => body.entities.find((entity: any) => entity.entity === "kind" && entity.entityId === id);
+    expect(kind("spike").state).toEqual({ id: "spike", label: "Spike", isBuiltin: false });
+    // Created once: nothing to say, and a device inserting it holds it as the workspace's own.
+    expect(kind("research").state).toEqual({ id: "research", label: "Research" });
   });
 
   it("says nothing about a create the log does not hold", async () => {
