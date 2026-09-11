@@ -22,6 +22,9 @@ staple events --follow [--since N] [--max N]        stream events as they land
 
 staple start <ref> --steal-if-stale <30m|2h|3600>   take over a dead agent's claim
 staple release <ref> --if-stale <dur>               free a dead agent's claim
+staple start|done|cancel|status|release … --agent A who acts; else $STAPLE_AGENT, else $USER
+staple <any write> … --ack-renumber                 write through a number sync renumbered here
+                                                    (docs/sync.md, "A number that moved under a caller")
 
 staple gate <ref> --owner O [-m text]               park a PARENT on a human; queue its subtree
 staple approve <ref> [--children R1,R2] [-m text]   release the whole queue, or only what you name

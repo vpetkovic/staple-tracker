@@ -152,6 +152,28 @@ inferred from the device's own outbox, a reopen of an issue another device had c
 not counted, and the devices never agreed who held the origin
 (`test/cloud-unique-claims.test.ts`).
 
+**"Live" has one definition: a status other than `done` and `cancelled`**
+(`ORIGIN_RELEASING_STATUSES`, `holdsLiveOrigin` in `src/core/types.ts`). It is the one the
+unique index `issues_live_origin_uq` enforces in every database, and the settlement, a
+reopen, the seed and the service's fold all read it. A reopen once read the status
+CATEGORY instead, so an issue in a custom cancelled-category status (`wontfix`) still held
+its origin by the index, moving it out counted as a later claim, and it and a later import
+both gave the origin up on every device. A category cannot be the definition without a
+migration — a partial index cannot read the statuses table — and a migration moves the
+schema every operation carries, which every device on an older build refuses
+(`schema_ahead`); so `wontfix` holds its origin as the index says
+(`test/cloud-live-origin.test.ts`).
+
+**A device hydrating from a snapshot settles by where each claim sits in the log.** The
+holder's claim is the last write of its origin, or its last reopen, else its create —
+read from the snapshot's per-field provenance, not from this device's outbox, which a fresh
+device does not have. The service's fold records a reopen as a write of `reopens` whether
+or not the operation said so (`reopensOrigin`, `worker/src/fold.ts`, and the tail fold): a
+reopen by an older build does not say so, and a device hydrating afterwards gave the origin
+to whichever issue it applied first, while every device reading the tail had given it to
+the earlier claim. A holder that yields this way on a hydrating device is cleared there and
+owes nothing — only the device that made a later claim settles it.
+
 **A number that moved under a caller.** A settlement moves this device's issue off a number
 another device claimed first, and the number then names that other issue. Something that
 learned the number before and uses it after would reach the other issue without knowing.
@@ -161,11 +183,27 @@ So:
   its argument once and waits on that issue by its id, answering with the identifier it
   holds now (and `renumberedWhileWaiting` in `--json`). The UI's open issue is pinned to its
   id once loaded, and its buttons and the palette's commands post the id.
-- **A write whose caller provably meant the issue that moved is refused**, naming the
-  number to use: a `done`, `release`, status change, comment or document by a number whose
-  former issue is checked out by this actor (and the one it names now is not), and a lease
-  renewal or release by a number whose former issue holds this device's lease. Nothing is
-  written (`WorkspaceStore.requireTarget`, `leasedIssue` in `cloud/lease.ts`).
+- **A write through the number is refused while the issue that moved may be the one
+  meant**, whoever the actor is. Who is writing proves nothing — the actor is `--agent`, or
+  `$STAPLE_AGENT`, or `$USER`, and the step that learned the number and the step that writes
+  need not agree — so the rule reads only what the issue that moved says about itself. The
+  write is refused, naming both issues (identifier, title and id), and nothing is written,
+  when either holds:
+  - that issue is **checked out by any agent, or leased by this device**; or
+  - it moved **less than a day ago** (`RENUMBER_GUARD_MS`, 24 hours, measured from when this
+    device moved it): a day covers the work that learned the number before the move — an
+    agent between `checkout` and `done`, a handoff written that morning, a script's
+    variable.
+
+  Every write a number can reach is covered: `done`, `cancel`, `status`, `release`,
+  `checkout`, comments, documents, blockers, gates and approvals, a child's parent, the plan,
+  milestones, a project filing, and the lease verbs (`WorkspaceStore.requireTarget` and
+  `writeTarget`, `leasedIssue` in `cloud/lease.ts`). The write goes through when the caller
+  names the issue by its **id**, which no renumber changes, or **acknowledges the move** —
+  `--ack-renumber` on the CLI, `acknowledgeRenumber: true` on an MCP write — and then goes
+  to the issue that holds the number now, with the notice below. Outside the day, with
+  nothing checked out or leased, that is also what happens without asking. `done`,
+  `cancel`, `status` and `release` take `--agent` as `checkout` does.
 - **Anything else by that number is answered with what happened**: "TRA-2 was renumbered here
   at <time>; your earlier TRA-2 is now TRA-4, and TRA-2 now names another issue." — on the
   CLI's stdout, as `renumbered` in its `--json`, and on MCP in the tool result itself (a
@@ -675,6 +713,57 @@ changed, never of what exists. What a workspace held before it was armed reaches
 service by [the seed](#a-workspaces-history-reaches-the-service-when-it-first-synchronizes),
 not by the seam.
 
+### The journal records what changed, by row
+
+Each mutation declares its operation (`Journal.record`), and that declaration used to be
+the whole list of what travelled — so a column a path wrote and did not name stayed on the
+device that wrote it. Found one path at a time: a release's `status_version`, a partial
+approval's `gate_released`, an assignment's `updated_at`. Now the journal does not depend on
+paths remembering. While a local mutation runs, a TEMP trigger on this connection keeps each
+synchronized row's image from before its first change (`src/core/cloud/row-diff.ts`), and
+when the mutation ends every synchronized column that differs from it joins the entity's
+operation, with the value the row holds: the operation the mutation declared, or a new
+`update` — a `create` for a row it inserted — attributed to the mutation's actor. The
+tables read this way are the ones whose columns replicate one for one: `issues`,
+`comments`, `projects`, `milestone_meta`. The vocabulary, settings, relations, documents
+and the ordered lists travel as whole values the store states in full.
+
+The declaration still decides the verb and still carries what a row cannot say — a
+`reopens`, a `blockedBy`, the `entries` beside a list, a document's revision. An applied
+remote operation is somebody else's change and is never captured. The triggers are
+per-connection and write nothing to the file: no schema a migration, a backup or another
+device sees changes. `test/sync-mutation-convergence.test.ts` holds it to that: a registry
+of every public mutation of the four stores (a new one fails until listed) and of the
+lease verbs, each run on one device and compared column for column, over every synchronized
+table, with a device that read it in the tail and one that hydrated from the snapshot; and
+every conflict kind, resolved either way, compared the same way.
+
+**Derived columns are never journaled.** They are computed from other synchronized
+columns, and every applier of this build computes them from what it writes, ignoring any
+value an operation carries:
+
+| Column | Derived from |
+|---|---|
+| `issues.normalized_title` | `title` (`normalizeTitle`) |
+| `issues.depth` | the parent's `depth` + 1, 0 without one |
+
+They are left out of the row diff, never recorded as provenance and never contested. What
+an issue operation does carry, computed from the row, is a copy for builds before this rule,
+whose applier reads it: the normalized title beside any `title`, and the depth on a create.
+Before, a conflict resolution sent the title alone and the losing device kept the losing
+title's normalization, which duplicate detection reads. Local counters are not derived
+columns and never leave the machine: `members_revision`, `queue_revision`,
+`settings_revision`, the vocabulary's `sort_order` numbers, the ranks.
+
+**A synchronized time comes from the log, never from the clock at apply.** A milestone's
+`updated_at` is written by the device that changed it and travels as `updatedAt`; an older
+build's operation, which carries none, is dated by its own time in the tail, and by its last
+write's time in a snapshot (`lastWriteAt`) — a fresh device used to date every milestone by
+the moment it hydrated. A conflict resolution is a write, and an issue, a project or a
+milestone it settles says so at the decision (`updatedAt`), where each side used to keep its
+own edit's time for good. An applier generation raised for these (`APPLIER_VERSION` 3)
+re-reads the snapshot once on every device, which repairs what an older applier wrote.
+
 ## The operation envelope
 
 One shape, for every mutation, on the wire and in the outbox.
@@ -1031,6 +1120,19 @@ same hydration, claims in log order, the same screen on a re-read — with the c
 last operation read. The refusal is not retried, and it never fails a sync
 (`test/cloud-large-log.test.ts`; proven past 20,000 on real workerd in the PR).
 
+**A tail read that stops part-way is kept, and the next sync goes on from it.** Twenty
+thousand operations are dozens of pull pages — more than an automatic sync's 2–10 s budget
+and more than the service's 120 requests a minute allow one run. The command line waits a
+rate limit out; automatic sync never waits inside a run, so every run stopped part-way,
+reported a failure, pushed its backoff out and began again from the first page: an
+automatic-only device never got there. Now the fold so far, the cursor to go on from and
+the epoch are kept in `meta` (`sync_tail_survey`, device-local) every ten pages and whenever
+the read is stopped — by the budget, the rate limit, or the network — and the next sync's
+read resumes from there; a moved epoch drops it, and applying the read clears it. A run of
+automatic sync that moved this device's reading of the log on is reported as `progressed`,
+not failed: the backoff is not pushed out, and the next run waits only as long as the
+service asked (`test/cloud-auto-sync-large-log.test.ts`).
+
 **A newer applier re-reads the snapshot once.** Nothing re-sends an operation a device
 has already applied, so what an older build's applier dropped — who queued each plan
 entry and its note, a built-in deleted elsewhere, the record a settlement closes —
@@ -1197,12 +1299,26 @@ hydrates, which has no operation to take them from (`test/cloud-relation-provena
 The journal names each field once, by its field name (`oneSpelling`), and the fold treats
 `updated_at` and `updatedAt` as one field, keeping the one written last; a device reading
 an older Worker's snapshot keeps the spelling written last by its provenance. Measured
-before: after a vocabulary migration, a stale `updated_at` won on every fresh device. A
-status move — derived for an ancestor, a gate, an approval, a send-back, a checkout —
+before: after a vocabulary migration, a stale `updated_at` won on every fresh device.
+
+**Where nothing says which spelling came last, the column's wins.** An older build
+journaled a create by field name and each later edit by column, and the Worker before this
+one kept both keys, so a backup it made — and every epoch restored from one — holds both
+spellings of an edited field with no provenance at all. Applying them by field name put the
+value at creation back: measured, the estimate went from 3h to 1h, an edited criterion came
+back, and a finished issue lost its `completed_at`, on every device of this build and every
+fresh one, and on the first sync after this Worker was deployed if the live epoch came from a
+restore. Only an edit ever wrote the column's spelling, so it is always the later value, and
+it is kept wherever both arrive without history: the service's fold and this device's tail
+fold drop the field name's (`columnSpellingWins`), the snapshot reader prefers the column's
+in a tie (`latestSpelling`), and so does the applier and the seed's survey.
+
+A status move — derived for an ancestor, a gate, an approval, a send-back, a checkout —
 journals every column it wrote, `status_version` and `updated_at` included; journaled as
 `{ status, derived }` those changed on the moving device only. A project's create and
 updates carry its own `createdAt` and `updatedAt` (`test/cloud-field-spelling.test.ts`,
-`test/cloud-derived-moves.test.ts`, `test/cloud-project-times.test.ts`).
+`test/cloud-derived-moves.test.ts`, `test/cloud-project-times.test.ts`). Since then no path
+names its columns at all: see [The journal records what changed, by row](#the-journal-records-what-changed-by-row).
 
 **The first device and a device joining a repository that has data are one rule:**
 *upload every local entity the repository does not hold, and take the repository's
