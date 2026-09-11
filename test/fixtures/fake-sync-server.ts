@@ -10,6 +10,8 @@
  *     verb the service will not take
  *   - `actor` must be a string, `baseVersion` is required for every verb but
  *     `create`, `repoId` and `deviceId` must match the session
+ *   - a purge needs the repository id typed back in its body, and is refused without
+ *     it exactly as the Worker refuses it (`worker/test/purge-fixture.ts`)
  *   - a batch is validated whole and rejected whole; nothing is partially applied
  *   - the repository holds ONE vocabulary, claimed by its first push or restore, and
  *     the other is refused with the Worker's exact 409 (`worker/src/vocabulary.ts`)
@@ -405,7 +407,8 @@ export class FakeSyncServer {
     // Backup, restore and purge. Modelled on worker/src/backups.ts, including the
     // property that matters most: a restore MATERIALISES the backup into the new
     // epoch rather than only bumping it. A fake that merely bumped would let a
-    // bump-only client pass, which is the one bug these tests exist to catch.
+    // bump-only client pass, which is the one bug these tests exist to catch. And a
+    // purge is refused without its typed confirmation, as the Worker refuses it.
     if (tail === "/backup" && method === "PUT") {
       const parsed = JSON.parse(String(body)) as { enabled?: unknown };
       if (typeof parsed.enabled !== "boolean") {
@@ -446,9 +449,12 @@ export class FakeSyncServer {
       );
     }
     if (tail === "" && method === "DELETE") {
+      this.assertPurgeConfirmed(session, body);
       this.ops.length = 0;
       this.backups.length = 0;
       this.restores.length = 0;
+      // The Worker deletes `leases` too, and the fake used to leave them standing.
+      this.leases.clear();
       this.devices.length = 0;
       // The Worker deletes the `repos` row itself, vocabulary and all.
       this.vocabulary = null;
@@ -1187,6 +1193,49 @@ export class FakeSyncServer {
   private describeBackup(backup: FakeBackup): Record<string, unknown> {
     const { entities: _entities, ...metadata } = backup;
     return metadata;
+  }
+
+  /**
+   * The purge's typed confirmation — `worker/src/backups.ts::purgeRepository` (STA-256).
+   *
+   * The fake used to purge on a bare DELETE, exactly as the Worker did, so every client
+   * test of purge proved a request the product promised to refuse. Now both refuse it
+   * with the bodies `worker/test/purge-fixture.ts` pins for the two of them: no body, an
+   * empty body or no `confirm` is `missing` (the request every earlier client sends), and
+   * anything but the credential's repository id is `mismatch`. Nothing is deleted.
+   */
+  private assertPurgeConfirmed(session: { repoId: string }, raw: unknown): void {
+    let confirm: unknown = undefined;
+    if (raw !== undefined && raw !== null && String(raw).length > 0) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(String(raw));
+      } catch {
+        throw new ServerError(400, "validation", "request body is not valid JSON");
+      }
+      if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new ServerError(400, "validation", "request body must be a JSON object");
+      }
+      confirm = (parsed as Record<string, unknown>).confirm;
+    }
+    if (confirm === undefined) {
+      throw new ServerError(
+        400,
+        "validation",
+        "purge refused: the request carried no typed confirmation, and this service requires " +
+          "the repository id in `confirm`. Nothing was deleted. Update staple, then run " +
+          "`staple cloud purge --confirm <repositoryId>` again.",
+        { retryable: false, confirmation: "missing" },
+      );
+    }
+    if (confirm !== session.repoId) {
+      throw new ServerError(
+        400,
+        "validation",
+        "purge refused: `confirm` does not match this repository's id. Nothing was deleted.",
+        { retryable: false, confirmation: "mismatch" },
+      );
+    }
   }
 
   /**

@@ -428,11 +428,11 @@ describe("KNOWN: logical errors this surface cannot project", () => {
        * the page never calls it on mount.
        *
        * There is deliberately NO `/api/cloud/purge`. `staple cloud purge`
-       * requires the repository id typed back and STA-256 records that the
-       * server does not yet validate a confirmation on the wire; a one-click
-       * irreversible remote deletion behind a browser session is not something to
-       * add while that is true. If it ever appears in this list, that is the
-       * review moment.
+       * requires the repository id typed back, and the service checks it on the
+       * wire (STA-256) — which proves the caller knew the id, not that a person
+       * read the disclosure. A one-click irreversible remote deletion behind a
+       * browser session is not something to add. If it ever appears in this list,
+       * that is the review moment.
        */
       "/api/cloud/connect",
       "/api/cloud/connect/preview",
@@ -635,9 +635,10 @@ describe("KNOWN: logical errors this surface cannot project", () => {
        * ## There is still deliberately NO /api/hub/purge
        *
        * For the reason `/api/cloud/purge` does not exist, multiplied by the size
-       * of the registry: STA-256 records that the server does not validate a
-       * purge confirmation on the wire. If a purge ever appears in this list,
-       * hub-wide least of all, that is the review moment.
+       * of the registry: the purge confirmation the service checks (STA-256)
+       * proves the caller knew an id, not that a person read what it destroys.
+       * If a purge ever appears in this list, hub-wide least of all, that is the
+       * review moment.
        */
       "/api/hub/connect",
       "/api/hub/connect/preview",

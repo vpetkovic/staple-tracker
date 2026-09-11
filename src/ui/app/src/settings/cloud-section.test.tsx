@@ -499,10 +499,10 @@ describe("the connected surface", () => {
     expect(html).toContain("staple cloud purge");
     expect(html).not.toContain("data-cloud-purge");
     /**
-     * STA-256 records that the server does not yet validate a confirmation on the
-     * wire, and `staple cloud purge` requires the repository id typed back. A
-     * one-click irreversible remote deletion whose only guard is a dialog this
-     * page draws is not a thing to add while that is true.
+     * `staple cloud purge` requires the repository id typed back, and the service
+     * checks it on the wire (STA-256), which proves the caller knew the id and not
+     * that a person read the disclosure. A one-click irreversible remote deletion
+     * whose only guard is a dialog this page draws is not a thing to add.
      */
     expect(source("cloud-settings.ts")).toContain("typed confirmation is the");
   });
@@ -1996,10 +1996,11 @@ describe("nothing hub-wide happens without a press", () => {
 
   it("has no hub-wide purge, in the panel, the pure half, or the client", () => {
     /**
-     * STA-256 records that the server does not validate a purge confirmation on
-     * the wire. A one-click irreversible remote deletion of every workspace is
-     * worse hub-wide than per workspace by exactly the size of the registry, and
-     * `PURGE_NOTICE` names the capability without offering it.
+     * The purge confirmation the service checks (STA-256) proves the caller knew
+     * an id, not that a person read what it destroys. A one-click irreversible
+     * remote deletion of every workspace is worse hub-wide than per workspace by
+     * exactly the size of the registry, and `PURGE_NOTICE` names the capability
+     * without offering it.
      *
      * **`lib/api.ts` is in this list, and it is the one that matters.** The
      * first version of this scan covered only the two files in this directory —

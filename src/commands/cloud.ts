@@ -1628,7 +1628,9 @@ function runPurge(argv: string[]): void {
   }
 
   settle(
-    performPurge(home, repositoryId).then((outcome) => {
+    // What was typed, not `repositoryId`: they are equal here, and the service checks the
+    // person's confirmation rather than a copy this build made of it (STA-256).
+    performPurge(home, repositoryId, values.confirm).then((outcome) => {
       if (outcome.unsupported) {
         // Not success, and not a generic failure either. Say exactly what is true.
         const message =

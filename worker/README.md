@@ -73,7 +73,7 @@ worker/
 | `GET` | `/v1/repos/{repoId}/backups` | device token |
 | `DELETE` | `/v1/repos/{repoId}/backups/{backupId}` | device token |
 | `POST` | `/v1/repos/{repoId}/backups/{backupId}/restore` | device token |
-| `DELETE` | `/v1/repos/{repoId}` | device token |
+| `DELETE` | `/v1/repos/{repoId}` | device token, plus `{ "confirm": "<repoId>" }` in the body |
 
 Three of those are **additive** to the route table in `docs/sync.md`, which names create,
 list and restore but nothing that writes the backup consent flag and nothing that removes
@@ -107,6 +107,17 @@ See `src/backups.ts`; the short version, because getting it wrong is unrecoverab
 - **Restore is chunked** at `maxBatchSize`, because staging N entities costs N+1 queries
   against the free plan's ceiling of 50. It is driven by calling the one route in a loop
   until it answers `done`.
+- **Purge requires the repository id typed back, on the wire.** The body is
+  `{ "confirm": "<repoId>" }` and `confirm` must be exactly the repository the credential
+  belongs to; a device token alone does not purge. No body, an empty body or no `confirm`
+  is refused `validation` with `confirmation: "missing"` and a message telling the person to
+  update staple — that is the bare DELETE every client from before this rule sends. Any
+  other value is `confirmation: "mismatch"`. Both are 400, not retryable, and delete
+  nothing; `worker/test/purge-fixture.ts` pins the two bodies for this suite and for the
+  client's fake. A JSON body rather than a header because restore already takes `confirm`
+  that way and the client already sends a DELETE body for lease release. The router's
+  body-size check skips DELETE (a bare DELETE has no `Content-Length`), so the purge route
+  applies the same cap itself before it reads the body.
 - **Purge deletes `devices` last**, so a batch that fails halfway leaves the repository
   still reachable to try again rather than leaving data nobody can reach or delete.
 
@@ -633,7 +644,8 @@ repeats begin's check, so one staging a contaminated backup into a workspace is 
 `conflict` on its next turn and stays `staging`. Abandon it with the two-statement form
 under step 0.
 
-Only if the rows cannot be identified is the answer `DELETE /v1/repos/{repoId}` (purge) and
+Only if the rows cannot be identified is the answer `DELETE /v1/repos/{repoId}` (purge, with
+`{ "confirm": "<repo id>" }` as its body, which `staple cloud purge --confirm` sends) and
 a re-provision from a device that still holds the data. That is the outcome this recipe
 exists to avoid; "no remedy short of a purge" with no documented purge is the difference
 between an incident and a dead repository.
