@@ -21,9 +21,18 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { copyFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
+import { pathToFileURL } from "node:url";
 import { freePort, removeDir, runCliAt, tempDir, REPO_ROOT } from "./fixtures/characterize-support.js";
 import { boundPortOf, LISTENING, spawnCli } from "./fixtures/lifecycle-support.js";
+import { testPackageDir } from "./fixtures/package-payload.js";
+import { sourceFiles } from "./fixtures/source-scan.js";
+
+/** `test/fixtures/exit-hold-preload.mjs`, and the line it writes when it starts holding. */
+const EXIT_HOLD_PRELOAD = join(REPO_ROOT, "test", "fixtures", "exit-hold-preload.mjs");
+const HOLD_MARKER = "[exit-hold] exit requested";
+/** Long enough that the second signal always lands inside it, even on a loaded runner. */
+const HOLD_MS = 2_000;
 
 let home: string;
 let root: string;
@@ -95,9 +104,86 @@ describe("foreground shutdown", () => {
     proc.signalIt("SIGINT");
     proc.signalIt("SIGINT");
     expect(await proc.waitForExit(25_000)).toBe(130);
-    // Exactly one notice, not two: the handler is `once` per signal AND guarded.
+    // Exactly one notice, not two: the handler is guarded.
     expect(proc.stderr().match(/shutting down/g)).toHaveLength(1);
   }, 60_000);
+});
+
+// ------------------------------------------- a signal during shutdown (STA-255)
+
+describe("a signal that arrives while shutdown is in progress (STA-255)", () => {
+  /**
+   * Two signals sent back to back usually both reach the process before its
+   * handler runs, so the case above passes on a quiet machine even with the
+   * defect present. The defect lived in the interval AFTER the first signal was
+   * handled: the listeners were registered with `process.once`, so handling the
+   * first removed the last listener for that signal, Node put the default
+   * disposition back, and a second signal in that interval killed the process
+   * outright: status null instead of 130, and sometimes no notice at all.
+   *
+   * `exit-hold-preload.mjs` holds the requested `process.exit()` open for a
+   * while and says so on stderr, which puts the second signal inside that
+   * interval every time rather than only under CI load. `sync` holds the thread,
+   * the way the real shutdown does. `async` lets the event loop turn, so the
+   * second signal reaches the JavaScript handler, and only the guard stops a
+   * second close().
+   */
+  function openHeld(mode: "sync" | "async") {
+    return spawnCli(["open", "--port", "0", "--no-browser"], {
+      cwd: repo,
+      env: { STAPLE_HOME: home, STAPLE_TEST_EXIT_HOLD: mode, STAPLE_TEST_EXIT_HOLD_MS: String(HOLD_MS) },
+      nodeArgs: ["--import", pathToFileURL(EXIT_HOLD_PRELOAD).href],
+    });
+  }
+
+  it.each([
+    ["SIGINT", "SIGINT", "sync"],
+    ["SIGINT", "SIGINT", "async"],
+    ["SIGTERM", "SIGTERM", "sync"],
+    ["SIGTERM", "SIGTERM", "async"],
+    ["SIGINT", "SIGTERM", "async"],
+    ["SIGTERM", "SIGINT", "async"],
+  ] as const)(
+    "%s, then %s during a %s shutdown: absorbed, one notice, exits 128+first",
+    async (first, second, mode) => {
+      const proc = openHeld(mode);
+      expect(await proc.waitFor((out) => LISTENING.test(out), 25_000)).toBe(true);
+
+      proc.signalIt(first);
+      // The first signal's shutdown has run and asked to exit; the process is
+      // now inside the hold, which is where the second one lands.
+      expect(await proc.waitFor((_out, err) => err.includes(HOLD_MARKER), 25_000)).toBe(true);
+      proc.signalIt(second);
+
+      const code = await proc.waitForExit(25_000);
+      expect({ code, signal: proc.signal() }).toEqual({ code: first === "SIGINT" ? 130 : 143, signal: null });
+      // One shutdown, named for the first signal, and one exit request.
+      expect(proc.stderr().match(/shutting down/g)).toHaveLength(1);
+      expect(proc.stderr()).toContain(`shutting down (${first})`);
+      expect(proc.stderr().split(HOLD_MARKER)).toHaveLength(2);
+    },
+    60_000,
+  );
+
+  it("with the hold loaded and one signal, the outcome is the plain shutdown's", async () => {
+    // The hook only delays the exit: same code, same single notice, no signal.
+    const proc = openHeld("sync");
+    expect(await proc.waitFor((out) => LISTENING.test(out), 25_000)).toBe(true);
+    proc.signalIt("SIGINT");
+    expect(await proc.waitForExit(25_000)).toBe(130);
+    expect(proc.signal()).toBe(null);
+    expect(proc.stderr().match(/shutting down \(SIGINT\)/g)).toHaveLength(1);
+  }, 60_000);
+
+  it("the hold is test-only: nothing under src/ loads it and the bundle does not contain it", () => {
+    const mentions = (text: string) =>
+      text.includes("exit-hold-preload") || text.includes("STAPLE_TEST_EXIT_HOLD") || text.includes(HOLD_MARKER);
+    const inSource = sourceFiles(join(REPO_ROOT, "src"))
+      .filter((file) => mentions(readFileSync(file, "utf8")))
+      .map((file) => relative(REPO_ROOT, file));
+    expect(inSource).toEqual([]);
+    expect(mentions(readFileSync(join(testPackageDir(), "staple.mjs"), "utf8"))).toBe(false);
+  });
 });
 
 // -------------------------------------------------------------- port policy

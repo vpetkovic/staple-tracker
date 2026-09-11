@@ -81,9 +81,18 @@ function shutdownSignalExit(signal: NodeJS.Signals): number {
 /**
  * Install the shutdown path.
  *
- * `once` per signal, and a guard flag besides: a second Ctrl-C while the first
- * close is draining must not re-enter `close()` on a half-closed server. The
- * notice goes to STDERR so the two startup lines stay the entire stdout
+ * The listeners are registered with `on` and stay registered until the process
+ * exits. A second SIGINT or SIGTERM, at any point after the first, reaches a
+ * listener and is absorbed by the `closing` guard. The guard is the first
+ * statement, set before anything that could yield, so the second signal can
+ * neither re-enter `close()` on a half-closed server nor print a second notice.
+ *
+ * They must not be `once` (STA-255). A `once` listener removes itself as it
+ * fires, and when the last listener for a signal goes, Node restores the
+ * default disposition. A second signal during shutdown then killed the process
+ * by signal (status null instead of 130 or 143) without ever reaching the guard.
+ *
+ * The notice goes to STDERR so the two startup lines stay the entire stdout
  * contract — a wrapper script grepping stdout for the bound URL must not have to
  * skip a farewell.
  */
@@ -103,8 +112,8 @@ function installShutdown(handle: UiHandle): void {
     }
     process.exit(shutdownSignalExit(signal));
   };
-  process.once("SIGINT", () => shutdown("SIGINT"));
-  process.once("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGINT", () => shutdown("SIGINT"));
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
 }
 
 export interface OpenOptions {

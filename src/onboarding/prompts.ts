@@ -78,6 +78,38 @@ function readLineSync(): string {
   }
 }
 
+/**
+ * Read fd 0 to EOF, blocking, and return it as UTF-8. What `--put -` reads.
+ *
+ * `readFileSync(0)` is not enough: when fd 0 is in non-blocking mode, a read
+ * with nothing written yet fails with `EAGAIN`, so a slow writer upstream
+ * (`(sleep 1; echo hi) | staple doc … --put -`) failed with exit 1 on the
+ * packaged runtime. `EAGAIN` here means "not yet", as it does in
+ * `readLineSync`, so it parks and retries. Bytes are joined before decoding,
+ * so a character split across two reads survives.
+ */
+export function readStdinToEnd(fd = 0): string {
+  const chunks: Buffer[] = [];
+  const chunk = Buffer.alloc(64 * 1024);
+  for (;;) {
+    let read = 0;
+    try {
+      read = readSync(fd, chunk, 0, chunk.length, null);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "EAGAIN") {
+        Atomics.wait(PARK, 0, 0, 20);
+        continue;
+      }
+      if (code === "EOF") break;
+      throw error;
+    }
+    if (read === 0) break;
+    chunks.push(Buffer.from(chunk.subarray(0, read)));
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
 /** Questions and their answers go to stderr, so stdout stays a clean result stream. */
 function ask(question: string): void {
   writeSync(2, question);

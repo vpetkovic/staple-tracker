@@ -1305,11 +1305,18 @@ function runLease(argv: string[]): void {
    * The bounded heartbeat. Ctrl-C is the cancellation, wired to the same
    * `AbortSignal` the loop already understands, so an interrupted heartbeat
    * finishes its report rather than dying mid-beat with nothing to show.
+   *
+   * `on`, not `once`, and never removed (STA-255). A `once` listener removes
+   * itself as it fires, and with no listener left Node restores the default
+   * disposition, so a second Ctrl-C while the last renewal was still in flight
+   * killed the process by signal, with no report. Aborting twice is harmless.
+   * Signal listeners do not keep the process alive, so leaving them in place
+   * until exit costs nothing and covers the report and the close as well.
    */
   const controller = new AbortController();
   const stop = (): void => controller.abort();
-  process.once("SIGINT", stop);
-  process.once("SIGTERM", stop);
+  process.on("SIGINT", stop);
+  process.on("SIGTERM", stop);
 
   const entityId = store.getIssue(ref!).id;
   settle(
@@ -1341,11 +1348,7 @@ function runLease(argv: string[]): void {
               : "The lease is NOT held — it expired or was taken over."),
         );
       })
-      .finally(() => {
-        process.off("SIGINT", stop);
-        process.off("SIGTERM", stop);
-        store.db.close();
-      }),
+      .finally(() => store.db.close()),
     json,
   );
 }

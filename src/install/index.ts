@@ -63,6 +63,7 @@ export {
   installLauncher,
   isManagedLauncher,
   launcherPath,
+  launcherSignals,
   resolveLauncherHome,
   verifyLauncherTarget,
   type LauncherVerification,

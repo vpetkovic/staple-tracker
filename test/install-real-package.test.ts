@@ -7,20 +7,21 @@
  * and the builder agree about what a payload IS — the flat layout, the exec
  * bit, the single shebang, the assets beside the bundle.
  *
- * Both A2 sources are exercised: the `dist-package/` directory a developer
- * builds, and the `.tgz` a user installs from. They must produce the same
+ * Both A2 sources are exercised: the payload directory `scripts/build-package.ts`
+ * produces, and the `.tgz` a user installs from. They must produce the same
  * installed tree, because plan §6 promises `npx -y staple-cli install` and a
  * local build are the same operation.
  *
- * The suite SKIPS rather than fails when `dist-package/` is absent: it is a
- * build output, not a source file, and a checkout that has not run
- * `npm run build:package` should not report a red test it cannot fix by
- * changing code. The tarball case additionally builds its own `.tgz` via
- * `npm pack`, which is skipped under the same condition.
+ * The payload is the one this run's globalSetup built from the current source
+ * (`testPackageDir()`, STA-250), so this suite always runs. It used to read the
+ * repository's `dist-package/` and skip when that was absent, which a parallel
+ * rebuild made happen at random: a run that exited 0 having tested nothing.
+ * The tarball case packs its own `.tgz` from the same payload via `npm pack`.
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { createServer as createNetServer } from "node:net";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -34,12 +35,12 @@ import {
 } from "../src/install/index.js";
 import { WORKSPACE_LATEST_VERSION } from "../src/core/migrations/workspace/index.js";
 import { removeDir, tempDir } from "./fixtures/characterize-support.js";
+import { testPackageDir } from "./fixtures/package-payload.js";
 import { writeCurrentWorkspace } from "./fixtures/schema/generate.js";
 import { FIXTURES, fixturePath } from "./fixtures/schema/support.js";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const distPackage = join(repoRoot, "dist-package");
-const built = existsSync(join(distPackage, "staple.mjs")) && existsSync(join(distPackage, "assets", "index.html"));
+const distPackage = testPackageDir();
 const packageVersion = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")).version as string;
 
 let scratch: string;
@@ -67,7 +68,7 @@ function runLauncher(args: string[]) {
   });
 }
 
-describe.skipIf(!built)("installing the built dist-package/", () => {
+describe("installing the built payload directory", () => {
   it("installs at the version A2 stamped into the artifact", () => {
     const result = install(distPackage);
 
@@ -194,7 +195,7 @@ describe.skipIf(!built)("installing the built dist-package/", () => {
   });
 });
 
-describe.skipIf(!built)("installing the packed tarball (plan §9 acceptance)", () => {
+describe("installing the packed tarball (plan §9 acceptance)", () => {
   let tarball: string;
 
   beforeAll(() => {
@@ -260,7 +261,7 @@ describe.skipIf(!built)("installing the packed tarball (plan §9 acceptance)", (
   });
 });
 
-describe.skipIf(!built)("upgrade and rollback with the real artifact", () => {
+describe("upgrade and rollback with the real artifact", () => {
   it("reinstalling the same real version is idempotent and keeps the launcher working", () => {
     const first = install(distPackage);
     const second = install(distPackage);
@@ -272,4 +273,165 @@ describe.skipIf(!built)("upgrade and rollback with the real artifact", () => {
     // No earlier version exists, so there is honestly nothing to roll back to.
     expect(() => rollbackRuntime({ home, binDir })).toThrow(/no previous version/);
   });
+});
+
+describe("the installed launcher passes signals on to the runtime it started", () => {
+  /**
+   * The launcher is a Node process that starts the runtime as its child. A
+   * terminal's Ctrl-C and launchd both signal the whole process group, so the
+   * runtime hears those directly. `kill <pid>` from another terminal signals the
+   * launcher alone. When the launcher did not forward it, the launcher died and
+   * the runtime carried on as an orphan, still holding its port.
+   *
+   * Once the runtime has exited, the launcher dies BY the signal it received
+   * rather than exiting 128 + n. A shell can tell the two apart and acts on it:
+   * see the bash loop case at the end.
+   */
+  const LISTENING = /staple ui — .* at http:\/\/localhost:(\d+)\//;
+
+  /** Every runtime this home's launcher could have started, for cleanup. */
+  function runtimesOf(stapleHome: string): number[] {
+    const listed = spawnSync("pgrep", ["-f", join(stapleHome, "runtime")], { encoding: "utf8" });
+    return listed.stdout.split("\n").filter(Boolean).map(Number);
+  }
+
+  function childrenOf(pid: number): number[] {
+    const listed = spawnSync("pgrep", ["-P", String(pid)], { encoding: "utf8" });
+    return listed.stdout.split("\n").filter(Boolean).map(Number);
+  }
+
+  function running(pid: number): boolean {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async function portIsFree(port: number): Promise<boolean> {
+    const probe = createNetServer();
+    return new Promise((resolveFree) => {
+      probe.once("error", () => resolveFree(false));
+      probe.listen(port, "127.0.0.1", () => probe.close(() => resolveFree(true)));
+    });
+  }
+
+  it.each([
+    ["SIGTERM", "the launcher's pid alone"],
+    ["SIGINT", "the launcher's pid alone"],
+    ["SIGHUP", "the launcher's pid alone"],
+    // A terminal's Ctrl-C: both processes hear it, and the runtime then gets
+    // the forwarded copy as well. It must still be one clean shutdown.
+    ["SIGINT", "the whole process group"],
+  ] as const)(
+    "%s sent to %s stops the runtime, frees its port, and the launcher dies by it",
+    async (signal, target) => {
+      install(distPackage);
+      const repo = join(scratch, "repo-signal");
+      mkdirSync(repo, { recursive: true });
+      const env = { ...process.env, STAPLE_HOME: home, NODE_NO_WARNINGS: "1" };
+      expect(spawnSync(join(binDir, "staple"), ["init"], { cwd: repo, env, encoding: "utf8" }).status).toBe(0);
+
+      const group = target === "the whole process group";
+      const launcher = spawn(join(binDir, "staple"), ["open", "--port", "0", "--no-browser"], {
+        cwd: repo,
+        env,
+        detached: group,
+      });
+      let stdout = "";
+      let stderr = "";
+      launcher.stdout.on("data", (chunk) => (stdout += String(chunk)));
+      launcher.stderr.on("data", (chunk) => (stderr += String(chunk)));
+      const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolveExit) =>
+        launcher.on("exit", (code, exitSignal) => resolveExit({ code, signal: exitSignal })),
+      );
+      let runtimePids: number[] = [];
+      try {
+        const deadline = Date.now() + 25_000;
+        while (!LISTENING.test(stdout) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 25));
+        const port = Number(LISTENING.exec(stdout)?.[1]);
+        expect(port).toBeGreaterThan(0);
+        runtimePids = childrenOf(launcher.pid!);
+        expect(runtimePids).toHaveLength(1);
+
+        if (group) process.kill(-launcher.pid!, signal);
+        else launcher.kill(signal); // the launcher's pid only
+
+        // Bounded here, inside the test's own timeout, so the cleanup below
+        // always runs even if the launcher never exits.
+        const outcome = await Promise.race([
+          exited,
+          new Promise<"still running">((r) => setTimeout(() => r("still running"), 15_000)),
+        ]);
+        expect(outcome).toEqual({ code: null, signal });
+        const gone = Date.now() + 10_000;
+        while (running(runtimePids[0]!) && Date.now() < gone) await new Promise((r) => setTimeout(r, 25));
+        expect(running(runtimePids[0]!)).toBe(false);
+        expect(await portIsFree(port)).toBe(true);
+        // SIGHUP has no handler in `staple open` and ends it by default; the
+        // other two go through its shutdown exactly once.
+        if (signal !== "SIGHUP") expect(stderr.match(/shutting down/g)).toHaveLength(1);
+      } finally {
+        // Never leak an orphan into the rest of the suite, whatever failed above.
+        for (const pid of runtimePids) if (running(pid)) process.kill(pid, "SIGKILL");
+        if (launcher.exitCode === null && launcher.signalCode === null) launcher.kill("SIGKILL");
+      }
+    },
+    60_000,
+  );
+
+  /**
+   * The case that decides between "exit 130" and "die by SIGINT". bash runs the
+   * installed launcher in a loop and gets one Ctrl-C. bash waits for its child,
+   * and if the child exited normally it concludes the child handled the Ctrl-C
+   * and runs the next command. The runtime run directly stops the loop, and so
+   * did the launcher before it forwarded signals, so the launcher must too.
+   *
+   * A terminal's Ctrl-C is the tty driver sending SIGINT to the foreground
+   * process group: bash, the launcher and the runtime at once. That is what
+   * this sends, to a bash that leads its own group. (`script` would give a real
+   * pty, but BSD `script` on macOS refuses a stdin that is not itself a tty,
+   * which a spawned child's never is.)
+   */
+  it("one Ctrl-C to the foreground group stops a bash loop that runs the launcher", async () => {
+    install(distPackage);
+    const repo = join(scratch, "repo-loop");
+    mkdirSync(repo, { recursive: true });
+    const env = { ...process.env, STAPLE_HOME: home, NODE_NO_WARNINGS: "1" };
+    expect(spawnSync(join(binDir, "staple"), ["init"], { cwd: repo, env, encoding: "utf8" }).status).toBe(0);
+
+    const loop = `for i in 1 2 3; do "${join(binDir, "staple")}" open --port 0 --no-browser; echo "after $i rc=$?"; done; echo END`;
+    const term = spawn("bash", ["-c", loop], { cwd: repo, env, detached: true });
+    let output = "";
+    term.stdout.on("data", (chunk) => (output += String(chunk)));
+    term.stderr.on("data", (chunk) => (output += String(chunk)));
+    const exited = new Promise<void>((resolveExit) => term.on("exit", () => resolveExit()));
+    try {
+      const deadline = Date.now() + 25_000;
+      while (!LISTENING.test(output) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 25));
+      expect(output, "the first pass never started listening").toMatch(LISTENING);
+
+      process.kill(-term.pid!, "SIGINT"); // Ctrl-C: the whole foreground group
+
+      // Give a wrongly continuing loop time to print and start its next pass.
+      await Promise.race([exited, new Promise((r) => setTimeout(r, 5_000))]);
+      expect(output).toContain("shutting down (SIGINT)");
+      expect(output).not.toContain("after 1");
+      expect(output).not.toContain("END");
+    } finally {
+      try {
+        process.kill(-term.pid!, "SIGKILL");
+      } catch {
+        // already gone
+      }
+      for (const pid of runtimesOf(home)) {
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          // already gone
+        }
+      }
+    }
+  }, 60_000);
 });

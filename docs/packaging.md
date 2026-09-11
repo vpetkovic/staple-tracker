@@ -17,6 +17,12 @@ therefore resolves nothing from `node_modules`, needs no TypeScript and no
 unresolved non-builtin import survives, if the bin loses its shebang or its
 executable bit, or if anything other than runtime output lands in the payload.
 
+The payload is assembled and checked in a hidden sibling of the output directory
+(`.dist-package.building-*`) and renamed into place only once every check has
+passed. The old payload is renamed aside and the new one renamed in straight
+after it, so a reader never finds a half-built tree. A failed build removes its
+staging directory and leaves the previous payload where it was.
+
 ```text
 staple-cli-<version>.tgz
   package.json            generated — name staple-cli, bin staple, dependencies {},
@@ -52,12 +58,20 @@ ship the source tree. Publication runs against the generated package; the
 version is read from the source `package.json`, so there is still one place to
 bump it.
 
-`test/package-tarball.test.ts` is the acceptance: it builds the payload, packs
-it, installs the tarball into a temporary prefix with `--offline`, and then
+`test/package-tarball.test.ts` is the acceptance: it packs the payload, installs
+the tarball into a temporary prefix with `--offline`, and then
 drives the installed binary from a directory outside this repository with no
 `node_modules` near it — `init`, `new`, `ls --json`, a `staple mcp` handshake
 with a real tool call, and a `staple open` that serves its own bundled assets.
 Nothing in it is skippable: every input is a local file.
+
+The payload that test, `install-real-package` and `install-schema-matrix` use is
+built by the suite itself. `test/setup/package-payload.ts`, a vitest
+globalSetup, runs `buildPackage()` from the current source into a temporary
+directory before any test file loads, and hands the path to the files. No test
+reads the repository's `dist-package/`, so `npm test` needs no prior
+`npm run build:package`. A stale or missing build cannot pass or skip these
+suites, and a build running alongside the suite cannot break them.
 
 ## Install (user-owned runtime)
 
@@ -122,6 +136,19 @@ pre-upgrade snapshot is what restores the workspace — see
 execs that entrypoint. So a home move needs no change to the launcher, and an
 upgrade needs no rewrite of it. It refuses to overwrite a `staple` on the
 launcher path that it did not write.
+
+The runtime runs as the launcher's child with the same stdin, stdout and stderr,
+and the launcher exits with the runtime's exit code. With no runtime installed
+it exits 70. It passes SIGINT, SIGTERM and SIGHUP on to the runtime, so
+`kill <launcher pid>` stops the runtime and frees its port instead of leaving it
+running as an orphan. When the launcher itself was signalled, or the runtime
+died by a signal, the launcher dies by that same signal once the runtime has
+exited, rather than exiting 128 + n. That matters to shells: bash reads a normal
+exit after Ctrl-C as "the program handled it" and runs the next command, so a
+single Ctrl-C would not stop a loop or a `staple … || fallback`. On Windows,
+SIGINT is not forwarded (a console Ctrl-C already reaches the runtime, and
+forwarding would kill it outright mid-shutdown), and the launcher exits with a
+code.
 
 **PATH is a separate consent.** `--yes` covers the home and the launcher
 directory. Editing a shell profile additionally requires `--update-path`, and

@@ -46,6 +46,15 @@ export default defineConfig({
     exclude: [...configDefaults.exclude, "worker/**"],
 
     /**
+     * Build the packaged payload once, before any file is collected, into a
+     * directory private to the run (STA-250). The suites that install or pack the
+     * real artifact read it through `testPackageDir()`. None of them reads the
+     * repository's `dist-package/`, which is a developer's build output and can be
+     * absent, stale, or mid-rebuild.
+     */
+    globalSetup: ["test/setup/package-payload.ts"],
+
+    /**
      * Vitest's default is 5000ms, which is wrong for this suite.
      *
      * Many tests here drive the real CLI by spawning it, and a single `it` can spawn

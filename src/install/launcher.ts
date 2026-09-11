@@ -94,6 +94,36 @@ export function launcherPath(binDir: string, context: LauncherContext = {}): str
 }
 
 /**
+ * What the emitted launcher does with signals, per platform. Embedded in the
+ * launcher as a literal for both platforms, so this function is the one source.
+ *
+ * - `listen`: the launcher waits on these instead of dying at once, so it never
+ *   returns before the runtime has finished shutting down.
+ * - `forward`: passed on to the runtime, so a signal sent to the launcher's pid
+ *   alone (`kill <pid>`) stops the runtime instead of orphaning it.
+ * - `reraise`: after the runtime exits, die by the signal the launcher received
+ *   rather than exit with 128 + n. POSIX shells tell those apart: bash reads a
+ *   normal exit after Ctrl-C as "the program handled it" and runs the next
+ *   command, where a death by SIGINT stops the script.
+ *
+ * On Windows, SIGINT is not forwarded. A console Ctrl-C already reaches both
+ * processes, and `child.kill()` there terminates the child outright whatever
+ * signal it is given. Forwarding would kill the runtime in the middle of the
+ * clean shutdown the Ctrl-C started (`staple open` closing its handles, the
+ * lease heartbeat printing its report). Windows has no death-by-signal status
+ * to preserve either, so it exits with a code instead of re-raising.
+ */
+export function launcherSignals(platform: NodeJS.Platform): {
+  listen: NodeJS.Signals[];
+  forward: NodeJS.Signals[];
+  reraise: boolean;
+} {
+  const listen: NodeJS.Signals[] = ["SIGINT", "SIGTERM", "SIGHUP"];
+  if (platform === "win32") return { listen, forward: ["SIGTERM", "SIGHUP"], reraise: false };
+  return { listen, forward: listen, reraise: true };
+}
+
+/**
  * The resolver body, shared by both platforms.
  *
  * This is a string rather than a checked-in `.mjs` file on purpose: the
@@ -122,7 +152,7 @@ function launcherSource(): string {
 // <home>/${RUNTIME_DIRNAME}/${CURRENT_FILENAME}, then execs the selected runtime.
 // Contains no absolute path into the home, so \`staple config home --move\`
 // needs no change here.
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { constants, homedir as osHomeDir } from "node:os";
 import { isAbsolute, join, posix, win32 } from "node:path";
@@ -175,16 +205,47 @@ if (typeof current.entrypoint !== "string" || isAbsolute(current.entrypoint)) {
 }
 const entry = join(runtime, ...current.entrypoint.split("/"));
 
-const result = spawnSync(process.execPath, [entry, ...process.argv.slice(2)], { stdio: "inherit" });
-if (result.error) {
-  die("could not start " + entry + ": " + result.error.message);
+const child = spawn(process.execPath, [entry, ...process.argv.slice(2)], { stdio: "inherit" });
+
+// Which signals to wait on, which to pass to the runtime, and whether to die by
+// them afterwards. The table and the reasons are \`launcherSignals()\` in
+// src/install/launcher.ts.
+const SIGNALS = process.platform === "win32" ? ${JSON.stringify(launcherSignals("win32"))} : ${JSON.stringify(launcherSignals("linux"))};
+
+// Pass on the signals a user or a supervisor sends to THIS pid, so a
+// \`kill <pid>\` of the launcher stops the runtime instead of orphaning it with
+// its port still bound. A terminal's Ctrl-C reaches both processes already;
+// the runtime's handlers absorb the forwarded copy as the repeat it is.
+let received = null;
+const relays = [];
+for (const signal of SIGNALS.listen) {
+  const relay = () => {
+    received = received ?? signal;
+    if (!SIGNALS.forward.includes(signal)) return;
+    try { child.kill(signal); } catch { /* already gone */ }
+  };
+  process.on(signal, relay);
+  relays.push([signal, relay]);
 }
-if (result.signal) {
-  // Report the signal the way a shell does, so \`staple\` in a pipeline behaves
-  // like the runtime it fronts rather than swallowing a Ctrl-C into exit 0.
-  process.exit(128 + (constants.signals[result.signal] ?? 0));
-}
-process.exit(result.status ?? 1);
+
+child.on("error", (error) => die("could not start " + entry + ": " + error.message));
+child.on("exit", (code, signal) => {
+  const death = received ?? signal;
+  if (death && SIGNALS.reraise) {
+    // Die BY the signal, not with an exit code. A shell running \`staple\` in a
+    // loop or before \`||\` reads a normal exit after Ctrl-C as "the program
+    // handled it" and carries on; a death by SIGINT makes it stop, as it
+    // would for the runtime run directly. With the listeners gone the default
+    // disposition is back, so the signal ends this process; the timer is the
+    // fallback if it somehow does not.
+    for (const [name, relay] of relays) process.off(name, relay);
+    setTimeout(() => process.exit(128 + (constants.signals[death] ?? 0)), 200);
+    process.kill(process.pid, death);
+    return;
+  }
+  if (death) process.exit(128 + (constants.signals[death] ?? 0));
+  process.exit(code ?? 1);
+});
 `;
 }
 
