@@ -108,6 +108,13 @@ const byPath = new Map<string, OpenedWorkspace>();
  */
 function asMcpResolutionError(error: unknown, ws?: string): unknown {
   if (!(error instanceof StapleError) || error.code !== "not_found") return error;
+  /**
+   * An absent row IS registered: `hub_overview` lists it. Its own sentence says the
+   * database isn't on this machine and names the verbs that attach it. Replacing that
+   * with "is not registered, call init" contradicts the overview and points at the
+   * one verb that can't help unless it runs inside a clone.
+   */
+  if (error.detail?.absentRow !== undefined) return error;
   const cause = ws
     ? `No workspace "${ws}" is registered in the hub.`
     : "No staple workspace found at or above this server's working directory.";

@@ -36,9 +36,8 @@ import { accessSync, constants, existsSync, statSync, statfsSync } from "node:fs
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { effectiveConfig, readConfig, resolveHome, setHomeOverride, stapleHome } from "../config/index.js";
-import { Hub, isAbsentRow } from "../core/hub.js";
+import { Hub, absentRowRefusal, isAbsentRow } from "../core/hub.js";
 import {
-  absentRowRefusal,
   classifyRegisteredPath,
   describeSecondClaimant,
   findRepointableRows,

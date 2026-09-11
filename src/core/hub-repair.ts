@@ -107,7 +107,7 @@
 import { existsSync } from "node:fs";
 import { basename, dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { Hub, isAbsentRow, type WorkspaceEntry } from "./hub.js";
+import { Hub, absentRowRefusal, isAbsentRow, type WorkspaceEntry } from "./hub.js";
 import { LEGACY_WORKSPACE_DIRNAME, WORKSPACE_DIRNAME, normalizePath } from "./path-migration.js";
 import { findRepositoryIdCollisions, readWorkspaceManifest } from "./repo-identity.js";
 
@@ -492,34 +492,27 @@ export function describeSecondClaimant(input: {
   );
 }
 
+/** The absent row a database's own slug stamp would land on, and whether it may. */
+export interface AdoptedRowMatch {
+  readonly row: WorkspaceEntry;
+  /** `absentRowRefusal`'s sentence, or null when the identities match. */
+  readonly refusal: string | null;
+}
+
 /**
- * Why the workspace at `openedDbPath` will not be attached to this absent row, or
- * null when it will.
+ * Would registering this database land on an absent row?
  *
- * It attaches only when it presents the identity the row recorded, which is
- * `locateAbsent`'s rule (`src/core/cloud/hub-registry.ts`). Walk-up repair and
- * `doctor`'s hub-link check both ask this, so the check that writes and the check
- * that reports can't disagree. The sentence names only the opened path; the row has
- * none.
+ * {@link findCopyClaimant}'s question for the other kind of row. `hub.register()`
+ * keys its upsert on the slug the database is stamped with, so that is the row this
+ * reads. `Hub.register` enforces the answer; `staple add` asks first, so its preview
+ * can name the row and say whether the identity matches before anything is written.
  */
-export function absentRowRefusal(row: WorkspaceEntry, openedDbPath: string): string | null {
-  const presented = identityOf(openedDbPath);
-  if (row.repositoryId !== null && presented === row.repositoryId) return null;
-  const listed = `"${row.slug}" is in this machine's hub from an adopted registry, with no database here`;
-  if (row.repositoryId === null) {
-    return (
-      `${listed} and no recorded sync identity, so nothing confirms that ${openedDbPath} is it. ` +
-      "It was not attached and nothing was written. Run `staple init` in that workspace to " +
-      "register it from its own stamp."
-    );
-  }
-  return (
-    `${listed}, as sync identity ${row.repositoryId}, and ${openedDbPath} presents ` +
-    `${presented === null ? "no sync identity" : presented}. It was not attached, because a ` +
-    "registry row attached to the wrong repository does not report itself later, and nothing " +
-    `was written. If this is a different workspace, \`${releaseSlugCommand(row.slug)}\` frees ` +
-    `the name for it. ${RELEASE_SLUG_CAVEAT}`
-  );
+export function findAdoptedRow(hub: Hub, openedDbPath: string): AdoptedRowMatch | null {
+  const probe = probeSlugAt(normalizePath(openedDbPath));
+  if (!probe.read || probe.slug === null) return null;
+  const row = hub.findBySlug(probe.slug);
+  if (!row || !isAbsentRow(row)) return null;
+  return { row, refusal: absentRowRefusal(row, openedDbPath) };
 }
 
 /**
@@ -732,7 +725,9 @@ export function findCopyClaimant(hub: Hub, openedDbPath: string): CopyClaimant |
   if (!entry) return null; // the slug is free; registering takes nothing
   // An absent row has no directory, so no live workspace is there to take it from.
   // Normalising its `""` made the current directory the "claimant", unreadable
-  // because a directory never opens as a database, and `add` refused.
+  // because a directory never opens as a database, and `add` refused for that reason.
+  // Whether THIS workspace may take the row is an identity question, and
+  // {@link findAdoptedRow} and `Hub.register` answer it.
   if (isAbsentRow(entry)) return null;
 
   const registered = normalizePath(entry.path);

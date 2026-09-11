@@ -33,13 +33,16 @@ import { resolve } from "node:path";
 import { StapleError } from "../core/types.js";
 import { planSetup } from "../onboarding/setup.js";
 import { normalizePath } from "../core/path-migration.js";
-import { Hub } from "../core/hub.js";
+import { Hub, isAbsentRow } from "../core/hub.js";
 import {
+  findAdoptedRow,
   findCopyClaimant,
   releaseSlugCommand,
   repairHubRegistration,
+  type AdoptedRowMatch,
   type CopyClaimant,
 } from "../core/hub-repair.js";
+import { readWorkspaceManifest } from "../core/repo-identity.js";
 import { performSetup, type InitReport } from "./init.js";
 
 export interface AddPreview {
@@ -89,7 +92,7 @@ export function previewAdd(path: string): AddPreview {
       changes.push(`create ${plan.layout.currentPath}`);
       changes.push(`write ${dir}/.staple/AGENTS.md (the agent protocol guide)`);
       changes.push(`write ${dir}/.staple/.gitignore (ignores the database, not AGENTS.md)`);
-      changes.push("register the workspace in the hub");
+      changes.push(createRegistrationNote(plan.layout.currentPath));
       break;
     case "adopt":
       changes.push(`open the legacy database at ${plan.migration?.sourcePath} where it is`);
@@ -109,6 +112,7 @@ export function previewAdd(path: string): AddPreview {
   let hubNote = "register the workspace in the hub";
   let noop = false;
   let claimant: CopyClaimant | null = null;
+  let adopted: AdoptedRowMatch | null = null;
   if (plan.action === "open") {
     const dbPath = plan.layout.currentPath;
     let hub: Hub | null = null;
@@ -124,6 +128,15 @@ export function previewAdd(path: string): AddPreview {
         // seen (register it), one that moved (repoint it), or a copy of one it
         // already has somewhere else — which is the case that must not proceed.
         claimant = findCopyClaimant(hub, dbPath);
+        // Or its slug names a row adopted from the registry, which it may take
+        // only with the same identity. `Hub.register` enforces that on --yes;
+        // this says so first.
+        adopted = findAdoptedRow(hub, dbPath);
+        if (adopted !== null && adopted.refusal === null) {
+          hubNote =
+            `attach the adopted row "${adopted.row.slug}" (sync identity ${adopted.row.repositoryId}) ` +
+            "here: this workspace presents the same identity";
+        }
       }
     } catch {
       // No hub yet, or an unreadable one. Registering is still the plan.
@@ -179,6 +192,15 @@ export function previewAdd(path: string): AddPreview {
     );
   }
 
+  /**
+   * Refused in the preview for the reason the copy claimant is: the upsert would
+   * land on a row adopted from the registry for a different repository. The
+   * sentence names both identities, and the hub row is untouched.
+   */
+  if (adopted !== null && adopted.refusal !== null) {
+    throw new StapleError("conflict", adopted.refusal, { path: dir, adoptedRow: adopted.row.slug });
+  }
+
   return {
     path: dir,
     action: plan.action,
@@ -187,6 +209,40 @@ export function previewAdd(path: string): AddPreview {
     reason: plan.reason,
     confirmWith: `staple add ${dir} --yes`,
   };
+}
+
+/**
+ * The hub line for a directory that has no database yet.
+ *
+ * A clone carries `.staple/repository.json` and no database. When that identity
+ * is an absent row adopted from the registry, `initWorkspace` takes that row over
+ * under its name and prefix (see its placeholder block), so the preview says so
+ * rather than promising a fresh registration. Read-only, and quiet on a hub or a
+ * manifest it cannot read: registering is still the plan, and `Hub.register`
+ * enforces identity on the way in.
+ */
+function createRegistrationNote(dbPath: string): string {
+  const fallback = "register the workspace in the hub";
+  let hub: Hub | null = null;
+  try {
+    const repositoryId = readWorkspaceManifest(dbPath)?.repositoryId ?? null;
+    if (repositoryId === null) return fallback;
+    hub = Hub.openReadOnly();
+    const row = hub.findByRepositoryId(repositoryId);
+    if (!row || !isAbsentRow(row)) return fallback;
+    return (
+      `take over the adopted row "${row.slug}" (prefix ${row.prefix}): its sync identity ` +
+      `${repositoryId} is the one this directory's repository.json presents`
+    );
+  } catch {
+    return fallback;
+  } finally {
+    try {
+      hub?.close();
+    } catch {
+      /* unwinding */
+    }
+  }
 }
 
 export function runAddCommand(argv: string[]): void {

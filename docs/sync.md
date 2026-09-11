@@ -1439,10 +1439,13 @@ identity before any name is compared.
   moment they are unsure where it went. If you do not have it yet, clone it and run
   `staple init`, which registers the real row against the identity the placeholder
   is holding. A workspace database that is already stamped with the row's slug and
-  prefix is attached by any command run inside it, and by `staple discover`, under
-  `locate`'s rule: only when its `repository.json` holds the row's identity.
-  Otherwise the row stays absent, and `staple doctor`'s hub-link check names both
-  identities.
+  prefix is attached by any command run inside it, by `staple discover`, by
+  `staple init` and by `staple add`, under `locate`'s rule: only when its
+  `repository.json` holds the row's identity. `add`'s preview names the row and
+  says so. Otherwise the row is left exactly as it was and the command is refused
+  with both identities named, because a registration keyed on the slug alone would
+  take over a row that belongs to another repository and overwrite its identity.
+  `staple doctor`'s hub-link check reports the same verdict.
 - **Prefix or slug already held by a different identity** — the entry is parked
   and named, and **nothing is renumbered**. A prefix is stamped into the workspace
   database and into every `PREFIX-N` that database ever emitted, including in

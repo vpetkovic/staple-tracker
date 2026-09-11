@@ -20,9 +20,10 @@
  * `repository.json`, so a consumer that resolved `""` would find a real directory and a
  * real manifest rather than failing loudly.
  */
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ABSENT_PATH, Hub } from "../src/core/hub.js";
 import {
@@ -35,6 +36,7 @@ import { initWorkspace, resolveWorkspace } from "../src/core/workspace.js";
 import { describeSkip, describeWorkspace, skipReasonFor } from "../src/core/cloud/hub-scope.js";
 import { moveHome } from "../src/config/move.js";
 import { runCliAt } from "./fixtures/characterize-support.js";
+import { mcpEnvelope, startMcpClient } from "./fixtures/contract-support.js";
 
 const ONE = "11111111-1111-4111-8111-111111111111";
 const TWO = "22222222-2222-4222-8222-222222222222";
@@ -86,7 +88,7 @@ function withHub<T>(run: (hub: Hub) => T): T {
  * A real workspace on disk whose hub row has been turned into the placeholder an adopt
  * leaves: same slug, same prefix, the given recorded identity, and no path.
  */
-function absentWorkspace(slug: string, recorded: "own" | string): {
+function absentWorkspace(slug: string, recorded: "own" | string | null): {
   dir: string;
   dbPath: string;
   prefix: string;
@@ -113,6 +115,18 @@ function absentWorkspace(slug: string, recorded: "own" | string): {
 
 const rowOf = (slug: string) => withHub((hub) => hub.get(slug)!);
 
+/** The hub row exactly as stored, every column, for "left as it was" assertions. */
+function rawRow(slug: string): Record<string, unknown> | undefined {
+  const db = new DatabaseSync(join(home, "hub.db"), { readOnly: true });
+  try {
+    return db.prepare("SELECT * FROM workspaces WHERE slug = ?").get(slug) as Record<string, unknown> | undefined;
+  } finally {
+    db.close();
+  }
+}
+
+const cli = (cwd: string, args: string[]) => runCliAt(cwd, args, { STAPLE_HOME: home }, 30_000);
+
 describe("hub repair never reads an absent row's path as the current directory", () => {
   it("offers no repoint for an absent row", () => {
     withHub((hub) => hub.registerAbsent({ slug: "alpha", prefix: "ALP", kind: "repo", repositoryId: ONE }));
@@ -135,6 +149,17 @@ describe("hub repair never reads an absent row's path as the current directory",
     expect(result.error).not.toContain(trapCwd);
     expect(result.error).not.toContain(join(trapCwd, ".."));
     expect(rowOf("alpha")).toMatchObject({ path: ABSENT_PATH, available: false, repositoryId: TWO });
+  });
+
+  it("refuses an absent row with no recorded identity, even to a workspace that presents none", () => {
+    // Both sides null is not a match: there is nothing to check the workspace against.
+    const ws = absentWorkspace("alpha", null);
+    renameSync(join(ws.dir, ".staple", "repository.json"), join(ws.dir, ".staple", "repository.json.gone"));
+    const before = rawRow("alpha");
+    const result = repairHubRegistration({ slug: "alpha", prefix: ws.prefix, dbPath: ws.dbPath, kind: "repo" });
+    expect(result).toMatchObject({ outcome: "conflict", pathBefore: null, changed: false });
+    expect(result.error).toContain("no recorded sync identity");
+    expect(rawRow("alpha")).toEqual(before);
   });
 
   it("reports no previous path when an absent row's prefix disagrees", () => {
@@ -229,7 +254,88 @@ describe("doctor never reads an absent row's path as the current directory", () 
   }, 60_000);
 });
 
+describe("`add` and `init` take an absent row only with its recorded identity", () => {
+  /**
+   * `hub.register()` upserts on the slug. An absent row is a registry entry for a
+   * repository this machine hasn't got, so a different repository sharing the slug
+   * and prefix used to take it over through `init` or `add --yes`, and the recorded id
+   * was then overwritten with the newcomer's. These run the real CLI.
+   */
+  it("`add` refuses a different repository, in the preview and with --yes, and leaves the row as it was", () => {
+    const ws = absentWorkspace("zeta", TWO);
+    const before = rawRow("zeta");
+
+    const preview = cli(trapCwd, ["add", ws.dir]);
+    expect(preview.status).not.toBe(0);
+    expect(preview.stderr).toContain(TWO);
+    expect(preview.stderr).toContain(ws.repositoryId);
+
+    const applied = cli(trapCwd, ["add", ws.dir, "--yes", "--json"]);
+    expect(applied.status).not.toBe(0);
+    expect(applied.stderr).toContain(TWO);
+    expect(rawRow("zeta")).toEqual(before);
+  }, 60_000);
+
+  it("`add` names the adopted row, says the identity matches, and attaches it", () => {
+    const ws = absentWorkspace("zeta", "own");
+
+    const preview = cli(trapCwd, ["add", ws.dir]);
+    expect(preview.stderr).toContain(`attach the adopted row "zeta" (sync identity ${ws.repositoryId})`);
+    expect(preview.stderr).toContain("presents the same identity");
+
+    const applied = cli(trapCwd, ["add", ws.dir, "--yes", "--json"]);
+    expect(applied.status, applied.stderr).toBe(0);
+    expect(rowOf("zeta")).toMatchObject({ path: ws.dbPath, available: true, repositoryId: ws.repositoryId });
+  }, 60_000);
+
+  it("`add` on a clone's manifest names the adopted row it takes over", () => {
+    const ws = absentWorkspace("zeta", "own");
+    // A clone carries the manifest and not the database.
+    for (const suffix of ["", "-wal", "-shm"]) rmSync(`${ws.dbPath}${suffix}`, { force: true });
+
+    const preview = cli(trapCwd, ["add", ws.dir]);
+    expect(preview.stderr).toContain(`take over the adopted row "zeta" (prefix ${ws.prefix})`);
+
+    const applied = cli(trapCwd, ["add", ws.dir, "--yes", "--json"]);
+    expect(applied.status, applied.stderr).toBe(0);
+    expect(rowOf("zeta")).toMatchObject({ prefix: ws.prefix, available: true, repositoryId: ws.repositoryId });
+  }, 60_000);
+
+  it("`init` refuses a different repository and leaves the row as it was", () => {
+    const ws = absentWorkspace("zeta", TWO);
+    const before = rawRow("zeta");
+    const run = cli(ws.dir, ["init", "--json"]);
+    expect(run.status).not.toBe(0);
+    expect(run.stderr).toContain(TWO);
+    expect(run.stderr).toContain(ws.repositoryId);
+    expect(rawRow("zeta")).toEqual(before);
+  }, 60_000);
+
+  it("`init` attaches the absent row when the identity matches", () => {
+    const ws = absentWorkspace("zeta", "own");
+    const run = cli(ws.dir, ["init", "--json"]);
+    expect(run.status, run.stderr).toBe(0);
+    expect(rowOf("zeta")).toMatchObject({ path: ws.dbPath, available: true, repositoryId: ws.repositoryId });
+  }, 60_000);
+});
+
 describe("the other readers of a hub row's path", () => {
+  it("MCP passes the absent-row sentence through instead of saying the slug is unregistered", async () => {
+    withHub((hub) => hub.registerAbsent({ slug: "alpha", prefix: "ALP", kind: "repo", repositoryId: ONE }));
+    const mcp = await startMcpClient({ home, cwd: trapCwd });
+    try {
+      const result = await mcp.call("list_tasks", { ws: "alpha" });
+      expect(result.isError).toBe(true);
+      const envelope = mcpEnvelope(result);
+      expect(envelope.code).toBe("not_found");
+      expect(envelope.message).toContain("not on this machine");
+      expect(envelope.message).toContain("staple hub registry locate alpha");
+      expect(envelope.message).not.toContain("is registered in the hub. Call");
+    } finally {
+      await mcp.close();
+    }
+  }, 60_000);
+
   it("`--ws` on an absent row says it is not on this machine, rather than 'No workspace at .'", () => {
     withHub((hub) => hub.registerAbsent({ slug: "alpha", prefix: "ALP", kind: "repo", repositoryId: ONE }));
     let message = "";

@@ -467,7 +467,11 @@ export function resolveWorkspace(options: { db?: string; ws?: string } = {}): Op
       }
       // `openWorkspace("")` refuses with "No workspace at ." and says to run init there,
       // which names the current directory for a row that has no directory at all.
-      if (isAbsentRow(entry)) throw new StapleError("not_found", describeAbsentRow(entry.slug));
+      // `absentRow` in the detail lets a surface that rewrites `not_found` (MCP's
+      // `asMcpResolutionError`) tell this apart from an unregistered slug.
+      if (isAbsentRow(entry)) {
+        throw new StapleError("not_found", describeAbsentRow(entry.slug), { absentRow: entry.slug });
+      }
       return openWorkspace(entry.path);
     } finally {
       hub.close();
