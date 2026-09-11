@@ -19,8 +19,12 @@
  * path reaches the files through `inject`. These cases pin that arrangement.
  */
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
+import type { TestProject } from "vitest/node";
+import { spawn } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
+import setup, { PAYLOAD_PREFIX } from "./setup/package-payload.js";
 import { WORKSPACE_LATEST_VERSION } from "../src/core/migrations/workspace/index.js";
 import { HUB_LATEST_VERSION } from "../src/core/migrations/hub/index.js";
 import { REPO_ROOT } from "./fixtures/characterize-support.js";
@@ -47,6 +51,33 @@ describe("the suite's packaged payload (STA-250)", () => {
     expect(manifest.version).toBe(sourceVersion);
     expect(manifest.staple).toEqual({ workspaceSchema: WORKSPACE_LATEST_VERSION, hubSchema: HUB_LATEST_VERSION });
   });
+
+  it("removes a payload left by a run that was stopped, and keeps a live run's", async () => {
+    // A pid that is certainly gone: a process that has already exited.
+    const exited = spawn(process.execPath, ["-e", ""]);
+    await new Promise((r) => exited.on("exit", r));
+    const stale = join(tmpdir(), `${PAYLOAD_PREFIX}${exited.pid}-stopped`);
+    mkdirSync(join(stale, "dist-package"), { recursive: true });
+    writeFileSync(join(stale, "dist-package", "staple.mjs"), "left behind by a Ctrl-C\n");
+
+    // The real globalSetup, run again. It builds a second payload of its own.
+    let provided: string | undefined;
+    const project = {
+      provide: (_key: string, value: string) => (provided = value),
+      onTestsRerun: () => undefined,
+    } as unknown as TestProject;
+    const teardown = await setup(project);
+    try {
+      expect(existsSync(stale)).toBe(false);
+      // This run's payload belongs to a live process and is still there.
+      expect(existsSync(join(testPackageDir(), "staple.mjs"))).toBe(true);
+      expect(provided).toMatch(new RegExp(`${PAYLOAD_PREFIX}${process.pid}-`));
+    } finally {
+      teardown();
+      rmSync(stale, { recursive: true, force: true });
+    }
+    expect(existsSync(provided!)).toBe(false);
+  }, 60_000);
 
   it("is the only payload a test reads: no test file refers to the repository's dist-package/", () => {
     // `join(REPO_ROOT, "dist-package")` is how every reader of the shared

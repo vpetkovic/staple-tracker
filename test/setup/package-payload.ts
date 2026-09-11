@@ -26,7 +26,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { TestProject } from "vitest/node";
-import { buildPackage } from "../../scripts/build-package.js";
+import { buildPackage, removeStaleScratch } from "../../scripts/build-package.js";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -38,9 +38,16 @@ function ensureUiBundle(): void {
   }
 }
 
+/** Every run's payload lives in `<tmpdir>/staple-test-package-<vitest pid>-<random>`. */
+export const PAYLOAD_PREFIX = "staple-test-package-";
+
 export default async function setup(project: TestProject): Promise<() => void> {
   ensureUiBundle();
-  const root = realpathSync(mkdtempSync(join(tmpdir(), "staple-test-package-")));
+  // A run stopped by Ctrl-C (or killed) never reaches its teardown, and its
+  // payload stays in the temp directory. Remove the ones whose run is gone; a
+  // run that is still going, in this checkout or another, keeps its own.
+  removeStaleScratch(tmpdir(), PAYLOAD_PREFIX);
+  const root = realpathSync(mkdtempSync(join(tmpdir(), `${PAYLOAD_PREFIX}${process.pid}-`)));
   const { outDir } = await buildPackage({ outDir: join(root, "dist-package") });
   project.provide("stapleTestPackage", outDir);
 

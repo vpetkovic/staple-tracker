@@ -1,5 +1,5 @@
 /**
- * STA-250: the package build never shows a reader a half-built or absent tree.
+ * STA-250: the package build never leaves its target half-built.
  *
  * `buildPackage()` used to `rmSync` its target and write the new payload into it
  * piece by piece. For the whole esbuild run the directory was gone or partial,
@@ -10,18 +10,32 @@
  * target half-built.
  *
  * The build now assembles the payload in a temporary sibling, verifies it there,
- * and only then moves it into place. These cases rebuild a target that already
- * holds a payload and watch it the whole time.
+ * and only then moves it into place with two back-to-back renames: old tree
+ * aside, new tree in. What that guarantees, and what these cases pin:
+ *
+ *   - never half-built, and complete for the whole of the build, as seen on
+ *     every turn of the event loop;
+ *   - if the new tree cannot be moved in, the old one is put back;
+ *   - scratch left by a build that was killed is removed by the next build.
+ *
+ * It is not an atomic swap. Another process can find the target missing for
+ * the instant between the two renames, and no in-process check can see that
+ * gap, because nothing runs between two synchronous calls. The suite does not
+ * depend on it: no test reads a directory a build is writing.
  *
  * Every build here goes into a scratch directory. None of them touches the
  * repository's `dist-package/`, because rewriting a directory another worker
  * reads is the defect under test.
  */
 import { afterEach, describe, expect, it } from "vitest";
-import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { buildPackage } from "../scripts/build-package.js";
-import { removeDir, tempDir } from "./fixtures/characterize-support.js";
+import { buildPackage, promote } from "../scripts/build-package.js";
+import { REPO_ROOT, removeDir, tempDir } from "./fixtures/characterize-support.js";
+
+const TSX_LOADER = join(REPO_ROOT, "node_modules", "tsx", "dist", "loader.mjs");
+const BUILD_SCRIPT = join(REPO_ROOT, "scripts", "build-package.ts");
 
 /** Build + verify is about a second; a few of them fit well inside this. */
 const BUILD_TIMEOUT = 120_000;
@@ -53,7 +67,7 @@ function incompleteness(dir: string): string | null {
 
 describe("rebuilding a payload in place (STA-250)", () => {
   it(
-    "never leaves the target absent or half-built while the new payload is assembled",
+    "keeps the previous payload complete at the target for the whole of the build",
     async () => {
       root = tempDir("build-atomic");
       const target = join(root, "dist-package");
@@ -110,6 +124,57 @@ describe("rebuilding a payload in place (STA-250)", () => {
       expect(incompleteness(first)).toBeNull();
       expect(incompleteness(second)).toBeNull();
       expect(readdirSync(root).sort()).toEqual(["first", "second"]);
+    },
+    BUILD_TIMEOUT,
+  );
+
+  it("puts the previous payload back when the new one cannot be moved in", () => {
+    const dir = (root = tempDir("build-promote"));
+    const target = join(dir, "dist-package");
+    mkdirSync(target);
+    writeFileSync(join(target, "staple.mjs"), "the previous build\n");
+
+    // A staging directory that is not there makes the second rename fail after
+    // the first has already moved the old tree aside.
+    expect(() => promote(join(dir, ".dist-package.building-1-gone"), target)).toThrow(/ENOENT/);
+
+    expect(readFileSync(join(target, "staple.mjs"), "utf8")).toBe("the previous build\n");
+    expect(readdirSync(dir)).toEqual(["dist-package"]);
+  });
+
+  it(
+    "removes the scratch a killed build left behind, and leaves a running build's alone",
+    async () => {
+      const dir = (root = tempDir("build-interrupted"));
+      const target = join(dir, "dist-package");
+
+      // A real build, stopped midway by SIGTERM once its staging directory exists.
+      const build = spawn(process.execPath, ["--import", TSX_LOADER, BUILD_SCRIPT, "--out", target], {
+        cwd: REPO_ROOT,
+        stdio: "ignore",
+      });
+      const exited = new Promise<void>((resolveExit) => build.on("exit", () => resolveExit()));
+      const scratchOf = (pid: number | undefined) =>
+        readdirSync(dir).filter((name) => name.startsWith(`.dist-package.building-${pid}-`));
+      const deadline = Date.now() + 60_000;
+      while (scratchOf(build.pid).length === 0 && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 2));
+      }
+      build.kill("SIGTERM");
+      await exited;
+      // The debris is real: the killed build could not clean up after itself.
+      expect(scratchOf(build.pid)).toHaveLength(1);
+      expect(existsSync(target)).toBe(false);
+
+      // Scratch owned by a process that is still running, which is what a build
+      // in progress in another terminal looks like.
+      const live = `.dist-package.building-${process.pid}-inflight`;
+      mkdirSync(join(dir, live));
+
+      await buildPackage({ outDir: target });
+
+      expect(readdirSync(dir).sort()).toEqual([live, "dist-package"]);
+      expect(incompleteness(target)).toBeNull();
     },
     BUILD_TIMEOUT,
   );

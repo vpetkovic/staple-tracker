@@ -25,8 +25,10 @@
  *
  * The payload is assembled and verified in a temporary sibling of the target, then
  * renamed into place (see `promote`). The target is never deleted up front and never
- * written piece by piece, so a reader sees the previous payload or the new one, and a
- * build that fails leaves the previous payload where it was.
+ * written piece by piece, so it is never half-built, and a build that fails leaves the
+ * previous payload where it was. It is not atomic: another process can find the
+ * target missing for the instant between the two renames that swap it. No test and no
+ * deploy step reads it while a build runs (the test suite builds its own payload).
  */
 import { build } from "esbuild";
 import { randomBytes } from "node:crypto";
@@ -43,6 +45,7 @@ import {
 } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
 import { WORKSPACE_LATEST_VERSION } from "../src/core/migrations/workspace/index.js";
 import { HUB_LATEST_VERSION } from "../src/core/migrations/hub/index.js";
 
@@ -238,11 +241,18 @@ function verifyNoSourceLeaks(dir: string): void {
  * has anything in it. So an existing payload is renamed aside, the new one is
  * renamed in, and only then is the old one deleted. The two renames run back to
  * back and synchronously, so no JavaScript runs between them. Another process can
- * find the target missing only in the instant between those two system calls, and
- * it never finds it half-built. If the second rename fails, the previous payload
- * is put back.
+ * find the target missing in the instant between those two system calls (this is
+ * not an atomic swap), but never finds it half-built. If the second rename fails,
+ * the previous payload is put back.
+ *
+ * A truly atomic swap needs either an exchange-rename (renameat2 / renamex_np, not
+ * reachable from Node) or a `dist-package` symlink swapped over its target. The
+ * symlink would change what `cpSync` and `npm pack` see at `dist-package/`: a copy
+ * of the path copies the link itself unless every reader resolves it first.
+ *
+ * Exported for its test.
  */
-function promote(staging: string, target: string): void {
+export function promote(staging: string, target: string): void {
   const aside = `${staging}.previous`;
   let hadPrevious = false;
   try {
@@ -260,14 +270,54 @@ function promote(staging: string, target: string): void {
   if (hadPrevious) rmSync(aside, { recursive: true, force: true });
 }
 
+/** True while `pid` names a running process (one this user may not signal counts too). */
+function isRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+/**
+ * Remove every `<parent>/<prefix><pid>-…` entry whose `<pid>` is no longer running,
+ * and return the names removed.
+ *
+ * Scratch directories carry the pid of the process that made them. A process
+ * stopped by a signal leaves its scratch behind, and gitignored scratch is never
+ * removed by `git reset --hard`, so the next run sweeps it. A directory whose
+ * owner is still running is left alone: that is a build or a test run in
+ * progress, not debris.
+ */
+export function removeStaleScratch(parent: string, prefix: string): string[] {
+  let names: string[];
+  try {
+    names = readdirSync(parent);
+  } catch {
+    return [];
+  }
+  const removed: string[] = [];
+  for (const name of names) {
+    if (!name.startsWith(prefix)) continue;
+    const pid = Number(/^(\d+)-/.exec(name.slice(prefix.length))?.[1]);
+    if (!Number.isSafeInteger(pid) || pid <= 0 || isRunning(pid)) continue;
+    rmSync(join(parent, name), { recursive: true, force: true });
+    removed.push(name);
+  }
+  return removed;
+}
+
 /**
  * Build the payload into `outDir` (default: the repository's `dist-package/`).
  *
  * The work happens in a hidden sibling, `.<name>.building-<pid>-<random>`, on the
  * same filesystem as the target so the final move is a rename. Every verification
  * runs against the staged tree before it is promoted, and the staging directory is
- * removed whether the build succeeds or fails. Each call works only on its own
- * directories, so builds into different targets can run at the same time.
+ * removed whether the build succeeds or fails. A build killed by a signal cannot
+ * clean up after itself, so each build first removes staging directories whose
+ * process is gone. Each call works only on its own directories, so builds into
+ * different targets can run at the same time.
  */
 export async function buildPackage(options: { outDir?: string } = {}): Promise<{
   outDir: string;
@@ -277,10 +327,9 @@ export async function buildPackage(options: { outDir?: string } = {}): Promise<{
 }> {
   const target = resolve(options.outDir ?? defaultOutDir);
   mkdirSync(dirname(target), { recursive: true });
-  const staging = join(
-    dirname(target),
-    `.${basename(target)}.building-${process.pid}-${randomBytes(4).toString("hex")}`,
-  );
+  const stagingPrefix = `.${basename(target)}.building-`;
+  removeStaleScratch(dirname(target), stagingPrefix);
+  const staging = join(dirname(target), `${stagingPrefix}${process.pid}-${randomBytes(4).toString("hex")}`);
   mkdirSync(staging);
 
   try {
@@ -299,9 +348,13 @@ export async function buildPackage(options: { outDir?: string } = {}): Promise<{
 }
 
 // Only when run directly, so the tests can import buildPackage() instead of shelling
-// out to a second tsx process.
+// out to a second tsx process. `--out <dir>` builds somewhere other than
+// dist-package/; the interrupted-build test uses it to stop a real build midway.
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const { outDir, bundledPackages, externals } = await buildPackage();
+  const { values } = parseArgs({ options: { out: { type: "string" } } });
+  const { outDir, bundledPackages, externals } = await buildPackage(
+    values.out === undefined ? {} : { outDir: values.out },
+  );
   console.log(`built ${relative(repoRoot, outDir)}/ — staple-cli ${sourcePkg.version}`);
   console.log(`bundled ${bundledPackages.length} packages: ${bundledPackages.join(", ")}`);
   console.log(`external (built-ins only): ${externals.join(", ")}`);
