@@ -18,15 +18,22 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   CLI_ENTRY,
   freePort,
+  REPO_ROOT,
   removeDir,
   runCliAt,
   spawnStaple,
   tempDir,
 } from "./fixtures/characterize-support.js";
+import { spawnCli } from "./fixtures/lifecycle-support.js";
 import { uiBundleExists, UI_BUILD_HINT } from "../src/ui/server.js";
+
+/** `test/fixtures/busy-loop-preload.mjs`, and the line it writes as each busy burst starts. */
+const BUSY_LOOP_PRELOAD = join(REPO_ROOT, "test", "fixtures", "busy-loop-preload.mjs");
+const BUSY_MARKER = "[busy-loop] busy";
 
 let home: string;
 let root: string;
@@ -58,7 +65,9 @@ describe("startup logging", () => {
   it("prints exactly two lines on STDOUT, naming the workspace and the bound URL", async () => {
     const port = await freePort();
     const proc = startUi(["--port", String(port)]);
-    expect(await proc.waitFor((out) => LISTENING.test(out), 25_000)).toBe(true);
+    // Wait for BOTH lines. They are two writes, and the second can reach the
+    // pipe after the first has already matched LISTENING; reading then saw ''.
+    expect(await proc.waitFor((out) => LISTENING.test(out) && out.split("\n").length >= 3, 25_000)).toBe(true);
     const lines = proc.stdout().split("\n");
     proc.kill();
 
@@ -221,21 +230,47 @@ describe("shutdown", () => {
     const { join, dirname } = await import("node:path");
     const openCommand = join(dirname(CLI_ENTRY), "commands", "open.ts");
     const source = readFileSync(openCommand, "utf8");
-    expect(source).toContain('process.once("SIGINT"');
-    expect(source).toContain('process.once("SIGTERM"');
+    // `on`, not `once`: a `once` listener removes itself as it fires, and the
+    // default disposition it leaves behind let a second signal kill the process
+    // mid-shutdown (STA-255; proven behaviourally in ui-lifecycle.test.ts).
+    expect(source).toContain('process.on("SIGINT"');
+    expect(source).toContain('process.on("SIGTERM"');
+    expect(source).not.toMatch(/process\.once\("SIG/);
     expect(source).toContain("handle.close()");
   });
 
-  it("SIGTERM shuts down gracefully and exits 143, announcing it on stderr", async () => {
+  /**
+   * Signalled DIRECTLY, as one process (`spawnCli`), not through tsx's `cli.mjs`
+   * launcher and a process-group kill (`spawnStaple`).
+   *
+   * The launcher is not staple, and on a loaded machine it decided this test.
+   * On a signal it waits 30ms for the child to report it, forwards it, waits
+   * another 30ms, and then sends SIGKILL. A server that could not run
+   * JavaScript for 60ms therefore died with no announcement and the launcher
+   * exited 143 on its behalf: the "expected '' to contain 'shutting down
+   * (SIGTERM)'" failure seen at load ~75 (STA-255).
+   *
+   * `busy-loop-preload.mjs` makes that condition certain rather than a matter
+   * of load. The SIGTERM lands while the server is holding its thread for
+   * 400ms. A process signalled directly keeps the signal until its event loop
+   * runs again, then shuts down properly, so this is staple's own exit status
+   * and announcement.
+   */
+  it("SIGTERM that lands while the server is busy still shuts down gracefully: 143, announced on stderr", async () => {
     const port = await freePort();
-    const proc = startUi(["--port", String(port)]);
+    const proc = spawnCli(["ui", "--port", String(port), "--no-open"], {
+      cwd: repo,
+      env: { STAPLE_HOME: home, STAPLE_TEST_BUSY_MS: "400", STAPLE_TEST_BUSY_EVERY_MS: "600" },
+      nodeArgs: ["--import", pathToFileURL(BUSY_LOOP_PRELOAD).href],
+    });
     expect(await proc.waitFor((out) => LISTENING.test(out), 25_000)).toBe(true);
-    proc.kill("SIGTERM");
-    // `spawnStaple` signals the process GROUP through tsx's launcher fork, so
-    // the code observed here is the launcher's rather than staple's own — which
-    // is why `ui-lifecycle.test.ts` spawns a single process to read the exact
-    // 143. What this case proves is that the shutdown path RAN.
-    await proc.waitForExit(20_000);
+    // Wait for a burst to START, so the signal arrives while the thread is held.
+    const bursts = proc.stderr().split(BUSY_MARKER).length;
+    expect(await proc.waitFor((_out, err) => err.split(BUSY_MARKER).length > bursts, 25_000)).toBe(true);
+    proc.signalIt("SIGTERM");
+
+    expect(await proc.waitForExit(20_000)).toBe(143);
+    expect(proc.signal()).toBe(null);
     expect(proc.stderr()).toContain("shutting down (SIGTERM)");
     // The farewell stays off stdout, so the two startup lines remain the whole
     // stdout contract for a wrapper script grepping for the bound URL.

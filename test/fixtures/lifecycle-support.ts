@@ -42,8 +42,16 @@ export function boundPortOf(output: string): number | null {
   return match ? Number(match[1]) : null;
 }
 
-export function spawnCli(args: string[], options: { cwd: string; env?: Record<string, string> }): LifecycleProcess {
-  const child = spawn(process.execPath, ["--import", TSX_LOADER, CLI_ENTRY, ...args], {
+export function spawnCli(
+  args: string[],
+  options: {
+    cwd: string;
+    env?: Record<string, string>;
+    /** Extra flags for `node` itself, before the entry point, e.g. another `--import`. */
+    nodeArgs?: string[];
+  },
+): LifecycleProcess {
+  const child = spawn(process.execPath, ["--import", TSX_LOADER, ...(options.nodeArgs ?? []), CLI_ENTRY, ...args], {
     cwd: options.cwd,
     env: bareEnv(options.env ?? {}),
   });

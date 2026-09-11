@@ -5,7 +5,9 @@ staple open      # prints http://127.0.0.1:4400/?token=… and opens your browse
 ```
 
 One command, no daemon: the server runs in the foreground and Ctrl-C closes it
-along with every database handle. `--hub` serves every registered workspace at
+along with every database handle, then exits 130 (143 for SIGTERM). A second
+Ctrl-C or SIGTERM while it is closing is absorbed, not treated as a harder kill.
+`--hub` serves every registered workspace at
 once; the browser behaviour follows `config browser=auto|always|never`.
 
 Views: Tasks (the subtask tree), the pickup queue, the dependency graph and
