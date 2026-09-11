@@ -12,9 +12,20 @@
  * CURRENT epoch and a freshly bumped epoch is empty. That is why the assertion is
  * written against the snapshot route rather than against the `ops` table.
  */
-import { env } from "cloudflare:test";
-import { describe, expect, it } from "vitest";
-import { DEVICE, REPO, call, expectError, jsonOf, pushOps, seedRepo } from "./helpers.js";
+import { SELF, env } from "cloudflare:test";
+import { beforeEach, describe, expect, it } from "vitest";
+import {
+  DEVICE,
+  ORIGIN,
+  OTHER_REPO,
+  REPO,
+  call,
+  expectError,
+  jsonOf,
+  pushOps,
+  seedRepo,
+} from "./helpers.js";
+import { PURGE_REFUSALS } from "./purge-fixture.js";
 
 async function enableBackup(repoId = REPO): Promise<void> {
   await env.DB.prepare(`UPDATE repos SET backup_enabled = 1 WHERE repo_id = ?1`)
@@ -874,17 +885,86 @@ describe("staging is chunked", () => {
 });
 
 describe("purge", () => {
-  it("destroys every trace of the repository, including its backups", async () => {
-    const token = await seedRepo();
-    await enableBackup();
-    await pushOps(creates(["issue-1"]), { token });
-    await call(`/v1/repos/${REPO}/backups`, { method: "POST", token, body: {} });
+  /** Every table purge deletes from, which is every table this Worker has. */
+  const TABLES = ["ops", "backups", "restores", "repos", "devices", "leases"] as const;
 
-    const response = await call(`/v1/repos/${REPO}`, { method: "DELETE", token });
+  /**
+   * Its own device per test, for the reason `device-prov` above gives: the rate
+   * limiter's counter survives the per-test truncation, and a fully populated
+   * repository costs a dozen requests to build.
+   */
+  let device = "";
+  let tests = 0;
+  beforeEach(() => {
+    tests += 1;
+    device = `purger-${tests}`;
+  });
+
+  /**
+   * Each table's rows for this repository, every column, in a stable order. Sorted
+   * here rather than by `rowid`, because `ops` is `WITHOUT ROWID`.
+   */
+  async function everyTable(repoId = REPO): Promise<Record<string, string[]>> {
+    const out: Record<string, string[]> = {};
+    for (const table of TABLES) {
+      const rows = await env.DB.prepare(`SELECT * FROM ${table} WHERE repo_id = ?1`)
+        .bind(repoId)
+        .all();
+      out[table] = rows.results.map((row) => JSON.stringify(row)).sort();
+    }
+    return out;
+  }
+
+  /**
+   * A repository with a row in EVERY table: operations, a backup, a finished restore
+   * (which adds the restore audit row, a pre-restore backup and a second epoch of
+   * operations), a lease, and two devices. A refused purge is then proved against all
+   * six tables, not only against the ones a refusal would most obviously touch.
+   */
+  async function populated(): Promise<string> {
+    const token = await seedRepo(REPO, device);
+    await seedRepo(REPO, `${device}-other`);
+    await enableBackup();
+    const pushed = await pushOps(
+      creates(["issue-1", "issue-2"]).map((op) => ({ ...op, deviceId: device })),
+      { token, device },
+    );
+    expect(pushed.status).toBe(200);
+    const backup = await jsonOf<{ backup: { backupId: string } }>(
+      await call(`/v1/repos/${REPO}/backups`, { method: "POST", token, body: {}, device }),
+    );
+    await runRestore(token, backup.backup.backupId, REPO, device);
+    const lease = await call(`/v1/repos/${REPO}/leases`, {
+      method: "POST",
+      token,
+      device,
+      body: { entityId: "issue-1", holder: "opus-s11", ttlSeconds: 300 },
+    });
+    expect(lease.status).toBe(200);
+
+    const tables = await everyTable();
+    for (const table of TABLES) {
+      expect({ table, populated: tables[table]!.length > 0 }).toEqual({ table, populated: true });
+    }
+    return token;
+  }
+
+  function purge(token: string, body?: unknown, headers?: Record<string, string>) {
+    return call(`/v1/repos/${REPO}`, { method: "DELETE", token, device, body, headers });
+  }
+
+  async function expectRefusal(response: Response, refusal: { status: number; body: unknown }) {
+    expect({ status: response.status, body: await response.json() }).toEqual(refusal);
+  }
+
+  it("destroys every trace of the repository with the right confirmation", async () => {
+    const token = await populated();
+
+    const response = await purge(token, { confirm: REPO });
     expect(response.status).toBe(200);
     expect(await jsonOf<{ purged: boolean }>(response)).toMatchObject({ purged: true });
 
-    for (const table of ["ops", "backups", "restores", "repos", "devices", "leases"]) {
+    for (const table of TABLES) {
       const row = await env.DB.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE repo_id = ?1`)
         .bind(REPO)
         .first<{ n: number }>();
@@ -893,11 +973,122 @@ describe("purge", () => {
   });
 
   it("leaves every other device with a credential that no longer authenticates", async () => {
-    const token = await seedRepo();
-    await call(`/v1/repos/${REPO}`, { method: "DELETE", token });
+    const token = await seedRepo(REPO, device);
+    expect((await purge(token, { confirm: REPO })).status).toBe(200);
     // The credential row is gone, so this is `auth` rather than `not_found`: the
     // server cannot tell a purged repository from one that never existed, and should
     // not be able to.
-    await expectError(await call(`/v1/repos/${REPO}/ops`, { token }), "auth", 401);
+    await expectError(await call(`/v1/repos/${REPO}/ops`, { token, device }), "auth", 401);
+  });
+
+  /**
+   * STA-256. This is the request every client released before the fix sends: a bare
+   * DELETE, no body, no `Content-Length`. It used to destroy the repository on a bearer
+   * credential alone. The refusal's message is what that client prints, so it tells
+   * the person to update.
+   */
+  it("refuses a purge with no confirmation at all, and every table is left exactly as it was", async () => {
+    const token = await populated();
+    const before = await everyTable();
+
+    await expectRefusal(await purge(token), PURGE_REFUSALS.missing);
+
+    expect(await everyTable()).toEqual(before);
+    // And the credential still works, which is what "nothing was deleted" means to
+    // the device that asked.
+    expect((await call(`/v1/repos/${REPO}/snapshot`, { token, device })).status).toBe(200);
+  });
+
+  it("treats an empty body, and a body with no `confirm`, as no confirmation", async () => {
+    const token = await populated();
+    const before = await everyTable();
+
+    await expectRefusal(await purge(token, {}), PURGE_REFUSALS.missing);
+    await expectRefusal(
+      await purge(token, undefined, { "Content-Length": "0" }),
+      PURGE_REFUSALS.missing,
+    );
+    await expectRefusal(await purge(token, { repositoryId: REPO }), PURGE_REFUSALS.missing);
+
+    expect(await everyTable()).toEqual(before);
+  });
+
+  it("refuses a wrong confirmation, and every table is left exactly as it was", async () => {
+    const token = await populated();
+    // A second repository the caller has no credential for, so "wrong" includes a real
+    // repository id and not only garbage.
+    await seedRepo(OTHER_REPO);
+    const before = await everyTable();
+    const otherBefore = await everyTable(OTHER_REPO);
+
+    const wrong: unknown[] = [
+      OTHER_REPO,
+      `${REPO.slice(0, -1)}2`,
+      ` ${REPO}`,
+      `${REPO}\n`,
+      "",
+      null,
+      1,
+      true,
+      [REPO],
+      { repoId: REPO },
+    ];
+    for (const confirm of wrong) {
+      await expectRefusal(await purge(token, { confirm }), PURGE_REFUSALS.mismatch);
+    }
+
+    expect(await everyTable()).toEqual(before);
+    expect(await everyTable(OTHER_REPO)).toEqual(otherBefore);
+  });
+
+  it("never echoes the value it was sent", async () => {
+    const token = await populated();
+    const response = await purge(token, { confirm: "stpl_looks-like-a-secret" });
+    expect(response.status).toBe(400);
+    expect(await response.text()).not.toContain("stpl_looks-like-a-secret");
+  });
+
+  it("refuses a body that is not a JSON object, and deletes nothing", async () => {
+    const token = await populated();
+    const before = await everyTable();
+
+    // Byte for byte, because the fake is held to the same text (`cloud-purge-confirmation`).
+    const exactly = async (response: Response, refusal: { status: number; body: unknown }) =>
+      expect({ status: response.status, text: await response.text() }).toEqual({
+        status: refusal.status,
+        text: JSON.stringify(refusal.body),
+      });
+    await exactly(await purge(token, [REPO]), PURGE_REFUSALS.notAnObject);
+    await exactly(await purge(token, REPO), PURGE_REFUSALS.notAnObject);
+    await exactly(await purge(token, 7), PURGE_REFUSALS.notAnObject);
+    const garbled = await SELF.fetch(`${ORIGIN}/v1/repos/${REPO}`, {
+      method: "DELETE",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Staple-Protocol": "1",
+        "Staple-Device": device,
+        "Content-Length": "5",
+      },
+      body: "{conf",
+    });
+    await exactly(garbled, PURGE_REFUSALS.malformed);
+    await exactly(await purge(token), PURGE_REFUSALS.missing);
+    await exactly(await purge(token, { confirm: OTHER_REPO }), PURGE_REFUSALS.mismatch);
+
+    expect(await everyTable()).toEqual(before);
+  });
+
+  it("bounds the body from Content-Length before it reads it, as a push does", async () => {
+    const token = await populated();
+    const before = await everyTable();
+
+    await expectError(
+      await purge(token, { confirm: REPO }, { "Content-Length": String(999 * 1024 * 1024) }),
+      "payload_too_large",
+      413,
+    );
+
+    expect(await everyTable()).toEqual(before);
   });
 });
+

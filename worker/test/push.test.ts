@@ -13,6 +13,8 @@ import {
   pushOps,
   seedRepo,
 } from "./helpers.js";
+import { EMITTED_PAYLOADS } from "./emitted-payloads.js";
+import { payloadRefusal } from "./payload-fixture.js";
 
 let token: string;
 
@@ -452,6 +454,100 @@ describe("POST /v1/repos/{repoId}/ops — envelope validation", () => {
       { token },
     );
     expect(queue.status).toBe(200);
+  });
+
+  /**
+   * STA-262. An array is `typeof "object"`, so it used to pass. It then took a sequence
+   * number and folded into nothing — the fold merges a payload's keys and an array has
+   * none — so it vanished from every snapshot and backup while the push said `applied`.
+   * `replace` on the plan is the case the ticket names; the rule is the same for every
+   * verb, because no emitter sends an array for any of them (see payload-fixture.ts).
+   */
+  it("refuses an array payload for every verb, and writes nothing and burns no seq", async () => {
+    const arrays: Record<string, unknown>[] = [
+      { entity: "queue", entityId: "queue", verb: "replace", payload: ["issue-1", "issue-2"] },
+      { entity: "milestone", entityId: "m-1", verb: "replace", payload: [] },
+      { entity: "issue", verb: "create", baseVersion: null, payload: [{ title: "t" }] },
+      { entity: "issue", verb: "update", payload: ["status", "done"] },
+      { entity: "issue", verb: "renumber", payload: ["TST-2"] },
+      { entity: "issue", verb: "delete", payload: [] },
+    ];
+    for (const [index, shape] of arrays.entries()) {
+      const response = await pushOps([envelope({ clientSeq: index + 1, ...shape })], { token });
+      expect({ status: response.status, body: await response.json() }).toEqual(payloadRefusal(0));
+    }
+
+    const repo = await env.DB.prepare(`SELECT last_seq FROM repos WHERE repo_id = ?1`)
+      .bind(REPO)
+      .first<{ last_seq: number }>();
+    const ops = await env.DB.prepare(`SELECT COUNT(*) AS n FROM ops WHERE repo_id = ?1`)
+      .bind(REPO)
+      .first<{ n: number }>();
+    expect({ lastSeq: repo!.last_seq, ops: ops!.n }).toEqual({ lastSeq: 0, ops: 0 });
+  });
+
+  it("names the offending operation, and refuses the whole batch around it", async () => {
+    const response = await pushOps(
+      [
+        envelope({ clientSeq: 1, payload: { status: "done" } }),
+        envelope({ clientSeq: 2, entity: "queue", entityId: "queue", verb: "replace", payload: ["a"] }),
+      ],
+      { token },
+    );
+    expect({ status: response.status, body: await response.json() }).toEqual(payloadRefusal(1));
+    const ops = await env.DB.prepare(`SELECT COUNT(*) AS n FROM ops WHERE repo_id = ?1`)
+      .bind(REPO)
+      .first<{ n: number }>();
+    expect(ops!.n).toBe(0);
+  });
+
+  /**
+   * The other half of STA-262: the refusal costs no legitimate emitter anything.
+   *
+   * `EMITTED_PAYLOADS` is one real payload per entity and verb the workspace client
+   * sends, recorded by `test/cloud-emitter-payloads.test.ts` from the emitters themselves
+   * and compared there on every run, so it is what the client sends today and not a
+   * hand-written guess at it. Every one goes through the real route and is `applied`.
+   */
+  it("accepts every payload a real emitter sends, one per entity and verb", async () => {
+    expect(EMITTED_PAYLOADS.length).toBeGreaterThanOrEqual(20);
+    const device = "device-emitters";
+    const own = await seedRepo(REPO, device);
+    const ops = EMITTED_PAYLOADS.map((recorded, index) =>
+      envelope({
+        opId: `emitted-${index + 1}`,
+        clientSeq: index + 1,
+        deviceId: device,
+        entity: recorded.entity,
+        entityId: `${recorded.entity}-${index + 1}`,
+        verb: recorded.verb,
+        baseVersion: recorded.verb === "create" ? null : 1,
+        payload: recorded.payload,
+      }),
+    );
+
+    const statuses: string[] = [];
+    for (let start = 0; start < ops.length; start += 20) {
+      const response = await pushOps(ops.slice(start, start + 20), { token: own, device });
+      expect(response.status).toBe(200);
+      const body = await jsonOf<{ results: { status: string }[] }>(response);
+      statuses.push(...body.results.map((result) => result.status));
+    }
+    expect(statuses).toEqual(EMITTED_PAYLOADS.map(() => "applied"));
+
+    const stored = await env.DB.prepare(`SELECT payload FROM ops WHERE repo_id = ?1 ORDER BY seq`)
+      .bind(REPO)
+      .all<{ payload: string }>();
+    expect(stored.results.map((row) => JSON.parse(row.payload))).toEqual(
+      EMITTED_PAYLOADS.map((recorded) => recorded.payload),
+    );
+  });
+
+  it("still refuses null and scalars, with the same sentence", async () => {
+    for (const [index, payload] of [null, "a string", 7, true].entries()) {
+      const response = await pushOps([envelope({ clientSeq: index + 1, payload })], { token });
+      expect({ status: response.status, body: await response.json() }).toEqual(payloadRefusal(0));
+    }
   });
 
   it("rejects an unknown entity", async () => {

@@ -253,10 +253,10 @@ export const getCloudWorkspaces = () => request<HubCloudReport>("/api/cloud/work
  * the settings section can render its entire state without any of them.
  *
  * There is no `purgeCloud`. `staple cloud purge` requires the repository id typed
- * back, STA-256 records that the server does not yet validate a confirmation on
- * the wire, and a one-click irreversible remote deletion behind a browser session
- * is not a thing to add while that is true. The section says purge exists and
- * names the command.
+ * back, and the service checks it on the wire (STA-256) — which proves the caller
+ * knew the id, not that a person read the disclosure. A one-click irreversible
+ * remote deletion behind a browser session is not a thing to add. The section
+ * says purge exists and names the command.
  */
 const cloudWrite = <T>(route: string, body: Record<string, unknown>) =>
   request<T>(`/api/cloud/${route}`, {

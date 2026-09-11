@@ -19,9 +19,13 @@
  *
  * Every verb here merges its payload's keys over the state and is silent about every key
  * it did not mention. `replace` is no exception, and that is the whole of the fix: an
- * ordered collection lives entirely under ONE key (`{ members: … }`, `{ order: … }` —
- * the only two shapes `envelope.ts` admits a `replace` for), so assigning that key's
- * value WHOLE, never merging it element-wise, already IS supersede for the collection.
+ * ordered collection lives entirely under ONE key (`{ members: … }` on a milestone,
+ * `{ order: … }` on the plan — `envelope.ts` admits `replace` only for those two
+ * entities, and every payload only as a JSON object), so assigning that key's value
+ * WHOLE, never merging it element-wise, already IS supersede for the collection. A
+ * `replace` may carry other keys beside it — the journal coalesces a milestone's
+ * membership with an edit to the same milestone into one operation — and they merge
+ * like any other verb's.
  *
  * Superseding the entity was a strictly stronger claim than any operation ever made.
  * This fold used to make it by setting the state to `{ replaced: payload }`, and that
@@ -244,11 +248,11 @@ export async function foldLog(
 
       const payload = JSON.parse(row.payload) as unknown;
       if (payload === null || typeof payload !== "object" || Array.isArray(payload)) {
-        // No keys, so nothing to be authoritative about. `envelope.ts` refuses a null or
-        // non-object payload at ingest — it does admit an array, and no emitter produces
-        // one for any verb — so this is a floor under a corrupted log rather than a case
-        // the wire is expected to carry. The floor is "contributes no state", which is
-        // what a non-object payload has always got here.
+        // No keys, so nothing to be authoritative about. `envelope.ts` refuses every
+        // payload that is not a JSON object at ingest, arrays included (STA-262), and a
+        // restore stages only folded state, which is always an object. So this is a
+        // floor under a log written before that refusal existed, or edited by hand,
+        // rather than a case the wire can carry. The floor is "contributes no state".
         continue;
       }
 

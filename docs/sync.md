@@ -595,6 +595,16 @@ deduplicates is indistinguishable from success, and loses the write.
 row. Full-row writes would turn every concurrent edit into a conflict on fields
 nobody touched.
 
+**`payload` is a JSON object, for every verb on every entity.** Never an array, a
+scalar or null; the service refuses the whole batch with `validation`, naming the
+operation. A list travels as the value of a key: the plan is `queue.replace` with
+`{ order }`, a milestone's membership `milestone.replace` with `{ members }`, a
+blocker set `relation.update` with `{ blockedBy }`. The fold merges a payload's keys,
+and an array has none, so an array the service admitted would take a sequence number
+and fold into nothing. No emitter sends one: `test/cloud-emitter-payloads.test.ts`
+drives every emitter and checks, and `worker/test/push.test.ts` pushes what they send
+through the Worker.
+
 `baseVersion` is the entity's local version immediately before the mutation. Each
 synchronized entity row gains a monotonic `version` bumped once per journaled
 mutation (the S2 migration). `baseVersion` is `null` for `create`.
@@ -630,7 +640,7 @@ and every request carries `Authorization: Bearer <token>`,
 | `POST` | `/v1/repos/{repoId}/backups` | Create a backup |
 | `DELETE` | `/v1/repos/{repoId}/backups/{backupId}` | Delete one backup — retention |
 | `POST` | `/v1/repos/{repoId}/backups/{backupId}/restore` | Restore — resumable; call until `done` |
-| `DELETE` | `/v1/repos/{repoId}` | Purge — requires a separate typed confirmation token |
+| `DELETE` | `/v1/repos/{repoId}` | Purge — body `{ "confirm": "<repoId>" }`, the id typed back; refused without it |
 
 Two of the backup routes were added after this table was first written. `PUT /backup`
 exists because the consent table below grants backup with "a server-side flag" and
@@ -1948,6 +1958,39 @@ state and backups. It requires typed confirmation, prints a retention disclosure
 first — what is stored, where, for how long, and who can read it — and does not
 touch the local database. Every other device's next request fails `not_found` and
 they keep their local state.
+
+**The typed confirmation goes on the wire, and the service checks it.** The command
+demands the repository id typed back (`--confirm <repositoryId>`) and sends what was
+typed as the DELETE's JSON body, `{ "confirm": "<repositoryId>" }`. The service
+purges only when `confirm` is exactly the repository the credential belongs to, so a
+device token on its own cannot destroy the repository. Otherwise it answers
+`validation` (400, not retryable) with a `confirmation` detail and deletes nothing:
+
+| `confirmation` | When | What the person is told |
+|---|---|---|
+| `missing` | no body, an empty body, or no `confirm` key | the request carried no typed confirmation; update staple and run the command again |
+| `mismatch` | `confirm` is anything but the repository id | `confirm` does not match this repository's id |
+
+`missing` is what every client released before this rule gets, because those builds
+send the purge with no body. They print the service's message as it is, so that
+message says to update staple. The current client never sends a purge without
+`confirm`; if the service still reports `missing`, something between the machine and
+the service dropped the DELETE's body, and the command says so. It reports both
+refusals as `NOTHING WAS PURGED`, exits 2, and keeps the local credential.
+
+**Why a JSON body and not a header.** Restore already takes its typed confirmation as
+`confirm` in a JSON body, so both destructive routes spell it the same way. The client
+already sends a JSON body on a DELETE with its `Content-Length` (lease release), and
+the Worker already reads one there, so nothing new was needed on either side. The
+Worker caps the purge body from `Content-Length` before reading it, with the same cap
+a push gets. A header would have needed a per-call header option on the transport
+that nothing else uses. The contract pins both refusals once, in
+`worker/test/purge-fixture.ts`, which the Worker's suite and the fake service the
+client is tested against both answer to.
+
+There is no purge over MCP and none in the page. The check on the wire proves the
+caller knew the repository id. It cannot prove that a person read the disclosure, and
+a model or a page script can read the id as easily as it can read anything else.
 
 **Backup** is a third opt-in and is disaster recovery, not convergence. It is a
 point-in-time export with its own retention and its own commands. Creating,

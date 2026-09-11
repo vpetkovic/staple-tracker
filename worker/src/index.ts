@@ -191,9 +191,10 @@ async function route(
   }
 
   // /v1/repos/{repoId} — purge. A separate verb on the repository itself, never a
-  // flag on disconnect.
+  // flag on disconnect, and refused unless its body carries `confirm` = the repository
+  // id. The route sizes that body itself; see `readPurgeConfirmation`.
   if (tail.length === 0 && method === "DELETE") {
-    return purgeRepository(env, session, protocol, startedAt);
+    return purgeRepository(request, env, session, protocol, startedAt);
   }
 
   // /v1/repos/{repoId}/devices

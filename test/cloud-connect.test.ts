@@ -688,22 +688,26 @@ describe("purge is a different decision from disconnect", () => {
     expect(retentionDisclosure(ENDPOINT, REPO_ID)).toContain(REPO_ID);
   });
 
-  it("targets DELETE on the repository itself, not on a device", async () => {
+  it("targets DELETE on the repository itself, carrying the typed confirmation", async () => {
+    // Against the real rule, which refuses a purge without `confirm`:
+    // `test/cloud-purge-confirmation.test.ts` drives this through the fake that
+    // enforces it. This one only pins the request's address and body.
     await connect();
     const server = fakeServer({ [`DELETE /v1/repos/${REPO_ID}`]: () => ({ status: 200, body: { purged: true } }) });
-    const outcome = await performPurge(home, REPO_ID, { fetchImpl: server.impl });
+    const outcome = await performPurge(home, REPO_ID, REPO_ID, { fetchImpl: server.impl });
     expect(outcome).toEqual({ purged: true, unsupported: false });
     expect(server.calls[0]!.method).toBe("DELETE");
     expect(new URL(server.calls[0]!.url).pathname).toBe(`/v1/repos/${REPO_ID}`);
+    expect(server.calls[0]!.body).toEqual({ confirm: REPO_ID });
   });
 
   it("reports UNSUPPORTED rather than success when the endpoint has no purge route", async () => {
-    // This is the deployed Worker's actual behaviour today: purge belongs to the
-    // restore lane and the router answers `not_found`. Saying "purged" here
-    // would tell somebody their data was destroyed when it was not.
+    // A Worker from before the purge route answers `not_found`; the route itself
+    // never does. Saying "purged" here would tell somebody their data was
+    // destroyed when it was not.
     await connect();
     const server = fakeServer({});
-    const outcome = await performPurge(home, REPO_ID, { fetchImpl: server.impl });
+    const outcome = await performPurge(home, REPO_ID, REPO_ID, { fetchImpl: server.impl });
     expect(outcome).toEqual({ purged: false, unsupported: true });
     // And the credential is still here, so they can try again or check.
     expect(existsSync(credentialFilePath(home, REPO_ID))).toBe(true);
@@ -711,7 +715,7 @@ describe("purge is a different decision from disconnect", () => {
 
   it("refuses without a connection rather than inventing an endpoint", async () => {
     const server = fakeServer({});
-    await expect(performPurge(home, REPO_ID, { fetchImpl: server.impl })).rejects.toThrow(/not connected/);
+    await expect(performPurge(home, REPO_ID, REPO_ID, { fetchImpl: server.impl })).rejects.toThrow(/not connected/);
     expect(server.calls).toHaveLength(0);
   });
 });

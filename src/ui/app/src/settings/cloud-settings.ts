@@ -303,10 +303,12 @@ export const CONNECT_DISCLOSURE: readonly string[] = [
  * omission.
  *
  * `staple cloud purge` requires the repository id typed back before it will act,
- * and STA-256 records that the server does not yet validate a confirmation on the
- * wire. A one-click irreversible remote deletion behind a browser session, whose
- * only guard is a dialog this page draws, is not a thing to add while that is
- * true — the guard would live entirely in the surface that a script bypasses.
+ * and the service checks that confirmation on the wire (STA-256). The check proves
+ * the caller knew the id, which this page knows as well as a person does; it
+ * cannot prove anybody read the disclosure. A one-click irreversible remote
+ * deletion behind a browser session, whose only guard is a dialog this page draws,
+ * is not a thing to add — the guard would live entirely in the surface that a
+ * script bypasses.
  *
  * Telling somebody the capability exists and where it lives costs nothing and
  * hides nothing, so the section says it.

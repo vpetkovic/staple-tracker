@@ -641,11 +641,12 @@ describe("the gates these routes inherit", () => {
 
   it("there is no purge route, and that is deliberate", async () => {
     /**
-     * `staple cloud purge` requires the repository id typed back, and STA-256
-     * records that the server does not yet validate a confirmation on the wire.
-     * A one-click irreversible remote deletion behind a browser session, whose
-     * only guard is a dialog the page draws, is not something to add while that
-     * is true.
+     * `staple cloud purge` requires the repository id typed back, and since
+     * STA-256 the service checks it on the wire too. That proves the caller knew
+     * the id, which the page knows as well as a person does. It does not prove
+     * anybody read the disclosure, so a one-click irreversible remote deletion
+     * behind a browser session, whose only guard is a dialog the page draws, is
+     * still not something to add.
      */
     for (const path of ["/api/cloud/purge", "/api/cloud/repo/purge"]) {
       // A POST to a path that is not in the write list is 405 (the method gate

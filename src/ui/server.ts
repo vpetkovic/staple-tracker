@@ -1222,10 +1222,11 @@ export function startUiServer(options: UiOptions): UiHandle {
            * request the user never authorized, whether or not anything changed.
            *
            * There is deliberately NO `/api/cloud/purge`. `staple cloud purge`
-           * requires the repository id typed back and STA-256 records that the
-           * server does not yet validate a confirmation on the wire; a one-click
-           * irreversible remote deletion behind a browser session is not a thing
-           * to add while that is true.
+           * requires the repository id typed back, and the service checks it on
+           * the wire (STA-256). That proves the caller knew the id, which this
+           * page knows as well as a person does; it cannot prove anybody read the
+           * disclosure. A one-click irreversible remote deletion behind a browser
+           * session is not a thing to add.
            */
           url.pathname === "/api/cloud/connect/preview" ||
           url.pathname === "/api/cloud/connect" ||
@@ -1273,10 +1274,10 @@ export function startUiServer(options: UiOptions): UiHandle {
            * the Origin check.
            *
            * There is deliberately NO `/api/hub/purge`, for the reason
-           * `/api/cloud/purge` does not exist and more so: STA-256 records
-           * that the server does not validate a purge confirmation on the
-           * wire, and a one-click irreversible remote deletion of every
-           * workspace at once is not a thing to add while that is true.
+           * `/api/cloud/purge` does not exist and more so: the confirmation
+           * the service checks (STA-256) proves the caller knew an id, not
+           * that a person read what it destroys, and a one-click irreversible
+           * remote deletion of every workspace at once is not a thing to add.
            */
           url.pathname === "/api/hub/connect/preview" ||
           url.pathname === "/api/hub/connect" ||
@@ -2242,10 +2243,11 @@ export function startUiServer(options: UiOptions): UiHandle {
        *
        * ## What is still not here
        *
-       * No hub-wide purge, and nothing that reaches `staple cloud purge`.
-       * STA-256 records that the server does not validate a purge confirmation on
-       * the wire, and a one-click irreversible remote deletion is worse hub-wide
-       * than per workspace by exactly the factor this whole family multiplies by.
+       * No hub-wide purge, and nothing that reaches `staple cloud purge`. The
+       * service checks a purge's typed confirmation (STA-256), which proves the
+       * caller knew an id and not that a person read the disclosure, and a
+       * one-click irreversible remote deletion is worse hub-wide than per
+       * workspace by exactly the factor this whole family multiplies by.
        */
 
       /**

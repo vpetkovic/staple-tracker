@@ -1242,10 +1242,11 @@ describe("the gates these four routes inherit", () => {
 
   it("there is still no hub-wide purge, and that is deliberate", async () => {
     /**
-     * STA-256 records that the server does not yet validate a purge confirmation
-     * on the wire. A one-click irreversible remote deletion of EVERY workspace,
-     * behind a browser session, is not a thing to add while that is true — and it
-     * is a far worse thing to add hub-wide than per workspace.
+     * The service checks a purge's typed confirmation on the wire (STA-256), but
+     * that proves only that the caller knew the repository id, which a page knows
+     * as well as a person. A one-click irreversible remote deletion of EVERY
+     * workspace, behind a browser session, is still not a thing to add — and it is
+     * a far worse thing to add hub-wide than per workspace.
      */
     for (const path of ["/api/hub/purge", "/api/cloud/hub/purge"]) {
       expect((await post(path, { confirm: true })).status, `${path} accepts a POST`).toBe(405);

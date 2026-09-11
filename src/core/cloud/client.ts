@@ -358,6 +358,8 @@ async function request<T>(call: Call): Promise<T> {
       // STA-290's refusal: which vocabulary the repository holds and which was offered.
       "repositoryVocabulary",
       "requestVocabulary",
+      // STA-256's refusal: a purge whose typed confirmation was `missing` or a `mismatch`.
+      "confirmation",
     ]) {
       if (body[key] !== undefined) detail[key] = body[key];
     }
@@ -678,28 +680,28 @@ export function releaseRemoteLease(
 }
 
 /**
- * `DELETE /v1/repos/{repoId}` — destroy the repository's remote state.
+ * `DELETE /v1/repos/{repoId}` with `{ "confirm": <typed> }` — destroy the
+ * repository's remote state.
  *
- * HISTORY, because the comment that used to be here said the opposite and it
- * matters that the change is visible. This route did not exist when the connect
- * lane wrote this function: `worker/README.md` assigned purge to the restore
- * lane, the Worker's router answered `not_found`, and `performPurge` translated
- * that into `unsupported` so that nobody was told their data had been destroyed
- * when it had not.
+ * `worker/src/backups.ts`, `purgeRepository`, deletes the operation log, the
+ * leases, the backups, the restore audit rows, the repository row and finally the
+ * device credentials, in that order — and only when `confirm` is exactly the
+ * repository id the credential belongs to (STA-256). `confirm` is what the human
+ * typed at `staple cloud purge --confirm`, passed through rather than re-derived
+ * from the connection, so the service checks the person's confirmation and not
+ * a copy this build made of it.
  *
- * **The route now exists** — `worker/src/backups.ts`, `purgeRepository`. It
- * deletes the operation log, the leases, the backups, the restore audit rows,
- * the repository row and finally the device credentials, in that order.
+ * A JSON body on a DELETE, the same way {@link releaseRemoteLease} sends its
+ * fencing token and the same `confirm` spelling restore uses. The shape and the
+ * two refusals are pinned in `worker/test/purge-fixture.ts`.
  *
- * FOLLOW-UP, deliberately not taken here. `performPurge` still maps `not_found`
- * to `unsupported`, and with the route present that mapping has changed meaning:
- * a `not_found` now describes a repository the server genuinely does not have,
- * not a server that cannot purge. Rewording it is the connect lane's decision to
- * make and is left alone rather than quietly changed underneath it.
+ * A Worker from before the route answers `not_found`, which `performPurge`
+ * reports as `unsupported`. A Worker from before STA-256 ignores the body and
+ * purges, which is what the person confirmed.
  */
 export function purgeRemoteRepository(
   endpoint: CloudEndpoint,
-  args: { repositoryId: string; token: string; deviceId: string },
+  args: { repositoryId: string; token: string; deviceId: string; confirm: string },
   options: RequestOptions = {},
 ): Promise<{ purged: boolean }> {
   return request({
@@ -709,6 +711,7 @@ export function purgeRemoteRepository(
     method: "DELETE",
     token: args.token,
     deviceId: args.deviceId,
+    body: { confirm: args.confirm },
   });
 }
 

@@ -11,7 +11,8 @@
  * restore path is the one that announces itself by moving the epoch.
  *
  * **Purge** destroys the remote state and is a separate verb with its own route. It
- * is never a flag on anything.
+ * is never a flag on anything, and it requires the repository id typed back in its
+ * body, checked here rather than only at the terminal.
  *
  * **Restore** is the dangerous one and gets the rest of this comment.
  *
@@ -71,7 +72,7 @@ import type { Env } from "./env.js";
 import { protocolForEntities } from "./envelope.js";
 import { SyncError, json } from "./errors.js";
 import { type BackupEntity, foldLog, forBackup, materializedVerb } from "./fold.js";
-import { readJson } from "./http.js";
+import { assertBodySize, readJson } from "./http.js";
 import { PROTOCOL_MAX, PROTOCOL_MIN, maxBatchSize, planOf } from "./limits.js";
 import { log, tokenFingerprint } from "./log.js";
 import {
@@ -1003,16 +1004,20 @@ async function commitRestore(
  * gets `forbidden` on connect rather than silently re-creating the repository —
  * `connect` never auto-creates, which is what makes that safe.
  *
- * DIVERGENCE, and it is worth stating plainly: `docs/sync.md` describes purge as
- * requiring "a separate typed confirmation token", and this route does not read one.
- * The typed confirmation is enforced in `staple cloud purge`, which prints the
- * retention disclosure and demands the repository id typed back before it calls
- * anything — and the deployed client sends this DELETE with no body at all. Moving
- * the confirmation onto the wire is a coordinated client-and-server change rather
- * than something this route can add unilaterally: requiring a token the shipped
- * client does not send would make purge permanently impossible instead of merely
- * unimplemented. Flagged for the follow-up that revisits the client's `unsupported`
- * path.
+ * **It requires the typed confirmation on the wire** (STA-256): the body is
+ * `{ "confirm": "<repositoryId>" }`, and `confirm` must be exactly the repository the
+ * credential belongs to. `staple cloud purge` prints the retention disclosure and
+ * demands the id typed back, and sends what was typed. Checked here too, because a
+ * bearer credential alone is not the confirmation the product promises: any holder of
+ * a device token could otherwise destroy the repository with a bare DELETE, which is
+ * exactly what every client released before this change sends. Those clients are
+ * refused with a message telling the person to update, and nothing is deleted.
+ *
+ * Refused as `validation` with a `confirmation` detail of `missing` or `mismatch`:
+ * non-retryable in every released client, and the same code restore answers a bad
+ * `confirm` with. A new code would have mapped to retryable `unavailable` on every
+ * installed build. `worker/test/purge-fixture.ts` pins both bodies for this suite and
+ * for the fake the client is tested against.
  *
  * The order of the deletes is deliberate. `devices` goes LAST: while it exists, this
  * request's own credential still authenticates, and if the batch fails halfway the
@@ -1020,11 +1025,32 @@ async function commitRestore(
  * partial failure, leave data nobody can reach and nobody can delete.
  */
 export async function purgeRepository(
+  request: Request,
   env: Env,
   session: Session,
   protocol: number,
   startedAt: number,
 ): Promise<Response> {
+  const confirm = await readPurgeConfirmation(request, env);
+  if (confirm === undefined) {
+    throw new SyncError(
+      "validation",
+      "purge refused: the request carried no typed confirmation, and this service requires " +
+        "the repository id in `confirm`. Nothing was deleted. Update staple, then run " +
+        "`staple cloud purge --confirm <repositoryId>` again.",
+      { confirmation: "missing" },
+    );
+  }
+  if (confirm !== session.repoId) {
+    // Never echoes what was sent: a caller who put the wrong thing in `confirm` may have
+    // put something in it that should not be reflected into a response or a log.
+    throw new SyncError(
+      "validation",
+      "purge refused: `confirm` does not match this repository's id. Nothing was deleted.",
+      { confirmation: "mismatch" },
+    );
+  }
+
   await env.DB.batch([
     env.DB.prepare(`DELETE FROM ops WHERE repo_id = ?1`).bind(session.repoId),
     env.DB.prepare(`DELETE FROM leases WHERE repo_id = ?1`).bind(session.repoId),
@@ -1045,4 +1071,25 @@ export async function purgeRepository(
   });
 
   return json({ protocol, purged: true });
+}
+
+/**
+ * The purge's `confirm`, or `undefined` when the request carries none.
+ *
+ * "None" is three shapes, and all three are the same answer: no body at all (what every
+ * client released before STA-256 sends), an empty body, and a JSON object without the
+ * key. Anything else goes through the ordinary body rules.
+ *
+ * The router's body-size check covers POST, PUT and PATCH, and deliberately not DELETE:
+ * a bare DELETE sends no `Content-Length`, and requiring one there would refuse every
+ * revoke and backup delete. So the cap is applied here, from the header and before the
+ * body is read, the same way a push gets it — a purge should not be the one route where
+ * the Worker parses a body of any size to find one field.
+ */
+async function readPurgeConfirmation(request: Request, env: Env): Promise<unknown> {
+  if (request.body === null) return undefined;
+  if (request.headers.get("Content-Length") === "0") return undefined;
+  assertBodySize(request, planOf(env));
+  const body = await readJson(request);
+  return body.confirm;
 }

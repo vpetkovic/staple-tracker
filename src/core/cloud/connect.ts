@@ -10,7 +10,7 @@
  * one.
  */
 import { clearAutoSyncState } from "./auto-state.js";
-import { connectDevice, fetchCapabilities, purgeRemoteRepository, revokeRemoteDevice, listRemoteDevices, type Capabilities, type RemoteDevice, type RequestOptions } from "./client.js";
+import { cloudCodeOf, cloudError, connectDevice, fetchCapabilities, purgeRemoteRepository, revokeRemoteDevice, listRemoteDevices, type Capabilities, type RemoteDevice, type RequestOptions } from "./client.js";
 import { CONNECTION_SCHEMA_VERSION, deleteConnection, readConnection, writeConnection, type CloudConnection } from "./connection.js";
 import { credentialStoreFor, selectCredentialStore, type SelectOptions } from "./credential-store.js";
 import { ensureDeviceId } from "./device.js";
@@ -339,25 +339,30 @@ export interface PurgeOutcome {
  * `staple cloud purge` — the remote half, once the disclosure has been printed
  * and the typed confirmation matched.
  *
- * DIVERGENCE, and it is the material one in this lane: **the deployed Worker
- * does not implement `DELETE /v1/repos/{repoId}`.** `worker/README.md` says
- * purge belongs to the restore lane, so the router answers `not_found`.
+ * `confirm` is what the human typed, and it goes on the wire as the request's
+ * `confirm` (STA-256). The service refuses a purge without it, or with anything
+ * but this repository's id, and deletes nothing; that refusal is turned into
+ * {@link purgeRefusal}'s sentence here, because the service's own wording is
+ * written for the older builds that never send one.
  *
- * That is reported as `unsupported`, not as success and not as a generic error.
- * The local credential is deliberately NOT removed on that path: a human who
- * asked to destroy remote state and had it silently not happen must not also
- * lose the credential that is the only way to try again or to check.
+ * A `not_found` is a Worker that predates the purge route, since the route
+ * itself never answers it. That is reported as `unsupported`, not as success and
+ * not as a generic error. The local credential is deliberately NOT removed on
+ * either refusal: a human who asked to destroy remote state and had it not
+ * happen must not also lose the credential that is the only way to try again or
+ * to check.
  */
 export async function performPurge(
   home: string,
   repositoryId: string,
+  confirm: string,
   options: RequestOptions & SelectOptions = {},
 ): Promise<PurgeOutcome> {
   const { connection, token } = requireSession(home, repositoryId, options);
   try {
     const result = await purgeRemoteRepository(
       parseEndpoint(connection.endpoint),
-      { repositoryId, token, deviceId: connection.deviceId },
+      { repositoryId, token, deviceId: connection.deviceId, confirm },
       options,
     );
     return { purged: result.purged !== false, unsupported: false };
@@ -365,6 +370,41 @@ export async function performPurge(
     if (error instanceof StapleError && error.code === "not_found") {
       return { purged: false, unsupported: true };
     }
+    const refused = purgeRefusal(error, connection.endpoint);
+    if (refused) throw refused;
     throw error;
   }
+}
+
+/**
+ * The service refused the purge's typed confirmation, as the error this build
+ * shows — or null when `error` is anything else.
+ *
+ * Recognised by `validation` plus the `confirmation` detail the Worker sets
+ * (`worker/test/purge-fixture.ts`), never by message text. Both say that nothing
+ * was deleted, because that is the one fact a person reading this needs first.
+ *
+ * `missing` should not happen from this build, which always sends `confirm`: it
+ * means the body did not arrive, and the thing that drops a DELETE's body on the
+ * way is something between this machine and the service. `mismatch` is a
+ * confirmation that does not name the repository this machine's credential
+ * belongs to. The service's own message stays in the detail for `--json`.
+ */
+export function purgeRefusal(error: unknown, endpoint: string): StapleError | null {
+  if (cloudCodeOf(error) !== "validation" || !(error instanceof StapleError)) return null;
+  const confirmation = error.detail?.confirmation;
+  if (confirmation !== "missing" && confirmation !== "mismatch") return null;
+  const why =
+    confirmation === "missing"
+      ? `${endpoint} refused the purge because the request reached it without the typed ` +
+        "confirmation, although this build sends one. Something between this machine and the " +
+        "service may be dropping the body of DELETE requests."
+      : `${endpoint} refused the purge because the confirmation does not name the repository ` +
+        "this machine's credential belongs to.";
+  return cloudError(
+    "validation",
+    `NOTHING WAS PURGED. ${why} Your remote data is untouched, and your local credential is ` +
+      "still in place.",
+    { ...error.detail, serverMessage: error.message },
+  );
 }
