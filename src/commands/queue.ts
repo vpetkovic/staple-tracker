@@ -70,8 +70,9 @@ match wins, and none is ever dropped: rank orders work, it never lifts a
 blocker, a gate, a live claim or a resolved status.
 
 REFUSALS. --base N is the revision a listing printed; a stale one is refused
-with revision_conflict (exit 7), the one retryable code, and the server order
-stands. With queue.policy = strict (staple settings get queue.policy) a
+with revision_conflict (exit 7), the one retryable code a tracker write
+returns, and the server order stands. With queue.policy = strict (staple
+settings get queue.policy) a
 checkout of a row the plan puts later than an eligible one is refused with
 out_of_order (exit 10), naming what to take instead — it is neither conflict
 (exit 4, somebody got there first) nor gated (exit 9, a human must act), and

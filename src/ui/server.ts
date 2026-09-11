@@ -2018,7 +2018,7 @@ export function startUiServer(options: UiOptions): UiHandle {
        * a swallowed error. `syncAllWorkspaces` deliberately does not throw for a
        * row — every failure becomes a row carrying the service's own message and
        * its own `cloudCode`, because folding `offline`, `revoked` and
-       * `rate_limited` into one thrown `conflict` is the thing that makes a
+       * `rate_limited` into one thrown error is the thing that makes a
        * multi-row table unactionable. Re-throwing here would discard exactly the
        * distinction the fan-out was built to keep.
        */
@@ -2592,7 +2592,7 @@ export function startUiServer(options: UiOptions): UiHandle {
        * a swallowed error. `syncAllWorkspaces` deliberately does not throw for a
        * row: every failure becomes a row carrying the service's own message and
        * its own `cloudCode`, because folding `offline`, `revoked` and
-       * `rate_limited` into one thrown `conflict` is the thing that makes a
+       * `rate_limited` into one thrown error is the thing that makes a
        * twelve-row table unactionable. Re-throwing here would discard exactly the
        * distinction the fan-out was built to keep.
        */

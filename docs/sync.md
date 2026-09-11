@@ -1905,6 +1905,19 @@ Only `rate_limited`, `unavailable` and `offline` are retried. Everything else is
 decision for a human, and retrying it is how a client turns one bad request into a
 sustained one.
 
+**The client surfaces every one of these as itself (STA-251).** Each code is a
+`StapleErrorCode` member. A sync failure's envelope `code` is the service's code,
+its `retryable` is the column above, and the CLI exits with the code's own number:
+`validation` 2, `not_found` 3 and `conflict` 4, shared with the tracker, then 11 to
+21 in this table's order (`docs/cli.md`, "Exit codes"). A refusal the client makes
+before sending has the same shape as the service's. Examples are the handshake's
+`protocol_unsupported`, a pulled operation's `schema_ahead`, an oversized seed row's
+`payload_too_large` and the backup consent's `forbidden`. `src/core/cloud/errors.ts`
+builds all of them. `detail.cloudCode` and `detail.retryable` repeat the code and the
+bit for `--json` consumers that read them from before this. A code the client does not
+know is `unavailable`, and so is an `offline` sent by a server, because `offline` is
+the client's own condition.
+
 **`conflict` also answers a write in the wrong vocabulary (STA-290).** A repository holds
 a hub's registry (`registration`, `crossLink`) or a workspace's data, never both. The
 service records which in `repos.vocabulary` and claims it with the repository's first

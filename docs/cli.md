@@ -613,8 +613,27 @@ text block; the UI server adds a legacy `error` alias for `message`):
 {"code":"conflict","message":"Checkout refused: …","detail":{"currentStatus":"in_progress","heldBy":"other-agent","blockers":[]},"retryable":false}
 ```
 
-`retryable` is the branchable bit: only `revision_conflict` is worth retrying.
-A checkout conflict means *pick a different task*.
+`retryable` is the branchable bit. Among the tracker's own failures only
+`revision_conflict` is worth retrying. A checkout conflict means *pick a different task*.
+Among cloud sync failures, `rate_limited`, `unavailable` and `offline` are
+retryable, and nothing else is.
+
+A cloud sync failure carries the service's own code, from the taxonomy in
+[sync.md](sync.md#error-taxonomy): `auth`, `forbidden`, `revoked` and the rest,
+never the nearest store code. `detail.cloudCode` and `detail.retryable` repeat
+the code and the bit. They are there for scripts written before the code was true, and
+they always agree with the top level:
+
+```json
+{"code":"offline","message":"Could not reach https://sync.example.com (TypeError). Local work is unaffected; nothing was sent and nothing was changed.","detail":{"endpoint":"https://sync.example.com","cloudCode":"offline","retryable":true},"retryable":true}
+```
+
+Until STA-251 the code was folded into a store code and only `detail` held the
+truth. `auth`, `forbidden`, `revoked`, `cursor_invalid`, `payload_too_large`,
+`schema_ahead` and `protocol_unsupported` were `validation` (exit 2).
+`epoch_changed`, `rate_limited`, `unavailable` and `offline` were a
+non-retryable `conflict` (exit 4). A script that branched on those two exit
+codes for a cloud command should branch on the codes below instead.
 
 ## Exit codes
 
@@ -629,3 +648,22 @@ Exit codes let CI branch without parsing stderr:
 | | | | 8 | `timeout` (`wait` only) |
 | | | | 9 | `gated` (a review gate above it is unresolved) |
 | | | | 10 | `out_of_order` (the plan says something else comes first) |
+
+Cloud sync failures (`staple cloud …`, `staple hub registry …`) use 2, 3 and 4 for the
+three codes they share with the tracker, and these for the rest:
+
+| code | meaning | retry? |
+|---|---|---|
+| 11 | `auth`: missing or invalid credential. Re-connect | no |
+| 12 | `forbidden`: not a member, or a consent the service or this machine lacks | no |
+| 13 | `revoked`: this device was revoked. Re-connect | no |
+| 14 | `epoch_changed`: the timeline moved again during recovery | no |
+| 15 | `cursor_invalid`: a stored position the service cannot read | no |
+| 16 | `payload_too_large`: a batch or one row is over the service's cap | no |
+| 17 | `schema_ahead`: data written by a newer staple. Upgrade | no |
+| 18 | `protocol_unsupported`: this build and the service share no protocol. Upgrade | no |
+| 19 | `rate_limited`: `detail.retryAfter` says how long | **yes** |
+| 20 | `unavailable`: a transient service failure | **yes** |
+| 21 | `offline`: the service could not be reached. Local work continues | **yes** |
+
+The retryable three are the last three, so `[ $? -ge 19 ]` is the "try again later" test.

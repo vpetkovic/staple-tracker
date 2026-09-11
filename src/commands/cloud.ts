@@ -52,6 +52,7 @@ import { Hub } from "../core/hub.js";
 import { resolveWorkspace } from "../core/workspace.js";
 import { StapleError, errorEnvelope } from "../core/types.js";
 import { confirm, isInteractive } from "../onboarding/prompts.js";
+import { exitCodeFor } from "./exit-codes.js";
 import { readConnection, setConsent } from "../core/cloud/connection.js";
 import {
   fetchDevices,
@@ -244,9 +245,6 @@ synchronizing automatically, and backing up. None of them implies another.
               who can read it, and then requires the repository id typed back.
               Never touches your local database. Not reversible.`;
 
-/** cli.ts owns the real table; this is the subset an async command can reach. */
-const EXIT_CODES: Record<string, number> = { validation: 2, not_found: 3, conflict: 4 };
-
 /**
  * Route an async failure through the same envelope the synchronous commands get.
  *
@@ -271,7 +269,7 @@ export function settle(work: Promise<void>, json: boolean): void {
     } else {
       console.error(error);
     }
-    process.exitCode = EXIT_CODES[envelope.code] ?? 1;
+    process.exitCode = exitCodeFor(envelope.code);
   });
 }
 

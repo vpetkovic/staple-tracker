@@ -36,6 +36,7 @@
  */
 import { StapleError } from "../types.js";
 import { endpointUrl, type CloudEndpoint } from "./endpoint.js";
+import { cloudError, isCloudErrorCode } from "./errors.js";
 
 /** The wire protocol this build speaks. Matches `PROTOCOL_MAX` in the Worker. */
 export const CLIENT_PROTOCOL = 1;
@@ -72,93 +73,12 @@ export interface RemoteDevice {
 }
 
 /**
- * The server's error vocabulary, from `worker/src/errors.ts`.
- *
- * `offline` is in the contract's table but is a CLIENT-side condition — there is
- * no server response that carries it — so it is produced here, by a transport
- * failure, and never parsed from a body.
+ * The error taxonomy — `worker/src/errors.ts` plus the client-side `offline` — lives in
+ * `errors.ts`, where code that refuses before a request can reach it without loading
+ * this file. A failure from here carries the service's own code as its `StapleError`
+ * code (STA-251); there is no nearer-meaning mapping in between.
  */
-export type CloudErrorCode =
-  | "validation"
-  | "auth"
-  | "forbidden"
-  | "revoked"
-  | "not_found"
-  | "conflict"
-  | "epoch_changed"
-  | "cursor_invalid"
-  | "payload_too_large"
-  | "schema_ahead"
-  | "protocol_unsupported"
-  | "rate_limited"
-  | "unavailable"
-  | "offline";
-
-/**
- * DIVERGENCE (client-side, and worth stating plainly).
- *
- * `StapleErrorCode` is a closed union that has no member for "not authenticated",
- * "not a member" or "revoked", and its retry contract marks exactly one code
- * retryable. The sync taxonomy needs fourteen codes and three retryable ones.
- *
- * Extending `StapleErrorCode` would touch `RETRYABLE_ERROR_CODES`, the CLI's
- * `EXIT_CODES` table and the error-contract goldens — a shared surface, mid-wave,
- * with concurrent lanes in the same files. So the server's code is preserved
- * EXACTLY in `detail.cloudCode` alongside `detail.retryable`, and the
- * `StapleError` code carries the nearest existing meaning for exit-code purposes.
- * `--json` consumers get the true code; shells get a sensible exit status.
- *
- * This is a deliberate deferral, not a loss: nothing is discarded, and the
- * follow-up is a single additive change to the union once the wave has merged.
- */
-const CODE_MAP: Record<CloudErrorCode, "validation" | "not_found" | "conflict"> = {
-  validation: "validation",
-  auth: "validation",
-  forbidden: "validation",
-  revoked: "validation",
-  not_found: "not_found",
-  conflict: "conflict",
-  epoch_changed: "conflict",
-  cursor_invalid: "validation",
-  payload_too_large: "validation",
-  schema_ahead: "validation",
-  protocol_unsupported: "validation",
-  rate_limited: "conflict",
-  unavailable: "conflict",
-  offline: "conflict",
-};
-
-const RETRYABLE: ReadonlySet<CloudErrorCode> = new Set(["rate_limited", "unavailable", "offline"]);
-
-export function isCloudErrorCode(value: unknown): value is CloudErrorCode {
-  return typeof value === "string" && value in CODE_MAP;
-}
-
-/** The `cloudCode` a `StapleError` from this module carries, or null when it is not one. */
-export function cloudCodeOf(error: unknown): CloudErrorCode | null {
-  if (!(error instanceof StapleError)) return null;
-  const code = error.detail?.cloudCode;
-  return isCloudErrorCode(code) ? code : null;
-}
-
-/**
- * Exported so that a client-side refusal carries the SAME shape as a server-side
- * one. The backup lane refuses two things before it ever makes a request — a
- * backup written by a newer schema (`schema_ahead`) and a command run without the
- * third consent (`forbidden`) — and a caller reading `detail.cloudCode` should
- * not have to know which side of the wire decided.
- */
-export function cloudError(
-  code: CloudErrorCode,
-  message: string,
-  detail: Record<string, unknown> = {},
-): StapleError {
-  return new StapleError(CODE_MAP[code], message, {
-    ...detail,
-    cloudCode: code,
-    retryable: RETRYABLE.has(code),
-  });
-}
+export { cloudCodeOf, cloudError, isCloudErrorCode, type CloudErrorCode } from "./errors.js";
 
 /**
  * The service refused to write one vocabulary into a repository that holds the other
@@ -212,11 +132,17 @@ function isVocabularyDetail(value: unknown): boolean {
   return value === "hub" || value === "workspace" || value === "mixed";
 }
 
-/** Was this failure the service refusing the other vocabulary, rather than a lease race? */
+/**
+ * Was this failure the service refusing the other vocabulary, rather than a lease race?
+ *
+ * Both are `conflict`, the true code. What tells them apart is `requestVocabulary`, which
+ * only the vocabulary refusal carries — a lease race names `holder` instead, and a local
+ * checkout conflict names neither.
+ */
 export function isVocabularyRefusal(error: unknown): boolean {
   return (
-    cloudCodeOf(error) === "conflict" &&
     error instanceof StapleError &&
+    error.code === "conflict" &&
     isVocabularyDetail(error.detail?.requestVocabulary)
   );
 }
@@ -318,7 +244,11 @@ async function request<T>(call: Call): Promise<T> {
 
   if (!response.ok) {
     const body = (parsed ?? {}) as Record<string, unknown>;
-    const code = isCloudErrorCode(body.code) ? body.code : "unavailable";
+    // A code this build does not know is transient, which is the rule every released
+    // client follows (`worker/README.md`). `offline` counts as unknown here: it is the
+    // client's own condition, produced by the catch above, and no response carries it.
+    const code =
+      isCloudErrorCode(body.code) && body.code !== "offline" ? body.code : "unavailable";
     const message = typeof body.message === "string" ? body.message : `HTTP ${response.status}`;
     const detail: Record<string, unknown> = { status: response.status, endpoint: call.endpoint.origin };
     // The code-specific extras the taxonomy names: the supported protocol range
@@ -600,8 +530,8 @@ export interface RemoteLease {
  *
  * A `conflict` here is the losing side of a race and is NOT retryable: the
  * server is telling this device that somebody else legitimately holds the lease,
- * and asking again is a spin against a fact. `RETRYABLE` above already omits it;
- * this comment exists so nobody adds it.
+ * and asking again is a spin against a fact. `RETRYABLE_ERROR_CODES` in
+ * `core/types.ts` already omits it; this comment exists so nobody adds it.
  *
  * `ttlSeconds` is omitted rather than defaulted client-side when the caller has
  * no opinion, so the service's default is the one that applies. A client that

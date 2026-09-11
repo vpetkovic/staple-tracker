@@ -27,8 +27,8 @@
  */
 import type { DatabaseSync } from "node:sqlite";
 import { recordInheritedFieldWrites, type Journal } from "../journal.js";
-import { StapleError } from "../types.js";
 import { ReferentMissing, applyToDatabase, localEntityVersion, setEntityVersion, snapshotToInput } from "./apply.js";
+import { cloudError } from "./errors.js";
 import type { SnapshotEntity } from "./wire.js";
 
 /** The sentinel entity the vocabulary order travels on. Mirrors `store.ts` and `apply.ts`. */
@@ -219,12 +219,12 @@ export function hydrate(
 
   if (final && pending.length > 0) {
     const first = pending[0]!;
-    throw new StapleError(
+    throw cloudError(
       "validation",
       `The snapshot's ${first.entity} ${first.entityId} names something the snapshot never ` +
         `delivered${missing ? `: ${missing.what}` : ""}. Nothing from this snapshot page was ` +
         `applied and the position did not move, so the next sync retries it.`,
-      { cloudCode: "validation", retryable: false, parked: pending.length },
+      { parked: pending.length },
     );
   }
   return { applied, parked: pending };

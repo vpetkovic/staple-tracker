@@ -114,7 +114,9 @@ describe("error envelopes (CLI --json projection)", () => {
     expect(() => JSON.parse(result.stderr)).toThrow();
   });
 
-  it("revision_conflict is the ONLY retryable code on this surface", () => {
+  // Among the store's failures. The retryable sync codes (19-21) are driven through
+  // this surface by test/cloud-error-codes.test.ts.
+  it("revision_conflict is the ONLY retryable store failure on this surface", () => {
     const retryable = CASES.filter((c) => cliEnvelope(runCase(c)).retryable === true);
     expect(retryable.map((c) => c.label)).toEqual(["revision_conflict"]);
   });
@@ -137,6 +139,20 @@ describe("exit code contract", () => {
       // shell loop must be able to tell "take the named issue instead" from
       // "pick anything else" without parsing stderr.
       out_of_order: 10,
+      // STA-251: the cloud sync taxonomy, one number per code rather than the
+      // 2/4 they used to share with the store. Retryable ones last, 19-21.
+      // test/cloud-error-codes.test.ts drives each through the real CLI.
+      auth: 11,
+      forbidden: 12,
+      revoked: 13,
+      epoch_changed: 14,
+      cursor_invalid: 15,
+      payload_too_large: 16,
+      schema_ahead: 17,
+      protocol_unsupported: 18,
+      rate_limited: 19,
+      unavailable: 20,
+      offline: 21,
     });
   });
 
@@ -154,6 +170,13 @@ describe("exit code contract", () => {
     );
     expect(help.stdout).toContain(
       "10 out_of_order (the pickup plan says something else comes first — take detail.expected[0])",
+    );
+    expect(help.stdout).toContain("cloud sync: 11 auth · 12 forbidden · 13 revoked · 14 epoch_changed");
+    expect(help.stdout).toContain(
+      "15 cursor_invalid · 16 payload_too_large · 17 schema_ahead · 18 protocol_unsupported",
+    );
+    expect(help.stdout).toContain(
+      "19 rate_limited · 20 unavailable · 21 offline (19–21 are retryable; try again later)",
     );
   });
 

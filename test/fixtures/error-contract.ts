@@ -9,6 +9,8 @@
  * suites at once.
  */
 
+import { isRetryable, type ErrorCode } from "../../worker/src/errors.js";
+
 export interface ErrorTriple {
   code: string;
   retryable: boolean;
@@ -17,9 +19,38 @@ export interface ErrorTriple {
 }
 
 /**
- * Only revision_conflict is retryable (core/types.ts RETRYABLE_ERROR_CODES).
- * A checkout conflict tells the caller to pick a different task; looping on it
- * is the exact behaviour the retry bit exists to prevent.
+ * Every code the deployed sync service can put on the wire, from the Worker's own type.
+ *
+ * `satisfies Record<ErrorCode, true>` is the parity check with `worker/src/errors.ts`: a
+ * code the Worker gains and this list lacks, or a code here the Worker does not have, fails
+ * typecheck. So a test that walks this list walks exactly what the service can send.
+ */
+export const SYNC_WIRE_CODES = Object.keys({
+  validation: true,
+  auth: true,
+  forbidden: true,
+  revoked: true,
+  not_found: true,
+  conflict: true,
+  epoch_changed: true,
+  cursor_invalid: true,
+  payload_too_large: true,
+  schema_ahead: true,
+  protocol_unsupported: true,
+  rate_limited: true,
+  unavailable: true,
+} satisfies Record<ErrorCode, true>) as ErrorCode[];
+
+/** Whether a sync failure may be retried. The Worker's table decides; `offline` is client-side. */
+export function syncRetryable(code: ErrorCode | "offline"): boolean {
+  return code === "offline" ? true : isRetryable(code);
+}
+
+/**
+ * Retryable: `revision_conflict` among the store's codes, and `rate_limited`, `unavailable`
+ * and `offline` among the sync codes (core/types.ts RETRYABLE_ERROR_CODES). A checkout
+ * conflict tells the caller to pick a different task; looping on it is the exact behaviour
+ * the retry bit exists to prevent.
  */
 export const ERROR_CONTRACT = {
   /** Claiming an issue another agent already holds. */
@@ -38,7 +69,7 @@ export const ERROR_CONTRACT = {
       detail: { currentStatus, heldBy: null, blockers },
     };
   },
-  /** Writing a document from a stale base revision. The one retryable failure. */
+  /** Writing a document from a stale base revision. The one retryable store failure. */
   revisionConflict(currentRevision: number): ErrorTriple {
     return { code: "revision_conflict", retryable: true, detail: { currentRevision } };
   },
@@ -99,6 +130,16 @@ export const ERROR_CONTRACT = {
       detail: { policy, expected, position, expectedPosition },
     };
   },
+  /**
+   * A cloud sync failure (STA-251). The code IS the service's code — never a nearby
+   * store code — and `retryable` is the protocol's. `detail.cloudCode` and
+   * `detail.retryable` repeat both, for `--json` consumers that read them from before the
+   * code was true; the rest of `detail` varies by route and is not part of the triple.
+   */
+  syncFailure(code: ErrorCode | "offline"): { code: string; retryable: boolean; detail: Record<string, unknown> } {
+    const retryable = syncRetryable(code);
+    return { code, retryable, detail: { cloudCode: code, retryable } };
+  },
 } as const;
 
 /** Reduce any surface's error body to the triple, so surfaces are comparable. */
@@ -122,6 +163,20 @@ export const CLI_EXIT_CODES: Record<string, number> = {
   timeout: 8,
   gated: 9,
   out_of_order: 10,
+  // The cloud sync taxonomy (STA-251), in docs/sync.md's table order. The three
+  // retryable codes are the last three, 19-21, so a shell can test one range for
+  // "try again later".
+  auth: 11,
+  forbidden: 12,
+  revoked: 13,
+  epoch_changed: 14,
+  cursor_invalid: 15,
+  payload_too_large: 16,
+  schema_ahead: 17,
+  protocol_unsupported: 18,
+  rate_limited: 19,
+  unavailable: 20,
+  offline: 21,
 };
 
 /** src/ui/server.ts maps StapleError -> 404 for not_found, 409 for everything else. */

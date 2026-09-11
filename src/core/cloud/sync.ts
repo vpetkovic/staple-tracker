@@ -32,10 +32,12 @@ import type { DatabaseSync } from "node:sqlite";
 import { tx } from "../db.js";
 import { assertOwnHost } from "../repo-identity.js";
 import { bindJournal, replayOutboxFieldWrites, type Journal, type OperationEnvelope } from "../journal.js";
-import { StapleError, nowIso } from "../types.js";
+import { StapleError, isRetryableErrorCode, nowIso } from "../types.js";
+import { CLOUD_ERROR_CODES } from "./errors.js";
 import {
   CLIENT_PROTOCOL,
   cloudCodeOf,
+  cloudError,
   fetchCapabilities,
   fetchSnapshotPage,
   pullOperations,
@@ -134,7 +136,7 @@ const DEFAULT_ATTEMPTS = 3;
  * not retryable — it is handled once, by re-bootstrapping, and never by asking
  * again.
  */
-const RETRYABLE: ReadonlySet<CloudErrorCode> = new Set(["rate_limited", "unavailable", "offline"]);
+const RETRYABLE: ReadonlySet<CloudErrorCode> = new Set(CLOUD_ERROR_CODES.filter(isRetryableErrorCode));
 
 const sleepDefault = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
@@ -237,18 +239,13 @@ async function negotiate(session: Session, options: SyncOptions): Promise<Capabi
     CLIENT_PROTOCOL < capabilities.protocol.min ||
     CLIENT_PROTOCOL > capabilities.protocol.max
   ) {
-    throw new StapleError(
-      "validation",
+    throw cloudError(
+      "protocol_unsupported",
       `${session.endpointOrigin} speaks protocol ${capabilities.protocol.min}–` +
         `${capabilities.protocol.max} and this build speaks ${CLIENT_PROTOCOL}. Nothing was sent ` +
         `and nothing was changed. Upgrade staple, or connect to a service that supports this ` +
         `protocol version.`,
-      {
-        cloudCode: "protocol_unsupported",
-        retryable: false,
-        min: capabilities.protocol.min,
-        max: capabilities.protocol.max,
-      },
+      { min: capabilities.protocol.min, max: capabilities.protocol.max },
     );
   }
   return capabilities;
@@ -559,11 +556,10 @@ async function pushPending(
      * until empty" is how a client hangs.
      */
     if (response.results.length === 0) {
-      throw new StapleError(
-        "conflict",
+      throw cloudError(
+        "unavailable",
         `${session.endpointOrigin} accepted a batch of ${batch.length} operations and returned no ` +
           `results. Nothing was marked acknowledged; the operations are still queued locally.`,
-        { cloudCode: "unavailable", retryable: true },
       );
     }
   }
@@ -901,11 +897,11 @@ function applyPage(
    */
   for (const op of ops) {
     if (op.schema > schema) {
-      throw new StapleError(
-        "validation",
+      throw cloudError(
+        "schema_ahead",
         `Operation ${op.opId} was written under workspace schema ${op.schema} and this database ` +
           `is at ${schema}. Nothing was applied. Upgrade staple and run \`staple migrate\`.`,
-        { cloudCode: "schema_ahead", retryable: false, schema: op.schema, local: schema },
+        { schema: op.schema, local: schema },
       );
     }
   }
@@ -932,12 +928,12 @@ function applyPage(
         else applied += 1;
       } catch (error) {
         if (!(error instanceof ReferentMissing)) throw error;
-        throw new StapleError(
+        throw cloudError(
           "validation",
           `Operation ${op.opId} (${op.entity}.${op.verb} on ${op.entityId}) names something this ` +
             `page never delivered: ${error.what}. The whole page was rolled back and nothing was ` +
             `applied; the cursor did not move, so the next sync retries it.`,
-          { cloudCode: "validation", retryable: false, referentMissing: true },
+          { referentMissing: true },
         );
       }
     }

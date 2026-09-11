@@ -19,6 +19,7 @@ import { runMilestoneCommand } from "./commands/milestone.js";
 import { runQueueCommand } from "./commands/queue.js";
 import { runCloudCommand } from "./commands/cloud.js";
 import { runHubRegistryCommand } from "./commands/hub-registry.js";
+import { EXIT_CODES, exitCodeFor } from "./commands/exit-codes.js";
 import { CLI_COMMAND_TRIGGERS, runCommandTrigger } from "./core/cloud/auto-triggers.js";
 import { findMigrationRoot, planMigration, runMigration } from "./core/path-migration.js";
 import {
@@ -223,33 +224,6 @@ function getStore(values: { db?: string; ws?: string }) {
   return opened;
 }
 
-/** Distinct exit codes so CI can branch on the failure class without parsing stderr. */
-const EXIT_CODES: Record<string, number> = {
-  validation: 2,
-  not_found: 3,
-  conflict: 4,
-  duplicate: 5,
-  cycle: 6,
-  revision_conflict: 7,
-  // `wait` only: a budget outcome, not a store error, so it is not a StapleError code.
-  timeout: 8,
-  /**
-   * Refused by a review gate (STA-143). Its own number so CI and shell loops can
-   * branch on "a human has to act" without parsing stderr — the one failure
-   * class where retrying, picking another task, or waiting longer are all
-   * equally useless.
-   */
-  gated: 9,
-  /**
-   * Refused by the pickup plan (STA-168, `queue.policy = strict`). Its own
-   * number for the same reason `gated` has one: this is a THIRD instruction, not
-   * a shade of conflict. Retrying is useless, picking any other task is useless,
-   * and the one useful move — take the identifier in `detail.expected` — is
-   * something a shell loop can only act on if it can tell this case apart
-   * without parsing stderr.
-   */
-  out_of_order: 10,
-};
 
 const SLEEP_LOCK = new Int32Array(new SharedArrayBuffer(4));
 
@@ -992,7 +966,10 @@ Statuses (built-in seed; run "staple statuses ls" for this workspace's actual se
 Exit codes: 0 ok · 1 unknown · 2 validation · 3 not_found · 4 conflict
             5 duplicate · 6 cycle · 7 revision_conflict · 8 timeout (wait)
             9 gated (a review gate above this issue is unresolved — a human, not a retry)
-            10 out_of_order (the pickup plan says something else comes first — take detail.expected[0])`;
+            10 out_of_order (the pickup plan says something else comes first — take detail.expected[0])
+            cloud sync: 11 auth · 12 forbidden · 13 revoked · 14 epoch_changed
+            15 cursor_invalid · 16 payload_too_large · 17 schema_ahead · 18 protocol_unsupported
+            19 rate_limited · 20 unavailable · 21 offline (19–21 are retryable; try again later)`;
 
 function main() {
   const [command, ...rest] = process.argv.slice(2);
@@ -2414,7 +2391,7 @@ try {
   } else {
     console.error(error);
   }
-  process.exitCode = EXIT_CODES[envelope.code] ?? 1;
+  process.exitCode = exitCodeFor(envelope.code);
 }
 
 /**

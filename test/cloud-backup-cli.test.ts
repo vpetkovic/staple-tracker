@@ -119,14 +119,15 @@ describe("connected, backup not consented", () => {
 
   it("refuses and names the consent, rather than describing the state", () => {
     const result = staple("cloud", "backup", "ls");
-    expect(result.status).toBe(2);
+    // `forbidden`'s own exit (STA-251). It was 2 while `forbidden` folded into `validation`.
+    expect(result.status).toBe(12);
     expect(result.stderr).toContain("separate consent");
     expect(result.stderr).toContain("staple cloud backup enable");
   });
 
   it("refuses a restore before it discloses anything, because consent comes first", () => {
     const result = staple("cloud", "restore", "some-backup", "--confirm", repositoryId);
-    expect(result.status).toBe(2);
+    expect(result.status).toBe(12);
     expect(result.stderr).toContain("staple cloud backup enable");
     // Nothing about what a restore would discard, because we never got that far.
     expect(result.stdout).not.toContain("DISCARDS");
@@ -190,7 +191,7 @@ describe("help and dispatch", () => {
     // Refused for want of consent — but refused on the LISTING path, which is the
     // one that changes nothing. A bare `cloud backup` must never be the command
     // that took a backup.
-    expect(result.status).toBe(2);
+    expect(result.status).toBe(12);
     expect(result.stderr).toContain("separate consent");
   });
 });
