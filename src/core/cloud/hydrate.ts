@@ -27,8 +27,19 @@
  */
 import type { DatabaseSync } from "node:sqlite";
 import { recordInheritedFieldWrites, type Journal } from "../journal.js";
-import { ReferentMissing, applyToDatabase, localEntityVersion, setEntityVersion, snapshotToInput } from "./apply.js";
+import {
+  ReferentMissing,
+  applyToDatabase,
+  localEntityVersion,
+  noteLoggedOriginClaim,
+  setEntityVersion,
+  settleRevisionsAfterRead,
+  snapshotToInput,
+  type SnapshotRead,
+} from "./apply.js";
+import { withoutOpenContests } from "./conflicts.js";
 import { cloudError } from "./errors.js";
+import { noteRewindVocabulary } from "./sync-state.js";
 import type { SnapshotEntity } from "./wire.js";
 
 /** The sentinel entity the vocabulary order travels on. Mirrors `store.ts` and `apply.ts`. */
@@ -41,8 +52,12 @@ export const VOCABULARY_ORDER_ID = "@order";
  * ledger hit rather than a second write. It is not an operation id the server ever
  * issued, and it is never sent anywhere.
  */
-export function snapshotOpId(cutoffSeq: number, entity: { entity: string; entityId: string }): string {
-  return `snap:${cutoffSeq}:${entity.entity} ${entity.entityId}`;
+export function snapshotOpId(
+  cutoffSeq: number,
+  entity: { entity: string; entityId: string },
+  ledger = "snap",
+): string {
+  return `${ledger}:${cutoffSeq}:${entity.entity} ${entity.entityId}`;
 }
 
 /**
@@ -71,9 +86,32 @@ export function hydrationRank(entity: { entity: string; entityId: string }): num
   }
 }
 
-/** Dependencies first, and parents before children among the issues. */
+/**
+ * Where an entity's claim on its unique value sits in the log: the seq of the last write
+ * of that value when some operation after the create set it, else the create's seq.
+ * `Infinity` from a service too old to say, which leaves those in the snapshot's order.
+ */
+function claimSeq(entity: SnapshotEntity): number {
+  const field = entity.entity === "issue" ? "identifier" : entity.entity === "project" ? "slug" : null;
+  const written = field ? entity.fieldWrites?.[field]?.seq : undefined;
+  if (typeof written === "number") return written;
+  return typeof entity.createdSeq === "number" ? entity.createdSeq : Number.POSITIVE_INFINITY;
+}
+
+/**
+ * Dependencies first, parents before children among the issues, and within each group
+ * the earlier claim first.
+ *
+ * The last is what makes a hydrating device settle two claims on one identifier or slug
+ * the way a device reading the ordered tail did. The applier gives the value to whoever
+ * holds it and a stand-in to whoever arrives second (`claims.ts`), so arriving in log
+ * order is the whole of agreeing with the log. Applied in key order instead — the order
+ * the snapshot is paged in, a function of the UUIDs — a fresh device gave `STA-5` to
+ * whichever of two issues happened to sort first, and disagreed with every other device
+ * about which issue `STA-5` is.
+ */
 export function orderForHydration(entities: readonly SnapshotEntity[]): SnapshotEntity[] {
-  const byRank = [...entities].sort((a, b) => hydrationRank(a) - hydrationRank(b));
+  const byRank = [...entities].sort((a, b) => hydrationRank(a) - hydrationRank(b) || claimSeq(a) - claimSeq(b));
   const issues = byRank.filter((entity) => entity.entity === "issue");
   if (issues.length < 2) return byRank;
 
@@ -112,14 +150,22 @@ export function applySnapshotEntity(
   cutoffSeq: number,
   at: string,
   sameTimeline = false,
+  ledger = "snap",
 ): void {
-  const input = snapshotToInput(entity, at);
+  const placed = withoutStalePlaces(db, `${ledger}:${cutoffSeq}`, entity);
+  const input = { ...snapshotToInput(placed, at), read: snapshotRead(cutoffSeq, ledger) };
+  // What a rewinding bootstrap orders the vocabulary by (`rewind.ts`).
+  if (placed.entity === "status" || placed.entity === "kind") {
+    noteRewindVocabulary(db, placed.entity, placed.entityId, placed.createdSeq, placed.deletedAt === null ? placed.state.order : null);
+  }
+  // Where its claim on an external origin sits in the log, for the settlement of a later one.
+  noteLoggedOriginClaim(db, `${ledger}:${cutoffSeq}`, entity);
   /**
    * Through `applyRemote` so the write is echo-suppressed: a hydrating device must not
    * journal an outbound copy of every row it was handed, which would push the entire
    * repository straight back at the server.
    */
-  journal.applyRemote({ opId: snapshotOpId(cutoffSeq, entity), seq: entity.lastSeq }, () => {
+  journal.applyRemote({ opId: snapshotOpId(cutoffSeq, entity, ledger), seq: entity.lastSeq }, () => {
     /**
      * Read BEFORE `setEntityVersion`, and used below. On a first bootstrap this is 0; on
      * a re-bootstrap it is the counter this device carried across the epoch change,
@@ -135,7 +181,13 @@ export function applySnapshotEntity(
      * keeps whichever claim is newer.
      */
     const priorVersion = sameTimeline ? 0 : localEntityVersion(db, entity.entity, entity.entityId);
-    applyToDatabase(db, input);
+    /**
+     * On the timeline it is already on, a device may hold values an open record here is
+     * still about, and the fold holds the other side of each: those are withheld, as the
+     * screen withholds them from an operation (`withoutOpenContests`).
+     */
+    const screened = sameTimeline ? withoutOpenContests(db, input) : { input, keeps: () => true };
+    if (screened.input !== null) applyToDatabase(db, screened.input);
     setEntityVersion(db, entity.entity, entity.entityId, entity.version);
     /**
      * And the provenance for the values just inherited (STA-263). `fieldWrites` names only
@@ -147,7 +199,9 @@ export function applySnapshotEntity(
       db,
       entity.entity,
       entity.entityId,
-      Object.entries(entity.fieldWrites ?? {}).map(([field, write]) => ({
+      Object.entries(entity.fieldWrites ?? {})
+        .filter(([field]) => screened.keeps(field))
+        .map(([field, write]) => ({
         field,
         baseVersion: write.baseVersion,
         opId: write.opId,
@@ -156,6 +210,44 @@ export function applySnapshotEntity(
       priorVersion,
     );
   });
+}
+
+/** The read a snapshot entity is applied in: its ledger ids and its cutoff (`applyDocumentRevision`). */
+function snapshotRead(cutoffSeq: number, ledger: string): SnapshotRead {
+  // `snapshotOpId` is this prefix, then `<entity> <entityId>`.
+  return { prefix: `${ledger}:${cutoffSeq}:`, cutoff: cutoffSeq };
+}
+
+/** Each status and kind's create seq, per snapshot, for the order that follows them. */
+const createdAt = new WeakMap<DatabaseSync, { snapshot: string; seqs: Map<string, number> }>();
+
+/**
+ * A vocabulary order without the entries created after it was written.
+ *
+ * A status or kind removed and added again with no position — an older build's `rm` then
+ * `add` — is put at the end by every device reading the log, and a fold from before this
+ * build still held its old place in the order. The service's fold now forgets that place
+ * (`forgetPlace`, `worker/src/fold.ts`); this is the same rule for a snapshot that does not:
+ * an entry whose create is later in the log than the order's last write is not in it, and
+ * goes where an entry the order does not name goes — after it.
+ */
+function withoutStalePlaces(db: DatabaseSync, snapshot: string, entity: SnapshotEntity): SnapshotEntity {
+  if (entity.entity !== "status" && entity.entity !== "kind") return entity;
+  let held = createdAt.get(db);
+  if (!held || held.snapshot !== snapshot) {
+    held = { snapshot, seqs: new Map() };
+    createdAt.set(db, held);
+  }
+  if (entity.entityId !== VOCABULARY_ORDER_ID) {
+    if (typeof entity.createdSeq === "number") held.seqs.set(`${entity.entity}/${entity.entityId}`, entity.createdSeq);
+    return entity;
+  }
+  const order = entity.state.order;
+  const written = entity.fieldWrites?.order?.seq ?? entity.createdSeq;
+  if (!Array.isArray(order) || typeof written !== "number") return entity;
+  const seqs = held.seqs;
+  const kept = order.filter((id) => !(typeof id === "string" && (seqs.get(`${entity.entity}/${id}`) ?? -1) > written));
+  return kept.length === order.length ? entity : { ...entity, state: { ...entity.state, order: kept } };
 }
 
 export interface HydrateOutcome {
@@ -190,6 +282,20 @@ export function hydrate(
   at: string,
   final: boolean,
   sameTimeline = false,
+  /**
+   * The namespace of the synthetic ledger ids. A re-read of a snapshot this device has
+   * already applied at the same cutoff — the applier catch-up in `sync.ts` — needs ids of
+   * its own, or every entity is a ledger hit and nothing is re-applied.
+   */
+  ledger = "snap",
+  /**
+   * Whether the snapshot is the log's word on what this device holds of it, once the read is
+   * complete: a revision it holds that the snapshot did not place, and that is not one of its
+   * own the log has not reached, is dropped (`settleRevisionsAfterRead`). False for a join —
+   * the workspace's own rows, which the seed sends — and for a snapshot from a fold before
+   * this build, which merged two revisions into one.
+   */
+  rewind = true,
 ): HydrateOutcome {
   let applied = 0;
   let pending = orderForHydration([...entities, ...parked]);
@@ -204,7 +310,7 @@ export function hydrate(
         continue;
       }
       try {
-        applySnapshotEntity(db, journal, entity, cutoffSeq, at, sameTimeline);
+        applySnapshotEntity(db, journal, entity, cutoffSeq, at, sameTimeline, ledger);
         applied += 1;
         progressed = true;
       } catch (error) {
@@ -216,6 +322,8 @@ export function hydrate(
     pending = next;
     if (!progressed || pending.length === 0) break;
   }
+
+  if (final && pending.length === 0) settleRevisionsAfterRead(db, snapshotRead(cutoffSeq, ledger), rewind);
 
   if (final && pending.length > 0) {
     const first = pending[0]!;

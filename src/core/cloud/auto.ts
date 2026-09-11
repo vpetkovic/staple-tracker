@@ -148,6 +148,16 @@ export const AUTO_SYNC_SESSION_INTERVAL_MS = 5 * 60 * 1000;
 export const AUTO_SYNC_BACKOFF_BASE_MS = 5_000;
 export const AUTO_SYNC_BACKOFF_CAP_MS = 5 * 60 * 1000;
 
+/**
+ * The longest a service's `Retry-After` holds automatic sync back.
+ *
+ * The deployed Worker asks for sixty seconds. Taken as given, `Retry-After: 31536000` set
+ * the next run a year out, and anything past about 1e14 seconds threw a RangeError inside
+ * the scheduler, because no Date can hold it. Fifteen minutes honours any reasonable wait;
+ * a service that wants longer is asked again then.
+ */
+export const AUTO_SYNC_MAX_RETRY_AFTER_MS = 15 * 60 * 1000;
+
 export function autoSyncBackoffMs(
   consecutiveFailures: number,
   random: () => number = Math.random,

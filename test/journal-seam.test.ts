@@ -240,7 +240,14 @@ describe("exactly one operation per logical mutation", () => {
     expect(added).toHaveLength(1);
     expect(added[0]!.entity).toBe("queue");
     expect(added[0]!.verb).toBe("replace");
-    expect(JSON.parse(added[0]!.payload)).toEqual({ order: [b.id, a.id] });
+    // The order, and beside it who queued each entry, when, and why (`cloud/apply.ts`, `entryFor`).
+    expect(JSON.parse(added[0]!.payload)).toEqual({
+      order: [b.id, a.id],
+      entries: {
+        [a.id]: expect.objectContaining({ addedBy: "planner", note: null }),
+        [b.id]: expect.objectContaining({ addedBy: "planner", note: null }),
+      },
+    });
   });
 
   /**
@@ -268,7 +275,14 @@ describe("exactly one operation per logical mutation", () => {
     const relations = added.filter((row) => row.entity === "relation");
     expect(relations).toHaveLength(1);
     expect(relations[0]!.verb).toBe("update");
-    expect(JSON.parse(relations[0]!.payload)).toEqual({ blockedBy: [one.id, two.id] });
+    // With who made each edge and when beside the set (`cloud/apply.ts`, `writeBlockers`).
+    expect(JSON.parse(relations[0]!.payload)).toEqual({
+      blockedBy: [one.id, two.id],
+      edges: {
+        [one.id]: { createdBy: "agent-a", createdAt: expect.any(String) },
+        [two.id]: { createdBy: "agent-a", createdAt: expect.any(String) },
+      },
+    });
   });
 
   /**

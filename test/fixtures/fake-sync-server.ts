@@ -31,6 +31,26 @@
  */
 import { randomUUID } from "node:crypto";
 import { isRetryable, type ErrorCode } from "../../worker/src/errors.js";
+import { columnSpellingWins } from "../../src/core/cloud/apply.js";
+import { settleRevisionCreate } from "../../src/core/cloud/revision-placement.js";
+import { ORIGIN_RELEASING_STATUSES } from "../../src/core/types.js";
+
+/** `settleRevision` in `worker/src/fold.ts`, on this fixture's operation shape: the same placement (`revision-placement.ts`). */
+function settleRevisionOp<T extends { entityId: string; payload: unknown }>(
+  folded: Map<string, { entity: string; entityId: string; deletedAt: number | null; state: Record<string, unknown> }>,
+  op: T,
+): T | null {
+  const payload = op.payload as Record<string, unknown>;
+  const settled = settleRevisionCreate(folded.values(), op.entityId, payload);
+  if (settled === null) return null;
+  if (settled.entityId === op.entityId && settled.payload === payload) return op;
+  return { ...op, entityId: settled.entityId, payload: settled.payload };
+}
+
+/** `reopensOrigin` in `worker/src/fold.ts`, which this fixture cannot import without the Worker's types. */
+function reopensOrigin(before: unknown, after: unknown): boolean {
+  return typeof before === "string" && typeof after === "string" && ORIGIN_RELEASING_STATUSES.includes(before) && !ORIGIN_RELEASING_STATUSES.includes(after);
+}
 import { SYNC_WIRE_CODES } from "./error-contract.js";
 
 /**
@@ -97,6 +117,8 @@ interface FieldWrite {
   baseVersion: number;
   opId: string;
   at: string;
+  /** The write's place in the log — `worker/src/fold.ts::FieldWrite.seq`. */
+  seq: number;
 }
 
 /** A folded entity, as a backup stores it. `superseded` records the verb. */
@@ -110,6 +132,12 @@ interface FoldedEntity {
   state: Record<string, unknown>;
   /** Stripped before a backup stores it, exactly as `fold.ts::forBackup` does. */
   fieldWrites: Record<string, FieldWrite>;
+  /** The seq of the create this state descends from — stripped from a backup like `fieldWrites`. */
+  createdSeq: number | null;
+  /** The client time of that create. Kept in a backup, and restored as the op's time. */
+  createdAt: string | null;
+  /** The actor of that create. Kept in a backup, and restored as the op's actor. */
+  createdBy: string | null;
 }
 
 /**
@@ -119,7 +147,7 @@ interface FoldedEntity {
  * entity versions and re-mints operation ids, so every number in `fieldWrites` would name
  * a timeline that no longer exists.
  */
-type BackupEntity = Omit<FoldedEntity, "fieldWrites">;
+type BackupEntity = Omit<FoldedEntity, "fieldWrites" | "createdSeq">;
 
 export interface FakeBackup {
   backupId: string;
@@ -167,6 +195,22 @@ export interface FakeServerOptions {
    * token enrolls another device, as on the real service when `enroll_sha256` is null.
    */
   enrollmentSecret?: string | null;
+  /**
+   * The per-device request limit — `worker/src/http.ts::assertRateLimit` and the
+   * `SYNC_LIMITER` binding in `worker/wrangler.toml` (120 per 60 s, keyed on
+   * `${repoId}:${deviceId}`, answered with 429 `rate_limited` and `Retry-After: 60`).
+   * Off unless given, because the binding is absent in the Worker's own local tests too.
+   * Counted on {@link FakeSyncServer.now}, so a test moves time by moving that clock.
+   */
+  rateLimit?: { requests: number; windowMs: number; retryAfterSeconds: number } | null;
+  /** The per-operation payload cap, advertised and enforced. The Worker's is 512 KiB on every plan. */
+  maxOpBytes?: number;
+  /**
+   * The most operations one fold reads — `worker/src/limits.ts` `MAX_SNAPSHOT_FOLD_OPS`
+   * (20,000). Past it a snapshot, a probe and a backup are refused with `unavailable`
+   * and `maxSnapshotFoldOps`, exactly as the Worker refuses them.
+   */
+  maxSnapshotFoldOps?: number;
 }
 
 /** `worker/src/vocabulary.ts`: which vocabulary a repository's log holds. */
@@ -242,6 +286,7 @@ class ServerError extends Error {
     readonly code: string,
     message: string,
     readonly extra: Record<string, unknown> = {},
+    readonly headers: Record<string, string> = {},
   ) {
     super(message);
   }
@@ -274,6 +319,14 @@ export class FakeSyncServer {
     headers?: Record<string, string>;
   } | null = null;
 
+  /**
+   * Serve the fold as the Worker deployed before this build does (df002809): a delete is
+   * final, a create after it is a late write the tombstone turns away, and a snapshot
+   * entity carries no `createdSeq`, `createdAt` or `createdBy`, nor a `seq` on its field
+   * writes. Settable at any time, which is how a test deploys the new Worker on the same log.
+   */
+  legacyFold = false;
+
   /** The server-side half of the third consent. Off until something turns it on. */
   backupEnabled = false;
   readonly backups: FakeBackup[] = [];
@@ -299,6 +352,9 @@ export class FakeSyncServer {
       protocol: { min: 1, max: 2 },
       vocabulary: null,
       enrollmentSecret: null,
+      rateLimit: null,
+      maxOpBytes: 512 * 1024,
+      maxSnapshotFoldOps: 20_000,
       ...options,
     };
     this.vocabulary = this.options.vocabulary;
@@ -370,11 +426,50 @@ export class FakeSyncServer {
             message: error.message,
             retryable: retryableOnWire(error.code),
             ...error.extra,
-          });
+          }, error.headers);
         }
         throw error;
       }
     }) as typeof fetch;
+  }
+
+  /** Requests refused by the rate limit, for assertions. */
+  rateLimited = 0;
+
+  /** Start (or stop) limiting the request rate — after a test has populated the repository. */
+  limitRate(limit: FakeServerOptions["rateLimit"]): void {
+    this.options.rateLimit = limit ?? null;
+  }
+
+  /** From now on, refuse to fold a log longer than `ops` (`maxSnapshotFoldOps`). */
+  limitFold(ops: number): void {
+    this.options.maxSnapshotFoldOps = ops;
+  }
+  private readonly requestTimes = new Map<string, number[]>();
+
+  /**
+   * `worker/src/http.ts::assertRateLimit`, after authentication as `worker/src/index.ts`
+   * orders it. A sliding window over this fixture's own clock.
+   */
+  private assertRateLimit(repoId: string, deviceId: string): void {
+    const limit = this.options.rateLimit;
+    if (!limit) return;
+    const key = `${repoId}:${deviceId}`;
+    const now = this.now();
+    const recent = (this.requestTimes.get(key) ?? []).filter((at) => at > now - limit.windowMs);
+    if (recent.length >= limit.requests) {
+      this.requestTimes.set(key, recent);
+      this.rateLimited += 1;
+      throw new ServerError(
+        429,
+        "rate_limited",
+        "request rate exceeded for this device",
+        {},
+        { "retry-after": String(limit.retryAfterSeconds) },
+      );
+    }
+    recent.push(now);
+    this.requestTimes.set(key, recent);
   }
 
   private json(status: number, body: unknown, headers: Record<string, string> = {}): Response {
@@ -410,7 +505,7 @@ export class FakeSyncServer {
     return {
       protocol: this.options.protocol,
       maxBatchSize: this.options.maxBatchSize,
-      maxOpBytes: 512 * 1024,
+      maxOpBytes: this.options.maxOpBytes,
       maxPullLimit: this.options.maxPullLimit,
       defaultPullLimit: this.options.defaultPullLimit,
       maxSnapshotPageSize: this.options.maxSnapshotPageSize,
@@ -445,6 +540,7 @@ export class FakeSyncServer {
       return this.connect(repoId, headers, body, protocol);
     }
     const session = this.authenticate(repoId, headers);
+    this.assertRateLimit(session.repoId, session.deviceId);
 
     if (tail === "/ops" && method === "POST") {
       return this.push(session, JSON.parse(String(body)) as Record<string, unknown>, protocol);
@@ -1063,9 +1159,9 @@ export class FakeSyncServer {
      * checked, so a 700 KiB operation applied here and 413s against the Worker.
      */
     const payloadBytes = Buffer.byteLength(JSON.stringify(op.payload), "utf8");
-    if (payloadBytes > 512 * 1024) {
+    if (payloadBytes > this.options.maxOpBytes) {
       throw new ServerError(413, "payload_too_large", `${at}.payload exceeds the documented cap`, {
-        maxBytes: 512 * 1024,
+        maxBytes: this.options.maxOpBytes,
         bytes: payloadBytes,
       });
     }
@@ -1180,7 +1276,11 @@ export class FakeSyncServer {
          * the opposite treatment: `worker/src/fold.ts::forBackup` strips this, because
          * a restore re-mints the very versions and operation ids it names.
          */
-        fieldWrites: entry.fieldWrites,
+        fieldWrites: this.legacyFold
+          ? Object.fromEntries(Object.entries(entry.fieldWrites).map(([field, { seq: _seq, ...write }]) => [field, write]))
+          : entry.fieldWrites,
+        // `worker/src/snapshot.ts::toWireEntity` — absent altogether on the older Worker.
+        ...(this.legacyFold ? {} : { createdSeq: entry.createdSeq, createdAt: entry.createdAt, createdBy: entry.createdBy }),
       })),
       nextCursor: hasMore
         ? b64url(
@@ -1217,10 +1317,20 @@ export class FakeSyncServer {
     let opCount = 0;
     let schemaVersion = 0;
 
-    for (const op of this.ops
+    for (const logged of this.ops
       .filter((candidate) => candidate.epoch === this.epoch && candidate.seq <= cutoff)
       .sort((a, b) => a.seq - b.seq)) {
+      // Two revisions written as one number: the later in the log takes the next —
+      // `settleRevision`, `worker/src/fold.ts`. Not on the Worker from before this build.
+      const op = !this.legacyFold && logged.entity === "documentRevision" && logged.verb === "create" ? settleRevisionOp(folded, logged) : logged;
       opCount += 1;
+      // The same revision, held under the number it was moved to: nothing new.
+      if (op === null) continue;
+      if (opCount > this.options.maxSnapshotFoldOps) {
+        throw new ServerError(503, "unavailable", "operation log is too large to fold in one pass", {
+          maxSnapshotFoldOps: this.options.maxSnapshotFoldOps,
+        });
+      }
       if (op.schema > schemaVersion) schemaVersion = op.schema;
 
       const key = `${op.entity} ${op.entityId}`;
@@ -1235,6 +1345,9 @@ export class FakeSyncServer {
           superseded: false,
           state: {},
           fieldWrites: {},
+          createdSeq: null,
+          createdAt: null,
+          createdBy: null,
         };
         folded.set(key, entry);
       }
@@ -1244,26 +1357,61 @@ export class FakeSyncServer {
         entry.deletedAt = op.serverTs;
         continue;
       }
+      // A create after a delete begins the entity again — `worker/src/fold.ts`. Not on the
+      // Worker from before this build, where the tombstone turned it away.
+      if (this.legacyFold && entry.deletedAt !== null) continue;
+      if (op.verb === "create") {
+        if (entry.deletedAt !== null) {
+          entry.deletedAt = null;
+          entry.state = {};
+          entry.fieldWrites = {};
+          entry.superseded = false;
+          // Created again: no place in an order written before — `forgetPlace`, `worker/src/fold.ts`.
+          const order = folded.get(`${op.entity} @order`);
+          if ((op.entity === "status" || op.entity === "kind") && Array.isArray(order?.state.order)) {
+            order.state.order = (order.state.order as unknown[]).filter((listed) => listed !== op.entityId);
+          }
+          // Nor the built-in it may have been — `worker/src/fold.ts`.
+          if (op.entity === "status" || op.entity === "kind") entry.state.isBuiltin = false;
+        }
+        entry.createdSeq = op.seq;
+        // Not a restore's own actor and instant — `worker/src/fold.ts`.
+        const restored = typeof op.actor === "string" && op.actor.startsWith("restore:");
+        entry.createdAt = restored ? null : op.createdAt;
+        entry.createdBy = restored ? null : op.actor;
+      }
       if (entry.deletedAt !== null) continue;
       if (op.payload === null || typeof op.payload !== "object" || Array.isArray(op.payload)) {
         continue;
       }
       // Every verb merges the keys it carried and is silent about the rest; only the
       // record of the verb differs. Mirrors `worker/src/fold.ts` (STA-259).
-      Object.assign(entry.state, op.payload as Record<string, unknown>);
+      // One field, whichever spelling wrote it — `worker/src/fold.ts`. Not on the Worker
+      // from before this build, which kept both.
+      // A payload in both spellings keeps the column's — `columnSpellingWins`, `worker/src/fold.ts`.
+      const carried = this.legacyFold ? (op.payload as Record<string, unknown>) : columnSpellingWins(op.payload as Record<string, unknown>);
+      for (const key of this.legacyFold ? [] : Object.keys(carried)) {
+        const other = key.includes("_")
+          ? key.replace(/_([a-z])/g, (_, letter: string) => letter.toUpperCase())
+          : key.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
+        if (other !== key) {
+          delete entry.state[other];
+          delete entry.fieldWrites[other];
+        }
+      }
+      const statusBefore = entry.state.status;
+      Object.assign(entry.state, carried);
       entry.superseded = op.verb === "replace";
 
       // And the provenance, for every verb but `create` — the line `Journal.flush`
       // already draws, and what keeps an entity's defaults from looking chosen
       // (STA-263). `version` is already incremented, so `- 1` is the version moved off.
       if (op.verb !== "create") {
-        for (const field of Object.keys(op.payload as Record<string, unknown>)) {
-          entry.fieldWrites[field] = {
-            baseVersion: entry.version - 1,
-            opId: op.opId,
-            at: op.createdAt,
-          };
-        }
+        const write = { baseVersion: entry.version - 1, opId: op.opId, at: op.createdAt, seq: op.seq };
+        for (const field of Object.keys(carried)) entry.fieldWrites[field] = write;
+        // A reopen, recorded by the fold — `reopensOrigin`, `worker/src/fold.ts`. Not on the
+        // Worker from before this build.
+        if (!this.legacyFold && op.entity === "issue" && reopensOrigin(statusBefore, carried.status)) entry.fieldWrites.reopens = write;
       }
     }
 
@@ -1295,7 +1443,11 @@ export class FakeSyncServer {
       createdByDevice: deviceId,
       // `worker/src/fold.ts::forBackup` — the fold minus this epoch's provenance,
       // which a restore into a new epoch could only misdescribe.
-      entities: folded.entities.map(({ fieldWrites: _provenance, ...rest }) => rest),
+      // A backup the Worker before this build made keeps no create time or actor either,
+      // so restoring it stages every entity under the restore's (`legacyFold`).
+      entities: folded.entities.map(({ fieldWrites: _provenance, createdSeq: _seq, ...rest }) =>
+        this.legacyFold ? { ...rest, createdAt: null, createdBy: null } : rest,
+      ),
     };
     this.backups.push(backup);
     return this.describeBackup(backup);
@@ -1463,10 +1615,11 @@ export class FakeSyncServer {
           verb,
           baseVersion: verb === "create" ? null : 0,
           payload,
-          actor: `restore:${restore.restoreId}`,
+          actor: entity.createdBy ?? `restore:${restore.restoreId}`,
           clientSeq: restore.staged + 1,
           schema: backup.schemaVersion,
-          createdAt: new Date().toISOString(),
+          // `worker/src/backups.ts`: the entity's own create time when the backup kept one.
+          createdAt: entity.createdAt ?? new Date().toISOString(),
           serverTs: Date.now(),
         });
         restore.staged += 1;

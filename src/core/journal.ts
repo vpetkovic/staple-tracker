@@ -42,11 +42,23 @@
  * recording is withheld.
  */
 import { createHash, randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { stapleHome } from "../config/home.js";
+import { connectionPath } from "./cloud/connection.js";
 import { readDeviceId } from "./cloud/device.js";
+import { cloudError } from "./cloud/errors.js";
+import { armRowCapture, ensureRowCapture, takeRowChanges, type RowChange } from "./cloud/row-diff.js";
 import { tx } from "./db.js";
-import { nowIso } from "./types.js";
+import { normalizeTitle, nowIso } from "./types.js";
+
+/**
+ * The issue fields derived from others (`DERIVED_ISSUE_FIELDS` in `cloud/apply.ts`, which
+ * this module cannot import at load time without a cycle through the applier).
+ */
+const DERIVED_FIELDS: ReadonlySet<string> = new Set(["normalizedTitle", "depth"]);
+/** Both spellings, for provenance a snapshot or an older build's operation names by column. */
+const DERIVED_ISSUE_KEYS: ReadonlySet<string> = new Set([...DERIVED_FIELDS, "normalized_title"]);
 
 /** Every entity an operation can name. Closed set — see docs/sync.md. */
 export const SYNC_ENTITIES = [
@@ -117,6 +129,13 @@ export interface SeedIntent {
   readonly serviceVersion: number;
 }
 
+/**
+ * The largest payload one operation may carry: the Worker's `MAX_OP_BYTES`
+ * (`worker/src/limits.ts`), which is the same on every plan. The journal refuses above
+ * it; the push re-checks against the value the service actually advertises.
+ */
+export const JOURNAL_MAX_OP_BYTES = 512 * 1024;
+
 /** The protocol this build speaks. */
 export const SYNC_PROTOCOL = 1;
 
@@ -166,10 +185,14 @@ export function deriveOpId(
  *   1. this machine has a device id — only `connect` creates one
  *   2. `sync_state.repository_id` is set — {@link Journal.armed} checks it
  *
- * So a connected laptop opening an unrelated global workspace still journals
- * nothing, and a repo-local workspace on a machine that has never connected does
- * too. That is the privacy posture stated as two `null` checks rather than as a
- * convention.
+ * A repo-local workspace on a machine that has never connected journals nothing. A
+ * workspace on a machine that has connected SOME repository journals from then on,
+ * whether or not its own repository is connected — every workspace with an identity has
+ * a `sync_state.repository_id`. That is harmless for privacy, because nothing leaves
+ * without its own connection, and harmless for correctness, because the first sync of
+ * a repository replaces any journal it made before joining with a seed of its current
+ * state (`cloud/seed.ts`). It is also what makes a disconnect safe: edits made while
+ * disconnected are journaled and go on the next sync.
  *
  * ## Why the environment still wins
  *
@@ -194,9 +217,30 @@ export function resolveDeviceId(): string | null {
   }
 }
 
+/**
+ * Every payload key in one spelling: camelCase, the field name.
+ *
+ * The seam's callers wrote some fields by field name (`updatedAt`) and some by column
+ * (`updated_at` — `updateIssue` journals the changed columns as they are), and the
+ * service's fold keeps each key it is sent. So one entity's state held both spellings of
+ * one field, a device hydrating applied them in key order, and after a vocabulary migration
+ * the stale one won on every fresh device while the tail held the new one. The fold and the
+ * snapshot applier now treat the two as one field (`worker/src/fold.ts`, `snapshotToInput`);
+ * this is the other half: nothing new is sent in two spellings. Top-level keys only — a
+ * nested value (a plan's `entries`) is data, keyed by ids.
+ */
+export function oneSpelling(payload: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(payload)) {
+    out[key.replace(/_([a-z])/g, (_, letter: string) => letter.toUpperCase())] = value;
+  }
+  return out;
+}
+
 interface SyncStateRow {
   repository_id: string | null;
   epoch: number;
+  cursor: string | null;
 }
 
 /**
@@ -290,7 +334,9 @@ export interface FieldWriteRecord {
  * newest write refreshes its attribution rather than being ignored.
  */
 export function recordFieldWrites(db: DatabaseSync, record: FieldWriteRecord): void {
-  if (record.fields.length === 0) return;
+  // A derived column is nobody's write, on every path that records one (`docs/sync.md`, "Derived columns").
+  const fields = record.entity === "issue" ? record.fields.filter((field) => !DERIVED_ISSUE_KEYS.has(field)) : record.fields;
+  if (fields.length === 0) return;
   const insert = db.prepare(
     `INSERT INTO sync_field_writes
        (entity, entity_id, field, base_version, op_id, device_id, written_at)
@@ -302,7 +348,7 @@ export function recordFieldWrites(db: DatabaseSync, record: FieldWriteRecord): v
        written_at   = excluded.written_at
       WHERE excluded.base_version >= sync_field_writes.base_version`,
   );
-  for (const field of record.fields) {
+  for (const field of fields) {
     insert.run(
       record.entity,
       record.entityId,
@@ -352,6 +398,7 @@ export function recordInheritedFieldWrites(
   writes: readonly InheritedFieldWrite[],
   priorVersion: number,
 ): void {
+  if (entity === "issue") writes = writes.filter((write) => !DERIVED_ISSUE_KEYS.has(write.field));
   if (writes.length === 0) return;
   const insert = db.prepare(
     `INSERT INTO sync_field_writes
@@ -463,11 +510,32 @@ export function replayOutboxFieldWrites(db: DatabaseSync): void {
 
 export class Journal {
   private scope: JournalScope | null = null;
+  private knownDeviceId: string | null;
 
+  /**
+   * `resolve` is set for a journal made by {@link journalFor}: one that found no device
+   * id when it was made, and must keep looking.
+   *
+   * A journal lives as long as its database connection, and a UI or MCP server holds one
+   * for its whole life. Resolving the device id once, when the journal was made, meant a
+   * server started before this machine's first `staple cloud connect` journaled nothing
+   * for as long as it ran — after the connect, after the first sync had seeded the
+   * repository — so every issue created and every edit made through it stayed on this
+   * machine and nothing ever said so. The device id is a file only `connect` writes, so
+   * until it is found it is looked for again on each mutation, and once found it is kept.
+   */
   constructor(
     private readonly db: DatabaseSync,
-    private readonly deviceId: string | null,
-  ) {}
+    deviceId: string | null,
+    private readonly resolve: (() => string | null) | null = null,
+  ) {
+    this.knownDeviceId = deviceId;
+  }
+
+  private get deviceId(): string | null {
+    if (this.knownDeviceId === null && this.resolve !== null) this.knownDeviceId = this.resolve();
+    return this.knownDeviceId;
+  }
 
   /** True when this workspace has both an identity and a bound device. */
   armed(): boolean {
@@ -477,9 +545,15 @@ export class Journal {
 
   private state(): SyncStateRow | null {
     const row = this.db
-      .prepare("SELECT repository_id, epoch FROM sync_state WHERE id = 1")
+      .prepare("SELECT repository_id, epoch, cursor FROM sync_state WHERE id = 1")
       .get() as SyncStateRow | undefined;
     return row ?? null;
+  }
+
+  /** This workspace's queue will be sent: it is connected here, or has synchronized before. */
+  private boundForService(state: SyncStateRow): boolean {
+    if (state.epoch > 0 || state.cursor !== null) return true;
+    return state.repository_id !== null && existsSync(connectionPath(stapleHome(), state.repository_id));
   }
 
   /** The dedup key an event should carry, or null outside any scope. */
@@ -517,8 +591,25 @@ export class Journal {
         entity: intent.entity,
         entityId: intent.entityId,
         verb: intent.verb,
-        payload: { ...(intent.payload ?? {}) },
+        payload: oneSpelling(intent.payload ?? {}),
         actor: intent.actor ?? null,
+      });
+      return;
+    }
+    /**
+     * Deleted, then brought back, in one mutation — a batch that removes a status and adds
+     * it again, a reset followed by a set. The net effect is an entity that exists with
+     * what the second half wrote, and that is what travels: a `create` carrying only its
+     * payload. Merged the ordinary way this was a `delete`, so the origin kept the entity
+     * and every receiver removed it.
+     */
+    if (existing.verb === "delete" && (intent.verb === "create" || intent.verb === "update")) {
+      scope.intents.set(key, {
+        entity: existing.entity,
+        entityId: existing.entityId,
+        verb: "create",
+        payload: oneSpelling(intent.payload ?? {}),
+        actor: intent.actor ?? existing.actor ?? null,
       });
       return;
     }
@@ -526,7 +617,7 @@ export class Journal {
       entity: existing.entity,
       entityId: existing.entityId,
       verb: mergeVerb(existing.verb, intent.verb),
-      payload: { ...existing.payload, ...(intent.payload ?? {}) },
+      payload: { ...existing.payload, ...oneSpelling(intent.payload ?? {}) },
       actor: intent.actor ?? existing.actor ?? null,
     });
   }
@@ -545,10 +636,21 @@ export class Journal {
 
     const scope = new JournalScope(randomUUID(), false);
     this.scope = scope;
+    /**
+     * With a device to journal for, the rows the mutation touches are read before and after
+     * (`cloud/row-diff.ts`): every synchronized column it changed travels, whether or not the
+     * mutation named it. Armed and disarmed inside the transaction, so a throw rolls the
+     * capture back with everything else.
+     */
+    const capturing = this.deviceId !== null;
+    if (capturing) ensureRowCapture(this.db);
     try {
       return tx(this.db, () => {
+        if (capturing) armRowCapture(this.db, true, true);
         const result = fn();
-        this.flush(scope);
+        const changes = capturing ? takeRowChanges(this.db) : [];
+        if (capturing) armRowCapture(this.db, false);
+        this.flush(scope, changes);
         return result;
       });
     } finally {
@@ -583,9 +685,12 @@ export class Journal {
       const outer = this.scope;
       const scope = new JournalScope(op.opId, true);
       this.scope = scope;
+      // What an applied operation writes is somebody else's change: nothing of it is journaled.
+      const capturing = armRowCapture(this.db, false);
       try {
         return apply();
       } finally {
+        if (capturing) armRowCapture(this.db, true);
         this.scope = outer;
       }
     });
@@ -602,13 +707,42 @@ export class Journal {
    * takes the version bump and the sequence allocation with it and the next
    * attempt derives the same id from the same inputs.
    */
-  private flush(scope: JournalScope): void {
-    if (scope.intents.size === 0) return;
+  private flush(scope: JournalScope, changes: readonly RowChange[] = []): void {
     if (this.deviceId === null) return;
+    if (scope.intents.size === 0 && changes.length === 0) return;
     const state = this.state();
     if (!state?.repository_id) return;
+    this.mergeRowChanges(scope, changes);
+    if (scope.intents.size === 0) return;
 
     const createdAt = nowIso();
+    /**
+     * Refused here, on the device, before a row is written — *"a document revision
+     * larger than the payload cap is refused at journal time, with the same code, so the
+     * failure surfaces where the human is"*. The service refuses an oversized payload
+     * for the whole batch, so an outbox holding one would fail the same push on every
+     * sync and nothing queued behind it would ever leave. The throw rolls the mutation
+     * back with it: the scope runs inside the mutation's transaction.
+     *
+     * Only for an operation that is going to a service: this workspace is connected
+     * here, or has synchronized before (so its queue is sent, as it stands, the next time
+     * it is). A journal is also armed in a workspace that has never been connected, on a
+     * machine that connected something else, and refusing a write THERE would forbid a
+     * large document in a tracker that syncs nowhere. Its first sync replaces that
+     * journal with a seed, and the seed names an oversized revision and leaves it behind.
+     */
+    for (const intent of scope.intents.values()) {
+      const bytes = Buffer.byteLength(JSON.stringify(intent.payload), "utf8");
+      if (bytes > JOURNAL_MAX_OP_BYTES && this.boundForService(state)) {
+        throw cloudError(
+          "payload_too_large",
+          `This ${intent.entity} change is ${bytes} bytes, and this workspace syncs to a service that ` +
+            `takes at most ${JOURNAL_MAX_OP_BYTES} bytes per operation, so it could never be sent. ` +
+            `Nothing was written. Shorten it, or keep the large content outside the tracker and link to it.`,
+          { bytes, maxBytes: JOURNAL_MAX_OP_BYTES },
+        );
+      }
+    }
     for (const intent of scope.intents.values()) {
       const baseVersion = this.bumpEntityVersion(intent.entity, intent.entityId);
       const clientSeq = this.allocateClientSeq();
@@ -655,7 +789,74 @@ export class Journal {
           at: createdAt,
         });
       }
+
+      /**
+       * A deletion made here is a tombstone here at once, not only when it comes back on
+       * the next pull. Until then it is this device's only record that the entity was
+       * deleted, and a set made in between has to go out as a `create` — after a delete
+       * only a create brings an entity back, in the service's fold and in every applier
+       * (`WorkspaceStore.setSetting`). Sent as an `update` it was dropped by the fold, and
+       * when the delete came back here it removed the value on this device as well. The
+       * create lifts the tombstone when it comes back, as on every other device.
+       */
+      if (intent.verb === "delete") {
+        this.db
+          .prepare(
+            `INSERT INTO sync_tombstones (entity, entity_id, deleted_at, device_id, op_id)
+             VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT (entity, entity_id) DO NOTHING`,
+          )
+          .run(intent.entity, intent.entityId, createdAt, this.deviceId, opId);
+      }
     }
+  }
+
+  /**
+   * Fold what the rows say changed into what the mutation declared (`cloud/row-diff.ts`).
+   *
+   * Every synchronized column the mutation changed joins its entity's operation with the
+   * value the row now holds — over a value the declaration named, since the row is what the
+   * mutation left. An entity the mutation changed and declared nothing about gets an
+   * operation of its own: an `update`, or a `create` for a row it inserted, attributed to
+   * the mutation's actor. A declared `delete` is left as it is.
+   *
+   * A derived issue column is never part of the change (`docs/sync.md`, "Derived
+   * columns"): no provenance, never contested, and ignored by this build's applier, which
+   * computes it. What an issue operation does carry, as the row holds it, is a copy for the
+   * builds from before this one, whose applier reads it — the normalized title beside any
+   * title, and the depth on a create.
+   */
+  private mergeRowChanges(scope: JournalScope, changes: readonly RowChange[]): void {
+    const actor = [...scope.intents.values()].find((intent) => intent.actor !== null)?.actor ?? null;
+    for (const change of changes) {
+      const key = `${change.entity}\u0000${change.entityId}`;
+      const existing = scope.intents.get(key);
+      if (existing?.verb === "delete") continue;
+      scope.intents.set(
+        key,
+        existing
+          ? { ...existing, payload: { ...existing.payload, ...change.fields } }
+          : { entity: change.entity, entityId: change.entityId, verb: change.created ? "create" : "update", payload: { ...change.fields }, actor },
+      );
+    }
+    for (const [key, intent] of scope.intents) {
+      if (intent.entity !== "issue" || intent.verb === "delete") continue;
+      const payload = Object.fromEntries(Object.entries(intent.payload).filter(([field]) => !DERIVED_FIELDS.has(field)));
+      if (typeof payload.title === "string") payload.normalizedTitle = normalizeTitle(payload.title);
+      if (intent.verb === "create") {
+        const row = this.db.prepare("SELECT depth FROM issues WHERE id = ?").get(intent.entityId) as { depth: number } | undefined;
+        if (row) payload.depth = row.depth;
+      }
+      scope.intents.set(key, { ...intent, payload });
+    }
+  }
+
+  /** True when this entity's last word, here, was a delete. */
+  isTombstoned(entity: SyncEntity, entityId: string): boolean {
+    return (
+      this.db.prepare("SELECT 1 AS hit FROM sync_tombstones WHERE entity = ? AND entity_id = ?").get(entity, entityId) !==
+      undefined
+    );
   }
 
   /**
@@ -796,6 +997,19 @@ export class Journal {
     return intents.length;
   }
 
+  /**
+   * Take one unsent operation out of the queue, with the provenance it recorded.
+   *
+   * For an operation the service will refuse whatever happens — larger than the payload
+   * it advertises — which would otherwise fail the same batch on every push and hold
+   * back everything queued behind it. The caller names what it withheld; the domain row
+   * it described is untouched.
+   */
+  withhold(opId: string): void {
+    this.db.prepare("DELETE FROM sync_field_writes WHERE op_id = ?").run(opId);
+    this.db.prepare("DELETE FROM sync_outbox WHERE op_id = ? AND acknowledged_seq IS NULL").run(opId);
+  }
+
   // ------------------------------------------------------------- compaction
 
   /**
@@ -932,7 +1146,7 @@ const journals = new WeakMap<DatabaseSync, Journal>();
 export function journalFor(db: DatabaseSync): Journal {
   const existing = journals.get(db);
   if (existing) return existing;
-  const created = new Journal(db, resolveDeviceId());
+  const created = new Journal(db, resolveDeviceId(), resolveDeviceId);
   journals.set(db, created);
   return created;
 }

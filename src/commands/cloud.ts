@@ -49,6 +49,7 @@ import {
   readWorkspaceManifest,
 } from "../core/repo-identity.js";
 import { Hub } from "../core/hub.js";
+import { acknowledgeRenumbers } from "../core/identifier-moves.js";
 import { resolveWorkspace } from "../core/workspace.js";
 import { StapleError, errorEnvelope } from "../core/types.js";
 import { confirm, isInteractive } from "../onboarding/prompts.js";
@@ -1053,7 +1054,16 @@ function runSync(argv: string[]): void {
   const pullLimit = pullLimitAll;
 
   settle(
-    syncRepository(opened.store.db, manifest.repositoryId, { home, pullLimit })
+    syncRepository(opened.store.db, manifest.repositoryId, {
+      home,
+      pullLimit,
+      // On stderr, so `--json` stays one document on stdout.
+      onServiceWait: (ms, code) =>
+        console.error(
+          `${code === "rate_limited" ? "The service is rate-limiting this device" : "The service is unavailable"} ` +
+            `and asked for ${Math.ceil(ms / 1000)}s; waiting, then continuing. Nothing already sent is sent twice.`,
+        ),
+    })
       .then((report) => {
         if (json) {
           console.log(JSON.stringify(report, null, 2));
@@ -1085,9 +1095,18 @@ function renderSyncReport(report: SyncReport): string {
   if (report.bootstrap) {
     const b = report.bootstrap;
     lines.push(
-      `${b.resumed ? "Resumed" : "Hydrated"} from a snapshot at seq ${b.cutoffSeq}: ` +
+      (b.fromTail
+        ? `Folded the ordered tail here to seq ${b.cutoffSeq} (the service cannot fold a log this large): `
+        : `${b.resumed ? "Resumed" : "Hydrated"} from a snapshot at seq ${b.cutoffSeq}: `) +
         `${b.entities} ${b.entities === 1 ? "entity" : "entities"} over ` +
         `${b.pages} ${b.pages === 1 ? "page" : "pages"}.`,
+    );
+  }
+  if (report.caughtUp) {
+    lines.push(
+      `Re-read the repository once (${report.caughtUp.entities} ` +
+        `${report.caughtUp.entities === 1 ? "entity" : "entities"}): an earlier build of staple applied this ` +
+        `database's state, and dropped parts of it this build applies.`,
     );
   }
 
@@ -1107,6 +1126,13 @@ function renderSyncReport(report: SyncReport): string {
           ? `, and skipped ${report.pulled.alreadyApplied} already applied here`
           : ""),
   );
+
+  for (const op of report.withheld) {
+    lines.push(
+      `  ! not sent: ${op.entity} ${op.entityId} is ${op.bytes} bytes and the service takes at most ` +
+        `${op.maxBytes}. It was taken out of the queue so the rest could go; it is still here.`,
+    );
+  }
 
   lines.push("");
   lines.push(`  service    ${report.endpoint}`);
@@ -1200,9 +1226,12 @@ function runLease(argv: string[]): void {
       ttl: { type: "string" },
       heartbeat: { type: "string" },
       for: { type: "string" },
+      "ack-renumber": { type: "boolean" },
     },
   });
   const json = values.json === true;
+  // A number this device's issue left may be named on purpose (`WorkspaceStore.requireTarget`).
+  if (values["ack-renumber"] === true) acknowledgeRenumbers();
   const home = stapleHome();
   const ref = positionals[0];
 
@@ -1313,12 +1342,27 @@ function runLease(argv: string[]): void {
    * Signal listeners do not keep the process alive, so leaving them in place
    * until exit costs nothing and covers the report and the close as well.
    */
+  /**
+   * The issue the heartbeat keeps, resolved as the other lease verbs resolve it: as a write
+   * (`leasedIssue` in `cloud/lease.ts`). By a number this device's issue has left, while
+   * that issue may be the one meant, it is refused, naming both, before a beat is sent —
+   * where a lookup renewed the issue holding the number now, and the lease on the issue
+   * that moved silently went unrenewed.
+   */
+  let entityId: string;
+  try {
+    entityId = store.writeTarget(ref!).id;
+  } catch (error) {
+    store.db.close();
+    settle(Promise.reject(error), json);
+    return;
+  }
+
   const controller = new AbortController();
   const stop = (): void => controller.abort();
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
 
-  const entityId = store.getIssue(ref!).id;
   settle(
     runHeartbeat(store.db, repositoryId, entityId, {
       ...options,

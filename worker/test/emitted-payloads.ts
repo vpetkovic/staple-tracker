@@ -42,10 +42,13 @@ export const EMITTED_PAYLOADS: ReadonlyArray<{
     "payload": {
       "resolvedAt": "2026-09-10T00:00:00.000Z",
       "resolvedBy": "vp",
-      "value": "TST-13",
-      "entity": "issue",
-      "targetId": "00000000-0000-4000-8000-000000000000",
-      "field": "identifier"
+      "value": [
+        "00000000-0000-4000-8000-000000000000",
+        "00000000-0000-4000-8000-000000000000"
+      ],
+      "entity": "queue",
+      "targetId": "@plan",
+      "field": "order"
     }
   },
   {
@@ -98,6 +101,7 @@ export const EMITTED_PAYLOADS: ReadonlyArray<{
       "gateResolvedAt": null,
       "gateReleased": false,
       "startedAt": null,
+      "blockedTransitionAt": null,
       "completedAt": null,
       "cancelledAt": null,
       "checkoutAgent": null,
@@ -110,18 +114,18 @@ export const EMITTED_PAYLOADS: ReadonlyArray<{
     "entity": "issue",
     "verb": "renumber",
     "payload": {
-      "identifier": "TST-13"
+      "identifier": "TST-14"
     }
   },
   {
     "entity": "issue",
     "verb": "update",
     "payload": {
-      "updated_at": "2026-09-10T00:00:00.000Z",
+      "updatedAt": "2026-09-10T00:00:00.000Z",
       "title": "Child, renamed",
-      "normalized_title": "child, renamed",
       "priority": "low",
-      "labels": "[]"
+      "labels": "[]",
+      "normalizedTitle": "child, renamed"
     }
   },
   {
@@ -129,14 +133,15 @@ export const EMITTED_PAYLOADS: ReadonlyArray<{
     "verb": "create",
     "payload": {
       "id": "research",
-      "label": "Research"
+      "label": "Research",
+      "isBuiltin": false
     }
   },
   {
     "entity": "kind",
     "verb": "delete",
     "payload": {
-      "migrateTo": null
+      "migrateTo": "milestone"
     }
   },
   {
@@ -172,8 +177,16 @@ export const EMITTED_PAYLOADS: ReadonlyArray<{
       "members": [
         "00000000-0000-4000-8000-000000000000"
       ],
+      "entries": {
+        "00000000-0000-4000-8000-000000000001": {
+          "addedBy": "past",
+          "addedAt": "2026-09-10T00:00:00.000Z",
+          "note": null
+        }
+      },
       "targetDate": null,
-      "startDate": "2026-01-01"
+      "startDate": "2026-01-01",
+      "updatedAt": "2026-09-10T00:00:00.000Z"
     }
   },
   {
@@ -182,7 +195,15 @@ export const EMITTED_PAYLOADS: ReadonlyArray<{
     "payload": {
       "members": [
         "00000000-0000-4000-8000-000000000000"
-      ]
+      ],
+      "entries": {
+        "00000000-0000-4000-8000-000000000001": {
+          "addedBy": "emitter",
+          "addedAt": "2026-09-10T00:00:00.000Z",
+          "note": null
+        }
+      },
+      "updatedAt": "2026-09-10T00:00:00.000Z"
     }
   },
   {
@@ -190,7 +211,8 @@ export const EMITTED_PAYLOADS: ReadonlyArray<{
     "verb": "update",
     "payload": {
       "targetDate": "2026-12-01",
-      "startDate": null
+      "startDate": null,
+      "updatedAt": "2026-09-10T00:00:00.000Z"
     }
   },
   {
@@ -215,7 +237,8 @@ export const EMITTED_PAYLOADS: ReadonlyArray<{
     "entity": "project",
     "verb": "update",
     "payload": {
-      "name": "Project, renamed"
+      "name": "Project, renamed",
+      "updatedAt": "2026-09-10T00:00:00.000Z"
     }
   },
   {
@@ -224,7 +247,14 @@ export const EMITTED_PAYLOADS: ReadonlyArray<{
     "payload": {
       "order": [
         "00000000-0000-4000-8000-000000000000"
-      ]
+      ],
+      "entries": {
+        "00000000-0000-4000-8000-000000000001": {
+          "addedBy": "past",
+          "addedAt": "2026-09-10T00:00:00.000Z",
+          "note": null
+        }
+      }
     }
   },
   {
@@ -234,7 +264,19 @@ export const EMITTED_PAYLOADS: ReadonlyArray<{
       "order": [
         "00000000-0000-4000-8000-000000000000",
         "00000000-0000-4000-8000-000000000000"
-      ]
+      ],
+      "entries": {
+        "00000000-0000-4000-8000-000000000001": {
+          "addedBy": "past",
+          "addedAt": "2026-09-10T00:00:00.000Z",
+          "note": null
+        },
+        "00000000-0000-4000-8000-000000000002": {
+          "addedBy": "emitter",
+          "addedAt": "2026-09-10T00:00:00.000Z",
+          "note": null
+        }
+      }
     }
   },
   {
@@ -243,7 +285,13 @@ export const EMITTED_PAYLOADS: ReadonlyArray<{
     "payload": {
       "blockedBy": [
         "00000000-0000-4000-8000-000000000000"
-      ]
+      ],
+      "edges": {
+        "00000000-0000-4000-8000-000000000001": {
+          "createdBy": "past",
+          "createdAt": "2026-09-10T00:00:00.000Z"
+        }
+      }
     }
   },
   {
@@ -252,7 +300,13 @@ export const EMITTED_PAYLOADS: ReadonlyArray<{
     "payload": {
       "blockedBy": [
         "00000000-0000-4000-8000-000000000000"
-      ]
+      ],
+      "edges": {
+        "00000000-0000-4000-8000-000000000001": {
+          "createdBy": "emitter",
+          "createdAt": "2026-09-10T00:00:00.000Z"
+        }
+      }
     }
   },
   {
@@ -280,14 +334,15 @@ export const EMITTED_PAYLOADS: ReadonlyArray<{
     "payload": {
       "id": "parked",
       "label": "Parked",
-      "category": "blocked"
+      "category": "blocked",
+      "isBuiltin": false
     }
   },
   {
     "entity": "status",
     "verb": "delete",
     "payload": {
-      "migrateTo": null
+      "migrateTo": "todo"
     }
   },
   {

@@ -43,7 +43,7 @@ const EXCLUDED: Record<string, string> = {
     "never a plain field write — the projection of a lease (docs/sync.md, 'Claims')",
   checkout_at: "as checkout_agent",
   blocked_transition_at:
-    "local timing state; not in the contract's issues field inventory",
+    "null at create; every transition into or out of a blocked status journals it (test/cloud-blocked-transition.test.ts)",
   completed_at: "null at create by construction; set by the status transition that journals it",
   cancelled_at: "as completed_at",
   gate_state: "null at create; every gate transition journals its own update",
@@ -156,13 +156,13 @@ describe("issue.create replicates every issues column, or says why not", () => {
     store.db.close();
   });
 
-  it("maps every payload key it carries onto a real column, except blockedBy", () => {
+  it("maps every payload key it carries onto a real column, except blockedBy and its edges", () => {
     const store = armed();
     const payload = createPayload(store);
     const columns = new Set(issueColumns(store));
 
     const unplaceable = Object.keys(payload).filter(
-      (key) => key !== "blockedBy" && !(ISSUE_COLUMNS[key] && columns.has(ISSUE_COLUMNS[key]!.column)),
+      (key) => key !== "blockedBy" && key !== "edges" && !(ISSUE_COLUMNS[key] && columns.has(ISSUE_COLUMNS[key]!.column)),
     );
     expect(
       unplaceable,

@@ -35,12 +35,15 @@
  */
 import type { DatabaseSync } from "node:sqlite";
 import { tx } from "../db.js";
+import { moveIdentifier } from "../identifier-moves.js";
 import { newId } from "../ids.js";
 import { replayOutboxFieldWrites, type Journal, type SeedIntent, type SyncEntity } from "../journal.js";
 import { WORKSPACE_SETTING_META_PREFIX } from "../settings-registry.js";
-import { BUILTIN_KIND_SEED, BUILTIN_STATUS_SEED, nowIso } from "../types.js";
+import { BUILTIN_KIND_SEED, BUILTIN_STATUS_SEED, holdsLiveOrigin, nowIso } from "../types.js";
 import { COMMENT_COLUMNS, ISSUE_COLUMNS, PROJECT_COLUMNS, applyToDatabase, payloadFromRow } from "./apply.js";
+import { settleOwedClaims } from "./claims.js";
 import { cloudError } from "./errors.js";
+import { REPOSITORY_PREFIX_SETTING, localPrefix, repositoryPrefixOf } from "./repository-prefix.js";
 import { VOCABULARY_ORDER_ID, hydrate } from "./hydrate.js";
 import { completeSnapshot } from "./sync-state.js";
 import type { SnapshotEntity } from "./wire.js";
@@ -64,6 +67,10 @@ export interface RepositorySurvey {
   readonly tailCursor: string;
   readonly entities: readonly SnapshotEntity[];
   readonly pages: number;
+  /** True when the service could not fold a log this large and the tail was folded here. */
+  readonly fromTail?: boolean;
+  /** How many operations of that tail an earlier, stopped read had already folded. */
+  readonly resumedFrom?: number;
 }
 
 export interface SeedItem {
@@ -114,6 +121,8 @@ export interface SeedReport {
   readonly cleared: readonly SeedCleared[];
   readonly replaced: readonly SeedReplaced[];
   readonly skipped: readonly SeedSkipped[];
+  /** The prefix this workspace took from the repository on joining, or null. */
+  readonly prefix?: { readonly from: string; readonly to: string } | null;
   readonly at: string;
 }
 
@@ -126,9 +135,9 @@ export interface SeedReport {
  * column is a workspace migration, and the migration number is what every operation
  * carries as `schema`: a receiver refuses a page stamped above its own schema with
  * `schema_ahead`. One bookkeeping column would make every device on an older build
- * refuse every operation this build emits. `meta` keys outside `slug`, `prefix` and
- * `setting:*` are default-deny for replication, so this row never leaves the machine,
- * exactly like `next_issue_number` and `queue_revision` beside it.
+ * refuse every operation this build emits. `meta` keys outside `setting:*` are
+ * default-deny for replication, so this row never leaves the machine, exactly like
+ * `next_issue_number` and `queue_revision` beside it.
  *
  * Keyed by repository id inside the value: `staple cloud fork-id` mints a new id, and
  * the new repository has received nothing, so a fork owes a seed of its own.
@@ -215,9 +224,22 @@ export function describeSeed(seed: SeedReport): { summary: string; details: stri
   }
 
   const details: string[] = [];
+  const prefix = seed.prefix ?? null;
+  /**
+   * A prefix taken with nothing renumbered is not news: a clone numbered nothing, and
+   * adopting the repository's prefix changed no identifier anybody has seen. It is in the
+   * report, and said only when it moved something.
+   */
+  const movedForPrefix = prefix !== null && seed.renamed.some((rename) => rename.field === "identifier" && rename.from.startsWith(`${prefix.from}-`));
+  if (prefix !== null && movedForPrefix) {
+    details.push(`this workspace now numbers issues ${prefix.to}-N, as the repository does (it was ${prefix.from}-N)`);
+  }
   for (const rename of seed.renamed) {
+    const forPrefix = prefix !== null && rename.field === "identifier" && rename.from.startsWith(`${prefix.from}-`);
     details.push(
-      rename.field === "identifier"
+      forPrefix
+        ? `renumbered ${rename.from} -> ${rename.to}: into the repository's ${prefix!.to} numbering`
+        : rename.field === "identifier"
         ? `renumbered ${rename.from} -> ${rename.to}: the repository already had a ${rename.from}`
         : `renamed project ${rename.from} -> ${rename.to}: the repository already had a project called ${rename.from}`,
     );
@@ -303,13 +325,23 @@ function isComplete(entity: SnapshotEntity): boolean {
 
 class SurveyIndex {
   readonly byKey = new Map<string, SnapshotEntity>();
+  /**
+   * The live items the repository holds: what "the repository is empty" asks about.
+   *
+   * Not the repository's prefix declaration. Every first device sends one, the empty ones
+   * too (`repository-prefix.ts`), and it is not data: counted, a repository an empty device
+   * joined first looked like one holding data, and the next device's join — the one with
+   * the real work — gave up its own vocabulary order and its removals of built-ins.
+   */
   readonly live: number;
 
   constructor(readonly survey: RepositorySurvey) {
     let live = 0;
     for (const entity of survey.entities) {
       this.byKey.set(keyOf(entity.entity, entity.entityId), entity);
-      if (entity.deletedAt === null) live += 1;
+      if (entity.deletedAt !== null) continue;
+      if (entity.entity === "setting" && entity.entityId === REPOSITORY_PREFIX_SETTING) continue;
+      live += 1;
     }
     this.live = live;
   }
@@ -343,7 +375,7 @@ class SurveyIndex {
 
 // ----------------------------------------------------------------- inventory
 
-interface LocalEntity {
+export interface LocalEntity {
   readonly entity: SyncEntity;
   readonly entityId: string;
   readonly label: string;
@@ -360,6 +392,16 @@ interface LocalEntity {
 
 type Row = Record<string, unknown>;
 
+/**
+ * One field of a folded state, by its payload name. A state naming it in both spellings —
+ * a restored create from before one spelling — is read by the column's, the edit
+ * (`columnSpellingWins`, `apply.ts`).
+ */
+function field(state: Record<string, unknown>, name: string): unknown {
+  const column = name.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
+  return column in state ? state[column] : state[name];
+}
+
 function str(value: unknown): string | null {
   return typeof value === "string" ? value : null;
 }
@@ -374,6 +416,13 @@ function identifierOf(db: DatabaseSync, issueId: string): string {
     | { identifier: string }
     | undefined;
   return row?.identifier ?? issueId;
+}
+
+/** An ordered collection's per-entry facts, as `entries` carries them (`apply.ts`, `entryFor`). */
+function entriesOf(
+  rows: ReadonlyArray<{ issue_id: string; added_by: string; added_at: string; note: string | null }>,
+): Record<string, { addedBy: string; addedAt: string; note: string | null }> {
+  return Object.fromEntries(rows.map((row) => [row.issue_id, { addedBy: row.added_by, addedAt: row.added_at, note: row.note }]));
 }
 
 /** Issues, parents before children, then by creation. */
@@ -395,6 +444,11 @@ function issuesInOrder(db: DatabaseSync): Row[] {
   };
   for (const row of rows) place(row);
   return ordered;
+}
+
+/** Every entity this database holds, as the operation that would recreate it ({@link inventory}). */
+export function localInventory(db: DatabaseSync, now: string): LocalEntity[] {
+  return inventory(db, now, []);
 }
 
 /**
@@ -438,33 +492,39 @@ function inventory(db: DatabaseSync, now: string, skipped: SeedSkipped[]): Local
     });
   }
 
+  /**
+   * A status or kind carries whether it is a built-in: one removed and added back is not, and
+   * a device that holds the built-in from its own migrations learns that from the create
+   * (`applyVocabulary`). Implied — not sent — only while it is the built-in as every device
+   * has it.
+   */
   for (const row of db
-    .prepare("SELECT id, label, category FROM workspace_statuses ORDER BY sort_order, id")
-    .all() as Array<{ id: string; label: string; category: string }>) {
+    .prepare("SELECT id, label, category, is_builtin FROM workspace_statuses ORDER BY sort_order, id")
+    .all() as Array<{ id: string; label: string; category: string; is_builtin: number }>) {
     const builtin = BUILTIN_STATUS.get(row.id);
     out.push({
       entity: "status",
       entityId: row.id,
       label: row.id,
-      payload: { id: row.id, label: row.label, category: row.category },
+      payload: { id: row.id, label: row.label, category: row.category, isBuiltin: row.is_builtin === 1 },
       actor: null,
       at: now,
-      implied: builtin !== undefined && builtin.label === row.label && builtin.category === row.category,
+      implied: builtin !== undefined && row.is_builtin === 1 && builtin.label === row.label && builtin.category === row.category,
     });
   }
 
   for (const row of db
-    .prepare("SELECT id, label FROM workspace_kinds ORDER BY sort_order, id")
-    .all() as Array<{ id: string; label: string }>) {
+    .prepare("SELECT id, label, is_builtin FROM workspace_kinds ORDER BY sort_order, id")
+    .all() as Array<{ id: string; label: string; is_builtin: number }>) {
     const builtin = BUILTIN_KIND.get(row.id);
     out.push({
       entity: "kind",
       entityId: row.id,
       label: row.id,
-      payload: { id: row.id, label: row.label },
+      payload: { id: row.id, label: row.label, isBuiltin: row.is_builtin === 1 },
       actor: null,
       at: now,
-      implied: builtin !== undefined && builtin.label === row.label,
+      implied: builtin !== undefined && row.is_builtin === 1 && builtin.label === row.label,
     });
   }
 
@@ -507,7 +567,11 @@ function inventory(db: DatabaseSync, now: string, skipped: SeedSkipped[]): Local
       entity: "relation",
       entityId: blockedId,
       label: `blockers of ${identifierOf(db, blockedId)}`,
-      payload: { blockedBy: set.map((edge) => edge.blocker_id) },
+      payload: {
+        blockedBy: set.map((edge) => edge.blocker_id),
+        // Each edge's own author and time, so no device dates them with the seed's.
+        edges: Object.fromEntries(set.map((edge) => [edge.blocker_id, { createdBy: edge.created_by, createdAt: edge.created_at }])),
+      },
       actor: set[set.length - 1]!.created_by,
       at: latest(set.map((edge) => edge.created_at), now),
     });
@@ -595,12 +659,17 @@ function inventory(db: DatabaseSync, now: string, skipped: SeedSkipped[]): Local
       .prepare("SELECT target_date, start_date, updated_at FROM milestone_meta WHERE issue_id = ?")
       .get(milestoneId) as { target_date: string | null; start_date: string | null; updated_at: string } | undefined;
     const members = db
-      .prepare("SELECT issue_id, added_by, added_at FROM milestone_members WHERE milestone_id = ? ORDER BY rank")
-      .all(milestoneId) as Array<{ issue_id: string; added_by: string; added_at: string }>;
-    const payload: Record<string, unknown> = { members: members.map((member) => member.issue_id) };
+      .prepare("SELECT issue_id, added_by, added_at, note FROM milestone_members WHERE milestone_id = ? ORDER BY rank")
+      .all(milestoneId) as Array<{ issue_id: string; added_by: string; added_at: string; note: string | null }>;
+    const payload: Record<string, unknown> = {
+      members: members.map((member) => member.issue_id),
+      entries: entriesOf(members),
+    };
     if (meta) {
       payload.targetDate = meta.target_date;
       payload.startDate = meta.start_date;
+      // When it last changed, as this device holds it (`applyMilestone`).
+      payload.updatedAt = meta.updated_at;
     }
     out.push({
       entity: "milestone",
@@ -613,14 +682,14 @@ function inventory(db: DatabaseSync, now: string, skipped: SeedSkipped[]): Local
   }
 
   const plan = db
-    .prepare("SELECT issue_id, added_by, added_at FROM queue_entries ORDER BY rank")
-    .all() as Array<{ issue_id: string; added_by: string; added_at: string }>;
+    .prepare("SELECT issue_id, added_by, added_at, note FROM queue_entries ORDER BY rank")
+    .all() as Array<{ issue_id: string; added_by: string; added_at: string; note: string | null }>;
   if (plan.length > 0) {
     out.push({
       entity: "queue",
       entityId: QUEUE_PLAN_ID,
       label: "the plan",
-      payload: { order: plan.map((entry) => entry.issue_id) },
+      payload: { order: plan.map((entry) => entry.issue_id), entries: entriesOf(plan) },
       actor: plan[plan.length - 1]!.added_by,
       at: latest(plan.map((entry) => entry.added_at), now),
     });
@@ -631,7 +700,7 @@ function inventory(db: DatabaseSync, now: string, skipped: SeedSkipped[]): Local
 
 // -------------------------------------------------------------------- yields
 
-const DONE_STATUSES = new Set(["done", "cancelled"]);
+// A live origin by the one definition (`holdsLiveOrigin`, `types.ts`).
 
 /** The unique display keys and dedup tokens the repository's live entities hold. */
 interface Claims {
@@ -654,12 +723,12 @@ function claimsOf(index: SurveyIndex): Claims {
     const s = issue.state;
     const identifier = str(s.identifier);
     if (identifier) claims.identifiers.set(identifier, issue.entityId);
-    const key = str(s.idempotencyKey ?? s.idempotency_key);
+    const key = str(field(s, "idempotencyKey"));
     if (key) claims.issueKeys.set(key, issue.entityId);
-    const originKind = str(s.originKind ?? s.origin_kind);
-    const originId = str(s.originId ?? s.origin_id);
+    const originKind = str(field(s, "originKind"));
+    const originId = str(field(s, "originId"));
     const status = str(s.status);
-    if (originKind && originKind !== "manual" && originId && !DONE_STATUSES.has(status ?? "")) {
+    if (originKind && originKind !== "manual" && originId && holdsLiveOrigin(status ?? "")) {
       claims.origins.set(`${originKind}\n${originId}`, issue.entityId);
     }
   }
@@ -668,11 +737,77 @@ function claimsOf(index: SurveyIndex): Claims {
     if (slug) claims.slugs.set(slug, project.entityId);
   }
   for (const comment of index.liveOf("comment")) {
-    const issueId = str(comment.state.issueId ?? comment.state.issue_id);
-    const key = str(comment.state.idempotencyKey ?? comment.state.idempotency_key);
+    const issueId = str(field(comment.state, "issueId"));
+    const key = str(field(comment.state, "idempotencyKey"));
     if (issueId && key) claims.commentKeys.set(`${issueId}\n${key}`, comment.entityId);
   }
   return claims;
+}
+
+/**
+ * A joining workspace takes its repository's prefix (`repository-prefix.ts`).
+ *
+ * The workspace is re-stamped, and each issue it numbered before joining is renumbered into
+ * the repository's namespace, in its own order, above every number the repository or this
+ * workspace uses — through `moveIdentifier`, so the old identifier keeps resolving here and
+ * this machine's hub cross-links follow it, with a system comment every device receives
+ * and a line in the seed report. A workspace that numbered nothing just takes the prefix.
+ */
+function adoptRepositoryPrefix(
+  db: DatabaseSync,
+  index: SurveyIndex,
+  to: string,
+  repositoryId: string,
+  now: string,
+  renamed: SeedRename[],
+): { from: string; to: string } | null {
+  const from = localPrefix(db);
+  if (from === null || from === to) return null;
+
+  const numberIn = (identifier: unknown): number => {
+    if (typeof identifier !== "string") return 0;
+    const match = new RegExp(`^${escapeRegExp(to)}-(\\d+)`).exec(identifier);
+    return match ? Number(match[1]) : 0;
+  };
+  let highest = 0;
+  for (const entity of index.survey.entities) {
+    if (entity.entity === "issue") highest = Math.max(highest, numberIn(entity.state.identifier));
+  }
+  const issues = db.prepare("SELECT id, identifier, created_at FROM issues").all() as Array<{
+    id: string;
+    identifier: string;
+    created_at: string;
+  }>;
+  for (const issue of issues) highest = Math.max(highest, numberIn(issue.identifier));
+
+  const theirs = issues.filter((issue) => !issue.identifier.startsWith(`${to}-`));
+  const localNumber = (identifier: string): number => Number(/-(\d+)(?:\+\d+)?$/.exec(identifier)?.[1] ?? 0);
+  theirs.sort((a, b) => localNumber(a.identifier) - localNumber(b.identifier) || a.created_at.localeCompare(b.created_at));
+  const note = db.prepare(
+    `INSERT INTO comments (id, issue_id, author, author_type, body, created_at)
+     VALUES (?, ?, 'staple', 'system', ?, ?)`,
+  );
+  for (const issue of theirs) {
+    highest += 1;
+    const moved = `${to}-${highest}`;
+    moveIdentifier(db, issue.id, moved, now);
+    note.run(
+      newId(),
+      issue.id,
+      `Renumbered from ${issue.identifier} to ${moved} when the workspace it was created in joined repository ` +
+        `${repositoryId}, whose issues are numbered ${to}-N. A reference to ${issue.identifier} made in that ` +
+        `workspace before ${now} means this issue.`,
+      now,
+    );
+    renamed.push({ entity: "issue", entityId: issue.id, label: moved, field: "identifier", from: issue.identifier, to: moved });
+  }
+  db.prepare("UPDATE meta SET value = ? WHERE key = 'prefix'").run(to);
+  db.prepare(
+    `INSERT INTO meta (key, value) VALUES ('next_issue_number', ?)
+     ON CONFLICT(key) DO UPDATE SET
+       value = CASE WHEN CAST(meta.value AS INTEGER) > CAST(excluded.value AS INTEGER) THEN meta.value ELSE excluded.value END`,
+  ).run(String(highest + 1));
+  return { from, to };
 }
 
 function escapeRegExp(text: string): string {
@@ -736,7 +871,7 @@ function yieldToRepository(
         });
       }
     }
-    if (issue.origin_kind !== "manual" && issue.origin_id !== null && !DONE_STATUSES.has(issue.status)) {
+    if (issue.origin_kind !== "manual" && issue.origin_id !== null && holdsLiveOrigin(issue.status)) {
       const owner = claims.origins.get(`${issue.origin_kind}\n${issue.origin_id}`);
       if (owner !== undefined && owner !== issue.id) {
         db.prepare("UPDATE issues SET origin_id = NULL WHERE id = ?").run(issue.id);
@@ -776,19 +911,22 @@ function yieldToRepository(
     for (const issue of renumber) {
       highest += 1;
       const to = prefix ? `${prefix}-${highest}` : `${issue.identifier}-${highest}`;
-      db.prepare("UPDATE issues SET identifier = ?, updated_at = ? WHERE id = ?").run(to, now, issue.id);
+      moveIdentifier(db, issue.id, to, now);
+      db.prepare("UPDATE issues SET updated_at = ? WHERE id = ?").run(now, issue.id);
       /**
-       * The old number is already in somebody's commit message, and there is no alias
-       * table to resolve it. A comment on the issue is the durable record that does
-       * exist: it travels with the issue to every device, `staple show` prints it, and
-       * a search for the old identifier finds it.
+       * The old number is already in somebody's commit message. On this machine it keeps
+       * resolving — to this issue, whenever no issue of the repository's holds it — and
+       * this machine's hub cross-links follow it (`identifier-moves.ts`). The comment is
+       * the record that reaches every OTHER device: it travels with the issue, `staple
+       * show` prints it, and a search for the old identifier finds it.
        */
       note.run(
         newId(),
         issue.id,
-        `Renumbered from ${issue.identifier} to ${to} when this workspace joined repository ` +
-          `${repositoryId}: the repository already had an issue numbered ${issue.identifier}. ` +
-          `A reference to ${issue.identifier} written on this machine before then means this issue.`,
+        `Renumbered from ${issue.identifier} to ${to} when the workspace it was created in joined repository ` +
+          `${repositoryId}, which already had an issue numbered ${issue.identifier}. A reference to ` +
+          `${issue.identifier} made in that workspace before ${now} means this issue; anywhere else, ` +
+          `${issue.identifier} is the repository's.`,
         now,
       );
       report.renamed.push({
@@ -809,11 +947,7 @@ function yieldToRepository(
        */
       if (mode === "heal") {
         const holder = claims.identifiers.get(issue.identifier)!;
-        db.prepare("UPDATE issues SET identifier = ? WHERE id = ? AND identifier <> ?").run(
-          issue.identifier,
-          holder,
-          issue.identifier,
-        );
+        moveIdentifier(db, holder, issue.identifier, now);
         db.prepare(
           `UPDATE sync_conflicts SET resolved_at = ?, resolved_by = 'staple', resolution = ?
             WHERE entity = 'issue' AND entity_id = ? AND field = 'identifier' AND resolved_at IS NULL`,
@@ -981,6 +1115,12 @@ export interface SeedArgs {
   readonly survey: RepositorySurvey;
   /** `capabilities().maxOpBytes`: the largest payload the service will take. */
   readonly maxOpBytes: number;
+  /**
+   * The repository's prefix, when a JOINING workspace takes it — decided by the caller,
+   * which has already checked that this machine's hub can take it (`sync.ts`). Null or
+   * absent leaves the prefix alone. See `repository-prefix.ts`.
+   */
+  readonly adoptPrefix?: string | null;
 }
 
 /**
@@ -995,23 +1135,31 @@ export function seedModeOf(db: DatabaseSync): SeedMode {
 }
 
 /** A local collection before the repository's version of it was applied. */
+type EntryFacts = { addedBy: string; addedAt: string; note: string | null };
+
 interface Collections {
   readonly plan: string[];
   readonly members: Map<string, string[]>;
   readonly blockers: Map<string, string[]>;
+  /** Who added each plan and membership entry, when, and its note, keyed by issue id. */
+  readonly entries: Map<string, EntryFacts>;
 }
 
 function collections(db: DatabaseSync): Collections {
-  const plan = (db.prepare("SELECT issue_id FROM queue_entries ORDER BY rank").all() as Array<{ issue_id: string }>).map(
-    (row) => row.issue_id,
-  );
+  const entries = new Map<string, EntryFacts>();
+  const planRows = db
+    .prepare("SELECT issue_id, added_by, added_at, note FROM queue_entries ORDER BY rank")
+    .all() as Array<{ issue_id: string; added_by: string; added_at: string; note: string | null }>;
+  const plan = planRows.map((row) => row.issue_id);
+  for (const row of planRows) entries.set(`queue ${row.issue_id}`, { addedBy: row.added_by, addedAt: row.added_at, note: row.note });
   const members = new Map<string, string[]>();
   for (const row of db
-    .prepare("SELECT milestone_id, issue_id FROM milestone_members ORDER BY milestone_id, rank")
-    .all() as Array<{ milestone_id: string; issue_id: string }>) {
+    .prepare("SELECT milestone_id, issue_id, added_by, added_at, note FROM milestone_members ORDER BY milestone_id, rank")
+    .all() as Array<{ milestone_id: string; issue_id: string; added_by: string; added_at: string; note: string | null }>) {
     const list = members.get(row.milestone_id) ?? [];
     list.push(row.issue_id);
     members.set(row.milestone_id, list);
+    entries.set(`milestone ${row.issue_id}`, { addedBy: row.added_by, addedAt: row.added_at, note: row.note });
   }
   const blockers = new Map<string, string[]>();
   for (const row of db
@@ -1021,7 +1169,7 @@ function collections(db: DatabaseSync): Collections {
     list.push(row.blocker_id);
     blockers.set(row.blocked_id, list);
   }
-  return { plan, members, blockers };
+  return { plan, members, blockers, entries };
 }
 
 function stringList(value: unknown): string[] {
@@ -1116,6 +1264,14 @@ export function seedRepository(db: DatabaseSync, journal: Journal, args: SeedArg
       return hasUnsent.get(entity, entityId) !== undefined && hasCreate.get(entity, entityId) === undefined;
     };
 
+    /**
+     * The repository's prefix first, before its names are claimed: every issue this
+     * workspace numbered before joining moves into the repository's namespace, above
+     * every number the repository uses, so the yield below has nothing left to renumber
+     * for a prefix — only the numbers, if any, the repository and this workspace share.
+     */
+    const prefixMove = mode === "join" && args.adoptPrefix ? adoptRepositoryPrefix(db, index, args.adoptPrefix, repositoryId, now, renamed) : null;
+
     yieldToRepository(db, index, willSeed, mode, repositoryId, now, { renamed, cleared });
 
     let before: Collections | null = null;
@@ -1127,7 +1283,8 @@ export function seedRepository(db: DatabaseSync, journal: Journal, args: SeedArg
        * rows under the same synthetic ids a paged bootstrap would use, and the tail
        * cursor this snapshot pinned becomes the ordinary pull cursor.
        */
-      hydrate(db, journal, survey.entities, [], survey.cutoffSeq, now, true);
+      // Rewinding nothing: what this workspace holds and the repository does not is its own, and is sent below.
+      hydrate(db, journal, survey.entities, [], survey.cutoffSeq, now, true, false, "snap", false);
       completeSnapshot(db, survey.tailCursor, survey.epoch);
       replayOutboxFieldWrites(db);
     }
@@ -1152,6 +1309,51 @@ export function seedRepository(db: DatabaseSync, journal: Journal, args: SeedArg
         serviceVersion: index.version(local.entity, local.entityId),
       });
     };
+
+    /**
+     * Built-ins this workspace removed before it connected.
+     *
+     * Every device has the built-in statuses and kinds by construction, so the seed never
+     * sends one at its defaults — and so it never sent that one had been REMOVED: the
+     * repository went on implying it, and every device that hydrated had it. Now:
+     *
+     *   - on a repository that holds nothing, the removal is this workspace's history like
+     *     anything else, and travels as a `delete`;
+     *   - on a repository that already says something about it, that was applied above;
+     *   - on a repository that holds data and says nothing about it, the repository implies
+     *     it, and what the repository holds it keeps: the built-in comes back here, and the
+     *     sync reports that it replaced this workspace's removal.
+     */
+    const builtinVocabulary = [
+      ["status", "workspace_statuses", BUILTIN_STATUS_SEED as ReadonlyArray<{ id: string; label: string; category?: string }>],
+      ["kind", "workspace_kinds", BUILTIN_KIND_SEED as ReadonlyArray<{ id: string; label: string; category?: string }>],
+    ] as const;
+    for (const [entity, table, seedRows] of builtinVocabulary) {
+      seedRows.forEach((row, position) => {
+        if (db.prepare(`SELECT 1 AS hit FROM ${table} WHERE id = ?`).get(row.id)) return;
+        if (index.get(entity, row.id) !== undefined) return;
+        if (index.live === 0 && mode === "join") {
+          db.prepare(
+            `INSERT INTO sync_tombstones (entity, entity_id, deleted_at, device_id, op_id)
+             VALUES (?, ?, ?, NULL, NULL) ON CONFLICT (entity, entity_id) DO NOTHING`,
+          ).run(entity, row.id, now);
+          intents.push({ entity, entityId: row.id, verb: "delete", payload: {}, actor: null, at: now, serviceVersion: 0 });
+          return;
+        }
+        if (entity === "status") {
+          db.prepare(
+            "INSERT INTO workspace_statuses (id, label, category, sort_order, is_builtin) VALUES (?, ?, ?, ?, 1)",
+          ).run(row.id, row.label, row.category!, (position + 1) * 10);
+        } else {
+          db.prepare("INSERT INTO workspace_kinds (id, label, sort_order, is_builtin) VALUES (?, ?, ?, 1)").run(
+            row.id,
+            row.label,
+            (position + 1) * 10,
+          );
+        }
+        replaced.push({ entity, entityId: row.id, label: `${entity} ${row.id}`, field: "present", local: false, repository: true });
+      });
+    }
 
     /**
      * The vocabulary orders. Not rows, so the inventory cannot carry them.
@@ -1210,6 +1412,28 @@ export function seedRepository(db: DatabaseSync, journal: Journal, args: SeedArg
       return null;
     };
 
+    /**
+     * The repository's prefix, declared if the service holds none: this workspace's own
+     * when the repository is empty, or the one its issues already carry when it predates
+     * the declaration (`repository-prefix.ts`). Recorded here too, as a receiver records it.
+     */
+    const repositoryPrefix = repositoryPrefixOf(survey.entities);
+    if (!repositoryPrefix.declared) {
+      const value = repositoryPrefix.prefix ?? localPrefix(db);
+      if (value !== null) {
+        const payload = { value };
+        applyToDatabase(db, { entity: "setting", entityId: REPOSITORY_PREFIX_SETTING, verb: "create", payload, actor: null, deviceId: null, at: now, opId: null });
+        intents.push({
+          entity: "setting",
+          entityId: REPOSITORY_PREFIX_SETTING,
+          verb: "create",
+          payload,
+          actor: null,
+          at: now,
+          serviceVersion: index.version("setting", REPOSITORY_PREFIX_SETTING),
+        });
+      }
+    }
     for (const local of locals.filter((candidate) => candidate.entity === "setting")) push(local);
     for (const local of locals.filter((candidate) => candidate.entity === "status")) push(local);
     const statusOrder = vocabularyOrder("status", seededStatuses);
@@ -1256,9 +1480,29 @@ export function seedRepository(db: DatabaseSync, journal: Journal, args: SeedArg
           replaced.push({ entity, entityId, label, field, local: shown(local), repository: shown(result) });
         }
         if (additions.length === 0) return;
-        applyToDatabase(db, { entity, entityId, verb, payload: { [field]: result }, actor: null, deviceId: null, at: now, opId: null });
+        const payload: Record<string, unknown> = { [field]: result };
+        if (entity !== "relation") {
+          /**
+           * Who added each entry, when, and its note travel beside the list
+           * (`apply.ts`, `entryFor`): the repository's for its own entries, this device's
+           * for the ones it is appending. Without them the appended entries would take
+           * this merge's time and no author, and a note written before joining would be
+           * the one thing about the entry that never arrived.
+           */
+          const theirEntries = held.state.entries;
+          const entries: Record<string, unknown> =
+            theirEntries !== null && typeof theirEntries === "object" && !Array.isArray(theirEntries)
+              ? { ...(theirEntries as Record<string, unknown>) }
+              : {};
+          for (const id of additions) {
+            const facts = before!.entries.get(`${entity} ${id}`);
+            if (facts) entries[id] = facts;
+          }
+          payload.entries = entries;
+        }
+        applyToDatabase(db, { entity, entityId, verb, payload, actor: null, deviceId: null, at: now, opId: null });
         merged.push({ entity, entityId, label });
-        tail.push({ entity, entityId, verb, payload: { [field]: result }, actor: null, at: now, serviceVersion: held.version });
+        tail.push({ entity, entityId, verb, payload, actor: null, at: now, serviceVersion: held.version });
       };
       mergeInto("queue", QUEUE_PLAN_ID, "order", "replace", before.plan, "the plan");
       for (const [milestoneId, members] of before.members) {
@@ -1275,10 +1519,11 @@ export function seedRepository(db: DatabaseSync, journal: Journal, args: SeedArg
      * batch — so one oversized operation in an outbox is a push that fails the same way
      * on every sync, and nothing behind it ever leaves. It is decided here instead.
      *
-     * A document revision is immutable and nothing names it, so it is left behind and
-     * named. Anything else is a row that other rows depend on, and leaving it behind
-     * would strand them; the seed refuses, names it, and writes nothing, and the fix is
-     * to shorten it and sync again.
+     * A document revision or a comment is written once and named by nothing, so it is
+     * left behind and named — the push makes the same decision for a queue written
+     * before the journal refused them. Anything else is a row that other rows depend on,
+     * and leaving it behind would strand them; the seed refuses, names it, and writes
+     * nothing, and the fix is to shorten it and sync again.
      */
     const sendable: SeedIntent[] = [];
     for (const intent of intents) {
@@ -1288,7 +1533,7 @@ export function seedRepository(db: DatabaseSync, journal: Journal, args: SeedArg
         continue;
       }
       const label = locals.find((local) => local.entity === intent.entity && local.entityId === intent.entityId)?.label ?? intent.entityId;
-      if (intent.entity === "documentRevision") {
+      if (intent.entity === "documentRevision" || intent.entity === "comment") {
         skipped.push({
           entity: intent.entity,
           entityId: intent.entityId,
@@ -1300,7 +1545,8 @@ export function seedRepository(db: DatabaseSync, journal: Journal, args: SeedArg
       throw cloudError(
         "payload_too_large",
         `${intent.entity} ${label} is ${bytes} bytes, and the service takes at most ${args.maxOpBytes} ` +
-          `per operation. Nothing was uploaded and nothing was changed. Shorten it and run sync again.`,
+          `per operation. Nothing was uploaded and nothing was changed. Shorten it and run sync again` +
+          (intent.entity === "issue" ? " (the UI and the MCP update_task tool edit an issue's description)." : "."),
         { entity: intent.entity, entityId: intent.entityId },
       );
     }
@@ -1323,12 +1569,16 @@ export function seedRepository(db: DatabaseSync, journal: Journal, args: SeedArg
      * push and this transaction: it keeps its id and follows the push like any other.
      */
     journal.seed(sendable);
+    // And anything the repository's state displaced while it was applied above (`claims.ts`).
+    settleOwedClaims(db, journal);
 
     const uploadedByEntity: Record<string, number> = {};
     let uploaded = 0;
     for (const intent of sendable) {
-      // An order is not an item anybody made; it travels, and is not counted as one.
+      // An order, or the repository's prefix, is not an item anybody made; it travels,
+      // and is not counted as one.
       if (intent.verb !== "create" || intent.entityId === VOCABULARY_ORDER_ID) continue;
+      if (intent.entity === "setting" && intent.entityId === REPOSITORY_PREFIX_SETTING) continue;
       uploaded += 1;
       uploadedByEntity[intent.entity] = (uploadedByEntity[intent.entity] ?? 0) + 1;
     }
@@ -1344,6 +1594,7 @@ export function seedRepository(db: DatabaseSync, journal: Journal, args: SeedArg
       cleared,
       replaced,
       skipped,
+      prefix: prefixMove,
       at: now,
     };
     writeSeedMarker(db, report);

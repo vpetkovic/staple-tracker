@@ -275,7 +275,8 @@ describe("the first device uploads everything it held before connecting", () => 
       kind: 1,
       setting: 1,
     });
-    expect(first.pushed.applied, "everything the seed journaled was accepted").toBe(first.seed!.uploaded + 1);
+    // Plus the status order, and the repository's prefix, which travel and are not items.
+    expect(first.pushed.applied, "everything the seed journaled was accepted").toBe(first.seed!.uploaded + 2);
     expect(first.pending).toBe(0);
 
     const b = onClone(server, "device-b");

@@ -107,6 +107,17 @@ export interface SnapshotEntity {
    * NOT here are the ones nobody chose, and `state` cannot tell them apart.
    */
   readonly fieldWrites?: Record<string, SnapshotFieldWrite>;
+  /**
+   * The seq and client time of the `create` this state descends from, null when the log
+   * holds none, absent from a Worker older than this build. The time is what a comment
+   * or revision whose payload predates its own `createdAt` is stamped with — the same
+   * value a device reading that create in the ordered tail uses — and the seq is how a
+   * hydrating device settles two claims on one identifier or slug in log order.
+   */
+  readonly createdSeq?: number | null;
+  readonly createdAt?: string | null;
+  /** The actor of that create — what a comment or revision without its own author takes. */
+  readonly createdBy?: string | null;
 }
 
 /** One field's provenance, as the server's fold computed it. */
@@ -116,6 +127,8 @@ export interface SnapshotFieldWrite {
   readonly opId: string;
   /** The operation's client timestamp — `sync_field_writes.written_at`. */
   readonly at: string;
+  /** The write's seq. Absent from a Worker older than this build. */
+  readonly seq?: number;
 }
 
 export interface SnapshotPage {

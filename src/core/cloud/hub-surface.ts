@@ -51,6 +51,7 @@
  * click, which is precisely the "one human's page-open into a heartbeat"
  * failure `surface.ts` names.
  */
+import { readAutoSyncState } from "./auto-state.js";
 import { readConnection } from "./connection.js";
 import { credentialStoreFor, type CredentialMechanism } from "./credential-store.js";
 import {
@@ -137,6 +138,12 @@ export interface HubWorkspaceReport {
   credentialPresent: boolean | null;
   /** This device's automatic-sync consent FOR THIS WORKSPACE. */
   auto: boolean;
+  /**
+   * When automatic sync next tries, if it is waiting — a service's `Retry-After`, or its
+   * own backoff — else null: what `staple cloud status` says for one workspace, said here
+   * for every one (`status.ts`).
+   */
+  autoWaitingUntil: string | null;
   /** This device's backup consent for this workspace. */
   backup: boolean;
   connectedAt: string | null;
@@ -362,6 +369,8 @@ export interface HubReportOptions {
   probeCredentials?: boolean;
   /** Injected in tests so no real keychain is consulted. */
   platform?: NodeJS.Platform;
+  /** The clock a pending automatic-sync wait is measured against. Injected in tests. */
+  now?: number;
   /** Injected in tests. Replaces the whole enumeration. */
   workspaces?: readonly HubWorkspace[];
   /**
@@ -566,6 +575,7 @@ function reportFor(
     repositoryId: workspace.repositoryId,
     skip,
     skipDetail,
+    autoWaitingUntil: null as string | null,
   };
 
   /**
@@ -677,7 +687,18 @@ function reportFor(
     auto: connection.auto,
     backup: connection.backup,
     connectedAt: connection.connectedAt,
+    autoWaitingUntil: connection.auto ? autoWaitOf(home, workspace.repositoryId, options.now) : null,
   };
+}
+
+/** A wait automatic sync is keeping for this workspace, while it is still ahead. */
+function autoWaitOf(home: string, repositoryId: string, now: number = Date.now()): string | null {
+  try {
+    const until = readAutoSyncState(home, repositoryId).nextEligibleAt;
+    return until !== null && Date.parse(until) > now ? until : null;
+  } catch {
+    return null;
+  }
 }
 
 /** The hub-wide list as a human reads it. One line per workspace, plus a tail. */
@@ -691,7 +712,7 @@ export function describeHubReport(report: HubCloudReport): string {
 
   for (const row of report.workspaces) {
     const marks: string[] = [];
-    if (row.auto) marks.push("auto");
+    if (row.auto) marks.push(row.autoWaitingUntil ? `auto, waiting until ${row.autoWaitingUntil}` : "auto");
     if (row.backup) marks.push("backup");
     if (!row.available) marks.push("MISSING");
     lines.push(

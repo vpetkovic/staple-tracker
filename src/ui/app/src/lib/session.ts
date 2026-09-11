@@ -52,6 +52,24 @@ export const DEFAULT_VIEW: ViewName = VIEWS[0];
 export interface Selection {
   workspace: string;
   ref: string;
+  /**
+   * The issue `ref` named when the detail first loaded it, pinned from then on. An
+   * identifier can move while the pane is open — sync renumbers an issue another device
+   * numbered alike, and the number then names that other issue — so everything that reads
+   * or writes the open issue goes by this once it is known (`selectionTarget`).
+   */
+  id?: string;
+}
+
+/** What to fetch or act on for a selection: the issue it was pinned to, else its ref. */
+export function selectionTarget(selection: Selection): string {
+  return selection.id ?? selection.ref;
+}
+
+/** The selection pinned to the issue it loaded — unless the reader has moved on since. */
+export function pinSelection(current: Selection | null, loaded: { workspace: string; ref: string; id: string }): Selection | null {
+  if (!current || current.workspace !== loaded.workspace || current.ref !== loaded.ref || current.id !== undefined) return current;
+  return { ...current, id: loaded.id };
 }
 
 export interface StapleSession {
@@ -183,6 +201,8 @@ export interface StapleSession {
   selection: Selection | null;
   /** The single navigation primitive: open an issue in the detail drawer. */
   open: (workspace: string, ref: string) => void;
+  /** Pin the open selection to the issue its ref loaded as (`pinSelection`). */
+  pin: (workspace: string, ref: string, id: string) => void;
   close: () => void;
 
   /** Ticks on every fingerprint change; every view refetches on it. */

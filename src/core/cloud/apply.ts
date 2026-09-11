@@ -52,7 +52,17 @@ import {
   settingMetaKey,
   type SettingDefinition,
 } from "../settings-registry.js";
-import { StapleError, normalizeTitle } from "../types.js";
+import { aliasedIssueId, moveIdentifier, recordIdentifierMove } from "../identifier-moves.js";
+import { ORIGIN_RELEASING_STATUSES, StapleError, holdsLiveOrigin, normalizeTitle, nowIso } from "../types.js";
+import { type OwnRevision, holderYields, oweSettlement, ownClaimSeq, ownOriginClaimSeq, ownRevisionOf, ownRevisions } from "./claims.js";
+import { placeRevision, sameRevision, summaryAt } from "./revision-placement.js";
+import {
+  isDefined,
+  recordRemovalTarget,
+  removalTarget,
+  usableTarget,
+  type VocabularyEntity,
+} from "../vocabulary-targets.js";
 import type { RemoteOperation, SnapshotEntity } from "./wire.js";
 
 /**
@@ -73,7 +83,7 @@ export class ReferentMissing extends Error {
 
 type Encoding = "raw" | "json" | "bool";
 
-interface Column {
+export interface Column {
   readonly column: string;
   readonly encoding: Encoding;
 }
@@ -91,7 +101,7 @@ function col(column: string, encoding: Encoding = "raw"): Column {
  * operations already carry them as fields and refusing them would drop a claim
  * on the floor; when the lease lane lands, it projects onto the same two columns.
  */
-const ISSUE_FIELDS: Record<string, Column> = {
+export const ISSUE_FIELDS: Record<string, Column> = {
   identifier: col("identifier"),
   title: col("title"),
   normalizedTitle: col("normalized_title"),
@@ -122,6 +132,9 @@ const ISSUE_FIELDS: Record<string, Column> = {
   gateResolvedAt: col("gate_resolved_at"),
   gateReleased: col("gate_released", "bool"),
   startedAt: col("started_at"),
+  // When the issue entered its current blocked cycle: written with the transition, and
+  // travelling with it (`test/cloud-blocked-transition.test.ts`).
+  blockedTransitionAt: col("blocked_transition_at"),
   completedAt: col("completed_at"),
   cancelledAt: col("cancelled_at"),
   checkoutAgent: col("checkout_agent"),
@@ -130,7 +143,7 @@ const ISSUE_FIELDS: Record<string, Column> = {
   updatedAt: col("updated_at"),
 };
 
-const COMMENT_FIELDS: Record<string, Column> = {
+export const COMMENT_FIELDS: Record<string, Column> = {
   issueId: col("issue_id"),
   author: col("author"),
   authorType: col("author_type"),
@@ -140,7 +153,7 @@ const COMMENT_FIELDS: Record<string, Column> = {
   createdAt: col("created_at"),
 };
 
-const PROJECT_FIELDS: Record<string, Column> = {
+export const PROJECT_FIELDS: Record<string, Column> = {
   slug: col("slug"),
   name: col("name"),
   kind: col("kind"),
@@ -149,6 +162,22 @@ const PROJECT_FIELDS: Record<string, Column> = {
   createdAt: col("created_at"),
   updatedAt: col("updated_at"),
 };
+
+/** A milestone's own row: its dates and when it last changed. `members_revision` is local. */
+export const MILESTONE_FIELDS: Record<string, Column> = {
+  targetDate: col("target_date"),
+  startDate: col("start_date"),
+  updatedAt: col("updated_at"),
+};
+
+/**
+ * The issue columns computed from other synchronized columns: `normalized_title` from
+ * `title`, `depth` from the parent's depth. Never part of a change a device journals —
+ * no provenance, never contested — and never read from an operation by this build: the
+ * applier computes them from what it wrote (`docs/sync.md`, "Derived columns").
+ */
+export const DERIVED_ISSUE_FIELDS: ReadonlySet<string> = new Set(["normalizedTitle", "depth"]);
+const DERIVED_ISSUE_COLUMNS: ReadonlySet<string> = new Set(["normalized_title", "depth"]);
 
 /**
  * The payload keys the applier understands for each table.
@@ -212,7 +241,7 @@ function encode(value: unknown, encoding: Encoding): unknown {
   return value as never;
 }
 
-function decodeColumn(value: unknown, encoding: Encoding): unknown {
+export function decodeColumn(value: unknown, encoding: Encoding): unknown {
   if (value === null || value === undefined) return null;
   if (encoding === "bool") return Number(value) !== 0;
   if (encoding === "json" && typeof value === "string") {
@@ -251,13 +280,60 @@ export function payloadFromRow(
   return payload;
 }
 
+/**
+ * A queued issue operation's payload with every column it names re-read from the row as
+ * it stands now, or null when the issue is gone.
+ *
+ * For `sync.ts`, and only for an operation that provably never landed: one larger than
+ * the service accepts, which the service refuses every time. Rebuilding THAT is safe —
+ * nothing has been told its contents — and it is how an issue someone has since edited
+ * below the limit gets sent. Keys with no column (`blockedBy`) are kept as queued.
+ */
+export function refreshedIssuePayload(
+  db: DatabaseSync,
+  issueId: string,
+  payload: Record<string, unknown>,
+): Record<string, unknown> | null {
+  const row = db.prepare("SELECT * FROM issues WHERE id = ?").get(issueId) as Record<string, unknown> | undefined;
+  if (!row) return null;
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(payload)) {
+    const mapped = ISSUE_COLUMNS[key];
+    out[key] = mapped && mapped.column in row ? decodeColumn(row[mapped.column], mapped.encoding) : value;
+  }
+  return out;
+}
+
+/**
+ * A payload naming one field in both spellings, with the column's spelling kept.
+ *
+ * Only a restored create from before one spelling carries both (`oneSpelling` in
+ * `journal.ts`): an older build journaled a create by field name and every later edit by
+ * column, the service's fold kept both keys, and a backup and every epoch restored from it
+ * holds both with no history to say which came last. The column's is the edit — only an
+ * edit ever wrote that spelling — so it is the later value, and it wins wherever such a
+ * payload is read: here, in the snapshot applier (`latestSpelling`), in the service's fold
+ * and in the tail fold (`worker/src/fold.ts`, `tail-fold.ts`).
+ */
+export function columnSpellingWins(payload: Record<string, unknown>): Record<string, unknown> {
+  let out: Record<string, unknown> | null = null;
+  for (const key of Object.keys(payload)) {
+    if (!key.includes("_")) continue;
+    const camel = key.replace(/_([a-z])/g, (_, letter: string) => letter.toUpperCase());
+    if (camel === key || !(camel in payload)) continue;
+    out ??= { ...payload };
+    delete out[camel];
+  }
+  return out ?? payload;
+}
+
 /** Map a payload onto `(column, value)` pairs, dropping fields with no column. */
 function project(
   payload: Record<string, unknown>,
   columns: Record<string, Column>,
 ): Array<[string, unknown]> {
   const pairs: Array<[string, unknown]> = [];
-  for (const [key, value] of Object.entries(payload)) {
+  for (const [key, value] of Object.entries(columnSpellingWins(payload))) {
     const mapped = columns[key];
     if (!mapped) continue;
     pairs.push([mapped.column, encode(value, mapped.encoding)]);
@@ -280,6 +356,66 @@ export interface ApplyInput {
   readonly at: string;
   /** The operation id, recorded on a tombstone. Null for a snapshot entity. */
   readonly opId: string | null;
+  /**
+   * Where the claims this input makes sit in the log: the operation's seq in the ordered
+   * tail, the create's seq for a snapshot entity. Null for a local apply — a conflict
+   * resolution on this device — which is a decision and yields to no earlier claim.
+   * See `claims.ts`.
+   */
+  readonly seq?: number | null;
+  /** A snapshot entity's per-field write seqs, for a field some later operation set. */
+  readonly fieldSeqs?: Readonly<Record<string, number>>;
+  /**
+   * True when `at` and `actor` are a GENUINE create's own: a `create` operation a device
+   * made, or a snapshot entity whose fold names its create's time. Not a restore's — a
+   * `restore:<id>` actor, or a snapshot of a create a restore staged, which the fold gives
+   * no time (`worker/src/fold.ts`) — and not a moment of hydration.
+   */
+  readonly atIsCreate?: boolean;
+  /**
+   * For a snapshot entity, the time of the last write the fold records for it — what a device
+   * reading that write in the tail used for a time the payload does not carry, where `at` is
+   * the create's (`applyMilestone`).
+   */
+  readonly lastWriteAt?: string | null;
+  /**
+   * For a snapshot entity, the read it is part of: where the log settled what it names, and
+   * what the read has placed so far (`applyDocumentRevision`). Absent for an operation.
+   */
+  readonly read?: SnapshotRead;
+}
+
+/** A snapshot read: its ledger ids' prefix (`snapshotOpId`, `hydrate.ts`) and its cutoff seq. */
+export interface SnapshotRead {
+  readonly prefix: string;
+  readonly cutoff: number;
+}
+
+function restoreActor(actor: string | null | undefined): boolean {
+  return typeof actor === "string" && actor.startsWith("restore:");
+}
+
+/**
+ * The time and author an older build's comment or revision is canonically written with.
+ *
+ * A payload from before 0c12bb9 carries no `createdAt` (and a revision's no `author`), so
+ * those are the create's: its envelope time and its actor, when the create is a genuine
+ * device operation. Every device converges on them — the one that wrote it too, whose
+ * store read the clock a millisecond before its journal did, and whose row the applier
+ * catch-up re-dates once. When the only create is one a restore staged, there is no true
+ * time or author to converge on, and a row this device holds keeps its own
+ * (`docs/sync.md`, "A restore's own actor and instant are never a create's").
+ */
+function canonicalCreate(input: ApplyInput): { at: string; actor: string | null } | null {
+  if (input.verb !== "create" || input.atIsCreate !== true) return null;
+  return { at: input.at, actor: input.actor };
+}
+
+/** The log position of this input's claim on any of `fields`. */
+function claimSeqOf(input: ApplyInput, fields: readonly string[]): number | null {
+  const bySeq = fields.map((field) => input.fieldSeqs?.[field]).filter((seq): seq is number => typeof seq === "number");
+  if (bySeq.length > 0) return Math.max(...bySeq);
+  return input.seq ?? null;
 }
 
 export function operationToInput(op: RemoteOperation): ApplyInput {
@@ -293,6 +429,8 @@ export function operationToInput(op: RemoteOperation): ApplyInput {
     deviceId: op.deviceId,
     at: op.createdAt,
     opId: op.opId,
+    seq: op.seq,
+    atIsCreate: op.verb === "create" && !restoreActor(op.actor),
   };
 }
 
@@ -314,16 +452,92 @@ export function operationToInput(op: RemoteOperation): ApplyInput {
  * makes the first post-bootstrap local mutation carry a `baseVersion` that means
  * something.
  */
+/**
+ * A snapshot entity's state with one spelling of each field: the one written last.
+ *
+ * A Worker from before this build folded `updatedAt` and `updated_at` as two keys, and
+ * applying both in key order let the stale one win (`oneSpelling` in `journal.ts`). Which
+ * is later is in the provenance: the write's seq, else its time; a key only a create set
+ * is older than any written after it.
+ */
+function latestSpelling(entity: SnapshotEntity): Record<string, unknown> {
+  const state = { ...entity.state };
+  const writes = (entity.fieldWrites ?? {}) as Record<string, { seq?: number; at?: string }>;
+  const rank = (key: string): [number, string] => [writes[key]?.seq ?? -1, writes[key]?.at ?? ""];
+  for (const key of Object.keys(entity.state)) {
+    if (!key.includes("_")) continue;
+    const camel = key.replace(/_([a-z])/g, (_, letter: string) => letter.toUpperCase());
+    if (!(camel in state) || !(key in state)) continue;
+    const [snakeSeq, snakeAt] = rank(key);
+    const [camelSeq, camelAt] = rank(camel);
+    // With no history to tell them apart — a restored create — the column's spelling is the
+    // edit, and the later value (`columnSpellingWins`).
+    const snakeLater = snakeSeq !== camelSeq ? snakeSeq > camelSeq : snakeAt !== camelAt ? snakeAt > camelAt : true;
+    delete state[snakeLater ? camel : key];
+  }
+  return state;
+}
+
+/**
+ * A milestone's `updatedAt` as the fold holds it, unless a later write did not carry one — an
+ * older build's, which a device reading the tail dates by the write's own time. Then it goes,
+ * and `applyMilestone` takes that write's time (`lastWriteAt`) as the tail did.
+ */
+function currentUpdatedAt(entity: SnapshotEntity, payload: Record<string, unknown>): Record<string, unknown> {
+  if (entity.entity !== "milestone") return payload;
+  const writes = Object.entries(entity.fieldWrites ?? {});
+  const seqOf = (field: string): number | null => {
+    const seq = entity.fieldWrites?.[field]?.seq;
+    return typeof seq === "number" ? seq : null;
+  };
+  const carried = seqOf("updatedAt") ?? seqOf("updated_at") ?? (typeof entity.createdSeq === "number" ? entity.createdSeq : null);
+  const last = writes.reduce((highest, [, write]) => (typeof write.seq === "number" ? Math.max(highest, write.seq) : highest), -1);
+  if (carried === null || last <= carried) return payload;
+  const { updatedAt: _stale, updated_at: _staleColumn, ...rest } = payload;
+  return rest;
+}
+
+/** The time of the latest write the fold records for an entity: highest seq, else latest time. */
+function lastWriteAt(entity: SnapshotEntity): string | null {
+  let best: { seq: number; at: string } | null = null;
+  for (const write of Object.values(entity.fieldWrites ?? {})) {
+    if (typeof write.at !== "string") continue;
+    const seq = typeof write.seq === "number" ? write.seq : -1;
+    if (best === null || seq > best.seq || (seq === best.seq && write.at > best.at)) best = { seq, at: write.at };
+  }
+  return best?.at ?? null;
+}
+
 export function snapshotToInput(entity: SnapshotEntity, at: string): ApplyInput {
+  const fieldSeqs: Record<string, number> = {};
+  for (const [field, write] of Object.entries(entity.fieldWrites ?? {})) {
+    if (typeof write.seq === "number") fieldSeqs[field] = write.seq;
+  }
   return {
     entity: entity.entity,
     entityId: entity.entityId,
     verb: entity.verb,
-    payload: entity.state,
-    actor: null,
+    payload: currentUpdatedAt(entity, latestSpelling(entity)),
+    // The create's actor, when the service sent it: the author a device reading that
+    // create in the tail would give a revision or comment whose payload names none.
+    actor: typeof entity.createdBy === "string" && entity.createdBy !== "" ? entity.createdBy : null,
     deviceId: null,
-    at,
+    /**
+     * The time of the entity's own create when the service sent it, which is the time a
+     * device reading that create in the ordered tail uses for every column the payload
+     * does not carry — a comment or revision written before its payload carried its own
+     * `createdAt`, above all. An entity the log holds no create of — a milestone's dates
+     * and members, the plan — takes the time of its last write, which is what a device
+     * reading that write in the tail used; never the moment of hydration, which no other
+     * device shares. That only for a tombstone, whose time is when this device learned of
+     * the delete, and for an older Worker that sends neither.
+     */
+    at: entity.verb === "delete" ? at : typeof entity.createdAt === "string" ? entity.createdAt : (lastWriteAt(entity) ?? at),
     opId: null,
+    seq: typeof entity.createdSeq === "number" ? entity.createdSeq : null,
+    fieldSeqs,
+    atIsCreate: entity.verb !== "delete" && typeof entity.createdAt === "string",
+    lastWriteAt: lastWriteAt(entity),
   };
 }
 
@@ -341,7 +555,17 @@ export function applyToDatabase(db: DatabaseSync, input: ApplyInput): boolean {
    * convergence order-independent. Checked before anything is written, and for
    * every verb except `delete` itself — a redelivered delete is idempotent.
    */
-  if (input.verb !== "delete" && isTombstoned(db, input.entity, input.entityId)) return false;
+  if (input.verb !== "delete" && isTombstoned(db, input.entity, input.entityId)) {
+    /**
+     * Except a `create`: somebody decided, after the delete, that the entity exists again —
+     * a status removed and added back, a setting reset and set. The service's fold makes
+     * the same exception (`worker/src/fold.ts`), so a device reading the ordered tail and a
+     * device hydrating from the snapshot agree about it; the tombstone still turns away
+     * every late update.
+     */
+    if (input.verb !== "create") return false;
+    db.prepare("DELETE FROM sync_tombstones WHERE entity = ? AND entity_id = ?").run(input.entity, input.entityId);
+  }
 
   switch (input.entity) {
     case "issue":
@@ -357,11 +581,11 @@ export function applyToDatabase(db: DatabaseSync, input: ApplyInput): boolean {
     case "project":
       return applyProject(db, input);
     case "status":
-      return applyVocabulary(db, input, "workspace_statuses");
+      return settingsMoved(db, applyVocabulary(db, input, "workspace_statuses"));
     case "kind":
-      return applyVocabulary(db, input, "workspace_kinds");
+      return settingsMoved(db, applyVocabulary(db, input, "workspace_kinds"));
     case "setting":
-      return applySetting(db, input);
+      return settingsMoved(db, applySetting(db, input));
     case "milestone":
       return applyMilestone(db, input);
     case "queue":
@@ -392,11 +616,78 @@ export function applyToDatabase(db: DatabaseSync, input: ApplyInput): boolean {
 
 // ------------------------------------------------------------------ entities
 
+/**
+ * A removal's target, recorded, and every issue still holding what it removes moved there.
+ *
+ * The issues the removing device held were moved by it, each its own operation. What is
+ * left is what it could not see: an issue another device moved into it concurrently. It
+ * goes where the removal says (`vocabulary-targets.ts`) — on every device, so none holds a
+ * status or kind it does not define — and when that move was this device's own, this
+ * device journals where it went, so the log agrees.
+ */
+function moveOffRemoved(db: DatabaseSync, input: ApplyInput, entity: VocabularyEntity): void {
+  const row = db.prepare(`SELECT ${entity === "status" ? "category" : "NULL AS category"} FROM ${entity === "status" ? "workspace_statuses" : "workspace_kinds"} WHERE id = ?`).get(input.entityId) as
+    | { category: string | null }
+    | undefined;
+  const category = row?.category ?? (typeof input.payload.category === "string" ? input.payload.category : null);
+  const named = typeof input.payload.migrateTo === "string" ? input.payload.migrateTo : null;
+  const held = removalTarget(db, entity, input.entityId);
+  const to = usableTarget(db, entity, input.entityId, named ?? held?.to ?? null, category);
+  if (to === null) return;
+  recordRemovalTarget(db, entity, input.entityId, to, false);
+  const column = entity === "status" ? "status" : "kind";
+  const holding = db.prepare(`SELECT id FROM issues WHERE ${column} = ?`).all(input.entityId) as Array<{ id: string }>;
+  for (const issue of holding) {
+    db.prepare(`UPDATE issues SET ${column} = ? WHERE id = ?`).run(to, issue.id);
+    if (held?.own === true || ownClaimSeq(db, "issue", issue.id, [column]) !== null) {
+      oweSettlement(db, { entity: "issue", entityId: issue.id, field: column, from: input.entityId });
+    }
+  }
+}
+
+/**
+ * An issue write naming a status or kind this database has removed goes where the removal
+ * said instead — the other half of {@link moveOffRemoved}, for a move that arrives after
+ * the removal. When the removal was this device's, it journals where the issue went.
+ */
+function redirectRemoved(db: DatabaseSync, input: ApplyInput, pairs: Array<[string, unknown]>): void {
+  for (const [index, [column, value]] of pairs.entries()) {
+    if ((column !== "status" && column !== "kind") || typeof value !== "string") continue;
+    const entity: VocabularyEntity = column;
+    if (isDefined(db, entity, value)) continue;
+    const removed = removalTarget(db, entity, value);
+    if (removed === null) continue;
+    const to = usableTarget(db, entity, value, removed.to, null);
+    if (to === null) continue;
+    pairs[index] = [column, to];
+    if (removed.own) oweSettlement(db, { entity: "issue", entityId: input.entityId, field: column, from: value });
+  }
+}
+
+/**
+ * The vocabulary or a setting changed under the store, so the revision its memo keys on
+ * moves (`WorkspaceStore.settings`, `meta.settings_revision`).
+ *
+ * The store bumps it on every change it makes itself; the applier did not, so a store on
+ * the same database — a UI or MCP server, or the command that just synced — went on
+ * serving the vocabulary from before the sync. Placing an entry then read the old numbers
+ * behind the order and put it first instead of last (`test/cloud-vocabulary-sort-order.test.ts`).
+ */
+export function settingsMoved(db: DatabaseSync, applied: boolean): boolean {
+  db.prepare(
+    `INSERT INTO meta (key, value) VALUES ('settings_revision', '1')
+     ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(meta.value AS INTEGER) + 1 AS TEXT)`,
+  ).run();
+  return applied;
+}
+
 function applyIssue(db: DatabaseSync, input: ApplyInput): boolean {
   if (input.verb === "delete") return tombstone(db, input, "issues", "id");
 
   const { payload } = input;
-  const pairs = project(payload, ISSUE_COLUMNS);
+  // A derived column is computed here from what is written, never taken from the operation.
+  const pairs = project(payload, ISSUE_COLUMNS).filter(([column]) => !DERIVED_ISSUE_COLUMNS.has(column));
+  redirectRemoved(db, input, pairs);
 
   const exists = db.prepare("SELECT 1 AS hit FROM issues WHERE id = ?").get(input.entityId) as
     | { hit: number }
@@ -415,8 +706,30 @@ function applyIssue(db: DatabaseSync, input: ApplyInput): boolean {
   if (!exists) {
     insertIssue(db, input, pairs);
   } else if (pairs.length > 0) {
-    displaceIdentifierHolder(db, input.entityId, pairs);
-    updateRow(db, "issues", "id", input.entityId, pairs);
+    const before = identifierOf(db, input.entityId);
+    displaceIdentifierHolder(db, input, pairs);
+    const values = new Map(pairs);
+    settleIssueKeys(db, input, values);
+    deriveIssueColumns(db, values);
+    updateRow(db, "issues", "id", input.entityId, [...values]);
+    const after = identifierOf(db, input.entityId);
+    if (before !== null && after !== null && before !== after) {
+      /**
+       * The allocator is kept clear of a number that arrives this way exactly as of one that
+       * arrives in a create (`advanceIssueNumber`). A settled number reaches every other
+       * device as a renumber of an issue it already holds — first as a stand-in, which has
+       * no number to advance past — and without this, the next `staple new` on that device
+       * minted the settled number again and died on the UNIQUE index. Measured live.
+       */
+      advanceIssueNumber(db, after);
+      // When it moved HERE, not when the operation was written: a hub link made in between
+      // named the old number and must follow (`hub.ts`, `followIdentifierMoves`).
+      recordIdentifierMove(db, { issueId: input.entityId, from: before, to: after, at: nowIso() });
+      if (input.seq !== undefined && input.seq !== null) {
+        closeIdentifierConflict(db, input, after);
+        giveBackFreedIdentifier(db, before, input);
+      }
+    }
   }
 
   // `blockedBy` rides inside the create so a receiver never observes an issue
@@ -442,8 +755,7 @@ function insertIssue(db: DatabaseSync, input: ApplyInput, pairs: Array<[string, 
   const values = new Map(pairs);
   values.set("id", input.entityId);
 
-  const title = (values.get("title") ?? "") as string;
-  if (!values.has("normalized_title")) values.set("normalized_title", normalizeTitle(title));
+  deriveIssueColumns(db, values, true);
   if (!values.has("created_at")) values.set("created_at", input.at);
   if (!values.has("updated_at")) values.set("updated_at", input.at);
   if (!values.has("identifier")) {
@@ -461,24 +773,27 @@ function insertIssue(db: DatabaseSync, input: ApplyInput, pairs: Array<[string, 
   const owner = identifierOwner(db, identifier);
   if (owner !== null && owner !== input.entityId) {
     /**
-     * Two devices minted the same identifier offline.
+     * Two devices minted the same identifier offline, and the earlier claim in the log
+     * keeps it (`claims.ts`).
      *
-     * `docs/sync.md` says this cannot happen because *"the server assigns the
-     * canonical number from the repository's own counter and returns it in the
-     * push response"* — but the deployed Worker implements no allocator and its
-     * push response carries only `{opId, status, seq}`, so the collision is real
-     * today. See the lane report.
-     *
-     * It is recorded as a conflict on the `identifier` field and the rest of the
-     * entity is applied under a provisional identifier, because *"No path
-     * applies last-write-wins"* and choosing a winner here would be exactly
-     * that. The conflict lane resolves it; until then both issues exist, both
-     * are reachable, and the contested field is on the record with both values.
+     * When the local holder is this device's own, later claim — not yet sent, or sent
+     * after this operation — the holder moves to a stand-in and this device owes the
+     * repository its renumber. Otherwise the arriving issue is the later claim: it is
+     * applied under the stand-in, and the identifier conflict is recorded so the stand-in
+     * is on the record until the device that made that claim renumbers it — whereupon the
+     * record is closed (`closeIdentifierConflict`). Nothing is dropped either way: both
+     * issues exist, both are reachable, and no value is chosen by arrival order.
      */
-    const provisional = provisionalIdentifier(db, identifier);
-    recordIdentifierConflict(db, input, identifier, provisional);
-    values.set("identifier", provisional);
+    if (holderYields(db, "issue", owner, ["identifier"], claimSeqOf(input, ["identifier"]))) {
+      moveIdentifier(db, owner, provisionalIdentifier(db, identifier));
+      oweSettlement(db, { entity: "issue", entityId: owner, field: "identifier", from: identifier });
+    } else {
+      const provisional = provisionalIdentifier(db, identifier);
+      recordIdentifierConflict(db, input, identifier, provisional);
+      values.set("identifier", provisional);
+    }
   }
+  settleIssueKeys(db, input, values);
 
   const columns = [...values.keys()];
   db.prepare(
@@ -486,6 +801,27 @@ function insertIssue(db: DatabaseSync, input: ApplyInput, pairs: Array<[string, 
   ).run(...(([...values.values()] as never[]) satisfies never[]));
 
   advanceIssueNumber(db, values.get("identifier") as string);
+}
+
+/**
+ * The derived columns of an issue write, computed from the columns it writes: the
+ * normalized title from the title, the depth from the parent's. An update that writes
+ * neither source leaves them as they are; an insert always has both. `values` has had any
+ * incoming derived value removed (`applyIssue`), so what a sender computed — or forgot
+ * to, as a conflict resolution once did — never decides what this device holds.
+ */
+function deriveIssueColumns(db: DatabaseSync, values: Map<string, unknown>, inserting = false): void {
+  if (inserting || values.has("title")) {
+    values.set("normalized_title", normalizeTitle(String(values.get("title") ?? "")));
+  }
+  if (inserting || values.has("parent_id")) {
+    const parentId = values.get("parent_id");
+    const parent =
+      typeof parentId === "string"
+        ? (db.prepare("SELECT depth FROM issues WHERE id = ?").get(parentId) as { depth: number } | undefined)
+        : undefined;
+    values.set("depth", parent === undefined ? 0 : parent.depth + 1);
+  }
 }
 
 /**
@@ -549,7 +885,9 @@ function identifierOwner(db: DatabaseSync, identifier: string): string | null {
 function provisionalIdentifier(db: DatabaseSync, identifier: string): string {
   for (let n = 1; n < 1000; n += 1) {
     const candidate = `${identifier}+${n}`;
-    if (identifierOwner(db, candidate) === null) return candidate;
+    // Nor one an issue here has held and moved off: that string still finds that issue
+    // (`identifier-moves.ts`), and a link or a note made through it means that issue.
+    if (identifierOwner(db, candidate) === null && aliasedIssueId(db, candidate) === null) return candidate;
   }
   throw new StapleError("conflict", `Could not find a free identifier near ${identifier}.`);
 }
@@ -624,19 +962,205 @@ function recordIdentifierConflict(
  */
 function displaceIdentifierHolder(
   db: DatabaseSync,
-  entityId: string,
+  input: ApplyInput,
   pairs: Array<[string, unknown]>,
 ): void {
-  const incoming = pairs.find(([column]) => column === "identifier");
+  const index = pairs.findIndex(([column]) => column === "identifier");
+  const incoming = index < 0 ? undefined : pairs[index];
   if (!incoming || typeof incoming[1] !== "string") return;
 
   const owner = identifierOwner(db, incoming[1]);
-  if (owner === null || owner === entityId) return;
+  if (owner === null || owner === input.entityId) return;
 
-  db.prepare("UPDATE issues SET identifier = ? WHERE id = ?").run(
-    provisionalIdentifier(db, incoming[1]),
-    owner,
+  /**
+   * Only a `renumber` is a decision about who holds a number, and so only a renumber —
+   * or a write made here, `seq` null — moves the holder aside unconditionally. Anything
+   * else that carries an identifier onto an existing row is a claim like a create's, and
+   * the earlier claim keeps it (`claims.ts`). The case that makes this necessary is this
+   * device's OWN create coming back on the next pull: it still says `TRA-2`, but this
+   * device has since moved its issue off `TRA-2` for an earlier claim, and re-applying
+   * the old payload would take the number back from the issue every other device gave
+   * it to.
+   */
+  const decision = input.verb === "renumber" || input.seq === undefined || input.seq === null;
+  if (!decision && !holderYields(db, "issue", owner, ["identifier"], claimSeqOf(input, ["identifier"]))) {
+    pairs.splice(index, 1);
+    return;
+  }
+  if (!decision) {
+    moveIdentifier(db, owner, provisionalIdentifier(db, incoming[1]));
+    oweSettlement(db, { entity: "issue", entityId: owner, field: "identifier", from: incoming[1] });
+    return;
+  }
+
+  moveIdentifier(db, owner, provisionalIdentifier(db, incoming[1]));
+  /**
+   * And when the issue moved aside is this device's own, and the renumber came from
+   * somewhere else, this device settles where it goes (`claims.ts`). Every device moves
+   * the same issue to the same stand-in; only the one that created it chooses its next
+   * number, so it gets one, and gets it once. A renumber made HERE — a resolution being
+   * applied locally, `seq` null — states every assignment itself and owes nothing.
+   */
+  if (input.seq !== undefined && input.seq !== null && ownClaimSeq(db, "issue", owner, ["identifier"]) !== null) {
+    oweSettlement(db, { entity: "issue", entityId: owner, field: "identifier", from: incoming[1] });
+  }
+}
+
+function identifierOf(db: DatabaseSync, issueId: string): string | null {
+  return (db.prepare("SELECT identifier FROM issues WHERE id = ?").get(issueId) as { identifier: string } | undefined)
+    ?.identifier ?? null;
+}
+
+/**
+ * The device that made a later claim has settled it: the stand-in's record is closed.
+ *
+ * `insertIssue` opened it when the issue arrived under a stand-in because another issue
+ * held its number first. The only way that issue's identifier changes after that is its
+ * own device renumbering it (or a person resolving it), and either way nothing is left
+ * to decide — so no record may go on claiming otherwise.
+ */
+function closeIdentifierConflict(db: DatabaseSync, input: ApplyInput, settled: string): void {
+  db.prepare(
+    `UPDATE sync_conflicts SET resolved_at = ?, resolved_by = ?, resolution = ?
+      WHERE entity = 'issue' AND entity_id = ? AND field = 'identifier' AND resolved_at IS NULL`,
+  ).run(input.at, input.actor ?? "staple", JSON.stringify(settled), input.entityId);
+}
+
+/**
+ * An identifier just freed goes back to the issue that was waiting for it.
+ *
+ * A device that met two claims in an order the log did not — hydrating from a service
+ * too old to say where each claim sits — can end with the LATER claim on the number and
+ * the earlier one on a stand-in, waiting, its conflict open. When the later claim's device
+ * renumbers it, the number is free, and the issue whose open record asks for it takes it:
+ * the value every device that read the log in order already gave it.
+ */
+function giveBackFreedIdentifier(db: DatabaseSync, freed: string, input: ApplyInput): void {
+  if (identifierOwner(db, freed) !== null) return;
+  const waiting = db
+    .prepare(
+      `SELECT entity_id FROM sync_conflicts
+        WHERE entity = 'issue' AND field = 'identifier' AND resolved_at IS NULL AND remote_value = ?`,
+    )
+    .all(JSON.stringify(freed)) as Array<{ entity_id: string }>;
+  const candidate = waiting.find((row) => (identifierOf(db, row.entity_id) ?? "").startsWith(`${freed}+`));
+  if (!candidate) return;
+  moveIdentifier(db, candidate.entity_id, freed);
+  closeIdentifierConflict(db, { ...input, entityId: candidate.entity_id }, freed);
+}
+
+/**
+ * The other two unique values an issue can hold: a retry key, and a live external origin.
+ *
+ * The same rule as the identifier (`claims.ts`): the earlier claim in the log keeps it.
+ * Neither has a display form to fall back on, so the later claim simply gives it up —
+ * the retry key or the origin is cleared on it, which is what the seed does to a joining
+ * device's duplicate — and when that later claim is this device's own, it owes the
+ * repository the clearing, as an operation.
+ *
+ * `values` is the column map about to be written; for an update, the columns it does not
+ * name are read from the row, because a status change alone can bring an origin back to
+ * life (`issues_live_origin_uq` spans only the open statuses).
+ */
+function settleIssueKeys(db: DatabaseSync, input: ApplyInput, values: Map<string, unknown>): void {
+  const current = (db.prepare("SELECT idempotency_key, origin_kind, origin_id, status FROM issues WHERE id = ?").get(
+    input.entityId,
+  ) ?? {}) as Record<string, unknown>;
+  const read = (column: string): unknown => (values.has(column) ? values.get(column) : current[column]);
+
+  const key = read("idempotency_key");
+  if (values.has("idempotency_key") && typeof key === "string") {
+    const holder = db
+      .prepare("SELECT id FROM issues WHERE idempotency_key = ? AND id <> ?")
+      .get(key, input.entityId) as { id: string } | undefined;
+    if (holder) {
+      const fields = ["idempotencyKey", "idempotency_key"];
+      if (holderYields(db, "issue", holder.id, fields, claimSeqOf(input, fields))) {
+        db.prepare("UPDATE issues SET idempotency_key = NULL WHERE id = ?").run(holder.id);
+        oweSettlement(db, { entity: "issue", entityId: holder.id, field: "idempotencyKey", from: key });
+      } else if ("idempotency_key" in current) {
+        // An existing issue keeps the key it has (see `settleProjectSlug`).
+        values.delete("idempotency_key");
+      } else {
+        values.set("idempotency_key", null);
+      }
+    }
+  }
+
+  const kind = read("origin_kind");
+  const originId = read("origin_id");
+  const status = read("status");
+  const touchesOrigin = values.has("origin_kind") || values.has("origin_id") || values.has("status");
+  if (touchesOrigin && typeof kind === "string" && kind !== "manual" && typeof originId === "string" && holdsLiveOrigin(status)) {
+    const holder = db
+      .prepare(
+        `SELECT id FROM issues
+          WHERE origin_kind = ? AND origin_id = ? AND id <> ?
+            AND status NOT IN (SELECT value FROM json_each(?))`,
+      )
+      .get(kind, originId, input.entityId, JSON.stringify(ORIGIN_RELEASING_STATUSES)) as { id: string } | undefined;
+    if (holder) {
+      /**
+       * Where each claim sits in the log. An operation's is its seq; a snapshot entity's is
+       * its last write of the origin or reopen (`ORIGIN_CLAIM_FIELDS`), else its create. The
+       * holder's is this device's own claim (`ownOriginClaimSeq`), or — for a holder a
+       * snapshot handed this device — where the snapshot says its claim is
+       * (`noteLoggedOriginClaim`). Without the second a hydrating device knew no claim of the
+       * holder's, so the holder always kept the origin: an issue an older build reopened
+       * after another device's import took it back on a fresh device, while every device
+       * that read the tail had given it to the import.
+       */
+      const incoming = claimSeqOf(input, ORIGIN_CLAIM_FIELDS);
+      const own = ownOriginClaimSeq(db, holder.id);
+      const holderClaim = (_db: DatabaseSync, id: string): number | null => {
+        const logged = loggedOriginClaim(db, id);
+        return own === null ? logged : logged === null ? own : Math.max(own, logged);
+      };
+      if (holderYields(db, "issue", holder.id, ORIGIN_CLAIM_FIELDS, incoming, holderClaim)) {
+        db.prepare("UPDATE issues SET origin_id = NULL WHERE id = ?").run(holder.id);
+        // Settled by the device that made the later claim, and only by it (`claims.ts`).
+        if (own !== null && incoming !== null && own > incoming) {
+          oweSettlement(db, { entity: "issue", entityId: holder.id, field: "originId", from: originId });
+        }
+      } else {
+        values.set("origin_id", null);
+      }
+    }
+  }
+}
+
+/** The fields whose last write is an issue's claim on its origin: the origin itself, or a reopen. */
+const ORIGIN_CLAIM_FIELDS: readonly string[] = ["originKind", "origin_kind", "originId", "origin_id", "reopens"];
+
+/**
+ * Where the snapshot a device is hydrating from puts each issue's claim on its origin, for
+ * the issues it has applied so far. Kept for one snapshot — keyed by it — because a seq means
+ * nothing across epochs.
+ */
+const loggedOriginClaims = new WeakMap<DatabaseSync, { snapshot: string; claims: Map<string, number> }>();
+
+/**
+ * Record where a snapshot entity's origin claim sits in the log (`hydrate.ts`): its last
+ * write of the origin or a reopen — the service's fold records a reopen whether or not the
+ * operation said so (`reopensOrigin`, `worker/src/fold.ts`) — else its create.
+ */
+export function noteLoggedOriginClaim(db: DatabaseSync, snapshot: string, entity: SnapshotEntity): void {
+  if (entity.entity !== "issue" || entity.verb === "delete") return;
+  let held = loggedOriginClaims.get(db);
+  if (!held || held.snapshot !== snapshot) {
+    held = { snapshot, claims: new Map() };
+    loggedOriginClaims.set(db, held);
+  }
+  const written = ORIGIN_CLAIM_FIELDS.map((field) => entity.fieldWrites?.[field]?.seq).filter(
+    (seq): seq is number => typeof seq === "number",
   );
+  const claim = written.length > 0 ? Math.max(...written) : typeof entity.createdSeq === "number" ? entity.createdSeq : null;
+  if (claim === null) held.claims.delete(entity.entityId);
+  else held.claims.set(entity.entityId, claim);
+}
+
+function loggedOriginClaim(db: DatabaseSync, issueId: string): number | null {
+  return loggedOriginClaims.get(db)?.claims.get(issueId) ?? null;
 }
 
 function issueExists(db: DatabaseSync, id: string): boolean {
@@ -657,7 +1181,13 @@ function applyComment(db: DatabaseSync, input: ApplyInput): boolean {
     | undefined;
 
   if (exists) {
-    if (pairs.length > 0) updateRow(db, "comments", "id", input.entityId, pairs);
+    const values = new Map(pairs);
+    // An older build's comment is dated by its genuine create everywhere, the writer too;
+    // never by a restore's (`canonicalCreate`).
+    const canonical = typeof input.payload.createdAt === "string" ? null : canonicalCreate(input);
+    if (canonical !== null) values.set("created_at", canonical.at);
+    settleCommentKey(db, input, values);
+    if (values.size > 0) updateRow(db, "comments", "id", input.entityId, [...values]);
     return true;
   }
   // A comment this database does not hold, and an operation that does not say which issue
@@ -671,11 +1201,40 @@ function applyComment(db: DatabaseSync, input: ApplyInput): boolean {
   if (!values.has("author")) values.set("author", input.actor ?? "unknown");
   if (!values.has("body")) values.set("body", "");
   if (!values.has("created_at")) values.set("created_at", input.at);
+  settleCommentKey(db, input, values);
   const columns = [...values.keys()];
   db.prepare(
     `INSERT INTO comments (${columns.join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`,
   ).run(...([...values.values()] as never[]));
   return true;
+}
+
+/**
+ * A retry key is unique per issue, and two devices can retry one agent's comment. The
+ * earlier claim in the log keeps the key (`claims.ts`, and `settleIssueKeys` for the
+ * same rule on issues) — on an arriving comment, and on this device's own comment coming
+ * back on the next pull still carrying a key it has since given up.
+ */
+function settleCommentKey(db: DatabaseSync, input: ApplyInput, values: Map<string, unknown>): void {
+  const key = values.get("idempotency_key");
+  if (typeof key !== "string") return;
+  const issueId =
+    (values.get("issue_id") as string | undefined) ??
+    (db.prepare("SELECT issue_id FROM comments WHERE id = ?").get(input.entityId) as { issue_id: string } | undefined)
+      ?.issue_id;
+  if (issueId === undefined) return;
+  const holder = db
+    .prepare("SELECT id FROM comments WHERE issue_id = ? AND idempotency_key = ? AND id <> ?")
+    .get(issueId, key, input.entityId) as { id: string } | undefined;
+  if (!holder) return;
+  const fields = ["idempotencyKey", "idempotency_key"];
+  if (holderYields(db, "comment", holder.id, fields, claimSeqOf(input, fields))) {
+    db.prepare("UPDATE comments SET idempotency_key = NULL WHERE id = ?").run(holder.id);
+    oweSettlement(db, { entity: "comment", entityId: holder.id, field: "idempotencyKey", from: key });
+  } else {
+    values.delete("idempotency_key");
+    if (!db.prepare("SELECT 1 AS hit FROM comments WHERE id = ?").get(input.entityId)) values.set("idempotency_key", null);
+  }
 }
 
 /**
@@ -686,9 +1245,37 @@ function applyComment(db: DatabaseSync, input: ApplyInput): boolean {
  * them as two operations would let a receiver see a head pointing at a body that
  * had not arrived.
  *
- * `document_revisions` rows are immutable once written, so a redelivered revision
- * is ignored rather than rewritten — but the head pointer still advances, because
- * the pointer is the mutable half.
+ * ## Where it goes: one placement, in log order
+ *
+ * Two devices that each write revision N before seeing the other's both send N. Taken in log
+ * order, each revision is the first free number from the one it claimed upward — its body,
+ * author and time kept, the move said in its change summary — by the one function every
+ * reader of the log uses (`placeRevision`, `revision-placement.ts`): this applier, the
+ * service's fold, the tail fold and the test service. The head is the highest revision, and
+ * its `updated_at` that revision's time (`writeHead`).
+ *
+ * What this device holds of a document is of two kinds:
+ *
+ *   - the log's: every revision that came from the log or a snapshot — whichever build
+ *     applied it — and every revision of this device's own that the log placed before the
+ *     operation being applied. Placed where the log placed it, and never moved by a later
+ *     operation. Matched to an arriving revision by content: its body, and its author where
+ *     both have one — never its time, which a build before this one took from the operation;
+ *   - this device's own that the log has not reached yet: written here and not sent, or
+ *     sent and given a later seq. The only kind that yields. When an earlier revision in the
+ *     log takes a number one of them holds, every one of them is placed again after it, in
+ *     the order they were written, by the same rule — and this device sends each that moved
+ *     again under its new number, for a device on an older build (`claims.ts`).
+ *
+ * ## A snapshot is the log's placement
+ *
+ * Read from a snapshot — joining, re-bootstrapping, or re-reading the timeline it is on —
+ * a revision's number is the one the log settled on, and it replaces whatever this device
+ * held there (`placeFromSnapshot`). A revision it held that matches by content is moved to
+ * that number and takes the log's time, author and summary, with no copy and no renumber;
+ * one in the way is moved aside until its own entity arrives. Once the read is complete
+ * (`settleRevisionsAfterRead`), this device's own revisions the log has not reached are
+ * placed after the log's, and what it holds that the log does not is dropped.
  */
 function applyDocumentRevision(db: DatabaseSync, input: ApplyInput): boolean {
   const { payload } = input;
@@ -713,36 +1300,229 @@ function applyDocumentRevision(db: DatabaseSync, input: ApplyInput): boolean {
    * revision of every document read as written by nobody, just now. A revision is
    * immutable, so the values it was written with are the only true ones.
    */
-  const author = typeof payload.author === "string" ? payload.author : input.actor;
-  const createdAt = typeof payload.createdAt === "string" ? payload.createdAt : input.at;
+  const incoming: HeldRevision = {
+    revision,
+    body: typeof payload.body === "string" ? payload.body : "",
+    author: typeof payload.author === "string" ? payload.author : input.actor,
+    createdAt: typeof payload.createdAt === "string" ? payload.createdAt : input.at,
+    changeSummary: typeof payload.changeSummary === "string" ? payload.changeSummary : null,
+  };
+  if (input.read !== undefined) placeFromSnapshot(db, issueId, key, incoming, input, input.read);
+  else placeFromLog(db, issueId, key, incoming, claimSeqOf(input, ["body"]));
+  writeHead(db, issueId, key, typeof payload.title === "string" ? payload.title : null);
+  return true;
+}
+
+interface HeldRevision {
+  readonly revision: number;
+  readonly body: string;
+  readonly author: string | null;
+  readonly createdAt: string;
+  readonly changeSummary: string | null;
+}
+
+function heldRevisions(db: DatabaseSync, issueId: string, key: string): HeldRevision[] {
+  return db
+    .prepare(
+      `SELECT revision, body, author, created_at AS createdAt, change_summary AS changeSummary
+         FROM document_revisions WHERE issue_id = ? AND key = ? ORDER BY revision`,
+    )
+    .all(issueId, key) as unknown as HeldRevision[];
+}
+
+function insertRevision(db: DatabaseSync, issueId: string, key: string, row: HeldRevision): void {
   db.prepare(
     `INSERT INTO document_revisions (issue_id, key, revision, body, author, change_summary, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT (issue_id, key, revision) DO NOTHING`,
-  ).run(
-    issueId,
-    key,
-    revision,
-    typeof payload.body === "string" ? payload.body : "",
-    author,
-    typeof payload.changeSummary === "string" ? payload.changeSummary : null,
-    createdAt,
-  );
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  ).run(issueId, key, row.revision, row.body, row.author, row.changeSummary, row.createdAt);
+}
 
-  /**
-   * The head only ever moves forward. A revision arriving out of order — which
-   * the page's `seq` ordering makes unlikely but not impossible across a
-   * bootstrap boundary — must not drag `current_revision` backwards.
-   */
+function deleteRevision(db: DatabaseSync, issueId: string, key: string, revision: number): void {
+  db.prepare("DELETE FROM document_revisions WHERE issue_id = ? AND key = ? AND revision = ?").run(issueId, key, revision);
+}
+
+/**
+ * One of this device's own revisions that the log has not reached by `at` — written here and
+ * not sent, or sent and given a later seq — or null. `at` null is a local apply (a conflict
+ * resolution), which is a decision and yields to nothing.
+ */
+function laterOwn(own: readonly OwnRevision[], row: HeldRevision, at: number | null): OwnRevision | null {
+  if (at === null) return null;
+  const mine = ownRevisionOf(own, row);
+  return mine !== null && mine.seq > at ? mine : null;
+}
+
+/**
+ * `incoming` is `row`: by content for a revision of the log's (`sameRevision`); exactly, its
+ * time too, for one of this device's own the log has not reached — its own operation, back.
+ */
+function isRevision(row: HeldRevision, incoming: HeldRevision, later: boolean): boolean {
+  return sameRevision(row, incoming) && (!later || row.createdAt === incoming.createdAt);
+}
+
+/** A revision arriving in the ordered tail, at `at` in the log. */
+function placeFromLog(db: DatabaseSync, issueId: string, key: string, incoming: HeldRevision, at: number | null): void {
+  const rows = heldRevisions(db, issueId, key);
+  const own = ownRevisions(db, issueId, key);
+  const later = rows.map((row) => ({ row, own: laterOwn(own, row, at) }));
+  // This device's own revision, back from the log.
+  if (later.some(({ row, own: mine }) => mine !== null && isRevision(row, incoming, true))) return;
+  const logs = later.filter(({ own: mine }) => mine === null).map(({ row }) => row);
+  const placed = placeRevision(logs, incoming.revision, incoming);
+  if (placed.again) return;
+  const yielders = later.filter((entry): entry is { row: HeldRevision; own: OwnRevision } => entry.own !== null);
+  if (yielders.length === 0) {
+    insertRevision(db, issueId, key, { ...incoming, revision: placed.revision, changeSummary: placed.changeSummary });
+    return;
+  }
+  // Earlier in the log than every revision of this device's own it has not reached: it
+  // takes its number, and they are placed again after it, in the order they were written.
+  for (const { row } of yielders) deleteRevision(db, issueId, key, row.revision);
+  const settled = { ...incoming, revision: placed.revision, changeSummary: placed.changeSummary };
+  insertRevision(db, issueId, key, settled);
+  placeOwnAgain(db, issueId, key, [...logs, settled], yielders);
+}
+
+/**
+ * This device's own revisions the log has not reached, placed after `placed` as the log will
+ * place them when they arrive: in the order they were written, each by `placeRevision` from
+ * the number it was written as. One the log will take as a revision it already holds is gone
+ * here too; one that moved is sent again under its new number (`claims.ts`).
+ */
+function placeOwnAgain(
+  db: DatabaseSync,
+  issueId: string,
+  key: string,
+  placed: HeldRevision[],
+  yielders: ReadonlyArray<{ row: HeldRevision; own: OwnRevision }>,
+): void {
+  const ordered = [...yielders].sort((a, b) => a.own.seq - b.own.seq || a.own.order - b.own.order);
+  for (const { row, own } of ordered) {
+    const at = placeRevision(placed, own.claimed, row);
+    if (at.again) continue;
+    const moved = { ...row, revision: at.revision, changeSummary: summaryAt(row.changeSummary, own.claimed, at.revision) };
+    insertRevision(db, issueId, key, moved);
+    placed.push(moved);
+    if (at.revision !== row.revision) {
+      oweSettlement(db, { entity: "documentRevision", entityId: `${issueId}/${key}/${at.revision}`, field: "revision", from: String(row.revision) });
+    }
+  }
+}
+
+/** A snapshot's revision: at the number the log settled on (`read`, `hydrate.ts`). */
+function placeFromSnapshot(
+  db: DatabaseSync,
+  issueId: string,
+  key: string,
+  incoming: HeldRevision,
+  input: ApplyInput,
+  read: SnapshotRead,
+): void {
+  const rows = heldRevisions(db, issueId, key);
+  const own = ownRevisions(db, issueId, key);
+  const later = (row: HeldRevision): boolean => laterOwn(own, row, read.cutoff) !== null;
+  const settledHere = (revision: number): boolean => settledInRead(db, read, issueId, key, revision);
+  const atNumber = rows.find((row) => row.revision === incoming.revision);
+  if (atNumber !== undefined && isRevision(atNumber, incoming, later(atNumber))) {
+    if (!later(atNumber)) takeLogFields(db, issueId, key, incoming.revision, input);
+    return;
+  }
+  // Held under another number: the log's placement replaces this device's.
+  const held = rows
+    .filter((row) => row.revision !== incoming.revision && !settledHere(row.revision) && isRevision(row, incoming, later(row)))
+    .sort((a, b) => a.revision - b.revision)[0];
+  if (atNumber !== undefined) {
+    // In the way: aside, above everything, until its own entity places it.
+    const aside = Math.max(...rows.map((row) => row.revision)) + 1;
+    db.prepare("UPDATE document_revisions SET revision = ? WHERE issue_id = ? AND key = ? AND revision = ?").run(aside, issueId, key, atNumber.revision);
+  }
+  if (held === undefined) {
+    insertRevision(db, issueId, key, incoming);
+    return;
+  }
+  db.prepare("UPDATE document_revisions SET revision = ? WHERE issue_id = ? AND key = ? AND revision = ?").run(incoming.revision, issueId, key, held.revision);
+  if (!later(held)) takeLogFields(db, issueId, key, incoming.revision, input);
+}
+
+/**
+ * The log's time, author and summary for a revision this device holds as the log's. A build
+ * before this one dated a revision it applied by the operation, a millisecond off; a fold
+ * before this one merged two revisions' fields into one row. What the snapshot says is what
+ * every device that reads it holds. An older build's payload without a time or an author
+ * takes its genuine create's, never a restore's (`canonicalCreate`).
+ */
+function takeLogFields(db: DatabaseSync, issueId: string, key: string, revision: number, input: ApplyInput): void {
+  const where = "WHERE issue_id = ? AND key = ? AND revision = ?";
+  const { payload } = input;
+  const canonical = canonicalCreate(input);
+  const createdAt = typeof payload.createdAt === "string" ? payload.createdAt : canonical?.at;
+  const author = typeof payload.author === "string" ? payload.author : (canonical?.actor ?? undefined);
+  if (createdAt !== undefined) db.prepare(`UPDATE document_revisions SET created_at = ? ${where}`).run(createdAt, issueId, key, revision);
+  if (typeof author === "string") db.prepare(`UPDATE document_revisions SET author = ? ${where}`).run(author, issueId, key, revision);
+  if ("changeSummary" in payload) {
+    const summary = typeof payload.changeSummary === "string" ? payload.changeSummary : null;
+    db.prepare(`UPDATE document_revisions SET change_summary = ? ${where}`).run(summary, issueId, key, revision);
+  }
+}
+
+/** Whether a snapshot read has applied its revision `revision` of a document yet. */
+function settledInRead(db: DatabaseSync, read: SnapshotRead, issueId: string, key: string, revision: number): boolean {
+  return db.prepare("SELECT 1 AS hit FROM sync_applied WHERE op_id = ?").get(`${read.prefix}documentRevision ${issueId}/${key}/${revision}`) !== undefined;
+}
+
+/**
+ * The end of a snapshot read, for every document: this device's own revisions the log has not
+ * reached are placed after the log's (`placeOwnAgain`), and — when `rewind` — every other
+ * revision the snapshot did not place is dropped. That is a revision the log does not hold: a
+ * copy an older build made, or one pushed to an epoch a restore rewound (`docs/sync.md`).
+ * Without `rewind` (a join, whose rows are this workspace's own and are sent by the seed, or a
+ * snapshot from a fold before this build) they stay where they are.
+ */
+export function settleRevisionsAfterRead(db: DatabaseSync, read: SnapshotRead, rewind: boolean): void {
+  const documents = db.prepare("SELECT DISTINCT issue_id AS issueId, key FROM document_revisions").all() as Array<{ issueId: string; key: string }>;
+  for (const { issueId, key } of documents) {
+    const rows = heldRevisions(db, issueId, key);
+    const unsettled = rows.filter((row) => !settledInRead(db, read, issueId, key, row.revision));
+    if (unsettled.length === 0) continue;
+    const own = ownRevisions(db, issueId, key);
+    const yielders: Array<{ row: HeldRevision; own: OwnRevision }> = [];
+    const gone = new Set<number>();
+    for (const row of unsettled) {
+      const mine = laterOwn(own, row, read.cutoff);
+      if (mine !== null) {
+        yielders.push({ row, own: mine });
+        gone.add(row.revision);
+      } else if (rewind) {
+        gone.add(row.revision);
+      }
+    }
+    for (const revision of gone) deleteRevision(db, issueId, key, revision);
+    placeOwnAgain(db, issueId, key, rows.filter((row) => !gone.has(row.revision)), yielders);
+    writeHead(db, issueId, key, null);
+  }
+}
+
+/**
+ * The head: the highest revision, and that revision's time. The last revision applied is not
+ * the head — a revision sent again under the number it moved to arrives after the ones above
+ * it, and stamped the document with its older time on every device reading the tail.
+ */
+function writeHead(db: DatabaseSync, issueId: string, key: string, title: string | null): void {
+  const top = db
+    .prepare("SELECT revision, created_at AS createdAt FROM document_revisions WHERE issue_id = ? AND key = ? ORDER BY revision DESC LIMIT 1")
+    .get(issueId, key) as { revision: number; createdAt: string } | undefined;
+  if (top === undefined) {
+    db.prepare("DELETE FROM documents WHERE issue_id = ? AND key = ?").run(issueId, key);
+    return;
+  }
   db.prepare(
     `INSERT INTO documents (issue_id, key, current_revision, title, updated_at)
      VALUES (?, ?, ?, ?, ?)
      ON CONFLICT (issue_id, key) DO UPDATE SET
-       current_revision = MAX(current_revision, excluded.current_revision),
+       current_revision = excluded.current_revision,
        title            = COALESCE(excluded.title, title),
        updated_at       = excluded.updated_at`,
-  ).run(issueId, key, revision, typeof payload.title === "string" ? payload.title : null, createdAt);
-  return true;
+  ).run(issueId, key, top.revision, title, top.createdAt);
 }
 
 /** A bare `document` operation: the head pointer and its title, nothing else. */
@@ -803,13 +1583,55 @@ function writeBlockers(
   for (const id of ids) {
     if (!issueExists(db, id)) throw new ReferentMissing(`issue ${id} (blocker of ${blockedId})`);
   }
-  db.prepare("DELETE FROM relations WHERE blocked_id = ? AND type = 'blocks'").run(blockedId);
-  const insert = db.prepare(
+  /**
+   * Each edge's own author and time: as the operation describes it (`edges`, which every
+   * build since this one sends), else as this database already holds it, else the
+   * operation's. The set is replaced — an edge it no longer names goes — but an edge it
+   * still names is not re-made: re-inserted with the operation's actor and time, the
+   * device that seeded the repository rewrote its own edges when its seed came back, and
+   * every other device dated all of an issue's edges with one instant.
+   */
+  const described =
+    input.payload.edges !== null && typeof input.payload.edges === "object" && !Array.isArray(input.payload.edges)
+      ? (input.payload.edges as Record<string, { createdBy?: unknown; createdAt?: unknown }>)
+      : {};
+  /**
+   * A set from a build that sends no `edges` — applied here in the ordered tail, where the
+   * operation's actor and time are known. A device hydrating from the snapshot has neither
+   * for the edges it added, so this device journals the edges as it now holds them, and the
+   * fold carries them to every device (`settleOne` in `claims.ts`).
+   */
+  if (ids.length > 0 && input.payload.edges === undefined && input.opId !== null && typeof input.seq === "number") {
+    oweSettlement(db, { entity: "relation", entityId: blockedId, field: "edges", from: "" });
+  }
+  const held = new Map(
+    (
+      db.prepare("SELECT blocker_id, created_by, created_at FROM relations WHERE blocked_id = ? AND type = 'blocks'").all(blockedId) as Array<{
+        blocker_id: string;
+        created_by: string | null;
+        created_at: string;
+      }>
+    ).map((row) => [row.blocker_id, row]),
+  );
+  const remove = db.prepare("DELETE FROM relations WHERE blocker_id = ? AND blocked_id = ? AND type = 'blocks'");
+  for (const id of held.keys()) if (!ids.includes(id)) remove.run(id, blockedId);
+  const upsert = db.prepare(
     `INSERT INTO relations (blocker_id, blocked_id, type, created_by, created_at)
      VALUES (?, ?, 'blocks', ?, ?)
-     ON CONFLICT (blocker_id, blocked_id, type) DO NOTHING`,
+     ON CONFLICT (blocker_id, blocked_id, type) DO UPDATE SET created_by = excluded.created_by, created_at = excluded.created_at`,
   );
-  for (const id of ids) insert.run(id, blockedId, input.actor, input.at);
+  for (const id of ids) {
+    const facts = described[id];
+    const kept = held.get(id);
+    const createdAt = typeof facts?.createdAt === "string" ? facts.createdAt : (kept?.created_at ?? input.at);
+    const createdBy =
+      facts !== undefined && (typeof facts.createdBy === "string" || facts.createdBy === null)
+        ? facts.createdBy
+        : kept !== undefined
+          ? kept.created_by
+          : input.actor;
+    upsert.run(id, blockedId, createdBy, createdAt);
+  }
 }
 
 /**
@@ -846,6 +1668,7 @@ function applyProject(db: DatabaseSync, input: ApplyInput): boolean {
   }
 
   const pairs = project(payload, PROJECT_COLUMNS);
+  settleProjectSlug(db, input, pairs);
   const exists = db.prepare("SELECT 1 AS hit FROM projects WHERE id = ?").get(input.entityId) as
     | { hit: number }
     | undefined;
@@ -873,6 +1696,39 @@ function applyProject(db: DatabaseSync, input: ApplyInput): boolean {
     `INSERT INTO projects (${columns.join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`,
   ).run(...([...values.values()] as never[]));
   return true;
+}
+
+/**
+ * Two devices creating a project of the same slug: the earlier claim in the log keeps it
+ * (`claims.ts`). The later one takes the first free `<slug>-N` here — a stand-in, since
+ * slugs are compared by people rather than by other rows — and when it is this device's
+ * own, this device journals the slug it now has, so every device and the fold agree.
+ * Rewrites `pairs` in place.
+ */
+function settleProjectSlug(db: DatabaseSync, input: ApplyInput, pairs: Array<[string, unknown]>): void {
+  const index = pairs.findIndex(([column]) => column === "slug");
+  if (index < 0) return;
+  const slug = pairs[index]![1];
+  if (typeof slug !== "string") return;
+  const holder = db.prepare("SELECT id FROM projects WHERE slug = ? AND id <> ?").get(slug, input.entityId) as
+    | { id: string }
+    | undefined;
+  if (!holder) return;
+  const free = (): string => {
+    let n = 2;
+    while (db.prepare("SELECT 1 AS hit FROM projects WHERE slug = ?").get(`${slug}-${n}`)) n += 1;
+    return `${slug}-${n}`;
+  };
+  if (holderYields(db, "project", holder.id, ["slug"], claimSeqOf(input, ["slug"]))) {
+    db.prepare("UPDATE projects SET slug = ? WHERE id = ?").run(free(), holder.id);
+    oweSettlement(db, { entity: "project", entityId: holder.id, field: "slug", from: slug });
+  } else if (db.prepare("SELECT 1 AS hit FROM projects WHERE id = ?").get(input.entityId)) {
+    // An existing project keeps the slug it has — which is never this one, the index being
+    // unique. The case is this device's own create coming back after it gave the slug up.
+    pairs.splice(index, 1);
+  } else {
+    pairs[index] = ["slug", free()];
+  }
 }
 
 /** The sentinel entity id the vocabulary ORDER travels on. Mirrors `store.ts`. */
@@ -905,6 +1761,21 @@ function applyVocabulary(
     order.forEach((id, index) => {
       if (typeof id === "string") write.run((index + 1) * 1000, id);
     });
+    /**
+     * And every entry the order does not name goes after it, in the order it had.
+     *
+     * An order lists what its author held when it was written. An entry added since —
+     * here, or concurrently on another device — is not in it, and left at its old
+     * position it would land wherever that number happens to fall among the new ones: on
+     * the device that wrote the order, reading its own order back on the next pull, a
+     * status added after it jumped to the top. After the listed ones is where a receiver
+     * puts an entry it has never seen, so every device ends in the same order.
+     */
+    const listed = new Set(order.filter((id): id is string => typeof id === "string"));
+    const rest = (db.prepare(`SELECT id FROM ${table} ORDER BY sort_order, id`).all() as Array<{ id: string }>).filter(
+      (row) => !listed.has(row.id),
+    );
+    rest.forEach((row, index) => write.run((listed.size + index + 1) * 1000, row.id));
     return true;
   }
 
@@ -912,16 +1783,34 @@ function applyVocabulary(
     /**
      * A vocabulary delete carries `migrateTo`, and the rows that moved are
      * journaled as their own `issue.update` operations by the originating
-     * device. So this removes the definition and nothing else — re-running the
-     * migration locally would be a second, conflicting authority over rows the
-     * origin has already decided about.
+     * device (`removeStatus`, `removeKind`). So this removes the definition and
+     * nothing else — re-running the migration locally would be a second,
+     * conflicting authority over rows the origin has already decided about.
+     *
+     * A built-in is removed like any other. Every device starts with the same
+     * built-ins, but a person can remove one (`removeStatus` allows it, under the
+     * same guards), and skipping it here left that status on every device but the
+     * one where it was removed — and on none that hydrated from the snapshot, which
+     * folds the delete.
      */
-    db.prepare(`DELETE FROM ${table} WHERE id = ? AND is_builtin = 0`).run(input.entityId);
+    writeTombstone(db, input);
+    moveOffRemoved(db, input, table === "workspace_statuses" ? "status" : "kind");
+    db.prepare(`DELETE FROM ${table} WHERE id = ?`).run(input.entityId);
     return true;
   }
 
   const label = input.payload.label;
   const category = input.payload.category;
+  /**
+   * Whether it is a built-in, from its create (`isBuiltin`). A device holds the built-ins
+   * from its own migrations, so one removed and added back arrived, on a device hydrating
+   * after, over the built-in it already had — and stayed a built-in there alone, while every
+   * device that read the removal in the tail held the one added back. A create from a build
+   * before this one says nothing; the service's fold says it for a create after a delete
+   * (`worker/src/fold.ts`).
+   */
+  const builtinValue = input.verb === "create" ? (input.payload.isBuiltin ?? input.payload.is_builtin) : undefined;
+  const builtin = typeof builtinValue === "boolean" ? (builtinValue ? 1 : 0) : null;
   const exists = db.prepare(`SELECT 1 AS hit FROM ${table} WHERE id = ?`).get(input.entityId) as
     | { hit: number }
     | undefined;
@@ -941,20 +1830,23 @@ function applyVocabulary(
     };
     if (table === "workspace_statuses") {
       db.prepare(
-        `INSERT INTO workspace_statuses (id, label, category, sort_order, is_builtin) VALUES (?, ?, ?, ?, 0)`,
+        `INSERT INTO workspace_statuses (id, label, category, sort_order, is_builtin) VALUES (?, ?, ?, ?, ?)`,
       ).run(
         input.entityId,
         typeof label === "string" ? label : input.entityId,
         typeof category === "string" ? category : "open",
         next.n,
+        builtin ?? 0,
       );
     } else {
       db.prepare(
-        `INSERT INTO workspace_kinds (id, label, sort_order, is_builtin) VALUES (?, ?, ?, 0)`,
-      ).run(input.entityId, typeof label === "string" ? label : input.entityId, next.n);
+        `INSERT INTO workspace_kinds (id, label, sort_order, is_builtin) VALUES (?, ?, ?, ?)`,
+      ).run(input.entityId, typeof label === "string" ? label : input.entityId, next.n, builtin ?? 0);
     }
     return true;
   }
+
+  if (builtin !== null) db.prepare(`UPDATE ${table} SET is_builtin = ? WHERE id = ?`).run(builtin, input.entityId);
 
   if (typeof label === "string") {
     db.prepare(`UPDATE ${table} SET label = ? WHERE id = ?`).run(label, input.entityId);
@@ -988,6 +1880,9 @@ function settingDefinition(key: string): SettingDefinition | null {
 function applySetting(db: DatabaseSync, input: ApplyInput): boolean {
   const metaKey = settingMetaKey(input.entityId);
   if (input.verb === "delete") {
+    // A tombstone, as for every deletion: a late `update` of this setting is turned away,
+    // and a `create` — a reset setting set again — lifts it (`applyToDatabase`).
+    writeTombstone(db, input);
     db.prepare("DELETE FROM meta WHERE key = ?").run(metaKey);
     return true;
   }
@@ -1050,9 +1945,25 @@ function applyMilestone(db: DatabaseSync, input: ApplyInput): boolean {
   const hasMembers = Array.isArray(members);
   const hasTarget = "targetDate" in input.payload;
   const hasStart = "startDate" in input.payload;
-  if (!hasMembers && !hasTarget && !hasStart) return false;
+  const hasUpdated = typeof input.payload.updatedAt === "string";
+  if (!hasMembers && !hasTarget && !hasStart && !hasUpdated) return false;
 
   if (!issueExists(db, input.entityId)) throw new ReferentMissing(`milestone ${input.entityId}`);
+  /**
+   * When the milestone last changed, as the device that changed it wrote it: the payload's
+   * `updatedAt`, which every build since this one sends (`journal.ts`, the row diff). An
+   * older build's operation says nothing, and its time in the log stands in — the
+   * operation's own time in the tail, the last write's in a snapshot (`snapshotToInput`),
+   * never the moment this device happened to apply it.
+   */
+  const updatedAt = hasUpdated ? (input.payload.updatedAt as string) : (input.lastWriteAt ?? input.at);
+  if (hasUpdated && !hasMembers && !hasTarget && !hasStart) {
+    db.prepare(
+      `INSERT INTO milestone_meta (issue_id, updated_at) VALUES (?, ?)
+       ON CONFLICT (issue_id) DO UPDATE SET updated_at = excluded.updated_at`,
+    ).run(input.entityId, updatedAt);
+    return true;
+  }
 
   if (hasMembers) {
     const ids = members.filter((id): id is string => typeof id === "string");
@@ -1060,15 +1971,27 @@ function applyMilestone(db: DatabaseSync, input: ApplyInput): boolean {
       if (!issueExists(db, id)) throw new ReferentMissing(`issue ${id} (member of ${input.entityId})`);
     }
 
+    const held = entryMetadata(
+      db
+        .prepare(
+          `SELECT issue_id, added_by, added_at, note FROM milestone_members
+            WHERE milestone_id = ? OR issue_id IN (SELECT value FROM json_each(?))`,
+        )
+        .all(input.entityId, JSON.stringify(ids)) as unknown as EntryRow[],
+    );
     db.prepare("DELETE FROM milestone_members WHERE milestone_id = ?").run(input.entityId);
     const ranks = renumberedRanks(ids.length);
     const insert = db.prepare(
       `INSERT INTO milestone_members (issue_id, milestone_id, rank, added_by, added_at, note)
-       VALUES (?, ?, ?, ?, ?, NULL)
+       VALUES (?, ?, ?, ?, ?, ?)
        ON CONFLICT (issue_id) DO UPDATE SET
-         milestone_id = excluded.milestone_id, rank = excluded.rank`,
+         milestone_id = excluded.milestone_id, rank = excluded.rank,
+         added_by = excluded.added_by, added_at = excluded.added_at, note = excluded.note`,
     );
-    ids.forEach((id, index) => insert.run(id, input.entityId, ranks[index]!, input.actor ?? "sync", input.at));
+    ids.forEach((id, index) => {
+      const entry = entryFor(id, input, held);
+      insert.run(id, input.entityId, ranks[index]!, entry.addedBy, entry.addedAt, entry.note);
+    });
 
     /**
      * `members_revision` is a device-local CAS counter for the local editor and
@@ -1080,7 +2003,7 @@ function applyMilestone(db: DatabaseSync, input: ApplyInput): boolean {
        VALUES (?, 1, ?)
        ON CONFLICT (issue_id) DO UPDATE SET
          members_revision = members_revision + 1, updated_at = excluded.updated_at`,
-    ).run(input.entityId, input.at);
+    ).run(input.entityId, updatedAt);
   }
 
   if (hasTarget || hasStart) {
@@ -1103,13 +2026,62 @@ function applyMilestone(db: DatabaseSync, input: ApplyInput): boolean {
       input.entityId,
       typeof target === "string" ? target : null,
       typeof start === "string" ? start : null,
-      input.at,
+      updatedAt,
       hasTarget ? 1 : 0,
       hasStart ? 1 : 0,
     );
   }
 
   return true;
+}
+
+interface EntryRow {
+  issue_id: string;
+  added_by: string;
+  added_at: string;
+  note: string | null;
+}
+
+interface EntryMetadata {
+  readonly addedBy: string;
+  readonly addedAt: string;
+  readonly note: string | null;
+}
+
+function entryMetadata(rows: readonly EntryRow[]): Map<string, EntryMetadata> {
+  return new Map(rows.map((row) => [row.issue_id, { addedBy: row.added_by, addedAt: row.added_at, note: row.note }]));
+}
+
+/**
+ * Who added one entry of an ordered collection, when, and with what note.
+ *
+ * The list travels as ids, because the ORDER is what is contested and what the rank
+ * is recomputed from; the per-entry facts travel beside it, in `entries`, keyed by
+ * issue id — `docs/sync.md`: *"`added_by`, `added_at` and `note` ride along"*. Before
+ * they did, a note written on one device never reached another, and every apply wrote
+ * the applying operation's actor and time over every entry, so a plan reordered on one
+ * device erased every other device's record of who queued what.
+ *
+ * An operation that says nothing about an entry — one from a build before `entries`,
+ * or a conflict resolution that carries only the order — leaves what this database
+ * already holds for it. Only an entry nobody has described takes the operation's actor
+ * and time.
+ */
+function entryFor(id: string, input: ApplyInput, held: Map<string, EntryMetadata>): EntryMetadata {
+  const described = input.payload.entries;
+  const carried =
+    described !== null && typeof described === "object" && !Array.isArray(described)
+      ? (described as Record<string, unknown>)[id]
+      : undefined;
+  if (carried !== null && typeof carried === "object" && !Array.isArray(carried)) {
+    const entry = carried as Record<string, unknown>;
+    return {
+      addedBy: typeof entry.addedBy === "string" ? entry.addedBy : (held.get(id)?.addedBy ?? input.actor ?? "sync"),
+      addedAt: typeof entry.addedAt === "string" ? entry.addedAt : (held.get(id)?.addedAt ?? input.at),
+      note: typeof entry.note === "string" ? entry.note : null,
+    };
+  }
+  return held.get(id) ?? { addedBy: input.actor ?? "sync", addedAt: input.at, note: null };
 }
 
 /**
@@ -1129,12 +2101,18 @@ function applyQueue(db: DatabaseSync, input: ApplyInput): boolean {
     if (!issueExists(db, id)) throw new ReferentMissing(`issue ${id} (queued)`);
   }
 
+  const held = entryMetadata(
+    db.prepare("SELECT issue_id, added_by, added_at, note FROM queue_entries").all() as unknown as EntryRow[],
+  );
   db.prepare("DELETE FROM queue_entries").run();
   const ranks = renumberedRanks(ids.length);
   const insert = db.prepare(
-    "INSERT INTO queue_entries (issue_id, rank, added_by, added_at, note) VALUES (?, ?, ?, ?, NULL)",
+    "INSERT INTO queue_entries (issue_id, rank, added_by, added_at, note) VALUES (?, ?, ?, ?, ?)",
   );
-  ids.forEach((id, index) => insert.run(id, ranks[index]!, input.actor ?? "sync", input.at));
+  ids.forEach((id, index) => {
+    const entry = entryFor(id, input, held);
+    insert.run(id, ranks[index]!, entry.addedBy, entry.addedAt, entry.note);
+  });
 
   // The local CAS token, bumped so an open editor notices. Local, never sent.
   db.prepare(
@@ -1264,13 +2242,17 @@ function isTombstoned(db: DatabaseSync, entity: string, entityId: string): boole
  * either both or neither, and "tombstone without row" is the harmless one.
  */
 function tombstone(db: DatabaseSync, input: ApplyInput, table: string, key: string): boolean {
+  writeTombstone(db, input);
+  db.prepare(`DELETE FROM ${table} WHERE ${key} = ?`).run(input.entityId);
+  return true;
+}
+
+function writeTombstone(db: DatabaseSync, input: ApplyInput): void {
   db.prepare(
     `INSERT INTO sync_tombstones (entity, entity_id, deleted_at, device_id, op_id)
      VALUES (?, ?, ?, ?, ?)
      ON CONFLICT (entity, entity_id) DO NOTHING`,
   ).run(input.entity, input.entityId, input.at, input.deviceId, input.opId);
-  db.prepare(`DELETE FROM ${table} WHERE ${key} = ?`).run(input.entityId);
-  return true;
 }
 
 // --------------------------------------------------------------------- utils

@@ -290,6 +290,9 @@ async function request<T>(call: Call): Promise<T> {
       "requestVocabulary",
       // STA-256's refusal: a purge whose typed confirmation was `missing` or a `mismatch`.
       "confirmation",
+      // A snapshot refused because the log is too large to fold in one pass: the client reads
+      // the ordered tail instead (`cloud/tail-fold.ts`).
+      "maxSnapshotFoldOps",
     ]) {
       if (body[key] !== undefined) detail[key] = body[key];
     }

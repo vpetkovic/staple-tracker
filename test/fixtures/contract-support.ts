@@ -325,10 +325,13 @@ export async function startMcpClient(options: {
   home: string;
   cwd: string;
   agent?: string;
+  /** More of the server's environment — `USER`, `STAPLE_DEVICE_ID`. */
+  env?: Record<string, string>;
 }): Promise<McpHarness> {
   const env = cleanEnv({
     STAPLE_HOME: options.home,
     ...(options.agent ? { STAPLE_AGENT: options.agent } : {}),
+    ...(options.env ?? {}),
   });
   const transport = new StdioClientTransport({
     command: process.execPath,

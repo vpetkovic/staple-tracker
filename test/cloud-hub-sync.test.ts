@@ -176,12 +176,13 @@ describe("a sync run reports per-workspace outcome, never an aggregate", () => {
     expect(outcome.failed).toBe(0);
 
     const rows = Object.fromEntries(outcome.workspaces.map((row) => [row.slug, row]));
-    expect(rows.alpha!.report!.pushed.applied).toBe(2);
-    expect(rows.bravo!.report!.pushed.applied).toBe(1);
+    // Each also declares its repository's prefix on its first sync (`repository-prefix.ts`).
+    expect(rows.alpha!.report!.pushed.applied).toBe(3);
+    expect(rows.bravo!.report!.pushed.applied).toBe(2);
     // Each row carries the FULL single-workspace report, not a summary of it.
     expect(rows.alpha!.report!.repositoryId).toBe(alpha.repositoryId);
     expect(rows.bravo!.report!.repositoryId).toBe(bravo.repositoryId);
-    expect(outcome.pushed).toBe(3);
+    expect(outcome.pushed).toBe(5);
   });
 
   it("skips a workspace that is not connected rather than failing it", async () => {
@@ -242,8 +243,8 @@ describe("a failure on one workspace does not abort the others", () => {
      * the failure in hub order, so this is the assertion that the run kept
      * going rather than merely that the first one was attempted.
      */
-    expect(alpha.server.ops).toHaveLength(1);
-    expect(charlie.server.ops).toHaveLength(1);
+    expect(alpha.server.ops.filter((op) => op.entity === "issue")).toHaveLength(1);
+    expect(charlie.server.ops.filter((op) => op.entity === "issue")).toHaveLength(1);
   });
 
   it("carries the service's own code per row, not staple's folded one", async () => {
@@ -346,7 +347,7 @@ describe("a MISSING workspace is skipped, and never materialised", () => {
     expect(existsSync(alpha.dbPath)).toBe(false);
     expect(alpha.server.ops).toHaveLength(0);
     expect(outcome.synced).toBe(1);
-    expect(bravo.server.ops).toHaveLength(1);
+    expect(bravo.server.ops.filter((op) => op.entity === "issue")).toHaveLength(1);
   });
 
   it("leaves the registration in place — existsSync is not evidence of deletion", async () => {
@@ -388,6 +389,6 @@ describe("the fan-out leaves nothing open behind it", () => {
         opened.store.db.close();
       }
     }
-    expect(bravo.server.ops).toHaveLength(1);
+    expect(bravo.server.ops.filter((op) => op.entity === "issue")).toHaveLength(1);
   });
 });

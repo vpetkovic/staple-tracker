@@ -322,6 +322,15 @@ id: Miniflare keys its SQLite file by that id, so local dev, the vitest integrat
 
 ## Deploying
 
+**Deploy the Worker before the client.** A release that changes both ships the Worker
+first, and the client after it is live. The order is load-bearing, not tidiness: the
+Worker's fold and the client's appliers agree on rules each side assumes the other already
+follows — among them that a field is folded under one spelling, and that a payload naming a
+field in both spellings keeps the column's (`columnSpellingWins`, `src/fold.ts`). A client of
+a newer build editing a field while an older Worker is live, followed by a backup and a
+restore, writes an edit that no build can recover (`docs/sync.md`, "Every field travels in
+one spelling"). With the Worker deployed first, that window is empty.
+
 The repository is **public**. No account id, no database id, no token and no
 `workers.dev` URL containing the account subdomain may enter a committed file.
 

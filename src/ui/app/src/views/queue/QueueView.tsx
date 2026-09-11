@@ -125,6 +125,7 @@ import {
   type PlanRow,
 } from "./queue-model";
 import { knownRows, queueTreeRows, type QueueTreeRow } from "./queue-tree";
+import { idsOf, pinnedRef } from "@/lib/write-ref";
 
 /**
  * THE ROW, EVERYWHERE ON THIS VIEW.
@@ -912,7 +913,8 @@ export function QueueView({ onAuthError }: { onAuthError: (error: AuthError) => 
   const applyOrder = useCallback(
     (order: readonly string[] | null) => {
       if (!view || !order) return;
-      void write(() => reorderQueue({ ws, order, baseRevision: view.revision }), order);
+      // The order the reader made, as the ids of the entries it shows (`lib/write-ref.ts`).
+      void write(() => reorderQueue({ ws, order: idsOf(view.entries.map((entry) => ({ identifier: entry.identifier, id: entry.issueId })), order), baseRevision: view.revision }), order);
     },
     [view, ws, write],
   );
@@ -938,7 +940,7 @@ export function QueueView({ onAuthError }: { onAuthError: (error: AuthError) => 
   const onRemove = useCallback(
     (identifier: string) => {
       if (!view) return;
-      void write(() => dequeueTask({ ws, ref: identifier, baseRevision: view.revision }), null);
+      void write(() => dequeueTask({ ws, ref: idsOf(view.entries.map((entry) => ({ identifier: entry.identifier, id: entry.issueId })), [identifier])[0]!, baseRevision: view.revision }), null);
     },
     [view, ws, write],
   );
@@ -947,9 +949,9 @@ export function QueueView({ onAuthError }: { onAuthError: (error: AuthError) => 
   const onAdd = useCallback(
     (ref: string, at?: number) => {
       if (!view) return;
-      void write(() => enqueueTask({ ws, ref, at, baseRevision: view.revision }), null);
+      void write(() => enqueueTask({ ws, ref: pinnedRef(issues, workspace, ref), at, baseRevision: view.revision }), null);
     },
-    [view, ws, write],
+    [issues, view, workspace, ws, write],
   );
 
   const onPrune = useCallback(() => {

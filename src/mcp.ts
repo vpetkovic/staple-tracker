@@ -33,6 +33,7 @@ import {
   type CloudSurfaceReport,
 } from "./core/cloud/surface.js";
 import { Hub, notifyHubResolvedSafe } from "./core/hub.js";
+import { takeRenumberNotices, withRenumberAcknowledged } from "./core/identifier-moves.js";
 import type { CrossBlockerState } from "./core/hub.js";
 import {
   COMMENT_AUTHOR_TYPES,
@@ -216,7 +217,7 @@ const autoSync = new SurfaceAutoSync({
  * failure as `isError` rather than by throwing, so the check is on the value.
  */
 {
-  type ToolConfig = { annotations?: { readOnlyHint?: boolean } };
+  type ToolConfig = { annotations?: { readOnlyHint?: boolean }; inputSchema?: Record<string, unknown> };
   type ToolCallback = (...args: unknown[]) => unknown;
   const direct = server.registerTool.bind(server) as unknown as (
     name: string,
@@ -239,11 +240,61 @@ const autoSync = new SurfaceAutoSync({
       return result instanceof Promise ? result.then(fire) : fire(result);
     };
 
+  /**
+   * An identifier the call used was renumbered on this device: the result says so, in a
+   * text block beside the answer and as `renumbered` on an object answer, because an
+   * agent reads the result and nothing else (`identifier-moves.ts`, `RenumberNotice`).
+   * Stale notices from outside a call are dropped first, so a notice is always this call's.
+   */
+  const withNotices =
+    (cb: ToolCallback): ToolCallback =>
+    (...args: unknown[]) => {
+      takeRenumberNotices();
+      const attach = (value: unknown) => {
+        const notices = takeRenumberNotices();
+        if (notices.length === 0 || value === null || typeof value !== "object") return value;
+        const result = value as { content?: Array<{ type: string; text: string }>; structuredContent?: Record<string, unknown> };
+        const lines = notices.map((notice) => `note: ${notice.message}`).join("\n");
+        return {
+          ...result,
+          content: [...(result.content ?? []), { type: "text" as const, text: lines }],
+          ...(result.structuredContent ? { structuredContent: { ...result.structuredContent, renumbered: notices } } : {}),
+        };
+      };
+      const result = cb(...args);
+      return result instanceof Promise ? result.then(attach) : attach(result);
+    };
+
+  /**
+   * Every write takes `acknowledgeRenumber`: the caller knows a number it uses may have moved
+   * on this device, and means the issue that holds it now. Without it a write through a
+   * number this device's issue moved off is refused while that issue may be the one meant
+   * (`WorkspaceStore.requireTarget`); naming the issue by id needs no acknowledgement.
+   */
+  const acknowledging =
+    (cb: ToolCallback): ToolCallback =>
+    (...args: unknown[]) =>
+      withRenumberAcknowledged((args[0] as { acknowledgeRenumber?: unknown } | undefined)?.acknowledgeRenumber === true, () => cb(...args));
+  const ACKNOWLEDGE = z
+    .boolean()
+    .optional()
+    .describe(
+      "Write through an issue number even if it was renumbered on this device and the issue that moved off it may be the one you mean. Prefer naming the issue by its id.",
+    );
+
   (server as unknown as { registerTool: unknown }).registerTool = (
     name: string,
     config: ToolConfig,
     cb: ToolCallback,
-  ) => direct(name, config, config.annotations?.readOnlyHint === true ? cb : afterWrite(cb));
+  ) =>
+    config.annotations?.readOnlyHint === true
+      ? direct(name, config, withNotices(cb))
+      : direct(
+          name,
+          // A tool that takes no arguments names no issue, and keeps the signature it has.
+          config.inputSchema === undefined ? config : { ...config, inputSchema: { ...config.inputSchema, acknowledgeRenumber: ACKNOWLEDGE } },
+          withNotices(afterWrite(acknowledging(cb))),
+        );
 }
 
 /**
@@ -1844,6 +1895,7 @@ server.registerTool(
  * that reports the milestone in its `milestonePath`.
  */
 const milestoneSummaryShape = {
+  id: z.string().describe("The milestone's issue id — name it by this in a write"),
   identifier: z.string(),
   title: z.string(),
   status: statusEnum,
@@ -1855,6 +1907,7 @@ const milestoneSummaryShape = {
   planPosition: z.number().nullable().describe("The milestone's own row in the pickup plan; null when it is not queued"),
 };
 const milestoneMemberShape = {
+  issueId: z.string().describe("The member's issue id — name it by this in a write"),
   identifier: z.string(),
   title: z.string(),
   kind: kindSchema,

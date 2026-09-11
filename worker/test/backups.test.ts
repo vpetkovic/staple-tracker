@@ -177,10 +177,69 @@ describe("creating and retaining a backup changes no convergence state", () => {
 
 describe("restore materialises into the new epoch", () => {
   /**
-   * THE assertion. A bump-only restore passes every other test in this file and fails
-   * this one, which is the entire reason it is written against `/snapshot` — the route
-   * a fresh device actually hydrates from — rather than against the `ops` table.
+   * A restored operation is written with the time and actor of the create it replaces, so
+   * the new epoch's fold hands a hydrating device the same date and author for a comment
+   * or revision whose payload predates carrying its own — not the moment of the restore.
    */
+  it("keeps each entity's create time and actor across the restore", async () => {
+    // Its own device: see "hands a restored epoch no provenance" below for why.
+    const device = "device-times";
+    const token = await seedRepo(REPO, device);
+    await enableBackup();
+    await pushOps(
+      creates(["issue-1"]).map((op) => ({ ...op, deviceId: device })),
+      { token, device },
+    );
+    const backup = await jsonOf<{ backup: { backupId: string } }>(
+      await call(`/v1/repos/${REPO}/backups`, { method: "POST", token, body: {}, device }),
+    );
+    await runRestore(token, backup.backup.backupId, REPO, device);
+    const snapshot = await jsonOf<{ entities: Array<{ createdAt: string; createdBy: string }> }>(
+      await call(`/v1/repos/${REPO}/snapshot`, { token, device }),
+    );
+    expect(snapshot.entities[0]!.createdAt).toBe("2026-09-08T10:00:00.000Z");
+    expect(snapshot.entities[0]!.createdBy).toBe("opus-s11");
+  });
+
+  /**
+   * A backup the Worker before this build made keeps no create time or actor, so its
+   * restore stages every entity under `restore:<id>` at the moment it ran. That is who
+   * restored and when; handed to devices as the create's, it dated every old comment with
+   * the restore instant and attributed every old revision to the restore.
+   */
+  it("hands a restored epoch no create time or actor when the backup kept none", async () => {
+    const device = "device-old-backup";
+    const token = await seedRepo(REPO, device);
+    await enableBackup();
+    await pushOps(
+      creates(["issue-1"]).map((op) => ({ ...op, deviceId: device })),
+      { token, device },
+    );
+    const backup = await jsonOf<{ backup: { backupId: string } }>(
+      await call(`/v1/repos/${REPO}/backups`, { method: "POST", token, body: {}, device }),
+    );
+    // As a backup from before this build: the fold without either field.
+    const stored = (await env.DB.prepare(`SELECT state FROM backups WHERE repo_id = ?1 AND backup_id = ?2`)
+      .bind(REPO, backup.backup.backupId)
+      .first()) as { state: string };
+    const old = JSON.parse(stored.state) as { entities: Array<Record<string, unknown>> };
+    for (const entity of old.entities) {
+      delete entity.createdAt;
+      delete entity.createdBy;
+    }
+    await env.DB.prepare(`UPDATE backups SET state = ?3 WHERE repo_id = ?1 AND backup_id = ?2`)
+      .bind(REPO, backup.backup.backupId, JSON.stringify(old))
+      .run();
+
+    await runRestore(token, backup.backup.backupId, REPO, device);
+    const snapshot = await jsonOf<{ entities: Array<{ createdSeq: number | null; createdAt: string | null; createdBy: string | null }> }>(
+      await call(`/v1/repos/${REPO}/snapshot`, { token, device }),
+    );
+    expect(snapshot.entities[0]!.createdSeq).toEqual(expect.any(Number));
+    expect(snapshot.entities[0]!.createdAt).toBeNull();
+    expect(snapshot.entities[0]!.createdBy).toBeNull();
+  });
+
   it("a device bootstrapping after a restore sees the restored content, not an empty repository", async () => {
     const token = await seedRepo();
     await enableBackup();
@@ -341,7 +400,7 @@ describe("restore materialises into the new epoch", () => {
       await call(`/v1/repos/${REPO}/snapshot`, { token, device }),
     );
     expect(before.entities[0]!.fieldWrites).toEqual({
-      order: { baseVersion: 0, opId: "q-1", at: "2026-09-08T10:00:00.000Z" },
+      order: { baseVersion: 0, opId: "q-1", at: "2026-09-08T10:00:00.000Z", seq: expect.any(Number) },
     });
 
     const backup = await jsonOf<{ backup: { backupId: string } }>(

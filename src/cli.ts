@@ -45,6 +45,7 @@ import { GENERIC_KIND_FALLBACK } from "./core/kind-appearance.js";
 import { Hub, notifyHubResolvedSafe } from "./core/hub.js";
 import { runInstallCommand } from "./install/index.js";
 import { dataVersion } from "./core/db.js";
+import { acknowledgeRenumbers, takeRenumberNotices } from "./core/identifier-moves.js";
 import {
   DEFAULT_ISSUE_KIND,
   ISSUE_STATUSES,
@@ -212,7 +213,9 @@ function gateCue(gate: IssueGate | null, queuedBy: QueuedBy | null): string {
   return "";
 }
 
-function getStore(values: { db?: string; ws?: string }) {
+function getStore(values: { db?: string; ws?: string; "ack-renumber"?: boolean }) {
+  // A number this command uses may have moved, and the caller says it knows (`WorkspaceStore.requireTarget`).
+  if (values["ack-renumber"] === true) acknowledgeRenumbers();
   const opened = resolveWorkspace({ db: values.db, ws: values.ws });
   // One place, so every command that renders a row can draw a configured status
   // (STA-140) without being handed the store just to look up a glyph.
@@ -338,7 +341,26 @@ function estimateOption(
 const jsonMode = process.argv.includes("--json");
 
 function outJson(payload: unknown): void {
+  /**
+   * An identifier this command used was renumbered on this device: the answer says so
+   * (`identifier-moves.ts`, `RenumberNotice`) — in the document an agent parses, not only
+   * on stderr where it would not look.
+   */
+  const notices = takeRenumberNotices();
+  if (notices.length > 0 && payload !== null && typeof payload === "object" && !Array.isArray(payload)) {
+    console.log(JSON.stringify({ ...(payload as Record<string, unknown>), renumbered: notices }));
+    return;
+  }
+  for (const notice of notices) console.error(`note: ${notice.message}`);
   console.log(JSON.stringify(payload));
+}
+
+/** Every renumber notice a command left and did not put in its JSON answer, said now. */
+function sayRenumberNotices(toStderr: boolean): void {
+  for (const notice of takeRenumberNotices()) {
+    if (toStderr) console.error(`note: ${notice.message}`);
+    else console.log(`note: ${notice.message}`);
+  }
 }
 
 function agentName(explicit?: string): string {
@@ -375,11 +397,12 @@ function completeWithHub(
   status: IssueStatus,
   comment?: string,
   estimatedSeconds?: number | null,
+  actor: string = agentName(),
 ) {
   const updated = store.updateIssue(
     ref,
     { status, comment, ...(estimatedSeconds === undefined ? {} : { estimatedSeconds }) },
-    agentName(),
+    actor,
   );
   notifyHubResolvedSafe(store.slug, updated.identifier);
   return updated;
@@ -845,13 +868,18 @@ Flow
               --override takes a row out of turn under queue.policy = strict and
               records who did it and why (the reason is mandatory). It never
               bypasses a blocker, a gate or a live claim
-  done <ref> [-m comment]               complete (+ cross-workspace fan-out)
-  cancel <ref> [-m comment]
-  status <ref> <status> [--estimate <dur>|--no-estimate]
+  done <ref> [--agent A] [-m comment]   complete (+ cross-workspace fan-out)
+  cancel <ref> [--agent A] [-m comment]
+  status <ref> <status> [--agent A] [--estimate <dur>|--no-estimate]
               any status, guards enforced; --estimate also re-records the
               estimate (same status = estimate-only write), --no-estimate clears
-  release <ref> [--if-stale <dur>]      give a claim back -> todo; --if-stale frees
-              a claim whose holder has been silent at least <dur> (any caller)
+  release <ref> [--agent A] [--if-stale <dur>]
+              give a claim back -> todo; --if-stale frees a claim whose holder
+              has been silent at least <dur> (any caller)
+              --agent names who acts, as on checkout; else $STAPLE_AGENT, else $USER
+  --ack-renumber  on any write: a number sync renumbered on this device is refused
+              while the issue that left it is checked out, leased here, or moved
+              under a day ago — this writes to whatever holds it now. Or use the id
   block <ref> --owner O --action TEXT   mark blocked with an unblock descriptor
   blocked-by <ref> [R1,R2|--none]       replace the dependency set
   wait <ref> [--timeout S] [--interval MS]
@@ -1001,6 +1029,7 @@ function main() {
     db: { type: "string" as const },
     ws: { type: "string" as const },
     json: { type: "boolean" as const },
+    "ack-renumber": { type: "boolean" as const },
   };
 
   switch (command) {
@@ -1332,7 +1361,7 @@ function main() {
       const { values, positionals } = parseArgs({
         args: rest,
         allowPositionals: true,
-        options: { ...common, message: { type: "string", short: "m" } },
+        options: { ...common, agent: { type: "string" }, message: { type: "string", short: "m" } },
       });
       const { store } = getStore(values);
       const issue = completeWithHub(
@@ -1340,6 +1369,8 @@ function main() {
         positionals[0]!,
         command === "done" ? "done" : "cancelled",
         values.message,
+        undefined,
+        agentName(values.agent),
       );
       if (values.json) {
         outJson(issue);
@@ -1355,6 +1386,7 @@ function main() {
         allowPositionals: true,
         options: {
           ...common,
+          agent: { type: "string" },
           estimate: { type: "string" },
           "no-estimate": { type: "boolean" },
         },
@@ -1371,11 +1403,11 @@ function main() {
       const estimatedSeconds = estimateOption(values.estimate, values["no-estimate"]);
       const issue =
         target === "done" || target === "cancelled"
-          ? completeWithHub(store, positionals[0]!, target, undefined, estimatedSeconds)
+          ? completeWithHub(store, positionals[0]!, target, undefined, estimatedSeconds, agentName(values.agent))
           : store.updateIssue(
               positionals[0]!,
               { status: target, ...(estimatedSeconds === undefined ? {} : { estimatedSeconds }) },
-              agentName(),
+              agentName(values.agent),
             );
       if (values.json) {
         outJson(issue);
@@ -1389,11 +1421,11 @@ function main() {
       const { values, positionals } = parseArgs({
         args: rest,
         allowPositionals: true,
-        options: { ...common, "if-stale": { type: "string" } },
+        options: { ...common, agent: { type: "string" }, "if-stale": { type: "string" } },
       });
       const { store } = getStore(values);
       const stale = values["if-stale"];
-      const released = store.releaseIssue(positionals[0]!, agentName(), {
+      const released = store.releaseIssue(positionals[0]!, agentName(values.agent), {
         ifIdleSeconds: stale === undefined ? undefined : parseDuration(stale, "if-stale"),
       });
       if (values.json) {
@@ -1545,7 +1577,14 @@ function main() {
       const timeoutMs =
         values.timeout === undefined ? undefined : positiveOption(values.timeout, 0, "timeout") * 1000;
       const { store } = readWithRetry(() => getStore(values), intervalMs);
-      const ref = positionals[0]!;
+      /**
+       * The issue, resolved once, and probed by its id from then on. Re-resolved each tick,
+       * a sync from another process that renumbered it — another device claimed its number
+       * first — turned `wait` into a wait on whichever issue took the number, and an agent
+       * gated on its own blocked task was told it was ready (`identifier-moves.ts`).
+       */
+      const waitedFor = readWithRetry(() => store.getIssue(positionals[0]!), intervalMs);
+      const ref = waitedFor.id;
       const startedAt = Date.now();
       const deadline = timeoutMs === undefined ? undefined : startedAt + timeoutMs;
       /**
@@ -1628,16 +1667,28 @@ function main() {
         process.exitCode = EXIT_CODES.timeout;
         break;
       }
+      // Renumbered while it waited: said, in the answer, with the identifier it holds now.
+      const moved =
+        snapshot.issue.identifier !== waitedFor.identifier
+          ? {
+              from: waitedFor.identifier,
+              to: snapshot.issue.identifier,
+              message: `${waitedFor.identifier} was renumbered here while this waited; it is now ${snapshot.issue.identifier}.`,
+            }
+          : null;
       if (values.json) {
-        outJson({ ...snapshot.issue, ready: true, reason: snapshot.reason, waitedMs, unresolvedBlockers: snapshot.unresolvedBlockers, queuedBy: snapshot.queuedBy });
+        outJson({ ...snapshot.issue, ready: true, reason: snapshot.reason, waitedMs, unresolvedBlockers: snapshot.unresolvedBlockers, queuedBy: snapshot.queuedBy, ...(moved ? { renumberedWhileWaiting: moved } : {}) });
         break;
       }
       console.log(line(snapshot.issue, `  [${snapshot.reason} after ${(waitedMs / 1000).toFixed(1)}s]`));
+      if (moved) console.log(`note: ${moved.message}`);
       break;
     }
 
     case "link": {
       const { values, positionals } = parseArgs({ args: rest, allowPositionals: true, options: common });
+      // Each end is a write through a number (`Hub.validateCrossLink`), acknowledged like any other.
+      if (values["ack-renumber"] === true) acknowledgeRenumbers();
       const hub = Hub.open();
       try {
         const link = hub.addCrossLink(positionals[0]!, positionals[1]!);
@@ -2363,7 +2414,9 @@ function main() {
 
 try {
   main();
+  sayRenumberNotices(jsonMode);
 } catch (error) {
+  sayRenumberNotices(true);
   // parseArgs failures (unknown option, missing value) are usage errors, not
   // transient faults — classify them as validation so the retry bit stays honest.
   const parseCode = (error as NodeJS.ErrnoException)?.code;

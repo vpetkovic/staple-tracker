@@ -106,6 +106,9 @@
  */
 import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
+import { stapleHome } from "../../config/home.js";
+import { carryIdentifierMovesToHub } from "../hub-follow.js";
+import { moveIdentifier } from "../identifier-moves.js";
 import { journalFor, recordFieldWrites, type SyncEntity, type SyncVerb } from "../journal.js";
 import { settingMetaKey } from "../settings-registry.js";
 import { StapleError, nowIso } from "../types.js";
@@ -114,6 +117,7 @@ import {
   ISSUE_COLUMNS,
   PROJECT_COLUMNS,
   applyToDatabase,
+  operationToInput,
   splitDocumentKey,
   type ApplyInput,
 } from "./apply.js";
@@ -312,11 +316,38 @@ function readField(
       const row = db.prepare("SELECT value FROM meta WHERE key = ?").get(settingMetaKey(entityId)) as
         | { value: unknown }
         | undefined;
-      return { present: true, value: row?.value ?? null };
+      // The setting's VALUE, not the envelope it is stored in: the record holds what a
+      // resolution writes back, and written back as the envelope, every device held it twice
+      // wrapped (`{"v":1,"value":"{\"v\":1,…}"}`).
+      return { present: true, value: settingValueOf(row?.value ?? null) };
     }
     default:
       return { present: false, value: null };
   }
+}
+
+/** A stored setting envelope's value; anything that is not one, as it is. */
+function settingValueOf(stored: unknown): unknown {
+  if (typeof stored !== "string") return stored;
+  try {
+    const parsed = JSON.parse(stored) as unknown;
+    if (parsed !== null && typeof parsed === "object" && "v" in parsed && "value" in parsed) {
+      return (parsed as { value: unknown }).value;
+    }
+  } catch {
+    // a plain string value
+  }
+  return stored;
+}
+
+/**
+ * The payload key a resolution writes a field under: the field name every applier reads
+ * (`targetDate`), not the column the record names (`target_date`) — written under the
+ * column, a milestone date resolved on one device changed on no device at all, that one
+ * included. Mirrors `oneSpelling` in `journal.ts`.
+ */
+function wireKey(field: string): string {
+  return field.replace(/_([a-z])/g, (_, letter: string) => letter.toUpperCase());
 }
 
 // ------------------------------------------------------------------ codec
@@ -513,16 +544,9 @@ export function screenForConflicts(
   op: RemoteOperation,
   localDeviceId: string | null,
 ): ApplyInput | null {
-  const input: ApplyInput = {
-    entity: op.entity,
-    entityId: op.entityId,
-    verb: op.verb,
-    payload: op.payload,
-    actor: op.actor === "" ? null : op.actor,
-    deviceId: op.deviceId,
-    at: op.createdAt,
-    opId: op.opId,
-  };
+  // The same record the applier builds, so what a screened operation carries — its seq
+  // above all, which settles claims on unique values (`claims.ts`) — cannot drift.
+  const input: ApplyInput = operationToInput(op);
 
   /**
    * A device cannot disagree with itself.
@@ -690,6 +714,14 @@ function contest(
       remoteAt: op.createdAt,
       detectedAt,
     });
+    if (named.name === wholeField) {
+      keepEntries(
+        db,
+        conflictId(op.entity, op.entityId, named.name, side.opId, op.opId),
+        heldEntries(db, op.entity, op.entityId),
+        op.payload.entries,
+      );
+    }
   }
 
   if (contested.size === 0) return input;
@@ -718,6 +750,100 @@ function contest(
   }
 
   return contentful ? { ...input, payload: kept } : null;
+}
+
+// ------------------------------------------------- the entries a plan record keeps
+
+/**
+ * Who added each entry of a plan or a milestone, when, and its note — keyed by issue id,
+ * the shape its operations carry as `entries`.
+ *
+ * A record of a contested plan holds the two ORDERS, because the order is what somebody
+ * is asked to choose between. The entries are not what is contested, but they are what a
+ * resolution has to write back: resolved from the orders alone, "keep mine" put every
+ * entry back without its note, on every device. So each side's entries are kept beside
+ * the record, device-local in `meta` (`conflict_entries:<id>`), written when it is
+ * detected and forgotten once it is closed.
+ */
+type Entries = Record<string, { addedBy: string; addedAt: string; note: string | null }>;
+
+function entriesKey(conflictId: string): string {
+  return `conflict_entries:${conflictId}`;
+}
+
+function heldEntries(db: DatabaseSync, entity: string, entityId: string): Entries {
+  const rows = (
+    entity === "queue"
+      ? db.prepare("SELECT issue_id, added_by, added_at, note FROM queue_entries").all()
+      : db.prepare("SELECT issue_id, added_by, added_at, note FROM milestone_members WHERE milestone_id = ?").all(entityId)
+  ) as Array<{ issue_id: string; added_by: string; added_at: string; note: string | null }>;
+  return Object.fromEntries(rows.map((row) => [row.issue_id, { addedBy: row.added_by, addedAt: row.added_at, note: row.note }]));
+}
+
+function keepEntries(db: DatabaseSync, conflictId: string, local: Entries, remote: unknown): void {
+  const theirs = remote !== null && typeof remote === "object" && !Array.isArray(remote) ? remote : {};
+  db.prepare("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT (key) DO NOTHING").run(
+    entriesKey(conflictId),
+    JSON.stringify({ local, remote: theirs }),
+  );
+}
+
+/** The entries a resolution to `chosen` writes: each chosen issue's, from the side chosen. */
+function entriesFor(db: DatabaseSync, conflict: ConflictRecord, choice: ResolutionChoice, chosen: unknown): Entries | null {
+  const row = db.prepare("SELECT value FROM meta WHERE key = ?").get(entriesKey(conflict.id)) as { value: string } | undefined;
+  if (row === undefined || !Array.isArray(chosen)) return null;
+  const kept = JSON.parse(row.value) as { local: Entries; remote: Entries };
+  const from = choice === "local" ? kept.local : choice === "remote" ? kept.remote : { ...kept.remote, ...kept.local };
+  const picked: Entries = {};
+  for (const id of chosen) {
+    if (typeof id === "string" && from[id] !== undefined) picked[id] = from[id]!;
+  }
+  return picked;
+}
+
+/** Forget the entries of every record that is closed now. */
+function forgetClosedEntries(db: DatabaseSync): void {
+  db.prepare(
+    `DELETE FROM meta WHERE key LIKE 'conflict_entries:%'
+       AND substr(key, 18) IN (SELECT id FROM sync_conflicts WHERE resolved_at IS NOT NULL)`,
+  ).run();
+}
+
+// ------------------------------------------- a snapshot re-read on this timeline
+
+/**
+ * A snapshot entity, less every value a record on this device is still open about.
+ *
+ * A device re-reading the snapshot of the timeline it is already on — the applier
+ * catch-up, or the recovery of a stuck tail (`sync.ts`) — is handed the fold, and the fold
+ * holds the last write of every value: for anything contested here, the other side.
+ * Applied as it came, it replaced the value this device holds while the record went on
+ * asking which of the two to keep; resolving it "local" then wrote back a value the
+ * device no longer had. So what an open record is about is withheld from the re-read,
+ * exactly as the screen withholds it from an operation: a field on its own, or a plan or
+ * a milestone's members whole. `keeps` answers for the provenance the entity carries.
+ */
+export function withoutOpenContests(
+  db: DatabaseSync,
+  input: ApplyInput,
+): { input: ApplyInput | null; keeps: (key: string) => boolean } {
+  const contested = new Set(
+    (
+      db
+        .prepare("SELECT field FROM sync_conflicts WHERE entity = ? AND entity_id = ? AND resolved_at IS NULL")
+        .all(input.entity, input.entityId) as Array<{ field: string }>
+    ).map((row) => row.field),
+  );
+  if (contested.size === 0) return { input, keeps: () => true };
+  const whole = WHOLE[input.entity];
+  if (whole !== undefined && contested.has(whole)) return { input: null, keeps: () => false };
+  const keeps = (key: string): boolean => {
+    const named = policy(input.entity, key);
+    if (!named) return true;
+    return !contested.has(named.name) && !(named.derivedFrom !== undefined && contested.has(named.derivedFrom));
+  };
+  const payload = Object.fromEntries(Object.entries(input.payload).filter(([key]) => keeps(key)));
+  return { input: { ...input, payload }, keeps };
 }
 
 function entityVersion(db: DatabaseSync, entity: string, entityId: string): number {
@@ -876,6 +1002,9 @@ export function countOpenConflicts(db: DatabaseSync): number {
  * is, and a receiver that treats it as an ordinary update would be right by
  * accident rather than by contract.
  */
+/** The entities whose row records when it last changed (`updated_at`). */
+const STAMPED: ReadonlySet<string> = new Set(["issue", "project", "milestone"]);
+
 function resolutionVerb(entity: string, field: string): SyncVerb {
   if (WHOLE[entity] === field) return "replace";
   if (entity === "issue" && field === "identifier") return "renumber";
@@ -901,6 +1030,15 @@ function resolutionVerb(entity: string, field: string): SyncVerb {
  *      disagreed is touched. History is appended to.
  */
 export function resolveConflict(db: DatabaseSync, request: ResolveRequest): ResolveOutcome {
+  const outcome = decide(db, request);
+  // A settled identifier moved an issue; this machine's hub cross-links follow it.
+  if (outcome.renumbered.length > 0 || (outcome.changed && outcome.conflict.field === "identifier")) {
+    carryIdentifierMovesToHub(db, stapleHome());
+  }
+  return outcome;
+}
+
+function decide(db: DatabaseSync, request: ResolveRequest): ResolveOutcome {
   const journal = journalFor(db);
 
   return journal.run(() => {
@@ -909,7 +1047,8 @@ export function resolveConflict(db: DatabaseSync, request: ResolveRequest): Reso
       throw new StapleError("not_found", `No conflict "${request.id}".`);
     }
 
-    const chosen = chooseValue(conflict, request);
+    // A setting record from before the value was unwrapped holds the envelope; write the value.
+    const chosen = conflict.entity === "setting" ? settingValueOf(chooseValue(conflict, request)) : chooseValue(conflict, request);
 
     if (conflict.resolvedAt !== null) {
       if (sameValue(conflict.resolvedValue, chosen)) {
@@ -946,8 +1085,17 @@ export function resolveConflict(db: DatabaseSync, request: ResolveRequest): Reso
       writes.push(assignment);
     }
 
+    // A plan or a milestone's members go back with each entry's author, time and note.
+    const entries = WHOLE[conflict.entity] === conflict.field ? entriesFor(db, conflict, request.choice, chosen) : null;
     for (const write of writes) {
-      const payload = { [conflict.field]: write.value };
+      const payload: Record<string, unknown> = { [wireKey(conflict.field)]: write.value };
+      if (entries !== null) payload.entries = entries;
+      /**
+       * A resolution is a write, and an entity that says when it last changed says so at
+       * the decision. Until then each side held its own edit's time; without this they held
+       * them for ever, the one column the decision did not name (`test/sync-mutation-convergence.test.ts`).
+       */
+      if (STAMPED.has(conflict.entity)) payload.updatedAt = at;
       applyToDatabase(db, {
         entity: conflict.entity,
         entityId: write.entityId,
@@ -969,6 +1117,7 @@ export function resolveConflict(db: DatabaseSync, request: ResolveRequest): Reso
 
     close(db, conflict.id, at, actor, chosen);
     settleOpenFor(db, conflict.entity, conflict.entityId, conflict.field, at, actor, chosen);
+    forgetClosedEntries(db);
 
     /**
      * The decision replicates as its own operation so that every other device
@@ -1132,7 +1281,7 @@ function freeIdentifier(
    * the OPERATION for the move is journaled by the caller's assignment loop,
    * which states the whole allocation in one place.
    */
-  db.prepare("UPDATE issues SET identifier = ? WHERE id = ?").run(replacement, holder.id);
+  moveIdentifier(db, holder.id, replacement);
   return [{ issueId: holder.id, from: chosen, to: replacement }];
 }
 
@@ -1178,7 +1327,7 @@ export function applyConflictOperation(db: DatabaseSync, op: RemoteOperation): b
       entity,
       entityId: targetId,
       verb: resolutionVerb(entity, field),
-      payload: { [field]: value },
+      payload: { [wireKey(field)]: value },
       actor: op.actor === "" ? null : op.actor,
       deviceId: op.deviceId,
       at,
@@ -1192,6 +1341,7 @@ export function applyConflictOperation(db: DatabaseSync, op: RemoteOperation): b
    * deciding device could not have named — see {@link settleOpenFor}.
    */
   settleOpenFor(db, entity, targetId, field, at, resolvedBy, value);
+  forgetClosedEntries(db);
   return true;
 }
 

@@ -46,23 +46,33 @@ import {
   type CloudErrorCode,
   type RequestOptions,
 } from "./client.js";
+import { readAutoSyncState, writeAutoSyncState } from "./auto-state.js";
 import { readConnection } from "./connection.js";
 import { credentialStoreFor } from "./credential-store.js";
 import { parseEndpoint, type CloudEndpoint } from "./endpoint.js";
-import { ReferentMissing, applyToDatabase, bumpEntityVersion } from "./apply.js";
+import { ReferentMissing, applyToDatabase, bumpEntityVersion, refreshedIssuePayload } from "./apply.js";
+import { carryIdentifierMovesToHub } from "../hub-follow.js";
+import { closeSettledIdentifierConflicts, settleOwedClaims } from "./claims.js";
+import { assertHubCanTakePrefix, prefixToAdopt, restampHubPrefix } from "./prefix-hub.js";
 import { applyConflictOperation, countOpenConflicts, screenForConflicts } from "./conflicts.js";
 import { hydrate } from "./hydrate.js";
+import { rewindToSnapshot } from "./rewind.js";
+import { TailFold, refusedAsTooLargeToFold, type Entry } from "./tail-fold.js";
 import { seedModeOf, seedOwed, seedRepository, type RepositorySurvey, type SeedReport } from "./seed.js";
 import {
   acknowledgeOperation,
   advanceCursor,
   beginBootstrap,
+  clearTailSurvey,
   completeSnapshot,
   pendingCount,
   recordHeadSeq,
   recordSnapshotPage,
+  readRewind,
+  readTailSurvey,
   recordSyncedAt,
   requireSyncState,
+  writeTailSurvey,
 } from "./sync-state.js";
 import {
   toWireEnvelope,
@@ -80,6 +90,8 @@ export interface BootstrapReport {
   readonly cutoffSeq: number;
   /** True when this sync continued a bootstrap an earlier run had started. */
   readonly resumed: boolean;
+  /** True when the service could not fold a log this large and the ordered tail was folded here. */
+  readonly fromTail?: boolean;
 }
 
 export interface SyncReport {
@@ -112,7 +124,23 @@ export interface SyncReport {
    * without seeding.
    */
   readonly seed: SeedReport | null;
+  /** Operations taken out of the queue unsent, because the service would refuse them. */
+  readonly withheld: readonly WithheldOperation[];
+  /**
+   * The snapshot this sync re-read because an earlier build of staple applied this
+   * database's state, or null. See {@link APPLIER_VERSION}.
+   */
+  readonly caughtUp: BootstrapReport | null;
   readonly at: string;
+}
+
+/** One operation larger than the service takes, named rather than left to block the push. */
+export interface WithheldOperation {
+  readonly entity: string;
+  readonly entityId: string;
+  readonly opId: string;
+  readonly bytes: number;
+  readonly maxBytes: number;
 }
 
 export interface SyncOptions extends RequestOptions {
@@ -124,9 +152,119 @@ export interface SyncOptions extends RequestOptions {
   attempts?: number;
   /** Pull page size. Clamped to what the server advertises. */
   pullLimit?: number;
+  /**
+   * How long, in total, this sync may wait on the service's `Retry-After` before it
+   * gives up and reports `rate_limited`. Automatic sync passes 0: its next attempt is its
+   * retry, and it schedules that no sooner than the service asked.
+   */
+  rateLimitWaitMs?: number;
+  /**
+   * Told before each wait a service asked for, with the refusal's code, so a surface
+   * can say why a sync has paused.
+   */
+  onServiceWait?: (waitMs: number, code: string) => void;
 }
 
 const DEFAULT_ATTEMPTS = 3;
+
+/**
+ * The applier's generation, recorded in the database once a sync completes.
+ *
+ * An older build's applier dropped things this one applies — who queued an entry and its
+ * note, a built-in status deleted elsewhere, the stand-in record a settlement closes — and
+ * what it dropped stays dropped: nothing re-sends an operation a device has already applied.
+ * Measured live, a device upgraded from a build before #101 kept a status every other device
+ * had deleted and the author of every plan entry as "sync". So the first sync by a build
+ * whose applier is newer than the one that wrote this database re-reads the snapshot once,
+ * on the timeline it is already on — the same read a stuck tail recovers with — and the
+ * state converges on what the log says. Raised whenever the applier learns to apply
+ * something it used to drop — or to place something where the log places it: 4 re-reads
+ * every document revision into the log's placement (`applyDocumentRevision`), which a
+ * device that merged two revisions from an older fold, dated them by their operations, or
+ * copied them under new numbers on an earlier re-read does not hold.
+ */
+export const APPLIER_VERSION = 4;
+const APPLIER_VERSION_KEY = "sync_applier_version";
+
+function applierVersionOf(db: DatabaseSync): number {
+  const row = db.prepare("SELECT value FROM meta WHERE key = ?").get(APPLIER_VERSION_KEY) as { value: string } | undefined;
+  return Number(row?.value ?? 1);
+}
+
+function recordApplierVersion(db: DatabaseSync): void {
+  db.prepare("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(
+    APPLIER_VERSION_KEY,
+    String(APPLIER_VERSION),
+  );
+}
+
+/**
+ * Whether a snapshot was served by a Worker whose fold this applier's generation needs.
+ *
+ * The client ships within minutes of a merge and the Worker whenever it is deployed, so
+ * for a while an upgraded device reads a snapshot from the Worker before this build — one
+ * that folds a delete as final even after a re-create, and says nothing of each create.
+ * Re-reading that one deleted, on every upgraded device, a status removed and added back,
+ * and then recorded the catch-up as done, so the new Worker never got to repair it. What
+ * tells the two apart is on every entity: `createdSeq`, which the new fold always sends (a
+ * number, or null) and the old one never does. An empty snapshot says nothing either way,
+ * and has nothing to repair.
+ */
+function servedByCurrentFold(entities: readonly SnapshotEntity[]): boolean | null {
+  if (entities.length === 0) return null;
+  return entities.every((entity) => Object.prototype.hasOwnProperty.call(entity, "createdSeq"));
+}
+
+/** Set when this sync applied a snapshot from the older fold; read once, at the end. */
+const hydratedFromOlderFold = new WeakMap<DatabaseSync, true>();
+
+function noteFold(db: DatabaseSync, entities: readonly SnapshotEntity[]): void {
+  if (servedByCurrentFold(entities) === false) hydratedFromOlderFold.set(db, true);
+}
+
+/**
+ * One entity of the snapshot, to ask whether the service folds creates yet — so a device
+ * that owes a re-read pays one small request per sync, not a whole snapshot, until the
+ * Worker that can repair it is live.
+ */
+async function serviceFoldsCreates(session: Session, options: SyncOptions): Promise<boolean> {
+  try {
+    const page = (await attempt(() => snapshotPage(session, null, 1, options), options)) as SnapshotPage;
+    return servedByCurrentFold(page.entities) !== false;
+  } catch (error) {
+    // Too large for the service to fold: the re-read folds the tail here instead, by this
+    // build's rules, whichever Worker is live (`tail-fold.ts`).
+    if (error instanceof TooLargeToFold) return true;
+    throw error;
+  }
+}
+
+/**
+ * The default `Retry-After` budget for one sync, and the longest single wait it takes.
+ *
+ * Sized for the one case that reaches it in ordinary use: the first sync of a large
+ * workspace, which uploads its whole history in batches of `maxBatchSize` and can run
+ * past the Worker's per-device limit (120 requests a minute, answered with
+ * `Retry-After: 60`). Ten minutes carries a first sync of tens of thousands of items to
+ * the end in one command; a single wait longer than two minutes is a service asking to
+ * be left alone, and that is reported rather than sat through.
+ */
+export const DEFAULT_RATE_LIMIT_WAIT_MS = 10 * 60_000;
+export const MAX_SINGLE_RATE_LIMIT_WAIT_MS = 2 * 60_000;
+
+/** `Retry-After` as milliseconds: delta-seconds or an HTTP date. Null when absent or unreadable. */
+export function retryAfterMs(error: unknown, now: number = Date.now()): number | null {
+  if (!(error instanceof StapleError)) return null;
+  const raw = error.detail?.retryAfter;
+  if (typeof raw !== "string" && typeof raw !== "number") return null;
+  const text = String(raw).trim();
+  if (/^\d+$/.test(text)) return Number(text) * 1000;
+  const at = Date.parse(text);
+  return Number.isNaN(at) ? null : Math.max(0, at - now);
+}
+
+/** Per-sync state `attempt` shares across every request of one sync. */
+const waitBudgets = new WeakMap<SyncOptions, { remainingMs: number }>();
 
 /**
  * Only these three are retried.
@@ -205,17 +343,61 @@ async function attempt<T>(
 ): Promise<T> {
   const attempts = Math.max(1, options.attempts ?? DEFAULT_ATTEMPTS);
   const sleep = options.sleep ?? sleepDefault;
+  let budget = waitBudgets.get(options);
+  if (!budget) {
+    budget = { remainingMs: options.rateLimitWaitMs ?? DEFAULT_RATE_LIMIT_WAIT_MS };
+    waitBudgets.set(options, budget);
+  }
   let last: unknown;
 
-  for (let n = 0; n < attempts; n += 1) {
+  for (let n = 0; n < attempts; ) {
     try {
       return await work();
     } catch (error) {
       last = error;
       const code = cloudCodeOf(error);
       if (code === null || !RETRYABLE.has(code)) throw error;
-      if (n === attempts - 1) throw error;
-      await sleep(Math.min(2_000, 200 * 2 ** n));
+      /**
+       * A service that says how long to wait is waited for, and the request is sent
+       * again — without spending one of the transient-failure attempts, because being
+       * told "not yet" is not a failure. Before this the schedule below retried a
+       * `Retry-After: 60` after 200 ms, was refused twice more, and the sync stopped
+       * with `rate_limited` halfway through a large first upload.
+       *
+       * Bounded twice: no single wait longer than {@link MAX_SINGLE_RATE_LIMIT_WAIT_MS},
+       * and no more in total than this sync's budget, so an absurd or hostile value
+       * cannot hang a command. Past either, the refusal is reported at once, with the
+       * service's `Retry-After` in its detail, and everything already acknowledged stays
+       * acknowledged.
+       */
+      const asked = retryAfterMs(error);
+      // `asked > 0`: a zero wait would retry without spending anything from either bound.
+      const honourable =
+        asked !== null && asked > 0 && asked <= MAX_SINGLE_RATE_LIMIT_WAIT_MS && asked <= budget.remainingMs;
+      if (code === "rate_limited" && honourable) {
+        budget.remainingMs -= asked;
+        options.onServiceWait?.(asked, code);
+        await sleep(asked);
+        continue;
+      }
+      // Asked to stay away for longer than this sync will wait: say so now, rather than
+      // asking again in 200 ms and being refused twice more.
+      if (code === "rate_limited" && asked !== null) throw error;
+      n += 1;
+      if (n >= attempts) throw error;
+      /**
+       * Any other retryable answer spends an attempt, and still waits at least what the
+       * service asked for when it said: a 503 with `Retry-After: 5` retried after 200 ms is
+       * the same rudeness as a 429 retried early, within the same two bounds.
+       */
+      const backoff = Math.min(2_000, 200 * 2 ** (n - 1));
+      if (honourable && asked > backoff) {
+        budget.remainingMs -= asked;
+        options.onServiceWait?.(asked, code);
+        await sleep(asked);
+      } else {
+        await sleep(backoff);
+      }
     }
   }
   throw last;
@@ -288,6 +470,9 @@ export async function syncRepository(
 
   const session = openSession(options.home, repositoryId);
   const state = requireSyncState(db);
+  // Read before the pull records anything. A database this sync hydrates — a first sync, a
+  // join, a re-bootstrap — owes nothing more once it has (`hydrated`, below).
+  const catchUpOwed = applierVersionOf(db) < APPLIER_VERSION;
 
   if (state.repositoryId !== repositoryId) {
     throw new StapleError(
@@ -337,21 +522,39 @@ export async function syncRepository(
    * has.
    */
   let forcedBootstrap: BootstrapReport | null = null;
+  const withheld: WithheldOperation[] = [];
   const pushed = { attempted: 0, applied: 0, duplicate: 0 };
   const pushAll = async (): Promise<void> => {
     let sent: SyncReport["pushed"];
     try {
-      sent = await pushPending(db, journal, session, capabilities, options);
+      sent = await pushPending(db, journal, session, capabilities, options, withheld);
     } catch (error) {
       if (cloudCodeOf(error) !== "epoch_changed") throw error;
       beginBootstrap(db, epochFrom(error) ?? requireSyncState(db).epoch + 1);
       forcedBootstrap = await runBootstrap(db, journal, session, capabilities, options);
-      sent = await pushPending(db, journal, session, capabilities, options);
+      sent = await pushPending(db, journal, session, capabilities, options, withheld);
     }
     pushed.attempted += sent.attempted;
     pushed.applied += sent.applied;
     pushed.duplicate += sent.duplicate;
   };
+
+  /**
+   * A restore made on this device moved its epoch already (`restoreFromBackup`), so its push
+   * would go straight into the new epoch, ahead of the bootstrap that rewinds this device —
+   * and the rewind is what finds the unsent work the new epoch lacks and sends what it
+   * names with it (`rewind.ts`). So the bootstrap it owes runs first.
+   */
+  if (readRewind(db) !== null && requireSyncState(db).cursor === null) {
+    try {
+      forcedBootstrap = await runBootstrap(db, journal, session, capabilities, options);
+    } catch (error) {
+      // Moved again under it: once, onto the epoch the service has, as the push and the pull do.
+      if (cloudCodeOf(error) !== "epoch_changed") throw error;
+      beginBootstrap(db, epochFrom(error) ?? requireSyncState(db).epoch + 1);
+      forcedBootstrap = { ...(await runBootstrap(db, journal, session, capabilities, options)), resumed: false };
+    }
+  }
 
   let seed: SeedReport | null = null;
   let joined: BootstrapReport | null = null;
@@ -370,15 +573,28 @@ export async function syncRepository(
      * A join does not: a database that has never synchronized has sent nothing, and its
      * whole pre-join journal is replaced by the seed.
      */
-    if (seedModeOf(db) === "heal") await pushAll();
-    const survey = await surveyRepository(session, capabilities, options);
+    const mode = seedModeOf(db);
+    if (mode === "heal") await pushAll();
+    const survey = await surveyRepository(db, session, capabilities, options);
+    noteFold(db, survey.entities);
+    /**
+     * A joining workspace takes its repository's prefix (`repository-prefix.ts`) — refused
+     * here, before the seed writes anything, when another workspace on this machine holds
+     * it. Nothing has been written by this point: the survey only reads.
+     */
+    const adoptPrefix = mode === "join" ? prefixToAdopt(db, survey.entities) : null;
+    if (adoptPrefix !== null) assertHubCanTakePrefix(options.home, db, adoptPrefix);
     seed = seedRepository(db, journal, {
       repositoryId,
       survey,
       maxOpBytes: capabilities.maxOpBytes,
+      adoptPrefix,
     });
+    // The tail read the survey resumed, if it was one, is spent.
+    clearTailSurvey(db);
+    if (seed?.prefix) restampHubPrefix(options.home, db, seed.prefix.to);
     if (seed?.mode === "join") {
-      joined = { entities: survey.entities.length, pages: survey.pages, cutoffSeq: survey.cutoffSeq, resumed: false };
+      joined = { entities: survey.entities.length, pages: survey.pages, cutoffSeq: survey.cutoffSeq, resumed: false, ...(survey.fromTail ? { fromTail: true } : {}) };
     }
   }
 
@@ -386,8 +602,50 @@ export async function syncRepository(
 
   const pull = await pullEverything(db, journal, session, capabilities, options);
 
+  /**
+   * What the pull made this device owe goes out in the same sync.
+   *
+   * Applying the pull can leave this device holding a later claim on an identifier or a
+   * slug that another device claimed first, and it settles that with an operation of its
+   * own (`claims.ts`). Until the settlement lands, every other device holds this device's
+   * issue under a stand-in, so it is sent now rather than on the next sync — which might
+   * be tomorrow.
+   */
+  if (pendingCount(db) > 0) await pushAll();
+
+  let caughtUp: BootstrapReport | null = null;
+  const hydrated = pull.bootstrap !== null || forcedBootstrap !== null || joined !== null;
+  if (catchUpOwed && !hydrated && (await serviceFoldsCreates(session, options))) {
+    caughtUp = (await recoverFromSnapshot(db, journal, session, capabilities, options, `applier-${APPLIER_VERSION}`)).bootstrap;
+  }
+  /**
+   * Recorded only when what this database holds came through the fold this applier needs.
+   * A snapshot from the older one — hydrated from, joined on, or re-read — leaves it owed,
+   * and taken back if it was recorded, so the first sync after the new Worker is live
+   * repairs it (`servedByCurrentFold`).
+   */
+  if (hydratedFromOlderFold.get(db) === true) {
+    db.prepare("DELETE FROM meta WHERE key = ?").run(APPLIER_VERSION_KEY);
+  } else if (!catchUpOwed || hydrated || caughtUp !== null) {
+    recordApplierVersion(db);
+  }
+  hydratedFromOlderFold.delete(db);
+  // And any identifier record an older build left open after applying its settlement.
+  closeSettledIdentifierConflicts(db);
+
   const after = requireSyncState(db);
   recordSyncedAt(db);
+  /**
+   * A sync that worked is the answer to whatever automatic sync was waiting out — a
+   * service's `Retry-After`, or its own failures — so the wait ends here, whichever surface
+   * ran it. Left in place, it outlived every manual sync and was cleared only by reconnecting.
+   */
+  const waiting = readAutoSyncState(options.home, repositoryId);
+  if (waiting.nextEligibleAt !== null || waiting.consecutiveFailures > 0) {
+    writeAutoSyncState(options.home, repositoryId, { ...waiting, consecutiveFailures: 0, nextEligibleAt: null });
+  }
+  // The identifiers this sync moved, carried to this machine's hub cross-links (`hub-follow.ts`).
+  carryIdentifierMovesToHub(db, options.home);
 
   const conflicts = countOpenConflicts(db);
 
@@ -403,6 +661,8 @@ export async function syncRepository(
     pending: pendingCount(db),
     conflicts,
     seed,
+    withheld,
+    caughtUp,
     at: nowIso(),
   };
 }
@@ -417,6 +677,113 @@ export async function syncRepository(
  * the service holds, and it writes all of it in one transaction.
  */
 async function surveyRepository(
+  db: DatabaseSync,
+  session: Session,
+  capabilities: Capabilities,
+  options: SyncOptions,
+): Promise<RepositorySurvey> {
+  try {
+    return await surveySnapshot(session, capabilities, options);
+  } catch (error) {
+    if (!(error instanceof TooLargeToFold)) throw error;
+    return surveyFromTail(db, session, capabilities, options);
+  }
+}
+
+/**
+ * The service refused to fold the log — past `MAX_SNAPSHOT_FOLD_OPS` — which no retry
+ * changes, so it is not left to `attempt` to retry as an `unavailable`.
+ */
+class TooLargeToFold extends Error {
+  constructor(readonly cause: unknown) {
+    super("the operation log is too large for the service to fold in one pass");
+  }
+}
+
+/** One snapshot page, with a refusal to fold turned into {@link TooLargeToFold}. */
+function snapshotPage(session: Session, cursor: string | null, limit: number, options: SyncOptions): Promise<SnapshotPage> {
+  return fetchSnapshotPage(
+    session.endpoint,
+    { repositoryId: session.repositoryId, token: session.token, deviceId: session.deviceId, cursor, limit },
+    options,
+  ).catch((error: unknown) => {
+    if (refusedAsTooLargeToFold(error)) throw new TooLargeToFold(error);
+    throw error;
+  }) as Promise<SnapshotPage>;
+}
+
+/**
+ * The survey from the ordered tail: every operation of the epoch, pulled in pages with no
+ * fold on the service, and folded here by the Worker's rules (`tail-fold.ts`). The cutoff
+ * is the last operation read, and the tail resumes after it.
+ */
+async function surveyFromTail(
+  db: DatabaseSync,
+  session: Session,
+  capabilities: Capabilities,
+  options: SyncOptions,
+): Promise<RepositorySurvey> {
+  /**
+   * Resumed from where an earlier read stopped (`readTailSurvey`): a large log is more
+   * pages than an automatic sync's budget, or the service's rate limit, allows one run, and
+   * a read that started again from the first page on every run never finished.
+   */
+  const saved = readTailSurvey(db, session.repositoryId);
+  const fold = new TailFold((saved?.folded ?? []) as Entry[]);
+  let cursor: string | null = saved?.cursor ?? null;
+  let pages = saved?.pages ?? 0;
+  let operations = saved?.operations ?? 0;
+  let epoch = saved?.epoch ?? 0;
+  let cutoffSeq = saved?.cutoffSeq ?? 0;
+  let unsaved = 0;
+  const keep = (): void => {
+    if (unsaved === 0) return;
+    writeTailSurvey(db, { repositoryId: session.repositoryId, epoch, cursor, pages, operations, cutoffSeq, folded: fold.saved() });
+    unsaved = 0;
+  };
+  try {
+    for (;;) {
+      const page = (await attempt(
+        () =>
+          pullOperations(
+            session.endpoint,
+            { repositoryId: session.repositoryId, token: session.token, deviceId: session.deviceId, cursor, limit: capabilities.maxPullLimit },
+            options,
+          ),
+        options,
+      )) as PullPage;
+      pages += 1;
+      epoch = page.epoch;
+      fold.add(page.ops);
+      operations += page.ops.length;
+      cutoffSeq = page.ops.reduce((highest, op) => Math.max(highest, op.seq), cutoffSeq);
+      cursor = page.nextCursor;
+      unsaved += 1;
+      if (!page.hasMore || page.ops.length === 0) break;
+      // Kept every few pages as well as when stopped, for a process that is killed outright.
+      if (unsaved >= TAIL_SURVEY_KEEP_EVERY) keep();
+    }
+  } catch (error) {
+    // Kept for the next sync — unless the epoch moved, which ends the log it describes.
+    if (cloudCodeOf(error) === "epoch_changed") clearTailSurvey(db);
+    else keep();
+    throw error;
+  }
+  return {
+    epoch,
+    cutoffSeq,
+    tailCursor: cursor!,
+    entities: fold.entities(),
+    pages,
+    fromTail: true,
+    ...(saved !== null ? { resumedFrom: saved.operations } : {}),
+  };
+}
+
+/** How many pages a tail read goes between keeping what it has read (`surveyFromTail`). */
+const TAIL_SURVEY_KEEP_EVERY = 10;
+
+async function surveySnapshot(
   session: Session,
   capabilities: Capabilities,
   options: SyncOptions,
@@ -425,21 +792,7 @@ async function surveyRepository(
   let cursor: string | null = null;
   let pages = 0;
   for (;;) {
-    const page = (await attempt(
-      () =>
-        fetchSnapshotPage(
-          session.endpoint,
-          {
-            repositoryId: session.repositoryId,
-            token: session.token,
-            deviceId: session.deviceId,
-            cursor,
-            limit: capabilities.maxSnapshotPageSize,
-          },
-          options,
-        ),
-      options,
-    )) as SnapshotPage;
+    const page = (await attempt(() => snapshotPage(session, cursor, capabilities.maxSnapshotPageSize, options), options)) as SnapshotPage;
     pages += 1;
     entities.push(...page.entities);
     if (page.nextCursor === null) {
@@ -490,6 +843,7 @@ async function pushPending(
   session: Session,
   capabilities: Capabilities,
   options: SyncOptions,
+  withheld: WithheldOperation[],
 ): Promise<SyncReport["pushed"]> {
   let attempted = 0;
   let applied = 0;
@@ -507,12 +861,89 @@ async function pushPending(
     if (batch.length === 0) break;
 
     /**
+     * An operation the service will refuse whatever happens is never sent as part of a
+     * batch. The service refuses an oversized payload for the WHOLE batch, so one of them
+     * in the outbox failed the same push on every sync and nothing queued behind it ever
+     * left the machine. The journal refuses one at write time; this is for an outbox
+     * written before it did, and for a service that advertises a smaller cap than the
+     * journal's.
+     *
+     * A document revision or a comment is taken out of the queue and named. Nothing
+     * refers to one revision — the next revision and the head pointer land without it —
+     * and a comment is written once and never edited or named by anything, so leaving
+     * either behind costs its text on the other devices and nothing else, which is the
+     * decision the seed makes too.
+     *
+     * An issue cannot be left behind: every later edit, child, comment and blocker of it
+     * would name something the other devices never receive. The queued operation never
+     * landed — the service refuses it every time — so it is rebuilt from the issue as it
+     * stands now, which is what makes editing the issue below the limit the way out.
+     * Anything still too large is refused by name. This build cannot queue any of these
+     * (the journal refuses them); only an outbox written by an older build can hold one.
+     */
+    const sizeOf = (payload: unknown): number => Buffer.byteLength(JSON.stringify(payload), "utf8");
+    const outbound = batch.map((op) => redactOutbound(db, op));
+    const tooLarge = outbound.filter((op) => sizeOf(op.payload) > capabilities.maxOpBytes);
+    const skippable = (op: OperationEnvelope): boolean => op.entity === "documentRevision" || op.entity === "comment";
+    let rebuilt = false;
+    for (const op of tooLarge) {
+      if (skippable(op) || op.entity !== "issue") continue;
+      const fresh = refreshedIssuePayload(db, op.entityId, op.payload);
+      if (fresh !== null && sizeOf(fresh) <= capabilities.maxOpBytes) {
+        db.prepare("UPDATE sync_outbox SET payload = ? WHERE op_id = ? AND acknowledged_seq IS NULL").run(
+          JSON.stringify(fresh),
+          op.opId,
+        );
+        rebuilt = true;
+      }
+    }
+    if (rebuilt) continue;
+    const unskippable = tooLarge.find((op) => !skippable(op));
+    if (unskippable) {
+      const bytes = sizeOf(unskippable.payload);
+      const label =
+        unskippable.entity === "issue"
+          ? `issue ${
+              (db.prepare("SELECT identifier FROM issues WHERE id = ?").get(unskippable.entityId) as
+                | { identifier: string }
+                | undefined)?.identifier ?? unskippable.entityId
+            }`
+          : `${unskippable.entity} ${unskippable.entityId}`;
+      throw cloudError(
+        "payload_too_large",
+        `A queued change to ${label} is ${bytes} bytes and ${session.endpointOrigin} takes at most ` +
+          `${capabilities.maxOpBytes}, so it can never be sent, and leaving it out would break everything ` +
+          `that refers to it. Nothing was sent. It was queued by an older build of staple.` +
+          (unskippable.entity === "issue"
+            ? ` Edit its description or title below the limit (in the UI, or with the MCP update_task tool) ` +
+              `and run \`staple cloud sync\` again: the queued change is rebuilt from the edited issue.`
+            : ""),
+        { bytes, maxBytes: capabilities.maxOpBytes },
+      );
+    }
+    if (tooLarge.length > 0) {
+      tx(db, () => {
+        for (const op of tooLarge) {
+          journal.withhold(op.opId);
+          withheld.push({
+            entity: op.entity,
+            entityId: op.entityId,
+            opId: op.opId,
+            bytes: Buffer.byteLength(JSON.stringify(op.payload), "utf8"),
+            maxBytes: capabilities.maxOpBytes,
+          });
+        }
+      });
+      continue;
+    }
+
+    /**
      * Zero is not an epoch — it is migration 010's default, meaning this device
      * has never learned one. Fencing on it would refuse every first push.
      */
     const known = requireSyncState(db).epoch;
     const epoch = known > 0 ? known : null;
-    const wire = batch.map((op) => toWireEnvelope(redactOutbound(db, op)));
+    const wire = outbound.map((op) => toWireEnvelope(op));
 
     const response = (await attempt(
       () =>
@@ -664,17 +1095,21 @@ async function recoverFromSnapshot(
   session: Session,
   capabilities: Capabilities,
   options: SyncOptions,
+  ledger = "snap",
 ): Promise<PullOutcome> {
-  const survey = await surveyRepository(session, capabilities, options);
+  const survey = await surveyRepository(db, session, capabilities, options);
+  noteFold(db, survey.entities);
   tx(db, () => {
-    hydrate(db, journal, survey.entities, [], survey.cutoffSeq, nowIso(), true, true);
+    hydrate(db, journal, survey.entities, [], survey.cutoffSeq, nowIso(), true, true, ledger, hydratedFromOlderFold.get(db) !== true);
+    clearTailSurvey(db);
     completeSnapshot(db, survey.tailCursor, survey.epoch);
     replayOutboxFieldWrites(db);
+    settleOwedClaims(db, journal);
   });
   const pulled = await drainTail(db, journal, session, capabilities, options);
   return {
     pulled,
-    bootstrap: { entities: survey.entities.length, pages: survey.pages, cutoffSeq: survey.cutoffSeq, resumed: false },
+    bootstrap: { entities: survey.entities.length, pages: survey.pages, cutoffSeq: survey.cutoffSeq, resumed: false, ...(survey.fromTail ? { fromTail: true } : {}) },
   };
 }
 
@@ -747,21 +1182,31 @@ async function runBootstrap(
   const limit = capabilities.maxSnapshotPageSize;
 
   for (;;) {
-    const page = (await attempt(
-      () =>
-        fetchSnapshotPage(
-          session.endpoint,
-          {
-            repositoryId: session.repositoryId,
-            token: session.token,
-            deviceId: session.deviceId,
-            cursor,
-            limit,
-          },
-          options,
-        ),
-      options,
-    )) as SnapshotPage;
+    let page: SnapshotPage;
+    try {
+      page = (await attempt(() => snapshotPage(session, cursor, limit, options), options)) as SnapshotPage;
+    } catch (error) {
+      if (!(error instanceof TooLargeToFold)) throw error;
+      /**
+       * Too large for the service to fold: a device joins from the ordered tail instead,
+       * folded here (`tail-fold.ts`) and applied as one snapshot, in one transaction.
+       * Before, a repository past `MAX_SNAPSHOT_FOLD_OPS` could not reach a new machine.
+       */
+      const survey = await surveyFromTail(db, session, capabilities, options);
+      noteFold(db, survey.entities);
+      const at = nowIso();
+      tx(db, () => {
+        const outcome = hydrate(db, journal, survey.entities, parked, survey.cutoffSeq, at, true);
+        clearTailSurvey(db);
+        entities += outcome.applied;
+        // A restore moved the epoch: this device rewinds with the repository (`rewind.ts`).
+        rewindToSnapshot(db, journal, { prefix: `snap:${survey.cutoffSeq}:`, cutoff: survey.cutoffSeq });
+        settleOwedClaims(db, journal);
+        completeSnapshot(db, survey.tailCursor, survey.epoch);
+        replayOutboxFieldWrites(db);
+      });
+      return { entities, pages: pages + survey.pages, cutoffSeq: survey.cutoffSeq, resumed, fromTail: true };
+    }
 
     cutoffSeq = page.cutoffSeq;
     pages += 1;
@@ -779,9 +1224,14 @@ async function runBootstrap(
     const at = nowIso();
     const final = page.nextCursor === null;
     tx(db, () => {
-      const outcome = hydrate(db, journal, page.entities, parked, cutoffSeq, at, final);
+      noteFold(db, page.entities);
+      const outcome = hydrate(db, journal, page.entities, parked, cutoffSeq, at, final, false, "snap", hydratedFromOlderFold.get(db) !== true);
       entities += outcome.applied;
       parked = outcome.parked;
+      // A restore moved the epoch: once the new epoch's snapshot is whole, this device
+      // rewinds with the repository (`rewind.ts`).
+      if (final) rewindToSnapshot(db, journal, { prefix: `snap:${cutoffSeq}:`, cutoff: cutoffSeq });
+      settleOwedClaims(db, journal);
 
       if (final) {
         // The snapshot half is done. The tail becomes the ordinary cursor and
@@ -937,6 +1387,11 @@ function applyPage(
         );
       }
     }
+    /**
+     * Every later claim of this device's that yielded to one in this page is settled now,
+     * in the same transaction, as ordinary operations (`claims.ts`).
+     */
+    settleOwedClaims(db, journal);
   });
 
   return { applied, skipped };

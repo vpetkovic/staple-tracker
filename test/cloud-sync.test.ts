@@ -463,7 +463,12 @@ describe("an epoch is a discontinuity, and it is never a silent reset", () => {
     const report = await b.sync();
     expect(report.epoch).toBe(2);
     expect(report.bootstrap, "a superseded cursor forces a bootstrap").not.toBeNull();
-    expect(titles(b.store)).toEqual(["After the restore", "Before the restore"]);
+    // What the new epoch holds, as a device joining it now does: a restore rewinds, and this
+    // one materialised nothing, so what B held from the old epoch is gone ("A restore rewinds").
+    const fresh = device("device-fresh", "token-fresh");
+    await fresh.sync();
+    expect(titles(b.store)).toEqual(["After the restore"]);
+    expect(titles(fresh.store)).toEqual(titles(b.store));
   });
 
   /**
@@ -559,10 +564,11 @@ describe("an epoch is a discontinuity, and it is never a silent reset", () => {
     expect(readSyncState(b.store.db)!.bootstrap, "nothing stale is left behind").toBeNull();
     expect(readSyncState(b.store.db)!.cursor, "B has an incremental position again").not.toBeNull();
 
-    // The recovery is not destructive: everything B had already hydrated is
-    // still there, alongside its own work.
-    for (const title of hydratedBefore) expect(titles(b.store)).toContain(title);
-    expect(titles(b.store)).toContain("Queued on B across a restore");
+    // The recovery rewinds B to the epoch the service has — two restores left it empty, so
+    // what B hydrated from the superseded one is gone — and keeps B's own unsent work
+    // ("A restore rewinds").
+    for (const title of hydratedBefore.filter((held) => held.startsWith("Issue "))) expect(titles(b.store)).not.toContain(title);
+    expect(titles(b.store)).toEqual(["Queued on B across a restore"]);
 
     // And the push completed, which is the half that a stuck bootstrap was
     // silently blocking. Proven on the OTHER device rather than from B's own

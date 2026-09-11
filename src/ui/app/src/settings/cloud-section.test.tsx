@@ -578,6 +578,7 @@ function hubRow(overrides: Partial<HubWorkspaceReport> = {}): HubWorkspaceReport
     credentialMechanism: "keychain",
     credentialPresent: null,
     auto: false,
+    autoWaitingUntil: null,
     backup: false,
     connectedAt: "2026-09-05T00:00:00.000Z",
     skip: null,

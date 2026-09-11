@@ -1,6 +1,9 @@
 import type { DatabaseSync } from "node:sqlite";
 import { insertEvent } from "./event-log.js";
-import { type Journal, journalFor } from "./journal.js";
+import { RENUMBER_GUARD_MS, aliasedIssueId, formerHolderOf, formerHolders, formerMove, noteRenumber, renumbersAcknowledged } from "./identifier-moves.js";
+import { readLocalLease } from "./cloud/lease-store.js";
+import { REPOSITORY_PREFIX_SETTING } from "./cloud/repository-prefix.js";
+import { type Journal, journalFor, resolveDeviceId } from "./journal.js";
 import {
   blockersResolvedDedupKey,
   childrenCompleteDedupKey,
@@ -27,6 +30,7 @@ import {
   type QueuedBy,
   REQUIRED_STATUS_CATEGORIES,
   RESOLVED_CATEGORIES,
+  holdsLiveOrigin,
   StapleError,
   type StapleEvent,
   type StatusCategory,
@@ -65,6 +69,7 @@ import {
   type KindWithAppearance,
 } from "./kind-appearance.js";
 import { MILESTONE_KIND } from "./milestones.js";
+import { fallbackTarget, recordRemovalTarget } from "./vocabulary-targets.js";
 import { ProjectStore } from "./project-store.js";
 import { QueueStore } from "./queue-store.js";
 /**
@@ -534,8 +539,23 @@ export class WorkspaceStore {
   constructor(
     readonly db: DatabaseSync,
     readonly slug: string,
-    readonly prefix: string,
+    private readonly openedPrefix: string,
   ) {}
+
+  /**
+   * The prefix this workspace mints identifiers under, read from the database each time.
+   *
+   * Not the value it was opened with: joining a repository re-stamps the workspace with the
+   * repository's prefix (`cloud/repository-prefix.ts`), and that can happen in another
+   * process while this one — a UI or MCP server — keeps running. A remembered prefix would
+   * mint the old one from then on, into a repository that has settled on the new one.
+   * A closed store mints nothing, and answers with the prefix it was opened with.
+   */
+  get prefix(): string {
+    if (!this.db.isOpen) return this.openedPrefix;
+    const row = this.db.prepare("SELECT value FROM meta WHERE key = 'prefix'").get() as { value: string } | undefined;
+    return row?.value ?? this.openedPrefix;
+  }
 
   // ---------- workspace settings: statuses and kinds (STA-140) ----------
 
@@ -691,6 +711,9 @@ export class WorkspaceStore {
       values.set(definition.key, { value: decoded.value, version: decoded.version });
       stored.delete(definition.key);
     }
+    // The repository's prefix rides a setting key so older builds preserve it unread
+    // (`cloud/repository-prefix.ts`); this one knows it, and it is not a workspace setting.
+    stored.delete(REPOSITORY_PREFIX_SETTING);
     for (const key of stored.keys()) unknownSettingKeys.push(key);
 
     const snapshot: SettingsSnapshot = {
@@ -1002,9 +1025,11 @@ export class WorkspaceStore {
         entity: "status",
         entityId: id,
         verb: "create",
-        payload: { id, label, category },
+        // Added here, never a built-in — even one removed and added back (`applyVocabulary`).
+        payload: { id, label, category, isBuiltin: false },
         actor: actor ?? null,
       });
+      this.journalPlacement("status", input.after, actor);
       return this.requireStatusRow(id);
     });
   }
@@ -1182,12 +1207,16 @@ export class WorkspaceStore {
           throw new StapleError("validation", "--migrate-to must name a different status");
         }
         this.requireStatusRow(target);
-        const result = this.db
-          .prepare("UPDATE issues SET status = ?, updated_at = ? WHERE status = ?")
-          .run(target, nowIso(), id);
-        migrated = Number(result.changes);
+        migrated = this.migrateVocabularyRows("status", id, target, actor);
       }
+      /**
+       * Every removal names where its issues go, even one nothing here held: another device
+       * may be moving an issue into it right now, and that issue goes where this removal says
+       * (`vocabulary-targets.ts`).
+       */
+      const target = opts.migrateTo?.trim() || fallbackTarget(this.db, "status", id, row.category);
       this.db.prepare("DELETE FROM workspace_statuses WHERE id = ?").run(id);
+      if (target) recordRemovalTarget(this.db, "status", id, target, true);
       this.bumpSettingsRevision();
       this.emitEvent({
         kind: "status_config_changed",
@@ -1198,11 +1227,69 @@ export class WorkspaceStore {
         entity: "status",
         entityId: id,
         verb: "delete",
-        payload: { migrateTo: opts.migrateTo ?? null },
+        payload: { migrateTo: target ?? null },
         actor: actor ?? null,
       });
       return { migrated };
     });
+  }
+
+  /**
+   * An entry added `--after` another is placed there on every device, not only this one.
+   *
+   * A `create` says nothing about position — a receiver puts a status it has never seen at
+   * the end, which is right for an entry added at the end and wrong for every other. So an
+   * entry placed anywhere else also journals the whole order, as the `@order` update a
+   * reorder sends; the receiver applies the create, then the order. An entry added at the
+   * end sends no order: the end is where every receiver already puts it, and an order sent
+   * for nothing would contest another device's concurrent, unrelated reorder.
+   */
+  private journalPlacement(entity: "status" | "kind", after: string | null | undefined, actor: string | null | undefined): void {
+    if (after === undefined || after === null) return;
+    this.settingsCache = null;
+    const order = (entity === "status" ? this.settings().statuses : this.settings().kinds).map((row) => row.id);
+    if (order[order.length - 1] !== undefined && order.indexOf(after) === order.length - 2) return;
+    this.journal.record({
+      entity,
+      entityId: VOCABULARY_ORDER_ID,
+      verb: "update",
+      payload: { order },
+      actor: actor ?? null,
+    });
+  }
+
+  /**
+   * Move every issue carrying a vocabulary entry being removed onto `target`.
+   *
+   * A bare column rewrite — no events, no status transitions, for the reason given on
+   * `removeStatus` — but each moved issue IS journaled, as the one field that changed. The
+   * applier on every other device deliberately does not re-run the migration from the
+   * delete's `migrateTo` (a second authority over rows the origin decided about), so it
+   * relies on these; before they were written, every other device kept those issues on a
+   * status or kind that no longer existed there.
+   */
+  private migrateVocabularyRows(
+    column: "status" | "kind",
+    from: string,
+    target: string,
+    actor: string | null | undefined,
+  ): number {
+    const ids = (
+      this.db.prepare(`SELECT id FROM issues WHERE ${column} = ?`).all(from) as Array<{ id: string }>
+    ).map((row) => row.id);
+    const now = nowIso();
+    const update = this.db.prepare(`UPDATE issues SET ${column} = ?, updated_at = ? WHERE id = ?`);
+    for (const issueId of ids) {
+      update.run(target, now, issueId);
+      this.journal.record({
+        entity: "issue",
+        entityId: issueId,
+        verb: "update",
+        payload: { [column]: target, updatedAt: now },
+        actor: actor ?? null,
+      });
+    }
+    return ids.length;
   }
 
   addKind(input: { id: string; label?: string; after?: string | null }, actor?: string | null): WorkspaceKind {
@@ -1231,9 +1318,10 @@ export class WorkspaceStore {
         entity: "kind",
         entityId: id,
         verb: "create",
-        payload: { id, label },
+        payload: { id, label, isBuiltin: false },
         actor: actor ?? null,
       });
+      this.journalPlacement("kind", input.after, actor);
       return this.requireKindRow(id);
     });
   }
@@ -1341,12 +1429,12 @@ export class WorkspaceStore {
         }
         if (target === id) throw new StapleError("validation", "--migrate-to must name a different kind");
         this.requireKindRow(target);
-        const result = this.db
-          .prepare("UPDATE issues SET kind = ?, updated_at = ? WHERE kind = ?")
-          .run(target, nowIso(), id);
-        migrated = Number(result.changes);
+        migrated = this.migrateVocabularyRows("kind", id, target, actor);
       }
+      // As `removeStatus`: the removal names where an issue moved into it elsewhere goes.
+      const target = opts.migrateTo?.trim() || fallbackTarget(this.db, "kind", id, null);
       this.db.prepare("DELETE FROM workspace_kinds WHERE id = ?").run(id);
+      if (target) recordRemovalTarget(this.db, "kind", id, target, true);
       this.bumpSettingsRevision();
       this.emitEvent({
         kind: "kind_config_changed",
@@ -1357,7 +1445,7 @@ export class WorkspaceStore {
         entity: "kind",
         entityId: id,
         verb: "delete",
-        payload: { migrateTo: opts.migrateTo ?? null },
+        payload: { migrateTo: target ?? null },
         actor: actor ?? null,
       });
       // A default that names a kind which no longer exists is not a setting, it
@@ -1508,10 +1596,16 @@ export class WorkspaceStore {
         actor: actor ?? null,
         payload: { action: "set", key, from, to: next },
       });
+      /**
+       * `create` when the setting's last word here was a reset: after a delete, only a
+       * create brings an entity back, on this device and in the service's fold alike
+       * (`cloud/apply.ts`, `worker/src/fold.ts`). Sent as an `update`, a setting reset and
+       * then set again stayed reset on every device that hydrated from the snapshot.
+       */
       this.journal.record({
         entity: "setting",
         entityId: key,
-        verb: "update",
+        verb: this.journal.isTombstoned("setting", key) ? "create" : "update",
         payload: { value: next },
         actor: actor ?? null,
       });
@@ -1567,16 +1661,210 @@ export class WorkspaceStore {
 
   /** Resolve a reference — uuid, identifier (WS-12), or bare number — to a row. */
   private findRow(ref: string): IssueRow | undefined {
+    const row = this.lookupRow(ref);
+    if (row) this.noteIfRenumbered(ref, row);
+    return row;
+  }
+
+  /**
+   * The identifier this caller used, if an issue moved off it here: the move, the issue that
+   * moved, and whether the identifier now names another issue (`identifier-moves.ts`).
+   */
+  private renumberedFrom(ref: string, resolved: IssueRow): { identifier: string; issueId: string; at: string } | null {
+    const trimmed = ref.trim();
+    if (trimmed === resolved.id) return null;
+    const upper = trimmed.toUpperCase();
+    const parsed = parseIdentifier(trimmed) ?? parseIdentifier(`${this.prefix}-${trimmed}`);
+    for (const identifier of [upper, parsed ? `${parsed.prefix}-${parsed.number}` : null]) {
+      if (identifier === null) continue;
+      const move = formerMove(this.db, identifier);
+      if (move !== null) return { identifier, ...move };
+    }
+    return null;
+  }
+
+  /** Leave the caller a notice when the identifier it used was renumbered here. */
+  private noteIfRenumbered(ref: string, resolved: IssueRow): void {
+    const moved = this.renumberedFrom(ref, resolved);
+    if (moved === null) return;
+    const now = this.db.prepare("SELECT identifier FROM issues WHERE id = ?").get(moved.issueId) as { identifier: string } | undefined;
+    if (!now || now.identifier === moved.identifier) return;
+    noteRenumber({
+      identifier: moved.identifier,
+      renumberedAt: moved.at,
+      issueId: moved.issueId,
+      nowIdentifier: now.identifier,
+      nowNamesAnother: moved.issueId !== resolved.id,
+    });
+  }
+
+  /**
+   * A write's target — refused when the number it was named by is one an issue on this
+   * device has left, and the caller may well mean that issue rather than what the number
+   * names now.
+   *
+   * Sync renumbers an issue two devices numbered alike (`cloud/claims.ts`), a decision
+   * elsewhere moves one, a resolution swaps two; the number then names another issue, or
+   * nothing. Whoever learned the number before — an agent between `checkout` and `done`, a
+   * handoff, a script — and writes through it after would write to the wrong issue. Who is
+   * writing proves nothing: the actor is `--agent`, `$STAPLE_AGENT` or `$USER`, and the
+   * step that learned the number and the step that writes need not agree. What the issues
+   * that left it say about themselves does. EVERY issue that has left the number on this
+   * device counts (`formerHolders`) — this device's own, and any other that passed through
+   * and moved on; remembering only the last let a write by a number this device's issue left
+   * land on one that held it after — and the write is refused when any of them other than the
+   * issue it resolves to:
+   *
+   *   - is checked out, by any agent, or leased by this device — somebody is working on it by
+   *     some name, and that name may be this one; or
+   *   - left the number within {@link RENUMBER_GUARD_MS} — anything that learned the number
+   *     yesterday may still be using it.
+   *
+   * Refused, it names every such issue and the one the number resolves to, and nothing is
+   * written. It goes through when the caller names the issue by id — which no renumber
+   * changes — or acknowledges the move (`--ack-renumber`, `acknowledgeRenumber`); then the
+   * number means what it resolves to now, with the notice every read of it leaves
+   * (`noteIfRenumbered`). Outside the window, with nothing held, that is also what happens
+   * without asking.
+   */
+  private requireTarget(ref: string): IssueRow {
+    const row = this.requireRow(ref);
+    if (renumbersAcknowledged()) return row;
+    const trimmed = ref.trim();
+    if (trimmed === row.id) return row;
+    const parsed = parseIdentifier(trimmed) ?? parseIdentifier(`${this.prefix}-${trimmed}`);
+    const spellings = [...new Set([trimmed.toUpperCase(), ...(parsed ? [`${parsed.prefix}-${parsed.number}`] : [])])];
+    const device = resolveDeviceId();
+    const hot: Array<{ issue: IssueRow; number: string; at: string; reasons: string[] }> = [];
+    for (const number of spellings) {
+      for (const holder of formerHolders(this.db, number)) {
+        if (holder.issueId === row.id || hot.some((entry) => entry.issue.id === holder.issueId)) continue;
+        const issue = this.db.prepare("SELECT * FROM issues WHERE id = ?").get(holder.issueId) as unknown as IssueRow | undefined;
+        if (!issue) continue;
+        const reasons: string[] = [];
+        if (issue.checkout_agent !== null) reasons.push(`it is checked out by ${issue.checkout_agent}`);
+        const lease = readLocalLease(this.db, issue.id);
+        if (lease !== null && (device === null || lease.deviceId === device)) reasons.push("this device holds its lease");
+        const at = Date.parse(holder.at);
+        if (!Number.isNaN(at) && Date.now() - at < RENUMBER_GUARD_MS) reasons.push("it moved less than a day ago");
+        if (reasons.length > 0) hot.push({ issue, number, at: holder.at, reasons });
+      }
+    }
+    if (hot.length === 0) return row;
+    const number = hot[0]!.number;
+    const held = row.identifier === number;
+    const others = hot.map(
+      (entry) => `"${entry.issue.title}", is now ${entry.issue.identifier} (${entry.issue.id}) — ${entry.reasons.join(", and ")}`,
+    );
+    throw new StapleError(
+      "conflict",
+      `${number} was renumbered here at ${hot[0]!.at}. The issue that held it, ${others.join("; and another that held it, ")}. ` +
+        `${number} now ${held ? "names" : "names nothing, and its last move leads to"} "${row.title}" (${row.id}). ` +
+        `Nothing was written, because you may mean ${hot.length === 1 ? "the first" : "one of the others"}. ` +
+        `Name the issue by its id, or pass --ack-renumber (MCP: acknowledgeRenumber) to write to ${number} as it is now.`,
+      {
+        renumbered: {
+          from: number,
+          at: hot[0]!.at,
+          movedIssue: { id: hot[0]!.issue.id, identifier: hot[0]!.issue.identifier, title: hot[0]!.issue.title },
+          formerHolders: hot.map((entry) => ({
+            id: entry.issue.id,
+            identifier: entry.issue.identifier,
+            title: entry.issue.title,
+            leftAt: entry.at,
+            reasons: entry.reasons,
+          })),
+          nowNames: { id: row.id, identifier: row.identifier, title: row.title },
+          reasons: hot[0]!.reasons,
+        },
+      },
+    );
+  }
+
+  /**
+   * The issue a write by another store names — {@link requireTarget}'s refusal included — for
+   * the milestone, plan and project stores, whose writes take an issue reference too.
+   */
+  writeTarget(ref: string): Issue {
+    return rowToIssue(this.requireTarget(ref));
+  }
+
+  /**
+   * The issue that moved off the identifier `ref` names here, when `ref` now resolves to a
+   * different one — for a caller that holds something of its own on the issue that moved (a
+   * lease, `cloud/lease.ts`) and must not act on the new holder by the old number.
+   */
+  movedOff(ref: string): { identifier: string; issueId: string; nowIdentifier: string; at: string } | null {
+    const row = this.lookupRow(ref);
+    if (!row) return null;
+    const moved = this.renumberedFrom(ref, row);
+    if (moved === null || moved.issueId === row.id) return null;
+    const now = this.db.prepare("SELECT identifier FROM issues WHERE id = ?").get(moved.issueId) as { identifier: string } | undefined;
+    return now ? { ...moved, nowIdentifier: now.identifier } : null;
+  }
+
+  /**
+   * Every column a status move writes, as the row it left holds them — what a gate, an
+   * approval, a send-back or a checkout journals, rather than a hand-picked few: journaled
+   * as `{ status, gateState, … }`, `status_version`, `updated_at` and the gate's times changed
+   * on the device that moved it only. `oneSpelling` in the journal gives the field names.
+   */
+  private movedColumns(row: IssueRow): Record<string, unknown> {
+    return {
+      status: row.status,
+      status_version: row.status_version,
+      updated_at: row.updated_at,
+      started_at: row.started_at,
+      completed_at: row.completed_at,
+      cancelled_at: row.cancelled_at,
+      blocked_transition_at: row.blocked_transition_at,
+      unblock_owner: row.unblock_owner,
+      unblock_action: row.unblock_action,
+      checkout_agent: row.checkout_agent,
+      checkout_at: row.checkout_at,
+      gate_state: row.gate_state,
+      gate_owner: row.gate_owner,
+      gate_requested_by: row.gate_requested_by,
+      gate_requested_at: row.gate_requested_at,
+      gate_resolved_by: row.gate_resolved_by,
+      gate_resolved_at: row.gate_resolved_at,
+      gate_released: row.gate_released === 1,
+    };
+  }
+
+  private lookupRow(ref: string): IssueRow | undefined {
     const trimmed = ref.trim();
     const byId = this.db.prepare("SELECT * FROM issues WHERE id = ?").get(trimmed) as
       | IssueRow
       | undefined;
     if (byId) return byId;
+    /**
+     * The identifier exactly as stored, before any parsing. Sync gives an incoming issue
+     * a provisional `STA-5+1` when two devices minted `STA-5`, and a `+` is not in the
+     * `PREFIX-N` grammar — so without this an issue could be shown in `ls` and then not
+     * be found by the identifier `ls` printed.
+     */
+    const exact = this.db.prepare("SELECT * FROM issues WHERE identifier = ?").get(trimmed.toUpperCase()) as
+      | IssueRow
+      | undefined;
+    if (exact) return exact;
     const parsed = parseIdentifier(trimmed) ?? parseIdentifier(`${this.prefix}-${trimmed}`);
-    if (parsed) {
-      return this.db
-        .prepare("SELECT * FROM issues WHERE identifier = ?")
-        .get(`${parsed.prefix}-${parsed.number}`) as unknown as IssueRow | undefined;
+    const canonical = parsed ? `${parsed.prefix}-${parsed.number}` : null;
+    if (canonical !== null) {
+      const row = this.db.prepare("SELECT * FROM issues WHERE identifier = ?").get(canonical) as unknown as
+        | IssueRow
+        | undefined;
+      if (row) return row;
+    }
+    /**
+     * An identifier this issue used to carry, before sync or a conflict resolution moved
+     * it — only when no issue carries it now (`identifier-moves.ts`). Without this, the
+     * `TST-2+1` somebody copied into a handoff stopped naming anything the moment the
+     * issue was given its settled number.
+     */
+    const aliased = aliasedIssueId(this.db, trimmed.toUpperCase()) ?? (canonical ? aliasedIssueId(this.db, canonical) : null);
+    if (aliased) {
+      return this.db.prepare("SELECT * FROM issues WHERE id = ?").get(aliased) as unknown as IssueRow | undefined;
     }
     return undefined;
   }
@@ -1687,7 +1975,7 @@ export class WorkspaceStore {
 
       let parent: IssueRow | null = null;
       if (input.parent) {
-        parent = this.requireRow(input.parent);
+        parent = this.requireTarget(input.parent);
         if (parent.depth + 1 > MAX_TREE_DEPTH) {
           throw new StapleError("validation", `Tree depth cap (${MAX_TREE_DEPTH}) exceeded`);
         }
@@ -1712,7 +2000,7 @@ export class WorkspaceStore {
         }
       }
 
-      const blockerRows = (input.blockedBy ?? []).map((ref) => this.requireRow(ref));
+      const blockerRows = (input.blockedBy ?? []).map((ref) => this.requireTarget(ref));
 
       const id = newId();
       const number = this.nextIssueNumber();
@@ -1802,7 +2090,8 @@ export class WorkspaceStore {
        *                            operations that move status
        *   checkout_agent/_at     — never a plain field write. They are the
        *                            projection of a lease (docs/sync.md, "Claims")
-       *   blocked_transition_at  — local timing state; not in the contract's list
+       *   blocked_transition_at  — null at create; every transition into or out of
+       *                            a blocked status journals it
        *   completed_at,          — null at create by construction; the status
        *   cancelled_at             transitions that set them journal updates
        *   gate_* (seven)         — null or 0 at create; every gate transition
@@ -1838,6 +2127,7 @@ export class WorkspaceStore {
           createdAt: now,
           updatedAt: now,
           blockedBy: blockerRows.map((blocker) => blocker.id),
+          ...(blockerRows.length > 0 ? { edges: this.edgeFactsOf(id) } : {}),
         },
         actor: input.createdBy ?? null,
       });
@@ -1870,6 +2160,18 @@ export class WorkspaceStore {
   }
 
   // ---------- relations ----------
+
+  /**
+   * Who made each of an issue's blocking edges and when, keyed by blocker id: the `edges`
+   * a blocker set travels with, so every device holds the edges this one does rather than
+   * dating them all with the operation (`writeBlockers` in `cloud/apply.ts`).
+   */
+  private edgeFactsOf(blockedId: string): Record<string, { createdBy: string | null; createdAt: string }> {
+    const rows = this.db
+      .prepare("SELECT blocker_id, created_by, created_at FROM relations WHERE blocked_id = ? AND type = 'blocks'")
+      .all(blockedId) as Array<{ blocker_id: string; created_by: string | null; created_at: string }>;
+    return Object.fromEntries(rows.map((row) => [row.blocker_id, { createdBy: row.created_by, createdAt: row.created_at }]));
+  }
 
   private insertEdge(blockerId: string, blockedId: string, createdBy: string | null): void {
     this.db
@@ -1916,8 +2218,8 @@ export class WorkspaceStore {
   /** Replace the full blocked-by set — set replacement, never incremental add. */
   setBlockedBy(ref: string, blockerRefs: string[], actor?: string | null): Issue {
     return this.journaled(() => {
-      const row = this.requireRow(ref);
-      const blockers = blockerRefs.map((blockerRef) => this.requireRow(blockerRef));
+      const row = this.requireTarget(ref);
+      const blockers = blockerRefs.map((blockerRef) => this.requireTarget(blockerRef));
       const deduped = [...new Map(blockers.map((b) => [b.id, b])).values()];
       this.assertNoCycle(
         row.id,
@@ -1954,7 +2256,7 @@ export class WorkspaceStore {
         entity: "relation",
         entityId: row.id,
         verb: "update",
-        payload: { blockedBy: deduped.map((blocker) => blocker.id) },
+        payload: { blockedBy: deduped.map((blocker) => blocker.id), edges: this.edgeFactsOf(row.id) },
         actor: actor ?? null,
       });
       // Level check: the new set may already be fully resolved.
@@ -2509,7 +2811,20 @@ export class WorkspaceStore {
       entity: "issue",
       entityId: ancestor.id,
       verb: "update",
-      payload: { status: next, derived: DERIVED_MARKERS[target] },
+      payload: {
+        /**
+         * Every column the compare-and-swap wrote — status, `status_version`, `updated_at`,
+         * the timestamps and the blocked cycle — not the status alone: journaled as
+         * `{ status, derived }`, the rest changed on this device only (measured on real
+         * data), although every one of them is a synchronized field. `oneSpelling` in the
+         * journal gives them their field names.
+         */
+        ...columns,
+        status_version: written.status_version,
+        derived: DERIVED_MARKERS[target],
+        // A derived reopen says so too (`reopens`, `updateIssue`).
+        ...(wasResolved && target !== "done" && target !== "cancelled" ? { reopens: true } : {}),
+      },
       actor,
     });
 
@@ -2920,7 +3235,7 @@ export class WorkspaceStore {
       throw new StapleError("validation", "gate requires --owner: name the human who must approve");
     }
     return this.journaled(() => {
-      const row = this.requireRow(ref);
+      const row = this.requireTarget(ref);
       if (this.isResolvedStatus(row.status)) {
         throw new StapleError(
           "conflict",
@@ -3016,12 +3331,7 @@ export class WorkspaceStore {
         entity: "issue",
         entityId: row.id,
         verb: "update",
-        payload: {
-          status: parkedStatus,
-          gateState: "pending",
-          gateOwner: owner,
-          checkoutAgent: null,
-        },
+        payload: this.movedColumns(updated),
         actor: actor ?? null,
       });
       if (opts.comment) {
@@ -3072,7 +3382,7 @@ export class WorkspaceStore {
     actor?: string | null,
   ): Issue {
     return this.journaled(() => {
-      const row = this.requireRow(ref);
+      const row = this.requireTarget(ref);
       if (!isActiveGate(row.gate_state)) {
         throw new StapleError(
           "conflict",
@@ -3088,7 +3398,7 @@ export class WorkspaceStore {
         const descendants = new Set(this.descendantIds(row.id));
         const released: string[] = [];
         for (const childRef of opts.children) {
-          const child = this.requireRow(childRef);
+          const child = this.requireTarget(childRef);
           if (!descendants.has(child.id)) {
             throw new StapleError(
               "validation",
@@ -3214,7 +3524,7 @@ export class WorkspaceStore {
         entity: "issue",
         entityId: row.id,
         verb: "update",
-        payload: { status: next, gateState: "approved", gateResolvedBy: actor ?? null },
+        payload: this.movedColumns(updated),
         actor: actor ?? null,
       });
       if (opts.comment) {
@@ -3260,7 +3570,7 @@ export class WorkspaceStore {
       );
     }
     return this.journaled(() => {
-      const row = this.requireRow(ref);
+      const row = this.requireTarget(ref);
       if (!isActiveGate(row.gate_state)) {
         throw new StapleError(
           "conflict",
@@ -3305,12 +3615,7 @@ export class WorkspaceStore {
         entity: "issue",
         entityId: row.id,
         verb: "update",
-        payload: {
-          status: next,
-          gateState: "changes_requested",
-          gateResolvedBy: actor ?? null,
-          checkoutAgent: null,
-        },
+        payload: this.movedColumns(updated),
         actor: actor ?? null,
       });
       this.insertComment(row.id, actor ?? "unknown", actor ? "agent" : "system", comment);
@@ -3326,7 +3631,7 @@ export class WorkspaceStore {
     if (patch.kind) this.assertConfiguredKind(patch.kind);
     if (patch.priority) assertPriority(patch.priority);
     return this.journaled(() => {
-      const row = this.requireRow(ref);
+      const row = this.requireTarget(ref);
       if (
         patch.expectedStatusVersion !== undefined &&
         patch.expectedStatusVersion !== row.status_version
@@ -3478,11 +3783,17 @@ export class WorkspaceStore {
        * have to invent a winner. `status_version` is carried because it is the
        * optimistic-concurrency token a receiver checks against, not decoration.
        */
+      /**
+       * A reopen says so. It is what makes a live external origin this issue's claim again
+       * (`cloud/claims.ts`), and only the operation knows the status it moved from — a
+       * device that inferred it from its own outbox missed every close another device made.
+       */
+      const reopens = statusChanging && !holdsLiveOrigin(row.status) && holdsLiveOrigin(statusAfter);
       this.journal.record({
         entity: "issue",
         entityId: row.id,
         verb: "update",
-        payload: { ...next },
+        payload: { ...next, ...(reopens ? { reopens: true } : {}) },
         actor: actor ?? null,
       });
 
@@ -4305,7 +4616,7 @@ export class WorkspaceStore {
     const activeStatus = this.primaryStatusFor("active");
     const stealIfIdleSeconds = assertIdleThreshold(opts.stealIfIdleSeconds, "stealIfIdleSeconds");
     return this.journaled(() => {
-      const row = this.requireRow(ref);
+      const row = this.requireTarget(ref);
       if (this.isActiveStatus(row.status) && row.checkout_agent === agent) {
         return rowToIssue(row); // crash-recovery re-claim
       }
@@ -4482,13 +4793,7 @@ export class WorkspaceStore {
                   entity: "issue",
                   entityId: row.id,
                   verb: "update",
-                  payload: {
-                    status: activeStatus,
-                    assignee: agent,
-                    checkoutAgent: agent,
-                    checkoutAt: now,
-                    previousHolder: claim.heldBy,
-                  },
+                  payload: { ...this.movedColumns(stolen), assignee: stolen.assignee, previousHolder: claim.heldBy },
                   actor: agent,
                 });
                 emitOverride();
@@ -4542,12 +4847,7 @@ export class WorkspaceStore {
         entity: "issue",
         entityId: row.id,
         verb: "update",
-        payload: {
-          status: activeStatus,
-          assignee: agent,
-          checkoutAgent: agent,
-          checkoutAt: now,
-        },
+        payload: { ...this.movedColumns(claimed), assignee: claimed.assignee },
         actor: agent,
       });
       emitOverride();
@@ -4571,7 +4871,7 @@ export class WorkspaceStore {
   releaseIssue(ref: string, agent?: string | null, opts: { ifIdleSeconds?: number } = {}): Issue {
     const ifIdleSeconds = assertIdleThreshold(opts.ifIdleSeconds, "ifIdleSeconds");
     return this.journaled(() => {
-      const row = this.requireRow(ref);
+      const row = this.requireTarget(ref);
       if (!this.isActiveStatus(row.status)) {
         throw new StapleError("conflict", `Cannot release: status is "${row.status}"`);
       }
@@ -4740,7 +5040,7 @@ export class WorkspaceStore {
     if (!body?.trim()) throw new StapleError("validation", "Comment body is required");
     const key = opts.idempotencyKey?.trim() || null;
     return this.journaled(() => {
-      const row = this.requireRow(ref);
+      const row = this.requireTarget(ref);
       if (key) {
         const existing = this.db
           .prepare("SELECT * FROM comments WHERE issue_id = ? AND idempotency_key = ?")
@@ -4795,7 +5095,7 @@ export class WorkspaceStore {
       throw new StapleError("validation", "Document key must be 1-64 chars of a-z 0-9 . _ -");
     }
     return this.journaled(() => {
-      const row = this.requireRow(ref);
+      const row = this.requireTarget(ref);
       const current = this.db
         .prepare("SELECT current_revision FROM documents WHERE issue_id = ? AND key = ?")
         .get(row.id, cleanKey) as { current_revision: number } | undefined;
@@ -5015,9 +5315,15 @@ export class WorkspaceStore {
       }
     }
     if (filters.q) {
-      where.push("(title LIKE ? OR identifier LIKE ? OR description LIKE ?)");
+      /**
+       * And the issue an identifier used to name here, when `q` is exactly one: a number an
+       * issue was renumbered off, or a stand-in it held (`identifier-moves.ts`). Searching
+       * for the identifier somebody wrote down finds the issue it meant, beside whichever
+       * issue holds that number now.
+       */
+      where.push("(title LIKE ? OR identifier LIKE ? OR description LIKE ? OR id = ?)");
       const like = `%${filters.q}%`;
-      params.push(like, like, like);
+      params.push(like, like, like, formerHolderOf(this.db, filters.q.trim().toUpperCase()));
     }
     /**
      * The status rank is GENERATED from the workspace's configuration (STA-140)

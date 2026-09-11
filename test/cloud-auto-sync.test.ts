@@ -74,6 +74,8 @@ function report(): SyncReport {
     pending: 0,
     conflicts: 0,
     seed: null,
+    withheld: [],
+    caughtUp: null,
     at: new Date().toISOString(),
   };
 }
