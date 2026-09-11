@@ -1708,7 +1708,9 @@ function runBackup(argv: string[]): void {
         }
         if (outcome.warning) {
           console.error(`\n! ${outcome.warning}`);
-          process.exitCode = 4;
+          // The swallowed failure's own exit: `offline` 21, `unavailable` 20. It was a
+          // hard-coded 4 (`conflict`), which is none of the codes this can fail with.
+          process.exitCode = exitCodeFor(outcome.warningCode ?? "unknown");
         }
       }),
       json,

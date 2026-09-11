@@ -56,7 +56,8 @@
  * unless something translates it.
  */
 import { createHash } from "node:crypto";
-import { StapleError } from "../types.js";
+import { StapleError, errorEnvelope } from "../types.js";
+import type { ConsentOutcome } from "./backup.js";
 import type { Hub } from "../hub.js";
 import {
   cloudCodeOf,
@@ -1005,7 +1006,7 @@ export async function setHubBackupConsent(
   hubId: string,
   enabled: boolean,
   options: Options = {},
-): Promise<{ enabled: boolean; serverAcknowledged: boolean; warning: string | null }> {
+): Promise<ConsentOutcome> {
   const connection = requireHubRegistryConnection(home, hubId);
   const { token } = requireHubSession(home, hubId, options);
   const endpoint = parseEndpoint(connection.endpoint);
@@ -1014,14 +1015,14 @@ export async function setHubBackupConsent(
   if (enabled) {
     await setRemoteBackupConsent(endpoint, call, { ...options, protocol: REGISTRY_PROTOCOL });
     setConsent(home, hubId, { backup: true });
-    return { enabled: true, serverAcknowledged: true, warning: null };
+    return { enabled: true, serverAcknowledged: true, warning: null, warningCode: null };
   }
 
   // Withdrawing must not require the network. Local first, then best effort.
   setConsent(home, hubId, { backup: false });
   try {
     await setRemoteBackupConsent(endpoint, call, { ...options, protocol: REGISTRY_PROTOCOL });
-    return { enabled: false, serverAcknowledged: true, warning: null };
+    return { enabled: false, serverAcknowledged: true, warning: null, warningCode: null };
   } catch (error) {
     return {
       enabled: false,
@@ -1030,6 +1031,8 @@ export async function setHubBackupConsent(
         "Hub backup is now off on this machine and it will not create another. The service " +
         "could not be told, so its own flag may still be set: " +
         `${error instanceof Error ? error.message : String(error)}`,
+      // See `ConsentOutcome.warningCode` in backup.ts: the command exits with it.
+      warningCode: errorEnvelope(error).code,
     };
   }
 }

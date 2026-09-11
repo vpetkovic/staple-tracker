@@ -666,4 +666,14 @@ three codes they share with the tracker, and these for the rest:
 | 20 | `unavailable`: a transient service failure | **yes** |
 | 21 | `offline`: the service could not be reached. Local work continues | **yes** |
 
-The retryable three are the last three, so `[ $? -ge 19 ]` is the "try again later" test.
+Test for exactly those three. Don't use a range check such as `-ge 19`. Codes above 21
+are not staple's: the installed launcher exits 70 when no runtime is installed, and a
+signal gives 128+n (130 for Ctrl-C). A loop that retried on those would spin for ever
+on a broken install:
+
+```sh
+staple cloud sync
+case $? in
+  19|20|21) echo "try again later" ;;
+esac
+```

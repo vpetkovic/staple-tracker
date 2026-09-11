@@ -68,7 +68,7 @@ import { StapleError } from "../core/types.js";
 import { readConnection } from "../core/cloud/connection.js";
 import { confirm, isInteractive } from "../onboarding/prompts.js";
 import { settle } from "./cloud.js";
-import { EXIT_CODES } from "./exit-codes.js";
+import { EXIT_CODES, exitCodeFor } from "./exit-codes.js";
 import {
   REGISTRY_DISCLOSURE,
   describeIdentityReplacement,
@@ -1016,7 +1016,8 @@ function runBackup(argv: string[]): void {
           }
           if (outcome.warning) {
             console.error(`\n! ${outcome.warning}`);
-            process.exitCode = 4;
+            // The swallowed failure's own exit, as `staple cloud backup disable` does.
+            process.exitCode = exitCodeFor(outcome.warningCode ?? "unknown");
           }
           return;
         }

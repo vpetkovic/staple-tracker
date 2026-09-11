@@ -20,7 +20,7 @@
  *   - each asserts the StapleError code, the retry bit, the preserved `detail.cloudCode` and
  *     `detail.retryable`, and the CLI's exit code.
  */
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
@@ -31,8 +31,10 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { bindJournal } from "../src/core/journal.js";
 import { openWorkspace } from "../src/core/open.js";
 import { initWorkspace } from "../src/core/workspace.js";
-import { StapleError, errorEnvelope } from "../src/core/types.js";
-import { deleteBackup, listBackups } from "../src/core/cloud/backup.js";
+import { StapleError, errorEnvelope, isRetryableErrorCode } from "../src/core/types.js";
+import { EXIT_CODES } from "../src/commands/exit-codes.js";
+import { CLOUD_ERROR_CODES } from "../src/core/cloud/errors.js";
+import { deleteBackup, listBackups, setBackupConsent } from "../src/core/cloud/backup.js";
 import { acquireRemoteLease, isVocabularyRefusal } from "../src/core/cloud/client.js";
 import { fetchDevices, performConnect } from "../src/core/cloud/connect.js";
 import { writeConnection } from "../src/core/cloud/connection.js";
@@ -593,6 +595,118 @@ describe("hub registry: the not-provisioned refusal", () => {
     expect(prose.stderr).toContain("not provisioned");
 
     expect(await fromCli(s, ...args)).toEqual(expectedCli("forbidden"));
+  });
+});
+
+describe("backup disable: the remote half fails, and the exit code says how", () => {
+  /**
+   * Withdrawing backup consent finishes offline by design: the local flag is cleared, the
+   * service is told on a best effort, and a failure there is a warning, not a throw. The
+   * warning used to exit a hard-coded 4 (`conflict`), which is none of the codes this can
+   * fail with. It now exits with the swallowed failure's own code.
+   */
+  it("an unreachable service is `offline`, exit 21", async () => {
+    const s = scenario("disableoffline", { backup: true, endpoint: deadEndpoint });
+    const outcome = await setBackupConsent(s.home, s.repositoryId, false);
+    expect({ acknowledged: outcome.serverAcknowledged, code: outcome.warningCode }).toEqual({
+      acknowledged: false,
+      code: "offline",
+    });
+    const result = await staple(s, "cloud", "backup", "disable", "--json");
+    expect(result.status).toBe(CLI_EXIT_CODES.offline);
+    expect(JSON.parse(result.stdout)).toMatchObject({ enabled: false, serverAcknowledged: false, warningCode: "offline" });
+  });
+
+  it("a transient service failure is `unavailable`, exit 20", async () => {
+    const s = scenario("disableunavailable", { backup: true });
+    const inject = () => {
+      s.server.failNext = { route: "PUT /v1/repos/:id/backup", times: 1, status: 503, code: "unavailable" };
+    };
+    inject();
+    expect((await setBackupConsent(s.home, s.repositoryId, false)).warningCode).toBe("unavailable");
+    inject();
+    const result = await staple(s, "cloud", "backup", "disable", "--json");
+    expect(result.status).toBe(CLI_EXIT_CODES.unavailable);
+    expect(JSON.parse(result.stdout)).toMatchObject({ serverAcknowledged: false, warningCode: "unavailable" });
+  });
+
+  it("the hub's backup disable exits the same way", async () => {
+    const s = scenario("hubdisable");
+    const hubId = "7a1d9e44-2b3c-4f10-9c8e-5d6f7a8b9c0d";
+    expect((await staple(s, "hub", "registry", "identity", hubId, "--yes")).status).toBe(0);
+    credentialStoreFor(s.home, "file").write(hubId, TOKEN);
+    const hubConnection = (at: string) =>
+      writeConnection(s.home, {
+        schemaVersion: 1,
+        repositoryId: hubId,
+        endpoint: at,
+        deviceId: DEVICE,
+        label: DEVICE,
+        credentialMechanism: "file",
+        connectedAt: "2026-09-10T00:00:00.000Z",
+        auto: false,
+        backup: true,
+        registry: false,
+        protocol: 2,
+      });
+
+    hubConnection(deadEndpoint);
+    const offline = await staple(s, "hub", "registry", "backup", "disable", "--json");
+    expect(offline.status).toBe(CLI_EXIT_CODES.offline);
+    expect(JSON.parse(offline.stdout)).toMatchObject({ serverAcknowledged: false, warningCode: "offline" });
+
+    hubConnection(endpoint);
+    current = new FakeSyncServer({ repositoryId: hubId });
+    current.enroll(DEVICE, TOKEN);
+    current.failNext = { route: "PUT /v1/repos/:id/backup", times: 1, status: 503, code: "unavailable" };
+    const unavailable = await staple(s, "hub", "registry", "backup", "disable", "--json");
+    expect(unavailable.status).toBe(CLI_EXIT_CODES.unavailable);
+    expect(JSON.parse(unavailable.stdout)).toMatchObject({ serverAcknowledged: false, warningCode: "unavailable" });
+  });
+});
+
+describe("the documented retry test retries exactly the retryable sync codes", () => {
+  /**
+   * `docs/cli.md` gives a shell snippet for "try again later". It is run here, as written,
+   * for every exit status 0-255, and must match exactly the exit codes of the retryable
+   * sync codes, derived from the source rather than restated. A range such as `-ge 19` also
+   * matched 70 (the installed launcher with no runtime) and 128+n (a signal), and a loop
+   * built on it spun for ever on a broken install.
+   */
+  it("matches 19, 20 and 21 and nothing else", () => {
+    const docs = readFileSync(join(REPO_ROOT, "docs", "cli.md"), "utf8");
+    const block = /```sh\n(staple cloud sync\ncase \$\? in[\s\S]*?esac)\n```/.exec(docs)?.[1];
+    expect(block, "docs/cli.md no longer has the retry snippet").toBeDefined();
+    const body = block!.replace(/^staple cloud sync$/m, "(exit $c)").replace(/echo "try again later"/, 'echo "$c"');
+    const run = spawnSync("sh", ["-c", `for c in $(seq 0 255); do\n${body}\ndone`], { encoding: "utf8" });
+    const matched = run.stdout.trim().split("\n").filter(Boolean).map(Number);
+    const retryable = CLOUD_ERROR_CODES.filter((code) => isRetryableErrorCode(code)).map((code) => EXIT_CODES[code]);
+    expect(matched).toEqual(retryable.sort((a, b) => a - b));
+  });
+});
+
+describe("the vocabulary refusal is a `conflict`, never a code that merely carries its keys", () => {
+  /**
+   * `request()` copies `requestVocabulary` into `detail` for EVERY non-2xx code, since the
+   * key list it copies is code-blind, but rewrites the message into the vocabulary refusal
+   * only for `conflict`. `isVocabularyRefusal` has to draw the same line, or a transient
+   * `unavailable` that happens to carry the key reads as a permanent refusal while its
+   * message says something else.
+   */
+  it("an `unavailable` carrying requestVocabulary is not the refusal, and stays retryable", async () => {
+    const s = scenario("vocabkeys");
+    s.server.failNext = {
+      route: "GET /v1/repos/:id/devices",
+      times: 1,
+      status: 503,
+      code: "unavailable",
+      detail: { repositoryVocabulary: "workspace", requestVocabulary: "hub" },
+    };
+    const error = await refusal(() => fetchDevices(s.home, s.repositoryId));
+    expect(inProcess(error)).toEqual(expected("unavailable"));
+    expect(error.detail?.requestVocabulary).toBe("hub");
+    expect(error.message).toBe("transient");
+    expect(isVocabularyRefusal(error)).toBe(false);
   });
 });
 

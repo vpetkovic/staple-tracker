@@ -437,8 +437,9 @@ active time"*.)
 
 Documents are keyed per issue (`plan`, `notes`, `worklog`, …) and revisioned.
 Writes take a `baseRevision` for optimistic concurrency; a stale base is a
-`revision_conflict`, which is the one error worth retrying. Any revision can be
-restored.
+`revision_conflict`, the one tracker-write error worth retrying (the others are
+cloud sync's `rate_limited`, `unavailable` and `offline`; see
+[sync.md](sync.md#error-taxonomy)). Any revision can be restored.
 
 This is the `plan.md` replacement: the plan lives *with* the ticket, so the
 agent that inherits the ticket inherits the plan.

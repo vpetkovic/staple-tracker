@@ -43,7 +43,9 @@ export const EXIT_CODES: Readonly<Record<StapleErrorCode | "timeout", number>> =
    * Each has its own number because each asks for a different remedy: `auth` and
    * `revoked` need a re-connect, `forbidden` a different secret or the missing consent,
    * `protocol_unsupported` and `schema_ahead` an upgrade. The three RETRYABLE codes are
-   * the last three, 19–21, so "try again later" is one range test in a shell.
+   * adjacent, 19–21. Test for exactly those (`case $? in 19|20|21)`), never `-ge 19`:
+   * the installed launcher exits 70 with no runtime and a signal gives 128+n, and a
+   * retry loop must not spin on either.
    */
   auth: 11,
   forbidden: 12,
