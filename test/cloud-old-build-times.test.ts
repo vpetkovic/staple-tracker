@@ -80,21 +80,30 @@ describe("history an older build wrote, without its own dates", () => {
     expect(revision(fresh.db, issueId)).toEqual(revision(tail.db, issueId));
   });
 
-  it("is never re-dated on a device that holds it from its create, the one that wrote it included", async () => {
-    const { tail, issueId, commentId } = await withOlderBuildHistory();
+  it("is dated and attributed the same on all four devices, the one that wrote it included", async () => {
+    const { a, tail, issueId, commentId } = await withOlderBuildHistory();
     // Measured live (56ff1f4): the older build's store dated its own row, then journaled the
-    // operation with a second reading of the clock, a millisecond later. That row is what the
-    // device that wrote it holds, from the real create, and a re-read of the snapshot does not
-    // rewrite it: a row held from its create is never re-dated or re-attributed, because the
-    // same rewrite applied the restore instant of an old restore to every device (W2).
-    const own = "2026-08-01T09:29:59.999Z";
-    tail.db.prepare("UPDATE comments SET created_at = ? WHERE id = ?").run(own, commentId);
-    tail.db.prepare("UPDATE document_revisions SET created_at = ? WHERE issue_id = ?").run(own, issueId);
-    tail.db.prepare("DELETE FROM meta WHERE key = 'sync_applier_version'").run();
+    // operation with a second reading of the clock, a millisecond later — and wrote its own
+    // name on the revision. That is the writer's row. The create is a genuine device
+    // operation, so its envelope time and actor are canonical, and the writer is re-dated
+    // to them once, by the catch-up.
+    const writer = tail;
+    writer.db.prepare("UPDATE comments SET created_at = '2026-08-01T09:29:59.999Z' WHERE id = ?").run(commentId);
+    writer.db
+      .prepare("UPDATE document_revisions SET created_at = '2026-08-01T09:29:59.999Z', author = 'old-build-agent' WHERE issue_id = ?")
+      .run(issueId);
+    writer.db.prepare("DELETE FROM meta WHERE key = 'sync_applier_version'").run();
 
-    expect((await tail.sync()).caughtUp).not.toBeNull();
-    expect(comment(tail.db, commentId)).toEqual({ author: "old-build-agent", created_at: own });
-    expect(revision(tail.db, issueId)).toEqual({ author: "older-build", created_at: own });
+    expect((await writer.sync()).caughtUp).not.toBeNull();
+    await a.sync();
+    const fresh = fleet!.machine("fresh");
+    await fresh.sync();
+    const late = fleet!.machine("late");
+    await late.sync();
+    for (const machine of [a, writer, fresh, late]) {
+      expect(comment(machine.db, commentId), machine.label).toEqual({ author: "old-build-agent", created_at: WRITTEN });
+      expect(revision(machine.db, issueId), machine.label).toEqual({ author: "older-build", created_at: WRITTEN });
+    }
   });
 
   it("is not re-dated by a re-read from a service that does not send the create's time", async () => {
@@ -146,6 +155,11 @@ describe("history an older build wrote, without its own dates", () => {
     it(`an old-shaped backup restored by ${restoredBy} re-dates and re-attributes nothing`, async () => {
       const { server, a, tail, issueId, commentId } = await withOlderBuildHistory();
       await a.sync();
+      // The tail holds values of its own (as the writer would, a millisecond off): after the
+      // restore there is no true time to converge on, so each device keeps what it holds.
+      const own = "2026-08-01T09:29:59.999Z";
+      tail.db.prepare("UPDATE comments SET created_at = ? WHERE id = ?").run(own, commentId);
+      tail.db.prepare("UPDATE document_revisions SET created_at = ? WHERE issue_id = ?").run(own, issueId);
       const options = { fetchImpl: server.fetch, sleep: async () => undefined };
       await setBackupConsent(a.home, REPO, true, options);
       server.legacyFold = true;
@@ -157,11 +171,10 @@ describe("history an older build wrote, without its own dates", () => {
       await a.sync();
       await tail.sync();
 
-      const truth = { comment: { author: "old-build-agent", created_at: WRITTEN }, revision: { author: "older-build", created_at: WRITTEN } };
-      for (const machine of [a, tail]) {
-        expect(comment(machine.db, commentId), machine.label).toEqual(truth.comment);
-        expect(revision(machine.db, issueId), machine.label).toEqual(truth.revision);
-      }
+      expect(comment(a.db, commentId)).toEqual({ author: "old-build-agent", created_at: WRITTEN });
+      expect(revision(a.db, issueId)).toEqual({ author: "older-build", created_at: WRITTEN });
+      expect(comment(tail.db, commentId)).toEqual({ author: "old-build-agent", created_at: own });
+      expect(revision(tail.db, issueId)).toEqual({ author: "older-build", created_at: own });
       // A device hydrating the restored epoch cannot learn what the backup never kept — but
       // it is not told the restore wrote them.
       const fresh = fleet!.machine("fresh");

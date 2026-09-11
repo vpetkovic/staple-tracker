@@ -325,6 +325,33 @@ export interface ApplyInput {
   readonly seq?: number | null;
   /** A snapshot entity's per-field write seqs, for a field some later operation set. */
   readonly fieldSeqs?: Readonly<Record<string, number>>;
+  /**
+   * True when `at` and `actor` are a GENUINE create's own: a `create` operation a device
+   * made, or a snapshot entity whose fold names its create's time. Not a restore's — a
+   * `restore:<id>` actor, or a snapshot of a create a restore staged, which the fold gives
+   * no time (`worker/src/fold.ts`) — and not a moment of hydration.
+   */
+  readonly atIsCreate?: boolean;
+}
+
+function restoreActor(actor: string | null | undefined): boolean {
+  return typeof actor === "string" && actor.startsWith("restore:");
+}
+
+/**
+ * The time and author an older build's comment or revision is canonically written with.
+ *
+ * A payload from before 0c12bb9 carries no `createdAt` (and a revision's no `author`), so
+ * those are the create's: its envelope time and its actor, when the create is a genuine
+ * device operation. Every device converges on them — the one that wrote it too, whose
+ * store read the clock a millisecond before its journal did, and whose row the applier
+ * catch-up re-dates once. When the only create is one a restore staged, there is no true
+ * time or author to converge on, and a row this device holds keeps its own
+ * (`docs/sync.md`, "A restore's own actor and instant are never a create's").
+ */
+function canonicalCreate(input: ApplyInput): { at: string; actor: string | null } | null {
+  if (input.verb !== "create" || input.atIsCreate !== true) return null;
+  return { at: input.at, actor: input.actor };
 }
 
 /** The log position of this input's claim on any of `fields`. */
@@ -346,6 +373,7 @@ export function operationToInput(op: RemoteOperation): ApplyInput {
     at: op.createdAt,
     opId: op.opId,
     seq: op.seq,
+    atIsCreate: op.verb === "create" && !restoreActor(op.actor),
   };
 }
 
@@ -392,6 +420,7 @@ export function snapshotToInput(entity: SnapshotEntity, at: string): ApplyInput 
     opId: null,
     seq: typeof entity.createdSeq === "number" ? entity.createdSeq : null,
     fieldSeqs,
+    atIsCreate: entity.verb !== "delete" && typeof entity.createdAt === "string",
   };
 }
 
@@ -968,13 +997,10 @@ function applyComment(db: DatabaseSync, input: ApplyInput): boolean {
 
   if (exists) {
     const values = new Map(pairs);
-    /**
-     * Who wrote a comment and when are its create's, and a comment this database holds has
-     * had its create: its time is not taken from the operation or the snapshot here. A
-     * restore stages the whole state as a new `create` under its own actor and instant, and
-     * a snapshot of a restored epoch can only say what the restore said — taken for the
-     * create's time, it rewrote the true time on every device that held the row.
-     */
+    // An older build's comment is dated by its genuine create everywhere, the writer too;
+    // never by a restore's (`canonicalCreate`).
+    const canonical = typeof input.payload.createdAt === "string" ? null : canonicalCreate(input);
+    if (canonical !== null) values.set("created_at", canonical.at);
     settleCommentKey(db, input, values);
     if (values.size > 0) updateRow(db, "comments", "id", input.entityId, [...values]);
     return true;
@@ -1077,6 +1103,18 @@ function applyDocumentRevision(db: DatabaseSync, input: ApplyInput): boolean {
     typeof payload.changeSummary === "string" ? payload.changeSummary : null,
     createdAt,
   );
+  // A revision held already: an older build's is dated and attributed by its genuine
+  // create on every device, the writer too; never by a restore's (`canonicalCreate`).
+  const canonical = canonicalCreate(input);
+  if (canonical !== null) {
+    const where = "WHERE issue_id = ? AND key = ? AND revision = ?";
+    if (typeof payload.createdAt !== "string") {
+      db.prepare(`UPDATE document_revisions SET created_at = ? ${where}`).run(canonical.at, issueId, key, revision);
+    }
+    if (typeof payload.author !== "string" && canonical.actor !== null) {
+      db.prepare(`UPDATE document_revisions SET author = ? ${where}`).run(canonical.actor, issueId, key, revision);
+    }
+  }
 
   /**
    * The head only ever moves forward. A revision arriving out of order — which

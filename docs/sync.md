@@ -970,15 +970,24 @@ the restored operation's, so the restored epoch's fold carries them too
 (`test/cloud-old-build-times.test.ts`). All four fields are additive; an older client
 ignores them.
 
-**A restore's own actor and instant are never a create's.** A backup made by the Worker
-before this build kept no create time or actor, so restoring it — by either Worker —
-stages every entity as a `create` by `restore:<id>` at the moment it ran. The fold emits
-no `createdAt` or `createdBy` for such a create, and a device never re-dates or
-re-attributes a comment or revision it already holds from its create: read as the
-create's, the restore instant replaced the true time of every old comment, and the
-restore became the author of every old revision, on every device. A device hydrating a
-restored epoch cannot learn what the backup never kept, and is not told the restore wrote
-it (`test/cloud-old-build-times.test.ts`, worker `backups.test.ts`).
+**An older build's comment is dated by its create, and a restore's create dates
+nothing.** A comment or revision whose payload carries no `createdAt` (and a revision no
+`author`) — everything written before 0c12bb9 — is canonically dated by its create's own
+envelope time and attributed to its actor, when that create is a genuine device operation.
+Every device converges on those, the one that wrote it included: that build's store dated
+the row, then journaled the operation with a second reading of the clock a millisecond
+later (measured live, a build from before #101), and the applier catch-up re-dates the
+writer's row once. A restore is not a genuine create. A backup made by the Worker before
+this build kept no create time or actor, so restoring it — by either Worker — stages
+every entity as a `create` by `restore:<id>` at the moment it ran; the fold emits no
+`createdAt` or `createdBy` for such a create, and a device that already holds the row
+keeps its own values — read as the create's, the restore instant had replaced the true
+time of every old comment, and the restore became the author of every old revision, on
+every device. **So after such a restore, the true time of a row from before 0c12bb9
+survives only on the devices that held it, and can differ between them** (the writer's
+millisecond among them): the server never had it, and cannot know better. A device
+hydrating the restored epoch cannot learn what the backup never kept, and is not told the
+restore wrote it (`test/cloud-old-build-times.test.ts`, worker `backups.test.ts`).
 
 **A newer applier re-reads the snapshot once.** Nothing re-sends an operation a device
 has already applied, so what an older build's applier dropped — who queued each plan
@@ -1014,13 +1023,6 @@ whole. And a plan's record keeps each side's entries (`conflict_entries:<id>` in
 device-local, forgotten once the record closes), so a resolution writes back who queued
 each entry, when and why from the side it chose — resolved from the order alone, "keep
 mine" put the entries back without their notes on every device.
-
-The device that wrote an older build's comment keeps its own row. That build's store dated
-the row, then journaled the operation with a second reading of the clock a millisecond
-later (measured live, a build from before #101), so the writer holds a time a millisecond
-off every other device's. That is the writer's own row from the real create, and a row
-held from its create is never re-dated — the same rewrite was what applied an old
-restore's instant to every device ([above](#ordering-cursors-and-epochs)).
 
 **An epoch is a discontinuity.** `epoch` is an integer stamped on the repository
 and embedded in every cursor. A restore that moves remote state backwards
