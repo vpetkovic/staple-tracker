@@ -52,6 +52,19 @@ export const PURGE_REFUSALS = {
       confirmation: "missing",
     },
   },
+  /**
+   * A body that is not JSON at all. The ordinary body rule (`worker/src/http.ts`,
+   * `readJson`), pinned here because the purge route is where the fake has to mirror it.
+   */
+  malformed: {
+    status: 400,
+    body: { code: "validation", message: "request body is not valid JSON", retryable: false },
+  },
+  /** JSON, but an array or a string or a number rather than an object. Same rule. */
+  notAnObject: {
+    status: 400,
+    body: { code: "validation", message: "request body must be a JSON object", retryable: false },
+  },
   /** `confirm` is present and is not the repository id the credential belongs to. */
   mismatch: {
     status: 400,

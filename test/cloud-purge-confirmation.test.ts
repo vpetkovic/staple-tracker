@@ -165,6 +165,27 @@ describe("the fake refuses exactly what the Worker refuses", () => {
     expect(await stillEnrolled()).toBe(true);
   });
 
+  it("refuses a body that is not a JSON object with the Worker's exact bytes, and deletes nothing", async () => {
+    await populate();
+    const before = holdings();
+    const exactly = async (response: Response, refusal: { status: number; body: unknown }) =>
+      expect({ status: response.status, text: await response.text() }).toEqual({
+        status: refusal.status,
+        text: JSON.stringify(refusal.body),
+      });
+
+    await exactly(await raw("DELETE", `/v1/repos/${REPO_ID}`, [REPO_ID]), PURGE_REFUSALS.notAnObject);
+    await exactly(await raw("DELETE", `/v1/repos/${REPO_ID}`, JSON.stringify(REPO_ID)), PURGE_REFUSALS.notAnObject);
+    await exactly(await raw("DELETE", `/v1/repos/${REPO_ID}`, "7"), PURGE_REFUSALS.notAnObject);
+    await exactly(await raw("DELETE", `/v1/repos/${REPO_ID}`, "{conf"), PURGE_REFUSALS.malformed);
+    // And the two confirmation refusals, byte for byte too.
+    await exactly(await raw("DELETE", `/v1/repos/${REPO_ID}`), PURGE_REFUSALS.missing);
+    await exactly(await raw("DELETE", `/v1/repos/${REPO_ID}`, { confirm: OTHER_REPO_ID }), PURGE_REFUSALS.mismatch);
+
+    expect(holdings()).toEqual(before);
+    expect(await stillEnrolled()).toBe(true);
+  });
+
   it("purges everything, leases included, with the right confirmation", async () => {
     await populate();
 

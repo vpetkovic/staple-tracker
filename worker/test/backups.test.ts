@@ -1052,7 +1052,15 @@ describe("purge", () => {
     const token = await populated();
     const before = await everyTable();
 
-    await expectError(await purge(token, [REPO]), "validation", 400);
+    // Byte for byte, because the fake is held to the same text (`cloud-purge-confirmation`).
+    const exactly = async (response: Response, refusal: { status: number; body: unknown }) =>
+      expect({ status: response.status, text: await response.text() }).toEqual({
+        status: refusal.status,
+        text: JSON.stringify(refusal.body),
+      });
+    await exactly(await purge(token, [REPO]), PURGE_REFUSALS.notAnObject);
+    await exactly(await purge(token, REPO), PURGE_REFUSALS.notAnObject);
+    await exactly(await purge(token, 7), PURGE_REFUSALS.notAnObject);
     const garbled = await SELF.fetch(`${ORIGIN}/v1/repos/${REPO}`, {
       method: "DELETE",
       headers: {
@@ -1063,7 +1071,9 @@ describe("purge", () => {
       },
       body: "{conf",
     });
-    await expectError(garbled, "validation", 400);
+    await exactly(garbled, PURGE_REFUSALS.malformed);
+    await exactly(await purge(token), PURGE_REFUSALS.missing);
+    await exactly(await purge(token, { confirm: OTHER_REPO }), PURGE_REFUSALS.mismatch);
 
     expect(await everyTable()).toEqual(before);
   });

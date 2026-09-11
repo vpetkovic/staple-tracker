@@ -1225,10 +1225,14 @@ export class FakeSyncServer {
       try {
         parsed = JSON.parse(String(raw));
       } catch {
-        throw new ServerError(400, "validation", "request body is not valid JSON");
+        throw new ServerError(400, "validation", "request body is not valid JSON", {
+          retryable: false,
+        });
       }
       if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-        throw new ServerError(400, "validation", "request body must be a JSON object");
+        throw new ServerError(400, "validation", "request body must be a JSON object", {
+          retryable: false,
+        });
       }
       confirm = (parsed as Record<string, unknown>).confirm;
     }
