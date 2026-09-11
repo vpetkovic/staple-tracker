@@ -49,6 +49,7 @@ import {
   readWorkspaceManifest,
 } from "../core/repo-identity.js";
 import { Hub } from "../core/hub.js";
+import { acknowledgeRenumbers } from "../core/identifier-moves.js";
 import { resolveWorkspace } from "../core/workspace.js";
 import { StapleError, errorEnvelope } from "../core/types.js";
 import { confirm, isInteractive } from "../onboarding/prompts.js";
@@ -1225,9 +1226,12 @@ function runLease(argv: string[]): void {
       ttl: { type: "string" },
       heartbeat: { type: "string" },
       for: { type: "string" },
+      "ack-renumber": { type: "boolean" },
     },
   });
   const json = values.json === true;
+  // A number this device's issue left may be named on purpose (`WorkspaceStore.requireTarget`).
+  if (values["ack-renumber"] === true) acknowledgeRenumbers();
   const home = stapleHome();
   const ref = positionals[0];
 
@@ -1338,12 +1342,27 @@ function runLease(argv: string[]): void {
    * Signal listeners do not keep the process alive, so leaving them in place
    * until exit costs nothing and covers the report and the close as well.
    */
+  /**
+   * The issue the heartbeat keeps, resolved as the other lease verbs resolve it: as a write
+   * (`leasedIssue` in `cloud/lease.ts`). By a number this device's issue has left, while
+   * that issue may be the one meant, it is refused, naming both, before a beat is sent —
+   * where a lookup renewed the issue holding the number now, and the lease on the issue
+   * that moved silently went unrenewed.
+   */
+  let entityId: string;
+  try {
+    entityId = store.writeTarget(ref!).id;
+  } catch (error) {
+    store.db.close();
+    settle(Promise.reject(error), json);
+    return;
+  }
+
   const controller = new AbortController();
   const stop = (): void => controller.abort();
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
 
-  const entityId = store.getIssue(ref!).id;
   settle(
     runHeartbeat(store.db, repositoryId, entityId, {
       ...options,

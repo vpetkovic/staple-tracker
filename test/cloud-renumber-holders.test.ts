@@ -231,7 +231,15 @@ describe("a number that moved under the process holding it", () => {
     } finally {
       await mcp.close();
     }
-    // The lease verbs by the old number, too.
+    // The lease verbs by the old number, too: the heartbeat on the CLI, and renew and release.
+    const beats = c.server.ops.length;
+    refusedNamingBoth(
+      runCli(["cloud", "lease", "renew", "TRA-2", "--heartbeat", "1s", "--for", "1s", "--db", c.b.dbPath], env(c.b, "vp")),
+      c,
+      moved,
+      /this device holds its lease/,
+    );
+    expect(c.server.ops.length).toBe(beats);
     for (const step of [() => renewClaim(c.b.store, REPO, "TRA-2", options), () => releaseClaim(c.b.store, REPO, "TRA-2", options)]) {
       const refused = await step().then(() => null, (error: unknown) => error as StapleError);
       expect(refused).toBeInstanceOf(StapleError);
@@ -251,6 +259,13 @@ describe("a number that moved under the process holding it", () => {
     // Inside the window: no checkout, no lease — refused all the same.
     refusedNamingBoth(runCli(["comment", "TRA-2", "progress", "--db", c.b.dbPath], env(c.b, "vp")), c, moved, /moved less than a day ago/);
     refusedNamingBoth(runCli(["checkout", "TRA-2", "--db", c.b.dbPath], env(c.b, "agent-x")), c, moved, /moved less than a day ago/);
+    // The lease heartbeat too — resolved as a write, like `renew` and `release`.
+    refusedNamingBoth(
+      runCli(["cloud", "lease", "renew", "TRA-2", "--heartbeat", "1s", "--for", "1s", "--db", c.b.dbPath], env(c.b, "vp")),
+      c,
+      moved,
+      /moved less than a day ago/,
+    );
     const mcp = await startMcpClient({ home: c.b.home, cwd: c.b.dir, env: { USER: "mcp-user", STAPLE_DEVICE_ID: c.b.deviceId } });
     try {
       const refused = await mcp.call("checkout_task", { ref: "TRA-2", actor: "mcp-agent" });
