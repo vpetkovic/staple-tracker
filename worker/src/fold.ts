@@ -331,6 +331,20 @@ export async function foldLog(
       // of a single key and the value is assigned whole — merging two plans element by
       // element would invent an order neither human asked for. What it no longer does is
       // discard `startsOn` because it happened to be talking about `members`.
+      /**
+       * One field, whichever spelling wrote it. Clients journaled some fields by field name
+       * (`updatedAt`) and some by column (`updated_at`), and keeping both left one entity's
+       * state holding a stale and a fresh value of the same field, applied in key order by a
+       * hydrating device — so the stale one could win. A key's other spelling is dropped
+       * when it is written, state and provenance alike, so the state holds the latest.
+       */
+      for (const key of Object.keys(payload as Record<string, unknown>)) {
+        const other = otherSpelling(key);
+        if (other !== key) {
+          delete entry.state[other];
+          delete entry.fieldWrites[other];
+        }
+      }
       Object.assign(entry.state, payload as Record<string, unknown>);
       // So the merge is the same for every verb and only the RECORD of the verb differs.
       entry.superseded = row.verb === "replace";
@@ -384,6 +398,13 @@ export async function foldLog(
  * discards later updates to a deleted entity anyway, and reproducing the corpse would
  * mean writing two operations per deleted entity for a state nothing reads.
  */
+/** `updated_at` for `updatedAt` and back; a key with neither shape is its own. */
+export function otherSpelling(key: string): string {
+  if (key.includes("_")) return key.replace(/_([a-z])/g, (_, letter: string) => letter.toUpperCase());
+  if (/[A-Z]/.test(key)) return key.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
+  return key;
+}
+
 export function materializedVerb(entity: BackupEntity): {
   verb: string;
   payload: Record<string, unknown>;

@@ -530,6 +530,21 @@ describe("the fold's record of each entity's create", () => {
     expect(entity.fieldWrites.title.seq).toBe(2);
   });
 
+  it("folds a field written under both spellings as one field, holding the value written last", async () => {
+    await pushOps(
+      [
+        envelope({ clientSeq: 1, verb: "create", baseVersion: null, payload: { title: "t", updatedAt: "2026-08-01T00:00:00.000Z" } }),
+        envelope({ clientSeq: 2, payload: { updated_at: "2026-08-02T00:00:00.000Z" } }),
+        envelope({ clientSeq: 3, payload: { updatedAt: "2026-08-03T00:00:00.000Z" } }),
+      ],
+      { token },
+    );
+    const body = await jsonOf(await call(`/v1/repos/${REPO}/snapshot`, { token }));
+    const [entity] = body.entities;
+    expect(entity.state).toEqual({ title: "t", updatedAt: "2026-08-03T00:00:00.000Z" });
+    expect(Object.keys(entity.fieldWrites)).toEqual(["updatedAt"]);
+  });
+
   it("says nothing about a create the log does not hold", async () => {
     await pushOps([envelope({ clientSeq: 1, payload: { title: "an edit with no create" } })], { token });
     const body = await jsonOf(await call(`/v1/repos/${REPO}/snapshot`, { token }));
