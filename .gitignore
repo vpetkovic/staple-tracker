@@ -176,3 +176,5 @@ dist-site/
 # The publishable staple-cli payload and its packed tarballs (scripts/build-package.ts).
 # Generated from src/ on demand; `npm run build:package` regenerates it.
 dist-package/
+# Its staging directory, which a build interrupted by a hard kill can leave behind.
+.dist-package.building-*

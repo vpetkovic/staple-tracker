@@ -21,13 +21,12 @@
  *   interrupt  an install that dies between stage and switch leaves one runtime
  *   docs       the commands `docs/migration.md` prints are run verbatim
  *
- * The package build is shared, not repeated: `dist-package/` is what
- * `test/package-tarball.test.ts` builds (or a developer's `npm run
- * build:package`), and like `install-real-package.test.ts` this file SKIPS
- * when it is absent. Vitest runs files in parallel, so the payload can be
- * mid-rebuild when this file loads; `beforeAll` copies it to scratch and
- * proves the copy runs before any case depends on it, retrying briefly so a
- * rebuild in flight is waited out rather than reported as a failure.
+ * The package build is shared, not repeated: the payload is the one this
+ * run's globalSetup built from the current source (`testPackageDir()`,
+ * STA-250), complete before this file loads, so the matrix always runs. It
+ * used to read the repository's `dist-package/`, skip when that was absent,
+ * and retry its copy while another file rebuilt it mid-run. `beforeAll`
+ * copies it to scratch and proves the copy runs before any case depends on it.
  *
  * Nothing here touches the developer's machine: `HOME`, `STAPLE_HOME`, and the
  * launcher directory are all under one scratch root that is removed after
@@ -65,12 +64,11 @@ import {
 } from "../src/install/index.js";
 import { REPO_ROOT, TSX_CLI, bareEnv, removeDir, tempDir } from "./fixtures/characterize-support.js";
 import { writeFakePayload } from "./fixtures/install-support.js";
+import { testPackageDir } from "./fixtures/package-payload.js";
 import { writeCurrentWorkspace } from "./fixtures/schema/generate.js";
 import { FIXTURES, fixturePath, rawMeta } from "./fixtures/schema/support.js";
 
-const distPackage = join(REPO_ROOT, "dist-package");
 const WAL_ORPHAN_WORKER = join(REPO_ROOT, "test", "fixtures", "schema", "wal-orphan-worker.ts");
-const built = existsSync(join(distPackage, "staple.mjs")) && existsSync(join(distPackage, "assets", "index.html"));
 const packageVersion = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")).version as string;
 
 /** Tables the fixtures carry rows in; the upgrade must not disturb a single one. */
@@ -273,30 +271,21 @@ function shell(line: string, cwd = scratch) {
   return spawnSync("sh", ["-c", line], { cwd, env, encoding: "utf8", timeout: 30_000 });
 }
 
-describe.skipIf(!built)("the packed runtime against every workspace schema on disk (STA-165)", () => {
-  beforeAll(async () => {
+describe("the packed runtime against every workspace schema on disk (STA-165)", () => {
+  beforeAll(() => {
     payloadRoot = tempDir("schema-matrix-payload");
     payload = join(payloadRoot, "dist-package");
-    // A stable copy of the artifact. Another test file may be rebuilding
-    // dist-package/ right now; copy, prove the copy runs, and if it does not,
-    // wait for the rebuild to land rather than fail on a half-written bundle.
-    let lastError = "";
-    for (let attempt = 0; attempt < 5; attempt += 1) {
-      rmSync(payload, { recursive: true, force: true });
-      try {
-        cpSync(distPackage, payload, { recursive: true, preserveTimestamps: true });
-        const probe = spawnSync(process.execPath, [join(payload, "staple.mjs"), "--version"], {
-          encoding: "utf8",
-          env: bareEnv(),
-        });
-        if (probe.status === 0 && probe.stdout.trim() === packageVersion) return;
-        lastError = `exit ${probe.status}: ${probe.stderr}`;
-      } catch (error) {
-        lastError = error instanceof Error ? error.message : String(error);
-      }
-      await new Promise((resolve) => setTimeout(resolve, 1_000));
-    }
-    throw new Error(`dist-package/ never settled into a runnable payload: ${lastError}`);
+    // A private copy of the run's payload, beside the relabelled and fake
+    // payloads the cases write into payloadRoot. Nothing rebuilds the source
+    // copy during the run, so one copy is enough; the probe proves it runs
+    // before any case depends on it.
+    cpSync(testPackageDir(), payload, { recursive: true, preserveTimestamps: true });
+    const probe = spawnSync(process.execPath, [join(payload, "staple.mjs"), "--version"], {
+      encoding: "utf8",
+      env: bareEnv(),
+    });
+    expect(probe.stderr).toBe("");
+    expect(probe.stdout.trim()).toBe(packageVersion);
   }, 30_000);
 
   afterAll(() => {

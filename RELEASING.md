@@ -26,12 +26,13 @@ secrets, and none should ever be added.
 - **The schema matrix is a release gate.** `test/install-schema-matrix.test.ts`
   drives the packed runtime through the real launcher against the schema-3,
   -5, -6, future-schema and WAL-backed fixtures, an interrupted install, and
-  the commands `docs/migration.md` prints. It needs `dist-package/` and skips
-  without it, so a full `npm test` in which it skipped is not a passing gate.
-  Before tagging, run it against the artifact you are about to publish:
+  the commands `docs/migration.md` prints. It runs in every `npm test`, against
+  a payload the suite builds from the checkout's source with the same
+  `buildPackage()` that produces `dist-package/`, so it cannot skip and
+  cannot pass against a stale build. On its own:
 
   ```bash
-  npm run build:package && npx vitest run test/install-schema-matrix.test.ts
+  npx vitest run test/install-schema-matrix.test.ts
   ```
 
 ## One-time npm setup (VP only, before the first release)
@@ -74,7 +75,7 @@ subsequent release is just the tag flow below.
 
 4. The `Release` workflow runs automatically:
    - gates: `npm test`, `npm run typecheck`, `npm run smoke:mcp`,
-     `npm run drill:npx` (the schema matrix above must have RUN, not skipped);
+     `npm run drill:npx` (`npm test` includes the schema matrix above);
    - guard: the tag must equal the version in BOTH `package.json` and the
      freshly built `dist-package/package.json`, or the job fails before
      publishing;

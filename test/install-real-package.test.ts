@@ -7,16 +7,16 @@
  * and the builder agree about what a payload IS — the flat layout, the exec
  * bit, the single shebang, the assets beside the bundle.
  *
- * Both A2 sources are exercised: the `dist-package/` directory a developer
- * builds, and the `.tgz` a user installs from. They must produce the same
+ * Both A2 sources are exercised: the payload directory `scripts/build-package.ts`
+ * produces, and the `.tgz` a user installs from. They must produce the same
  * installed tree, because plan §6 promises `npx -y staple-cli install` and a
  * local build are the same operation.
  *
- * The suite SKIPS rather than fails when `dist-package/` is absent: it is a
- * build output, not a source file, and a checkout that has not run
- * `npm run build:package` should not report a red test it cannot fix by
- * changing code. The tarball case additionally builds its own `.tgz` via
- * `npm pack`, which is skipped under the same condition.
+ * The payload is the one this run's globalSetup built from the current source
+ * (`testPackageDir()`, STA-250), so this suite always runs. It used to read the
+ * repository's `dist-package/` and skip when that was absent, which a parallel
+ * rebuild made happen at random: a run that exited 0 having tested nothing.
+ * The tarball case packs its own `.tgz` from the same payload via `npm pack`.
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
@@ -34,12 +34,12 @@ import {
 } from "../src/install/index.js";
 import { WORKSPACE_LATEST_VERSION } from "../src/core/migrations/workspace/index.js";
 import { removeDir, tempDir } from "./fixtures/characterize-support.js";
+import { testPackageDir } from "./fixtures/package-payload.js";
 import { writeCurrentWorkspace } from "./fixtures/schema/generate.js";
 import { FIXTURES, fixturePath } from "./fixtures/schema/support.js";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const distPackage = join(repoRoot, "dist-package");
-const built = existsSync(join(distPackage, "staple.mjs")) && existsSync(join(distPackage, "assets", "index.html"));
+const distPackage = testPackageDir();
 const packageVersion = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")).version as string;
 
 let scratch: string;
@@ -67,7 +67,7 @@ function runLauncher(args: string[]) {
   });
 }
 
-describe.skipIf(!built)("installing the built dist-package/", () => {
+describe("installing the built payload directory", () => {
   it("installs at the version A2 stamped into the artifact", () => {
     const result = install(distPackage);
 
@@ -194,7 +194,7 @@ describe.skipIf(!built)("installing the built dist-package/", () => {
   });
 });
 
-describe.skipIf(!built)("installing the packed tarball (plan §9 acceptance)", () => {
+describe("installing the packed tarball (plan §9 acceptance)", () => {
   let tarball: string;
 
   beforeAll(() => {
@@ -260,7 +260,7 @@ describe.skipIf(!built)("installing the packed tarball (plan §9 acceptance)", (
   });
 });
 
-describe.skipIf(!built)("upgrade and rollback with the real artifact", () => {
+describe("upgrade and rollback with the real artifact", () => {
   it("reinstalling the same real version is idempotent and keeps the launcher working", () => {
     const first = install(distPackage);
     const second = install(distPackage);

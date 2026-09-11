@@ -22,38 +22,32 @@
  * stray `npm publish` at the repository root cannot ship the source tree. The artifact
  * metadata is generated here, taking `version` from the source package.json so there
  * is still exactly one place to bump.
+ *
+ * The payload is assembled and verified in a temporary sibling of the target, then
+ * renamed into place (see `promote`). The target is never deleted up front and never
+ * written piece by piece, so a reader sees the previous payload or the new one, and a
+ * build that fails leaves the previous payload where it was.
  */
 import { build } from "esbuild";
+import { randomBytes } from "node:crypto";
 import {
   cpSync,
   existsSync,
   mkdirSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { WORKSPACE_LATEST_VERSION } from "../src/core/migrations/workspace/index.js";
 import { HUB_LATEST_VERSION } from "../src/core/migrations/hub/index.js";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-/**
- * Where the payload is assembled.
- *
- * A `let`, not a `const`, so a caller can build somewhere else — and the reason
- * is a real defect rather than flexibility for its own sake. `package-tarball`
- * calls `buildPackage()` mid-suite, which deletes and rewrites this directory,
- * while `install-real-package` and `install-schema-matrix` read it from parallel
- * workers and skip when it is absent. That race produced failures whose set
- * changed between runs, and made a stale build look green once.
- *
- * Pass `outDir` to build into a scratch directory and leave the shared one
- * alone.
- */
-let outDir = join(repoRoot, "dist-package");
+const defaultOutDir = join(repoRoot, "dist-package");
 const uiDist = join(repoRoot, "src", "ui", "app", "dist");
 
 const sourcePkg = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")) as {
@@ -70,10 +64,10 @@ const sourcePkg = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"
  * externalises the `node:` scheme. Nothing else may survive as an import: the published
  * runtime has no node_modules to resolve from. verifyNoExternalImports enforces that.
  */
-async function bundle(): Promise<{ bundledPackages: string[]; externals: string[] }> {
+async function bundle(dir: string): Promise<{ bundledPackages: string[]; externals: string[] }> {
   const result = await build({
     entryPoints: [join(repoRoot, "src", "package", "staple.ts")],
-    outfile: join(outDir, "staple.mjs"),
+    outfile: join(dir, "staple.mjs"),
     bundle: true,
     // No splitting: the dynamic imports in the entrypoint stay inlined and lazy, so one
     // file holds both surfaces and only the dispatched one evaluates.
@@ -145,18 +139,18 @@ function verifyExecutableBin(bundlePath: string): void {
 }
 
 /** The UI bundle, copied beside staple.mjs as assets/ — the layout resolveUiDistDir probes for. */
-function copyUiAssets(): void {
+function copyUiAssets(dir: string): void {
   if (!existsSync(join(uiDist, "index.html"))) {
     throw new Error(
       `the UI bundle is missing at ${uiDist}. Run \`npm run build:ui\` before building the package.`,
     );
   }
-  cpSync(uiDist, join(outDir, "assets"), { recursive: true });
+  cpSync(uiDist, join(dir, "assets"), { recursive: true });
 }
 
-function writeArtifactManifest(bundledPackages: string[]): void {
+function writeArtifactManifest(dir: string, bundledPackages: string[]): void {
   writeFileSync(
-    join(outDir, "package.json"),
+    join(dir, "package.json"),
     `${JSON.stringify(
       {
         name: "staple-cli",
@@ -211,10 +205,10 @@ function writeArtifactManifest(bundledPackages: string[]): void {
     "> `src/ui/app/src/assets/fonts/GEIST-OFL-LICENSE.txt`.",
     "",
   ].join("\n");
-  writeFileSync(join(outDir, "THIRD-PARTY-NOTICES.md"), notices);
+  writeFileSync(join(dir, "THIRD-PARTY-NOTICES.md"), notices);
 
-  cpSync(join(repoRoot, "README.md"), join(outDir, "README.md"));
-  cpSync(join(repoRoot, "LICENSE"), join(outDir, "LICENSE"));
+  cpSync(join(repoRoot, "README.md"), join(dir, "README.md"));
+  cpSync(join(repoRoot, "LICENSE"), join(dir, "LICENSE"));
 }
 
 /**
@@ -222,7 +216,7 @@ function writeArtifactManifest(bundledPackages: string[]): void {
  * tests, no lockfile, nothing private. Checked here rather than trusted to `files`,
  * because dist-package/ is built fresh and an accidental stray copy would ship.
  */
-function verifyNoSourceLeaks(): void {
+function verifyNoSourceLeaks(dir: string): void {
   const allowed = new Set([
     "package.json",
     "staple.mjs",
@@ -231,36 +225,83 @@ function verifyNoSourceLeaks(): void {
     "LICENSE",
     "THIRD-PARTY-NOTICES.md",
   ]);
-  const unexpected = readdirSync(outDir).filter((name) => !allowed.has(name));
+  const unexpected = readdirSync(dir).filter((name) => !allowed.has(name));
   if (unexpected.length > 0) {
     throw new Error(`unexpected files in the publishable payload: ${unexpected.join(", ")}`);
   }
 }
 
+/**
+ * Move a verified payload from its staging directory to `target`.
+ *
+ * rename(2) replaces a file in one step, but it will not replace a directory that
+ * has anything in it. So an existing payload is renamed aside, the new one is
+ * renamed in, and only then is the old one deleted. The two renames run back to
+ * back and synchronously, so no JavaScript runs between them. Another process can
+ * find the target missing only in the instant between those two system calls, and
+ * it never finds it half-built. If the second rename fails, the previous payload
+ * is put back.
+ */
+function promote(staging: string, target: string): void {
+  const aside = `${staging}.previous`;
+  let hadPrevious = false;
+  try {
+    renameSync(target, aside);
+    hadPrevious = true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  try {
+    renameSync(staging, target);
+  } catch (error) {
+    if (hadPrevious) renameSync(aside, target);
+    throw error;
+  }
+  if (hadPrevious) rmSync(aside, { recursive: true, force: true });
+}
+
+/**
+ * Build the payload into `outDir` (default: the repository's `dist-package/`).
+ *
+ * The work happens in a hidden sibling, `.<name>.building-<pid>-<random>`, on the
+ * same filesystem as the target so the final move is a rename. Every verification
+ * runs against the staged tree before it is promoted, and the staging directory is
+ * removed whether the build succeeds or fails. Each call works only on its own
+ * directories, so builds into different targets can run at the same time.
+ */
 export async function buildPackage(options: { outDir?: string } = {}): Promise<{
   outDir: string;
   version: string;
   bundledPackages: string[];
   externals: string[];
 }> {
-  outDir = options.outDir ?? join(repoRoot, "dist-package");
-  rmSync(outDir, { recursive: true, force: true });
-  mkdirSync(outDir, { recursive: true });
+  const target = resolve(options.outDir ?? defaultOutDir);
+  mkdirSync(dirname(target), { recursive: true });
+  const staging = join(
+    dirname(target),
+    `.${basename(target)}.building-${process.pid}-${randomBytes(4).toString("hex")}`,
+  );
+  mkdirSync(staging);
 
-  const { bundledPackages, externals } = await bundle();
-  verifyNoExternalImports(externals);
-  verifyExecutableBin(join(outDir, "staple.mjs"));
-  copyUiAssets();
-  writeArtifactManifest(bundledPackages);
-  verifyNoSourceLeaks();
-
-  return { outDir, version: sourcePkg.version, bundledPackages, externals };
+  try {
+    const { bundledPackages, externals } = await bundle(staging);
+    verifyNoExternalImports(externals);
+    verifyExecutableBin(join(staging, "staple.mjs"));
+    copyUiAssets(staging);
+    writeArtifactManifest(staging, bundledPackages);
+    verifyNoSourceLeaks(staging);
+    promote(staging, target);
+    return { outDir: target, version: sourcePkg.version, bundledPackages, externals };
+  } finally {
+    // A no-op after a successful promote; after a failure it removes the half-built tree.
+    rmSync(staging, { recursive: true, force: true });
+  }
 }
 
-// Only when run directly, so the tarball test can import buildPackage() instead of
-// shelling out to a second tsx process.
+// Only when run directly, so the tests can import buildPackage() instead of shelling
+// out to a second tsx process.
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const { bundledPackages, externals } = await buildPackage();
+  const { outDir, bundledPackages, externals } = await buildPackage();
   console.log(`built ${relative(repoRoot, outDir)}/ — staple-cli ${sourcePkg.version}`);
   console.log(`bundled ${bundledPackages.length} packages: ${bundledPackages.join(", ")}`);
   console.log(`external (built-ins only): ${externals.join(", ")}`);

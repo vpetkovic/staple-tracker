@@ -3,10 +3,15 @@
  *
  * Everything else in the suite runs staple through `tsx src/…`, which silently supplies
  * the whole repository — TypeScript, node_modules, the UI bundle at its source path.
- * That proves the product and proves nothing about the artifact. This file builds the
- * real payload, packs it with `npm pack`, installs the tarball into a throwaway prefix
- * with no network, and then drives the installed `staple` binary from a directory that
- * is not inside this project and has no node_modules anywhere near it.
+ * That proves the product and proves nothing about the artifact. This file packs the
+ * real payload with `npm pack`, installs the tarball into a throwaway prefix with no
+ * network, and then drives the installed `staple` binary from a directory that is not
+ * inside this project and has no node_modules anywhere near it.
+ *
+ * The payload is the one this run's globalSetup built with `buildPackage()` from the
+ * current source (`testPackageDir()`, STA-250). This file used to call `buildPackage()`
+ * itself mid-suite. Pointed at the shared `dist-package/`, that deleted and rewrote the
+ * directory two other files were reading.
  *
  * What that arrangement is designed to catch:
  *   - an unbundled dependency (nothing is installed alongside, so it cannot resolve);
@@ -18,15 +23,15 @@
  * both read from local files only, so there is no network condition to skip on.
  */
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { buildPackage } from "../scripts/build-package.js";
 import { WORKSPACE_LATEST_VERSION } from "../src/core/migrations/workspace/index.js";
 import { HUB_LATEST_VERSION } from "../src/core/migrations/hub/index.js";
 import { bareEnv, freePort, removeDir, REPO_ROOT, tempDir } from "./fixtures/characterize-support.js";
+import { testPackageDir } from "./fixtures/package-payload.js";
 
-/** Build + pack + install is a minute of work on a cold cache; do it once. */
+/** Pack + install is a minute of work on a cold cache; do it once. */
 const SETUP_TIMEOUT = 300_000;
 /** Starting a real process and waiting on a socket does not fit the 5s default. */
 const PROCESS_TIMEOUT = 60_000;
@@ -61,32 +66,19 @@ function runStaple(args: string[], cwd = project) {
   return { status: result.status ?? 0, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
 }
 
-beforeAll(async () => {
+beforeAll(() => {
   staging = tempDir("pkg-staging");
   prefix = tempDir("pkg-prefix");
   project = tempDir("pkg-project");
   home = tempDir("pkg-home");
 
-  // The packaged payload embeds the Vite bundle, so the bundle has to exist. Building
-  // it here rather than skipping keeps this file unconditional: `npm test` alone proves
-  // the artifact, whether or not someone remembered to run `npm run build:ui` first.
-  if (!existsSync(join(REPO_ROOT, "src", "ui", "app", "dist", "index.html"))) {
-    const uiBuild = spawnSync("npm", ["run", "build:ui"], {
-      cwd: REPO_ROOT,
-      encoding: "utf8",
-      timeout: 180_000,
-    });
-    expect(uiBuild.status, `npm run build:ui failed: ${uiBuild.stderr}`).toBe(0);
-  }
+  // The version buildPackage() stamps into the artifact is the source package.json's.
+  artifactVersion = (JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as { version: string })
+    .version;
 
-  // Build into the staging directory, NOT the shared `dist-package/`. Rewriting
-  // that one mid-suite is what raced `install-real-package` and
-  // `install-schema-matrix`, which read it from parallel workers.
-  const built = await buildPackage({ outDir: join(staging, "dist-package") });
-  artifactVersion = built.version;
-
-  // `npm pack <dir>` produces exactly what `npm publish` would upload.
-  const packed = spawnSync("npm", ["pack", built.outDir, "--pack-destination", staging, "--json"], {
+  // `npm pack <dir>` produces exactly what `npm publish` would upload. It reads the
+  // payload and writes the tarball into this file's own staging directory.
+  const packed = spawnSync("npm", ["pack", testPackageDir(), "--pack-destination", staging, "--json"], {
     encoding: "utf8",
     timeout: 120_000,
   });

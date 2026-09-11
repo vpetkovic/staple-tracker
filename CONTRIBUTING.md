@@ -122,6 +122,10 @@ metadata (name `staple-cli`, bin `staple`, `dependencies: {}`). The drill is
 the npx contract: it must pass with nothing but Node — no checkout, no `tsx`,
 no build tools — available to the installed binary.
 
+`npm test` does not need `dist-package/`. The suites that install or pack the
+real artifact get a payload the test run builds for itself, from the current
+source, before any test file loads (`test/setup/package-payload.ts`).
+
 To try the packaged binary directly:
 
 ```bash
