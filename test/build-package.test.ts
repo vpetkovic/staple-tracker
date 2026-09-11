@@ -16,6 +16,8 @@
  *   - never half-built, and complete for the whole of the build, as seen on
  *     every turn of the event loop;
  *   - if the new tree cannot be moved in, the old one is put back;
+ *   - a build killed between the two renames leaves the old tree aside; the
+ *     next build puts it back before it starts, rather than sweeping it;
  *   - scratch left by a build that was killed is removed by the next build.
  *
  * It is not an atomic swap. Another process can find the target missing for
@@ -141,6 +143,44 @@ describe("rebuilding a payload in place (STA-250)", () => {
     expect(readFileSync(join(target, "staple.mjs"), "utf8")).toBe("the previous build\n");
     expect(readdirSync(dir)).toEqual(["dist-package"]);
   });
+
+  it(
+    "puts back the previous payload a build killed mid-swap left aside, before building",
+    async () => {
+      const dir = (root = tempDir("build-midswap"));
+      const target = join(dir, "dist-package");
+      // What a build killed between promote's two renames leaves: no target, the
+      // old payload renamed aside, and its own staged tree, all owned by a
+      // process that is gone.
+      const exited = spawn(process.execPath, ["-e", ""]);
+      await new Promise((r) => exited.on("exit", r));
+      const aside = join(dir, `.dist-package.building-${exited.pid}-0badc0de.previous`);
+      mkdirSync(aside);
+      writeFileSync(join(aside, "OLD-TREE"), "the last good build\n");
+      mkdirSync(join(dir, `.dist-package.building-${exited.pid}-0badc0de`));
+
+      // Watched throughout, as in the first case: the old tree must be back at
+      // the target while this build is still running, not just gone.
+      let sawOldTree = false;
+      let building = true;
+      const look = (): void => {
+        if (!building) return;
+        if (existsSync(join(target, "OLD-TREE"))) sawOldTree = true;
+        setTimeout(look, 1);
+      };
+      setTimeout(look, 0);
+      try {
+        await buildPackage({ outDir: target });
+      } finally {
+        building = false;
+      }
+
+      expect(sawOldTree).toBe(true);
+      expect(incompleteness(target)).toBeNull();
+      expect(readdirSync(dir)).toEqual(["dist-package"]);
+    },
+    BUILD_TIMEOUT,
+  );
 
   it(
     "removes the scratch a killed build left behind, and leaves a running build's alone",

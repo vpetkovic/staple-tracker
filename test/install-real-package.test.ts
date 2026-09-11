@@ -282,8 +282,18 @@ describe("the installed launcher passes signals on to the runtime it started", (
    * runtime hears those directly. `kill <pid>` from another terminal signals the
    * launcher alone. When the launcher did not forward it, the launcher died and
    * the runtime carried on as an orphan, still holding its port.
+   *
+   * Once the runtime has exited, the launcher dies BY the signal it received
+   * rather than exiting 128 + n. A shell can tell the two apart and acts on it:
+   * see the bash loop case at the end.
    */
   const LISTENING = /staple ui — .* at http:\/\/localhost:(\d+)\//;
+
+  /** Every runtime this home's launcher could have started, for cleanup. */
+  function runtimesOf(stapleHome: string): number[] {
+    const listed = spawnSync("pgrep", ["-f", join(stapleHome, "runtime")], { encoding: "utf8" });
+    return listed.stdout.split("\n").filter(Boolean).map(Number);
+  }
 
   function childrenOf(pid: number): number[] {
     const listed = spawnSync("pgrep", ["-P", String(pid)], { encoding: "utf8" });
@@ -308,15 +318,15 @@ describe("the installed launcher passes signals on to the runtime it started", (
   }
 
   it.each([
-    ["SIGTERM", "the launcher's pid alone", 143],
-    ["SIGINT", "the launcher's pid alone", 130],
-    ["SIGHUP", "the launcher's pid alone", 129],
+    ["SIGTERM", "the launcher's pid alone"],
+    ["SIGINT", "the launcher's pid alone"],
+    ["SIGHUP", "the launcher's pid alone"],
     // A terminal's Ctrl-C: both processes hear it, and the runtime then gets
     // the forwarded copy as well. It must still be one clean shutdown.
-    ["SIGINT", "the whole process group", 130],
+    ["SIGINT", "the whole process group"],
   ] as const)(
-    "%s sent to %s stops the runtime and frees its port (exit %i)",
-    async (signal, target, expected) => {
+    "%s sent to %s stops the runtime, frees its port, and the launcher dies by it",
+    async (signal, target) => {
       install(distPackage);
       const repo = join(scratch, "repo-signal");
       mkdirSync(repo, { recursive: true });
@@ -354,7 +364,7 @@ describe("the installed launcher passes signals on to the runtime it started", (
           exited,
           new Promise<"still running">((r) => setTimeout(() => r("still running"), 15_000)),
         ]);
-        expect(outcome).toEqual({ code: expected, signal: null });
+        expect(outcome).toEqual({ code: null, signal });
         const gone = Date.now() + 10_000;
         while (running(runtimePids[0]!) && Date.now() < gone) await new Promise((r) => setTimeout(r, 25));
         expect(running(runtimePids[0]!)).toBe(false);
@@ -370,4 +380,58 @@ describe("the installed launcher passes signals on to the runtime it started", (
     },
     60_000,
   );
+
+  /**
+   * The case that decides between "exit 130" and "die by SIGINT". bash runs the
+   * installed launcher in a loop and gets one Ctrl-C. bash waits for its child,
+   * and if the child exited normally it concludes the child handled the Ctrl-C
+   * and runs the next command. The runtime run directly stops the loop, and so
+   * did the launcher before it forwarded signals, so the launcher must too.
+   *
+   * A terminal's Ctrl-C is the tty driver sending SIGINT to the foreground
+   * process group: bash, the launcher and the runtime at once. That is what
+   * this sends, to a bash that leads its own group. (`script` would give a real
+   * pty, but BSD `script` on macOS refuses a stdin that is not itself a tty,
+   * which a spawned child's never is.)
+   */
+  it("one Ctrl-C to the foreground group stops a bash loop that runs the launcher", async () => {
+    install(distPackage);
+    const repo = join(scratch, "repo-loop");
+    mkdirSync(repo, { recursive: true });
+    const env = { ...process.env, STAPLE_HOME: home, NODE_NO_WARNINGS: "1" };
+    expect(spawnSync(join(binDir, "staple"), ["init"], { cwd: repo, env, encoding: "utf8" }).status).toBe(0);
+
+    const loop = `for i in 1 2 3; do "${join(binDir, "staple")}" open --port 0 --no-browser; echo "after $i rc=$?"; done; echo END`;
+    const term = spawn("bash", ["-c", loop], { cwd: repo, env, detached: true });
+    let output = "";
+    term.stdout.on("data", (chunk) => (output += String(chunk)));
+    term.stderr.on("data", (chunk) => (output += String(chunk)));
+    const exited = new Promise<void>((resolveExit) => term.on("exit", () => resolveExit()));
+    try {
+      const deadline = Date.now() + 25_000;
+      while (!LISTENING.test(output) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 25));
+      expect(output, "the first pass never started listening").toMatch(LISTENING);
+
+      process.kill(-term.pid!, "SIGINT"); // Ctrl-C: the whole foreground group
+
+      // Give a wrongly continuing loop time to print and start its next pass.
+      await Promise.race([exited, new Promise((r) => setTimeout(r, 5_000))]);
+      expect(output).toContain("shutting down (SIGINT)");
+      expect(output).not.toContain("after 1");
+      expect(output).not.toContain("END");
+    } finally {
+      try {
+        process.kill(-term.pid!, "SIGKILL");
+      } catch {
+        // already gone
+      }
+      for (const pid of runtimesOf(home)) {
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          // already gone
+        }
+      }
+    }
+  }, 60_000);
 });

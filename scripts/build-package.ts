@@ -291,21 +291,42 @@ function isRunning(pid: number): boolean {
  * progress, not debris.
  */
 export function removeStaleScratch(parent: string, prefix: string): string[] {
+  const stale = staleScratch(parent, prefix);
+  for (const name of stale) rmSync(join(parent, name), { recursive: true, force: true });
+  return stale;
+}
+
+/** The `<prefix><pid>-…` entries in `parent` whose `<pid>` is no longer running. */
+function staleScratch(parent: string, prefix: string): string[] {
   let names: string[];
   try {
     names = readdirSync(parent);
   } catch {
     return [];
   }
-  const removed: string[] = [];
-  for (const name of names) {
-    if (!name.startsWith(prefix)) continue;
+  return names.filter((name) => {
+    if (!name.startsWith(prefix)) return false;
     const pid = Number(/^(\d+)-/.exec(name.slice(prefix.length))?.[1]);
-    if (!Number.isSafeInteger(pid) || pid <= 0 || isRunning(pid)) continue;
-    rmSync(join(parent, name), { recursive: true, force: true });
-    removed.push(name);
-  }
-  return removed;
+    return Number.isSafeInteger(pid) && pid > 0 && !isRunning(pid);
+  });
+}
+
+/**
+ * Put back a payload that a killed build had renamed aside.
+ *
+ * A build killed between `promote`'s two renames leaves no target, and the
+ * previous payload only as `.<name>.building-<pid>-<random>.previous`. That is
+ * the last good tree, not debris: sweeping it and then failing this build would
+ * leave nothing at all. So when the target is missing, the newest such tree
+ * from a dead build is renamed back first, and only then is the rest swept.
+ */
+function restoreInterruptedSwap(parent: string, prefix: string, target: string): void {
+  if (existsSync(target)) return;
+  const [newest] = staleScratch(parent, prefix)
+    .filter((name) => name.endsWith(".previous"))
+    .map((name) => ({ name, mtime: statSync(join(parent, name)).mtimeMs }))
+    .sort((a, b) => b.mtime - a.mtime);
+  if (newest) renameSync(join(parent, newest.name), target);
 }
 
 /**
@@ -315,9 +336,10 @@ export function removeStaleScratch(parent: string, prefix: string): string[] {
  * same filesystem as the target so the final move is a rename. Every verification
  * runs against the staged tree before it is promoted, and the staging directory is
  * removed whether the build succeeds or fails. A build killed by a signal cannot
- * clean up after itself, so each build first removes staging directories whose
- * process is gone. Each call works only on its own directories, so builds into
- * different targets can run at the same time.
+ * clean up after itself, so each build first puts back a previous payload that a
+ * killed build had renamed aside (when the target is missing), and then removes
+ * staging directories whose process is gone. Each call works only on its own
+ * directories, so builds into different targets can run at the same time.
  */
 export async function buildPackage(options: { outDir?: string } = {}): Promise<{
   outDir: string;
@@ -328,6 +350,7 @@ export async function buildPackage(options: { outDir?: string } = {}): Promise<{
   const target = resolve(options.outDir ?? defaultOutDir);
   mkdirSync(dirname(target), { recursive: true });
   const stagingPrefix = `.${basename(target)}.building-`;
+  restoreInterruptedSwap(dirname(target), stagingPrefix, target);
   removeStaleScratch(dirname(target), stagingPrefix);
   const staging = join(dirname(target), `${stagingPrefix}${process.pid}-${randomBytes(4).toString("hex")}`);
   mkdirSync(staging);

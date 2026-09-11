@@ -23,6 +23,7 @@ import {
   installRuntime,
   isManagedLauncher,
   launcherPath,
+  launcherSignals,
   resolveLauncherHome,
   verifyLauncherTarget,
 } from "../src/install/index.js";
@@ -241,5 +242,29 @@ describe("ownership and verification", () => {
       expect(existsSync(path)).toBe(true);
       expect(readFileSync(path, "utf8")).not.toMatch(/\bsudo\b|\bdoas\b|\bpkexec\b|runas/i);
     }
+  });
+});
+
+describe("what the launcher does with signals (STA-255)", () => {
+  /**
+   * The POSIX behaviour is proven end to end in install-real-package.test.ts.
+   * There is no Windows runner, so the Windows row is pinned here as a table,
+   * and the second case proves the emitted launcher is driven by that table.
+   */
+  it("forwards SIGINT on POSIX but never on Windows, where a console Ctrl-C already reaches the runtime", () => {
+    const listen = ["SIGINT", "SIGTERM", "SIGHUP"];
+    expect(launcherSignals("win32")).toEqual({ listen, forward: ["SIGTERM", "SIGHUP"], reraise: false });
+    expect(launcherSignals("linux")).toEqual({ listen, forward: listen, reraise: true });
+    expect(launcherSignals("darwin")).toEqual(launcherSignals("linux"));
+  });
+
+  it("emits that table into the launcher, for both platforms, whichever one installs it", () => {
+    const table =
+      `process.platform === "win32" ? ${JSON.stringify(launcherSignals("win32"))} : ` +
+      `${JSON.stringify(launcherSignals("linux"))};`;
+    installLauncher({ binDir, platform: "linux" });
+    installLauncher({ binDir: join(scratch, "win"), platform: "win32" });
+    expect(readFileSync(join(binDir, "staple"), "utf8")).toContain(table);
+    expect(readFileSync(join(scratch, "win", "staple-launcher.mjs"), "utf8")).toContain(table);
   });
 });

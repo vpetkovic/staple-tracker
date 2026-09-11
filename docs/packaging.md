@@ -138,10 +138,17 @@ upgrade needs no rewrite of it. It refuses to overwrite a `staple` on the
 launcher path that it did not write.
 
 The runtime runs as the launcher's child with the same stdin, stdout and stderr,
-and the launcher exits with the runtime's exit code, or 128 + the signal number
-if a signal ended the runtime. It passes SIGINT, SIGTERM and SIGHUP on to the
-runtime, so `kill <launcher pid>` stops the runtime and frees its port instead
-of leaving it running as an orphan. With no runtime installed it exits 70.
+and the launcher exits with the runtime's exit code. With no runtime installed
+it exits 70. It passes SIGINT, SIGTERM and SIGHUP on to the runtime, so
+`kill <launcher pid>` stops the runtime and frees its port instead of leaving it
+running as an orphan. When the launcher itself was signalled, or the runtime
+died by a signal, the launcher dies by that same signal once the runtime has
+exited, rather than exiting 128 + n. That matters to shells: bash reads a normal
+exit after Ctrl-C as "the program handled it" and runs the next command, so a
+single Ctrl-C would not stop a loop or a `staple … || fallback`. On Windows,
+SIGINT is not forwarded (a console Ctrl-C already reaches the runtime, and
+forwarding would kill it outright mid-shutdown), and the launcher exits with a
+code.
 
 **PATH is a separate consent.** `--yes` covers the home and the launcher
 directory. Editing a shell profile additionally requires `--update-path`, and
