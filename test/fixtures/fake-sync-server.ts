@@ -31,29 +31,20 @@
  */
 import { randomUUID } from "node:crypto";
 import { isRetryable, type ErrorCode } from "../../worker/src/errors.js";
-import { columnSpellingWins, renumberedSummary, sameRevision } from "../../src/core/cloud/apply.js";
+import { columnSpellingWins } from "../../src/core/cloud/apply.js";
+import { settleRevisionCreate } from "../../src/core/cloud/revision-placement.js";
 import { ORIGIN_RELEASING_STATUSES } from "../../src/core/types.js";
 
-/** `settleRevision` in `worker/src/fold.ts`, on this fixture's operation shape. */
+/** `settleRevision` in `worker/src/fold.ts`, on this fixture's operation shape: the same placement (`revision-placement.ts`). */
 function settleRevisionOp<T extends { entityId: string; payload: unknown }>(
   folded: Map<string, { entity: string; entityId: string; deletedAt: number | null; state: Record<string, unknown> }>,
   op: T,
 ): T | null {
   const payload = op.payload as Record<string, unknown>;
-  const held = folded.get(`documentRevision ${op.entityId}`);
-  if (held === undefined || held.deletedAt !== null || sameRevision(held.state, payload)) return op;
-  const slash = op.entityId.lastIndexOf("/");
-  const document = op.entityId.slice(0, slash + 1);
-  const from = Number(op.entityId.slice(slash + 1));
-  let highest = from;
-  for (const entry of folded.values()) {
-    if (entry.entity !== "documentRevision" || entry.deletedAt !== null || !entry.entityId.startsWith(document)) continue;
-    if (sameRevision(entry.state, payload)) return null;
-    const revision = Number(entry.entityId.slice(document.length));
-    if (Number.isInteger(revision) && revision > highest) highest = revision;
-  }
-  const to = highest + 1;
-  return { ...op, entityId: `${document}${to}`, payload: { ...payload, revision: to, changeSummary: renumberedSummary(payload.changeSummary, from, to) } };
+  const settled = settleRevisionCreate(folded.values(), op.entityId, payload);
+  if (settled === null) return null;
+  if (settled.entityId === op.entityId && settled.payload === payload) return op;
+  return { ...op, entityId: settled.entityId, payload: settled.payload };
 }
 
 /** `reopensOrigin` in `worker/src/fold.ts`, which this fixture cannot import without the Worker's types. */
@@ -448,6 +439,11 @@ export class FakeSyncServer {
   /** Start (or stop) limiting the request rate — after a test has populated the repository. */
   limitRate(limit: FakeServerOptions["rateLimit"]): void {
     this.options.rateLimit = limit ?? null;
+  }
+
+  /** From now on, refuse to fold a log longer than `ops` (`maxSnapshotFoldOps`). */
+  limitFold(ops: number): void {
+    this.options.maxSnapshotFoldOps = ops;
   }
   private readonly requestTimes = new Map<string, number[]>();
 
@@ -1375,6 +1371,8 @@ export class FakeSyncServer {
           if ((op.entity === "status" || op.entity === "kind") && Array.isArray(order?.state.order)) {
             order.state.order = (order.state.order as unknown[]).filter((listed) => listed !== op.entityId);
           }
+          // Nor the built-in it may have been — `worker/src/fold.ts`.
+          if (op.entity === "status" || op.entity === "kind") entry.state.isBuiltin = false;
         }
         entry.createdSeq = op.seq;
         // Not a restore's own actor and instant — `worker/src/fold.ts`.

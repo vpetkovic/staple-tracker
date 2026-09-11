@@ -106,6 +106,23 @@ describe("history an older build wrote, without its own dates", () => {
     }
   });
 
+  it("dates and attributes a revision the writer holds as the same text by its create, on the re-read", async () => {
+    const { a, tail, issueId } = await withOlderBuildHistory();
+    // The same revision — its body, and no author to tell it from the log's — dated by the
+    // older build's second reading of the clock. The log's placement keeps the row and gives
+    // it the create's time and actor (`takeLogFields`, `canonicalCreate`).
+    const writer = tail;
+    writer.db.prepare("UPDATE document_revisions SET created_at = '2026-08-01T09:29:59.999Z', author = NULL WHERE issue_id = ?").run(issueId);
+    writer.db.prepare("DELETE FROM meta WHERE key = 'sync_applier_version'").run();
+    expect((await writer.sync()).caughtUp).not.toBeNull();
+    await a.sync();
+    const fresh = fleet!.machine("fresh");
+    await fresh.sync();
+    for (const machine of [a, writer, fresh]) {
+      expect(revision(machine.db, issueId), machine.label).toEqual({ author: "older-build", created_at: WRITTEN });
+    }
+  });
+
   it("is not re-dated by a re-read from a service that does not send the create's time", async () => {
     const { server, tail, commentId } = await withOlderBuildHistory();
     const own = "2026-08-01T09:29:59.999Z";

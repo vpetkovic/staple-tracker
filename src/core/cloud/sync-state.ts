@@ -271,7 +271,74 @@ export function beginBootstrap(db: DatabaseSync, epoch: number): void {
     ).run(epoch);
     // A tail read part-way belongs to the epoch being left.
     clearTailSurvey(db);
+    // And the epoch moved because a restore rewound the repository: the bootstrap rewinds
+    // this device with it once the new epoch's snapshot is in hand (`rewind.ts`).
+    writeRewind(db, { epoch, vocabulary: {} });
   });
+}
+
+// ------------------------------------------------------------ the rewind
+
+const REWIND_KEY = "sync_rewind";
+
+/** A vocabulary as a rewinding read found it: each entry's create seq, and its order. */
+export interface RewindVocabulary {
+  readonly seqs: Readonly<Record<string, number>>;
+  readonly order: readonly string[] | null;
+}
+
+/**
+ * A rewind owed by the bootstrap under way (`rewind.ts`), and what its read has noted so far.
+ * In `meta`, which never synchronizes, so a bootstrap stopped part-way still owes it.
+ */
+export interface OwedRewind {
+  readonly epoch: number;
+  readonly vocabulary: Partial<Record<"status" | "kind", RewindVocabulary>>;
+}
+
+export function readRewind(db: DatabaseSync): OwedRewind | null {
+  const row = db.prepare("SELECT value FROM meta WHERE key = ?").get(REWIND_KEY) as { value: string } | undefined;
+  if (!row) return null;
+  try {
+    const owed = JSON.parse(row.value) as OwedRewind;
+    return typeof owed.epoch === "number" && owed.vocabulary !== null && typeof owed.vocabulary === "object" ? owed : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeRewind(db: DatabaseSync, owed: OwedRewind): void {
+  db.prepare("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(
+    REWIND_KEY,
+    JSON.stringify(owed),
+  );
+}
+
+export function clearRewind(db: DatabaseSync): void {
+  db.prepare("DELETE FROM meta WHERE key = ?").run(REWIND_KEY);
+}
+
+/**
+ * A status or kind a rewinding read applied: its create's seq, or the order as applied — what
+ * a device hydrating the new epoch orders its vocabulary by (`freshOrder`, `rewind.ts`).
+ */
+export function noteRewindVocabulary(
+  db: DatabaseSync,
+  entity: "status" | "kind",
+  entityId: string,
+  createdSeq: number | null | undefined,
+  order: unknown,
+): void {
+  const owed = readRewind(db);
+  if (owed === null) return;
+  const held = owed.vocabulary[entity] ?? { seqs: {}, order: null };
+  const next: RewindVocabulary =
+    entityId === "@order"
+      ? { seqs: held.seqs, order: Array.isArray(order) ? order.filter((id): id is string => typeof id === "string") : null }
+      : typeof createdSeq === "number"
+        ? { seqs: { ...held.seqs, [entityId]: createdSeq }, order: held.order }
+        : held;
+  writeRewind(db, { ...owed, vocabulary: { ...owed.vocabulary, [entity]: next } });
 }
 
 // ------------------------------------------------------------ the tail survey

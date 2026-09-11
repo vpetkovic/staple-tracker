@@ -56,6 +56,7 @@ import { closeSettledIdentifierConflicts, settleOwedClaims } from "./claims.js";
 import { assertHubCanTakePrefix, prefixToAdopt, restampHubPrefix } from "./prefix-hub.js";
 import { applyConflictOperation, countOpenConflicts, screenForConflicts } from "./conflicts.js";
 import { hydrate } from "./hydrate.js";
+import { rewindToSnapshot } from "./rewind.js";
 import { TailFold, refusedAsTooLargeToFold, type Entry } from "./tail-fold.js";
 import { seedModeOf, seedOwed, seedRepository, type RepositorySurvey, type SeedReport } from "./seed.js";
 import {
@@ -67,6 +68,7 @@ import {
   pendingCount,
   recordHeadSeq,
   recordSnapshotPage,
+  readRewind,
   readTailSurvey,
   recordSyncedAt,
   requireSyncState,
@@ -176,9 +178,12 @@ const DEFAULT_ATTEMPTS = 3;
  * whose applier is newer than the one that wrote this database re-reads the snapshot once,
  * on the timeline it is already on — the same read a stuck tail recovers with — and the
  * state converges on what the log says. Raised whenever the applier learns to apply
- * something it used to drop.
+ * something it used to drop — or to place something where the log places it: 4 re-reads
+ * every document revision into the log's placement (`applyDocumentRevision`), which a
+ * device that merged two revisions from an older fold, dated them by their operations, or
+ * copied them under new numbers on an earlier re-read does not hold.
  */
-export const APPLIER_VERSION = 3;
+export const APPLIER_VERSION = 4;
 const APPLIER_VERSION_KEY = "sync_applier_version";
 
 function applierVersionOf(db: DatabaseSync): number {
@@ -533,6 +538,23 @@ export async function syncRepository(
     pushed.applied += sent.applied;
     pushed.duplicate += sent.duplicate;
   };
+
+  /**
+   * A restore made on this device moved its epoch already (`restoreFromBackup`), so its push
+   * would go straight into the new epoch, ahead of the bootstrap that rewinds this device —
+   * and the rewind is what finds the unsent work the new epoch lacks and sends what it
+   * names with it (`rewind.ts`). So the bootstrap it owes runs first.
+   */
+  if (readRewind(db) !== null && requireSyncState(db).cursor === null) {
+    try {
+      forcedBootstrap = await runBootstrap(db, journal, session, capabilities, options);
+    } catch (error) {
+      // Moved again under it: once, onto the epoch the service has, as the push and the pull do.
+      if (cloudCodeOf(error) !== "epoch_changed") throw error;
+      beginBootstrap(db, epochFrom(error) ?? requireSyncState(db).epoch + 1);
+      forcedBootstrap = { ...(await runBootstrap(db, journal, session, capabilities, options)), resumed: false };
+    }
+  }
 
   let seed: SeedReport | null = null;
   let joined: BootstrapReport | null = null;
@@ -1078,7 +1100,7 @@ async function recoverFromSnapshot(
   const survey = await surveyRepository(db, session, capabilities, options);
   noteFold(db, survey.entities);
   tx(db, () => {
-    hydrate(db, journal, survey.entities, [], survey.cutoffSeq, nowIso(), true, true, ledger);
+    hydrate(db, journal, survey.entities, [], survey.cutoffSeq, nowIso(), true, true, ledger, hydratedFromOlderFold.get(db) !== true);
     clearTailSurvey(db);
     completeSnapshot(db, survey.tailCursor, survey.epoch);
     replayOutboxFieldWrites(db);
@@ -1177,6 +1199,8 @@ async function runBootstrap(
         const outcome = hydrate(db, journal, survey.entities, parked, survey.cutoffSeq, at, true);
         clearTailSurvey(db);
         entities += outcome.applied;
+        // A restore moved the epoch: this device rewinds with the repository (`rewind.ts`).
+        rewindToSnapshot(db, journal, { prefix: `snap:${survey.cutoffSeq}:`, cutoff: survey.cutoffSeq });
         settleOwedClaims(db, journal);
         completeSnapshot(db, survey.tailCursor, survey.epoch);
         replayOutboxFieldWrites(db);
@@ -1201,9 +1225,12 @@ async function runBootstrap(
     const final = page.nextCursor === null;
     tx(db, () => {
       noteFold(db, page.entities);
-      const outcome = hydrate(db, journal, page.entities, parked, cutoffSeq, at, final);
+      const outcome = hydrate(db, journal, page.entities, parked, cutoffSeq, at, final, false, "snap", hydratedFromOlderFold.get(db) !== true);
       entities += outcome.applied;
       parked = outcome.parked;
+      // A restore moved the epoch: once the new epoch's snapshot is whole, this device
+      // rewinds with the repository (`rewind.ts`).
+      if (final) rewindToSnapshot(db, journal, { prefix: `snap:${cutoffSeq}:`, cutoff: cutoffSeq });
       settleOwedClaims(db, journal);
 
       if (final) {

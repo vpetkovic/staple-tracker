@@ -54,7 +54,8 @@ import {
 } from "../settings-registry.js";
 import { aliasedIssueId, moveIdentifier, recordIdentifierMove } from "../identifier-moves.js";
 import { ORIGIN_RELEASING_STATUSES, StapleError, holdsLiveOrigin, normalizeTitle, nowIso } from "../types.js";
-import { holderYields, oweSettlement, ownClaimSeq, ownOriginClaimSeq } from "./claims.js";
+import { type OwnRevision, holderYields, oweSettlement, ownClaimSeq, ownOriginClaimSeq, ownRevisionOf, ownRevisions } from "./claims.js";
+import { placeRevision, sameRevision, summaryAt } from "./revision-placement.js";
 import {
   isDefined,
   recordRemovalTarget,
@@ -377,6 +378,17 @@ export interface ApplyInput {
    * the create's (`applyMilestone`).
    */
   readonly lastWriteAt?: string | null;
+  /**
+   * For a snapshot entity, the read it is part of: where the log settled what it names, and
+   * what the read has placed so far (`applyDocumentRevision`). Absent for an operation.
+   */
+  readonly read?: SnapshotRead;
+}
+
+/** A snapshot read: its ledger ids' prefix (`snapshotOpId`, `hydrate.ts`) and its cutoff seq. */
+export interface SnapshotRead {
+  readonly prefix: string;
+  readonly cutoff: number;
 }
 
 function restoreActor(actor: string | null | undefined): boolean {
@@ -1233,21 +1245,37 @@ function settleCommentKey(db: DatabaseSync, input: ApplyInput, values: Map<strin
  * them as two operations would let a receiver see a head pointing at a body that
  * had not arrived.
  *
- * `document_revisions` rows are immutable once written, so a redelivered revision
- * is ignored rather than rewritten — but the head pointer still advances, because
- * the pointer is the mutable half.
+ * ## Where it goes: one placement, in log order
  *
- * ## Two revisions written as one number
+ * Two devices that each write revision N before seeing the other's both send N. Taken in log
+ * order, each revision is the first free number from the one it claimed upward — its body,
+ * author and time kept, the move said in its change summary — by the one function every
+ * reader of the log uses (`placeRevision`, `revision-placement.ts`): this applier, the
+ * service's fold, the tail fold and the test service. The head is the highest revision, and
+ * its `updated_at` that revision's time (`writeHead`).
  *
- * Two devices that each write revision N before seeing the other's both send N. The
- * earlier in the log keeps it; the later is the next free revision of the document, with
- * its body, author and time, and the move said in its change summary (`renumberedSummary`)
- * — here, in the service's fold and in the tail fold alike (`settleRevision`,
- * `worker/src/fold.ts`). When the later one is this device's own, it moves, and this device
- * sends it again under its new number so a device on an older build receives it too
- * (`claims.ts`). Before, each device kept whichever arrived first and the fold the last, so
- * one writer's text existed only on its own device. Nothing is dropped, and the head is the
- * highest revision.
+ * What this device holds of a document is of two kinds:
+ *
+ *   - the log's: every revision that came from the log or a snapshot — whichever build
+ *     applied it — and every revision of this device's own that the log placed before the
+ *     operation being applied. Placed where the log placed it, and never moved by a later
+ *     operation. Matched to an arriving revision by content: its body, and its author where
+ *     both have one — never its time, which a build before this one took from the operation;
+ *   - this device's own that the log has not reached yet: written here and not sent, or
+ *     sent and given a later seq. The only kind that yields. When an earlier revision in the
+ *     log takes a number one of them holds, every one of them is placed again after it, in
+ *     the order they were written, by the same rule — and this device sends each that moved
+ *     again under its new number, for a device on an older build (`claims.ts`).
+ *
+ * ## A snapshot is the log's placement
+ *
+ * Read from a snapshot — joining, re-bootstrapping, or re-reading the timeline it is on —
+ * a revision's number is the one the log settled on, and it replaces whatever this device
+ * held there (`placeFromSnapshot`). A revision it held that matches by content is moved to
+ * that number and takes the log's time, author and summary, with no copy and no renumber;
+ * one in the way is moved aside until its own entity arrives. Once the read is complete
+ * (`settleRevisionsAfterRead`), this device's own revisions the log has not reached are
+ * placed after the log's, and what it holds that the log does not is dropped.
  */
 function applyDocumentRevision(db: DatabaseSync, input: ApplyInput): boolean {
   const { payload } = input;
@@ -1270,142 +1298,231 @@ function applyDocumentRevision(db: DatabaseSync, input: ApplyInput): boolean {
    * in the ordered tail, and wrong for one arriving in a snapshot, which has neither: a
    * snapshot entity is applied with a null actor at the moment of hydration, so every
    * revision of every document read as written by nobody, just now. A revision is
-   * immutable, so the values it was written with are the only true ones — and a revision
-   * this database already holds keeps them (`DO NOTHING`), whatever a restore restages.
+   * immutable, so the values it was written with are the only true ones.
    */
-  const author = typeof payload.author === "string" ? payload.author : input.actor;
-  const createdAt = typeof payload.createdAt === "string" ? payload.createdAt : input.at;
-  const body = typeof payload.body === "string" ? payload.body : "";
-  const summary = typeof payload.changeSummary === "string" ? payload.changeSummary : null;
-  const held = db
-    .prepare("SELECT revision, body, author, created_at AS createdAt FROM document_revisions WHERE issue_id = ? AND key = ?")
-    .all(issueId, key) as Array<{ revision: number; body: string; author: string | null; createdAt: string }>;
-  const insert = db.prepare(
+  const incoming: HeldRevision = {
+    revision,
+    body: typeof payload.body === "string" ? payload.body : "",
+    author: typeof payload.author === "string" ? payload.author : input.actor,
+    createdAt: typeof payload.createdAt === "string" ? payload.createdAt : input.at,
+    changeSummary: typeof payload.changeSummary === "string" ? payload.changeSummary : null,
+  };
+  if (input.read !== undefined) placeFromSnapshot(db, issueId, key, incoming, input, input.read);
+  else placeFromLog(db, issueId, key, incoming, claimSeqOf(input, ["body"]));
+  writeHead(db, issueId, key, typeof payload.title === "string" ? payload.title : null);
+  return true;
+}
+
+interface HeldRevision {
+  readonly revision: number;
+  readonly body: string;
+  readonly author: string | null;
+  readonly createdAt: string;
+  readonly changeSummary: string | null;
+}
+
+function heldRevisions(db: DatabaseSync, issueId: string, key: string): HeldRevision[] {
+  return db
+    .prepare(
+      `SELECT revision, body, author, created_at AS createdAt, change_summary AS changeSummary
+         FROM document_revisions WHERE issue_id = ? AND key = ? ORDER BY revision`,
+    )
+    .all(issueId, key) as unknown as HeldRevision[];
+}
+
+function insertRevision(db: DatabaseSync, issueId: string, key: string, row: HeldRevision): void {
+  db.prepare(
     `INSERT INTO document_revisions (issue_id, key, revision, body, author, change_summary, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?)`,
-  );
-  const atNumber = held.find((row) => row.revision === revision);
-  // This revision, held already — under its number, or under the one it was moved to.
-  const same = atNumber !== undefined && sameRevision(atNumber, payload) ? atNumber : held.find((row) => sameRevision(row, payload));
-  let placed = same?.revision ?? revision;
-  if (same === undefined) {
-    /**
-     * The first number from `revision` up that no earlier claim holds. A holder that is this
-     * device's own later claim — written here and sent after, or not yet — yields it and moves
-     * past the highest, and this device sends it again there (`claims.ts`); a holder from
-     * earlier in the log keeps it, and this one goes on up. Every device reading the log, and
-     * the fold, reach the same numbers.
-     */
-    const bySlot = new Map(held.map((row) => [row.revision, row]));
-    for (let slot = revision; ; slot += 1) {
-      const occupant = bySlot.get(slot);
-      if (occupant === undefined) {
-        insert.run(issueId, key, slot, body, author, slot === revision ? summary : renumberedSummary(summary, revision, slot), createdAt);
-        placed = slot;
-        break;
-      }
-      // The occupant is this device's own revision when an operation of its own carried it — its
-      // write, or its settlement under a number it moved to — whatever id that operation used.
-      if (holderYields(db, "documentRevision", `${issueId}/${key}/${slot}`, ["body"], claimSeqOf(input, ["body"]), () => ownRevisionClaim(db, occupant))) {
-        const next = Math.max(...bySlot.keys()) + 1;
-        const moved = db.prepare("SELECT change_summary FROM document_revisions WHERE issue_id = ? AND key = ? AND revision = ?").get(issueId, key, slot) as { change_summary: string | null };
-        db.prepare("UPDATE document_revisions SET revision = ?, change_summary = ? WHERE issue_id = ? AND key = ? AND revision = ?").run(
-          next,
-          renumberedSummary(moved.change_summary, slot, next),
-          issueId,
-          key,
-          slot,
-        );
-        insert.run(issueId, key, slot, body, author, slot === revision ? summary : renumberedSummary(summary, revision, slot), createdAt);
-        oweSettlement(db, { entity: "documentRevision", entityId: `${issueId}/${key}/${next}`, field: "revision", from: String(slot) });
-        placed = slot;
-        break;
-      }
-    }
-  } else {
-    // A revision held already: an older build's is dated and attributed by its genuine
-    // create on every device, the writer too; never by a restore's (`canonicalCreate`).
-    const canonical = canonicalCreate(input);
-    if (canonical !== null) {
-      const where = "WHERE issue_id = ? AND key = ? AND revision = ?";
-      if (typeof payload.createdAt !== "string") {
-        db.prepare(`UPDATE document_revisions SET created_at = ? ${where}`).run(canonical.at, issueId, key, placed);
-      }
-      if (typeof payload.author !== "string" && canonical.actor !== null) {
-        db.prepare(`UPDATE document_revisions SET author = ? ${where}`).run(canonical.actor, issueId, key, placed);
-      }
+  ).run(issueId, key, row.revision, row.body, row.author, row.changeSummary, row.createdAt);
+}
+
+function deleteRevision(db: DatabaseSync, issueId: string, key: string, revision: number): void {
+  db.prepare("DELETE FROM document_revisions WHERE issue_id = ? AND key = ? AND revision = ?").run(issueId, key, revision);
+}
+
+/**
+ * One of this device's own revisions that the log has not reached by `at` — written here and
+ * not sent, or sent and given a later seq — or null. `at` null is a local apply (a conflict
+ * resolution), which is a decision and yields to nothing.
+ */
+function laterOwn(own: readonly OwnRevision[], row: HeldRevision, at: number | null): OwnRevision | null {
+  if (at === null) return null;
+  const mine = ownRevisionOf(own, row);
+  return mine !== null && mine.seq > at ? mine : null;
+}
+
+/**
+ * `incoming` is `row`: by content for a revision of the log's (`sameRevision`); exactly, its
+ * time too, for one of this device's own the log has not reached — its own operation, back.
+ */
+function isRevision(row: HeldRevision, incoming: HeldRevision, later: boolean): boolean {
+  return sameRevision(row, incoming) && (!later || row.createdAt === incoming.createdAt);
+}
+
+/** A revision arriving in the ordered tail, at `at` in the log. */
+function placeFromLog(db: DatabaseSync, issueId: string, key: string, incoming: HeldRevision, at: number | null): void {
+  const rows = heldRevisions(db, issueId, key);
+  const own = ownRevisions(db, issueId, key);
+  const later = rows.map((row) => ({ row, own: laterOwn(own, row, at) }));
+  // This device's own revision, back from the log.
+  if (later.some(({ row, own: mine }) => mine !== null && isRevision(row, incoming, true))) return;
+  const logs = later.filter(({ own: mine }) => mine === null).map(({ row }) => row);
+  const placed = placeRevision(logs, incoming.revision, incoming);
+  if (placed.again) return;
+  const yielders = later.filter((entry): entry is { row: HeldRevision; own: OwnRevision } => entry.own !== null);
+  if (yielders.length === 0) {
+    insertRevision(db, issueId, key, { ...incoming, revision: placed.revision, changeSummary: placed.changeSummary });
+    return;
+  }
+  // Earlier in the log than every revision of this device's own it has not reached: it
+  // takes its number, and they are placed again after it, in the order they were written.
+  for (const { row } of yielders) deleteRevision(db, issueId, key, row.revision);
+  const settled = { ...incoming, revision: placed.revision, changeSummary: placed.changeSummary };
+  insertRevision(db, issueId, key, settled);
+  placeOwnAgain(db, issueId, key, [...logs, settled], yielders);
+}
+
+/**
+ * This device's own revisions the log has not reached, placed after `placed` as the log will
+ * place them when they arrive: in the order they were written, each by `placeRevision` from
+ * the number it was written as. One the log will take as a revision it already holds is gone
+ * here too; one that moved is sent again under its new number (`claims.ts`).
+ */
+function placeOwnAgain(
+  db: DatabaseSync,
+  issueId: string,
+  key: string,
+  placed: HeldRevision[],
+  yielders: ReadonlyArray<{ row: HeldRevision; own: OwnRevision }>,
+): void {
+  const ordered = [...yielders].sort((a, b) => a.own.seq - b.own.seq || a.own.order - b.own.order);
+  for (const { row, own } of ordered) {
+    const at = placeRevision(placed, own.claimed, row);
+    if (at.again) continue;
+    const moved = { ...row, revision: at.revision, changeSummary: summaryAt(row.changeSummary, own.claimed, at.revision) };
+    insertRevision(db, issueId, key, moved);
+    placed.push(moved);
+    if (at.revision !== row.revision) {
+      oweSettlement(db, { entity: "documentRevision", entityId: `${issueId}/${key}/${at.revision}`, field: "revision", from: String(row.revision) });
     }
   }
+}
 
-  /**
-   * The head only ever moves forward. A revision arriving out of order — which
-   * the page's `seq` ordering makes unlikely but not impossible across a
-   * bootstrap boundary — must not drag `current_revision` backwards.
-   */
+/** A snapshot's revision: at the number the log settled on (`read`, `hydrate.ts`). */
+function placeFromSnapshot(
+  db: DatabaseSync,
+  issueId: string,
+  key: string,
+  incoming: HeldRevision,
+  input: ApplyInput,
+  read: SnapshotRead,
+): void {
+  const rows = heldRevisions(db, issueId, key);
+  const own = ownRevisions(db, issueId, key);
+  const later = (row: HeldRevision): boolean => laterOwn(own, row, read.cutoff) !== null;
+  const settledHere = (revision: number): boolean => settledInRead(db, read, issueId, key, revision);
+  const atNumber = rows.find((row) => row.revision === incoming.revision);
+  if (atNumber !== undefined && isRevision(atNumber, incoming, later(atNumber))) {
+    if (!later(atNumber)) takeLogFields(db, issueId, key, incoming.revision, input);
+    return;
+  }
+  // Held under another number: the log's placement replaces this device's.
+  const held = rows
+    .filter((row) => row.revision !== incoming.revision && !settledHere(row.revision) && isRevision(row, incoming, later(row)))
+    .sort((a, b) => a.revision - b.revision)[0];
+  if (atNumber !== undefined) {
+    // In the way: aside, above everything, until its own entity places it.
+    const aside = Math.max(...rows.map((row) => row.revision)) + 1;
+    db.prepare("UPDATE document_revisions SET revision = ? WHERE issue_id = ? AND key = ? AND revision = ?").run(aside, issueId, key, atNumber.revision);
+  }
+  if (held === undefined) {
+    insertRevision(db, issueId, key, incoming);
+    return;
+  }
+  db.prepare("UPDATE document_revisions SET revision = ? WHERE issue_id = ? AND key = ? AND revision = ?").run(incoming.revision, issueId, key, held.revision);
+  if (!later(held)) takeLogFields(db, issueId, key, incoming.revision, input);
+}
+
+/**
+ * The log's time, author and summary for a revision this device holds as the log's. A build
+ * before this one dated a revision it applied by the operation, a millisecond off; a fold
+ * before this one merged two revisions' fields into one row. What the snapshot says is what
+ * every device that reads it holds. An older build's payload without a time or an author
+ * takes its genuine create's, never a restore's (`canonicalCreate`).
+ */
+function takeLogFields(db: DatabaseSync, issueId: string, key: string, revision: number, input: ApplyInput): void {
+  const where = "WHERE issue_id = ? AND key = ? AND revision = ?";
+  const { payload } = input;
+  const canonical = canonicalCreate(input);
+  const createdAt = typeof payload.createdAt === "string" ? payload.createdAt : canonical?.at;
+  const author = typeof payload.author === "string" ? payload.author : (canonical?.actor ?? undefined);
+  if (createdAt !== undefined) db.prepare(`UPDATE document_revisions SET created_at = ? ${where}`).run(createdAt, issueId, key, revision);
+  if (typeof author === "string") db.prepare(`UPDATE document_revisions SET author = ? ${where}`).run(author, issueId, key, revision);
+  if ("changeSummary" in payload) {
+    const summary = typeof payload.changeSummary === "string" ? payload.changeSummary : null;
+    db.prepare(`UPDATE document_revisions SET change_summary = ? ${where}`).run(summary, issueId, key, revision);
+  }
+}
+
+/** Whether a snapshot read has applied its revision `revision` of a document yet. */
+function settledInRead(db: DatabaseSync, read: SnapshotRead, issueId: string, key: string, revision: number): boolean {
+  return db.prepare("SELECT 1 AS hit FROM sync_applied WHERE op_id = ?").get(`${read.prefix}documentRevision ${issueId}/${key}/${revision}`) !== undefined;
+}
+
+/**
+ * The end of a snapshot read, for every document: this device's own revisions the log has not
+ * reached are placed after the log's (`placeOwnAgain`), and — when `rewind` — every other
+ * revision the snapshot did not place is dropped. That is a revision the log does not hold: a
+ * copy an older build made, or one pushed to an epoch a restore rewound (`docs/sync.md`).
+ * Without `rewind` (a join, whose rows are this workspace's own and are sent by the seed, or a
+ * snapshot from a fold before this build) they stay where they are.
+ */
+export function settleRevisionsAfterRead(db: DatabaseSync, read: SnapshotRead, rewind: boolean): void {
+  const documents = db.prepare("SELECT DISTINCT issue_id AS issueId, key FROM document_revisions").all() as Array<{ issueId: string; key: string }>;
+  for (const { issueId, key } of documents) {
+    const rows = heldRevisions(db, issueId, key);
+    const unsettled = rows.filter((row) => !settledInRead(db, read, issueId, key, row.revision));
+    if (unsettled.length === 0) continue;
+    const own = ownRevisions(db, issueId, key);
+    const yielders: Array<{ row: HeldRevision; own: OwnRevision }> = [];
+    const gone = new Set<number>();
+    for (const row of unsettled) {
+      const mine = laterOwn(own, row, read.cutoff);
+      if (mine !== null) {
+        yielders.push({ row, own: mine });
+        gone.add(row.revision);
+      } else if (rewind) {
+        gone.add(row.revision);
+      }
+    }
+    for (const revision of gone) deleteRevision(db, issueId, key, revision);
+    placeOwnAgain(db, issueId, key, rows.filter((row) => !gone.has(row.revision)), yielders);
+    writeHead(db, issueId, key, null);
+  }
+}
+
+/**
+ * The head: the highest revision, and that revision's time. The last revision applied is not
+ * the head — a revision sent again under the number it moved to arrives after the ones above
+ * it, and stamped the document with its older time on every device reading the tail.
+ */
+function writeHead(db: DatabaseSync, issueId: string, key: string, title: string | null): void {
+  const top = db
+    .prepare("SELECT revision, created_at AS createdAt FROM document_revisions WHERE issue_id = ? AND key = ? ORDER BY revision DESC LIMIT 1")
+    .get(issueId, key) as { revision: number; createdAt: string } | undefined;
+  if (top === undefined) {
+    db.prepare("DELETE FROM documents WHERE issue_id = ? AND key = ?").run(issueId, key);
+    return;
+  }
   db.prepare(
     `INSERT INTO documents (issue_id, key, current_revision, title, updated_at)
      VALUES (?, ?, ?, ?, ?)
      ON CONFLICT (issue_id, key) DO UPDATE SET
-       current_revision = MAX(current_revision, excluded.current_revision),
+       current_revision = excluded.current_revision,
        title            = COALESCE(excluded.title, title),
        updated_at       = excluded.updated_at`,
-  ).run(issueId, key, highestRevision(db, issueId, key, Math.max(revision, placed)), typeof payload.title === "string" ? payload.title : null, createdAt);
-  return true;
-}
-
-/**
- * Where this device's own claim on a revision sits in the log: the operation of its own that
- * carried that revision — its body, author and time — acknowledged, or `Infinity` unsent.
- */
-function ownRevisionClaim(db: DatabaseSync, revision: { body: string; author: string | null; createdAt: string }): number | null {
-  const rows = db
-    .prepare("SELECT payload, acknowledged_seq FROM sync_outbox WHERE entity = 'documentRevision' ORDER BY client_seq")
-    .all() as Array<{ payload: string; acknowledged_seq: number | null }>;
-  for (const row of rows) {
-    let payload: Record<string, unknown>;
-    try {
-      payload = JSON.parse(row.payload) as Record<string, unknown>;
-    } catch {
-      continue;
-    }
-    if (sameRevision(revision, payload)) return row.acknowledged_seq ?? Number.POSITIVE_INFINITY;
-  }
-  return null;
-}
-
-/** The highest revision a document holds here: its head. */
-function highestRevision(db: DatabaseSync, issueId: string, key: string, atLeast: number): number {
-  const row = db.prepare("SELECT MAX(revision) AS n FROM document_revisions WHERE issue_id = ? AND key = ?").get(issueId, key) as { n: number | null };
-  return Math.max(atLeast, row.n ?? 0);
-}
-
-/**
- * The same revision: the same body, and the same author and time where both say. The
- * service's fold decides it by the same rule (`sameRevision`, `worker/src/fold.ts`).
- */
-export function sameRevision(held: Record<string, unknown>, incoming: Record<string, unknown>): boolean {
-  if (held.body !== incoming.body) return false;
-  for (const field of ["author", "createdAt"]) {
-    if (typeof incoming[field] === "string" && typeof held[field] === "string" && incoming[field] !== held[field]) return false;
-  }
-  return true;
-}
-
-/**
- * A renumbered revision's change summary: its own, and what happened to its number — from
- * the number it was written as, whatever it was moved through on the way, so every device
- * says the same thing about it.
- */
-export function renumberedSummary(summary: unknown, from: number, to: number): string {
-  let own = typeof summary === "string" ? summary : "";
-  let written = from;
-  const moved = /^(?:([\s\S]*) — )?renumbered from r(\d+) to r\d+: written at the same time as another r\2, which the repository's log holds first$/.exec(own);
-  if (moved) {
-    own = moved[1] ?? "";
-    written = Number(moved[2]);
-  }
-  const kept = own.trim() !== "" ? `${own} — ` : "";
-  return `${kept}renumbered from r${written} to r${to}: written at the same time as another r${written}, which the repository's log holds first`;
+  ).run(issueId, key, top.revision, title, top.createdAt);
 }
 
 /** A bare `document` operation: the head pointer and its title, nothing else. */
@@ -1684,6 +1801,16 @@ function applyVocabulary(
 
   const label = input.payload.label;
   const category = input.payload.category;
+  /**
+   * Whether it is a built-in, from its create (`isBuiltin`). A device holds the built-ins
+   * from its own migrations, so one removed and added back arrived, on a device hydrating
+   * after, over the built-in it already had — and stayed a built-in there alone, while every
+   * device that read the removal in the tail held the one added back. A create from a build
+   * before this one says nothing; the service's fold says it for a create after a delete
+   * (`worker/src/fold.ts`).
+   */
+  const builtinValue = input.verb === "create" ? (input.payload.isBuiltin ?? input.payload.is_builtin) : undefined;
+  const builtin = typeof builtinValue === "boolean" ? (builtinValue ? 1 : 0) : null;
   const exists = db.prepare(`SELECT 1 AS hit FROM ${table} WHERE id = ?`).get(input.entityId) as
     | { hit: number }
     | undefined;
@@ -1703,20 +1830,23 @@ function applyVocabulary(
     };
     if (table === "workspace_statuses") {
       db.prepare(
-        `INSERT INTO workspace_statuses (id, label, category, sort_order, is_builtin) VALUES (?, ?, ?, ?, 0)`,
+        `INSERT INTO workspace_statuses (id, label, category, sort_order, is_builtin) VALUES (?, ?, ?, ?, ?)`,
       ).run(
         input.entityId,
         typeof label === "string" ? label : input.entityId,
         typeof category === "string" ? category : "open",
         next.n,
+        builtin ?? 0,
       );
     } else {
       db.prepare(
-        `INSERT INTO workspace_kinds (id, label, sort_order, is_builtin) VALUES (?, ?, ?, 0)`,
-      ).run(input.entityId, typeof label === "string" ? label : input.entityId, next.n);
+        `INSERT INTO workspace_kinds (id, label, sort_order, is_builtin) VALUES (?, ?, ?, ?)`,
+      ).run(input.entityId, typeof label === "string" ? label : input.entityId, next.n, builtin ?? 0);
     }
     return true;
   }
+
+  if (builtin !== null) db.prepare(`UPDATE ${table} SET is_builtin = ? WHERE id = ?`).run(builtin, input.entityId);
 
   if (typeof label === "string") {
     db.prepare(`UPDATE ${table} SET label = ? WHERE id = ?`).run(label, input.entityId);

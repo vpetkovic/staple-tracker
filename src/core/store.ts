@@ -1025,7 +1025,8 @@ export class WorkspaceStore {
         entity: "status",
         entityId: id,
         verb: "create",
-        payload: { id, label, category },
+        // Added here, never a built-in — even one removed and added back (`applyVocabulary`).
+        payload: { id, label, category, isBuiltin: false },
         actor: actor ?? null,
       });
       this.journalPlacement("status", input.after, actor);
@@ -1317,7 +1318,7 @@ export class WorkspaceStore {
         entity: "kind",
         entityId: id,
         verb: "create",
-        payload: { id, label },
+        payload: { id, label, isBuiltin: false },
         actor: actor ?? null,
       });
       this.journalPlacement("kind", input.after, actor);

@@ -27,9 +27,19 @@
  */
 import type { DatabaseSync } from "node:sqlite";
 import { recordInheritedFieldWrites, type Journal } from "../journal.js";
-import { ReferentMissing, applyToDatabase, localEntityVersion, noteLoggedOriginClaim, setEntityVersion, snapshotToInput } from "./apply.js";
+import {
+  ReferentMissing,
+  applyToDatabase,
+  localEntityVersion,
+  noteLoggedOriginClaim,
+  setEntityVersion,
+  settleRevisionsAfterRead,
+  snapshotToInput,
+  type SnapshotRead,
+} from "./apply.js";
 import { withoutOpenContests } from "./conflicts.js";
 import { cloudError } from "./errors.js";
+import { noteRewindVocabulary } from "./sync-state.js";
 import type { SnapshotEntity } from "./wire.js";
 
 /** The sentinel entity the vocabulary order travels on. Mirrors `store.ts` and `apply.ts`. */
@@ -142,7 +152,12 @@ export function applySnapshotEntity(
   sameTimeline = false,
   ledger = "snap",
 ): void {
-  const input = snapshotToInput(withoutStalePlaces(db, `${ledger}:${cutoffSeq}`, entity), at);
+  const placed = withoutStalePlaces(db, `${ledger}:${cutoffSeq}`, entity);
+  const input = { ...snapshotToInput(placed, at), read: snapshotRead(cutoffSeq, ledger) };
+  // What a rewinding bootstrap orders the vocabulary by (`rewind.ts`).
+  if (placed.entity === "status" || placed.entity === "kind") {
+    noteRewindVocabulary(db, placed.entity, placed.entityId, placed.createdSeq, placed.deletedAt === null ? placed.state.order : null);
+  }
   // Where its claim on an external origin sits in the log, for the settlement of a later one.
   noteLoggedOriginClaim(db, `${ledger}:${cutoffSeq}`, entity);
   /**
@@ -195,6 +210,12 @@ export function applySnapshotEntity(
       priorVersion,
     );
   });
+}
+
+/** The read a snapshot entity is applied in: its ledger ids and its cutoff (`applyDocumentRevision`). */
+function snapshotRead(cutoffSeq: number, ledger: string): SnapshotRead {
+  // `snapshotOpId` is this prefix, then `<entity> <entityId>`.
+  return { prefix: `${ledger}:${cutoffSeq}:`, cutoff: cutoffSeq };
 }
 
 /** Each status and kind's create seq, per snapshot, for the order that follows them. */
@@ -267,6 +288,14 @@ export function hydrate(
    * its own, or every entity is a ledger hit and nothing is re-applied.
    */
   ledger = "snap",
+  /**
+   * Whether the snapshot is the log's word on what this device holds of it, once the read is
+   * complete: a revision it holds that the snapshot did not place, and that is not one of its
+   * own the log has not reached, is dropped (`settleRevisionsAfterRead`). False for a join —
+   * the workspace's own rows, which the seed sends — and for a snapshot from a fold before
+   * this build, which merged two revisions into one.
+   */
+  rewind = true,
 ): HydrateOutcome {
   let applied = 0;
   let pending = orderForHydration([...entities, ...parked]);
@@ -293,6 +322,8 @@ export function hydrate(
     pending = next;
     if (!progressed || pending.length === 0) break;
   }
+
+  if (final && pending.length === 0) settleRevisionsAfterRead(db, snapshotRead(cutoffSeq, ledger), rewind);
 
   if (final && pending.length > 0) {
     const first = pending[0]!;

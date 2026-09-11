@@ -122,6 +122,58 @@ export function ownOriginClaimSeq(db: DatabaseSync, issueId: string): number | n
   return null;
 }
 
+/** A document revision this device wrote: the first operation of its own that carried it. */
+export interface OwnRevision {
+  readonly body: unknown;
+  readonly author: unknown;
+  readonly createdAt: unknown;
+  /** Where it sits in the log: its acknowledged seq, or `Infinity` unsent. */
+  readonly seq: number;
+  /** The number it was written as. */
+  readonly claimed: number;
+  /** Its place in this device's outbox. */
+  readonly order: number;
+}
+
+/**
+ * The revisions of one document this device wrote, from its outbox, each by the first
+ * operation that carried it — its write; a later one is the same revision sent again under
+ * the number it moved to (`settleOne`).
+ */
+export function ownRevisions(db: DatabaseSync, issueId: string, key: string): OwnRevision[] {
+  const prefix = `${issueId}/${key}/`;
+  const rows = db
+    .prepare(
+      `SELECT client_seq, payload, acknowledged_seq FROM sync_outbox
+        WHERE entity = 'documentRevision' AND verb = 'create' AND substr(entity_id, 1, ?) = ?
+        ORDER BY client_seq`,
+    )
+    .all(prefix.length, prefix) as Array<{ client_seq: number; payload: string; acknowledged_seq: number | null }>;
+  const out: OwnRevision[] = [];
+  for (const row of rows) {
+    let payload: Record<string, unknown>;
+    try {
+      payload = JSON.parse(row.payload) as Record<string, unknown>;
+    } catch {
+      continue;
+    }
+    if (typeof payload.revision !== "number") continue;
+    const revision = { body: payload.body, author: payload.author ?? null, createdAt: payload.createdAt };
+    if (ownRevisionOf(out, revision) !== null) continue;
+    out.push({ ...revision, seq: row.acknowledged_seq ?? Number.POSITIVE_INFINITY, claimed: payload.revision, order: row.client_seq });
+  }
+  return out;
+}
+
+/**
+ * The revision of this device's own that `row` is, or null: the same body, author and time.
+ * Its time too, unlike `sameRevision` — this device wrote both, so they are identical, and a
+ * revision another device wrote with the same text is not this device's.
+ */
+export function ownRevisionOf(own: readonly OwnRevision[], row: { body: unknown; author: unknown; createdAt: unknown }): OwnRevision | null {
+  return own.find((mine) => mine.body === row.body && mine.author === (row.author ?? null) && mine.createdAt === row.createdAt) ?? null;
+}
+
 /**
  * True when the local holder of a value made the LATER claim and so must yield it.
  *
@@ -232,7 +284,8 @@ function settleOne(db: DatabaseSync, journal: Journal, item: OwedSettlement): bo
    * A revision of this device's that yielded its number to an earlier one (`apply.ts`): sent
    * again under the number it holds now, so a device on an older build — which keeps the
    * first revision to arrive under a number — receives its text too. Every device of this
-   * build already holds it there, and takes this as the same revision.
+   * build already holds it there, and takes this as the same revision. Only while the number
+   * holds this device's own: a later yield may have moved it on, and that sent it again there.
    */
   if (item.entity === "documentRevision" && item.field === "revision") {
     const slash = item.entityId.lastIndexOf("/");
@@ -244,7 +297,7 @@ function settleOne(db: DatabaseSync, journal: Journal, item: OwedSettlement): bo
     const row = db
       .prepare("SELECT body, author, change_summary, created_at FROM document_revisions WHERE issue_id = ? AND key = ? AND revision = ?")
       .get(issueId, key, revision) as { body: string; author: string | null; change_summary: string | null; created_at: string } | undefined;
-    if (!row) return false;
+    if (!row || ownRevisionOf(ownRevisions(db, issueId, key), { body: row.body, author: row.author, createdAt: row.created_at }) === null) return false;
     journal.record({
       entity: "documentRevision",
       entityId: item.entityId,

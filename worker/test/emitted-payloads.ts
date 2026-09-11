@@ -133,7 +133,8 @@ export const EMITTED_PAYLOADS: ReadonlyArray<{
     "verb": "create",
     "payload": {
       "id": "research",
-      "label": "Research"
+      "label": "Research",
+      "isBuiltin": false
     }
   },
   {
@@ -333,7 +334,8 @@ export const EMITTED_PAYLOADS: ReadonlyArray<{
     "payload": {
       "id": "parked",
       "label": "Parked",
-      "category": "blocked"
+      "category": "blocked",
+      "isBuiltin": false
     }
   },
   {

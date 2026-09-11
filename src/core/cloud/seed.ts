@@ -375,7 +375,7 @@ class SurveyIndex {
 
 // ----------------------------------------------------------------- inventory
 
-interface LocalEntity {
+export interface LocalEntity {
   readonly entity: SyncEntity;
   readonly entityId: string;
   readonly label: string;
@@ -446,6 +446,11 @@ function issuesInOrder(db: DatabaseSync): Row[] {
   return ordered;
 }
 
+/** Every entity this database holds, as the operation that would recreate it ({@link inventory}). */
+export function localInventory(db: DatabaseSync, now: string): LocalEntity[] {
+  return inventory(db, now, []);
+}
+
 /**
  * Every entity this database holds, as the operation that would recreate it, in an
  * order a receiver can apply: definitions, then issues (parents first), then what
@@ -487,33 +492,39 @@ function inventory(db: DatabaseSync, now: string, skipped: SeedSkipped[]): Local
     });
   }
 
+  /**
+   * A status or kind carries whether it is a built-in: one removed and added back is not, and
+   * a device that holds the built-in from its own migrations learns that from the create
+   * (`applyVocabulary`). Implied — not sent — only while it is the built-in as every device
+   * has it.
+   */
   for (const row of db
-    .prepare("SELECT id, label, category FROM workspace_statuses ORDER BY sort_order, id")
-    .all() as Array<{ id: string; label: string; category: string }>) {
+    .prepare("SELECT id, label, category, is_builtin FROM workspace_statuses ORDER BY sort_order, id")
+    .all() as Array<{ id: string; label: string; category: string; is_builtin: number }>) {
     const builtin = BUILTIN_STATUS.get(row.id);
     out.push({
       entity: "status",
       entityId: row.id,
       label: row.id,
-      payload: { id: row.id, label: row.label, category: row.category },
+      payload: { id: row.id, label: row.label, category: row.category, isBuiltin: row.is_builtin === 1 },
       actor: null,
       at: now,
-      implied: builtin !== undefined && builtin.label === row.label && builtin.category === row.category,
+      implied: builtin !== undefined && row.is_builtin === 1 && builtin.label === row.label && builtin.category === row.category,
     });
   }
 
   for (const row of db
-    .prepare("SELECT id, label FROM workspace_kinds ORDER BY sort_order, id")
-    .all() as Array<{ id: string; label: string }>) {
+    .prepare("SELECT id, label, is_builtin FROM workspace_kinds ORDER BY sort_order, id")
+    .all() as Array<{ id: string; label: string; is_builtin: number }>) {
     const builtin = BUILTIN_KIND.get(row.id);
     out.push({
       entity: "kind",
       entityId: row.id,
       label: row.id,
-      payload: { id: row.id, label: row.label },
+      payload: { id: row.id, label: row.label, isBuiltin: row.is_builtin === 1 },
       actor: null,
       at: now,
-      implied: builtin !== undefined && builtin.label === row.label,
+      implied: builtin !== undefined && row.is_builtin === 1 && builtin.label === row.label,
     });
   }
 
@@ -1272,7 +1283,8 @@ export function seedRepository(db: DatabaseSync, journal: Journal, args: SeedArg
        * rows under the same synthetic ids a paged bootstrap would use, and the tail
        * cursor this snapshot pinned becomes the ordinary pull cursor.
        */
-      hydrate(db, journal, survey.entities, [], survey.cutoffSeq, now, true);
+      // Rewinding nothing: what this workspace holds and the repository does not is its own, and is sent below.
+      hydrate(db, journal, survey.entities, [], survey.cutoffSeq, now, true, false, "snap", false);
       completeSnapshot(db, survey.tailCursor, survey.epoch);
       replayOutboxFieldWrites(db);
     }
