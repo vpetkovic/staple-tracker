@@ -927,14 +927,40 @@ export class Hub {
    * refuses exactly what the apply would refuse.
    */
   checkCrossLink(blockerIdentifier: string, blockedIdentifier: string): void {
-    this.validateCrossLink(blockerIdentifier, blockedIdentifier);
+    this.validateCrossLink(blockerIdentifier, blockedIdentifier, false);
+  }
+
+  /**
+   * One end of a link as a caller names it: an identifier (`GAR-42`), whose prefix names the
+   * workspace, or `<slug>:<issue id>` — the form the UI sends, which names the issue by the
+   * id its pane is pinned to and so never goes through a number at all.
+   */
+  private resolveLinkEnd(ref: string): { entry: WorkspaceEntry; identifier: string } {
+    const byId = /^([^:\s]+):([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.exec(ref.trim());
+    if (byId) {
+      const entry = this.list().find((w) => w.slug === byId[1]);
+      if (!entry) throw new StapleError("not_found", `No workspace "${byId[1]}" in the hub`);
+      if (!entry.available) {
+        throw new StapleError("validation", `Workspace "${entry.slug}" is not on this machine, so issue ${byId[2]} cannot be looked up; name it by identifier`);
+      }
+      return { entry, identifier: byId[2]!.toLowerCase() };
+    }
+    return this.resolveIdentifier(ref);
   }
 
   private validateCrossLink(
     blockerIdentifier: string,
     blockedIdentifier: string,
+    /**
+     * True for a link a person makes (`link`, MCP `cross_link`, the UI): each end is
+     * resolved as a write is (`WorkspaceStore.writeTarget`), so a number an issue has left
+     * on that workspace's device, while that issue may be the one meant, is refused rather
+     * than linked to whatever holds it now. False for a link adopted from the service's
+     * registry, which is a record, not a write through a number.
+     */
+    asWrite = true,
   ): { blocker: { entry: WorkspaceEntry; identifier: string }; blocked: { entry: WorkspaceEntry; identifier: string } } {
-    const typed = [this.resolveIdentifier(blockerIdentifier), this.resolveIdentifier(blockedIdentifier)];
+    const typed = [this.resolveLinkEnd(blockerIdentifier), this.resolveLinkEnd(blockedIdentifier)];
     if (typed[0]!.entry.slug === typed[1]!.entry.slug) {
       throw new StapleError(
         "validation",
@@ -951,7 +977,8 @@ export class Hub {
       if (!side.entry.available) return side;
       const ws = openWorkspace(side.entry.path);
       try {
-        return { entry: side.entry, identifier: ws.store.getIssue(side.identifier).identifier };
+        const issue = asWrite ? ws.store.writeTarget(side.identifier) : ws.store.getIssue(side.identifier);
+        return { entry: side.entry, identifier: issue.identifier };
       } finally {
         ws.store.db.close();
       }
@@ -1059,7 +1086,8 @@ export class Hub {
     blockedIdentifier: string,
     record: boolean,
   ): CrossLink {
-    const { blocker, blocked } = this.validateCrossLink(blockerIdentifier, blockedIdentifier);
+    // A person's link is a write through each end; an adopted one is the service's record.
+    const { blocker, blocked } = this.validateCrossLink(blockerIdentifier, blockedIdentifier, record);
     const link: CrossLink = {
       blockerWs: blocker.entry.slug,
       blockerIdentifier: blocker.identifier,

@@ -22,7 +22,7 @@
  * unchanged. The cutoff is the last operation read; the tail resumes after it.
  */
 import { holdsLiveOrigin } from "../types.js";
-import { columnSpellingWins } from "./apply.js";
+import { columnSpellingWins, renumberedSummary, sameRevision } from "./apply.js";
 import type { RemoteOperation, SnapshotEntity, SnapshotFieldWrite } from "./wire.js";
 
 export interface Entry {
@@ -63,7 +63,11 @@ export class TailFold {
 
   /** Fold operations that come after everything folded so far. */
   add(ops: readonly RemoteOperation[]): void {
-    for (const op of [...ops].sort((a, b) => a.seq - b.seq)) {
+    for (const sent of [...ops].sort((a, b) => a.seq - b.seq)) {
+      // Two revisions written as one number: the later in the log takes the next (`settleRevision`, `apply.ts`).
+      const op = sent.entity === "documentRevision" && sent.verb === "create" ? this.settleRevision(sent) : sent;
+      // The same revision, held under the number it was moved to: nothing new.
+      if (op === null) continue;
       const key = `${op.entity} ${op.entityId}`;
       let entry = this.entries.get(key);
       if (!entry) {
@@ -94,6 +98,11 @@ export class TailFold {
           entry.state = {};
           entry.fieldWrites = {};
           entry.superseded = false;
+          // Created again: no place in an order written before (`forgetPlace`, `worker/src/fold.ts`).
+          const order = this.entries.get(`${op.entity} @order`);
+          if ((op.entity === "status" || op.entity === "kind") && Array.isArray(order?.state.order)) {
+            order.state.order = (order.state.order as unknown[]).filter((listed) => listed !== op.entityId);
+          }
         }
         entry.createdSeq = op.seq;
         const restored = typeof op.actor === "string" && op.actor.startsWith("restore:");
@@ -124,6 +133,24 @@ export class TailFold {
         }
       }
     }
+  }
+
+  private settleRevision(op: RemoteOperation): RemoteOperation | null {
+    const held = this.entries.get(`documentRevision ${op.entityId}`);
+    const payload = op.payload as Record<string, unknown>;
+    if (held === undefined || held.deletedAt !== null || sameRevision(held.state, payload)) return op;
+    const slash = op.entityId.lastIndexOf("/");
+    const document = op.entityId.slice(0, slash + 1);
+    const from = Number(op.entityId.slice(slash + 1));
+    let highest = from;
+    for (const entry of this.entries.values()) {
+      if (entry.entity !== "documentRevision" || entry.deletedAt !== null || !entry.entityId.startsWith(document)) continue;
+      if (sameRevision(entry.state, payload)) return null;
+      const revision = Number(entry.entityId.slice(document.length));
+      if (Number.isInteger(revision) && revision > highest) highest = revision;
+    }
+    const to = highest + 1;
+    return { ...op, entityId: `${document}${to}`, payload: { ...payload, revision: to, changeSummary: renumberedSummary(payload.changeSummary, from, to) } };
   }
 
   /** What has been folded so far, as plain data. */

@@ -1138,6 +1138,8 @@ export const MILESTONE_STATES = ["planned", "active", "overdue", "done", "cancel
 export type MilestoneState = (typeof MILESTONE_STATES)[number];
 
 export interface MilestoneSummary {
+  /** The milestone's issue id: what a write names it by (`lib/write-ref.ts`). */
+  id: string;
   identifier: string;
   title: string;
   status: StatusId;
@@ -1161,6 +1163,8 @@ export interface MilestoneProgress {
 }
 
 export interface MilestoneMemberRow {
+  /** The member's issue id: what a write names it by (`lib/write-ref.ts`). */
+  issueId: string;
   identifier: string;
   title: string;
   kind: KindId;

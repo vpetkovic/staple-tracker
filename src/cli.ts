@@ -1687,6 +1687,8 @@ function main() {
 
     case "link": {
       const { values, positionals } = parseArgs({ args: rest, allowPositionals: true, options: common });
+      // Each end is a write through a number (`Hub.validateCrossLink`), acknowledged like any other.
+      if (values["ack-renumber"] === true) acknowledgeRenumbers();
       const hub = Hub.open();
       try {
         const link = hub.addCrossLink(positionals[0]!, positionals[1]!);

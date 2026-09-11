@@ -31,8 +31,30 @@
  */
 import { randomUUID } from "node:crypto";
 import { isRetryable, type ErrorCode } from "../../worker/src/errors.js";
-import { columnSpellingWins } from "../../src/core/cloud/apply.js";
+import { columnSpellingWins, renumberedSummary, sameRevision } from "../../src/core/cloud/apply.js";
 import { ORIGIN_RELEASING_STATUSES } from "../../src/core/types.js";
+
+/** `settleRevision` in `worker/src/fold.ts`, on this fixture's operation shape. */
+function settleRevisionOp<T extends { entityId: string; payload: unknown }>(
+  folded: Map<string, { entity: string; entityId: string; deletedAt: number | null; state: Record<string, unknown> }>,
+  op: T,
+): T | null {
+  const payload = op.payload as Record<string, unknown>;
+  const held = folded.get(`documentRevision ${op.entityId}`);
+  if (held === undefined || held.deletedAt !== null || sameRevision(held.state, payload)) return op;
+  const slash = op.entityId.lastIndexOf("/");
+  const document = op.entityId.slice(0, slash + 1);
+  const from = Number(op.entityId.slice(slash + 1));
+  let highest = from;
+  for (const entry of folded.values()) {
+    if (entry.entity !== "documentRevision" || entry.deletedAt !== null || !entry.entityId.startsWith(document)) continue;
+    if (sameRevision(entry.state, payload)) return null;
+    const revision = Number(entry.entityId.slice(document.length));
+    if (Number.isInteger(revision) && revision > highest) highest = revision;
+  }
+  const to = highest + 1;
+  return { ...op, entityId: `${document}${to}`, payload: { ...payload, revision: to, changeSummary: renumberedSummary(payload.changeSummary, from, to) } };
+}
 
 /** `reopensOrigin` in `worker/src/fold.ts`, which this fixture cannot import without the Worker's types. */
 function reopensOrigin(before: unknown, after: unknown): boolean {
@@ -1299,10 +1321,15 @@ export class FakeSyncServer {
     let opCount = 0;
     let schemaVersion = 0;
 
-    for (const op of this.ops
+    for (const logged of this.ops
       .filter((candidate) => candidate.epoch === this.epoch && candidate.seq <= cutoff)
       .sort((a, b) => a.seq - b.seq)) {
+      // Two revisions written as one number: the later in the log takes the next —
+      // `settleRevision`, `worker/src/fold.ts`. Not on the Worker from before this build.
+      const op = !this.legacyFold && logged.entity === "documentRevision" && logged.verb === "create" ? settleRevisionOp(folded, logged) : logged;
       opCount += 1;
+      // The same revision, held under the number it was moved to: nothing new.
+      if (op === null) continue;
       if (opCount > this.options.maxSnapshotFoldOps) {
         throw new ServerError(503, "unavailable", "operation log is too large to fold in one pass", {
           maxSnapshotFoldOps: this.options.maxSnapshotFoldOps,
@@ -1343,6 +1370,11 @@ export class FakeSyncServer {
           entry.state = {};
           entry.fieldWrites = {};
           entry.superseded = false;
+          // Created again: no place in an order written before — `forgetPlace`, `worker/src/fold.ts`.
+          const order = folded.get(`${op.entity} @order`);
+          if ((op.entity === "status" || op.entity === "kind") && Array.isArray(order?.state.order)) {
+            order.state.order = (order.state.order as unknown[]).filter((listed) => listed !== op.entityId);
+          }
         }
         entry.createdSeq = op.seq;
         // Not a restore's own actor and instant — `worker/src/fold.ts`.

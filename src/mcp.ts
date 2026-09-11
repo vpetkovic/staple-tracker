@@ -1895,6 +1895,7 @@ server.registerTool(
  * that reports the milestone in its `milestonePath`.
  */
 const milestoneSummaryShape = {
+  id: z.string().describe("The milestone's issue id — name it by this in a write"),
   identifier: z.string(),
   title: z.string(),
   status: statusEnum,
@@ -1906,6 +1907,7 @@ const milestoneSummaryShape = {
   planPosition: z.number().nullable().describe("The milestone's own row in the pickup plan; null when it is not queued"),
 };
 const milestoneMemberShape = {
+  issueId: z.string().describe("The member's issue id — name it by this in a write"),
   identifier: z.string(),
   title: z.string(),
   kind: kindSchema,

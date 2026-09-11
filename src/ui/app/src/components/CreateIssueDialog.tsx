@@ -51,6 +51,7 @@ import { describeRefusal, type Refusal } from "@/lib/refusal";
 import { useSession } from "@/lib/session";
 import { configuredKindOrder, kindLabel } from "@/lib/settings";
 import { ISSUE_PRIORITIES, type Issue, type IssueKind, type IssuePriority, type IssueRow } from "@/lib/types";
+import { pinnedRef } from "@/lib/write-ref";
 import {
   EMPTY_CREATE_FORM,
   buildCreatePayload,
@@ -162,7 +163,11 @@ export function CreateIssueDialog({ open, onOpenChange }: { open: boolean; onOpe
     setBusy(true);
     setRefusal(null);
     try {
-      const created = await action<Issue>({ ws: ws || undefined }, buildCreatePayload(form));
+      // Every pick by id (`lib/write-ref.ts`); another workspace's as `<slug>:<id>`.
+      const created = await action<Issue>(
+        { ws: ws || undefined },
+        buildCreatePayload(form, (ref) => pinnedRef(rows, ws || session.workspaces[0]?.slug || "", ref)),
+      );
       // Refetch, then select what was just made: creating a task and then having to
       // find it is the thing that makes a create dialog feel like a form rather than
       // part of the tool.

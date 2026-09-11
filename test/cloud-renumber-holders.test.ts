@@ -22,12 +22,15 @@
  * Every refusal here leaves both issues as they were, on both devices, after both sync.
  */
 import { spawn } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { acquireClaim, releaseClaim, renewClaim } from "../src/core/cloud/lease.js";
+import { renumbersAcknowledged, withRenumberAcknowledged } from "../src/core/identifier-moves.js";
+import { Hub } from "../src/core/hub.js";
 import { StapleError } from "../src/core/types.js";
+import { initWorkspace } from "../src/core/workspace.js";
 import { CLI_ENTRY, REPO_ROOT, TSX_CLI, runCli, startMcpClient } from "./fixtures/contract-support.js";
 import { FakeSyncServer } from "./fixtures/fake-sync-server.js";
 import { Fleet, type Machine } from "./fixtures/sync-machines.js";
@@ -109,8 +112,12 @@ function both(c: Collision): unknown {
 function ageTheMove(machine: Machine): void {
   const row = machine.db.prepare("SELECT value FROM meta WHERE key = 'identifier_alias:TRA-2'").get() as { value: string };
   const alias = JSON.parse(row.value) as Record<string, unknown>;
-  alias.at = new Date(Date.now() - 2 * DAY).toISOString();
+  const then = new Date(Date.now() - 2 * DAY).toISOString();
+  alias.at = then;
   machine.db.prepare("UPDATE meta SET value = ? WHERE key = 'identifier_alias:TRA-2'").run(JSON.stringify(alias));
+  const holders = machine.db.prepare("SELECT value FROM meta WHERE key = 'identifier_holders:TRA-2'").get() as { value: string };
+  const aged = (JSON.parse(holders.value) as Array<Record<string, unknown>>).map((holder) => ({ ...holder, at: then }));
+  machine.db.prepare("UPDATE meta SET value = ? WHERE key = 'identifier_holders:TRA-2'").run(JSON.stringify(aged));
 }
 
 function refusedNamingBoth(result: { status: number; stderr: string }, c: Collision, moved: string, reason: RegExp): void {
@@ -306,6 +313,69 @@ describe("a number that moved under the process holding it", () => {
     c.b.store.queue().enqueue(c.mine.id, {}, "vp");
     expect(c.b.store.blockersOf(other).map((row) => row.id)).toEqual([c.mine.id]);
   }, 120_000);
+
+  it("`link` by the old number is refused like any other write, on the CLI and on MCP; by id or acknowledged it links", async () => {
+    const c = await collision();
+    const moved = await c.settle();
+    // Another workspace on B's machine, registered in B's hub.
+    c.b.use();
+    const root = mkdtempSync(join(tmpdir(), "staple-renumber-other-"));
+    scratch.push(root);
+    const otherDir = join(root, "other");
+    mkdirSync(otherDir);
+    const other = initWorkspace({ dir: otherDir, slug: "other" });
+    const foreign = other.store.createIssue({ title: "Elsewhere" }).identifier;
+    const foreign2 = other.store.createIssue({ title: "Elsewhere too" }).identifier;
+    other.store.db.close();
+    const links = (): unknown[] => {
+      const hub = Hub.open();
+      try {
+        return hub.listCrossLinks().map((link) => [link.blockerIdentifier, link.blockedIdentifier]);
+      } finally {
+        hub.close();
+      }
+    };
+
+    refusedNamingBoth(runCli(["link", "TRA-2", foreign], env(c.b, "vp")), c, moved, /moved less than a day ago/);
+    expect(links()).toEqual([]);
+    const mcp = await startMcpClient({ home: c.b.home, cwd: c.b.dir, env: { USER: "mcp-user", STAPLE_DEVICE_ID: c.b.deviceId } });
+    try {
+      const refused = await mcp.call("cross_link", { blocker_identifier: "TRA-2", blocked_identifier: foreign });
+      expect(refused.isError).toBe(true);
+      expect(JSON.stringify(refused.content)).toContain(`is now ${moved} (${c.mine.id})`);
+      expect(links()).toEqual([]);
+      // Acknowledged, TRA-2 is what it names now.
+      const acknowledged = await mcp.call("cross_link", { blocker_identifier: "TRA-2", blocked_identifier: foreign, acknowledgeRenumber: true });
+      expect(acknowledged.isError, JSON.stringify(acknowledged.content)).not.toBe(true);
+    } finally {
+      await mcp.close();
+    }
+    expect(links()).toEqual([["TRA-2", foreign]]);
+    // And on the CLI, acknowledged.
+    expect(runCli(["link", "TRA-2", foreign2, "--ack-renumber"], env(c.b, "vp")).status).toBe(0);
+    // By the issue's id — the form the UI sends — it links the issue meant, by the number it holds now.
+    expect(runCli(["link", `tracker:${c.mine.id}`, foreign], env(c.b, "vp")).status).toBe(0);
+    expect(links()).toEqual(expect.arrayContaining([["TRA-2", foreign], ["TRA-2", foreign2], [moved, foreign]]));
+  }, 120_000);
+
+  it("an acknowledged call keeps its acknowledgement across an await, and a call beside it does not get it", async () => {
+    const c = await collision();
+    await c.settle();
+    c.b.use();
+    const later = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 5));
+    const acknowledged = withRenumberAcknowledged(true, async () => {
+      await later();
+      return c.b.store.addComment("TRA-2", "after an await", "agent-b");
+    });
+    // Meanwhile, a call that did not acknowledge.
+    const beside = (async () => {
+      await later();
+      return c.b.store.addComment("TRA-2", "beside it", "agent-c");
+    })();
+    expect((await acknowledged).issueId).toBe(c.theirs.id);
+    await expect(beside).rejects.toThrowError(/is now TRA-\d+ \(/);
+    expect(renumbersAcknowledged()).toBe(false);
+  });
 
   it("`done`, `status` and `release` take `--agent` as `checkout` does", async () => {
     const c = await collision();

@@ -77,6 +77,8 @@ const READS: Record<StoreName, readonly string[]> = {
 
 interface World {
   readonly a: Machine;
+  /** The tail device, which can write too — before it has heard of what A just wrote. */
+  readonly b: Machine;
   readonly fleet: Fleet;
   /** Named rows the scenarios share, by id. */
   readonly ids: Record<string, string>;
@@ -255,6 +257,16 @@ const SCENARIOS: readonly Scenario[] = [
   },
   { method: "WorkspaceStore.putDocument", name: "write a document", run: (w) => void w.a.store.putDocument(w.ids["Everything"]!, "spec", "v1", { author: "alice", title: "Spec" }) },
   { method: "WorkspaceStore.putDocument", name: "revise a document", run: (w) => void w.a.store.putDocument(w.ids["Everything"]!, "spec", "v2", { author: "bob", changeSummary: "second" }) },
+  {
+    method: "WorkspaceStore.putDocument",
+    name: "write the same revision on two devices at once",
+    run: (w) => {
+      w.b.use();
+      w.b.store.putDocument(w.ids["Everything"]!, "concurrent", "B's text", { author: "bob" });
+      w.a.use();
+      w.a.store.putDocument(w.ids["Everything"]!, "concurrent", "A's text", { author: "alice" });
+    },
+  },
   { method: "WorkspaceStore.restoreDocumentRevision", name: "restore a revision", run: (w) => void w.a.store.restoreDocumentRevision(w.ids["Everything"]!, "spec", 1, "carol") },
 
   // ---- milestones
@@ -455,7 +467,7 @@ describe("every public mutation", () => {
     await a.sync();
     const b = fleet.machine("b");
     await b.sync();
-    const world: World = { a, fleet, ids: {} };
+    const world: World = { a, b, fleet, ids: {} };
     const failures: string[] = [];
     // A difference is reported against the scenario that made it, once.
     const seen = new Set<string>();

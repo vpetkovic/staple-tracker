@@ -13,6 +13,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
 import { Hub } from "../src/core/hub.js";
+import { withRenumberAcknowledged } from "../src/core/identifier-moves.js";
 import { REGISTRY_PAYLOAD_FORMAT, adoptRegistry } from "../src/core/cloud/hub-registry.js";
 import { initWorkspace } from "../src/core/workspace.js";
 import { listConflicts, resolveConflict } from "../src/core/cloud/conflicts.js";
@@ -62,10 +63,12 @@ function changes(machine: Machine): Array<{ blocker: string; present: boolean }>
   }
 }
 
-function link(machine: Machine, blocker: string, blocked: string): void {
+function link(machine: Machine, blocker: string, blocked: string, acknowledged = false): void {
   const hub = Hub.openAt(machine.home);
   try {
-    hub.addCrossLink(blocker, blocked);
+    // A link made through a number that moved within the day is refused unless the caller
+    // acknowledges it means what holds the number now (`WorkspaceStore.requireTarget`).
+    withRenumberAcknowledged(acknowledged, () => hub.addCrossLink(blocker, blocked));
   } finally {
     hub.close();
   }
@@ -105,7 +108,7 @@ describe("hub cross-links follow a renumbered issue", () => {
 
     // A link made AFTER the move that names TRA-2 means the issue that holds TRA-2 now,
     // and a later move of a different issue does not touch it.
-    link(b, "TRA-2", other);
+    link(b, "TRA-2", other, true);
     await b.sync();
     expect(links(b)).toEqual(expect.arrayContaining([{ blocker: "TRA-2", blocked: other }, { blocker: settled, blocked: other }]));
   });
@@ -135,7 +138,7 @@ describe("hub cross-links follow a renumbered issue", () => {
     const fresh = a.store.createIssue({ title: "Someone else's, made later" });
     a.db.prepare("UPDATE issues SET identifier = 'TRA-7' WHERE id = ?").run(fresh.id);
     const second = other.replace(/-(\d+)$/, (_, n: string) => `-${Number(n) + 1}`);
-    link(a, "TRA-7", second);
+    link(a, "TRA-7", second, true);
     carryIdentifierMovesToHub(a.db, a.home);
     // The link made before the second move followed it; the one made after it stayed.
     expect(links(a)).toEqual(

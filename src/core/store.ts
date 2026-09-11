@@ -1,6 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { insertEvent } from "./event-log.js";
-import { RENUMBER_GUARD_MS, aliasedIssueId, formerHolderOf, formerMove, noteRenumber, renumbersAcknowledged } from "./identifier-moves.js";
+import { RENUMBER_GUARD_MS, aliasedIssueId, formerHolderOf, formerHolders, formerMove, noteRenumber, renumbersAcknowledged } from "./identifier-moves.js";
 import { readLocalLease } from "./cloud/lease-store.js";
 import { REPOSITORY_PREFIX_SETTING } from "./cloud/repository-prefix.js";
 import { type Journal, journalFor, resolveDeviceId } from "./journal.js";
@@ -1698,56 +1698,83 @@ export class WorkspaceStore {
   }
 
   /**
-   * A write's target — refused when the number it was named by is one this device's own issue
-   * moved off, and the caller may well have meant that issue.
+   * A write's target — refused when the number it was named by is one an issue on this
+   * device has left, and the caller may well mean that issue rather than what the number
+   * names now.
    *
-   * Sync renumbers an issue two devices numbered alike (`cloud/claims.ts`), and the number
-   * then names the other one. Whoever learned the number before the move — an agent between
-   * `checkout` and `done`, a handoff, a script — and writes through it after would write to
-   * the wrong issue. Who is writing proves nothing: the actor is `$STAPLE_AGENT`, or `$USER`,
-   * or whatever `--agent` said, and the step that learned the number and the step that
-   * writes need not agree. What the issue that moved says about itself does:
+   * Sync renumbers an issue two devices numbered alike (`cloud/claims.ts`), a decision
+   * elsewhere moves one, a resolution swaps two; the number then names another issue, or
+   * nothing. Whoever learned the number before — an agent between `checkout` and `done`, a
+   * handoff, a script — and writes through it after would write to the wrong issue. Who is
+   * writing proves nothing: the actor is `--agent`, `$STAPLE_AGENT` or `$USER`, and the
+   * step that learned the number and the step that writes need not agree. What the issues
+   * that left it say about themselves does. EVERY issue that has left the number on this
+   * device counts (`formerHolders`) — this device's own, and any other that passed through
+   * and moved on; remembering only the last let a write by a number this device's issue left
+   * land on one that held it after — and the write is refused when any of them other than the
+   * issue it resolves to:
    *
-   *   - it is checked out, by any agent, or leased by this device — somebody is working on
-   *     it by some name, and that name may be this one; or
-   *   - it moved within {@link RENUMBER_GUARD_MS} — anything that learned the number
+   *   - is checked out, by any agent, or leased by this device — somebody is working on it by
+   *     some name, and that name may be this one; or
+   *   - left the number within {@link RENUMBER_GUARD_MS} — anything that learned the number
    *     yesterday may still be using it.
    *
-   * Either way the write is refused, naming both issues, and nothing is written. It goes
-   * through when the caller names the issue by id — which no renumber changes — or
-   * acknowledges the move (`--ack-renumber`, `acknowledgeRenumber`); then the number means
-   * the issue that holds it now, with the notice every read of it leaves
-   * (`noteIfRenumbered`). Outside the window, with no checkout or lease, that is also what
-   * happens without asking.
+   * Refused, it names every such issue and the one the number resolves to, and nothing is
+   * written. It goes through when the caller names the issue by id — which no renumber
+   * changes — or acknowledges the move (`--ack-renumber`, `acknowledgeRenumber`); then the
+   * number means what it resolves to now, with the notice every read of it leaves
+   * (`noteIfRenumbered`). Outside the window, with nothing held, that is also what happens
+   * without asking.
    */
   private requireTarget(ref: string): IssueRow {
     const row = this.requireRow(ref);
     if (renumbersAcknowledged()) return row;
-    const moved = this.renumberedFrom(ref, row);
-    if (moved === null || moved.issueId === row.id) return row;
-    const meant = this.db.prepare("SELECT * FROM issues WHERE id = ?").get(moved.issueId) as unknown as IssueRow | undefined;
-    if (!meant) return row;
-    const reasons: string[] = [];
-    if (meant.checkout_agent !== null) reasons.push(`it is checked out by ${meant.checkout_agent}`);
-    const lease = readLocalLease(this.db, meant.id);
+    const trimmed = ref.trim();
+    if (trimmed === row.id) return row;
+    const parsed = parseIdentifier(trimmed) ?? parseIdentifier(`${this.prefix}-${trimmed}`);
+    const spellings = [...new Set([trimmed.toUpperCase(), ...(parsed ? [`${parsed.prefix}-${parsed.number}`] : [])])];
     const device = resolveDeviceId();
-    if (lease !== null && (device === null || lease.deviceId === device)) reasons.push("this device holds its lease");
-    const at = Date.parse(moved.at);
-    if (!Number.isNaN(at) && Date.now() - at < RENUMBER_GUARD_MS) reasons.push("it moved less than a day ago");
-    if (reasons.length === 0) return row;
+    const hot: Array<{ issue: IssueRow; number: string; at: string; reasons: string[] }> = [];
+    for (const number of spellings) {
+      for (const holder of formerHolders(this.db, number)) {
+        if (holder.issueId === row.id || hot.some((entry) => entry.issue.id === holder.issueId)) continue;
+        const issue = this.db.prepare("SELECT * FROM issues WHERE id = ?").get(holder.issueId) as unknown as IssueRow | undefined;
+        if (!issue) continue;
+        const reasons: string[] = [];
+        if (issue.checkout_agent !== null) reasons.push(`it is checked out by ${issue.checkout_agent}`);
+        const lease = readLocalLease(this.db, issue.id);
+        if (lease !== null && (device === null || lease.deviceId === device)) reasons.push("this device holds its lease");
+        const at = Date.parse(holder.at);
+        if (!Number.isNaN(at) && Date.now() - at < RENUMBER_GUARD_MS) reasons.push("it moved less than a day ago");
+        if (reasons.length > 0) hot.push({ issue, number, at: holder.at, reasons });
+      }
+    }
+    if (hot.length === 0) return row;
+    const number = hot[0]!.number;
+    const held = row.identifier === number;
+    const others = hot.map(
+      (entry) => `"${entry.issue.title}", is now ${entry.issue.identifier} (${entry.issue.id}) — ${entry.reasons.join(", and ")}`,
+    );
     throw new StapleError(
       "conflict",
-      `${moved.identifier} was renumbered here at ${moved.at}. The issue that held it, "${meant.title}", is now ` +
-        `${meant.identifier} (${meant.id}); ${moved.identifier} now names "${row.title}" (${row.id}). ` +
-        `Nothing was written, because you may mean the first: ${reasons.join(", and ")}. ` +
-        `Name the issue by its id, or pass --ack-renumber (MCP: acknowledgeRenumber) to write to ${moved.identifier} as it is now.`,
+      `${number} was renumbered here at ${hot[0]!.at}. The issue that held it, ${others.join("; and another that held it, ")}. ` +
+        `${number} now ${held ? "names" : "names nothing, and its last move leads to"} "${row.title}" (${row.id}). ` +
+        `Nothing was written, because you may mean ${hot.length === 1 ? "the first" : "one of the others"}. ` +
+        `Name the issue by its id, or pass --ack-renumber (MCP: acknowledgeRenumber) to write to ${number} as it is now.`,
       {
         renumbered: {
-          from: moved.identifier,
-          at: moved.at,
-          movedIssue: { id: meant.id, identifier: meant.identifier, title: meant.title },
+          from: number,
+          at: hot[0]!.at,
+          movedIssue: { id: hot[0]!.issue.id, identifier: hot[0]!.issue.identifier, title: hot[0]!.issue.title },
+          formerHolders: hot.map((entry) => ({
+            id: entry.issue.id,
+            identifier: entry.issue.identifier,
+            title: entry.issue.title,
+            leftAt: entry.at,
+            reasons: entry.reasons,
+          })),
           nowNames: { id: row.id, identifier: row.identifier, title: row.title },
-          reasons,
+          reasons: hot[0]!.reasons,
         },
       },
     );

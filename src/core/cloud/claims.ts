@@ -43,10 +43,10 @@ import { nowIso } from "../types.js";
 
 /** A later claim of this device's that it yielded, and now settles. */
 export interface OwedSettlement {
-  readonly entity: "issue" | "project" | "comment" | "relation";
+  readonly entity: "issue" | "project" | "comment" | "relation" | "documentRevision";
   readonly entityId: string;
   /** `status` and `kind`: an issue moved off a status or kind that was removed (`vocabulary-targets.ts`). */
-  readonly field: "identifier" | "slug" | "idempotencyKey" | "originId" | "status" | "kind" | "edges";
+  readonly field: "identifier" | "slug" | "idempotencyKey" | "originId" | "status" | "kind" | "edges" | "revision";
   /** The value it gave up. */
   readonly from: string;
 }
@@ -225,6 +225,32 @@ function settleOne(db: DatabaseSync, journal: Journal, item: OwedSettlement): bo
     record("relation", "update", {
       blockedBy: rows.map((row) => row.blocker_id),
       edges: Object.fromEntries(rows.map((row) => [row.blocker_id, { createdBy: row.created_by, createdAt: row.created_at }])),
+    });
+    return true;
+  }
+  /**
+   * A revision of this device's that yielded its number to an earlier one (`apply.ts`): sent
+   * again under the number it holds now, so a device on an older build — which keeps the
+   * first revision to arrive under a number — receives its text too. Every device of this
+   * build already holds it there, and takes this as the same revision.
+   */
+  if (item.entity === "documentRevision" && item.field === "revision") {
+    const slash = item.entityId.lastIndexOf("/");
+    const document = item.entityId.slice(0, slash);
+    const split = document.indexOf("/");
+    const issueId = document.slice(0, split);
+    const key = document.slice(split + 1);
+    const revision = Number(item.entityId.slice(slash + 1));
+    const row = db
+      .prepare("SELECT body, author, change_summary, created_at FROM document_revisions WHERE issue_id = ? AND key = ? AND revision = ?")
+      .get(issueId, key, revision) as { body: string; author: string | null; change_summary: string | null; created_at: string } | undefined;
+    if (!row) return false;
+    journal.record({
+      entity: "documentRevision",
+      entityId: item.entityId,
+      verb: "create",
+      payload: { issueId, key, revision, body: row.body, title: null, changeSummary: row.change_summary, author: row.author, createdAt: row.created_at },
+      actor: row.author,
     });
     return true;
   }

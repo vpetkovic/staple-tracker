@@ -53,6 +53,7 @@ import type {
 import { useResource } from "@/lib/useStaple";
 import { cn } from "@/lib/utils";
 import { EmptyState, ErrorState, LoadingState, SectionHeading } from "@/views/ViewChrome";
+import { idsOf, pinnedRef } from "@/lib/write-ref";
 import {
   dateLabel,
   layoutFor,
@@ -618,7 +619,13 @@ export function MilestonesView({ onAuthError }: { onAuthError: (error: AuthError
       const order = movedOrder(view.members, from, to);
       if (!order) return;
       void write(() =>
-        reorderMilestoneMembers({ ws, milestone: view.milestone.identifier, order, baseRevision: view.revision }),
+        reorderMilestoneMembers({
+          ws,
+          // By id (`lib/write-ref.ts`): the milestone and the members the reader sees.
+          milestone: view.milestone.id,
+          order: idsOf(view.members.map((member) => ({ identifier: member.identifier, id: member.issueId })), order),
+          baseRevision: view.revision,
+        }),
       );
     },
     [view, ws, write],
@@ -628,7 +635,12 @@ export function MilestonesView({ onAuthError }: { onAuthError: (error: AuthError
     (identifier: string) => {
       if (!view) return;
       void write(() =>
-        removeMilestoneMember({ ws, milestone: view.milestone.identifier, ref: identifier, baseRevision: view.revision }),
+        removeMilestoneMember({
+          ws,
+          milestone: view.milestone.id,
+          ref: idsOf(view.members.map((member) => ({ identifier: member.identifier, id: member.issueId })), [identifier])[0]!,
+          baseRevision: view.revision,
+        }),
       );
     },
     [view, ws, write],
@@ -640,8 +652,8 @@ export function MilestonesView({ onAuthError }: { onAuthError: (error: AuthError
       void write(() =>
         addMilestoneMember({
           ws,
-          milestone: view.milestone.identifier,
-          ref,
+          milestone: view.milestone.id,
+          ref: pinnedRef(session.issues.data ?? [], workspace, ref),
           baseRevision: view.revision,
           ...(note ? { note } : {}),
         }),

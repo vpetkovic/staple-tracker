@@ -140,7 +140,11 @@ export function forWorkspaceSwitch(state: CreateFormState): CreateFormState {
 }
 
 /** The payload the dialog POSTs. Empty optional fields are omitted, not emptied. */
-export function buildCreatePayload(state: CreateFormState): Extract<ActionPayload, { type: "create" }> {
+export function buildCreatePayload(
+  state: CreateFormState,
+  /** A picked or pasted task, as the write names it: its id (`lib/write-ref.ts`). */
+  pin: (ref: string) => string = (ref) => ref,
+): Extract<ActionPayload, { type: "create" }> {
   const payload: Extract<ActionPayload, { type: "create" }> = {
     type: "create",
     // Trimmed but never rejected — see rule 2 above.
@@ -162,7 +166,7 @@ export function buildCreatePayload(state: CreateFormState): Extract<ActionPayloa
   if (description) payload.description = description;
 
   const parent = state.parent.trim();
-  if (parent) payload.parent = parent;
+  if (parent) payload.parent = pin(parent);
 
   // Still tidied even though these arrive from a dropdown: a chip can be added,
   // removed and re-added against a stale option list, and the dialog should not be
@@ -170,10 +174,10 @@ export function buildCreatePayload(state: CreateFormState): Extract<ActionPayloa
   const labels = tidy(state.labels);
   if (labels.length > 0) payload.labels = labels;
 
-  const blockedBy = tidy(state.blockedBy);
+  const blockedBy = tidy(state.blockedBy).map(pin);
   if (blockedBy.length > 0) payload.blockedBy = blockedBy;
 
-  const blocking = tidy(state.blocking);
+  const blocking = tidy(state.blocking).map(pin);
   if (blocking.length > 0) payload.blocking = blocking;
 
   // Omitted when untouched, for rule 1: an absent project is "none", and sending "" would

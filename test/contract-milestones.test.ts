@@ -113,6 +113,8 @@ describe("every operation has the same shape and refusal on every surface", () =
     const fromHttp = normalize(await httpJson(`/api/milestone?ref=CON-5&ws=${WS}`), [home]);
     expect(fromCli).toEqual({
       milestone: {
+        // What a write names it by, whatever number it holds (`lib/write-ref.ts`).
+        id: "<uuid>",
         identifier: "CON-5",
         title: "October cut",
         status: "backlog",
@@ -133,6 +135,7 @@ describe("every operation has the same shape and refusal on every surface", () =
       revision: 1,
       members: [
         {
+          issueId: "<uuid>",
           identifier: "CON-4",
           title: "Flake",
           kind: "task",

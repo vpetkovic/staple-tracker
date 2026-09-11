@@ -48,6 +48,8 @@ import { type Issue, MAX_TREE_DEPTH, StapleError, type StatusCategory, nowIso } 
 
 /** The milestone half of the view: the issue fields a plan needs plus its own metadata. */
 export interface MilestoneSummary {
+  /** The milestone's issue id: what a write names it by, whatever number it holds. */
+  id: string;
   identifier: string;
   title: string;
   status: string;
@@ -63,6 +65,8 @@ export interface MilestoneSummary {
 
 /** One ordered member, as every surface prints it. */
 export interface MilestoneMemberRow {
+  /** The member's issue id: what a write names it by, whatever number it holds. */
+  issueId: string;
   identifier: string;
   title: string;
   kind: string;
@@ -575,6 +579,7 @@ export class MilestoneStore {
               | { identifier: string }
               | undefined)?.identifier ?? null);
       return {
+        issueId: row.issue_id,
         identifier: row.identifier,
         title: row.title,
         kind: row.kind,
@@ -601,6 +606,7 @@ export class MilestoneStore {
     const startDate = meta?.start_date ?? null;
     return {
       milestone: {
+        id: issue.id,
         identifier: issue.identifier,
         title: issue.title,
         status: issue.status,

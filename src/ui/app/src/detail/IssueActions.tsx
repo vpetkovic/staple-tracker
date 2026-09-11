@@ -29,6 +29,7 @@ import {
   type QueuedBy,
 } from "@/lib/types";
 import { GateReview } from "./GateReview";
+import { idsOf } from "@/lib/write-ref";
 
 /**
  * Who is doing this? Asked, remembered, and asked again with the remembered answer
@@ -271,7 +272,14 @@ export function IssueActions({
             void runGate(() => approveGate({ ws: workspace, ref: issue.id, comment }))
           }
           onApproveSelected={(refs) =>
-            void runGate(() => approveGate({ ws: workspace, ref: issue.id, children: refs }))
+            void runGate(() =>
+              approveGate({
+                ws: workspace,
+                ref: issue.id,
+                // The ticked rows by id, never by number (`lib/write-ref.ts`).
+                children: idsOf(childrenQueued, refs),
+              }),
+            )
           }
           onRequestChanges={(comment) =>
             void runGate(() => requestGateChanges({ ws: workspace, ref: issue.id, comment }))

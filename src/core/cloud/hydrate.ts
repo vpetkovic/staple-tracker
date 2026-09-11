@@ -142,7 +142,7 @@ export function applySnapshotEntity(
   sameTimeline = false,
   ledger = "snap",
 ): void {
-  const input = snapshotToInput(entity, at);
+  const input = snapshotToInput(withoutStalePlaces(db, `${ledger}:${cutoffSeq}`, entity), at);
   // Where its claim on an external origin sits in the log, for the settlement of a later one.
   noteLoggedOriginClaim(db, `${ledger}:${cutoffSeq}`, entity);
   /**
@@ -195,6 +195,38 @@ export function applySnapshotEntity(
       priorVersion,
     );
   });
+}
+
+/** Each status and kind's create seq, per snapshot, for the order that follows them. */
+const createdAt = new WeakMap<DatabaseSync, { snapshot: string; seqs: Map<string, number> }>();
+
+/**
+ * A vocabulary order without the entries created after it was written.
+ *
+ * A status or kind removed and added again with no position — an older build's `rm` then
+ * `add` — is put at the end by every device reading the log, and a fold from before this
+ * build still held its old place in the order. The service's fold now forgets that place
+ * (`forgetPlace`, `worker/src/fold.ts`); this is the same rule for a snapshot that does not:
+ * an entry whose create is later in the log than the order's last write is not in it, and
+ * goes where an entry the order does not name goes — after it.
+ */
+function withoutStalePlaces(db: DatabaseSync, snapshot: string, entity: SnapshotEntity): SnapshotEntity {
+  if (entity.entity !== "status" && entity.entity !== "kind") return entity;
+  let held = createdAt.get(db);
+  if (!held || held.snapshot !== snapshot) {
+    held = { snapshot, seqs: new Map() };
+    createdAt.set(db, held);
+  }
+  if (entity.entityId !== VOCABULARY_ORDER_ID) {
+    if (typeof entity.createdSeq === "number") held.seqs.set(`${entity.entity}/${entity.entityId}`, entity.createdSeq);
+    return entity;
+  }
+  const order = entity.state.order;
+  const written = entity.fieldWrites?.order?.seq ?? entity.createdSeq;
+  if (!Array.isArray(order) || typeof written !== "number") return entity;
+  const seqs = held.seqs;
+  const kept = order.filter((id) => !(typeof id === "string" && (seqs.get(`${entity.entity}/${id}`) ?? -1) > written));
+  return kept.length === order.length ? entity : { ...entity, state: { ...entity.state, order: kept } };
 }
 
 export interface HydrateOutcome {

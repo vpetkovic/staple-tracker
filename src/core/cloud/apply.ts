@@ -1236,6 +1236,18 @@ function settleCommentKey(db: DatabaseSync, input: ApplyInput, values: Map<strin
  * `document_revisions` rows are immutable once written, so a redelivered revision
  * is ignored rather than rewritten — but the head pointer still advances, because
  * the pointer is the mutable half.
+ *
+ * ## Two revisions written as one number
+ *
+ * Two devices that each write revision N before seeing the other's both send N. The
+ * earlier in the log keeps it; the later is the next free revision of the document, with
+ * its body, author and time, and the move said in its change summary (`renumberedSummary`)
+ * — here, in the service's fold and in the tail fold alike (`settleRevision`,
+ * `worker/src/fold.ts`). When the later one is this device's own, it moves, and this device
+ * sends it again under its new number so a device on an older build receives it too
+ * (`claims.ts`). Before, each device kept whichever arrived first and the fold the last, so
+ * one writer's text existed only on its own device. Nothing is dropped, and the head is the
+ * highest revision.
  */
 function applyDocumentRevision(db: DatabaseSync, input: ApplyInput): boolean {
   const { payload } = input;
@@ -1263,29 +1275,65 @@ function applyDocumentRevision(db: DatabaseSync, input: ApplyInput): boolean {
    */
   const author = typeof payload.author === "string" ? payload.author : input.actor;
   const createdAt = typeof payload.createdAt === "string" ? payload.createdAt : input.at;
-  db.prepare(
+  const body = typeof payload.body === "string" ? payload.body : "";
+  const summary = typeof payload.changeSummary === "string" ? payload.changeSummary : null;
+  const held = db
+    .prepare("SELECT revision, body, author, created_at AS createdAt FROM document_revisions WHERE issue_id = ? AND key = ?")
+    .all(issueId, key) as Array<{ revision: number; body: string; author: string | null; createdAt: string }>;
+  const insert = db.prepare(
     `INSERT INTO document_revisions (issue_id, key, revision, body, author, change_summary, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT (issue_id, key, revision) DO NOTHING`,
-  ).run(
-    issueId,
-    key,
-    revision,
-    typeof payload.body === "string" ? payload.body : "",
-    author,
-    typeof payload.changeSummary === "string" ? payload.changeSummary : null,
-    createdAt,
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
   );
-  // A revision held already: an older build's is dated and attributed by its genuine
-  // create on every device, the writer too; never by a restore's (`canonicalCreate`).
-  const canonical = canonicalCreate(input);
-  if (canonical !== null) {
-    const where = "WHERE issue_id = ? AND key = ? AND revision = ?";
-    if (typeof payload.createdAt !== "string") {
-      db.prepare(`UPDATE document_revisions SET created_at = ? ${where}`).run(canonical.at, issueId, key, revision);
+  const atNumber = held.find((row) => row.revision === revision);
+  // This revision, held already — under its number, or under the one it was moved to.
+  const same = atNumber !== undefined && sameRevision(atNumber, payload) ? atNumber : held.find((row) => sameRevision(row, payload));
+  let placed = same?.revision ?? revision;
+  if (same === undefined) {
+    /**
+     * The first number from `revision` up that no earlier claim holds. A holder that is this
+     * device's own later claim — written here and sent after, or not yet — yields it and moves
+     * past the highest, and this device sends it again there (`claims.ts`); a holder from
+     * earlier in the log keeps it, and this one goes on up. Every device reading the log, and
+     * the fold, reach the same numbers.
+     */
+    const bySlot = new Map(held.map((row) => [row.revision, row]));
+    for (let slot = revision; ; slot += 1) {
+      const occupant = bySlot.get(slot);
+      if (occupant === undefined) {
+        insert.run(issueId, key, slot, body, author, slot === revision ? summary : renumberedSummary(summary, revision, slot), createdAt);
+        placed = slot;
+        break;
+      }
+      // The occupant is this device's own revision when an operation of its own carried it — its
+      // write, or its settlement under a number it moved to — whatever id that operation used.
+      if (holderYields(db, "documentRevision", `${issueId}/${key}/${slot}`, ["body"], claimSeqOf(input, ["body"]), () => ownRevisionClaim(db, occupant))) {
+        const next = Math.max(...bySlot.keys()) + 1;
+        const moved = db.prepare("SELECT change_summary FROM document_revisions WHERE issue_id = ? AND key = ? AND revision = ?").get(issueId, key, slot) as { change_summary: string | null };
+        db.prepare("UPDATE document_revisions SET revision = ?, change_summary = ? WHERE issue_id = ? AND key = ? AND revision = ?").run(
+          next,
+          renumberedSummary(moved.change_summary, slot, next),
+          issueId,
+          key,
+          slot,
+        );
+        insert.run(issueId, key, slot, body, author, slot === revision ? summary : renumberedSummary(summary, revision, slot), createdAt);
+        oweSettlement(db, { entity: "documentRevision", entityId: `${issueId}/${key}/${next}`, field: "revision", from: String(slot) });
+        placed = slot;
+        break;
+      }
     }
-    if (typeof payload.author !== "string" && canonical.actor !== null) {
-      db.prepare(`UPDATE document_revisions SET author = ? ${where}`).run(canonical.actor, issueId, key, revision);
+  } else {
+    // A revision held already: an older build's is dated and attributed by its genuine
+    // create on every device, the writer too; never by a restore's (`canonicalCreate`).
+    const canonical = canonicalCreate(input);
+    if (canonical !== null) {
+      const where = "WHERE issue_id = ? AND key = ? AND revision = ?";
+      if (typeof payload.createdAt !== "string") {
+        db.prepare(`UPDATE document_revisions SET created_at = ? ${where}`).run(canonical.at, issueId, key, placed);
+      }
+      if (typeof payload.author !== "string" && canonical.actor !== null) {
+        db.prepare(`UPDATE document_revisions SET author = ? ${where}`).run(canonical.actor, issueId, key, placed);
+      }
     }
   }
 
@@ -1301,8 +1349,63 @@ function applyDocumentRevision(db: DatabaseSync, input: ApplyInput): boolean {
        current_revision = MAX(current_revision, excluded.current_revision),
        title            = COALESCE(excluded.title, title),
        updated_at       = excluded.updated_at`,
-  ).run(issueId, key, revision, typeof payload.title === "string" ? payload.title : null, createdAt);
+  ).run(issueId, key, highestRevision(db, issueId, key, Math.max(revision, placed)), typeof payload.title === "string" ? payload.title : null, createdAt);
   return true;
+}
+
+/**
+ * Where this device's own claim on a revision sits in the log: the operation of its own that
+ * carried that revision — its body, author and time — acknowledged, or `Infinity` unsent.
+ */
+function ownRevisionClaim(db: DatabaseSync, revision: { body: string; author: string | null; createdAt: string }): number | null {
+  const rows = db
+    .prepare("SELECT payload, acknowledged_seq FROM sync_outbox WHERE entity = 'documentRevision' ORDER BY client_seq")
+    .all() as Array<{ payload: string; acknowledged_seq: number | null }>;
+  for (const row of rows) {
+    let payload: Record<string, unknown>;
+    try {
+      payload = JSON.parse(row.payload) as Record<string, unknown>;
+    } catch {
+      continue;
+    }
+    if (sameRevision(revision, payload)) return row.acknowledged_seq ?? Number.POSITIVE_INFINITY;
+  }
+  return null;
+}
+
+/** The highest revision a document holds here: its head. */
+function highestRevision(db: DatabaseSync, issueId: string, key: string, atLeast: number): number {
+  const row = db.prepare("SELECT MAX(revision) AS n FROM document_revisions WHERE issue_id = ? AND key = ?").get(issueId, key) as { n: number | null };
+  return Math.max(atLeast, row.n ?? 0);
+}
+
+/**
+ * The same revision: the same body, and the same author and time where both say. The
+ * service's fold decides it by the same rule (`sameRevision`, `worker/src/fold.ts`).
+ */
+export function sameRevision(held: Record<string, unknown>, incoming: Record<string, unknown>): boolean {
+  if (held.body !== incoming.body) return false;
+  for (const field of ["author", "createdAt"]) {
+    if (typeof incoming[field] === "string" && typeof held[field] === "string" && incoming[field] !== held[field]) return false;
+  }
+  return true;
+}
+
+/**
+ * A renumbered revision's change summary: its own, and what happened to its number — from
+ * the number it was written as, whatever it was moved through on the way, so every device
+ * says the same thing about it.
+ */
+export function renumberedSummary(summary: unknown, from: number, to: number): string {
+  let own = typeof summary === "string" ? summary : "";
+  let written = from;
+  const moved = /^(?:([\s\S]*) — )?renumbered from r(\d+) to r\d+: written at the same time as another r\2, which the repository's log holds first$/.exec(own);
+  if (moved) {
+    own = moved[1] ?? "";
+    written = Number(moved[2]);
+  }
+  const kept = own.trim() !== "" ? `${own} — ` : "";
+  return `${kept}renumbered from r${written} to r${to}: written at the same time as another r${written}, which the repository's log holds first`;
 }
 
 /** A bare `document` operation: the head pointer and its title, nothing else. */

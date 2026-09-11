@@ -10,12 +10,14 @@
  * of those into a reference to nothing — or, worse, to whichever issue holds the number
  * next.
  *
- * So each move is recorded twice, in `meta`, which never synchronizes (every device makes
- * its own record of the moves it applied):
+ * So each move is recorded three times, in `meta`, which never synchronizes (every device
+ * makes its own record of the moves it applied):
  *
  *   - `identifier_alias:<from>` — the issue the old identifier meant, consulted by lookups
  *     only when no issue holds that identifier any more. An identifier another issue now
  *     holds means that issue; the alias never overrules a live row.
+ *   - `identifier_holders:<from>` — every issue that has left it, with when, which the write
+ *     guard reads (`formerHolders`).
  *   - `identifier_moves_pending` — the moves not yet carried to this machine's hub, whose
  *     cross-links name issues by identifier (`Hub.followIdentifierMoves`).
  *
@@ -24,6 +26,7 @@
  * schema — one bookkeeping table would make every older device refuse everything this
  * build sends.
  */
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { DatabaseSync } from "node:sqlite";
 import { nowIso } from "./types.js";
 
@@ -35,7 +38,58 @@ export interface IdentifierMove {
 }
 
 const ALIAS_PREFIX = "identifier_alias:";
+const HOLDERS_PREFIX = "identifier_holders:";
 const PENDING_KEY = "identifier_moves_pending";
+
+/** One issue that left an identifier here, and when it left it last. */
+export interface FormerHolder {
+  readonly issueId: string;
+  readonly at: string;
+}
+
+function readHolders(db: DatabaseSync, identifier: string): FormerHolder[] {
+  const row = db.prepare("SELECT value FROM meta WHERE key = ?").get(`${HOLDERS_PREFIX}${identifier}`) as
+    | { value: string }
+    | undefined;
+  if (!row) return [];
+  try {
+    const parsed = JSON.parse(row.value) as unknown;
+    return Array.isArray(parsed)
+      ? parsed.filter((entry): entry is FormerHolder => typeof entry?.issueId === "string" && typeof entry?.at === "string")
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * EVERY issue that has left an identifier on this device, with when it left — not only the
+ * last, which is all the alias keeps.
+ *
+ * A number can be left by this device's issue, then held and left by another, and another:
+ * a settlement, a renumber decided elsewhere, a resolution. Whoever learned the number while
+ * any of them held it may still be writing through it, so the write guard asks about all of
+ * them (`WorkspaceStore.requireTarget`). A move recorded before this list existed is still
+ * in the alias, and is read from there.
+ */
+export function formerHolders(db: DatabaseSync, identifier: string): FormerHolder[] {
+  const holders = readHolders(db, identifier);
+  const last = db.prepare("SELECT value FROM meta WHERE key = ?").get(`${ALIAS_PREFIX}${identifier}`) as
+    | { value: string }
+    | undefined;
+  if (last) {
+    try {
+      const parsed = JSON.parse(last.value) as { issueId?: unknown; at?: unknown };
+      if (typeof parsed.issueId === "string" && !holders.some((holder) => holder.issueId === parsed.issueId)) {
+        holders.push({ issueId: parsed.issueId, at: typeof parsed.at === "string" ? parsed.at : "" });
+      }
+    } catch {
+      /* a record this build cannot read names nobody */
+    }
+  }
+  const exists = db.prepare("SELECT 1 AS hit FROM issues WHERE id = ?");
+  return holders.filter((holder) => exists.get(holder.issueId) !== undefined);
+}
 
 /**
  * Give an existing issue a new identifier, and remember the old one.
@@ -59,6 +113,12 @@ export function recordIdentifierMove(db: DatabaseSync, move: IdentifierMove): vo
   db.prepare(
     `INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
   ).run(`${ALIAS_PREFIX}${move.from}`, JSON.stringify({ issueId: move.issueId, to: move.to, at: move.at }));
+  // And beside the last, every issue that has ever left it here (`formerHolders`).
+  const holders = readHolders(db, move.from).filter((holder) => holder.issueId !== move.issueId);
+  holders.push({ issueId: move.issueId, at: move.at });
+  db.prepare(
+    `INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+  ).run(`${HOLDERS_PREFIX}${move.from}`, JSON.stringify(holders));
   const pending = readPending(db);
   pending.push(move);
   db.prepare(
@@ -194,28 +254,29 @@ export function takeRenumberNotices(): RenumberNotice[] {
  */
 export const RENUMBER_GUARD_MS = 24 * 60 * 60 * 1000;
 
-let acknowledged = 0;
+/** The whole process acknowledges: a CLI command run with `--ack-renumber`. */
+let processAcknowledged = false;
+/**
+ * One call acknowledges — an MCP write with `acknowledgeRenumber` — for as long as that call
+ * runs, awaits included, and for nothing that runs beside it.
+ */
+const callAcknowledged = new AsyncLocalStorage<boolean>();
 
 /**
  * Run `fn` with a caller's acknowledgement that a number it uses may have moved: its writes
  * go to whichever issue holds the number now, with the notice, instead of being refused.
- * `staple --ack-renumber`, and `acknowledgeRenumber` on an MCP write.
+ * `acknowledgeRenumber` on an MCP write. The acknowledgement follows `fn` across every
+ * `await`, and ends with it — another call running meanwhile does not have it.
  */
 export function withRenumberAcknowledged<T>(on: boolean, fn: () => T): T {
-  if (!on) return fn();
-  acknowledged += 1;
-  try {
-    return fn();
-  } finally {
-    acknowledged -= 1;
-  }
+  return on ? callAcknowledged.run(true, fn) : fn();
 }
 
 /** For a process that runs one command: the acknowledgement holds for all of it. */
 export function acknowledgeRenumbers(): void {
-  acknowledged += 1;
+  processAcknowledged = true;
 }
 
 export function renumbersAcknowledged(): boolean {
-  return acknowledged > 0;
+  return processAcknowledged || callAcknowledged.getStore() === true;
 }
