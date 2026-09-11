@@ -185,6 +185,12 @@ export interface FakeServerOptions {
   rateLimit?: { requests: number; windowMs: number; retryAfterSeconds: number } | null;
   /** The per-operation payload cap, advertised and enforced. The Worker's is 512 KiB on every plan. */
   maxOpBytes?: number;
+  /**
+   * The most operations one fold reads — `worker/src/limits.ts` `MAX_SNAPSHOT_FOLD_OPS`
+   * (20,000). Past it a snapshot, a probe and a backup are refused with `unavailable`
+   * and `maxSnapshotFoldOps`, exactly as the Worker refuses them.
+   */
+  maxSnapshotFoldOps?: number;
 }
 
 /** `worker/src/vocabulary.ts`: which vocabulary a repository's log holds. */
@@ -328,6 +334,7 @@ export class FakeSyncServer {
       enrollmentSecret: null,
       rateLimit: null,
       maxOpBytes: 512 * 1024,
+      maxSnapshotFoldOps: 20_000,
       ...options,
     };
     this.vocabulary = this.options.vocabulary;
@@ -1284,6 +1291,11 @@ export class FakeSyncServer {
       .filter((candidate) => candidate.epoch === this.epoch && candidate.seq <= cutoff)
       .sort((a, b) => a.seq - b.seq)) {
       opCount += 1;
+      if (opCount > this.options.maxSnapshotFoldOps) {
+        throw new ServerError(503, "unavailable", "operation log is too large to fold in one pass", {
+          maxSnapshotFoldOps: this.options.maxSnapshotFoldOps,
+        });
+      }
       if (op.schema > schemaVersion) schemaVersion = op.schema;
 
       const key = `${op.entity} ${op.entityId}`;
@@ -1332,6 +1344,17 @@ export class FakeSyncServer {
       }
       // Every verb merges the keys it carried and is silent about the rest; only the
       // record of the verb differs. Mirrors `worker/src/fold.ts` (STA-259).
+      // One field, whichever spelling wrote it — `worker/src/fold.ts`. Not on the Worker
+      // from before this build, which kept both.
+      for (const key of this.legacyFold ? [] : Object.keys(op.payload as Record<string, unknown>)) {
+        const other = key.includes("_")
+          ? key.replace(/_([a-z])/g, (_, letter: string) => letter.toUpperCase())
+          : key.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
+        if (other !== key) {
+          delete entry.state[other];
+          delete entry.fieldWrites[other];
+        }
+      }
       Object.assign(entry.state, op.payload as Record<string, unknown>);
       entry.superseded = op.verb === "replace";
 

@@ -15,6 +15,7 @@ import { AUTO_SYNC_MAX_RETRY_AFTER_MS } from "../src/core/cloud/auto.js";
 import { AutoSyncScheduler } from "../src/core/cloud/auto-sync.js";
 import { readAutoSyncState } from "../src/core/cloud/auto-state.js";
 import { localCloudStatus } from "../src/core/cloud/status.js";
+import { describeHubReport, hubCloudReport } from "../src/core/cloud/hub-surface.js";
 import { setConsent } from "../src/core/cloud/connection.js";
 import { StapleError } from "../src/core/types.js";
 import { syncRepository } from "../src/core/cloud/sync.js";
@@ -194,11 +195,16 @@ describe("automatic sync, which has a budget and waits between runs instead", ()
 
       const status = localCloudStatus(a.home, REPO, { now: clock.now });
       expect(status.warnings.join("\n")).toContain(readAutoSyncState(a.home, REPO).nextEligibleAt!);
+      // And `cloud status --all` says the same, for every workspace.
+      const hubRow = hubCloudReport(a.home, { now: clock.now }).workspaces.find((row) => row.repositoryId === REPO)!;
+      expect(hubRow.autoWaitingUntil).toBe(readAutoSyncState(a.home, REPO).nextEligibleAt);
+      expect(describeHubReport(hubCloudReport(a.home, { now: clock.now }))).toContain(`waiting until ${hubRow.autoWaitingUntil}`);
 
       // A manual sync goes ahead, and once it has worked there is nothing left to wait for.
       await a.sync();
       expect(readAutoSyncState(a.home, REPO).nextEligibleAt).toBeNull();
       expect(localCloudStatus(a.home, REPO, { now: clock.now }).warnings).toEqual([]);
+      expect(hubCloudReport(a.home, { now: clock.now }).workspaces.find((row) => row.repositoryId === REPO)!.autoWaitingUntil).toBeNull();
     });
   }
 });

@@ -1447,6 +1447,8 @@ export interface HubWorkspaceReport {
    */
   credentialPresent: boolean | null;
   auto: boolean;
+  /** When automatic sync next tries, if it is waiting; else null (`hub-surface.ts`). */
+  autoWaitingUntil: string | null;
   backup: boolean;
   connectedAt: string | null;
   /**

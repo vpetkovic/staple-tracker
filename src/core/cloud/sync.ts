@@ -56,6 +56,7 @@ import { closeSettledIdentifierConflicts, settleOwedClaims } from "./claims.js";
 import { assertHubCanTakePrefix, prefixToAdopt, restampHubPrefix } from "./prefix-hub.js";
 import { applyConflictOperation, countOpenConflicts, screenForConflicts } from "./conflicts.js";
 import { hydrate } from "./hydrate.js";
+import { foldOperations, refusedAsTooLargeToFold } from "./tail-fold.js";
 import { seedModeOf, seedOwed, seedRepository, type RepositorySurvey, type SeedReport } from "./seed.js";
 import {
   acknowledgeOperation,
@@ -84,6 +85,8 @@ export interface BootstrapReport {
   readonly cutoffSeq: number;
   /** True when this sync continued a bootstrap an earlier run had started. */
   readonly resumed: boolean;
+  /** True when the service could not fold a log this large and the ordered tail was folded here. */
+  readonly fromTail?: boolean;
 }
 
 export interface SyncReport {
@@ -217,16 +220,15 @@ function noteFold(db: DatabaseSync, entities: readonly SnapshotEntity[]): void {
  * Worker that can repair it is live.
  */
 async function serviceFoldsCreates(session: Session, options: SyncOptions): Promise<boolean> {
-  const page = (await attempt(
-    () =>
-      fetchSnapshotPage(
-        session.endpoint,
-        { repositoryId: session.repositoryId, token: session.token, deviceId: session.deviceId, cursor: null, limit: 1 },
-        options,
-      ),
-    options,
-  )) as SnapshotPage;
-  return servedByCurrentFold(page.entities) !== false;
+  try {
+    const page = (await attempt(() => snapshotPage(session, null, 1, options), options)) as SnapshotPage;
+    return servedByCurrentFold(page.entities) !== false;
+  } catch (error) {
+    // Too large for the service to fold: the re-read folds the tail here instead, by this
+    // build's rules, whichever Worker is live (`tail-fold.ts`).
+    if (error instanceof TooLargeToFold) return true;
+    throw error;
+  }
 }
 
 /**
@@ -565,7 +567,7 @@ export async function syncRepository(
     });
     if (seed?.prefix) restampHubPrefix(options.home, db, seed.prefix.to);
     if (seed?.mode === "join") {
-      joined = { entities: survey.entities.length, pages: survey.pages, cutoffSeq: survey.cutoffSeq, resumed: false };
+      joined = { entities: survey.entities.length, pages: survey.pages, cutoffSeq: survey.cutoffSeq, resumed: false, ...(survey.fromTail ? { fromTail: true } : {}) };
     }
   }
 
@@ -652,25 +654,78 @@ async function surveyRepository(
   capabilities: Capabilities,
   options: SyncOptions,
 ): Promise<RepositorySurvey> {
+  try {
+    return await surveySnapshot(session, capabilities, options);
+  } catch (error) {
+    if (!(error instanceof TooLargeToFold)) throw error;
+    return surveyFromTail(session, capabilities, options);
+  }
+}
+
+/**
+ * The service refused to fold the log — past `MAX_SNAPSHOT_FOLD_OPS` — which no retry
+ * changes, so it is not left to `attempt` to retry as an `unavailable`.
+ */
+class TooLargeToFold extends Error {
+  constructor(readonly cause: unknown) {
+    super("the operation log is too large for the service to fold in one pass");
+  }
+}
+
+/** One snapshot page, with a refusal to fold turned into {@link TooLargeToFold}. */
+function snapshotPage(session: Session, cursor: string | null, limit: number, options: SyncOptions): Promise<SnapshotPage> {
+  return fetchSnapshotPage(
+    session.endpoint,
+    { repositoryId: session.repositoryId, token: session.token, deviceId: session.deviceId, cursor, limit },
+    options,
+  ).catch((error: unknown) => {
+    if (refusedAsTooLargeToFold(error)) throw new TooLargeToFold(error);
+    throw error;
+  }) as Promise<SnapshotPage>;
+}
+
+/**
+ * The survey from the ordered tail: every operation of the epoch, pulled in pages with no
+ * fold on the service, and folded here by the Worker's rules (`tail-fold.ts`). The cutoff
+ * is the last operation read, and the tail resumes after it.
+ */
+async function surveyFromTail(session: Session, capabilities: Capabilities, options: SyncOptions): Promise<RepositorySurvey> {
+  const ops: RemoteOperation[] = [];
+  let cursor: string | null = null;
+  let pages = 0;
+  let epoch = 0;
+  let tailCursor: string | null = null;
+  for (;;) {
+    const page = (await attempt(
+      () =>
+        pullOperations(
+          session.endpoint,
+          { repositoryId: session.repositoryId, token: session.token, deviceId: session.deviceId, cursor, limit: capabilities.maxPullLimit },
+          options,
+        ),
+      options,
+    )) as PullPage;
+    pages += 1;
+    epoch = page.epoch;
+    ops.push(...page.ops);
+    cursor = page.nextCursor;
+    tailCursor = page.nextCursor;
+    if (!page.hasMore || page.ops.length === 0) break;
+  }
+  const cutoffSeq = ops.reduce((highest, op) => Math.max(highest, op.seq), 0);
+  return { epoch, cutoffSeq, tailCursor: tailCursor!, entities: foldOperations(ops), pages, fromTail: true };
+}
+
+async function surveySnapshot(
+  session: Session,
+  capabilities: Capabilities,
+  options: SyncOptions,
+): Promise<RepositorySurvey> {
   const entities: SnapshotEntity[] = [];
   let cursor: string | null = null;
   let pages = 0;
   for (;;) {
-    const page = (await attempt(
-      () =>
-        fetchSnapshotPage(
-          session.endpoint,
-          {
-            repositoryId: session.repositoryId,
-            token: session.token,
-            deviceId: session.deviceId,
-            cursor,
-            limit: capabilities.maxSnapshotPageSize,
-          },
-          options,
-        ),
-      options,
-    )) as SnapshotPage;
+    const page = (await attempt(() => snapshotPage(session, cursor, capabilities.maxSnapshotPageSize, options), options)) as SnapshotPage;
     pages += 1;
     entities.push(...page.entities);
     if (page.nextCursor === null) {
@@ -986,7 +1041,7 @@ async function recoverFromSnapshot(
   const pulled = await drainTail(db, journal, session, capabilities, options);
   return {
     pulled,
-    bootstrap: { entities: survey.entities.length, pages: survey.pages, cutoffSeq: survey.cutoffSeq, resumed: false },
+    bootstrap: { entities: survey.entities.length, pages: survey.pages, cutoffSeq: survey.cutoffSeq, resumed: false, ...(survey.fromTail ? { fromTail: true } : {}) },
   };
 }
 
@@ -1059,21 +1114,28 @@ async function runBootstrap(
   const limit = capabilities.maxSnapshotPageSize;
 
   for (;;) {
-    const page = (await attempt(
-      () =>
-        fetchSnapshotPage(
-          session.endpoint,
-          {
-            repositoryId: session.repositoryId,
-            token: session.token,
-            deviceId: session.deviceId,
-            cursor,
-            limit,
-          },
-          options,
-        ),
-      options,
-    )) as SnapshotPage;
+    let page: SnapshotPage;
+    try {
+      page = (await attempt(() => snapshotPage(session, cursor, limit, options), options)) as SnapshotPage;
+    } catch (error) {
+      if (!(error instanceof TooLargeToFold)) throw error;
+      /**
+       * Too large for the service to fold: a device joins from the ordered tail instead,
+       * folded here (`tail-fold.ts`) and applied as one snapshot, in one transaction.
+       * Before, a repository past `MAX_SNAPSHOT_FOLD_OPS` could not reach a new machine.
+       */
+      const survey = await surveyFromTail(session, capabilities, options);
+      noteFold(db, survey.entities);
+      const at = nowIso();
+      tx(db, () => {
+        const outcome = hydrate(db, journal, survey.entities, parked, survey.cutoffSeq, at, true);
+        entities += outcome.applied;
+        settleOwedClaims(db, journal);
+        completeSnapshot(db, survey.tailCursor, survey.epoch);
+        replayOutboxFieldWrites(db);
+      });
+      return { entities, pages: pages + survey.pages, cutoffSeq: survey.cutoffSeq, resumed, fromTail: true };
+    }
 
     cutoffSeq = page.cutoffSeq;
     pages += 1;

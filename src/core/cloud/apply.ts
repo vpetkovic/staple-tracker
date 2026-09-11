@@ -395,6 +395,30 @@ export function operationToInput(op: RemoteOperation): ApplyInput {
  * makes the first post-bootstrap local mutation carry a `baseVersion` that means
  * something.
  */
+/**
+ * A snapshot entity's state with one spelling of each field: the one written last.
+ *
+ * A Worker from before this build folded `updatedAt` and `updated_at` as two keys, and
+ * applying both in key order let the stale one win (`oneSpelling` in `journal.ts`). Which
+ * is later is in the provenance: the write's seq, else its time; a key only a create set
+ * is older than any written after it.
+ */
+function latestSpelling(entity: SnapshotEntity): Record<string, unknown> {
+  const state = { ...entity.state };
+  const writes = (entity.fieldWrites ?? {}) as Record<string, { seq?: number; at?: string }>;
+  const rank = (key: string): [number, string] => [writes[key]?.seq ?? -1, writes[key]?.at ?? ""];
+  for (const key of Object.keys(entity.state)) {
+    if (!key.includes("_")) continue;
+    const camel = key.replace(/_([a-z])/g, (_, letter: string) => letter.toUpperCase());
+    if (!(camel in state) || !(key in state)) continue;
+    const [snakeSeq, snakeAt] = rank(key);
+    const [camelSeq, camelAt] = rank(camel);
+    const snakeLater = snakeSeq !== camelSeq ? snakeSeq > camelSeq : snakeAt > camelAt;
+    delete state[snakeLater ? camel : key];
+  }
+  return state;
+}
+
 export function snapshotToInput(entity: SnapshotEntity, at: string): ApplyInput {
   const fieldSeqs: Record<string, number> = {};
   for (const [field, write] of Object.entries(entity.fieldWrites ?? {})) {
@@ -404,7 +428,7 @@ export function snapshotToInput(entity: SnapshotEntity, at: string): ApplyInput 
     entity: entity.entity,
     entityId: entity.entityId,
     verb: entity.verb,
-    payload: entity.state,
+    payload: latestSpelling(entity),
     // The create's actor, when the service sent it: the author a device reading that
     // create in the tail would give a revision or comment whose payload names none.
     actor: typeof entity.createdBy === "string" && entity.createdBy !== "" ? entity.createdBy : null,
@@ -1202,6 +1226,15 @@ function writeBlockers(
     input.payload.edges !== null && typeof input.payload.edges === "object" && !Array.isArray(input.payload.edges)
       ? (input.payload.edges as Record<string, { createdBy?: unknown; createdAt?: unknown }>)
       : {};
+  /**
+   * A set from a build that sends no `edges` — applied here in the ordered tail, where the
+   * operation's actor and time are known. A device hydrating from the snapshot has neither
+   * for the edges it added, so this device journals the edges as it now holds them, and the
+   * fold carries them to every device (`settleOne` in `claims.ts`).
+   */
+  if (ids.length > 0 && input.payload.edges === undefined && input.opId !== null && typeof input.seq === "number") {
+    oweSettlement(db, { entity: "relation", entityId: blockedId, field: "edges", from: "" });
+  }
   const held = new Map(
     (
       db.prepare("SELECT blocker_id, created_by, created_at FROM relations WHERE blocked_id = ? AND type = 'blocks'").all(blockedId) as Array<{

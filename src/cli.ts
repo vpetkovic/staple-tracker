@@ -45,6 +45,7 @@ import { GENERIC_KIND_FALLBACK } from "./core/kind-appearance.js";
 import { Hub, notifyHubResolvedSafe } from "./core/hub.js";
 import { runInstallCommand } from "./install/index.js";
 import { dataVersion } from "./core/db.js";
+import { takeRenumberNotices } from "./core/identifier-moves.js";
 import {
   DEFAULT_ISSUE_KIND,
   ISSUE_STATUSES,
@@ -338,7 +339,26 @@ function estimateOption(
 const jsonMode = process.argv.includes("--json");
 
 function outJson(payload: unknown): void {
+  /**
+   * An identifier this command used was renumbered on this device: the answer says so
+   * (`identifier-moves.ts`, `RenumberNotice`) — in the document an agent parses, not only
+   * on stderr where it would not look.
+   */
+  const notices = takeRenumberNotices();
+  if (notices.length > 0 && payload !== null && typeof payload === "object" && !Array.isArray(payload)) {
+    console.log(JSON.stringify({ ...(payload as Record<string, unknown>), renumbered: notices }));
+    return;
+  }
+  for (const notice of notices) console.error(`note: ${notice.message}`);
   console.log(JSON.stringify(payload));
+}
+
+/** Every renumber notice a command left and did not put in its JSON answer, said now. */
+function sayRenumberNotices(toStderr: boolean): void {
+  for (const notice of takeRenumberNotices()) {
+    if (toStderr) console.error(`note: ${notice.message}`);
+    else console.log(`note: ${notice.message}`);
+  }
 }
 
 function agentName(explicit?: string): string {
@@ -1545,7 +1565,14 @@ function main() {
       const timeoutMs =
         values.timeout === undefined ? undefined : positiveOption(values.timeout, 0, "timeout") * 1000;
       const { store } = readWithRetry(() => getStore(values), intervalMs);
-      const ref = positionals[0]!;
+      /**
+       * The issue, resolved once, and probed by its id from then on. Re-resolved each tick,
+       * a sync from another process that renumbered it — another device claimed its number
+       * first — turned `wait` into a wait on whichever issue took the number, and an agent
+       * gated on its own blocked task was told it was ready (`identifier-moves.ts`).
+       */
+      const waitedFor = readWithRetry(() => store.getIssue(positionals[0]!), intervalMs);
+      const ref = waitedFor.id;
       const startedAt = Date.now();
       const deadline = timeoutMs === undefined ? undefined : startedAt + timeoutMs;
       /**
@@ -1628,11 +1655,21 @@ function main() {
         process.exitCode = EXIT_CODES.timeout;
         break;
       }
+      // Renumbered while it waited: said, in the answer, with the identifier it holds now.
+      const moved =
+        snapshot.issue.identifier !== waitedFor.identifier
+          ? {
+              from: waitedFor.identifier,
+              to: snapshot.issue.identifier,
+              message: `${waitedFor.identifier} was renumbered here while this waited; it is now ${snapshot.issue.identifier}.`,
+            }
+          : null;
       if (values.json) {
-        outJson({ ...snapshot.issue, ready: true, reason: snapshot.reason, waitedMs, unresolvedBlockers: snapshot.unresolvedBlockers, queuedBy: snapshot.queuedBy });
+        outJson({ ...snapshot.issue, ready: true, reason: snapshot.reason, waitedMs, unresolvedBlockers: snapshot.unresolvedBlockers, queuedBy: snapshot.queuedBy, ...(moved ? { renumberedWhileWaiting: moved } : {}) });
         break;
       }
       console.log(line(snapshot.issue, `  [${snapshot.reason} after ${(waitedMs / 1000).toFixed(1)}s]`));
+      if (moved) console.log(`note: ${moved.message}`);
       break;
     }
 
@@ -2363,7 +2400,9 @@ function main() {
 
 try {
   main();
+  sayRenumberNotices(jsonMode);
 } catch (error) {
+  sayRenumberNotices(true);
   // parseArgs failures (unknown option, missing value) are usage errors, not
   // transient faults — classify them as validation so the retry bit stays honest.
   const parseCode = (error as NodeJS.ErrnoException)?.code;

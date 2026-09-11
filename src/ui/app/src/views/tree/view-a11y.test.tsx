@@ -101,6 +101,7 @@ function session(over: Partial<StapleSession> = {}): StapleSession {
     publishVisibleOrder: noop,
     selection: null,
     open: noop,
+    pin: noop,
     close: noop,
     version: 1,
     refresh: noop,

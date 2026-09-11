@@ -13,6 +13,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
 import { Hub } from "../src/core/hub.js";
+import { REGISTRY_PAYLOAD_FORMAT, adoptRegistry } from "../src/core/cloud/hub-registry.js";
 import { initWorkspace } from "../src/core/workspace.js";
 import { listConflicts, resolveConflict } from "../src/core/cloud/conflicts.js";
 import { FakeSyncServer } from "./fixtures/fake-sync-server.js";
@@ -237,5 +238,42 @@ describe("a hub link made through a stand-in", () => {
     expect(links(a)).toEqual([{ blocker: settledB, blocked: other }]);
     expect(a.store.getIssue("TRA-2+1").id).toBe(onB.id);
     expect(identifierOf(a.db, onC.id)).not.toBe(settledB);
+
+    // A link published by another machine under a stand-in: placed here under the issue it
+    // finds, or — when it finds none — skipped for that reason, not for a prefix.
+    const hub = Hub.openAt(a.home);
+    try {
+      const trackerRepo = hub.findBySlug("tracker")!.repositoryId!;
+      const otherRepo = hub.findBySlug("other")!.repositoryId!;
+      const published = (blockerIdentifier: string) => ({
+        blockerRepositoryId: trackerRepo,
+        blockerWs: "tracker",
+        blockerIdentifier,
+        blockedRepositoryId: otherRepo,
+        blockedWs: "other",
+        blockedIdentifier: "OTH-2",
+        type: "blocks" as const,
+      });
+      const report = adoptRegistry(
+        hub,
+        {
+          format: REGISTRY_PAYLOAD_FORMAT,
+          hubId: "another-machine",
+          capturedAt: "2026-09-11T00:00:00.000Z",
+          workspaces: [],
+          crossLinks: [published("TRA-2+1"), published("TRA-9+1")],
+        },
+        { apply: true },
+      );
+      const reasons = report.crossLinkDecisions.map((decision) => decision.reason ?? decision.outcome).join("\n");
+      expect(reasons).toContain("TRA-9+1, is a stand-in another machine used");
+      expect(reasons).not.toContain("initialised here separately");
+      expect(hub.crossLinksFor("tracker").map((link) => link.blockerIdentifier)).toContain(settledB);
+      // And unlinking through the stand-in removes the link stored under the settled number.
+      expect(hub.removeCrossLink("TRA-2+1", other)).toEqual(expect.objectContaining({ blockerIdentifier: settledB }));
+    } finally {
+      hub.close();
+    }
+    expect(links(a).filter((row) => row.blocked === other)).toEqual([]);
   });
 });

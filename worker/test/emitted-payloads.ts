@@ -121,9 +121,9 @@ export const EMITTED_PAYLOADS: ReadonlyArray<{
     "entity": "issue",
     "verb": "update",
     "payload": {
-      "updated_at": "2026-09-10T00:00:00.000Z",
+      "updatedAt": "2026-09-10T00:00:00.000Z",
       "title": "Child, renamed",
-      "normalized_title": "child, renamed",
+      "normalizedTitle": "child, renamed",
       "priority": "low",
       "labels": "[]"
     }
@@ -233,7 +233,8 @@ export const EMITTED_PAYLOADS: ReadonlyArray<{
     "entity": "project",
     "verb": "update",
     "payload": {
-      "name": "Project, renamed"
+      "name": "Project, renamed",
+      "updatedAt": "2026-09-10T00:00:00.000Z"
     }
   },
   {

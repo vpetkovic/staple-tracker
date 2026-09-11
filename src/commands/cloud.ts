@@ -1094,7 +1094,9 @@ function renderSyncReport(report: SyncReport): string {
   if (report.bootstrap) {
     const b = report.bootstrap;
     lines.push(
-      `${b.resumed ? "Resumed" : "Hydrated"} from a snapshot at seq ${b.cutoffSeq}: ` +
+      (b.fromTail
+        ? `Folded the ordered tail here to seq ${b.cutoffSeq} (the service cannot fold a log this large): `
+        : `${b.resumed ? "Resumed" : "Hydrated"} from a snapshot at seq ${b.cutoffSeq}: `) +
         `${b.entities} ${b.entities === 1 ? "entity" : "entities"} over ` +
         `${b.pages} ${b.pages === 1 ? "page" : "pages"}.`,
     );

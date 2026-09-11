@@ -45,6 +45,7 @@ import { StatusBadge } from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { getIssue } from "@/lib/api";
+import { selectionTarget } from "@/lib/session";
 import type { AuthError } from "@/lib/api";
 import { isStaleClaim } from "@/lib/claim";
 import { useSession, type Selection } from "@/lib/session";
@@ -89,14 +90,22 @@ export function IssueDetailPanel({
    */
   useEffect(() => onOpenDetailTab(setTab), []);
 
-  const load = useCallback(
-    () => getIssue({ ws: selection.workspace, ref: selection.ref }),
-    [selection.workspace, selection.ref],
-  );
-  const resource = useResource(load, [selection.workspace, selection.ref, session.version], onAuthError);
+  /**
+   * By the issue the selection was pinned to once it loaded, not by the identifier it was
+   * opened with: sync can move an open issue off its number, and the number then names
+   * another issue — re-fetched by it on the next tick, the pane and every button on it
+   * became that other issue's (`selectionTarget`).
+   */
+  const target = selectionTarget(selection);
+  const load = useCallback(() => getIssue({ ws: selection.workspace, ref: target }), [selection.workspace, target]);
+  const resource = useResource(load, [selection.workspace, target, session.version], onAuthError);
 
   const detail = resource.data;
   const issue = detail?.issue;
+  const { pin } = session;
+  useEffect(() => {
+    if (issue) pin(selection.workspace, selection.ref, issue.id);
+  }, [issue, pin, selection.workspace, selection.ref]);
   const stale = isStaleClaim(detail?.claim);
   const tabs = detail ? visibleTabs(detail) : [];
   const active = tabs.some((t) => t.id === tab) ? tab : (tabs[0]?.id ?? "overview");
@@ -111,7 +120,7 @@ export function IssueDetailPanel({
           header are the persistent chrome on the page, and when their heights are
           computed from different padding they never quite line up across a resize. */}
       <div className="flex h-11 shrink-0 items-center gap-2 border-b px-3 pr-2">
-        <span className="font-mono text-[11px] text-text-tertiary">{selection.ref}</span>
+        <span className="font-mono text-[11px] text-text-tertiary">{issue?.identifier ?? selection.ref}</span>
         {issue ? <StatusBadge status={issue.status} /> : null}
 
         {/* Ancestry as a breadcrumb, and clickable — the old panel printed the same

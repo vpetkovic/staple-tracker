@@ -43,10 +43,10 @@ import { nowIso } from "../types.js";
 
 /** A later claim of this device's that it yielded, and now settles. */
 export interface OwedSettlement {
-  readonly entity: "issue" | "project" | "comment";
+  readonly entity: "issue" | "project" | "comment" | "relation";
   readonly entityId: string;
   /** `status` and `kind`: an issue moved off a status or kind that was removed (`vocabulary-targets.ts`). */
-  readonly field: "identifier" | "slug" | "idempotencyKey" | "originId" | "status" | "kind";
+  readonly field: "identifier" | "slug" | "idempotencyKey" | "originId" | "status" | "kind" | "edges";
   /** The value it gave up. */
   readonly from: string;
 }
@@ -90,8 +90,6 @@ export function ownClaimSeq(db: DatabaseSync, entity: string, entityId: string, 
   return null;
 }
 
-const CLOSED_STATUSES = new Set(["done", "cancelled"]);
-
 /**
  * Where this device's own claim on an issue's live external origin sits in the log.
  *
@@ -99,23 +97,18 @@ const CLOSED_STATUSES = new Set(["done", "cancelled"]);
  * it — and when it is reopened from done or cancelled while it carries one, because a
  * live origin is one on an open issue (`issues_live_origin_uq`). A move between two open
  * statuses is not a claim: taken for one, backlog to todo on the earlier holder beat a
- * later import on another device, the holder gave the origin up, the later import had
- * already given it up to the holder, and nobody held it.
- *
- * Read oldest first, so each status write can be told a reopen or not by the status
- * before it. A status write with nothing before it in the outbox — whatever preceded it
- * was sent and compacted long since — is not taken for a reopen. `ownClaimSeq` explains
- * the values.
+ * later import on another device, and both gave the origin up. A reopen is known by the
+ * operation that made it (`reopens`, `WorkspaceStore.updateIssue`): inferred from this
+ * device's own outbox, a reopen of an issue another device had closed was not counted,
+ * and the devices never agreed who held the origin.
  */
 export function ownOriginClaimSeq(db: DatabaseSync, issueId: string): number | null {
   const rows = db
     .prepare(
       `SELECT payload, acknowledged_seq FROM sync_outbox
-        WHERE entity = 'issue' AND entity_id = ? ORDER BY client_seq ASC`,
+        WHERE entity = 'issue' AND entity_id = ? ORDER BY client_seq DESC`,
     )
     .all(issueId) as Array<{ payload: string; acknowledged_seq: number | null }>;
-  let claim: number | null = null;
-  let status: string | null = null;
   for (const row of rows) {
     let payload: Record<string, unknown>;
     try {
@@ -123,14 +116,10 @@ export function ownOriginClaimSeq(db: DatabaseSync, issueId: string): number | n
     } catch {
       continue;
     }
-    const at = row.acknowledged_seq ?? Number.POSITIVE_INFINITY;
-    const next: string | null = typeof payload.status === "string" ? payload.status : status;
     const writesOrigin = ["originKind", "origin_kind", "originId", "origin_id"].some((field) => field in payload);
-    const reopens = status !== null && CLOSED_STATUSES.has(status) && !CLOSED_STATUSES.has(next ?? "");
-    if (writesOrigin || reopens) claim = at;
-    status = next;
+    if (writesOrigin || payload.reopens === true) return row.acknowledged_seq ?? Number.POSITIVE_INFINITY;
   }
-  return claim;
+  return null;
 }
 
 /**
@@ -196,10 +185,10 @@ function settleOne(db: DatabaseSync, journal: Journal, item: OwedSettlement): bo
     // Replicated, so every sentence of it has to be true on every device: the one that kept
     // the number, this one, and one that joins next year.
     const body =
-      `Renumbered from ${item.from} to ${to}: two devices created ${item.from} before either had seen ` +
-      `the other's, and the repository keeps the one created first. A reference to ${item.from} made ` +
-      `before ${at} on the device where this issue was created means this issue; anywhere else, ` +
-      `${item.from} is the other one.`;
+      `Renumbered from ${item.from} to ${to}: more than one device created ${item.from} before seeing ` +
+      `the others', and the repository keeps the one created first; every other is renumbered by the ` +
+      `device that created it. A reference to ${item.from} made before ${at} on the device where this ` +
+      `issue was created means this issue.`;
     db.prepare(
       `INSERT INTO comments (id, issue_id, author, author_type, body, created_at)
        VALUES (?, ?, 'staple', 'system', ?, ?)`,
@@ -227,6 +216,16 @@ function settleOne(db: DatabaseSync, journal: Journal, item: OwedSettlement): bo
   }
   if (item.entity === "issue" && item.field === "originId") {
     record("issue", "update", { originId: null });
+    return true;
+  }
+  if (item.entity === "relation" && item.field === "edges") {
+    const rows = db
+      .prepare("SELECT blocker_id, created_by, created_at FROM relations WHERE blocked_id = ? AND type = 'blocks' ORDER BY blocker_id")
+      .all(item.entityId) as Array<{ blocker_id: string; created_by: string | null; created_at: string }>;
+    record("relation", "update", {
+      blockedBy: rows.map((row) => row.blocker_id),
+      edges: Object.fromEntries(rows.map((row) => [row.blocker_id, { createdBy: row.created_by, createdAt: row.created_at }])),
+    });
     return true;
   }
   if (item.entity === "issue" && (item.field === "status" || item.field === "kind")) {

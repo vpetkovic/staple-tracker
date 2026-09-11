@@ -136,7 +136,11 @@ describe("two devices creating an issue offline under the same number", () => {
     const noteOnA = (a.db.prepare("SELECT body FROM comments WHERE issue_id = ?").get(onB.id) as { body: string }).body;
     expect(noteOnA).toBe(note.body);
     expect(noteOnA).not.toContain("this machine");
-    expect(noteOnA).toContain("on the device where this issue was created means this issue; anywhere else, TRA-2 is the other one.");
+    expect(noteOnA).toContain("more than one device created TRA-2");
+    expect(noteOnA).toContain("on the device where this issue was created means this issue.");
+    // Nothing in it is false on a third device that also created a TRA-2 and has not
+    // settled its own yet: it says nothing of what TRA-2 means anywhere else.
+    expect(noteOnA).not.toContain("anywhere else");
     // A's record of the stand-in was closed by the renumber that settled it — by B's actor,
     // at the settled number — as it applied, not left for the end of the sync to sweep.
     const renumber = fleet!.server.ops.find((op) => op.entityId === onB.id && op.verb === "renumber")!;

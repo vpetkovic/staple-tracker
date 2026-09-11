@@ -1,6 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { insertEvent } from "./event-log.js";
-import { aliasedIssueId, formerHolderOf } from "./identifier-moves.js";
+import { aliasedIssueId, formerHolderOf, formerMove, noteRenumber } from "./identifier-moves.js";
 import { REPOSITORY_PREFIX_SETTING } from "./cloud/repository-prefix.js";
 import { type Journal, journalFor } from "./journal.js";
 import {
@@ -1658,6 +1658,111 @@ export class WorkspaceStore {
 
   /** Resolve a reference — uuid, identifier (WS-12), or bare number — to a row. */
   private findRow(ref: string): IssueRow | undefined {
+    const row = this.lookupRow(ref);
+    if (row) this.noteIfRenumbered(ref, row);
+    return row;
+  }
+
+  /**
+   * The identifier this caller used, if an issue moved off it here: the move, the issue that
+   * moved, and whether the identifier now names another issue (`identifier-moves.ts`).
+   */
+  private renumberedFrom(ref: string, resolved: IssueRow): { identifier: string; issueId: string; at: string } | null {
+    const trimmed = ref.trim();
+    if (trimmed === resolved.id) return null;
+    const upper = trimmed.toUpperCase();
+    const parsed = parseIdentifier(trimmed) ?? parseIdentifier(`${this.prefix}-${trimmed}`);
+    for (const identifier of [upper, parsed ? `${parsed.prefix}-${parsed.number}` : null]) {
+      if (identifier === null) continue;
+      const move = formerMove(this.db, identifier);
+      if (move !== null) return { identifier, ...move };
+    }
+    return null;
+  }
+
+  /** Leave the caller a notice when the identifier it used was renumbered here. */
+  private noteIfRenumbered(ref: string, resolved: IssueRow): void {
+    const moved = this.renumberedFrom(ref, resolved);
+    if (moved === null) return;
+    const now = this.db.prepare("SELECT identifier FROM issues WHERE id = ?").get(moved.issueId) as { identifier: string } | undefined;
+    if (!now || now.identifier === moved.identifier) return;
+    noteRenumber({
+      identifier: moved.identifier,
+      renumberedAt: moved.at,
+      issueId: moved.issueId,
+      nowIdentifier: now.identifier,
+      nowNamesAnother: moved.issueId !== resolved.id,
+    });
+  }
+
+  /**
+   * A write's target, refused when the caller provably meant the issue that moved.
+   *
+   * An agent holds its checkout by the identifier it was given. If sync renumbered that issue
+   * in between, the identifier now names another issue, and a `done`, `release`, status
+   * change or comment by it would land there. The checkout is the proof of what was meant:
+   * when the issue that moved off this identifier is checked out by this actor and the one
+   * holding it now is not, the write is refused and names the identifier to use.
+   */
+  private requireTarget(ref: string, actor: string | null | undefined): IssueRow {
+    const row = this.requireRow(ref);
+    if (!actor) return row;
+    const moved = this.renumberedFrom(ref, row);
+    if (moved === null || moved.issueId === row.id || row.checkout_agent === actor) return row;
+    const meant = this.db.prepare("SELECT * FROM issues WHERE id = ?").get(moved.issueId) as unknown as IssueRow | undefined;
+    if (!meant || meant.checkout_agent !== actor) return row;
+    throw new StapleError(
+      "conflict",
+      `${moved.identifier} was renumbered here at ${moved.at}: the issue you have checked out is now ` +
+        `${meant.identifier}, and ${moved.identifier} names another issue. Nothing was written. Use ${meant.identifier}.`,
+      { renumbered: { from: moved.identifier, to: meant.identifier, at: moved.at, issueId: meant.id } },
+    );
+  }
+
+  /**
+   * The issue that moved off the identifier `ref` names here, when `ref` now resolves to a
+   * different one — for a caller that holds something of its own on the issue that moved (a
+   * lease, `cloud/lease.ts`) and must not act on the new holder by the old number.
+   */
+  movedOff(ref: string): { identifier: string; issueId: string; nowIdentifier: string; at: string } | null {
+    const row = this.lookupRow(ref);
+    if (!row) return null;
+    const moved = this.renumberedFrom(ref, row);
+    if (moved === null || moved.issueId === row.id) return null;
+    const now = this.db.prepare("SELECT identifier FROM issues WHERE id = ?").get(moved.issueId) as { identifier: string } | undefined;
+    return now ? { ...moved, nowIdentifier: now.identifier } : null;
+  }
+
+  /**
+   * Every column a status move writes, as the row it left holds them — what a gate, an
+   * approval, a send-back or a checkout journals, rather than a hand-picked few: journaled
+   * as `{ status, gateState, … }`, `status_version`, `updated_at` and the gate's times changed
+   * on the device that moved it only. `oneSpelling` in the journal gives the field names.
+   */
+  private movedColumns(row: IssueRow): Record<string, unknown> {
+    return {
+      status: row.status,
+      status_version: row.status_version,
+      updated_at: row.updated_at,
+      started_at: row.started_at,
+      completed_at: row.completed_at,
+      cancelled_at: row.cancelled_at,
+      blocked_transition_at: row.blocked_transition_at,
+      unblock_owner: row.unblock_owner,
+      unblock_action: row.unblock_action,
+      checkout_agent: row.checkout_agent,
+      checkout_at: row.checkout_at,
+      gate_state: row.gate_state,
+      gate_owner: row.gate_owner,
+      gate_requested_by: row.gate_requested_by,
+      gate_requested_at: row.gate_requested_at,
+      gate_resolved_by: row.gate_resolved_by,
+      gate_resolved_at: row.gate_resolved_at,
+      gate_released: row.gate_released === 1,
+    };
+  }
+
+  private lookupRow(ref: string): IssueRow | undefined {
     const trimmed = ref.trim();
     const byId = this.db.prepare("SELECT * FROM issues WHERE id = ?").get(trimmed) as
       | IssueRow
@@ -2043,7 +2148,7 @@ export class WorkspaceStore {
   /** Replace the full blocked-by set — set replacement, never incremental add. */
   setBlockedBy(ref: string, blockerRefs: string[], actor?: string | null): Issue {
     return this.journaled(() => {
-      const row = this.requireRow(ref);
+      const row = this.requireTarget(ref, actor);
       const blockers = blockerRefs.map((blockerRef) => this.requireRow(blockerRef));
       const deduped = [...new Map(blockers.map((b) => [b.id, b])).values()];
       this.assertNoCycle(
@@ -2637,10 +2742,18 @@ export class WorkspaceStore {
       entityId: ancestor.id,
       verb: "update",
       payload: {
-        status: next,
+        /**
+         * Every column the compare-and-swap wrote — status, `status_version`, `updated_at`,
+         * the timestamps and the blocked cycle — not the status alone: journaled as
+         * `{ status, derived }`, the rest changed on this device only (measured on real
+         * data), although every one of them is a synchronized field. `oneSpelling` in the
+         * journal gives them their field names.
+         */
+        ...columns,
+        status_version: written.status_version,
         derived: DERIVED_MARKERS[target],
-        // The blocked cycle this transition began or ended travels with it.
-        ...("blocked_transition_at" in columns ? { blockedTransitionAt: columns.blocked_transition_at } : {}),
+        // A derived reopen says so too (`reopens`, `updateIssue`).
+        ...(wasResolved && target !== "done" && target !== "cancelled" ? { reopens: true } : {}),
       },
       actor,
     });
@@ -3052,7 +3165,7 @@ export class WorkspaceStore {
       throw new StapleError("validation", "gate requires --owner: name the human who must approve");
     }
     return this.journaled(() => {
-      const row = this.requireRow(ref);
+      const row = this.requireTarget(ref, actor);
       if (this.isResolvedStatus(row.status)) {
         throw new StapleError(
           "conflict",
@@ -3148,13 +3261,7 @@ export class WorkspaceStore {
         entity: "issue",
         entityId: row.id,
         verb: "update",
-        payload: {
-          status: parkedStatus,
-          gateState: "pending",
-          gateOwner: owner,
-          checkoutAgent: null,
-          blockedTransitionAt: null,
-        },
+        payload: this.movedColumns(updated),
         actor: actor ?? null,
       });
       if (opts.comment) {
@@ -3205,7 +3312,7 @@ export class WorkspaceStore {
     actor?: string | null,
   ): Issue {
     return this.journaled(() => {
-      const row = this.requireRow(ref);
+      const row = this.requireTarget(ref, actor);
       if (!isActiveGate(row.gate_state)) {
         throw new StapleError(
           "conflict",
@@ -3347,12 +3454,7 @@ export class WorkspaceStore {
         entity: "issue",
         entityId: row.id,
         verb: "update",
-        payload: {
-          status: next,
-          gateState: "approved",
-          gateResolvedBy: actor ?? null,
-          blockedTransitionAt: updated.blocked_transition_at,
-        },
+        payload: this.movedColumns(updated),
         actor: actor ?? null,
       });
       if (opts.comment) {
@@ -3398,7 +3500,7 @@ export class WorkspaceStore {
       );
     }
     return this.journaled(() => {
-      const row = this.requireRow(ref);
+      const row = this.requireTarget(ref, actor);
       if (!isActiveGate(row.gate_state)) {
         throw new StapleError(
           "conflict",
@@ -3443,13 +3545,7 @@ export class WorkspaceStore {
         entity: "issue",
         entityId: row.id,
         verb: "update",
-        payload: {
-          status: next,
-          gateState: "changes_requested",
-          gateResolvedBy: actor ?? null,
-          checkoutAgent: null,
-          blockedTransitionAt: null,
-        },
+        payload: this.movedColumns(updated),
         actor: actor ?? null,
       });
       this.insertComment(row.id, actor ?? "unknown", actor ? "agent" : "system", comment);
@@ -3465,7 +3561,7 @@ export class WorkspaceStore {
     if (patch.kind) this.assertConfiguredKind(patch.kind);
     if (patch.priority) assertPriority(patch.priority);
     return this.journaled(() => {
-      const row = this.requireRow(ref);
+      const row = this.requireTarget(ref, actor);
       if (
         patch.expectedStatusVersion !== undefined &&
         patch.expectedStatusVersion !== row.status_version
@@ -3617,11 +3713,18 @@ export class WorkspaceStore {
        * have to invent a winner. `status_version` is carried because it is the
        * optimistic-concurrency token a receiver checks against, not decoration.
        */
+      /**
+       * A reopen says so. It is what makes a live external origin this issue's claim again
+       * (`cloud/claims.ts`), and only the operation knows the status it moved from — a
+       * device that inferred it from its own outbox missed every close another device made.
+       */
+      const reopens =
+        statusChanging && categoryBefore !== null && categoryAfter !== null && RESOLVED_CATEGORIES.includes(categoryBefore) && !RESOLVED_CATEGORIES.includes(categoryAfter);
       this.journal.record({
         entity: "issue",
         entityId: row.id,
         verb: "update",
-        payload: { ...next },
+        payload: { ...next, ...(reopens ? { reopens: true } : {}) },
         actor: actor ?? null,
       });
 
@@ -4444,7 +4547,7 @@ export class WorkspaceStore {
     const activeStatus = this.primaryStatusFor("active");
     const stealIfIdleSeconds = assertIdleThreshold(opts.stealIfIdleSeconds, "stealIfIdleSeconds");
     return this.journaled(() => {
-      const row = this.requireRow(ref);
+      const row = this.requireTarget(ref, agent);
       if (this.isActiveStatus(row.status) && row.checkout_agent === agent) {
         return rowToIssue(row); // crash-recovery re-claim
       }
@@ -4621,14 +4724,7 @@ export class WorkspaceStore {
                   entity: "issue",
                   entityId: row.id,
                   verb: "update",
-                  payload: {
-                    status: activeStatus,
-                    assignee: agent,
-                    checkoutAgent: agent,
-                    checkoutAt: now,
-                    blockedTransitionAt: null,
-                    previousHolder: claim.heldBy,
-                  },
+                  payload: { ...this.movedColumns(stolen), assignee: stolen.assignee, previousHolder: claim.heldBy },
                   actor: agent,
                 });
                 emitOverride();
@@ -4682,13 +4778,7 @@ export class WorkspaceStore {
         entity: "issue",
         entityId: row.id,
         verb: "update",
-        payload: {
-          status: activeStatus,
-          assignee: agent,
-          checkoutAgent: agent,
-          checkoutAt: now,
-          blockedTransitionAt: null,
-        },
+        payload: { ...this.movedColumns(claimed), assignee: claimed.assignee },
         actor: agent,
       });
       emitOverride();
@@ -4712,7 +4802,7 @@ export class WorkspaceStore {
   releaseIssue(ref: string, agent?: string | null, opts: { ifIdleSeconds?: number } = {}): Issue {
     const ifIdleSeconds = assertIdleThreshold(opts.ifIdleSeconds, "ifIdleSeconds");
     return this.journaled(() => {
-      const row = this.requireRow(ref);
+      const row = this.requireTarget(ref, agent);
       if (!this.isActiveStatus(row.status)) {
         throw new StapleError("conflict", `Cannot release: status is "${row.status}"`);
       }
@@ -4881,7 +4971,7 @@ export class WorkspaceStore {
     if (!body?.trim()) throw new StapleError("validation", "Comment body is required");
     const key = opts.idempotencyKey?.trim() || null;
     return this.journaled(() => {
-      const row = this.requireRow(ref);
+      const row = this.requireTarget(ref, author);
       if (key) {
         const existing = this.db
           .prepare("SELECT * FROM comments WHERE issue_id = ? AND idempotency_key = ?")
@@ -4936,7 +5026,7 @@ export class WorkspaceStore {
       throw new StapleError("validation", "Document key must be 1-64 chars of a-z 0-9 . _ -");
     }
     return this.journaled(() => {
-      const row = this.requireRow(ref);
+      const row = this.requireTarget(ref, opts.author);
       const current = this.db
         .prepare("SELECT current_revision FROM documents WHERE issue_id = ? AND key = ?")
         .get(row.id, cleanKey) as { current_revision: number } | undefined;

@@ -47,7 +47,7 @@ import {
 } from "@/components/ui/dialog";
 import { action, getIssues } from "@/lib/api";
 import { withDimension } from "@/lib/filters";
-import { useSession } from "@/lib/session";
+import { useSession, type Selection } from "@/lib/session";
 import { workspaceSettings } from "@/lib/settings";
 import { openSettings } from "@/lib/shell-events";
 import type { IssueStatus } from "@/lib/types";
@@ -63,6 +63,7 @@ import {
   type CommandAction,
   type PaletteCommand,
   type PalettePage,
+  writeTarget,
 } from "./commands";
 
 /**
@@ -196,12 +197,13 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
 
   /** One write, one place that decides what a failure means. */
   const write = useCallback(
-    async (target: { workspace: string; ref: string; actor?: string }, payload: Parameters<typeof action>[1]) => {
+    async (target: Selection & { actor?: string }, payload: Parameters<typeof action>[1]) => {
       setBusy(true);
       setRefusal(null);
       try {
-        // Selection carries `workspace`; the API target field is `ws`.
-        await action({ ws: target.workspace, ref: target.ref, ...(target.actor ? { actor: target.actor } : {}) }, payload);
+        // Selection carries `workspace`; the API target field is `ws` — and the ref is the
+        // issue the selection was pinned to (`writeTarget`).
+        await action(writeTarget(target), payload);
         session.refresh();
         return true;
       } catch (error) {

@@ -316,11 +316,38 @@ function readField(
       const row = db.prepare("SELECT value FROM meta WHERE key = ?").get(settingMetaKey(entityId)) as
         | { value: unknown }
         | undefined;
-      return { present: true, value: row?.value ?? null };
+      // The setting's VALUE, not the envelope it is stored in: the record holds what a
+      // resolution writes back, and written back as the envelope, every device held it twice
+      // wrapped (`{"v":1,"value":"{\"v\":1,…}"}`).
+      return { present: true, value: settingValueOf(row?.value ?? null) };
     }
     default:
       return { present: false, value: null };
   }
+}
+
+/** A stored setting envelope's value; anything that is not one, as it is. */
+function settingValueOf(stored: unknown): unknown {
+  if (typeof stored !== "string") return stored;
+  try {
+    const parsed = JSON.parse(stored) as unknown;
+    if (parsed !== null && typeof parsed === "object" && "v" in parsed && "value" in parsed) {
+      return (parsed as { value: unknown }).value;
+    }
+  } catch {
+    // a plain string value
+  }
+  return stored;
+}
+
+/**
+ * The payload key a resolution writes a field under: the field name every applier reads
+ * (`targetDate`), not the column the record names (`target_date`) — written under the
+ * column, a milestone date resolved on one device changed on no device at all, that one
+ * included. Mirrors `oneSpelling` in `journal.ts`.
+ */
+function wireKey(field: string): string {
+  return field.replace(/_([a-z])/g, (_, letter: string) => letter.toUpperCase());
 }
 
 // ------------------------------------------------------------------ codec
@@ -1017,7 +1044,8 @@ function decide(db: DatabaseSync, request: ResolveRequest): ResolveOutcome {
       throw new StapleError("not_found", `No conflict "${request.id}".`);
     }
 
-    const chosen = chooseValue(conflict, request);
+    // A setting record from before the value was unwrapped holds the envelope; write the value.
+    const chosen = conflict.entity === "setting" ? settingValueOf(chooseValue(conflict, request)) : chooseValue(conflict, request);
 
     if (conflict.resolvedAt !== null) {
       if (sameValue(conflict.resolvedValue, chosen)) {
@@ -1057,7 +1085,7 @@ function decide(db: DatabaseSync, request: ResolveRequest): ResolveOutcome {
     // A plan or a milestone's members go back with each entry's author, time and note.
     const entries = WHOLE[conflict.entity] === conflict.field ? entriesFor(db, conflict, request.choice, chosen) : null;
     for (const write of writes) {
-      const payload: Record<string, unknown> = { [conflict.field]: write.value };
+      const payload: Record<string, unknown> = { [wireKey(conflict.field)]: write.value };
       if (entries !== null) payload.entries = entries;
       applyToDatabase(db, {
         entity: conflict.entity,
@@ -1290,7 +1318,7 @@ export function applyConflictOperation(db: DatabaseSync, op: RemoteOperation): b
       entity,
       entityId: targetId,
       verb: resolutionVerb(entity, field),
-      payload: { [field]: value },
+      payload: { [wireKey(field)]: value },
       actor: op.actor === "" ? null : op.actor,
       deviceId: op.deviceId,
       at,

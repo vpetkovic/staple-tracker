@@ -208,6 +208,26 @@ export function resolveDeviceId(): string | null {
   }
 }
 
+/**
+ * Every payload key in one spelling: camelCase, the field name.
+ *
+ * The seam's callers wrote some fields by field name (`updatedAt`) and some by column
+ * (`updated_at` — `updateIssue` journals the changed columns as they are), and the
+ * service's fold keeps each key it is sent. So one entity's state held both spellings of
+ * one field, a device hydrating applied them in key order, and after a vocabulary migration
+ * the stale one won on every fresh device while the tail held the new one. The fold and the
+ * snapshot applier now treat the two as one field (`worker/src/fold.ts`, `snapshotToInput`);
+ * this is the other half: nothing new is sent in two spellings. Top-level keys only — a
+ * nested value (a plan's `entries`) is data, keyed by ids.
+ */
+export function oneSpelling(payload: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(payload)) {
+    out[key.replace(/_([a-z])/g, (_, letter: string) => letter.toUpperCase())] = value;
+  }
+  return out;
+}
+
 interface SyncStateRow {
   repository_id: string | null;
   epoch: number;
@@ -559,7 +579,7 @@ export class Journal {
         entity: intent.entity,
         entityId: intent.entityId,
         verb: intent.verb,
-        payload: { ...(intent.payload ?? {}) },
+        payload: oneSpelling(intent.payload ?? {}),
         actor: intent.actor ?? null,
       });
       return;
@@ -576,7 +596,7 @@ export class Journal {
         entity: existing.entity,
         entityId: existing.entityId,
         verb: "create",
-        payload: { ...(intent.payload ?? {}) },
+        payload: oneSpelling(intent.payload ?? {}),
         actor: intent.actor ?? existing.actor ?? null,
       });
       return;
@@ -585,7 +605,7 @@ export class Journal {
       entity: existing.entity,
       entityId: existing.entityId,
       verb: mergeVerb(existing.verb, intent.verb),
-      payload: { ...existing.payload, ...(intent.payload ?? {}) },
+      payload: { ...existing.payload, ...oneSpelling(intent.payload ?? {}) },
       actor: intent.actor ?? existing.actor ?? null,
     });
   }

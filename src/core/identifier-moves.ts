@@ -122,3 +122,63 @@ function readPending(db: DatabaseSync): IdentifierMove[] {
     return [];
   }
 }
+
+/**
+ * The move off an identifier recorded here — which issue left it, and when — whether or not
+ * another issue holds it now.
+ */
+export function formerMove(db: DatabaseSync, identifier: string): { issueId: string; at: string } | null {
+  const row = db.prepare("SELECT value FROM meta WHERE key = ?").get(`${ALIAS_PREFIX}${identifier}`) as
+    | { value: string }
+    | undefined;
+  if (!row) return null;
+  try {
+    const parsed = JSON.parse(row.value) as { issueId?: unknown; at?: unknown };
+    if (typeof parsed.issueId !== "string") return null;
+    if (!db.prepare("SELECT 1 AS hit FROM issues WHERE id = ?").get(parsed.issueId)) return null;
+    return { issueId: parsed.issueId, at: typeof parsed.at === "string" ? parsed.at : "an earlier sync" };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * What a caller is told when an identifier it used was renumbered on this device.
+ *
+ * Log-order settlement moves an issue off a number another device claimed first
+ * (`cloud/claims.ts`), and the number then names that other issue. A process that learned
+ * `TRA-2` before the move and uses it after — an agent between `checkout` and `done`, a
+ * handoff, a script — would reach a different issue and never know. So every resolution of
+ * an identifier with a move off it recorded here leaves a notice, and the surfaces put it in
+ * the response the caller reads: the CLI on stdout and in `--json`, MCP in the tool
+ * result (`takeRenumberNotices`). Where the caller provably meant the issue that moved — it
+ * holds that issue's checkout — the store refuses instead (`WorkspaceStore.requireTarget`).
+ */
+export interface RenumberNotice {
+  /** The identifier as the caller used it. */
+  readonly identifier: string;
+  /** When the issue that held it moved off it, here. */
+  readonly renumberedAt: string;
+  /** That issue, and the identifier it holds now. */
+  readonly issueId: string;
+  readonly nowIdentifier: string;
+  /** Whether the identifier names another issue now (it resolved to that one). */
+  readonly nowNamesAnother: boolean;
+  readonly message: string;
+}
+
+const pendingNotices: RenumberNotice[] = [];
+
+export function noteRenumber(notice: Omit<RenumberNotice, "message">): void {
+  if (pendingNotices.some((held) => held.identifier === notice.identifier && held.issueId === notice.issueId)) return;
+  const message = notice.nowNamesAnother
+    ? `${notice.identifier} was renumbered here at ${notice.renumberedAt}; your earlier ${notice.identifier} is now ` +
+      `${notice.nowIdentifier}, and ${notice.identifier} now names another issue.`
+    : `${notice.identifier} was renumbered here at ${notice.renumberedAt}; it is now ${notice.nowIdentifier}.`;
+  pendingNotices.push({ ...notice, message });
+}
+
+/** Every notice since the last call, oldest first — and forget them. */
+export function takeRenumberNotices(): RenumberNotice[] {
+  return pendingNotices.splice(0, pendingNotices.length);
+}

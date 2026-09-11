@@ -33,6 +33,7 @@ import {
   type CloudSurfaceReport,
 } from "./core/cloud/surface.js";
 import { Hub, notifyHubResolvedSafe } from "./core/hub.js";
+import { takeRenumberNotices } from "./core/identifier-moves.js";
 import type { CrossBlockerState } from "./core/hub.js";
 import {
   COMMENT_AUTHOR_TYPES,
@@ -239,11 +240,36 @@ const autoSync = new SurfaceAutoSync({
       return result instanceof Promise ? result.then(fire) : fire(result);
     };
 
+  /**
+   * An identifier the call used was renumbered on this device: the result says so, in a
+   * text block beside the answer and as `renumbered` on an object answer, because an
+   * agent reads the result and nothing else (`identifier-moves.ts`, `RenumberNotice`).
+   * Stale notices from outside a call are dropped first, so a notice is always this call's.
+   */
+  const withNotices =
+    (cb: ToolCallback): ToolCallback =>
+    (...args: unknown[]) => {
+      takeRenumberNotices();
+      const attach = (value: unknown) => {
+        const notices = takeRenumberNotices();
+        if (notices.length === 0 || value === null || typeof value !== "object") return value;
+        const result = value as { content?: Array<{ type: string; text: string }>; structuredContent?: Record<string, unknown> };
+        const lines = notices.map((notice) => `note: ${notice.message}`).join("\n");
+        return {
+          ...result,
+          content: [...(result.content ?? []), { type: "text" as const, text: lines }],
+          ...(result.structuredContent ? { structuredContent: { ...result.structuredContent, renumbered: notices } } : {}),
+        };
+      };
+      const result = cb(...args);
+      return result instanceof Promise ? result.then(attach) : attach(result);
+    };
+
   (server as unknown as { registerTool: unknown }).registerTool = (
     name: string,
     config: ToolConfig,
     cb: ToolCallback,
-  ) => direct(name, config, config.annotations?.readOnlyHint === true ? cb : afterWrite(cb));
+  ) => direct(name, config, withNotices(config.annotations?.readOnlyHint === true ? cb : afterWrite(cb)));
 }
 
 /**

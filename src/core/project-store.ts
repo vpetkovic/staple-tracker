@@ -189,6 +189,9 @@ export class ProjectStore {
           kind: project.kind,
           sourceKind: project.sourceKind,
           source: project.source,
+          // Its own times, so no other device dates it by the operation (measured: 1 ms off).
+          createdAt: project.createdAt,
+          updatedAt: project.updatedAt,
         },
         actor,
       });
@@ -235,7 +238,7 @@ export class ProjectStore {
         entity: "project",
         entityId: project.id,
         verb: "update",
-        payload: Object.fromEntries(changed.map((key) => [key, fields[key]])),
+        payload: { ...Object.fromEntries(changed.map((key) => [key, fields[key]])), updatedAt: project.updatedAt },
         actor,
       });
       return project;

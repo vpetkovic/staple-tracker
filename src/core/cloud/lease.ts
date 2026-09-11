@@ -306,13 +306,32 @@ export async function acquireClaim(
  * It is not retried, because retrying a lease we demonstrably do not hold is a
  * spin, which is exactly why the taxonomy marks the code non-retryable.
  */
+/**
+ * The issue a lease operation by `ref` is about — refused when `ref` was renumbered here
+ * and this device's lease is on the issue that moved off it, not on the one it names now.
+ * By the old number, a renewal or a release would otherwise be aimed at the new holder.
+ */
+function leasedIssue(store: WorkspaceStore, ref: string): ReturnType<WorkspaceStore["getIssue"]> {
+  const issue = store.getIssue(ref);
+  const moved = store.movedOff(ref);
+  if (moved !== null && readLocalLease(store.db, moved.issueId) !== null && readLocalLease(store.db, issue.id) === null) {
+    throw new StapleError(
+      "conflict",
+      `${moved.identifier} was renumbered here at ${moved.at}: the issue this device holds the lease on is now ` +
+        `${moved.nowIdentifier}, and ${moved.identifier} names another issue. Nothing was sent. Use ${moved.nowIdentifier}.`,
+      { renumbered: { from: moved.identifier, to: moved.nowIdentifier, at: moved.at, issueId: moved.issueId } },
+    );
+  }
+  return issue;
+}
+
 export async function renewClaim(
   store: WorkspaceStore,
   repositoryId: string,
   ref: string,
   options: LeaseOptions,
 ): Promise<RenewOutcome> {
-  const issue = store.getIssue(ref);
+  const issue = leasedIssue(store, ref);
   return renewLease(store.db, repositoryId, issue.id, options, issue.identifier);
 }
 
@@ -399,7 +418,7 @@ export async function releaseClaim(
   ref: string,
   options: LeaseOptions,
 ): Promise<ReleaseOutcome> {
-  const issue = store.getIssue(ref);
+  const issue = leasedIssue(store, ref);
   const entityId = issue.id;
   const connection = connectionOrNull(options.home, repositoryId);
   const held = readLocalLease(store.db, entityId);

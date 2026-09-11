@@ -120,6 +120,43 @@ describe("unique values two devices claimed offline", () => {
     }
   });
 
+  it("a reopen is a claim even when another device did the close", async () => {
+    fleet = new Fleet(new FakeSyncServer({ repositoryId: REPO }), REPO);
+    const a = fleet.machine("a");
+    await a.sync();
+    const b = fleet.machine("b");
+    await b.sync();
+    const c = fleet.machine("c");
+    await c.sync();
+
+    // A imports; B closes it; A learns of the close.
+    const held = a.store.createIssue({ title: "Imported on A", originKind: "github", originId: "acme/web#60" }).id;
+    await a.sync();
+    await b.sync();
+    b.store.updateIssue(held, { status: "done" });
+    await b.sync();
+    await a.sync();
+    // C imports the same external issue again, live; A reopens its own without seeing that.
+    await c.sync();
+    const again = c.store.createIssue({ title: "Imported again on C", originKind: "github", originId: "acme/web#60" }).id;
+    await c.sync();
+    a.store.updateIssue(held, { status: "todo" });
+    await a.sync();
+    await b.sync();
+    await c.sync();
+    const d = fleet.machine("d");
+    await d.sync();
+
+    // C's import is earlier in the log than A's reopen, so it keeps the origin everywhere.
+    for (const machine of [a, b, c, d]) {
+      expect(row(machine.db, "SELECT origin_id AS o FROM issues WHERE id = ?", again), machine.label).toEqual({ o: "acme/web#60" });
+      expect(row(machine.db, "SELECT origin_id AS o, status FROM issues WHERE id = ?", held), machine.label).toEqual({
+        o: null,
+        status: "todo",
+      });
+    }
+  });
+
   it("the earlier holder of a live origin keeps it through a move between two open statuses", async () => {
     fleet = new Fleet(new FakeSyncServer({ repositoryId: REPO }), REPO);
     const a = fleet.machine("a");

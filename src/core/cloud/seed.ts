@@ -67,6 +67,8 @@ export interface RepositorySurvey {
   readonly tailCursor: string;
   readonly entities: readonly SnapshotEntity[];
   readonly pages: number;
+  /** True when the service could not fold a log this large and the tail was folded here. */
+  readonly fromTail?: boolean;
 }
 
 export interface SeedItem {

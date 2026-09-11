@@ -1269,7 +1269,55 @@ export class Hub {
    * publish retract the link, and what stops an adopt from bringing it back here.
    */
   removeCrossLink(blockerIdentifier: string, blockedIdentifier: string): CrossLink | undefined {
-    return this.deleteCrossLink(blockerIdentifier, blockedIdentifier, true);
+    const exact = this.deleteCrossLink(blockerIdentifier, blockedIdentifier, true);
+    if (exact) return exact;
+    /**
+     * Typed through an identifier the issue has moved off (a stand-in, a renumbered
+     * number) — as `link` accepts one. The link is stored under the issue's identifier
+     * now (`validateCrossLink`), so that is the one to remove.
+     */
+    const blocker = this.currentIdentifier(blockerIdentifier);
+    const blocked = this.currentIdentifier(blockedIdentifier);
+    if (blocker === null || blocked === null) return undefined;
+    return this.deleteCrossLink(blocker, blocked, true);
+  }
+
+  /**
+   * Whether `identifier` finds an issue in this machine's copy of workspace `slug` — a
+   * stand-in or an old number included (`identifier-moves.ts`). True when the workspace
+   * is not on this machine: there is nothing here to say it does not.
+   */
+  namesIssueHere(slug: string, identifier: string): boolean {
+    const entry = this.findBySlug(slug);
+    if (!entry?.available) return true;
+    const ws = openWorkspace(entry.path);
+    try {
+      ws.store.getIssue(identifier);
+      return true;
+    } catch {
+      return false;
+    } finally {
+      ws.store.db.close();
+    }
+  }
+
+  /** The identifier the issue `identifier` finds holds now, or null when it finds none here. */
+  private currentIdentifier(identifier: string): string | null {
+    let side: { entry: WorkspaceEntry; identifier: string };
+    try {
+      side = this.resolveIdentifier(identifier);
+    } catch {
+      return null;
+    }
+    if (!side.entry.available) return side.identifier;
+    const ws = openWorkspace(side.entry.path);
+    try {
+      return ws.store.getIssue(side.identifier).identifier;
+    } catch {
+      return null;
+    } finally {
+      ws.store.db.close();
+    }
   }
 
   /**

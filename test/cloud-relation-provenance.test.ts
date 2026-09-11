@@ -33,7 +33,8 @@ const tick = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 3
 
 describe("blocking edges", () => {
   it("keep their author and time on the seeding device, and arrive with them everywhere else", async () => {
-    fleet = new Fleet(new FakeSyncServer({ repositoryId: REPO }), REPO);
+    const server = new FakeSyncServer({ repositoryId: REPO });
+    fleet = new Fleet(server, REPO);
     const a = fleet.connect("a", fleet.prepare("a"));
     // Real-data shape: edges made at different moments, by create and by a later set.
     const first = a.store.createIssue({ title: "First" });
@@ -59,6 +60,10 @@ describe("blocking edges", () => {
     await a.sync();
     await a.sync();
     expect(edges(a.db)).toEqual(before);
+    // The seed sends each set with its edges, so nothing has to be published again to heal it.
+    const sets = server.ops.filter((op) => op.entity === "relation");
+    expect(sets).toHaveLength(3);
+    expect(sets.every((op) => (op.payload as { edges?: unknown }).edges !== undefined)).toBe(true);
 
     const tail = fleet.machine("tail");
     await tail.sync();
@@ -102,5 +107,17 @@ describe("blocking edges", () => {
     });
     expect(byBlocker(a.db, second.id)).toEqual(expect.objectContaining({ created_by: "older-build" }));
     expect(byBlocker(fresh.db, first.id)).toEqual(byBlocker(a.db, first.id));
+    // The edge the older build added reads the same on a device that hydrated too: the
+    // device that applied its set journaled the edges it gave it (`settleOne`), so the fold
+    // carries them. Before, a fresh device dated it by hydration and credited nobody.
+    const tail = fleet!.machine("tail");
+    await tail.sync();
+    const late = fleet!.machine("late");
+    await late.sync();
+    for (const machine of [fresh, tail, late]) {
+      await machine.sync();
+      expect(byBlocker(machine.db, second.id), machine.label).toEqual(byBlocker(a.db, second.id));
+      expect(byBlocker(machine.db, first.id), machine.label).toEqual(byBlocker(a.db, first.id));
+    }
   });
 });
