@@ -123,9 +123,9 @@ export const EMITTED_PAYLOADS: ReadonlyArray<{
     "payload": {
       "updatedAt": "2026-09-10T00:00:00.000Z",
       "title": "Child, renamed",
-      "normalizedTitle": "child, renamed",
       "priority": "low",
-      "labels": "[]"
+      "labels": "[]",
+      "normalizedTitle": "child, renamed"
     }
   },
   {
@@ -184,7 +184,8 @@ export const EMITTED_PAYLOADS: ReadonlyArray<{
         }
       },
       "targetDate": null,
-      "startDate": "2026-01-01"
+      "startDate": "2026-01-01",
+      "updatedAt": "2026-09-10T00:00:00.000Z"
     }
   },
   {
@@ -200,7 +201,8 @@ export const EMITTED_PAYLOADS: ReadonlyArray<{
           "addedAt": "2026-09-10T00:00:00.000Z",
           "note": null
         }
-      }
+      },
+      "updatedAt": "2026-09-10T00:00:00.000Z"
     }
   },
   {
@@ -208,7 +210,8 @@ export const EMITTED_PAYLOADS: ReadonlyArray<{
     "verb": "update",
     "payload": {
       "targetDate": "2026-12-01",
-      "startDate": null
+      "startDate": null,
+      "updatedAt": "2026-09-10T00:00:00.000Z"
     }
   },
   {

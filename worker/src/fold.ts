@@ -338,14 +338,16 @@ export async function foldLog(
        * hydrating device — so the stale one could win. A key's other spelling is dropped
        * when it is written, state and provenance alike, so the state holds the latest.
        */
-      for (const key of Object.keys(payload as Record<string, unknown>)) {
+      const carried = columnSpellingWins(payload as Record<string, unknown>);
+      for (const key of Object.keys(carried)) {
         const other = otherSpelling(key);
         if (other !== key) {
           delete entry.state[other];
           delete entry.fieldWrites[other];
         }
       }
-      Object.assign(entry.state, payload as Record<string, unknown>);
+      const statusBefore = entry.state.status;
+      Object.assign(entry.state, carried);
       // So the merge is the same for every verb and only the RECORD of the verb differs.
       entry.superseded = row.verb === "replace";
 
@@ -363,14 +365,9 @@ export async function foldLog(
        * version the write moved off.
        */
       if (row.verb !== "create") {
-        for (const field of Object.keys(payload as Record<string, unknown>)) {
-          entry.fieldWrites[field] = {
-            baseVersion: entry.version - 1,
-            opId: row.op_id,
-            at: row.created_at,
-            seq: row.seq,
-          };
-        }
+        const write = { baseVersion: entry.version - 1, opId: row.op_id, at: row.created_at, seq: row.seq };
+        for (const field of Object.keys(carried)) entry.fieldWrites[field] = write;
+        if (entry.entity === "issue" && reopensOrigin(statusBefore, carried.status)) entry.fieldWrites.reopens = write;
       }
     }
 
@@ -398,6 +395,55 @@ export async function foldLog(
  * discards later updates to a deleted entity anyway, and reproducing the corpse would
  * mean writing two operations per deleted entity for a state nothing reads.
  */
+/**
+ * A payload naming one field in both spellings keeps the column's.
+ *
+ * Only a restored create from before one spelling carries both: an older build journaled a
+ * create by field name and every later edit by column, the fold before this one kept both
+ * keys, and a backup and every epoch restored from it holds both with no provenance to say
+ * which came last. The column's is the edit — only an edit ever wrote that spelling — so it
+ * is the later value. The client's applier, its snapshot reader and its tail fold keep the
+ * same one (`columnSpellingWins` in `src/core/cloud/apply.ts`, `tail-fold.ts`).
+ */
+export function columnSpellingWins(payload: Record<string, unknown>): Record<string, unknown> {
+  let out: Record<string, unknown> | null = null;
+  for (const key of Object.keys(payload)) {
+    if (!key.includes("_")) continue;
+    const camel = otherSpelling(key);
+    if (camel === key || !(camel in payload)) continue;
+    out ??= { ...payload };
+    delete out[camel];
+  }
+  return out ?? payload;
+}
+
+/**
+ * The statuses an issue gives up its external origin in — the one definition of a live
+ * origin, `ORIGIN_RELEASING_STATUSES` in `src/core/types.ts`, which a client test holds
+ * this to.
+ */
+export const ORIGIN_RELEASING_STATUSES: readonly string[] = ["done", "cancelled"];
+
+/**
+ * True when a write moves an issue from a status that releases its origin to one that
+ * holds it: a reopen, which is a claim on the origin it carries (`src/core/cloud/claims.ts`).
+ *
+ * Recorded as provenance under `reopens`, with the write's seq, whether or not the
+ * operation said so. A build from before `reopens` did not, and a device hydrating from
+ * this fold has only the last write of `status` to go on — which cannot tell a reopen
+ * from a move between two open statuses. The fold can: it holds the status the write
+ * moved from. Without it a fresh device gave an origin to the issue a device reading the
+ * tail had taken it from.
+ */
+export function reopensOrigin(before: unknown, after: unknown): boolean {
+  return (
+    typeof before === "string" &&
+    typeof after === "string" &&
+    ORIGIN_RELEASING_STATUSES.includes(before) &&
+    !ORIGIN_RELEASING_STATUSES.includes(after)
+  );
+}
+
 /** `updated_at` for `updatedAt` and back; a key with neither shape is its own. */
 export function otherSpelling(key: string): string {
   if (key.includes("_")) return key.replace(/_([a-z])/g, (_, letter: string) => letter.toUpperCase());

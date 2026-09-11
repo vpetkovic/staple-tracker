@@ -545,6 +545,43 @@ describe("the fold's record of each entity's create", () => {
     expect(Object.keys(entity.fieldWrites)).toEqual(["updatedAt"]);
   });
 
+  it("keeps the column's spelling of a field a restored create names in both", async () => {
+    // A backup folded before one spelling holds a create's value by field name and every
+    // later edit's by column, with no provenance; the column's is the edit.
+    await pushOps(
+      [
+        envelope({
+          clientSeq: 1,
+          verb: "create",
+          baseVersion: null,
+          actor: "restore:backup-1",
+          payload: { title: "t", estimatedSeconds: 3600, acceptanceCriteria: ["a", "b"], estimated_seconds: 10800, acceptance_criteria: ["a", "c"] },
+        }),
+      ],
+      { token },
+    );
+    const body = await jsonOf(await call(`/v1/repos/${REPO}/snapshot`, { token }));
+    const [entity] = body.entities;
+    expect(entity.state).toEqual({ title: "t", estimated_seconds: 10800, acceptance_criteria: ["a", "c"] });
+  });
+
+  it("records a reopen as a write of `reopens`, whether or not the operation said so", async () => {
+    await pushOps(
+      [
+        envelope({ clientSeq: 1, verb: "create", baseVersion: null, entityId: "reopened", payload: { title: "t", status: "done" } }),
+        envelope({ clientSeq: 2, entityId: "reopened", payload: { status: "todo" } }),
+        envelope({ clientSeq: 3, verb: "create", baseVersion: null, entityId: "moved", payload: { title: "u", status: "backlog" } }),
+        envelope({ clientSeq: 4, entityId: "moved", payload: { status: "todo" } }),
+      ],
+      { token },
+    );
+    const body = await jsonOf(await call(`/v1/repos/${REPO}/snapshot`, { token }));
+    const byId = Object.fromEntries(body.entities.map((entity: any) => [entity.entityId, entity]));
+    expect(byId.reopened.fieldWrites.reopens.seq).toBe(2);
+    expect(byId.reopened.state.reopens).toBeUndefined();
+    expect(byId.moved.fieldWrites.reopens).toBeUndefined();
+  });
+
   it("says nothing about a create the log does not hold", async () => {
     await pushOps([envelope({ clientSeq: 1, payload: { title: "an edit with no create" } })], { token });
     const body = await jsonOf(await call(`/v1/repos/${REPO}/snapshot`, { token }));
