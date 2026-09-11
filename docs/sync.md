@@ -183,27 +183,46 @@ So:
   its argument once and waits on that issue by its id, answering with the identifier it
   holds now (and `renumberedWhileWaiting` in `--json`). The UI's open issue is pinned to its
   id once loaded, and its buttons and the palette's commands post the id.
-- **A write through the number is refused while the issue that moved may be the one
-  meant**, whoever the actor is. Who is writing proves nothing — the actor is `--agent`, or
-  `$STAPLE_AGENT`, or `$USER`, and the step that learned the number and the step that writes
-  need not agree — so the rule reads only what the issue that moved says about itself. The
-  write is refused, naming both issues (identifier, title and id), and nothing is written,
-  when either holds:
-  - that issue is **checked out by any agent, or leased by this device**; or
-  - it moved **less than a day ago** (`RENUMBER_GUARD_MS`, 24 hours, measured from when this
+- **The contract: within a day of a move, or while any issue that left the number is held, a
+  write by that number never lands on an issue other than the one the caller meant, however
+  many issues have passed through the number. It is refused instead.** Outside the day, with
+  nothing held, the write goes through with the notice below.
+
+  The guard reads **every issue that has left the number on this device** — kept with when
+  it left (`identifier_holders:<number>` in `meta`, `formerHolders`), not only the last one,
+  and not only this device's own: a number can be left by this device's issue, then held and
+  left by another device's, and a write through it by somebody who learned it while the first
+  held it must not land on the second. So the guard can fire on a device whose own issues
+  never moved. Who is writing proves nothing — the actor is `--agent`, or `$STAPLE_AGENT`, or
+  `$USER`, and the step that learned the number and the step that writes need not agree — so
+  the rule reads only what those issues say about themselves. The write is refused, naming
+  each of them and the issue the number resolves to (identifier, title and id), and nothing
+  is written, when any issue that left the number, other than the one it resolves to:
+  - is **checked out by any agent, or leased by this device**; or
+  - left it **less than a day ago** (`RENUMBER_GUARD_MS`, 24 hours, measured from when this
     device moved it): a day covers the work that learned the number before the move — an
     agent between `checkout` and `done`, a handoff written that morning, a script's
     variable.
 
   Every write a number can reach is covered: `done`, `cancel`, `status`, `release`,
   `checkout`, comments, documents, blockers, gates and approvals, a child's parent, the plan,
-  milestones, a project filing, and the lease verbs (`WorkspaceStore.requireTarget` and
-  `writeTarget`, `leasedIssue` in `cloud/lease.ts`). The write goes through when the caller
-  names the issue by its **id**, which no renumber changes, or **acknowledges the move** —
-  `--ack-renumber` on the CLI, `acknowledgeRenumber: true` on an MCP write — and then goes
-  to the issue that holds the number now, with the notice below. Outside the day, with
-  nothing checked out or leased, that is also what happens without asking. `done`,
-  `cancel`, `status` and `release` take `--agent` as `checkout` does.
+  milestones, a project filing, a hub cross-link (`link`, MCP `cross_link`, both ends) and the
+  lease verbs (`WorkspaceStore.requireTarget` and `writeTarget`, `Hub.validateCrossLink`,
+  `leasedIssue` in `cloud/lease.ts`). The write goes through when the caller names the issue
+  by its **id**, which no renumber changes — for a link, `<slug>:<id>` — or **acknowledges the
+  move**: `--ack-renumber` on the CLI, `acknowledgeRenumber: true` on an MCP write, where it
+  holds for that call alone, across its awaits (`AsyncLocalStorage`). It then goes to the
+  issue the number resolves to now, with the notice below. `done`, `cancel`, `status` and
+  `release` take `--agent` as `checkout` does.
+
+  **The page writes by id, so it never meets the guard.** Every row it shows carries its id,
+  and every write it makes — a comment, a document restore, the plan and a milestone's
+  members, a gate's children, a new task's parent and relations — names the id of the row the
+  reader acted on; a number typed or pasted is looked up among the rows it holds, and a task
+  in another workspace is `<slug>:<id>` (`src/ui/app/src/lib/write-ref.ts`).
+  `test/cloud-learned-writes.test.ts` holds the contract over 20 seeded runs of three devices
+  and a peer on an older build creating, synchronizing, losing push answers, moving numbers and
+  writing through numbers they learned.
 - **Anything else by that number is answered with what happened**: "TRA-2 was renumbered here
   at <time>; your earlier TRA-2 is now TRA-4, and TRA-2 now names another issue." — on the
   CLI's stdout, as `renumbered` in its `--json`, and on MCP in the tool result itself (a
@@ -280,7 +299,7 @@ entity's own primary key.
 | `issues` | `id` | `identifier`, `title`, `normalized_title`, `description`, `status`, `status_version`, `priority`, `parent_id`, `depth`, `assignee`, `created_by`, `labels`, `acceptance_criteria`, `block_parent_until_done`, `unblock_owner`, `unblock_action`, `origin_kind`, `origin_id`, `idempotency_key`, `estimated_seconds`, `kind`, `project_id`, `gate_state`, `gate_owner`, `gate_requested_by`, `gate_requested_at`, `gate_resolved_by`, `gate_resolved_at`, `gate_released`, `started_at`, `blocked_transition_at`, `completed_at`, `cancelled_at`, `created_at`, `updated_at` |
 | `comments` | `id` | `issue_id`, `author`, `author_type`, `body`, `idempotency_key`, `deleted_at`, `created_at` |
 | `documents` | `(issue_id, key)` | `current_revision`, `title`, `updated_at` |
-| `document_revisions` | `(issue_id, key, revision)` | `body`, `author`, `change_summary`, `created_at` — immutable once written |
+| `document_revisions` | `(issue_id, key, revision)` | `body`, `author`, `change_summary`, `created_at` — immutable once written, except that one written under a number an earlier revision holds in the log is moved to the next free number (below) |
 | `relations` | `(blocker_id, blocked_id, type)` | `created_by`, `created_at` — `relations.id` is a local `AUTOINCREMENT` and does **not** travel |
 | `projects` | `id` | `slug`, `name`, `kind`, `source_kind`, `source`, `created_at`, `updated_at` |
 | `workspace_statuses` | `id` | `label`, `category`, `sort_order`, `is_builtin` |
@@ -407,6 +426,17 @@ its order, then every entry it does not name, in the order they had — which is
 entry added since the order was written belongs, on the device that wrote the order as on
 every other (`test/cloud-vocabulary-lifecycle.test.ts`).
 
+**An entry created again after it was deleted has no place in an earlier order.** An older
+build removes and re-adds a status with a delete and a create and no order; a device reading
+the log puts the new one at the end, where it puts an entry it has never seen. The service's
+fold used to keep the deleted one's place in the last order, so every device hydrating from
+it put the new one there instead — for good, since nothing sent a new order. Now the fold
+forgets an entry's place in the order when a create brings it back (`forgetPlace`,
+`worker/src/fold.ts`, and the tail fold), and a device hydrating from a snapshot that did
+not leaves out of the order every entry created after the order's last write
+(`withoutStalePlaces`, `hydrate.ts`); an order written after the create names it again, and
+places it (`test/cloud-vocabulary-readd-order.test.ts`).
+
 **The numbers behind the order are each device's own.** What travels is the order, never
 a `sort_order` value, so each device holds numbers of its own making — the store places an
 entry at the midpoint of its neighbours, the applier appends at `MAX + 1000` and writes an
@@ -464,7 +494,7 @@ this contract, not a judgement call for an implementer.
 | `meta.next_issue_number` | workspace db | Per-database counter; see [Identity](#identity-is-the-uuid-never-the-identifier). |
 | `meta.settings_revision`, `meta.queue_revision` | workspace db | Derived cache-invalidation and CAS counters. Merged as `max()` so local optimistic concurrency stays monotonic. |
 | `meta.schema_version` | workspace db | **Correctness, not privacy.** It describes the format *this binary* understands. Replicating it lets an older build be told it is newer than it is, defeating the `assertNotNewer` upgrade guard that exists precisely because version and file must travel together. |
-| `meta` keys outside `setting:*` | workspace db | Default-deny. A local counter added later must not start synchronizing because nobody updated this page. `slug` and `prefix` are among them: the slug is this machine's name, and the repository's prefix travels as a setting, `setting:repository.prefix`, which a joining workspace adopts once ([above](#the-prefix-is-the-repositorys-the-slug-is-the-machines)). `identifier_alias:*` and `identifier_moves_pending` are this machine's record of the identifiers it moved. |
+| `meta` keys outside `setting:*` | workspace db | Default-deny. A local counter added later must not start synchronizing because nobody updated this page. `slug` and `prefix` are among them: the slug is this machine's name, and the repository's prefix travels as a setting, `setting:repository.prefix`, which a joining workspace adopts once ([above](#the-prefix-is-the-repositorys-the-slug-is-the-machines)). `identifier_alias:*`, `identifier_holders:*` and `identifier_moves_pending` are this machine's record of the identifiers it moved; `sync_tail_survey` is a tail read part-way through. |
 | `projects.source` where `source_kind = 'local'` | workspace db | An absolute filesystem path; discloses directory layout and the OS account name. Redacted per row, see above. |
 | `events` (whole table) | workspace db | Re-derived on apply, see above. |
 | `relations.id` | workspace db | Local `AUTOINCREMENT` surrogate. The natural key is `(blocker_id, blocked_id, type)`, which the `UNIQUE` constraint already declares. |
@@ -1308,8 +1338,15 @@ spellings of an edited field with no provenance at all. Applying them by field n
 value at creation back: measured, the estimate went from 3h to 1h, an edited criterion came
 back, and a finished issue lost its `completed_at`, on every device of this build and every
 fresh one, and on the first sync after this Worker was deployed if the live epoch came from a
-restore. Only an edit ever wrote the column's spelling, so it is always the later value, and
-it is kept wherever both arrive without history: the service's fold and this device's tail
+restore. The column's spelling is the later value in every such entity written while the
+Worker of this build was live, or before any client of this build synchronized: until this
+build only an edit wrote that spelling, and from this build on the Worker's fold drops the
+other spelling whenever one is written. The one exception is a window no deployment should
+open — a client of this build editing a field (it journals the field name) while the Worker
+before this build is still live (it keeps both keys), followed by a backup and a restore:
+that edit is then the field name's, with no history, and is lost on every build. So **the
+Worker is deployed before the client** (`worker/README.md`), which leaves the window empty.
+The column's spelling is kept wherever both arrive without history: the service's fold and this device's tail
 fold drop the field name's (`columnSpellingWins`), the snapshot reader prefers the column's
 in a tie (`latestSpelling`), and so does the applier and the seed's survey.
 
@@ -1515,6 +1552,22 @@ written back and every device held it twice wrapped), and a resolution writes a 
 its field name (`targetDate`, which the milestone applier reads; under the column's
 spelling, a milestone date resolved on one device changed on none)
 (`test/cloud-conflict-resolution-matrix.test.ts`).
+
+**Two revisions written as one number both survive, settled by the log.** A document
+revision is immutable once written, and its number is its document's next, decided on the
+device that writes it — so two devices that each write revision N before seeing the other's
+send two different revision N's. Each device used to keep the first to arrive and the
+service's fold the last, so one writer's text existed only on its own device, and no record
+said so. Now the earlier write in the log keeps N, as for identifiers, and the later is the
+document's next free revision on every device — its body, author and time kept, and
+"renumbered from rN to rM: written at the same time as another rN, which the repository's log
+holds first" added to its change summary — in the applier, the service's fold and the tail
+fold alike (`applyDocumentRevision`, `settleRevision`). A device whose own revision is the
+later one moves it and sends it again under its new number, so a device on an older build,
+which keeps whatever reached it first under a number, receives the text too. Nothing is
+dropped, and the document's head is its highest revision
+(`test/cloud-document-revisions.test.ts`, and the registry in
+`test/sync-mutation-convergence.test.ts`).
 
 **No path applies last-write-wins.** Not for `updated_at`, not for `seq`, not for
 "the server is authoritative". A conflict is data, and resolving it is a decision
