@@ -186,6 +186,20 @@ scoped anyway, because a client on an older build must be rejected by the databa
 rather than silently deduplicated into data loss. Defence in depth on the side where
 the damage is unrecoverable.
 
+### A payload is a JSON object, for every verb
+
+`envelope.ts` refuses any `payload` that is not a JSON object — an array, a scalar or
+null — with `validation` naming the operation, and the whole batch with it. The fold merges
+a payload's keys and an array has none, so before this refusal (STA-262) an array was
+stored, took a sequence number and folded into nothing, gone from every snapshot and backup
+while the push said `applied`. `typeof [] === "object"` is how it got through.
+
+No emitter sends one. Every list on the wire is the value of a key — `{ order }` for the
+plan and the status and kind orders, `{ members }` for a milestone, `{ blockedBy }` for a
+blocker set. `worker/test/emitted-payloads.ts` holds one real payload per entity and verb
+the client emits, recorded and re-checked by the root suite from the emitters themselves,
+and `test/push.test.ts` pushes every one through this Worker.
+
 ### A repository holds one vocabulary
 
 A hub's log holds only `registration` and `crossLink`; a workspace's holds only the other

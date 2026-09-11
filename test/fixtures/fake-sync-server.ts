@@ -9,7 +9,8 @@
  *     (`worker/src/envelope.ts`), which is what catches an emitter journalling a
  *     verb the service will not take
  *   - `actor` must be a string, `baseVersion` is required for every verb but
- *     `create`, `repoId` and `deviceId` must match the session
+ *     `create`, `repoId` and `deviceId` must match the session, and `payload` must be
+ *     a JSON object — never an array (`worker/test/payload-fixture.ts`)
  *   - a purge needs the repository id typed back in its body, and is refused without
  *     it exactly as the Worker refuses it (`worker/test/purge-fixture.ts`)
  *   - a batch is validated whole and rejected whole; nothing is partially applied
@@ -944,8 +945,21 @@ export class FakeSyncServer {
       throw new ServerError(400, "validation", `${at}.baseVersion is required for '${verb}'`);
     }
 
-    if (op.payload === null || typeof op.payload !== "object") {
-      throw new ServerError(400, "validation", `${at}.payload must be an object or an array`);
+    /**
+     * A JSON object, for every verb on every entity — `worker/src/envelope.ts` (STA-262).
+     *
+     * This admitted an array exactly as the Worker did, because `typeof [] === "object"`,
+     * and folded it into nothing exactly as the Worker did. Both refuse it now, with the
+     * body `worker/test/payload-fixture.ts` pins for the two of them.
+     */
+    if (op.payload === null || typeof op.payload !== "object" || Array.isArray(op.payload)) {
+      throw new ServerError(
+        400,
+        "validation",
+        `${at}.payload must be a JSON object. An operation carries the fields it sets as keys, ` +
+          "and an array or a scalar has none.",
+        { retryable: false, index },
+      );
     }
     /**
      * The per-operation cap, ENFORCED — it was advertised by `/v1/capabilities` and never

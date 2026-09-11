@@ -283,8 +283,26 @@ export function validateEnvelope(
     throw new SyncError("validation", `${at}.baseVersion is required for '${verb}'`, { index });
   }
 
-  if (op.payload === null || typeof op.payload !== "object") {
-    throw new SyncError("validation", `${at}.payload must be an object or an array`, { index });
+  /**
+   * `payload` is a JSON object, for every verb on every entity (STA-262).
+   *
+   * `typeof [] === "object"`, so this check used to admit an array, while `fold.ts`
+   * described it as admitting only the two ordered-collection shapes. No emitter sends one:
+   * every client payload type is `Record<string, unknown>`, and the lists the wire does
+   * carry are always the value of a key — `{ order }` for the plan and the status and
+   * kind orders, `{ members }` for a milestone, `{ blockedBy }` for a blocker set. The
+   * fold merges a payload's keys and an array has none, so an admitted array was stored,
+   * given a sequence number and folded into nothing: gone from every snapshot and backup
+   * while the push reported `applied`. `worker/test/payload-fixture.ts` records one real
+   * payload per entity and verb the client emits, and `push.test.ts` pushes them all.
+   */
+  if (op.payload === null || typeof op.payload !== "object" || Array.isArray(op.payload)) {
+    throw new SyncError(
+      "validation",
+      `${at}.payload must be a JSON object. An operation carries the fields it sets as keys, ` +
+        "and an array or a scalar has none.",
+      { index },
+    );
   }
   // Per-operation cap, measured on the serialized payload. The whole-body cap already
   // ran on Content-Length; this one is what makes "one enormous operation inside a

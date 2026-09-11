@@ -595,6 +595,16 @@ deduplicates is indistinguishable from success, and loses the write.
 row. Full-row writes would turn every concurrent edit into a conflict on fields
 nobody touched.
 
+**`payload` is a JSON object, for every verb on every entity.** Never an array, a
+scalar or null; the service refuses the whole batch with `validation`, naming the
+operation. A list travels as the value of a key: the plan is `queue.replace` with
+`{ order }`, a milestone's membership `milestone.replace` with `{ members }`, a
+blocker set `relation.update` with `{ blockedBy }`. The fold merges a payload's keys,
+and an array has none, so an array the service admitted would take a sequence number
+and fold into nothing. No emitter sends one: `test/cloud-emitter-payloads.test.ts`
+drives every emitter and checks, and `worker/test/push.test.ts` pushes what they send
+through the Worker.
+
 `baseVersion` is the entity's local version immediately before the mutation. Each
 synchronized entity row gains a monotonic `version` bumped once per journaled
 mutation (the S2 migration). `baseVersion` is `null` for `create`.
