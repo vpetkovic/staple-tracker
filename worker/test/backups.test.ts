@@ -201,6 +201,45 @@ describe("restore materialises into the new epoch", () => {
     expect(snapshot.entities[0]!.createdBy).toBe("opus-s11");
   });
 
+  /**
+   * A backup the Worker before this build made keeps no create time or actor, so its
+   * restore stages every entity under `restore:<id>` at the moment it ran. That is who
+   * restored and when; handed to devices as the create's, it dated every old comment with
+   * the restore instant and attributed every old revision to the restore.
+   */
+  it("hands a restored epoch no create time or actor when the backup kept none", async () => {
+    const device = "device-old-backup";
+    const token = await seedRepo(REPO, device);
+    await enableBackup();
+    await pushOps(
+      creates(["issue-1"]).map((op) => ({ ...op, deviceId: device })),
+      { token, device },
+    );
+    const backup = await jsonOf<{ backup: { backupId: string } }>(
+      await call(`/v1/repos/${REPO}/backups`, { method: "POST", token, body: {}, device }),
+    );
+    // As a backup from before this build: the fold without either field.
+    const stored = (await env.DB.prepare(`SELECT state FROM backups WHERE repo_id = ?1 AND backup_id = ?2`)
+      .bind(REPO, backup.backup.backupId)
+      .first()) as { state: string };
+    const old = JSON.parse(stored.state) as { entities: Array<Record<string, unknown>> };
+    for (const entity of old.entities) {
+      delete entity.createdAt;
+      delete entity.createdBy;
+    }
+    await env.DB.prepare(`UPDATE backups SET state = ?3 WHERE repo_id = ?1 AND backup_id = ?2`)
+      .bind(REPO, backup.backup.backupId, JSON.stringify(old))
+      .run();
+
+    await runRestore(token, backup.backup.backupId, REPO, device);
+    const snapshot = await jsonOf<{ entities: Array<{ createdSeq: number | null; createdAt: string | null; createdBy: string | null }> }>(
+      await call(`/v1/repos/${REPO}/snapshot`, { token, device }),
+    );
+    expect(snapshot.entities[0]!.createdSeq).toEqual(expect.any(Number));
+    expect(snapshot.entities[0]!.createdAt).toBeNull();
+    expect(snapshot.entities[0]!.createdBy).toBeNull();
+  });
+
   it("a device bootstrapping after a restore sees the restored content, not an empty repository", async () => {
     const token = await seedRepo();
     await enableBackup();

@@ -302,8 +302,17 @@ export async function foldLog(
           entry.superseded = false;
         }
         entry.createdSeq = row.seq;
-        entry.createdAt = row.created_at;
-        entry.createdBy = row.actor;
+        /**
+         * Not a restore's own actor and instant. A restore stages every entity as a
+         * `create`; when its backup kept the original creator and time (`forBackup`) it
+         * stages under those, and otherwise — a backup from before this build, or a
+         * restore by the Worker before it — under `restore:<id>` at the moment it ran.
+         * Those say who restored and when, not who wrote the thing and when, and a device
+         * dating an old comment or attributing an old revision by them rewrote the truth.
+         */
+        const restored = typeof row.actor === "string" && row.actor.startsWith("restore:");
+        entry.createdAt = restored ? null : row.created_at;
+        entry.createdBy = restored ? null : row.actor;
       }
       if (entry.deletedAt !== null) continue;
 
