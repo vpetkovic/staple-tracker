@@ -795,12 +795,12 @@ function insertIssue(db: DatabaseSync, input: ApplyInput, pairs: Array<[string, 
      * issues exist, both are reachable, and no value is chosen by arrival order.
      */
     if (holderYields(db, "issue", owner, ["identifier"], claimSeqOf(input, ["identifier"]))) {
-      moveIdentifier(db, owner, provisionalIdentifier(db, identifier));
+      moveIdentifier(db, owner, provisionalIdentifier(db, identifier, ownClaimSeq(db, "issue", owner, ["identifier"])));
       oweSettlement(db, { entity: "issue", entityId: owner, field: "identifier", from: identifier });
     } else if (heldAheadOfRead(db, input, "issue", owner)) {
       moveIdentifier(db, owner, provisionalIdentifier(db, identifier));
     } else {
-      const provisional = provisionalIdentifier(db, identifier);
+      const provisional = provisionalIdentifier(db, identifier, claimSeqOf(input, ["identifier"]));
       recordIdentifierConflict(db, input, identifier, provisional);
       values.set("identifier", provisional);
     }
@@ -894,7 +894,20 @@ function identifierOwner(db: DatabaseSync, identifier: string): string | null {
  * The suffix is a pure function of the contested identifier and the rows already
  * present, so both devices reach the same answer from the same inputs.
  */
-function provisionalIdentifier(db: DatabaseSync, identifier: string): string {
+function provisionalIdentifier(db: DatabaseSync, identifier: string, claimSeq: number | null = null): string {
+  /**
+   * The claim's own place in the log, when it has one: the seq of the write that claimed the
+   * number, which every device reads the same — from the operation on the tail, from the
+   * snapshot's record of that write when hydrating — and which no other claim shares. So the
+   * stand-in names the same issue on every device, and is never handed out to another claim.
+   * A counter of this device's own made it `+2` on a device that had passed `+1` before and `+1`
+   * on one that joined afterwards. A claim with no place yet — this device's own, unsent, or a
+   * holder a read has not placed — is on this device alone, and takes the first free suffix.
+   */
+  if (claimSeq !== null && Number.isFinite(claimSeq)) {
+    const placed = `${identifier}+${claimSeq}`;
+    if (identifierOwner(db, placed) === null && aliasedIssueId(db, placed) === null) return placed;
+  }
   for (let n = 1; n < 1000; n += 1) {
     const candidate = `${identifier}+${n}`;
     // Nor one an issue here has held and moved off: that string still finds that issue
@@ -1003,7 +1016,7 @@ function displaceIdentifierHolder(
   const settlement = input.verb === "renumber" && input.actor === "staple";
   const decision = (input.verb === "renumber" && !settlement) || input.seq === undefined || input.seq === null;
   if (!decision && holderYields(db, "issue", owner, ["identifier"], claimSeqOf(input, ["identifier"]))) {
-    moveIdentifier(db, owner, provisionalIdentifier(db, incoming[1]));
+    moveIdentifier(db, owner, provisionalIdentifier(db, incoming[1], ownClaimSeq(db, "issue", owner, ["identifier"])));
     oweSettlement(db, { entity: "issue", entityId: owner, field: "identifier", from: incoming[1] });
     return;
   }
@@ -1020,7 +1033,7 @@ function displaceIdentifierHolder(
     return;
   }
 
-  moveIdentifier(db, owner, provisionalIdentifier(db, incoming[1]));
+  moveIdentifier(db, owner, provisionalIdentifier(db, incoming[1], input.seq ?? null));
   /**
    * And when the issue moved aside is this device's own, and the renumber came from
    * somewhere else, this device settles where it goes (`claims.ts`). Every device moves
@@ -1065,7 +1078,7 @@ function laterClaimInRead(db: DatabaseSync, input: ApplyInput, pairs: Array<[str
   if (own === Number.POSITIVE_INFINITY || (current !== null && current.startsWith(`${contested}+`))) {
     pairs.splice(index, 1);
   } else {
-    pairs[index] = ["identifier", provisionalIdentifier(db, contested)];
+    pairs[index] = ["identifier", provisionalIdentifier(db, contested, claimSeqOf(input, ["identifier"]))];
   }
   if (own === null) {
     // Another device's: on the record until that device settles it.
