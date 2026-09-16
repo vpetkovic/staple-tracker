@@ -58,7 +58,7 @@ import { assertHubCanTakePrefix, prefixToAdopt, restampHubPrefix } from "./prefi
 import { applyConflictOperation, countOpenConflicts, screenForConflicts } from "./conflicts.js";
 import { applySnapshotEntity, hydrate } from "./hydrate.js";
 import { owedLeaseReleases, settleOwedLeaseRelease } from "./lease-store.js";
-import { countQuarantined, quarantineOperation, retryQuarantine } from "./quarantine.js";
+import { countQuarantined, quarantineOperation, retryQuarantine, withoutLaterWrites } from "./quarantine.js";
 import { reconcileAfterRead, reconcileBeforeRead } from "./rewind.js";
 import { TailFold, refusedAsTooLargeToFold, type Entry } from "./tail-fold.js";
 import { seedModeOf, seedOwed, seedRepository, type RepositorySurvey, type SeedReport } from "./seed.js";
@@ -1437,7 +1437,17 @@ function applyPage(
 
     // The single retry. Anything still unresolvable is a page that cannot be
     // applied coherently, and a partial page is worse than none.
-    for (const op of deferred) {
+    for (const deferredOp of deferred) {
+      /**
+       * Retried after the rest of the page, it would land over what a later operation of the
+       * page wrote to the same fields; those fields stay as the later operation left them, as
+       * the log's order has it (`withoutLaterWrites`).
+       */
+      const op = withoutLaterWrites(db, deferredOp);
+      if (op === null) {
+        skipped += 1;
+        continue;
+      }
       try {
         const outcome = applyOne(db, journal, op, localDeviceId, true);
         if (outcome === "skipped") skipped += 1;

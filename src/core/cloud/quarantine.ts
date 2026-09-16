@@ -42,6 +42,14 @@ export interface QuarantinedEntity {
    * arrives.
    */
   readonly heldWhenSetAside?: boolean;
+  /**
+   * Who last wrote each of the entity's fields here when it was set aside (`sync_field_writes`,
+   * operation ids). A field written since — later in the log, or here — has a newer value than
+   * the set-aside one, which is not replayed over it (`supersededFields`).
+   */
+  readonly writesWhenSetAside?: Readonly<Record<string, string | null>>;
+  /** The epoch it was set aside in: one still waiting after the epoch moved is a divergence. */
+  readonly epoch?: number;
   /** Set aside from the ordered tail. */
   readonly operation?: RemoteOperation;
   /** Set aside from a snapshot, with the read it was part of. */
@@ -79,7 +87,7 @@ export function countQuarantined(db: DatabaseSync): number {
 /** Set an operation of the ordered tail aside. */
 export function quarantineOperation(db: DatabaseSync, op: RemoteOperation, missing: ReferentMissing): void {
   const items = readQuarantine(db).filter((item) => item.operation?.opId !== op.opId);
-  items.push({ entity: op.entity, entityId: op.entityId, what: missing.what, since: nowIso(), heldWhenSetAside: entityHeld(db, op.entity, op.entityId), operation: op });
+  items.push({ entity: op.entity, entityId: op.entityId, what: missing.what, since: nowIso(), heldWhenSetAside: entityHeld(db, op.entity, op.entityId), writesWhenSetAside: fieldWritesOf(db, op.entity, op.entityId), epoch: epochOf(db), operation: op });
   writeQuarantine(db, items);
 }
 
@@ -91,7 +99,7 @@ export function quarantineSnapshotEntity(
   read: { cutoffSeq: number; ledger: string; sameTimeline: boolean },
 ): void {
   const items = readQuarantine(db).filter((item) => !(item.snapshot && item.entity === entity.entity && item.entityId === entity.entityId));
-  items.push({ entity: entity.entity, entityId: entity.entityId, what: missing.what, since: nowIso(), heldWhenSetAside: entityHeld(db, entity.entity, entity.entityId), snapshot: { entity, ...read } });
+  items.push({ entity: entity.entity, entityId: entity.entityId, what: missing.what, since: nowIso(), heldWhenSetAside: entityHeld(db, entity.entity, entity.entityId), writesWhenSetAside: fieldWritesOf(db, entity.entity, entity.entityId), epoch: epochOf(db), snapshot: { entity, ...read } });
   writeQuarantine(db, items);
 }
 
@@ -118,21 +126,38 @@ export function retryQuarantine(
   let settled = 0;
   for (const item of items) {
     const key = `${item.entity} ${item.entityId}`;
+    // What was written since it was set aside is newer than it, and stays.
+    const superseded = supersededFields(db, item);
     try {
       if (item.snapshot) {
         // A later create brought it: the tail is newer than the snapshot.
-        if (!item.heldWhenSetAside && holds(item.entity, item.entityId)) {
+        if (!item.heldWhenSetAside && holds(item.entity, item.entityId) && CREATED.has(item.entity)) {
           settled += 1;
           continue;
         }
-        apply.snapshot(item.snapshot.entity, item.snapshot.cutoffSeq, item.snapshot.ledger, item.snapshot.sameTimeline);
+        const state = withoutFields(item.snapshot.entity.state, superseded, heldUpdatedAt(db, item.entity, item.entityId));
+        if (state === null) {
+          settled += 1;
+          continue;
+        }
+        const fieldWrites = item.snapshot.entity.fieldWrites
+          ? Object.fromEntries(Object.entries(item.snapshot.entity.fieldWrites).filter(([field]) => !superseded.has(field)))
+          : undefined;
+        apply.snapshot({ ...item.snapshot.entity, state, ...(fieldWrites ? { fieldWrites } : {}) } as SnapshotEntity, item.snapshot.cutoffSeq, item.snapshot.ledger, item.snapshot.sameTimeline);
         brought.add(key);
         settled += 1;
         continue;
       }
       const op = item.operation!;
-      if (op.verb !== "create" && op.verb !== "delete" && !item.heldWhenSetAside && holds(item.entity, item.entityId) && !brought.has(key)) {
+      if (op.verb !== "create" && op.verb !== "delete" && !item.heldWhenSetAside && holds(item.entity, item.entityId) && !brought.has(key) && CREATED.has(item.entity)) {
         // An edit of an entity a later create made: that create already carries it.
+        settled += 1;
+        continue;
+      }
+      if (op.verb !== "create" && op.verb !== "delete") {
+        const payload = withoutFields(op.payload, superseded, heldUpdatedAt(db, op.entity, op.entityId));
+        // Every field it writes was written again later: the log's order drops it.
+        if (payload !== null) apply.operation({ ...op, payload });
         settled += 1;
         continue;
       }
@@ -146,6 +171,106 @@ export function retryQuarantine(
   }
   writeQuarantine(db, waiting);
   return settled;
+}
+
+/** The entities a `create` brings whole; the collections — a blocker set, the plan, a milestone — have none. */
+const CREATED: ReadonlySet<string> = new Set(["issue", "comment", "project", "status", "kind", "documentRevision"]);
+
+/**
+ * An operation applied out of its place in the log — after operations later than it, because
+ * what it named arrived after them (a page's deferred retry, `sync.ts`) — without the fields
+ * one of those later operations already wrote here. Null when nothing it writes is left. A
+ * create or a delete is returned as it is.
+ */
+export function withoutLaterWrites(db: DatabaseSync, op: RemoteOperation): RemoteOperation | null {
+  if (op.verb === "create" || op.verb === "delete") return op;
+  const superseded = supersededFields(db, { entity: op.entity, entityId: op.entityId, what: "", since: "", operation: op });
+  const payload = withoutFields(op.payload, superseded, heldUpdatedAt(db, op.entity, op.entityId));
+  return payload === null ? null : { ...op, payload };
+}
+
+/** A collection's list travels with its per-entry facts: superseded together. */
+const COMPANIONS: Readonly<Record<string, readonly string[]>> = {
+  blockedBy: ["edges"],
+  order: ["entries"],
+  members: ["entries"],
+};
+
+function fieldWritesOf(db: DatabaseSync, entity: string, entityId: string): Record<string, string | null> {
+  const rows = db.prepare("SELECT field, op_id FROM sync_field_writes WHERE entity = ? AND entity_id = ?").all(entity, entityId) as Array<{ field: string; op_id: string | null }>;
+  return Object.fromEntries(rows.map((row) => [row.field, row.op_id]));
+}
+
+function epochOf(db: DatabaseSync): number | undefined {
+  const row = db.prepare("SELECT epoch FROM sync_state WHERE id = 1").get() as { epoch: number } | undefined;
+  return row?.epoch;
+}
+
+/**
+ * Where an operation that wrote a field here sits in the log: its seq when it was applied from
+ * the log or acknowledged, after everything when this device has not sent it yet, and null when
+ * this device cannot say (a snapshot's inherited write, or a ledger row compacted away).
+ */
+function positionOf(db: DatabaseSync, opId: string | null): number | null {
+  if (opId === null) return null;
+  const applied = db.prepare("SELECT seq FROM sync_applied WHERE op_id = ?").get(opId) as { seq: number } | undefined;
+  if (applied) return applied.seq;
+  const own = db.prepare("SELECT acknowledged_seq FROM sync_outbox WHERE op_id = ?").get(opId) as { acknowledged_seq: number | null } | undefined;
+  if (own) return own.acknowledged_seq ?? Number.POSITIVE_INFINITY;
+  return null;
+}
+
+/**
+ * The fields a later write holds here: written by an operation after the set-aside one in the
+ * log — the snapshot's cutoff, for one set aside from a snapshot — or by this device after it.
+ * The log's order, which the set-aside write would have lost to had it applied in its place.
+ * Where this device cannot place the write, a write made since it was set aside counts. With
+ * each field, what travels with it.
+ */
+function supersededFields(db: DatabaseSync, item: QuarantinedEntity): Set<string> {
+  const out = new Set<string>();
+  const at = item.operation ? item.operation.seq : item.snapshot ? item.snapshot.cutoffSeq : null;
+  for (const [field, opId] of Object.entries(fieldWritesOf(db, item.entity, item.entityId))) {
+    if (item.operation && opId === item.operation.opId) continue;
+    const position = positionOf(db, opId);
+    const later =
+      position !== null && at !== null
+        ? position > at
+        : item.writesWhenSetAside !== undefined && item.writesWhenSetAside[field] !== opId;
+    if (!later) continue;
+    out.add(field);
+    for (const companion of COMPANIONS[field] ?? []) out.add(companion);
+  }
+  return out;
+}
+
+/**
+ * A payload or state without the superseded fields; null when nothing it writes is left. When
+ * any field was written later, so was the entity's last-change time: what is left carries the
+ * later of its own and the one held here (`heldAt`), never an older one over it.
+ */
+function withoutFields(record: Readonly<Record<string, unknown>>, superseded: ReadonlySet<string>, heldAt: string | null = null): Record<string, unknown> | null {
+  if (superseded.size === 0) return { ...record };
+  const kept = Object.entries(record).filter(([field]) => !superseded.has(field) && field !== "updatedAt" && field !== "updated_at");
+  if (kept.length === 0) return null;
+  const own = typeof record.updatedAt === "string" ? record.updatedAt : typeof record.updated_at === "string" ? record.updated_at : null;
+  const latest = [own, heldAt].filter((at): at is string => at !== null).sort().pop() ?? null;
+  return { ...Object.fromEntries(kept), ...(latest !== null ? { updatedAt: latest } : {}) };
+}
+
+/** The entity's last-change time as this device holds it, for the entities that keep one. */
+function heldUpdatedAt(db: DatabaseSync, entity: string, entityId: string): string | null {
+  const read = (sql: string): string | null => (db.prepare(sql).get(entityId) as { at: string | null } | undefined)?.at ?? null;
+  switch (entity) {
+    case "issue":
+      return read("SELECT updated_at AS at FROM issues WHERE id = ?");
+    case "milestone":
+      return read("SELECT updated_at AS at FROM milestone_meta WHERE issue_id = ?");
+    case "project":
+      return read("SELECT updated_at AS at FROM projects WHERE id = ?");
+    default:
+      return null;
+  }
 }
 
 /** Whether this device holds a row of an entity, for the entities that can name another. */
