@@ -79,8 +79,15 @@ it.** On a device applying an operation, whoever holds the value made its claim 
 
 - **before this operation in the log** — another device's, or this device's own and
   already sent. The arriving claim is the later one: it is applied with a stand-in (an
-  issue as `STA-5+1`, a project as `web-2`, a retry key or origin cleared) and nothing is
-  dropped. For an identifier the stand-in is also recorded as an `identifier` conflict,
+  issue as `STA-5+<seq>`, a project as `web-2`, a retry key or origin cleared) and nothing is
+  dropped. **An issue's stand-in is the claim's place in the log**: `<number>+<seq>`, the seq
+  of the write that claimed the number — read from the operation on the tail and from the
+  fold's record of that write when hydrating — so it is the same identifier, naming the same
+  issue, on every device, and no other claim can be given it. A counter of each device's own
+  gave `+2` on a device that had passed `+1` before and `+1` on one that joined afterwards,
+  and `comment STA-5+1` reached different issues on the two
+  (`test/cloud-stand-in-determinism.test.ts`). A claim with no place in the log yet — this
+  device's own, unsent — is on this device alone and takes the first free suffix. For an identifier the stand-in is also recorded as an `identifier` conflict,
   so it is on the record until it is settled; or
 - **after it** — this device's own claim, not yet sent, or sent and given a later seq.
   The holder is the later claim: it takes the stand-in, and because it is this device's,
@@ -143,7 +150,7 @@ number — is recorded in the workspace (`src/core/identifier-moves.ts`, device-
 `meta` rows, never synchronized) and the old identifier resolves to the issue it meant
 whenever no issue holds it now: a `STA-5+1` copied into a handoff still finds its issue
 after it is settled at `STA-9`. An identifier another issue holds now means that issue.
-A provisional stand-in itself resolves too, although a `+` is not in the `PREFIX-N`
+A stand-in itself resolves too, although a `+` is not in the `PREFIX-N`
 grammar, locally and through the hub from any directory. And this machine's hub
 cross-links, which name issues by identifier, follow each move made before the link
 was ([The hub registry](#the-hub-is-a-repository-and-that-is-the-whole-mechanism)).
@@ -151,9 +158,9 @@ was ([The hub registry](#the-hub-is-a-repository-and-that-is-the-whole-mechanism
 Three things keep that true for good. A link made through an old identifier or a
 stand-in (`staple link STA-5+1 OTH-3`) is stored under the identifier the issue holds
 *now*: stored as typed, it named no issue anybody keys on, so the issue read as having
-no cross blocker. A stand-in is never handed out twice on one device: a `+n` an issue has
-held and moved off stays that issue's, so the next collision on the same number takes the
-next free suffix instead of inheriting the old one's links. And a search whose text is
+no cross blocker. A stand-in is never handed out twice: its suffix is a seq no other claim
+has, and a `+n` an issue has held and moved off stays that issue's — a suffix that would
+reuse one (a local stand-in) takes the next free one instead of inheriting the old one's links. And a search whose text is
 exactly an old identifier (`staple ls -q STA-5`, `list_tasks` with `q`) finds the issue
 it meant as well as whichever issue holds that number now. Stored identifiers are only a
 hub concern: relations, the plan and milestone membership store issue UUIDs
