@@ -16,8 +16,17 @@ import {
 import type { Env } from "./env.js";
 import { minProtocolFor } from "./envelope.js";
 import { SyncError, json } from "./errors.js";
-import { DEFAULT_PULL_LIMIT, MAX_PULL_LIMIT, PROTOCOL_MAX, PROTOCOL_MIN } from "./limits.js";
-import { log, tokenFingerprint } from "./log.js";
+import { advanceFold, foldProgress } from "./fold-store.js";
+import {
+  DEFAULT_PULL_LIMIT,
+  LAZY_FOLD_BEHIND,
+  MAX_PULL_LIMIT,
+  PROTOCOL_MAX,
+  PROTOCOL_MIN,
+  planOf,
+  pullFoldBudget,
+} from "./limits.js";
+import { errorKind, log, tokenFingerprint } from "./log.js";
 
 interface OpRow {
   seq: number;
@@ -83,6 +92,8 @@ export async function pull(
   const lastSeq = rows.length > 0 ? rows[rows.length - 1]!.seq : after;
   const next: PullCursor = { v: 1, r: session.repoId, e: session.epoch, s: lastSeq };
 
+  await keepFoldNearHead(env, session);
+
   log({
     event: "pull",
     status: 200,
@@ -105,6 +116,28 @@ export async function pull(
     nextCursor: encodeCursor(next),
     hasMore,
   });
+}
+
+/**
+ * Move the fold checkpoint on by one step when it has fallen behind the log (`fold-store.ts`).
+ *
+ * Here because every sync pulls: a device that pushed pulls straight after, so the
+ * checkpoint trails the log by little more than {@link LAZY_FOLD_BEHIND} operations, and a
+ * backup or restore — which finish the fold inside their own request — find almost nothing
+ * left to do. Below the threshold it costs one indexed read. A pull never fails because of
+ * it: the pull's answer is already decided, a failed step writes nothing (its batch is one
+ * transaction), and the next pull or snapshot tries again.
+ */
+async function keepFoldNearHead(env: Env, session: Session): Promise<void> {
+  try {
+    const progress = await foldProgress(env, session.repoId, session.epoch);
+    if (session.lastSeq - progress.seq < LAZY_FOLD_BEHIND) return;
+    await advanceFold(env, session.repoId, session.epoch, session.lastSeq, {
+      budget: pullFoldBudget(planOf(env)),
+    });
+  } catch (err) {
+    log({ event: "fold.lag", status: 503, code: errorKind(err), repo_id: session.repoId, epoch: session.epoch });
+  }
 }
 
 /**

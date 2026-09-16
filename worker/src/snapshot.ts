@@ -5,30 +5,24 @@
  * cursor `C` forward. Writes concurrent with the snapshot land in the tail, so nothing
  * is missed and nothing is applied twice.
  *
- * WHY THERE IS NO PROJECTION TABLE. The obvious implementation maintains an
- * `entity_state` table on every push. It is rejected for three reasons, in order of
- * weight:
+ * THE FOLD IS READ FROM THE CHECKPOINT, NOT COMPUTED HERE. This route used to fold the
+ * whole log for every page and refused past 20,000 operations; `fold-store.ts` says why
+ * that could not scale and what replaced it. What this route does now:
  *
- *   1. It would cost one more statement per operation, taking a push from N+4 to 2N+4.
- *      The free plan's queries-per-invocation ceiling is 50, so the advertised batch
- *      size of 25 would no longer fit — and that number is in the committed wire
- *      contract.
- *   2. It would roughly double the rows written per operation, against a free-tier
- *      budget of 100,000 rows/day that is ALREADY the binding constraint on how much
- *      this service can accept.
- *   3. It is derived state that can go stale relative to the log it is derived from,
- *      and repairing it is a whole second correctness problem.
+ *   - The FIRST page pins the cutoff at the head, as it always has, and folds the
+ *     checkpoint there first. Normally it is within a few hundred operations (every pull
+ *     moves it on, `pull.ts`). Straight after this Worker is deployed onto a large log it is
+ *     not, and the page answers "still folding", retryably, having folded this request's
+ *     budget, until it is.
+ *   - A LATER page reads its cutoff from the cursor, as it always has. The checkpoint
+ *     serves any cutoff it has passed, so a cursor pinned days ago, or by the Worker
+ *     before this one, resumes exactly where it stopped.
  *
- * So the fold happens on read. It is a pure function of the log, which means it cannot
- * disagree with the log, and it writes nothing at all.
- *
- * The cost is that a snapshot request re-folds the log for every page. At this
- * service's design scale — a two-machine tracker whose free-plan ceiling is ~50,000
- * operations per DAY — that is one query per 500 operations against a ceiling of 50
- * queries, and typically a single page. If a repository ever genuinely outgrows it,
- * the answer is a projection table maintained lazily by THIS route (never by push),
- * catching up from a stored `folded_seq`. That is a real design, not a hope; it is not
- * built because nothing here needs it yet.
+ * WHY NOT A PROJECTION MAINTAINED BY PUSH. It would cost a push statements against the
+ * free plan's 50 per invocation, and rows written against its 100,000 per day — the
+ * budget that already bounds how much this service can accept. The checkpoint is advanced
+ * by reads instead, and is derived state that cannot disagree with the log: every row of
+ * it is a function of the log alone.
  */
 
 import type { Session } from "./auth.js";
@@ -42,12 +36,15 @@ import {
 import type { Env } from "./env.js";
 import { minProtocolFor } from "./envelope.js";
 import { SyncError, json } from "./errors.js";
-import { type FieldWrite, type FoldedEntity, foldLog, materializedVerb } from "./fold.js";
+import { type FieldWrite, type FoldedEntity, materializedVerb } from "./fold.js";
+import { foldedPage, pinMark, reachFold } from "./fold-store.js";
 import {
   DEFAULT_SNAPSHOT_PAGE,
   MAX_SNAPSHOT_PAGE,
   PROTOCOL_MAX,
   PROTOCOL_MIN,
+  planOf,
+  requestFoldBudget,
 } from "./limits.js";
 import { log, tokenFingerprint } from "./log.js";
 
@@ -99,6 +96,7 @@ export async function snapshot(
   const limit = parseLimit(url.searchParams.get("limit"));
 
   const rawCursor = url.searchParams.get("cursor");
+  const budget = requestFoldBudget(planOf(env));
   let cutoff: number;
   let afterKey = "";
   if (rawCursor !== null && rawCursor !== "") {
@@ -107,13 +105,38 @@ export async function snapshot(
     // The cutoff is pinned in the cursor, so every page of one snapshot folds to the
     // same seq. Re-reading the high-water mark per page would let a concurrent push
     // move the cutoff mid-bootstrap and produce a snapshot that never existed.
+    //
+    // A cutoff past the high-water mark was never handed out by any Worker — `last_seq`
+    // only climbs — and folding towards it would record the fold as having reached
+    // operations that do not exist yet.
+    if (cursor.c < 0 || cursor.c > session.lastSeq) {
+      throw new SyncError("cursor_invalid", "the snapshot cursor names a cutoff past the log");
+    }
     cutoff = cursor.c;
     afterKey = cursor.k;
+    // Normally a no-op: the first page took the checkpoint at least this far. Not for a
+    // cursor an older Worker handed out, which no checkpoint has reached yet.
+    await reachFold(env, session.repoId, session.epoch, cutoff, { budget });
   } else {
+    /**
+     * The head, as it always was — never wherever the checkpoint happens to have got.
+     *
+     * A cutoff short of the head would be a true snapshot of the log up to it, and the log up
+     * to a point is not always whole: a restore stages its entities in the order of their
+     * claims, not in the order they name each other, so part of a restored epoch can hold a
+     * comment whose issue comes after it, and a device refuses a snapshot that names what it
+     * never delivered — then asks again for the same page, at the same cutoff, for ever. The
+     * head has every entity its log will ever name. So this folds towards the head and refuses,
+     * `foldBehind`, changing nothing, until the fold has reached it; a client asks again while
+     * `foldedSeq` climbs. The head is then a mark (`pinMark` writes one when a concurrent step
+     * carried the checkpoint past it), so no later page folds anything on top of it.
+     */
     cutoff = session.lastSeq;
+    await reachFold(env, session.repoId, session.epoch, cutoff, { budget });
+    await pinMark(env, session.repoId, session.epoch, cutoff);
   }
 
-  const folded = await foldLog(env, session.repoId, session.epoch, cutoff);
+  const folded = await foldedPage(env, session.repoId, session.epoch, cutoff, afterKey, limit);
 
   /**
    * Refused over the WHOLE fold, not over the page about to be served.
@@ -124,12 +147,14 @@ export async function snapshot(
    * device holding a partial hydration of a repository it cannot finish reading —
    * which is exactly the half-bootstrap the cursor's pinned cutoff exists to
    * prevent. Either the whole view is serveable at this protocol or none of it is.
+   * `kinds` is every entity kind the fold holds at the cutoff, which the checkpoint
+   * records at each mark, so this needs no pass over the entities.
    *
    * Same table and same code as `pull.ts`; see `assertServable` there for why 426
    * rather than filtering or serving.
    */
-  for (const entity of folded.entities) {
-    const required = minProtocolFor(entity.entity);
+  for (const kind of folded.kinds) {
+    const required = minProtocolFor(kind);
     if (required !== null && required > protocol) {
       throw new SyncError(
         "protocol_unsupported",
@@ -138,17 +163,14 @@ export async function snapshot(
           min: PROTOCOL_MIN,
           max: PROTOCOL_MAX,
           requiredProtocol: required,
-          entity: entity.entity,
+          entity: kind,
         },
       );
     }
   }
 
-  // `foldLog` already returns entities ordered by entity key, which is the paging order.
-  const remaining = folded.entities.filter((e) => entityKey(e.entity, e.entityId) > afterKey);
-  const hasMore = remaining.length > limit;
-  const page = remaining.slice(0, limit);
-
+  const page = folded.entities;
+  const hasMore = folded.hasMore;
   const lastKey =
     page.length > 0 ? entityKey(page[page.length - 1]!.entity, page[page.length - 1]!.entityId) : afterKey;
 
