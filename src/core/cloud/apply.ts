@@ -1927,11 +1927,13 @@ function applyVocabulary(
    * create stayed put on devices that held it and went last on one that joined, because a
    * snapshot's order leaves out an entry created after it (`withoutStalePlaces`,
    * `hydrate.ts`). An order written after the create places it. A genuine create only: what a
-   * restore stages is not one (`atIsCreate`). Nor this device's own create coming back: the entry is
-   * already where this device put it, and the order it wrote with it follows.
+   * restore stages is not one (`atIsCreate`). This device's own create coming back is placed the
+   * same way: where this device put it was its own choice, and a device that added another entry
+   * concurrently, landing earlier in the log, holds that one first — as the log does, and as a
+   * fresh device does. Nothing locally chosen outlives the acknowledgement; the order this device
+   * wrote with the create, later in the log, places it again as it does everywhere.
    */
-  const ownEcho = input.opId !== null && db.prepare("SELECT 1 AS hit FROM sync_outbox WHERE op_id = ?").get(input.opId) !== undefined;
-  if (input.verb === "create" && input.atIsCreate === true && !ownEcho) {
+  if (input.verb === "create" && input.atIsCreate === true) {
     const last = db.prepare(`SELECT COALESCE(MAX(sort_order), 0) + 1000 AS n FROM ${table} WHERE id <> ?`).get(input.entityId) as { n: number };
     db.prepare(`UPDATE ${table} SET sort_order = ? WHERE id = ?`).run(last.n, input.entityId);
   }

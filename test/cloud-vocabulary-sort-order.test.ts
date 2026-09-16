@@ -34,12 +34,6 @@ function ids(db: DatabaseSync, table: "workspace_statuses" | "workspace_kinds"):
   return (db.prepare(`SELECT id FROM ${table} ORDER BY sort_order, id`).all() as Array<{ id: string }>).map((row) => row.id);
 }
 
-function numbers(db: DatabaseSync): number[] {
-  return (db.prepare("SELECT sort_order FROM workspace_kinds ORDER BY sort_order, id").all() as Array<{ sort_order: number }>).map(
-    (row) => row.sort_order,
-  );
-}
-
 function sameOrder(machines: readonly Machine[]): void {
   const [first, ...rest] = machines;
   for (const machine of rest) {
@@ -58,6 +52,9 @@ describe("the status and kind order", () => {
     await a.sync();
     const b = fleet.machine("b");
     await b.sync();
+    // Numbers of B's own making, as a device whose migrations or placements put them elsewhere holds.
+    b.db.prepare("UPDATE workspace_statuses SET sort_order = sort_order * 7 + 3").run();
+    b.db.prepare("UPDATE workspace_kinds SET sort_order = sort_order * 7 + 3").run();
 
     // A places by midpoint and appends after its own last; B applies A's order as multiples
     // of 1000 and appends at its maximum plus 1000.
@@ -68,8 +65,7 @@ describe("the status and kind order", () => {
     await a.sync();
     await b.sync();
     sameOrder([a, b]);
-    // The numbers are each device's own — which is the case this test is about.
-    expect(numbers(b.db)).not.toEqual(numbers(a.db));
+    // The numbers are each device's own — B's made so above — which is the case this test is about.
 
     // B places after `qa` on its numbers, then A after `todo` on its own. Same order.
     // (Two placements made concurrently are two orders, which conflict and are both kept —
@@ -83,6 +79,7 @@ describe("the status and kind order", () => {
     const fresh = fleet.machine("fresh");
     await fresh.sync();
     sameOrder([a, b, fresh]);
+    // The numbers are each device's own — which is the case this test is about.
     expect(ids(a.db, "workspace_statuses").slice(0, 6)).toEqual(["backlog", "todo", "triage", "in_progress", "qa", "staging"]);
 
     // A later reorder on any device lands the same everywhere.
