@@ -219,12 +219,20 @@ So:
   the rule reads only what those issues say about themselves. The write is refused, naming
   each of them and the issue the number resolves to (identifier, title and id), and nothing
   is written, when any issue that left the number, other than the one it resolves to:
-  - is **checked out by any agent, or leased by this device** — for an issue a restore
-    removed, was checked out when it went, or its lease is still held here; or
+  - is **checked out by any agent, or leased by this device**; or
   - left it **less than a day ago** (`RENUMBER_GUARD_MS`, 24 hours, measured from when this
     device moved it): a day covers the work that learned the number before the move — an
     agent between `checkout` and `done`, a handoff written that morning, a script's
     variable.
+
+  An issue a restore removed refuses **only inside that day**, and the refusal says who had it
+  checked out when it went. Nobody is holding it after that: its checkout went with its row,
+  and the rewind forgot this device's lease on it and gives the lease back to the service at
+  the end of that sync — or at the next sync, if the service could not be reached
+  (`forgetRemovedIssueLease`, `sync_lease_releases_owed` in `meta`). A release by its **id** —
+  `release`, MCP `release_task`, `cloud lease release` — has nothing left to give back, and
+  says what the restore removed and when instead of failing; any other write by its id is
+  `not_found` with the same sentence.
 
   Every write a number can reach is covered: `done`, `cancel`, `status`, `release`,
   `checkout`, comments, documents, blockers, gates and approvals, a child's parent, the plan,
@@ -246,10 +254,14 @@ So:
   and a peer on an older build creating, synchronizing, losing push answers, moving numbers and
   writing through numbers they learned.
 - **Anything else by that number is answered with what happened**: "TRA-2 was renumbered here
-  at <time>; your earlier TRA-2 is now TRA-4, and TRA-2 now names another issue." — on the
-  CLI's stdout, as `renumbered` in its `--json`, and on MCP in the tool result itself (a
-  text block, and `renumbered` on an object result), never on stderr alone
-  (`RenumberNotice` in `identifier-moves.ts`).
+  at <time>; your earlier TRA-2 is now TRA-4, and TRA-2 now names another issue." For a
+  number a restore emptied: "TRA-2's earlier issue "A's task" (<id>) was removed by a restore
+  here at <time>; TRA-2 now names "B's issue" (<id>)." — with `nowIdentifier: null`,
+  `removedByRestore` and `nowNames` in the record. On a read, an acknowledged write and a
+  write after the window alike: on the CLI's stdout, as `renumbered` in its `--json`, and on
+  MCP in the tool result itself (a text block, and `renumbered` on an object result), never
+  on stderr alone (`RenumberNotice` in `identifier-moves.ts`,
+  `test/cloud-restore-removed-holder.test.ts`).
 
 A settlement comment is worded to be true on every device, however many created the number:
 the repository keeps the one created first, every other is renumbered by the device that
