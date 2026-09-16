@@ -25,6 +25,8 @@ import {
   pushOps,
   seedRepo,
 } from "./helpers.js";
+import { restoreStageEntities } from "../src/limits.js";
+import { oldCaptureBackup } from "./old-worker.js";
 import { PURGE_REFUSALS } from "./purge-fixture.js";
 
 async function enableBackup(repoId = REPO): Promise<void> {
@@ -255,10 +257,8 @@ describe("restore materialises into the new epoch", () => {
       creates(["issue-1"]).map((op) => ({ ...op, deviceId: device })),
       { token, device },
     );
-    const backup = await jsonOf<{ backup: { backupId: string } }>(
-      await call(`/v1/repos/${REPO}/backups`, { method: "POST", token, body: {}, device }),
-    );
-    // As a backup from before this build: the fold without either field.
+    // As a backup from before this build: the fold inside the row, without either field.
+    const backup = { backup: await oldCaptureBackup(env.DB, REPO, { backupId: "old-backup", deviceId: device }) };
     const stored = (await env.DB.prepare(`SELECT state FROM backups WHERE repo_id = ?1 AND backup_id = ?2`)
       .bind(REPO, backup.backup.backupId)
       .first()) as { state: string };
@@ -925,25 +925,29 @@ describe("the pre-restore snapshot and the audit record", () => {
 });
 
 describe("staging is chunked", () => {
-  it("takes more than one call when the backup exceeds the batch ceiling", async () => {
-    const token = await seedRepo();
+  it("takes more than one call when the backup exceeds what one turn stages", async () => {
+    // Its own device, so the rate limiter (120 a minute per device) is not spent by the tests before it.
+    const device = "device-chunk";
+    const token = await seedRepo(REPO, device);
     await enableBackup();
 
-    // 30 entities against a free-plan ceiling of 25 per stage.
-    const ids = Array.from({ length: 30 }, (_, i) => `issue-${i + 1}`);
+    // Thirty more entities than the free plan stages in one turn.
+    const chunk = restoreStageEntities("free");
+    const ids = Array.from({ length: chunk + 30 }, (_, i) => `issue-${i + 1}`);
     for (let i = 0; i < ids.length; i += 25) {
-      await pushOps(creates(ids.slice(i, i + 25), i + 1), { token });
+      await pushOps(creates(ids.slice(i, i + 25), i + 1).map((op) => ({ ...op, deviceId: device })), { token, device });
     }
 
     const backup = await jsonOf<{ backup: { backupId: string; entityCount: number } }>(
-      await call(`/v1/repos/${REPO}/backups`, { method: "POST", token, body: {} }),
+      await call(`/v1/repos/${REPO}/backups`, { method: "POST", token, body: {}, device }),
     );
-    expect(backup.backup.entityCount).toBe(30);
+    expect(backup.backup.entityCount).toBe(chunk + 30);
 
     const begun = await jsonOf<{ restoreId: string }>(
       await call(`/v1/repos/${REPO}/backups/${backup.backup.backupId}/restore`, {
         method: "POST",
         token,
+        device,
         body: { confirm: REPO },
       }),
     );
@@ -952,34 +956,37 @@ describe("staging is chunked", () => {
       await call(`/v1/repos/${REPO}/backups/${backup.backup.backupId}/restore`, {
         method: "POST",
         token,
+        device,
         body: { confirm: REPO, restoreId: begun.restoreId },
       }),
     );
-    expect(first.staged).toBe(25);
+    expect(first.staged).toBe(chunk);
     expect(first.done).toBe(false);
 
     const second = await jsonOf<{ staged: number; done: boolean }>(
       await call(`/v1/repos/${REPO}/backups/${backup.backup.backupId}/restore`, {
         method: "POST",
         token,
+        device,
         body: { confirm: REPO, restoreId: begun.restoreId },
       }),
     );
-    expect(second.staged).toBe(30);
+    expect(second.staged).toBe(chunk + 30);
 
     const committed = await jsonOf<{ done: boolean }>(
       await call(`/v1/repos/${REPO}/backups/${backup.backup.backupId}/restore`, {
         method: "POST",
         token,
+        device,
         body: { confirm: REPO, restoreId: begun.restoreId },
       }),
     );
     expect(committed.done).toBe(true);
 
     const snapshot = await jsonOf<{ entities: unknown[] }>(
-      await call(`/v1/repos/${REPO}/snapshot`, { token }),
+      await call(`/v1/repos/${REPO}/snapshot?limit=500`, { token, device }),
     );
-    expect(snapshot.entities).toHaveLength(30);
+    expect(snapshot.entities).toHaveLength(chunk + 30);
   });
 });
 
