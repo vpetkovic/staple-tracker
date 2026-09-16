@@ -39,11 +39,11 @@ async function sync(...machines: Machine[]): Promise<void> {
 }
 
 /**
- * A backs up; after it, A's agent creates a task, checks it out, and — with `lease` — leases it.
+ * A backs up; after it, A's agent creates a task, checks it out (unless `checkout` is false), and — with `lease` — leases it.
  * B, offline, numbers its own issue alike. A restores, and both follow: the task is removed on
  * A, and its number names B's issue.
  */
-async function emptiedByRestore(options: { lease?: boolean; unreachableRelease?: boolean } = {}) {
+async function emptiedByRestore(options: { checkout?: boolean; lease?: boolean; unreachableRelease?: boolean } = {}) {
   const server = new FakeSyncServer({ repositoryId: REPO });
   fleet = new Fleet(server, REPO);
   const a = fleet.machine("a");
@@ -53,7 +53,7 @@ async function emptiedByRestore(options: { lease?: boolean; unreachableRelease?:
   await setBackupConsent(a.home, REPO, true, { fetchImpl: server.fetch });
   const backup = await createBackup(a.home, REPO, null, { fetchImpl: server.fetch });
   const task = a.store.createIssue({ title: "A's task" });
-  a.store.checkoutIssue(task.id, "agent-a");
+  if (options.checkout !== false) a.store.checkoutIssue(task.id, "agent-a");
   const leaseOptions = { home: a.home, fetchImpl: server.fetch, sleep: async () => undefined };
   if (options.lease) await acquireClaim(a.store, REPO, task.id, "agent-a", leaseOptions);
   await a.sync();
@@ -115,7 +115,7 @@ function expectRemovalNotice(notices: readonly Notice[] | undefined, c: Awaited<
 
 describe("a number a restore emptied, used after the refusal", () => {
   it("answers a write after the window, and a read, with what the restore removed — on the CLI and on MCP", async () => {
-    const c = await emptiedByRestore();
+    const c = await emptiedByRestore({ checkout: false });
     ageRemoval(c.a, 2 * DAY);
     const number = c.task.identifier;
 

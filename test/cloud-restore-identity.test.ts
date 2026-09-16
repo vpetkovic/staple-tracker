@@ -12,7 +12,7 @@
  * RI2. A restore that removes an issue vacates its number, and the issue that takes it next
  * received every write meant for the removed one — an agent's `done` included — with no
  * notice. The removed issue is now a former holder of its number (`recordRemovedHolder`), and
- * the write is refused inside the day, or while it was checked out.
+ * the write is refused inside the day (`test/cloud-restore-removed-holder.test.ts` for after it).
  */
 import { afterEach, describe, expect, it } from "vitest";
 import type { DatabaseSync } from "node:sqlite";
