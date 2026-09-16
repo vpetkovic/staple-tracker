@@ -101,13 +101,17 @@ export function reconcileBeforeRead(db: DatabaseSync, entities: readonly Snapsho
     const space = key.indexOf(" ");
     keep(key.slice(0, space), key.slice(space + 1));
   }
-  // Work this device never sent.
+  // Work this device never sent — and everything each operation names, create or edit alike.
+  // An unsent edit of an entity the epoch holds names what it names all the same: a status,
+  // kind or project on an issue, a blocker, a queued issue, a milestone member made after the
+  // backup. Kept only through the entity, those were removed while the edit was still sent.
   const unsent = db
-    .prepare("SELECT entity, entity_id AS id FROM sync_outbox WHERE acknowledged_seq IS NULL ORDER BY client_seq")
-    .all() as Array<{ entity: string; id: string }>;
+    .prepare("SELECT entity, entity_id AS id, payload FROM sync_outbox WHERE acknowledged_seq IS NULL ORDER BY client_seq")
+    .all() as Array<{ entity: string; id: string; payload: string }>;
   for (const op of unsent) {
     if (op.entity === "documentRevision") keep("issue", op.id.slice(0, op.id.indexOf("/")));
     else keep(op.entity, op.id);
+    for (const [named, namedId] of operationReferents(op.entity, op.id, parsedPayload(op.payload))) keep(named, namedId);
   }
 
   // Never pushable, and so never on any timeline: this device's own (`recordWithheld`).
@@ -189,12 +193,7 @@ function sendReferentsFirst(db: DatabaseSync, journal: Journal): void {
   });
   // For each operation, the pending creates it has to follow.
   const after = pending.map((op, index) => {
-    let payload: Record<string, unknown> = {};
-    try {
-      payload = JSON.parse(op.payload) as Record<string, unknown>;
-    } catch {
-      // Not ours to judge here: sent as it is, where it is.
-    }
+    const payload = parsedPayload(op.payload);
     const own = op.verb === "create" ? [] : [[op.entity, op.entityId] as const];
     return [...own, ...operationReferents(op.entity, op.entityId, payload)]
       .map(([entity, id]) => creates.get(keyOf(entity, id)))
@@ -219,6 +218,16 @@ function sendReferentsFirst(db: DatabaseSync, journal: Journal): void {
     order.push(next);
   }
   journal.reorderPending(order.map((index) => pending[index]!.opId));
+}
+
+/** A queued operation's payload; one this build cannot read names nothing. */
+function parsedPayload(raw: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
 }
 
 /** What an operation names that a receiver must already hold to apply it (`apply.ts`). */
