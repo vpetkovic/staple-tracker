@@ -18,6 +18,12 @@ import { FakeSyncServer } from "./fixtures/fake-sync-server.js";
 import { OlderBuildDevice } from "./fixtures/older-build.js";
 import { Fleet, type Machine } from "./fixtures/sync-machines.js";
 
+/** The stand-in a later claim waits under: its number, and the seq of the write that claimed it. */
+function standInOf(server: FakeSyncServer, issueId: string, number: string): string {
+  const claim = server.ops.find((op) => op.entity === "issue" && op.entityId === issueId && (op.payload as { identifier?: unknown }).identifier === number);
+  return `${number}+${claim!.seq}`;
+}
+
 const REPO = "5eed0000-0000-4000-8000-0000000000d4";
 
 let fleet: Fleet | null = null;
@@ -100,15 +106,16 @@ describe("two devices creating an issue offline under the same number", () => {
     await b.sync();
     await a.sync();
 
-    // A met B's issue under the stand-in `TRA-2+1` before B settled it. That stand-in
-    // may be in a handoff already; it still finds B's issue.
+    // A met B's issue under a stand-in (`TRA-2+<seq of B's claim>`) before B settled it. That
+    // stand-in may be in a handoff already; it still finds B's issue.
     a.use();
-    expect(a.store.getIssue("TRA-2+1").id).toBe(onB.id);
+    const standIn = standInOf(fleet!.server, onB.id, "TRA-2");
+    expect(a.store.getIssue(standIn).id).toBe(onB.id);
     // And from anywhere on the machine: the hub finds the workspace by the prefix, suffix
     // and all, which is how `staple show TRA-2+1` outside the repository resolves it.
     const hub = Hub.openAt(a.home);
     try {
-      expect(hub.resolveIdentifier("tra-2+1")).toEqual(expect.objectContaining({ identifier: "TRA-2+1" }));
+      expect(hub.resolveIdentifier(standIn.toLowerCase())).toEqual(expect.objectContaining({ identifier: standIn }));
       expect(() => hub.resolveIdentifier("TRA-2+x")).toThrow(/not an identifier/);
     } finally {
       hub.close();
@@ -123,7 +130,7 @@ describe("two devices creating an issue offline under the same number", () => {
     // — alongside the issue that holds that number now; on A, so does the stand-in.
     expect(b.store.listIssues({ q: "tra-2" }).map((issue) => issue.id)).toEqual(expect.arrayContaining([onA.id, onB.id]));
     a.use();
-    expect(a.store.listIssues({ q: "TRA-2+1" }).map((issue) => issue.id)).toEqual([onB.id]);
+    expect(a.store.listIssues({ q: standIn }).map((issue) => issue.id)).toEqual([onB.id]);
     b.use();
     const note = b.db
       .prepare("SELECT body, author_type FROM comments WHERE issue_id = ?")
@@ -165,7 +172,7 @@ describe("two devices creating an issue offline under the same number", () => {
     ]);
     await a.sync();
     expect(openConflicts(a.db)).toBe(1);
-    expect(identifierOf(a.db, peer)).toBe("TRA-2+1");
+    expect(identifierOf(a.db, peer)).toBe(standInOf(server, peer, "TRA-2"));
 
     // The state an older build leaves when the peer's issue is settled: the issue moved, and
     // its applier — which had no rule to close the record — left it open. Reproduced here as

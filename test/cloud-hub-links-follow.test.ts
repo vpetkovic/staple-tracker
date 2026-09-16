@@ -21,6 +21,12 @@ import { FakeSyncServer } from "./fixtures/fake-sync-server.js";
 import { OlderBuildDevice } from "./fixtures/older-build.js";
 import { Fleet, type Machine } from "./fixtures/sync-machines.js";
 
+/** The stand-in a later claim waits under: its number, and the seq of the write that claimed it. */
+function standInOf(server: FakeSyncServer, issueId: string, number: string): string {
+  const claim = server.ops.find((op) => op.entity === "issue" && op.entityId === issueId && (op.payload as { identifier?: unknown }).identifier === number);
+  return `${number}+${claim!.seq}`;
+}
+
 const REPO = "5eed0000-0000-4000-8000-0000000000f6";
 
 let fleet: Fleet | null = null;
@@ -228,8 +234,9 @@ describe("a hub link made through a stand-in", () => {
     await a.sync();
     // A met B's issue under a stand-in, and links through it.
     a.use();
-    expect(a.store.getIssue("TRA-2+1").id).toBe(onB.id);
-    link(a, "TRA-2+1", other);
+    const standIn = standInOf(fleet!.server, onB.id, "TRA-2");
+    expect(a.store.getIssue(standIn).id).toBe(onB.id);
+    link(a, standIn, other);
     const settledB = identifierOf(a.db, onB.id);
     expect(links(a)).toEqual([{ blocker: settledB, blocked: other }]);
 
@@ -239,7 +246,7 @@ describe("a hub link made through a stand-in", () => {
     // Still B's issue, under the number B settled on — not C's, however C's claim lands here.
     expect(identifierOf(a.db, onB.id)).toBe(settledB);
     expect(links(a)).toEqual([{ blocker: settledB, blocked: other }]);
-    expect(a.store.getIssue("TRA-2+1").id).toBe(onB.id);
+    expect(a.store.getIssue(standIn).id).toBe(onB.id);
     expect(identifierOf(a.db, onC.id)).not.toBe(settledB);
 
     // A link published by another machine under a stand-in: placed here under the issue it
@@ -264,7 +271,7 @@ describe("a hub link made through a stand-in", () => {
           hubId: "another-machine",
           capturedAt: "2026-09-11T00:00:00.000Z",
           workspaces: [],
-          crossLinks: [published("TRA-2+1"), published("TRA-9+1")],
+          crossLinks: [published(standIn), published("TRA-9+1")],
         },
         { apply: true },
       );
@@ -273,7 +280,7 @@ describe("a hub link made through a stand-in", () => {
       expect(reasons).not.toContain("initialised here separately");
       expect(hub.crossLinksFor("tracker").map((link) => link.blockerIdentifier)).toContain(settledB);
       // And unlinking through the stand-in removes the link stored under the settled number.
-      expect(hub.removeCrossLink("TRA-2+1", other)).toEqual(expect.objectContaining({ blockerIdentifier: settledB }));
+      expect(hub.removeCrossLink(standIn, other)).toEqual(expect.objectContaining({ blockerIdentifier: settledB }));
     } finally {
       hub.close();
     }

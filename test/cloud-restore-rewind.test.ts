@@ -221,7 +221,7 @@ describe("the values a rewound row held", () => {
     ]);
     await sync(c);
     c.use();
-    expect((c.db.prepare("SELECT identifier FROM issues WHERE id = ?").get(waitingId) as { identifier: string }).identifier).toBe(`${holder.identifier}+1`);
+    expect((c.db.prepare("SELECT identifier FROM issues WHERE id = ?").get(waitingId) as { identifier: string }).identifier).toBe(`${holder.identifier}+${server.ops.find((op) => op.entityId === waitingId)!.seq}`);
     // C comments on it: unsent work that keeps it through the rewind.
     c.store.addComment(waitingId, "C's unsent note", "carol");
 
