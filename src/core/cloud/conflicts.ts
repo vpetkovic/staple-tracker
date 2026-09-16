@@ -567,6 +567,13 @@ export function screenForConflicts(
   if (localDeviceId !== null && op.deviceId === localDeviceId) return input;
 
   if (!screenable(op.verb) || op.baseVersion === null) return input;
+  /**
+   * Nor is a device's settlement of its own later claim — a renumber `staple` writes
+   * (`settleOne`, `claims.ts`). It contests no value anybody chose: who holds the number is
+   * decided by the claims in the log (`displaceIdentifierHolder`, `apply.ts`), and screened as
+   * an edit, one that lost its number left a record open that nothing would ever close.
+   */
+  if (op.verb === "renumber" && op.actor === "staple") return input;
 
   const version = entityVersion(db, op.entity, op.entityId);
   const kept =

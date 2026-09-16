@@ -711,7 +711,8 @@ function applyIssue(db: DatabaseSync, input: ApplyInput): boolean {
     const values = new Map(pairs);
     settleIssueKeys(db, input, values);
     deriveIssueColumns(db, values);
-    updateRow(db, "issues", "id", input.entityId, [...values]);
+    // A settlement that lost its number to an earlier claim carries nothing else to write.
+    if (values.size > 0) updateRow(db, "issues", "id", input.entityId, [...values]);
     const after = identifierOf(db, input.entityId);
     if (before !== null && after !== null && before !== after) {
       /**
@@ -768,6 +769,15 @@ function insertIssue(db: DatabaseSync, input: ApplyInput, pairs: Array<[string, 
      */
     throw new ReferentMissing(`the create of issue ${input.entityId}, which no operation so far has carried`);
   }
+  if (!values.has("title")) {
+    /**
+     * Nor is one that carries an identifier and no title — a renumber, which is a settlement
+     * of an issue this device does not hold (a restore rewound it here; the device that owns
+     * it sends it again, create and all, `rewind.ts`). Written, it failed the page on the
+     * title's NOT NULL.
+     */
+    throw new ReferentMissing(`the create of issue ${input.entityId}, which no operation so far has carried`);
+  }
 
   const identifier = values.get("identifier") as string;
   const owner = identifierOwner(db, identifier);
@@ -787,6 +797,8 @@ function insertIssue(db: DatabaseSync, input: ApplyInput, pairs: Array<[string, 
     if (holderYields(db, "issue", owner, ["identifier"], claimSeqOf(input, ["identifier"]))) {
       moveIdentifier(db, owner, provisionalIdentifier(db, identifier));
       oweSettlement(db, { entity: "issue", entityId: owner, field: "identifier", from: identifier });
+    } else if (heldAheadOfRead(db, input, "issue", owner)) {
+      moveIdentifier(db, owner, provisionalIdentifier(db, identifier));
     } else {
       const provisional = provisionalIdentifier(db, identifier);
       recordIdentifierConflict(db, input, identifier, provisional);
@@ -981,15 +993,30 @@ function displaceIdentifierHolder(
    * device has since moved its issue off `TRA-2` for an earlier claim, and re-applying
    * the old payload would take the number back from the issue every other device gave
    * it to.
+   *
+   * A renumber a device makes to SETTLE its own later claim (`settleOne` in `claims.ts`,
+   * written by `staple`) is not a decision about anybody else's issue: it is a claim on the
+   * number it chose, and the earlier claim keeps that number too. As a decision, a settlement
+   * queued before a restore and sent into the new epoch took its number from the issue the
+   * new epoch had given it to, on every device reading the tail and on none hydrating.
    */
-  const decision = input.verb === "renumber" || input.seq === undefined || input.seq === null;
-  if (!decision && !holderYields(db, "issue", owner, ["identifier"], claimSeqOf(input, ["identifier"]))) {
-    pairs.splice(index, 1);
+  const settlement = input.verb === "renumber" && input.actor === "staple";
+  const decision = (input.verb === "renumber" && !settlement) || input.seq === undefined || input.seq === null;
+  if (!decision && holderYields(db, "issue", owner, ["identifier"], claimSeqOf(input, ["identifier"]))) {
+    moveIdentifier(db, owner, provisionalIdentifier(db, incoming[1]));
+    oweSettlement(db, { entity: "issue", entityId: owner, field: "identifier", from: incoming[1] });
+    return;
+  }
+  if (!decision && heldAheadOfRead(db, input, "issue", owner)) {
+    moveIdentifier(db, owner, provisionalIdentifier(db, incoming[1]));
+    return;
+  }
+  if (!decision && input.read !== undefined) {
+    laterClaimInRead(db, input, pairs, index, incoming[1]);
     return;
   }
   if (!decision) {
-    moveIdentifier(db, owner, provisionalIdentifier(db, incoming[1]));
-    oweSettlement(db, { entity: "issue", entityId: owner, field: "identifier", from: incoming[1] });
+    pairs.splice(index, 1);
     return;
   }
 
@@ -1003,6 +1030,48 @@ function displaceIdentifierHolder(
    */
   if (input.seq !== undefined && input.seq !== null && ownClaimSeq(db, "issue", owner, ["identifier"]) !== null) {
     oweSettlement(db, { entity: "issue", entityId: owner, field: "identifier", from: incoming[1] });
+  }
+}
+
+/**
+ * In a snapshot read, whether a value's local holder holds it only as this device had it —
+ * the read has not placed the holder yet, and it is not this device's own later claim. Such
+ * a value was written by an operation the epoch does not hold (a settlement or a decision a
+ * restore rewound) or placed by an older applier; the snapshot's order decides, as on a device
+ * hydrating it fresh, and the holder is moved aside until its own entity places it. Before, the
+ * holder kept the value and the arriving entity went without it, on this device alone.
+ */
+function heldAheadOfRead(db: DatabaseSync, input: ApplyInput, entity: string, holderId: string): boolean {
+  if (input.read === undefined || placedInRead(db, input.read, entity, holderId)) return false;
+  // A row nothing ever journaled or applied is this workspace's own, not a value of a timeline.
+  return db.prepare("SELECT 1 AS hit FROM sync_entity_versions WHERE entity = ? AND entity_id = ?").get(entity, holderId) !== undefined;
+}
+
+/** Whether a snapshot read has applied an entity yet. */
+function placedInRead(db: DatabaseSync, read: SnapshotRead, entity: string, entityId: string): boolean {
+  return db.prepare("SELECT 1 AS hit FROM sync_applied WHERE op_id = ?").get(`${read.prefix}${entity} ${entityId}`) !== undefined;
+}
+
+/**
+ * A snapshot's issue whose identifier an issue earlier in the read holds: the later claim, as a
+ * device hydrating fresh takes it — a stand-in, on the record. When it is this device's own, its
+ * settlement is owed again (`claims.ts`): the epoch holds none — a restore rewound it, or it was
+ * never sent — and every other device holds the stand-in until it arrives. One queued here and
+ * not yet sent is left to land.
+ */
+function laterClaimInRead(db: DatabaseSync, input: ApplyInput, pairs: Array<[string, unknown]>, index: number, contested: string): void {
+  const own = ownClaimSeq(db, "issue", input.entityId, ["identifier"]);
+  const current = identifierOf(db, input.entityId);
+  if (own === Number.POSITIVE_INFINITY || (current !== null && current.startsWith(`${contested}+`))) {
+    pairs.splice(index, 1);
+  } else {
+    pairs[index] = ["identifier", provisionalIdentifier(db, contested)];
+  }
+  if (own === null) {
+    // Another device's: on the record until that device settles it.
+    recordIdentifierConflict(db, input, contested, (pairs.find(([column]) => column === "identifier")?.[1] as string | undefined) ?? current ?? contested);
+  } else if (own !== Number.POSITIVE_INFINITY) {
+    oweSettlement(db, { entity: "issue", entityId: input.entityId, field: "identifier", from: contested });
   }
 }
 
@@ -1722,6 +1791,9 @@ function settleProjectSlug(db: DatabaseSync, input: ApplyInput, pairs: Array<[st
   if (holderYields(db, "project", holder.id, ["slug"], claimSeqOf(input, ["slug"]))) {
     db.prepare("UPDATE projects SET slug = ? WHERE id = ?").run(free(), holder.id);
     oweSettlement(db, { entity: "project", entityId: holder.id, field: "slug", from: slug });
+  } else if (heldAheadOfRead(db, input, "project", holder.id)) {
+    // Held only as this device had it: the snapshot's order decides (`heldAheadOfRead`).
+    db.prepare("UPDATE projects SET slug = ? WHERE id = ?").run(free(), holder.id);
   } else if (db.prepare("SELECT 1 AS hit FROM projects WHERE id = ?").get(input.entityId)) {
     // An existing project keeps the slug it has — which is never this one, the index being
     // unique. The case is this device's own create coming back after it gave the slug up.
@@ -1847,6 +1919,22 @@ function applyVocabulary(
   }
 
   if (builtin !== null) db.prepare(`UPDATE ${table} SET is_builtin = ? WHERE id = ?`).run(builtin, input.entityId);
+  /**
+   * A create puts its entry last, wherever this device held it — as it puts one this device
+   * never held. The rule is one for every device: a built-in removed and added back went last
+   * on the device that did it and on every device reading the tail, and stayed where its
+   * migration put it on a device hydrating afterwards; a built-in a restore sent again as a
+   * create stayed put on devices that held it and went last on one that joined, because a
+   * snapshot's order leaves out an entry created after it (`withoutStalePlaces`,
+   * `hydrate.ts`). An order written after the create places it. A genuine create only: what a
+   * restore stages is not one (`atIsCreate`). Nor this device's own create coming back: the entry is
+   * already where this device put it, and the order it wrote with it follows.
+   */
+  const ownEcho = input.opId !== null && db.prepare("SELECT 1 AS hit FROM sync_outbox WHERE op_id = ?").get(input.opId) !== undefined;
+  if (input.verb === "create" && input.atIsCreate === true && !ownEcho) {
+    const last = db.prepare(`SELECT COALESCE(MAX(sort_order), 0) + 1000 AS n FROM ${table} WHERE id <> ?`).get(input.entityId) as { n: number };
+    db.prepare(`UPDATE ${table} SET sort_order = ? WHERE id = ?`).run(last.n, input.entityId);
+  }
 
   if (typeof label === "string") {
     db.prepare(`UPDATE ${table} SET label = ? WHERE id = ?`).run(label, input.entityId);

@@ -202,6 +202,46 @@ describe("restore materialises into the new epoch", () => {
   });
 
   /**
+   * Two issues claimed one identifier; the earlier claim in the log holds it. The backup is
+   * stored by key, and `zz-earlier` sorts after `aa-later` — staged in that order, the new
+   * epoch's log put the later claim first and every device hydrating it gave it the number.
+   * A restore stages in the order the claims sat in the log (`restoreOrder`), a settlement
+   * after the create counting as the claim.
+   */
+  it("stages a backup in the order its claims sat in the log", async () => {
+    const device = "device-order";
+    const token = await seedRepo(REPO, device);
+    await enableBackup();
+    const issue = (id: string, clientSeq: number, identifier: string) => ({
+      ...creates([id], clientSeq)[0]!,
+      deviceId: device,
+      payload: { title: id, identifier },
+    });
+    await pushOps(
+      [
+        issue("zz-earlier", 1, "T-1"),
+        issue("aa-later", 2, "T-1"),
+        issue("mm-created-first", 3, "T-2"),
+      ],
+      { token, device },
+    );
+    // `mm-created-first` is renumbered after both: its claim on T-9 is that write.
+    await pushOps(
+      [{ ...creates(["mm-created-first"], 4)[0]!, deviceId: device, verb: "renumber", baseVersion: 1, payload: { identifier: "T-9" } }],
+      { token, device },
+    );
+    const backup = await jsonOf<{ backup: { backupId: string } }>(
+      await call(`/v1/repos/${REPO}/backups`, { method: "POST", token, body: {}, device }),
+    );
+    const { epoch } = await repoRow();
+    await runRestore(token, backup.backup.backupId, REPO, device);
+    const staged = await env.DB.prepare(`SELECT entity_id FROM ops WHERE repo_id = ?1 AND epoch = ?2 ORDER BY seq`)
+      .bind(REPO, epoch + 1)
+      .all<{ entity_id: string }>();
+    expect(staged.results.map((row) => row.entity_id)).toEqual(["zz-earlier", "aa-later", "mm-created-first"]);
+  });
+
+  /**
    * A backup the Worker before this build made keeps no create time or actor, so its
    * restore stages every entity under `restore:<id>` at the moment it ran. That is who
    * restored and when; handed to devices as the create's, it dated every old comment with

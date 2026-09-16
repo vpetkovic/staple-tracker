@@ -34,6 +34,13 @@ function builtin(db: DatabaseSync, table: "workspace_statuses" | "workspace_kind
   return db.prepare(`SELECT is_builtin FROM ${table} WHERE id = ?`).get(id);
 }
 
+async function sync(...machines: Machine[]): Promise<void> {
+  for (const machine of machines) {
+    machine.use();
+    await machine.sync();
+  }
+}
+
 async function agree(machines: readonly Machine[]): Promise<void> {
   for (let round = 0; round < 2; round += 1) {
     for (const machine of machines) {
@@ -103,6 +110,39 @@ describe("a built-in removed and added back", () => {
       ["status", false],
     ]);
   });
+
+  /**
+   * RS1-y. Where a create of an entry a device already holds puts it: last, as it puts one it
+   * never held (`applyVocabulary`). Removed and added back with no order ever written, it went
+   * last on the writer and every device reading the tail, and stayed in its installed place on
+   * a device hydrating afterwards.
+   */
+  for (const fold of ["service", "tail"] as const) {
+    it(`goes last on every device, a fresh one included (${fold} fold)`, async () => {
+      const server = new FakeSyncServer({ repositoryId: REPO, ...(fold === "tail" ? { maxSnapshotFoldOps: 3 } : {}) });
+      fleet = new Fleet(server, REPO);
+      const a = fleet.machine("a");
+      a.store.createIssue({ title: "Something to sync" });
+      await a.sync();
+      const b = fleet.machine("b");
+      await b.sync();
+      a.use();
+      a.store.removeKind("spike", { migrateTo: "task" }, "alice");
+      a.store.addKind({ id: "spike", label: "Spike" }, "alice");
+      a.store.removeStatus("in_review", { migrateTo: "todo" }, "alice");
+      a.store.addStatus({ id: "in_review", category: "review", label: "In review" }, "alice");
+      await sync(a, b);
+      const fresh = fleet.machine("fresh");
+      await fresh.sync();
+      const ordered = (db: DatabaseSync, table: string): string[] => (db.prepare(`SELECT id FROM ${table} ORDER BY sort_order, id`).all() as Array<{ id: string }>).map((row) => row.id);
+      for (const table of ["workspace_kinds", "workspace_statuses"]) {
+        const writer = ordered(a.db, table);
+        expect(writer.at(-1)).toBe(table === "workspace_kinds" ? "spike" : "in_review");
+        expect(ordered(b.db, table), `b ${table}`).toEqual(writer);
+        expect(ordered(fresh.db, table), `fresh ${table}`).toEqual(writer);
+      }
+    });
+  }
 
   it("stays a built-in everywhere when it was only relabelled", async () => {
     fleet = new Fleet(new FakeSyncServer({ repositoryId: REPO }), REPO);

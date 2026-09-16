@@ -45,6 +45,12 @@ const PENDING_KEY = "identifier_moves_pending";
 export interface FormerHolder {
   readonly issueId: string;
   readonly at: string;
+  /**
+   * Set when it left the number because a restore removed it (`cloud/rewind.ts`): the issue
+   * is gone, so what the guard asks of it is kept here — its title, and who had it checked
+   * out when it went.
+   */
+  readonly removed?: { readonly title: string; readonly checkedOutBy: string | null };
 }
 
 function readHolders(db: DatabaseSync, identifier: string): FormerHolder[] {
@@ -88,7 +94,35 @@ export function formerHolders(db: DatabaseSync, identifier: string): FormerHolde
     }
   }
   const exists = db.prepare("SELECT 1 AS hit FROM issues WHERE id = ?");
-  return holders.filter((holder) => exists.get(holder.issueId) !== undefined);
+  // An issue a restore removed is still one a caller may mean (`recordRemovedHolder`).
+  return holders.filter((holder) => holder.removed !== undefined || exists.get(holder.issueId) !== undefined);
+}
+
+/**
+ * Record that a restore removed an issue holding `identifier` (`cloud/rewind.ts`): a former
+ * holder like any issue that moved off it, and the one whose row is gone. A number the rewind
+ * vacated used to leave no trace, so the next issue to take it received every write meant for
+ * the removed one — an agent's `done` included — with no notice.
+ */
+export function recordRemovedHolder(
+  db: DatabaseSync,
+  identifier: string,
+  removal: { issueId: string; at: string; title: string; checkedOutBy: string | null },
+): void {
+  const removed = { title: removal.title, checkedOutBy: removal.checkedOutBy };
+  const write = (key: string, holders: readonly FormerHolder[]): void => {
+    db.prepare(`INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(key, JSON.stringify(holders));
+  };
+  // Every number it left here before, too: a caller may have learned any of them.
+  const lists = db.prepare("SELECT key FROM meta WHERE key LIKE ? AND instr(value, ?) > 0").all(`${HOLDERS_PREFIX}%`, removal.issueId) as Array<{ key: string }>;
+  for (const { key } of lists) {
+    const number = key.slice(HOLDERS_PREFIX.length);
+    if (number === identifier) continue;
+    write(key, readHolders(db, number).map((holder) => (holder.issueId === removal.issueId ? { ...holder, at: removal.at, removed } : holder)));
+  }
+  const holders = readHolders(db, identifier).filter((holder) => holder.issueId !== removal.issueId);
+  holders.push({ issueId: removal.issueId, at: removal.at, removed });
+  write(`${HOLDERS_PREFIX}${identifier}`, holders);
 }
 
 /**

@@ -96,9 +96,25 @@ hydrates afterwards reads the settled value from the fold. **Nobody is asked to 
 anything and no conflict stays open.** A settlement can itself collide with a number a
 third device minted meanwhile; that is a fresh claim, settled the same way.
 
-- **A `renumber` is a decision**, and moves whoever holds its target aside: it is how a
-  conflict resolution swaps two numbers and how a settlement lands. When the issue moved
-  aside is this device's own, this device settles where it goes.
+- **A `renumber` a person decides is a decision**, and moves whoever holds its target
+  aside: it is how a conflict resolution swaps two numbers. When the issue moved aside is
+  this device's own, this device settles where it goes. **A settlement's `renumber` is a
+  claim** on the number it chose (written by `staple`, `settleOne`): the earlier claim in
+  the log keeps that number too, and a settlement that loses it is settled again by its
+  device. As a decision, a settlement queued before a restore and sent into the new epoch
+  took its number from the issue the new epoch had given it to, on every device reading the
+  tail and on none hydrating; and the conflict screen does not read one as an edit, which
+  left a record open that nothing closed.
+- **A snapshot read decides by the log's order, not by what this device holds.** A value
+  held here by an entity the read has not placed yet — and not this device's own later claim
+  — was written by an operation the epoch does not hold (a settlement or decision a restore
+  rewound) or placed by an older applier: it is moved aside, and the entity the log gives it
+  to takes it (`heldAheadOfRead`, `apply.ts`). An issue the read placed earlier keeps a number
+  a later one in the read asks for, and the later one takes a stand-in on the record — as on
+  a device hydrating fresh — and, when it is this device's own, **its settlement is owed
+  again**: the epoch holds none — a restore rewound the one it sent — and every device holds
+  the stand-in until it arrives (`laterClaimInRead`). A row nothing ever journaled or applied
+  is this workspace's own and keeps its values, as before.
 - **This device's own operation coming back on the next pull is a claim like any
   other.** It can still carry an identifier the device has since given up, and applying
   it as written would take the number back from the issue every other device gave it to;
@@ -193,12 +209,18 @@ So:
   and not only this device's own: a number can be left by this device's issue, then held and
   left by another device's, and a write through it by somebody who learned it while the first
   held it must not land on the second. So the guard can fire on a device whose own issues
-  never moved. Who is writing proves nothing — the actor is `--agent`, or `$STAPLE_AGENT`, or
+  never moved. An issue **a restore removed** is one of them ([below](#a-restore-rewinds)): its
+  number, and every number it left here before, keep it as a holder that left when it was
+  removed, with its title and who had it checked out. A restore that vacated a number used to
+  leave no trace, and the issue that took the number next received every write meant for the
+  removed one — an agent's `done` included — with no notice (`test/cloud-restore-identity.test.ts`,
+  and the restoring seeds of `test/cloud-learned-writes.test.ts`). Who is writing proves nothing — the actor is `--agent`, or `$STAPLE_AGENT`, or
   `$USER`, and the step that learned the number and the step that writes need not agree — so
   the rule reads only what those issues say about themselves. The write is refused, naming
   each of them and the issue the number resolves to (identifier, title and id), and nothing
   is written, when any issue that left the number, other than the one it resolves to:
-  - is **checked out by any agent, or leased by this device**; or
+  - is **checked out by any agent, or leased by this device** — for an issue a restore
+    removed, was checked out when it went, or its lease is still held here; or
   - left it **less than a day ago** (`RENUMBER_GUARD_MS`, 24 hours, measured from when this
     device moved it): a day covers the work that learned the number before the move — an
     agent between `checkout` and `done`, a handoff written that morning, a script's
@@ -447,6 +469,18 @@ forgets an entry's place in the order when a create brings it back (`forgetPlace
 not leaves out of the order every entry created after the order's last write
 (`withoutStalePlaces`, `hydrate.ts`); an order written after the create names it again, and
 places it (`test/cloud-vocabulary-readd-order.test.ts`).
+
+**A create puts its entry last — one this device already holds too.** The rule is the same
+on every device: a create of a status or kind puts it after every other entry, whether the
+device held it (a built-in, from its migrations) or not; an order written after the create
+places it (`applyVocabulary`). Before, a built-in removed and added back went last on the
+device that did it and on every device reading the tail, and stayed where its migration put
+it on a device hydrating afterwards; and a built-in sent again as a create stayed put on
+devices that held it and went last on one that joined. A genuine create only: what a restore
+stages is not one, and neither is this device's own create coming back, whose entry is
+already where the device put it and whose order follows. The seed's order accounts for it:
+a built-in the seed sends is last on a fresh device, and the seed sends an order when that is
+not this device's (`test/cloud-builtin-readd.test.ts`).
 
 **The numbers behind the order are each device's own.** What travels is the order, never
 a `sort_order` value, so each device holds numbers of its own making — the store places an
@@ -958,6 +992,16 @@ decided from durable state rather than from anything the caller asks for, so a c
 that lost its place recovers by calling again and being told where it actually got to.
 Staging is chunked at `maxBatchSize` for the same reason a push is.
 
+**A restore stages in the order the claims sat in the log.** A backup keeps, per entity,
+where its claim sat in the log it was folded from — the last write of its identifier or
+slug, or of a vocabulary's order, else its create (`claimSeq`, `forBackup`) — and a
+restore stages in that order (`restoreOrder`, `worker/src/backups.ts`); what the log holds
+no claim of, a built-in only ever edited, goes first. Staged by key, as they were, the later
+of two claims on one number could come first in the new epoch, and every device hydrating
+it gave the number to the claim that had lost it. A backup from before `claimSeq` is staged
+as it was stored (`worker/test/backups.test.ts`, "stages a backup in the order its claims
+sat in the log"; `test/cloud-restore-identity.test.ts`).
+
 Push takes `{ protocol, deviceId, ops: [envelope…] }` and returns a per-operation
 status, never a bare accepted/rejected split:
 
@@ -1065,8 +1109,8 @@ replays the entire history into a live database.
 **Apply is one transaction per page**, and idempotent: every applied `opId` is
 recorded, and a re-delivered operation is a no-op. Within a page, operations apply
 in `seq` order; an operation whose referent does not exist yet is deferred to the
-end of the page and retried once. If it is still unresolvable when the page ends,
-the page fails whole with `validation` and nothing is committed. Causality across
+end of the page and retried once. If it is still unresolvable when the page ends, it is
+set aside ([below](#no-entity-can-stop-a-sync)) and the rest of the page commits. Causality across
 devices is mostly self-enforcing — a device cannot edit an entity it has never
 seen, so the edit necessarily sorts after the create — but "mostly" is not a
 guarantee to build an apply loop on.
@@ -1079,21 +1123,36 @@ of the log — arbitrarily many pages later, beyond the end-of-page retry. An op
 on an entity this database does not hold, carrying none of the fields only a create
 carries (an issue's identifier, a comment's issue, a project's slug, a status's
 category), is therefore a missing referent — it is never inserted with invented
-values. And a page that fails for a missing referent is answered by **one read of the
-snapshot**, applied in one transaction, after which the tail resumes from the cutoff
-that snapshot pinned: a snapshot folds every operation on an entity into one state
-whatever order they arrived in, so an update followed much later by its create folds
-to a complete entity. This is the timeline the device is already on, so nothing is
-forgotten — the ledger, versions and field record stay, and inherited provenance is
-taken at the fold's own numbers rather than lifted as a re-bootstrap into a new epoch
-lifts it. Once per sync; if the snapshot cannot resolve it either, the sync fails,
-naming the referent.
+values: it is set aside until its create arrives, and then dropped, because the create —
+sent by a heal or a seed at the end of the log — is the whole entity as its device holds it,
+the edit included.
+
+**No entity can stop a sync.** An entity that names what this device does not hold — a
+comment on an issue the repository lacks, an edit of an issue whose create is nowhere, in a
+page of the tail or in a snapshot — used to fail its page whole, and every later sync met the
+same page and failed again: one device's write stopped every other device, and every join,
+for good (measured: a device that followed a restore on c7a49d6 edited a row the restore had
+rewound, and every other device and every fresh join failed from then on). Now it is **set
+aside** (`src/core/cloud/quarantine.ts`, `sync_quarantine` in `meta`), everything else
+applies, and the position moves on. Whatever was set aside is tried again after every page
+and every snapshot read, in the order it was set aside:
+
+- one that waited on something else it names applies once that arrives;
+- an edit of an entity this device did not hold, whose create a later operation brings, is
+  dropped — that create carries the whole entity as its author held it, after the edit — and
+  so is a snapshot's older state of an entity the tail has since created.
+
+`staple cloud status` shows how many are waiting (`quarantined` in `--json`, and on the
+page), a sync says so, and `staple doctor` lists each with what it names
+(`test/cloud-quarantine.test.ts`). A fresh device always joins.
 
 **Bootstrap is a snapshot cutoff plus the ordered tail.** A hydrating device reads
 a materialized snapshot taken at `seq = C`, then pulls from cursor `C` forward.
 Writes concurrent with the snapshot are in the tail, so nothing is missed and
-nothing is applied twice. A re-bootstrap — the one an epoch change forces —
-resumes both halves from bounded cursors after an interruption. A database's
+nothing is applied twice. A re-bootstrap — the one an epoch change forces — reads
+the snapshot whole too, because it reconciles to it before applying any of it
+([A restore rewinds](#a-restore-rewinds)); a death during that read costs a re-read and
+leaves nothing half-applied. A database's
 FIRST synchronization reads the snapshot whole before it writes anything, because
 [the seed](#a-workspaces-history-reaches-the-service-when-it-first-synchronizes)
 has to know everything the repository holds before it decides what to upload; a
@@ -1245,30 +1304,54 @@ A restore puts the repository back to a backup, and every device follows it ther
 epoch's snapshot says what the repository holds; what it does not say is everything pushed
 to the old epoch after the backup. A device that held such a row used to keep it through its
 re-bootstrap, while a device joining afterwards never had it — one repository, two answers,
-for good. So once a device has read the new epoch's snapshot whole, it rewinds with the
-repository (`src/core/cloud/rewind.ts`):
+for good. So a device **reconciles to the epoch's fold** (`src/core/cloud/rewind.ts`): it
+reads the snapshot whole and, before applying any of it, removes what the epoch does not hold
+and nothing keeps; then it applies the snapshot, all in one transaction. Removed first, so
+nothing it rewinds — a number, a slug, a retry key — is in the way of the epoch's own; and a
+re-bootstrap killed part-way leaves nothing half-applied, and reads again on the next sync.
 
-- **What was pushed after the backup is gone.** A row the new epoch does not hold, that was
+- **What was pushed after the backup is gone.** A row the epoch does not hold, that was
   pushed — this device's own, acknowledged, or one it applied from the log — is removed on
-  every device that re-bootstraps into the new epoch, with what hangs off it: an issue's
-  comments, documents, blockers, milestone and plan entries. That is the rewind, which is
-  what a restore is for — undoing damage. A built-in status or kind the new epoch says
-  nothing about is put back as every device's migrations install it, and the vocabulary is
-  in the order a device hydrating the new epoch holds it. Document revisions are settled by
-  the read itself ([above](#conflicts-are-preserved-never-resolved-silently)).
+  every device, with what hangs off it: an issue's comments, documents, blockers, milestone
+  and plan entries; its open conflict records are closed. That is the rewind, which is what
+  a restore is for — undoing damage. An issue removed stays a former holder of its number
+  ([above](#identifiers-and-other-unique-values)): a write by that number is refused inside
+  the day, or while it was checked out. A built-in status or kind the epoch says nothing
+  about is put back as every device's migrations install it, and the vocabulary is in the
+  order a device hydrating the epoch holds it. Document revisions are settled by the read
+  itself ([above](#conflicts-are-preserved-never-resolved-silently)).
 - **Work that was never pushed is kept, and reaches every device.** An entity with an
   operation in this device's outbox that no service acknowledged is kept, with whatever it
-  names that the new epoch lacks — a comment's issue, an issue's parent, project, status and
-  kind — and sent into the new epoch: its queued operations as they are, and a `create` of
-  each kept entity the queue holds no create of, the whole entity as this device holds it,
-  as a heal sends one ([below](#a-workspaces-history-reaches-the-service-when-it-first-synchronizes)).
-  A restore never silently discards a device's unsent work. A device that made the restore
-  has moved its epoch already, so its next sync reads the new epoch before it pushes, and
-  the rewind sees that work before it is sent.
+  names that the epoch lacks — a comment's issue, an issue's parent, project, status and
+  kind — and sent into the epoch: its queued operations as they are, and a `create` of each
+  kept entity the queue holds no create of, the whole entity as this device holds it, as a
+  heal sends one ([below](#a-workspaces-history-reaches-the-service-when-it-first-synchronizes)).
+  Built-ins are never sent: every device installs them. A device that made the restore has
+  moved its epoch already, so its next sync reads the epoch before it pushes, and the rewind
+  sees that work before it is sent. What a restore rewound can leave an issue kept here on a
+  stand-in with its number now free: it takes the number back.
+- **Work already done in the epoch on a row it lacks is kept too.** A device that followed
+  the restore on a build that did not rewind held every rewound row, and could edit one —
+  its operations in the epoch then name entities the epoch does not hold. Rather than drop
+  that work everywhere, a device reconciling keeps whatever the epoch's own entities name and
+  do not hold — the issue an edit with no create is of, the issue a comment is on — when it
+  holds it, and sends it as a `create`: the same rule as unsent work, because both are work
+  a person did that the epoch has no row for, and dropping it would discard it silently on
+  every device at once. Until a device that holds it reconciles, other devices set the
+  dangling entities aside ([below](#no-entity-can-stop-a-sync)).
+- **A restore an older build followed is noticed after the upgrade.** The database records
+  the epoch this build last reconciled it against (`sync_reconciled_epoch`). A device whose
+  epoch is not that one — it followed a restore on c7a49d6, which hydrated the new epoch on
+  top of everything it held — reconciles on its first sync by this build, the applier's
+  catch-up re-read included; so does every database this build has not yet reconciled.
 
-Every device, and a fresh one, then holds the same (`test/cloud-restore-rewind.test.ts`, in
-the service's fold and the tail fold). A row nothing ever journaled or applied is not the
-rewind's: it was never on any timeline, and the heal is what sends it.
+Every device, and a fresh one, then holds the same on every synchronized column — pinned as
+a test by the property registry's restore step (`test/sync-mutation-convergence.test.ts`), and
+by `test/cloud-restore-rewind.test.ts`, `test/cloud-restore-identity.test.ts` and
+`test/cloud-restore-older-build.test.ts`, in the service's fold and the tail fold. A row
+nothing ever journaled or applied, and one whose operation was withheld as larger than the
+service takes, is this workspace's own and never on any timeline: a reconcile leaves it, and
+the heal is what sends the first.
 
 ### What the server cannot do
 

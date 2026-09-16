@@ -56,6 +56,7 @@ import {
 } from "../core/path-migration.js";
 import { hubSchemaState, workspaceSchemaState } from "../core/schema.js";
 import { findWorkspace } from "../core/workspace.js";
+import { readQuarantine } from "../core/cloud/quarantine.js";
 import { recordedRepositoryPrefix } from "../core/cloud/repository-prefix.js";
 import { readMeta, snapshotPathFor } from "../core/open.js";
 import { WorkspaceStore } from "../core/store.js";
@@ -1106,6 +1107,43 @@ function checkRepositoryPrefix(dir: string): CheckResult {
 }
 
 /**
+ * Is anything this workspace pulled waiting on something it does not hold?
+ *
+ * An entity naming what never arrived — a comment on an issue the repository lacks, an edit
+ * of an issue whose create is nowhere — is set aside and the rest of a sync applies
+ * (`cloud/quarantine.ts`); it lands once what it names arrives. Listed here, with what each
+ * names, so a person can see what is waiting and on what.
+ */
+function checkSyncQuarantine(dir: string): CheckResult {
+  const id = "sync-quarantine";
+  const title = "Synchronized entities waiting";
+  let found;
+  try {
+    found = findWorkspace(dir);
+  } catch {
+    return result(id, title, "skip", "The current workspace does not resolve.", { dir });
+  }
+  if (!found) return result(id, title, "skip", `No staple workspace at or above ${dir}.`, { dir });
+  const db = readOnlyDb(found.dbPath);
+  try {
+    const waiting = readQuarantine(db).map((item) => ({ entity: item.entity, entityId: item.entityId, names: item.what, since: item.since }));
+    const data = { dbPath: found.dbPath, waiting };
+    if (waiting.length === 0) return result(id, title, "pass", "Nothing this workspace pulled is waiting on something it does not hold.", data);
+    return result(
+      id,
+      title,
+      "warn",
+      `${waiting.length} set aside, each naming something this workspace does not hold yet: ` +
+        waiting.map((item) => `${item.entity} ${item.entityId} (names ${item.names})`).join("; ") +
+        ". Everything else applied; each lands once what it names arrives.",
+      data,
+    );
+  } finally {
+    db.close();
+  }
+}
+
+/**
  * Can the UI bind its configured port?
  *
  * A child process, because there is no synchronous bind API and this CLI's
@@ -1251,6 +1289,7 @@ export function runDiagnostics(options: { dir?: string } = {}): DoctorReport {
     guard("orphan-workspaces", "Unregistered databases", () => checkOrphanWorkspaces(dir)),
     guard("queue", "Pickup queue", () => checkQueue(dir)),
     guard("repository-prefix", "Repository prefix", () => checkRepositoryPrefix(dir)),
+    guard("sync-quarantine", "Synchronized entities waiting", () => checkSyncQuarantine(dir)),
     guard("ui-port", "UI port", checkUiPort),
     guard("runtime", "Installed runtime", checkRuntime),
     guard("ui-assets", "UI bundle", checkUiAssets),

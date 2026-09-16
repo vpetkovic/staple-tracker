@@ -1,5 +1,6 @@
 /**
- * A restore rewinds the repository, and every device that follows it rewinds with it.
+ * What a device holds, reconciled to the current epoch's fold: a restore rewinds the
+ * repository, and every device that follows it rewinds with it.
  *
  * Contract: `docs/sync.md`, "A restore rewinds".
  *
@@ -7,107 +8,150 @@
  * re-bootstraps into it (`beginBootstrap`). The snapshot it reads says what the repository
  * holds. What it does not say is everything pushed to the old epoch after the backup — and a
  * device that held such a row kept it, while a device joining afterwards never had it: two
- * devices on one timeline, disagreeing for good. A restore is for undoing what came after the
- * backup, so that is what every device does once the new epoch's snapshot is in hand:
+ * devices on one timeline, disagreeing for good. So, with the new epoch's snapshot in hand
+ * and BEFORE it is applied ({@link reconcileBeforeRead}):
  *
- *   - a row this device holds that the new epoch does not, and that was pushed — this
- *     device's own, acknowledged, or one it applied from the log — is removed, with what
- *     hangs off it. A built-in status or kind is put back as every device's migrations
- *     install it, and the vocabulary's order is the one a device hydrating now holds;
- *   - work this device never sent — its outbox's unacknowledged operations — is kept, with
- *     whatever it names that the new epoch lacks, and sent into the new epoch: its queued
- *     operations as they are, and a `create` of each kept entity the queue has none for, as
- *     a heal sends one (`seed.ts`). A restore never silently discards unsent work.
+ *   - a row this device holds that the epoch does not, and that was pushed — this device's
+ *     own, acknowledged, or one it applied from the log — is removed, with what hangs off it.
+ *     Removed first, so no value it holds — a number, a slug, a retry key — is in the way of
+ *     the epoch's own. An issue removed leaves its number a former holder that a write by that
+ *     number is refused over (`identifier-moves.ts`). A built-in the epoch says nothing about
+ *     is put back as every device's migrations install it;
+ *   - what is kept: work this device never sent (its outbox's unacknowledged operations), and
+ *     what the epoch's own entities name but do not hold — an edit of an issue whose create
+ *     the epoch lacks, a comment on an issue it lacks, made by a device that did not rewind —
+ *     with whatever each names that the epoch lacks. Sent into the epoch after the read
+ *     ({@link reconcileAfterRead}): the queued operations as they are, and a `create` of each
+ *     kept entity the queue has none for, as a heal sends one (`seed.ts`). Built-ins are never
+ *     sent: every device installs them.
  *
- * Every device, and a fresh one, then holds the same. Revisions of documents are settled
- * the same way by the read itself (`settleRevisionsAfterRead`, `apply.ts`).
+ * After the read, an issue left on a stand-in whose number the rewind freed takes it back,
+ * and the vocabulary is in the order a device hydrating the epoch holds it. Every device, and
+ * a fresh one, then holds the same. The same reconcile runs on a device whose epoch moved
+ * under a build that did not reconcile: it notices after the upgrade, by the epoch it last
+ * reconciled against (`sync_reconciled_epoch`).
  */
 import type { DatabaseSync } from "node:sqlite";
 import type { Journal, SyncEntity } from "../journal.js";
+import { moveIdentifier, recordRemovedHolder } from "../identifier-moves.js";
 import { WORKSPACE_SETTING_META_PREFIX } from "../settings-registry.js";
 import { BUILTIN_KIND_SEED, BUILTIN_STATUS_SEED, nowIso } from "../types.js";
-import { settingsMoved, type SnapshotRead } from "./apply.js";
+import { settingsMoved } from "./apply.js";
 import { localInventory } from "./seed.js";
-import { clearRewind, readRewind } from "./sync-state.js";
+import { recordReconciledEpoch, withheldEntities } from "./sync-state.js";
+import type { SnapshotEntity } from "./wire.js";
 
 const QUEUE_PLAN_ID = "@plan";
 const ORDER_ID = "@order";
 
-export interface RewindReport {
-  /** Rows the new epoch does not hold, removed here. */
+export interface ReconcileReport {
+  /** Rows the epoch does not hold, removed here. */
   readonly removed: number;
   /** Built-in statuses and kinds put back as installed. */
   readonly restoredBuiltins: number;
-  /** Entities kept for unsent work and sent into the new epoch as a `create`. */
+  /** Entities kept and sent into the epoch as a `create`. */
   readonly republished: number;
+  /** Issues given back a number the rewind freed. */
+  readonly givenBack: number;
 }
 
 type Key = `${string} ${string}`;
 const keyOf = (entity: string, id: string): Key => `${entity} ${id}`;
 
+const BUILTINS: ReadonlyArray<readonly [SyncEntity, string]> = [
+  ...BUILTIN_STATUS_SEED.map((status) => ["status", status.id as string] as const),
+  ...BUILTIN_KIND_SEED.map((kind) => ["kind", kind.id as string] as const),
+];
+const BUILTIN_KEYS = new Set(BUILTINS.map(([entity, id]) => keyOf(entity, id)));
+
+/** What the read before it decided, for the half after it. */
+export interface ReconcilePlan {
+  readonly kept: ReadonlySet<Key>;
+  readonly removed: number;
+  readonly restoredBuiltins: number;
+  readonly entities: readonly SnapshotEntity[];
+}
+
 /**
- * Rewind to the snapshot just read, when a restore moved the epoch. Runs once the read is
- * complete, inside its transaction, and outside the applier's suppressed scope: what it
- * sends is journaled like any mutation made here. Null when no rewind is owed.
+ * Before the epoch's snapshot is applied: remove what the epoch does not hold and nothing
+ * keeps, and put back the built-ins it says nothing about. Inside the read's transaction.
  */
-export function rewindToSnapshot(db: DatabaseSync, journal: Journal, read: SnapshotRead): RewindReport | null {
-  const owed = readRewind(db);
-  if (owed === null) return null;
-  const placedQuery = db.prepare("SELECT 1 AS hit FROM sync_applied WHERE op_id = ?");
-  const placed = (entity: string, id: string): boolean => placedQuery.get(`${read.prefix}${keyOf(entity, id)}`) !== undefined;
+export function reconcileBeforeRead(db: DatabaseSync, entities: readonly SnapshotEntity[]): ReconcilePlan {
+  const inEpoch = new Set<Key>(entities.map((entity) => keyOf(entity.entity, entity.entityId)));
+  const placed = (entity: string, id: string): boolean => inEpoch.has(keyOf(entity, id));
   const versioned = db.prepare("SELECT 1 AS hit FROM sync_entity_versions WHERE entity = ? AND entity_id = ?");
   const journaled = db.prepare("SELECT 1 AS hit FROM sync_outbox WHERE entity = ? AND entity_id = ? LIMIT 1");
   // Known to synchronization: written here and journaled, or applied from a log.
   const known = (entity: string, id: string): boolean => versioned.get(entity, id) !== undefined || journaled.get(entity, id) !== undefined;
 
-  const unsent = db
-    .prepare("SELECT entity, entity_id AS id, verb FROM sync_outbox WHERE acknowledged_seq IS NULL ORDER BY client_seq")
-    .all() as Array<{ entity: string; id: string; verb: string }>;
-  const unsentCreates = new Set(unsent.filter((op) => op.verb === "create").map((op) => keyOf(op.entity, op.id)));
-
-  // Kept: unsent work the new epoch lacks, and whatever it names that the new epoch lacks.
   const kept = new Set<Key>();
   const keep = (entity: string, id: string): void => {
     const key = keyOf(entity, id);
-    if (kept.has(key) || placed(entity, id) || !holds(db, entity, id)) return;
+    if (kept.has(key) || BUILTIN_KEYS.has(key) || !holds(db, entity, id)) return;
+    // Held by the epoch already — unless the epoch holds it only in part (below).
+    if (placed(entity, id) && !needed.has(key)) return;
     kept.add(key);
     for (const [named, namedId] of referents(db, entity, id)) keep(named, namedId);
   };
+  // What the epoch's own entities name and do not hold: an edit with no create, and what a
+  // comment, a child, a blocker set, a milestone or the plan names that is not there.
+  const needed = foldNeeds(entities);
+  for (const key of needed) {
+    const space = key.indexOf(" ");
+    keep(key.slice(0, space), key.slice(space + 1));
+  }
+  // Work this device never sent.
+  const unsent = db
+    .prepare("SELECT entity, entity_id AS id FROM sync_outbox WHERE acknowledged_seq IS NULL ORDER BY client_seq")
+    .all() as Array<{ entity: string; id: string }>;
   for (const op of unsent) {
     if (op.entity === "documentRevision") keep("issue", op.id.slice(0, op.id.indexOf("/")));
     else keep(op.entity, op.id);
   }
 
-  const builtins: ReadonlyArray<readonly [SyncEntity, string]> = [
-    ...BUILTIN_STATUS_SEED.map((status) => ["status", status.id as string] as const),
-    ...BUILTIN_KIND_SEED.map((kind) => ["kind", kind.id as string] as const),
-  ];
-  const builtin = new Set(builtins.map(([entity, id]) => keyOf(entity, id)));
-
-  // Rewound: everything else the new epoch lacks that was ever synchronized.
+  // Never pushable, and so never on any timeline: this device's own (`recordWithheld`).
+  const withheld = withheldEntities(db);
   let removed = 0;
   for (const [entity, id] of heldEntities(db)) {
     const key = keyOf(entity, id);
-    if (builtin.has(key) || kept.has(key) || placed(entity, id) || !known(entity, id)) continue;
+    if (BUILTIN_KEYS.has(key) || kept.has(key) || placed(entity, id) || withheld.has(key) || !known(entity, id)) continue;
     removed += remove(db, entity, id);
+    // A record about it has nothing left to decide: closed, and kept, as every record is.
+    db.prepare("UPDATE sync_conflicts SET resolved_at = ?, resolved_by = 'staple', resolution = ? WHERE entity = ? AND entity_id = ? AND resolved_at IS NULL").run(
+      nowIso(),
+      JSON.stringify("rewound by a restore"),
+      entity,
+      id,
+    );
   }
 
-  // A built-in the new epoch says nothing about is the one every device's migrations install.
   let restoredBuiltins = 0;
-  for (const [entity, id] of builtins) {
-    if (placed(entity, id) || kept.has(keyOf(entity, id))) continue;
+  for (const [entity, id] of BUILTINS) {
+    if (placed(entity, id)) continue;
     if (reinstall(db, entity, id)) restoredBuiltins += 1;
   }
+  return { kept, removed, restoredBuiltins, entities };
+}
 
-  for (const entity of ["status", "kind"] as const) {
-    freshOrder(db, entity, owed.vocabulary[entity] ?? { seqs: {}, order: null }, placed(entity, ORDER_ID), kept);
-  }
+/**
+ * After the snapshot is applied: numbers the rewind freed go back to the issues waiting on
+ * them, the vocabulary takes a fresh device's order, and what was kept is sent into the
+ * epoch. Inside the read's transaction, outside the applier's suppressed scope: what it
+ * sends is journaled like any mutation made here.
+ */
+export function reconcileAfterRead(db: DatabaseSync, journal: Journal, plan: ReconcilePlan, epoch: number): ReconcileReport {
+  const givenBack = giveBackFreedNumbers(db);
+  for (const entity of ["status", "kind"] as const) freshOrder(db, entity, plan.entities, plan.kept);
   settingsMoved(db, true);
 
-  // Sent into the new epoch: each kept entity the queue holds no create of, whole.
+  const unsentCreates = new Set(
+    (db.prepare("SELECT entity, entity_id AS id FROM sync_outbox WHERE acknowledged_seq IS NULL AND verb = 'create'").all() as Array<{ entity: string; id: string }>).map(
+      (op) => keyOf(op.entity, op.id),
+    ),
+  );
   const republish = localInventory(db, nowIso()).filter((local) => {
     const key = keyOf(local.entity, local.entityId);
-    return kept.has(key) && !unsentCreates.has(key);
+    return plan.kept.has(key) && !unsentCreates.has(key) && !BUILTIN_KEYS.has(key);
   });
   if (republish.length > 0) {
     journal.run(() => {
@@ -116,8 +160,64 @@ export function rewindToSnapshot(db: DatabaseSync, journal: Journal, read: Snaps
       }
     });
   }
-  clearRewind(db);
-  return { removed, restoredBuiltins, republished: republish.length };
+  recordReconciledEpoch(db, epoch);
+  return { removed: plan.removed, restoredBuiltins: plan.restoredBuiltins, republished: republish.length, givenBack };
+}
+
+/**
+ * Keys of what the epoch's entities name and do not hold whole: an issue, comment or project
+ * the log holds edits of and no create, and what a live entity names that the epoch lacks.
+ */
+function foldNeeds(entities: readonly SnapshotEntity[]): Set<Key> {
+  const whole = new Set<Key>();
+  const live = entities.filter((entity) => entity.deletedAt === null && entity.verb !== "delete");
+  for (const entity of live) {
+    const needsCreate = entity.entity === "issue" || entity.entity === "comment" || entity.entity === "project";
+    if (!(needsCreate && entity.createdSeq === null)) whole.add(keyOf(entity.entity, entity.entityId));
+  }
+  const needed = new Set<Key>();
+  const need = (entity: string, id: unknown): void => {
+    if (typeof id !== "string" || id === "") return;
+    const key = keyOf(entity, id);
+    if (!whole.has(key) && !BUILTIN_KEYS.has(key)) needed.add(key);
+  };
+  const field = (state: Record<string, unknown>, camel: string, snake: string): unknown => state[camel] ?? state[snake];
+  for (const entity of live) {
+    const state = entity.state;
+    switch (entity.entity) {
+      case "issue":
+        if (entity.createdSeq === null) need("issue", entity.entityId);
+        need("issue", field(state, "parentId", "parent_id"));
+        need("project", field(state, "projectId", "project_id"));
+        need("status", state.status);
+        need("kind", state.kind);
+        break;
+      case "comment":
+        if (entity.createdSeq === null) need("comment", entity.entityId);
+        need("issue", field(state, "issueId", "issue_id"));
+        break;
+      case "project":
+        if (entity.createdSeq === null) need("project", entity.entityId);
+        break;
+      case "documentRevision":
+        need("issue", state.issueId);
+        break;
+      case "relation":
+        need("issue", entity.entityId);
+        if (Array.isArray(state.blockedBy)) for (const id of state.blockedBy) need("issue", id);
+        break;
+      case "milestone":
+        need("issue", entity.entityId);
+        if (Array.isArray(state.members)) for (const id of state.members) need("issue", id);
+        break;
+      case "queue":
+        if (Array.isArray(state.order)) for (const id of state.order) need("issue", id);
+        break;
+      default:
+        break;
+    }
+  }
+  return needed;
 }
 
 /** Every entity this device holds a row of, but its document revisions (settled by the read). */
@@ -196,37 +296,49 @@ function referents(db: DatabaseSync, entity: string, id: string): Array<readonly
 
 /** Remove one entity's rows, and what hangs off them. The number of entities removed. */
 function remove(db: DatabaseSync, entity: SyncEntity, id: string): number {
+  const gone = (changes: number | bigint): number => (Number(changes) > 0 ? 1 : 0);
   switch (entity) {
     case "setting":
-      db.prepare("DELETE FROM meta WHERE key = ?").run(`${WORKSPACE_SETTING_META_PREFIX}${id}`);
-      return 1;
+      return gone(db.prepare("DELETE FROM meta WHERE key = ?").run(`${WORKSPACE_SETTING_META_PREFIX}${id}`).changes);
     case "status":
-      db.prepare("DELETE FROM workspace_statuses WHERE id = ?").run(id);
-      return 1;
+      return gone(db.prepare("DELETE FROM workspace_statuses WHERE id = ?").run(id).changes);
     case "kind":
-      db.prepare("DELETE FROM workspace_kinds WHERE id = ?").run(id);
-      return 1;
+      return gone(db.prepare("DELETE FROM workspace_kinds WHERE id = ?").run(id).changes);
     case "project":
       db.prepare("UPDATE issues SET project_id = NULL WHERE project_id = ?").run(id);
-      db.prepare("DELETE FROM projects WHERE id = ?").run(id);
-      return 1;
-    case "issue":
+      return gone(db.prepare("DELETE FROM projects WHERE id = ?").run(id).changes);
+    case "issue": {
+      const row = db.prepare("SELECT identifier, title, checkout_agent FROM issues WHERE id = ?").get(id) as
+        | { identifier: string; title: string; checkout_agent: string | null }
+        | undefined;
+      if (!row) return 0;
+      /**
+       * Its number stays a former holder, removed by the restore: a caller that learned it may
+       * still mean this issue, and a write by that number now lands on whichever issue holds it
+       * next (`WorkspaceStore.requireTarget`). Held while it was checked out or leased here.
+       */
+      recordRemovedHolder(db, row.identifier, {
+        issueId: id,
+        at: nowIso(),
+        title: row.title,
+        checkedOutBy: row.checkout_agent,
+      });
       // Its documents have no foreign key to it; everything else hanging off it cascades.
       db.prepare("DELETE FROM document_revisions WHERE issue_id = ?").run(id);
       db.prepare("DELETE FROM documents WHERE issue_id = ?").run(id);
-      return db.prepare("DELETE FROM issues WHERE id = ?").run(id).changes > 0 ? 1 : 0;
+      return gone(db.prepare("DELETE FROM issues WHERE id = ?").run(id).changes);
+    }
     case "comment":
-      return db.prepare("DELETE FROM comments WHERE id = ?").run(id).changes > 0 ? 1 : 0;
+      return gone(db.prepare("DELETE FROM comments WHERE id = ?").run(id).changes);
     case "relation":
-      db.prepare("DELETE FROM relations WHERE blocked_id = ? AND type = 'blocks'").run(id);
-      return 1;
-    case "milestone":
-      db.prepare("DELETE FROM milestone_members WHERE milestone_id = ?").run(id);
-      db.prepare("DELETE FROM milestone_meta WHERE issue_id = ?").run(id);
-      return 1;
+      return gone(db.prepare("DELETE FROM relations WHERE blocked_id = ? AND type = 'blocks'").run(id).changes);
+    case "milestone": {
+      const members = db.prepare("DELETE FROM milestone_members WHERE milestone_id = ?").run(id).changes;
+      const meta = db.prepare("DELETE FROM milestone_meta WHERE issue_id = ?").run(id).changes;
+      return gone(Number(members) + Number(meta));
+    }
     case "queue":
-      db.prepare("DELETE FROM queue_entries").run();
-      return 1;
+      return gone(db.prepare("DELETE FROM queue_entries").run().changes);
     default:
       return 0;
   }
@@ -253,35 +365,73 @@ function reinstall(db: DatabaseSync, entity: SyncEntity, id: string): boolean {
 }
 
 /**
- * A vocabulary in the order a device hydrating the new epoch now holds it: the built-ins as
- * installed, then the others in the order the log created them — then the snapshot's order,
- * when it has one, over them (the entries it names first, the rest after, as
- * `applyVocabulary` places them) — and last what was kept for unsent work, which reaches
- * every other device after the snapshot.
+ * An issue on a stand-in (`TRA-2+1`), its record open, whose number nothing holds any more:
+ * the rewind removed what held it. It takes the number back and the record closes — what a
+ * fresh device, which never saw the holder, gives it.
  */
-function freshOrder(
-  db: DatabaseSync,
-  entity: "status" | "kind",
-  noted: { readonly seqs: Readonly<Record<string, number>>; readonly order: readonly string[] | null },
-  hasOrder: boolean,
-  kept: ReadonlySet<Key>,
-): void {
+function giveBackFreedNumbers(db: DatabaseSync): number {
+  const open = db
+    .prepare("SELECT id, entity_id, remote_value FROM sync_conflicts WHERE entity = 'issue' AND field = 'identifier' AND resolved_at IS NULL")
+    .all() as Array<{ id: string; entity_id: string; remote_value: string | null }>;
+  let given = 0;
+  for (const record of open) {
+    let wanted: unknown;
+    try {
+      wanted = record.remote_value === null ? null : JSON.parse(record.remote_value);
+    } catch {
+      continue;
+    }
+    if (typeof wanted !== "string") continue;
+    const row = db.prepare("SELECT identifier FROM issues WHERE id = ?").get(record.entity_id) as { identifier: string } | undefined;
+    if (!row || !row.identifier.startsWith(`${wanted}+`)) continue;
+    if (db.prepare("SELECT 1 AS hit FROM issues WHERE identifier = ?").get(wanted)) continue;
+    moveIdentifier(db, record.entity_id, wanted);
+    db.prepare("UPDATE sync_conflicts SET resolved_at = ?, resolved_by = 'staple', resolution = ? WHERE id = ?").run(nowIso(), JSON.stringify(wanted), record.id);
+    given += 1;
+  }
+  return given;
+}
+
+/**
+ * A vocabulary in the order a device hydrating the epoch holds it (`applyVocabulary`): the
+ * built-ins the log holds no create of, as installed; then every entry whose create the log
+ * holds, in log order — a create puts its entry last, a built-in's too — then the epoch's
+ * order over them when it has one (the entries it names first, in its order, the rest after,
+ * leaving out an entry created after it was written); and last what was kept for unsent work,
+ * which reaches every other device after the snapshot.
+ */
+function freshOrder(db: DatabaseSync, entity: "status" | "kind", entities: readonly SnapshotEntity[], kept: ReadonlySet<Key>): void {
   const table = entity === "status" ? "workspace_statuses" : "workspace_kinds";
   const installed = new Map<string, number>((entity === "status" ? BUILTIN_STATUS_SEED : BUILTIN_KIND_SEED).map((row, position) => [row.id as string, position]));
+  const created = new Map<string, number>();
+  let order: { list: string[]; written: number } | null = null;
+  for (const snapshot of entities) {
+    if (snapshot.entity !== entity || snapshot.deletedAt !== null) continue;
+    if (snapshot.entityId === ORDER_ID) {
+      const written = snapshot.fieldWrites?.order?.seq ?? snapshot.createdSeq;
+      if (Array.isArray(snapshot.state.order) && typeof written === "number") {
+        order = { list: snapshot.state.order.filter((id): id is string => typeof id === "string"), written };
+      }
+    } else if (typeof snapshot.createdSeq === "number" && typeof snapshot.createdAt === "string") {
+      // A genuine create (what a restore staged is not one): it put its entry last.
+      created.set(snapshot.entityId, snapshot.createdSeq);
+    }
+  }
   const rows = (db.prepare(`SELECT id FROM ${table} ORDER BY sort_order, id`).all() as Array<{ id: string }>).map((row) => row.id);
   const unsent = rows.filter((id) => kept.has(keyOf(entity, id)) && !installed.has(id));
-  const rank = (id: string): [number, number] => [installed.get(id) ?? Number.POSITIVE_INFINITY, noted.seqs[id] ?? Number.POSITIVE_INFINITY];
-  const base = rows
+  const rank = (id: string): [number, number] =>
+    created.has(id) ? [1, created.get(id)!] : installed.has(id) ? [0, installed.get(id)!] : [1, Number.POSITIVE_INFINITY];
+  let base = rows
     .filter((id) => !unsent.includes(id))
     .map((id, position) => ({ id, position, rank: rank(id) }))
     .sort((a, b) => a.rank[0] - b.rank[0] || a.rank[1] - b.rank[1] || a.position - b.position)
     .map((row) => row.id);
-  let order = base;
-  if (hasOrder && noted.order !== null) {
-    const listed = noted.order.filter((id) => base.includes(id));
-    order = [...listed, ...base.filter((id) => !listed.includes(id))];
+  if (order !== null) {
+    const written = order.written;
+    const listed = order.list.filter((id) => base.includes(id) && !((created.get(id) ?? -1) > written));
+    base = [...listed, ...base.filter((id) => !listed.includes(id))];
   }
   const write = db.prepare(`UPDATE ${table} SET sort_order = ? WHERE id = ?`);
-  [...order, ...unsent].forEach((id, index) => write.run(-(index + 1), id));
-  [...order, ...unsent].forEach((id, index) => write.run((index + 1) * 1000, id));
+  [...base, ...unsent].forEach((id, index) => write.run(-(index + 1), id));
+  [...base, ...unsent].forEach((id, index) => write.run((index + 1) * 1000, id));
 }

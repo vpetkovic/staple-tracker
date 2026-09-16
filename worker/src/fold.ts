@@ -158,6 +158,15 @@ export interface BackupEntity {
    * and on a device reading the tail to whoever this names.
    */
   createdBy?: string | null;
+  /**
+   * Where the entity's claim sat in the log it was folded from: the last write of its
+   * identifier or slug — or, for a vocabulary's order, of the order — else its create; null
+   * when the log holds neither (a built-in only ever edited). Only an ORDER —
+   * the seq itself is the old epoch's — and the order a restore stages entities in
+   * (`restoreOrder`, `backups.ts`), so the new epoch's log gives each contested
+   * identifier to the claim the old one did. A backup from before this field has none.
+   */
+  claimSeq?: number | null;
 }
 
 export interface FoldedEntity extends BackupEntity {
@@ -534,5 +543,8 @@ export function materializedVerb(entity: BackupEntity): {
  */
 export function forBackup(entity: FoldedEntity): BackupEntity {
   const { fieldWrites: _thisEpochsProvenance, createdSeq: _thisEpochsSeq, ...rest } = entity;
-  return rest;
+  const claimed =
+    entity.entity === "issue" ? "identifier" : entity.entity === "project" ? "slug" : entity.entityId === VOCABULARY_ORDER_ID ? "order" : null;
+  const written = claimed === null ? undefined : entity.fieldWrites[claimed]?.seq;
+  return { ...rest, claimSeq: typeof written === "number" ? written : entity.createdSeq };
 }

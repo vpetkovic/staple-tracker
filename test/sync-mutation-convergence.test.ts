@@ -17,6 +17,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
+import { createBackup, restoreFromBackup, setBackupConsent } from "../src/core/cloud/backup.js";
 import { listConflicts, resolveConflict, type ResolutionChoice } from "../src/core/cloud/conflicts.js";
 import { acquireClaim, releaseClaim } from "../src/core/cloud/lease.js";
 import { FakeSyncServer } from "./fixtures/fake-sync-server.js";
@@ -407,8 +408,17 @@ describe("every public mutation", () => {
         return true;
       });
 
+    // And a restore at the end, to a backup taken half-way (`rewind.ts`).
+    a.use();
+    await setBackupConsent(a.home, REPO, true, { fetchImpl: fleet.server.fetch });
+    let backupId: string | null = null;
+
     for (const [index, scenario] of SCENARIOS.entries()) {
       const label = `${scenario.method} (${scenario.name})`;
+      if (index === Math.floor(SCENARIOS.length / 2)) {
+        a.use();
+        backupId = (await createBackup(a.home, REPO, null, { fetchImpl: fleet.server.fetch })).backupId;
+      }
       try {
         if (scenario.prep) {
           a.use();
@@ -430,6 +440,31 @@ describe("every public mutation", () => {
       } catch (error) {
         failures.push(`${label} threw: ${(error as Error).message}`);
       }
+    }
+
+    /**
+     * The restore step: everything after the half-way backup is rewound, B's unsent work
+     * survives, and every device and a fresh one hold the same on every synchronized column —
+     * the sentence "every device, and a fresh one, then holds the same" (`docs/sync.md`, "A
+     * restore rewinds") as a test.
+     */
+    try {
+      b.use();
+      const unsent = b.store.createIssue({ title: "B's, unsent across the restore" });
+      b.store.addComment(unsent.id, "and its comment", "bob");
+      b.store.updateIssue(world.ids["Everything"]!, { priority: "low" }, "bob");
+      a.use();
+      await restoreFromBackup(a.db, a.home, REPO, backupId!, { fetchImpl: fleet.server.fetch });
+      for (const machine of [a, b, a, b]) {
+        machine.use();
+        await machine.sync();
+      }
+      const hydrated = fleet.machine("fresh-after-restore");
+      await hydrated.sync();
+      const want = stateOf(hydrated.db);
+      failures.push(...differences("restore a", want, stateOf(a.db)), ...differences("restore b", want, stateOf(b.db)));
+    } catch (error) {
+      failures.push(`the restore threw: ${(error as Error).message}`);
     }
     expect(failures).toEqual([]);
   }, 120_000);

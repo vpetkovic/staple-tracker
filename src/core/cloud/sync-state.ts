@@ -277,6 +277,48 @@ export function beginBootstrap(db: DatabaseSync, epoch: number): void {
   });
 }
 
+// ------------------------------------------------------------ the reconcile
+
+const RECONCILED_KEY = "sync_reconciled_epoch";
+
+/**
+ * The epoch this build last reconciled this database against (`rewind.ts`), or null. A device
+ * whose epoch moved under a build that did not reconcile — it followed a restore the old way
+ * and kept everything — is told apart by this after it upgrades.
+ */
+export function reconciledEpoch(db: DatabaseSync): number | null {
+  const row = db.prepare("SELECT value FROM meta WHERE key = ?").get(RECONCILED_KEY) as { value: string } | undefined;
+  const value = Number(row?.value);
+  return row && Number.isInteger(value) ? value : null;
+}
+
+export function recordReconciledEpoch(db: DatabaseSync, epoch: number): void {
+  db.prepare("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(RECONCILED_KEY, String(epoch));
+}
+
+const WITHHELD_KEY = "sync_withheld";
+
+/**
+ * Entities an operation of which was taken out of the queue unsent because the service would
+ * refuse it (`journal.withhold`). Never pushed and never pushable, they are this device's own:
+ * a reconcile never removes them.
+ */
+export function withheldEntities(db: DatabaseSync): Set<string> {
+  const row = db.prepare("SELECT value FROM meta WHERE key = ?").get(WITHHELD_KEY) as { value: string } | undefined;
+  try {
+    const parsed = JSON.parse(row?.value ?? "[]") as unknown;
+    return new Set(Array.isArray(parsed) ? parsed.filter((key): key is string => typeof key === "string") : []);
+  } catch {
+    return new Set();
+  }
+}
+
+export function recordWithheld(db: DatabaseSync, entity: string, entityId: string): void {
+  const held = withheldEntities(db);
+  held.add(`${entity} ${entityId}`);
+  db.prepare("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(WITHHELD_KEY, JSON.stringify([...held]));
+}
+
 // ------------------------------------------------------------ the rewind
 
 const REWIND_KEY = "sync_rewind";

@@ -45,7 +45,7 @@ import { settleOwedClaims } from "./claims.js";
 import { cloudError } from "./errors.js";
 import { REPOSITORY_PREFIX_SETTING, localPrefix, repositoryPrefixOf } from "./repository-prefix.js";
 import { VOCABULARY_ORDER_ID, hydrate } from "./hydrate.js";
-import { completeSnapshot } from "./sync-state.js";
+import { completeSnapshot, recordReconciledEpoch } from "./sync-state.js";
 import type { SnapshotEntity } from "./wire.js";
 
 /** The plan's singleton entity id. Mirrors `queue-store.ts`. */
@@ -1286,6 +1286,8 @@ export function seedRepository(db: DatabaseSync, journal: Journal, args: SeedArg
       // Rewinding nothing: what this workspace holds and the repository does not is its own, and is sent below.
       hydrate(db, journal, survey.entities, [], survey.cutoffSeq, now, true, false, "snap", false);
       completeSnapshot(db, survey.tailCursor, survey.epoch);
+      // Joined on the epoch the repository is on: nothing to reconcile against (`rewind.ts`).
+      recordReconciledEpoch(db, survey.epoch);
       replayOutboxFieldWrites(db);
     }
 
@@ -1373,14 +1375,15 @@ export function seedRepository(db: DatabaseSync, journal: Journal, args: SeedArg
       if (index.live === 0) {
         /**
          * What a fresh device will hold after applying the creates above: the built-ins
-         * where its own migration put them, and every other entry appended in the order
-         * the creates arrive, which is this device's order. When that is already this
+         * nothing sent where its own migration put them, and every entry sent appended in
+         * the order the creates arrive — a built-in sent too, since a create puts its entry
+         * last (`applyVocabulary`) — which is this device's order. When that is already this
          * device's order there is nothing to say; otherwise the order travels whole.
          */
         const builtins = (entity === "status" ? BUILTIN_STATUS_SEED : BUILTIN_KIND_SEED).map((row) => row.id as string);
         const expected = [
-          ...builtins.filter((id) => local.includes(id)),
-          ...local.filter((id) => !builtins.includes(id)),
+          ...builtins.filter((id) => local.includes(id) && !seeded.includes(id)),
+          ...local.filter((id) => !builtins.includes(id) || seeded.includes(id)),
         ];
         if (sameList(local, expected)) return null;
         return {

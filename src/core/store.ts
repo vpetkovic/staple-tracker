@@ -1735,30 +1735,40 @@ export class WorkspaceStore {
     const parsed = parseIdentifier(trimmed) ?? parseIdentifier(`${this.prefix}-${trimmed}`);
     const spellings = [...new Set([trimmed.toUpperCase(), ...(parsed ? [`${parsed.prefix}-${parsed.number}`] : [])])];
     const device = resolveDeviceId();
-    const hot: Array<{ issue: IssueRow; number: string; at: string; reasons: string[] }> = [];
+    const hot: Array<{ issue: IssueRow; number: string; at: string; reasons: string[]; removed?: boolean }> = [];
     for (const number of spellings) {
       for (const holder of formerHolders(this.db, number)) {
         if (holder.issueId === row.id || hot.some((entry) => entry.issue.id === holder.issueId)) continue;
-        const issue = this.db.prepare("SELECT * FROM issues WHERE id = ?").get(holder.issueId) as unknown as IssueRow | undefined;
-        if (!issue) continue;
+        const live = this.db.prepare("SELECT * FROM issues WHERE id = ?").get(holder.issueId) as unknown as IssueRow | undefined;
+        /**
+         * An issue a restore removed (`cloud/rewind.ts`) is asked the same questions from what
+         * was kept of it: held while it was checked out when it went, or while this device still
+         * holds its lease, and recent for a day after the removal.
+         */
+        const removed = live === undefined ? holder.removed : undefined;
+        if (live === undefined && removed === undefined) continue;
+        const issue = live ?? ({ id: holder.issueId, identifier: number, title: removed!.title, checkout_agent: removed!.checkedOutBy } as unknown as IssueRow);
         const reasons: string[] = [];
-        if (issue.checkout_agent !== null) reasons.push(`it is checked out by ${issue.checkout_agent}`);
+        if (removed) reasons.push("the restore removed it");
+        if (issue.checkout_agent !== null) reasons.push(removed ? `it was checked out by ${issue.checkout_agent} when it went` : `it is checked out by ${issue.checkout_agent}`);
         const lease = readLocalLease(this.db, issue.id);
         if (lease !== null && (device === null || lease.deviceId === device)) reasons.push("this device holds its lease");
         const at = Date.parse(holder.at);
-        if (!Number.isNaN(at) && Date.now() - at < RENUMBER_GUARD_MS) reasons.push("it moved less than a day ago");
-        if (reasons.length > 0) hot.push({ issue, number, at: holder.at, reasons });
+        if (!Number.isNaN(at) && Date.now() - at < RENUMBER_GUARD_MS) reasons.push(removed ? "less than a day ago" : "it moved less than a day ago");
+        if (reasons.length > (removed ? 1 : 0)) hot.push({ issue, number, at: holder.at, reasons, removed: removed !== undefined });
       }
     }
     if (hot.length === 0) return row;
     const number = hot[0]!.number;
     const held = row.identifier === number;
-    const others = hot.map(
-      (entry) => `"${entry.issue.title}", is now ${entry.issue.identifier} (${entry.issue.id}) — ${entry.reasons.join(", and ")}`,
+    const others = hot.map((entry) =>
+      entry.removed
+        ? `"${entry.issue.title}" (${entry.issue.id}), is gone — ${entry.reasons.join(", ")}`
+        : `"${entry.issue.title}", is now ${entry.issue.identifier} (${entry.issue.id}) — ${entry.reasons.join(", and ")}`,
     );
     throw new StapleError(
       "conflict",
-      `${number} was renumbered here at ${hot[0]!.at}. The issue that held it, ${others.join("; and another that held it, ")}. ` +
+      `${number} ${hot[0]!.removed ? "lost its issue to a restore" : "was renumbered"} here at ${hot[0]!.at}. The issue that held it, ${others.join("; and another that held it, ")}. ` +
         `${number} now ${held ? "names" : "names nothing, and its last move leads to"} "${row.title}" (${row.id}). ` +
         `Nothing was written, because you may mean ${hot.length === 1 ? "the first" : "one of the others"}. ` +
         `Name the issue by its id, or pass --ack-renumber (MCP: acknowledgeRenumber) to write to ${number} as it is now.`,
@@ -1769,10 +1779,11 @@ export class WorkspaceStore {
           movedIssue: { id: hot[0]!.issue.id, identifier: hot[0]!.issue.identifier, title: hot[0]!.issue.title },
           formerHolders: hot.map((entry) => ({
             id: entry.issue.id,
-            identifier: entry.issue.identifier,
+            identifier: entry.removed ? null : entry.issue.identifier,
             title: entry.issue.title,
             leftAt: entry.at,
             reasons: entry.reasons,
+            ...(entry.removed ? { removedByRestore: true } : {}),
           })),
           nowNames: { id: row.id, identifier: row.identifier, title: row.title },
           reasons: hot[0]!.reasons,

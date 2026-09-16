@@ -45,6 +45,7 @@ function report(over: Partial<CloudSurfaceReport> = {}): CloudSurfaceReport {
     epoch: null,
     lastSyncAt: null,
     conflicts: { open: 0, resolved: 0 },
+    quarantined: 0,
     leases: { held: 0 },
     warnings: [],
     failure: null,

@@ -105,6 +105,7 @@ describe("the report is one shape in every state", () => {
     "epoch",
     "lastSyncAt",
     "conflicts",
+    "quarantined",
     "leases",
     "warnings",
     "failure",

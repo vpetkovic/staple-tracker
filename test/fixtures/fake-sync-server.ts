@@ -147,7 +147,16 @@ interface FoldedEntity {
  * entity versions and re-mints operation ids, so every number in `fieldWrites` would name
  * a timeline that no longer exists.
  */
-type BackupEntity = Omit<FoldedEntity, "fieldWrites" | "createdSeq">;
+type BackupEntity = Omit<FoldedEntity, "fieldWrites" | "createdSeq"> & { claimSeq?: number | null };
+
+/** `restoreOrder` in `worker/src/backups.ts`: stage in the order the claims sat in the log. */
+function restoreOrder(entities: readonly BackupEntity[]): BackupEntity[] {
+  if (!entities.every((entity) => Object.prototype.hasOwnProperty.call(entity, "claimSeq"))) return [...entities];
+  return entities
+    .map((entity, position) => ({ entity, position }))
+    .sort((a, b) => (a.entity.claimSeq ?? Number.NEGATIVE_INFINITY) - (b.entity.claimSeq ?? Number.NEGATIVE_INFINITY) || a.position - b.position)
+    .map(({ entity }) => entity);
+}
 
 export interface FakeBackup {
   backupId: string;
@@ -1445,9 +1454,13 @@ export class FakeSyncServer {
       // which a restore into a new epoch could only misdescribe.
       // A backup the Worker before this build made keeps no create time or actor either,
       // so restoring it stages every entity under the restore's (`legacyFold`).
-      entities: folded.entities.map(({ fieldWrites: _provenance, createdSeq: _seq, ...rest }) =>
-        this.legacyFold ? { ...rest, createdAt: null, createdBy: null } : rest,
-      ),
+      entities: folded.entities.map(({ fieldWrites, createdSeq, ...rest }) => {
+        if (this.legacyFold) return { ...rest, createdAt: null, createdBy: null };
+        // `forBackup`: where its claim sat in this log, as an order for the restore.
+        const claimed = rest.entity === "issue" ? "identifier" : rest.entity === "project" ? "slug" : rest.entityId === "@order" ? "order" : null;
+        const written = claimed === null ? undefined : fieldWrites[claimed]?.seq;
+        return { ...rest, claimSeq: typeof written === "number" ? written : createdSeq };
+      }),
     };
     this.backups.push(backup);
     return this.describeBackup(backup);
@@ -1594,7 +1607,7 @@ export class FakeSyncServer {
     if (restore.staged < restore.entityCount) {
       // Asked again on every stage turn, as `worker/src/backups.ts::stageRestore` does.
       this.claimForRestore(backup);
-      const chunk = backup.entities.slice(
+      const chunk = restoreOrder(backup.entities).slice(
         restore.staged,
         restore.staged + this.options.maxBatchSize,
       );

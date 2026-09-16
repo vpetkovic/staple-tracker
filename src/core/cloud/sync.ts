@@ -55,8 +55,9 @@ import { carryIdentifierMovesToHub } from "../hub-follow.js";
 import { closeSettledIdentifierConflicts, settleOwedClaims } from "./claims.js";
 import { assertHubCanTakePrefix, prefixToAdopt, restampHubPrefix } from "./prefix-hub.js";
 import { applyConflictOperation, countOpenConflicts, screenForConflicts } from "./conflicts.js";
-import { hydrate } from "./hydrate.js";
-import { rewindToSnapshot } from "./rewind.js";
+import { applySnapshotEntity, hydrate } from "./hydrate.js";
+import { countQuarantined, quarantineOperation, retryQuarantine } from "./quarantine.js";
+import { reconcileAfterRead, reconcileBeforeRead } from "./rewind.js";
 import { TailFold, refusedAsTooLargeToFold, type Entry } from "./tail-fold.js";
 import { seedModeOf, seedOwed, seedRepository, type RepositorySurvey, type SeedReport } from "./seed.js";
 import {
@@ -68,8 +69,11 @@ import {
   pendingCount,
   recordHeadSeq,
   recordSnapshotPage,
+  clearRewind,
   readRewind,
   readTailSurvey,
+  reconciledEpoch,
+  recordWithheld,
   recordSyncedAt,
   requireSyncState,
   writeTailSurvey,
@@ -117,6 +121,8 @@ export interface SyncReport {
   readonly pending: number;
   /** Unresolved conflict records after this sync. */
   readonly conflicts: number;
+  /** Entities set aside after this sync, naming what this device does not hold (`quarantine.ts`). */
+  readonly quarantined: number;
   /**
    * What this sync uploaded of the state the workspace already held, or null when the
    * seed was not owed. Non-null exactly once per repository per database: on the first
@@ -615,8 +621,15 @@ export async function syncRepository(
 
   let caughtUp: BootstrapReport | null = null;
   const hydrated = pull.bootstrap !== null || forcedBootstrap !== null || joined !== null;
-  if (catchUpOwed && !hydrated && (await serviceFoldsCreates(session, options))) {
-    caughtUp = (await recoverFromSnapshot(db, journal, session, capabilities, options, `applier-${APPLIER_VERSION}`)).bootstrap;
+  /**
+   * And a reconcile, when the epoch this database is on is not the one this build last
+   * reconciled it against: a restore an older build followed, keeping what the restore
+   * rewound (`rewind.ts`). Read the same way as the catch-up, which reconciles too.
+   */
+  const reconcileOwed = !hydrated && reconciledEpoch(db) !== requireSyncState(db).epoch;
+  if ((catchUpOwed || reconcileOwed) && !hydrated && (await serviceFoldsCreates(session, options))) {
+    const ledger = catchUpOwed ? `applier-${APPLIER_VERSION}` : `reconcile-${requireSyncState(db).epoch}`;
+    caughtUp = (await recoverFromSnapshot(db, journal, session, capabilities, options, ledger)).bootstrap;
   }
   /**
    * Recorded only when what this database holds came through the fold this applier needs.
@@ -648,6 +661,7 @@ export async function syncRepository(
   carryIdentifierMovesToHub(db, options.home);
 
   const conflicts = countOpenConflicts(db);
+  const quarantined = countQuarantined(db);
 
   return {
     repositoryId,
@@ -660,6 +674,7 @@ export async function syncRepository(
     headSeq: after.headSeq,
     pending: pendingCount(db),
     conflicts,
+    quarantined,
     seed,
     withheld,
     caughtUp,
@@ -925,6 +940,7 @@ async function pushPending(
       tx(db, () => {
         for (const op of tooLarge) {
           journal.withhold(op.opId);
+          recordWithheld(db, op.entity, op.entityId);
           withheld.push({
             entity: op.entity,
             entityId: op.entityId,
@@ -1097,18 +1113,43 @@ async function recoverFromSnapshot(
   options: SyncOptions,
   ledger = "snap",
 ): Promise<PullOutcome> {
+  const { bootstrap } = await readReconciled(db, journal, session, capabilities, options, ledger, true);
+  const pulled = await drainTail(db, journal, session, capabilities, options);
+  return { pulled, bootstrap };
+}
+
+/**
+ * Read the whole snapshot, and apply it as one transaction — reconciled to it first when it
+ * is the current fold (`rewind.ts`): what this device holds that the epoch does not, and
+ * nothing keeps, is removed BEFORE the snapshot's values land, so none of them is in the way.
+ * The re-bootstrap a restore owes, the applier's catch-up, a reconcile a restore noticed only
+ * by an older build owes, and a stuck tail's recovery all read this way.
+ */
+async function readReconciled(
+  db: DatabaseSync,
+  journal: Journal,
+  session: Session,
+  capabilities: Capabilities,
+  options: SyncOptions,
+  ledger: string,
+  sameTimeline: boolean,
+): Promise<{ bootstrap: BootstrapReport }> {
   const survey = await surveyRepository(db, session, capabilities, options);
   noteFold(db, survey.entities);
+  // A fold from before this build merged and dropped things: it is no word on what to remove.
+  const current = hydratedFromOlderFold.get(db) !== true;
   tx(db, () => {
-    hydrate(db, journal, survey.entities, [], survey.cutoffSeq, nowIso(), true, true, ledger, hydratedFromOlderFold.get(db) !== true);
+    const plan = current ? reconcileBeforeRead(db, survey.entities) : null;
+    hydrate(db, journal, survey.entities, [], survey.cutoffSeq, nowIso(), true, sameTimeline, ledger, current);
     clearTailSurvey(db);
+    if (plan !== null) reconcileAfterRead(db, journal, plan, survey.epoch);
+    clearRewind(db);
+    retryQuarantined(db, journal, session.deviceId);
     completeSnapshot(db, survey.tailCursor, survey.epoch);
     replayOutboxFieldWrites(db);
     settleOwedClaims(db, journal);
   });
-  const pulled = await drainTail(db, journal, session, capabilities, options);
   return {
-    pulled,
     bootstrap: { entities: survey.entities.length, pages: survey.pages, cutoffSeq: survey.cutoffSeq, resumed: false, ...(survey.fromTail ? { fromTail: true } : {}) },
   };
 }
@@ -1172,6 +1213,7 @@ async function runBootstrap(
   capabilities: Capabilities,
   options: SyncOptions,
 ): Promise<BootstrapReport> {
+  if (readRewind(db) !== null) return (await readReconciled(db, journal, session, capabilities, options, "snap", false)).bootstrap;
   const start = requireSyncState(db);
   const resumed = start.bootstrap !== null;
   let cursor = start.bootstrap?.snapshot ?? null;
@@ -1199,8 +1241,6 @@ async function runBootstrap(
         const outcome = hydrate(db, journal, survey.entities, parked, survey.cutoffSeq, at, true);
         clearTailSurvey(db);
         entities += outcome.applied;
-        // A restore moved the epoch: this device rewinds with the repository (`rewind.ts`).
-        rewindToSnapshot(db, journal, { prefix: `snap:${survey.cutoffSeq}:`, cutoff: survey.cutoffSeq });
         settleOwedClaims(db, journal);
         completeSnapshot(db, survey.tailCursor, survey.epoch);
         replayOutboxFieldWrites(db);
@@ -1228,9 +1268,7 @@ async function runBootstrap(
       const outcome = hydrate(db, journal, page.entities, parked, cutoffSeq, at, final, false, "snap", hydratedFromOlderFold.get(db) !== true);
       entities += outcome.applied;
       parked = outcome.parked;
-      // A restore moved the epoch: once the new epoch's snapshot is whole, this device
-      // rewinds with the repository (`rewind.ts`).
-      if (final) rewindToSnapshot(db, journal, { prefix: `snap:${cutoffSeq}:`, cutoff: cutoffSeq });
+      if (final) retryQuarantined(db, journal, session.deviceId);
       settleOwedClaims(db, journal);
 
       if (final) {
@@ -1324,9 +1362,11 @@ async function drainTail(
  * Apply one page as one transaction.
  *
  * *"Within a page, operations apply in `seq` order; an operation whose referent
- * does not exist yet is deferred to the end of the page and retried once. If it
- * is still unresolvable when the page ends, the page fails whole with
- * `validation` and nothing is committed."*
+ * does not exist yet is deferred to the end of the page and retried once."* One still
+ * unresolvable when the page ends is set aside (`quarantine.ts`) and the rest of the page
+ * applies: the page used to fail whole, and the next sync met it again and failed again, so
+ * one device's write could stop every other device for good. What was set aside is tried
+ * again after every page, and lands once what it names arrives.
  *
  * Causality across devices is mostly self-enforcing — a device cannot edit an
  * entity it has never seen, so the edit necessarily sorts after the create — but
@@ -1378,15 +1418,11 @@ function applyPage(
         else applied += 1;
       } catch (error) {
         if (!(error instanceof ReferentMissing)) throw error;
-        throw cloudError(
-          "validation",
-          `Operation ${op.opId} (${op.entity}.${op.verb} on ${op.entityId}) names something this ` +
-            `page never delivered: ${error.what}. The whole page was rolled back and nothing was ` +
-            `applied; the cursor did not move, so the next sync retries it.`,
-          { referentMissing: true },
-        );
+        quarantineOperation(db, op, error);
       }
     }
+    // And what an earlier page set aside, now that this one has landed.
+    retryQuarantined(db, journal, localDeviceId);
     /**
      * Every later claim of this device's that yielded to one in this page is settled now,
      * in the same transaction, as ordinary operations (`claims.ts`).
@@ -1395,6 +1431,14 @@ function applyPage(
   });
 
   return { applied, skipped };
+}
+
+/** Try what was set aside again (`quarantine.ts`). Inside the caller's transaction. */
+function retryQuarantined(db: DatabaseSync, journal: Journal, localDeviceId: string): void {
+  retryQuarantine(db, {
+    snapshot: (entity, cutoffSeq, ledger, sameTimeline) => applySnapshotEntity(db, journal, entity, cutoffSeq, nowIso(), sameTimeline, ledger),
+    operation: (op) => void applyOne(db, journal, op, localDeviceId, true),
+  });
 }
 
 function applyOne(

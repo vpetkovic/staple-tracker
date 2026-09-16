@@ -1149,6 +1149,13 @@ function renderSyncReport(report: SyncReport): string {
         `Both sides are preserved; nothing was merged or discarded.`,
     );
   }
+  if (report.quarantined > 0) {
+    lines.push("");
+    lines.push(
+      `  ! ${report.quarantined} set aside: ${report.quarantined === 1 ? "it names" : "they name"} something this device does not hold. ` +
+        `Everything else applied; each lands once what it names arrives. \`staple doctor\` lists them.`,
+    );
+  }
   return lines.join("\n");
 }
 

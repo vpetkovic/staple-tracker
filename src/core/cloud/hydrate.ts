@@ -38,7 +38,7 @@ import {
   type SnapshotRead,
 } from "./apply.js";
 import { withoutOpenContests } from "./conflicts.js";
-import { cloudError } from "./errors.js";
+import { quarantineSnapshotEntity } from "./quarantine.js";
 import { noteRewindVocabulary } from "./sync-state.js";
 import type { SnapshotEntity } from "./wire.js";
 
@@ -269,9 +269,10 @@ export interface HydrateOutcome {
  * silently skips the ids it cannot find — the order is then wrong with nothing to say
  * so. There is no referent check that could catch that, which is why it is a rule.
  *
- * With `final` set, anything still parked is a snapshot that cannot be applied
- * coherently, and it fails whole: *"a partial page is worse than none"* is as true of a
- * snapshot as of a page.
+ * With `final` set, anything still parked names what the snapshot never delivered. It is set
+ * aside (`quarantine.ts`) and the rest of the snapshot applies: failing the read whole, as
+ * this did, stopped every device that read it and every device that joined, for ever, over
+ * one entity. It lands once what it names arrives.
  */
 export function hydrate(
   db: DatabaseSync,
@@ -299,7 +300,7 @@ export function hydrate(
 ): HydrateOutcome {
   let applied = 0;
   let pending = orderForHydration([...entities, ...parked]);
-  let missing: ReferentMissing | null = null;
+  const missing = new Map<SnapshotEntity, ReferentMissing>();
 
   for (;;) {
     const next: SnapshotEntity[] = [];
@@ -315,7 +316,7 @@ export function hydrate(
         progressed = true;
       } catch (error) {
         if (!(error instanceof ReferentMissing)) throw error;
-        missing = error;
+        missing.set(entity, error);
         next.push(entity);
       }
     }
@@ -323,17 +324,12 @@ export function hydrate(
     if (!progressed || pending.length === 0) break;
   }
 
-  if (final && pending.length === 0) settleRevisionsAfterRead(db, snapshotRead(cutoffSeq, ledger), rewind);
-
-  if (final && pending.length > 0) {
-    const first = pending[0]!;
-    throw cloudError(
-      "validation",
-      `The snapshot's ${first.entity} ${first.entityId} names something the snapshot never ` +
-        `delivered${missing ? `: ${missing.what}` : ""}. Nothing from this snapshot page was ` +
-        `applied and the position did not move, so the next sync retries it.`,
-      { parked: pending.length },
-    );
+  if (final) {
+    for (const entity of pending) {
+      quarantineSnapshotEntity(db, entity, missing.get(entity) ?? new ReferentMissing(`what ${entity.entity} ${entity.entityId} names`), { cutoffSeq, ledger, sameTimeline });
+    }
+    pending = [];
+    settleRevisionsAfterRead(db, snapshotRead(cutoffSeq, ledger), rewind);
   }
   return { applied, parked: pending };
 }

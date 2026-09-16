@@ -2403,6 +2403,7 @@ const cloudStatusShape = {
   epoch: z.number().nullable(),
   lastSyncAt: z.string().nullable(),
   conflicts: z.object({ open: z.number(), resolved: z.number() }),
+  quarantined: z.number().describe("Entities set aside because they name something this device does not hold yet; each lands once it arrives"),
   leases: z.object({ held: z.number() }).describe("Leases THIS device holds"),
   warnings: z.array(z.string()),
   failure: z

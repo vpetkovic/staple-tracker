@@ -14,10 +14,15 @@
  * and moves them by decisions (`renumber`), as a person settling a record there does,
  * which is what makes numbers pass through more than one issue.
  *
+ * Half the seeds also restore the repository part-way (`describe` below): a restore that
+ * removes an issue vacates its number, and a write by it must not land on the issue that
+ * takes it next — which it did on every run the reviewer measured, 798 of 1,875 writes.
+ *
  * Seeded and bounded, so a failure names its seed and replays.
  */
 import { afterEach, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
+import { createBackup, restoreFromBackup, setBackupConsent } from "../src/core/cloud/backup.js";
 import { listConflicts, resolveConflict } from "../src/core/cloud/conflicts.js";
 import { StapleError } from "../src/core/types.js";
 import { OlderBuildDevice } from "./fixtures/older-build.js";
@@ -54,8 +59,8 @@ interface Learned {
 }
 
 describe("a write by a number learned before sync moved it", () => {
-  for (const seed of SEEDS) {
-    it(`never lands on an issue the writer did not mean (seed ${seed})`, async () => {
+  for (const [seed, restoring] of [...SEEDS.map((seed) => [seed, false] as const), ...SEEDS.map((seed) => [seed, true] as const)]) {
+    it(`never lands on an issue the writer did not mean (seed ${seed}${restoring ? ", with a restore" : ""})`, async () => {
       const next = random(seed);
       const pick = <T>(items: readonly T[]): T => items[Math.floor(next() * items.length)]!;
       const server = new FakeSyncServer({ repositoryId: REPO });
@@ -83,7 +88,21 @@ describe("a write by a number learned before sync moved it", () => {
       const stats = { writes: 0, refused: 0, landed: 0, dropped: 0 };
       const wrong: string[] = [];
       let created = 0;
+      let backupId: string | null = null;
+      const first = machines[0]!;
+      if (restoring) {
+        first.use();
+        await setBackupConsent(first.home, REPO, true, { fetchImpl: server.fetch });
+      }
       for (let step = 0; step < STEPS; step += 1) {
+        if (restoring && step === Math.floor(STEPS / 3)) {
+          first.use();
+          backupId = (await createBackup(first.home, REPO, null, { fetchImpl: server.fetch })).backupId;
+        }
+        if (restoring && step === Math.floor((2 * STEPS) / 3) && backupId !== null) {
+          first.use();
+          await restoreFromBackup(first.db, first.home, REPO, backupId, { fetchImpl: server.fetch });
+        }
         const machine = pick(machines);
         machine.use();
         const roll = next();
@@ -97,7 +116,7 @@ describe("a write by a number learned before sync moved it", () => {
             // A decision made there — a person settling a record — moves one of its issues to a
             // number, taking it from whoever holds it, and out of the one it had.
             const moved = pick(olderIssues);
-            await older.push([{ entity: "issue", entityId: moved.id, verb: "renumber" as never, baseVersion: moved.version, payload: { identifier: `TRA-${number}` } }]);
+            await older.push([{ entity: "issue", entityId: moved.id, verb: "renumber" as never, baseVersion: moved.version, payload: { identifier: `TRA-${number}` } }]).catch(() => undefined);
             moved.version += 1;
           } else {
             olderCount += 1;
@@ -110,7 +129,7 @@ describe("a write by a number learned before sync moved it", () => {
                 verb: "create",
                 payload: { identifier: `TRA-${number}`, title, normalizedTitle: title, status: "backlog", kind: "task", priority: "medium", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
               },
-            ]);
+            ]).catch(() => undefined);
             olderIssues.push({ id, version: 1 });
           }
         } else if (roll < P.sync) {
@@ -145,7 +164,8 @@ describe("a write by a number learned before sync moved it", () => {
               wrong.push(`step ${step}: ${machine.label} wrote via ${number}, meant "${meant.title}", landed on ${on.identifier} "${on.title}"`);
             }
           } catch (error) {
-            if (!(error instanceof StapleError) || error.code !== "conflict") throw error;
+            // Refused: a number another issue may be meant by, or — after a restore — one nothing holds.
+            if (!(error instanceof StapleError) || (error.code !== "conflict" && error.code !== "not_found")) throw error;
             stats.refused += 1;
           }
         }

@@ -1359,6 +1359,8 @@ export interface CloudSurfaceReport {
   epoch: number | null;
   lastSyncAt: string | null;
   conflicts: { open: number; resolved: number };
+  /** Entities set aside, naming what this device does not hold yet (`quarantine.ts`). */
+  quarantined: number;
   leases: { held: number };
   warnings: string[];
   failure: {
