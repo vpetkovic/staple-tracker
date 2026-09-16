@@ -1152,11 +1152,24 @@ and every snapshot read, in the order it was set aside:
 - one that waited on something else it names applies once that arrives;
 - an edit of an entity this device did not hold, whose create a later operation brings, is
   dropped — that create carries the whole entity as its author held it, after the edit — and
-  so is a snapshot's older state of an entity the tail has since created.
+  so is a snapshot's older state of an entity the tail has since created;
+- **never over a later write.** Applied late, it would land after operations that come after
+  it in the log. So a field one of those already wrote here — placed by where that write sits
+  in the log (`sync_applied`, the outbox, or a snapshot's cutoff), or, where this device cannot
+  place it, written since the entity was set aside — keeps the later value. A blocker set, the
+  plan's order and a milestone's members go with their per-entry facts, and the entity's
+  last-change time is never set back. What has nothing left to write is dropped, as the log's
+  order would have dropped it. The same rule holds for an operation a page defers to its end
+  (`withoutLaterWrites`), and for everything that can be set aside, from the tail or a
+  snapshot (`test/cloud-quarantine-superseded.test.ts`).
 
 `staple cloud status` shows how many are waiting (`quarantined` in `--json`, and on the
 page), a sync says so, and `staple doctor` lists each with what it names
-(`test/cloud-quarantine.test.ts`). A fresh device always joins.
+(`test/cloud-quarantine.test.ts`). A fresh device always joins. **A wait nothing will end is
+a divergence, never a quiet wait:** an entity still waiting after a restore's rewind was read
+here — that read kept and sent everything unsent work named, so what is still missing is on
+no timeline — or waiting longer than a week (`QUARANTINE_DIVERGENCE_MS`), fails `staple doctor`
+(`divergedQuarantine`), naming what is missing and since when.
 
 **Bootstrap is a snapshot cutoff plus the ordered tail.** A hydrating device reads
 a materialized snapshot taken at `seq = C`, then pulls from cursor `C` forward.
@@ -1335,7 +1348,11 @@ re-bootstrap killed part-way leaves nothing half-applied, and reads again on the
 - **Work that was never pushed is kept, and reaches every device.** An entity with an
   operation in this device's outbox that no service acknowledged is kept, with whatever it
   names that the epoch lacks — a comment's issue, an issue's parent, project, status and
-  kind — and sent into the epoch: its queued operations as they are, and a `create` of each
+  kind. So is whatever **every** unsent operation names, create or edit alike, transitively:
+  an unsent edit of an issue the backup holds, naming a status, kind or project made after
+  the backup, a blocker set naming a later issue, the plan or a milestone's members naming
+  one (`test/cloud-restore-unsent-referents.test.ts`). Kept only through the entity, those
+  were removed while the edit was still sent. All of it is sent into the epoch: its queued operations as they are, and a `create` of each
   kept entity the queue holds no create of, the whole entity as this device holds it, as a
   heal sends one ([below](#a-workspaces-history-reaches-the-service-when-it-first-synchronizes)).
   Built-ins are never sent: every device installs them. A kept entity's `create` is journaled
