@@ -48,8 +48,12 @@ export interface QuarantinedEntity {
    * the set-aside one, which is not replayed over it (`supersededFields`).
    */
   readonly writesWhenSetAside?: Readonly<Record<string, string | null>>;
-  /** The epoch it was set aside in: one still waiting after the epoch moved is a divergence. */
-  readonly epoch?: number;
+  /**
+   * Already waiting when a restore's rewind read the repository here (`markWaitingAcrossRewind`).
+   * The rewind keeps and sends everything unsent work names, so what such an entity still names
+   * is on no timeline: a divergence, not a wait.
+   */
+  readonly acrossRewind?: boolean;
   /** Set aside from the ordered tail. */
   readonly operation?: RemoteOperation;
   /** Set aside from a snapshot, with the read it was part of. */
@@ -75,6 +79,34 @@ function writeQuarantine(db: DatabaseSync, items: readonly QuarantinedEntity[]):
   db.prepare("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(KEY, JSON.stringify(items));
 }
 
+/**
+ * How long an entity may wait on what it names before it is a divergence, not a wait: a week.
+ * What an operation names reaches the log ahead of it or soon after — the device that sent it
+ * holds it, and sends it at its next sync — so a week covers a device away that long.
+ */
+export const QUARANTINE_DIVERGENCE_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * The set-aside entities that will not land on their own: waiting since before the epoch this
+ * device has since finished reading — a restore's rewind kept everything unsent work names and
+ * sent it, so what is still missing after one is on no timeline — or for longer than
+ * {@link QUARANTINE_DIVERGENCE_MS}. Each is a real divergence from the devices that hold what it
+ * names, and `staple doctor` fails over it, naming what is missing.
+ */
+export function divergedQuarantine(db: DatabaseSync, now: number = Date.now()): QuarantinedEntity[] {
+  return readQuarantine(db).filter((item) => {
+    if (item.acrossRewind === true) return true;
+    const since = Date.parse(item.since);
+    return !Number.isNaN(since) && now - since > QUARANTINE_DIVERGENCE_MS;
+  });
+}
+
+/** A rewinding read is under way (`sync.ts`, `readReconciled`): what waits now waits across it. */
+export function markWaitingAcrossRewind(db: DatabaseSync): void {
+  const items = readQuarantine(db);
+  if (items.length > 0) writeQuarantine(db, items.map((item) => ({ ...item, acrossRewind: true })));
+}
+
 /** How many entities are waiting. Zero when none are, or the table cannot be read. */
 export function countQuarantined(db: DatabaseSync): number {
   try {
@@ -87,7 +119,7 @@ export function countQuarantined(db: DatabaseSync): number {
 /** Set an operation of the ordered tail aside. */
 export function quarantineOperation(db: DatabaseSync, op: RemoteOperation, missing: ReferentMissing): void {
   const items = readQuarantine(db).filter((item) => item.operation?.opId !== op.opId);
-  items.push({ entity: op.entity, entityId: op.entityId, what: missing.what, since: nowIso(), heldWhenSetAside: entityHeld(db, op.entity, op.entityId), writesWhenSetAside: fieldWritesOf(db, op.entity, op.entityId), epoch: epochOf(db), operation: op });
+  items.push({ entity: op.entity, entityId: op.entityId, what: missing.what, since: nowIso(), heldWhenSetAside: entityHeld(db, op.entity, op.entityId), writesWhenSetAside: fieldWritesOf(db, op.entity, op.entityId), operation: op });
   writeQuarantine(db, items);
 }
 
@@ -99,7 +131,7 @@ export function quarantineSnapshotEntity(
   read: { cutoffSeq: number; ledger: string; sameTimeline: boolean },
 ): void {
   const items = readQuarantine(db).filter((item) => !(item.snapshot && item.entity === entity.entity && item.entityId === entity.entityId));
-  items.push({ entity: entity.entity, entityId: entity.entityId, what: missing.what, since: nowIso(), heldWhenSetAside: entityHeld(db, entity.entity, entity.entityId), writesWhenSetAside: fieldWritesOf(db, entity.entity, entity.entityId), epoch: epochOf(db), snapshot: { entity, ...read } });
+  items.push({ entity: entity.entity, entityId: entity.entityId, what: missing.what, since: nowIso(), heldWhenSetAside: entityHeld(db, entity.entity, entity.entityId), writesWhenSetAside: fieldWritesOf(db, entity.entity, entity.entityId), snapshot: { entity, ...read } });
   writeQuarantine(db, items);
 }
 
@@ -199,11 +231,6 @@ const COMPANIONS: Readonly<Record<string, readonly string[]>> = {
 function fieldWritesOf(db: DatabaseSync, entity: string, entityId: string): Record<string, string | null> {
   const rows = db.prepare("SELECT field, op_id FROM sync_field_writes WHERE entity = ? AND entity_id = ?").all(entity, entityId) as Array<{ field: string; op_id: string | null }>;
   return Object.fromEntries(rows.map((row) => [row.field, row.op_id]));
-}
-
-function epochOf(db: DatabaseSync): number | undefined {
-  const row = db.prepare("SELECT epoch FROM sync_state WHERE id = 1").get() as { epoch: number } | undefined;
-  return row?.epoch;
 }
 
 /**

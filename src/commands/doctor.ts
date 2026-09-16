@@ -56,7 +56,7 @@ import {
 } from "../core/path-migration.js";
 import { hubSchemaState, workspaceSchemaState } from "../core/schema.js";
 import { findWorkspace } from "../core/workspace.js";
-import { readQuarantine } from "../core/cloud/quarantine.js";
+import { QUARANTINE_DIVERGENCE_MS, divergedQuarantine, readQuarantine } from "../core/cloud/quarantine.js";
 import { recordedRepositoryPrefix } from "../core/cloud/repository-prefix.js";
 import { readMeta, snapshotPathFor } from "../core/open.js";
 import { WorkspaceStore } from "../core/store.js";
@@ -1127,7 +1127,24 @@ function checkSyncQuarantine(dir: string): CheckResult {
   const db = readOnlyDb(found.dbPath);
   try {
     const waiting = readQuarantine(db).map((item) => ({ entity: item.entity, entityId: item.entityId, names: item.what, since: item.since }));
-    const data = { dbPath: found.dbPath, waiting };
+    const diverged = divergedQuarantine(db).map((item) => ({ entity: item.entity, entityId: item.entityId, names: item.what, since: item.since }));
+    const data = { dbPath: found.dbPath, waiting, diverged };
+    /**
+     * Waiting across a restore that has been read, or for more than a week: nothing is going to
+     * bring what it names, and this device disagrees with every device that holds it. Never a
+     * quiet wait (`divergedQuarantine`).
+     */
+    if (diverged.length > 0) {
+      return result(
+        id,
+        title,
+        "fail",
+        `${diverged.length} set aside will not land on their own — waiting since before a restore this workspace has read, or for more than ${QUARANTINE_DIVERGENCE_MS / 86_400_000} days — and this workspace diverges from every device that holds them: ` +
+          diverged.map((item) => `${item.entity} ${item.entityId} names ${item.names}, which is missing here (waiting since ${item.since})`).join("; ") +
+          ". Nothing on the repository's timeline brings it: the device that wrote it has to send it, or the entity has to be removed.",
+        data,
+      );
+    }
     if (waiting.length === 0) return result(id, title, "pass", "Nothing this workspace pulled is waiting on something it does not hold.", data);
     return result(
       id,

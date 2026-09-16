@@ -58,7 +58,7 @@ import { assertHubCanTakePrefix, prefixToAdopt, restampHubPrefix } from "./prefi
 import { applyConflictOperation, countOpenConflicts, screenForConflicts } from "./conflicts.js";
 import { applySnapshotEntity, hydrate } from "./hydrate.js";
 import { owedLeaseReleases, settleOwedLeaseRelease } from "./lease-store.js";
-import { countQuarantined, quarantineOperation, retryQuarantine, withoutLaterWrites } from "./quarantine.js";
+import { countQuarantined, markWaitingAcrossRewind, quarantineOperation, retryQuarantine, withoutLaterWrites } from "./quarantine.js";
 import { reconcileAfterRead, reconcileBeforeRead } from "./rewind.js";
 import { TailFold, refusedAsTooLargeToFold, type Entry } from "./tail-fold.js";
 import { seedModeOf, seedOwed, seedRepository, type RepositorySurvey, type SeedReport } from "./seed.js";
@@ -1166,6 +1166,8 @@ async function readReconciled(
   const current = hydratedFromOlderFold.get(db) !== true;
   tx(db, () => {
     const plan = current ? reconcileBeforeRead(db, survey.entities) : null;
+    // What waits already waits across this rewind: still waiting after it, it is a divergence.
+    if (plan !== null && readRewind(db) !== null) markWaitingAcrossRewind(db);
     hydrate(db, journal, survey.entities, [], survey.cutoffSeq, nowIso(), true, sameTimeline, ledger, current);
     clearTailSurvey(db);
     if (plan !== null) reconcileAfterRead(db, journal, plan, survey.epoch);

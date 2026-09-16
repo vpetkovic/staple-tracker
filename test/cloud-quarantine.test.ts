@@ -9,6 +9,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { runDiagnostics } from "../src/commands/doctor.js";
+import { createBackup, restoreFromBackup, setBackupConsent } from "../src/core/cloud/backup.js";
 import { countQuarantined, readQuarantine } from "../src/core/cloud/quarantine.js";
 import { cloudSurfaceReport } from "../src/core/cloud/surface.js";
 import { FakeSyncServer } from "./fixtures/fake-sync-server.js";
@@ -87,4 +88,59 @@ describe("an entity naming what never arrived", () => {
     }
     expect(runDiagnostics({ dir: joining.dir }).checks.find((candidate) => candidate.id === "sync-quarantine")!.status).toBe("pass");
   });
+});
+
+/**
+ * RR1's safety rule: a wait that nothing will end is a divergence, and doctor fails over it,
+ * naming what is missing — after a restore this device has read (the rewind kept and sent
+ * everything unsent work named, so what is still missing is on no timeline), or after a week.
+ */
+describe("an entity that waits for what nothing will bring", () => {
+  async function waiting() {
+    const server = new FakeSyncServer({ repositoryId: REPO });
+    fleet = new Fleet(server, REPO);
+    const a = fleet.machine("a");
+    a.store.createIssue({ title: "Shared" });
+    await a.sync();
+    const b = fleet.machine("b");
+    await b.sync();
+    a.use();
+    await setBackupConsent(a.home, REPO, true, { fetchImpl: server.fetch });
+    const backup = await createBackup(a.home, REPO, null, { fetchImpl: server.fetch });
+    const schema = Number((a.db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as { value: string }).value);
+    const missing = randomUUID();
+    await new OlderBuildDevice(server, REPO, "device-older", schema).push([
+      { entity: "comment", entityId: randomUUID(), verb: "create", payload: { issueId: missing, author: "older", authorType: "agent", body: "on an issue nobody sent" } },
+    ]);
+    b.use();
+    await b.sync();
+    expect(countQuarantined(b.db)).toBe(1);
+    const check = () => runDiagnostics({ dir: b.dir }).checks.find((candidate) => candidate.id === "sync-quarantine")!;
+    expect(check().status).toBe("warn");
+    return { server, a, b, backup, missing, check };
+  }
+
+  it("fails doctor, naming what is missing, once it has waited across a restore this device read", async () => {
+    const c = await waiting();
+    c.a.use();
+    await restoreFromBackup(c.a.db, c.a.home, REPO, c.backup.backupId, { fetchImpl: c.server.fetch });
+    await c.a.sync();
+    c.b.use();
+    await c.b.sync();
+    expect(countQuarantined(c.b.db)).toBe(1);
+    const check = c.check();
+    expect(check.status).toBe("fail");
+    expect(check.detail).toContain(c.missing);
+    expect(check.detail).toContain("diverges");
+  }, 60_000);
+
+  it("fails doctor, naming what is missing, once it has waited more than a week", async () => {
+    const c = await waiting();
+    const row = c.b.db.prepare("SELECT value FROM meta WHERE key = 'sync_quarantine'").get() as { value: string };
+    const aged = (JSON.parse(row.value) as Array<Record<string, unknown>>).map((item) => ({ ...item, since: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString() }));
+    c.b.db.prepare("UPDATE meta SET value = ? WHERE key = 'sync_quarantine'").run(JSON.stringify(aged));
+    const check = c.check();
+    expect(check.status).toBe("fail");
+    expect(check.detail).toContain(c.missing);
+  }, 60_000);
 });
