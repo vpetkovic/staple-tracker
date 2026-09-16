@@ -20,6 +20,28 @@ server-side [identifier allocation](#identity-is-the-uuid-never-the-identifier),
 and honouring `Retry-After` in the [error taxonomy](#error-taxonomy). Everything
 else on this page is implemented.
 
+## The support boundary
+
+What this page promises holds for a fleet inside these three lines, and is not promised
+outside them:
+
+- **The Worker is deployed before any client of this release** (`worker/README.md`). A
+  client of this release against an older Worker degrades where this page says so, and is
+  not otherwise supported.
+- **Every device runs a build at least as new as this release.** The rules on this page that
+  name an older build (c7a49d6, 56ff1f4) describe what this release does when it meets one,
+  and are kept and tested as they stand; nothing further is promised for a fleet that still
+  runs one.
+- **A backup made before this release is not guaranteed to restore identically.** It restores,
+  but a Worker before this release kept neither each entity's place in the log (`claimSeq`)
+  nor its create's time and actor, so what a restore of it stages can differ from what the
+  devices that followed the old log held, in the order of claims and vocabulary entries above
+  all. A backup made after this release's Worker is deployed restores as this page describes.
+
+Inside those lines, every synchronized value a device holds is a function of the log, and of
+the snapshot it hydrated from — never something the device chose locally and kept past the
+acknowledgement: an order, a stand-in, a time, an author.
+
 ## Two invariants the rest of the page serves
 
 **A workspace that has not been connected makes no Staple-owned network call.**
@@ -496,8 +518,12 @@ places it (`applyVocabulary`). Before, a built-in removed and added back went la
 device that did it and on every device reading the tail, and stayed where its migration put
 it on a device hydrating afterwards; and a built-in sent again as a create stayed put on
 devices that held it and went last on one that joined. A genuine create only: what a restore
-stages is not one, and neither is this device's own create coming back, whose entry is
-already where the device put it and whose order follows. The seed's order accounts for it:
+stages is not one. **This device's own create coming back is placed the same way**: where the
+device put it was its own choice, and two devices that each added an entry offline held their
+own first, while every other device and a fresh one held them in the log's order — for good
+(`test/cloud-vocabulary-concurrent-adds.test.ts`). Nothing a device chose locally outlives
+the acknowledgement; an order the device wrote with the create, later in the log, places it
+again as it does everywhere. The seed's order accounts for it:
 a built-in the seed sends is last on a fresh device, and the seed sends an order when that is
 not this device's (`test/cloud-builtin-readd.test.ts`).
 
