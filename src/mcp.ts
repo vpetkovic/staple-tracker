@@ -1188,11 +1188,14 @@ server.registerTool(
     },
   },
   ({ ref, actor, agent, if_idle_seconds, ws }) =>
-    run(() =>
-      storeFor(ws).releaseIssue(ref, requireActor(actor, agent), {
+    run(() => {
+      // An issue a restore removed has no checkout or lease left: said, not refused.
+      const gone = storeFor(ws).removedByRestore(ref);
+      if (gone !== null) return { released: false, removedByRestore: gone };
+      return storeFor(ws).releaseIssue(ref, requireActor(actor, agent), {
         ifIdleSeconds: if_idle_seconds,
-      }),
-    ),
+      });
+    }),
 );
 
 /**

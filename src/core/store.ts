@@ -1,6 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { insertEvent } from "./event-log.js";
-import { RENUMBER_GUARD_MS, aliasedIssueId, formerHolderOf, formerHolders, formerMove, noteRenumber, renumbersAcknowledged } from "./identifier-moves.js";
+import { RENUMBER_GUARD_MS, aliasedIssueId, removedByRestore, formerHolderOf, formerHolders, formerMove, noteRenumber, renumbersAcknowledged } from "./identifier-moves.js";
 import { readLocalLease } from "./cloud/lease-store.js";
 import { REPOSITORY_PREFIX_SETTING } from "./cloud/repository-prefix.js";
 import { type Journal, journalFor, resolveDeviceId } from "./journal.js";
@@ -1671,31 +1671,56 @@ export class WorkspaceStore {
    * moved, and whether the identifier now names another issue (`identifier-moves.ts`).
    */
   private renumberedFrom(ref: string, resolved: IssueRow): { identifier: string; issueId: string; at: string } | null {
-    const trimmed = ref.trim();
-    if (trimmed === resolved.id) return null;
-    const upper = trimmed.toUpperCase();
-    const parsed = parseIdentifier(trimmed) ?? parseIdentifier(`${this.prefix}-${trimmed}`);
-    for (const identifier of [upper, parsed ? `${parsed.prefix}-${parsed.number}` : null]) {
-      if (identifier === null) continue;
+    for (const identifier of this.spellingsOf(ref, resolved)) {
       const move = formerMove(this.db, identifier);
       if (move !== null) return { identifier, ...move };
     }
     return null;
   }
 
-  /** Leave the caller a notice when the identifier it used was renumbered here. */
+  /** The identifiers a reference spells, when it is not the resolved issue's id. */
+  private spellingsOf(ref: string, resolved: IssueRow): string[] {
+    const trimmed = ref.trim();
+    if (trimmed === resolved.id) return [];
+    const parsed = parseIdentifier(trimmed) ?? parseIdentifier(`${this.prefix}-${trimmed}`);
+    return [...new Set([trimmed.toUpperCase(), ...(parsed ? [`${parsed.prefix}-${parsed.number}`] : [])])];
+  }
+
+  /**
+   * Leave the caller a notice when the identifier it used was renumbered here — or when a
+   * restore removed the issue that held it (`recordRemovedHolder`), and the identifier now
+   * names another issue. Either way the caller may have meant the issue that left it, and a
+   * read or a write that goes through says so.
+   */
   private noteIfRenumbered(ref: string, resolved: IssueRow): void {
     const moved = this.renumberedFrom(ref, resolved);
-    if (moved === null) return;
-    const now = this.db.prepare("SELECT identifier FROM issues WHERE id = ?").get(moved.issueId) as { identifier: string } | undefined;
-    if (!now || now.identifier === moved.identifier) return;
-    noteRenumber({
-      identifier: moved.identifier,
-      renumberedAt: moved.at,
-      issueId: moved.issueId,
-      nowIdentifier: now.identifier,
-      nowNamesAnother: moved.issueId !== resolved.id,
-    });
+    if (moved !== null) {
+      const now = this.db.prepare("SELECT identifier FROM issues WHERE id = ?").get(moved.issueId) as { identifier: string } | undefined;
+      if (now && now.identifier !== moved.identifier) {
+        noteRenumber({
+          identifier: moved.identifier,
+          renumberedAt: moved.at,
+          issueId: moved.issueId,
+          nowIdentifier: now.identifier,
+          nowNamesAnother: moved.issueId !== resolved.id,
+        });
+      }
+    }
+    const exists = this.db.prepare("SELECT 1 AS hit FROM issues WHERE id = ?");
+    for (const identifier of this.spellingsOf(ref, resolved)) {
+      for (const holder of formerHolders(this.db, identifier)) {
+        if (holder.removed === undefined || holder.issueId === resolved.id || exists.get(holder.issueId) !== undefined) continue;
+        noteRenumber({
+          identifier,
+          renumberedAt: holder.at,
+          issueId: holder.issueId,
+          nowIdentifier: null,
+          nowNamesAnother: true,
+          removedByRestore: { title: holder.removed.title },
+          nowNames: { id: resolved.id, identifier: resolved.identifier, title: resolved.title },
+        });
+      }
+    }
   }
 
   /**
@@ -1742,8 +1767,10 @@ export class WorkspaceStore {
         const live = this.db.prepare("SELECT * FROM issues WHERE id = ?").get(holder.issueId) as unknown as IssueRow | undefined;
         /**
          * An issue a restore removed (`cloud/rewind.ts`) is asked the same questions from what
-         * was kept of it: held while it was checked out when it went, or while this device still
-         * holds its lease, and recent for a day after the removal.
+         * was kept of it, and refuses only for a day after the removal: its checkout went with it,
+         * and so did this device's lease (the rewind forgets it, and gives it back to the service),
+         * so nobody can still be holding it once that day is over. Inside the day, who had it
+         * checked out when it went is said with the refusal.
          */
         const removed = live === undefined ? holder.removed : undefined;
         if (live === undefined && removed === undefined) continue;
@@ -1755,7 +1782,8 @@ export class WorkspaceStore {
         if (lease !== null && (device === null || lease.deviceId === device)) reasons.push("this device holds its lease");
         const at = Date.parse(holder.at);
         if (!Number.isNaN(at) && Date.now() - at < RENUMBER_GUARD_MS) reasons.push(removed ? "less than a day ago" : "it moved less than a day ago");
-        if (reasons.length > (removed ? 1 : 0)) hot.push({ issue, number, at: holder.at, reasons, removed: removed !== undefined });
+        const recent = !Number.isNaN(at) && Date.now() - at < RENUMBER_GUARD_MS;
+        if (removed ? recent : reasons.length > 0) hot.push({ issue, number, at: holder.at, reasons, removed: removed !== undefined });
       }
     }
     if (hot.length === 0) return row;
@@ -1882,8 +1910,34 @@ export class WorkspaceStore {
 
   private requireRow(ref: string): IssueRow {
     const row = this.findRow(ref);
-    if (!row) throw new StapleError("not_found", `No issue matches "${ref}" in workspace ${this.slug}`);
+    if (!row) {
+      const gone = this.removedByRestore(ref);
+      throw new StapleError("not_found", gone ? gone.message : `No issue matches "${ref}" in workspace ${this.slug}`, gone ? { removedByRestore: gone } : undefined);
+    }
     return row;
+  }
+
+  /**
+   * When `ref` is the id of an issue a restore removed here (`cloud/rewind.ts`): what was
+   * removed, and a sentence saying so. Its checkout went with its row, and this device's lease
+   * on it went too — forgotten here and given back to the service by the next sync — so a
+   * release by its id has nothing left to give back, and the surfaces say that instead of
+   * failing (`release`, MCP `release_task`, `cloud lease release`).
+   */
+  removedByRestore(ref: string): { id: string; identifier: string; title: string; removedAt: string; checkedOutBy: string | null; message: string } | null {
+    const id = ref.trim();
+    const gone = removedByRestore(this.db, id);
+    if (gone === null) return null;
+    return {
+      id,
+      identifier: gone.identifier,
+      title: gone.title,
+      removedAt: gone.at,
+      checkedOutBy: gone.checkedOutBy,
+      message:
+        `"${gone.title}" (${id}, ${gone.identifier}) was removed by a restore here at ${gone.at}. ` +
+        `Its checkout went with it, and so did this device's lease on it, so there is nothing left to release.`,
+    };
   }
 
   getIssue(ref: string): Issue {

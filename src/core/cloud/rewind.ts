@@ -37,6 +37,7 @@ import { moveIdentifier, recordRemovedHolder } from "../identifier-moves.js";
 import { WORKSPACE_SETTING_META_PREFIX } from "../settings-registry.js";
 import { BUILTIN_KIND_SEED, BUILTIN_STATUS_SEED, nowIso } from "../types.js";
 import { settingsMoved } from "./apply.js";
+import { forgetRemovedIssueLease } from "./lease-store.js";
 import { localInventory } from "./seed.js";
 import { recordReconciledEpoch, withheldEntities } from "./sync-state.js";
 import type { SnapshotEntity } from "./wire.js";
@@ -422,6 +423,9 @@ function remove(db: DatabaseSync, entity: SyncEntity, id: string): number {
         title: row.title,
         checkedOutBy: row.checkout_agent,
       });
+      // Its checkout goes with the row; this device's lease on it goes too, released on the
+      // service by the sync that follows (`releaseOwedLeases`, `sync.ts`).
+      forgetRemovedIssueLease(db, id);
       // Its documents have no foreign key to it; everything else hanging off it cascades.
       db.prepare("DELETE FROM document_revisions WHERE issue_id = ?").run(id);
       db.prepare("DELETE FROM documents WHERE issue_id = ?").run(id);

@@ -1425,6 +1425,13 @@ function main() {
       });
       const { store } = getStore(values);
       const stale = values["if-stale"];
+      // An issue a restore removed has no checkout or lease left: said, not refused.
+      const gone = store.removedByRestore(positionals[0]!);
+      if (gone !== null) {
+        if (values.json) outJson({ released: false, removedByRestore: gone });
+        else console.log(gone.message);
+        break;
+      }
       const released = store.releaseIssue(positionals[0]!, agentName(values.agent), {
         ifIdleSeconds: stale === undefined ? undefined : parseDuration(stale, "if-stale"),
       });

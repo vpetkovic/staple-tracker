@@ -42,6 +42,7 @@ import {
   fetchSnapshotPage,
   pullOperations,
   pushOperations,
+  releaseRemoteLease,
   type Capabilities,
   type CloudErrorCode,
   type RequestOptions,
@@ -56,6 +57,7 @@ import { closeSettledIdentifierConflicts, settleOwedClaims } from "./claims.js";
 import { assertHubCanTakePrefix, prefixToAdopt, restampHubPrefix } from "./prefix-hub.js";
 import { applyConflictOperation, countOpenConflicts, screenForConflicts } from "./conflicts.js";
 import { applySnapshotEntity, hydrate } from "./hydrate.js";
+import { owedLeaseReleases, settleOwedLeaseRelease } from "./lease-store.js";
 import { countQuarantined, quarantineOperation, retryQuarantine } from "./quarantine.js";
 import { reconcileAfterRead, reconcileBeforeRead } from "./rewind.js";
 import { TailFold, refusedAsTooLargeToFold, type Entry } from "./tail-fold.js";
@@ -645,6 +647,7 @@ export async function syncRepository(
   hydratedFromOlderFold.delete(db);
   // And any identifier record an older build left open after applying its settlement.
   closeSettledIdentifierConflicts(db);
+  await releaseOwedLeases(db, session, options);
 
   const after = requireSyncState(db);
   recordSyncedAt(db);
@@ -680,6 +683,29 @@ export async function syncRepository(
     caughtUp,
     at: nowIso(),
   };
+}
+
+/**
+ * Give the service back the leases this device held on issues a restore removed here
+ * (`forgetRemovedIssueLease`, `rewind.ts`). The rewind forgot the mirror rows; the service
+ * may still hold them until they expire, keeping the entity from any other device. Released,
+ * or refused as not held with that token, the debt is settled; a service that cannot be reached
+ * leaves it for the next sync, and never fails this one.
+ */
+async function releaseOwedLeases(db: DatabaseSync, session: Session, options: SyncOptions): Promise<void> {
+  for (const owed of owedLeaseReleases(db)) {
+    try {
+      await releaseRemoteLease(
+        session.endpoint,
+        { repositoryId: session.repositoryId, token: session.token, deviceId: session.deviceId, entityId: owed.entityId, fencingToken: owed.fencingToken },
+        options,
+      );
+    } catch (error) {
+      const code = cloudCodeOf(error);
+      if (code === "offline" || code === "unavailable" || code === "rate_limited" || code === null) return;
+    }
+    settleOwedLeaseRelease(db, owed.entityId);
+  }
 }
 
 /**

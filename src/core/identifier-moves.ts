@@ -50,7 +50,7 @@ export interface FormerHolder {
    * is gone, so what the guard asks of it is kept here — its title, and who had it checked
    * out when it went.
    */
-  readonly removed?: { readonly title: string; readonly checkedOutBy: string | null };
+  readonly removed?: { readonly title: string; readonly checkedOutBy: string | null; readonly heldAs?: string };
 }
 
 function readHolders(db: DatabaseSync, identifier: string): FormerHolder[] {
@@ -109,7 +109,7 @@ export function recordRemovedHolder(
   identifier: string,
   removal: { issueId: string; at: string; title: string; checkedOutBy: string | null },
 ): void {
-  const removed = { title: removal.title, checkedOutBy: removal.checkedOutBy };
+  const removed = { title: removal.title, checkedOutBy: removal.checkedOutBy, heldAs: identifier };
   const write = (key: string, holders: readonly FormerHolder[]): void => {
     db.prepare(`INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(key, JSON.stringify(holders));
   };
@@ -123,6 +123,26 @@ export function recordRemovedHolder(
   const holders = readHolders(db, identifier).filter((holder) => holder.issueId !== removal.issueId);
   holders.push({ issueId: removal.issueId, at: removal.at, removed });
   write(`${HOLDERS_PREFIX}${identifier}`, holders);
+}
+
+/**
+ * What a restore removed under an issue id here (`recordRemovedHolder`): the number it held
+ * when it went, when, its title and who had it checked out. Null for an id no restore removed.
+ */
+export function removedByRestore(
+  db: DatabaseSync,
+  issueId: string,
+): { identifier: string; at: string; title: string; checkedOutBy: string | null } | null {
+  if (db.prepare("SELECT 1 AS hit FROM issues WHERE id = ?").get(issueId)) return null;
+  const lists = db.prepare("SELECT key FROM meta WHERE key LIKE ? AND instr(value, ?) > 0").all(`${HOLDERS_PREFIX}%`, issueId) as Array<{ key: string }>;
+  for (const { key } of lists) {
+    const listed = key.slice(HOLDERS_PREFIX.length);
+    const holder = readHolders(db, listed).find((entry) => entry.issueId === issueId && entry.removed !== undefined);
+    if (!holder?.removed) continue;
+    // Every number it had left carries the removal, and names the one it held when it went.
+    return { identifier: holder.removed.heldAs ?? listed, at: holder.at, title: holder.removed.title, checkedOutBy: holder.removed.checkedOutBy };
+  }
+  return null;
 }
 
 /**
@@ -254,9 +274,13 @@ export interface RenumberNotice {
   readonly identifier: string;
   /** When the issue that held it moved off it, here. */
   readonly renumberedAt: string;
-  /** That issue, and the identifier it holds now. */
+  /** That issue, and the identifier it holds now: null when a restore removed it. */
   readonly issueId: string;
-  readonly nowIdentifier: string;
+  readonly nowIdentifier: string | null;
+  /** Set when the issue that held it was removed by a restore (`cloud/rewind.ts`). */
+  readonly removedByRestore?: { readonly title: string };
+  /** What the identifier names now, when a restore emptied it and another issue took it. */
+  readonly nowNames?: { readonly id: string; readonly identifier: string; readonly title: string };
   /** Whether the identifier names another issue now (it resolved to that one). */
   readonly nowNamesAnother: boolean;
   readonly message: string;
@@ -266,7 +290,12 @@ const pendingNotices: RenumberNotice[] = [];
 
 export function noteRenumber(notice: Omit<RenumberNotice, "message">): void {
   if (pendingNotices.some((held) => held.identifier === notice.identifier && held.issueId === notice.issueId)) return;
-  const message = notice.nowNamesAnother
+  const message = notice.removedByRestore
+    ? `${notice.identifier}'s earlier issue "${notice.removedByRestore.title}" (${notice.issueId}) was removed by a restore here at ${notice.renumberedAt}; ` +
+      (notice.nowNames
+        ? `${notice.identifier} now names "${notice.nowNames.title}" (${notice.nowNames.id}).`
+        : `${notice.identifier} names nothing now.`)
+    : notice.nowNamesAnother
     ? `${notice.identifier} was renumbered here at ${notice.renumberedAt}; your earlier ${notice.identifier} is now ` +
       `${notice.nowIdentifier}, and ${notice.identifier} now names another issue.`
     : `${notice.identifier} was renumbered here at ${notice.renumberedAt}; it is now ${notice.nowIdentifier}.`;

@@ -65,9 +65,11 @@ import {
   forgetLocalLease,
   leaseScopeNote,
   listLocalLeases,
+  owedLeaseReleases,
   readLocalLease,
   recordLocalLease,
   serverInstant,
+  settleOwedLeaseRelease,
   LOCAL_SCOPE_NOTE,
   type ClaimScope,
   type LocalLease,
@@ -411,6 +413,40 @@ export async function releaseClaim(
   ref: string,
   options: LeaseOptions,
 ): Promise<ReleaseOutcome> {
+  /**
+   * An issue a restore removed: its checkout went with its row, and the rewind forgot this
+   * device's lease and owes the service its release (`forgetRemovedIssueLease`). Given back now
+   * when a sync has not yet, and said either way — never a `not_found`.
+   */
+  const gone = store.removedByRestore(ref);
+  if (gone !== null) {
+    const owed = owedLeaseReleases(store.db).find((entry) => entry.entityId === gone.id);
+    let remoteReleased = false;
+    const connection = connectionOrNull(options.home, repositoryId);
+    if (owed && connection !== null) {
+      const session = requireSession(options.home, repositoryId);
+      try {
+        await releaseRemoteLease(
+          session.endpoint,
+          { repositoryId: session.repositoryId, token: session.token, deviceId: session.deviceId, entityId: gone.id, fencingToken: owed.fencingToken },
+          options,
+        );
+        remoteReleased = true;
+        settleOwedLeaseRelease(store.db, gone.id);
+      } catch (error) {
+        if (reasonFor(cloudCodeOf(error)) !== "offline") settleOwedLeaseRelease(store.db, gone.id);
+      }
+    }
+    return {
+      scope: remoteReleased ? "lease" : "local",
+      entityId: gone.id,
+      remoteReleased,
+      reason: remoteReleased ? null : "no-lease",
+      stranded: false,
+      issue: null,
+      note: remoteReleased ? `${gone.message} The lease it held on the service was released now.` : gone.message,
+    };
+  }
   const issue = leasedIssue(store, ref);
   const entityId = issue.id;
   const connection = connectionOrNull(options.home, repositoryId);
