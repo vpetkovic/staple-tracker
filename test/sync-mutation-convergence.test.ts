@@ -65,7 +65,7 @@ const READS: Record<StoreName, readonly string[]> = {
     "journaled", "getStatuses", "getKinds", "kindAppearance", "getKindsWithAppearance", "kindOrder", "defaultKind",
     "statusOrder", "openStatusOrder", "inboxPickupOrder", "checkoutExpectedStatuses", "categoryOf", "isResolvedStatus",
     "isActiveStatus", "primaryStatusFor", "assertConfiguredStatus", "assertConfiguredKind", "statusUsageCount",
-    "kindUsageCount", "getSetting", "settingValue", "settingValues", "unknownSettingKeys", "movedOff", "getIssue",
+    "kindUsageCount", "getSetting", "settingValue", "settingValues", "unknownSettingKeys", "movedOff", "removedByRestore", "getIssue",
     "listEvents", "blockersOf", "dependentsOf", "unresolvedBlockersOf", "unresolvedBlockersFor", "openDependentsFor",
     "blockingChildrenOf", "gate", "gateFor", "queuedByFor", "gateQueueOf", "queuedBy", "claimActivity",
     "claimActivityFor", "worklogSummaryFor", "timingFor", "timing", "detailTiming", "listComments", "listCommentsPage",
