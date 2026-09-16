@@ -1165,9 +1165,9 @@ async function readReconciled(
   // A fold from before this build merged and dropped things: it is no word on what to remove.
   const current = hydratedFromOlderFold.get(db) !== true;
   tx(db, () => {
-    const plan = current ? reconcileBeforeRead(db, survey.entities) : null;
     // What waits already waits across this rewind: still waiting after it, it is a divergence.
-    if (plan !== null && readRewind(db) !== null) markWaitingAcrossRewind(db);
+    if (current && readRewind(db) !== null) markWaitingAcrossRewind(db);
+    const plan = current ? reconcileBeforeRead(db, survey.entities) : null;
     hydrate(db, journal, survey.entities, [], survey.cutoffSeq, nowIso(), true, sameTimeline, ledger, current);
     clearTailSurvey(db);
     if (plan !== null) reconcileAfterRead(db, journal, plan, survey.epoch);
