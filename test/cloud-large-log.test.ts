@@ -81,6 +81,18 @@ describe("a log too large for the service to fold", () => {
     expect(everything(v.db)).toEqual(everything(a.db));
   });
 
+  // A bootstrap no restore rewinds: one an older build began, which records no rewind.
+  it("a bootstrap an older build began reads the tail too", async () => {
+    const { a } = await largeRepository();
+    const v = fleet!.machine("v");
+    await v.sync();
+    beginBootstrap(v.db, 1);
+    v.db.prepare("DELETE FROM meta WHERE key = 'sync_rewind'").run();
+    const report = await v.sync();
+    expect(report.bootstrap?.fromTail).toBe(true);
+    expect(everything(v.db)).toEqual(everything(a.db));
+  });
+
   it("a clone with work of its own seeds into it", async () => {
     const { a } = await largeRepository();
     const c = fleet!.connect("c", fleet!.prepare("c"));
