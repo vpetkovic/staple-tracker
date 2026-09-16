@@ -1326,9 +1326,13 @@ re-bootstrap killed part-way leaves nothing half-applied, and reads again on the
   kind — and sent into the epoch: its queued operations as they are, and a `create` of each
   kept entity the queue holds no create of, the whole entity as this device holds it, as a
   heal sends one ([below](#a-workspaces-history-reaches-the-service-when-it-first-synchronizes)).
-  Built-ins are never sent: every device installs them. A device that made the restore has
-  moved its epoch already, so its next sync reads the epoch before it pushes, and the rewind
-  sees that work before it is sent. What a restore rewound can leave an issue kept here on a
+  Built-ins are never sent: every device installs them. A kept entity's `create` is journaled
+  after the queued work that kept it, so the queue is then put in an order every receiver can
+  apply as it goes: each operation after the pending `create` of whatever it names (an unsent
+  comment after its issue's create sent again). Otherwise the queued order stands; the
+  operations trade the client sequences they hold, and keep their ids. A device that made
+  the restore has moved its epoch already, so its next sync reads the epoch before it pushes,
+  and the rewind sees that work before it is sent. What a restore rewound can leave an issue kept here on a
   stand-in with its number now free: it takes the number back.
 - **Work already done in the epoch on a row it lacks is kept too.** A device that followed
   the restore on a build that did not rewind held every rewound row, and could edit one —
