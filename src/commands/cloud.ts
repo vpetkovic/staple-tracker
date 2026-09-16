@@ -288,6 +288,26 @@ export function settle(work: Promise<void>, json: boolean): void {
  * checkout, and that is what decides whether `staple init` is the answer or the
  * very thing not to do.
  */
+/**
+ * Say why a backup or a restore is waiting: the service is still folding the log
+ * (`whileFolding`, `src/core/cloud/client.ts`). On stderr, and at most every ten seconds, so a
+ * wait of a few minutes after the Worker is deployed onto a large log reads as progress rather
+ * than as a hang. Nothing in `--json` mode, whose stdout is the result alone.
+ */
+function foldingNotice(json: boolean): ((foldedSeq: number, cutoffSeq: number | null) => void) | undefined {
+  if (json) return undefined;
+  let said = 0;
+  return (foldedSeq, cutoffSeq) => {
+    const now = Date.now();
+    if (now - said < 10_000) return;
+    said = now;
+    console.error(
+      `The service is still folding this repository's log (at seq ${foldedSeq}` +
+        `${cutoffSeq === null ? "" : ` of ${cutoffSeq}`}); waiting for it to finish.`,
+    );
+  };
+}
+
 function noIdentity(dbPath: string, consequence: string): StapleError {
   return new StapleError(
     "not_found",
@@ -1776,7 +1796,7 @@ function runBackup(argv: string[]): void {
 
   if (sub === "create") {
     settle(
-      createBackup(home, repositoryId, values.label ?? null).then((backup) => {
+      createBackup(home, repositoryId, values.label ?? null, { onFolding: foldingNotice(json) }).then((backup) => {
         if (json) {
           console.log(JSON.stringify({ backup }, null, 2));
           return;
@@ -1932,7 +1952,9 @@ function runRestore(argv: string[]): void {
           return;
         }
 
-        const report = await restoreFromBackup(opened.store.db, home, repositoryId, backupId);
+        const report = await restoreFromBackup(opened.store.db, home, repositoryId, backupId, {
+          onFolding: foldingNotice(json),
+        });
         if (json) {
           console.log(JSON.stringify({ restored: true, ...report }, null, 2));
           return;

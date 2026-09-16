@@ -160,6 +160,8 @@ function restoreOrder(entities: readonly BackupEntity[]): BackupEntity[] {
 
 export interface FakeBackup {
   backupId: string;
+  /** 'fold' for one this Worker took; 'inline' for one the Worker before the checkpoint took. */
+  content: "inline" | "fold";
   epoch: number;
   cutoffSeq: number;
   entityCount: number;
@@ -215,11 +217,35 @@ export interface FakeServerOptions {
   /** The per-operation payload cap, advertised and enforced. The Worker's is 512 KiB on every plan. */
   maxOpBytes?: number;
   /**
-   * The most operations one fold reads — `worker/src/limits.ts` `MAX_SNAPSHOT_FOLD_OPS`
-   * (20,000). Past it a snapshot, a probe and a backup are refused with `unavailable`
-   * and `maxSnapshotFoldOps`, exactly as the Worker refuses them.
+   * The most operations one fold reads, as the Worker before the fold checkpoint refused past
+   * 20,000 (its `MAX_SNAPSHOT_FOLD_OPS`): a snapshot, a probe and a backup past it are refused
+   * with `unavailable` and `maxSnapshotFoldOps`. Unlimited unless given — the Worker now has
+   * no such cap — so a test that sets it stands in for that older Worker.
    */
   maxSnapshotFoldOps?: number;
+  /**
+   * The fold checkpoint (`worker/src/fold-store.ts`): how many operations one request may
+   * fold (`foldBudget`), and how far behind the head a pull finds the fold before it folds
+   * (`foldStep`, `LAZY_FOLD_BEHIND`). The Worker's are 500 and 500 on the free plan. Unlimited unless given, which is a checkpoint
+   * always at the head; a test that sets them sees what a device sees straight after the
+   * Worker is deployed onto a large log — a first snapshot page, a backup and a restore
+   * answered "still folding" until the fold gets there.
+   */
+  foldBudget?: number;
+  foldStep?: number;
+  /**
+   * What one request may fold in payload bytes (`FOLD_STEP_BYTES`, 1 MiB on free), a request
+   * always taking its first operation. Unlimited unless given.
+   */
+  foldBudgetBytes?: number;
+  /** Entities one restore turn stages — `restoreStageEntities` in `worker/src/limits.ts`, 200 on free. */
+  restoreStageEntities?: number;
+  /**
+   * Stored bytes of entities one snapshot page or restore turn carries, at least one entity —
+   * `PAGE_BYTES` in `worker/src/limits.ts`, 1 MiB. A page cut by it is shorter than its limit
+   * and says `hasMore`.
+   */
+  pageBytes?: number;
 }
 
 /** `worker/src/vocabulary.ts`: which vocabulary a repository's log holds. */
@@ -336,6 +362,9 @@ export class FakeSyncServer {
    */
   legacyFold = false;
 
+  /** How far the fold of each epoch has got — `fold_marks`, reduced to the newest mark. */
+  readonly foldedTo = new Map<number, number>();
+
   /** The server-side half of the third consent. Off until something turns it on. */
   backupEnabled = false;
   readonly backups: FakeBackup[] = [];
@@ -363,7 +392,12 @@ export class FakeSyncServer {
       enrollmentSecret: null,
       rateLimit: null,
       maxOpBytes: 512 * 1024,
-      maxSnapshotFoldOps: 20_000,
+      maxSnapshotFoldOps: Number.POSITIVE_INFINITY,
+      foldBudget: Number.POSITIVE_INFINITY,
+      foldStep: Number.POSITIVE_INFINITY,
+      foldBudgetBytes: Number.POSITIVE_INFINITY,
+      restoreStageEntities: 200,
+      pageBytes: 1024 * 1024,
       ...options,
     };
     this.vocabulary = this.options.vocabulary;
@@ -572,6 +606,7 @@ export class FakeSyncServer {
     }
     if (tail === "/backups" && method === "POST") {
       this.assertBackupConsent();
+      if (!this.legacyFold) this.reachFold(this.epoch, this.lastSeq, { remaining: this.options.foldBudget });
       return this.ok(protocol, { backup: this.captureBackup(session.deviceId, "manual") });
     }
     if (tail === "/backups" && method === "GET") {
@@ -1216,6 +1251,11 @@ export class FakeSyncServer {
 
     this.assertServable(rows, protocol);
 
+    // A pull that finds the fold a step behind moves it on — `keepFoldNearHead`, `worker/src/pull.ts`.
+    if (this.lastSeq - (this.foldedTo.get(this.epoch) ?? 0) >= this.options.foldStep) {
+      this.advanceFold(this.epoch, this.lastSeq, { remaining: this.options.foldBudget });
+    }
+
     return this.ok(protocol, {
       epoch: this.epoch,
       serverHighWatermark: this.lastSeq,
@@ -1243,8 +1283,15 @@ export class FakeSyncServer {
       // Pinned in the cursor: every page of one snapshot folds to the same seq.
       cutoff = Number(cursor.c ?? 0);
       afterKey = String(cursor.k ?? "");
+      if (cutoff > this.lastSeq) throw new ServerError(400, "cursor_invalid", "the snapshot cursor names a cutoff past the log");
+      if (!this.legacyFold) this.reachFold(this.epoch, cutoff, { remaining: this.options.foldBudget });
     } else {
+      // The head, once the fold has reached it — `worker/src/snapshot.ts`.
       cutoff = this.lastSeq;
+      if (!this.legacyFold) {
+        this.reachFold(this.epoch, cutoff, { remaining: this.options.foldBudget });
+        this.foldedTo.set(this.epoch, Math.max(this.foldedTo.get(this.epoch) ?? 0, cutoff));
+      }
     }
 
     const ordered = this.fold(cutoff).entities;
@@ -1252,8 +1299,8 @@ export class FakeSyncServer {
     // and refusing halfway leaves a device holding a partial hydration.
     this.assertServable(ordered, protocol);
     const remaining = ordered.filter((entry) => `${entry.entity} ${entry.entityId}` > afterKey);
-    const hasMore = remaining.length > limit;
-    const page = remaining.slice(0, limit);
+    const page = this.byBytes(remaining.slice(0, limit), (entry) => Buffer.byteLength(JSON.stringify(entry.state), "utf8") + Buffer.byteLength(JSON.stringify(entry.fieldWrites), "utf8"));
+    const hasMore = remaining.length > page.length;
     const lastKey =
       page.length > 0
         ? `${page[page.length - 1]!.entity} ${page[page.length - 1]!.entityId}`
@@ -1434,6 +1481,7 @@ export class FakeSyncServer {
     const folded = this.fold(this.lastSeq);
     const backup: FakeBackup = {
       backupId: `backup-${this.backups.length + 1}`,
+      content: this.legacyFold ? "inline" : "fold",
       epoch: this.epoch,
       cutoffSeq: this.lastSeq,
       entityCount: folded.entities.length,
@@ -1467,8 +1515,73 @@ export class FakeSyncServer {
   }
 
   private describeBackup(backup: FakeBackup): Record<string, unknown> {
-    const { entities: _entities, ...metadata } = backup;
+    const { entities: _entities, content: _content, ...metadata } = backup;
     return metadata;
+  }
+
+  /** The longest prefix within `pageBytes`, and never empty — `foldedPage` and `nextChunk`. */
+  private byBytes<T>(items: readonly T[], size: (item: T) => number): T[] {
+    const out: T[] = [];
+    let bytes = 0;
+    for (const item of items) {
+      const weight = size(item);
+      if (out.length > 0 && bytes + weight > this.options.pageBytes) break;
+      out.push(item);
+      bytes += weight;
+    }
+    return out;
+  }
+
+  /**
+   * `advanceFold`, `worker/src/fold-store.ts`: fold this epoch towards `target`, at most the
+   * budget's operations, and answer how far the fold got.
+   */
+  private advanceFold(epoch: number, target: number, budget: { remaining: number; bytes?: number }): number {
+    const from = this.foldedTo.get(epoch) ?? 0;
+    if (from >= target) return from;
+    const pending = this.foldable(epoch, from, target);
+    // At most the budget's operations, and an operation only while the bytes before it are
+    // under the byte budget — so the first is always taken (the window in `advanceFold`).
+    const bytes = budget.bytes ?? this.options.foldBudgetBytes;
+    const taken: typeof pending = [];
+    let spent = 0;
+    for (const op of pending) {
+      if (taken.length >= Math.max(0, budget.remaining) || spent >= bytes) break;
+      taken.push(op);
+      spent += this.payloadBytes(op);
+    }
+    budget.remaining -= taken.length;
+    if (budget.bytes !== undefined) budget.bytes -= spent;
+    const reached = taken.length === pending.length ? target : taken[taken.length - 1]?.seq ?? from;
+    this.foldedTo.set(epoch, reached);
+    return reached;
+  }
+
+  private foldable(epoch: number, from: number, to: number): StoredOp[] {
+    return this.ops.filter((op) => op.epoch === epoch && op.seq > from && op.seq <= to).sort((a, b) => a.seq - b.seq);
+  }
+
+  /** What `length(CAST(payload AS BLOB))` measures: the stored JSON text in UTF-8 bytes. */
+  private payloadBytes(op: { payload: unknown }): number {
+    return Buffer.byteLength(JSON.stringify(op.payload), "utf8");
+  }
+
+  /**
+   * `reachFold`: advance, then refuse — `unavailable`, `foldedSeq` and `cutoffSeq`,
+   * `Retry-After: 1`, exactly the Worker's `foldBehind` — unless no operation up to the cutoff is left.
+   */
+  private reachFold(epoch: number, cutoff: number, budget: { remaining: number; bytes?: number }, progressFrom = 0): void {
+    const reached = this.advanceFold(epoch, cutoff, budget);
+    if (this.foldable(epoch, reached, cutoff).length > 0) {
+      const folded = Math.max(reached, progressFrom);
+      throw new ServerError(
+        503,
+        "unavailable",
+        `the service is still folding this repository's log: it has reached seq ${folded} of ${cutoff}. Every request moves it on; ask again.`,
+        { foldedSeq: folded, cutoffSeq: cutoff },
+        { "retry-after": "1" },
+      );
+    }
   }
 
   /**
@@ -1565,6 +1678,14 @@ export class FakeSyncServer {
       if (this.restores.some((candidate) => candidate.status === "staging")) {
         throw new ServerError(409, "conflict", "a restore is already in flight");
       }
+      if (!this.legacyFold) {
+        // `beginRestore`: the backup's cutoff and the head, folded before anything changes.
+        // One request's budget, operations and bytes, shared by both — as `beginRestore` shares it.
+        const budget = { remaining: this.options.foldBudget, bytes: this.options.foldBudgetBytes };
+        if (backup.content === "fold") this.reachFold(backup.epoch, backup.cutoffSeq, budget);
+        // The head's progress counts from an older epoch's cutoff, so `foldedSeq` climbs across both.
+        this.reachFold(this.epoch, this.lastSeq, budget, backup.content === "fold" && backup.epoch !== this.epoch ? backup.cutoffSeq : 0);
+      }
       this.claimForRestore(backup);
       const undo = this.captureBackup(session.deviceId, "pre-restore");
       restore = {
@@ -1607,9 +1728,9 @@ export class FakeSyncServer {
     if (restore.staged < restore.entityCount) {
       // Asked again on every stage turn, as `worker/src/backups.ts::stageRestore` does.
       this.claimForRestore(backup);
-      const chunk = restoreOrder(backup.entities).slice(
-        restore.staged,
-        restore.staged + this.options.maxBatchSize,
+      const chunk = this.byBytes(
+        restoreOrder(backup.entities).slice(restore.staged, restore.staged + this.options.restoreStageEntities),
+        (entity) => Buffer.byteLength(JSON.stringify(entity.state), "utf8"),
       );
       for (const entity of chunk) {
         this.lastSeq += 1;
@@ -1637,6 +1758,8 @@ export class FakeSyncServer {
         });
         restore.staged += 1;
       }
+      // The Worker folds what a turn staged, so the new epoch is folded by the commit (`stageRestore`).
+      if (!this.legacyFold) this.advanceFold(restore.toEpoch, this.lastSeq, { remaining: 2 * this.options.restoreStageEntities });
       return this.ok(protocol, {
         restoreId: restore.restoreId,
         status: "staging",

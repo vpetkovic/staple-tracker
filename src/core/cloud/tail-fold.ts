@@ -2,13 +2,15 @@
  * The snapshot, folded here from the ordered tail, for a log too large for the service
  * to fold.
  *
- * The Worker refuses to fold more than `MAX_SNAPSHOT_FOLD_OPS` operations in one pass
- * (`worker/src/limits.ts`, 20,000): a request's CPU and time are bounded, and a truncated
- * fold would be a snapshot that silently omits entities. Past that, every snapshot is
- * refused `unavailable`, which stopped two things for good on a large repository: a new
- * device could not join (a bootstrap is a snapshot), and a device upgraded to this build
- * failed every sync, after its push and pull had landed, because its one-time re-read
- * (`APPLIER_VERSION`) is a snapshot too.
+ * A Worker from before the fold checkpoint (`worker/src/fold-store.ts`) folds the whole
+ * log inside one request and refuses past 20,000 operations (its `MAX_SNAPSHOT_FOLD_OPS`):
+ * a request's CPU and time are bounded, and a truncated fold would be a snapshot that
+ * silently omits entities. Past that, every snapshot is refused `unavailable`, which
+ * stopped two things for good on a large repository: a new device could not join (a
+ * bootstrap is a snapshot), and a device upgraded to this build failed every sync, after
+ * its push and pull had landed, because its one-time re-read (`APPLIER_VERSION`) is a
+ * snapshot too. The Worker since keeps its fold and never refuses as too large, so this is
+ * for a device talking to a service that has not been redeployed.
  *
  * But the operations are all there, and the pull route serves them in pages from the
  * start of the epoch with no fold at all. So when the service refuses a snapshot as too
