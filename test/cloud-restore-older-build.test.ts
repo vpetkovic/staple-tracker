@@ -75,13 +75,17 @@ describe("a device that followed a restore on a build that did not rewind", () =
 
     // ro follows it on c7a49d6: a re-bootstrap that keeps everything, and records nothing of
     // this build's — the epoch it last reconciled against stays the old one.
-    const reconciled = (ro.db.prepare("SELECT value FROM meta WHERE key = 'sync_reconciled_epoch'").get() as { value: string }).value;
+    const reconciled = (ro.db.prepare("SELECT value FROM meta WHERE key = 'sync_reconciled_epoch'").get() as { value: string } | undefined)?.value ?? null;
+    const setReconciled = (value: string | null): void => {
+      if (value === null) ro.db.prepare("DELETE FROM meta WHERE key = 'sync_reconciled_epoch'").run();
+      else ro.db.prepare("INSERT INTO meta (key, value) VALUES ('sync_reconciled_epoch', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value").run(value);
+    };
     const olderBuild = async (): Promise<void> => {
-      ro.db.prepare("UPDATE meta SET value = ? WHERE key = 'sync_reconciled_epoch'").run(String(server.epoch));
+      setReconciled(String(server.epoch));
       ro.use();
       const report = await ro.sync();
       expect(report.pending).toBe(0);
-      ro.db.prepare("UPDATE meta SET value = ? WHERE key = 'sync_reconciled_epoch'").run(reconciled);
+      setReconciled(reconciled);
     };
     beginBootstrap(ro.db, server.epoch);
     ro.db.prepare("DELETE FROM meta WHERE key = 'sync_rewind'").run();
