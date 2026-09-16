@@ -1069,6 +1069,30 @@ export class Journal {
     });
   }
 
+  /**
+   * Put the pending operations in the order given (operation ids): the order a push sends
+   * them in. The pending rows trade the client sequences they already hold, so the counter
+   * does not move and no sequence is minted twice; operation ids are unchanged, so a push
+   * that landed and was not acknowledged is still absorbed as a retry. `opIds` must name
+   * every pending operation exactly once.
+   */
+  reorderPending(opIds: readonly string[]): void {
+    const rows = this.db
+      .prepare("SELECT op_id, client_seq FROM sync_outbox WHERE acknowledged_seq IS NULL ORDER BY client_seq")
+      .all() as Array<{ op_id: string; client_seq: number }>;
+    const pendingIds = new Set(rows.map((row) => row.op_id));
+    if (opIds.length !== rows.length || new Set(opIds).size !== rows.length || !opIds.every((id) => pendingIds.has(id))) {
+      throw new Error("journal.reorderPending: the order must name every pending operation exactly once.");
+    }
+    if (opIds.every((id, index) => rows[index]!.op_id === id)) return;
+    tx(this.db, () => {
+      // Out of the way first: `client_seq` is UNIQUE, and a positive sequence is never negative.
+      this.db.prepare("UPDATE sync_outbox SET client_seq = -client_seq WHERE acknowledged_seq IS NULL").run();
+      const place = this.db.prepare("UPDATE sync_outbox SET client_seq = ? WHERE op_id = ?");
+      opIds.forEach((id, index) => place.run(rows[index]!.client_seq, id));
+    });
+  }
+
   // ------------------------------------------------------------------ reads
 
   /** Pending operations in allocation order — what a push would send. */

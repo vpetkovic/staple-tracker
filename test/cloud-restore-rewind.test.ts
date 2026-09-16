@@ -92,7 +92,7 @@ async function restoredFleet(options: { fold?: "service" | "tail" } = {}) {
   await sync(b, a, b);
   const fresh = fleet.machine("fresh");
   await fresh.sync();
-  return { a, b, fresh, before, gone };
+  return { a, b, fresh, before, gone, server };
 }
 
 describe("a restore", () => {
@@ -124,7 +124,7 @@ describe("a restore", () => {
   }
 
   it("keeps what a device never sent, with what it names, and every device receives it", async () => {
-    const { a, b, fresh } = await restoredFleet();
+    const { a, b, fresh, server } = await restoredFleet();
     const comments = (machine: Machine): string[] =>
       (machine.db.prepare("SELECT body FROM comments WHERE author_type <> 'system' ORDER BY body").all() as Array<{ body: string }>).map((row) => row.body);
     for (const machine of [a, b, fresh]) {
@@ -135,6 +135,15 @@ describe("a restore", () => {
     }
     // And nothing waits to be sent.
     for (const machine of [a, b]) expect((await machine.sync()).pending, machine.label).toBe(0);
+    // The restoring device rewinds before it pushes, so what its unsent comment names is in the
+    // new epoch's log AHEAD of the comment: a device reading the tail, of any build, never
+    // meets the comment before its issue.
+    const epoch = Math.max(...server.ops.map((op) => op.epoch));
+    const kept = (a.db.prepare("SELECT id FROM issues WHERE title = 'Kept by a'").get() as { id: string }).id;
+    const seqOf = (match: (op: (typeof server.ops)[number]) => boolean): number => server.ops.find((op) => op.epoch === epoch && match(op))?.seq ?? Number.NaN;
+    const issueAt = seqOf((op) => op.entity === "issue" && op.entityId === kept && op.verb === "create");
+    const commentAt = seqOf((op) => op.entity === "comment" && (op.payload as { body?: unknown }).body === "a's unsent comment on an issue pushed after the backup");
+    expect(issueAt).toBeLessThan(commentAt);
   });
 
   for (const fold of ["service", "tail"] as const) {

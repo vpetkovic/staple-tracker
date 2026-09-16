@@ -160,8 +160,107 @@ export function reconcileAfterRead(db: DatabaseSync, journal: Journal, plan: Rec
       }
     });
   }
+  sendReferentsFirst(db, journal);
   recordReconciledEpoch(db, epoch);
   return { removed: plan.removed, restoredBuiltins: plan.restoredBuiltins, republished: republish.length, givenBack };
+}
+
+/**
+ * The pending operations, put in an order every receiver can apply as it goes: each after the
+ * `create` of whatever it names, when that create is pending too.
+ *
+ * A kept entity's `create` is journaled here, after the queued work that kept it — an
+ * unsent comment on an issue pushed after the backup is queued before the issue's create
+ * sent again. Sent in allocation order, the comment reached the log first, and every device
+ * reading the tail met a comment on an issue it did not have: set aside until the issue
+ * arrived on this build (`quarantine.ts`), and a sync that fails over it for good on a build
+ * before it. Otherwise the allocation order stands. A cycle — two creates naming each other —
+ * keeps it too, for what it cannot order.
+ */
+function sendReferentsFirst(db: DatabaseSync, journal: Journal): void {
+  const pending = db
+    .prepare("SELECT op_id AS opId, entity, entity_id AS entityId, verb, payload FROM sync_outbox WHERE acknowledged_seq IS NULL ORDER BY client_seq")
+    .all() as Array<{ opId: string; entity: string; entityId: string; verb: string; payload: string }>;
+  const creates = new Map<Key, number>();
+  pending.forEach((op, index) => {
+    const key = keyOf(op.entity, op.entityId);
+    if (op.verb === "create" && !creates.has(key)) creates.set(key, index);
+  });
+  // For each operation, the pending creates it has to follow.
+  const after = pending.map((op, index) => {
+    let payload: Record<string, unknown> = {};
+    try {
+      payload = JSON.parse(op.payload) as Record<string, unknown>;
+    } catch {
+      // Not ours to judge here: sent as it is, where it is.
+    }
+    const own = op.verb === "create" ? [] : [[op.entity, op.entityId] as const];
+    return [...own, ...operationReferents(op.entity, op.entityId, payload)]
+      .map(([entity, id]) => creates.get(keyOf(entity, id)))
+      .filter((at): at is number => at !== undefined && at !== index);
+  });
+  if (after.every((deps, index) => deps.every((at) => at < index))) return;
+
+  const placed = new Set<number>();
+  const order: number[] = [];
+  while (order.length < pending.length) {
+    // The earliest operation whose referents are all placed; in a cycle, the earliest left.
+    let next = -1;
+    for (let index = 0; index < pending.length; index += 1) {
+      if (placed.has(index)) continue;
+      if (next === -1) next = index;
+      if (after[index]!.every((at) => placed.has(at))) {
+        next = index;
+        break;
+      }
+    }
+    placed.add(next);
+    order.push(next);
+  }
+  journal.reorderPending(order.map((index) => pending[index]!.opId));
+}
+
+/** What an operation names that a receiver must already hold to apply it (`apply.ts`). */
+function operationReferents(entity: string, entityId: string, payload: Record<string, unknown>): Array<readonly [string, string]> {
+  const out: Array<readonly [string, string]> = [];
+  const issue = (id: unknown): void => {
+    if (typeof id === "string" && id !== "") out.push(["issue", id]);
+  };
+  const issues = (ids: unknown): void => {
+    if (Array.isArray(ids)) for (const id of ids) issue(id);
+  };
+  switch (entity) {
+    case "issue":
+      issue(payload.parentId);
+      if (typeof payload.projectId === "string") out.push(["project", payload.projectId]);
+      if (typeof payload.status === "string") out.push(["status", payload.status]);
+      if (typeof payload.kind === "string") out.push(["kind", payload.kind]);
+      break;
+    case "comment":
+    case "documentRevision":
+      issue(payload.issueId);
+      break;
+    case "document":
+      issue(entityId.slice(0, entityId.indexOf("/")));
+      break;
+    case "relation":
+      issue(entityId);
+      issues(payload.blockedBy);
+      break;
+    case "milestone":
+      issue(entityId);
+      issues(payload.members);
+      break;
+    case "queue":
+      issues(payload.order);
+      break;
+    case "lease":
+      issue(entityId);
+      break;
+    default:
+      break;
+  }
+  return out;
 }
 
 /**
