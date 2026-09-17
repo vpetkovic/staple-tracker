@@ -467,6 +467,12 @@ export function recordInheritedFieldWrites(
  * because `beginBootstrap` does not rewind it — so unlike the snapshot's numbers
  * they need no lifting.
  *
+ * Only work not pushed. An operation a service acknowledged is in the log, and the snapshot
+ * says who wrote each field it holds; after a restore, one the epoch does not hold wrote
+ * nothing this device still holds. Replayed, a member add a restore rewound went on claiming
+ * the membership, and a membership sent again into the epoch was withheld against it, where a
+ * fresh device applied it.
+ *
  * Called AFTER the snapshot half completes, not before it. The ordering is the
  * whole argument: the server's view of the world is older than an operation this
  * device has not yet sent, so this device's un-sent work is the last word.
@@ -476,7 +482,7 @@ export function replayOutboxFieldWrites(db: DatabaseSync): void {
     .prepare(
       `SELECT op_id, entity, entity_id, base_version, payload, created_at
          FROM sync_outbox
-        WHERE base_version IS NOT NULL
+        WHERE base_version IS NOT NULL AND acknowledged_seq IS NULL
         ORDER BY client_seq`,
     )
     .all() as Array<{

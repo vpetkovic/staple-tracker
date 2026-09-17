@@ -1400,6 +1400,18 @@ re-bootstrap killed part-way leaves nothing half-applied, and reads again on the
   rewind removes: each side loses them, as the list does, and a record whose sides then
   agree closes (`test/cloud-restore-open-list-record.test.ts`). Kept whole, resolving to the
   side that named a removed issue failed for ever.
+- **What the rewind removed claims nothing afterwards.** The provenance a re-bootstrap puts
+  back is this device's unsent work only: an acknowledged operation is in the log, whose
+  snapshot says who wrote each field, and one a restore rewound wrote nothing this device
+  still holds. Put back too, a member add the restore rewound went on claiming the membership
+  and withheld one written into the new epoch. Nor is an empty list nobody here wrote
+  contested by the version alone — a device still counts the operations it rewound — so a
+  membership sent again into the epoch lands where it was rewound
+  (`test/cloud-restore-resent-membership.test.ts`). And a blocker set the epoch does not hold
+  loses its version: an issue's create carries the blockers it was made with, and applies
+  them only when the log holds no set of its own for the issue, which a fresh device applies
+  after the issue whatever the order; sent again after the set, the create replaced it on
+  every device reading the tail (`test/cloud-restore-resent-create-blockers.test.ts`).
 - **Work that was never pushed is kept, and reaches every device.** An entity with an
   operation in this device's outbox that no service acknowledged is kept, with whatever it
   names that the epoch lacks — a comment's issue, an issue's parent, project, status and

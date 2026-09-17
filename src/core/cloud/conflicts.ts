@@ -681,7 +681,16 @@ function contest(
    * `test/cloud-scalar-conflict-evidence.test.ts`.
    */
   const wholeField = WHOLE[op.entity];
-  if (wholeField !== undefined && !localWrites.has(wholeField)) {
+  /**
+   * Except an empty list. With no write behind it, it is not a list anybody here chose: a
+   * milestone whose membership the log never wrote holds none, and a device that rewound to
+   * such a milestone still counts the operations it rewound in its version — so a membership
+   * sent again into the new epoch read as behind, and was withheld against nothing, where a
+   * fresh device applies it.
+   */
+  const heldList = wholeField === undefined ? null : readField(db, op.entity, op.entityId, wholeField);
+  const nothingHeld = heldList !== null && Array.isArray(heldList.value) && heldList.value.length === 0;
+  if (wholeField !== undefined && !localWrites.has(wholeField) && !nothingHeld) {
     for (const key of Object.keys(op.payload)) {
       if (policy(op.entity, key)?.name !== wholeField) continue;
       localWrites.set(wholeField, { opId: null, at: null, baseValue: undefined });
