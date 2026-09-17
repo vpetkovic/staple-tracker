@@ -35,6 +35,15 @@ async function progress(epoch = 1): Promise<number> {
   return (await foldProgress(env, REPO, epoch)).seq;
 }
 
+/**
+ * The checkpoint at the head of `epoch`, as devices that have synced leave it — folded here
+ * directly, since how many pulls that takes depends on what the log's operations cost to fold.
+ */
+async function catchUp(epoch = 1): Promise<void> {
+  const repo = (await env.DB.prepare(`SELECT last_seq FROM repos WHERE repo_id = ?1`).bind(REPO).first<{ last_seq: number }>())!;
+  await advanceFold(env, REPO, epoch, repo.last_seq, { budget: { remaining: Number.MAX_SAFE_INTEGER } });
+}
+
 async function snapshotAll(): Promise<{ cutoffSeq: number; tailCursor: string; entities: any[] }> {
   let cursor: string | null = null;
   const entities: any[] = [];
@@ -204,7 +213,7 @@ describe("a restore the fold is not ready for", () => {
   it("finishes a restore whose source checkpoint was cleared while it staged, folding it back a turn at a time", async () => {
     const ops = generateLog({ seed: 316, count: 2500, pool: 400 });
     await insertOps(env.DB, REPO, ops);
-    for (let n = 0; n < 6; n += 1) await req(`/v1/repos/${REPO}/ops?limit=1`, { token });
+    await catchUp();
     const taken = await jsonOf(await req(`/v1/repos/${REPO}/backups`, { method: "POST", token, body: {} }));
     expect(taken.backup.entityCount).toBeGreaterThan(restoreStageEntities("free"));
     const before = content((await foldLog(env, REPO, 1, ops[ops.length - 1]!.seq)).entities);
@@ -382,7 +391,7 @@ describe("the epoch a restore fills", () => {
   it("refuses to begin while it holds operations an abandoned restore left, and changes nothing", async () => {
     const ops = generateLog({ seed: 314, count: 400, pool: 15 });
     await insertOps(env.DB, REPO, ops);
-    for (let n = 0; n < 2; n += 1) await req(`/v1/repos/${REPO}/ops?limit=1`, { token });
+    await catchUp();
     await oldCaptureBackup(env.DB, REPO, { backupId: "before-orphans", deviceId: "device-a" });
     // A restore's staged rows whose `restores` row was deleted by hand, and nothing else.
     const orphans = generateLog({ seed: 315, count: 25, pool: 15, epoch: 2, firstSeq: ops[ops.length - 1]!.seq + 1 });
@@ -461,7 +470,7 @@ describe("a database the Worker before the checkpoint wrote", () => {
 
     // The restored epoch, as a device bootstrapping now reads it: the fold of epoch 2.
     const head = after[after.length - 1]!.seq;
-    for (let n = 0; n < 4; n += 1) await req(`/v1/repos/${REPO}/ops?limit=1`, { token });
+    await catchUp(2);
     const served = await snapshotAll();
     expect(served.cutoffSeq).toBe(head);
     expect(served.entities.map((e) => JSON.stringify([e.entity, e.entityId, e.version, e.lastSeq, e.state, e.fieldWrites]))).toEqual(
