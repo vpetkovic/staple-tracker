@@ -1334,11 +1334,14 @@ one; only an issue a custom value adds, which neither side held, is the resolver
 decision. A resolved status carries its `status_version` — the resolver's plus one — as
 every status write does; written as the status alone, the resolver kept its own token while
 a fresh device took the last one the log carried (`test/cloud-resolution-status-version.test.ts`).
-The decision's own `conflict` operation carries the same `entries` and `statusVersion`, and
-a device writes them even where the decided value already stands: a device with its own
-record open withholds the resolving write and closes its record by the decision, and from
-the value alone it wrote the resolver as the author of every entry of a list and kept its
-own token, where a fresh device held the log's (`test/cloud-resolution-entry-provenance.test.ts`).
+The decision's own `conflict` operation carries the same `entries`, `statusVersion` and
+`updatedAt`, and a device writes them even where the decided value already stands: a device
+with its own record open withholds the resolving write and closes its record by the
+decision, and from the value alone it wrote the resolver as the author of every entry of a
+list and kept its own token, where a fresh device held the log's
+(`test/cloud-resolution-entry-provenance.test.ts`); and a device already holding the decided
+value — a renumber applies while a record about the number is open — kept its own
+`updated_at` (`test/cloud-resolution-decision-stamp.test.ts`).
 
 **An epoch is a discontinuity.** `epoch` is an integer stamped on the repository
 and embedded in every cursor. A restore that moves remote state backwards

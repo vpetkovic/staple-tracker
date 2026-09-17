@@ -1114,18 +1114,18 @@ function decide(db: DatabaseSync, request: ResolveRequest): ResolveOutcome {
      */
     const companions: Record<string, unknown> = {};
     if (entries !== null) companions.entries = entries;
+    /**
+     * A resolution is a write, and an entity that says when it last changed says so at the
+     * decision. Until then each side held its own edit's time; without this they held them for
+     * ever, the one column the decision did not name (`test/sync-mutation-convergence.test.ts`).
+     */
+    if (STAMPED.has(conflict.entity)) companions.updatedAt = at;
     if (conflict.entity === "issue" && conflict.field === "status") {
       const row = db.prepare("SELECT status_version FROM issues WHERE id = ?").get(conflict.entityId) as { status_version: number } | undefined;
       if (row !== undefined) companions.statusVersion = row.status_version + 1;
     }
     for (const write of writes) {
       const payload: Record<string, unknown> = { [wireKey(conflict.field)]: write.value, ...companions };
-      /**
-       * A resolution is a write, and an entity that says when it last changed says so at
-       * the decision. Until then each side held its own edit's time; without this they held
-       * them for ever, the one column the decision did not name (`test/sync-mutation-convergence.test.ts`).
-       */
-      if (STAMPED.has(conflict.entity)) payload.updatedAt = at;
       applyToDatabase(db, {
         entity: conflict.entity,
         entityId: write.entityId,
@@ -1364,6 +1364,7 @@ export function applyConflictOperation(db: DatabaseSync, op: RemoteOperation): b
   const companions: Record<string, unknown> = {
     ...(isEntries(payload.entries) ? { entries: payload.entries } : {}),
     ...(typeof payload.statusVersion === "number" ? { statusVersion: payload.statusVersion } : {}),
+    ...(typeof payload.updatedAt === "string" ? { updatedAt: payload.updatedAt } : {}),
   };
   if (current.present && (!sameValue(current.value, value) || Object.keys(companions).length > 0)) {
     applyToDatabase(db, {
