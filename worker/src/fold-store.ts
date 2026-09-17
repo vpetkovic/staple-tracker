@@ -82,8 +82,30 @@
 import { entityKey } from "./cursor.js";
 import type { Env } from "./env.js";
 import { SyncError } from "./errors.js";
+import { writtenAs } from "../../src/core/cloud/revision-placement.js";
 import { type FoldOpRow, type FoldedEntity, VOCABULARY_ORDER_ID, claimSeq, foldRow } from "./fold.js";
-import { FOLD_STEP_BYTES, FOLD_STEP_OPS, FOLD_WRITE_BYTES, PAGE_BYTES, TAIL_BYTES } from "./limits.js";
+import {
+  CANDIDATES_READ,
+  type CandidateRequest,
+  type PlacementNeed,
+  RUNS_READ,
+  RevisionPlacer,
+  type RevisionSlot,
+  bodyKey,
+  candidateId,
+  revisionSlot,
+} from "./fold-revisions.js";
+import { runWork } from "./fold-work.js";
+import {
+  FOLD_STEP_BYTES,
+  FOLD_STEP_OPS,
+  FOLD_STEP_READS,
+  FOLD_STEP_WALK,
+  FOLD_STEP_WORK,
+  FOLD_WRITE_BYTES,
+  PAGE_BYTES,
+  TAIL_BYTES,
+} from "./limits.js";
 
 const encoder = new TextEncoder();
 
@@ -186,92 +208,279 @@ function fromRow(row: VersionRow): FoldedEntity {
   };
 }
 
+/** `ops` rows as a step reads them: the fold's columns, and what each costs to fold. */
+export interface StepRow extends FoldOpRow {
+  schema_version: number;
+  /** UTF-8 bytes of the payload. */
+  bytes: number;
+  /** Quotes and backslashes in the payload (`fold-work.ts`). */
+  escapes: number;
+}
+
+/** A version is the newest at or below the mark when no later version at or below it follows. */
+const NEWEST = (alias: string) =>
+  `NOT EXISTS (SELECT 1 FROM fold_versions w
+                WHERE w.repo_id = ?1 AND w.epoch = ?2 AND w.ord = ${alias}.ord AND w.seq > ${alias}.seq AND w.seq <= ?3)`;
+
+/** The escapes of a stored column, counted by SQLite (`fold-work.ts`). */
+const ESCAPES = (column: string) => `(length(${column}) - length(replace(replace(${column}, '\\', ''), '"', '')))`;
+
 /**
- * Every entity a run of operations can read, as the fold holds it at mark `at`, keyed by
- * `entityKey`: the ones they name, every revision of each document a `documentRevision`
- * create names (by key prefix, which the order encoding preserves), and the `@order` of each
- * vocabulary a `status` or `kind` create names. An entity absent at `at` is absent here.
+ * The entities one operation names: its own and, for a `status` or `kind` create, its vocabulary's
+ * `@order`, which a create after a delete rewrites (`forgetPlace`, `fold.ts`). A revision create's
+ * other reads, the revisions it can collide with, are the placement's (`fold-revisions.ts`).
  */
-async function loadFold(
-  env: Env,
-  repoId: string,
-  epoch: number,
-  at: number,
-  rows: readonly FoldOpRow[],
-): Promise<Map<string, FoldedEntity>> {
-  const fold = new Map<string, FoldedEntity>();
-  if (at === 0 || rows.length === 0) return fold;
-  const keys = new Set<string>();
-  const documents = new Set<string>();
-  for (const row of rows) {
-    keys.add(foldOrder(entityKey(row.entity, row.entity_id)));
-    if (row.verb !== "create") continue;
-    if (row.entity === "status" || row.entity === "kind") keys.add(foldOrder(entityKey(row.entity, VOCABULARY_ORDER_ID)));
-    if (row.entity === "documentRevision") {
-      documents.add(foldOrder(entityKey(row.entity, row.entity_id.slice(0, row.entity_id.lastIndexOf("/") + 1))));
-    }
+function namedKeys(row: FoldOpRow): string[] {
+  const own = entityKey(row.entity, row.entity_id);
+  if (row.verb === "create" && (row.entity === "status" || row.entity === "kind")) {
+    return [own, entityKey(row.entity, VOCABULARY_ORDER_ID)];
   }
+  return [own];
+}
+
+function isRevisionCreate(row: FoldOpRow): boolean {
+  return row.entity === "documentRevision" && row.verb === "create";
+}
+
+/** What a run of operations may cost (`foldRun`). */
+export interface RunLimits {
+  /** Estimated isolate time, in nanoseconds (`fold-work.ts`). */
+  work: number;
+  /** Reads its placements may make beyond the ones it plans (`fold-revisions.ts`). */
+  reads: number;
+  /** Numbers its placements may step through one at a time. */
+  walk: number;
   /**
-   * `CROSS JOIN` fixes the join order, and it is load-bearing: SQLite cannot size a
-   * `json_each`, and left to itself it made `fold_versions` the outer loop — every version of
-   * the epoch visited once per key asked for. Measured on workerd, that was 7 million rows read
-   * by one pull of a 20,000-operation log. With the keys outside, each is one index seek.
+   * False to fold the first operation whatever it costs, which is how a single operation larger
+   * than any budget still folds: alone, in a request that has spent nothing else.
    */
-  const [named, siblings] = await env.DB.batch<VersionRow>([
-    env.DB.prepare(
-      `SELECT ${VERSION_COLUMNS}
-         FROM json_each(?4) k
-         CROSS JOIN fold_versions v
-           ON v.repo_id = ?1 AND v.epoch = ?2 AND v.ord = k.value
-          AND v.seq = (SELECT MAX(w.seq) FROM fold_versions w
-                        WHERE w.repo_id = ?1 AND w.epoch = ?2 AND w.ord = k.value AND w.seq <= ?3)`,
-    ).bind(repoId, epoch, at, JSON.stringify([...keys])),
-    // `char(128)` sorts after every byte an encoded key can hold, so this is "starts with".
-    env.DB.prepare(
-      `SELECT ${VERSION_COLUMNS}
-         FROM (SELECT w.ord, MAX(w.seq) AS at
-                 FROM json_each(?4) p
-                 CROSS JOIN fold_versions w
-                   ON w.repo_id = ?1 AND w.epoch = ?2 AND w.ord >= p.value AND w.ord < p.value || char(128)
-                  AND w.seq <= ?3
-                GROUP BY w.ord) m
-         CROSS JOIN fold_versions v ON v.repo_id = ?1 AND v.epoch = ?2 AND v.ord = m.ord AND v.seq = m.at`,
-    ).bind(repoId, epoch, at, JSON.stringify([...documents])),
-  ]);
-  for (const row of [...named!.results, ...siblings!.results]) {
-    fold.set(entityKey(row.entity, row.entity_id), fromRow(row));
-  }
-  return fold;
+  mayBeEmpty: boolean;
 }
 
 /**
- * Fold a run of operations onto the fold at `base`. Answers every entry the run changed,
- * with the seq of the last operation that changed it, the keys of the entities it created,
- * and the counts at the run's end.
+ * Fold a run of operations onto the fold at `base`: every one, or given `limits`, as many as fit.
+ * Answers every entry the run changed with the seq of the last operation that changed it, the keys
+ * of the entities it created, the counts where it ended, how many operations it folded and the
+ * work they were estimated at.
+ *
+ * ## How a run is bounded
+ *
+ * By its WORK: the isolate time `fold-work.ts` estimates from sizes SQLite measures before anything
+ * large is read. Each payload's bytes and escapes come with the operations; one sizing query
+ * answers the stored size and escapes of every entity they name. The run keeps the longest prefix
+ * whose estimate fits and loads only what that prefix names, so a step on large or escape-heavy
+ * states is short and a step of small edits is long. The statements a step writes are packs of at
+ * most {@link FOLD_WRITE_BYTES}, so its work bounds them too.
+ *
+ * A revision create reads the few revisions it can collide with, never its document
+ * (`fold-revisions.ts`). When its placement needs more than the run may read, the run ends before
+ * it: that operation is the first of the next step, where it can always be placed.
+ *
+ * Without `limits` the run folds everything it is given, however much that reads. That is a tail
+ * folded on top of a mark by a read, which is part of a step some request already fitted.
  */
 async function foldRun(
   env: Env,
   repoId: string,
   epoch: number,
   base: Mark,
-  rows: readonly (FoldOpRow & { schema_version: number })[],
-  seq: number,
+  rows: readonly StepRow[],
+  end: number,
+  limits: RunLimits | null,
 ): Promise<{
   fold: Map<string, FoldedEntity>;
   changed: Map<string, number>;
   created: Set<string>;
   mark: Mark;
+  folded: number;
+  work: number;
 }> {
-  const fold = await loadFold(env, repoId, epoch, base.seq, rows);
+  const fold = new Map<string, FoldedEntity>();
+  const nothing = () => ({ fold, changed: new Map<string, number>(), created: new Set<string>(), mark: base, folded: 0, work: 0 });
+  if (rows.length === 0) return nothing();
+
+  // --- What each prefix would cost, from sizes; and D1's live revisions at every number named.
+  const keysOf = rows.map(namedKeys);
+  const allNamed = [...new Set(keysOf.flat())];
+  const slots = new Map<string, RevisionSlot>();
+  for (const key of allNamed) {
+    const space = key.indexOf(" ");
+    const slot = revisionSlot(key.slice(0, space), key.slice(space + 1));
+    if (slot) slots.set(JSON.stringify([slot.doc, slot.rev]), slot);
+  }
+  const sizes = new Map<string, { size: number; escapes: number }>();
+  const aliases: Array<{ doc: string; rev: number; key: string }> = [];
+  if (base.seq > 0 && (limits !== null || slots.size > 0)) {
+    const statements: D1PreparedStatement[] = [];
+    if (limits !== null) {
+      statements.push(
+        env.DB.prepare(
+          `SELECT v.entity, v.entity_id,
+                  length(CAST(v.state AS BLOB)) + length(CAST(v.field_writes AS BLOB)) AS size,
+                  ${ESCAPES("v.state")} + ${ESCAPES("v.field_writes")} AS escapes
+             FROM json_each(?4) k
+             CROSS JOIN fold_versions v
+               ON v.repo_id = ?1 AND v.epoch = ?2 AND v.ord = k.value AND v.seq <= ?3 AND ${NEWEST("v")}`,
+        ).bind(repoId, epoch, base.seq, JSON.stringify(allNamed.map(foldOrder))),
+      );
+    }
+    if (slots.size > 0) {
+      statements.push(
+        env.DB.prepare(
+          `SELECT json_extract(s.value, '$[0]') AS doc, json_extract(s.value, '$[1]') AS rev, v.entity, v.entity_id
+             FROM json_each(?4) s
+             CROSS JOIN fold_versions v
+               ON v.repo_id = ?1 AND v.epoch = ?2 AND v.doc = json_extract(s.value, '$[0]')
+              AND v.rev = json_extract(s.value, '$[1]') AND v.seq <= ?3 AND v.deleted_at IS NULL AND ${NEWEST("v")}`,
+        ).bind(repoId, epoch, base.seq, JSON.stringify([...slots.values()].map((slot) => [slot.doc, slot.rev]))),
+      );
+    }
+    const results = await env.DB.batch<Record<string, unknown>>(statements);
+    let next = 0;
+    if (limits !== null) {
+      for (const row of results[next++]!.results) {
+        sizes.set(entityKey(row.entity as string, row.entity_id as string), { size: row.size as number, escapes: row.escapes as number });
+      }
+    }
+    if (slots.size > 0) {
+      for (const row of results[next++]!.results) {
+        aliases.push({ doc: row.doc as string, rev: row.rev as number, key: entityKey(row.entity as string, row.entity_id as string) });
+      }
+    }
+  }
+
+  const cumulative = runWork(
+    rows.map((row, index) => ({ keys: keysOf[index]!, bytes: row.bytes, escapes: row.escapes })),
+    (key) => sizes.get(key),
+  );
+  let take = rows.length;
+  if (limits !== null) {
+    take = 0;
+    while (take < rows.length && cumulative[take]! <= limits.work) take += 1;
+    if (take === 0 && !limits.mayBeEmpty) take = 1;
+    if (take === 0) return nothing();
+  }
+  const prefix = rows.slice(0, take);
+
+  // --- Load what the prefix names, and read ahead for its revision creates.
+  const named = [...new Set(keysOf.slice(0, take).flat())];
+  const parsed = new Map<number, Record<string, unknown> | undefined>();
+  const runsFrom = new Map<string, number>();
+  const candidates = new Map<string, CandidateRequest>();
+  for (const row of prefix) {
+    if (!isRevisionCreate(row)) continue;
+    let payload: Record<string, unknown> | undefined;
+    try {
+      payload = JSON.parse(row.payload) as Record<string, unknown>;
+    } catch {
+      payload = undefined;
+    }
+    parsed.set(row.seq, payload);
+    if (payload === undefined || payload === null) continue;
+    const slash = row.entity_id.lastIndexOf("/");
+    const claimed = Number(row.entity_id.slice(slash + 1));
+    if (!Number.isInteger(claimed)) continue;
+    const doc = row.entity_id.slice(0, slash + 1);
+    runsFrom.set(doc, Math.min(runsFrom.get(doc) ?? claimed, claimed));
+    const key = bodyKey(payload.body);
+    if (key === null) continue;
+    const floor = Math.min(claimed, writtenAs(payload.changeSummary) ?? claimed);
+    const request: CandidateRequest = { doc, floor, bodyKey: key, author: typeof payload.author === "string" ? payload.author : null };
+    candidates.set(candidateId(request), request);
+  }
+
+  const placer = new RevisionPlacer(fold, limits === null ? Number.POSITIVE_INFINITY : limits.walk);
+  for (const slot of slots.values()) placer.absorbSlot(slot.doc, slot.rev, []);
+  for (const alias of aliases) placer.absorbSlot(alias.doc, alias.rev, [alias.key]);
+  if (base.seq === 0) {
+    // Nothing is folded below the run, so no revision is held anywhere yet.
+    for (const doc of runsFrom.keys()) placer.absorbRuns(doc, Number.NEGATIVE_INFINITY, RUNS_READ, []);
+    for (const request of candidates.values()) placer.absorbCandidates(request, CANDIDATES_READ, []);
+  } else {
+    const statements: D1PreparedStatement[] = [
+      env.DB.prepare(
+        `SELECT ${VERSION_COLUMNS}
+           FROM json_each(?4) k
+           CROSS JOIN fold_versions v
+             ON v.repo_id = ?1 AND v.epoch = ?2 AND v.ord = k.value AND v.seq <= ?3 AND ${NEWEST("v")}`,
+      ).bind(repoId, epoch, base.seq, JSON.stringify(named.map(foldOrder))),
+    ];
+    const runs = [...runsFrom];
+    const requests = [...candidates.values()];
+    if (runs.length > 0) statements.push(runsStatement(env, repoId, epoch, base.seq, runs, RUNS_READ));
+    if (requests.length > 0) statements.push(candidatesStatement(env, repoId, epoch, base.seq, requests, CANDIDATES_READ));
+    const results = await env.DB.batch<Record<string, unknown>>(statements);
+    for (const row of results[0]!.results as unknown as VersionRow[]) fold.set(entityKey(row.entity, row.entity_id), fromRow(row));
+    let next = 1;
+    if (runs.length > 0) absorbRuns(placer, runs, RUNS_READ, results[next++]!.results);
+    if (requests.length > 0) absorbCandidates(placer, requests, CANDIDATES_READ, results[next++]!.results);
+  }
+
+  // --- Fold, an operation at a time, until the prefix is done or a placement needs more than the run may read.
   const existed = new Set(fold.keys());
   const changed = new Map<string, number>();
+  let reads = 0;
+  let folded = 0;
+  folding: for (let index = 0; index < prefix.length; index += 1) {
+    const original = prefix[index]!;
+    let row: FoldOpRow | null = original;
+    let payload: unknown;
+    if (isRevisionCreate(original)) {
+      for (;;) {
+        const placed = placer.place(original, parsed.get(original.seq));
+        if (!("need" in placed)) {
+          row = placed.row;
+          if (placed.row !== null) {
+            payload = placed.payload;
+            if (placed.revive) {
+              // A deleted revision where it moves: the create revives it, continuing its version count,
+              // as the fold of the whole log does. Nothing else of the deleted state survives a revive.
+              const key = entityKey(placed.row.entity, placed.row.entity_id);
+              fold.set(key, {
+                entity: placed.row.entity,
+                entityId: placed.row.entity_id,
+                version: placed.revive.version,
+                deletedAt: 0,
+                lastSeq: 0,
+                superseded: false,
+                state: {},
+                fieldWrites: {},
+                createdSeq: null,
+                createdAt: null,
+                createdBy: null,
+              });
+              existed.add(key);
+            }
+          }
+          break;
+        }
+        const must = limits === null || (index === 0 && !limits.mayBeEmpty);
+        if (placed.need.kind === "walk") {
+          if (!must) break folding;
+          placer.walkLimit = Number.POSITIVE_INFINITY;
+          continue;
+        }
+        if (!must && reads >= limits!.reads) break folding;
+        reads += 1;
+        await readForPlacement(env, repoId, epoch, base.seq, placer, placed.need);
+      }
+    }
+    if (row !== null) {
+      const at = row.seq;
+      const entry = foldRow(fold, row, (key) => changed.set(key, at), false, payload);
+      if (entry !== null) {
+        const key = entityKey(entry.entity, entry.entityId);
+        changed.set(key, at);
+        placer.observe(key);
+      }
+    }
+    folded = index + 1;
+  }
+  if (folded === 0) return nothing();
+
   const kinds = { ...base.kinds };
   let schemaVersion = base.schemaVersion;
-  for (const row of rows) {
-    if (row.schema_version > schemaVersion) schemaVersion = row.schema_version;
-    const entry = foldRow(fold, row, (key) => changed.set(key, row.seq));
-    if (entry !== null) changed.set(entityKey(entry.entity, entry.entityId), row.seq);
-  }
+  for (const row of prefix.slice(0, folded)) if (row.schema_version > schemaVersion) schemaVersion = row.schema_version;
   const created = new Set<string>();
   for (const key of changed.keys()) {
     if (existed.has(key)) continue;
@@ -285,17 +494,159 @@ async function foldRun(
     fold,
     changed,
     created,
-    mark: { seq, opCount: base.opCount + rows.length, schemaVersion, kinds: sorted },
+    mark: {
+      seq: folded === rows.length ? end : rows[folded - 1]!.seq,
+      opCount: base.opCount + folded,
+      schemaVersion,
+      kinds: sorted,
+    },
+    folded,
+    work: cumulative[folded - 1]!,
   };
 }
 
 /**
- * What a request may still fold, in operations and in payload bytes. Shared by every advance
- * one request makes; `bytes` absent is no byte limit, which only a test asks for.
+ * Runs of consecutive numbers held by live revisions of a document, from a number upward: the first
+ * `limit` of each request. `rev - ROW_NUMBER()` is the same along a run, so it names the run.
+ */
+function runsStatement(
+  env: Env,
+  repoId: string,
+  epoch: number,
+  at: number,
+  requests: ReadonlyArray<readonly [string, number]>,
+  limit: number,
+): D1PreparedStatement {
+  return env.DB.prepare(
+    `WITH req AS (SELECT key AS i, json_extract(value, '$[0]') AS doc, json_extract(value, '$[1]') AS start FROM json_each(?4)),
+          held AS (SELECT DISTINCT req.i, v.rev
+                     FROM req
+                     CROSS JOIN fold_versions v
+                       ON v.repo_id = ?1 AND v.epoch = ?2 AND v.doc = req.doc AND v.rev >= req.start
+                      AND v.seq <= ?3 AND v.deleted_at IS NULL AND ${NEWEST("v")}),
+          islands AS (SELECT i, rev, rev - ROW_NUMBER() OVER (PARTITION BY i ORDER BY rev) AS island FROM held),
+          runs AS (SELECT i, MIN(rev) AS lo, MAX(rev) AS hi FROM islands GROUP BY i, island),
+          ranked AS (SELECT i, lo, hi, ROW_NUMBER() OVER (PARTITION BY i ORDER BY lo) AS n FROM runs)
+     SELECT i, lo, hi FROM ranked WHERE n <= ?5`,
+  ).bind(
+    repoId,
+    epoch,
+    at,
+    JSON.stringify(requests.map(([doc, from]) => [doc, Number.isFinite(from) ? from : -Number.MAX_VALUE])),
+    limit,
+  );
+}
+
+function absorbRuns(
+  placer: RevisionPlacer,
+  requests: ReadonlyArray<readonly [string, number]>,
+  limit: number,
+  rows: ReadonlyArray<Record<string, unknown>>,
+): void {
+  const byRequest = requests.map(() => [] as Array<[number, number]>);
+  for (const row of rows) byRequest[row.i as number]!.push([row.lo as number, row.hi as number]);
+  requests.forEach(([doc, from], index) => placer.absorbRuns(doc, from, limit, byRequest[index]!));
+}
+
+/**
+ * Live revisions of a document at or above a floor with a body key and an author `sameRevision`
+ * does not tell apart (two authors differ only when both are strings): the first `limit` of each
+ * request, lowest number first.
+ */
+function candidatesStatement(
+  env: Env,
+  repoId: string,
+  epoch: number,
+  at: number,
+  requests: readonly CandidateRequest[],
+  limit: number,
+): D1PreparedStatement {
+  return env.DB.prepare(
+    `WITH req AS (SELECT key AS i, json_extract(value, '$[0]') AS doc, json_extract(value, '$[1]') AS floor,
+                         json_extract(value, '$[2]') AS body, json_extract(value, '$[3]') AS author
+                    FROM json_each(?4)),
+          found AS (SELECT req.i, v.entity, v.entity_id, v.rev,
+                           ROW_NUMBER() OVER (PARTITION BY req.i ORDER BY v.rev, v.ord) AS n
+                      FROM req
+                      CROSS JOIN fold_versions v
+                        ON v.repo_id = ?1 AND v.epoch = ?2 AND v.doc = req.doc AND v.body_key = req.body
+                       AND v.rev >= req.floor AND v.seq <= ?3 AND v.deleted_at IS NULL AND ${NEWEST("v")}
+                     WHERE req.author IS NULL OR json_type(v.state, '$.author') IS NOT 'text'
+                        OR json_extract(v.state, '$.author') = req.author)
+     SELECT i, entity, entity_id, rev FROM found WHERE n <= ?5`,
+  ).bind(repoId, epoch, at, JSON.stringify(requests.map((r) => [r.doc, r.floor, r.bodyKey, r.author])), limit);
+}
+
+function absorbCandidates(
+  placer: RevisionPlacer,
+  requests: readonly CandidateRequest[],
+  limit: number,
+  rows: ReadonlyArray<Record<string, unknown>>,
+): void {
+  const byRequest = requests.map(() => [] as Array<{ key: string; rev: number }>);
+  for (const row of rows) {
+    byRequest[row.i as number]!.push({ key: entityKey(row.entity as string, row.entity_id as string), rev: row.rev as number });
+  }
+  requests.forEach((request, index) => placer.absorbCandidates(request, limit, byRequest[index]!));
+}
+
+/** One read a placement asked for, at the step's base mark. */
+async function readForPlacement(
+  env: Env,
+  repoId: string,
+  epoch: number,
+  at: number,
+  placer: RevisionPlacer,
+  need: Exclude<PlacementNeed, { kind: "walk" }>,
+): Promise<void> {
+  switch (need.kind) {
+    case "runs": {
+      const results = at === 0 ? [] : (await runsStatement(env, repoId, epoch, at, [[need.doc, need.from]], RUNS_READ).all()).results;
+      return absorbRuns(placer, [[need.doc, need.from]], RUNS_READ, results as Array<Record<string, unknown>>);
+    }
+    case "candidates": {
+      const results = at === 0 ? [] : (await candidatesStatement(env, repoId, epoch, at, [need.request], need.limit).all()).results;
+      return absorbCandidates(placer, [need.request], need.limit, results as Array<Record<string, unknown>>);
+    }
+    case "bodies": {
+      const { results } = await env.DB.prepare(
+        `SELECT v.entity, v.entity_id, v.state
+           FROM json_each(?4) k
+           CROSS JOIN fold_versions v
+             ON v.repo_id = ?1 AND v.epoch = ?2 AND v.ord = k.value AND v.seq <= ?3 AND ${NEWEST("v")}`,
+      )
+        .bind(repoId, epoch, at, JSON.stringify(need.keys.map(foldOrder)))
+        .all<{ entity: string; entity_id: string; state: string }>();
+      for (const row of results) placer.absorbBody(entityKey(row.entity, row.entity_id), JSON.parse(row.state) as Record<string, unknown>);
+      return;
+    }
+    case "version": {
+      const row =
+        at === 0
+          ? null
+          : await env.DB.prepare(
+              `SELECT version, deleted_at FROM fold_versions
+                WHERE repo_id = ?1 AND epoch = ?2 AND ord = ?4 AND seq <= ?3
+                ORDER BY seq DESC LIMIT 1`,
+            )
+              .bind(repoId, epoch, at, foldOrder(need.key))
+              .first<{ version: number; deleted_at: number | null }>();
+      return placer.absorbVersion(need.key, row ? { version: row.version, deletedAt: row.deleted_at } : null);
+    }
+  }
+}
+
+/**
+ * What a request may still fold: operations, payload bytes and work (`foldRun`); a field absent is
+ * no limit, which only a test asks for. `folded` is set once the request has folded anything, and
+ * from then on a step that fits nothing folds nothing. A request that has done other work first
+ * sets it itself, so its fold never takes it past its budget.
  */
 export interface FoldBudget {
   remaining: number;
   bytes?: number;
+  work?: number;
+  folded?: boolean;
 }
 
 export interface AdvanceOptions {
@@ -305,6 +656,11 @@ export interface AdvanceOptions {
   stepOps?: number;
   /** Payload bytes per step. {@link FOLD_STEP_BYTES} unless a test needs another. */
   stepBytes?: number;
+  /** Work per step. {@link FOLD_STEP_WORK} unless a test needs another. */
+  stepWork?: number;
+  /** A step's placement reads and walk. {@link FOLD_STEP_READS} and {@link FOLD_STEP_WALK} unless a test needs others. */
+  stepReads?: number;
+  stepWalk?: number;
   /** Test seam: runs after a step has read its operations, before it reads what they fold onto. */
   afterRead?: () => Promise<void>;
   /** Test seam: runs after a step has folded its operations, before it writes. */
@@ -330,24 +686,27 @@ export async function advanceFold(
 ): Promise<Mark> {
   const stepOps = options.stepOps ?? FOLD_STEP_OPS;
   const stepBytes = options.stepBytes ?? FOLD_STEP_BYTES;
+  const stepWork = options.stepWork ?? FOLD_STEP_WORK;
+  const { budget } = options;
   let mark = await foldProgress(env, repoId, epoch);
 
-  while (mark.seq < target && options.budget.remaining > 0 && (options.budget.bytes ?? 1) > 0) {
-    const limit = Math.min(stepOps, options.budget.remaining);
-    const byteCap = Math.min(stepBytes, options.budget.bytes ?? Number.POSITIVE_INFINITY);
+  while (mark.seq < target && budget.remaining > 0 && (budget.bytes ?? 1) > 0 && (budget.work ?? 1) > 0) {
+    const limit = Math.min(stepOps, budget.remaining);
+    const byteCap = Math.min(stepBytes, budget.bytes ?? Number.POSITIVE_INFINITY);
     /**
-     * At most `limit` operations, and no more payload than `stepBytes` — the first always,
+     * At most `limit` operations, and no more payload than `byteCap` — the first always,
      * so a single operation larger than the budget still moves the fold on. The rows past
      * the byte budget come back with a NULL payload (`ops.payload` is NOT NULL), which is
      * where the step stops. The inner LIMIT is what bounds the scan: the window runs over
      * at most `limit` rows, never over the rest of the backlog.
      */
     const read = await env.DB.prepare(
-      `SELECT seq, op_id, entity, entity_id, verb, actor, created_at, server_ts, schema_version, bytes,
+      `SELECT seq, op_id, entity, entity_id, verb, actor, created_at, server_ts, schema_version, bytes, escapes,
               CASE WHEN spent - bytes < ?5 THEN payload END AS payload
          FROM (SELECT *, SUM(bytes) OVER (ORDER BY seq ROWS UNBOUNDED PRECEDING) AS spent
                  FROM (SELECT seq, op_id, entity, entity_id, verb, actor, created_at, server_ts,
-                              schema_version, payload, length(CAST(payload AS BLOB)) AS bytes
+                              schema_version, payload, length(CAST(payload AS BLOB)) AS bytes,
+                              ${ESCAPES("payload")} AS escapes
                          FROM ops
                         WHERE repo_id = ?1 AND epoch = ?2 AND seq > ?3 AND seq <= ?4
                         ORDER BY seq
@@ -355,16 +714,20 @@ export async function advanceFold(
         ORDER BY seq`,
     )
       .bind(repoId, epoch, mark.seq, target, byteCap, limit)
-      .all<Omit<FoldOpRow, "payload"> & { payload: string | null; schema_version: number; bytes: number }>();
+      .all<Omit<StepRow, "payload"> & { payload: string | null }>();
 
     const cut = read.results.findIndex((row) => row.payload === null);
-    const rows = (cut >= 0 ? read.results.slice(0, cut) : read.results) as (FoldOpRow & {
-      schema_version: number;
-    })[];
+    const rows = (cut >= 0 ? read.results.slice(0, cut) : read.results) as StepRow[];
     const end = cut >= 0 || read.results.length === limit ? rows[rows.length - 1]!.seq : target;
 
     await options.afterRead?.();
-    const run = await foldRun(env, repoId, epoch, mark, rows, end);
+    const run = await foldRun(env, repoId, epoch, mark, rows, end, {
+      work: Math.min(stepWork, budget.work ?? Number.POSITIVE_INFINITY),
+      reads: options.stepReads ?? FOLD_STEP_READS,
+      walk: options.stepWalk ?? FOLD_STEP_WALK,
+      mayBeEmpty: budget.folded === true,
+    });
+    if (run.folded === 0) break;
 
     await options.beforeWrite?.();
 
@@ -375,14 +738,17 @@ export async function advanceFold(
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)`,
       ).bind(repoId, epoch, run.mark.seq, run.mark.opCount, run.mark.schemaVersion, JSON.stringify(run.mark.kinds)),
     ]);
-    options.budget.remaining -= rows.length;
-    if (options.budget.bytes !== undefined) {
-      options.budget.bytes -= rows.reduce((sum, row) => sum + (row as { bytes?: number }).bytes!, 0);
-    }
+    budget.folded = true;
+    budget.remaining -= run.folded;
+    if (budget.bytes !== undefined) budget.bytes -= rows.slice(0, run.folded).reduce((sum, row) => sum + row.bytes, 0);
+    if (budget.work !== undefined) budget.work -= run.work;
     mark = run.mark;
   }
   return mark;
 }
+
+/** A state this large is written in a statement of its own, never packed (`writeVersions`). */
+const ALONE_CHARS = 64 * 1024;
 
 /**
  * The versions a step wrote, packed into as few statements as the size of a bound value
@@ -394,7 +760,11 @@ export async function advanceFold(
  * text, escaped again inside the packed array, can be twice its own size — every quote in it
  * is `\\\"` there. So a pack is closed at {@link FOLD_WRITE_BYTES}, and a version too large to
  * share one is written alone with every column bound as it is, which costs nothing but its
- * own bytes.
+ * own bytes. A large state goes alone without being packed first: serializing escape-heavy
+ * text a second time costs three times what the first did (`fold-work.ts`).
+ *
+ * A revision's version carries its slot and body key too: what the placement's indexes read
+ * (`fold-revisions.ts`).
  */
 function writeVersions(
   env: Env,
@@ -412,12 +782,13 @@ function writeVersions(
       env.DB.prepare(
         `INSERT OR IGNORE INTO fold_versions
            (repo_id, epoch, ord, seq, entity, entity_id, version, deleted_at, last_seq, superseded,
-            state, field_writes, created_seq, created_at, created_by, stage_order)
+            state, field_writes, created_seq, created_at, created_by, stage_order, doc, rev, body_key)
          SELECT ?1, ?2, json_extract(value, '$.o'), json_extract(value, '$.s'),
                 json_extract(value, '$.e'), json_extract(value, '$.i'), json_extract(value, '$.v'),
                 json_extract(value, '$.d'), json_extract(value, '$.l'), json_extract(value, '$.u'),
                 json_extract(value, '$.st'), json_extract(value, '$.fw'), json_extract(value, '$.cs'),
-                json_extract(value, '$.ca'), json_extract(value, '$.cb'), json_extract(value, '$.so')
+                json_extract(value, '$.ca'), json_extract(value, '$.cb'), json_extract(value, '$.so'),
+                json_extract(value, '$.dc'), json_extract(value, '$.rv'), json_extract(value, '$.bk')
            FROM json_each(?3)`,
       ).bind(repoId, epoch, `[${packed.join(",")}]`),
     );
@@ -426,31 +797,41 @@ function writeVersions(
   };
   for (const [key, seq] of changed) {
     const entry = fold.get(key)!;
-    const item = JSON.stringify({
-      o: foldOrder(key),
-      s: seq,
-      e: entry.entity,
-      i: entry.entityId,
-      v: entry.version,
-      d: entry.deletedAt,
-      l: entry.lastSeq,
-      u: entry.superseded ? 1 : 0,
-      st: JSON.stringify(entry.state),
-      fw: JSON.stringify(entry.fieldWrites),
-      cs: entry.createdSeq,
-      ca: entry.createdAt ?? null,
-      cb: entry.createdBy ?? null,
-      so: claimSeq(entry) ?? 0,
-    });
+    const slot = revisionSlot(entry.entity, entry.entityId);
+    const body = slot ? bodyKey(entry.state.body) : null;
+    const state = JSON.stringify(entry.state);
+    const fieldWrites = JSON.stringify(entry.fieldWrites);
+    const item =
+      state.length + fieldWrites.length > ALONE_CHARS
+        ? null
+        : JSON.stringify({
+            o: foldOrder(key),
+            s: seq,
+            e: entry.entity,
+            i: entry.entityId,
+            v: entry.version,
+            d: entry.deletedAt,
+            l: entry.lastSeq,
+            u: entry.superseded ? 1 : 0,
+            st: state,
+            fw: fieldWrites,
+            cs: entry.createdSeq,
+            ca: entry.createdAt ?? null,
+            cb: entry.createdBy ?? null,
+            so: claimSeq(entry) ?? 0,
+            dc: slot?.doc ?? null,
+            rv: slot?.rev ?? null,
+            bk: body,
+          });
     // In bytes: a state's text is not escaped past ASCII, so a character can be three of them.
-    const size = utf8Bytes(item);
+    const size = item === null ? Number.POSITIVE_INFINITY : utf8Bytes(item);
     if (size > FOLD_WRITE_BYTES) {
       statements.push(
         env.DB.prepare(
           `INSERT OR IGNORE INTO fold_versions
              (repo_id, epoch, ord, seq, entity, entity_id, version, deleted_at, last_seq, superseded,
-              state, field_writes, created_seq, created_at, created_by, stage_order)
-           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)`,
+              state, field_writes, created_seq, created_at, created_by, stage_order, doc, rev, body_key)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)`,
         ).bind(
           repoId,
           epoch,
@@ -462,18 +843,21 @@ function writeVersions(
           entry.deletedAt,
           entry.lastSeq,
           entry.superseded ? 1 : 0,
-          JSON.stringify(entry.state),
-          JSON.stringify(entry.fieldWrites),
+          state,
+          fieldWrites,
           entry.createdSeq,
           entry.createdAt ?? null,
           entry.createdBy ?? null,
           claimSeq(entry) ?? 0,
+          slot?.doc ?? null,
+          slot?.rev ?? null,
+          body,
         ),
       );
       continue;
     }
     if (bytes > 0 && bytes + size > FOLD_WRITE_BYTES) flush();
-    packed.push(item);
+    packed.push(item!);
     bytes += size;
   }
   flush();
@@ -561,14 +945,16 @@ async function foldAt(
     .first<{ n: number; bytes: number }>();
   if ((size?.n ?? 0) > FOLD_STEP_OPS || (size?.bytes ?? 0) > TAIL_BYTES) throw foldBehind(base.seq, cutoff);
   const read = await env.DB.prepare(
-    `SELECT seq, op_id, entity, entity_id, verb, payload, actor, created_at, server_ts, schema_version
+    `SELECT seq, op_id, entity, entity_id, verb, payload, actor, created_at, server_ts, schema_version,
+            0 AS bytes, 0 AS escapes
        FROM ops
       WHERE repo_id = ?1 AND epoch = ?2 AND seq > ?3 AND seq <= ?4
       ORDER BY seq`,
   )
     .bind(repoId, epoch, base.seq, cutoff)
-    .all<FoldOpRow & { schema_version: number }>();
-  const run = await foldRun(env, repoId, epoch, base, read.results, cutoff);
+    .all<StepRow>();
+  // Whole: the tail is part of a step some request already fitted to its budget.
+  const run = await foldRun(env, repoId, epoch, base, read.results, cutoff, null);
   return { base, fold: run.fold, changed: run.changed, created: run.created, mark: run.mark };
 }
 

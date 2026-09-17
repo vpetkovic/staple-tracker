@@ -169,6 +169,61 @@ describe("the checkpoint reproduces the single-pass fold", () => {
   }, 120_000);
 });
 
+describe("long revision histories and wide states, in steps of every size down to one operation", () => {
+  /**
+   * Revision creates are placed against the few revisions D1 is asked for, overlaid with what the
+   * step has folded (`fold-revisions.ts`), and steps are cut by work (`foldRun`). So these logs are
+   * built to make both matter: documents saved hundreds of times with contested, stale, re-sent and
+   * doubly spelled numbers, deleted and edited revisions, bodies alike at both ends; issues whose
+   * descriptions are tens of kilobytes of quotes. They are folded in steps whose work, operations,
+   * placement reads and walk are all random — a step of one operation often, and a budget spent so
+   * that a step folds nothing — and compared with `foldLog` at cutoffs along the way.
+   */
+  const HEAVY = Array.from({ length: 10 }, (_, index) => 5000 + index * 101);
+  it.each(HEAVY)("seed %i", async (seed) => {
+    const random = prng(seed * 31337);
+    const repoId = `heavy-${seed}`;
+    await repoRow(repoId);
+    const ops = generateLog({
+      seed,
+      count: 700 + Math.floor(random() * 1300),
+      pool: 8,
+      heavyRevisions: 150,
+      wide: seed % 2 === 0 ? 2 : 0,
+    });
+    await insertOps(env.DB, repoId, ops);
+    const head = ops[ops.length - 1]!.seq;
+
+    let progress = 0;
+    let rounds = 0;
+    while (progress < head) {
+      const target = Math.min(head, progress + 1 + Math.floor(random() * 300));
+      const options = () => ({
+        stepOps: 1 + Math.floor(random() * 120),
+        stepWork: random() < 0.3 ? 1 : 1 + Math.floor(random() * 6_000_000),
+        stepReads: Math.floor(random() * 4),
+        stepWalk: 1 + Math.floor(random() * 40),
+      });
+      let mark = await advanceFold(env, repoId, 1, target, {
+        budget: {
+          remaining: 1 + Math.floor(random() * 300),
+          ...(random() < 0.5 ? { work: 1 + Math.floor(random() * 3_000_000) } : {}),
+          // A request that has already spent its budget on something else: a step may fold nothing.
+          ...(random() < 0.3 ? { folded: true } : {}),
+        },
+        ...options(),
+      });
+      // A request that has spent nothing always folds at least one operation.
+      if (mark.seq === progress) mark = await advanceFold(env, repoId, 1, target, { budget: { remaining: 1, work: 1 }, ...options() });
+      expect(mark.seq).toBeGreaterThan(progress);
+      progress = mark.seq;
+      rounds += 1;
+      if (rounds % 3 === 0) await compareAt(repoId, 1, someCutoff(ops, progress, random), random, `seed=${seed} round=${rounds}`);
+    }
+    await compareAt(repoId, 1, head, random, `seed=${seed} head`);
+  }, 300_000);
+});
+
 describe("the snapshot route serves the single-pass fold", () => {
   /**
    * Through `GET /snapshot`, at the head and at cutoffs pinned in cursors — the path a

@@ -138,6 +138,9 @@ interface RestoreRow {
   guard_seq: number;
   entity_count: number;
   status: string;
+  /** Staged rows counted up to `staged_seq`; see `stagedCount`. */
+  staged_count: number;
+  staged_seq: number | null;
 }
 
 /**
@@ -542,7 +545,7 @@ export async function restoreBackup(
 
   const restore = await env.DB.prepare(
     `SELECT restore_id, from_backup_id, pre_restore_backup_id, from_epoch, to_epoch,
-            guard_seq, entity_count, status
+            guard_seq, entity_count, status, staged_count, staged_seq
        FROM restores WHERE repo_id = ?1 AND restore_id = ?2`,
   )
     .bind(session.repoId, restoreId)
@@ -578,20 +581,28 @@ export async function restoreBackup(
 /**
  * How much of the new epoch already exists. The authority on progress.
  *
- * Counted above the restore's `guard_seq` only, which is every row it staged — a stage
- * reserves its seqs after `begin` read the high-water mark — and never the rest of the log:
- * `ops` has no index on epoch, so the bare `COUNT(*)` this was read the whole repository on
- * every turn, ~110,000 rows a turn at 100,000 operations, the free plan's 5 million rows a day
- * gone in one restore. `beginRestore` refuses while the target epoch holds rows from before,
- * so the two counts are the same number.
+ * Counted from the rows themselves, so it is what happened rather than what was recorded — but
+ * not counted again from the start on every turn. Every stage turn records, in the same batch as
+ * the rows it writes, how many staged rows there are up to the seq it reserved to
+ * (`restores.staged_count` at `restores.staged_seq`, `stageRestore`), so a turn counts only the
+ * rows above that: the ones a turn wrote after it, which is none unless a turn is in flight
+ * beside this one. Counting every staged row on every turn read the whole restore once per
+ * turn — rows read growing with the square of the restore, against the free plan's 5 million a
+ * day.
+ *
+ * A restore begun before `staged_seq` existed has none, and is counted once from `guard_seq`.
+ * Above `guard_seq` is every row a restore staged — a stage reserves its seqs after `begin` read
+ * the high-water mark — and never the rest of the log; `beginRestore` refuses while the target
+ * epoch holds rows from before.
  */
 async function stagedCount(env: Env, repoId: string, restore: RestoreRow): Promise<number> {
+  const counted = restore.staged_seq === null ? 0 : restore.staged_count;
   const row = await env.DB.prepare(
     `SELECT COUNT(*) AS n FROM ops WHERE repo_id = ?1 AND seq > ?3 AND epoch = ?2`,
   )
-    .bind(repoId, restore.to_epoch, restore.guard_seq)
+    .bind(repoId, restore.to_epoch, restore.staged_seq ?? restore.guard_seq)
     .first<{ n: number }>();
-  return row?.n ?? 0;
+  return counted + (row?.n ?? 0);
 }
 
 /**
@@ -1149,6 +1160,25 @@ async function stageRestore(
   }
   flush();
 
+  /**
+   * Progress, counted in the same transaction as the rows: the staged rows up to the seq this turn
+   * reserved to, as the count at the last recorded seq plus the rows above it (`stagedCount`). It
+   * only moves forward, so a turn that ran beside this one and recorded further is left as it is.
+   */
+  statements.push(
+    env.DB.prepare(
+      `UPDATE restores
+          SET staged_count = CASE WHEN staged_seq IS NULL THEN 0 ELSE staged_count END
+                + (SELECT COUNT(*) FROM ops o
+                    WHERE o.repo_id = ?1 AND o.epoch = restores.to_epoch
+                      AND o.seq > COALESCE(restores.staged_seq, restores.guard_seq)
+                      AND o.seq <= (SELECT last_seq FROM repos WHERE repo_id = ?1)),
+              staged_seq = (SELECT last_seq FROM repos WHERE repo_id = ?1)
+        WHERE repo_id = ?1 AND restore_id = ?2
+          AND (staged_seq IS NULL OR staged_seq < (SELECT last_seq FROM repos WHERE repo_id = ?1))`,
+    ).bind(session.repoId, restore.restore_id),
+  );
+
   const [reserved] = await env.DB.batch<{ last_seq: number }>(statements);
 
   /**
@@ -1166,12 +1196,16 @@ async function stageRestore(
     });
   }
 
-  const nowStaged = await stagedCount(env, session.repoId, restore);
-  await env.DB.prepare(
-    `UPDATE restores SET staged_count = ?3 WHERE repo_id = ?1 AND restore_id = ?2`,
+  const recorded = await env.DB.prepare(
+    `SELECT staged_count, staged_seq FROM restores WHERE repo_id = ?1 AND restore_id = ?2`,
   )
-    .bind(session.repoId, restore.restore_id, nowStaged)
-    .run();
+    .bind(session.repoId, restore.restore_id)
+    .first<{ staged_count: number; staged_seq: number | null }>();
+  const nowStaged = await stagedCount(env, session.repoId, {
+    ...restore,
+    staged_count: recorded?.staged_count ?? 0,
+    staged_seq: recorded?.staged_seq ?? null,
+  });
 
   log({
     event: "restore.stage",

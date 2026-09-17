@@ -144,6 +144,18 @@ export const FOLD_STEP_OPS = 500;
  */
 export const FOLD_STEP_BYTES = 1024 * 1024;
 
+/**
+ * Isolate time one fold step may be estimated at, in nanoseconds (`fold-work.ts`): payloads parsed,
+ * stored states loaded, and states and packed statements written.
+ */
+export const FOLD_STEP_WORK = 4_000_000;
+
+/** Reads a step may make for its revision placements beyond the ones it plans. */
+export const FOLD_STEP_READS = 4;
+
+/** Numbers a step's placements may step through one at a time (`fold-revisions.ts`). */
+export const FOLD_STEP_WALK = 4096;
+
 /** D1's ceiling on a string or a row: the most one operation's payload can ever be. */
 export const ROW_BYTES = 2_000_000;
 

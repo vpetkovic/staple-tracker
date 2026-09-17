@@ -464,9 +464,13 @@ export function foldRow(
   entities: Map<string, FoldedEntity>,
   original: FoldOpRow,
   changed: (key: string) => void = () => undefined,
+  settle = true,
+  parsed?: unknown,
 ): FoldedEntity | null {
-  // Two revisions written as one number: the later in the log takes the next (`settleRevision`).
-  const row = original.entity === "documentRevision" && original.verb === "create" ? settleRevision(entities, original) : original;
+  // Two revisions written as one number: the later in the log takes the next (`settleRevision`) —
+  // unless the caller placed it already, against the revisions it read (`fold-revisions.ts`).
+  const row =
+    settle && original.entity === "documentRevision" && original.verb === "create" ? settleRevision(entities, original) : original;
   // The same revision, held under the number it was moved to: nothing new.
   if (row === null) return null;
 
@@ -526,7 +530,8 @@ export function foldRow(
   }
   if (entry.deletedAt !== null) return entry;
 
-  const payload = JSON.parse(row.payload) as unknown;
+  // The caller's parse of this row's payload, when it already made one (`fold-store.ts`).
+  const payload = (parsed !== undefined ? parsed : JSON.parse(row.payload)) as unknown;
   if (payload === null || typeof payload !== "object" || Array.isArray(payload)) {
     // No keys, so nothing to be authoritative about. `envelope.ts` refuses every
     // payload that is not a JSON object at ingest, arrays included (STA-262), and a

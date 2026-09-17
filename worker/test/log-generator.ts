@@ -45,6 +45,16 @@ export interface GenerateOptions {
    * same entities while their operations differ. Defaults to `seed`.
    */
   idSeed?: number;
+  /**
+   * The weight of long revision histories: a few documents saved over and over, the way a worklog
+   * is, with everything their placement has to get right — numbers claimed twice, stale claims far
+   * below the head, the same revision sent again, numbers spelled two ways, deleted and edited
+   * revisions, bodies that are not strings, and string bodies alike at both ends and different in
+   * the middle. 0, the default, is none.
+   */
+  heavyRevisions?: number;
+  /** The weight of edits carrying large, quote-heavy descriptions. 0, the default, is none. */
+  wide?: number;
 }
 
 /** mulberry32: small, fast and deterministic. */
@@ -114,7 +124,11 @@ export function generateLog(options: GenerateOptions): GeneratedOp[] {
     ["documentRevision", 10],
     ["kind", 4],
     ...(options.registry ? ([["registration", 5], ["crossLink", 3]] as Array<[string, number]>) : []),
+    ...(options.heavyRevisions ? ([["heavyRevision", options.heavyRevisions]] as Array<[string, number]>) : []),
+    ...(options.wide ? ([["wide", options.wide]] as Array<[string, number]>) : []),
   ];
+  // Where each long history has got: the number its next save claims, and bodies it has held.
+  const worklogs = new Map<string, { next: number; bodies: unknown[] }>();
   const weight = kinds.reduce((sum, [, w]) => sum + w, 0);
   const pickKind = (): string => {
     let r = random() * weight;
@@ -288,6 +302,59 @@ export function generateLog(options: GenerateOptions): GeneratedOp[] {
           });
         } else if (r < 0.9) push("documentRevision", id, "delete", {});
         else push("documentRevision", id, "update", { changeSummary: "edited" });
+        break;
+      }
+      case "heavyRevision": {
+        const document = `${pick(issues.slice(0, 2))}/${pick(["worklog", "log"])}/`;
+        const log = worklogs.get(document) ?? { next: 1, bodies: [] };
+        worklogs.set(document, log);
+        const body = (): unknown => {
+          const b = random();
+          if (b < 0.06 && log.bodies.length > 0) return pick(log.bodies);
+          if (b < 0.1) return pick([7, 0, null, true, undefined, { nested: 1 }, "same"]);
+          // Alike at both ends and different in the middle: one sampled key, several bodies.
+          if (b < 0.2) return `${"<".repeat(1100)}${pick(["middle-a", "middle-b", "middle-c"])}${">".repeat(1100)}`;
+          return `entry ${Math.floor(random() * 1e6)} "quoted" \\ ${"w".repeat(Math.floor(random() * 300))}`;
+        };
+        const author = () => pick(["alice", "bob", undefined, 5]);
+        const create = (n: number, spelling = String(n), extra: Record<string, unknown> = {}) => {
+          const held = body();
+          if (!log.bodies.includes(held)) log.bodies.push(held);
+          const who = author();
+          push("documentRevision", `${document}${spelling}`, "create", {
+            issueId: document.split("/")[0],
+            key: document.slice(document.indexOf("/") + 1, -1),
+            revision: n,
+            ...(held === undefined ? {} : { body: held }),
+            ...(who === undefined ? {} : { author: who }),
+            changeSummary: pick([null, "saved", ""]),
+            ...extra,
+          });
+        };
+        if (r < 0.5) create(log.next++);
+        else if (r < 0.62) create(Math.max(1, log.next - 1 - Math.floor(random() * 5)));
+        else if (r < 0.67) create(1 + Math.floor(random() * log.next));
+        else if (r < 0.72) {
+          // Sent again as the number it was moved to, saying where it was written.
+          const n = Math.max(1, log.next - 1 - Math.floor(random() * 3));
+          create(n, String(n), {
+            changeSummary: `renumbered from r${Math.max(1, n - 1)} to r${n}: written at the same time as another r${Math.max(1, n - 1)}, which the repository's log holds first`,
+          });
+        } else if (r < 0.77) {
+          const n = 1 + Math.floor(random() * log.next);
+          create(n, pick([`0${n}`, `${n}.0`, ` ${n}`]));
+        } else if (r < 0.87) {
+          push("documentRevision", `${document}${1 + Math.floor(random() * log.next)}`, "delete", {});
+        } else if (r < 0.95) {
+          push("documentRevision", `${document}${1 + Math.floor(random() * log.next)}`, "update", { body: body() });
+        } else {
+          push("documentRevision", `${document}${1 + Math.floor(random() * log.next)}`, "update", { author: author() ?? null });
+        }
+        break;
+      }
+      case "wide": {
+        const quotes = '"'.repeat(Math.floor(random() * 40_000));
+        push("issue", pick(issues), chance(0.2) ? "create" : "update", { description: `${quotes}\\${quotes.slice(0, 100)}`, title: "wide" });
         break;
       }
       case "document": {
