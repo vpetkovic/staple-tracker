@@ -71,4 +71,41 @@ describe("a revision renumbered by the log while its writer did not hear back", 
     const want = stateOf(fresh.db);
     expect([a, b].flatMap((machine) => differences(machine.label, want, stateOf(machine.db)))).toEqual([]);
   }, 60_000);
+
+  // Another revision of the writer's in the way: its renumbered one is moved to where the log put
+  // it, rather than found there.
+  it("says so when the writer moves it there past a later one of its own", async () => {
+    const server = new FakeSyncServer({ repositoryId: REPO });
+    fleet = new Fleet(server, REPO);
+    const a = fleet.machine("a");
+    const issue = a.store.createIssue({ title: "Shared" });
+    await a.sync();
+    const b = fleet.machine("b");
+    await sync(b);
+
+    b.use();
+    b.store.putDocument(issue.id, "spec", "b's spec", { author: "b" });
+    await b.sync();
+    a.use();
+    a.store.putDocument(issue.id, "spec", "a's spec", { author: "a" });
+    const answerLost: typeof fetch = async (input, init) => {
+      const response = await server.fetch(input, init);
+      if ((init?.method ?? "GET") === "POST" && String(input).endsWith("/ops")) throw new TypeError("fetch failed");
+      return response;
+    };
+    await a.sync({ fetchImpl: answerLost, attempts: 1 } as never).catch(() => undefined);
+    a.store.putDocument(issue.id, "spec", "a's second spec", { author: "a" });
+
+    b.use();
+    await sync(b);
+    await setBackupConsent(b.home, REPO, true, { fetchImpl: server.fetch });
+    const backup = await createBackup(b.home, REPO, null, { fetchImpl: server.fetch });
+    await restoreFromBackup(b.db, b.home, REPO, backup.backupId, { fetchImpl: server.fetch });
+    await sync(b, a, b, a, b);
+    const fresh = fleet.machine("fresh");
+    await sync(fresh);
+
+    const want = stateOf(fresh.db);
+    expect([a, b].flatMap((machine) => differences(machine.label, want, stateOf(machine.db)))).toEqual([]);
+  }, 60_000);
 });

@@ -1539,6 +1539,8 @@ function placeFromSnapshot(
   }
   db.prepare("UPDATE document_revisions SET revision = ? WHERE issue_id = ? AND key = ? AND revision = ?").run(incoming.revision, issueId, key, held.revision);
   if (!later(held)) takeLogFields(db, issueId, key, incoming.revision, input);
+  // Moved to where the log placed this device's own, it says so, as above.
+  else db.prepare("UPDATE document_revisions SET change_summary = ? WHERE issue_id = ? AND key = ? AND revision = ?").run(incoming.changeSummary, issueId, key, incoming.revision);
 }
 
 /**
