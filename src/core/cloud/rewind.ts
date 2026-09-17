@@ -145,6 +145,16 @@ export function reconcileBeforeRead(db: DatabaseSync, entities: readonly Snapsho
     db.prepare("UPDATE milestone_meta SET members_revision = members_revision + 1 WHERE issue_id = ?").run(entity.entityId);
   }
 
+  /**
+   * A blocker set the epoch does not hold is not in the log any more: its version goes, so an
+   * issue's own create decides its blockers again, as on a fresh device (`applyIssue`,
+   * `apply.ts`). One this device still has to send takes a version again when it comes back.
+   */
+  for (const { id } of db.prepare("SELECT entity_id AS id FROM sync_entity_versions WHERE entity = 'relation'").all() as Array<{ id: string }>) {
+    if (placed("relation", id)) continue;
+    db.prepare("DELETE FROM sync_entity_versions WHERE entity = 'relation' AND entity_id = ?").run(id);
+  }
+
   let restoredBuiltins = 0;
   for (const [entity, id] of BUILTINS) {
     if (placed(entity, id)) continue;

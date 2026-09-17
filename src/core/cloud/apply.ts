@@ -735,7 +735,17 @@ function applyIssue(db: DatabaseSync, input: ApplyInput): boolean {
 
   // `blockedBy` rides inside the create so a receiver never observes an issue
   // whose declared blockers have not arrived. It is not an `issues` column.
-  if (Array.isArray(payload.blockedBy)) {
+  /**
+   * Unless the log holds the issue's blocker set as its own entity. A fold keeps the two apart
+   * and a device hydrating applies the set after the issue, so the set's word is the last
+   * whatever order the log has them in. Read from the tail, a create sent again after the set
+   * — a create whose answer was lost, sent again into the epoch a restore made — carried the
+   * blockers the issue was created with, and removed an edge every fresh device holds. Known
+   * here by the set's version: every device that applied or wrote it holds one, and a rewind
+   * forgets the version of a set the epoch does not hold (`rewind.ts`).
+   */
+  const setLogged = db.prepare("SELECT 1 AS hit FROM sync_entity_versions WHERE entity = 'relation' AND entity_id = ?").get(input.entityId) !== undefined;
+  if (Array.isArray(payload.blockedBy) && !setLogged) {
     writeBlockers(db, input.entityId, payload.blockedBy as unknown[], input);
   }
   return true;
