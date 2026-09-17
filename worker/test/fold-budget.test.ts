@@ -306,11 +306,13 @@ describe("a request's budget", () => {
     for (let n = 0; n < 100; n += 1) ops.push(op(n + 2, "issue", `issue-${n}`, "create", { title: `wide ${n}`, description: quoted(30_000, `${n}`) }));
     for (let n = 0; n < 600; n += 1) ops.push(op(n + 102, "issue", `issue-${n % 100}`, "update", { title: `t${n}` }));
     await insertOps(env.DB, REPO, ops);
+    // The large edit folded already, so what the fold has next would fit a request with room.
+    await advanceFold(env, REPO, 1, 1, { budget: { remaining: 1 } });
 
     // The large edit alone, and nothing folded: the page spent the request.
     const first = await send(`/ops?limit=100`, env.DB);
     expect({ status: first.status, ops: first.json.ops.length, hasMore: first.json.hasMore }).toEqual({ status: 200, ops: 1, hasMore: true });
-    expect((await foldProgress(env, REPO, 1)).seq).toBe(0);
+    expect((await foldProgress(env, REPO, 1)).seq).toBe(1);
     // Quote-heavy edits: a page cut by work, well short of its limit.
     const second = await send(`/ops?limit=100&cursor=${encodeURIComponent(first.json.nextCursor)}`, env.DB);
     expect(second.json.ops.length).toBeGreaterThan(0);
