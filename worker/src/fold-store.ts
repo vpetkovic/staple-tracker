@@ -34,10 +34,19 @@
  * — which is why a version's key `seq` and the entity's `lastSeq` are separate columns.
  *
  * A snapshot or backup at a cutoff C that is not itself a mark reads the newest mark S at
- * or below C and folds the operations in `(S, C]` on top, the same way a step does. Steps
- * are at most {@link FOLD_STEP_OPS} operations long, so once the checkpoint has passed C
- * that tail is bounded too, and ANY cutoff — including one pinned in a snapshot cursor days
- * ago, or in a cursor an older Worker handed out — is served exactly.
+ * or below C and folds the operations in `(S, C]` on top, the same way a step does. That tail
+ * lies inside the step that wrote the next mark, which some request fitted to its budget
+ * ({@link foldRun}), so once the checkpoint has passed C the tail is bounded too, and ANY
+ * cutoff — including one pinned in a snapshot cursor days ago, or in a cursor an older Worker
+ * handed out — is served exactly.
+ *
+ * ## What bounds a step
+ *
+ * Its estimated isolate time (`fold-work.ts`), measured from sizes before anything large is
+ * read, and not only its operations and payload bytes: a pull that folded a step of a worklog
+ * saved 1,500 times measured 87 ms of isolate time on workerd. A revision create reads the few
+ * revisions it can collide with through two indexes, never its whole document
+ * (`fold-revisions.ts`). A request shares one budget between its fold and what it serves.
  *
  * ## Why rows are versions, never updated in place
  *

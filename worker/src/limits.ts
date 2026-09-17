@@ -131,9 +131,9 @@ export const SNAPSHOT_FOLD_PAGE = 500;
 export const MAX_SNAPSHOT_FOLD_OPS = 20_000;
 
 /**
- * Operations one fold step reads and folds (`fold-store.ts`). Also the most a snapshot page
- * or a restore turn ever folds on top of a checkpoint mark, because marks are at most one
- * step apart.
+ * The most operations one fold step reads (`fold-store.ts`); it folds as many of them as fit
+ * {@link FOLD_STEP_WORK}. Also the most a snapshot page or a restore turn ever folds on top of a
+ * checkpoint mark, because marks are at most one step apart.
  */
 export const FOLD_STEP_OPS = 500;
 
@@ -203,11 +203,11 @@ export const LAZY_FOLD_BEHIND = 500;
 /**
  * The fold's per-request budgets, by plan.
  *
- * `foldBudgetOps` — operations one request may fold. Measured on workerd, a step of 500 costs
- * 2–5 ms of isolate time (7 ms on a cold isolate), so the free plan's 10 ms per request fits
- * one step beside the rest of the request — a 500-entity snapshot page or a 500-operation
- * pull page. The paid plan's 30 s default fits far more than any repository needs, and its
- * 1,000 queries per invocation fit a hundred steps at six queries each.
+ * `foldBudgetOps` — the most operations one request may fold. Not what bounds a request's CPU:
+ * a step of small edits folds in a few milliseconds, and a step of a worklog saved 1,500 times
+ * took 87. `requestWork` does, in estimated isolate time (`fold-work.ts`), which the
+ * request's page shares. The paid plan's 30 s default fits far more than any repository needs,
+ * and its 1,000 queries per invocation fit a hundred steps at about ten queries each.
  *
  * `pullFoldOps` — operations a pull that finds the fold behind may fold, beside its page.
  *

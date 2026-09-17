@@ -50,9 +50,9 @@
  * **Why it is chunked.** A request has 10 ms of CPU and 50 D1 queries on the free plan,
  * and a restore stages one operation per entity, so a single-shot restore would work on a
  * demo repository and fail permanently on a real one. `stage` writes
- * `restoreStageEntities` at a time (200 free, 1,000 paid) in packed statements, folds them
- * into the new epoch's checkpoint as it goes, and keeps its progress durable in D1 rather
- * than in a request.
+ * `restoreStageEntities` at a time (200 free, 1,000 paid), no more than `RESTORE_PAGE_WORK` of
+ * estimated isolate time, in packed statements, folds them into the new epoch's checkpoint with
+ * what the turn has left, and keeps its progress durable in D1 rather than in a request.
  *
  * **Non-truncating, still.** Nothing here deletes an operation. `repos.last_seq`
  * keeps climbing across the flip, so `seq` is never reused, fenced lease tokens stay

@@ -1087,11 +1087,11 @@ maxPullLimit }`.
 |---|---|---|
 | Operations per push batch | **200** paid, **25** free | A push costs `N + 4` D1 statements, against a queries-per-Worker-invocation ceiling of 1,000 paid and **50** free |
 | Single operation payload | **512 KiB** | Well under D1's 2 MB maximum row size, with headroom for the envelope |
-| Pull page `limit` | default 200, maximum **500** | |
+| Pull page `limit` | default 200, maximum **500**, and at most **3 ms** of estimated isolate time to send, the first operation always | A page cut by work is shorter than its limit and says `hasMore` |
 | Requests per device | 120 per 60 s, answered with `Retry-After: 60` | Policy, not a platform limit — the `SYNC_LIMITER` binding in `worker/wrangler.toml`, keyed on repository and device |
-| Snapshot page `limit` | default 200, maximum **500** entities, and at most **1 MiB** of their state | A page cut by bytes is shorter than its limit and says `hasMore` |
-| Operations the service folds in one request | **500** operations and **1 MiB** of payload free, **50,000** paid | The free plan's 10 ms of CPU: a request folding 500 measures 5–10 ms of isolate time on workerd. See [the fold checkpoint](#the-service-keeps-its-fold-and-folds-it-a-request-at-a-time) |
-| Entities one restore turn stages | **200** free, **1,000** paid, and at most **1 MiB** of state | CPU again: an operation id, a payload and a row each |
+| Snapshot page `limit` | default 200, maximum **500** entities, at most **1 MiB** of their state, and at most **3 ms** of estimated isolate time to send | A page cut by bytes or work is shorter than its limit and says `hasMore` |
+| Fold work in one request | **5 ms** of estimated isolate time free, shared with the page it serves; at most 500 operations and 1 MiB of payload a step | The free plan's 10 ms of CPU. A step is cut by what its operations cost to fold, not by how many there are. See [the fold checkpoint](#the-service-keeps-its-fold-and-folds-it-a-request-at-a-time) |
+| Entities one restore turn stages | **200** free, **1,000** paid, at most **1 MiB** of state and **2 ms** of estimated isolate time | CPU again: an operation id, a payload and a row each, and the fold of them in the rest of the turn |
 
 These replace the numbers this page carried before the Cloudflare research
 landed; the earlier batch size of 500 was set without knowing the
@@ -1277,11 +1277,15 @@ restore wrote it (`test/cloud-old-build-times.test.ts`, worker `backups.test.ts`
 the whole log inside each snapshot, backup and restore request, and refused past 20,000
 operations. Even under that limit, a request cost more CPU and more D1 queries than the free
 plan allows. This Worker keeps the fold in D1 as a checkpoint (`worker/src/fold-store.ts`).
-It folds at most 500 operations per request on the free plan, and it can read any cutoff the
-checkpoint has reached, however old. So no repository is too large to snapshot, back up or
-restore. Every pull that finds the checkpoint 500 or more seqs behind moves it on, so on a
-repository that syncs, the checkpoint trails the head by a few hundred operations. What a
-device can see of it:
+On the free plan a request folds what fits 5 ms of isolate time, estimated from what the
+operations cost to fold rather than from how many there are: long in small edits, short in
+large or quote-heavy ones, and never loading more than a new revision can collide with, however
+many revisions its document holds (`worker/src/fold-revisions.ts`). It can read any cutoff the
+checkpoint has reached, however old, so no repository is too large to snapshot, back up or
+restore. Every pull that finds the checkpoint 500 or more seqs behind moves it on by what its
+own page leaves of the request's budget, and folds nothing rather than more, so on a repository
+that syncs the checkpoint trails the head by a few hundred operations. What a device can see of
+it:
 
 - **A snapshot, a backup, and a restore's first turn wait for it.** A snapshot's first page
   is pinned at the head, as it always was. Later pages use the cutoff their cursor pinned,
@@ -1297,18 +1301,24 @@ device can see of it:
   one. This client asks again while `foldedSeq` climbs (`whileFolding`,
   `src/core/cloud/client.ts`), says so on stderr, and stops the first time it does not climb.
   An older client reports the retryable error, and its next sync or command carries on from
-  there. An unfolded 100,000-operation log takes about two hundred such answers on the free
-  plan (`test/cloud-fold-checkpoint.test.ts`).
+  there. An unfolded 100,000-operation log takes a few hundred such answers on the free plan,
+  more when its operations are large (`test/cloud-fold-checkpoint.test.ts`). A request that
+  folded and then has no room for the first entity of its page answers the same way, with
+  `foldedSeq` at the cutoff, and the next request serves the page.
 - **A backup is a point in the fold, not a copy of it.** It records the epoch, the cutoff
   and the fold's counts there, so no backup has a size limit. A restore pages the entities
   back out of the checkpoint in `restoreOrder`: by claim, then by key. A backup the Worker
   before the checkpoint took holds its entities in its own row and restores as it always did.
 - **The limits a device can see are the Worker's, and the test service mirrors them.** A
-  snapshot page holds at most `limit` entities and at most 1 MiB of their state and field
-  writes, counted in UTF-8 bytes. A restore turn stages at most 200 entities (1,000 on paid)
-  and 1 MiB of state. `worker/test/fold-parity-fixture.ts` records what the Worker answers on
-  a log where those limits bind, and both the Worker and `test/fixtures/fake-sync-server.ts`
-  are held to it.
+  snapshot page holds at most `limit` entities, at most 1 MiB of their state and field writes
+  counted in UTF-8 bytes, and at most 3 ms of estimated isolate time to send. A pull page holds
+  at most `limit` operations and 3 ms of estimated isolate time, the first always. A restore
+  turn stages at most 200 entities (1,000 on paid), 1 MiB of state and 2 ms of estimated
+  isolate time. A page cut short says `hasMore`. The estimate counts bytes and, above all,
+  quotes and backslashes, which are what JSON costs to parse and write
+  (`worker/src/fold-work.ts`). `worker/test/fold-parity-fixture.ts` records what the Worker
+  answers on a log where those limits bind, including a worklog of contested revisions, and
+  both the Worker and `test/fixtures/fake-sync-server.ts` are held to it.
 
 **A log too large for an older service to fold is folded here.** A Worker from before the
 checkpoint folds at most 20,000 operations (`MAX_SNAPSHOT_FOLD_OPS`) for a snapshot and

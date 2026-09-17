@@ -1,9 +1,10 @@
 /**
  * GET /v1/repos/{repoId}/ops?cursor=&limit= — pull a bounded page.
  *
- * Two queries: authenticate, then one index range scan. `PRIMARY KEY (repo_id, seq)`
+ * Two queries for the page: authenticate, then one index range scan. `PRIMARY KEY (repo_id, seq)`
  * on a `WITHOUT ROWID` table makes the scan read exactly the rows it returns, so the
- * billed rows_read is the page size and not the table size.
+ * billed rows_read is the page size and not the table size. Then, when the fold checkpoint is
+ * behind, a fold step within what the page left of the request's budget (`keepFoldNearHead`).
  */
 
 import type { Session } from "./auth.js";
