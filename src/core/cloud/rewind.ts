@@ -130,6 +130,22 @@ export function reconcileBeforeRead(db: DatabaseSync, entities: readonly Snapsho
     );
   }
 
+  /**
+   * A milestone the epoch holds with no `members` key has had no membership written to the log:
+   * one made on a connected device goes out as its dates alone, and a restore stages what the
+   * fold held. A fresh device reading it holds no members, so neither does this one — unless its
+   * own unsent membership, the whole list it holds, is still to be sent. The plan and a blocker
+   * set have no such shape: each reaches the log only as its whole list.
+   */
+  const unsentMembership = new Set(unsent.filter((op) => op.entity === "milestone" && Array.isArray(parsedPayload(op.payload).members)).map((op) => op.id));
+  for (const entity of entities) {
+    if (entity.entity !== "milestone" || entity.deletedAt !== null || entity.verb === "delete" || Array.isArray(entity.state.members)) continue;
+    if (unsentMembership.has(entity.entityId) || withheld.has(keyOf("milestone", entity.entityId))) continue;
+    if (Number(db.prepare("DELETE FROM milestone_members WHERE milestone_id = ?").run(entity.entityId).changes) === 0) continue;
+    // An open editor's check notices, as it does for a membership applied (`applyMilestone`).
+    db.prepare("UPDATE milestone_meta SET members_revision = members_revision + 1 WHERE issue_id = ?").run(entity.entityId);
+  }
+
   let restoredBuiltins = 0;
   for (const [entity, id] of BUILTINS) {
     if (placed(entity, id)) continue;
