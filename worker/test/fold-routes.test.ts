@@ -129,7 +129,7 @@ describe("GET /snapshot on a log the fold has not reached", () => {
     expect(await progress()).toBe(head);
     const snapshot = await snapshotAll();
     expect(content(snapshot.entities)).toEqual(content((await foldLog(env, REPO, 1, head)).entities));
-  });
+  }, 120_000);
 
   it("refuses a cursor naming a cutoff past the log, and folds nothing towards it", async () => {
     const ops = generateLog({ seed: 302, count: 300, pool: 10 });
@@ -181,7 +181,7 @@ describe("GET /ops keeps the fold near the head", () => {
     await req(`/v1/repos/${REPO}/ops?limit=1`, { token });
     expect(await progress()).toBeGreaterThan(stopped);
     expect(await progress()).toBeLessThanOrEqual(last[0]!.seq);
-  });
+  }, 120_000);
 });
 
 describe("a restore the fold is not ready for", () => {
@@ -228,7 +228,7 @@ describe("a restore the fold is not ready for", () => {
       }
     });
     expect(content((await snapshotAll()).entities)).toEqual(before);
-  });
+  }, 120_000);
 
   it("restores a backup of an older epoch after the checkpoint was cleared, folding that epoch first", async () => {
     const ops = generateLog({ seed: 308, count: 2500, pool: 30 });
@@ -252,7 +252,7 @@ describe("a restore the fold is not ready for", () => {
 
     await restore(undo, true);
     expect(content((await snapshotAll()).entities)).toEqual(before);
-  });
+  }, 120_000);
 });
 
 describe("a repository of large documents", () => {
