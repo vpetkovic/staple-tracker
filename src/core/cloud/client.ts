@@ -36,7 +36,7 @@
  */
 import { StapleError } from "../types.js";
 import { endpointUrl, type CloudEndpoint } from "./endpoint.js";
-import { cloudError, isCloudErrorCode } from "./errors.js";
+import { cloudCodeOf, cloudError, isCloudErrorCode } from "./errors.js";
 
 /** The wire protocol this build speaks. Matches `PROTOCOL_MAX` in the Worker. */
 export const CLIENT_PROTOCOL = 1;
@@ -167,6 +167,13 @@ export interface RequestOptions {
    * rather than of the request.
    */
   protocol?: number;
+  /** Injected in tests: how {@link whileFolding} waits between attempts. */
+  sleep?: (ms: number) => Promise<void>;
+  /**
+   * Told each time the service answers that it is still folding the log, with how far it
+   * has got and how far it has to go, so a command can say why it is waiting.
+   */
+  onFolding?: (foldedSeq: number, cutoffSeq: number | null) => void;
 }
 
 interface Call extends RequestOptions {
@@ -290,9 +297,14 @@ async function request<T>(call: Call): Promise<T> {
       "requestVocabulary",
       // STA-256's refusal: a purge whose typed confirmation was `missing` or a `mismatch`.
       "confirmation",
-      // A snapshot refused because the log is too large to fold in one pass: the client reads
-      // the ordered tail instead (`cloud/tail-fold.ts`).
+      // A snapshot refused because the log is too large to fold in one pass — by a Worker from
+      // before the fold checkpoint: the client reads the ordered tail instead (`cloud/tail-fold.ts`).
       "maxSnapshotFoldOps",
+      // The service still folding its log (`worker/src/fold-store.ts`, `foldBehind`): how far
+      // it has got, and the cutoff it is folding towards. `whileFolding` asks again while the
+      // first climbs.
+      "foldedSeq",
+      "cutoffSeq",
     ]) {
       if (body[key] !== undefined) detail[key] = body[key];
     }
@@ -503,14 +515,52 @@ export function fetchSnapshotPage(
   const query = new URLSearchParams();
   if (args.cursor !== null) query.set("cursor", args.cursor);
   query.set("limit", String(args.limit));
-  return request({
-    ...options,
-    endpoint,
-    path: `/v1/repos/${encodeURIComponent(args.repositoryId)}/snapshot?${query.toString()}`,
-    method: "GET",
-    token: args.token,
-    deviceId: args.deviceId,
-  });
+  // A page pinned at a cutoff the service's fold has not reached — a bootstrap resumed from a
+  // cursor an older Worker handed out — is folded towards it a request at a time.
+  return whileFolding(
+    () =>
+      request({
+        ...options,
+        endpoint,
+        path: `/v1/repos/${encodeURIComponent(args.repositoryId)}/snapshot?${query.toString()}`,
+        method: "GET",
+        token: args.token,
+        deviceId: args.deviceId,
+      }),
+    options,
+  );
+}
+
+/**
+ * Ask again while the service answers that it is still folding the log, for as long as each
+ * answer shows it got further.
+ *
+ * The Worker keeps its fold of the log in D1 and moves it on in bounded steps, a request's
+ * budget at a time (`worker/src/fold-store.ts`). A backup, a restore and a snapshot page
+ * need it to have reached a cutoff; when it has not, the request folds its budget and answers
+ * `unavailable` with `foldedSeq`, how far the fold has got, and `Retry-After`. That is
+ * straight after the Worker is deployed onto a large log, before devices have synced it along:
+ * a 100,000-operation log is two hundred such answers on the free plan. So this asks again —
+ * after the wait the service asked for, never more than five seconds — and stops the moment
+ * an answer is anything else, or is a refusal that did not move `foldedSeq` on, which is a
+ * fold that is stuck and not one that is working.
+ */
+export async function whileFolding<T>(send: () => Promise<T>, options: RequestOptions): Promise<T> {
+  const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  let reached = -1;
+  for (;;) {
+    try {
+      return await send();
+    } catch (error) {
+      const detail = (error as { detail?: Record<string, unknown> } | null)?.detail;
+      const folded = detail?.foldedSeq;
+      if (cloudCodeOf(error) !== "unavailable" || typeof folded !== "number" || folded <= reached) throw error;
+      reached = folded;
+      options.onFolding?.(folded, typeof detail?.cutoffSeq === "number" ? detail.cutoffSeq : null);
+      const asked = Number(detail?.retryAfter);
+      await sleep(Number.isFinite(asked) && asked > 0 ? Math.min(asked, 5) * 1000 : 1000);
+    }
+  }
 }
 
 /**
@@ -686,21 +736,28 @@ export function setRemoteBackupConsent(
   });
 }
 
-/** `POST /v1/repos/{repoId}/backups` — take a point-in-time fold. */
+/**
+ * `POST /v1/repos/{repoId}/backups` — take a point-in-time fold. Waits while the service is
+ * still folding the log up to now ({@link whileFolding}).
+ */
 export function createRemoteBackup(
   endpoint: CloudEndpoint,
   args: RepoCall & { label: string | null },
   options: RequestOptions = {},
 ): Promise<{ backup: RemoteBackup }> {
-  return request({
-    ...options,
-    endpoint,
-    path: `/v1/repos/${encodeURIComponent(args.repositoryId)}/backups`,
-    method: "POST",
-    token: args.token,
-    deviceId: args.deviceId,
-    body: { label: args.label },
-  });
+  return whileFolding(
+    () =>
+      request({
+        ...options,
+        endpoint,
+        path: `/v1/repos/${encodeURIComponent(args.repositoryId)}/backups`,
+        method: "POST",
+        token: args.token,
+        deviceId: args.deviceId,
+        body: { label: args.label },
+      }),
+    options,
+  );
 }
 
 /** `GET /v1/repos/{repoId}/backups` — metadata only; never the folded contents. */
@@ -759,9 +816,10 @@ export interface RestoreProgress {
  * that somehow escaped its command still cannot advance a restore against a
  * repository it was not told the id of.
  *
- * Why a loop rather than one call: staging N entities costs N+1 D1 queries
- * against a free-plan ceiling of 50, so a single-shot restore would work on a
- * demonstration repository and fail permanently on a real one.
+ * Why a loop rather than one call: a request on the free plan has 10 ms of CPU and
+ * 50 D1 queries, and a restore writes an operation per entity, so a single-shot restore
+ * would work on a demonstration repository and fail permanently on a real one. The
+ * Worker stages a bounded chunk a turn.
  */
 export function advanceRemoteRestore(
   endpoint: CloudEndpoint,
@@ -771,15 +829,21 @@ export function advanceRemoteRestore(
   const body: Record<string, unknown> = { confirm: args.repositoryId };
   if (args.restoreId !== null) body.restoreId = args.restoreId;
   if (args.actor !== null) body.actor = args.actor;
-  return request({
-    ...options,
-    endpoint,
-    path:
-      `/v1/repos/${encodeURIComponent(args.repositoryId)}` +
-      `/backups/${encodeURIComponent(args.backupId)}/restore`,
-    method: "POST",
-    token: args.token,
-    deviceId: args.deviceId,
-    body,
-  });
+  // The first turn refuses, changing nothing, until the service has folded both the backup's
+  // cutoff and the log's head (the undo); it is asked again while that is moving.
+  return whileFolding(
+    () =>
+      request({
+        ...options,
+        endpoint,
+        path:
+          `/v1/repos/${encodeURIComponent(args.repositoryId)}` +
+          `/backups/${encodeURIComponent(args.backupId)}/restore`,
+        method: "POST",
+        token: args.token,
+        deviceId: args.deviceId,
+        body,
+      }),
+    options,
+  );
 }

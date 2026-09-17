@@ -122,24 +122,167 @@ export const MAX_SNAPSHOT_PAGE = 500;
 export const DEFAULT_SNAPSHOT_PAGE = 200;
 
 /**
- * Operations read per fold query while materializing a snapshot. A snapshot request
- * spends `ceil(log / SNAPSHOT_FOLD_PAGE)` queries against the same
- * queries-per-invocation ceiling as everything else, so this is deliberately large:
- * 500 keeps a 10,000-operation repository inside 20 queries.
+ * Operations read per query by the single-pass fold (`foldLog` in `fold.ts`), which no route
+ * runs any more; kept as the reference the fold checkpoint is proved against.
  */
 export const SNAPSHOT_FOLD_PAGE = 500;
 
-/**
- * The ceiling on how much log one snapshot request will fold. Beyond this the
- * response is `unavailable` rather than a truncated snapshot, because a snapshot
- * that silently omits entities hydrates a device into quiet divergence.
- *
- * The free plan's real ceiling is ~50,000 operations per DAY (100,000 rows written,
- * ~2 rows per operation), and this is a two-machine tracker. If a repository ever
- * genuinely exceeds this, the answer is a maintained projection table, not a bigger
- * number here — see worker/README.md.
- */
+/** The most log the single-pass fold (`foldLog`) folds before it refuses. */
 export const MAX_SNAPSHOT_FOLD_OPS = 20_000;
+
+/**
+ * The most operations one fold step reads (`fold-store.ts`); it folds as many of them as fit
+ * {@link FOLD_STEP_WORK}. Also the most a snapshot page or a restore turn ever folds on top of a
+ * checkpoint mark, because marks are at most one step apart.
+ */
+export const FOLD_STEP_OPS = 500;
+
+/**
+ * Payload bytes one fold step reads, whatever its operation count: the bound on a step's
+ * memory and CPU when operations are large (each may be up to {@link MAX_OP_BYTES}). A step
+ * always takes its first operation, so one larger than this still moves the fold on.
+ */
+export const FOLD_STEP_BYTES = 1024 * 1024;
+
+/**
+ * Isolate time one fold step may be estimated at, in nanoseconds (`fold-work.ts`): payloads parsed,
+ * stored states loaded, and states and packed statements written.
+ */
+export const FOLD_STEP_WORK = 4_000_000;
+
+/** Reads a step may make for its revision placements beyond the ones it plans. */
+export const FOLD_STEP_READS = 4;
+
+/** Numbers a step's placements may step through one at a time (`fold-revisions.ts`). */
+export const FOLD_STEP_WALK = 4096;
+
+/** D1's ceiling on a string or a row: the most one operation's payload can ever be. */
+export const ROW_BYTES = 2_000_000;
+
+/**
+ * The most payload between two checkpoint marks: a step's bytes and the one operation that
+ * may take it past them. A read folds at most this on top of a mark.
+ */
+export const TAIL_BYTES = FOLD_STEP_BYTES + ROW_BYTES;
+
+/**
+ * Stored bytes of entities one snapshot page, or one restore turn, carries — at least one
+ * entity, however large. A page of 500 entities is 1.6 MB and 6 ms of isolate time on the
+ * measured 100,000-operation log, and a repository of large documents would be far more; the
+ * page is cut here instead and `hasMore` says so, as it does for the entity limit.
+ */
+export const PAGE_BYTES = 1024 * 1024;
+
+/**
+ * Estimated isolate time one snapshot page may spend reading and serializing its entities
+ * (`serveWork`, `fold-work.ts`): a page of escape-heavy states is cut long before its bytes are.
+ */
+export const PAGE_WORK = 2_000_000;
+
+/**
+ * Estimated isolate time one restore turn may spend reading and staging entities. Half of a
+ * request, so the fold of what it staged, which costs about as much again, fits in the rest and the
+ * new epoch's checkpoint keeps up with the restore.
+ */
+export const RESTORE_PAGE_WORK = 2_000_000;
+
+/** Bytes of packed rows per INSERT statement: under D1's 2 MB ceiling on a bound value. */
+export const FOLD_WRITE_BYTES = 900_000;
+
+/**
+ * How far the fold may be behind the log before a pull advances it — in seqs, from the fold's
+ * newest mark to the high-water mark, which counts a reserved-but-unused slot as well as an
+ * operation and so never understates how much there is to fold.
+ *
+ * Pulls are what keep the checkpoint near the head without a push paying for it: every
+ * sync pulls, so the fold never trails the log by much more than this, and a backup or a
+ * restore — which fold what is left inside their own request — always have little to do.
+ */
+export const LAZY_FOLD_BEHIND = 500;
+
+/**
+ * The fold's per-request budgets, by plan.
+ *
+ * `foldBudgetOps` — the most operations one request may fold. Not what bounds a request's CPU:
+ * a step of small edits folds in a few milliseconds, and a step of a worklog saved 1,500 times
+ * took 87. `requestWork` does, in estimated isolate time (`fold-work.ts`), which the
+ * request's page shares. The paid plan's 30 s default fits far more than any repository needs,
+ * and its 1,000 queries per invocation fit a hundred steps at about ten queries each.
+ *
+ * `pullFoldOps` — operations a pull that finds the fold behind may fold, beside its page.
+ *
+ * `restoreStageEntities` — entities one restore turn writes. A turn writes them with one
+ * packed statement per ~900 KB rather than one statement each, so the ceiling is CPU
+ * (an operation id, a payload and a row each), not the query count.
+ */
+const FOLD_PLAN_LIMITS: Record<
+  Plan,
+  { foldBudgetOps: number; foldBudgetBytes: number; requestWork: number; pullFoldOps: number; restoreStageEntities: number }
+> = {
+  free: {
+    foldBudgetOps: FOLD_STEP_OPS,
+    foldBudgetBytes: FOLD_STEP_BYTES,
+    requestWork: 4_000_000,
+    pullFoldOps: FOLD_STEP_OPS,
+    restoreStageEntities: 200,
+  },
+  paid: {
+    foldBudgetOps: 100 * FOLD_STEP_OPS,
+    foldBudgetBytes: 64 * FOLD_STEP_BYTES,
+    requestWork: 100 * FOLD_STEP_WORK,
+    pullFoldOps: 50 * FOLD_STEP_OPS,
+    restoreStageEntities: 1000,
+  },
+};
+
+export function foldBudgetOps(plan: Plan): number {
+  return FOLD_PLAN_LIMITS[plan].foldBudgetOps;
+}
+
+/**
+ * What one request may fold, and read: {@link foldBudgetOps} operations, no more payload than
+ * this, and no more estimated isolate time than {@link requestWork} (`fold-work.ts`) — which the
+ * request's page, when it serves one, shares.
+ */
+export function requestFoldBudget(plan: Plan): { remaining: number; bytes: number; work: number } {
+  return {
+    remaining: FOLD_PLAN_LIMITS[plan].foldBudgetOps,
+    bytes: FOLD_PLAN_LIMITS[plan].foldBudgetBytes,
+    work: FOLD_PLAN_LIMITS[plan].requestWork,
+  };
+}
+
+/**
+ * Estimated isolate time one request may spend on the fold and on what it serves from it, in
+ * nanoseconds (`fold-work.ts`). Four milliseconds on free, so the request's own routing,
+ * authentication and response fit beside it under the plan's ten.
+ */
+export function requestWork(plan: Plan): number {
+  return FOLD_PLAN_LIMITS[plan].requestWork;
+}
+
+/** Operations a pull that finds the fold behind may fold: one step on free, beside its page. */
+export function pullFoldOps(plan: Plan): number {
+  return FOLD_PLAN_LIMITS[plan].pullFoldOps;
+}
+
+/**
+ * What a pull that finds the fold behind may fold beside a page estimated at `spent`: the request's
+ * work less the page's, and nothing at all rather than more (`folded`), because a pull's own
+ * answer must never be what folding costs it.
+ */
+export function pullFoldBudget(plan: Plan, spent: number): { remaining: number; bytes: number; work: number; folded: true } {
+  return {
+    remaining: FOLD_PLAN_LIMITS[plan].pullFoldOps,
+    bytes: FOLD_PLAN_LIMITS[plan].foldBudgetBytes,
+    work: Math.max(0, FOLD_PLAN_LIMITS[plan].requestWork - spent),
+    folded: true,
+  };
+}
+
+export function restoreStageEntities(plan: Plan): number {
+  return FOLD_PLAN_LIMITS[plan].restoreStageEntities;
+}
 
 /** Default lease TTL, and the ceiling a client may ask for. Server clock only. */
 export const DEFAULT_LEASE_TTL_SECONDS = 300;

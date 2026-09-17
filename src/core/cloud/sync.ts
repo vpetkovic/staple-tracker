@@ -732,8 +732,9 @@ async function surveyRepository(
 }
 
 /**
- * The service refused to fold the log — past `MAX_SNAPSHOT_FOLD_OPS` — which no retry
- * changes, so it is not left to `attempt` to retry as an `unavailable`.
+ * The service refused to fold the log — a Worker from before the fold checkpoint, past its
+ * `MAX_SNAPSHOT_FOLD_OPS` — which no retry changes, so it is not left to `attempt` to retry
+ * as an `unavailable`.
  */
 class TooLargeToFold extends Error {
   constructor(readonly cause: unknown) {
@@ -1260,7 +1261,8 @@ async function runBootstrap(
       /**
        * Too large for the service to fold: a device joins from the ordered tail instead,
        * folded here (`tail-fold.ts`) and applied as one snapshot, in one transaction.
-       * Before, a repository past `MAX_SNAPSHOT_FOLD_OPS` could not reach a new machine.
+       * Before, a repository past an older Worker's `MAX_SNAPSHOT_FOLD_OPS` could not reach
+       * a new machine.
        */
       const survey = await surveyFromTail(db, session, capabilities, options);
       noteFold(db, survey.entities);

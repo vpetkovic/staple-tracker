@@ -1,9 +1,10 @@
 /**
  * GET /v1/repos/{repoId}/ops?cursor=&limit= — pull a bounded page.
  *
- * Two queries: authenticate, then one index range scan. `PRIMARY KEY (repo_id, seq)`
+ * Two queries for the page: authenticate, then one index range scan. `PRIMARY KEY (repo_id, seq)`
  * on a `WITHOUT ROWID` table makes the scan read exactly the rows it returns, so the
- * billed rows_read is the page size and not the table size.
+ * billed rows_read is the page size and not the table size. Then, when the fold checkpoint is
+ * behind, a fold step within what the page left of the request's budget (`keepFoldNearHead`).
  */
 
 import type { Session } from "./auth.js";
@@ -16,8 +17,19 @@ import {
 import type { Env } from "./env.js";
 import { minProtocolFor } from "./envelope.js";
 import { SyncError, json } from "./errors.js";
-import { DEFAULT_PULL_LIMIT, MAX_PULL_LIMIT, PROTOCOL_MAX, PROTOCOL_MIN } from "./limits.js";
-import { log, tokenFingerprint } from "./log.js";
+import { advanceFold, foldProgress } from "./fold-store.js";
+import { ENTITY_NS, PARSE_NS_PER_BYTE, PARSE_NS_PER_ESCAPE, serveWork } from "./fold-work.js";
+import {
+  DEFAULT_PULL_LIMIT,
+  LAZY_FOLD_BEHIND,
+  MAX_PULL_LIMIT,
+  PAGE_WORK,
+  PROTOCOL_MAX,
+  PROTOCOL_MIN,
+  planOf,
+  pullFoldBudget,
+} from "./limits.js";
+import { errorKind, log, tokenFingerprint } from "./log.js";
 
 interface OpRow {
   seq: number;
@@ -59,21 +71,41 @@ export async function pull(
     after = cursor.s;
   }
 
-  // `hasMore` by fetching limit + 1 and trimming. Never a COUNT(*), which scans the
-  // whole range to answer a question the extra row already answers.
+  /**
+   * `hasMore` by fetching limit + 1 and trimming. Never a COUNT(*), which scans the
+   * whole range to answer a question the extra row already answers.
+   *
+   * And no more than {@link PAGE_WORK} of estimated isolate time to parse and send
+   * (`serveWork`, `fold-work.ts`) — always the first operation, however large. SQLite
+   * measures each row and sums them, and a row past the budget comes back without its
+   * payload, so a page of escape-heavy operations is cut before the isolate reads it; the
+   * page is then shorter than its limit and says `hasMore`, which every client already
+   * follows.
+   */
   const page = await env.DB.prepare(
     `SELECT seq, epoch, op_id, device_id, entity, entity_id, verb, base_version,
-            payload, actor, client_seq, schema_version, created_at, server_ts
-       FROM ops
-      WHERE repo_id = ?1 AND epoch = ?2 AND seq > ?3
-      ORDER BY seq
-      LIMIT ?4`,
+            CASE WHEN n = 1 OR spent <= ?5 THEN payload END AS payload,
+            actor, client_seq, schema_version, created_at, server_ts, bytes, escapes
+       FROM (SELECT *, SUM(${ENTITY_NS} + ${2 * PARSE_NS_PER_BYTE} * bytes + ${2 * PARSE_NS_PER_ESCAPE} * escapes)
+                         OVER (ORDER BY seq ROWS UNBOUNDED PRECEDING) AS spent,
+                       ROW_NUMBER() OVER (ORDER BY seq) AS n
+               FROM (SELECT seq, epoch, op_id, device_id, entity, entity_id, verb, base_version,
+                            payload, actor, client_seq, schema_version, created_at, server_ts,
+                            length(CAST(payload AS BLOB)) AS bytes,
+                            length(payload) - length(replace(replace(payload, '\\', ''), '"', '')) AS escapes
+                       FROM ops
+                      WHERE repo_id = ?1 AND epoch = ?2 AND seq > ?3
+                      ORDER BY seq
+                      LIMIT ?4))
+      ORDER BY seq`,
   )
-    .bind(session.repoId, session.epoch, after, limit + 1)
-    .all<OpRow>();
+    .bind(session.repoId, session.epoch, after, limit + 1, PAGE_WORK)
+    .all<Omit<OpRow, "payload"> & { payload: string | null; bytes: number; escapes: number }>();
 
-  const hasMore = page.results.length > limit;
-  const rows = hasMore ? page.results.slice(0, limit) : page.results;
+  const cut = page.results.findIndex((row) => row.payload === null);
+  const within = (cut >= 0 ? page.results.slice(0, cut) : page.results) as Array<OpRow & { bytes: number; escapes: number }>;
+  const hasMore = page.results.length > limit || cut >= 0;
+  const rows = within.slice(0, limit);
 
   assertServable(rows, protocol);
 
@@ -82,6 +114,10 @@ export async function pull(
   // — and `WHERE seq > cursor` is gap-tolerant by construction.
   const lastSeq = rows.length > 0 ? rows[rows.length - 1]!.seq : after;
   const next: PullCursor = { v: 1, r: session.repoId, e: session.epoch, s: lastSeq };
+
+  // What the page costs to parse and put on the wire, so the fold beside it never takes the request past its budget.
+  const spent = rows.reduce((sum, row) => sum + serveWork(row.bytes, row.escapes), 0);
+  await keepFoldNearHead(env, session, spent);
 
   log({
     event: "pull",
@@ -105,6 +141,30 @@ export async function pull(
     nextCursor: encodeCursor(next),
     hasMore,
   });
+}
+
+/**
+ * Move the fold checkpoint on when it has fallen behind the log (`fold-store.ts`), by what the
+ * request's budget has left beside its page (`spent`) and never more: the step is cut to fit, and
+ * a step that fits nothing folds nothing (`pullFoldBudget`).
+ *
+ * Here because every sync pulls: a device that pushed pulls straight after, so the
+ * checkpoint trails the log by little more than {@link LAZY_FOLD_BEHIND} operations, and a
+ * backup or restore — which finish the fold inside their own request — find almost nothing
+ * left to do. Below the threshold it costs one indexed read. A pull never fails because of
+ * it: the pull's answer is already decided, a failed step writes nothing (its batch is one
+ * transaction), and the next pull or snapshot tries again.
+ */
+async function keepFoldNearHead(env: Env, session: Session, spent: number): Promise<void> {
+  try {
+    const progress = await foldProgress(env, session.repoId, session.epoch);
+    if (session.lastSeq - progress.seq < LAZY_FOLD_BEHIND) return;
+    await advanceFold(env, session.repoId, session.epoch, session.lastSeq, {
+      budget: pullFoldBudget(planOf(env), spent),
+    });
+  } catch (err) {
+    log({ event: "fold.lag", status: 503, code: errorKind(err), repo_id: session.repoId, epoch: session.epoch });
+  }
 }
 
 /**

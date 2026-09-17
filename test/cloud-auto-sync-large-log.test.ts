@@ -1,6 +1,6 @@
 /**
  * A device that only ever synchronizes automatically still reaches a log too large for the
- * service to fold.
+ * service to fold — a Worker from before the fold checkpoint, which refuses past 20,000.
  *
  * Such a log is read whole from the ordered tail and folded on the device (`tail-fold.ts`),
  * which on a real repository — 20,000 operations and more — is more pages than an automatic
@@ -12,7 +12,7 @@
  * at, and a run that got somewhere reports progress rather than failure (`auto-sync.ts`).
  *
  * The fake folds at most 30 operations, serves 5 a page, and lets a device make 6 requests
- * a minute — the Worker's 20,000, 500 and 120, scaled so one run cannot finish.
+ * a minute — that Worker's 20,000, 500 and 120, scaled so one run cannot finish.
  */
 import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
