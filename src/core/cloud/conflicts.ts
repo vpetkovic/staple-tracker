@@ -795,15 +795,27 @@ function keepEntries(db: DatabaseSync, conflictId: string, local: Entries, remot
   );
 }
 
-/** The entries a resolution to `chosen` writes: each chosen issue's, from the side chosen. */
-function entriesFor(db: DatabaseSync, conflict: ConflictRecord, choice: ResolutionChoice, chosen: unknown): Entries | null {
+/**
+ * The entries a resolution to `chosen` writes: each chosen issue's, from the side chosen (either,
+ * for a custom value). Every chosen issue has one, so no device applying the decision makes one
+ * up from the operation's own author and time; only an issue neither side held — one a custom
+ * value genuinely adds — is the resolver's, at the decision.
+ */
+function entriesFor(
+  db: DatabaseSync,
+  conflict: ConflictRecord,
+  choice: ResolutionChoice,
+  chosen: unknown,
+  actor: string | null,
+  at: string,
+): Entries | null {
+  if (!Array.isArray(chosen)) return null;
   const row = db.prepare("SELECT value FROM meta WHERE key = ?").get(entriesKey(conflict.id)) as { value: string } | undefined;
-  if (row === undefined || !Array.isArray(chosen)) return null;
-  const kept = JSON.parse(row.value) as { local: Entries; remote: Entries };
+  const kept = row === undefined ? { local: {} as Entries, remote: {} as Entries } : (JSON.parse(row.value) as { local: Entries; remote: Entries });
   const from = choice === "local" ? kept.local : choice === "remote" ? kept.remote : { ...kept.remote, ...kept.local };
   const picked: Entries = {};
   for (const id of chosen) {
-    if (typeof id === "string" && from[id] !== undefined) picked[id] = from[id]!;
+    if (typeof id === "string") picked[id] = from[id] ?? { addedBy: actor ?? "sync", addedAt: at, note: null };
   }
   return picked;
 }
@@ -1093,7 +1105,7 @@ function decide(db: DatabaseSync, request: ResolveRequest): ResolveOutcome {
     }
 
     // A plan or a milestone's members go back with each entry's author, time and note.
-    const entries = WHOLE[conflict.entity] === conflict.field ? entriesFor(db, conflict, request.choice, chosen) : null;
+    const entries = WHOLE[conflict.entity] === conflict.field ? entriesFor(db, conflict, request.choice, chosen, actor, at) : null;
     for (const write of writes) {
       const payload: Record<string, unknown> = { [wireKey(conflict.field)]: write.value };
       if (entries !== null) payload.entries = entries;
@@ -1143,6 +1155,13 @@ function decide(db: DatabaseSync, request: ResolveRequest): ResolveOutcome {
         entity: conflict.entity,
         targetId: conflict.entityId,
         field: conflict.field,
+        /**
+         * And a list's entries, as the resolving write carries them. A device with its own
+         * record open about the list withholds that write, and closes its record by this
+         * one: from the value alone, it wrote the resolver as the author of every entry, at
+         * the moment of the decision, where every other device holds each entry's own.
+         */
+        ...(entries !== null ? { entries } : {}),
       },
       actor,
     });
@@ -1334,7 +1353,8 @@ export function applyConflictOperation(db: DatabaseSync, op: RemoteOperation): b
       entity,
       entityId: targetId,
       verb: resolutionVerb(entity, field),
-      payload: { [wireKey(field)]: value },
+      // A list's entries ride with the decision (`resolveConflict`).
+      payload: { [wireKey(field)]: value, ...(isEntries(payload.entries) ? { entries: payload.entries } : {}) },
       actor: op.actor === "" ? null : op.actor,
       deviceId: op.deviceId,
       at,
@@ -1350,6 +1370,10 @@ export function applyConflictOperation(db: DatabaseSync, op: RemoteOperation): b
   settleOpenFor(db, entity, targetId, field, at, resolvedBy, value);
   forgetClosedEntries(db);
   return true;
+}
+
+function isEntries(value: unknown): value is Entries {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 /** Exported for the surfaces, which all render the same summary line. */

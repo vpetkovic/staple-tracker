@@ -1329,7 +1329,13 @@ withholds it from an operation: a field on its own, a plan or a milestone's memb
 whole. And a plan's record keeps each side's entries (`conflict_entries:<id>` in `meta`,
 device-local, forgotten once the record closes), so a resolution writes back who queued
 each entry, when and why from the side it chose — resolved from the order alone, "keep
-mine" put the entries back without their notes on every device.
+mine" put the entries back without their notes on every device. Every chosen entry has
+one; only an issue a custom value adds, which neither side held, is the resolver's, at the
+decision. The decision's own `conflict` operation carries the same `entries`: a device
+with its own record open about the list withholds the resolving `replace` and closes its
+record by the decision, and from the list alone it wrote the resolver as the author of
+every entry, where a fresh device held each entry's own
+(`test/cloud-resolution-entry-provenance.test.ts`).
 
 **An epoch is a discontinuity.** `epoch` is an integer stamped on the repository
 and embedded in every cursor. A restore that moves remote state backwards
