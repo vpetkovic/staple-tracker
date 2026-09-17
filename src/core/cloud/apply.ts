@@ -727,7 +727,12 @@ function applyIssue(db: DatabaseSync, input: ApplyInput): boolean {
       // named the old number and must follow (`hub.ts`, `followIdentifierMoves`).
       recordIdentifierMove(db, { issueId: input.entityId, from: before, to: after, at: nowIso() });
       if (input.seq !== undefined && input.seq !== null) {
-        closeIdentifierConflict(db, input, after);
+        // Not when this very apply put it on a stand-in for a later claim: that is what the record is about.
+        const waits = db
+          .prepare("SELECT remote_value FROM sync_conflicts WHERE entity = 'issue' AND entity_id = ? AND field = 'identifier' AND resolved_at IS NULL")
+          .all(input.entityId) as Array<{ remote_value: string | null }>;
+        const standIn = waits.some((record) => record.remote_value !== null && after.startsWith(`${JSON.parse(record.remote_value) as string}+`));
+        if (!standIn) closeIdentifierConflict(db, input, after);
         giveBackFreedIdentifier(db, before, input);
       }
     }
@@ -958,7 +963,11 @@ function recordIdentifierConflict(
         local_op_id, remote_op_id, local_device_id, remote_device_id,
         local_at, remote_at, detected_at)
      VALUES (?, 'issue', ?, 'identifier', NULL, ?, ?, NULL, ?, NULL, ?, NULL, ?, ?)
-     ON CONFLICT (id) DO NOTHING`,
+     ON CONFLICT (id) DO UPDATE SET
+       local_value = excluded.local_value, remote_value = excluded.remote_value, remote_op_id = excluded.remote_op_id,
+       remote_device_id = excluded.remote_device_id, remote_at = excluded.remote_at, detected_at = excluded.detected_at,
+       resolved_at = NULL, resolved_by = NULL, resolution = NULL
+     WHERE sync_conflicts.resolved_at IS NOT NULL`,
   ).run(
     `identifier:${input.entityId}`,
     input.entityId,
