@@ -340,7 +340,7 @@ describe("the epoch a restore fills", () => {
   it("starts its checkpoint at the restore's guard, and is folded by the time it goes live", async () => {
     const ops = generateLog({ seed: 311, count: 1200, pool: 20 });
     await insertOps(env.DB, REPO, ops);
-    for (let n = 0; n < 3; n += 1) await req(`/v1/repos/${REPO}/ops?limit=1`, { token });
+    await catchUp();
     const head = ops[ops.length - 1]!.seq;
     const taken = await jsonOf(await req(`/v1/repos/${REPO}/backups`, { method: "POST", token, body: {} }));
 
@@ -369,7 +369,7 @@ describe("the epoch a restore fills", () => {
   it("clears fold rows an abandoned restore left in it, and folds the new one from its own rows", async () => {
     const ops = generateLog({ seed: 312, count: 600, pool: 15 });
     await insertOps(env.DB, REPO, ops);
-    for (let n = 0; n < 2; n += 1) await req(`/v1/repos/${REPO}/ops?limit=1`, { token });
+    await catchUp();
     const head = ops[ops.length - 1]!.seq;
     // What a restore abandoned after it staged leaves once its operations are removed: a
     // checkpoint of epoch 2 that describes rows no longer there.

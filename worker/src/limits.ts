@@ -177,10 +177,10 @@ export const PAGE_BYTES = 1024 * 1024;
  * Estimated isolate time one snapshot page may spend reading and serializing its entities
  * (`serveWork`, `fold-work.ts`): a page of escape-heavy states is cut long before its bytes are.
  */
-export const PAGE_WORK = 3_000_000;
+export const PAGE_WORK = 2_000_000;
 
 /**
- * Estimated isolate time one restore turn may spend reading and staging entities. A third of a
+ * Estimated isolate time one restore turn may spend reading and staging entities. Half of a
  * request, so the fold of what it staged, which costs about as much again, fits in the rest and the
  * new epoch's checkpoint keeps up with the restore.
  */
@@ -222,7 +222,7 @@ const FOLD_PLAN_LIMITS: Record<
   free: {
     foldBudgetOps: FOLD_STEP_OPS,
     foldBudgetBytes: FOLD_STEP_BYTES,
-    requestWork: 5_000_000,
+    requestWork: 4_000_000,
     pullFoldOps: FOLD_STEP_OPS,
     restoreStageEntities: 200,
   },
@@ -254,7 +254,7 @@ export function requestFoldBudget(plan: Plan): { remaining: number; bytes: numbe
 
 /**
  * Estimated isolate time one request may spend on the fold and on what it serves from it, in
- * nanoseconds (`fold-work.ts`). Five milliseconds on free, so the request's own routing,
+ * nanoseconds (`fold-work.ts`). Four milliseconds on free, so the request's own routing,
  * authentication and response fit beside it under the plan's ten.
  */
 export function requestWork(plan: Plan): number {

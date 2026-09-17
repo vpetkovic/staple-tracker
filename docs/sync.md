@@ -1087,10 +1087,10 @@ maxPullLimit }`.
 |---|---|---|
 | Operations per push batch | **200** paid, **25** free | A push costs `N + 4` D1 statements, against a queries-per-Worker-invocation ceiling of 1,000 paid and **50** free |
 | Single operation payload | **512 KiB** | Well under D1's 2 MB maximum row size, with headroom for the envelope |
-| Pull page `limit` | default 200, maximum **500**, and at most **3 ms** of estimated isolate time to send, the first operation always | A page cut by work is shorter than its limit and says `hasMore` |
+| Pull page `limit` | default 200, maximum **500**, and at most **2 ms** of estimated isolate time to send, the first operation always | A page cut by work is shorter than its limit and says `hasMore` |
 | Requests per device | 120 per 60 s, answered with `Retry-After: 60` | Policy, not a platform limit — the `SYNC_LIMITER` binding in `worker/wrangler.toml`, keyed on repository and device |
-| Snapshot page `limit` | default 200, maximum **500** entities, at most **1 MiB** of their state, and at most **3 ms** of estimated isolate time to send | A page cut by bytes or work is shorter than its limit and says `hasMore` |
-| Fold work in one request | **5 ms** of estimated isolate time free, shared with the page it serves; at most 500 operations and 1 MiB of payload a step | The free plan's 10 ms of CPU. A step is cut by what its operations cost to fold, not by how many there are. See [the fold checkpoint](#the-service-keeps-its-fold-and-folds-it-a-request-at-a-time) |
+| Snapshot page `limit` | default 200, maximum **500** entities, at most **1 MiB** of their state, and at most **2 ms** of estimated isolate time to send | A page cut by bytes or work is shorter than its limit and says `hasMore` |
+| Fold work in one request | **4 ms** of estimated isolate time free, shared with the page it serves; at most 500 operations and 1 MiB of payload a step | The free plan's 10 ms of CPU. A step is cut by what its operations cost to fold, not by how many there are. See [the fold checkpoint](#the-service-keeps-its-fold-and-folds-it-a-request-at-a-time) |
 | Entities one restore turn stages | **200** free, **1,000** paid, at most **1 MiB** of state and **2 ms** of estimated isolate time | CPU again: an operation id, a payload and a row each, and the fold of them in the rest of the turn |
 
 These replace the numbers this page carried before the Cloudflare research
@@ -1277,7 +1277,7 @@ restore wrote it (`test/cloud-old-build-times.test.ts`, worker `backups.test.ts`
 the whole log inside each snapshot, backup and restore request, and refused past 20,000
 operations. Even under that limit, a request cost more CPU and more D1 queries than the free
 plan allows. This Worker keeps the fold in D1 as a checkpoint (`worker/src/fold-store.ts`).
-On the free plan a request folds what fits 5 ms of isolate time, estimated from what the
+On the free plan a request folds what fits 4 ms of isolate time, estimated from what the
 operations cost to fold rather than from how many there are: long in small edits, short in
 large or quote-heavy ones, and never loading more than a new revision can collide with, however
 many revisions its document holds (`worker/src/fold-revisions.ts`). It can read any cutoff the
@@ -1311,8 +1311,8 @@ it:
   before the checkpoint took holds its entities in its own row and restores as it always did.
 - **The limits a device can see are the Worker's, and the test service mirrors them.** A
   snapshot page holds at most `limit` entities, at most 1 MiB of their state and field writes
-  counted in UTF-8 bytes, and at most 3 ms of estimated isolate time to send. A pull page holds
-  at most `limit` operations and 3 ms of estimated isolate time, the first always. A restore
+  counted in UTF-8 bytes, and at most 2 ms of estimated isolate time to send. A pull page holds
+  at most `limit` operations and 2 ms of estimated isolate time, the first always. A restore
   turn stages at most 200 entities (1,000 on paid), 1 MiB of state and 2 ms of estimated
   isolate time. A page cut short says `hasMore`. The estimate counts bytes and, above all,
   quotes and backslashes, which are what JSON costs to parse and write

@@ -16,7 +16,7 @@ test runner.
 ```bash
 cd worker
 npm install --legacy-peer-deps   # see "Why --legacy-peer-deps" below
-npm test                          # 208 tests, in the Workers runtime, no network
+npm test                          # 304 tests, in the Workers runtime, no network
 npm run typecheck
 npm run lint:logs                 # no console.* outside src/log.ts
 ```
@@ -44,12 +44,14 @@ worker/
     backups.ts         backup, epoch-safe restore, purge
     vocabulary.ts      a repository holds a hub registry or a workspace, never both
     fold.ts            the fold's rule: how one operation changes the fold
-    fold-store.ts      the fold kept in D1, advanced in bounded steps
+    fold-store.ts      the fold kept in D1, advanced in steps bounded by their work
+    fold-revisions.ts  placing a revision through indexes, not through its document
+    fold-work.ts       what folding, paging and staging cost, estimated from sizes
     cursor.ts          opaque cursors
     errors.ts          the error taxonomy
     limits.ts          everything /v1/capabilities advertises
     log.ts             THE ONLY console.* in this Worker
-  test/                208 tests
+  test/                304 tests
   scripts/lint-logs.mjs
   wrangler.toml        COMMITTED. Placeholders only.
   wrangler.local.toml  GITIGNORED. Real account and database ids.
@@ -111,8 +113,9 @@ See `src/backups.ts`; the short version, because getting it wrong is unrecoverab
   epochs, and it must not be made to. `test/backups.test.ts` asserts the restored
   content is visible through `/snapshot` for exactly this reason — a bump-only
   implementation passes every other test in that file.
-- **Restore is chunked**, 200 entities a turn on the free plan and 1,000 on paid, written
-  with packed statements and folded into the new epoch's checkpoint as they are staged, so
+- **Restore is chunked**, 200 entities a turn on the free plan and 1,000 on paid, and no more
+  than 2 ms of estimated isolate time, written with packed statements and folded into the new
+  epoch's checkpoint as they are staged, so
   the epoch is fully folded by the time it goes live. It is driven by calling the one route
   in a loop until it answers `done`. Its first turn needs the checkpoint to have reached
   the backup's cutoff and the head; until it has, the turn folds its budget and refuses,
@@ -274,25 +277,63 @@ caps at 2 MB.
 
 **What is kept.** `fold_versions` holds each entity as the fold left it at the end of each
 fold step that changed it. `fold_marks` holds the seq each step ended at, with the fold's
-counts there. A step folds at most 500 operations (and 1 MiB of payload) after the newest
-mark, and writes its versions and its mark in one D1 batch. At a mark, every entity is its
-newest version at or below it. At any other cutoff, the fold is the newest mark below it plus
-the operations after it. Rows are only ever added, never updated, so concurrent steps and a
-push landing mid-step cannot tear the checkpoint.
+counts there. A step folds operations after the newest mark, and writes its versions and its
+mark in one D1 batch. At a mark, every entity is its newest version at or below it. At any
+other cutoff, the fold is the newest mark below it plus the operations after it. Rows are only
+ever added, never updated, so concurrent steps and a push landing mid-step cannot tear the
+checkpoint. A revision's rows also carry its document, its number and a key for its body, which
+two indexes read (below).
 
-**Who moves it on.** Every pull that finds it 500 or more seqs behind folds one step, so on
-any repository that syncs it stays within a few hundred operations of the head. A
-snapshot's first page, a backup, and a restore's first turn each fold up to their cutoff,
-one budget per request: 500 operations and 1 MiB on free, 50,000 on paid. Each answers
-"still folding" until the fold has reached its cutoff. A snapshot stays pinned at the head,
-as it always was. A backup's cutoff is always a mark. Each restore turn folds what it
-staged, so the restored epoch is folded by the time it goes live.
+**What bounds a step.** Its work, not its operation count. A step reads at most 500
+operations and 1 MiB of payload, and folds the longest run of them whose estimated isolate time
+fits 4 ms (`src/fold-work.ts`). The estimate comes from sizes SQLite measures before anything
+large is read: each payload's bytes, the stored size of each entity the run names, and the size
+each entity will be written back at. It counts escapes (quotes and backslashes) as well as
+bytes, because V8 copies plain text through `JSON.parse` and `JSON.stringify` almost for free
+and pays for every character it escapes. Measured on workerd, per megabyte of JSON text:
+
+| Content | parse | serialize, then pack into a statement |
+|---|---|---|
+| ASCII letters, `é`, CJK | 0.05–0.2 ms | 0.2–0.5 ms |
+| a third `\n` | 1.5 ms | 3.1 ms |
+| `\"` | 3.7 ms | 8.4 ms |
+
+A step always folds its first operation when the request has done nothing else, so one
+operation larger than any budget still folds, alone. A request that has folded or served
+something folds nothing it has no room for. Checked against isolate time: on logs from
+`test/log-generator.ts`, steps measured 0.7 to 0.9 of their estimate, at about 270 operations
+a step.
+
+**A revision is placed through two indexes, never through its document.** A
+`documentRevision` create settles against its document's revisions: it is dropped when a live
+revision at or above its floor holds the same body, and otherwise takes the first number from
+its claim upward that no live revision holds. The step before this one loaded every revision of
+the document to decide that, so a step of k saves on a document of R revisions cost k × R, and
+a worklog saved a few thousand times could no longer be folded by any request. Now a step reads
+the runs of held numbers from each document's lowest claim (`fold_versions_revisions`, one row
+for 5,000 consecutive revisions) and the live revisions holding the same body key
+(`fold_versions_revision_bodies`), confirming a match on the stored body. It overlays what the
+step itself has folded (`src/fold-revisions.ts`). When a placement needs more than the step has
+read, the step reads again up to four times, then ends before that operation.
+
+**Who moves it on.** Every pull that finds it 500 or more seqs behind folds with what its page
+left of the request's 4 ms, and folds nothing rather than more. On any repository that syncs,
+it stays within a few hundred operations of the head. A snapshot's first page, a backup, and a
+restore's first turn each fold up to their cutoff with the request's budget, and answer "still
+folding" until the fold has reached it. A snapshot stays pinned at the head, as it always was.
+A backup's cutoff is always a mark. Each restore turn stages no more than 2 ms of work and folds
+what it staged with the rest, so the restored epoch is folded by the time it goes live.
+
+**Pages are cut by work too.** A pull page and a snapshot page stop at 2 ms of estimated
+isolate time to send, the first entry always, and say `hasMore`. A page of 30 KB quote-heavy
+issues used to cost 13 ms of isolate time to send before any fold ran.
 
 **A backup is a row.** It records the epoch, the cutoff and the fold's counts there. A
 restore pages the backup's entities out of the checkpoint in the order `restoreOrder` stages
 them (`claimSeq`, then key), read off the `fold_versions_stage` index. A backup taken by the
 Worker before this one (`content = 'inline'`) keeps its entities in its own row and restores
-as it did.
+as it did. A restore turn counts its progress from the staged rows it has not counted yet
+(`restores.staged_seq`), never the whole restore again.
 
 Measured on workerd with this Worker deployed onto the same D1 as above, the most any one
 request cost:
@@ -439,7 +480,7 @@ a newer build editing a field while an older Worker is live, followed by a backu
 restore, writes an edit that no build can recover (`docs/sync.md`, "Every field travels in
 one spelling"). With the Worker deployed first, that window is empty.
 
-**Deploying the fold checkpoint** (migration `0006`) needs no step after the migration;
+**Deploying the fold checkpoint** (migrations `0006` and `0007`) needs no step after the migrations;
 [The fold checkpoint](#the-fold-checkpoint) says what devices see while it is built on a
 large existing log.
 

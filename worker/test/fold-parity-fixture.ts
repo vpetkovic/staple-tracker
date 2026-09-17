@@ -134,11 +134,11 @@ export const FOLD_PARITY_LIMITS = {
   foldBudget: 500,
   foldStep: 500,
   foldBudgetBytes: 1024 * 1024,
-  foldWork: 5_000_000,
+  foldWork: 4_000_000,
   foldStepWork: 4_000_000,
   restoreStageEntities: 200,
   pageBytes: 1024 * 1024,
-  pageWork: 3_000_000,
+  pageWork: 2_000_000,
   restorePageWork: 2_000_000,
 } as const;
 
@@ -260,13 +260,13 @@ export async function observeFoldParity(driver: ParityDriver): Promise<Record<st
  * answer the same.
  */
 export const FOLD_PARITY_OBSERVED: Record<string, unknown> = {
-  snapshot: {"folding":[358,562,711,829,938,1073,1204,1278,1372,1440,1724,1857,1860],"cutoffSeq":1862,"pages":[384,6,2,2,12,33,22,22,22,33]},
-  pulled: [388,289,289,295,397,48,2],
-  backup: {"folding":[829,938,1073,1204,1278,1372,1440,1724,1857,1860],"status":200,"entityCount":538,"opCount":1708,"cutoffSeq":1862},
-  restore: [{"folding":358},{"folding":562},{"folding":711},{"folding":829},{"folding":938},{"folding":1073},{"folding":1204},{"folding":1278},{"folding":1372},{"folding":1440},{"folding":1724},{"folding":1857},{"folding":1860},{"status":200,"staged":0},{"status":200,"staged":24},{"status":200,"staged":29},{"status":200,"staged":65},{"status":200,"staged":79},{"status":200,"staged":97},{"status":200,"staged":134},{"status":200,"staged":165},{"status":200,"staged":201},{"status":200,"staged":401},{"status":200,"staged":538},{"status":200,"staged":538}],
-  restored: {"folding":[],"cutoffSeq":2400,"pages":[389,2,2,2,33,22,22,22,44]},
-  undo: [{"folding":358,"cutoff":1862},{"folding":562,"cutoff":1862},{"folding":711,"cutoff":1862},{"folding":829,"cutoff":1862},{"folding":938,"cutoff":1862},{"folding":1073,"cutoff":1862},{"folding":1204,"cutoff":1862},{"folding":1278,"cutoff":1862},{"folding":1372,"cutoff":1862},{"folding":1440,"cutoff":1862},{"folding":1724,"cutoff":1862},{"folding":1857,"cutoff":1862},{"folding":1860,"cutoff":1862},{"folding":1872,"cutoff":2400},{"folding":1890,"cutoff":2400},{"folding":1928,"cutoff":2400},{"folding":1954,"cutoff":2400},{"folding":1997,"cutoff":2400},{"folding":2057,"cutoff":2400},{"folding":2356,"cutoff":2400},{"status":200,"staged":0},{"status":200,"staged":24},{"status":200,"staged":29},{"status":200,"staged":65},{"status":200,"staged":79},{"status":200,"staged":97},{"status":200,"staged":134},{"status":200,"staged":165},{"status":200,"staged":201},{"status":200,"staged":401},{"status":200,"staged":538},{"status":200,"staged":538}],
-  undone: {"folding":[],"cutoffSeq":2938,"pages":[389,2,2,2,33,22,22,22,44]},
+  snapshot: {"folding":[327,517,652,759,829,927,987,1108,1213,1272,1333,1411,1469,1736,1856,1859],"cutoffSeq":1862,"pages":[115,273,2,2,2,12,33,22,22,22,33]},
+  pulled: [291,193,193,193,193,198,246,194,4,3],
+  backup: {"folding":[927,987,1108,1213,1272,1333,1411,1469,1736,1856,1859],"status":200,"entityCount":538,"opCount":1708,"cutoffSeq":1862},
+  restore: [{"folding":327},{"folding":517},{"folding":652},{"folding":759},{"folding":829},{"folding":927},{"folding":987},{"folding":1108},{"folding":1213},{"folding":1272},{"folding":1333},{"folding":1411},{"folding":1469},{"folding":1736},{"folding":1856},{"folding":1859},{"status":200,"staged":0},{"status":200,"staged":24},{"status":200,"staged":29},{"status":200,"staged":65},{"status":200,"staged":79},{"status":200,"staged":97},{"status":200,"staged":134},{"status":200,"staged":165},{"status":200,"staged":201},{"status":200,"staged":401},{"status":200,"staged":538},{"status":200,"staged":538}],
+  restored: {"folding":[],"cutoffSeq":2400,"pages":[299,91,2,2,12,33,22,22,22,33]},
+  undo: [{"folding":327,"cutoff":1862},{"folding":517,"cutoff":1862},{"folding":652,"cutoff":1862},{"folding":759,"cutoff":1862},{"folding":829,"cutoff":1862},{"folding":927,"cutoff":1862},{"folding":987,"cutoff":1862},{"folding":1108,"cutoff":1862},{"folding":1213,"cutoff":1862},{"folding":1272,"cutoff":1862},{"folding":1333,"cutoff":1862},{"folding":1411,"cutoff":1862},{"folding":1469,"cutoff":1862},{"folding":1736,"cutoff":1862},{"folding":1856,"cutoff":1862},{"folding":1859,"cutoff":1862},{"folding":1862,"cutoff":2400},{"folding":1887,"cutoff":2400},{"folding":1924,"cutoff":2400},{"folding":1942,"cutoff":2400},{"folding":1984,"cutoff":2400},{"folding":2028,"cutoff":2400},{"folding":2201,"cutoff":2400},{"status":200,"staged":0},{"status":200,"staged":24},{"status":200,"staged":29},{"status":200,"staged":65},{"status":200,"staged":79},{"status":200,"staged":97},{"status":200,"staged":134},{"status":200,"staged":165},{"status":200,"staged":201},{"status":200,"staged":401},{"status":200,"staged":538},{"status":200,"staged":538}],
+  undone: {"folding":[],"cutoffSeq":2938,"pages":[299,91,2,2,12,33,22,22,22,33]},
   stagedOrder: [
     "issue iss-037", "issue iss-074", "issue iss-109", "issue iss-146", "issue iss-031", "issue iss-068",
     "issue iss-105", "issue iss-140", "issue iss-027", "issue iss-062", "issue iss-099", "issue iss-136",

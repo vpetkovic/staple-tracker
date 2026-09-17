@@ -10,6 +10,10 @@ import { FOLD_PARITY_OBSERVED, FOLD_PARITY_OPS, observeFoldParity } from "./fold
 
 it("answers the fold's limits exactly as the fixture records", async () => {
   const token = await seedRepo();
+  // Devices taking requests in turn: one may make 120 a minute, and the scenario makes more.
+  const fleet = [{ device: "device-a", token }];
+  for (let n = 1; n < 8; n += 1) fleet.push({ device: `device-parity-${n}`, token: await seedRepo(REPO, `device-parity-${n}`) });
+  let turn = 0;
   await call(`/v1/repos/${REPO}/backup`, { method: "PUT", token, body: { enabled: true } });
   for (let start = 0; start < FOLD_PARITY_OPS.length; start += 50) {
     await env.DB.prepare(
@@ -31,7 +35,8 @@ it("answers the fold's limits exactly as the fixture records", async () => {
   const observed = await observeFoldParity({
     repoId: REPO,
     async send(method, path, body) {
-      const response = await call(`/v1/repos/${REPO}${path}`, { method, token, ...(body === undefined ? {} : { body }) });
+      const member = fleet[turn++ % fleet.length]!;
+      const response = await call(`/v1/repos/${REPO}${path}`, { method, token: member.token, device: member.device, ...(body === undefined ? {} : { body }) });
       return { status: response.status, body: await jsonOf(response) };
     },
     async clearFold() {

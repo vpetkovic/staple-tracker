@@ -327,7 +327,8 @@ async function foldRun(
     work: 0,
     keyOf: bodyKey,
   });
-  if (rows.length === 0) return nothing();
+  // No operations up to `end`, only seqs reserved and never used: the fold there is the fold at the base.
+  if (rows.length === 0) return { ...nothing(), mark: { ...base, seq: end } };
 
   // --- What each prefix would cost, from sizes; and D1's live revisions at every number named.
   const keysOf = rows.map(namedKeys);
@@ -759,7 +760,7 @@ export async function advanceFold(
       walk: options.stepWalk ?? FOLD_STEP_WALK,
       mayBeEmpty: budget.folded === true,
     });
-    if (run.folded === 0) break;
+    if (run.folded === 0 && rows.length > 0) break;
 
     await options.beforeWrite?.();
 

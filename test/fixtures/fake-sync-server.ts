@@ -252,7 +252,7 @@ export interface FakeServerOptions {
   foldBudgetBytes?: number;
   /**
    * Estimated isolate time one request may spend folding and serving (`requestWork` in
-   * `worker/src/limits.ts`, 5 ms on free), and one fold step (`FOLD_STEP_WORK`, 4 ms), in
+   * `worker/src/limits.ts`, 4 ms on free), and one fold step (`FOLD_STEP_WORK`, 4 ms), in
    * nanoseconds of `worker/src/fold-work.ts`'s model. Unlimited unless given; given, steps are cut
    * exactly where the Worker cuts them — by work, by placement reads and walk (`foldRun`).
    */
@@ -268,7 +268,7 @@ export interface FakeServerOptions {
   pageBytes?: number;
   /**
    * Estimated isolate time one snapshot page, and one restore turn's page, may spend
-   * (`PAGE_WORK`, 3 ms, and `RESTORE_PAGE_WORK`, 2 ms, in `worker/src/limits.ts`).
+   * (`PAGE_WORK`, 2 ms, and `RESTORE_PAGE_WORK`, 2 ms, in `worker/src/limits.ts`).
    */
   pageWork?: number;
   restorePageWork?: number;
@@ -452,7 +452,7 @@ export class FakeSyncServer {
       foldStepWork: Number.POSITIVE_INFINITY,
       restoreStageEntities: 200,
       pageBytes: 1024 * 1024,
-      pageWork: 3_000_000,
+      pageWork: 2_000_000,
       restorePageWork: 2_000_000,
       ...options,
     };
@@ -1669,6 +1669,12 @@ export class FakeSyncServer {
         if (window.length >= limit || spent >= byteCap) break;
         window.push(op);
         spent += this.payloadBytes(op);
+      }
+      // Nothing up to the target but seqs reserved and never used: the fold is there (`foldRun`).
+      if (window.length === 0) {
+        from = target;
+        this.foldedTo.set(epoch, from);
+        break;
       }
       const run = stepped
         ? this.foldRun(epoch, from, window, {
