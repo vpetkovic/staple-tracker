@@ -12,8 +12,10 @@
  * The log is chosen so the limits bind: payloads in characters that are two and three UTF-8
  * bytes, so a limit counted in string length and one counted in bytes cut differently; some
  * of 400 KB, so the free plan's 1 MiB of payload a request stops a fold before its 500
- * operations do, and entity states past 1 MiB a page; gaps in seq; and renumbers, so a
- * restore's claim order is not its key order.
+ * operations do, and entity states past 1 MiB a page; gaps in seq; renumbers, so a
+ * restore's claim order is not its key order; and a worklog of contested revisions with quotes
+ * in every body, so steps are cut by estimated work (`worker/src/fold-work.ts`) and by what a
+ * revision's placement may read (`worker/src/fold-revisions.ts`), not only by count and bytes.
  */
 
 /** One operation, as `ops` stores it: the payload already JSON text. */
@@ -71,6 +73,42 @@ export const FOLD_PARITY_OPS: readonly ParityOp[] = (() => {
       serverTs: base + n * 1000,
     });
   }
+  // A worklog saved 400 times, with quotes in every body: its revision creates are placed against
+  // what D1 holds, so steps are cut where a placement needs more than a step may read — a number
+  // claimed again, a stale claim far below the head, the same revision sent again, a number spelled
+  // two ways, a deleted revision whose number is taken again.
+  const worklog = "iss-000/worklog/";
+  let next = 1;
+  for (let n = 0; n < 400; n += 1) {
+    seq += 1;
+    let entityId: string;
+    let verb = "create";
+    let payload: Record<string, unknown>;
+    const body = `# Worklog\n\n"entry ${n}" \\ ${"w".repeat(n % 300)}\n`;
+    if (n % 17 === 16) {
+      verb = "delete";
+      entityId = `${worklog}${Math.max(1, next - 5)}`;
+      payload = {};
+    } else if (n % 11 === 10) {
+      entityId = `${worklog}${Math.max(1, next - 1)}`;
+      payload = { issueId: "iss-000", key: "worklog", revision: Math.max(1, next - 1), body: `# Worklog\n\n"entry ${n - 1}" \\ ${"w".repeat((n - 1) % 300)}\n`, author: "parity", changeSummary: null };
+    } else {
+      const claimed = n % 19 === 18 ? 1 : n % 7 === 6 ? Math.max(1, next - 3) : next++;
+      entityId = `${worklog}${n % 13 === 12 ? `0${claimed}` : claimed}`;
+      payload = { issueId: "iss-000", key: "worklog", revision: claimed, body, author: "parity", changeSummary: null };
+    }
+    out.push({
+      seq,
+      entity: "documentRevision",
+      entityId,
+      verb,
+      payload: JSON.stringify(payload),
+      opId: `parity-worklog-${n}`,
+      actor: "parity",
+      createdAt: new Date(base + (1400 + n) * 1000).toISOString(),
+      serverTs: base + (1400 + n) * 1000,
+    });
+  }
   // A run of 400 KB edits to end on: a request folds three of them before its 1 MiB is spent, so
   // one request's budget ends exactly at the log's end — where a restore of it goes on to fold
   // the next epoch with nothing left, and its progress must still climb.
@@ -96,8 +134,12 @@ export const FOLD_PARITY_LIMITS = {
   foldBudget: 500,
   foldStep: 500,
   foldBudgetBytes: 1024 * 1024,
+  foldWork: 5_000_000,
+  foldStepWork: 4_000_000,
   restoreStageEntities: 200,
   pageBytes: 1024 * 1024,
+  pageWork: 3_000_000,
+  restorePageWork: 2_000_000,
 } as const;
 
 export interface ParityResponse {
@@ -213,12 +255,12 @@ export async function observeFoldParity(driver: ParityDriver): Promise<Record<st
  * answer the same.
  */
 export const FOLD_PARITY_OBSERVED: Record<string, unknown> = {
-  snapshot: {"folding": [544, 869, 1303, 1456, 1459], "cutoffSeq": 1462, "pages": [62, 2, 2, 12, 33, 22, 22, 22, 33]},
-  backup: {"folding": [1456, 1459], "status": 200, "entityCount": 210, "opCount": 1308, "cutoffSeq": 1462},
-  restore: [{"folding": 544}, {"folding": 869}, {"folding": 1303}, {"folding": 1456}, {"folding": 1459}, {"status": 200, "staged": 0}, {"status": 200, "staged": 24}, {"status": 200, "staged": 29}, {"status": 200, "staged": 65}, {"status": 200, "staged": 79}, {"status": 200, "staged": 97}, {"status": 200, "staged": 134}, {"status": 200, "staged": 165}, {"status": 200, "staged": 201}, {"status": 200, "staged": 210}, {"status": 200, "staged": 210}],
-  restored: {"folding": [], "cutoffSeq": 1672, "pages": [62, 2, 2, 12, 33, 22, 22, 22, 33]},
-  undo: [{"folding": 544, "cutoff": 1462}, {"folding": 869, "cutoff": 1462}, {"folding": 1303, "cutoff": 1462}, {"folding": 1456, "cutoff": 1462}, {"folding": 1459, "cutoff": 1462}, {"folding": 1462, "cutoff": 1672}, {"folding": 1487, "cutoff": 1672}, {"folding": 1524, "cutoff": 1672}, {"folding": 1542, "cutoff": 1672}, {"folding": 1584, "cutoff": 1672}, {"folding": 1628, "cutoff": 1672}, {"status": 200, "staged": 0}, {"status": 200, "staged": 24}, {"status": 200, "staged": 29}, {"status": 200, "staged": 65}, {"status": 200, "staged": 79}, {"status": 200, "staged": 97}, {"status": 200, "staged": 134}, {"status": 200, "staged": 165}, {"status": 200, "staged": 201}, {"status": 200, "staged": 210}, {"status": 200, "staged": 210}],
-  undone: {"folding": [], "cutoffSeq": 1882, "pages": [62, 2, 2, 12, 33, 22, 22, 22, 33]},
+  snapshot: {"folding":[358,562,711,829,938,1073,1204,1278,1372,1440,1724,1857,1860],"cutoffSeq":1862,"pages":[384,6,2,2,12,33,22,22,22,33]},
+  backup: {"folding":[434,602,738,868,977,1106,1213,1302,1377,1451,1785,1857,1860],"status":200,"entityCount":538,"opCount":1708,"cutoffSeq":1862},
+  restore: [{"folding":358},{"folding":562},{"folding":711},{"folding":829},{"folding":938},{"folding":1073},{"folding":1204},{"folding":1278},{"folding":1372},{"folding":1440},{"folding":1724},{"folding":1857},{"folding":1860},{"status":200,"staged":0},{"status":200,"staged":24},{"status":200,"staged":29},{"status":200,"staged":65},{"status":200,"staged":79},{"status":200,"staged":97},{"status":200,"staged":134},{"status":200,"staged":165},{"status":200,"staged":201},{"status":200,"staged":401},{"status":200,"staged":538},{"status":200,"staged":538}],
+  restored: {"folding":[],"cutoffSeq":2400,"pages":[389,2,2,2,33,22,22,22,44]},
+  undo: [{"folding":358,"cutoff":1862},{"folding":562,"cutoff":1862},{"folding":711,"cutoff":1862},{"folding":829,"cutoff":1862},{"folding":938,"cutoff":1862},{"folding":1073,"cutoff":1862},{"folding":1204,"cutoff":1862},{"folding":1278,"cutoff":1862},{"folding":1372,"cutoff":1862},{"folding":1440,"cutoff":1862},{"folding":1724,"cutoff":1862},{"folding":1857,"cutoff":1862},{"folding":1860,"cutoff":1862},{"folding":1872,"cutoff":2400},{"folding":1890,"cutoff":2400},{"folding":1928,"cutoff":2400},{"folding":1954,"cutoff":2400},{"folding":1997,"cutoff":2400},{"folding":2057,"cutoff":2400},{"folding":2356,"cutoff":2400},{"status":200,"staged":0},{"status":200,"staged":24},{"status":200,"staged":29},{"status":200,"staged":65},{"status":200,"staged":79},{"status":200,"staged":97},{"status":200,"staged":134},{"status":200,"staged":165},{"status":200,"staged":201},{"status":200,"staged":401},{"status":200,"staged":538},{"status":200,"staged":538}],
+  undone: {"folding":[],"cutoffSeq":2938,"pages":[389,2,2,2,33,22,22,22,44]},
   stagedOrder: [
     "issue iss-037", "issue iss-074", "issue iss-109", "issue iss-146", "issue iss-031", "issue iss-068",
     "issue iss-105", "issue iss-140", "issue iss-027", "issue iss-062", "issue iss-099", "issue iss-136",
@@ -255,5 +297,60 @@ export const FOLD_PARITY_OBSERVED: Record<string, unknown> = {
     "issue iss-121", "comment com-48", "issue iss-002", "comment com-59", "issue iss-033", "comment com-10",
     "comment com-21", "issue iss-064", "comment com-32", "issue iss-095", "comment com-43", "issue iss-126",
     "comment com-54", "comment com-05", "issue iss-038", "comment com-16", "comment com-27", "comment com-38",
+    "documentRevision iss-000/worklog/1", "documentRevision iss-000/worklog/2", "documentRevision iss-000/worklog/3", "documentRevision iss-000/worklog/4", "documentRevision iss-000/worklog/5", "documentRevision iss-000/worklog/6",
+    "documentRevision iss-000/worklog/7", "documentRevision iss-000/worklog/8", "documentRevision iss-000/worklog/10", "documentRevision iss-000/worklog/11", "documentRevision iss-000/worklog/12", "documentRevision iss-000/worklog/13",
+    "documentRevision iss-000/worklog/14", "documentRevision iss-000/worklog/15", "documentRevision iss-000/worklog/16", "documentRevision iss-000/worklog/9", "documentRevision iss-000/worklog/17", "documentRevision iss-000/worklog/18",
+    "documentRevision iss-000/worklog/19", "documentRevision iss-000/worklog/21", "documentRevision iss-000/worklog/22", "documentRevision iss-000/worklog/23", "documentRevision iss-000/worklog/24", "documentRevision iss-000/worklog/25",
+    "documentRevision iss-000/worklog/26", "documentRevision iss-000/worklog/27", "documentRevision iss-000/worklog/28", "documentRevision iss-000/worklog/29", "documentRevision iss-000/worklog/30", "documentRevision iss-000/worklog/20",
+    "documentRevision iss-000/worklog/32", "documentRevision iss-000/worklog/33", "documentRevision iss-000/worklog/34", "documentRevision iss-000/worklog/35", "documentRevision iss-000/worklog/36", "documentRevision iss-000/worklog/37",
+    "documentRevision iss-000/worklog/38", "documentRevision iss-000/worklog/39", "documentRevision iss-000/worklog/40", "documentRevision iss-000/worklog/41", "documentRevision iss-000/worklog/43", "documentRevision iss-000/worklog/44",
+    "documentRevision iss-000/worklog/45", "documentRevision iss-000/worklog/46", "documentRevision iss-000/worklog/31", "documentRevision iss-000/worklog/47", "documentRevision iss-000/worklog/48", "documentRevision iss-000/worklog/49",
+    "documentRevision iss-000/worklog/50", "documentRevision iss-000/worklog/51", "documentRevision iss-000/worklog/52", "documentRevision iss-000/worklog/53", "documentRevision iss-000/worklog/55", "documentRevision iss-000/worklog/56",
+    "documentRevision iss-000/worklog/57", "documentRevision iss-000/worklog/58", "documentRevision iss-000/worklog/59", "documentRevision iss-000/worklog/60", "documentRevision iss-000/worklog/61", "documentRevision iss-000/worklog/62",
+    "documentRevision iss-000/worklog/42", "documentRevision iss-000/worklog/63", "documentRevision iss-000/worklog/64", "documentRevision iss-000/worklog/66", "documentRevision iss-000/worklog/67", "documentRevision iss-000/worklog/68",
+    "documentRevision iss-000/worklog/69", "documentRevision iss-000/worklog/70", "documentRevision iss-000/worklog/71", "documentRevision iss-000/worklog/72", "documentRevision iss-000/worklog/73", "documentRevision iss-000/worklog/74",
+    "documentRevision iss-000/worklog/75", "documentRevision iss-000/worklog/76", "documentRevision iss-000/worklog/78", "documentRevision iss-000/worklog/54", "documentRevision iss-000/worklog/79", "documentRevision iss-000/worklog/80",
+    "documentRevision iss-000/worklog/81", "documentRevision iss-000/worklog/82", "documentRevision iss-000/worklog/83", "documentRevision iss-000/worklog/84", "documentRevision iss-000/worklog/85", "documentRevision iss-000/worklog/86",
+    "documentRevision iss-000/worklog/87", "documentRevision iss-000/worklog/88", "documentRevision iss-000/worklog/90", "documentRevision iss-000/worklog/91", "documentRevision iss-000/worklog/92", "documentRevision iss-000/worklog/93",
+    "documentRevision iss-000/worklog/65", "documentRevision iss-000/worklog/94", "documentRevision iss-000/worklog/95", "documentRevision iss-000/worklog/96", "documentRevision iss-000/worklog/97", "documentRevision iss-000/worklog/98",
+    "documentRevision iss-000/worklog/99", "documentRevision iss-000/worklog/100", "documentRevision iss-000/worklog/102", "documentRevision iss-000/worklog/103", "documentRevision iss-000/worklog/104", "documentRevision iss-000/worklog/105",
+    "documentRevision iss-000/worklog/106", "documentRevision iss-000/worklog/107", "documentRevision iss-000/worklog/108", "documentRevision iss-000/worklog/77", "documentRevision iss-000/worklog/109", "documentRevision iss-000/worklog/110",
+    "documentRevision iss-000/worklog/111", "documentRevision iss-000/worklog/112", "documentRevision iss-000/worklog/114", "documentRevision iss-000/worklog/115", "documentRevision iss-000/worklog/116", "documentRevision iss-000/worklog/117",
+    "documentRevision iss-000/worklog/118", "documentRevision iss-000/worklog/119", "documentRevision iss-000/worklog/120", "documentRevision iss-000/worklog/121", "documentRevision iss-000/worklog/122", "documentRevision iss-000/worklog/123",
+    "documentRevision iss-000/worklog/124", "documentRevision iss-000/worklog/89", "documentRevision iss-000/worklog/126", "documentRevision iss-000/worklog/127", "documentRevision iss-000/worklog/128", "documentRevision iss-000/worklog/129",
+    "documentRevision iss-000/worklog/130", "documentRevision iss-000/worklog/131", "documentRevision iss-000/worklog/132", "documentRevision iss-000/worklog/133", "documentRevision iss-000/worklog/134", "documentRevision iss-000/worklog/135",
+    "documentRevision iss-000/worklog/137", "documentRevision iss-000/worklog/138", "documentRevision iss-000/worklog/139", "documentRevision iss-000/worklog/101", "documentRevision iss-000/worklog/140", "documentRevision iss-000/worklog/141",
+    "documentRevision iss-000/worklog/142", "documentRevision iss-000/worklog/143", "documentRevision iss-000/worklog/144", "documentRevision iss-000/worklog/145", "documentRevision iss-000/worklog/146", "documentRevision iss-000/worklog/147",
+    "documentRevision iss-000/worklog/149", "documentRevision iss-000/worklog/150", "documentRevision iss-000/worklog/151", "documentRevision iss-000/worklog/152", "documentRevision iss-000/worklog/153", "documentRevision iss-000/worklog/154",
+    "documentRevision iss-000/worklog/155", "documentRevision iss-000/worklog/113", "documentRevision iss-000/worklog/156", "documentRevision iss-000/worklog/157", "documentRevision iss-000/worklog/158", "documentRevision iss-000/worklog/159",
+    "documentRevision iss-000/worklog/160", "documentRevision iss-000/worklog/162", "documentRevision iss-000/worklog/163", "documentRevision iss-000/worklog/164", "documentRevision iss-000/worklog/165", "documentRevision iss-000/worklog/166",
+    "documentRevision iss-000/worklog/167", "documentRevision iss-000/worklog/168", "documentRevision iss-000/worklog/169", "documentRevision iss-000/worklog/170", "documentRevision iss-000/worklog/171", "documentRevision iss-000/worklog/173",
+    "documentRevision iss-000/worklog/174", "documentRevision iss-000/worklog/175", "documentRevision iss-000/worklog/176", "documentRevision iss-000/worklog/177", "documentRevision iss-000/worklog/178", "documentRevision iss-000/worklog/179",
+    "documentRevision iss-000/worklog/180", "documentRevision iss-000/worklog/181", "documentRevision iss-000/worklog/182", "documentRevision iss-000/worklog/183", "documentRevision iss-000/worklog/184", "documentRevision iss-000/worklog/186",
+    "documentRevision iss-000/worklog/187", "documentRevision iss-000/worklog/125", "documentRevision iss-000/worklog/188", "documentRevision iss-000/worklog/189", "documentRevision iss-000/worklog/190", "documentRevision iss-000/worklog/191",
+    "documentRevision iss-000/worklog/192", "documentRevision iss-000/worklog/193", "documentRevision iss-000/worklog/194", "documentRevision iss-000/worklog/196", "documentRevision iss-000/worklog/197", "documentRevision iss-000/worklog/198",
+    "documentRevision iss-000/worklog/199", "documentRevision iss-000/worklog/200", "documentRevision iss-000/worklog/201", "documentRevision iss-000/worklog/202", "documentRevision iss-000/worklog/136", "documentRevision iss-000/worklog/203",
+    "documentRevision iss-000/worklog/204", "documentRevision iss-000/worklog/205", "documentRevision iss-000/worklog/206", "documentRevision iss-000/worklog/208", "documentRevision iss-000/worklog/209", "documentRevision iss-000/worklog/210",
+    "documentRevision iss-000/worklog/211", "documentRevision iss-000/worklog/212", "documentRevision iss-000/worklog/213", "documentRevision iss-000/worklog/214", "documentRevision iss-000/worklog/215", "documentRevision iss-000/worklog/216",
+    "documentRevision iss-000/worklog/217", "documentRevision iss-000/worklog/148", "documentRevision iss-000/worklog/218", "documentRevision iss-000/worklog/220", "documentRevision iss-000/worklog/221", "documentRevision iss-000/worklog/222",
+    "documentRevision iss-000/worklog/223", "documentRevision iss-000/worklog/224", "documentRevision iss-000/worklog/225", "documentRevision iss-000/worklog/226", "documentRevision iss-000/worklog/227", "documentRevision iss-000/worklog/228",
+    "documentRevision iss-000/worklog/229", "documentRevision iss-000/worklog/230", "documentRevision iss-000/worklog/231", "documentRevision iss-000/worklog/232", "documentRevision iss-000/worklog/233", "documentRevision iss-000/worklog/161",
+    "documentRevision iss-000/worklog/234", "documentRevision iss-000/worklog/235", "documentRevision iss-000/worklog/236", "documentRevision iss-000/worklog/237", "documentRevision iss-000/worklog/238", "documentRevision iss-000/worklog/239",
+    "documentRevision iss-000/worklog/240", "documentRevision iss-000/worklog/241", "documentRevision iss-000/worklog/242", "documentRevision iss-000/worklog/243", "documentRevision iss-000/worklog/244", "documentRevision iss-000/worklog/245",
+    "documentRevision iss-000/worklog/246", "documentRevision iss-000/worklog/247", "documentRevision iss-000/worklog/248", "documentRevision iss-000/worklog/249", "documentRevision iss-000/worklog/172", "documentRevision iss-000/worklog/250",
+    "documentRevision iss-000/worklog/251", "documentRevision iss-000/worklog/252", "documentRevision iss-000/worklog/253", "documentRevision iss-000/worklog/254", "documentRevision iss-000/worklog/255", "documentRevision iss-000/worklog/256",
+    "documentRevision iss-000/worklog/257", "documentRevision iss-000/worklog/258", "documentRevision iss-000/worklog/259", "documentRevision iss-000/worklog/260", "documentRevision iss-000/worklog/261", "documentRevision iss-000/worklog/262",
+    "documentRevision iss-000/worklog/263", "documentRevision iss-000/worklog/264", "documentRevision iss-000/worklog/265", "documentRevision iss-000/worklog/266", "documentRevision iss-000/worklog/267", "documentRevision iss-000/worklog/268",
+    "documentRevision iss-000/worklog/269", "documentRevision iss-000/worklog/270", "documentRevision iss-000/worklog/271", "documentRevision iss-000/worklog/272", "documentRevision iss-000/worklog/273", "documentRevision iss-000/worklog/274",
+    "documentRevision iss-000/worklog/275", "documentRevision iss-000/worklog/276", "documentRevision iss-000/worklog/277", "documentRevision iss-000/worklog/278", "documentRevision iss-000/worklog/279", "documentRevision iss-000/worklog/280",
+    "documentRevision iss-000/worklog/185", "documentRevision iss-000/worklog/281", "documentRevision iss-000/worklog/282", "documentRevision iss-000/worklog/283", "documentRevision iss-000/worklog/284", "documentRevision iss-000/worklog/285",
+    "documentRevision iss-000/worklog/286", "documentRevision iss-000/worklog/287", "documentRevision iss-000/worklog/288", "documentRevision iss-000/worklog/289", "documentRevision iss-000/worklog/290", "documentRevision iss-000/worklog/291",
+    "documentRevision iss-000/worklog/292", "documentRevision iss-000/worklog/293", "documentRevision iss-000/worklog/294", "documentRevision iss-000/worklog/295", "documentRevision iss-000/worklog/296", "documentRevision iss-000/worklog/195",
+    "documentRevision iss-000/worklog/297", "documentRevision iss-000/worklog/298", "documentRevision iss-000/worklog/299", "documentRevision iss-000/worklog/300", "documentRevision iss-000/worklog/301", "documentRevision iss-000/worklog/302",
+    "documentRevision iss-000/worklog/303", "documentRevision iss-000/worklog/304", "documentRevision iss-000/worklog/305", "documentRevision iss-000/worklog/306", "documentRevision iss-000/worklog/307", "documentRevision iss-000/worklog/308",
+    "documentRevision iss-000/worklog/309", "documentRevision iss-000/worklog/310", "documentRevision iss-000/worklog/311", "documentRevision iss-000/worklog/312", "documentRevision iss-000/worklog/207", "documentRevision iss-000/worklog/313",
+    "documentRevision iss-000/worklog/314", "documentRevision iss-000/worklog/315", "documentRevision iss-000/worklog/316", "documentRevision iss-000/worklog/317", "documentRevision iss-000/worklog/318", "documentRevision iss-000/worklog/319",
+    "documentRevision iss-000/worklog/320", "documentRevision iss-000/worklog/321", "documentRevision iss-000/worklog/322", "documentRevision iss-000/worklog/323", "documentRevision iss-000/worklog/324", "documentRevision iss-000/worklog/325",
+    "documentRevision iss-000/worklog/326", "documentRevision iss-000/worklog/327", "documentRevision iss-000/worklog/219", "documentRevision iss-000/worklog/328",
   ].join("|"),
 };

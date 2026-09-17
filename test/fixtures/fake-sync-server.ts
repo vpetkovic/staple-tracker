@@ -32,7 +32,19 @@
 import { randomUUID } from "node:crypto";
 import { isRetryable, type ErrorCode } from "../../worker/src/errors.js";
 import { columnSpellingWins } from "../../src/core/cloud/apply.js";
-import { settleRevisionCreate } from "../../src/core/cloud/revision-placement.js";
+import { settleRevisionCreate, writtenAs } from "../../src/core/cloud/revision-placement.js";
+import {
+  CANDIDATES_READ,
+  type CandidateRequest,
+  type PlacementNeed,
+  RUNS_READ,
+  RevisionPlacer,
+  bodyKey,
+  bodyKeys,
+  candidateId,
+  revisionSlot,
+} from "../../worker/src/fold-revisions.js";
+import { countEscapes, parseWork, runWork, serveWork, writeWork } from "../../worker/src/fold-work.js";
 import { ORIGIN_RELEASING_STATUSES } from "../../src/core/types.js";
 
 /** `settleRevision` in `worker/src/fold.ts`, on this fixture's operation shape: the same placement (`revision-placement.ts`). */
@@ -238,6 +250,14 @@ export interface FakeServerOptions {
    * always taking its first operation. Unlimited unless given.
    */
   foldBudgetBytes?: number;
+  /**
+   * Estimated isolate time one request may spend folding and serving (`requestWork` in
+   * `worker/src/limits.ts`, 5 ms on free), and one fold step (`FOLD_STEP_WORK`, 4 ms), in
+   * nanoseconds of `worker/src/fold-work.ts`'s model. Unlimited unless given; given, steps are cut
+   * exactly where the Worker cuts them — by work, by placement reads and walk (`foldRun`).
+   */
+  foldWork?: number;
+  foldStepWork?: number;
   /** Entities one restore turn stages — `restoreStageEntities` in `worker/src/limits.ts`, 200 on free. */
   restoreStageEntities?: number;
   /**
@@ -246,6 +266,38 @@ export interface FakeServerOptions {
    * and says `hasMore`.
    */
   pageBytes?: number;
+  /**
+   * Estimated isolate time one snapshot page, and one restore turn's page, may spend
+   * (`PAGE_WORK`, 3 ms, and `RESTORE_PAGE_WORK`, 2 ms, in `worker/src/limits.ts`).
+   */
+  pageWork?: number;
+  restorePageWork?: number;
+}
+
+/** The Worker's step and read constants (`worker/src/limits.ts`), reproduced: that file reaches the Worker's types. */
+const FOLD_STEP_OPS = 500;
+const FOLD_STEP_BYTES = 1024 * 1024;
+const FOLD_STEP_READS = 4;
+const FOLD_STEP_WALK = 4096;
+const ROW_BYTES = 2_000_000;
+
+/** A fold budget, as `FoldBudget` in `worker/src/fold-store.ts`. */
+interface FakeFoldBudget {
+  remaining: number;
+  bytes?: number;
+  work?: number;
+  folded?: boolean;
+}
+
+/** `stageWork` in `worker/src/fold-store.ts`. */
+function stageWork(size: number, escapes: number): number {
+  return parseWork(size, escapes) + writeWork(size, escapes);
+}
+
+/** What `length(CAST(x AS BLOB))` measures and what the Worker's escape count counts, of a value's JSON text. */
+function measured(value: unknown): { size: number; escapes: number } {
+  const text = JSON.stringify(value);
+  return { size: Buffer.byteLength(text, "utf8"), escapes: countEscapes(text) };
 }
 
 /** `worker/src/vocabulary.ts`: which vocabulary a repository's log holds. */
@@ -396,8 +448,12 @@ export class FakeSyncServer {
       foldBudget: Number.POSITIVE_INFINITY,
       foldStep: Number.POSITIVE_INFINITY,
       foldBudgetBytes: Number.POSITIVE_INFINITY,
+      foldWork: Number.POSITIVE_INFINITY,
+      foldStepWork: Number.POSITIVE_INFINITY,
       restoreStageEntities: 200,
       pageBytes: 1024 * 1024,
+      pageWork: 3_000_000,
+      restorePageWork: 2_000_000,
       ...options,
     };
     this.vocabulary = this.options.vocabulary;
@@ -606,7 +662,7 @@ export class FakeSyncServer {
     }
     if (tail === "/backups" && method === "POST") {
       this.assertBackupConsent();
-      if (!this.legacyFold) this.reachFold(this.epoch, this.lastSeq, { remaining: this.options.foldBudget });
+      if (!this.legacyFold) this.reachFold(this.epoch, this.lastSeq, this.requestBudget());
       return this.ok(protocol, { backup: this.captureBackup(session.deviceId, "manual") });
     }
     if (tail === "/backups" && method === "GET") {
@@ -1251,9 +1307,19 @@ export class FakeSyncServer {
 
     this.assertServable(rows, protocol);
 
-    // A pull that finds the fold a step behind moves it on — `keepFoldNearHead`, `worker/src/pull.ts`.
+    // A pull that finds the fold a step behind moves it on — `keepFoldNearHead`, `worker/src/pull.ts` —
+    // by what its page leaves of the request's work, and never more.
     if (this.lastSeq - (this.foldedTo.get(this.epoch) ?? 0) >= this.options.foldStep) {
-      this.advanceFold(this.epoch, this.lastSeq, { remaining: this.options.foldBudget });
+      const spent = rows.reduce((sum, op) => {
+        const { size, escapes } = measured(op.payload);
+        return sum + serveWork(size, escapes);
+      }, 0);
+      this.advanceFold(this.epoch, this.lastSeq, {
+        remaining: this.options.foldBudget,
+        bytes: this.options.foldBudgetBytes,
+        work: Math.max(0, this.options.foldWork - spent),
+        folded: true,
+      });
     }
 
     return this.ok(protocol, {
@@ -1277,6 +1343,7 @@ export class FakeSyncServer {
     const raw = url.searchParams.get("cursor");
     let cutoff: number;
     let afterKey = "";
+    const budget = this.requestBudget();
     if (raw) {
       const cursor = this.decodeCursor(raw);
       this.assertScope(cursor, session.repoId);
@@ -1284,12 +1351,12 @@ export class FakeSyncServer {
       cutoff = Number(cursor.c ?? 0);
       afterKey = String(cursor.k ?? "");
       if (cutoff > this.lastSeq) throw new ServerError(400, "cursor_invalid", "the snapshot cursor names a cutoff past the log");
-      if (!this.legacyFold) this.reachFold(this.epoch, cutoff, { remaining: this.options.foldBudget });
+      if (!this.legacyFold) this.reachFold(this.epoch, cutoff, budget);
     } else {
       // The head, once the fold has reached it — `worker/src/snapshot.ts`.
       cutoff = this.lastSeq;
       if (!this.legacyFold) {
-        this.reachFold(this.epoch, cutoff, { remaining: this.options.foldBudget });
+        this.reachFold(this.epoch, cutoff, budget);
         this.foldedTo.set(this.epoch, Math.max(this.foldedTo.get(this.epoch) ?? 0, cutoff));
       }
     }
@@ -1299,7 +1366,20 @@ export class FakeSyncServer {
     // and refusing halfway leaves a device holding a partial hydration.
     this.assertServable(ordered, protocol);
     const remaining = ordered.filter((entry) => `${entry.entity} ${entry.entityId}` > afterKey);
-    const page = this.byBytes(remaining.slice(0, limit), (entry) => Buffer.byteLength(JSON.stringify(entry.state), "utf8") + Buffer.byteLength(JSON.stringify(entry.fieldWrites), "utf8"));
+    // Cut by bytes and by work, and after folding with no room for its first entity, deferred —
+    // `foldedPage` and `snapshot`, `worker/src`.
+    const page = this.byWork(
+      remaining.slice(0, limit),
+      (entry) => {
+        const state = measured(entry.state);
+        const fieldWrites = measured(entry.fieldWrites);
+        const size = state.size + fieldWrites.size;
+        return { size, work: serveWork(size, state.escapes + fieldWrites.escapes) };
+      },
+      Math.min(this.options.pageWork, budget.work ?? this.options.pageWork),
+      budget.folded !== true,
+    );
+    if (page.length === 0 && remaining.length > 0) this.foldBehind(cutoff, cutoff);
     const hasMore = remaining.length > page.length;
     const lastKey =
       page.length > 0
@@ -1364,7 +1444,7 @@ export class FakeSyncServer {
    * way it was captured"*. This fixture used to hold two copies of it, and a fixture
    * that disagrees with itself cannot prove the two halves of a bootstrap agree.
    */
-  private fold(cutoff: number): {
+  private fold(cutoff: number, epoch = this.epoch): {
     entities: FoldedEntity[];
     opCount: number;
     schemaVersion: number;
@@ -1374,7 +1454,7 @@ export class FakeSyncServer {
     let schemaVersion = 0;
 
     for (const logged of this.ops
-      .filter((candidate) => candidate.epoch === this.epoch && candidate.seq <= cutoff)
+      .filter((candidate) => candidate.epoch === epoch && candidate.seq <= cutoff)
       .sort((a, b) => a.seq - b.seq)) {
       // Two revisions written as one number: the later in the log takes the next —
       // `settleRevision`, `worker/src/fold.ts`. Not on the Worker from before this build.
@@ -1388,7 +1468,18 @@ export class FakeSyncServer {
         });
       }
       if (op.schema > schemaVersion) schemaVersion = op.schema;
+      this.foldOp(folded, op);
+    }
 
+    const entities = [...folded.values()].sort((a, b) =>
+      `${a.entity} ${a.entityId}` < `${b.entity} ${b.entityId}` ? -1 : 1,
+    );
+    return { entities, opCount, schemaVersion };
+  }
+
+  /** One operation folded into `folded`: `foldRow` in `worker/src/fold.ts`, after its placement. */
+  private foldOp(folded: Map<string, FoldedEntity>, op: StoredOp): void {
+    {
       const key = `${op.entity} ${op.entityId}`;
       let entry = folded.get(key);
       if (!entry) {
@@ -1411,11 +1502,11 @@ export class FakeSyncServer {
       entry.lastSeq = op.seq;
       if (op.verb === "delete") {
         entry.deletedAt = op.serverTs;
-        continue;
+        return;
       }
       // A create after a delete begins the entity again — `worker/src/fold.ts`. Not on the
       // Worker from before this build, where the tombstone turned it away.
-      if (this.legacyFold && entry.deletedAt !== null) continue;
+      if (this.legacyFold && entry.deletedAt !== null) return;
       if (op.verb === "create") {
         if (entry.deletedAt !== null) {
           entry.deletedAt = null;
@@ -1436,9 +1527,9 @@ export class FakeSyncServer {
         entry.createdAt = restored ? null : op.createdAt;
         entry.createdBy = restored ? null : op.actor;
       }
-      if (entry.deletedAt !== null) continue;
+      if (entry.deletedAt !== null) return;
       if (op.payload === null || typeof op.payload !== "object" || Array.isArray(op.payload)) {
-        continue;
+        return;
       }
       // Every verb merges the keys it carried and is silent about the rest; only the
       // record of the verb differs. Mirrors `worker/src/fold.ts` (STA-259).
@@ -1470,11 +1561,6 @@ export class FakeSyncServer {
         if (!this.legacyFold && op.entity === "issue" && reopensOrigin(statusBefore, carried.status)) entry.fieldWrites.reopens = write;
       }
     }
-
-    const entities = [...folded.values()].sort((a, b) =>
-      `${a.entity} ${a.entityId}` < `${b.entity} ${b.entityId}` ? -1 : 1,
-    );
-    return { entities, opCount, schemaVersion };
   }
 
   private captureBackup(deviceId: string, kind: "manual" | "pre-restore"): Record<string, unknown> {
@@ -1533,28 +1619,233 @@ export class FakeSyncServer {
   }
 
   /**
-   * `advanceFold`, `worker/src/fold-store.ts`: fold this epoch towards `target`, at most the
-   * budget's operations, and answer how far the fold got.
+   * The longest prefix within `pageBytes` and `maxWork`, and never empty unless `atLeastOne` is
+   * false — `foldedPage` and `restorePage`, `worker/src/fold-store.ts`.
    */
-  private advanceFold(epoch: number, target: number, budget: { remaining: number; bytes?: number }): number {
-    const from = this.foldedTo.get(epoch) ?? 0;
-    if (from >= target) return from;
-    const pending = this.foldable(epoch, from, target);
-    // At most the budget's operations, and an operation only while the bytes before it are
-    // under the byte budget — so the first is always taken (the window in `advanceFold`).
-    const bytes = budget.bytes ?? this.options.foldBudgetBytes;
-    const taken: typeof pending = [];
-    let spent = 0;
-    for (const op of pending) {
-      if (taken.length >= Math.max(0, budget.remaining) || spent >= bytes) break;
-      taken.push(op);
-      spent += this.payloadBytes(op);
+  private byWork<T>(items: readonly T[], cost: (item: T) => { size: number; work: number }, maxWork: number, atLeastOne: boolean): T[] {
+    const out: T[] = [];
+    let bytes = 0;
+    let work = 0;
+    for (const item of items) {
+      const { size, work: weight } = cost(item);
+      if ((out.length > 0 || !atLeastOne) && (bytes + size > this.options.pageBytes || work + weight > maxWork)) break;
+      out.push(item);
+      bytes += size;
+      work += weight;
     }
-    budget.remaining -= taken.length;
-    if (budget.bytes !== undefined) budget.bytes -= spent;
-    const reached = taken.length === pending.length ? target : taken[taken.length - 1]?.seq ?? from;
-    this.foldedTo.set(epoch, reached);
-    return reached;
+    return out;
+  }
+
+  /** What one request may fold and serve — `requestFoldBudget`, `worker/src/limits.ts`. */
+  private requestBudget(): FakeFoldBudget {
+    return { remaining: this.options.foldBudget, bytes: this.options.foldBudgetBytes, work: this.options.foldWork };
+  }
+
+  /**
+   * `advanceFold`, `worker/src/fold-store.ts`: fold this epoch towards `target`, a step at a time,
+   * until the budget runs out, and answer how far the fold got.
+   */
+  private advanceFold(epoch: number, target: number, budget: FakeFoldBudget): number {
+    let from = this.foldedTo.get(epoch) ?? 0;
+    const stepWork = this.options.foldStepWork;
+    const stepped = Number.isFinite(stepWork) || Number.isFinite(budget.work ?? Number.POSITIVE_INFINITY);
+    while (from < target && budget.remaining > 0 && (budget.bytes ?? 1) > 0 && (budget.work ?? 1) > 0) {
+      const pending = this.foldable(epoch, from, target);
+      // At most the step's operations, and an operation only while the bytes before it are under
+      // the step's bytes — so the first is always taken (the window in `advanceFold`).
+      const limit = Math.min(stepped ? FOLD_STEP_OPS : Number.POSITIVE_INFINITY, budget.remaining);
+      const byteCap = Math.min(stepped ? FOLD_STEP_BYTES : Number.POSITIVE_INFINITY, budget.bytes ?? this.options.foldBudgetBytes);
+      const window: typeof pending = [];
+      let spent = 0;
+      for (const op of pending) {
+        if (window.length >= limit || spent >= byteCap) break;
+        window.push(op);
+        spent += this.payloadBytes(op);
+      }
+      const run = stepped
+        ? this.foldRun(epoch, from, window, {
+            work: Math.min(stepWork, budget.work ?? Number.POSITIVE_INFINITY),
+            reads: FOLD_STEP_READS,
+            walk: FOLD_STEP_WALK,
+            mayBeEmpty: budget.folded === true,
+          })
+        : { folded: window.length, work: 0 };
+      if (run.folded === 0) break;
+      const taken = window.slice(0, run.folded);
+      budget.folded = true;
+      budget.remaining -= taken.length;
+      if (budget.bytes !== undefined) budget.bytes -= taken.reduce((sum, op) => sum + this.payloadBytes(op), 0);
+      if (budget.work !== undefined) budget.work -= run.work;
+      // A window that ran out of operations before its limit ends at the target (`advanceFold`).
+      const whole = taken.length === window.length && window.length === pending.length;
+      from = whole ? target : taken[taken.length - 1]!.seq;
+      this.foldedTo.set(epoch, from);
+      if (!stepped) break;
+    }
+    return from;
+  }
+
+  /**
+   * How many of `rows` one fold step folds onto the fold of `epoch` at `base`, and the work it
+   * was estimated at: `foldRun` in `worker/src/fold-store.ts`, cut where it cuts — by the work of
+   * each prefix, and before a revision create whose placement needs more reads or walk than the
+   * step has — with its placement answered from this fixture's fold at `base` instead of D1.
+   */
+  private foldRun(
+    epoch: number,
+    base: number,
+    rows: readonly StoredOp[],
+    limits: { work: number; reads: number; walk: number; mayBeEmpty: boolean },
+  ): { folded: number; work: number } {
+    if (rows.length === 0) return { folded: 0, work: 0 };
+    const stored = new Map(this.fold(base, epoch).entities.map((entity) => [`${entity.entity} ${entity.entityId}`, entity]));
+    const named = (op: StoredOp) => {
+      const own = `${op.entity} ${op.entityId}`;
+      return op.verb === "create" && (op.entity === "status" || op.entity === "kind") ? [own, `${op.entity} @order`] : [own];
+    };
+    const keysOf = rows.map(named);
+    const cumulative = runWork(
+      rows.map((op, index) => {
+        const payload = measured(op.payload);
+        return { keys: keysOf[index]!, bytes: payload.size, escapes: payload.escapes };
+      }),
+      (key) => {
+        const entity = stored.get(key);
+        if (!entity) return undefined;
+        const state = measured(entity.state);
+        const fieldWrites = measured(entity.fieldWrites);
+        return { size: state.size + fieldWrites.size, escapes: state.escapes + fieldWrites.escapes };
+      },
+    );
+    let take = 0;
+    while (take < rows.length && cumulative[take]! <= limits.work) take += 1;
+    if (take === 0 && !limits.mayBeEmpty) take = 1;
+    if (take === 0) return { folded: 0, work: 0 };
+    const prefix = rows.slice(0, take);
+
+    // What the Worker loads: the entities the prefix names, as they stood at the base.
+    const fold = new Map<string, FoldedEntity>();
+    for (const key of new Set(keysOf.slice(0, take).flat())) {
+      const entity = stored.get(key);
+      if (entity) fold.set(key, structuredClone(entity));
+    }
+    const live = (doc: string) =>
+      [...stored.entries()].flatMap(([key, entity]) => {
+        const slot = revisionSlot(entity.entity, entity.entityId);
+        return slot && slot.doc === doc && entity.deletedAt === null ? [{ key, rev: slot.rev, entity }] : [];
+      });
+    const keyOf = bodyKeys();
+    const placer = new RevisionPlacer(fold, limits.walk, keyOf);
+    const read = (need: Exclude<PlacementNeed, { kind: "walk" }>) => {
+      if (need.kind === "runs") {
+        const revs = [...new Set(live(need.doc).map((held) => held.rev).filter((rev) => rev >= need.from))].sort((a, b) => a - b);
+        const runs: Array<[number, number]> = [];
+        for (const rev of revs) {
+          const last = runs[runs.length - 1];
+          if (last && last[1] + 1 === rev) last[1] = rev;
+          else runs.push([rev, rev]);
+        }
+        placer.absorbRuns(need.doc, need.from, RUNS_READ, runs.slice(0, RUNS_READ));
+      } else if (need.kind === "candidates") {
+        const { request, limit } = need;
+        const rows = live(request.doc)
+          .filter(
+            (held) =>
+              held.rev >= request.floor &&
+              bodyKey(held.entity.state.body) === request.bodyKey &&
+              (request.author === null || typeof held.entity.state.author !== "string" || held.entity.state.author === request.author),
+          )
+          .map((held) => ({ key: held.key, rev: held.rev }))
+          .sort((a, b) => a.rev - b.rev || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+        placer.absorbCandidates(request, limit, rows.slice(0, limit));
+      } else if (need.kind === "bodies") {
+        for (const key of need.keys) placer.absorbBody(key, stored.get(key)!.state);
+      } else {
+        const entity = stored.get(need.key);
+        placer.absorbVersion(need.key, entity ? { version: entity.version, deletedAt: entity.deletedAt } : null);
+      }
+    };
+    // D1's live revisions at the number of every revision the whole window names.
+    for (const key of new Set(keysOf.flat())) {
+      const space = key.indexOf(" ");
+      const slot = revisionSlot(key.slice(0, space), key.slice(space + 1));
+      if (!slot) continue;
+      placer.absorbSlot(slot.doc, slot.rev, []);
+      for (const held of live(slot.doc)) if (held.rev === slot.rev) placer.absorbSlot(slot.doc, slot.rev, [held.key]);
+    }
+    // The reads the Worker plans: runs from each document's lowest claim, same-body revisions per create.
+    const parsed = new Map<number, Record<string, unknown>>();
+    const runsFrom = new Map<string, number>();
+    const requests = new Map<string, CandidateRequest>();
+    for (const op of prefix) {
+      if (op.entity !== "documentRevision" || op.verb !== "create") continue;
+      const payload = JSON.parse(JSON.stringify(op.payload)) as Record<string, unknown>;
+      parsed.set(op.seq, payload);
+      if (payload === null) continue;
+      const slash = op.entityId.lastIndexOf("/");
+      const claimed = Number(op.entityId.slice(slash + 1));
+      if (!Number.isInteger(claimed)) continue;
+      const doc = op.entityId.slice(0, slash + 1);
+      runsFrom.set(doc, Math.min(runsFrom.get(doc) ?? claimed, claimed));
+      const key = keyOf(payload.body);
+      if (key === null) continue;
+      const floor = Math.min(claimed, writtenAs(payload.changeSummary) ?? claimed);
+      const request = { doc, floor, bodyKey: key, author: typeof payload.author === "string" ? payload.author : null };
+      requests.set(candidateId(request), request);
+    }
+    for (const [doc, from] of runsFrom) read({ kind: "runs", doc, from: base === 0 ? Number.NEGATIVE_INFINITY : from });
+    for (const request of requests.values()) read({ kind: "candidates", request, limit: CANDIDATES_READ });
+
+    let reads = 0;
+    let folded = 0;
+    folding: for (let index = 0; index < prefix.length; index += 1) {
+      const original = prefix[index]!;
+      let op: StoredOp | null = original;
+      if (original.entity === "documentRevision" && original.verb === "create") {
+        for (;;) {
+          const row = { seq: original.seq, entity: original.entity, entity_id: original.entityId, payload: "" };
+          const placed = placer.place(row, parsed.get(original.seq));
+          if (!("need" in placed)) {
+            if (placed.row === null) op = null;
+            else {
+              op = { ...original, entityId: placed.row.entity_id, payload: placed.payload };
+              if (placed.revive) {
+                const key = `documentRevision ${placed.row.entity_id}`;
+                fold.set(key, {
+                  entity: "documentRevision",
+                  entityId: placed.row.entity_id,
+                  version: placed.revive.version,
+                  deletedAt: 0,
+                  lastSeq: 0,
+                  superseded: false,
+                  state: {},
+                  fieldWrites: {},
+                  createdSeq: null,
+                  createdAt: null,
+                  createdBy: null,
+                });
+              }
+            }
+            break;
+          }
+          const must = index === 0 && !limits.mayBeEmpty;
+          if (placed.need.kind === "walk") {
+            if (!must) break folding;
+            placer.walkLimit = Number.POSITIVE_INFINITY;
+            continue;
+          }
+          if (!must && reads >= limits.reads) break folding;
+          reads += 1;
+          read(placed.need);
+        }
+      }
+      if (op !== null) {
+        this.foldOp(fold, op);
+        placer.observe(`${op.entity} ${op.entityId}`);
+      }
+      folded = index + 1;
+    }
+    return { folded, work: folded === 0 ? 0 : cumulative[folded - 1]! };
   }
 
   private foldable(epoch: number, from: number, to: number): StoredOp[] {
@@ -1570,18 +1861,20 @@ export class FakeSyncServer {
    * `reachFold`: advance, then refuse — `unavailable`, `foldedSeq` and `cutoffSeq`,
    * `Retry-After: 1`, exactly the Worker's `foldBehind` — unless no operation up to the cutoff is left.
    */
-  private reachFold(epoch: number, cutoff: number, budget: { remaining: number; bytes?: number }, progressFrom = 0): void {
+  private reachFold(epoch: number, cutoff: number, budget: FakeFoldBudget, progressFrom = 0): void {
     const reached = this.advanceFold(epoch, cutoff, budget);
-    if (this.foldable(epoch, reached, cutoff).length > 0) {
-      const folded = Math.max(reached, progressFrom);
-      throw new ServerError(
-        503,
-        "unavailable",
-        `the service is still folding this repository's log: it has reached seq ${folded} of ${cutoff}. Every request moves it on; ask again.`,
-        { foldedSeq: folded, cutoffSeq: cutoff },
-        { "retry-after": "1" },
-      );
-    }
+    if (this.foldable(epoch, reached, cutoff).length > 0) this.foldBehind(Math.max(reached, progressFrom), cutoff);
+  }
+
+  /** `foldBehind`, `worker/src/fold-store.ts`: `unavailable` with `foldedSeq`, `cutoffSeq` and `Retry-After: 1`. */
+  private foldBehind(folded: number, cutoff: number): never {
+    throw new ServerError(
+      503,
+      "unavailable",
+      `the service is still folding this repository's log: it has reached seq ${folded} of ${cutoff}. Every request moves it on; ask again.`,
+      { foldedSeq: folded, cutoffSeq: cutoff },
+      { "retry-after": "1" },
+    );
   }
 
   /**
@@ -1681,7 +1974,7 @@ export class FakeSyncServer {
       if (!this.legacyFold) {
         // `beginRestore`: the backup's cutoff and the head, folded before anything changes.
         // One request's budget, operations and bytes, shared by both — as `beginRestore` shares it.
-        const budget = { remaining: this.options.foldBudget, bytes: this.options.foldBudgetBytes };
+        const budget = this.requestBudget();
         if (backup.content === "fold") this.reachFold(backup.epoch, backup.cutoffSeq, budget);
         // The head's progress counts from an older epoch's cutoff, so `foldedSeq` climbs across both.
         this.reachFold(this.epoch, this.lastSeq, budget, backup.content === "fold" && backup.epoch !== this.epoch ? backup.cutoffSeq : 0);
@@ -1728,17 +2021,43 @@ export class FakeSyncServer {
     if (restore.staged < restore.entityCount) {
       // Asked again on every stage turn, as `worker/src/backups.ts::stageRestore` does.
       this.claimForRestore(backup);
-      const chunk = this.byBytes(
+      // One request's budget, which reaching the backup's cutoff, the page and the fold of what it
+      // staged share — `nextChunk` and `stageRestore`.
+      const budget = this.requestBudget();
+      if (!this.legacyFold && backup.content === "fold") this.reachFold(backup.epoch, backup.cutoffSeq, budget);
+      const chunk = this.byWork(
         restoreOrder(backup.entities).slice(restore.staged, restore.staged + this.options.restoreStageEntities),
-        (entity) => Buffer.byteLength(JSON.stringify(entity.state), "utf8"),
+        (entity) => {
+          const { size, escapes } = measured(entity.state);
+          return { size, work: stageWork(size, escapes) };
+        },
+        Math.min(this.options.restorePageWork, budget.work ?? this.options.restorePageWork),
+        !(backup.content === "fold" && budget.folded === true),
       );
-      for (const entity of chunk) {
+      if (chunk.length === 0) this.foldBehind(backup.cutoffSeq, backup.cutoffSeq);
+      let spent = 0;
+      for (const [index, entity] of chunk.entries()) {
         this.lastSeq += 1;
         // `worker/src/fold.ts::materializedVerb`: the whole state under the recorded verb,
         // except a tombstone, which materialises bare because the corpse is a state
         // nothing reads.
         const verb = entity.deletedAt !== null ? "delete" : entity.superseded ? "replace" : "create";
         const payload = entity.deletedAt !== null ? {} : entity.state;
+        // What writing it costs, measured on the row the Worker packs: a 32-character operation id
+        // and a restore's 36-character id where the Worker has them (`stageRestore`).
+        const item = JSON.stringify({
+          n: index + 1,
+          o: "0".repeat(32),
+          e: entity.entity,
+          i: entity.entityId,
+          v: verb,
+          b: verb === "create" ? null : 0,
+          p: JSON.stringify(payload),
+          a: entity.createdBy ?? `restore:${"0".repeat(36)}`,
+          c: restore.staged + 1,
+          t: entity.createdAt ?? new Date().toISOString(),
+        });
+        spent += stageWork(Buffer.byteLength(item, "utf8"), countEscapes(item));
         this.ops.push({
           seq: this.lastSeq,
           epoch: restore.toEpoch,
@@ -1759,7 +2078,14 @@ export class FakeSyncServer {
         restore.staged += 1;
       }
       // The Worker folds what a turn staged, so the new epoch is folded by the commit (`stageRestore`).
-      if (!this.legacyFold) this.advanceFold(restore.toEpoch, this.lastSeq, { remaining: 2 * this.options.restoreStageEntities });
+      if (!this.legacyFold) {
+        this.advanceFold(restore.toEpoch, this.lastSeq, {
+          remaining: 2 * this.options.restoreStageEntities,
+          bytes: 2 * (this.options.pageBytes + ROW_BYTES),
+          work: Math.max(0, (budget.work ?? Number.POSITIVE_INFINITY) - spent),
+          folded: true,
+        });
+      }
       return this.ok(protocol, {
         restoreId: restore.restoreId,
         status: "staging",
