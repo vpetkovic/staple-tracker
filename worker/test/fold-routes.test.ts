@@ -113,8 +113,8 @@ describe("GET /snapshot on a log the fold has not reached", () => {
       refusals += 1;
     }
     // A budget folded by each, and served by the one that reaches the head: never more than a
-    // budget folded in a request.
-    expect(refusals).toBe(Math.ceil(ops.length / foldBudgetOps("free")) - 1);
+    // budget's operations folded in a request, and often fewer, since a step is cut by its work too.
+    expect(refusals).toBeGreaterThanOrEqual(Math.ceil(ops.length / foldBudgetOps("free")) - 1);
     // Never a cutoff short of the head, and the cutoff is a mark.
     expect(first.cutoffSeq).toBe(head);
     expect(await progress()).toBe(head);
@@ -140,26 +140,38 @@ describe("GET /ops keeps the fold near the head", () => {
     await insertOps(env.DB, REPO, ops);
     const head = ops[ops.length - 1]!.seq;
 
-    await req(`/v1/repos/${REPO}/ops?limit=1`, { token });
-    expect(await progress()).toBe(ops[pullFoldOps("free") - 1]!.seq);
-    // One pull's worth each, and no more.
-    for (let pulls = 1; pulls < Math.ceil(ops.length / pullFoldOps("free")); pulls += 1) {
-      expect(await progress()).toBeLessThan(head);
+    // One pull's worth each: some operations, never more than a pull may fold, until the fold is
+    // less than the threshold behind.
+    let pulls = 0;
+    let folded = 0;
+    while (head - (await progress()) >= LAZY_FOLD_BEHIND) {
       await req(`/v1/repos/${REPO}/ops?limit=1`, { token });
+      pulls += 1;
+      const reached = await progress();
+      const now = ops.filter((op) => op.seq <= reached).length;
+      expect(now).toBeGreaterThan(folded);
+      expect(now - folded).toBeLessThanOrEqual(pullFoldOps("free"));
+      folded = now;
+      expect(pulls).toBeLessThan(200);
     }
-    expect(await progress()).toBe(head);
+    expect(pulls).toBeGreaterThanOrEqual(Math.ceil((ops.length - LAZY_FOLD_BEHIND) / pullFoldOps("free")));
 
-    // Fewer than the threshold behind — counted in seqs, and this log has no gaps — and a
-    // pull leaves the fold where it is.
-    const more = generateLog({ seed: 304, count: LAZY_FOLD_BEHIND - 1, pool: 30, firstSeq: head + 1, gapRate: 0 });
+    // Fewer than the threshold behind — counted in seqs, and the log has no gaps from here on — and
+    // a pull leaves the fold where it is.
+    const stopped = await progress();
+    await req(`/v1/repos/${REPO}/ops?limit=1`, { token });
+    expect(await progress()).toBe(stopped);
+    const more = generateLog({ seed: 304, count: LAZY_FOLD_BEHIND - 1 - (head - stopped), pool: 30, firstSeq: head + 1, gapRate: 0 });
     await insertOps(env.DB, REPO, more);
     await req(`/v1/repos/${REPO}/ops?limit=1`, { token });
-    expect(await progress()).toBe(head);
+    expect(await progress()).toBe(stopped);
     // One more operation, and it is exactly the threshold behind: the next pull folds.
-    const last = generateLog({ seed: 305, count: 1, pool: 30, firstSeq: more[more.length - 1]!.seq + 1, gapRate: 0 });
+    const last = generateLog({ seed: 305, count: 1, pool: 30, firstSeq: (more[more.length - 1]?.seq ?? head) + 1, gapRate: 0 });
     await insertOps(env.DB, REPO, last);
+    expect(last[0]!.seq - stopped).toBe(LAZY_FOLD_BEHIND);
     await req(`/v1/repos/${REPO}/ops?limit=1`, { token });
-    expect(await progress()).toBe(last[0]!.seq);
+    expect(await progress()).toBeGreaterThan(stopped);
+    expect(await progress()).toBeLessThanOrEqual(last[0]!.seq);
   });
 });
 
@@ -212,9 +224,16 @@ describe("a restore the fold is not ready for", () => {
   it("restores a backup of an older epoch after the checkpoint was cleared, folding that epoch first", async () => {
     const ops = generateLog({ seed: 308, count: 2500, pool: 30 });
     await insertOps(env.DB, REPO, ops);
-    // Four pulls fold four steps; the backup folds the fifth and is taken in one request.
+    // Pulls fold part of it; the backup folds the rest, a request at a time.
     for (let n = 0; n < 4; n += 1) await req(`/v1/repos/${REPO}/ops?limit=1`, { token });
-    const taken = await jsonOf(await req(`/v1/repos/${REPO}/backups`, { method: "POST", token, body: {} }));
+    let taken: any;
+    for (let folded = -1; ; ) {
+      const response = await req(`/v1/repos/${REPO}/backups`, { method: "POST", token, body: {} });
+      taken = await jsonOf(response);
+      if (response.status !== 503) break;
+      expect(taken.foldedSeq).toBeGreaterThan(folded);
+      folded = taken.foldedSeq;
+    }
     const done = await restore(taken.backup.backupId);
     const undo = done.preRestoreBackupId as string;
     const before = content((await foldLog(env, REPO, 1, ops[ops.length - 1]!.seq)).entities);

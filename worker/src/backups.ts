@@ -85,13 +85,16 @@ import {
   pinMark,
   reachFold,
   restorePage,
+  stageWork,
   utf8Bytes,
 } from "./fold-store.js";
+import { countEscapes } from "./fold-work.js";
 import { assertBodySize, readJson } from "./http.js";
 import {
   FOLD_WRITE_BYTES,
   PAGE_BYTES,
   PROTOCOL_MAX,
+  RESTORE_PAGE_WORK,
   PROTOCOL_MIN,
   ROW_BYTES,
   planOf,
@@ -926,18 +929,25 @@ async function nextChunk(
   restore: RestoreRow,
   source: { content: string; epoch: number; cutoff_seq: number; state: string | null },
   staged: number,
+  budget: FoldBudget,
 ): Promise<BackupEntity[]> {
   const size = restoreStageEntities(planOf(env));
+  const room = Math.min(RESTORE_PAGE_WORK, budget.work ?? RESTORE_PAGE_WORK);
   if (source.content !== "fold") {
-    // At most `size` entities and no more than `PAGE_BYTES` of their state — at least one.
+    // At most `size` entities, no more than `PAGE_BYTES` of their state and no more than the turn's
+    // room to stage them (`stageWork`) — at least one.
     const parsed = JSON.parse(source.state ?? "{}") as { entities?: BackupEntity[] };
     const chunk: BackupEntity[] = [];
     let bytes = 0;
+    let work = 0;
     for (const entity of restoreOrder(parsed.entities ?? []).slice(staged, staged + size)) {
-      const weight = utf8Bytes(JSON.stringify(entity.state));
-      if (chunk.length > 0 && bytes + weight > PAGE_BYTES) break;
+      const text = JSON.stringify(entity.state);
+      const weight = utf8Bytes(text);
+      const cost = stageWork(weight, countEscapes(text));
+      if (chunk.length > 0 && (bytes + weight > PAGE_BYTES || work + cost > room)) break;
       chunk.push(entity);
       bytes += weight;
+      work += cost;
     }
     return chunk;
   }
@@ -945,7 +955,7 @@ async function nextChunk(
   // mark, and a checkpoint only moves forward. Not after an operator cleared it mid-restore
   // (README, "The fold checkpoint"), when this folds it back a turn at a time instead of
   // wedging the restore.
-  await reachFold(env, repoId, source.epoch, source.cutoff_seq, { budget: requestFoldBudget(planOf(env)) });
+  await reachFold(env, repoId, source.epoch, source.cutoff_seq, { budget });
   await pinMark(env, repoId, source.epoch, source.cutoff_seq);
   const last = await env.DB.prepare(
     `SELECT entity, entity_id FROM ops WHERE repo_id = ?1 AND seq > ?3 AND epoch = ?2 ORDER BY seq DESC LIMIT 1`,
@@ -953,7 +963,13 @@ async function nextChunk(
     .bind(repoId, restore.to_epoch, restore.guard_seq)
     .first<{ entity: string; entity_id: string }>();
   const after = last ? entityKey(last.entity, last.entity_id) : null;
-  const page = await restorePage(env, repoId, source.epoch, source.cutoff_seq, after, size);
+  const page = await restorePage(env, repoId, source.epoch, source.cutoff_seq, after, size, PAGE_BYTES, {
+    work: Math.min(RESTORE_PAGE_WORK, budget.work ?? RESTORE_PAGE_WORK),
+    atLeastOne: budget.folded !== true,
+  });
+  // Folding the backup's epoch took this turn's room, so it stages nothing and says so; asked again,
+  // there is nothing left to fold and the turn stages.
+  if (page.length === 0 && budget.folded === true) throw foldBehind(source.cutoff_seq, source.cutoff_seq);
   return page.map(forBackup);
 }
 
@@ -1020,7 +1036,8 @@ async function stageRestore(
     .first<{ content: string; epoch: number; cutoff_seq: number; schema_version: number; state: string | null }>();
   if (!source) throw new SyncError("not_found", "the backup being restored no longer exists");
 
-  const chunk = await nextChunk(env, session.repoId, restore, source, staged);
+  const budget: FoldBudget = requestFoldBudget(planOf(env));
+  const chunk = await nextChunk(env, session.repoId, restore, source, staged, budget);
   if (chunk.length === 0) {
     throw new SyncError("conflict", "the backup holds fewer entities than the restore expects");
   }
@@ -1044,6 +1061,8 @@ async function stageRestore(
    */
   let packed: string[] = [];
   let bytes = 0;
+  // What reading and staging the chunk cost, which the fold of it below does not get to spend again.
+  let spent = 0;
   const flush = () => {
     if (packed.length === 0) return;
     statements.push(
@@ -1122,6 +1141,7 @@ async function stageRestore(
       t: entity.createdAt ?? createdAt,
     });
     const size = utf8Bytes(item);
+    spent += stageWork(size, countEscapes(item));
     if (size > FOLD_WRITE_BYTES) {
       statements.push(
         env.DB.prepare(
@@ -1192,7 +1212,12 @@ async function stageRestore(
   const stagedTo = reserved?.results[0]?.last_seq;
   if (typeof stagedTo === "number") {
     await advanceFold(env, session.repoId, restore.to_epoch, stagedTo, {
-      budget: { remaining: 2 * restoreStageEntities(planOf(env)), bytes: 2 * (PAGE_BYTES + ROW_BYTES) },
+      budget: {
+        remaining: 2 * restoreStageEntities(planOf(env)),
+        bytes: 2 * (PAGE_BYTES + ROW_BYTES),
+        work: Math.max(0, (budget.work ?? 0) - spent),
+        folded: true,
+      },
     });
   }
 

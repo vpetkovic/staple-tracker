@@ -104,17 +104,32 @@ export function bodyKey(body: unknown): string | null {
   if (typeof body === "boolean") return `b:${body}`;
   if (typeof body === "number") return `n:${String(body)}`;
   if (typeof body !== "string") return null;
-  // FNV-1a over UTF-16 code units.
+  // FNV-1a over UTF-16 code units: the first and last `SAMPLED`, or all of a short body.
+  const length = body.length;
+  const head = Math.min(length, SAMPLED);
+  const tail = Math.max(head, length - SAMPLED);
   let hash = 0x811c9dc5;
-  const mix = (from: number, to: number) => {
-    for (let index = from; index < to; index += 1) hash = Math.imul(hash ^ body.charCodeAt(index), 0x01000193);
+  for (let index = 0; index < head; index += 1) hash = Math.imul(hash ^ body.charCodeAt(index), 0x01000193);
+  for (let index = tail; index < length; index += 1) hash = Math.imul(hash ^ body.charCodeAt(index), 0x01000193);
+  return `s:${length}:${(hash >>> 0).toString(36)}`;
+}
+
+/**
+ * {@link bodyKey}, remembered for each string body it is asked about, so a step keys a body once
+ * when it plans, places and writes it. A string past V8's hashed length is keyed afresh instead: it
+ * would hash on its length alone as a map key.
+ */
+export function bodyKeys(): (body: unknown) => string | null {
+  const known = new Map<string, string | null>();
+  return (body) => {
+    if (typeof body !== "string" || body.length > 16_000) return bodyKey(body);
+    let key = known.get(body);
+    if (key === undefined) {
+      key = bodyKey(body);
+      known.set(body, key);
+    }
+    return key;
   };
-  if (body.length <= 2 * SAMPLED) mix(0, body.length);
-  else {
-    mix(0, SAMPLED);
-    mix(body.length - SAMPLED, body.length);
-  }
-  return `s:${body.length}:${(hash >>> 0).toString(36)}`;
 }
 
 /** What a create's same-revision check asks D1: its document, floor, body key and author. */
@@ -193,6 +208,7 @@ export class RevisionPlacer {
     private readonly fold: ReadonlyMap<string, PlacementEntry>,
     /** Raised by the caller for an operation that must be placed however far it walks. */
     public walkLimit: number,
+    private readonly keyOf: (body: unknown) => string | null = bodyKey,
   ) {}
 
   /** Held runs of `doc` from `from` upward: the first `limit`, or all of them when fewer. */
@@ -265,7 +281,7 @@ export class RevisionPlacer {
       const request: CandidateRequest = {
         doc,
         floor,
-        bodyKey: bodyKey(incoming.body)!,
+        bodyKey: this.keyOf(incoming.body)!,
         author: typeof incoming.author === "string" ? incoming.author : null,
       };
       const found = this.candidates.get(candidateId(request));

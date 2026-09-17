@@ -17,6 +17,7 @@ import type { Env } from "./env.js";
 import { minProtocolFor } from "./envelope.js";
 import { SyncError, json } from "./errors.js";
 import { advanceFold, foldProgress } from "./fold-store.js";
+import { serveWork } from "./fold-work.js";
 import {
   DEFAULT_PULL_LIMIT,
   LAZY_FOLD_BEHIND,
@@ -72,14 +73,16 @@ export async function pull(
   // whole range to answer a question the extra row already answers.
   const page = await env.DB.prepare(
     `SELECT seq, epoch, op_id, device_id, entity, entity_id, verb, base_version,
-            payload, actor, client_seq, schema_version, created_at, server_ts
+            payload, actor, client_seq, schema_version, created_at, server_ts,
+            length(CAST(payload AS BLOB)) AS bytes,
+            length(payload) - length(replace(replace(payload, '\\', ''), '"', '')) AS escapes
        FROM ops
       WHERE repo_id = ?1 AND epoch = ?2 AND seq > ?3
       ORDER BY seq
       LIMIT ?4`,
   )
     .bind(session.repoId, session.epoch, after, limit + 1)
-    .all<OpRow>();
+    .all<OpRow & { bytes: number; escapes: number }>();
 
   const hasMore = page.results.length > limit;
   const rows = hasMore ? page.results.slice(0, limit) : page.results;
@@ -92,7 +95,9 @@ export async function pull(
   const lastSeq = rows.length > 0 ? rows[rows.length - 1]!.seq : after;
   const next: PullCursor = { v: 1, r: session.repoId, e: session.epoch, s: lastSeq };
 
-  await keepFoldNearHead(env, session);
+  // What the page costs to parse and put on the wire, so the fold beside it never takes the request past its budget.
+  const spent = rows.reduce((sum, row) => sum + serveWork(row.bytes, row.escapes), 0);
+  await keepFoldNearHead(env, session, spent);
 
   log({
     event: "pull",
@@ -119,7 +124,9 @@ export async function pull(
 }
 
 /**
- * Move the fold checkpoint on by one step when it has fallen behind the log (`fold-store.ts`).
+ * Move the fold checkpoint on when it has fallen behind the log (`fold-store.ts`), by what the
+ * request's budget has left beside its page (`spent`) and never more: the step is cut to fit, and
+ * a step that fits nothing folds nothing (`pullFoldBudget`).
  *
  * Here because every sync pulls: a device that pushed pulls straight after, so the
  * checkpoint trails the log by little more than {@link LAZY_FOLD_BEHIND} operations, and a
@@ -128,12 +135,12 @@ export async function pull(
  * it: the pull's answer is already decided, a failed step writes nothing (its batch is one
  * transaction), and the next pull or snapshot tries again.
  */
-async function keepFoldNearHead(env: Env, session: Session): Promise<void> {
+async function keepFoldNearHead(env: Env, session: Session, spent: number): Promise<void> {
   try {
     const progress = await foldProgress(env, session.repoId, session.epoch);
     if (session.lastSeq - progress.seq < LAZY_FOLD_BEHIND) return;
     await advanceFold(env, session.repoId, session.epoch, session.lastSeq, {
-      budget: pullFoldBudget(planOf(env)),
+      budget: pullFoldBudget(planOf(env), spent),
     });
   } catch (err) {
     log({ event: "fold.lag", status: 503, code: errorKind(err), repo_id: session.repoId, epoch: session.epoch });

@@ -173,6 +173,19 @@ export const TAIL_BYTES = FOLD_STEP_BYTES + ROW_BYTES;
  */
 export const PAGE_BYTES = 1024 * 1024;
 
+/**
+ * Estimated isolate time one snapshot page may spend reading and serializing its entities
+ * (`serveWork`, `fold-work.ts`): a page of escape-heavy states is cut long before its bytes are.
+ */
+export const PAGE_WORK = 3_000_000;
+
+/**
+ * Estimated isolate time one restore turn may spend reading and staging entities. A third of a
+ * request, so the fold of what it staged, which costs about as much again, fits in the rest and the
+ * new epoch's checkpoint keeps up with the restore.
+ */
+export const RESTORE_PAGE_WORK = 2_000_000;
+
 /** Bytes of packed rows per INSERT statement: under D1's 2 MB ceiling on a bound value. */
 export const FOLD_WRITE_BYTES = 900_000;
 
@@ -204,17 +217,19 @@ export const LAZY_FOLD_BEHIND = 500;
  */
 const FOLD_PLAN_LIMITS: Record<
   Plan,
-  { foldBudgetOps: number; foldBudgetBytes: number; pullFoldOps: number; restoreStageEntities: number }
+  { foldBudgetOps: number; foldBudgetBytes: number; requestWork: number; pullFoldOps: number; restoreStageEntities: number }
 > = {
   free: {
     foldBudgetOps: FOLD_STEP_OPS,
     foldBudgetBytes: FOLD_STEP_BYTES,
+    requestWork: 5_000_000,
     pullFoldOps: FOLD_STEP_OPS,
     restoreStageEntities: 200,
   },
   paid: {
     foldBudgetOps: 100 * FOLD_STEP_OPS,
     foldBudgetBytes: 64 * FOLD_STEP_BYTES,
+    requestWork: 100 * FOLD_STEP_WORK,
     pullFoldOps: 50 * FOLD_STEP_OPS,
     restoreStageEntities: 1000,
   },
@@ -224,9 +239,26 @@ export function foldBudgetOps(plan: Plan): number {
   return FOLD_PLAN_LIMITS[plan].foldBudgetOps;
 }
 
-/** What one request may fold: {@link foldBudgetOps} operations and no more payload than this. */
-export function requestFoldBudget(plan: Plan): { remaining: number; bytes: number } {
-  return { remaining: FOLD_PLAN_LIMITS[plan].foldBudgetOps, bytes: FOLD_PLAN_LIMITS[plan].foldBudgetBytes };
+/**
+ * What one request may fold, and read: {@link foldBudgetOps} operations, no more payload than
+ * this, and no more estimated isolate time than {@link requestWork} (`fold-work.ts`) — which the
+ * request's page, when it serves one, shares.
+ */
+export function requestFoldBudget(plan: Plan): { remaining: number; bytes: number; work: number } {
+  return {
+    remaining: FOLD_PLAN_LIMITS[plan].foldBudgetOps,
+    bytes: FOLD_PLAN_LIMITS[plan].foldBudgetBytes,
+    work: FOLD_PLAN_LIMITS[plan].requestWork,
+  };
+}
+
+/**
+ * Estimated isolate time one request may spend on the fold and on what it serves from it, in
+ * nanoseconds (`fold-work.ts`). Five milliseconds on free, so the request's own routing,
+ * authentication and response fit beside it under the plan's ten.
+ */
+export function requestWork(plan: Plan): number {
+  return FOLD_PLAN_LIMITS[plan].requestWork;
 }
 
 /** Operations a pull that finds the fold behind may fold: one step on free, beside its page. */
@@ -234,9 +266,18 @@ export function pullFoldOps(plan: Plan): number {
   return FOLD_PLAN_LIMITS[plan].pullFoldOps;
 }
 
-/** What a pull that finds the fold behind may fold, operations and bytes. */
-export function pullFoldBudget(plan: Plan): { remaining: number; bytes: number } {
-  return { remaining: FOLD_PLAN_LIMITS[plan].pullFoldOps, bytes: FOLD_PLAN_LIMITS[plan].foldBudgetBytes };
+/**
+ * What a pull that finds the fold behind may fold beside a page estimated at `spent`: the request's
+ * work less the page's, and nothing at all rather than more (`folded`), because a pull's own
+ * answer must never be what folding costs it.
+ */
+export function pullFoldBudget(plan: Plan, spent: number): { remaining: number; bytes: number; work: number; folded: true } {
+  return {
+    remaining: FOLD_PLAN_LIMITS[plan].pullFoldOps,
+    bytes: FOLD_PLAN_LIMITS[plan].foldBudgetBytes,
+    work: Math.max(0, FOLD_PLAN_LIMITS[plan].requestWork - spent),
+    folded: true,
+  };
 }
 
 export function restoreStageEntities(plan: Plan): number {

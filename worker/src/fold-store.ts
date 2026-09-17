@@ -92,10 +92,11 @@ import {
   RevisionPlacer,
   type RevisionSlot,
   bodyKey,
+  bodyKeys,
   candidateId,
   revisionSlot,
 } from "./fold-revisions.js";
-import { runWork } from "./fold-work.js";
+import { countEscapes, parseWork, runWork, serveWork, writeWork } from "./fold-work.js";
 import {
   FOLD_STEP_BYTES,
   FOLD_STEP_OPS,
@@ -104,6 +105,8 @@ import {
   FOLD_STEP_WORK,
   FOLD_WRITE_BYTES,
   PAGE_BYTES,
+  PAGE_WORK,
+  RESTORE_PAGE_WORK,
   TAIL_BYTES,
 } from "./limits.js";
 
@@ -294,9 +297,19 @@ async function foldRun(
   mark: Mark;
   folded: number;
   work: number;
+  /** The body keys the run computed, for its writes. */
+  keyOf: (body: unknown) => string | null;
 }> {
   const fold = new Map<string, FoldedEntity>();
-  const nothing = () => ({ fold, changed: new Map<string, number>(), created: new Set<string>(), mark: base, folded: 0, work: 0 });
+  const nothing = () => ({
+    fold,
+    changed: new Map<string, number>(),
+    created: new Set<string>(),
+    mark: base,
+    folded: 0,
+    work: 0,
+    keyOf: bodyKey,
+  });
   if (rows.length === 0) return nothing();
 
   // --- What each prefix would cost, from sizes; and D1's live revisions at every number named.
@@ -364,6 +377,7 @@ async function foldRun(
 
   // --- Load what the prefix names, and read ahead for its revision creates.
   const named = [...new Set(keysOf.slice(0, take).flat())];
+  const keyOf = bodyKeys();
   const parsed = new Map<number, Record<string, unknown> | undefined>();
   const runsFrom = new Map<string, number>();
   const candidates = new Map<string, CandidateRequest>();
@@ -382,14 +396,14 @@ async function foldRun(
     if (!Number.isInteger(claimed)) continue;
     const doc = row.entity_id.slice(0, slash + 1);
     runsFrom.set(doc, Math.min(runsFrom.get(doc) ?? claimed, claimed));
-    const key = bodyKey(payload.body);
+    const key = keyOf(payload.body);
     if (key === null) continue;
     const floor = Math.min(claimed, writtenAs(payload.changeSummary) ?? claimed);
     const request: CandidateRequest = { doc, floor, bodyKey: key, author: typeof payload.author === "string" ? payload.author : null };
     candidates.set(candidateId(request), request);
   }
 
-  const placer = new RevisionPlacer(fold, limits === null ? Number.POSITIVE_INFINITY : limits.walk);
+  const placer = new RevisionPlacer(fold, limits === null ? Number.POSITIVE_INFINITY : limits.walk, keyOf);
   for (const slot of slots.values()) placer.absorbSlot(slot.doc, slot.rev, []);
   for (const alias of aliases) placer.absorbSlot(alias.doc, alias.rev, [alias.key]);
   if (base.seq === 0) {
@@ -494,6 +508,7 @@ async function foldRun(
     fold,
     changed,
     created,
+    keyOf,
     mark: {
       seq: folded === rows.length ? end : rows[folded - 1]!.seq,
       opCount: base.opCount + folded,
@@ -732,7 +747,7 @@ export async function advanceFold(
     await options.beforeWrite?.();
 
     await env.DB.batch([
-      ...writeVersions(env, repoId, epoch, run.fold, run.changed),
+      ...writeVersions(env, repoId, epoch, run.fold, run.changed, run.keyOf),
       env.DB.prepare(
         `INSERT OR IGNORE INTO fold_marks (repo_id, epoch, seq, op_count, schema_version, kinds)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)`,
@@ -772,6 +787,7 @@ function writeVersions(
   epoch: number,
   fold: ReadonlyMap<string, FoldedEntity>,
   changed: ReadonlyMap<string, number>,
+  keyOf: (body: unknown) => string | null = bodyKey,
 ): D1PreparedStatement[] {
   const statements: D1PreparedStatement[] = [];
   let packed: string[] = [];
@@ -798,7 +814,7 @@ function writeVersions(
   for (const [key, seq] of changed) {
     const entry = fold.get(key)!;
     const slot = revisionSlot(entry.entity, entry.entityId);
-    const body = slot ? bodyKey(entry.state.body) : null;
+    const body = slot ? keyOf(entry.state.body) : null;
     const state = JSON.stringify(entry.state);
     const fieldWrites = JSON.stringify(entry.fieldWrites);
     const item =
@@ -991,8 +1007,10 @@ export async function pinMark(env: Env, repoId: string, epoch: number, cutoff: n
 /**
  * The fold at the mark `cutoff`, the page of entities a restore stages next: in stage order —
  * `claimSeq`, then key, which is `restoreOrder` in `backups.ts` — after `afterKey`, the entity
- * the last turn staged (or from the start, given null). At most `limit` of them and no more than
- * `maxBytes` of their state, which is what a restore writes — always at least one.
+ * the last turn staged (or from the start, given null). At most `limit` of them, no more than
+ * `maxBytes` of their state, which is what a restore writes, and no more than `room.work` of
+ * estimated isolate time to read and stage them (`fold-work.ts`) — always at least one, unless
+ * `room.atLeastOne` is false.
  *
  * Read off `fold_versions_stage`: the versions at or below the cutoff in stage order, each kept
  * only when it is its entity's newest there. A version an entity has since moved past is read
@@ -1007,6 +1025,7 @@ export async function restorePage(
   afterKey: string | null,
   limit: number,
   maxBytes: number = PAGE_BYTES,
+  room: { work?: number; atLeastOne?: boolean } = {},
 ): Promise<FoldedEntity[]> {
   const base = await markAtOrBelow(env, repoId, epoch, cutoff);
   if (base.seq !== cutoff) throw foldBehind(base.seq, cutoff);
@@ -1029,7 +1048,7 @@ export async function restorePage(
 
   const listed = (
     await env.DB.prepare(
-      `SELECT v.ord, v.seq, length(CAST(v.state AS BLOB)) AS size
+      `SELECT v.ord, v.seq, length(CAST(v.state AS BLOB)) AS size, ${ESCAPES("v.state")} AS escapes
          FROM fold_versions v
         WHERE v.repo_id = ?1 AND v.epoch = ?2 AND (v.stage_order, v.ord) > (?3, ?4) AND v.seq <= ?5
           AND NOT EXISTS (SELECT 1 FROM fold_versions w
@@ -1038,15 +1057,19 @@ export async function restorePage(
         LIMIT ?6`,
     )
       .bind(repoId, epoch, position[0], position[1], cutoff, limit)
-      .all<{ ord: string; seq: number; size: number }>()
+      .all<{ ord: string; seq: number; size: number; escapes: number }>()
   ).results;
 
+  const maxWork = room.work ?? RESTORE_PAGE_WORK;
   const page: Array<{ ord: string; seq: number }> = [];
   let bytes = 0;
+  let work = 0;
   for (const row of listed) {
-    if (page.length > 0 && bytes + row.size > maxBytes) break;
+    const cost = stageWork(row.size, row.escapes);
+    if ((page.length > 0 || room.atLeastOne === false) && (bytes + row.size > maxBytes || work + cost > maxWork)) break;
     page.push(row);
     bytes += row.size;
+    work += cost;
   }
   if (page.length === 0) return [];
 
@@ -1063,6 +1086,11 @@ export async function restorePage(
   return page.map((row) => byOrd.get(row.ord)!);
 }
 
+/** Estimated isolate time to read an entity of this stored size and stage it as an operation. */
+export function stageWork(size: number, escapes: number): number {
+  return parseWork(size, escapes) + writeWork(size, escapes);
+}
+
 /** The fold's counts at `cutoff`: what a backup taken there records. */
 export async function foldSummary(env: Env, repoId: string, epoch: number, cutoff: number): Promise<Mark> {
   return (await foldAt(env, repoId, epoch, cutoff)).mark;
@@ -1072,13 +1100,17 @@ export interface FoldPage {
   /** In snapshot order, after the key asked for. */
   entities: FoldedEntity[];
   hasMore: boolean;
+  /** True when the next entity did not fit the room given and none was served (`atLeastOne: false`). */
+  deferred: boolean;
   /** Every entity kind the fold holds at the cutoff — the WHOLE fold, not this page. */
   kinds: string[];
 }
 
 /**
  * The fold at `cutoff`, the page of entities whose keys follow `afterKey`: at most `limit` of
- * them, and no more than `maxBytes` of their stored state — always at least one.
+ * them, no more than `maxBytes` of their stored state, and no more than `room.work` of estimated
+ * isolate time to read and serialize them (`serveWork`, `fold-work.ts`) — always at least one,
+ * unless `room.atLeastOne` is false, when a first entity that does not fit is `deferred`.
  */
 export async function foldedPage(
   env: Env,
@@ -1088,6 +1120,7 @@ export async function foldedPage(
   afterKey: string,
   limit: number,
   maxBytes: number = PAGE_BYTES,
+  room: { work?: number; atLeastOne?: boolean } = {},
 ): Promise<FoldPage> {
   const at = await foldAt(env, repoId, epoch, cutoff);
   const after = foldOrder(afterKey);
@@ -1102,7 +1135,8 @@ export async function foldedPage(
       : (
           await env.DB.prepare(
             `SELECT m.ord, m.at, v.entity, v.entity_id,
-                    length(CAST(v.state AS BLOB)) + length(CAST(v.field_writes AS BLOB)) AS size
+                    length(CAST(v.state AS BLOB)) + length(CAST(v.field_writes AS BLOB)) AS size,
+                    ${ESCAPES("v.state")} + ${ESCAPES("v.field_writes")} AS escapes
                FROM (SELECT ord, MAX(seq) AS at FROM fold_versions
                       WHERE repo_id = ?1 AND epoch = ?2 AND ord > ?3 AND seq <= ?4
                       GROUP BY ord ORDER BY ord LIMIT ?5) m
@@ -1111,33 +1145,41 @@ export async function foldedPage(
               ORDER BY m.ord`,
           )
             .bind(repoId, epoch, after, at.base.seq, limit + 1)
-            .all<{ ord: string; at: number; entity: string; entity_id: string; size: number }>()
+            .all<{ ord: string; at: number; entity: string; entity_id: string; size: number; escapes: number }>()
         ).results;
 
   // An entity the tail read or changed is as the tail left it; the rest are read below.
-  const candidates = new Map<string, { at?: number; size: number; entry?: FoldedEntity }>();
-  // In UTF-8 bytes, as SQLite measured the rest, so a page is cut at the same entity whichever
-  // side of the checkpoint it came from.
-  const sized = (entry: FoldedEntity) => utf8Bytes(JSON.stringify(entry.state)) + utf8Bytes(JSON.stringify(entry.fieldWrites));
+  const candidates = new Map<string, { at?: number; size: number; escapes: number; entry?: FoldedEntity }>();
+  // In UTF-8 bytes and escapes, as SQLite measured the rest, so a page is cut at the same entity
+  // whichever side of the checkpoint it came from.
+  const sized = (entry: FoldedEntity) => {
+    const state = JSON.stringify(entry.state);
+    const fieldWrites = JSON.stringify(entry.fieldWrites);
+    return { size: utf8Bytes(state) + utf8Bytes(fieldWrites), escapes: countEscapes(state) + countEscapes(fieldWrites), entry };
+  };
   for (const row of listed) {
     const entry = at.fold.get(entityKey(row.entity, row.entity_id));
-    candidates.set(row.ord, entry ? { size: sized(entry), entry } : { at: row.at, size: row.size });
+    candidates.set(row.ord, entry ? sized(entry) : { at: row.at, size: row.size, escapes: row.escapes });
   }
   for (const key of at.created) {
     const ord = foldOrder(key);
     const entry = at.fold.get(key)!;
-    if (ord > after) candidates.set(ord, { size: sized(entry), entry });
+    if (ord > after) candidates.set(ord, sized(entry));
   }
   const ordered = [...candidates.keys()].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 
+  const maxWork = room.work ?? PAGE_WORK;
   const page: string[] = [];
   let bytes = 0;
+  let work = 0;
   for (const ord of ordered) {
     if (page.length === limit) break;
-    const size = candidates.get(ord)!.size;
-    if (page.length > 0 && bytes + size > maxBytes) break;
+    const { size, escapes } = candidates.get(ord)!;
+    const cost = serveWork(size, escapes);
+    if ((page.length > 0 || room.atLeastOne === false) && (bytes + size > maxBytes || work + cost > maxWork)) break;
     page.push(ord);
     bytes += size;
+    work += cost;
   }
 
   const unread = page.filter((ord) => candidates.get(ord)!.entry === undefined);
@@ -1160,6 +1202,7 @@ export async function foldedPage(
   return {
     entities: page.map((ord) => candidates.get(ord)!.entry!),
     hasMore: page.length < ordered.length,
+    deferred: page.length === 0 && ordered.length > 0,
     kinds: Object.keys(at.mark.kinds),
   };
 }

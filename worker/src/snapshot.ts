@@ -37,10 +37,12 @@ import type { Env } from "./env.js";
 import { minProtocolFor } from "./envelope.js";
 import { SyncError, json } from "./errors.js";
 import { type FieldWrite, type FoldedEntity, materializedVerb } from "./fold.js";
-import { foldedPage, pinMark, reachFold } from "./fold-store.js";
+import { type FoldBudget, foldBehind, foldedPage, pinMark, reachFold } from "./fold-store.js";
 import {
   DEFAULT_SNAPSHOT_PAGE,
   MAX_SNAPSHOT_PAGE,
+  PAGE_BYTES,
+  PAGE_WORK,
   PROTOCOL_MAX,
   PROTOCOL_MIN,
   planOf,
@@ -96,7 +98,7 @@ export async function snapshot(
   const limit = parseLimit(url.searchParams.get("limit"));
 
   const rawCursor = url.searchParams.get("cursor");
-  const budget = requestFoldBudget(planOf(env));
+  const budget: FoldBudget = requestFoldBudget(planOf(env));
   let cutoff: number;
   let afterKey = "";
   if (rawCursor !== null && rawCursor !== "") {
@@ -136,7 +138,17 @@ export async function snapshot(
     await pinMark(env, session.repoId, session.epoch, cutoff);
   }
 
-  const folded = await foldedPage(env, session.repoId, session.epoch, cutoff, afterKey, limit);
+  /**
+   * The page gets what the request's budget has left after folding, up to a page's own. A request
+   * that folded nothing always serves at least one entity, however large. One that folded and has no
+   * room left for the next entity serves none and answers "still folding" at the fold's progress,
+   * which is the cutoff: asked again, the fold has nothing left to do and the page is served.
+   */
+  const folded = await foldedPage(env, session.repoId, session.epoch, cutoff, afterKey, limit, PAGE_BYTES, {
+    work: Math.min(PAGE_WORK, budget.work ?? PAGE_WORK),
+    atLeastOne: budget.folded !== true,
+  });
+  if (folded.deferred) throw foldBehind(cutoff, cutoff);
 
   /**
    * Refused over the WHOLE fold, not over the page about to be served.
