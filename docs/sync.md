@@ -152,7 +152,9 @@ third device minted meanwhile; that is a fresh claim, settled the same way.
   by entity key, which is a function of the UUIDs, so the fold carries where each claim
   sits — the seq of the entity's create (`createdSeq`) and of each later field write
   (`fieldWrites[…].seq`) — and the device orders issues and projects by it before
-  applying. A device hydrating from a Worker too old to say applies them in key order,
+  applying; milestones too, by their membership's last write, because an issue is in one
+  milestone at most and two lists naming it leave it in the one the log wrote last
+  (`test/cloud-milestone-concurrent-membership.test.ts`). A device hydrating from a Worker too old to say applies them in key order,
   and is put right when the later claim's settlement arrives: a number freed is given
   back to the issue whose open record asks for it.
 - **A device on a build from before this** does not settle its claims, and degrades to

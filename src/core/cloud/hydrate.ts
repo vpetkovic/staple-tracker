@@ -92,7 +92,11 @@ export function hydrationRank(entity: { entity: string; entityId: string }): num
  * `Infinity` from a service too old to say, which leaves those in the snapshot's order.
  */
 function claimSeq(entity: SnapshotEntity): number {
-  const field = entity.entity === "issue" ? "identifier" : entity.entity === "project" ? "slug" : null;
+  /**
+   * A milestone's claim is on its members: an issue is in one milestone at most, and two lists
+   * naming one issue leave it in the one the log wrote last, as a device reading the tail has it.
+   */
+  const field = entity.entity === "issue" ? "identifier" : entity.entity === "project" ? "slug" : entity.entity === "milestone" ? "members" : null;
   const written = field ? entity.fieldWrites?.[field]?.seq : undefined;
   if (typeof written === "number") return written;
   return typeof entity.createdSeq === "number" ? entity.createdSeq : Number.POSITIVE_INFINITY;
