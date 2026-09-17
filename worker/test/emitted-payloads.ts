@@ -48,7 +48,19 @@ export const EMITTED_PAYLOADS: ReadonlyArray<{
       ],
       "entity": "queue",
       "targetId": "@plan",
-      "field": "order"
+      "field": "order",
+      "entries": {
+        "00000000-0000-4000-8000-000000000001": {
+          "addedBy": "emitter",
+          "addedAt": "2026-09-10T00:00:00.000Z",
+          "note": null
+        },
+        "00000000-0000-4000-8000-000000000002": {
+          "addedBy": "past",
+          "addedAt": "2026-09-10T00:00:00.000Z",
+          "note": null
+        }
+      }
     }
   },
   {
