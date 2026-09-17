@@ -161,6 +161,7 @@ export function reconcileBeforeRead(db: DatabaseSync, entities: readonly Snapsho
  */
 export function reconcileAfterRead(db: DatabaseSync, journal: Journal, plan: ReconcilePlan, epoch: number): ReconcileReport {
   const givenBack = giveBackFreedNumbers(db);
+  settleListRecords(db);
   for (const entity of ["status", "kind"] as const) freshOrder(db, entity, plan.entities, plan.kept);
   settingsMoved(db, true);
 
@@ -517,6 +518,37 @@ function giveBackFreedNumbers(db: DatabaseSync): number {
     given += 1;
   }
   return given;
+}
+
+/**
+ * An open record about the plan or a milestone's members, without the issues the epoch does not
+ * hold. It is about the list, not the issues in it, so it stayed open when the rewind removed one
+ * — and resolving to the side that named it failed for ever, on an issue no device holds. Each
+ * side loses what the rewind removed, as the list does; two sides that then agree leave nothing to
+ * ask, and the record closes.
+ */
+function settleListRecords(db: DatabaseSync): void {
+  const open = db
+    .prepare(
+      `SELECT id, local_value, remote_value FROM sync_conflicts
+        WHERE resolved_at IS NULL AND ((entity = 'queue' AND field = 'order') OR (entity = 'milestone' AND field = 'members'))`,
+    )
+    .all() as Array<{ id: string; local_value: string | null; remote_value: string | null }>;
+  const held = db.prepare("SELECT 1 AS hit FROM issues WHERE id = ?");
+  const present = (raw: string | null): string | null => {
+    if (raw === null) return null;
+    const list = JSON.parse(raw) as unknown;
+    return Array.isArray(list) ? JSON.stringify(list.filter((id) => typeof id !== "string" || held.get(id) !== undefined)) : raw;
+  };
+  for (const record of open) {
+    const local = present(record.local_value);
+    const remote = present(record.remote_value);
+    if (local === remote) {
+      db.prepare("UPDATE sync_conflicts SET resolved_at = ?, resolved_by = 'staple', resolution = ? WHERE id = ?").run(nowIso(), JSON.stringify("rewound by a restore"), record.id);
+    } else if (local !== record.local_value || remote !== record.remote_value) {
+      db.prepare("UPDATE sync_conflicts SET local_value = ?, remote_value = ? WHERE id = ?").run(local, remote, record.id);
+    }
+  }
 }
 
 /**

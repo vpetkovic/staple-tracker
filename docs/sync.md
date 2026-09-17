@@ -1392,7 +1392,11 @@ re-bootstrap killed part-way leaves nothing half-applied, and reads again on the
   holds no members, as it does on a fresh device: the rewind clears its member rows, unless
   this device's unsent membership of it is still to be sent
   (`test/cloud-restore-milestone-members.test.ts`). The plan and a blocker set have no such
-  shape; each reaches the log only as its whole list.
+  shape; each reaches the log only as its whole list. An open record about the plan or a
+  milestone's members is about the list, not the issues in it, so it outlives the issues the
+  rewind removes: each side loses them, as the list does, and a record whose sides then
+  agree closes (`test/cloud-restore-open-list-record.test.ts`). Kept whole, resolving to the
+  side that named a removed issue failed for ever.
 - **Work that was never pushed is kept, and reaches every device.** An entity with an
   operation in this device's outbox that no service acknowledged is kept, with whatever it
   names that the epoch lacks — a comment's issue, an issue's parent, project, status and
