@@ -70,6 +70,40 @@ describe("a create sent again after a restore", () => {
     expect([a, b].flatMap((machine) => differences(machine.label, want, stateOf(machine.db)))).toEqual([]);
   }, 60_000);
 
+  it("keeps a set the restorer has still to send", async () => {
+    const server = new FakeSyncServer({ repositoryId: REPO });
+    fleet = new Fleet(server, REPO);
+    const a = fleet.machine("a");
+    await a.sync();
+    // Made while connected: each create carries its blockers.
+    const [issue, j] = ["I", "J"].map((title) => a.store.createIssue({ title }));
+    await a.sync();
+    await setBackupConsent(a.home, REPO, true, { fetchImpl: server.fetch });
+    const backup = await createBackup(a.home, REPO, null, { fetchImpl: server.fetch });
+    const b = fleet.machine("b");
+    await sync(b);
+
+    // a blocks I on J offline, and restores before it is sent.
+    a.use();
+    a.store.setBlockedBy(issue!.id, [j!.id], "a");
+    await restoreFromBackup(a.db, a.home, REPO, backup.backupId, { fetchImpl: server.fetch });
+    // The read, with the push after it lost: the set is a's still, not only once its echo lands.
+    let read = false;
+    const pushLost: typeof fetch = async (input, init) => {
+      if (String(input).includes("/snapshot")) read = true;
+      if (read && (init?.method ?? "GET") === "POST" && String(input).endsWith("/ops")) throw new TypeError("fetch failed");
+      return server.fetch(input, init);
+    };
+    await a.sync({ fetchImpl: pushLost, attempts: 1 } as never).catch(() => undefined);
+    expect(read).toBe(true);
+    expect(edges(a, issue!.id)).toEqual([j!.id]);
+    await sync(a, b, a);
+    const fresh = fleet.machine("fresh");
+    await sync(fresh);
+
+    for (const machine of [a, b, fresh]) expect(edges(machine, issue!.id), machine.label).toEqual([j!.id]);
+  }, 60_000);
+
   it("decides the blockers again when the restore rewound the set", async () => {
     const server = new FakeSyncServer({ repositoryId: REPO });
     fleet = new Fleet(server, REPO);

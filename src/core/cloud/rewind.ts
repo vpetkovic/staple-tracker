@@ -148,10 +148,12 @@ export function reconcileBeforeRead(db: DatabaseSync, entities: readonly Snapsho
   /**
    * A blocker set the epoch does not hold is not in the log any more: its version goes, so an
    * issue's own create decides its blockers again, as on a fresh device (`applyIssue`,
-   * `apply.ts`). One this device still has to send takes a version again when it comes back.
+   * `apply.ts`). Except one this device still has to send, which the log holds as soon as it is
+   * sent: forgotten, the epoch's own create of the issue replaced it here before it went.
    */
+  const unsentSets = new Set(unsent.filter((op) => op.entity === "relation").map((op) => op.id));
   for (const { id } of db.prepare("SELECT entity_id AS id FROM sync_entity_versions WHERE entity = 'relation'").all() as Array<{ id: string }>) {
-    if (placed("relation", id)) continue;
+    if (placed("relation", id) || unsentSets.has(id)) continue;
     db.prepare("DELETE FROM sync_entity_versions WHERE entity = 'relation' AND entity_id = ?").run(id);
   }
 
