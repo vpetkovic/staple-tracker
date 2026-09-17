@@ -50,12 +50,14 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { SyncOptions, SyncReport } from "./sync.js";
 import {
+  AUTO_SYNC_MAX_RETRY_AFTER_MS,
   autoSyncBackoffMs,
   autoSyncGate,
   type AutoSyncSkip,
   type AutoSyncTrigger,
 } from "./auto.js";
 import { readAutoSyncState, writeAutoSyncState, type AutoSyncState } from "./auto-state.js";
+import { syncProgressMark } from "./sync-state.js";
 
 export type AutoSyncOutcome =
   | { readonly status: "skipped"; readonly reason: AutoSyncSkip }
@@ -64,6 +66,16 @@ export type AutoSyncOutcome =
   | { readonly status: "timeout"; readonly ms: number }
   /** `stop()` fired, or the surface shut down mid-run. */
   | { readonly status: "cancelled"; readonly ms: number }
+  /**
+   * Stopped part-way — the budget elapsed, or the service asked it to wait — having moved
+   * this device's reading of the log on, which the next run continues from. Not a failure.
+   */
+  | {
+      readonly status: "progressed";
+      readonly stoppedBy: "timeout" | "failed";
+      readonly code: string | null;
+      readonly ms: number;
+    }
   | {
       readonly status: "failed";
       /** The cloud error code when there was one — `offline`, `unavailable`, … */
@@ -110,6 +122,23 @@ function codeOf(error: unknown): string | null {
   const detail = (error as { detail?: Record<string, unknown> } | null)?.detail;
   const code = detail?.cloudCode;
   return typeof code === "string" ? code : null;
+}
+
+/**
+ * A `rate_limited` refusal's `Retry-After`, in milliseconds, or 0.
+ *
+ * Read here from the error's detail rather than imported from `sync.ts`, which this
+ * module must not load until a run is allowed (see the module comment). Delta-seconds
+ * or an HTTP date, as the header allows.
+ */
+function retryAfterFrom(error: unknown, now: number): number {
+  if (codeOf(error) !== "rate_limited") return 0;
+  const raw = (error as { detail?: Record<string, unknown> } | null)?.detail?.retryAfter;
+  if (typeof raw !== "string" && typeof raw !== "number") return 0;
+  const text = String(raw).trim();
+  const asked = /^\d+$/.test(text) ? Number(text) * 1000 : Date.parse(text) - now;
+  // Bounded, and never NaN or Infinity (`AUTO_SYNC_MAX_RETRY_AFTER_MS`).
+  return Number.isNaN(asked) ? 0 : Math.min(Math.max(0, asked), AUTO_SYNC_MAX_RETRY_AFTER_MS);
 }
 
 function messageOf(error: unknown): string {
@@ -235,6 +264,9 @@ export class AutoSyncScheduler {
 
     const controller = new AbortController();
     this.controller = controller;
+    // Where this device's reading of the log stands, to tell a stopped run that got
+    // somewhere from one that did not.
+    const mark = syncProgressMark(target.db);
     /**
      * A distinct object, so the catch below can tell "the budget elapsed" from
      * "somebody closed the window" by identity rather than by re-reading
@@ -266,6 +298,12 @@ export class AutoSyncScheduler {
          * backoff window.
          */
         attempts: 1,
+        /**
+         * And no waiting inside the run on a `Retry-After`: the run has a budget, and a
+         * service asking for a minute is answered by scheduling the next run no sooner
+         * than that — see the backoff below.
+         */
+        rateLimitWaitMs: 0,
         timeoutMs: decision.bound.budgetMs,
         fetchImpl: this.guard(controller.signal),
       });
@@ -285,11 +323,39 @@ export class AutoSyncScheduler {
       return { status: "synced", report, ms };
     } catch (error) {
       const ms = this.now() - startedAt;
-      const outcome: AutoSyncOutcome = !controller.signal.aborted
+      const stopped: AutoSyncOutcome = !controller.signal.aborted
         ? { status: "failed", code: codeOf(error), message: messageOf(error), ms }
         : controller.signal.reason === budgetElapsed
           ? { status: "timeout", ms }
           : { status: "cancelled", ms };
+      const asked = retryAfterFrom(error, this.now());
+
+      /**
+       * A run the budget or the service stopped part-way, having moved this device's reading
+       * of the log on, is progress and not a failure: a large log is more pages than one
+       * run's budget, or the service's rate limit, allows, and what was read is kept for the
+       * next run (`surveyFromTail` in `sync.ts`, the pull's cursor). Counted as a failure,
+       * it pushed the backoff out and reported failing on every run of a device that was
+       * getting there. It waits no less than the service asked, and no more.
+       */
+      if ((stopped.status === "timeout" || stopped.status === "failed") && syncProgressMark(target.db) !== mark) {
+        const outcome: AutoSyncOutcome = {
+          status: "progressed",
+          stoppedBy: stopped.status,
+          code: stopped.status === "failed" ? stopped.code : null,
+          ms,
+        };
+        this.persist(target.repositoryId, {
+          lastAttemptAt: new Date(startedAt).toISOString(),
+          lastOkAt: readAutoSyncState(home, target.repositoryId).lastOkAt,
+          consecutiveFailures: 0,
+          nextEligibleAt: asked > 0 ? new Date(this.now() + asked).toISOString() : null,
+          lastOutcome: `progressed after ${ms}ms (${trigger}); the next run goes on from there`,
+        });
+        this.debug?.(`${trigger} progressed after ${ms}ms`);
+        return outcome;
+      }
+      const outcome = stopped;
 
       /**
        * A cancellation is not a failure and must not push the backoff out.
@@ -300,12 +366,17 @@ export class AutoSyncScheduler {
        */
       const failed = outcome.status !== "cancelled";
       const failures = failed ? readAutoSyncState(home, target.repositoryId).consecutiveFailures + 1 : 0;
+      /**
+       * Never sooner than the service asked. The jittered backoff starts at five
+       * seconds, and a rate-limited service says how long it wants — sixty, from the
+       * deployed Worker — so the next trigger waits for whichever is later.
+       */
       this.persist(target.repositoryId, {
         lastAttemptAt: new Date(startedAt).toISOString(),
         lastOkAt: readAutoSyncState(home, target.repositoryId).lastOkAt,
         consecutiveFailures: failed ? failures : 0,
         nextEligibleAt: failed
-          ? new Date(this.now() + autoSyncBackoffMs(failures, this.random)).toISOString()
+          ? new Date(this.now() + Math.max(autoSyncBackoffMs(failures, this.random), asked)).toISOString()
           : null,
         lastOutcome: `${outcome.status} after ${ms}ms (${trigger})`,
       });

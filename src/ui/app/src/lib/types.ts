@@ -1138,6 +1138,8 @@ export const MILESTONE_STATES = ["planned", "active", "overdue", "done", "cancel
 export type MilestoneState = (typeof MILESTONE_STATES)[number];
 
 export interface MilestoneSummary {
+  /** The milestone's issue id: what a write names it by (`lib/write-ref.ts`). */
+  id: string;
   identifier: string;
   title: string;
   status: StatusId;
@@ -1161,6 +1163,8 @@ export interface MilestoneProgress {
 }
 
 export interface MilestoneMemberRow {
+  /** The member's issue id: what a write names it by (`lib/write-ref.ts`). */
+  issueId: string;
   identifier: string;
   title: string;
   kind: KindId;
@@ -1355,6 +1359,8 @@ export interface CloudSurfaceReport {
   epoch: number | null;
   lastSyncAt: string | null;
   conflicts: { open: number; resolved: number };
+  /** Entities set aside, naming what this device does not hold yet (`quarantine.ts`). */
+  quarantined: number;
   leases: { held: number };
   warnings: string[];
   failure: {
@@ -1447,6 +1453,8 @@ export interface HubWorkspaceReport {
    */
   credentialPresent: boolean | null;
   auto: boolean;
+  /** When automatic sync next tries, if it is waiting; else null (`hub-surface.ts`). */
+  autoWaitingUntil: string | null;
   backup: boolean;
   connectedAt: string | null;
   /**

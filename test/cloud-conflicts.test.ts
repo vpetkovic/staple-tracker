@@ -13,6 +13,7 @@
  * it, and that resolution is an explicit choice which emits a new operation
  * rather than rewriting the two that disagreed.
  */
+import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -32,6 +33,7 @@ import {
 } from "../src/core/cloud/conflicts.js";
 import { syncRepository, type SyncReport } from "../src/core/cloud/sync.js";
 import { FakeSyncServer } from "./fixtures/fake-sync-server.js";
+import { OlderBuildDevice } from "./fixtures/older-build.js";
 
 const REPO_ID = "0e77fa01-1111-4222-8333-444455556666";
 const ENDPOINT = "https://sync.test.example";
@@ -515,31 +517,43 @@ describe("resolution is idempotent and convergent", () => {
 
 // ------------------------------------------------- the one users hit today
 
-describe("offline identifier collisions", () => {
+describe("offline identifier collisions with a device on an older build", () => {
   /**
-   * `docs/sync.md` makes the server the identifier allocator, so this is meant
-   * to be impossible; the deployed Worker has no allocator (STA-254), so it is
-   * the conflict a user actually meets. The applier already records it. What is
-   * asserted here is that it arrives in the same shape as every other conflict
-   * and can be settled through the same one surface.
+   * Between two current devices this collision settles itself: the device whose claim
+   * landed second renumbers its own issue (`src/core/cloud/claims.ts`, and
+   * `test/cloud-identifier-allocation.test.ts`). A device on a build from before that
+   * never renumbers, so while one of those is in the fleet the collision is still the
+   * conflict a person meets — and what is asserted here is that it arrives in the same
+   * shape as every other conflict and can be settled through the same one surface.
    */
-  async function collided(): Promise<{ a: Device; b: Device; onA: string; onB: string }> {
+  async function collided(): Promise<{ a: Device; onA: string; onB: string; server: FakeSyncServer }> {
     const server = new FakeSyncServer({ repositoryId: REPO_ID });
     const a = device(server, "device-a");
     a.store.createIssue({ title: "The shared base" });
     await a.sync();
-    const b = device(server, "device-b");
-    await b.sync();
 
     const onA = a.store.createIssue({ title: "Created offline on A" });
-    const onB = b.store.createIssue({ title: "Created offline on B" });
     expect(onA.identifier).toBe("TST-2");
-    expect(onB.identifier).toBe("TST-2");
+    await a.sync();
 
+    // B minted TST-2 offline too, on an older build, and its create lands after A's.
+    const sent = a.store.db
+      .prepare("SELECT payload FROM sync_outbox WHERE entity = 'issue' AND entity_id = ? AND verb = 'create'")
+      .get(onA.id) as { payload: string };
+    const schema = Number(
+      (a.store.db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as { value: string }).value,
+    );
+    const onB = randomUUID();
+    await new OlderBuildDevice(server, REPO_ID, "device-b", schema).push([
+      {
+        entity: "issue",
+        entityId: onB,
+        verb: "create",
+        payload: { ...JSON.parse(sent.payload), title: "Created offline on B", normalizedTitle: "created offline on b" },
+      },
+    ]);
     await a.sync();
-    await b.sync();
-    await a.sync();
-    return { a, b, onA: onA.id, onB: onB.id };
+    return { a, onA: onA.id, onB, server };
   }
 
   it("names the local side as what this database holds, and the remote as what arrived", async () => {
@@ -551,6 +565,10 @@ describe("offline identifier collisions", () => {
     expect(conflict.localValue).toBe(columnOf(a, onB, "identifier"));
     expect(conflict.remoteValue).toBe("TST-2");
     expect(conflict.remoteDeviceId).toBe("device-b");
+    // The provisional identifier is one a person reads off `ls` and types back: it finds
+    // the issue, although a `+` is not in the PREFIX-N grammar.
+    expect(a.store.getIssue(String(conflict.localValue)).id).toBe(onB);
+    expect(a.store.getIssue(String(conflict.localValue).toLowerCase()).id).toBe(onB);
   });
 
   it("frees the contested number when the arriving issue is given it", async () => {
@@ -573,18 +591,20 @@ describe("offline identifier collisions", () => {
     ]);
   });
 
-  it("settles the display allocation on both devices once someone decides", async () => {
-    const { a, b, onA, onB } = await collided();
+  it("settles the display allocation on every current device once someone decides", async () => {
+    const { a, onA, onB, server } = await collided();
+    // A second current device, which hydrated while the collision stood.
+    const c = device(server, "device-c");
+    await c.sync();
     const conflict = open(a)[0]!;
     resolveConflict(a.store.db, { id: conflict.id, choice: "local", actor: "vp" });
 
     await a.sync();
-    await b.sync();
-    await a.sync();
+    await c.sync();
 
     // Both devices agree about which issue owns which number, and no issue was
     // lost to get there.
-    for (const d of [a, b]) {
+    for (const d of [a, c]) {
       expect(
         (d.store.db.prepare("SELECT COUNT(*) AS n FROM issues").get() as { n: number }).n,
       ).toBe(3);

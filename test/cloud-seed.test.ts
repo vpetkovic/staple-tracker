@@ -15,6 +15,7 @@
  * journaled. A fixture that already had outbox rows would test a workspace nobody has.
  */
 import { spawnSync } from "node:child_process";
+import { countQuarantined } from "../src/core/cloud/quarantine.js";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -275,7 +276,8 @@ describe("the first device uploads everything it held before connecting", () => 
       kind: 1,
       setting: 1,
     });
-    expect(first.pushed.applied, "everything the seed journaled was accepted").toBe(first.seed!.uploaded + 1);
+    // Plus the status order, and the repository's prefix, which travel and are not items.
+    expect(first.pushed.applied, "everything the seed journaled was accepted").toBe(first.seed!.uploaded + 2);
     expect(first.pending).toBe(0);
 
     const b = onClone(server, "device-b");
@@ -766,10 +768,11 @@ describe("a database that synchronized under a build that did not seed", () => {
      * A was connected all along, so its tail holds the old build's update to B's third
      * issue many operations ahead of the create the heal just sent. One operation per
      * page puts them on different pages, beyond the reach of the pull loop's end-of-page
-     * retry: the page fails, and the sync answers it with one read of the snapshot.
+     * retry: the update is set aside (`quarantine.ts`), the pull goes on, and when the
+     * create arrives it carries the whole issue, edit included.
      */
-    const recovered = await a.sync({ pullLimit: 1 });
-    expect(recovered.bootstrap, "the stuck tail was answered by the snapshot").not.toBeNull();
+    await a.sync({ pullLimit: 1 });
+    expect(countQuarantined(a.db)).toBe(0);
     expect(shape(a.db)).toEqual(shape(b.db));
     expect((await b.sync()).seed).toBeNull();
 
@@ -813,9 +816,9 @@ describe("a database that synchronized under a build that did not seed", () => {
     );
 
     // One operation per page, so the edit and the create it names are on different pages
-    // and the end-of-page retry cannot reach: the page is answered by the snapshot.
-    const pulled = await a.sync({ pullLimit: 1 });
-    expect(pulled.bootstrap, "recovered from the snapshot").not.toBeNull();
+    // and the end-of-page retry cannot reach: the edit waits aside until the create lands.
+    await a.sync({ pullLimit: 1 });
+    expect(countQuarantined(a.db)).toBe(0);
     expect(
       (a.db.prepare("SELECT blocker_id FROM relations WHERE blocked_id = ? ORDER BY blocker_id").all(blocked.id) as Array<{ blocker_id: string }>)
         .map((row) => row.blocker_id)
@@ -956,10 +959,11 @@ describe("a paged bootstrap applies a snapshot in an order a database can take",
   /**
    * `GET /snapshot` pages by entity key, and `comment …` and `documentRevision …` sort
    * before `issue …`. Pages of ONE entity put every dependency on a later page than its
-   * dependent, and an interruption in the middle means the dependents that were parked
-   * must survive the process that parked them.
+   * dependent. A re-bootstrap into a moved epoch reads the snapshot whole before it applies
+   * any of it (`rewind.ts`), so an interruption in the middle leaves nothing parked and
+   * nothing applied, and the next sync lands every dependent after what it names.
    */
-  it("parks what names a later page, keeps it across an interruption, and lands it", async () => {
+  it("lands what names a later page after it, and an interruption leaves nothing half-applied", async () => {
     const server = new FakeSyncServer({ repositoryId, maxSnapshotPageSize: 1 });
     const b = onClone(server, "device-b");
     await b.sync();
@@ -976,17 +980,12 @@ describe("a paged bootstrap applies a snapshot in an order a database can take",
       return server.fetch(input, init);
     };
     await expect(b.sync({ fetchImpl: dying })).rejects.toThrow();
-    const midway = readSyncState(b.db)!.bootstrap!;
-    expect(midway.parked!.map((entity) => entity.entity).sort()).toEqual([
-      "comment",
-      "comment",
-      "documentRevision",
-      "documentRevision",
-    ]);
+    expect(readSyncState(b.db)!.bootstrap).toBeNull();
     expect(count(b.db, "SELECT COUNT(*) AS n FROM comments"), "nothing was applied ahead of its issue").toBe(0);
 
     const report = await b.sync();
-    expect(report.bootstrap!.resumed).toBe(true);
+    expect(report.bootstrap!.resumed).toBe(false);
+    expect(countQuarantined(b.db)).toBe(0);
     expect(shape(b.db)).toEqual(shape(c.db));
   });
 });

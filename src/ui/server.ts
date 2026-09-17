@@ -3944,7 +3944,19 @@ export function startUiServer(options: UiOptions): UiHandle {
            */
           const hub = options.hub ? openHubSafe() : null;
           try {
+            /**
+             * The page names a task it picked by id — `<slug>:<id>` for one in another
+             * workspace (`src/ui/app/src/lib/write-ref.ts`) — so a number that has moved never
+             * decides which task a create relates to. Its own workspace's is the bare id.
+             */
+            const pinned = /^([^:\s]+):([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
+            const local = (ref: string): string => {
+              const byId = pinned.exec(ref.trim());
+              return byId && byId[1] === handle.slug ? byId[2]! : ref;
+            };
             const owner = (ref: string): string | null => {
+              const byId = pinned.exec(ref.trim());
+              if (byId) return byId[1]!;
               if (!hub) return null;
               try {
                 return hub.resolveIdentifier(ref).entry.slug;
@@ -3953,13 +3965,14 @@ export function startUiServer(options: UiOptions): UiHandle {
               }
             };
             const partition = (refs: string[]) => {
-              const local: string[] = [];
+              const localRefs: string[] = [];
               const foreign: string[] = [];
               for (const ref of refs) {
                 const slug = owner(ref);
-                (slug === null || slug === handle.slug ? local : foreign).push(ref);
+                if (slug === null || slug === handle.slug) localRefs.push(local(ref));
+                else foreign.push(ref);
               }
-              return { local, foreign };
+              return { local: localRefs, foreign };
             };
 
             const blockedBy = partition(stringList(body.blockedBy) ?? []);
@@ -3989,7 +4002,7 @@ export function startUiServer(options: UiOptions): UiHandle {
                * bargain every other field on this branch makes.
                */
               kind: (body.kind as string) || undefined,
-              parent: (body.parent as string) || null,
+              parent: body.parent ? local(body.parent as string) : null,
               labels: stringList(body.labels),
               blockedBy: blockedBy.local,
               estimatedSeconds: optionalEstimate(body.estimateSeconds),
@@ -4029,12 +4042,12 @@ export function startUiServer(options: UiOptions): UiHandle {
                * writing at once is this tracker's normal operating condition.
                */
               for (const targetRef of blocking.local) {
-                const target = handle.store.getIssue(targetRef);
-                const current = handle.store.blockersOf(target.id).map((row) => row.identifier);
-                // INSERT OR IGNORE dedupes the edge, but the identifier list is what
-                // gets re-inserted, so a repeat would be a wasted write, not a duplicate.
-                if (current.includes(created.identifier)) continue;
-                handle.store.setBlockedBy(targetRef, [...current, created.identifier], actor);
+                const target = handle.store.writeTarget(targetRef);
+                // By id, the target's blockers and the new task: re-naming them by number
+                // would make each one a write through whatever number it holds.
+                const current = handle.store.blockersOf(target.id).map((row) => row.id);
+                if (current.includes(created.id)) continue;
+                handle.store.setBlockedBy(target.id, [...current, created.id], actor);
               }
 
               /**

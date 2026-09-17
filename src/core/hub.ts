@@ -337,6 +337,14 @@ export class Hub {
     return new Hub(db, path);
   }
 
+  /** The hub of a staple home named explicitly — for code handed a home, like sync. */
+  static openAt(home: string): Hub {
+    const path = join(home, "hub.db");
+    const db = openDb(path);
+    migrateHub(db);
+    return new Hub(db, path);
+  }
+
   /**
    * A hub opened for reading only, with no migration and no WAL conversion.
    *
@@ -867,15 +875,23 @@ export class Hub {
 
   /** Resolve an identifier like GAR-42 to its owning workspace entry. */
   resolveIdentifier(identifier: string): { entry: WorkspaceEntry; identifier: string } {
-    const parsed = parseIdentifier(identifier);
-    if (!parsed) {
+    /**
+     * A provisional identifier — `STA-5+1`, which sync gives an issue whose number
+     * another device also minted — is `PREFIX-N` plus a suffix. The prefix is still what
+     * names the workspace, so the suffix is carried through rather than refused.
+     */
+    const upper = identifier.trim().toUpperCase();
+    const plus = upper.indexOf("+");
+    const suffix = plus < 0 ? "" : upper.slice(plus);
+    const parsed = parseIdentifier(plus < 0 ? upper : upper.slice(0, plus));
+    if (!parsed || (suffix !== "" && !/^\+\d+$/.test(suffix))) {
       throw new StapleError("validation", `"${identifier}" is not an identifier (expected PREFIX-N)`);
     }
     const entry = this.list().find((w) => w.prefix === parsed.prefix);
     if (!entry) {
       throw new StapleError("not_found", `No workspace with prefix ${parsed.prefix} in the hub`);
     }
-    return { entry, identifier: `${parsed.prefix}-${parsed.number}` };
+    return { entry, identifier: `${parsed.prefix}-${parsed.number}${suffix}` };
   }
 
   // ---------- cross-workspace links ----------
@@ -911,31 +927,62 @@ export class Hub {
    * refuses exactly what the apply would refuse.
    */
   checkCrossLink(blockerIdentifier: string, blockedIdentifier: string): void {
-    this.validateCrossLink(blockerIdentifier, blockedIdentifier);
+    this.validateCrossLink(blockerIdentifier, blockedIdentifier, false);
+  }
+
+  /**
+   * One end of a link as a caller names it: an identifier (`GAR-42`), whose prefix names the
+   * workspace, or `<slug>:<issue id>` — the form the UI sends, which names the issue by the
+   * id its pane is pinned to and so never goes through a number at all.
+   */
+  private resolveLinkEnd(ref: string): { entry: WorkspaceEntry; identifier: string } {
+    const byId = /^([^:\s]+):([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.exec(ref.trim());
+    if (byId) {
+      const entry = this.list().find((w) => w.slug === byId[1]);
+      if (!entry) throw new StapleError("not_found", `No workspace "${byId[1]}" in the hub`);
+      if (!entry.available) {
+        throw new StapleError("validation", `Workspace "${entry.slug}" is not on this machine, so issue ${byId[2]} cannot be looked up; name it by identifier`);
+      }
+      return { entry, identifier: byId[2]!.toLowerCase() };
+    }
+    return this.resolveIdentifier(ref);
   }
 
   private validateCrossLink(
     blockerIdentifier: string,
     blockedIdentifier: string,
+    /**
+     * True for a link a person makes (`link`, MCP `cross_link`, the UI): each end is
+     * resolved as a write is (`WorkspaceStore.writeTarget`), so a number an issue has left
+     * on that workspace's device, while that issue may be the one meant, is refused rather
+     * than linked to whatever holds it now. False for a link adopted from the service's
+     * registry, which is a record, not a write through a number.
+     */
+    asWrite = true,
   ): { blocker: { entry: WorkspaceEntry; identifier: string }; blocked: { entry: WorkspaceEntry; identifier: string } } {
-    const blocker = this.resolveIdentifier(blockerIdentifier);
-    const blocked = this.resolveIdentifier(blockedIdentifier);
-    if (blocker.entry.slug === blocked.entry.slug) {
+    const typed = [this.resolveLinkEnd(blockerIdentifier), this.resolveLinkEnd(blockedIdentifier)];
+    if (typed[0]!.entry.slug === typed[1]!.entry.slug) {
       throw new StapleError(
         "validation",
-        `Both issues are in workspace "${blocker.entry.slug}" — use the workspace-local blocked-by instead`,
+        `Both issues are in workspace "${typed[0]!.entry.slug}" — use the workspace-local blocked-by instead`,
       );
     }
-    for (const side of [blocker, blocked]) {
-      if (side.entry.available) {
-        const ws = openWorkspace(side.entry.path);
-        try {
-          ws.store.getIssue(side.identifier);
-        } finally {
-          ws.store.db.close();
-        }
+    /**
+     * Each end under the identifier its issue holds NOW, not the one that was typed. A
+     * stand-in (`TRA-2+1`) or an identifier the issue has since moved off still finds it
+     * (`identifier-moves.ts`), but stored as typed it named no issue anybody keys on — a
+     * cross blocker nobody saw — and the next issue handed that string took the link.
+     */
+    const [blocker, blocked] = typed.map((side) => {
+      if (!side.entry.available) return side;
+      const ws = openWorkspace(side.entry.path);
+      try {
+        const issue = asWrite ? ws.store.writeTarget(side.identifier) : ws.store.getIssue(side.identifier);
+        return { entry: side.entry, identifier: issue.identifier };
+      } finally {
+        ws.store.db.close();
       }
-    }
+    }) as [typeof typed[0], typeof typed[1]];
     // Cross-file cycle guard over the hub edges (workspace-local edges cannot
     // close a cross-file loop unless a hub edge participates in it too — a
     // documented prototype simplification).
@@ -943,12 +990,104 @@ export class Hub {
     return { blocker, blocked };
   }
 
+  /**
+   * Re-stamp one workspace row with the prefix its database now carries.
+   *
+   * Only for a workspace that has just taken its repository's prefix on joining
+   * (`cloud/repository-prefix.ts`), after `assertHubCanTakePrefix` found no other row
+   * holding it. The database is authoritative and was re-stamped first; this keeps the
+   * derived row in step. There is no user-facing verb for it, on purpose.
+   *
+   * Through the gate {@link Hub.register} goes through: a row with a path is the
+   * workspace under that slug, and an absent row is another repository's unless
+   * `openedDbPath` presents the identity it recorded ({@link absentRowRefusal}). That
+   * is refused, and nothing is written.
+   */
+  restampPrefix(slug: string, prefix: string, openedDbPath: string): void {
+    tx(this.db, () => {
+      const row = this.db.prepare("SELECT slug, path, repository_id FROM workspaces WHERE slug = ?").get(slug) as
+        | { slug: string; path: string; repository_id: string | null }
+        | undefined;
+      if (!row) return;
+      if (isAbsentRow(row)) {
+        const refusal = absentRowRefusal({ slug: row.slug, repositoryId: row.repository_id }, openedDbPath);
+        if (refusal !== null) throw new StapleError("conflict", refusal, { absentRow: row.slug });
+      }
+      this.db.prepare("UPDATE workspaces SET prefix = ? WHERE slug = ?").run(prefix, slug);
+    });
+  }
+
+  /**
+   * Carry one workspace's identifier moves onto the cross-links that name its issues.
+   *
+   * A cross-link names each end by identifier (`cross_links`, and the registry's link
+   * key), and an identifier can move after a link was made: sync renumbers an issue two
+   * devices numbered alike, a joining workspace yields numbers its repository already
+   * uses, a conflict resolution moves an incumbent aside. Left alone, the link then names
+   * whatever issue holds the old number next — a different issue — or nothing.
+   *
+   * Each move rewrites the links made BEFORE it on that workspace's side (a link made
+   * after the move, naming the old number, means the issue that holds it now). And it is
+   * recorded as this machine's acts on the registry: the link under its old key removed,
+   * the link under its new key added — so a publish retracts the stale key rather than
+   * leaving it for another machine to adopt, and the new one reaches everyone.
+   */
+  followIdentifierMoves(
+    slug: string,
+    moves: readonly { from: string; to: string; at: string }[],
+  ): number {
+    let followed = 0;
+    tx(this.db, () => {
+      for (const move of moves) {
+        for (const side of ["blocker", "blocked"] as const) {
+          const rows = this.db
+            .prepare(
+              `SELECT * FROM cross_links
+                WHERE ${side}_ws = ? AND ${side}_identifier = ? AND created_at <= ?`,
+            )
+            .all(slug, move.from, move.at) as Array<{
+            id: number;
+            blocker_ws: string;
+            blocker_identifier: string;
+            blocked_ws: string;
+            blocked_identifier: string;
+            created_at: string;
+          }>;
+          for (const row of rows) {
+            const before: CrossLink = {
+              blockerWs: row.blocker_ws,
+              blockerIdentifier: row.blocker_identifier,
+              blockedWs: row.blocked_ws,
+              blockedIdentifier: row.blocked_identifier,
+              type: "blocks",
+            };
+            const after: CrossLink =
+              side === "blocker" ? { ...before, blockerIdentifier: move.to } : { ...before, blockedIdentifier: move.to };
+            this.db.prepare("DELETE FROM cross_links WHERE id = ?").run(row.id);
+            this.db
+              .prepare(
+                `INSERT OR IGNORE INTO cross_links
+                   (blocker_ws, blocker_identifier, blocked_ws, blocked_identifier, type, created_at)
+                 VALUES (?,?,?,?, 'blocks', ?)`,
+              )
+              .run(after.blockerWs, after.blockerIdentifier, after.blockedWs, after.blockedIdentifier, row.created_at);
+            this.recordCrossLinkChange(before, false);
+            this.recordCrossLinkChange(after, true);
+            followed += 1;
+          }
+        }
+      }
+    });
+    return followed;
+  }
+
   private insertCrossLink(
     blockerIdentifier: string,
     blockedIdentifier: string,
     record: boolean,
   ): CrossLink {
-    const { blocker, blocked } = this.validateCrossLink(blockerIdentifier, blockedIdentifier);
+    // A person's link is a write through each end; an adopted one is the service's record.
+    const { blocker, blocked } = this.validateCrossLink(blockerIdentifier, blockedIdentifier, record);
     const link: CrossLink = {
       blockerWs: blocker.entry.slug,
       blockerIdentifier: blocker.identifier,
@@ -1158,7 +1297,55 @@ export class Hub {
    * publish retract the link, and what stops an adopt from bringing it back here.
    */
   removeCrossLink(blockerIdentifier: string, blockedIdentifier: string): CrossLink | undefined {
-    return this.deleteCrossLink(blockerIdentifier, blockedIdentifier, true);
+    const exact = this.deleteCrossLink(blockerIdentifier, blockedIdentifier, true);
+    if (exact) return exact;
+    /**
+     * Typed through an identifier the issue has moved off (a stand-in, a renumbered
+     * number) — as `link` accepts one. The link is stored under the issue's identifier
+     * now (`validateCrossLink`), so that is the one to remove.
+     */
+    const blocker = this.currentIdentifier(blockerIdentifier);
+    const blocked = this.currentIdentifier(blockedIdentifier);
+    if (blocker === null || blocked === null) return undefined;
+    return this.deleteCrossLink(blocker, blocked, true);
+  }
+
+  /**
+   * Whether `identifier` finds an issue in this machine's copy of workspace `slug` — a
+   * stand-in or an old number included (`identifier-moves.ts`). True when the workspace
+   * is not on this machine: there is nothing here to say it does not.
+   */
+  namesIssueHere(slug: string, identifier: string): boolean {
+    const entry = this.findBySlug(slug);
+    if (!entry?.available) return true;
+    const ws = openWorkspace(entry.path);
+    try {
+      ws.store.getIssue(identifier);
+      return true;
+    } catch {
+      return false;
+    } finally {
+      ws.store.db.close();
+    }
+  }
+
+  /** The identifier the issue `identifier` finds holds now, or null when it finds none here. */
+  private currentIdentifier(identifier: string): string | null {
+    let side: { entry: WorkspaceEntry; identifier: string };
+    try {
+      side = this.resolveIdentifier(identifier);
+    } catch {
+      return null;
+    }
+    if (!side.entry.available) return side.identifier;
+    const ws = openWorkspace(side.entry.path);
+    try {
+      return ws.store.getIssue(side.identifier).identifier;
+    } catch {
+      return null;
+    } finally {
+      ws.store.db.close();
+    }
   }
 
   /**

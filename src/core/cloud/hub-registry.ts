@@ -451,8 +451,24 @@ function adoptCrossLinks(
             : ` (its workspace entry above: ${decision.outcome}).`),
       };
     }
-    const prefix = parseIdentifier(identifier)?.prefix ?? null;
+    /**
+     * A stand-in (`TRA-2+1`) is in the workspace's own numbering: another machine held the
+     * issue under it while two devices' claims on TRA-2 were settled. It is placed like any
+     * identifier, and the adopt resolves it here (`identifier-moves.ts`) — or says it names
+     * no issue here, which is the true reason, not a separately initialised repository.
+     */
+    const standIn = /\+\d+$/.test(identifier);
+    const prefix = parseIdentifier(identifier.replace(/\+\d+$/, ""))?.prefix ?? null;
     const match = candidates.find((c) => c.prefix === prefix);
+    if (match !== undefined && standIn && !hub.namesIssueHere(match.slug, identifier)) {
+      return {
+        ok: false,
+        reason:
+          `the ${side} end, ${identifier}, is a stand-in another machine used while two devices' ` +
+          "claims on one number were settled, and it names no issue here. That machine publishes " +
+          "the link under the settled identifier the next time it runs `staple hub registry publish`.",
+      };
+    }
     if (match !== undefined) return { ok: true, slug: match.slug };
     const held = candidates.map((c) => `"${c.slug}" under prefix ${c.prefix}`).join(" and ");
     return {

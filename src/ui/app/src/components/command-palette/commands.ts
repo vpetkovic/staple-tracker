@@ -12,7 +12,7 @@
  * exist at test time.
  */
 import { HANDOFF_RISKS, handoffRiskOf, type HandoffRisk } from "../../lib/filters";
-import { VIEWS, viewLabel, type Selection, type ViewName } from "../../lib/session";
+import { VIEWS, selectionTarget, viewLabel, type Selection, type ViewName } from "../../lib/session";
 import { SEED_SETTINGS } from "../../lib/settings";
 import {
   type IssueRow,
@@ -262,6 +262,15 @@ function issueCount(count: number): string {
  * Every non-issue command, in natural order. Ordering for display is a separate
  * concern — see `orderCommands`.
  */
+/**
+ * Where a palette write on the open issue goes: the issue the selection was pinned to, not
+ * the number it was opened by — a renumber in between would otherwise aim it at another
+ * issue (`selectionTarget`).
+ */
+export function writeTarget(selected: Selection & { actor?: string }): { ws: string; ref: string; actor?: string } {
+  return { ws: selected.workspace, ref: selectionTarget(selected), ...(selected.actor ? { actor: selected.actor } : {}) };
+}
+
 export function buildCommands(context: PaletteContext): PaletteCommand[] {
   const commands: PaletteCommand[] = [];
 

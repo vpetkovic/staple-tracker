@@ -164,11 +164,12 @@ export function TreeView({ onAuthError }: { onAuthError: (error: AuthError) => v
           disabled={queueBusy || queueRevision === undefined}
           onOpen={() => session.open(row.workspace, ref)}
           // `at: 1` is the wire's own "put it in front", not a reorder computed here.
+          // Writes by the row's id, never its number (`lib/write-ref.ts`).
           onQueueNext={() =>
-            void queueWrite((baseRevision) => enqueueTask({ ws, ref, at: 1, baseRevision }))
+            void queueWrite((baseRevision) => enqueueTask({ ws, ref: row.issue.id, at: 1, baseRevision }))
           }
-          onQueueLast={() => void queueWrite((baseRevision) => enqueueTask({ ws, ref, baseRevision }))}
-          onDequeue={() => void queueWrite((baseRevision) => dequeueTask({ ws, ref, baseRevision }))}
+          onQueueLast={() => void queueWrite((baseRevision) => enqueueTask({ ws, ref: row.issue.id, baseRevision }))}
+          onDequeue={() => void queueWrite((baseRevision) => dequeueTask({ ws, ref: row.issue.id, baseRevision }))}
         />
       );
     },

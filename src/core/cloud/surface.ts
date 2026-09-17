@@ -49,6 +49,7 @@
  * few seconds."*
  */
 import { dirname } from "node:path";
+import { countQuarantined } from "./quarantine.js";
 import type { DatabaseSync } from "node:sqlite";
 import { conflictsSummary } from "./conflicts.js";
 import type { CredentialMechanism } from "./credential-store.js";
@@ -159,6 +160,11 @@ export interface CloudSurfaceReport {
   epoch: number | null;
   lastSyncAt: string | null;
   conflicts: CloudConflictCounts;
+  /**
+   * Entities set aside because they name something this device does not hold
+   * (`quarantine.ts`). Everything else applied; each lands once what it names arrives.
+   */
+  quarantined: number;
   leases: CloudLeaseCounts;
   /** Things worth knowing that are not the state — a widened credential file, say. */
   warnings: string[];
@@ -270,6 +276,7 @@ export function cloudSurfaceReport(status: CloudStatus, db: DatabaseSync): Cloud
     epoch: syncState?.epoch ?? null,
     lastSyncAt: syncState?.lastSyncAt ?? null,
     conflicts: safely(() => conflictsSummary(db), { open: 0, resolved: 0 }),
+    quarantined: safely(() => countQuarantined(db), 0),
     leases: {
       held: safely(
         () =>
@@ -388,6 +395,7 @@ export function noIdentityReport(dbPath?: string): CloudSurfaceReport {
     epoch: null,
     lastSyncAt: null,
     conflicts: { open: 0, resolved: 0 },
+    quarantined: 0,
     leases: { held: 0 },
     warnings: [],
     failure: {
@@ -440,6 +448,9 @@ export function describeReport(report: CloudSurfaceReport): string {
   if (report.lastSyncAt) row("last sync", report.lastSyncAt);
   if (report.conflicts.open > 0) {
     row("conflicts", `${report.conflicts.open} unresolved — staple cloud conflicts`);
+  }
+  if (report.quarantined > 0) {
+    row("waiting", `${report.quarantined} set aside, naming what this device does not hold yet — staple doctor`);
   }
   if (report.leases.held > 0) row("leases held", String(report.leases.held));
 

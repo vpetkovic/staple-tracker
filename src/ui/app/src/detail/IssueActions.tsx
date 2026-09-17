@@ -29,6 +29,7 @@ import {
   type QueuedBy,
 } from "@/lib/types";
 import { GateReview } from "./GateReview";
+import { idsOf } from "@/lib/write-ref";
 
 /**
  * Who is doing this? Asked, remembered, and asked again with the remembered answer
@@ -102,7 +103,7 @@ export function IssueActions({
     setBusy(true);
     setRefusal(null);
     try {
-      await action({ ws: workspace, ref: issue.identifier, ...(actor ? { actor } : {}) }, payload);
+      await action({ ws: workspace, ref: issue.id, ...(actor ? { actor } : {}) }, payload);
       refresh();
     } catch (caught) {
       // A refused action is information, not a failure: "someone else holds this" is
@@ -268,13 +269,20 @@ export function IssueActions({
           queue={childrenQueued}
           busy={busy}
           onApproveAll={(comment) =>
-            void runGate(() => approveGate({ ws: workspace, ref: issue.identifier, comment }))
+            void runGate(() => approveGate({ ws: workspace, ref: issue.id, comment }))
           }
           onApproveSelected={(refs) =>
-            void runGate(() => approveGate({ ws: workspace, ref: issue.identifier, children: refs }))
+            void runGate(() =>
+              approveGate({
+                ws: workspace,
+                ref: issue.id,
+                // The ticked rows by id, never by number (`lib/write-ref.ts`).
+                children: idsOf(childrenQueued, refs),
+              }),
+            )
           }
           onRequestChanges={(comment) =>
-            void runGate(() => requestGateChanges({ ws: workspace, ref: issue.identifier, comment }))
+            void runGate(() => requestGateChanges({ ws: workspace, ref: issue.id, comment }))
           }
         />
       ) : null}
@@ -283,7 +291,7 @@ export function IssueActions({
         <RequestGatePanel
           busy={busy}
           childCount={children.length}
-          onRequest={(owner) => void runGate(() => requestGate({ ws: workspace, ref: issue.identifier, owner }))}
+          onRequest={(owner) => void runGate(() => requestGate({ ws: workspace, ref: issue.id, owner }))}
         />
       ) : null}
 

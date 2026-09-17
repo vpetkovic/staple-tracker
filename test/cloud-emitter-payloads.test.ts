@@ -105,6 +105,18 @@ function device(server: FakeSyncServer, deviceId: string, armed = true): Device 
   };
 }
 
+/**
+ * A clock tick between two writes. The journal sends what a write changed (`journal.ts`, the
+ * row diff), and a milestone's `updated_at` written in the same millisecond as before is no
+ * change — so without this the recorded payloads below would depend on how fast the suite ran.
+ */
+function later(): void {
+  const until = Date.now() + 2;
+  while (Date.now() < until) {
+    /* a millisecond or two */
+  }
+}
+
 /** Everything the workspace client can journal, in one place so a new emitter lands here. */
 function exerciseTheSeam(store: WorkspaceStore): void {
   const actor = "emitter";
@@ -155,10 +167,15 @@ function exerciseTheSeam(store: WorkspaceStore): void {
   // Milestones: dates, and every membership mutator (each replicates as the whole list).
   const milestone = store.milestones().create({ title: "M1", targetDate: "2026-12-01" }, actor);
   const milestoneRef = milestone.preview ? "" : milestone.milestone.identifier;
+  later();
   store.milestones().update(milestoneRef, { startDate: "2026-10-01" }, actor);
+  later();
   store.milestones().addMember(milestoneRef, epic.identifier, {}, actor);
+  later();
   store.milestones().addMember(milestoneRef, blocker.identifier, {}, actor);
+  later();
   store.milestones().reorderMembers(milestoneRef, [blocker.identifier, epic.identifier], {}, actor);
+  later();
   store.milestones().removeMember(milestoneRef, blocker.identifier, {}, actor);
   // From an epic: the dates and the membership land in ONE scope, so the journal
   // coalesces them into one `replace` carrying both (`mergeVerb`).
@@ -190,6 +207,7 @@ function history(store: WorkspaceStore): void {
   store.projects().assign(child.identifier, project.id, "past");
   const milestone = store.milestones().create({ title: "Old milestone", startDate: "2026-01-01" }, "past");
   const ref = milestone.preview ? "" : milestone.milestone.identifier;
+  later();
   store.milestones().addMember(ref, epic.identifier, {}, "past");
   store.queue().enqueue(child.identifier, {}, "past");
 }
@@ -237,10 +255,14 @@ async function everythingTheClientSends(): Promise<FakeSyncServer> {
   await a.sync();
 
   // Every conflict A holds, settled — which journals the settled entity under the
-  // resolution's own verb, and the `conflict` record itself.
+  // resolution's own verb, and the `conflict` record itself. The two issues created offline
+  // under one number are not among them: the device whose claim landed second renumbered
+  // its own (`src/core/cloud/claims.ts`), and that `issue.renumber` is in what was sent.
   const open = listConflicts(a.store.db).filter((conflict) => conflict.resolvedAt === null);
-  expect(open.map((conflict) => conflict.field).sort()).toEqual(["identifier", "order", "title"]);
-  for (const conflict of listConflicts(a.store.db)) {
+  expect(open.map((conflict) => conflict.field).sort()).toEqual(["order", "title"]);
+  // In a fixed order: the record keeps the first payload per entity and verb, and two
+  // conflict ids are hashes that sort differently from run to run.
+  for (const conflict of [...listConflicts(a.store.db)].sort((x, y) => x.field.localeCompare(y.field))) {
     if (conflict.resolvedAt !== null) continue;
     resolveConflict(a.store.db, { id: conflict.id, choice: "remote", actor: "vp" });
   }
@@ -261,7 +283,15 @@ function stable(value: unknown): unknown {
   }
   if (Array.isArray(value)) return value.map(stable);
   if (value !== null && typeof value === "object") {
-    return Object.fromEntries(Object.entries(value).map(([key, inner]) => [key, stable(inner)]));
+    // Keys too: a plan's `entries` is keyed by issue id. Numbered in order of appearance,
+    // so two ids stay two keys.
+    let n = 0;
+    return Object.fromEntries(
+      Object.entries(value).map(([key, inner]) => [
+        UUID.test(key) ? `00000000-0000-4000-8000-${String((n += 1)).padStart(12, "0")}` : key,
+        stable(inner),
+      ]),
+    );
   }
   return value;
 }
@@ -286,15 +316,19 @@ describe("every payload a real emitter sends is a JSON object", () => {
       server.ops
         .filter((op) => `${op.entity}.${op.verb}` === combo)
         .map((op) => Object.keys(op.payload as Record<string, unknown>).sort().join(","));
-    expect(new Set(listKey("queue.replace"))).toEqual(new Set(["order"]));
-    expect(new Set(listKey("relation.update"))).toEqual(new Set(["blockedBy"]));
+    // The plan's order, with who queued each entry, when and why beside it — a conflict
+    // resolution too, from the side it chose (conflicts.ts, "the entries a plan record keeps").
+    expect(new Set(listKey("queue.replace"))).toEqual(new Set(["entries,order"]));
+    // A blocker set, with who made each edge and when beside it.
+    expect(new Set(listKey("relation.update"))).toEqual(new Set(["blockedBy,edges"]));
     expect(listKey("status.update")).toContain("order");
     expect(listKey("kind.update")).toContain("order");
     expect(listKey("milestone.replace").every((keys) => keys.split(",").includes("members"))).toBe(true);
     // And a `replace` is not only its collection: a milestone made from an epic journals
     // its dates and its membership in one scope, coalesced into one `replace`. The fold
     // merges the other keys like any verb's (worker/src/fold.ts).
-    expect(listKey("milestone.replace")).toContain("members,startDate,targetDate");
+    // And when it last changed (the row diff, `journal.ts`).
+    expect(listKey("milestone.replace")).toContain("entries,members,startDate,targetDate,updatedAt");
   }, 60_000);
 
   it("matches the record the Worker suite pushes, one payload per entity and verb", async () => {

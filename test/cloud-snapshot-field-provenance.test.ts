@@ -379,8 +379,9 @@ describe("a device defends a field it inherited from a snapshot", () => {
     const b = device(server, "device-b");
     await b.sync();
 
-    // The whole plan lives under one entity id and replicates as one pseudo-field.
-    expect(fieldsWritten(b, "@plan")).toEqual(["order"]);
+    // The whole plan lives under one entity id and replicates as one pseudo-field, with
+    // who queued each entry, when and why travelling beside it (`apply.ts`, `entryFor`).
+    expect(fieldsWritten(b, "@plan")).toEqual(["entries", "order"]);
     expect(writeOf(b, "@plan", "order")!.op_id).toBe(writeOf(a, "@plan", "order")!.op_id);
   });
 });
