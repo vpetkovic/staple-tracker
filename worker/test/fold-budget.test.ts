@@ -277,6 +277,28 @@ describe("a fold step's work", () => {
   });
 });
 
+describe("an entity edited in thousands of steps", () => {
+  /**
+   * A queue or a vocabulary's order is edited throughout a log's life, so the checkpoint holds a
+   * version of it for nearly every step. A step that edits it again reads its newest version with
+   * one seek; visiting every version of it to find the newest cost 600 ms of D1 time a request
+   * on a 100,000-operation log.
+   */
+  it("is read with one seek, however many versions it has", async () => {
+    const ops: GeneratedOp[] = [];
+    for (let n = 0; n < 1201; n += 1) ops.push(op(n + 1, "queue", "default", n === 0 ? "create" : "replace", { order: [`issue-${n}`] }));
+    await insertOps(env.DB, REPO, ops);
+    await advanceFold(env, REPO, 1, 1200, { budget: { remaining: Number.MAX_SAFE_INTEGER }, stepOps: 2 });
+    const versions = await env.DB.prepare(`SELECT COUNT(*) AS n FROM fold_versions`).first<{ n: number }>();
+    expect(versions!.n).toBeGreaterThan(500);
+
+    const m = meter();
+    await advanceFold({ ...env, DB: metered(env.DB, m) }, REPO, 1, 1201, { budget: { remaining: 500 } });
+    const read = [...m.rowsRead].filter(([sql]) => sql.includes("k.value")).reduce((sum, [, n]) => sum + n, 0);
+    expect(read).toBeLessThan(50);
+  }, 120_000);
+});
+
 describe("a request's budget", () => {
   it("cuts a pull page by its work, and folds beside it only what the page leaves", async () => {
     // An edit larger than a request's budget, a hundred 30 KB quote-heavy ones, then 600 small ones.

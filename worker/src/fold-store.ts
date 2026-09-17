@@ -28,10 +28,11 @@
  * transaction. A mark therefore never exists without every version it depends on.
  *
  * Two of the fold's rules read other entities (`foldRow` in `fold.ts`): a `documentRevision`
- * create reads every revision of its document, and a `status` or `kind` created again
- * rewrites that vocabulary's `@order`. So a step loads those as well as the entities it
- * names, and writes a version of an `@order` it changed even though no operation named it
- * — which is why a version's key `seq` and the entity's `lastSeq` are separate columns.
+ * create is placed against the revisions of its document, and a `status` or `kind` created
+ * again rewrites that vocabulary's `@order`. So a step reads the revisions a create can collide
+ * with (`fold-revisions.ts`) and loads the `@order` as well as the entities it names, and writes
+ * a version of an `@order` it changed even though no operation named it — which is why a
+ * version's key `seq` and the entity's `lastSeq` are separate columns.
  *
  * A snapshot or backup at a cutoff C that is not itself a mark reads the newest mark S at
  * or below C and folds the operations in `(S, C]` on top, the same way a step does. That tail
@@ -234,6 +235,13 @@ const NEWEST = (alias: string) =>
   `NOT EXISTS (SELECT 1 FROM fold_versions w
                 WHERE w.repo_id = ?1 AND w.epoch = ?2 AND w.ord = ${alias}.ord AND w.seq > ${alias}.seq AND w.seq <= ?3)`;
 
+/**
+ * The newest version of the key `k.value` at or below the mark: one index seek. Not {@link NEWEST}
+ * for a key named outright, which visits every version of it at or below the mark, and an entity
+ * a log edits thousands of times has thousands (a queue, a vocabulary's order).
+ */
+const NEWEST_OF_KEY = `(SELECT MAX(w.seq) FROM fold_versions w WHERE w.repo_id = ?1 AND w.epoch = ?2 AND w.ord = k.value AND w.seq <= ?3)`;
+
 /** The escapes of a stored column, counted by SQLite (`fold-work.ts`). */
 const ESCAPES = (column: string) => `(length(${column}) - length(replace(replace(${column}, '\\', ''), '"', '')))`;
 
@@ -342,7 +350,7 @@ async function foldRun(
                   ${ESCAPES("v.state")} + ${ESCAPES("v.field_writes")} AS escapes
              FROM json_each(?4) k
              CROSS JOIN fold_versions v
-               ON v.repo_id = ?1 AND v.epoch = ?2 AND v.ord = k.value AND v.seq <= ?3 AND ${NEWEST("v")}`,
+               ON v.repo_id = ?1 AND v.epoch = ?2 AND v.ord = k.value AND v.seq = ${NEWEST_OF_KEY}`,
         ).bind(repoId, epoch, base.seq, JSON.stringify(allNamed.map(foldOrder))),
       );
     }
@@ -425,7 +433,7 @@ async function foldRun(
         `SELECT ${VERSION_COLUMNS}
            FROM json_each(?4) k
            CROSS JOIN fold_versions v
-             ON v.repo_id = ?1 AND v.epoch = ?2 AND v.ord = k.value AND v.seq <= ?3 AND ${NEWEST("v")}`,
+             ON v.repo_id = ?1 AND v.epoch = ?2 AND v.ord = k.value AND v.seq = ${NEWEST_OF_KEY}`,
       ).bind(repoId, epoch, base.seq, JSON.stringify(named.map(foldOrder))),
     ];
     const runs = [...runsFrom];
@@ -637,7 +645,7 @@ async function readForPlacement(
         `SELECT v.entity, v.entity_id, v.state
            FROM json_each(?4) k
            CROSS JOIN fold_versions v
-             ON v.repo_id = ?1 AND v.epoch = ?2 AND v.ord = k.value AND v.seq <= ?3 AND ${NEWEST("v")}`,
+             ON v.repo_id = ?1 AND v.epoch = ?2 AND v.ord = k.value AND v.seq = ${NEWEST_OF_KEY}`,
       )
         .bind(repoId, epoch, at, JSON.stringify(need.keys.map(foldOrder)))
         .all<{ entity: string; entity_id: string; state: string }>();
