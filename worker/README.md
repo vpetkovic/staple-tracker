@@ -335,31 +335,49 @@ Worker before this one (`content = 'inline'`) keeps its entities in its own row 
 as it did. A restore turn counts its progress from the staged rows it has not counted yet
 (`restores.staged_seq`), never the whole restore again.
 
-Measured on workerd with this Worker deployed onto the same D1 as above, the most any one
-request cost:
+**Measured.** Real devices (this repository's built CLI) syncing through this Worker on workerd
+(`wrangler dev --local`), with every request metered: queries are D1 statements, each statement
+of a batch counted as one; rows are D1 rows read; the time is isolate time, wall time less the
+time spent waiting on D1. Each run syncs an author and a second device as it writes, joins a
+fresh device through `GET /snapshot`, takes a backup, writes more, restores the backup and joins
+another fresh device. In all three every device ended identical, table for table.
 
-| Request | 20,000 | 50,000 | 100,000 |
+The step before this one, on a worklog saved 1,500 times with a sync every 100 saves: a pull
+cost 87 ms and a restore turn 39 ms. A pull asking for one operation on a document of 4,000
+revisions cost 152 ms.
+
+Most and 99th percentile isolate time, most queries and most rows read, per request:
+
+| Request | A worklog saved 5,000 times, syncing every 100 | 500 issues with 30 KB quote-heavy descriptions | 100,000 mixed operations, syncing every 2,500 |
 |---|---|---|---|
-| `GET /snapshot`, first page, nothing folded (40 / 100 / 200 answers) | 11 q · 13,250 rows · 10 ms | 11 q · 15,680 rows · 6 ms | 11 q · 21,179 rows · 7 ms |
-| `GET /snapshot`, a 500-entity page | 11 q · 13,250 rows · 6 ms | 11 q · 19,791 rows · 6 ms | 11 q · 28,155 rows · 5 ms |
-| `GET /ops`, 500 operations and a fold step | 9 q · 4,736 rows · 8 ms | 9 q · 6,792 rows · 9 ms | 9 q · 9,254 rows · 9 ms |
-| `POST /backups`, fold near the head | 5 q · 5 rows · 0 ms | 5 q · 5 rows · 0 ms | 5 q · 5 rows · 0 ms |
-| `GET /backups` | 3 q · 5 rows · 0 ms | 3 q · 5 rows · 0 ms | 3 q · 5 rows · 0 ms |
-| a restore turn (up to 200 entities staged and folded) | 23 q · 13,804 rows · 5 ms | 23 q · 30,448 rows · 6 ms | 23 q · 53,431 rows · 5 ms |
+| `GET /ops` | 7 ms · p99 6 · 15 q · 7,789 rows (212) | 5 ms · p99 4 · 11 q · 5,023 rows (122) | 18 ms · p99 7 · 16 q · 6,951 rows (2,644) |
+| `GET /snapshot`, first page | 5 ms · 14 q · 5,046 rows (7) | 4 ms · 11 q · 4,161 rows (72) | 7 ms · p99 6 · 15 q · 5,791 rows (1,174) |
+| `GET /snapshot`, later page | 3 ms · 5 q · 1,547 rows (72) | 3 ms · 5 q · 1,048 rows (180) | 4 ms · p99 3 · 5 q · 6,715 rows (630) |
+| `POST /backups` | 1 ms · 5 q · 5 rows | 0 ms · 5 q · 5 rows | 0 ms · 5 q · 5 rows |
+| a restore turn | 8 ms · 30 q · 6,260 rows (28) | 6 ms · 26 q · 3,524 rows (90) | 28 ms · p99 7 · 30 q · 42,260 rows (227) |
+| `POST /ops` (unchanged) | 2 ms · 29 q (206) | 3 ms · 29 q (45) | 17 ms · p99 8 · 29 q (4,009) |
 
-"q" is D1 queries, "rows" is D1 rows read, and the time is isolate time: wall time less the
-time spent waiting on D1. The largest page and restore-turn reads come from entities with
-many versions. Across a whole snapshot or a whole restore, each version is read about twice,
-so either costs a small multiple of the log's size in rows read, where the old fold cost the
-whole log per page. At 100,000 operations the checkpoint held 70,167 versions and 213 marks.
+The counts in brackets are requests. The two outliers of the 100,000-operation run, one pull of
+2,644 at 18 ms and one restore turn of 227 at 28 ms, spent 1 and 6 ms in the traced fold and page
+and the rest outside them; pushes, which this change does not touch, reached 17 ms in the same
+run on the same host. The same probe as the reviewer's, one-operation pulls on the restored
+worklog with its checkpoint cut back to 3,900 revisions, measured at most 9 ms and 15 queries.
 
-**Deploying onto a large log.** Migration `0006` adds the tables empty. The checkpoint of
+What it costs in waiting: a pull folds only what its page leaves, so under heavy writing the
+checkpoint falls behind. After the 100,000-operation run it was 30,000 operations behind, and
+the fresh device's first page answered "still folding" about a thousand times, twenty minutes at
+the client's one-second retry, before it was served.
+
+**Deploying onto a large log.** Migration `0006` adds the tables empty, and `0007` adds the
+revision columns and their indexes and clears whatever `0006` had built, keeping the floor mark of
+a restore still staging. The checkpoint of
 every existing epoch, including an epoch an older Worker restored, is built from `ops` by
 the requests above, and nothing needs running. Until the checkpoint is built, a snapshot's
 first page, a backup and a restore's first turn answer `503 unavailable` with `foldedSeq`
 (how far it got), `cutoffSeq` (how far it must go) and `Retry-After: 1`. Each such answer
-has moved the fold on by the request's budget. A 100,000-operation log takes about two
-hundred of them on the free plan, and fewer the more devices are syncing. `foldedSeq` climbs
+has moved the fold on by the request's budget. A 100,000-operation log takes several hundred
+of them on the free plan, more when its operations are large, and fewer the more devices are
+syncing. `foldedSeq` climbs
 from one answer to the next, including across a restore of an older epoch's backup, which
 folds that epoch and then the current one. A client of this build asks again while
 `foldedSeq` climbs, and says so on stderr. An older client reports the retryable error, and
