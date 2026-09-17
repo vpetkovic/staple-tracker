@@ -1106,9 +1106,20 @@ function decide(db: DatabaseSync, request: ResolveRequest): ResolveOutcome {
 
     // A plan or a milestone's members go back with each entry's author, time and note.
     const entries = WHOLE[conflict.entity] === conflict.field ? entriesFor(db, conflict, request.choice, chosen, actor, at) : null;
+    /**
+     * What the decision writes beside the value, the same on every device: a list's entries, and
+     * a status's `status_version` — the token every status write carries, withheld with the
+     * status while the record was open. Without it each device kept the token it held and a
+     * fresh device took the last one the log carried.
+     */
+    const companions: Record<string, unknown> = {};
+    if (entries !== null) companions.entries = entries;
+    if (conflict.entity === "issue" && conflict.field === "status") {
+      const row = db.prepare("SELECT status_version FROM issues WHERE id = ?").get(conflict.entityId) as { status_version: number } | undefined;
+      if (row !== undefined) companions.statusVersion = row.status_version + 1;
+    }
     for (const write of writes) {
-      const payload: Record<string, unknown> = { [wireKey(conflict.field)]: write.value };
-      if (entries !== null) payload.entries = entries;
+      const payload: Record<string, unknown> = { [wireKey(conflict.field)]: write.value, ...companions };
       /**
        * A resolution is a write, and an entity that says when it last changed says so at
        * the decision. Until then each side held its own edit's time; without this they held
@@ -1156,12 +1167,12 @@ function decide(db: DatabaseSync, request: ResolveRequest): ResolveOutcome {
         targetId: conflict.entityId,
         field: conflict.field,
         /**
-         * And a list's entries, as the resolving write carries them. A device with its own
-         * record open about the list withholds that write, and closes its record by this
-         * one: from the value alone, it wrote the resolver as the author of every entry, at
-         * the moment of the decision, where every other device holds each entry's own.
+         * And what the resolving write carries beside the value. A device with its own record
+         * open withholds that write, and closes its record by this one: from the value alone,
+         * it wrote the resolver as the author of every entry of a list, at the moment of the
+         * decision, and kept its own `status_version`, where every other device held the log's.
          */
-        ...(entries !== null ? { entries } : {}),
+        ...companions,
       },
       actor,
     });
@@ -1348,13 +1359,18 @@ export function applyConflictOperation(db: DatabaseSync, op: RemoteOperation): b
   if (existing !== null && existing.resolvedAt !== null) return false;
 
   const current = readField(db, entity, targetId, field);
-  if (current.present && !sameValue(current.value, value)) {
+  // What the resolving write carried beside the value rides with the decision (`resolveConflict`),
+  // and is written even where the value already stands.
+  const companions: Record<string, unknown> = {
+    ...(isEntries(payload.entries) ? { entries: payload.entries } : {}),
+    ...(typeof payload.statusVersion === "number" ? { statusVersion: payload.statusVersion } : {}),
+  };
+  if (current.present && (!sameValue(current.value, value) || Object.keys(companions).length > 0)) {
     applyToDatabase(db, {
       entity,
       entityId: targetId,
       verb: resolutionVerb(entity, field),
-      // A list's entries ride with the decision (`resolveConflict`).
-      payload: { [wireKey(field)]: value, ...(isEntries(payload.entries) ? { entries: payload.entries } : {}) },
+      payload: { [wireKey(field)]: value, ...companions },
       actor: op.actor === "" ? null : op.actor,
       deviceId: op.deviceId,
       at,
