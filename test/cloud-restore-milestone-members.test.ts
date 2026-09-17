@@ -12,6 +12,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 import { createBackup, restoreFromBackup, setBackupConsent } from "../src/core/cloud/backup.js";
+import { listConflicts } from "../src/core/cloud/conflicts.js";
 import { FakeSyncServer } from "./fixtures/fake-sync-server.js";
 import { Fleet, type Machine } from "./fixtures/sync-machines.js";
 import { differences, stateOf } from "./fixtures/synchronized-state.js";
@@ -101,4 +102,32 @@ describe("a restore of a milestone whose membership the backup never saw written
       }, 60_000);
     }
   }
+});
+
+describe("a re-read of a milestone whose membership the log holds", () => {
+  // The rule is for an absent list only: a list the read will not apply, because a record here is
+  // still about it, is not the rewind's to clear.
+  it("leaves the members a conflict here is still about as they were", async () => {
+    fleet = new Fleet(new FakeSyncServer({ repositoryId: REPO }), REPO);
+    const a = fleet.machine("a");
+    a.store.addKind({ id: "milestone", label: "Milestone" }, "a");
+    const e1 = a.store.createIssue({ title: "E1" });
+    const e2 = a.store.createIssue({ title: "E2" });
+    a.store.milestones().create({ title: "M", targetDate: "2026-12-01" }, "a");
+    const m = (a.db.prepare("SELECT issue_id FROM milestone_meta").get() as { issue_id: string }).issue_id;
+    await a.sync();
+    const b = fleet.machine("b");
+    await sync(b);
+    a.use();
+    a.store.milestones().addMember(m, e1.id, {}, "a");
+    b.use();
+    b.store.milestones().addMember(m, e2.id, {}, "b");
+    await sync(b, a);
+    expect(listConflicts(a.db).filter((conflict) => conflict.resolvedAt === null).map((conflict) => conflict.field)).toEqual(["members"]);
+    const held = members(a, m);
+
+    a.db.prepare("DELETE FROM meta WHERE key = 'sync_applier_version'").run();
+    expect((await a.sync()).caughtUp).not.toBeNull();
+    expect(members(a, m)).toEqual(held);
+  }, 60_000);
 });

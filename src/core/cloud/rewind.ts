@@ -139,8 +139,7 @@ export function reconcileBeforeRead(db: DatabaseSync, entities: readonly Snapsho
    */
   const unsentMembership = new Set(unsent.filter((op) => op.entity === "milestone" && Array.isArray(parsedPayload(op.payload).members)).map((op) => op.id));
   for (const entity of entities) {
-    if (entity.entity !== "milestone" || entity.deletedAt !== null || entity.verb === "delete" || Array.isArray(entity.state.members)) continue;
-    if (unsentMembership.has(entity.entityId) || withheld.has(keyOf("milestone", entity.entityId))) continue;
+    if (entity.entity !== "milestone" || Array.isArray(entity.state.members) || unsentMembership.has(entity.entityId)) continue;
     if (Number(db.prepare("DELETE FROM milestone_members WHERE milestone_id = ?").run(entity.entityId).changes) === 0) continue;
     // An open editor's check notices, as it does for a membership applied (`applyMilestone`).
     db.prepare("UPDATE milestone_meta SET members_revision = members_revision + 1 WHERE issue_id = ?").run(entity.entityId);

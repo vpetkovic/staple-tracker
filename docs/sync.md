@@ -1378,6 +1378,12 @@ re-bootstrap killed part-way leaves nothing half-applied, and reads again on the
   about is put back as every device's migrations install it, and the vocabulary is in the
   order a device hydrating the epoch holds it. Document revisions are settled by the read
   itself ([above](#conflicts-are-preserved-never-resolved-silently)).
+  A milestone the epoch holds with no `members` key — one made on a connected device reaches
+  the log as its dates alone, and a restore stages it so until its membership is written —
+  holds no members, as it does on a fresh device: the rewind clears its member rows, unless
+  this device's unsent membership of it is still to be sent
+  (`test/cloud-restore-milestone-members.test.ts`). The plan and a blocker set have no such
+  shape; each reaches the log only as its whole list.
 - **Work that was never pushed is kept, and reaches every device.** An entity with an
   operation in this device's outbox that no service acknowledged is kept, with whatever it
   names that the epoch lacks — a comment's issue, an issue's parent, project, status and
