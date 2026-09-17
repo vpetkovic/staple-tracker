@@ -7,11 +7,10 @@
 import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 import { encodeCursor, entityKey } from "../src/cursor.js";
-import { materializedVerb } from "../src/fold.js";
+import { foldLog, materializedVerb } from "../src/fold.js";
 import { advanceFold, foldProgress } from "../src/fold-store.js";
 import { LAZY_FOLD_BEHIND, PAGE_BYTES, foldBudgetOps, pullFoldOps, restoreStageEntities } from "../src/limits.js";
 import { REPO, call, jsonOf, seedRepo } from "./helpers.js";
-import { oracleFoldLog } from "./fold-oracle.js";
 import { type GeneratedOp, generateLog, insertOps } from "./log-generator.js";
 import { oldCaptureBackup } from "./old-worker.js";
 
@@ -120,7 +119,7 @@ describe("GET /snapshot on a log the fold has not reached", () => {
     expect(first.cutoffSeq).toBe(head);
     expect(await progress()).toBe(head);
     const snapshot = await snapshotAll();
-    expect(content(snapshot.entities)).toEqual(content((await oracleFoldLog(env, REPO, 1, head)).entities));
+    expect(content(snapshot.entities)).toEqual(content((await foldLog(env, REPO, 1, head)).entities));
   });
 
   it("refuses a cursor naming a cutoff past the log, and folds nothing towards it", async () => {
@@ -196,7 +195,7 @@ describe("a restore the fold is not ready for", () => {
     for (let n = 0; n < 6; n += 1) await req(`/v1/repos/${REPO}/ops?limit=1`, { token });
     const taken = await jsonOf(await req(`/v1/repos/${REPO}/backups`, { method: "POST", token, body: {} }));
     expect(taken.backup.entityCount).toBeGreaterThan(restoreStageEntities("free"));
-    const before = content((await oracleFoldLog(env, REPO, 1, ops[ops.length - 1]!.seq)).entities);
+    const before = content((await foldLog(env, REPO, 1, ops[ops.length - 1]!.seq)).entities);
 
     await restore(taken.backup.backupId, "any turn", async (turn) => {
       // After the first stage turn, the whole checkpoint goes, the source epoch's with it.
@@ -218,7 +217,7 @@ describe("a restore the fold is not ready for", () => {
     const taken = await jsonOf(await req(`/v1/repos/${REPO}/backups`, { method: "POST", token, body: {} }));
     const done = await restore(taken.backup.backupId);
     const undo = done.preRestoreBackupId as string;
-    const before = content((await oracleFoldLog(env, REPO, 1, ops[ops.length - 1]!.seq)).entities);
+    const before = content((await foldLog(env, REPO, 1, ops[ops.length - 1]!.seq)).entities);
 
     // worker/README.md's recovery recipe clears the checkpoint; it is rebuilt from `ops`.
     await env.DB.batch([env.DB.prepare(`DELETE FROM fold_versions`), env.DB.prepare(`DELETE FROM fold_marks`)]);
@@ -290,8 +289,8 @@ describe("a repository of large documents", () => {
     expect(pages.length).toBeGreaterThan(8);
     for (const page of pages) expect(JSON.stringify(page).length).toBeLessThan(PAGE_BYTES + 100_000);
     // At the cutoff the first page pinned: wherever the fold had got.
-    expect(content(pages.flat())).toEqual(content((await oracleFoldLog(env, REPO, 1, firstCutoff!)).entities));
-    const expected = content((await oracleFoldLog(env, REPO, 1, taken.backup.cutoffSeq)).entities);
+    expect(content(pages.flat())).toEqual(content((await foldLog(env, REPO, 1, firstCutoff!)).entities));
+    const expected = content((await foldLog(env, REPO, 1, taken.backup.cutoffSeq)).entities);
 
     // A restore turn stages no more than PAGE_BYTES of it, so it takes many turns.
     let turns = 0;
@@ -356,9 +355,9 @@ describe("the epoch a restore fills", () => {
     const repo = (await env.DB.prepare(`SELECT last_seq FROM repos WHERE repo_id = ?1`).bind(REPO).first<{ last_seq: number }>())!;
     const served = await snapshotAll();
     expect(served.entities.map((e) => JSON.stringify(e.state))).toEqual(
-      (await oracleFoldLog(env, REPO, 2, repo.last_seq)).entities.map((e) => JSON.stringify(e.state)),
+      (await foldLog(env, REPO, 2, repo.last_seq)).entities.map((e) => JSON.stringify(e.state)),
     );
-    expect(content(served.entities)).toEqual(content((await oracleFoldLog(env, REPO, 1, head)).entities));
+    expect(content(served.entities)).toEqual(content((await foldLog(env, REPO, 1, head)).entities));
   });
 
   it("refuses to begin while it holds operations an abandoned restore left, and changes nothing", async () => {
@@ -447,7 +446,7 @@ describe("a database the Worker before the checkpoint wrote", () => {
     const served = await snapshotAll();
     expect(served.cutoffSeq).toBe(head);
     expect(served.entities.map((e) => JSON.stringify([e.entity, e.entityId, e.version, e.lastSeq, e.state, e.fieldWrites]))).toEqual(
-      (await oracleFoldLog(env, REPO, 2, head)).entities.map((e) =>
+      (await foldLog(env, REPO, 2, head)).entities.map((e) =>
         JSON.stringify([e.entity, e.entityId, e.version, e.lastSeq, e.state, e.fieldWrites]),
       ),
     );

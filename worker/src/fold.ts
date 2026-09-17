@@ -88,6 +88,9 @@
 
 import { type FoldedRevisionEntry, settleRevisionCreate } from "../../src/core/cloud/revision-placement.js";
 import { entityKey } from "./cursor.js";
+import type { Env } from "./env.js";
+import { SyncError } from "./errors.js";
+import { MAX_SNAPSHOT_FOLD_OPS, SNAPSHOT_FOLD_PAGE } from "./limits.js";
 
 /**
  * The newest non-`create` write of one field, as `sync_field_writes` would hold it.
@@ -182,6 +185,222 @@ export interface FoldedEntity extends BackupEntity {
    * its default. See the module comment.
    */
   fieldWrites: Record<string, FieldWrite>;
+}
+
+// The single-pass fold of a whole log, as this Worker ran it before the checkpoint. No route calls
+// it any more: every route reads the fold kept in D1 (`fold-store.ts`), and
+// `worker/test/fold-equivalence.test.ts` holds that kept fold to this one, byte for byte.
+export interface FoldResult {
+  entities: FoldedEntity[];
+  /** Operations read. Recorded on the backup so a human can see what it cost. */
+  opCount: number;
+  /** The highest `schema_version` seen. Stored, never interpreted by the server. */
+  schemaVersion: number;
+}
+
+/**
+ * Fold `repo_id = repoId AND epoch = epoch AND seq <= cutoff` into entity state.
+ *
+ * Mechanical, and knows nothing about what an issue is:
+ *
+ *   create/update/renumber — shallow-merge the payload's fields over the state
+ *   replace                — the same merge, and the value of the key naming the ordered
+ *                            collection is assigned WHOLE, which is the supersede. The
+ *                            verb is recorded so a restore can reproduce it.
+ *   delete                 — record a tombstone; later updates become no-ops
+ *   create after a delete  — the entity begins again: the tombstone is lifted and the
+ *                            state restarts from this create's payload
+ *
+ * The tombstone wins over every later update regardless of arrival order, which is what
+ * makes convergence order-independent, and it is RETURNED rather than omitted: a device
+ * handed silence about a deleted entity cannot tell it from one it has never heard of.
+ * That matters more for a restore than for a bootstrap, because a re-bootstrapping
+ * device keeps its local rows — so an unmaterialised tombstone means a deleted issue
+ * quietly coming back to life on every device that still has it.
+ *
+ * ## Why a create is the one thing a tombstone yields to
+ *
+ * A tombstone exists to stop a LATE update — one made before its author saw the delete —
+ * from resurrecting what was deleted. A create is not late: it is somebody deciding,
+ * after the delete, that the entity exists again, and for an entity keyed by a name
+ * rather than a UUID that is an ordinary thing to do. Removing a status and adding it
+ * back, or resetting a setting and setting it again, reuses the key. Treating the
+ * tombstone as final dropped the second create on every device that hydrated from here,
+ * while every device that read the ordered tail applied it — the two halves of a
+ * bootstrap disagreeing about whether `blocked` is a status. The client's applier makes
+ * the identical exception (`apply.ts`), so both halves agree again.
+ */
+export async function foldLog(
+  env: Env,
+  repoId: string,
+  epoch: number,
+  cutoff: number,
+): Promise<FoldResult> {
+  const entities = new Map<string, FoldedEntity>();
+  let after = 0;
+  let opCount = 0;
+  let schemaVersion = 0;
+
+  for (;;) {
+    const page = await env.DB.prepare(
+      `SELECT seq, op_id, entity, entity_id, verb, payload, actor, created_at, server_ts, schema_version
+         FROM ops
+        WHERE repo_id = ?1 AND epoch = ?2 AND seq > ?3 AND seq <= ?4
+        ORDER BY seq
+        LIMIT ?5`,
+    )
+      .bind(repoId, epoch, after, cutoff, SNAPSHOT_FOLD_PAGE)
+      .all<{
+        seq: number;
+        op_id: string;
+        entity: string;
+        entity_id: string;
+        verb: string;
+        payload: string;
+        actor: string | null;
+        created_at: string;
+        server_ts: number;
+        schema_version: number;
+      }>();
+
+    if (page.results.length === 0) break;
+
+    opCount += page.results.length;
+    if (opCount > MAX_SNAPSHOT_FOLD_OPS) {
+      // The same refusal `GET /snapshot` makes, for the same reason: a truncated
+      // fold is a backup that silently omits entities, and restoring one would
+      // delete real data while reporting success.
+      throw new SyncError("unavailable", "operation log is too large to fold in one pass", {
+        maxSnapshotFoldOps: MAX_SNAPSHOT_FOLD_OPS,
+      });
+    }
+
+    for (const original of page.results) {
+      if (original.schema_version > schemaVersion) schemaVersion = original.schema_version;
+      // Two revisions written as one number: the later in the log takes the next (`settleRevision`).
+      const row = original.entity === "documentRevision" && original.verb === "create" ? settleRevision(entities, original) : original;
+      // The same revision, held under the number it was moved to: nothing new.
+      if (row === null) continue;
+
+      const key = entityKey(row.entity, row.entity_id);
+      let entry = entities.get(key);
+      if (!entry) {
+        entry = {
+          entity: row.entity,
+          entityId: row.entity_id,
+          version: 0,
+          deletedAt: null,
+          lastSeq: row.seq,
+          superseded: false,
+          state: {},
+          fieldWrites: {},
+          createdSeq: null,
+          createdAt: null,
+          createdBy: null,
+        };
+        entities.set(key, entry);
+      }
+
+      entry.version += 1;
+      entry.lastSeq = row.seq;
+
+      if (row.verb === "delete") {
+        entry.deletedAt = row.server_ts;
+        continue;
+      }
+      if (row.verb === "create") {
+        if (entry.deletedAt !== null) {
+          // The entity begins again (see the module comment). Nothing of the deleted one
+          // survives into it: not its fields, not their provenance, not its verb.
+          entry.deletedAt = null;
+          entry.state = {};
+          entry.fieldWrites = {};
+          entry.superseded = false;
+          forgetPlace(entities.get(entityKey(row.entity, VOCABULARY_ORDER_ID)), row.entity, row.entity_id);
+          // Nor is a status or kind created again the built-in it may have been: every device
+          // that read the delete in the log holds the one added back, and a create from a build
+          // before this one does not say so itself (`applyVocabulary`, `src/core/cloud/apply.ts`).
+          if (row.entity === "status" || row.entity === "kind") entry.state.isBuiltin = false;
+        }
+        entry.createdSeq = row.seq;
+        /**
+         * Not a restore's own actor and instant. A restore stages every entity as a
+         * `create`; when its backup kept the original creator and time (`forBackup`) it
+         * stages under those, and otherwise — a backup from before this build, or a
+         * restore by the Worker before it — under `restore:<id>` at the moment it ran.
+         * Those say who restored and when, not who wrote the thing and when, and a device
+         * dating an old comment or attributing an old revision by them rewrote the truth.
+         */
+        const restored = typeof row.actor === "string" && row.actor.startsWith("restore:");
+        entry.createdAt = restored ? null : row.created_at;
+        entry.createdBy = restored ? null : row.actor;
+      }
+      if (entry.deletedAt !== null) continue;
+
+      const payload = JSON.parse(row.payload) as unknown;
+      if (payload === null || typeof payload !== "object" || Array.isArray(payload)) {
+        // No keys, so nothing to be authoritative about. `envelope.ts` refuses every
+        // payload that is not a JSON object at ingest, arrays included (STA-262), and a
+        // restore stages only folded state, which is always an object. So this is a
+        // floor under a log written before that refusal existed, or edited by hand,
+        // rather than a case the wire can carry. The floor is "contributes no state".
+        continue;
+      }
+
+      // EVERY verb merges the keys it carried and is silent about the rest. A `replace`
+      // still supersedes the collection it names, because that collection is the value
+      // of a single key and the value is assigned whole — merging two plans element by
+      // element would invent an order neither human asked for. What it no longer does is
+      // discard `startsOn` because it happened to be talking about `members`.
+      /**
+       * One field, whichever spelling wrote it. Clients journaled some fields by field name
+       * (`updatedAt`) and some by column (`updated_at`), and keeping both left one entity's
+       * state holding a stale and a fresh value of the same field, applied in key order by a
+       * hydrating device — so the stale one could win. A key's other spelling is dropped
+       * when it is written, state and provenance alike, so the state holds the latest.
+       */
+      const carried = columnSpellingWins(payload as Record<string, unknown>);
+      for (const key of Object.keys(carried)) {
+        const other = otherSpelling(key);
+        if (other !== key) {
+          delete entry.state[other];
+          delete entry.fieldWrites[other];
+        }
+      }
+      const statusBefore = entry.state.status;
+      Object.assign(entry.state, carried);
+      // So the merge is the same for every verb and only the RECORD of the verb differs.
+      entry.superseded = row.verb === "replace";
+
+      /**
+       * The same keys again, as provenance — for every verb EXCEPT `create` (STA-263).
+       *
+       * The exclusion is the fix, not an optimization. A create carries the entity's
+       * whole field inventory including the defaults nobody chose, so recording it
+       * would make a later edit contest a `medium` that was never a decision. It is
+       * also precisely what `Journal.flush` does for a locally authored mutation, so
+       * a hydrated device ends up holding the same rows a device that was present for
+       * this log holds — and no others.
+       *
+       * `entry.version` has already been incremented for this row, so `- 1` is the
+       * version the write moved off.
+       */
+      if (row.verb !== "create") {
+        const write = { baseVersion: entry.version - 1, opId: row.op_id, at: row.created_at, seq: row.seq };
+        for (const field of Object.keys(carried)) entry.fieldWrites[field] = write;
+        if (entry.entity === "issue" && reopensOrigin(statusBefore, carried.status)) entry.fieldWrites.reopens = write;
+      }
+    }
+
+    after = page.results[page.results.length - 1]!.seq;
+    if (page.results.length < SNAPSHOT_FOLD_PAGE) break;
+  }
+
+  const ordered = [...entities.values()].sort((a, b) =>
+    entityKey(a.entity, a.entityId) < entityKey(b.entity, b.entityId) ? -1 : 1,
+  );
+
+  return { entities: ordered, opCount, schemaVersion };
 }
 
 /** One row of `ops`, as much of it as the fold reads. */

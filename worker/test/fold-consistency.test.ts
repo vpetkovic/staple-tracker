@@ -14,10 +14,9 @@ import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { entityKey } from "../src/cursor.js";
 import { restoreOrder } from "../src/backups.js";
-import { type FoldedEntity, forBackup, materializedVerb } from "../src/fold.js";
+import { type FoldedEntity, foldLog, forBackup, materializedVerb } from "../src/fold.js";
 import { advanceFold, foldProgress, foldedPage, pinMark, restorePage } from "../src/fold-store.js";
 import { REPO, call, jsonOf, seedRepo } from "./helpers.js";
-import { oracleFoldLog } from "./fold-oracle.js";
 import { type GeneratedOp, generateLog, insertOps, prng } from "./log-generator.js";
 
 const BIG = { remaining: 1_000_000 };
@@ -47,7 +46,7 @@ async function expectFoldEverywhere(repoId: string, epoch: number, ops: readonly
   const seqs = ops.filter((op) => op.epoch === epoch && op.seq <= head).map((op) => op.seq);
   const every = Math.max(1, Math.floor(seqs.length / 25));
   for (const cutoff of [...seqs.filter((_, index) => index % every === 0), head]) {
-    const expected = (await oracleFoldLog(env, repoId, epoch, cutoff)).entities.map((entity) => JSON.stringify(entity));
+    const expected = (await foldLog(env, repoId, epoch, cutoff)).entities.map((entity) => JSON.stringify(entity));
     expect({ epoch, cutoff, fold: await wholeFold(repoId, epoch, cutoff) }).toEqual({ epoch, cutoff, fold: expected });
   }
 }
@@ -161,13 +160,13 @@ describe("a checkpoint is never read across an epoch change", () => {
       if (!body.hasMore) break;
       cursor = body.nextCursor;
     }
-    const restored = (await oracleFoldLog(env, REPO, 2, repo.last_seq)).entities;
+    const restored = (await foldLog(env, REPO, 2, repo.last_seq)).entities;
     expect(served.map((e) => [e.entity, e.entityId, e.version, e.lastSeq, JSON.stringify(e.state)])).toEqual(
       restored.map((e) => [e.entity, e.entityId, e.version, e.lastSeq, JSON.stringify(e.state)]),
     );
     // A restore materialises a tombstone as a bare `delete` and a superseded entity as a
     // `replace` (`materializedVerb`), and only a `create` carries its time back.
-    const original = (await oracleFoldLog(env, REPO, 1, head)).entities;
+    const original = (await foldLog(env, REPO, 1, head)).entities;
     const restoredAs = (e: any) => [
       e.entityId,
       e.deletedAt === null,
@@ -272,7 +271,7 @@ describe("nothing concurrent tears the checkpoint", () => {
           const last = page[page.length - 1]!;
           after = entityKey(last.entity, last.entityId);
         }
-        const expected = restoreOrder((await oracleFoldLog(env, repoId, 1, cutoff)).entities.map(forBackup));
+        const expected = restoreOrder((await foldLog(env, repoId, 1, cutoff)).entities.map(forBackup));
         expect({ cutoff, staged }).toEqual({ cutoff, staged: expected.map((entity) => JSON.stringify(entity)) });
       }
     }, 120_000);
@@ -297,7 +296,7 @@ describe("nothing concurrent tears the checkpoint", () => {
     }
     const cutoff = taken.backup.cutoffSeq as number;
     expect(cutoff).toBe(early[early.length - 1]!.seq);
-    const expected = restoreOrder((await oracleFoldLog(env, REPO, 1, cutoff)).entities.map(forBackup));
+    const expected = restoreOrder((await foldLog(env, REPO, 1, cutoff)).entities.map(forBackup));
 
     const late = ops.slice(900);
     await insertOps(env.DB, REPO, late);

@@ -14,7 +14,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import worker from "../src/index.js";
 import { entityKey } from "../src/cursor.js";
 import { DEVICE, ORIGIN, REPO, seedRepo } from "./helpers.js";
-import { oracleFoldLog } from "./fold-oracle.js";
+import { foldLog } from "../src/fold.js";
 import { type GeneratedOp, insertOps } from "./log-generator.js";
 
 const D1_VALUE_BYTES = 2_000_000;
@@ -145,8 +145,8 @@ describe("inside deployed D1's 2,000,000-byte ceiling on a bound value", () => {
       }
     };
     const served = await read();
-    expect(content(served.entities)).toEqual(content((await oracleFoldLog(env, REPO, 1, served.cutoff)).entities));
-    const expected = content((await oracleFoldLog(env, REPO, 1, head)).entities);
+    expect(content(served.entities)).toEqual(content((await foldLog(env, REPO, 1, served.cutoff)).entities));
+    const expected = content((await foldLog(env, REPO, 1, head)).entities);
 
     let restoreId: string | undefined;
     for (let turn = 0; turn < 500; turn += 1) {

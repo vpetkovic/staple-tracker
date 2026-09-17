@@ -122,6 +122,15 @@ export const MAX_SNAPSHOT_PAGE = 500;
 export const DEFAULT_SNAPSHOT_PAGE = 200;
 
 /**
+ * Operations read per query by the single-pass fold (`foldLog` in `fold.ts`), which no route
+ * runs any more; kept as the reference the fold checkpoint is proved against.
+ */
+export const SNAPSHOT_FOLD_PAGE = 500;
+
+/** The most log the single-pass fold (`foldLog`) folds before it refuses. */
+export const MAX_SNAPSHOT_FOLD_OPS = 20_000;
+
+/**
  * Operations one fold step reads and folds (`fold-store.ts`). Also the most a snapshot page
  * or a restore turn ever folds on top of a checkpoint mark, because marks are at most one
  * step apart.

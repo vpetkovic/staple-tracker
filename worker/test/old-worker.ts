@@ -9,8 +9,7 @@
  * way the old `captureBackup` did so the tests can hold it to that.
  */
 import { protocolForEntities } from "../src/envelope.js";
-import { forBackup } from "../src/fold.js";
-import { oracleFoldLog } from "./fold-oracle.js";
+import { foldLog, forBackup } from "../src/fold.js";
 
 export async function oldCaptureBackup(
   db: D1Database,
@@ -21,7 +20,7 @@ export async function oldCaptureBackup(
     epoch: number;
     last_seq: number;
   }>())!;
-  const folded = await oracleFoldLog({ DB: db }, repoId, repo.epoch, repo.last_seq);
+  const folded = await foldLog({ DB: db } as never, repoId, repo.epoch, repo.last_seq);
   await db
     .prepare(
       `INSERT INTO backups

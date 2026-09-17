@@ -19,11 +19,10 @@
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { encodeCursor, entityKey } from "../src/cursor.js";
-import { type FoldedEntity, forBackup, materializedVerb } from "../src/fold.js";
+import { type FoldedEntity, foldLog, forBackup, materializedVerb } from "../src/fold.js";
 import { restoreOrder } from "../src/backups.js";
 import { advanceFold, entityCount, foldSummary, foldedPage, pinMark, restorePage } from "../src/fold-store.js";
 import { call, jsonOf, seedRepo } from "./helpers.js";
-import { oracleFoldLog } from "./fold-oracle.js";
 import { type GeneratedOp, generateLog, insertOps, prng } from "./log-generator.js";
 
 async function repoRow(repoId: string): Promise<void> {
@@ -81,7 +80,7 @@ function someCutoff(ops: readonly GeneratedOp[], max: number, random: () => numb
 }
 
 async function compareAt(repoId: string, epoch: number, cutoff: number, random: () => number, context: string) {
-  const expected = await oracleFoldLog(env, repoId, epoch, cutoff);
+  const expected = await foldLog(env, repoId, epoch, cutoff);
   expectSameFold(await checkpointFold(repoId, epoch, cutoff, random), expected.entities, `${context} cutoff=${cutoff}`);
   const summary = await foldSummary(env, repoId, epoch, cutoff);
   expect({
@@ -210,7 +209,7 @@ describe("the snapshot route serves the single-pass fold", () => {
         if (!body.hasMore) break;
         cursor = body.nextCursor;
       }
-      const expected = (await oracleFoldLog(env, repoId, 1, cutoff!)).entities.map((entity) => ({
+      const expected = (await foldLog(env, repoId, 1, cutoff!)).entities.map((entity) => ({
         entity: entity.entity,
         entityId: entity.entityId,
         version: entity.version,
