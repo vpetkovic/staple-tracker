@@ -11,8 +11,10 @@
  * it holds, every stand-in names the same issue everywhere, nothing is set aside, and a write by
  * a number reached the issue it meant.
  *
- * Seeded, ids included, so a seed is one run and a failure names it. The default seeds are the
- * ones that found a divergence; sweep others with `RV_FIRST` and `RV_COUNT`:
+ * Seeded, ids included, so a seed is one run and a failure names it. The default seeds are the ones
+ * a sweep of this file found a divergence with (79, 568, 634, 642, 684, 950), and the numbers of
+ * those the reviewer's unseeded run of the same scenario did; sweep others with `RV_FIRST` and
+ * `RV_COUNT`, 1 to 1000 in four ranges of 250 at a time:
  *
  *   RV_FIRST=1 RV_COUNT=250 npx vitest run test/cloud-fleet-sweep.test.ts
  */
@@ -37,16 +39,19 @@ vi.mock("node:crypto", async (importOriginal) => {
 });
 
 const REPO = "5eed0000-0000-4000-8000-00000000f106";
-const DEFAULT_SEEDS = [141, 146, 153, 162, 163, 172, 175, 221, 223, 234, 240, 372, 406, 420];
+const DEFAULT_SEEDS = [79, 141, 146, 153, 162, 163, 172, 175, 221, 223, 234, 240, 372, 406, 420, 568, 634, 642, 684, 950];
 const SEEDS =
   process.env.RV_FIRST !== undefined
     ? Array.from({ length: Number(process.env.RV_COUNT ?? 1) }, (_, index) => Number(process.env.RV_FIRST) + index)
     : DEFAULT_SEEDS;
 
 let fleet: Fleet | null = null;
-afterEach(() => {
+afterEach(async () => {
   fleet?.close();
   fleet = null;
+  // A seed awaits nothing but microtasks; a sweep of hundreds would starve the runner's own
+  // reporting until it timed out. One turn of the event loop between seeds lets it through.
+  await new Promise((resolve) => setImmediate(resolve));
 });
 
 function rng(seed: number): () => number {
