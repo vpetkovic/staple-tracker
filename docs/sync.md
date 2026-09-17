@@ -1803,7 +1803,11 @@ service's fold, the tail fold and the test service all call `placeRevision`
   that the log does not is dropped (not by a join, whose rows are the workspace's own, nor
   from a fold before this build). Before, a device that joined from a fold which had merged
   two same-number revisions into one row kept that row on its re-read and moved the log's
-  earlier text up as if it were the newer.
+  earlier text up as if it were the newer. A revision of this device's own the log has not
+  reached keeps its own time and author, but where the log holds that very revision it takes
+  the log's summary: a writer whose r1 the log placed at r2, with the answer lost, restored a
+  backup holding it, set its own aside to r2 for the log's r1, and alone said nothing of the
+  move (`test/cloud-restore-renumbered-revision.test.ts`).
 - **The head is the highest revision, dated by it.** `documents.updated_at` is the highest
   revision's time, not the last one applied: a revision sent again under its new number
   arrives after the ones above it, and stamped the document with its older time on every

@@ -1507,6 +1507,11 @@ function placeFromSnapshot(
   const atNumber = rows.find((row) => row.revision === incoming.revision);
   if (atNumber !== undefined && isRevision(atNumber, incoming, later(atNumber))) {
     if (!later(atNumber)) takeLogFields(db, issueId, key, incoming.revision, input);
+    /**
+     * This device's own, which the log has not reached, keeps its own fields — but its summary
+     * says where the log placed it, and the log placed this very revision here. Kept, a revision
+     * this device had set aside to this number read as never moved on this device alone.
+     */ else db.prepare("UPDATE document_revisions SET change_summary = ? WHERE issue_id = ? AND key = ? AND revision = ?").run(incoming.changeSummary, issueId, key, incoming.revision);
     return;
   }
   // Held under another number: the log's placement replaces this device's.
