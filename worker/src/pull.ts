@@ -17,11 +17,12 @@ import type { Env } from "./env.js";
 import { minProtocolFor } from "./envelope.js";
 import { SyncError, json } from "./errors.js";
 import { advanceFold, foldProgress } from "./fold-store.js";
-import { serveWork } from "./fold-work.js";
+import { ENTITY_NS, PARSE_NS_PER_BYTE, PARSE_NS_PER_ESCAPE, serveWork } from "./fold-work.js";
 import {
   DEFAULT_PULL_LIMIT,
   LAZY_FOLD_BEHIND,
   MAX_PULL_LIMIT,
+  PAGE_WORK,
   PROTOCOL_MAX,
   PROTOCOL_MIN,
   planOf,
@@ -69,23 +70,41 @@ export async function pull(
     after = cursor.s;
   }
 
-  // `hasMore` by fetching limit + 1 and trimming. Never a COUNT(*), which scans the
-  // whole range to answer a question the extra row already answers.
+  /**
+   * `hasMore` by fetching limit + 1 and trimming. Never a COUNT(*), which scans the
+   * whole range to answer a question the extra row already answers.
+   *
+   * And no more than {@link PAGE_WORK} of estimated isolate time to parse and send
+   * (`serveWork`, `fold-work.ts`) — always the first operation, however large. SQLite
+   * measures each row and sums them, and a row past the budget comes back without its
+   * payload, so a page of escape-heavy operations is cut before the isolate reads it; the
+   * page is then shorter than its limit and says `hasMore`, which every client already
+   * follows.
+   */
   const page = await env.DB.prepare(
     `SELECT seq, epoch, op_id, device_id, entity, entity_id, verb, base_version,
-            payload, actor, client_seq, schema_version, created_at, server_ts,
-            length(CAST(payload AS BLOB)) AS bytes,
-            length(payload) - length(replace(replace(payload, '\\', ''), '"', '')) AS escapes
-       FROM ops
-      WHERE repo_id = ?1 AND epoch = ?2 AND seq > ?3
-      ORDER BY seq
-      LIMIT ?4`,
+            CASE WHEN n = 1 OR spent <= ?5 THEN payload END AS payload,
+            actor, client_seq, schema_version, created_at, server_ts, bytes, escapes
+       FROM (SELECT *, SUM(${ENTITY_NS} + ${2 * PARSE_NS_PER_BYTE} * bytes + ${2 * PARSE_NS_PER_ESCAPE} * escapes)
+                         OVER (ORDER BY seq ROWS UNBOUNDED PRECEDING) AS spent,
+                       ROW_NUMBER() OVER (ORDER BY seq) AS n
+               FROM (SELECT seq, epoch, op_id, device_id, entity, entity_id, verb, base_version,
+                            payload, actor, client_seq, schema_version, created_at, server_ts,
+                            length(CAST(payload AS BLOB)) AS bytes,
+                            length(payload) - length(replace(replace(payload, '\\', ''), '"', '')) AS escapes
+                       FROM ops
+                      WHERE repo_id = ?1 AND epoch = ?2 AND seq > ?3
+                      ORDER BY seq
+                      LIMIT ?4))
+      ORDER BY seq`,
   )
-    .bind(session.repoId, session.epoch, after, limit + 1)
-    .all<OpRow & { bytes: number; escapes: number }>();
+    .bind(session.repoId, session.epoch, after, limit + 1, PAGE_WORK)
+    .all<Omit<OpRow, "payload"> & { payload: string | null; bytes: number; escapes: number }>();
 
-  const hasMore = page.results.length > limit;
-  const rows = hasMore ? page.results.slice(0, limit) : page.results;
+  const cut = page.results.findIndex((row) => row.payload === null);
+  const within = (cut >= 0 ? page.results.slice(0, cut) : page.results) as Array<OpRow & { bytes: number; escapes: number }>;
+  const hasMore = page.results.length > limit || cut >= 0;
+  const rows = within.slice(0, limit);
 
   assertServable(rows, protocol);
 

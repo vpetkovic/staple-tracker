@@ -1300,8 +1300,16 @@ export class FakeSyncServer {
     const eligible = this.ops
       .filter((op) => op.epoch === this.epoch && op.seq > after)
       .sort((a, b) => a.seq - b.seq);
-    const hasMore = eligible.length > limit;
-    const rows = eligible.slice(0, limit);
+    // No more than `pageWork` of estimated isolate time to send, the first always — `worker/src/pull.ts`.
+    const rows: StoredOp[] = [];
+    let spent = 0;
+    for (const op of eligible.slice(0, limit)) {
+      const { size, escapes } = measured(op.payload);
+      spent += serveWork(size, escapes);
+      if (rows.length > 0 && spent > this.options.pageWork) break;
+      rows.push(op);
+    }
+    const hasMore = eligible.length > rows.length;
     // The cursor advances to the last seq RETURNED, never to the watermark.
     const lastSeq = rows.length > 0 ? rows[rows.length - 1]!.seq : after;
 
@@ -1310,14 +1318,14 @@ export class FakeSyncServer {
     // A pull that finds the fold a step behind moves it on — `keepFoldNearHead`, `worker/src/pull.ts` —
     // by what its page leaves of the request's work, and never more.
     if (this.lastSeq - (this.foldedTo.get(this.epoch) ?? 0) >= this.options.foldStep) {
-      const spent = rows.reduce((sum, op) => {
+      const served = rows.reduce((sum, op) => {
         const { size, escapes } = measured(op.payload);
         return sum + serveWork(size, escapes);
       }, 0);
       this.advanceFold(this.epoch, this.lastSeq, {
         remaining: this.options.foldBudget,
         bytes: this.options.foldBudgetBytes,
-        work: Math.max(0, this.options.foldWork - spent),
+        work: Math.max(0, this.options.foldWork - served),
         folded: true,
       });
     }

@@ -10,6 +10,7 @@
 import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 import worker from "../src/index.js";
+import { encodeCursor } from "../src/cursor.js";
 import { type FoldBudget, advanceFold, foldProgress } from "../src/fold-store.js";
 import { runWork } from "../src/fold-work.js";
 import { FOLD_STEP_WORK, requestWork } from "../src/limits.js";
@@ -277,21 +278,27 @@ describe("a fold step's work", () => {
 });
 
 describe("a request's budget", () => {
-  it("is what its pull page leaves: a page that costs it all folds nothing", async () => {
-    // 600 operations, the fold 500 behind: a pull of a page of 30 KB quote-heavy edits spends the
-    // request on its page; a pull of one small operation folds.
-    const ops: GeneratedOp[] = [];
-    for (let n = 0; n < 100; n += 1) ops.push(op(n + 1, "issue", `issue-${n}`, "create", { title: `wide ${n}`, description: quoted(30_000, `${n}`) }));
-    for (let n = 100; n < 600; n += 1) ops.push(op(n + 1, "issue", `issue-${n % 100}`, "update", { title: `t${n}` }));
+  it("cuts a pull page by its work, and folds beside it only what the page leaves", async () => {
+    // An edit larger than a request's budget, a hundred 30 KB quote-heavy ones, then 600 small ones.
+    const ops: GeneratedOp[] = [op(1, "issue", "issue-big", "create", { title: "big", description: quoted(500_000, "a") })];
+    for (let n = 0; n < 100; n += 1) ops.push(op(n + 2, "issue", `issue-${n}`, "create", { title: `wide ${n}`, description: quoted(30_000, `${n}`) }));
+    for (let n = 0; n < 600; n += 1) ops.push(op(n + 102, "issue", `issue-${n % 100}`, "update", { title: `t${n}` }));
     await insertOps(env.DB, REPO, ops);
 
-    const large = await send(`/ops?limit=100`, env.DB);
-    expect(large.status).toBe(200);
+    // The large edit alone, and nothing folded: the page spent the request.
+    const first = await send(`/ops?limit=100`, env.DB);
+    expect({ status: first.status, ops: first.json.ops.length, hasMore: first.json.hasMore }).toEqual({ status: 200, ops: 1, hasMore: true });
     expect((await foldProgress(env, REPO, 1)).seq).toBe(0);
-
-    const small = await send(`/ops?limit=1&cursor=${encodeURIComponent(large.json.nextCursor)}`, env.DB);
+    // Quote-heavy edits: a page cut by work, well short of its limit.
+    const second = await send(`/ops?limit=100&cursor=${encodeURIComponent(first.json.nextCursor)}`, env.DB);
+    expect(second.json.ops.length).toBeGreaterThan(0);
+    expect(second.json.ops.length).toBeLessThan(20);
+    expect(second.json.hasMore).toBe(true);
+    // One small operation, with small ones next to fold: the page leaves the request room, and it folds.
+    await advanceFold(env, REPO, 1, 101, { budget: { remaining: Number.MAX_SAFE_INTEGER } });
+    const small = await send(`/ops?limit=1&cursor=${encodeURIComponent(encodeCursor({ v: 1, r: REPO, e: 1, s: 650 }))}`, env.DB);
     expect(small.status).toBe(200);
-    expect((await foldProgress(env, REPO, 1)).seq).toBeGreaterThan(0);
+    expect((await foldProgress(env, REPO, 1)).seq).toBeGreaterThan(101);
   });
 
   it("is shared by a snapshot page: after folding, a page with no room is deferred, and served when asked again", async () => {

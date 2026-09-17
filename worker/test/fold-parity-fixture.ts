@@ -188,13 +188,18 @@ export async function observeFoldParity(driver: ParityDriver): Promise<Record<st
   await driver.clearFold();
   observed.snapshot = await snapshot();
 
-  // A pull a step behind folds a step; three pull pages from nothing.
+  // A pull a step behind folds what its page leaves of its budget; the whole log pulled from nothing.
   await driver.clearFold();
   let cursor: string | null = null;
-  for (let page = 0; page < 3; page += 1) {
+  // Every page, each cut by count or by the work of sending it, which folds only what its page leaves.
+  const pulled: number[] = [];
+  for (let page = 0; page < 100; page += 1) {
     const response = await driver.send("GET", `/ops?limit=500${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`);
+    pulled.push(response.body.ops.length);
     cursor = response.body.nextCursor;
+    if (!response.body.hasMore) break;
   }
+  observed.pulled = pulled;
 
   const backup = await untilFolded(() => driver.send("POST", "/backups", {}));
   observed.backup = {
@@ -256,7 +261,8 @@ export async function observeFoldParity(driver: ParityDriver): Promise<Record<st
  */
 export const FOLD_PARITY_OBSERVED: Record<string, unknown> = {
   snapshot: {"folding":[358,562,711,829,938,1073,1204,1278,1372,1440,1724,1857,1860],"cutoffSeq":1862,"pages":[384,6,2,2,12,33,22,22,22,33]},
-  backup: {"folding":[434,602,738,868,977,1106,1213,1302,1377,1451,1785,1857,1860],"status":200,"entityCount":538,"opCount":1708,"cutoffSeq":1862},
+  pulled: [388,289,289,295,397,48,2],
+  backup: {"folding":[829,938,1073,1204,1278,1372,1440,1724,1857,1860],"status":200,"entityCount":538,"opCount":1708,"cutoffSeq":1862},
   restore: [{"folding":358},{"folding":562},{"folding":711},{"folding":829},{"folding":938},{"folding":1073},{"folding":1204},{"folding":1278},{"folding":1372},{"folding":1440},{"folding":1724},{"folding":1857},{"folding":1860},{"status":200,"staged":0},{"status":200,"staged":24},{"status":200,"staged":29},{"status":200,"staged":65},{"status":200,"staged":79},{"status":200,"staged":97},{"status":200,"staged":134},{"status":200,"staged":165},{"status":200,"staged":201},{"status":200,"staged":401},{"status":200,"staged":538},{"status":200,"staged":538}],
   restored: {"folding":[],"cutoffSeq":2400,"pages":[389,2,2,2,33,22,22,22,44]},
   undo: [{"folding":358,"cutoff":1862},{"folding":562,"cutoff":1862},{"folding":711,"cutoff":1862},{"folding":829,"cutoff":1862},{"folding":938,"cutoff":1862},{"folding":1073,"cutoff":1862},{"folding":1204,"cutoff":1862},{"folding":1278,"cutoff":1862},{"folding":1372,"cutoff":1862},{"folding":1440,"cutoff":1862},{"folding":1724,"cutoff":1862},{"folding":1857,"cutoff":1862},{"folding":1860,"cutoff":1862},{"folding":1872,"cutoff":2400},{"folding":1890,"cutoff":2400},{"folding":1928,"cutoff":2400},{"folding":1954,"cutoff":2400},{"folding":1997,"cutoff":2400},{"folding":2057,"cutoff":2400},{"folding":2356,"cutoff":2400},{"status":200,"staged":0},{"status":200,"staged":24},{"status":200,"staged":29},{"status":200,"staged":65},{"status":200,"staged":79},{"status":200,"staged":97},{"status":200,"staged":134},{"status":200,"staged":165},{"status":200,"staged":201},{"status":200,"staged":401},{"status":200,"staged":538},{"status":200,"staged":538}],
