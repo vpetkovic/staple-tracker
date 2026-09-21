@@ -16,7 +16,7 @@ test runner.
 ```bash
 cd worker
 npm install --legacy-peer-deps   # see "Why --legacy-peer-deps" below
-npm test                          # 304 tests, in the Workers runtime, no network
+npm test                          # 308 tests, in the Workers runtime, no network
 npm run typecheck
 npm run lint:logs                 # no console.* outside src/log.ts
 ```
@@ -47,11 +47,12 @@ worker/
     fold-store.ts      the fold kept in D1, advanced in steps bounded by their work
     fold-revisions.ts  placing a revision through indexes, not through its document
     fold-work.ts       what folding, paging and staging cost, estimated from sizes
+    catch-up.ts        the Cron Trigger: folds the repositories furthest behind
     cursor.ts          opaque cursors
     errors.ts          the error taxonomy
     limits.ts          everything /v1/capabilities advertises
     log.ts             THE ONLY console.* in this Worker
-  test/                304 tests
+  test/                308 tests
   scripts/lint-logs.mjs
   wrangler.toml        COMMITTED. Placeholders only.
   wrangler.local.toml  GITIGNORED. Real account and database ids.
@@ -316,13 +317,36 @@ for 5,000 consecutive revisions) and the live revisions holding the same body ke
 step itself has folded (`src/fold-revisions.ts`). When a placement needs more than the step has
 read, the step reads again up to four times, then ends before that operation.
 
-**Who moves it on.** Every pull that finds it 500 or more seqs behind folds with what its page
-left of the request's 4 ms, and folds nothing rather than more. On any repository that syncs,
-it stays within a few hundred operations of the head. A snapshot's first page, a backup, and a
-restore's first turn each fold up to their cutoff with the request's budget, and answer "still
-folding" until the fold has reached it. A snapshot stays pinned at the head, as it always was.
-A backup's cutoff is always a mark. Each restore turn stages no more than 2 ms of work and folds
-what it staged with the rest, so the restored epoch is folded by the time it goes live.
+**Who moves it on.** Four things, each inside one request's budget:
+
+- **Every push**, with what its own batch left of the request's 4 ms, one step. The writer pays
+  for what it wrote, which is what keeps a repository being written hard from falling behind: pulls
+  alone left a 100,000-operation run's checkpoint 30,000 operations behind, because a device
+  writing pushes far more than it pulls.
+- **Every pull** that finds the fold 500 or more seqs behind, with what its page left, and nothing
+  rather than more.
+- **A snapshot's first page, a backup, and a restore's first turn**, up to their own cutoff, which
+  they need; each answers "still folding" until the fold has reached it. A snapshot stays pinned at
+  the head, as it always was, and a backup's cutoff is always a mark. Each restore turn stages no
+  more than 2 ms of work and folds what it staged with the rest, so the restored epoch is folded by
+  the time it goes live.
+- **A Cron Trigger every two minutes** (`src/catch-up.ts`), one request's budget a run, over the
+  repositories furthest behind. This is the floor under the fold's progress for a repository whose
+  devices went quiet mid-catch-up; it is not a way to fold a large log quickly, because a scheduled
+  invocation has the same ten milliseconds and fifty queries as a request.
+
+**A joining device never waits on it.** A snapshot page asks again while the fold climbs, but only
+for five answers or five seconds (`SNAPSHOT_FOLD_PATIENCE`, `src/core/cloud/client.ts`). Past that
+the client reads the ordered tail and folds it itself, the path a Worker too old to fold a large log
+already sent it down. So a device joins a repository in bounded time whatever the checkpoint is
+doing, and pays for it in pull pages rather than in waiting.
+
+**Statements.** A request folds at most two steps (`foldStepsPerRequest`), and a step issues at
+most fifteen: the operations it reads, two sizing, three loading, up to four its placements need,
+and its writes. So a pull costs about 33 statements at worst, a snapshot page 37, a restore turn 42,
+and a push 45 including its own N + 4 — against the free plan's fifty an invocation. A step that
+ends early at its placement reads costs almost no work, so without that cap a single request could
+have taken hundreds of cheap steps.
 
 **Pages are cut by work too.** A pull page and a snapshot page stop at 2 ms of estimated
 isolate time to send, the first entry always, and say `hasMore`. A page of 30 KB quote-heavy

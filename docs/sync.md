@@ -1090,7 +1090,7 @@ maxPullLimit }`.
 | Pull page `limit` | default 200, maximum **500**, and at most **2 ms** of estimated isolate time to send, the first operation always | A page cut by work is shorter than its limit and says `hasMore` |
 | Requests per device | 120 per 60 s, answered with `Retry-After: 60` | Policy, not a platform limit — the `SYNC_LIMITER` binding in `worker/wrangler.toml`, keyed on repository and device |
 | Snapshot page `limit` | default 200, maximum **500** entities, at most **1 MiB** of their state, and at most **2 ms** of estimated isolate time to send | A page cut by bytes or work is shorter than its limit and says `hasMore` |
-| Fold work in one request | **4 ms** of estimated isolate time free, shared with the page it serves; at most 500 operations and 1 MiB of payload a step | The free plan's 10 ms of CPU. A step is cut by what its operations cost to fold, not by how many there are. See [the fold checkpoint](#the-service-keeps-its-fold-and-folds-it-a-request-at-a-time) |
+| Fold work in one request | **4 ms** of estimated isolate time free, shared with the page it serves or the batch it took; at most two steps, 500 operations and 1 MiB of payload a step | The free plan's 10 ms of CPU and 50 queries. A step is cut by what its operations cost to fold, not by how many there are. See [the fold checkpoint](#the-service-keeps-its-fold-and-folds-it-a-request-at-a-time) |
 | Entities one restore turn stages | **200** free, **1,000** paid, at most **1 MiB** of state and **2 ms** of estimated isolate time | CPU again: an operation id, a payload and a row each, and the fold of them in the rest of the turn |
 
 These replace the numbers this page carried before the Cloudflare research
@@ -1282,10 +1282,11 @@ operations cost to fold rather than from how many there are: long in small edits
 large or quote-heavy ones, and never loading more than a new revision can collide with, however
 many revisions its document holds (`worker/src/fold-revisions.ts`). It can read any cutoff the
 checkpoint has reached, however old, so no repository is too large to snapshot, back up or
-restore. Every pull that finds the checkpoint 500 or more seqs behind moves it on by what its
-own page leaves of the request's budget, and folds nothing rather than more, so on a repository
-that syncs the checkpoint trails the head by a few hundred operations. What a device can see of
-it:
+restore. Every push moves the checkpoint on with what its own batch leaves of the request's budget,
+every pull that finds it 500 or more seqs behind with what its page leaves, and a Cron Trigger every
+two minutes with a whole budget on the repositories furthest behind — so on a repository anyone is
+using, writing or reading, the checkpoint trails the head by a few hundred operations. Each of them
+folds nothing rather than going over. What a device can see of it:
 
 - **A snapshot, a backup, and a restore's first turn wait for it.** A snapshot's first page
   is pinned at the head, as it always was. Later pages use the cutoff their cursor pinned,
@@ -1305,6 +1306,13 @@ it:
   more when its operations are large (`test/cloud-fold-checkpoint.test.ts`). A request that
   folded and then has no room for the first entity of its page answers the same way, with
   `foldedSeq` at the cutoff, and the next request serves the page.
+- **A joining device does not wait for it.** A snapshot page asks again for five answers or five
+  seconds and then stops (`SNAPSHOT_FOLD_PATIENCE`, `src/core/cloud/client.ts`): the bootstrap
+  reads the ordered tail instead and folds it here, which needs no fold on the service — the same
+  path a Worker too old to fold a large log sends it down. Every refusal does move the fold on, so
+  waiting would finish eventually, but a log written faster than requests fold it left a fresh
+  device waiting twenty minutes on workerd. A backup and a restore have no such alternative and
+  keep asking while `foldedSeq` climbs.
 - **A backup is a point in the fold, not a copy of it.** It records the epoch, the cutoff
   and the fold's counts there, so no backup has a size limit. A restore pages the entities
   back out of the checkpoint in `restoreOrder`: by claim, then by key. A backup the Worker
