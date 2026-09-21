@@ -2075,9 +2075,6 @@ export class FakeSyncServer {
       // One request's budget, which reaching the backup's cutoff, the page and the fold of what it
       // staged share — `nextChunk` and `stageRestore`.
       const budget = this.requestBudget();
-      // What earlier turns staged is folded first, so the epoch is folded when it goes live
-      // (`foldWhatWasStaged`, `worker/src/backups.ts`).
-      if (!this.legacyFold) this.foldWhatWasStaged(restore, budget);
       if (!this.legacyFold && backup.content === "fold") this.reachFold(backup.epoch, backup.cutoffSeq, budget);
       const chunk = this.byWork(
         restoreOrder(backup.entities).slice(restore.staged, restore.staged + this.options.restoreStageEntities),

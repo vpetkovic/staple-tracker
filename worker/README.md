@@ -16,7 +16,7 @@ test runner.
 ```bash
 cd worker
 npm install --legacy-peer-deps   # see "Why --legacy-peer-deps" below
-npm test                          # 308 tests, in the Workers runtime, no network
+npm test                          # 309 tests, in the Workers runtime, no network
 npm run typecheck
 npm run lint:logs                 # no console.* outside src/log.ts
 ```
@@ -52,7 +52,7 @@ worker/
     errors.ts          the error taxonomy
     limits.ts          everything /v1/capabilities advertises
     log.ts             THE ONLY console.* in this Worker
-  test/                308 tests
+  test/                309 tests
   scripts/lint-logs.mjs
   wrangler.toml        COMMITTED. Placeholders only.
   wrangler.local.toml  GITIGNORED. Real account and database ids.
@@ -328,8 +328,8 @@ read, the step reads again up to four times, then ends before that operation.
 - **A snapshot's first page, a backup, and a restore's first turn**, up to their own cutoff, which
   they need; each answers "still folding" until the fold has reached it. A snapshot stays pinned at
   the head, as it always was, and a backup's cutoff is always a mark. Each restore turn stages no
-  more than 1.5 ms of work and folds what it staged with the rest, and folds what earlier turns
-  staged before it stages more, so the restored epoch is folded by
+  more than 1.5 ms of work and folds what it staged with the rest; the commit folds whatever is
+  left, or refuses until it can, so the restored epoch is folded by
   the time it goes live.
 - **A Cron Trigger every two minutes** (`src/catch-up.ts`), one request's budget a run, over the
   repositories furthest behind. This is the floor under the fold's progress for a repository whose
@@ -363,37 +363,55 @@ as it did. A restore turn counts its progress from the staged rows it has not co
 (`restores.staged_seq`), never the whole restore again.
 
 **Measured.** Real devices (this repository's built CLI) syncing through this Worker on workerd
-(`wrangler dev --local`), with every request metered: queries are D1 statements, each statement
-of a batch counted as one; rows are D1 rows read; the time is isolate time, wall time less the
-time spent waiting on D1. Each run syncs an author and a second device as it writes, joins a
-fresh device through `GET /snapshot`, takes a backup, writes more, restores the backup and joins
-another fresh device. In all three every device ended identical, table for table.
+(`wrangler dev --local`), with every request metered: queries are D1 statements, each statement of a
+batch counted as one; rows are D1 rows read; the time is isolate time, wall time less the time spent
+waiting on D1. Each run syncs an author and a second device as it writes, joins a fresh device
+through `GET /snapshot`, takes a backup, writes more, restores the backup, joins another fresh
+device, and finally clears the whole checkpoint and joins a third. In all three every device ended
+identical, table for table, including the one that joined with nothing folded at all.
 
-The step before this one, on a worklog saved 1,500 times with a sync every 100 saves: a pull
-cost 87 ms and a restore turn 39 ms. A pull asking for one operation on a document of 4,000
-revisions cost 152 ms.
+The step before this one, on a worklog saved 1,500 times with a sync every 100 saves: a pull cost
+87 ms and a restore turn 39 ms. A pull asking for one operation on a document of 4,000 revisions
+cost 152 ms. The same probe now measures at most 9 ms and 15 queries.
 
-Most and 99th percentile isolate time, most queries and most rows read, per request:
+Most and 99th percentile isolate time, most queries, most rows read, and how many requests of that
+kind the run made:
 
 | Request | A worklog saved 5,000 times, syncing every 100 | 500 issues with 30 KB quote-heavy descriptions | 100,000 mixed operations, syncing every 2,500 |
 |---|---|---|---|
-| `GET /ops` | 7 ms · p99 6 · 15 q · 7,789 rows (212) | 5 ms · p99 4 · 11 q · 5,023 rows (122) | 18 ms · p99 7 · 16 q · 6,951 rows (2,644) |
-| `GET /snapshot`, first page | 5 ms · 14 q · 5,046 rows (7) | 4 ms · 11 q · 4,161 rows (72) | 7 ms · p99 6 · 15 q · 5,791 rows (1,174) |
-| `GET /snapshot`, later page | 3 ms · 5 q · 1,547 rows (72) | 3 ms · 5 q · 1,048 rows (180) | 4 ms · p99 3 · 5 q · 6,715 rows (630) |
-| `POST /backups` | 1 ms · 5 q · 5 rows | 0 ms · 5 q · 5 rows | 0 ms · 5 q · 5 rows |
-| a restore turn | 8 ms · 30 q · 6,260 rows (28) | 6 ms · 26 q · 3,524 rows (90) | 28 ms · p99 7 · 30 q · 42,260 rows (227) |
-| `POST /ops` (unchanged) | 2 ms · 29 q (206) | 3 ms · 29 q (45) | 17 ms · p99 8 · 29 q (4,009) |
+| `GET /ops` | 7 ms · p99 2 · 20 q · 11,112 rows (226) | 4 ms · p99 4 · 14 q · 4,374 rows (143) | 38 ms · p99 7 · 21 q · 105,211 rows (2,681) |
+| `GET /snapshot`, first page | 6 ms · 19 q · 10,532 rows (11) | 3 ms · 13 q · 5,216 rows (15) | 5 ms · 17 q · 105,417 rows (15) |
+| `GET /snapshot`, later page | 3 ms · 5 q · 1,819 rows (48) | 3 ms · 5 q · 1,006 rows (87) | 4 ms · 5 q · 1,949 rows (309) |
+| `POST /backups` | 0 ms · 5 q · 5 rows (1) | 5 ms · 14 q · 4,243 rows (32) | 35 ms · p99 5 · 20 q · 5,713 rows (2,586) |
+| a restore turn | 7 ms · 40 q · 5,536 rows (36) | 5 ms · p99 4 · 26 q · 893 rows (256) | 14 ms · p99 8 · 40 q · 42,266 rows (291) |
+| `POST /ops` (its own cost unchanged) | 4 ms · p99 3 · 38 q (206) | 5 ms · 38 q (45) | 14 ms · p99 7 · 39 q (4,009) |
 
-The counts in brackets are requests. The two outliers of the 100,000-operation run, one pull of
-2,644 at 18 ms and one restore turn of 227 at 28 ms, spent 1 and 6 ms in the traced fold and page
-and the rest outside them; pushes, which this change does not touch, reached 17 ms in the same
-run on the same host. The same probe as the reviewer's, one-operation pulls on the restored
-worklog with its checkpoint cut back to 3,900 revisions, measured at most 9 ms and 15 queries.
+Forty queries is the most any request made, against the free plan's fifty.
 
-What it costs in waiting: a pull folds only what its page leaves, so under heavy writing the
-checkpoint falls behind. After the 100,000-operation run it was 30,000 operations behind, and
-the fresh device's first page answered "still folding" about a thousand times, twenty minutes at
-the client's one-second retry, before it was served.
+**The maximums, and what they are.** In the 100,000-operation run, 18 of 10,076 requests measured
+over 10 ms and 14 of those were pushes, whose own parsing and validation of a 175 KB batch this
+change does not touch — `worker/README.md` has named that as the free plan's binding constraint on
+batch size since before the checkpoint existed. Of the other four, three spent 1 ms or less inside
+the fold and the page this design bounds and the rest outside them, which is the host: one pull at
+38 ms whose page and fold traced 0 ms, one at 20 ms, one restore turn at 14 ms. The fourth is real
+and singular: one backup of 2,586 spent 32 ms loading inside a step estimated at 1 ms, on a heap
+holding a 692 MB log. The 99th percentiles are 7 ms for pulls, 5 for backups, 8 for restore turns
+and 4 for snapshot pages. The two smaller runs have no request over 7 ms.
+
+**What a joining device waits.** After writing 100,000 operations the checkpoint was 50,000
+operations behind — the mixture's plan entity re-sends its whole order on every enqueue, which is
+480 MB of that log's 690 MB, and folding one of those costs more than the push that wrote it can pay.
+A fresh device joined anyway, in 69 seconds: five answers of "still folding", then the ordered tail
+in 782 pull pages, and its tables are identical to the author's. With the whole checkpoint deleted —
+142,458 operations, nothing folded — a fresh device joined in 14 seconds. The same with the worklog
+(45 seconds) and the wide issues (6 seconds). Before this, the same join waited 20 minutes on the
+fold and a thousand refusals.
+
+What still waits on the fold is a backup, which has no alternative: it must record a cutoff the fold
+has reached. On that 100,000-operation log it took 2,586 requests and 47 minutes of one-second
+retries. On the two smaller runs it took one request and thirty-two. Pushes folding what they write
+is what keeps that number small: with pulls alone the same run left the checkpoint 30,000 operations
+behind after writing, and with neither it was the whole log.
 
 **Deploying onto a large log.** Migration `0006` adds the tables empty, and `0007` adds the
 revision columns and their indexes and clears whatever `0006` had built, keeping the floor mark of

@@ -974,16 +974,16 @@ async function nextChunk(
 }
 
 /**
- * Fold what earlier turns staged, before this one stages more or commits.
+ * Fold what the restore staged, before the epoch goes live.
  *
- * A turn folds what it staged with what its own budget has left (`stageRestore`), and that is
- * usually enough — but staging an entity and folding the operation it became cost about the same,
- * so a turn whose staging was expensive can leave a little behind. Left alone, "the restored epoch
- * is folded by the time it goes live" would stop being true and the first device to bootstrap onto
- * the new epoch would wait for it. So a turn folds the backlog first and, when its budget cannot
- * finish it, refuses retryably with how far it got: the client asks again while that climbs
- * (`whileFolding`, `src/core/cloud/client.ts`), and no turn is ever asked to fold more than one
- * budget.
+ * Each turn folds what it staged with what its own budget has left (`stageRestore`), and that is
+ * normally the whole of it. What this is for is the rest: a turn whose staging was expensive enough
+ * to leave a little behind, or a checkpoint an operator cleared mid-restore (worker/README.md, "The
+ * fold checkpoint"). Without it "the restored epoch is folded by the time it goes live" would stop
+ * being true, and the first device to bootstrap onto the new epoch would wait for a fold nobody was
+ * paying for. When one budget cannot finish it the commit refuses retryably with how far it got: the
+ * client asks again while that climbs (`whileFolding`, `src/core/cloud/client.ts`), and no request
+ * is ever asked to fold more than one budget.
  */
 async function foldWhatWasStaged(env: Env, repoId: string, restore: RestoreRow, budget: FoldBudget): Promise<void> {
   const staged = await env.DB.prepare(
@@ -1059,7 +1059,6 @@ async function stageRestore(
   if (!source) throw new SyncError("not_found", "the backup being restored no longer exists");
 
   const budget: FoldBudget = requestFoldBudget(planOf(env));
-  await foldWhatWasStaged(env, session.repoId, restore, budget);
   const chunk = await nextChunk(env, session.repoId, restore, source, staged, budget);
   if (chunk.length === 0) {
     throw new SyncError("conflict", "the backup holds fewer entities than the restore expects");

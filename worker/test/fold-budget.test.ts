@@ -549,3 +549,69 @@ describe("keeping the fold near the head without a reader", () => {
     for (const [label, statements] of worst) expect({ label, statements }).toEqual({ label, statements: Math.min(statements, 45) });
   }, 180_000);
 });
+
+describe("a restore's epoch", () => {
+  /**
+   * A turn folds what it staged with what its budget has left, so the epoch is folded as it is
+   * filled. What happens when that is not enough — a turn whose staging was expensive, or an
+   * operator who cleared the checkpoint mid-restore (worker/README.md, "The fold checkpoint") — is
+   * what this pins: a turn folds what earlier turns staged before it stages more, and the commit
+   * folds what is left or refuses. Otherwise the epoch goes live unfolded and every device that
+   * bootstraps onto it waits for a fold nobody is paying for.
+   */
+  it("is folded when it goes live, even if its checkpoint is cleared under it", async () => {
+    const ops: GeneratedOp[] = [];
+    for (let n = 0; n < 150; n += 1) {
+      ops.push(op(n + 1, "issue", `issue-${String(n).padStart(3, "0")}`, "create", { title: `wide ${n}`, description: quoted(20_000, `${n}`) }));
+    }
+    await insertOps(env.DB, REPO, ops);
+    await foldAll();
+    const taken = await send(`/backups`, env.DB, "POST", {});
+    expect(taken.status, JSON.stringify(taken.json).slice(0, 200)).toBe(200);
+
+    const clear = async () => {
+      await env.DB.batch([
+        env.DB.prepare(`DELETE FROM fold_versions WHERE repo_id = ?1 AND epoch = 2`).bind(REPO),
+        env.DB.prepare(`DELETE FROM fold_marks WHERE repo_id = ?1 AND epoch = 2`).bind(REPO),
+      ]);
+    };
+    let restoreId: string | undefined;
+    let done = false;
+    let refusals = 0;
+    let clearedEarly = false;
+    let clearedBeforeCommit = false;
+    // A 20 KB quote-heavy state costs about a millisecond to stage, so a turn stages one of them.
+    for (let turn = 0; turn < 400 && !done; turn += 1) {
+      const response = await send(`/backups/${taken.json.backup.backupId}/restore`, env.DB, "POST", {
+        confirm: REPO,
+        ...(restoreId ? { restoreId } : {}),
+      });
+      if (response.status === 503 && typeof response.json.foldedSeq === "number") {
+        refusals += 1;
+        continue;
+      }
+      expect(response.status, JSON.stringify(response.json).slice(0, 200)).toBe(200);
+      restoreId = response.json.restoreId;
+      done = response.json.done === true;
+      // Once part-way, the checkpoint of the epoch being filled goes: a later turn must fold it back.
+      if (!clearedEarly && response.json.staged > 5) {
+        await clear();
+        clearedEarly = true;
+      }
+      // And again with everything staged, so only the commit can fold what is left.
+      if (!clearedBeforeCommit && response.json.staged === taken.json.backup.entityCount) {
+        await clear();
+        clearedBeforeCommit = true;
+      }
+    }
+    expect({ done, clearedEarly, clearedBeforeCommit }).toEqual({ done: true, clearedEarly: true, clearedBeforeCommit: true });
+    expect(refusals).toBeGreaterThan(0);
+
+    // The epoch it moved to is folded to its head: the next device to bootstrap waits for nothing.
+    const repo = (await env.DB.prepare(`SELECT epoch, last_seq FROM repos WHERE repo_id = ?1`).bind(REPO).first<{ epoch: number; last_seq: number }>())!;
+    expect(repo.epoch).toBe(2);
+    expect((await foldProgress(env, REPO, repo.epoch)).seq).toBe(repo.last_seq);
+    const page = await send(`/snapshot?limit=500`, env.DB);
+    expect(page.status).toBe(200);
+  }, 180_000);
+});
