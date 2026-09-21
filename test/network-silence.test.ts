@@ -214,7 +214,7 @@ describe("the spy, before it is trusted to prove anything", () => {
     for (const exempt of ["127.0.0.1", "127.0.0.2", "::1", "localhost", "/tmp/staple.sock"]) {
       expect(isExempt(exempt)).toBe(true);
     }
-    for (const egress of ["example.com", "1.1.1.1", "staple-sync-dev.vptkvc.workers.dev"]) {
+    for (const egress of ["example.com", "1.1.1.1", "staple-tracker-sync.example.workers.dev"]) {
       expect(isExempt(egress)).toBe(false);
     }
   });
