@@ -1,4 +1,4 @@
-# staple-sync-dev — COMMITTED CONFIGURATION.
+# staple-tracker-sync — COMMITTED CONFIGURATION.
 #
 # This file contains NO real identifiers. The repository is public.
 #
@@ -15,7 +15,7 @@
 #
 # See worker/README.md for the deploy recipe.
 
-name = "staple-sync-dev"
+name = "staple-tracker-sync"
 main = "src/index.ts"
 compatibility_date = "2026-09-01"
 compatibility_flags = ["nodejs_compat"]
