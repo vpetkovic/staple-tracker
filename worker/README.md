@@ -380,41 +380,43 @@ kind the run made:
 
 | Request | A worklog saved 5,000 times, syncing every 100 | 500 issues with 30 KB quote-heavy descriptions | 100,000 mixed operations, syncing every 2,500 |
 |---|---|---|---|
-| `GET /ops` | 5 ms · p99 3 · 20 q · 11,112 rows (226) | 4 ms · p99 3 · 14 q · 4,374 rows (143) | 38 ms · p99 7 · 21 q · 105,211 rows (2,681) |
-| `GET /snapshot`, first page | 5 ms · 19 q · 10,532 rows (11) | 5 ms · 13 q · 5,216 rows (15) | 5 ms · 17 q · 105,417 rows (15) |
-| `GET /snapshot`, later page | 2 ms · 5 q · 1,819 rows (48) | 4 ms · 5 q · 1,006 rows (87) | 4 ms · 5 q · 1,949 rows (309) |
-| `POST /backups` | 1 ms · 5 q · 5 rows (1) | 5 ms · 14 q · 4,243 rows (32) | 35 ms · p99 5 · 20 q · 5,713 rows (2,586) |
-| a restore turn | 8 ms · 38 q · 9,633 rows (36) | 5 ms · p99 4 · 24 q · 893 rows (256) | 14 ms · p99 8 · 40 q · 42,266 rows (291) |
+| `GET /ops` | 5 ms · p99 3 · 20 q · 11,112 rows (226) | 4 ms · p99 3 · 14 q · 4,374 rows (143) | 191 ms · p99 8 · median 5 · 21 q · 105,211 rows (2,689) |
+| `GET /snapshot`, first page | 5 ms · 19 q · 10,532 rows (11) | 5 ms · 13 q · 5,216 rows (15) | 7 ms · 17 q · 105,417 rows (15) |
+| `GET /snapshot`, later page | 2 ms · 5 q · 1,819 rows (48) | 4 ms · 5 q · 1,006 rows (87) | 3 ms · 5 q · 1,949 rows (309) |
+| `POST /backups` | 1 ms · 5 q · 5 rows (1) | 5 ms · 14 q · 4,243 rows (32) | 46 ms · p99 6 · 20 q · 5,706 rows (2,592) |
+| a restore turn | 8 ms · 38 q · 9,633 rows (36) | 5 ms · p99 4 · 24 q · 893 rows (256) | 8 ms · p99 7 · 25 q · 44,313 rows (441) |
 | `POST /ops` (its own cost unchanged) | 4 ms · p99 3 · 38 q (206) | 5 ms · 38 q (45) | 14 ms · p99 7 · 39 q (4,009) |
 
-Forty queries is the most any request made, against the free plan's fifty. Not one request of the
+Thirty-nine queries is the most any request made, against the free plan's fifty. Not one request of the
 1,376 in the first two runs measured over 10 ms.
 
-**The maximums in the third run, and what they are.** 18 of its 10,076 requests measured over 10 ms
-and 14 were pushes, whose own parsing and validation of a 175 KB batch this change does not touch —
+**The maximums in the third run, and what they are.** 18 of its 10,240 requests measured over 10 ms.
+Fourteen were pushes, whose own parsing and validation of a 175 KB batch this change does not touch —
 this file has named that as the free plan's binding constraint on batch size since before the
-checkpoint existed. Of the other four, three spent 1 ms or less inside the fold and the page this
-design bounds and the rest outside them, which is the host: a pull at 38 ms whose page and fold
-traced 0 ms, another at 20 ms, a restore turn at 14 ms. The fourth is real and singular: one backup
-of 2,586 spent 32 ms loading inside a step estimated at 1 ms, on a heap holding a 692 MB log. The
-99th percentiles are 7 ms for pulls, 5 for backups and 8 for restore turns. That run was measured one
-commit before the last, which only removes work from a restore turn.
+checkpoint existed, and those pushes folded nothing. The other four are the host, not this design:
+each traced 1 ms or less inside the fold and the page it bounds and spent the rest outside them, on a
+machine that was also running the devices and a 692 MB database. They are a pull at 191 ms, two at
+10 ms, and one backup refusal of 2,592 at 46 ms whose step was estimated at 0.3 ms. The medians and
+99th percentiles are what the design produces: pulls median 5 ms and p99 8, backups p99 6, restore
+turns p99 7.
 
 **What a joining device waits.** After writing 100,000 operations the checkpoint was 50,000
 operations behind: the mixture's plan entity re-sends its whole order on every enqueue, which is
 480 MB of that log's 690 MB, and folding one of those costs more than the push that wrote it can pay.
-A fresh device joined anyway, in 69 seconds — five answers of "still folding", then the ordered tail
-in 782 pull pages — and its tables are identical to the author's. With the whole checkpoint deleted,
-142,458 operations and nothing folded, a fresh device joined in 14 seconds. The same with the worklog
+A fresh device joined anyway, in 66 seconds — five answers of "still folding", then the ordered tail
+in 784 pull pages — and its tables are identical to the author's. With the whole checkpoint deleted,
+142,462 operations and nothing folded, a fresh device joined in 13 seconds. The same with the worklog
 (45 seconds) and the wide issues (6 seconds). Before this, that join waited twenty minutes on the
 fold and about a thousand refusals.
 
 What still waits on the fold is a backup, which has no alternative: it must record a cutoff the fold
-has reached. On that 100,000-operation log it took 2,586 requests and 47 minutes of one-second
-retries; on the worklog it took one and on the wide issues 32. Pushes folding what they write is what
-keeps that number down — with pulls alone the same run left the checkpoint 30,000 operations behind
-after writing, and with neither it was the whole log — and on the worklog run, where a push can pay
-for what it wrote, the checkpoint finished at the head.
+has reached. On that 100,000-operation log it took 2,592 requests and **12 minutes**, against 47 for
+the same backlog when each refusal asked for a second (`FOLD_RETRY_MS`, `src/limits.ts`): the requests
+do the folding, so the wait between them is latency and nothing else. On the worklog it took one
+request and on the wide issues 32. Pushes folding what they write is what keeps the count down — with
+pulls alone the same run left the checkpoint 30,000 operations behind after writing, and with neither
+it was the whole log — and on the worklog run, where a push can pay for what it wrote, the checkpoint
+finished at the head.
 
 **An entity whose every write carries its whole state costs the fold more than the push that
 wrote it.** This is the one shape that outruns everything above, and it is worth naming because a
