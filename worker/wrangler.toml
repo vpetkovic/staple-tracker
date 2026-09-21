@@ -27,6 +27,13 @@ compatibility_flags = ["nodejs_compat"]
 # correctness, because the server enforces exactly what it advertises.
 PLAN = "free"
 
+# The fold's floor: every two minutes, fold the repositories furthest behind by one request's
+# budget (`src/catch-up.ts`). Cron Triggers are on the Workers Free plan, and a scheduled
+# invocation has the same ten milliseconds of isolate time and fifty queries as a fetch, so this
+# run is bounded exactly as a request is.
+[triggers]
+crons = ["*/2 * * * *"]
+
 [observability]
 enabled = true
 head_sampling_rate = 1

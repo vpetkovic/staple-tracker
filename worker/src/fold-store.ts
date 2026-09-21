@@ -679,6 +679,8 @@ export interface FoldBudget {
   remaining: number;
   bytes?: number;
   work?: number;
+  /** Steps left, which is what bounds the STATEMENTS a request issues (`foldStepsPerRequest`). */
+  steps?: number;
   folded?: boolean;
 }
 
@@ -723,7 +725,13 @@ export async function advanceFold(
   const { budget } = options;
   let mark = await foldProgress(env, repoId, epoch);
 
-  while (mark.seq < target && budget.remaining > 0 && (budget.bytes ?? 1) > 0 && (budget.work ?? 1) > 0) {
+  while (
+    mark.seq < target &&
+    budget.remaining > 0 &&
+    (budget.bytes ?? 1) > 0 &&
+    (budget.work ?? 1) > 0 &&
+    (budget.steps ?? 1) > 0
+  ) {
     const limit = Math.min(stepOps, budget.remaining);
     const byteCap = Math.min(stepBytes, budget.bytes ?? Number.POSITIVE_INFINITY);
     /**
@@ -772,6 +780,7 @@ export async function advanceFold(
       ).bind(repoId, epoch, run.mark.seq, run.mark.opCount, run.mark.schemaVersion, JSON.stringify(run.mark.kinds)),
     ]);
     budget.folded = true;
+    if (budget.steps !== undefined) budget.steps -= 1;
     budget.remaining -= run.folded;
     if (budget.bytes !== undefined) budget.bytes -= rows.slice(0, run.folded).reduce((sum, row) => sum + row.bytes, 0);
     if (budget.work !== undefined) budget.work -= run.work;

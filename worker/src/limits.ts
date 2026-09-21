@@ -150,6 +150,17 @@ export const FOLD_STEP_BYTES = 1024 * 1024;
  */
 export const FOLD_STEP_WORK = 4_000_000;
 
+/**
+ * Steps one request may take, by plan: what bounds the STATEMENTS it issues, where
+ * {@link FOLD_STEP_WORK} bounds its isolate time. A step costs at most fifteen — the operations
+ * it reads, two sizing, three loading, four its placements may need, and its writes — so two
+ * steps leave a pull, a snapshot page or a restore turn well inside the free plan's fifty
+ * queries an invocation. A push takes one, beside the N + 4 its batch already costs.
+ */
+export function foldStepsPerRequest(plan: Plan): number {
+  return plan === "paid" ? 50 : 2;
+}
+
 /** Reads a step may make for its revision placements beyond the ones it plans. */
 export const FOLD_STEP_READS = 4;
 
@@ -244,11 +255,12 @@ export function foldBudgetOps(plan: Plan): number {
  * this, and no more estimated isolate time than {@link requestWork} (`fold-work.ts`) — which the
  * request's page, when it serves one, shares.
  */
-export function requestFoldBudget(plan: Plan): { remaining: number; bytes: number; work: number } {
+export function requestFoldBudget(plan: Plan): { remaining: number; bytes: number; work: number; steps: number } {
   return {
     remaining: FOLD_PLAN_LIMITS[plan].foldBudgetOps,
     bytes: FOLD_PLAN_LIMITS[plan].foldBudgetBytes,
     work: FOLD_PLAN_LIMITS[plan].requestWork,
+    steps: foldStepsPerRequest(plan),
   };
 }
 
@@ -267,15 +279,20 @@ export function pullFoldOps(plan: Plan): number {
 }
 
 /**
- * What a pull that finds the fold behind may fold beside a page estimated at `spent`: the request's
- * work less the page's, and nothing at all rather than more (`folded`), because a pull's own
- * answer must never be what folding costs it.
+ * What a request that has already done its own work — served a page, taken a batch — may fold
+ * beside it: the request's work less what that cost (`spent`), and nothing at all rather than more
+ * (`folded`), because a pull's or a push's own answer must never be what folding costs it.
  */
-export function pullFoldBudget(plan: Plan, spent: number): { remaining: number; bytes: number; work: number; folded: true } {
+export function remainingFoldBudget(
+  plan: Plan,
+  spent: number,
+  steps = foldStepsPerRequest(plan),
+): { remaining: number; bytes: number; work: number; steps: number; folded: true } {
   return {
     remaining: FOLD_PLAN_LIMITS[plan].pullFoldOps,
     bytes: FOLD_PLAN_LIMITS[plan].foldBudgetBytes,
     work: Math.max(0, FOLD_PLAN_LIMITS[plan].requestWork - spent),
+    steps,
     folded: true,
   };
 }

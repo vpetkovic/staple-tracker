@@ -27,7 +27,7 @@ import {
   PROTOCOL_MAX,
   PROTOCOL_MIN,
   planOf,
-  pullFoldBudget,
+  remainingFoldBudget,
 } from "./limits.js";
 import { errorKind, log, tokenFingerprint } from "./log.js";
 
@@ -160,7 +160,7 @@ async function keepFoldNearHead(env: Env, session: Session, spent: number): Prom
     const progress = await foldProgress(env, session.repoId, session.epoch);
     if (session.lastSeq - progress.seq < LAZY_FOLD_BEHIND) return;
     await advanceFold(env, session.repoId, session.epoch, session.lastSeq, {
-      budget: pullFoldBudget(planOf(env), spent),
+      budget: remainingFoldBudget(planOf(env), spent),
     });
   } catch (err) {
     log({ event: "fold.lag", status: 503, code: errorKind(err), repo_id: session.repoId, epoch: session.epoch });

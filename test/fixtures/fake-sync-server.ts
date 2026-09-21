@@ -258,6 +258,8 @@ export interface FakeServerOptions {
    */
   foldWork?: number;
   foldStepWork?: number;
+  /** Steps one request may take — `foldStepsPerRequest` in `worker/src/limits.ts`, 2 on free. */
+  foldSteps?: number;
   /** Entities one restore turn stages — `restoreStageEntities` in `worker/src/limits.ts`, 200 on free. */
   restoreStageEntities?: number;
   /**
@@ -286,6 +288,8 @@ interface FakeFoldBudget {
   remaining: number;
   bytes?: number;
   work?: number;
+  /** Steps left: what bounds the statements a request issues (`foldStepsPerRequest`). */
+  steps?: number;
   folded?: boolean;
 }
 
@@ -450,6 +454,7 @@ export class FakeSyncServer {
       foldBudgetBytes: Number.POSITIVE_INFINITY,
       foldWork: Number.POSITIVE_INFINITY,
       foldStepWork: Number.POSITIVE_INFINITY,
+      foldSteps: Number.POSITIVE_INFINITY,
       restoreStageEntities: 200,
       pageBytes: 1024 * 1024,
       pageWork: 2_000_000,
@@ -642,7 +647,7 @@ export class FakeSyncServer {
     this.assertRateLimit(session.repoId, session.deviceId);
 
     if (tail === "/ops" && method === "POST") {
-      return this.push(session, JSON.parse(String(body)) as Record<string, unknown>, protocol);
+      return this.push(session, JSON.parse(String(body)) as Record<string, unknown>, protocol, Buffer.byteLength(String(body), "utf8"));
     }
     if (tail === "/ops" && method === "GET") return this.pull(session, url, protocol);
     if (tail === "/snapshot" && method === "GET") return this.snapshot(session, url, protocol);
@@ -995,6 +1000,7 @@ export class FakeSyncServer {
     session: { repoId: string; deviceId: string },
     body: Record<string, unknown>,
     protocol: number,
+    bytes = 0,
   ): Response {
     if (!Array.isArray(body.ops)) throw new ServerError(400, "validation", "ops must be an array");
     if (body.ops.length > this.options.maxBatchSize) {
@@ -1111,6 +1117,18 @@ export class FakeSyncServer {
       this.ops.push({ ...op, seq, epoch: this.epoch, deviceId: session.deviceId, serverTs: now });
       return { opId: op.opId, status: "applied" as const, seq };
     });
+
+    // The writer pays for folding what it wrote: one step with what the request has left
+    // (`foldWhatWasWritten`, `worker/src/push.ts`).
+    if (!this.legacyFold) {
+      this.advanceFold(this.epoch, this.lastSeq, {
+        remaining: this.options.foldBudget,
+        bytes: this.options.foldBudgetBytes,
+        work: Math.max(0, this.options.foldWork - serveWork(bytes, bytes / 2)),
+        steps: 1,
+        folded: true,
+      });
+    }
 
     return this.ok(protocol, {
       epoch: this.epoch,
@@ -1326,6 +1344,7 @@ export class FakeSyncServer {
         remaining: this.options.foldBudget,
         bytes: this.options.foldBudgetBytes,
         work: Math.max(0, this.options.foldWork - served),
+        steps: this.options.foldSteps,
         folded: true,
       });
     }
@@ -1646,7 +1665,12 @@ export class FakeSyncServer {
 
   /** What one request may fold and serve — `requestFoldBudget`, `worker/src/limits.ts`. */
   private requestBudget(): FakeFoldBudget {
-    return { remaining: this.options.foldBudget, bytes: this.options.foldBudgetBytes, work: this.options.foldWork };
+    return {
+      remaining: this.options.foldBudget,
+      bytes: this.options.foldBudgetBytes,
+      work: this.options.foldWork,
+      steps: this.options.foldSteps,
+    };
   }
 
   /**
@@ -1657,7 +1681,7 @@ export class FakeSyncServer {
     let from = this.foldedTo.get(epoch) ?? 0;
     const stepWork = this.options.foldStepWork;
     const stepped = Number.isFinite(stepWork) || Number.isFinite(budget.work ?? Number.POSITIVE_INFINITY);
-    while (from < target && budget.remaining > 0 && (budget.bytes ?? 1) > 0 && (budget.work ?? 1) > 0) {
+    while (from < target && budget.remaining > 0 && (budget.bytes ?? 1) > 0 && (budget.work ?? 1) > 0 && (budget.steps ?? 1) > 0) {
       const pending = this.foldable(epoch, from, target);
       // At most the step's operations, and an operation only while the bytes before it are under
       // the step's bytes — so the first is always taken (the window in `advanceFold`).
@@ -1687,6 +1711,7 @@ export class FakeSyncServer {
       if (run.folded === 0) break;
       const taken = window.slice(0, run.folded);
       budget.folded = true;
+      if (budget.steps !== undefined) budget.steps -= 1;
       budget.remaining -= taken.length;
       if (budget.bytes !== undefined) budget.bytes -= taken.reduce((sum, op) => sum + this.payloadBytes(op), 0);
       if (budget.work !== undefined) budget.work -= run.work;
@@ -2097,6 +2122,7 @@ export class FakeSyncServer {
           remaining: 2 * this.options.restoreStageEntities,
           bytes: 2 * (this.options.pageBytes + ROW_BYTES),
           work: Math.max(0, (budget.work ?? Number.POSITIVE_INFINITY) - spent),
+          steps: budget.steps,
           folded: true,
         });
       }
