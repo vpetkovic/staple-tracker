@@ -270,7 +270,7 @@ export interface FakeServerOptions {
   pageBytes?: number;
   /**
    * Estimated isolate time one snapshot page, and one restore turn's page, may spend
-   * (`PAGE_WORK`, 2 ms, and `RESTORE_PAGE_WORK`, 2 ms, in `worker/src/limits.ts`).
+   * (`PAGE_WORK`, 2 ms, and `RESTORE_PAGE_WORK`, 1.5 ms, in `worker/src/limits.ts`).
    */
   pageWork?: number;
   restorePageWork?: number;
@@ -458,7 +458,7 @@ export class FakeSyncServer {
       restoreStageEntities: 200,
       pageBytes: 1024 * 1024,
       pageWork: 2_000_000,
-      restorePageWork: 2_000_000,
+      restorePageWork: 1_500_000,
       ...options,
     };
     this.vocabulary = this.options.vocabulary;
@@ -1905,6 +1905,18 @@ export class FakeSyncServer {
     if (this.foldable(epoch, reached, cutoff).length > 0) this.foldBehind(Math.max(reached, progressFrom), cutoff);
   }
 
+  /**
+   * Fold what earlier turns staged into the epoch a restore is filling, refusing retryably when one
+   * budget cannot finish it — `foldWhatWasStaged`, `worker/src/backups.ts`.
+   */
+  private foldWhatWasStaged(restore: FakeRestore, budget: FakeFoldBudget): void {
+    const staged = this.ops
+      .filter((op) => op.epoch === restore.toEpoch && op.seq > restore.guardSeq)
+      .reduce((highest, op) => Math.max(highest, op.seq), 0);
+    if (staged === 0) return;
+    this.reachFold(restore.toEpoch, staged, budget);
+  }
+
   /** `foldBehind`, `worker/src/fold-store.ts`: `unavailable` with `foldedSeq`, `cutoffSeq` and `Retry-After: 1`. */
   private foldBehind(folded: number, cutoff: number): never {
     throw new ServerError(
@@ -2063,6 +2075,9 @@ export class FakeSyncServer {
       // One request's budget, which reaching the backup's cutoff, the page and the fold of what it
       // staged share — `nextChunk` and `stageRestore`.
       const budget = this.requestBudget();
+      // What earlier turns staged is folded first, so the epoch is folded when it goes live
+      // (`foldWhatWasStaged`, `worker/src/backups.ts`).
+      if (!this.legacyFold) this.foldWhatWasStaged(restore, budget);
       if (!this.legacyFold && backup.content === "fold") this.reachFold(backup.epoch, backup.cutoffSeq, budget);
       const chunk = this.byWork(
         restoreOrder(backup.entities).slice(restore.staged, restore.staged + this.options.restoreStageEntities),
@@ -2136,6 +2151,9 @@ export class FakeSyncServer {
         staged: restore.staged,
       });
     }
+
+    // Everything staged, folded before the epoch goes live (`foldWhatWasStaged`).
+    if (!this.legacyFold) this.foldWhatWasStaged(restore, this.requestBudget());
 
     // Commit. Refuse over work that landed in the old epoch after we began: it is
     // in neither the backup nor the pre-restore fold.

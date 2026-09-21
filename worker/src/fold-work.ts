@@ -30,16 +30,27 @@
  * what requests measured.
  */
 
+/**
+ * The coefficients are about TWICE the JSON cost measured above, and deliberately.
+ *
+ * What a budget has to predict is the isolate time of a REQUEST, and JSON is only most of it: the
+ * route's own parsing and response, the strings D1 hands back, the maps and rows a step builds, and
+ * whatever garbage collection the run provokes are the rest. Measured against real devices on
+ * workerd, a request whose fold was estimated at the JSON cost alone took about two and a half
+ * times that. At twice, a request estimated at four milliseconds measures about four — see
+ * worker/README.md for the per-request maximums these produced.
+ */
+
 /** Fixed isolate time per operation a step folds: its row, keys, placement, maps and pack item. */
-export const OP_NS = 12_000;
+export const OP_NS = 24_000;
 /** Fixed isolate time per entity a page serves or a restore stages. */
-export const ENTITY_NS = 6_000;
+export const ENTITY_NS = 12_000;
 /** Parsing, per byte and per escape. */
-export const PARSE_NS_PER_BYTE = 0.5;
-export const PARSE_NS_PER_ESCAPE = 6;
+export const PARSE_NS_PER_BYTE = 1;
+export const PARSE_NS_PER_ESCAPE = 12;
 /** Serializing an entity's state and provenance and packing it into a statement, per byte and escape. */
-export const WRITE_NS_PER_BYTE = 1.5;
-export const WRITE_NS_PER_ESCAPE = 18;
+export const WRITE_NS_PER_BYTE = 3;
+export const WRITE_NS_PER_ESCAPE = 36;
 /** Provenance an operation adds to what its entity writes: at most, per operation. */
 export const PROVENANCE_BYTES = 200;
 export const PROVENANCE_ESCAPES = 16;

@@ -191,11 +191,11 @@ export const PAGE_BYTES = 1024 * 1024;
 export const PAGE_WORK = 2_000_000;
 
 /**
- * Estimated isolate time one restore turn may spend reading and staging entities. Half of a
+ * Estimated isolate time one restore turn may spend reading and staging entities. Under half of a
  * request, so the fold of what it staged, which costs about as much again, fits in the rest and the
  * new epoch's checkpoint keeps up with the restore.
  */
-export const RESTORE_PAGE_WORK = 2_000_000;
+export const RESTORE_PAGE_WORK = 1_500_000;
 
 /** Bytes of packed rows per INSERT statement: under D1's 2 MB ceiling on a bound value. */
 export const FOLD_WRITE_BYTES = 900_000;

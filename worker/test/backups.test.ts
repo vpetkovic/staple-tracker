@@ -952,41 +952,43 @@ describe("staging is chunked", () => {
       }),
     );
 
-    const first = await jsonOf<{ staged: number; done: boolean }>(
-      await call(`/v1/repos/${REPO}/backups/${backup.backup.backupId}/restore`, {
-        method: "POST",
-        token,
-        device,
-        body: { confirm: REPO, restoreId: begun.restoreId },
-      }),
-    );
-    expect(first.staged).toBe(chunk);
-    expect(first.done).toBe(false);
+    // Turn after turn, each staging what its budget allows — never all of it, and never nothing.
+    let staged = 0;
+    let turns = 0;
+    let done = false;
+    for (let turn = 0; turn < 100 && !done; turn += 1) {
+      const answer = await jsonOf<{ staged: number; done: boolean; foldedSeq?: number }>(
+        await call(`/v1/repos/${REPO}/backups/${backup.backup.backupId}/restore`, {
+          method: "POST",
+          token,
+          device,
+          body: { confirm: REPO, restoreId: begun.restoreId },
+        }),
+      );
+      // A turn that folded what earlier turns staged and could not finish says so, retryably.
+      if (typeof answer.foldedSeq === "number") continue;
+      turns += 1;
+      if (turn === 0) expect(answer.staged).toBeLessThan(chunk + 30);
+      expect(answer.staged).toBeGreaterThanOrEqual(staged);
+      staged = answer.staged;
+      done = answer.done;
+    }
+    expect(done).toBe(true);
+    expect(turns).toBeGreaterThan(2);
+    expect(staged).toBe(chunk + 30);
 
-    const second = await jsonOf<{ staged: number; done: boolean }>(
-      await call(`/v1/repos/${REPO}/backups/${backup.backup.backupId}/restore`, {
-        method: "POST",
-        token,
-        device,
-        body: { confirm: REPO, restoreId: begun.restoreId },
-      }),
-    );
-    expect(second.staged).toBe(chunk + 30);
-
-    const committed = await jsonOf<{ done: boolean }>(
-      await call(`/v1/repos/${REPO}/backups/${backup.backup.backupId}/restore`, {
-        method: "POST",
-        token,
-        device,
-        body: { confirm: REPO, restoreId: begun.restoreId },
-      }),
-    );
-    expect(committed.done).toBe(true);
-
-    const snapshot = await jsonOf<{ entities: unknown[] }>(
-      await call(`/v1/repos/${REPO}/snapshot?limit=500`, { token, device }),
-    );
-    expect(snapshot.entities).toHaveLength(chunk + 30);
+    // Every page of it: a page is cut by its work as well as by its limit.
+    const served: unknown[] = [];
+    let cursor: string | null = null;
+    for (let page = 0; page < 50; page += 1) {
+      const answer = await jsonOf<{ entities: unknown[]; hasMore: boolean; nextCursor: string | null }>(
+        await call(`/v1/repos/${REPO}/snapshot?limit=500${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`, { token, device }),
+      );
+      served.push(...answer.entities);
+      if (!answer.hasMore) break;
+      cursor = answer.nextCursor;
+    }
+    expect(served).toHaveLength(chunk + 30);
   });
 });
 
