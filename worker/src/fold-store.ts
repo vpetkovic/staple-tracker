@@ -112,6 +112,7 @@ import {
   FOLD_STEP_OPS,
   FOLD_STEP_READS,
   FOLD_STEP_WALK,
+  FOLD_RETRY_MS,
   FOLD_STEP_WORK,
   FOLD_WRITE_BYTES,
   PAGE_BYTES,
@@ -947,13 +948,18 @@ export async function reachFold(
  * finishes the job: `foldedSeq` is how far the fold has got and `cutoffSeq` how far it has
  * to go, and a caller that sees `foldedSeq` climbing between attempts knows it is being
  * served, not stalled.
+ *
+ * And it says how soon to ask: {@link FOLD_RETRY_MS} in `retryAfterMs`, because the wait is pure
+ * latency — nothing here is overloaded, the work is simply not finished — and a second of it per
+ * refusal is what made a backup of a large unfolded log take three quarters of an hour. The
+ * `Retry-After: 1` header stays as the floor for any caller that reads only headers.
  */
 export function foldBehind(foldedSeq: number, cutoffSeq: number): SyncError {
   return new SyncError(
     "unavailable",
     `the service is still folding this repository's log: it has reached seq ${foldedSeq} of ` +
       `${cutoffSeq}. Every request moves it on; ask again.`,
-    { foldedSeq, cutoffSeq },
+    { foldedSeq, cutoffSeq, retryAfterMs: FOLD_RETRY_MS },
     { "retry-after": "1" },
   );
 }

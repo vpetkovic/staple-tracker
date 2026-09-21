@@ -416,6 +416,26 @@ keeps that number down — with pulls alone the same run left the checkpoint 30,
 after writing, and with neither it was the whole log — and on the worklog run, where a push can pay
 for what it wrote, the checkpoint finished at the head.
 
+**An entity whose every write carries its whole state costs the fold more than the push that
+wrote it.** This is the one shape that outruns everything above, and it is worth naming because a
+client can create it without noticing. The plan is stored as one entity holding an ordered list, and
+its emitter re-sends the WHOLE order on every enqueue, so a plan of three thousand entries writes a
+120 KB payload per enqueue — and the fold has to load that entity's stored state and write it back
+each time, which costs more than the push that wrote the 120 KB can pay out of the same 6 ms. So the
+checkpoint falls behind while such a repository is written, and what has to reach the head — a
+backup, a restore's first turn — waits for the pushes, the pulls and the cron to catch up.
+
+Measured on the 100,000-operation run: 480 MB of its 690 MB was that one entity, the checkpoint
+finished 50,000 operations behind after the writing stopped, and the backup that had to reach the head
+took 2,586 requests. Joining does not wait for any of it (a device reads the ordered tail instead),
+and the same run's worklog and issue entities fold faster than they are written — the worklog run
+ended with the checkpoint at the head.
+
+The fix belongs in the emitter, not here: an enqueue should journal the entry it added rather than the
+order it produced, which is a client change and a wire change, and not one to make while the fold is
+being repaired. The service's side of it is already bounded — a step of those payloads is one or two
+operations long, and every request stays inside its budget.
+
 **Deploying onto a large log.** Migration `0006` adds the tables empty, and `0007` adds the
 revision columns and their indexes and clears whatever `0006` had built, keeping the floor mark of
 a restore still staging. The checkpoint of

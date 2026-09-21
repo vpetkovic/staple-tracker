@@ -1306,6 +1306,17 @@ folds nothing rather than going over. What a device can see of it:
   more when its operations are large (`test/cloud-fold-checkpoint.test.ts`). A request that
   folded and then has no room for the first entity of its page answers the same way, with
   `foldedSeq` at the cutoff, and the next request serves the page.
+- **An entity that re-sends its whole state on every write is slower to fold than to write.** The
+  plan is one entity holding an ordered list, and its emitter sends the whole order on every
+  enqueue: at three thousand entries that is a 120 KB payload per enqueue, and the service has to
+  load and rewrite that state to fold each one, which costs more than the push that carried it can
+  pay inside one request's budget. So on a repository written that way the checkpoint falls behind,
+  and what needs it at a cutoff — a backup, a restore's first turn — waits while pushes, pulls and
+  the service's own two-minute catch-up close the gap. Measured on workerd: of a
+  100,000-operation log's 690 MB, 480 MB was that one entity; the checkpoint ended 50,000
+  operations behind; the backup took 2,586 requests. Nothing else in the same log behaved that way,
+  and a joining device does not wait for it at all (below). The remedy is for the emitter to journal
+  the entry rather than the order; until then this is the cost.
 - **A joining device does not wait for it.** A snapshot page asks again for five answers or five
   seconds and then stops (`SNAPSHOT_FOLD_PATIENCE`, `src/core/cloud/client.ts`): the bootstrap
   reads the ordered tail instead and folds it here, which needs no fold on the service — the same

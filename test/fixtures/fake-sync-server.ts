@@ -277,6 +277,7 @@ export interface FakeServerOptions {
 }
 
 /** The Worker's step and read constants (`worker/src/limits.ts`), reproduced: that file reaches the Worker's types. */
+const FOLD_RETRY_MS = 200;
 const FOLD_STEP_OPS = 500;
 const FOLD_STEP_BYTES = 1024 * 1024;
 const FOLD_STEP_READS = 4;
@@ -1917,13 +1918,17 @@ export class FakeSyncServer {
     this.reachFold(restore.toEpoch, staged, budget);
   }
 
-  /** `foldBehind`, `worker/src/fold-store.ts`: `unavailable` with `foldedSeq`, `cutoffSeq` and `Retry-After: 1`. */
+  /**
+   * `foldBehind`, `worker/src/fold-store.ts`: `unavailable` with `foldedSeq`, `cutoffSeq`, the
+   * milliseconds to wait (`FOLD_RETRY_MS`, 200 — `Retry-After` cannot say less than a second) and
+   * the `Retry-After: 1` floor for anything that reads only headers.
+   */
   private foldBehind(folded: number, cutoff: number): never {
     throw new ServerError(
       503,
       "unavailable",
       `the service is still folding this repository's log: it has reached seq ${folded} of ${cutoff}. Every request moves it on; ask again.`,
-      { foldedSeq: folded, cutoffSeq: cutoff },
+      { foldedSeq: folded, cutoffSeq: cutoff, retryAfterMs: FOLD_RETRY_MS },
       { "retry-after": "1" },
     );
   }

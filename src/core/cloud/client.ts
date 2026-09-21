@@ -302,9 +302,12 @@ async function request<T>(call: Call): Promise<T> {
       "maxSnapshotFoldOps",
       // The service still folding its log (`worker/src/fold-store.ts`, `foldBehind`): how far
       // it has got, and the cutoff it is folding towards. `whileFolding` asks again while the
-      // first climbs.
+      // first climbs, after `retryAfterMs` — which `Retry-After` cannot say, being in whole
+      // seconds, and a second of it per refusal is most of what a backup of a large unfolded log
+      // would take.
       "foldedSeq",
       "cutoffSeq",
+      "retryAfterMs",
     ]) {
       if (body[key] !== undefined) detail[key] = body[key];
     }
@@ -582,10 +585,21 @@ export async function whileFolding<T>(
       // Out of patience: the refusal is handed back with how far the fold got, and the caller
       // decides what to do instead of waiting (`SNAPSHOT_FOLD_PATIENCE`).
       if (patience !== undefined && (answers >= patience.answers || Date.now() - started >= patience.ms)) throw error;
-      const asked = Number(detail?.retryAfter);
-      await sleep(Number.isFinite(asked) && asked > 0 ? Math.min(asked, 5) * 1000 : 1000);
+      await sleep(foldingWait(detail));
     }
   }
+}
+
+/**
+ * How long to wait before asking again: the milliseconds the service named (`retryAfterMs`,
+ * `worker/src/fold-store.ts`), else its `Retry-After` seconds, else a second. Clamped to five
+ * seconds either way, as every other wait this client takes from a service is.
+ */
+function foldingWait(detail: Record<string, unknown> | undefined): number {
+  const ms = Number(detail?.retryAfterMs);
+  if (Number.isFinite(ms) && ms >= 0) return Math.min(ms, 5_000);
+  const seconds = Number(detail?.retryAfter);
+  return Number.isFinite(seconds) && seconds > 0 ? Math.min(seconds, 5) * 1000 : 1000;
 }
 
 /**

@@ -161,6 +161,21 @@ export function foldStepsPerRequest(plan: Plan): number {
   return plan === "paid" ? 50 : 2;
 }
 
+/**
+ * How long a client should wait before asking again for something the fold has not reached
+ * (`foldBehind`, `fold-store.ts`), in milliseconds.
+ *
+ * `Retry-After` cannot say it: HTTP measures it in whole seconds, and a second is the wrong answer
+ * here. A refusal is not back-pressure — the request folded its budget and the next one folds the
+ * next — so the only thing the wait costs is the time a backup takes. Measured on workerd, a backup
+ * of a 100,000-operation log whose checkpoint was 50,000 operations behind took 2,586 refusals: at a
+ * second each, 47 minutes of waiting for about four minutes of folding. So the refusal carries
+ * `retryAfterMs` beside `foldedSeq`, which this repository's client honours (`whileFolding`,
+ * `src/core/cloud/client.ts`) and clamps; the `Retry-After: 1` header stays for anything that reads
+ * only headers, and for the rate limiter's own refusal, which IS back-pressure and still says 60.
+ */
+export const FOLD_RETRY_MS = 200;
+
 /** Reads a step may make for its revision placements beyond the ones it plans. */
 export const FOLD_STEP_READS = 4;
 

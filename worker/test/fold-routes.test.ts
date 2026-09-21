@@ -9,7 +9,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { encodeCursor, entityKey } from "../src/cursor.js";
 import { foldLog, materializedVerb } from "../src/fold.js";
 import { advanceFold, foldProgress } from "../src/fold-store.js";
-import { LAZY_FOLD_BEHIND, PAGE_BYTES, foldBudgetOps, pullFoldOps, restoreStageEntities } from "../src/limits.js";
+import { FOLD_RETRY_MS, LAZY_FOLD_BEHIND, PAGE_BYTES, foldBudgetOps, pullFoldOps, restoreStageEntities } from "../src/limits.js";
 import { REPO, call, jsonOf, seedRepo } from "./helpers.js";
 import { type GeneratedOp, generateLog, insertOps } from "./log-generator.js";
 import { oldCaptureBackup } from "./old-worker.js";
@@ -116,7 +116,15 @@ describe("GET /snapshot on a log the fold has not reached", () => {
         first = body;
         break;
       }
-      expect({ status: response.status, code: body.code, cutoffSeq: body.cutoffSeq }).toEqual({ status: 503, code: "unavailable", cutoffSeq: head });
+      expect({ status: response.status, code: body.code, cutoffSeq: body.cutoffSeq, retryAfterMs: body.retryAfterMs }).toEqual({
+        status: 503,
+        code: "unavailable",
+        cutoffSeq: head,
+        // How soon to ask again: a fold in progress is not back-pressure, and `Retry-After` cannot
+        // say less than the second it carries for callers that read only headers.
+        retryAfterMs: FOLD_RETRY_MS,
+      });
+      expect(response.headers.get("retry-after")).toBe("1");
       expect(body.foldedSeq).toBeGreaterThan(folded);
       folded = body.foldedSeq;
       refusals += 1;

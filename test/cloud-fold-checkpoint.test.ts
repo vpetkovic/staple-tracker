@@ -17,7 +17,8 @@
 import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { createBackup, restoreFromBackup, setBackupConsent } from "../src/core/cloud/backup.js";
-import { SNAPSHOT_FOLD_PATIENCE, cloudCodeOf, fetchSnapshotPage } from "../src/core/cloud/client.js";
+import { SNAPSHOT_FOLD_PATIENCE, cloudCodeOf, fetchSnapshotPage, whileFolding } from "../src/core/cloud/client.js";
+import { cloudError } from "../src/core/cloud/errors.js";
 import { parseEndpoint } from "../src/core/cloud/endpoint.js";
 import { setConsent } from "../src/core/cloud/connection.js";
 import { FakeSyncServer } from "./fixtures/fake-sync-server.js";
@@ -100,8 +101,14 @@ describe("a device meeting a service that is still folding", () => {
     expect(seen.length).toBeGreaterThan(2);
     expect(seen).toEqual([...seen].sort((x, y) => x - y));
     expect(new Set(seen).size).toBe(seen.length);
-    // The service's own Retry-After, once per refusal.
-    expect(waits).toEqual(seen.map(() => 1000));
+    /**
+     * The milliseconds the refusal named, once per refusal — not the second its `Retry-After`
+     * header carries. A fold in progress is not back-pressure: every refusal folded a budget, so the
+     * wait is pure latency, and at a second each a backup of a large unfolded log spent three
+     * quarters of an hour waiting for four minutes of folding (`FOLD_RETRY_MS`,
+     * `worker/src/limits.ts`).
+     */
+    expect(waits).toEqual(seen.map(() => 200));
     expect(backup.opCount).toBe(server.ops.filter((op) => op.epoch === 1).length);
   });
 
@@ -217,5 +224,41 @@ describe("a device meeting a service that is still folding", () => {
     expect(cloudCodeOf(error)).toBe("unavailable");
     expect((error as { detail: Record<string, unknown> }).detail.foldedSeq).toBe(0);
     expect(waits).toBe(1);
+  });
+});
+
+describe("waiting on a service that is still folding", () => {
+  /**
+   * The milliseconds come from the service, so they are clamped here as every wait this client takes
+   * from a service is: a refusal asking for a minute does not get one.
+   */
+  it("waits no longer than five seconds, whatever the refusal asks for", async () => {
+    const waits: number[] = [];
+    let attempts = 0;
+    const served = await whileFolding(
+      async () => {
+        attempts += 1;
+        if (attempts > 2) return "served";
+        throw cloudError("unavailable", "still folding", { foldedSeq: attempts, cutoffSeq: 99, retryAfterMs: 60_000 });
+      },
+      { sleep: async (ms) => void waits.push(ms) },
+    );
+    expect(served).toBe("served");
+    expect(waits).toEqual([5000, 5000]);
+  });
+
+  /** And a refusal that names none falls back to its `Retry-After` seconds, as it always did. */
+  it("falls back to the seconds a refusal's Retry-After carries", async () => {
+    const waits: number[] = [];
+    let attempts = 0;
+    await whileFolding(
+      async () => {
+        attempts += 1;
+        if (attempts > 1) return "served";
+        throw cloudError("unavailable", "still folding", { foldedSeq: 1, cutoffSeq: 99, retryAfter: "2" });
+      },
+      { sleep: async (ms) => void waits.push(ms) },
+    );
+    expect(waits).toEqual([2000]);
   });
 });
