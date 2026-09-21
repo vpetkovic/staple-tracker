@@ -17,7 +17,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { createBackup, restoreFromBackup, setBackupConsent } from "../src/core/cloud/backup.js";
-import { cloudCodeOf, fetchSnapshotPage } from "../src/core/cloud/client.js";
+import { SNAPSHOT_FOLD_PATIENCE, cloudCodeOf, fetchSnapshotPage } from "../src/core/cloud/client.js";
 import { parseEndpoint } from "../src/core/cloud/endpoint.js";
 import { setConsent } from "../src/core/cloud/connection.js";
 import { FakeSyncServer } from "./fixtures/fake-sync-server.js";
@@ -45,8 +45,8 @@ function everything(db: DatabaseSync): unknown {
  * A repository of a few dozen operations — issues, comments, a plan with notes, a status
  * removed and added again — whose fold the service has not started: the Worker just deployed.
  */
-async function unfolded(): Promise<{ server: FakeSyncServer; a: Machine }> {
-  const server = new FakeSyncServer({ repositoryId: REPO, foldBudget: BUDGET, foldStep: BUDGET });
+async function unfolded(budget = BUDGET): Promise<{ server: FakeSyncServer; a: Machine }> {
+  const server = new FakeSyncServer({ repositoryId: REPO, foldBudget: budget, foldStep: BUDGET });
   fleet = new Fleet(server, REPO);
   const a = fleet.machine("a");
   await a.sync();
@@ -72,13 +72,16 @@ async function allowBackup(machine: Machine, server: FakeSyncServer): Promise<vo
 
 describe("a device meeting a service that is still folding", () => {
   it("joins at the head once the service has folded to it, waiting while it does", async () => {
-    const { server, a } = await unfolded();
+    // A fold that reaches the head within a page's patience, so the snapshot is what serves it.
+    const { server, a } = await unfolded(12);
     const fresh = fleet!.machine("fresh");
     let refusals = 0;
     const report = await fresh.sync({ onFolding: () => (refusals += 1) });
     // Never a snapshot short of the head: that is where the first page is pinned, as it was.
     expect(report.bootstrap?.cutoffSeq).toBe(server.lastSeq);
     expect(refusals).toBeGreaterThan(2);
+    expect(refusals).toBeLessThan(SNAPSHOT_FOLD_PATIENCE.answers);
+    expect(report.bootstrap?.fromTail).toBeFalsy();
     expect(everything(fresh.db)).toEqual(everything(a.db));
   });
 
@@ -155,8 +158,8 @@ describe("a device meeting a service that is still folding", () => {
 
   it("asks again for a snapshot page pinned at a cutoff the service has not folded to", async () => {
     // A cursor from before the Worker was deployed: pinned at the head, which no checkpoint
-    // has reached. The page is folded towards a request at a time.
-    const { server, a } = await unfolded();
+    // has reached. The page is folded towards a request at a time, and served once it is there.
+    const { server, a } = await unfolded(12);
     const cursor = Buffer.from(JSON.stringify({ v: 1, r: REPO, e: 1, c: server.lastSeq, k: "" }), "utf8").toString("base64url");
     let refusals = 0;
     const page = (await fetchSnapshotPage(
@@ -166,6 +169,32 @@ describe("a device meeting a service that is still folding", () => {
     )) as { cutoffSeq: number; entities: unknown[] };
     expect(refusals).toBeGreaterThan(2);
     expect(page.cutoffSeq).toBe(server.lastSeq);
+  });
+
+  /**
+   * A device joining must not wait on the fold of a log it can read itself. Past a page's
+   * patience the refusal comes back, and the bootstrap reads the ordered tail and folds it here
+   * — the same path a Worker too old to fold a log this large sends it down.
+   */
+  it("gives a snapshot page up after its patience, and joins from the ordered tail instead", async () => {
+    const { server, a } = await unfolded();
+    const cursor = Buffer.from(JSON.stringify({ v: 1, r: REPO, e: 1, c: server.lastSeq, k: "" }), "utf8").toString("base64url");
+    let refusals = 0;
+    const error = await fetchSnapshotPage(
+      parseEndpoint(ENDPOINT),
+      { repositoryId: REPO, token: `token-${a.deviceId}`, deviceId: a.deviceId, cursor, limit: 500 },
+      { fetchImpl: server.fetch, sleep: async () => undefined, onFolding: () => (refusals += 1) },
+    ).catch((caught: unknown) => caught);
+    expect(cloudCodeOf(error)).toBe("unavailable");
+    expect(typeof (error as { detail: Record<string, unknown> }).detail.foldedSeq).toBe("number");
+    expect(refusals).toBe(SNAPSHOT_FOLD_PATIENCE.answers);
+
+    // And the device joins anyway, from the tail, with the same content.
+    const fresh = fleet!.machine("fresh");
+    const report = await fresh.sync({ sleep: async () => undefined });
+    expect(report.bootstrap?.fromTail).toBe(true);
+    expect(report.bootstrap?.cutoffSeq).toBe(server.lastSeq);
+    expect(everything(fresh.db)).toEqual(everything(a.db));
   });
 
   it("gives up on an answer that did not move the fold on, rather than asking for ever", async () => {

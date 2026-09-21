@@ -60,7 +60,7 @@ import { applySnapshotEntity, hydrate } from "./hydrate.js";
 import { owedLeaseReleases, settleOwedLeaseRelease } from "./lease-store.js";
 import { countQuarantined, markWaitingAcrossRewind, quarantineOperation, retryQuarantine, withoutLaterWrites } from "./quarantine.js";
 import { reconcileAfterRead, reconcileBeforeRead } from "./rewind.js";
-import { TailFold, refusedAsTooLargeToFold, type Entry } from "./tail-fold.js";
+import { TailFold, refusedAsStillFolding, refusedAsTooLargeToFold, type Entry } from "./tail-fold.js";
 import { seedModeOf, seedOwed, seedRepository, type RepositorySurvey, type SeedReport } from "./seed.js";
 import {
   acknowledgeOperation,
@@ -242,7 +242,7 @@ async function serviceFoldsCreates(session: Session, options: SyncOptions): Prom
   } catch (error) {
     // Too large for the service to fold: the re-read folds the tail here instead, by this
     // build's rules, whichever Worker is live (`tail-fold.ts`).
-    if (error instanceof TooLargeToFold) return true;
+    if (error instanceof FoldNotServed) return true;
     throw error;
   }
 }
@@ -726,30 +726,37 @@ async function surveyRepository(
   try {
     return await surveySnapshot(session, capabilities, options);
   } catch (error) {
-    if (!(error instanceof TooLargeToFold)) throw error;
+    if (!(error instanceof FoldNotServed)) throw error;
     return surveyFromTail(db, session, capabilities, options);
   }
 }
 
 /**
- * The service refused to fold the log — a Worker from before the fold checkpoint, past its
- * `MAX_SNAPSHOT_FOLD_OPS` — which no retry changes, so it is not left to `attempt` to retry
- * as an `unavailable`.
+ * The service did not serve the fold, for either of the two reasons that have the same remedy:
+ *
+ *   - it refuses to fold a log this large in one pass — a Worker from before the fold checkpoint,
+ *     past its `MAX_SNAPSHOT_FOLD_OPS` — which no retry changes;
+ *   - it is still folding its log towards this cutoff and has not got there within the page's
+ *     patience (`SNAPSHOT_FOLD_PATIENCE`, `client.ts`), which waiting would fix but only
+ *     eventually, and a device joining a repository is not made to wait for it.
+ *
+ * Either way this device reads the ordered tail and folds it itself, so neither is left to
+ * `attempt` to retry as an `unavailable`.
  */
-class TooLargeToFold extends Error {
+class FoldNotServed extends Error {
   constructor(readonly cause: unknown) {
-    super("the operation log is too large for the service to fold in one pass");
+    super("the service did not serve the fold of this log");
   }
 }
 
-/** One snapshot page, with a refusal to fold turned into {@link TooLargeToFold}. */
+/** One snapshot page, with a refusal to fold turned into {@link FoldNotServed}. */
 function snapshotPage(session: Session, cursor: string | null, limit: number, options: SyncOptions): Promise<SnapshotPage> {
   return fetchSnapshotPage(
     session.endpoint,
     { repositoryId: session.repositoryId, token: session.token, deviceId: session.deviceId, cursor, limit },
     options,
   ).catch((error: unknown) => {
-    if (refusedAsTooLargeToFold(error)) throw new TooLargeToFold(error);
+    if (refusedAsTooLargeToFold(error) || refusedAsStillFolding(error)) throw new FoldNotServed(error);
     throw error;
   }) as Promise<SnapshotPage>;
 }
@@ -1257,12 +1264,14 @@ async function runBootstrap(
     try {
       page = (await attempt(() => snapshotPage(session, cursor, limit, options), options)) as SnapshotPage;
     } catch (error) {
-      if (!(error instanceof TooLargeToFold)) throw error;
+      if (!(error instanceof FoldNotServed)) throw error;
       /**
-       * Too large for the service to fold: a device joins from the ordered tail instead,
-       * folded here (`tail-fold.ts`) and applied as one snapshot, in one transaction.
-       * Before, a repository past an older Worker's `MAX_SNAPSHOT_FOLD_OPS` could not reach
-       * a new machine.
+       * The service did not serve the fold — too large for an older Worker to fold in one pass, or
+       * still folding towards this cutoff after this page's patience — so the device joins from the
+       * ordered tail instead, folded here (`tail-fold.ts`) and applied as one snapshot, in one
+       * transaction. Before, a repository past an older Worker's `MAX_SNAPSHOT_FOLD_OPS` could not
+       * reach a new machine at all, and one whose checkpoint was far behind kept a joining device
+       * waiting while every other device carried on writing.
        */
       const survey = await surveyFromTail(db, session, capabilities, options);
       noteFold(db, survey.entities);

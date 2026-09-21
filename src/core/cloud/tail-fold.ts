@@ -186,3 +186,12 @@ export function refusedAsTooLargeToFold(error: unknown): boolean {
   const detail = (error as { detail?: Record<string, unknown> } | null)?.detail;
   return typeof detail?.maxSnapshotFoldOps === "number";
 }
+
+/**
+ * Whether a request was refused because the service has not folded its log this far yet
+ * (`foldBehind`, `worker/src/fold-store.ts`): it says how far it has got.
+ */
+export function refusedAsStillFolding(error: unknown): boolean {
+  const detail = (error as { detail?: Record<string, unknown> } | null)?.detail;
+  return typeof detail?.foldedSeq === "number";
+}

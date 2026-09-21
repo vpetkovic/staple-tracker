@@ -507,6 +507,20 @@ export function pullOperations(
  * SAME cutoff the cursor carries, which is what makes a multi-page bootstrap a
  * consistent view rather than a series of unrelated ones.
  */
+/**
+ * How long one snapshot page waits on a service that is still folding before the caller gives up
+ * on it: five answers, or five seconds, whichever comes first.
+ *
+ * A device joining a repository must not wait on the fold of a log it can read itself. Every
+ * refusal has moved the fold on, so waiting does finish — but a log written faster than requests
+ * fold it leaves the checkpoint a long way behind, and measured on workerd a fresh device joining
+ * a 100,000-operation repository waited twenty minutes that way. Past this bound the caller reads
+ * the ordered tail and folds it itself instead (`sync.ts`, `tail-fold.ts`), which needs no fold on
+ * the service at all. A backup and a restore have no such alternative and keep asking while the
+ * fold climbs; only a snapshot page has somewhere else to go.
+ */
+export const SNAPSHOT_FOLD_PATIENCE = { answers: 5, ms: 5_000 } as const;
+
 export function fetchSnapshotPage(
   endpoint: CloudEndpoint,
   args: RepoCall & { cursor: string | null; limit: number },
@@ -528,12 +542,13 @@ export function fetchSnapshotPage(
         deviceId: args.deviceId,
       }),
     options,
+    SNAPSHOT_FOLD_PATIENCE,
   );
 }
 
 /**
  * Ask again while the service answers that it is still folding the log, for as long as each
- * answer shows it got further.
+ * answer shows it got further — and, given a `patience`, no longer than that.
  *
  * The Worker keeps its fold of the log in D1 and moves it on in bounded steps, a request's
  * budget at a time (`worker/src/fold-store.ts`). A backup, a restore and a snapshot page
@@ -545,8 +560,14 @@ export function fetchSnapshotPage(
  * an answer is anything else, or is a refusal that did not move `foldedSeq` on, which is a
  * fold that is stuck and not one that is working.
  */
-export async function whileFolding<T>(send: () => Promise<T>, options: RequestOptions): Promise<T> {
+export async function whileFolding<T>(
+  send: () => Promise<T>,
+  options: RequestOptions,
+  patience?: { answers: number; ms: number },
+): Promise<T> {
   const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const started = Date.now();
+  let answers = 0;
   let reached = -1;
   for (;;) {
     try {
@@ -556,7 +577,11 @@ export async function whileFolding<T>(send: () => Promise<T>, options: RequestOp
       const folded = detail?.foldedSeq;
       if (cloudCodeOf(error) !== "unavailable" || typeof folded !== "number" || folded <= reached) throw error;
       reached = folded;
+      answers += 1;
       options.onFolding?.(folded, typeof detail?.cutoffSeq === "number" ? detail.cutoffSeq : null);
+      // Out of patience: the refusal is handed back with how far the fold got, and the caller
+      // decides what to do instead of waiting (`SNAPSHOT_FOLD_PATIENCE`).
+      if (patience !== undefined && (answers >= patience.answers || Date.now() - started >= patience.ms)) throw error;
       const asked = Number(detail?.retryAfter);
       await sleep(Number.isFinite(asked) && asked > 0 ? Math.min(asked, 5) * 1000 : 1000);
     }
