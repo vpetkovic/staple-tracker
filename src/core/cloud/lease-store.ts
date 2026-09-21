@@ -211,3 +211,56 @@ export function leaseScopeNote(lease: LocalLease): string {
     `${lease.serverExpiresAt}. The service decides that, not this machine.`
   );
 }
+
+// ------------------------------------------------------- releases a rewind owes
+
+const OWED_RELEASES_KEY = "sync_lease_releases_owed";
+
+/** A lease the service may still hold on an issue a restore removed here. */
+export interface OwedLeaseRelease {
+  readonly entityId: string;
+  readonly fencingToken: number;
+}
+
+/** The releases a rewind left for the next conversation with the service, oldest first. */
+export function owedLeaseReleases(db: DatabaseSync): OwedLeaseRelease[] {
+  const row = db.prepare("SELECT value FROM meta WHERE key = ?").get(OWED_RELEASES_KEY) as { value: string } | undefined;
+  if (!row) return [];
+  try {
+    const parsed = JSON.parse(row.value) as unknown;
+    return Array.isArray(parsed)
+      ? parsed.filter((entry): entry is OwedLeaseRelease => typeof entry?.entityId === "string" && Number.isInteger(entry?.fencingToken))
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeOwedReleases(db: DatabaseSync, owed: readonly OwedLeaseRelease[]): void {
+  if (owed.length === 0) {
+    db.prepare("DELETE FROM meta WHERE key = ?").run(OWED_RELEASES_KEY);
+    return;
+  }
+  db.prepare("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value").run(
+    OWED_RELEASES_KEY,
+    JSON.stringify(owed),
+  );
+}
+
+/**
+ * The issue a lease was on is gone — a restore removed it (`rewind.ts`): forget the mirror row,
+ * and owe the service a release of the token, which the next sync presents. Inside the rewind's
+ * transaction, which cannot wait on the network. The service refuses a token another device
+ * holds, so owing one this device does not hold costs one refused request and nothing else.
+ */
+export function forgetRemovedIssueLease(db: DatabaseSync, entityId: string): void {
+  const lease = readLocalLease(db, entityId);
+  if (lease === null) return;
+  forgetLocalLease(db, entityId);
+  writeOwedReleases(db, [...owedLeaseReleases(db).filter((owed) => owed.entityId !== entityId), { entityId, fencingToken: lease.fencingToken }]);
+}
+
+/** The service answered for this release — released, or not held with that token. */
+export function settleOwedLeaseRelease(db: DatabaseSync, entityId: string): void {
+  writeOwedReleases(db, owedLeaseReleases(db).filter((owed) => owed.entityId !== entityId));
+}

@@ -52,7 +52,7 @@ function useUpdate(issue: Issue, workspace: string, refresh: () => void) {
     setBusy(true);
     setRefusal(null);
     try {
-      await action({ ws: workspace, ref: issue.identifier }, patch);
+      await action({ ws: workspace, ref: issue.id }, patch);
       refresh();
       return true;
     } catch (caught) {
@@ -266,7 +266,7 @@ export function InlineProject({ issue, workspace, refresh }: EditorProps) {
     setBusy(true);
     setRefusal(null);
     try {
-      await assignProject({ ws: workspace, ref: issue.identifier, project });
+      await assignProject({ ws: workspace, ref: issue.id, project });
       refresh();
     } catch (caught) {
       setRefusal(describeRefusal(caught));

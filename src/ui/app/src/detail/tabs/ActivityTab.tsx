@@ -146,7 +146,8 @@ export function ActivityTab({ detail, workspace, onAuthError, refresh }: TabProp
     setSending(true);
     setError("");
     try {
-      await action({ ws: workspace, ref }, { type: "comment", body });
+      // By id: the pane's issue, whatever number it holds now (`lib/write-ref.ts`).
+      await action({ ws: workspace, ref: detail.issue.id }, { type: "comment", body });
       setDraft("");
       refresh();
       events.reload();

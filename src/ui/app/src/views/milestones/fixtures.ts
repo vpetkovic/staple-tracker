@@ -34,6 +34,7 @@ export function progress(over: ProgressOver = {}): MilestoneProgress {
 
 export function member(over: Partial<MilestoneMemberRow> & { identifier: string }): MilestoneMemberRow {
   return {
+    issueId: `id-${over.identifier}`,
     title: `${over.identifier} title`,
     kind: "task",
     status: "todo",
@@ -51,6 +52,7 @@ export function member(over: Partial<MilestoneMemberRow> & { identifier: string 
 export function view(over: ViewOver = {}): MilestoneView {
   return {
     milestone: {
+      id: "id-STA-190",
       identifier: "STA-190",
       title: "October cut",
       status: "in_progress",

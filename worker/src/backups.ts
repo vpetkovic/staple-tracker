@@ -761,6 +761,25 @@ async function assertRestorableVocabulary(
  * being at `from_epoch`, so a stage that races a commit writes nothing rather than
  * appending orphans to an epoch that has already gone live.
  */
+/**
+ * The order a restore stages a backup's entities in: the order their claims sat in the log
+ * the backup was folded from (`BackupEntity.claimSeq`). The new epoch's log is then the old
+ * one's order, so a device reading it — or hydrating from its fold — gives a contested
+ * identifier or slug to the claim the old epoch gave it to. Staged in the order the backup
+ * was stored (by key), the later of two claims on one number could come first, and a fresh
+ * device gave the number to it. What the log holds no claim of — a built-in only ever edited —
+ * goes first, as it was there before anything; a vocabulary's order goes where it was last
+ * written, after the entries it names. A backup from before `claimSeq` keeps its stored order:
+ * a restore of it may already be part-way, staged by position.
+ */
+export function restoreOrder(entities: readonly BackupEntity[]): BackupEntity[] {
+  if (!entities.every((entity) => Object.prototype.hasOwnProperty.call(entity, "claimSeq"))) return [...entities];
+  return entities
+    .map((entity, position) => ({ entity, position }))
+    .sort((a, b) => (a.entity.claimSeq ?? Number.NEGATIVE_INFINITY) - (b.entity.claimSeq ?? Number.NEGATIVE_INFINITY) || a.position - b.position)
+    .map(({ entity }) => entity);
+}
+
 async function stageRestore(
   env: Env,
   session: Session,
@@ -795,7 +814,7 @@ async function stageRestore(
   if (!source) throw new SyncError("not_found", "the backup being restored no longer exists");
 
   const parsed = JSON.parse(source.state) as { entities: BackupEntity[] };
-  const chunk = parsed.entities.slice(staged, staged + maxBatchSize(planOf(env)));
+  const chunk = restoreOrder(parsed.entities).slice(staged, staged + maxBatchSize(planOf(env)));
   if (chunk.length === 0) {
     throw new SyncError("conflict", "the backup holds fewer entities than the restore expects");
   }
@@ -837,7 +856,9 @@ async function stageRestore(
         entity.entityId,
         verb,
         JSON.stringify(payload),
-        `restore:${restore.restore_id}`,
+        // The original creator when the backup kept one (`fold.ts`, `createdBy`), so the new
+        // epoch attributes what it restores as the old one did; the restore otherwise.
+        entity.createdBy ?? `restore:${restore.restore_id}`,
         // `client_seq` is a RECORD of which allocation produced an operation, never an
         // allocator. These rows were not allocated by any device's counter, so the
         // ordinal within the restore is the honest value — and writing a device's real
@@ -849,7 +870,10 @@ async function stageRestore(
         // schema its DATA was written under — not the one the restoring device happens
         // to be running.
         source.schema_version,
-        createdAt,
+        // The entity's own create time when the backup recorded one, so the new epoch's
+        // fold hands a hydrating device the time the thing was written rather than the
+        // moment it was restored (`fold.ts`, `BackupEntity.createdAt`).
+        entity.createdAt ?? createdAt,
         now,
         restore.from_epoch,
         /**

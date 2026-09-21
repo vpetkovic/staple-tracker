@@ -189,6 +189,9 @@ export class ProjectStore {
           kind: project.kind,
           sourceKind: project.sourceKind,
           source: project.source,
+          // Its own times, so no other device dates it by the operation (measured: 1 ms off).
+          createdAt: project.createdAt,
+          updatedAt: project.updatedAt,
         },
         actor,
       });
@@ -235,7 +238,7 @@ export class ProjectStore {
         entity: "project",
         entityId: project.id,
         verb: "update",
-        payload: Object.fromEntries(changed.map((key) => [key, fields[key]])),
+        payload: { ...Object.fromEntries(changed.map((key) => [key, fields[key]])), updatedAt: project.updatedAt },
         actor,
       });
       return project;
@@ -301,7 +304,8 @@ export class ProjectStore {
    */
   assign(issueRef: string, project: string | null, actor: string | null): Issue {
     return this.journaled(() => {
-      const issue = this.store.getIssue(issueRef);
+      // Refused through a number an issue here moved off while that one may be meant (`writeTarget`).
+      const issue = this.store.writeTarget(issueRef);
       const target = project === null || project.trim() === "" ? null : rowToProject(this.requireRow(project));
       const nextId = target?.id ?? null;
       if (nextId === issue.projectId) return issue;

@@ -48,6 +48,8 @@ import { type Issue, MAX_TREE_DEPTH, StapleError, type StatusCategory, nowIso } 
 
 /** The milestone half of the view: the issue fields a plan needs plus its own metadata. */
 export interface MilestoneSummary {
+  /** The milestone's issue id: what a write names it by, whatever number it holds. */
+  id: string;
   identifier: string;
   title: string;
   status: string;
@@ -63,6 +65,8 @@ export interface MilestoneSummary {
 
 /** One ordered member, as every surface prints it. */
 export interface MilestoneMemberRow {
+  /** The member's issue id: what a write names it by, whatever number it holds. */
+  issueId: string;
   identifier: string;
   title: string;
   kind: string;
@@ -265,13 +269,18 @@ export class MilestoneStore {
     }
   }
 
-  private requireIssue(ref: string): Issue {
+  /**
+   * An issue a milestone call names. For a write — the milestone, a member, a neighbour, the
+   * epic it is made from — refused through a number this device's issue moved off while that
+   * one may be meant (`WorkspaceStore.writeTarget`); a read is answered with the notice.
+   */
+  private requireIssue(ref: string, forWrite = true): Issue {
     this.assertLocalRef(ref);
-    return this.store.getIssue(ref);
+    return forWrite ? this.store.writeTarget(ref) : this.store.getIssue(ref);
   }
 
-  private requireMilestone(ref: string): Issue {
-    const issue = this.requireIssue(ref);
+  private requireMilestone(ref: string, forWrite = true): Issue {
+    const issue = this.requireIssue(ref, forWrite);
     if (issue.kind !== MILESTONE_KIND) {
       throw new StapleError(
         "validation",
@@ -446,16 +455,20 @@ export class MilestoneStore {
    * this order", which is exactly what a receiver needs and all it needs.
    */
   private recordMembership(milestoneId: string, actor: string | null): void {
-    const order = (
-      this.db
-        .prepare("SELECT issue_id FROM milestone_members WHERE milestone_id = ? ORDER BY rank")
-        .all(milestoneId) as Array<{ issue_id: string }>
-    ).map((row) => row.issue_id);
+    const rows = this.db
+      .prepare("SELECT issue_id, added_by, added_at, note FROM milestone_members WHERE milestone_id = ? ORDER BY rank")
+      .all(milestoneId) as Array<{ issue_id: string; added_by: string; added_at: string; note: string | null }>;
     this.journal.record({
       entity: "milestone",
       entityId: milestoneId,
       verb: "replace",
-      payload: { members: order },
+      // Who added each member, when, and its note ride beside the order; see `recordPlan`.
+      payload: {
+        members: rows.map((row) => row.issue_id),
+        entries: Object.fromEntries(
+          rows.map((row) => [row.issue_id, { addedBy: row.added_by, addedAt: row.added_at, note: row.note }]),
+        ),
+      },
       actor,
     });
   }
@@ -566,6 +579,7 @@ export class MilestoneStore {
               | { identifier: string }
               | undefined)?.identifier ?? null);
       return {
+        issueId: row.issue_id,
         identifier: row.identifier,
         title: row.title,
         kind: row.kind,
@@ -592,6 +606,7 @@ export class MilestoneStore {
     const startDate = meta?.start_date ?? null;
     return {
       milestone: {
+        id: issue.id,
         identifier: issue.identifier,
         title: issue.title,
         status: issue.status,
@@ -612,7 +627,7 @@ export class MilestoneStore {
   /** One milestone, one shape. `validation` for a non-milestone, `not_found` for nothing. */
   get(ref: string): MilestoneView {
     this.assertKindConfigured();
-    return this.view(this.requireMilestone(ref).id);
+    return this.view(this.requireMilestone(ref, false).id);
   }
 
   /**
@@ -648,7 +663,7 @@ export class MilestoneStore {
 
   /** The effective milestone of an issue: its own direct membership, else the nearest ancestor's. */
   milestoneOf(ref: string): string | null {
-    const issue = this.requireIssue(ref);
+    const issue = this.requireIssue(ref, false);
     for (const id of [issue.id, ...this.ancestorIds(issue.id)]) {
       const membership = this.membershipOf(id);
       if (membership) {

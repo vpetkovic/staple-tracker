@@ -55,6 +55,7 @@
  * the trade this design exists to refuse.
  */
 import { mkdtempSync, rmSync } from "node:fs";
+import { countQuarantined } from "../src/core/cloud/quarantine.js";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -202,7 +203,7 @@ describe("a device defends a field it relayed as hard as one it authored", () =>
     await b.sync();
     expect(titleOf(b, issueId)).toBe("Title from A");
     // B journaled nothing for it, and never will. This is what the outbox knew.
-    expect(count(b, "sync_outbox")).toBe(0);
+    expect(count(b, `sync_outbox WHERE entity_id = '${issueId}'`)).toBe(0);
 
     c.store.updateIssue(issueId, { title: "Title from C" });
     await c.sync();
@@ -443,12 +444,12 @@ describe("the evidence is bounded, and the apply owns it", () => {
    * does not hold, and it would do it from a table nothing ever prunes. So a page
    * that fails anywhere must take the provenance with it.
    *
-   * The failure here is the one the applier documents: an operation naming a
-   * referent the page never delivered. B's comment reaches A without the issue it
-   * belongs to, so the whole page rolls back — including B's perfectly good
-   * `assignee` write that had already been applied and recorded.
+   * An operation naming what the page never delivered no longer fails it: B's comment
+   * reaches A without the issue it belongs to, and is set aside (`quarantine.ts`) while
+   * the rest applies. So the page B's good `assignee` write is on lands with its evidence,
+   * and the comment set aside leaves none — until its issue arrives, it wrote nothing.
    */
-  it("rolls provenance back with the page that failed", async () => {
+  it("keeps the evidence of what landed, and leaves none for what was set aside", async () => {
     const { server, a, b, issueId } = await relayed();
 
     b.store.updateIssue(issueId, { assignee: "someone" });
@@ -465,12 +466,13 @@ describe("the evidence is bounded, and the apply owns it", () => {
     server.ops.splice(lost, 1);
     expect(server.ops.length).toBeLessThan(before);
 
-    await expect(a.sync()).rejects.toThrow(/never delivered/);
+    await a.sync();
 
-    // Nothing from that page landed: not the domain write, and not its evidence.
-    expect(columnOf(a, issueId, "assignee")).toBeNull();
-    expect(fieldWrites(a, issueId).map((row) => row.field)).not.toContain("assignee");
+    expect(columnOf(a, issueId, "assignee")).toBe("someone");
+    expect(fieldWrites(a, issueId).map((row) => row.field)).toContain("assignee");
     expect(count(a, "issues")).toBe(1);
+    expect(count(a, "comments"), "the comment waits for its issue").toBe(0);
+    expect(countQuarantined(a.store.db)).toBe(1);
   });
 });
 

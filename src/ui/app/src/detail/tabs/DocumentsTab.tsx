@@ -190,7 +190,7 @@ export function DocumentsTab({ detail, workspace, onAuthError, refresh }: TabPro
     setBusy(true);
     setWriteError("");
     try {
-      await action({ ws: workspace, ref }, { type: "doc_restore", key, revision, baseRevision: currentRevision });
+      await action({ ws: workspace, ref: detail.issue.id }, { type: "doc_restore", key, revision, baseRevision: currentRevision });
       setArming(null);
       setReading(null);
       refresh();

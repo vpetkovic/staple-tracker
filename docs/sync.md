@@ -20,6 +20,28 @@ server-side [identifier allocation](#identity-is-the-uuid-never-the-identifier),
 and honouring `Retry-After` in the [error taxonomy](#error-taxonomy). Everything
 else on this page is implemented.
 
+## The support boundary
+
+What this page promises holds for a fleet inside these three lines, and is not promised
+outside them:
+
+- **The Worker is deployed before any client of this release** (`worker/README.md`). A
+  client of this release against an older Worker degrades where this page says so, and is
+  not otherwise supported.
+- **Every device runs a build at least as new as this release.** The rules on this page that
+  name an older build (c7a49d6, 56ff1f4) describe what this release does when it meets one,
+  and are kept and tested as they stand; nothing further is promised for a fleet that still
+  runs one.
+- **A backup made before this release is not guaranteed to restore identically.** It restores,
+  but a Worker before this release kept neither each entity's place in the log (`claimSeq`)
+  nor its create's time and actor, so what a restore of it stages can differ from what the
+  devices that followed the old log held, in the order of claims and vocabulary entries above
+  all. A backup made after this release's Worker is deployed restores as this page describes.
+
+Inside those lines, every synchronized value a device holds is a function of the log, and of
+the snapshot it hydrated from — never something the device chose locally and kept past the
+acknowledgement: an order, a stand-in, a time, an author.
+
 ## Two invariants the rest of the page serves
 
 **A workspace that has not been connected makes no Staple-owned network call.**
@@ -49,48 +71,286 @@ a per-database counter consumed by an atomic `INSERT … ON CONFLICT DO UPDATE �
 RETURNING`, and it carries a `UNIQUE` index. Two devices creating issues offline
 both mint `STA-250`. Last-writer-wins on that column loses an issue.
 
-**The counter is provisional; the server is the allocator.**
+**The counter is local; the log is the allocator.** `meta.next_issue_number` never
+synchronizes: it is each database's own allocator, and `staple new` makes no network
+call, so creating offline keeps working and two devices can mint the same number. What
+settles them is the one order every device agrees on — the log — by the rule in
+[Identifiers and other unique values](#identifiers-and-other-unique-values): the earlier
+claim keeps the number, and the device that made the later claim renumbers its own issue.
 
-- An unconnected repository allocates from `meta.next_issue_number` exactly as it
-  does today. Nothing changes, and nothing can collide, because nothing is shared.
-- A connected repository allocates the same way, and marks the identifier
-  **provisional** until the issue's `create` operation is accepted. `staple new`
-  makes no network call, so offline creation keeps working.
-- On acceptance, the server assigns the canonical number from the repository's own
-  counter and returns it in the push response. The device renumbers, emits nothing
-  further, and retains the provisional identifier as a resolvable alias — it is
-  already in somebody's commit message.
+This is the decision **STA-254** asked this page to record, between the two options it
+used to name. Neither a server-side allocator (the push response carrying a canonical
+number) nor per-device number ranges was built. The allocator needs a counter on the
+Worker, a push response that changes shape and a renumber-on-acceptance path on every
+client; ranges need a round trip before the first offline create. The log already orders
+every claim for every device, and a `renumber` already travels, so settling by log order
+needs neither: no new server state, no change to the wire.
 
-One authority allocates, so there is no collision to detect and no distributed
-tie-break to get subtly wrong on one device. The cost is that an identifier
-created offline on a connected repository can change once, at first push, and
-surfaces must show provisional identifiers as provisional rather than pretending
-they are settled.
+### Identifiers and other unique values
 
-> **Not yet shipped — the three bullets above are the design, not the build.**
-> Neither half of the allocator exists. The push response carries `opId`, `status`
-> and `seq` and no identifier, there is no renumber-on-acceptance path, and no
-> surface marks an identifier provisional. So the collision this section says
-> cannot happen *can*, and what ships instead is detection: `apply.ts` gives the
-> incoming issue a locally free provisional identifier and records a
-> `sync_conflicts` row on the `identifier` field, applying the rest of the entity
-> rather than dropping it. Resolving that conflict frees the contested number and
-> renumbers whichever issue was holding it, which is why `renumber` is a real verb
-> today — it is emitted by *conflict resolution*, not by an allocation response.
-> Nothing is lost silently, but a human settles what one authority was supposed to
-> make unaskable. **STA-254** owns closing this, and owns recording which of the
-> two options this page names — a single allocator or per-device ranges — was
-> taken.
+An identifier is one of five values a workspace database holds `UNIQUE`: an issue's
+identifier, its retry key (`idempotency_key`), a live external origin (`origin_kind`,
+`origin_id` on an open issue), a comment's retry key within its issue, and a project's
+slug. Each can be claimed on two devices that have not heard from each other — both mint
+`STA-5`, both create a project called `web`, both import the same GitHub issue — and a
+receiver cannot write the second claim as it arrived. The code is
+`src/core/cloud/claims.ts` and the applier (`src/core/cloud/apply.ts`).
 
-`meta.next_issue_number` therefore **never synchronizes**: it is a local
-provisional allocator, not shared state.
+**The earlier claim in the log keeps the value, and the later claim's own device settles
+it.** On a device applying an operation, whoever holds the value made its claim either
 
-`meta.prefix` and `meta.slug` do synchronize, and must. The prefix is baked into
-every identifier ever minted, so two devices disagreeing about it produces two
-identifier namespaces in one repository. The prefix is also hub-allocated, which
-makes it the one value where the local hub and the sync service both have a claim
-— the sync service wins, and `staple doctor` reports the disagreement rather than
-silently repointing either one.
+- **before this operation in the log** — another device's, or this device's own and
+  already sent. The arriving claim is the later one: it is applied with a stand-in (an
+  issue as `STA-5+<seq>`, a project as `web-2`, a retry key or origin cleared) and nothing is
+  dropped. **An issue's stand-in is the claim's place in the log**: `<number>+<seq>`, the seq
+  of the write that claimed the number — read from the operation on the tail and from the
+  fold's record of that write when hydrating — so it is the same identifier, naming the same
+  issue, on every device, and no other claim can be given it. A counter of each device's own
+  gave `+2` on a device that had passed `+1` before and `+1` on one that joined afterwards,
+  and `comment STA-5+1` reached different issues on the two
+  (`test/cloud-stand-in-determinism.test.ts`). A claim with no place in the log yet — this
+  device's own, unsent — is on this device alone and takes the first free suffix. For an identifier the stand-in is also recorded as an `identifier` conflict,
+  so it is on the record until it is settled; or
+- **after it** — this device's own claim, not yet sent, or sent and given a later seq.
+  The holder is the later claim: it takes the stand-in, and because it is this device's,
+  this device owes the repository the settlement.
+
+Only the device that made a later claim ever settles it, so exactly one device does, with
+an ordinary operation journaled in the same transaction as the page that revealed the
+collision and sent in the same sync: a `renumber` to a number its own allocator has
+never handed out, with a system comment on the issue saying what moved and why; a slug
+`update`; an `update` clearing the retry key or the origin. Every other device applies it
+like any operation, the stand-in's record is closed when it arrives, and a device that
+hydrates afterwards reads the settled value from the fold. **Nobody is asked to resolve
+anything and no conflict stays open.** A settlement can itself collide with a number a
+third device minted meanwhile; that is a fresh claim, settled the same way.
+
+- **A `renumber` a person decides is a decision**, and moves whoever holds its target
+  aside: it is how a conflict resolution swaps two numbers. When the issue moved aside is
+  this device's own, this device settles where it goes. **A settlement's `renumber` is a
+  claim** on the number it chose (written by `staple`, `settleOne`): the earlier claim in
+  the log keeps that number too, and a settlement that loses it is settled again by its
+  device. As a decision, a settlement queued before a restore and sent into the new epoch
+  took its number from the issue the new epoch had given it to, on every device reading the
+  tail and on none hydrating; and the conflict screen does not read one as an edit, which
+  left a record open that nothing closed.
+- **A snapshot read decides by the log's order, not by what this device holds.** A value
+  held here by an entity the read has not placed yet — and not this device's own later claim
+  — was written by an operation the epoch does not hold (a settlement or decision a restore
+  rewound) or placed by an older applier: it is moved aside, and the entity the log gives it
+  to takes it (`heldAheadOfRead`, `apply.ts`). An issue the read placed earlier keeps a number
+  a later one in the read asks for, and the later one takes a stand-in on the record — as on
+  a device hydrating fresh — and, when it is this device's own, **its settlement is owed
+  again**: the epoch holds none — a restore rewound the one it sent — and every device holds
+  the stand-in until it arrives (`laterClaimInRead`). A row nothing ever journaled or applied
+  is this workspace's own and keeps its values, as before.
+- **This device's own operation coming back on the next pull is a claim like any
+  other.** It can still carry an identifier the device has since given up, and applying
+  it as written would take the number back from the issue every other device gave it to;
+  the earlier claim keeps it.
+- **A hydrating device applies competing claims in log order.** The snapshot is paged
+  by entity key, which is a function of the UUIDs, so the fold carries where each claim
+  sits — the seq of the entity's create (`createdSeq`) and of each later field write
+  (`fieldWrites[…].seq`) — and the device orders issues and projects by it before
+  applying; milestones too, by their membership's last write, because an issue is in one
+  milestone at most and two lists naming it leave it in the one the log wrote last
+  (`test/cloud-milestone-concurrent-membership.test.ts`). A device hydrating from a Worker too old to say applies them in key order,
+  and is put right when the later claim's settlement arrives: a number freed is given
+  back to the issue whose open record asks for it.
+- **A device on a build from before this** does not settle its claims, and degrades to
+  what it did before: its later claim stays on a stand-in on the other devices, with an
+  open identifier conflict that resolution settles as it always could. As a receiver it
+  applies a settlement but leaves the stand-in's record open (measured live: "1
+  unresolved conflict" about an issue every device agreed on); its first sync on this
+  build closes every identifier record whose issue has moved off its stand-in since.
+- **A settled number keeps every allocator clear of it.** It reaches the other devices as
+  a renumber of an issue they already hold, so the applier advances the local allocator
+  on that path exactly as it does for a create — measured live without it, the next
+  `staple new` on a receiving device minted the settled number again.
+
+**An identifier that moved keeps resolving.** Every change of an existing issue's
+identifier — a settlement, a stand-in, a resolution, a joining workspace yielding a
+number — is recorded in the workspace (`src/core/identifier-moves.ts`, device-local
+`meta` rows, never synchronized) and the old identifier resolves to the issue it meant
+whenever no issue holds it now: a `STA-5+1` copied into a handoff still finds its issue
+after it is settled at `STA-9`. An identifier another issue holds now means that issue.
+A stand-in itself resolves too, although a `+` is not in the `PREFIX-N`
+grammar, locally and through the hub from any directory. And this machine's hub
+cross-links, which name issues by identifier, follow each move made before the link
+was ([The hub registry](#the-hub-is-a-repository-and-that-is-the-whole-mechanism)).
+
+Three things keep that true for good. A link made through an old identifier or a
+stand-in (`staple link STA-5+1 OTH-3`) is stored under the identifier the issue holds
+*now*: stored as typed, it named no issue anybody keys on, so the issue read as having
+no cross blocker. A stand-in is never handed out twice: its suffix is a seq no other claim
+has, and a `+n` an issue has held and moved off stays that issue's — a suffix that would
+reuse one (a local stand-in) takes the next free one instead of inheriting the old one's links. And a search whose text is
+exactly an old identifier (`staple ls -q STA-5`, `list_tasks` with `q`) finds the issue
+it meant as well as whichever issue holds that number now. Stored identifiers are only a
+hub concern: relations, the plan and milestone membership store issue UUIDs
+(`test/cloud-hub-links-follow.test.ts`, "a hub link made through a stand-in").
+
+**The other unique values settle the same way, and only a claim is a claim.** For a live
+external origin, the claim is the write that makes the issue a live holder — its create,
+a change of its origin, or a reopen from done or cancelled. A move between two open
+statuses is not: taken for one, the earlier holder's backlog-to-todo beat a later import
+elsewhere, and both gave the origin up. A reopen says so in its own operation (`reopens`):
+inferred from the device's own outbox, a reopen of an issue another device had closed was
+not counted, and the devices never agreed who held the origin
+(`test/cloud-unique-claims.test.ts`).
+
+**"Live" has one definition: a status other than `done` and `cancelled`**
+(`ORIGIN_RELEASING_STATUSES`, `holdsLiveOrigin` in `src/core/types.ts`). It is the one the
+unique index `issues_live_origin_uq` enforces in every database, and the settlement, a
+reopen, the seed and the service's fold all read it. A reopen once read the status
+CATEGORY instead, so an issue in a custom cancelled-category status (`wontfix`) still held
+its origin by the index, moving it out counted as a later claim, and it and a later import
+both gave the origin up on every device. A category cannot be the definition without a
+migration — a partial index cannot read the statuses table — and a migration moves the
+schema every operation carries, which every device on an older build refuses
+(`schema_ahead`); so `wontfix` holds its origin as the index says
+(`test/cloud-live-origin.test.ts`).
+
+**A device hydrating from a snapshot settles by where each claim sits in the log.** The
+holder's claim is the last write of its origin, or its last reopen, else its create —
+read from the snapshot's per-field provenance, not from this device's outbox, which a fresh
+device does not have. The service's fold records a reopen as a write of `reopens` whether
+or not the operation said so (`reopensOrigin`, `worker/src/fold.ts`, and the tail fold): a
+reopen by an older build does not say so, and a device hydrating afterwards gave the origin
+to whichever issue it applied first, while every device reading the tail had given it to
+the earlier claim. A holder that yields this way on a hydrating device is cleared there and
+owes nothing — only the device that made a later claim settles it.
+
+**A number that moved under a caller.** A settlement moves this device's issue off a number
+another device claimed first, and the number then names that other issue. Something that
+learned the number before and uses it after would reach the other issue without knowing.
+So:
+
+- **A process that resolved the number once keeps what it resolved.** `staple wait` resolves
+  its argument once and waits on that issue by its id, answering with the identifier it
+  holds now (and `renumberedWhileWaiting` in `--json`). The UI's open issue is pinned to its
+  id once loaded, and its buttons and the palette's commands post the id.
+- **The contract: within a day of a move, or while any issue that left the number is held, a
+  write by that number never lands on an issue other than the one the caller meant, however
+  many issues have passed through the number. It is refused instead.** Outside the day, with
+  nothing held, the write goes through with the notice below.
+
+  The guard reads **every issue that has left the number on this device** — kept with when
+  it left (`identifier_holders:<number>` in `meta`, `formerHolders`), not only the last one,
+  and not only this device's own: a number can be left by this device's issue, then held and
+  left by another device's, and a write through it by somebody who learned it while the first
+  held it must not land on the second. So the guard can fire on a device whose own issues
+  never moved. An issue **a restore removed** is one of them ([below](#a-restore-rewinds)): its
+  number, and every number it left here before, keep it as a holder that left when it was
+  removed, with its title and who had it checked out. A restore that vacated a number used to
+  leave no trace, and the issue that took the number next received every write meant for the
+  removed one — an agent's `done` included — with no notice (`test/cloud-restore-identity.test.ts`,
+  and the restoring seeds of `test/cloud-learned-writes.test.ts`). Who is writing proves nothing — the actor is `--agent`, or `$STAPLE_AGENT`, or
+  `$USER`, and the step that learned the number and the step that writes need not agree — so
+  the rule reads only what those issues say about themselves. The write is refused, naming
+  each of them and the issue the number resolves to (identifier, title and id), and nothing
+  is written, when any issue that left the number, other than the one it resolves to:
+  - is **checked out by any agent, or leased by this device**; or
+  - left it **less than a day ago** (`RENUMBER_GUARD_MS`, 24 hours, measured from when this
+    device moved it): a day covers the work that learned the number before the move — an
+    agent between `checkout` and `done`, a handoff written that morning, a script's
+    variable.
+
+  An issue a restore removed refuses **only inside that day**, and the refusal says who had it
+  checked out when it went. Nobody is holding it after that: its checkout went with its row,
+  and the rewind forgot this device's lease on it and gives the lease back to the service at
+  the end of that sync — or at the next sync, if the service could not be reached
+  (`forgetRemovedIssueLease`, `sync_lease_releases_owed` in `meta`). A release by its **id** —
+  `release`, MCP `release_task`, `cloud lease release` — has nothing left to give back, and
+  says what the restore removed and when instead of failing; any other write by its id is
+  `not_found` with the same sentence.
+
+  Every write a number can reach is covered: `done`, `cancel`, `status`, `release`,
+  `checkout`, comments, documents, blockers, gates and approvals, a child's parent, the plan,
+  milestones, a project filing, a hub cross-link (`link`, MCP `cross_link`, both ends) and the
+  lease verbs (`WorkspaceStore.requireTarget` and `writeTarget`, `Hub.validateCrossLink`,
+  `leasedIssue` in `cloud/lease.ts`). The write goes through when the caller names the issue
+  by its **id**, which no renumber changes — for a link, `<slug>:<id>` — or **acknowledges the
+  move**: `--ack-renumber` on the CLI, `acknowledgeRenumber: true` on an MCP write, where it
+  holds for that call alone, across its awaits (`AsyncLocalStorage`). It then goes to the
+  issue the number resolves to now, with the notice below. `done`, `cancel`, `status` and
+  `release` take `--agent` as `checkout` does.
+
+  **The page writes by id, so it never meets the guard.** Every row it shows carries its id,
+  and every write it makes — a comment, a document restore, the plan and a milestone's
+  members, a gate's children, a new task's parent and relations — names the id of the row the
+  reader acted on; a number typed or pasted is looked up among the rows it holds, and a task
+  in another workspace is `<slug>:<id>` (`src/ui/app/src/lib/write-ref.ts`).
+  `test/cloud-learned-writes.test.ts` holds the contract over 20 seeded runs of three devices
+  and a peer on an older build creating, synchronizing, losing push answers, moving numbers and
+  writing through numbers they learned.
+- **Anything else by that number is answered with what happened**: "TRA-2 was renumbered here
+  at <time>; your earlier TRA-2 is now TRA-4, and TRA-2 now names another issue." For a
+  number a restore emptied: "TRA-2's earlier issue "A's task" (<id>) was removed by a restore
+  here at <time>; TRA-2 now names "B's issue" (<id>)." — with `nowIdentifier: null`,
+  `removedByRestore` and `nowNames` in the record. On a read, an acknowledged write and a
+  write after the window alike: on the CLI's stdout, as `renumbered` in its `--json`, and on
+  MCP in the tool result itself (a text block, and `renumbered` on an object result), never
+  on stderr alone (`RenumberNotice` in `identifier-moves.ts`,
+  `test/cloud-restore-removed-holder.test.ts`).
+
+A settlement comment is worded to be true on every device, however many created the number:
+the repository keeps the one created first, every other is renumbered by the device that
+created it, and a reference made before the move on the device where the issue was created
+means this issue. `staple hub unlink` accepts an old number or a stand-in as `link` does, and
+a published link naming a stand-in this machine cannot place is skipped for that reason
+(`test/cloud-renumber-holders.test.ts`, `test/cloud-hub-links-follow.test.ts`).
+
+### The prefix is the repository's; the slug is the machine's
+
+**The prefix synchronizes, once, at join.** It is in every identifier, so a repository
+whose devices numbered issues under two prefixes holds two namespaces: `TRA-4` on one
+machine and `STA-4` on another are different issues, and nothing in the identifier
+rules above compares across them. Two prefixes are what you get by default, because a
+prefix is derived from the directory a clone was initialised in — `tracker/` is `TRA`,
+`staple-tracker/` is `STA`. The code is `src/core/cloud/repository-prefix.ts`.
+
+- **It travels as a setting**, `setting:repository.prefix`, an entity every build
+  already applies. A build from before this one stores it as a setting key it has no
+  definition for, which preserves it unread: measured, a build from `master` reads the
+  declaration in its ordered tail and in a snapshot, applies both pages, and ends with its
+  cursor at the head. It rides the snapshot like any setting.
+- **The first device to seed declares its own prefix.** A device seeding a repository
+  that has issues but no declaration — one from before this — declares the prefix most of
+  those issues carry. It is never declared again.
+- **A joining workspace takes it**, inside its seed: the workspace is re-stamped, and each
+  issue it numbered before joining is renumbered into the repository's namespace above
+  every number the repository uses, through the same identifier-move machinery as any
+  renumber — the old identifier resolves here, this machine's hub cross-links follow, a
+  system comment on the issue says what happened, and the seed report and the sync output
+  list every one. A fresh clone that numbered nothing just takes the prefix, and nothing
+  is said: no identifier anybody has seen changed.
+- **Refused, before anything is written, when another workspace on this machine holds
+  it.** A prefix names one workspace per machine — it is how an identifier typed anywhere
+  on the machine finds its workspace — and no verb renames a prefix. The refusal names the
+  other workspace and the one real way out, `staple hub unregister <slug>`, which releases
+  the prefix and leaves that workspace's files untouched.
+- **The hub row it re-stamps is its own by the gate `Hub.register` uses.** A hub row with
+  no path — an adopted registry's, for a repository this machine has not got — takes its
+  identity only from the `repository_id` the hub recorded, so sharing this workspace's slug
+  does not make it this workspace's (`absentRowRefusal` in `src/core/hub.ts`). One that
+  records another identity counts as another workspace: holding the repository's prefix,
+  it refuses the join as above, naming its identity; holding another, it is left as it was
+  and the workspace joins (`test/cloud-repository-prefix.test.ts`).
+- **After that it never changes.** Nothing re-stamps a workspace later, because its
+  prefix is in every identifier it has printed. A workspace whose prefix and its
+  repository's disagree — one that joined on a build that did not take it, or raced
+  another first device — is reported by `staple doctor` (`repository-prefix`), with both
+  prefixes, not silently repointed.
+
+**The slug does not synchronize.** It is this machine's name for a directory, unique only
+among this machine's workspaces (`hub.workspaces.slug`), and derived from the directory
+name, so two machines holding one repository routinely call it different things. The
+[hub registry](#the-hub-registry-is-a-set-not-a-map) already treats it as per-machine —
+names are create-only there, and "this machine calls it X; the registry calls it Y" is
+reported, not overwritten. Synchronizing it would rename a workspace on every other
+machine, into a name that can collide with an unrelated workspace there, with no rename
+verb to resolve it.
 
 ## What synchronizes
 
@@ -101,22 +361,33 @@ entity's own primary key.
 
 | Table | Key | Fields that travel |
 |---|---|---|
-| `issues` | `id` | `identifier`, `title`, `normalized_title`, `description`, `status`, `status_version`, `priority`, `parent_id`, `depth`, `assignee`, `created_by`, `labels`, `acceptance_criteria`, `block_parent_until_done`, `unblock_owner`, `unblock_action`, `origin_kind`, `origin_id`, `idempotency_key`, `estimated_seconds`, `kind`, `project_id`, `gate_state`, `gate_owner`, `gate_requested_by`, `gate_requested_at`, `gate_resolved_by`, `gate_resolved_at`, `gate_released`, `started_at`, `completed_at`, `cancelled_at`, `created_at`, `updated_at` |
+| `issues` | `id` | `identifier`, `title`, `normalized_title`, `description`, `status`, `status_version`, `priority`, `parent_id`, `depth`, `assignee`, `created_by`, `labels`, `acceptance_criteria`, `block_parent_until_done`, `unblock_owner`, `unblock_action`, `origin_kind`, `origin_id`, `idempotency_key`, `estimated_seconds`, `kind`, `project_id`, `gate_state`, `gate_owner`, `gate_requested_by`, `gate_requested_at`, `gate_resolved_by`, `gate_resolved_at`, `gate_released`, `started_at`, `blocked_transition_at`, `completed_at`, `cancelled_at`, `created_at`, `updated_at` |
 | `comments` | `id` | `issue_id`, `author`, `author_type`, `body`, `idempotency_key`, `deleted_at`, `created_at` |
 | `documents` | `(issue_id, key)` | `current_revision`, `title`, `updated_at` |
-| `document_revisions` | `(issue_id, key, revision)` | `body`, `author`, `change_summary`, `created_at` — immutable once written |
+| `document_revisions` | `(issue_id, key, revision)` | `body`, `author`, `change_summary`, `created_at` — immutable once written, except that its number is where the log places it ([below](#conflicts-are-preserved-never-resolved-silently)) |
 | `relations` | `(blocker_id, blocked_id, type)` | `created_by`, `created_at` — `relations.id` is a local `AUTOINCREMENT` and does **not** travel |
 | `projects` | `id` | `slug`, `name`, `kind`, `source_kind`, `source`, `created_at`, `updated_at` |
-| `workspace_statuses` | `id` | `label`, `category`, `sort_order`, `is_builtin` |
-| `workspace_kinds` | `id` | `label`, `sort_order`, `is_builtin` |
+| `workspace_statuses` | `id` | `label`, `category`, `sort_order`, `is_builtin` (as `isBuiltin` on a create, below) |
+| `workspace_kinds` | `id` | `label`, `sort_order`, `is_builtin` (as `isBuiltin` on a create, below) |
 | `milestone_meta` | `issue_id` | `target_date`, `start_date`, `updated_at` — `members_revision` is derived, see below |
-| `meta` | `key` | **only** `slug`, `prefix`, and rows matching `setting:*` |
+| `meta` | `key` | **only** rows matching `setting:*` — the repository's prefix travels as one of them, `setting:repository.prefix` ([above](#the-prefix-is-the-repositorys-the-slug-is-the-machines)); `slug` and `prefix` themselves are this workspace's own |
 
 `meta` is the one table that cannot take a single classification, so it is an
 allowlist and the default is deny. `setting:*` includes keys this build has no
 definition for: `unknownSettingKeys()` already preserves them unread, and sync
 carries them through unchanged for the same reason — an older device round-tripping
 a workspace must not delete a newer device's settings.
+
+**A status or kind's create says whether it is a built-in** (`isBuiltin`). Every device
+holds the built-ins from its own migrations, so one removed and added back arrived, on a
+device hydrating afterwards, over the built-in it already had — and stayed a built-in there
+alone, while the device that did it and every device that read the removal in the tail held
+the one added back as the workspace's own. The store sends `isBuiltin: false` on every add,
+the seed sends each row's own value (and treats a built-in as implied only while it still
+is one), and the applier writes it over the row it holds. A create from a build before this
+one says nothing, so the service's fold says `isBuiltin: false` for a status or kind created
+after its delete, and so do the tail fold and the test service
+(`test/cloud-builtin-readd.test.ts`, and the registry in `test/sync-mutation-convergence.test.ts`).
 
 `projects.source` is **redacted per row, keyed on its sibling column**. When
 `source_kind = 'local'` it holds an absolute filesystem path, which discloses the
@@ -151,8 +422,9 @@ So they do not replicate row by row. Each is one operation carrying the **entire
 ordered list of entity ids**, checked against **the base revision it was computed
 from**:
 
-- `queue.replace` — payload `{ order: [issueId…] }`, on the singleton plan entity
-- `milestone.replaceMembers` — payload `{ members: [issueId…] }`, on the
+- `queue.replace` — payload `{ order: [issueId…], entries: {…} }`, on the singleton
+  plan entity
+- `milestone.replace` — payload `{ members: [issueId…], entries: {…} }`, on the
   milestone, which the envelope already names in `entityId`
 
 **There is no per-row queue or membership operation.** No `queue.insert`, no
@@ -209,8 +481,67 @@ otherwise a decision everyone converged on would leave a device still reporting
 an open conflict about a plan that was decided. Records already resolved are
 untouched, including ones resolved to a different value.
 
-`queue_entries.added_by`, `added_at` and `note` ride along inside the entry
-objects.
+**Who put each entry there, when, and the note they left ride beside the list**, in
+`entries`, keyed by issue id: `{ addedBy, addedAt, note }` for every entry of the plan
+and of a milestone. Beside it and never inside it, because the order is the contested
+value and is compared whole — a note written on one device must not make two identical
+orders disagree. A receiver writes each entry's own facts, and an operation that says
+nothing about an entry (a conflict resolution, which carries only the order, or a build
+from before `entries`) leaves what the receiver already holds for it. Before this a note
+never left the device it was written on, and every device that applied a list wrote the
+applying operation's actor and time over every entry, so a reorder on one machine erased
+every other machine's record of who queued what (`test/cloud-entry-notes.test.ts`).
+
+**A status or kind added after another is placed there on every device.** A `create`
+says nothing about position, and a receiver puts an entry it has never seen at the end.
+So an entry added anywhere but the end also journals the whole vocabulary order, as the
+`@order` update a reorder sends; an entry added at the end sends none, because the end is
+where every receiver already puts it, and an order sent for nothing would contest another
+device's concurrent, unrelated reorder. An order is applied as the entries it names, in
+its order, then every entry it does not name, in the order they had — which is where an
+entry added since the order was written belongs, on the device that wrote the order as on
+every other (`test/cloud-vocabulary-lifecycle.test.ts`).
+
+**An entry created again after it was deleted has no place in an earlier order.** An older
+build removes and re-adds a status with a delete and a create and no order; a device reading
+the log puts the new one at the end, where it puts an entry it has never seen. The service's
+fold used to keep the deleted one's place in the last order, so every device hydrating from
+it put the new one there instead — for good, since nothing sent a new order. Now the fold
+forgets an entry's place in the order when a create brings it back (`forgetPlace`,
+`worker/src/fold.ts`, and the tail fold), and a device hydrating from a snapshot that did
+not leaves out of the order every entry created after the order's last write
+(`withoutStalePlaces`, `hydrate.ts`); an order written after the create names it again, and
+places it (`test/cloud-vocabulary-readd-order.test.ts`).
+
+**A create puts its entry last — one this device already holds too.** The rule is the same
+on every device: a create of a status or kind puts it after every other entry, whether the
+device held it (a built-in, from its migrations) or not; an order written after the create
+places it (`applyVocabulary`). Before, a built-in removed and added back went last on the
+device that did it and on every device reading the tail, and stayed where its migration put
+it on a device hydrating afterwards; and a built-in sent again as a create stayed put on
+devices that held it and went last on one that joined. A genuine create only: what a restore
+stages is not one. **This device's own create coming back is placed the same way**: where the
+device put it was its own choice, and two devices that each added an entry offline held their
+own first, while every other device and a fresh one held them in the log's order — for good
+(`test/cloud-vocabulary-concurrent-adds.test.ts`). Nothing a device chose locally outlives
+the acknowledgement; an order the device wrote with the create, later in the log, places it
+again as it does everywhere. The seed's order accounts for it:
+a built-in the seed sends is last on a fresh device, and the seed sends an order when that is
+not this device's (`test/cloud-builtin-readd.test.ts`).
+
+**The numbers behind the order are each device's own.** What travels is the order, never
+a `sort_order` value, so each device holds numbers of its own making — the store places an
+entry at the midpoint of its neighbours, the applier appends at `MAX + 1000` and writes an
+order as multiples of 1000, migration 006 put `awaiting_approval` at `in_review + 5` —
+and on a mixed fleet the numbers differed while every displayed order matched. Every
+reader is relative: `ORDER BY sort_order, id` in the store, the applier, the seed and the
+conflict screen; the store's midpoint between two neighbours on this device; `MAX` for
+"after the last". None compares a number with another device's, and `sortOrder` on a
+status or kind a surface returns is a sort key, not a position. What must hold is that
+the store reads the numbers the applier wrote: it memoizes the vocabulary on
+`meta.settings_revision`, which the applier and the seed now move too — before, a store
+on a synced database placed an entry by the numbers from before the sync and put it
+first instead of last (`test/cloud-vocabulary-sort-order.test.ts`).
 
 ### Events are re-derived, never transported
 
@@ -255,7 +586,7 @@ this contract, not a judgement call for an implementer.
 | `meta.next_issue_number` | workspace db | Per-database counter; see [Identity](#identity-is-the-uuid-never-the-identifier). |
 | `meta.settings_revision`, `meta.queue_revision` | workspace db | Derived cache-invalidation and CAS counters. Merged as `max()` so local optimistic concurrency stays monotonic. |
 | `meta.schema_version` | workspace db | **Correctness, not privacy.** It describes the format *this binary* understands. Replicating it lets an older build be told it is newer than it is, defeating the `assertNotNewer` upgrade guard that exists precisely because version and file must travel together. |
-| `meta` keys outside `slug`, `prefix`, `setting:*` | workspace db | Default-deny. A local counter added later must not start synchronizing because nobody updated this page. |
+| `meta` keys outside `setting:*` | workspace db | Default-deny. A local counter added later must not start synchronizing because nobody updated this page. `slug` and `prefix` are among them: the slug is this machine's name, and the repository's prefix travels as a setting, `setting:repository.prefix`, which a joining workspace adopts once ([above](#the-prefix-is-the-repositorys-the-slug-is-the-machines)). `identifier_alias:*`, `identifier_holders:*` and `identifier_moves_pending` are this machine's record of the identifiers it moved; `sync_tail_survey` is a tail read part-way through. |
 | `projects.source` where `source_kind = 'local'` | workspace db | An absolute filesystem path; discloses directory layout and the OS account name. Redacted per row, see above. |
 | `events` (whole table) | workspace db | Re-derived on apply, see above. |
 | `relations.id` | workspace db | Local `AUTOINCREMENT` surrogate. The natural key is `(blocker_id, blocked_id, type)`, which the `UNIQUE` constraint already declares. |
@@ -504,6 +835,58 @@ changed, never of what exists. What a workspace held before it was armed reaches
 service by [the seed](#a-workspaces-history-reaches-the-service-when-it-first-synchronizes),
 not by the seam.
 
+### The journal records what changed, by row
+
+Each mutation declares its operation (`Journal.record`), and that declaration used to be
+the whole list of what travelled — so a column a path wrote and did not name stayed on the
+device that wrote it. Found one path at a time: a release's `status_version`, a partial
+approval's `gate_released`, an assignment's `updated_at`. Now the journal does not depend on
+paths remembering. While a local mutation runs, a TEMP trigger on this connection keeps each
+synchronized row's image from before its first change (`src/core/cloud/row-diff.ts`), and
+when the mutation ends every synchronized column that differs from it joins the entity's
+operation, with the value the row holds: the operation the mutation declared, or a new
+`update` — a `create` for a row it inserted — attributed to the mutation's actor. The
+tables read this way are the ones whose columns replicate one for one: `issues`,
+`comments`, `projects`, `milestone_meta`. The vocabulary, settings, relations, documents
+and the ordered lists travel as whole values the store states in full.
+
+The declaration still decides the verb and still carries what a row cannot say — a
+`reopens`, a `blockedBy`, the `entries` beside a list, a document's revision. An applied
+remote operation is somebody else's change and is never captured. The triggers are
+per-connection and write nothing to the file: no schema a migration, a backup or another
+device sees changes. `test/sync-mutation-convergence.test.ts` holds it to that: a registry
+of every public mutation of the four stores (a new one fails until listed) and of the
+lease verbs, each run on one device and compared column for column, over every synchronized
+table, with a device that read it in the tail and one that hydrated from the snapshot; and
+every conflict kind, resolved either way, compared the same way.
+
+**Derived columns are never journaled.** They are computed from other synchronized
+columns, and every applier of this build computes them from what it writes, ignoring any
+value an operation carries:
+
+| Column | Derived from |
+|---|---|
+| `issues.normalized_title` | `title` (`normalizeTitle`) |
+| `issues.depth` | the parent's `depth` + 1, 0 without one |
+
+They are left out of the row diff, never recorded as provenance and never contested. What
+an issue operation does carry, computed from the row, is a copy for builds before this rule,
+whose applier reads it: the normalized title beside any `title`, and the depth on a create.
+Before, a conflict resolution sent the title alone and the losing device kept the losing
+title's normalization, which duplicate detection reads. Local counters are not derived
+columns and never leave the machine: `members_revision`, `queue_revision`,
+`settings_revision`, the vocabulary's `sort_order` numbers, the ranks.
+
+**A synchronized time comes from the log, never from the clock at apply.** A milestone's
+`updated_at` is written by the device that changed it and travels as `updatedAt`; an older
+build's operation, which carries none, is dated by its own time in the tail, and by its last
+write's time in a snapshot (`lastWriteAt`) — a fresh device used to date every milestone by
+the moment it hydrated. A conflict resolution is a write, and an issue, a project or a
+milestone it settles says so at the decision (`updatedAt`), where each side used to keep its
+own edit's time for good. An applier generation raised for these (`APPLIER_VERSION` 3)
+re-reads the snapshot once on every device, which repairs what an older applier wrote; 4
+does the same for [revision numbers](#conflicts-are-preserved-never-resolved-silently).
+
 ## The operation envelope
 
 One shape, for every mutation, on the wire and in the outbox.
@@ -656,6 +1039,16 @@ decided from durable state rather than from anything the caller asks for, so a c
 that lost its place recovers by calling again and being told where it actually got to.
 Staging is chunked at `maxBatchSize` for the same reason a push is.
 
+**A restore stages in the order the claims sat in the log.** A backup keeps, per entity,
+where its claim sat in the log it was folded from — the last write of its identifier or
+slug, or of a vocabulary's order, else its create (`claimSeq`, `forBackup`) — and a
+restore stages in that order (`restoreOrder`, `worker/src/backups.ts`); what the log holds
+no claim of, a built-in only ever edited, goes first. Staged by key, as they were, the later
+of two claims on one number could come first in the new epoch, and every device hydrating
+it gave the number to the claim that had lost it. A backup from before `claimSeq` is staged
+as it was stored (`worker/test/backups.test.ts`, "stages a backup in the order its claims
+sat in the log"; `test/cloud-restore-identity.test.ts`).
+
 Push takes `{ protocol, deviceId, ops: [envelope…] }` and returns a per-operation
 status, never a bare accepted/rejected split:
 
@@ -694,7 +1087,7 @@ maxPullLimit }`.
 | Operations per push batch | **200** paid, **25** free | A push costs `N + 4` D1 statements, against a queries-per-Worker-invocation ceiling of 1,000 paid and **50** free |
 | Single operation payload | **512 KiB** | Well under D1's 2 MB maximum row size, with headroom for the envelope |
 | Pull page `limit` | default 200, maximum **500** | |
-| Requests per device | 60/min, burst 120 | Policy, not a platform limit |
+| Requests per device | 120 per 60 s, answered with `Retry-After: 60` | Policy, not a platform limit — the `SYNC_LIMITER` binding in `worker/wrangler.toml`, keyed on repository and device |
 
 These replace the numbers this page carried before the Cloudflare research
 landed; the earlier batch size of 500 was set without knowing the
@@ -705,10 +1098,29 @@ parsed. The free plan allows 10 ms of CPU per request, so a limit enforced after
 `await request.json()` is enforced too late to help.
 
 Exceeding a limit is `payload_too_large` or `rate_limited` — never a silent
-truncation, and never a partially accepted batch. A document revision larger than
-the payload cap is refused at journal time, on the device, with the same code, so
-the failure surfaces where the human is rather than three hours later in a
-background sync.
+truncation, and never a partially accepted batch.
+
+**An operation larger than the payload cap is refused at journal time**, on the
+device, with the same code and nothing written, so the failure surfaces where the human
+is rather than three hours later in a background sync. A document revision above it, a
+comment, a description: the service refuses an oversized payload for the whole batch,
+so one of them in the outbox would fail the same push on every sync and nothing queued
+behind it would ever leave. The refusal applies to a workspace whose operations are going
+somewhere — connected on this machine, or synchronized before (its queue is sent, as it
+stands, the next time it is). A workspace that has never been connected is left alone,
+even though its journal is armed whenever the machine has connected something else: its
+first sync replaces that journal with a seed, and the seed names an oversized revision or
+comment and leaves it behind.
+
+An outbox written before the refusal existed, or a service advertising a smaller cap than
+the journal's, is handled at push time. A document revision or a comment is taken out of
+the queue and named in the sync report (`withheld`): nothing refers to one revision, and a
+comment is written once and named by nothing, so leaving either behind costs its text on
+the other devices and nothing else. An issue cannot be left behind — every edit, child,
+comment and blocker of it would name something no other device receives — and the queued
+operation provably never landed, so it is rebuilt from the issue as it stands; editing the
+issue below the cap (the UI, or the MCP `update_task` tool) is the way out, and the refusal
+says so. Anything else still too large is refused by name (`test/cloud-oversize.test.ts`).
 
 ## Ordering, cursors and epochs
 
@@ -744,8 +1156,8 @@ replays the entire history into a live database.
 **Apply is one transaction per page**, and idempotent: every applied `opId` is
 recorded, and a re-delivered operation is a no-op. Within a page, operations apply
 in `seq` order; an operation whose referent does not exist yet is deferred to the
-end of the page and retried once. If it is still unresolvable when the page ends,
-the page fails whole with `validation` and nothing is committed. Causality across
+end of the page and retried once. If it is still unresolvable when the page ends, it is
+set aside ([below](#no-entity-can-stop-a-sync)) and the rest of the page commits. Causality across
 devices is mostly self-enforcing — a device cannot edit an entity it has never
 seen, so the edit necessarily sorts after the create — but "mostly" is not a
 guarantee to build an apply loop on.
@@ -758,21 +1170,49 @@ of the log — arbitrarily many pages later, beyond the end-of-page retry. An op
 on an entity this database does not hold, carrying none of the fields only a create
 carries (an issue's identifier, a comment's issue, a project's slug, a status's
 category), is therefore a missing referent — it is never inserted with invented
-values. And a page that fails for a missing referent is answered by **one read of the
-snapshot**, applied in one transaction, after which the tail resumes from the cutoff
-that snapshot pinned: a snapshot folds every operation on an entity into one state
-whatever order they arrived in, so an update followed much later by its create folds
-to a complete entity. This is the timeline the device is already on, so nothing is
-forgotten — the ledger, versions and field record stay, and inherited provenance is
-taken at the fold's own numbers rather than lifted as a re-bootstrap into a new epoch
-lifts it. Once per sync; if the snapshot cannot resolve it either, the sync fails,
-naming the referent.
+values: it is set aside until its create arrives, and then dropped, because the create —
+sent by a heal or a seed at the end of the log — is the whole entity as its device holds it,
+the edit included.
+
+**No entity can stop a sync.** An entity that names what this device does not hold — a
+comment on an issue the repository lacks, an edit of an issue whose create is nowhere, in a
+page of the tail or in a snapshot — used to fail its page whole, and every later sync met the
+same page and failed again: one device's write stopped every other device, and every join,
+for good (measured: a device that followed a restore on c7a49d6 edited a row the restore had
+rewound, and every other device and every fresh join failed from then on). Now it is **set
+aside** (`src/core/cloud/quarantine.ts`, `sync_quarantine` in `meta`), everything else
+applies, and the position moves on. Whatever was set aside is tried again after every page
+and every snapshot read, in the order it was set aside:
+
+- one that waited on something else it names applies once that arrives;
+- an edit of an entity this device did not hold, whose create a later operation brings, is
+  dropped — that create carries the whole entity as its author held it, after the edit — and
+  so is a snapshot's older state of an entity the tail has since created;
+- **never over a later write.** Applied late, it would land after operations that come after
+  it in the log. So a field one of those already wrote here — placed by where that write sits
+  in the log (`sync_applied`, the outbox, or a snapshot's cutoff), or, where this device cannot
+  place it, written since the entity was set aside — keeps the later value. A blocker set, the
+  plan's order and a milestone's members go with their per-entry facts, and the entity's
+  last-change time is never set back. What has nothing left to write is dropped, as the log's
+  order would have dropped it. The same rule holds for an operation a page defers to its end
+  (`withoutLaterWrites`), and for everything that can be set aside, from the tail or a
+  snapshot (`test/cloud-quarantine-superseded.test.ts`).
+
+`staple cloud status` shows how many are waiting (`quarantined` in `--json`, and on the
+page), a sync says so, and `staple doctor` lists each with what it names
+(`test/cloud-quarantine.test.ts`). A fresh device always joins. **A wait nothing will end is
+a divergence, never a quiet wait:** an entity still waiting after a restore's rewind was read
+here — that read kept and sent everything unsent work named, so what is still missing is on
+no timeline — or waiting longer than a week (`QUARANTINE_DIVERGENCE_MS`), fails `staple doctor`
+(`divergedQuarantine`), naming what is missing and since when.
 
 **Bootstrap is a snapshot cutoff plus the ordered tail.** A hydrating device reads
 a materialized snapshot taken at `seq = C`, then pulls from cursor `C` forward.
 Writes concurrent with the snapshot are in the tail, so nothing is missed and
-nothing is applied twice. A re-bootstrap — the one an epoch change forces —
-resumes both halves from bounded cursors after an interruption. A database's
+nothing is applied twice. A re-bootstrap — the one an epoch change forces — reads
+the snapshot whole too, because it reconciles to it before applying any of it
+([A restore rewinds](#a-restore-rewinds)); a death during that read costs a re-read and
+leaves nothing half-applied. A database's
 FIRST synchronization reads the snapshot whole before it writes anything, because
 [the seed](#a-workspaces-history-reaches-the-service-when-it-first-synchronizes)
 has to know everything the repository holds before it decides what to upload; a
@@ -795,6 +1235,115 @@ before the last status of its class arrives it would silently skip the ids it
 cannot find, and there is no referent check that could catch that. Before this, a
 fresh device could not hydrate a repository with a single comment in it — the
 comment arrived ahead of its issue on every attempt.
+
+**A snapshot entity carries what its create said, beside the fold.** `createdSeq`,
+`createdAt` and `createdBy` are the seq, client time and actor of the `create` its state
+descends from (null when the log holds none), and each `fieldWrites` entry carries its
+write's `seq`. The seqs let a hydrating device settle two claims on one identifier or
+slug in log order ([above](#identifiers-and-other-unique-values)). The time and actor are
+what a device reading that create in the tail uses for every column the payload does not
+carry: a comment or document revision written by a build from before its payload
+carried its own `createdAt` (and, for a revision, `author`) used to be stamped on a
+hydrating device with the moment it hydrated and attributed to nobody, and now reads the
+same on every device. A backup keeps the time and actor and a restore writes them back as
+the restored operation's, so the restored epoch's fold carries them too
+(`test/cloud-old-build-times.test.ts`). All four fields are additive; an older client
+ignores them.
+
+**An older build's comment is dated by its create, and a restore's create dates
+nothing.** A comment or revision whose payload carries no `createdAt` (and a revision no
+`author`) — everything written before 0c12bb9 — is canonically dated by its create's own
+envelope time and attributed to its actor, when that create is a genuine device operation.
+Every device converges on those, the one that wrote it included: that build's store dated
+the row, then journaled the operation with a second reading of the clock a millisecond
+later (measured live, a build from before #101), and the applier catch-up re-dates the
+writer's row once. A restore is not a genuine create. A backup made by the Worker before
+this build kept no create time or actor, so restoring it — by either Worker — stages
+every entity as a `create` by `restore:<id>` at the moment it ran; the fold emits no
+`createdAt` or `createdBy` for such a create, and a device that already holds the row
+keeps its own values — read as the create's, the restore instant had replaced the true
+time of every old comment, and the restore became the author of every old revision, on
+every device. **So after such a restore, the true time of a row from before 0c12bb9
+survives only on the devices that held it, and can differ between them** (the writer's
+millisecond among them): the server never had it, and cannot know better. A device
+hydrating the restored epoch cannot learn what the backup never kept, and is not told the
+restore wrote it (`test/cloud-old-build-times.test.ts`, worker `backups.test.ts`).
+
+**A log too large for the service to fold is folded here.** The Worker folds at most
+`MAX_SNAPSHOT_FOLD_OPS` operations (20,000) for a snapshot and refuses past it, so on a large
+repository a new device could not join, a clone with work of its own could not seed, and a
+device upgraded to this build failed every sync after its push and pull had landed, because
+its re-read is a snapshot. The operations are all there, and the pull route serves them in
+pages with no fold. So when the service refuses a snapshot as too large (`maxSnapshotFoldOps`
+in the refusal), the device pulls the whole ordered tail and folds it itself by the Worker's
+rules (`src/core/cloud/tail-fold.ts`), and applies the result exactly as a snapshot — the
+same hydration, claims in log order, the same screen on a re-read — with the cutoff at the
+last operation read. The refusal is not retried, and it never fails a sync
+(`test/cloud-large-log.test.ts`; proven past 20,000 on real workerd in the PR).
+
+**A tail read that stops part-way is kept, and the next sync goes on from it.** Twenty
+thousand operations are dozens of pull pages — more than an automatic sync's 2–10 s budget
+and more than the service's 120 requests a minute allow one run. The command line waits a
+rate limit out; automatic sync never waits inside a run, so every run stopped part-way,
+reported a failure, pushed its backoff out and began again from the first page: an
+automatic-only device never got there. Now the fold so far, the cursor to go on from and
+the epoch are kept in `meta` (`sync_tail_survey`, device-local) every ten pages and whenever
+the read is stopped — by the budget, the rate limit, or the network — and the next sync's
+read resumes from there; a moved epoch drops it, and applying the read clears it. A run of
+automatic sync that moved this device's reading of the log on is reported as `progressed`,
+not failed: the backoff is not pushed out, and the next run waits only as long as the
+service asked (`test/cloud-auto-sync-large-log.test.ts`).
+
+**A newer applier re-reads the snapshot once.** Nothing re-sends an operation a device
+has already applied, so what an older build's applier dropped — who queued each plan
+entry and its note, a built-in deleted elsewhere, the record a settlement closes —
+stayed dropped after upgrading; measured live, a device upgraded from a build before
+#101 kept a status every other device had deleted and every plan entry's author as
+`sync`. So the database records the applier generation that last wrote it
+(`sync_applier_version` in `meta`, device-local), and the first sync by a build whose
+applier is newer reads the snapshot once on the timeline the device is already on — the
+same read a stuck tail recovers with, under ledger ids of its own so an entity already
+applied at that cutoff is applied again — and says so. A database this applier hydrated
+records the generation as it goes and is never re-read
+(`test/cloud-applier-catch-up.test.ts`). Generation 4 re-reads every document revision into
+the log's placement: a device that joined from a fold that merged two revisions into one row,
+one whose older build dated what it applied by the operation, and one an earlier re-read gave
+copies under new numbers, all hold what a fresh device holds after it
+(`test/cloud-document-revisions.test.ts`).
+
+**The re-read waits for the Worker that folds creates.** The client ships within minutes
+of a merge and the Worker whenever it is deployed. The Worker before this build folds a
+delete as final even after a re-create, so its snapshot deletes a status removed and
+added back — and a re-read of it deleted that status on every upgraded device, then
+recorded the catch-up as done, so the new Worker never got to repair it. So the
+generation is recorded only when what the database holds came through the new fold: a
+snapshot whose entities carry `createdSeq` (which the new fold always sends and the old
+one never does). A device that owes the re-read asks for one snapshot entity per sync
+until the answer carries it, then re-reads; a device that hydrated, joined or re-read
+from the old fold owes it again (`servedByCurrentFold` in `src/core/cloud/sync.ts`;
+`test/cloud-applier-catch-up.test.ts`, "waits for the Worker that folds creates").
+
+**The re-read leaves alone what a conflict here is still about.** The fold holds the last
+write of every value — for anything contested on this device, the other side. Applied
+as it came, it replaced the value this device holds while the record went on asking
+which to keep. So a re-read withholds what an open record is about, as the screen
+withholds it from an operation: a field on its own, a plan or a milestone's members
+whole. And a plan's record keeps each side's entries (`conflict_entries:<id>` in `meta`,
+device-local, forgotten once the record closes), so a resolution writes back who queued
+each entry, when and why from the side it chose — resolved from the order alone, "keep
+mine" put the entries back without their notes on every device. Every chosen entry has
+one; only an issue a custom value adds, which neither side held, is the resolver's, at the
+decision. A resolved status carries its `status_version` — the resolver's plus one — as
+every status write does; written as the status alone, the resolver kept its own token while
+a fresh device took the last one the log carried (`test/cloud-resolution-status-version.test.ts`).
+The decision's own `conflict` operation carries the same `entries`, `statusVersion` and
+`updatedAt`, and a device writes them even where the decided value already stands: a device
+with its own record open withholds the resolving write and closes its record by the
+decision, and from the value alone it wrote the resolver as the author of every entry of a
+list and kept its own token, where a fresh device held the log's
+(`test/cloud-resolution-entry-provenance.test.ts`); and a device already holding the decided
+value — a renumber applies while a record about the number is open — kept its own
+`updated_at` (`test/cloud-resolution-decision-stamp.test.ts`).
 
 **An epoch is a discontinuity.** `epoch` is an integer stamped on the repository
 and embedded in every cursor. A restore that moves remote state backwards
@@ -820,6 +1369,91 @@ and a device that re-bootstraps into it hydrates nothing while the old rows sit
 there being retained for forensics that nobody asked for. The two options a
 restore may take are *append compensating operations* or *bump the epoch and
 re-materialise*; "bump the epoch" on its own is not one of them.
+
+### A restore rewinds
+
+A restore puts the repository back to a backup, and every device follows it there. The new
+epoch's snapshot says what the repository holds; what it does not say is everything pushed
+to the old epoch after the backup. A device that held such a row used to keep it through its
+re-bootstrap, while a device joining afterwards never had it — one repository, two answers,
+for good. So a device **reconciles to the epoch's fold** (`src/core/cloud/rewind.ts`): it
+reads the snapshot whole and, before applying any of it, removes what the epoch does not hold
+and nothing keeps; then it applies the snapshot, all in one transaction. Removed first, so
+nothing it rewinds — a number, a slug, a retry key — is in the way of the epoch's own; and a
+re-bootstrap killed part-way leaves nothing half-applied, and reads again on the next sync.
+
+- **What was pushed after the backup is gone.** A row the epoch does not hold, that was
+  pushed — this device's own, acknowledged, or one it applied from the log — is removed on
+  every device, with what hangs off it: an issue's comments, documents, blockers, milestone
+  and plan entries; its open conflict records are closed. That is the rewind, which is what
+  a restore is for — undoing damage. An issue removed stays a former holder of its number
+  ([above](#identifiers-and-other-unique-values)): a write by that number is refused inside
+  the day, or while it was checked out. A built-in status or kind the epoch says nothing
+  about is put back as every device's migrations install it, and the vocabulary is in the
+  order a device hydrating the epoch holds it. Document revisions are settled by the read
+  itself ([above](#conflicts-are-preserved-never-resolved-silently)).
+  A milestone the epoch holds with no `members` key — one made on a connected device reaches
+  the log as its dates alone, and a restore stages it so until its membership is written —
+  holds no members, as it does on a fresh device: the rewind clears its member rows, unless
+  this device's unsent membership of it is still to be sent
+  (`test/cloud-restore-milestone-members.test.ts`). The plan and a blocker set have no such
+  shape; each reaches the log only as its whole list. An open record about the plan or a
+  milestone's members is about the list, not the issues in it, so it outlives the issues the
+  rewind removes: each side loses them, as the list does, and a record whose sides then
+  agree closes (`test/cloud-restore-open-list-record.test.ts`). Kept whole, resolving to the
+  side that named a removed issue failed for ever.
+- **What the rewind removed claims nothing afterwards.** The provenance a re-bootstrap puts
+  back is this device's unsent work only: an acknowledged operation is in the log, whose
+  snapshot says who wrote each field, and one a restore rewound wrote nothing this device
+  still holds. Put back too, a member add the restore rewound went on claiming the membership
+  and withheld one written into the new epoch. Nor is an empty list nobody here wrote
+  contested by the version alone — a device still counts the operations it rewound — so a
+  membership sent again into the epoch lands where it was rewound
+  (`test/cloud-restore-resent-membership.test.ts`). And a blocker set the epoch does not hold
+  loses its version: an issue's create carries the blockers it was made with, and applies
+  them only when the log holds no set of its own for the issue, which a fresh device applies
+  after the issue whatever the order; sent again after the set, the create replaced it on
+  every device reading the tail (`test/cloud-restore-resent-create-blockers.test.ts`).
+- **Work that was never pushed is kept, and reaches every device.** An entity with an
+  operation in this device's outbox that no service acknowledged is kept, with whatever it
+  names that the epoch lacks — a comment's issue, an issue's parent, project, status and
+  kind. So is whatever **every** unsent operation names, create or edit alike, transitively:
+  an unsent edit of an issue the backup holds, naming a status, kind or project made after
+  the backup, a blocker set naming a later issue, the plan or a milestone's members naming
+  one (`test/cloud-restore-unsent-referents.test.ts`). Kept only through the entity, those
+  were removed while the edit was still sent. All of it is sent into the epoch: its queued operations as they are, and a `create` of each
+  kept entity the queue holds no create of, the whole entity as this device holds it, as a
+  heal sends one ([below](#a-workspaces-history-reaches-the-service-when-it-first-synchronizes)).
+  Built-ins are never sent: every device installs them. A kept entity's `create` is journaled
+  after the queued work that kept it, so the queue is then put in an order every receiver can
+  apply as it goes: each operation after the pending `create` of whatever it names (an unsent
+  comment after its issue's create sent again). Otherwise the queued order stands; the
+  operations trade the client sequences they hold, and keep their ids. A device that made
+  the restore has moved its epoch already, so its next sync reads the epoch before it pushes,
+  and the rewind sees that work before it is sent. What a restore rewound can leave an issue kept here on a
+  stand-in with its number now free: it takes the number back.
+- **Work already done in the epoch on a row it lacks is kept too.** A device that followed
+  the restore on a build that did not rewind held every rewound row, and could edit one —
+  its operations in the epoch then name entities the epoch does not hold. Rather than drop
+  that work everywhere, a device reconciling keeps whatever the epoch's own entities name and
+  do not hold — the issue an edit with no create is of, the issue a comment is on — when it
+  holds it, and sends it as a `create`: the same rule as unsent work, because both are work
+  a person did that the epoch has no row for, and dropping it would discard it silently on
+  every device at once. Until a device that holds it reconciles, other devices set the
+  dangling entities aside ([below](#no-entity-can-stop-a-sync)).
+- **A restore an older build followed is noticed after the upgrade.** The database records
+  the epoch this build last reconciled it against (`sync_reconciled_epoch`). A device whose
+  epoch is not that one — it followed a restore on c7a49d6, which hydrated the new epoch on
+  top of everything it held — reconciles on its first sync by this build, the applier's
+  catch-up re-read included; so does every database this build has not yet reconciled.
+
+Every device, and a fresh one, then holds the same on every synchronized column — pinned as
+a test by the property registry's restore step (`test/sync-mutation-convergence.test.ts`), and
+by `test/cloud-restore-rewind.test.ts`, `test/cloud-restore-identity.test.ts` and
+`test/cloud-restore-older-build.test.ts`, in the service's fold and the tail fold. A row
+nothing ever journaled or applied, and one whose operation was withheld as larger than the
+service takes, is this workspace's own and never on any timeline: a reconcile leaves it, and
+the heal is what sends the first.
 
 ### What the server cannot do
 
@@ -882,8 +1516,8 @@ process dies it has either seeded or not. The record is a device-local `meta` ro
 a workspace migration, the migration number is what every operation carries as
 `schema`, and a device receiving a page stamped above its own schema refuses it
 with `schema_ahead` — one bookkeeping column would make every device on an older
-build refuse every operation this build emits. `meta` keys outside `slug`, `prefix`
-and `setting:*` never replicate, so the row never leaves the machine. It names the
+build refuse every operation this build emits. `meta` keys outside `setting:*` never
+replicate, so the row never leaves the machine. It names the
 repository because `staple cloud fork-id` mints a new one, and a fork has received
 nothing, so it owes a seed of its own — which is also what finally makes a fork's
 outbox, dropped by `fork-id`, reach the new repository.
@@ -899,7 +1533,61 @@ issues parents first, blocker sets, comments, document revisions, milestones, an
 the plan. A built-in status or kind still carrying the label and category it was
 installed with is not sent — every device holds it already, by construction — and
 a vocabulary order is sent only when it differs from the one a receiver would build
-by appending, which is where a receiver puts an entry it has never seen.
+by appending, which is where a receiver puts an entry it has never seen. A built-in this
+workspace **removed** before connecting is sent as a `delete` when it seeds an empty
+repository; a repository that holds data and says nothing about that built-in implies
+it, and what the repository holds it keeps, so on joining such a repository the
+built-in comes back and the sync reports that it replaced the removal.
+
+**"Empty" means no data, and the prefix declaration is not data.** Every first device
+declares the repository's prefix, an empty one too. Counted as an item, a repository an
+empty laptop joined first looked like one holding data, and the workstation that joined
+next — the one with the real work — gave up its own kind order and its removals of
+built-ins, on its own machine, and every device converged on that
+(`test/cloud-vocabulary-lifecycle.test.ts`, "a repository an empty device joined first").
+
+**A blocker set carries each edge's own author and time** (`edges`, beside `blockedBy`),
+from the seed, a create and `setBlockedBy`. The applier writes each edge from them, else
+keeps an edge it already holds as it holds it, else takes the operation's: it used to
+delete and re-insert the whole set with the operation's actor and time, so the seeding
+device rewrote the times of its own edges when its seed came back (measured: 19 of them,
+by 1–3 ms) and every other device dated all of an issue's edges with one instant. A set
+from a build that sends no `edges` is given its facts by the device that applies it in the
+ordered tail — the operation's actor and time for an edge it added — and that device
+journals the edges as it now holds them, so the fold carries them to a device that
+hydrates, which has no operation to take them from (`test/cloud-relation-provenance.test.ts`).
+
+**Every field travels in one spelling, and every write of a status move travels whole.**
+The journal names each field once, by its field name (`oneSpelling`), and the fold treats
+`updated_at` and `updatedAt` as one field, keeping the one written last; a device reading
+an older Worker's snapshot keeps the spelling written last by its provenance. Measured
+before: after a vocabulary migration, a stale `updated_at` won on every fresh device.
+
+**Where nothing says which spelling came last, the column's wins.** An older build
+journaled a create by field name and each later edit by column, and the Worker before this
+one kept both keys, so a backup it made — and every epoch restored from one — holds both
+spellings of an edited field with no provenance at all. Applying them by field name put the
+value at creation back: measured, the estimate went from 3h to 1h, an edited criterion came
+back, and a finished issue lost its `completed_at`, on every device of this build and every
+fresh one, and on the first sync after this Worker was deployed if the live epoch came from a
+restore. The column's spelling is the later value in every such entity written while the
+Worker of this build was live, or before any client of this build synchronized: until this
+build only an edit wrote that spelling, and from this build on the Worker's fold drops the
+other spelling whenever one is written. The one exception is a window no deployment should
+open — a client of this build editing a field (it journals the field name) while the Worker
+before this build is still live (it keeps both keys), followed by a backup and a restore:
+that edit is then the field name's, with no history, and is lost on every build. So **the
+Worker is deployed before the client** (`worker/README.md`), which leaves the window empty.
+The column's spelling is kept wherever both arrive without history: the service's fold and this device's tail
+fold drop the field name's (`columnSpellingWins`), the snapshot reader prefers the column's
+in a tie (`latestSpelling`), and so does the applier and the seed's survey.
+
+A status move — derived for an ancestor, a gate, an approval, a send-back, a checkout —
+journals every column it wrote, `status_version` and `updated_at` included; journaled as
+`{ status, derived }` those changed on the moving device only. A project's create and
+updates carry its own `createdAt` and `updatedAt` (`test/cloud-field-spelling.test.ts`,
+`test/cloud-derived-moves.test.ts`, `test/cloud-project-times.test.ts`). Since then no path
+names its columns at all: see [The journal records what changed, by row](#the-journal-records-what-changed-by-row).
 
 **The first device and a device joining a repository that has data are one rule:**
 *upload every local entity the repository does not hold, and take the repository's
@@ -911,9 +1599,15 @@ comment or project; what they can share is a name, and names are settled like th
   is already `STA-5` on every connected device; this device's `STA-5` has never been
   seen by anybody. So a local issue whose identifier the repository uses is
   renumbered to the next number above both — and gets a comment saying so, because
-  the old number is already in somebody's commit message and there is no alias
-  table: the comment travels with the issue, `staple show` prints it, and a search
-  for the old identifier finds it. A project slug the repository uses gets a free
+  the old number is already in somebody's commit message: on this machine the old
+  number keeps resolving and hub cross-links follow it
+  ([Identifiers](#identifiers-and-other-unique-values)), a search for the old identifier
+  (`staple ls -q`, `list_tasks`'s `q`) finds the issue through the same alias, and the
+  comment is the record every other device receives, which `staple show` prints. It is
+  worded to be true on every device that reads it: it names the workspace the issue was
+  created in, never "this machine". Before any of that, a workspace whose prefix differs from the
+  repository's takes the repository's and moves its issues into that numbering
+  ([The prefix](#the-prefix-is-the-repositorys-the-slug-is-the-machines)). A project slug the repository uses gets a free
   suffix. An issue retry key (`idempotency_key`) or a live external origin the
   repository already holds is cleared on the local duplicate. Each of these happens
   before anything is applied or uploaded, which keeps every `UNIQUE` index on both
@@ -967,9 +1661,10 @@ parameter.
 **What cannot go, and says so.** The service refuses a payload over `maxOpBytes`
 (512 KiB) for the whole batch, so one oversized operation would fail the same push
 on every sync and nothing behind it would ever leave. The seed decides instead. A
-document revision is immutable and nothing names it, so an oversized one is left
-behind and named. Anything else is a row other rows depend on; the seed refuses,
-names it, writes nothing, and the fix is to shorten it and sync again. A revision
+document revision is immutable and nothing names it, and a comment is written once and
+named by nothing, so an oversized one is left behind and named. Anything else is a row
+other rows depend on; the seed refuses, names it, writes nothing, and the fix is to
+shorten it and sync again. A revision
 whose issue no longer exists (see Known limits) is named and left behind, because no
 device could place it.
 
@@ -1008,8 +1703,8 @@ service, and this device's counters never agreeing with anyone's again.
 
 ## Deletion is a tombstone
 
-**This section designs a capability the tracker does not currently have.** No
-surface deletes an issue today — not CLI, not MCP, not HTTP. Rows leave only by
+**For issues and comments, this section designs a capability the tracker does not
+currently have.** No surface deletes an issue today — not CLI, not MCP, not HTTP. Rows leave only by
 `ON DELETE CASCADE` when a parent goes, and `comments.deleted_at` is the schema's
 only soft delete. Nothing below describes existing behaviour; it is the contract
 deletion must meet *if and when* a delete surface is added, and it exists now
@@ -1023,6 +1718,41 @@ deviceId, opId)` — and the local row is removed only after the tombstone is
 durable in the same transaction. Applying an `update` for a tombstoned entity is
 a **no-op, not a resurrection**: the tombstone wins regardless of arrival order,
 which is what makes convergence order-independent.
+
+What is deleted today are the entities keyed by a name rather than a UUID — statuses,
+kinds, settings (a reset is a `delete`) — and projects. Each is tombstoned on every
+device that applies the delete **and on the device that made it**, at once: until its
+own delete comes back, that is its only record that the entity is gone. Built-ins
+included: removing a built-in status or kind is allowed locally, under the same guards
+as any other, so it is removed on every device, and the issues its `--migrate-to` moved
+travel as their own `issue.update`s — the receiver never re-runs a migration.
+
+**A removal and a move into it.** Locally an issue never holds a status or kind its
+workspace does not define: removing one an issue holds is refused without `--migrate-to`.
+Across devices the removal and a concurrent move into what it removes were each legal
+where they were made, and the issue ended on a status no device defined. So every removal
+names a target — the `--migrate-to` it was given, or, when nothing held it where it was
+removed, the first remaining status of the same category (the first remaining kind) — and
+carries it as `migrateTo`. Any device that finds an issue on a removed status or kind moves
+it there: applying the removal while an issue holds it, or applying a move into one it
+has already removed. The device whose own write was involved — the removal or the move —
+journals where the issue went, so the log agrees and a device hydrating later reads it
+from the fold. A device that knows a removal only from a snapshot, which drops a delete's
+payload, uses the same rule on the category the snapshot still shows, until that
+settlement arrives (`src/core/vocabulary-targets.ts`;
+`test/cloud-vocabulary-removal-race.test.ts`).
+
+**A `create` is the one thing a tombstone yields to.** A key reused after a delete —
+a status removed and added back, a setting reset and set — is somebody deciding, after
+the delete, that the entity exists again; it is not a late edit. So a `create` lifts the
+tombstone and the entity begins again from its payload, in the service's fold and in
+every applier alike. Everything after the delete that is not a create stays turned away.
+To make that true end to end, a set that follows a reset is journaled as a `create`, and
+a delete followed by a re-create inside one mutation (a batched remove-and-add) is sent
+as that create rather than merged into a delete. Before this the fold treated the
+tombstone as final: every device that hydrated from the snapshot kept the entity
+deleted while every device that read the ordered tail applied the second create
+(`test/cloud-vocabulary-lifecycle.test.ts`, `worker/test/snapshot.test.ts`).
 
 Tombstones are retained for the compaction horizon (below) and no less. A
 tombstone dropped while any device's cursor is still behind it is exactly how a
@@ -1045,6 +1775,64 @@ because `client_seq_high_water` lives outside the outbox
 never be the thing that decides what the next operation id will be.
 
 ## Conflicts are preserved, never resolved silently
+
+**A resolution converges on every device, for every field that can conflict** — an issue
+field, the plan, a milestone's members and dates, a status or kind label, the status and
+kind order, a setting, a project name — resolved either way. A setting's record holds the
+setting's value, not the envelope it is stored in (resolved "local", the envelope was
+written back and every device held it twice wrapped), and a resolution writes a field under
+its field name (`targetDate`, which the milestone applier reads; under the column's
+spelling, a milestone date resolved on one device changed on none)
+(`test/cloud-conflict-resolution-matrix.test.ts`).
+
+**Two revisions written as one number both survive, placed by the log.** A document
+revision is immutable once written, and its number is its document's next, decided on the
+device that writes it — so two devices that each write revision N before seeing the other's
+send two different revision N's. Each device used to keep the first to arrive and the
+service's fold the last, so one writer's text existed only on its own device, and no record
+said so. Now there is one placement, and every reader of the log uses it — the applier, the
+service's fold, the tail fold and the test service all call `placeRevision`
+(`src/core/cloud/revision-placement.ts`, which the Worker imports as it stands):
+
+- **Taken in log order, each revision is the first free number from the one it claimed
+  upward.** Its body, author and time are kept, and when it moved, "renumbered from rN to rM:
+  written at the same time as another rN, which the repository's log holds first" is added to
+  its change summary.
+- **A revision the log already holds is not a second one.** It is the same revision when it
+  has the same body, and the same author where both have one — never by its time: a build
+  before this one dated a revision it applied by the operation, a millisecond off the time it
+  carries, and compared by time, every revision such a device held read as another and was
+  copied under a new number. It is matched at or above the number it was written as (a
+  revision sent again under the number it moved to says that number in its summary); below
+  it is an earlier revision, and a document put back to an earlier text is a new revision.
+- **Only this device's own revisions the log has not reached yield** — written here and not
+  sent, or sent and given a later seq. When an earlier revision in the log takes a number
+  one of them holds, every one of them is placed again after it, in the order they were
+  written, by the same rule, and each that moved is sent again under its new number, so a
+  device on an older build, which keeps whatever reached it first under a number, receives
+  the text too. Before, the one in the way alone went past the highest, and a writer with
+  two revisions in flight held them backwards, its older text as the current document.
+- **A snapshot is the log's placement.** Joining, re-bootstrapping or re-reading, a
+  revision's number is the one the log settled on, and it replaces what this device held
+  there: a revision it holds that matches by content moves to that number and takes the
+  log's time, author and summary, with no copy and no renumber. Once the read is complete,
+  its own revisions the log has not reached are placed after the log's, and one it holds
+  that the log does not is dropped (not by a join, whose rows are the workspace's own, nor
+  from a fold before this build). Before, a device that joined from a fold which had merged
+  two same-number revisions into one row kept that row on its re-read and moved the log's
+  earlier text up as if it were the newer. A revision of this device's own the log has not
+  reached keeps its own time and author, but where the log holds that very revision it takes
+  the log's summary: a writer whose r1 the log placed at r2, with the answer lost, restored a
+  backup holding it, set its own aside to r2 for the log's r1, and alone said nothing of the
+  move (`test/cloud-restore-renumbered-revision.test.ts`).
+- **The head is the highest revision, dated by it.** `documents.updated_at` is the highest
+  revision's time, not the last one applied: a revision sent again under its new number
+  arrives after the ones above it, and stamped the document with its older time on every
+  device reading the tail.
+
+Nothing is dropped, and every device and a fresh one hold the same numbers
+(`test/cloud-document-revisions.test.ts`, worker `snapshot.test.ts`, and the registry in
+`test/sync-mutation-convergence.test.ts`).
 
 **No path applies last-write-wins.** Not for `updated_at`, not for `seq`, not for
 "the server is authoritative". A conflict is data, and resolving it is a decision
@@ -1271,6 +2059,18 @@ Two entity kinds, at protocol 2:
 | `registration` | the workspace's `repository_id` | `format`, `slug`, `prefix`, `kind`, `addedAt`, all on the `create` only |
 | `crossLink` | `rid/` + the blocker's `repository_id`, blocker identifier, blocked `repository_id`, blocked identifier, each percent-encoded, joined with `/` | on the `create`: `format`, `blockerWs`, `blockerIdentifier`, `blockedWs`, `blockedIdentifier`, `type`, `present: true`; on an `update`: `format` and `present` only |
 
+**A link follows its issue when the issue's identifier moves.** A link names each end by
+identifier, here and in `cross_links`, and an identifier can move after the link was made:
+sync settles two devices' claims on one number, a joining workspace yields numbers its
+repository uses or takes its repository's prefix, a resolution moves an incumbent aside.
+Every such move is recorded in the workspace and carried to this machine's hub at the end
+of each sync and after each resolution (`src/core/hub-follow.ts`). Each link made before
+the move is rewritten to the new identifier — one made after it, naming the old number,
+means the issue that holds that number now and is left alone — and the move is recorded
+as this machine's acts on the registry, the link under its old key removed and under its
+new key added, so a publish retracts the stale key rather than leaving it for another
+machine to adopt (`test/cloud-hub-links-follow.test.ts`).
+
 They are two entities rather than one blob because the fold is per entity and is
 last-write-wins: one entity holding the whole registry would make every publish
 rewrite every workspace, so two machines editing two different workspaces would each
@@ -1422,7 +2222,10 @@ workspace **by `repository_id`**, never by slug. The identifier must then carry 
 this machine holds that repository under. A repository initialised separately on two
 machines can get two prefixes, because a prefix is derived from the directory name when
 the workspace is first initialised: a clone in `tracker/` gets `TRA` and a clone in
-`staple-tracker/` gets `STA`. Then the registry's `TRA-3` names no issue here. **That is a fact about the data, not a defect, and it is the rule:** the
+`staple-tracker/` gets `STA`. Then the registry's `TRA-3` names no issue here. A clone that
+joins its repository through sync takes the repository's prefix when it does
+([The prefix](#the-prefix-is-the-repositorys-the-slug-is-the-machines)), so this is the case
+of a workspace that has not — never connected, or joined on a build from before that. **That is a fact about the data, not a defect, and it is the rule:** the
 link is reported as skipped with that reason, and staple does not renumber a prefix to
 make it fit. The same holds for an identifier the local workspace does not contain, an
 end whose workspace did not land here, and a link that would close a cycle. Each is
@@ -1953,18 +2756,35 @@ other vocabulary needs its own repository, and `isVocabularyRefusal` in
 `src/core/cloud/client.ts` separates this refusal from a lease race. Provisioning and the
 cleanup for a repository contaminated before the rule existed are in `worker/README.md`.
 
-**`Retry-After` is not yet honoured**, and the backoff half of that row is the only
-half that ships. The Worker sends the header, and the client reads it into
-`detail.retryAfter` where `--json` consumers can see it — and then nothing consumes
-it: the in-sync schedule is `min(2s, 200ms · 2ⁿ)` over three attempts, so a service
-asking for sixty seconds is retried after two hundred milliseconds. Automatic sync
-is better behaved by a different mechanism rather than by reading the header — one
-attempt per run, with a persisted jittered backoff based at five seconds and capped
-at five minutes — so the observable damage today is bounded to manual `staple cloud
-sync` against a rate-limited endpoint. It is written down here because the row
-above is what an implementer of a *second* transport would read and believe, and a
-provider with a real quota is exactly where ignoring the header stops being
-cosmetic.
+**`Retry-After` is honoured (STA-264).** The Worker sends it with every
+`rate_limited` (`Retry-After: 60`, at 120 requests a minute per device), and the client
+reads it — delta-seconds or an HTTP date — into `detail.retryAfter` and acts on it:
+
+- **Within one sync, a `rate_limited` is waited out and the request sent again**,
+  without spending one of the three transient-failure attempts, because being told "not
+  yet" is not a failure. This is what carries the first sync of a large workspace, which
+  uploads its whole history in batches of `maxBatchSize` and can run past the limit, to
+  the end in one command instead of stopping halfway. `staple cloud sync` says on stderr
+  that it is waiting and for how long.
+- **Bounded twice**, so an absurd or hostile value cannot hang a command: no single wait
+  over two minutes, and no more than ten minutes of waiting in one sync. A service asking
+  for longer is reported at once, as `rate_limited` with its `retryAfter`, rather than
+  asked again in 200 ms; everything already acknowledged stays acknowledged, and the next
+  sync sends the rest exactly once.
+- **Any other retryable answer carrying `Retry-After`** — an `unavailable` 503 — still
+  spends an attempt, and waits at least what the service asked for within the same bounds,
+  instead of the `min(2s, 200ms · 2ⁿ)` default.
+- **Automatic sync does not wait inside a run** — a run has a budget — and schedules its
+  next run no sooner than the service asked: its jittered backoff (five seconds, doubling,
+  capped at five minutes) or the `Retry-After`, whichever is later — the `Retry-After`
+  bounded at fifteen minutes, because taken as given `Retry-After: 31536000` put the next
+  run a year out and anything past about 1e14 seconds threw inside the scheduler. A wait
+  it is keeping shows in `staple cloud status` and, per workspace, in `staple cloud status
+  --all` (`autoWaitingUntil`), and any sync that works ends it.
+
+The tests drive the real client against the fake service with the Worker's limit switched
+on, on a clock the test moves by exactly what the client sleeps
+(`test/cloud-rate-limit.test.ts`).
 
 ## Backup, disconnect and purge are three different things
 
@@ -2148,13 +2968,12 @@ Honest gaps, so nobody discovers them the hard way.
   *without being asked again* is a different kind of decision, and it stays
   per-workspace so that a hub-wide connect cannot become hub-wide background
   traffic by adding one word.
-- **Provisional identifiers change once.** An issue created offline on a connected
-  repository is renumbered when the server allocates its canonical number. The
-  provisional identifier remains a resolvable alias, but a number written into a
-  commit message before the first push points at an alias rather than the primary.
-  Per-device number ranges would avoid the churn at the cost of an allocator
-  round trip before the first offline creation; that trade is revisitable if the
-  churn proves noisy in practice.
+- **An identifier two devices minted alike changes once, on the device that minted it
+  second.** Its issue is renumbered by that device when the earlier claim reaches it
+  ([Identifiers and other unique values](#identifiers-and-other-unique-values)). The old
+  number keeps resolving on that machine, and a comment on the issue says what it was;
+  a number written into a commit message before then names the other device's issue on
+  every machine but that one.
 - **`document_revisions` has no foreign key to `issues`.** Orphaned revisions are
   already reachable locally today; sync does not introduce the hazard and does not
   fix it either.

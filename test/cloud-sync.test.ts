@@ -231,21 +231,23 @@ function dyingAfterOneSnapshotPage(): typeof fetch {
 }
 
 describe("bootstrap and incremental sync resume from bounded opaque cursors", () => {
-  it("resumes a bootstrap that was killed between pages", async () => {
+  /**
+   * A re-bootstrap into a moved epoch reads the new epoch's snapshot whole and applies it in
+   * one transaction, reconciled to it first (`rewind.ts`): what the device holds that the
+   * epoch does not has to be known before anything of the epoch lands. So, like a first sync,
+   * a death halfway costs a re-read and never leaves a half-applied epoch.
+   */
+  it("writes nothing when a re-bootstrap dies mid-snapshot, and completes on the next run", async () => {
     const b = await deviceOwingAPagedRebootstrap();
-
-    // The page that committed is durable and so is the position; the rest of the
-    // bootstrap is not.
     await expect(b.sync({ fetchImpl: dyingAfterOneSnapshotPage(), pullLimit: 2 })).rejects.toThrow();
 
     const midway = readSyncState(b.store.db)!;
-    expect(midway.bootstrap, "an interrupted bootstrap records where it got to").not.toBeNull();
-    expect(midway.cursor, "and does not pretend the incremental cursor is valid yet").toBeNull();
-    expect(titles(b.store).length).toBeGreaterThan(0);
-    expect(titles(b.store).length).toBeLessThan(6);
+    expect(midway.bootstrap).toBeNull();
+    expect(midway.cursor, "the incremental cursor is not pretended valid").toBeNull();
+    expect(titles(b.store)).toEqual([]);
 
     const report = await b.sync();
-    expect(report.bootstrap!.resumed).toBe(true);
+    expect(report.bootstrap!.resumed).toBe(false);
     expect(titles(b.store)).toEqual(["Issue 0", "Issue 1", "Issue 2", "Issue 3", "Issue 4", "Issue 5"]);
   });
 
@@ -463,7 +465,12 @@ describe("an epoch is a discontinuity, and it is never a silent reset", () => {
     const report = await b.sync();
     expect(report.epoch).toBe(2);
     expect(report.bootstrap, "a superseded cursor forces a bootstrap").not.toBeNull();
-    expect(titles(b.store)).toEqual(["After the restore", "Before the restore"]);
+    // What the new epoch holds, as a device joining it now does: a restore rewinds, and this
+    // one materialised nothing, so what B held from the old epoch is gone ("A restore rewinds").
+    const fresh = device("device-fresh", "token-fresh");
+    await fresh.sync();
+    expect(titles(b.store)).toEqual(["After the restore"]);
+    expect(titles(fresh.store)).toEqual(titles(b.store));
   });
 
   /**
@@ -528,7 +535,8 @@ describe("an epoch is a discontinuity, and it is never a silent reset", () => {
     const a = device("device-a", "token-a");
     await a.sync();
     await expect(b.sync({ fetchImpl: dyingAfterOneSnapshotPage(), pullLimit: 2 })).rejects.toThrow();
-    expect(readSyncState(b.store.db)!.bootstrap, "B is mid-bootstrap").not.toBeNull();
+    // A re-bootstrap reads whole: the death left nothing applied and no position to resume.
+    expect(readSyncState(b.store.db)!.bootstrap).toBeNull();
 
     // Two restores while B is away, so a client that recovers by guessing
     // `epoch + 1` lands on the wrong number and has to be corrected by the
@@ -549,7 +557,7 @@ describe("an epoch is a discontinuity, and it is never a silent reset", () => {
     };
 
     const hydratedBefore = titles(b.store);
-    expect(hydratedBefore.length, "B got part of the way before it died").toBeGreaterThan(0);
+    expect(hydratedBefore, "nothing of the epoch B died reading, only its own work").toEqual(["Queued on B across a restore"]);
 
     const report = await b.sync({ fetchImpl: workerShaped });
 
@@ -559,10 +567,11 @@ describe("an epoch is a discontinuity, and it is never a silent reset", () => {
     expect(readSyncState(b.store.db)!.bootstrap, "nothing stale is left behind").toBeNull();
     expect(readSyncState(b.store.db)!.cursor, "B has an incremental position again").not.toBeNull();
 
-    // The recovery is not destructive: everything B had already hydrated is
-    // still there, alongside its own work.
-    for (const title of hydratedBefore) expect(titles(b.store)).toContain(title);
-    expect(titles(b.store)).toContain("Queued on B across a restore");
+    // The recovery rewinds B to the epoch the service has — two restores left it empty, so
+    // what B hydrated from the superseded one is gone — and keeps B's own unsent work
+    // ("A restore rewinds").
+    for (const title of hydratedBefore.filter((held) => held.startsWith("Issue "))) expect(titles(b.store)).not.toContain(title);
+    expect(titles(b.store)).toEqual(["Queued on B across a restore"]);
 
     // And the push completed, which is the half that a stuck bootstrap was
     // silently blocking. Proven on the OTHER device rather than from B's own

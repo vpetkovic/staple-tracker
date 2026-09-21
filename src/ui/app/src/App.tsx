@@ -51,6 +51,7 @@ import { projectsForWorkspace } from "@/lib/projects";
 import {
   DEFAULT_VIEW,
   SessionContext,
+  pinSelection,
   type Selection,
   type StapleSession,
   type ViewName,
@@ -400,6 +401,10 @@ export function App() {
   );
 
   const open = useCallback((workspace: string, ref: string) => setSelection({ workspace, ref }), []);
+  const pin = useCallback(
+    (workspace: string, ref: string, id: string) => setSelection((current) => pinSelection(current, { workspace, ref, id })),
+    [],
+  );
   const close = useCallback(() => setSelection(null), []);
 
   const settingsSnapshot = settings.settings;
@@ -431,6 +436,7 @@ export function App() {
       setAssignee,
       selection,
       open,
+      pin,
       close,
       version,
       refresh: bump,
@@ -460,6 +466,7 @@ export function App() {
     setAssignee,
     selection,
     open,
+    pin,
     close,
     version,
     bump,

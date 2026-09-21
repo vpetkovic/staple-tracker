@@ -65,9 +65,11 @@ import {
   forgetLocalLease,
   leaseScopeNote,
   listLocalLeases,
+  owedLeaseReleases,
   readLocalLease,
   recordLocalLease,
   serverInstant,
+  settleOwedLeaseRelease,
   LOCAL_SCOPE_NOTE,
   type ClaimScope,
   type LocalLease,
@@ -205,7 +207,8 @@ export async function acquireClaim(
   holder: string,
   options: LeaseOptions,
 ): Promise<ClaimOutcome> {
-  const issue = store.getIssue(ref);
+  // Before anything is asked of the service: a lease taken on the wrong issue is a lease somebody else waits on.
+  const issue = store.writeTarget(ref);
   const entityId = issue.id;
   const connection = connectionOrNull(options.home, repositoryId);
 
@@ -216,7 +219,7 @@ export async function acquireClaim(
      * connection record was absent and that was the end of it. The claim is the
      * same local claim `staple checkout` makes, and it is labelled as such.
      */
-    const claimed = store.checkoutIssue(ref, holder);
+    const claimed = store.checkoutIssue(entityId, holder);
     return {
       scope: "local",
       entityId,
@@ -249,7 +252,7 @@ export async function acquireClaim(
      * is what re-entrancy in the journal seam is for.
      */
     const claimed = store.journaled(() => {
-      const result = store.checkoutIssue(ref, holder);
+      const result = store.checkoutIssue(entityId, holder);
       store.journal.record({
         entity: "lease",
         entityId,
@@ -306,13 +309,24 @@ export async function acquireClaim(
  * It is not retried, because retrying a lease we demonstrably do not hold is a
  * spin, which is exactly why the taxonomy marks the code non-retryable.
  */
+/**
+ * The issue a lease operation by `ref` is about — refused, before anything is sent, when
+ * `ref` is a number this device's issue moved off and that issue may be the one meant: this
+ * device leases it, somebody has it checked out, or it moved within the day
+ * (`WorkspaceStore.writeTarget`). By the old number a renewal or a release would be aimed at
+ * the issue that holds it now.
+ */
+function leasedIssue(store: WorkspaceStore, ref: string): ReturnType<WorkspaceStore["getIssue"]> {
+  return store.writeTarget(ref);
+}
+
 export async function renewClaim(
   store: WorkspaceStore,
   repositoryId: string,
   ref: string,
   options: LeaseOptions,
 ): Promise<RenewOutcome> {
-  const issue = store.getIssue(ref);
+  const issue = leasedIssue(store, ref);
   return renewLease(store.db, repositoryId, issue.id, options, issue.identifier);
 }
 
@@ -399,7 +413,41 @@ export async function releaseClaim(
   ref: string,
   options: LeaseOptions,
 ): Promise<ReleaseOutcome> {
-  const issue = store.getIssue(ref);
+  /**
+   * An issue a restore removed: its checkout went with its row, and the rewind forgot this
+   * device's lease and owes the service its release (`forgetRemovedIssueLease`). Given back now
+   * when a sync has not yet, and said either way — never a `not_found`.
+   */
+  const gone = store.removedByRestore(ref);
+  if (gone !== null) {
+    const owed = owedLeaseReleases(store.db).find((entry) => entry.entityId === gone.id);
+    let remoteReleased = false;
+    const connection = connectionOrNull(options.home, repositoryId);
+    if (owed && connection !== null) {
+      const session = requireSession(options.home, repositoryId);
+      try {
+        await releaseRemoteLease(
+          session.endpoint,
+          { repositoryId: session.repositoryId, token: session.token, deviceId: session.deviceId, entityId: gone.id, fencingToken: owed.fencingToken },
+          options,
+        );
+        remoteReleased = true;
+        settleOwedLeaseRelease(store.db, gone.id);
+      } catch (error) {
+        if (reasonFor(cloudCodeOf(error)) !== "offline") settleOwedLeaseRelease(store.db, gone.id);
+      }
+    }
+    return {
+      scope: remoteReleased ? "lease" : "local",
+      entityId: gone.id,
+      remoteReleased,
+      reason: remoteReleased ? null : "no-lease",
+      stranded: false,
+      issue: null,
+      note: remoteReleased ? `${gone.message} The lease it held on the service was released now.` : gone.message,
+    };
+  }
+  const issue = leasedIssue(store, ref);
   const entityId = issue.id;
   const connection = connectionOrNull(options.home, repositoryId);
   const held = readLocalLease(store.db, entityId);
@@ -448,7 +496,7 @@ export async function releaseClaim(
    */
   let released: Issue | null = null;
   try {
-    released = store.releaseIssue(ref);
+    released = store.releaseIssue(entityId);
     if (remoteReleased) {
       store.journaled(() => {
         store.journal.record({
