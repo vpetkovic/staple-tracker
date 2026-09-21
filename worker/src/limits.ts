@@ -185,10 +185,18 @@ export const TAIL_BYTES = FOLD_STEP_BYTES + ROW_BYTES;
 export const PAGE_BYTES = 1024 * 1024;
 
 /**
- * Estimated isolate time one snapshot page may spend reading and serializing its entities
- * (`serveWork`, `fold-work.ts`): a page of escape-heavy states is cut long before its bytes are.
+ * Estimated isolate time one page — a pull's or a snapshot's — may spend reading and serializing
+ * what it serves (`serveWork`, `fold-work.ts`): a page of escape-heavy states or operations is cut
+ * long before its bytes are, and a page is never cut below one entry.
+ *
+ * As large as a whole request's budget, because a page is nearly all a read request does, and the
+ * request's own budget is what stops a page and a fold together from going over. A joining device
+ * that reads the ordered tail reads the whole log in these pages, so cutting them smaller than the
+ * CPU requires only turns one slow join into another: 100,000 operations of 7 KB each is 650 pages
+ * at this size and 2,650 at a third of it, against the per-device rate limit of 120 requests a
+ * minute.
  */
-export const PAGE_WORK = 2_000_000;
+export const PAGE_WORK = 6_000_000;
 
 /**
  * Estimated isolate time one restore turn may spend reading and staging entities. Under half of a
@@ -233,7 +241,7 @@ const FOLD_PLAN_LIMITS: Record<
   free: {
     foldBudgetOps: FOLD_STEP_OPS,
     foldBudgetBytes: FOLD_STEP_BYTES,
-    requestWork: 4_000_000,
+    requestWork: 6_000_000,
     pullFoldOps: FOLD_STEP_OPS,
     restoreStageEntities: 200,
   },
@@ -266,8 +274,14 @@ export function requestFoldBudget(plan: Plan): { remaining: number; bytes: numbe
 
 /**
  * Estimated isolate time one request may spend on the fold and on what it serves from it, in
- * nanoseconds (`fold-work.ts`). Four milliseconds on free, so the request's own routing,
- * authentication and response fit beside it under the plan's ten.
+ * nanoseconds (`fold-work.ts`). Six milliseconds on free: the estimate is calibrated against
+ * measured requests, so six is about six, and the request's own routing, authentication and
+ * response fit beside it under the plan's ten.
+ *
+ * It is shared, not split. A pull page of large operations can spend all of it and then fold
+ * nothing; a small page leaves it for the fold. Bigger is better for both — pages are what a
+ * joining device reads the whole log in, and the fold is what a backup waits for — and the ceiling
+ * is what a request measures.
  */
 export function requestWork(plan: Plan): number {
   return FOLD_PLAN_LIMITS[plan].requestWork;

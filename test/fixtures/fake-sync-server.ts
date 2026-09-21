@@ -270,7 +270,7 @@ export interface FakeServerOptions {
   pageBytes?: number;
   /**
    * Estimated isolate time one snapshot page, and one restore turn's page, may spend
-   * (`PAGE_WORK`, 2 ms, and `RESTORE_PAGE_WORK`, 1.5 ms, in `worker/src/limits.ts`).
+   * (`PAGE_WORK`, 6 ms, and `RESTORE_PAGE_WORK`, 1.5 ms, in `worker/src/limits.ts`).
    */
   pageWork?: number;
   restorePageWork?: number;
@@ -457,7 +457,7 @@ export class FakeSyncServer {
       foldSteps: Number.POSITIVE_INFINITY,
       restoreStageEntities: 200,
       pageBytes: 1024 * 1024,
-      pageWork: 2_000_000,
+      pageWork: 6_000_000,
       restorePageWork: 1_500_000,
       ...options,
     };

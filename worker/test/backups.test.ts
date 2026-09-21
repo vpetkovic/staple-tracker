@@ -981,12 +981,12 @@ describe("staging is chunked", () => {
     const served: unknown[] = [];
     let cursor: string | null = null;
     for (let page = 0; page < 50; page += 1) {
-      const answer = await jsonOf<{ entities: unknown[]; hasMore: boolean; nextCursor: string | null }>(
+      const pageOf: { entities: unknown[]; hasMore: boolean; nextCursor: string | null } = await jsonOf(
         await call(`/v1/repos/${REPO}/snapshot?limit=500${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`, { token, device }),
       );
-      served.push(...answer.entities);
-      if (!answer.hasMore) break;
-      cursor = answer.nextCursor;
+      served.push(...pageOf.entities);
+      if (!pageOf.hasMore) break;
+      cursor = pageOf.nextCursor;
     }
     expect(served).toHaveLength(chunk + 30);
   });

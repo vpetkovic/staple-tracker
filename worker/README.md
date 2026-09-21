@@ -115,7 +115,7 @@ See `src/backups.ts`; the short version, because getting it wrong is unrecoverab
   content is visible through `/snapshot` for exactly this reason — a bump-only
   implementation passes every other test in that file.
 - **Restore is chunked**, 200 entities a turn on the free plan and 1,000 on paid, and no more
-  than 2 ms of estimated isolate time, written with packed statements and folded into the new
+  than 1.5 ms of estimated isolate time, written with packed statements and folded into the new
   epoch's checkpoint as they are staged, so
   the epoch is fully folded by the time it goes live. It is driven by calling the one route
   in a loop until it answers `done`. Its first turn needs the checkpoint to have reached
@@ -319,7 +319,7 @@ read, the step reads again up to four times, then ends before that operation.
 
 **Who moves it on.** Four things, each inside one request's budget:
 
-- **Every push**, with what its own batch left of the request's 4 ms, one step. The writer pays
+- **Every push**, with what its own batch left of the request's 6 ms, one step. The writer pays
   for what it wrote, which is what keeps a repository being written hard from falling behind: pulls
   alone left a 100,000-operation run's checkpoint 30,000 operations behind, because a device
   writing pushes far more than it pulls.
@@ -328,7 +328,8 @@ read, the step reads again up to four times, then ends before that operation.
 - **A snapshot's first page, a backup, and a restore's first turn**, up to their own cutoff, which
   they need; each answers "still folding" until the fold has reached it. A snapshot stays pinned at
   the head, as it always was, and a backup's cutoff is always a mark. Each restore turn stages no
-  more than 2 ms of work and folds what it staged with the rest, so the restored epoch is folded by
+  more than 1.5 ms of work and folds what it staged with the rest, and folds what earlier turns
+  staged before it stages more, so the restored epoch is folded by
   the time it goes live.
 - **A Cron Trigger every two minutes** (`src/catch-up.ts`), one request's budget a run, over the
   repositories furthest behind. This is the floor under the fold's progress for a repository whose
@@ -348,9 +349,11 @@ and a push 45 including its own N + 4 — against the free plan's fifty an invoc
 ends early at its placement reads costs almost no work, so without that cap a single request could
 have taken hundreds of cheap steps.
 
-**Pages are cut by work too.** A pull page and a snapshot page stop at 2 ms of estimated
-isolate time to send, the first entry always, and say `hasMore`. A page of 30 KB quote-heavy
-issues used to cost 13 ms of isolate time to send before any fold ran.
+**Pages are cut by work too.** A pull page and a snapshot page stop at 6 ms of estimated isolate
+time to send, the first entry always, and say `hasMore`. A page of 30 KB quote-heavy issues used to
+cost 13 ms of isolate time to send before any fold ran. They are cut no smaller than the CPU asks
+for: a device joining from the ordered tail reads the whole log in pull pages, and every page it
+does not need is a request against the per-device rate limit.
 
 **A backup is a row.** It records the epoch, the cutoff and the fold's counts there. A
 restore pages the backup's entities out of the checkpoint in the order `restoreOrder` stages
