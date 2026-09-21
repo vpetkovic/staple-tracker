@@ -11,10 +11,11 @@ import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 import worker from "../src/index.js";
 import { encodeCursor } from "../src/cursor.js";
+import { catchUpFolds } from "../src/catch-up.js";
 import { type FoldBudget, advanceFold, foldProgress } from "../src/fold-store.js";
 import { runWork } from "../src/fold-work.js";
-import { FOLD_STEP_WORK, requestWork } from "../src/limits.js";
-import { DEVICE, ORIGIN, REPO, seedRepo } from "./helpers.js";
+import { FOLD_STEP_WORK, requestFoldBudget, requestWork } from "../src/limits.js";
+import { DEVICE, ORIGIN, REPO, envelope, seedRepo } from "./helpers.js";
 import { type GeneratedOp, insertOps } from "./log-generator.js";
 
 /** What D1 handed the isolate, and what was asked of it. */
@@ -374,4 +375,173 @@ describe("a restore turn", () => {
     // No turn counts more than a turn's rows, however much the restore has staged.
     for (const rows of counted) expect(rows).toBeLessThanOrEqual(3 * 200 + 10);
   }, 120_000);
+});
+
+describe("keeping the fold near the head without a reader", () => {
+  /**
+   * A device writing hard pushes far more than it pulls, and a pull is what used to move the
+   * checkpoint: a 100,000-operation run left it 30,000 operations behind and the next device to
+   * join paid for all of it. A push folds one step with what its request has left.
+   */
+  it("a push folds what it wrote, and folds nothing when its own batch spent the request", async () => {
+    const ops: GeneratedOp[] = [];
+    for (let n = 0; n < 600; n += 1) ops.push(op(n + 1, "comment", `comment-${n}`, "create", { issueId: "i", body: `c${n}` }));
+    await insertOps(env.DB, REPO, ops);
+    expect((await foldProgress(env, REPO, 1)).seq).toBe(0);
+
+    // A small push: the fold moves, without the repository being read at all.
+    const pushed = await send(`/ops`, env.DB, "POST", {
+      protocol: 1,
+      deviceId: DEVICE,
+      ops: [envelope({ clientSeq: 1, entityId: "issue-pushed", verb: "create", baseVersion: null, payload: { title: "pushed" } })],
+    });
+    expect(pushed.status, JSON.stringify(pushed.json).slice(0, 200)).toBe(200);
+    const moved = (await foldProgress(env, REPO, 1)).seq;
+    expect(moved).toBeGreaterThan(0);
+
+    // A push whose own body is larger than the request's budget folds nothing more.
+    const big = await send(`/ops`, env.DB, "POST", {
+      protocol: 1,
+      deviceId: DEVICE,
+      ops: Array.from({ length: 10 }, (_, n) =>
+        envelope({
+          clientSeq: 2 + n,
+          entityId: `issue-big-push-${n}`,
+          verb: "create",
+          baseVersion: null,
+          payload: { title: "big", description: quoted(300_000, `p${n}`) },
+        }),
+      ),
+    });
+    expect(big.status).toBe(200);
+    expect((await foldProgress(env, REPO, 1)).seq).toBe(moved);
+  }, 120_000);
+
+  /**
+   * And the repository nobody is syncing at all: the Cron Trigger folds the ones furthest behind,
+   * one request's budget a run (`catch-up.ts`).
+   */
+  it("the cron run folds the repository furthest behind, by a request's budget", async () => {
+    const other = "22222222-2222-4222-8222-222222222222";
+    await env.DB.prepare(
+      `INSERT INTO repos (repo_id, epoch, last_seq, last_fencing_token, created_at) VALUES (?1, 1, 0, 0, 0)`,
+    )
+      .bind(other)
+      .run();
+    // A short log on this repository, a long one on the other.
+    const few: GeneratedOp[] = [];
+    for (let n = 0; n < 20; n += 1) few.push(op(n + 1, "comment", `comment-${n}`, "create", { issueId: "i", body: `c${n}` }));
+    await insertOps(env.DB, REPO, few);
+    const many: GeneratedOp[] = [];
+    for (let n = 0; n < 2000; n += 1) many.push(op(n + 1, "comment", `comment-${n}`, "create", { issueId: "i", body: `c${n}` }));
+    await insertOps(env.DB, other, many);
+
+    const m = meter();
+    const first = await catchUpFolds({ ...env, DB: metered(env.DB, m) } as never);
+    // The long one first, and within one request: its statements are a fold's, not a scan's.
+    expect(first[0]?.repoId).toBe(other);
+    expect(m.statements).toBeLessThan(40);
+    const folded = (await foldProgress(env, other, 1)).seq;
+    expect(folded).toBeGreaterThan(0);
+    expect(folded).toBeLessThan(many[many.length - 1]!.seq);
+    // One budget for the run, not one per repository: the short log waits its turn.
+    expect((await foldProgress(env, REPO, 1)).seq).toBe(0);
+
+    // Run after run it gets there, and the short one is folded too once it is the one behind.
+    for (let run = 0; run < 40 && (await foldProgress(env, other, 1)).seq < many[many.length - 1]!.seq; run += 1) {
+      await catchUpFolds(env);
+    }
+    expect((await foldProgress(env, other, 1)).seq).toBe(many[many.length - 1]!.seq);
+    await catchUpFolds(env);
+    expect((await foldProgress(env, REPO, 1)).seq).toBe(few[few.length - 1]!.seq);
+  }, 120_000);
+
+  /**
+   * A step that ends at its placement reads folds a couple of operations and costs almost no work,
+   * so a request's work budget would let it take hundreds of them — and each is about ten
+   * statements, against the free plan's fifty an invocation. The step cap is what bounds that.
+   */
+  it("takes at most two steps a request, so steps cut short cannot run up its statements", async () => {
+    // Revisions 1..200 with every other number deleted, then claims spread across them.
+    const ops = saves(1, 1, 200);
+    let seq = 200;
+    for (let n = 2; n <= 200; n += 2) ops.push(op(++seq, "documentRevision", `issue-1/worklog/${n}`, "delete", {}));
+    const before = seq;
+    for (let n = 0; n < 60; n += 1) ops.push(saves(++seq, 1 + n * 3, 1, `late-${n}`)[0]!);
+    await insertOps(env.DB, REPO, ops);
+    await advanceFold(env, REPO, 1, before, { budget: { remaining: Number.MAX_SAFE_INTEGER } });
+
+    const m = meter();
+    await advanceFold({ ...env, DB: metered(env.DB, m) }, REPO, 1, await head(), { budget: requestFoldBudget("free") });
+    // Some of the claims, and no more statements than a request can afford.
+    expect((await foldProgress(env, REPO, 1)).seq).toBeGreaterThan(before);
+    expect((await foldProgress(env, REPO, 1)).seq).toBeLessThan(await head());
+    expect(m.statements).toBeLessThanOrEqual(45);
+  }, 120_000);
+
+  /**
+   * The free plan allows fifty D1 queries an invocation. A request folds at most two steps, and a
+   * step at most fifteen statements, so no request in a heavy scenario comes near it.
+   */
+  it("no request issues more than forty-five statements, whatever it folds", async () => {
+    const ops: GeneratedOp[] = [];
+    for (let n = 0; n < 300; n += 1) {
+      ops.push(op(n + 1, "issue", `issue-${String(n).padStart(3, "0")}`, "create", { title: `wide ${n}`, description: quoted(20_000, `${n}`) }));
+    }
+    for (let n = 0; n < 200; n += 1) {
+      ops.push(op(301 + n, "documentRevision", `issue-000/worklog/${n + 1}`, "create", { issueId: "issue-000", key: "worklog", revision: n + 1, body: `"entry ${n}" \\`, author: "alice", changeSummary: null }));
+    }
+    // Every other number deleted, then claims spread far apart: placements that need more than a
+    // step may read, so the steps are cut short and cost almost nothing in work — which is when
+    // the number of steps, not their work, is what bounds a request's statements.
+    let seq = 500;
+    for (let n = 2; n <= 200; n += 2) ops.push(op(++seq, "documentRevision", `issue-000/worklog/${n}`, "delete", {}));
+    for (let n = 0; n < 40; n += 1) {
+      ops.push(op(++seq, "documentRevision", `issue-000/worklog/${1 + n * 5}`, "create", { issueId: "issue-000", key: "worklog", revision: 1 + n * 5, body: `"late ${n}" \\`, author: "alice", changeSummary: null }));
+    }
+    await insertOps(env.DB, REPO, ops);
+
+    const worst = new Map<string, number>();
+    const record = async (label: string, path: string, method = "GET", body?: unknown) => {
+      const m = meter();
+      const response = await send(path, metered(env.DB, m), method, body);
+      worst.set(label, Math.max(worst.get(label) ?? 0, m.statements));
+      return response;
+    };
+    // Pulls and pushes while the fold is behind, then a snapshot, a backup and a whole restore.
+    let cursor: string | null = null;
+    for (let page = 0; page < 20; page += 1) {
+      const response = await record("pull", `/ops?limit=500${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`);
+      cursor = response.json.nextCursor;
+      if (!response.json.hasMore) break;
+    }
+    await record("push", `/ops`, "POST", {
+      protocol: 1,
+      deviceId: DEVICE,
+      ops: Array.from({ length: 25 }, (_, n) =>
+        envelope({ clientSeq: 100 + n, entityId: `issue-pushed-${n}`, verb: "create", baseVersion: null, payload: { title: `p${n}`, description: quoted(4_000, `${n}`) } }),
+      ),
+    });
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      const response = await record("snapshot", `/snapshot?limit=500`);
+      if (response.status === 200) break;
+    }
+    let taken: any;
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      const response = await record("backup", `/backups`, "POST", {});
+      if (response.status === 200) {
+        taken = response.json;
+        break;
+      }
+    }
+    let restoreId: string | undefined;
+    for (let turn = 0; turn < 100; turn += 1) {
+      const response = await record("restore turn", `/backups/${taken.backup.backupId}/restore`, "POST", { confirm: REPO, ...(restoreId ? { restoreId } : {}) });
+      if (response.status === 503) continue;
+      expect(response.status, JSON.stringify(response.json).slice(0, 200)).toBe(200);
+      restoreId = response.json.restoreId;
+      if (response.json.done) break;
+    }
+    for (const [label, statements] of worst) expect({ label, statements }).toEqual({ label, statements: Math.min(statements, 45) });
+  }, 180_000);
 });
