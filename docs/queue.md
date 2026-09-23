@@ -42,8 +42,10 @@ the effective order, and every surface — `inbox`, `queue`, `queue next`, the
 checkout guard, MCP, HTTP and the editor's preview — reads it. Its inputs are
 exactly: the `queue_entries` table; the issue tree (`parent_id`, sibling order);
 status categories; local `blocks` edges and hub `cross_links`; gates
-(`queuedByFor`); live claims (`checkout_agent` on an active-category row);
-milestone membership order (R3); the workspace policy; and the calling actor.
+(`queuedByFor`); live claims (`checkout_agent`);
+milestone membership order (R3); and the configured checkout statuses. The
+optional actor remains accepted for caller compatibility; a held row is never
+a fresh pickup, even for its holder.
 Cross-workspace blockers are the one input the resolver takes INJECTED rather
 than fetched — they live in the hub, and `Hub.crossBlockersOf` opens a workspace
 file per link, which is not a cost an inbox can pay per row — so a caller that
@@ -98,11 +100,14 @@ rule that matches; the ladder is hard constraints only, and rank is not on it:
 | 1 | `resolved` | category `done` or `cancelled` |
 | 2 | `gated` | `queuedBy` non-null, or category `gated` — named before a blocker, as the inbox does |
 | 3 | `blocked` | any unresolved local blocker, any unresolved or *unresolvable* cross-workspace blocker, or category `blocked` |
-| 4 | `claimed` | category `active` with `checkout_agent` set to somebody other than the actor |
-| 5 | `eligible` | everything else |
+| 4 | `claimed` | any live claim, including the actor's own ongoing work |
+| 5 | `unavailable` | status is outside the configured checkout status set, such as review or active without a claim |
+| 6 | `eligible` | an unclaimed leaf in a checkout status |
 
 Every non-eligible row carries a `detail` saying why (`queuedBy`, the blocker
-identifiers, the holder and their `idleSeconds`). Rows are **never dropped** for
+identifiers, the holder and their `idleSeconds`, or an unavailable status). Every
+effective row also carries `claim`: full holder, activity, and scope metadata
+when held, or `null` for a fresh pickup. Rows are **never dropped** for
 being ineligible — the plan is shown whole, so a human can see what their order
 is waiting on, and a blocked or gated member of a milestone stays where its
 milestone put it while the resolver advances past it by the ladder. Milestone
@@ -135,10 +140,10 @@ milestone and epic path for every effective row"*; `queue-surfaces.test.ts` —
 *"reports the milestone and epic path for every effective row on every
 surface"*.)
 
-**Next item** is the first `eligible` row for the actor; the rows before it are
-returned as `skipped`, each with its eligibility and detail. With no actor,
-`claimed` rows are reported as claimed and the next item is the first row
-nobody holds. (Pinned by `store-queue-resolver.test.ts` — *"next is the first
+**Next item** is the first `eligible` row; the rows before it are returned as
+`skipped`, each with its eligibility, detail, and claim context. Every held row
+is `claimed`, including the caller's own ongoing work. (Pinned by
+`store-queue-resolver.test.ts` — *"next is the first
 eligible row and lists what it skipped"*, *"has no eligible row, and no next,
 when everything is held"*.)
 
@@ -165,7 +170,7 @@ observe until a human sets `strict`. (Pinned by `store-settings.test.ts` —
 *"queue.policy defaults to advisory"*; `store-queue-resolver.test.ts` —
 *"advisory never refuses a checkout for order"*.)
 
-**`strict`** refuses a checkout of issue X when an `eligible` row for the actor
+**`strict`** refuses a checkout of issue X when an `eligible` row
 exists **earlier** in effective order — earlier meaning a smaller position, or
 any position at all when X is in the unqueued band. The refusal has its own
 code, **`out_of_order`, exit 10**, non-retryable, and its `detail` names what

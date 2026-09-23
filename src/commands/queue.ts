@@ -65,7 +65,7 @@ TWO ORDERS, and the difference is the whole command.
                       column; the default listing shows it as a "-> n" cue per
                       leaf, and "queue next" is its first takeable row.
 
-Every row is classified resolved | gated | blocked | claimed | eligible, first
+Every row is classified resolved | gated | blocked | claimed | unavailable | eligible, first
 match wins, and none is ever dropped: rank orders work, it never lifts a
 blocker, a gate, a live claim or a resolved status.
 

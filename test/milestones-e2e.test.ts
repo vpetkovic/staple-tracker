@@ -766,8 +766,8 @@ describe("a gate over a member epic", () => {
     expect(rowFor(held, SCENARIO.m1).eligibility).toBe("claimed");
     expect(rowFor(held, SCENARIO.m1).reason).toBe(`${SCENARIO.m1} is held by other-agent.`);
     expect(held.revision).toBe(before.revision);
-    // The holder itself still sees its own row as takeable.
-    expect(rowFor(await queueHttp("other-agent"), SCENARIO.m1).eligibility).toBe("eligible");
+    // The holder can resume through checkout, but ongoing work is not fresh pickup.
+    expect(rowFor(await queueHttp("other-agent"), SCENARIO.m1).eligibility).toBe("claimed");
 
     expect(runCli(["release", SCENARIO.m1, "--ws", WS], { STAPLE_HOME: home, STAPLE_AGENT: "other-agent" }).status).toBe(0);
     expect((await queueHttp()).effective).toEqual(before.effective);

@@ -202,13 +202,12 @@ describe("a claim taken, stolen and released re-derives the order", () => {
     expect(before.next).toBe("QLI-2");
 
     ok("checkout", "QLI-2", "--agent", "agent-a");
-    // Whose view it is decides the answer, and only that: agent-b is handed the
-    // second row, agent-a is handed back its own.
+    // Both agents see ongoing work as claimed and are handed the next fresh row.
     const held = await everySurface("agent-b");
     expect(held.effective).toEqual(["QLI-2:claimed", "QLI-3:eligible", "QLI-4:eligible"]);
     expect(held.next).toBe("QLI-3");
     expect(rowFor(held, "QLI-2").detail).toMatchObject({ heldBy: "agent-a" });
-    expect((await everySurface("agent-a")).next).toBe("QLI-2");
+    expect((await everySurface("agent-a")).next).toBe("QLI-3");
     expect(held.revision).toBe(before.revision);
 
     // A takeover is a claim change, not a plan change: the head is still the
@@ -218,7 +217,7 @@ describe("a claim taken, stolen and released re-derives the order", () => {
     expect(stolen.effective).toEqual(["QLI-2:claimed", "QLI-3:eligible", "QLI-4:eligible"]);
     expect(stolen.next).toBe("QLI-3");
     expect(rowFor(stolen, "QLI-2").detail).toMatchObject({ heldBy: "agent-b" });
-    expect((await everySurface("agent-b")).next).toBe("QLI-2");
+    expect((await everySurface("agent-b")).next).toBe("QLI-3");
     expect(stolen.revision).toBe(before.revision);
 
     // And releasing it hands the head back to whoever reads next, with nothing

@@ -41,6 +41,7 @@ import type {
 export const ELIGIBILITY_PRESENTATION: Readonly<Record<QueueEligibility, { glyph: string; label: string }>> = {
   eligible: { glyph: "○", label: "Eligible" },
   claimed: { glyph: "◐", label: "Claimed" },
+  unavailable: { glyph: "–", label: "Unavailable" },
   blocked: { glyph: "⊘", label: "Blocked" },
   gated: { glyph: "◇", label: "Gated" },
   resolved: { glyph: "✓", label: "Resolved" },

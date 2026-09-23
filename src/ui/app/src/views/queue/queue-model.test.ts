@@ -144,6 +144,7 @@ describe("why a row cannot be picked up", () => {
     expect(ELIGIBILITY_PRESENTATION.blocked).toEqual({ glyph: "⊘", label: "Blocked" });
     expect(ELIGIBILITY_PRESENTATION.gated).toEqual({ glyph: "◇", label: "Gated" });
     expect(ELIGIBILITY_PRESENTATION.claimed).toEqual({ glyph: "◐", label: "Claimed" });
+    expect(ELIGIBILITY_PRESENTATION.unavailable).toEqual({ glyph: "–", label: "Unavailable" });
     expect(ELIGIBILITY_PRESENTATION.resolved).toEqual({ glyph: "✓", label: "Resolved" });
   });
 });
@@ -232,4 +233,3 @@ describe("the retry a conflict offers", () => {
     expect(retryOrder(["A", "B", "GONE"], current)).toBeNull();
   });
 });
-

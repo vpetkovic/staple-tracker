@@ -141,6 +141,7 @@ function issueFromContainer(identifier: string): Issue {
     via: null,
     unqueued: false,
     eligibility: "eligible",
+    claim: null,
     reason: null,
     detail: null,
     dueAt: null,

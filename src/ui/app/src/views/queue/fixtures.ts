@@ -34,6 +34,7 @@ export function effective(over: Partial<EffectiveQueueRow> & { identifier: strin
     via: null,
     unqueued: false,
     eligibility: "eligible",
+    claim: null,
     reason: null,
     detail: null,
     dueAt: null,
