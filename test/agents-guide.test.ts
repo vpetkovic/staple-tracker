@@ -287,13 +287,12 @@ describe("the guide teaches the whole protocol", () => {
     expect(guide).toMatch(/plain checkout of a stale claim is still refused/i);
   });
 
-  it("carries a copy-pasteable MCP wiring line pointing at a real entry point", () => {
+  it("wires MCP through the installed CLI rather than a checkout entry point", () => {
     const line = guide.split("\n").find((l) => l.includes("claude mcp add staple"));
     expect(line, "wiring one-liner").toBeTruthy();
     expect(line).toContain("STAPLE_AGENT=");
-    const entry = line?.match(/npx tsx (\S+)/)?.[1];
-    expect(entry, "resolved mcp entry").toBeTruthy();
-    expect(existsSync(entry as string), `${entry} should exist`).toBe(true);
+    expect(line).toContain("-- staple mcp");
+    expect(line).not.toContain("npx tsx");
   });
 
   it("tells the reader their edits are safe", () => {

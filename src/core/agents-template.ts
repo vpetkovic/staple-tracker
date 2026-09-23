@@ -1,6 +1,5 @@
 import { existsSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 
 /**
  * The onboarding guide `staple init` drops next to a repo workspace, so the next
@@ -12,15 +11,6 @@ import { fileURLToPath } from "node:url";
  */
 
 export const AGENTS_GUIDE_FILENAME = "AGENTS.md";
-
-/** Absolute path to this checkout's MCP entry point, for a copy-pasteable wiring line. */
-function mcpEntryPath(): string {
-  // .../src/core/agents-template.(ts|js) -> .../src/mcp.(ts|js). There is no build
-  // step for the server today (everything runs through tsx), but keep the extension
-  // derived rather than hardcoded so a compiled layout still points somewhere real.
-  const here = fileURLToPath(import.meta.url);
-  return join(dirname(dirname(here)), here.endsWith(".ts") ? "mcp.ts" : "mcp.js");
-}
 
 export interface AgentsGuideContext {
   /** Workspace slug, e.g. `staple`. */
@@ -391,7 +381,7 @@ comment first. That is what they left you. Leave the same for the next one.
 ## Wiring
 
 \`\`\`bash
-claude mcp add staple -e STAPLE_AGENT=your-name -- npx tsx ${mcpEntryPath()}
+claude mcp add staple -e STAPLE_AGENT=your-name -- staple mcp
 \`\`\`
 
 The MCP tools mirror the CLI: \`inbox\`, \`next_task\` and \`list_queue\` for the
