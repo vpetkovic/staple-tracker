@@ -97,6 +97,7 @@ export const ROW_CUE_PRESENTATION: Readonly<
   waiting: { glyph: "⋯", label: "Waiting", hint: PICKUP_HINTS.waiting },
   gated: { glyph: "⚑", label: "Gated", hint: PICKUP_HINTS.gated },
   in_flight: { glyph: "◐", label: "In flight", hint: PICKUP_HINTS.in_flight },
+  unavailable: { glyph: "–", label: "Unavailable", hint: "this status cannot be checked out" },
   unqueued: {
     glyph: "·",
     label: "Unqueued",
@@ -229,6 +230,7 @@ export function buildRowCueIndex(
       const reason = row.reason;
       if (row.eligibility === "gated") return { state: "gated", position: null, scope: "effective", reason };
       if (row.eligibility === "blocked") return { state: "waiting", position: null, scope: "effective", reason };
+      if (row.eligibility === "unavailable") return { state: "unavailable", position: null, scope: "effective", reason };
       if (row.eligibility === "claimed") {
         return { state: "in_flight", position: null, scope: "effective", reason };
       }

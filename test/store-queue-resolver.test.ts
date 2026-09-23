@@ -339,8 +339,8 @@ describe("the eligibility ladder", () => {
       // The blocker itself is real, unqueued work.
       `${blocker}:eligible`,
     ]);
-    // The actor's OWN claim is not somebody else's claim.
-    expect(eligibilityOf(held, "other-agent")).toBe("eligible");
+    // Ongoing work is never offered as a fresh pickup, even to its holder.
+    expect(eligibilityOf(held, "other-agent")).toBe("claimed");
   });
 
   it("names the gate before the blocker", () => {
@@ -417,6 +417,31 @@ describe("the eligibility ladder", () => {
 // ----------------------------------------------------------------- the policy
 
 describe("queue.policy = advisory", () => {
+  it("only offers unclaimed leaves whose status checkout accepts", () => {
+    const review = issue("awaiting review");
+    const active = issue("active without holder");
+    const held = issue("held by me");
+    const ready = issue("ready leaf");
+    store.updateIssue(review, { status: "in_review" }, "vp");
+    store.updateIssue(active, { status: "in_progress", assignee: "vp" }, "vp");
+    store.checkoutIssue(held, "me");
+    for (const ref of [review, active, held, ready]) queue.enqueue(ref, {}, "vp");
+
+    const result = queue.effectiveQueue({ actor: "me" });
+    expect(result.rows.map(({ identifier, eligibility }) => [identifier, eligibility])).toEqual([
+      [review, "unavailable"],
+      [active, "unavailable"],
+      [held, "claimed"],
+      [ready, "eligible"],
+    ]);
+    expect(result.rows[2]!.claim).toMatchObject({ heldBy: "me", scope: "local", lease: null });
+    expect(result.next?.identifier).toBe(ready);
+    expect(store.checkoutIssue(ready, "me").identifier).toBe(ready);
+    // Reclaiming one's own ticket is still intentionally idempotent, but it
+    // is ongoing work and therefore must never displace a fresh pickup.
+    expect(store.checkoutIssue(held, "me").identifier).toBe(held);
+  });
+
   it("advisory never refuses a checkout for order", () => {
     const first = issue("first");
     const later = issue("later");

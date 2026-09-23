@@ -2198,8 +2198,9 @@ const effectiveRowShape = {
   via: z.string().nullable().describe("The queued container this row was expanded out of"),
   unqueued: z.boolean().describe("True for a row after the last plan row: still work, just later"),
   eligibility: z
-    .enum(["resolved", "gated", "blocked", "claimed", "eligible"])
-    .describe("First rule that matches: resolved, gated, blocked, claimed, else eligible. Only `eligible` is takeable."),
+    .enum(["resolved", "gated", "blocked", "claimed", "unavailable", "eligible"])
+    .describe("First rule that matches: resolved, gated, blocked, claimed, unavailable, else eligible. Only `eligible` is takeable."),
+  ...claimField,
   reason: z.string().nullable(),
   detail: z.record(z.string(), z.unknown()).nullable(),
   dueAt: z.string().nullable().describe("The milestone target date this row inherits; explains urgency, never reorders"),
@@ -2227,10 +2228,10 @@ server.registerTool(
   "list_queue",
   {
     description:
-      "The pickup plan and the effective agent order it resolves to, at one revision. `entries` is PLAN order — what a human queued, containers and milestones included. `effective` is what agents actually receive: every container expanded depth-first to its open leaf work, then the unqueued band in presentation sort, every row classified resolved | gated | blocked | claimed | eligible with a reason. Resolved entries are hidden unless `all`.",
+      "The pickup plan and the effective agent order it resolves to, at one revision. `entries` is PLAN order — what a human queued, containers and milestones included. `effective` is what agents actually receive: every container expanded depth-first to its open leaf work, then the unqueued band in presentation sort, every row classified resolved | gated | blocked | claimed | unavailable | eligible with a reason and full claim metadata. Resolved entries are hidden unless `all`.",
     inputSchema: {
       all: z.boolean().optional().describe("Include done and cancelled plan entries"),
-      actor: z.string().optional().describe("Whose view: a row held by somebody ELSE is `claimed`"),
+      actor: z.string().optional().describe("Whose view; every held row is `claimed`, including this actor's"),
       ws: wsSchema,
     },
     outputSchema: queueViewShape,
@@ -2243,7 +2244,7 @@ server.registerTool(
   "next_task",
   {
     description:
-      "The ONE row you should take next and everything it stepped over. `next` is the first eligible row in effective order for you; `skipped` lists what came before it with why (resolved, gated, blocked, claimed). Under queue.policy = strict this is exactly what checkout_task will let you claim — call it before claiming and you will never see out_of_order.",
+      "The ONE fresh leaf you should take next and everything it stepped over. `next` is the first eligible row in effective order; `skipped` lists what came before it with why (resolved, gated, blocked, claimed, unavailable). Each row carries full claim metadata or null. Under queue.policy = strict this is exactly what checkout_task will let you claim — call it before claiming and you will never see out_of_order.",
     inputSchema: { actor: z.string().optional().describe("Whose view (defaults to unattributed)"), ws: wsSchema },
     outputSchema: {
       revision: z.number(),

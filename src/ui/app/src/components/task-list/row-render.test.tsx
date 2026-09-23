@@ -1293,9 +1293,9 @@ describe("row cues", () => {
       { issueId: "epic", identifier: "STA-9", title: "The epic", kind: "epic", status: "todo", planPosition: 2, rank: 2000, parent: null, resolved: false, addedBy: "VP", addedAt: "2026-09-01T00:00:00.000Z", note: null },
     ],
     effective: [
-      { issueId: "a", identifier: "STA-1", title: "first", kind: "task", status: "todo", position: 1, planPosition: 1, via: null, unqueued: false, eligibility: "eligible", reason: null, detail: null, dueAt: null, milestonePath: ["STA-50"], epicPath: [], parent: null },
-      { issueId: "b", identifier: "STA-2", title: "second", kind: "task", status: "todo", position: 2, planPosition: 2, via: "STA-9", unqueued: false, eligibility: "eligible", reason: null, detail: null, dueAt: null, milestonePath: [], epicPath: ["STA-9"], parent: "epic" },
-      { issueId: "c", identifier: "STA-3", title: "third", kind: "task", status: "todo", position: 3, planPosition: null, via: null, unqueued: false, eligibility: "blocked", reason: "STA-3 is blocked by STA-1.", detail: null, dueAt: null, milestonePath: [], epicPath: [], parent: null },
+      { issueId: "a", identifier: "STA-1", title: "first", kind: "task", status: "todo", position: 1, planPosition: 1, via: null, unqueued: false, eligibility: "eligible", claim: null, reason: null, detail: null, dueAt: null, milestonePath: ["STA-50"], epicPath: [], parent: null },
+      { issueId: "b", identifier: "STA-2", title: "second", kind: "task", status: "todo", position: 2, planPosition: 2, via: "STA-9", unqueued: false, eligibility: "eligible", claim: null, reason: null, detail: null, dueAt: null, milestonePath: [], epicPath: ["STA-9"], parent: "epic" },
+      { issueId: "c", identifier: "STA-3", title: "third", kind: "task", status: "todo", position: 3, planPosition: null, via: null, unqueued: false, eligibility: "blocked", claim: null, reason: "STA-3 is blocked by STA-1.", detail: null, dueAt: null, milestonePath: [], epicPath: [], parent: null },
     ],
   };
   const TITLES = new Map([["STA-50", "Q4 launch"]]);

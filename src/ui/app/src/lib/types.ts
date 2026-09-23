@@ -827,6 +827,7 @@ export const ROW_CUE_STATES = [
   "waiting",
   "gated",
   "in_flight",
+  "unavailable",
   "unqueued",
 ] as const;
 export type RowCueState = (typeof ROW_CUE_STATES)[number];
@@ -1213,7 +1214,7 @@ export type MilestoneListRow = Omit<MilestoneView, "members"> & { memberCount: n
  * to leaf work and every row classified — what agents receive, and what the
  * READY list derives its order from.
  */
-export const QUEUE_ELIGIBILITIES = ["resolved", "gated", "blocked", "claimed", "eligible"] as const;
+export const QUEUE_ELIGIBILITIES = ["resolved", "gated", "blocked", "claimed", "unavailable", "eligible"] as const;
 export type QueueEligibility = (typeof QUEUE_ELIGIBILITIES)[number];
 
 export interface QueueEntry {
@@ -1248,6 +1249,8 @@ export interface EffectiveQueueRow {
   /** True for a row after the last plan row: still work, just later. */
   unqueued: boolean;
   eligibility: QueueEligibility;
+  /** Current holder activity and scope, or null for a fresh pickup. */
+  claim: ClaimActivity | null;
   /** A sentence for a human; null when the row is eligible. */
   reason: string | null;
   detail: Record<string, unknown> | null;

@@ -34,7 +34,7 @@ import type { Journal } from "./journal.js";
 import { parseIdentifier } from "./ids.js";
 import { milestoneDateBounds, MILESTONE_KIND, nearestMilestone, rankBetween, renumberedRanks } from "./milestones.js";
 import type { WorkspaceStore } from "./store.js";
-import { type BuiltinIssueKind, type Issue, MAX_TREE_DEPTH, StapleError, nowIso } from "./types.js";
+import { type BuiltinIssueKind, type ClaimActivity, type Issue, MAX_TREE_DEPTH, StapleError, nowIso } from "./types.js";
 
 /**
  * The kind an `epicPath` names. `epic` is the SEEDED id (`BUILTIN_KIND_SEED`),
@@ -634,7 +634,6 @@ export class QueueStore {
   effectiveQueue(options: EffectiveQueueOptions | string | null = {}): EffectiveQueue {
     const opts: EffectiveQueueOptions =
       typeof options === "string" || options === null ? { actor: options } : options;
-    const actor = opts.actor ?? null;
     const nodes = this.nodes();
     /**
      * The milestone side, for the whole workspace, in two queries (R3d,
@@ -763,6 +762,7 @@ export class QueueStore {
     const blockers = this.store.unresolvedBlockersFor(ids);
     const gates = this.store.queuedByFor(ids);
     const claims = this.store.claimActivityFor(ids);
+    const checkoutStatuses = new Set(this.store.checkoutExpectedStatuses());
 
     /** The row's own id first, then its parent, then the grandparent — one walk, two paths. */
     const chainOf = (id: string): string[] => {
@@ -830,10 +830,14 @@ export class QueueStore {
             unresolvable: blocker.unresolvable,
           })),
         };
-      } else if (category === "active" && node.checkout_agent !== null && node.checkout_agent !== actor) {
+      } else if (node.checkout_agent !== null) {
         eligibility = "claimed";
         reason = `${node.identifier} is held by ${node.checkout_agent}.`;
         detail = { heldBy: node.checkout_agent, idleSeconds: claim?.idleSeconds ?? null };
+      } else if (!checkoutStatuses.has(node.status)) {
+        eligibility = "unavailable";
+        reason = `${node.identifier} is ${node.status}, which cannot be checked out.`;
+        detail = { status: node.status };
       }
       return {
         issueId: node.id,
@@ -846,6 +850,7 @@ export class QueueStore {
         via: row.via,
         unqueued: row.unqueued,
         eligibility,
+        claim,
         reason,
         detail,
         dueAt: row.dueAt,
@@ -936,7 +941,7 @@ export class QueueStore {
  */
 
 /** The eligibility ladder, in order. The first rule that matches wins. */
-export type QueueEligibility = "resolved" | "gated" | "blocked" | "claimed" | "eligible";
+export type QueueEligibility = "resolved" | "gated" | "blocked" | "claimed" | "unavailable" | "eligible";
 
 /** One row of the effective order — what an agent receives. */
 export interface EffectiveQueueRow {
@@ -958,6 +963,8 @@ export interface EffectiveQueueRow {
   /** True for a row after the last plan row: still work, just later. */
   unqueued: boolean;
   eligibility: QueueEligibility;
+  /** Liveness of a held row, null for an unclaimed pickup candidate. */
+  claim: ClaimActivity | null;
   /** A sentence for a human; null when the row is eligible. */
   reason: string | null;
   /** The machine-readable half of `reason`; null when the row is eligible. */
@@ -1030,7 +1037,7 @@ export interface CrossBlockerLite {
 }
 
 export interface EffectiveQueueOptions {
-  /** Whose view this is. A row held by somebody ELSE is `claimed`; a row held by the actor is not. */
+  /** Accepted for caller compatibility; held rows remain claimed, including the actor's own. */
   actor?: string | null;
   /** Cross-workspace blockers by issue identifier; absent means none are known. */
   crossBlockers?: ReadonlyMap<string, readonly CrossBlockerLite[]>;

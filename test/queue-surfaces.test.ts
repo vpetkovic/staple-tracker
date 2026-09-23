@@ -385,3 +385,42 @@ describe("the milestone and epic path ride on every effective row", () => {
     expect(fromCli.map(([identifier]) => identifier)).not.toContain("QUE-6");
   });
 });
+
+describe("fresh pickup contract", () => {
+  it("CLI and MCP exclude review and held rows, expose claim context, and return a checkoutable leaf", async () => {
+    // The existing queue has QUE-2 before QUE-4, with QUE-3 blocked. A review
+    // status and a same-actor claim must both be skipped under strict policy.
+    expect(cli("status", "QUE-2", "in_review", "--ws", WS).status).toBe(0);
+    expect(cli("checkout", "QUE-4", "--agent", "agent-1", "--override", "-m", "fixture", "--ws", WS).status).toBe(0);
+
+    const cliView = cliJson("queue", "--actor", "agent-1", "--ws", WS);
+    const mcpView = await mcpJson("list_queue", { actor: "agent-1" });
+    expect(normalize(mcpView, [home])).toEqual(normalize(cliView, [home]));
+    const actionable = (cliView.effective as Array<{ identifier: string; eligibility: string }>)
+      .filter((row) => row.eligibility === "eligible")
+      .map((row) => row.identifier);
+    expect(actionable).toEqual(["QUE-5"]);
+
+    const fromCli = cliJson("queue", "next", "--actor", "agent-1", "--ws", WS);
+    const fromMcp = await mcpJson("next_task", { actor: "agent-1" });
+    expect(normalize(fromMcp, [home])).toEqual(normalize(fromCli, [home]));
+    const skipped = fromCli.skipped as Array<Record<string, unknown>>;
+    expect(skipped.find((row) => row.identifier === "QUE-2")).toMatchObject({
+      eligibility: "unavailable",
+      claim: null,
+    });
+    expect(skipped.find((row) => row.identifier === "QUE-3")).toMatchObject({ eligibility: "blocked" });
+    expect(skipped.find((row) => row.identifier === "QUE-4")).toMatchObject({
+      eligibility: "claimed",
+      claim: { heldBy: "agent-1", scope: "local", lease: null },
+    });
+    const next = fromCli.next as { identifier: string; kind: string; eligibility: string; claim: unknown };
+    expect(next).toMatchObject({ identifier: "QUE-5", kind: "task", eligibility: "eligible", claim: null });
+    const viaMcp = await mcp.call("checkout_task", { ws: WS, ref: next.identifier, actor: "agent-1" });
+    expect(viaMcp.isError, JSON.stringify(viaMcp.content)).toBeFalsy();
+    expect(cli("release", next.identifier, "--agent", "agent-1", "--ws", WS).status).toBe(0);
+    expect(cli("checkout", next.identifier, "--agent", "agent-1", "--ws", WS).status).toBe(0);
+    // Checkout keeps its separate crash-recovery contract.
+    expect(cli("checkout", "QUE-4", "--agent", "agent-1", "--ws", WS).status).toBe(0);
+  });
+});
