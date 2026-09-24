@@ -122,7 +122,7 @@ import {
   type ApplyInput,
 } from "./apply.js";
 import { settleIncomingAttempt } from "./apply-attempts.js";
-import { ATTEMPT_END_FIELDS, orphanAgainstReal } from "./attempt-ends.js";
+import { ATTEMPT_END_FIELDS, settledByApplyRule } from "./attempt-ends.js";
 import type { RemoteOperation } from "./wire.js";
 
 // ------------------------------------------------------------------- shapes
@@ -775,8 +775,9 @@ function contest(
     const endUnit = op.entity === "attempt" && named.name === "end";
     const remoteValue = endUnit ? attemptEndValue({ ...(local.value as Record<string, unknown>), ...op.payload }) : carried;
     if (sameValue(local.value, remoteValue)) continue;
-    // An orphan end and a real end are settled by the apply rule, never recorded as a conflict.
-    if (endUnit && orphanAgainstReal(local.value as Record<string, unknown>, remoteValue as Record<string, unknown>)) continue;
+    // An orphan end and a real end, or an end and a state that is not one, are settled by the
+    // apply rule, never recorded as a conflict.
+    if (endUnit && settledByApplyRule(local.value as Record<string, unknown>, remoteValue as Record<string, unknown>)) continue;
 
     contested.add(named.name);
     record(db, {

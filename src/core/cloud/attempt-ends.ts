@@ -15,6 +15,9 @@
  *
  *   - an orphan end never overwrites a real end the entity already holds;
  *   - a real end always overwrites an orphan end;
+ *   - a state that is not an end (a pause or a resume, sent before its device learned of the
+ *     end) never overwrites any end the entity already holds, and an end always overwrites
+ *     it — so a stale pause cannot reopen an attempt a steal ended;
  *   - otherwise the ordinary rules apply.
  *
  * The end fields are compared as one unit, which is why every `attempt` operation that sets
@@ -75,29 +78,39 @@ export function isRealEnd(fields: Readonly<Record<string, unknown>> | null | und
   return read(fields, "state") === "ended" && !isOrphanEnd(fields);
 }
 
+/** Whether these end fields say the attempt has ended. */
+function ended(fields: Readonly<Record<string, unknown>> | null | undefined): boolean {
+  return fields !== null && fields !== undefined && read(fields, "state") === "ended";
+}
+
 /**
- * True when an incoming payload's end fields are exactly one orphan end and one real end
- * against what is held. Conflict screening skips the end fields for that pair: the apply
- * rule settles it, in either direction, and records no conflict.
+ * True when the apply rule, not conflict screening, settles an incoming payload's end fields
+ * against what is held: exactly one orphan end and one real end, or exactly one end and one
+ * state that is not an end. Screening skips the end fields for such a pair and records no
+ * conflict; the rule settles it in either direction and either order of arrival.
  */
-export function orphanAgainstReal(
+export function settledByApplyRule(
   held: Readonly<Record<string, unknown>> | null | undefined,
   incoming: Readonly<Record<string, unknown>>,
 ): boolean {
-  if (!carriesAttemptEnd(incoming)) return false;
+  if (!carriesAttemptEnd(incoming) || held === null || held === undefined) return false;
+  if (ended(held) !== ended(incoming)) return true;
   return (isOrphanEnd(incoming) && isRealEnd(held)) || (isRealEnd(incoming) && isOrphanEnd(held));
 }
 
 /**
  * The payload an `attempt` operation may apply over `held`: itself, or itself without the
- * seven end fields when it is an orphan end arriving over a real end. Returns the same
+ * seven end fields when it is an orphan end arriving over a real end, or a state that is not
+ * an end arriving over any end. Returns the same
  * object when nothing is dropped, so a caller can tell by identity.
  */
 export function settleAttemptEnd<T extends Readonly<Record<string, unknown>>>(
   held: Readonly<Record<string, unknown>> | null | undefined,
   incoming: T,
 ): T {
-  if (!carriesAttemptEnd(incoming) || !isOrphanEnd(incoming) || !isRealEnd(held)) return incoming;
+  if (!carriesAttemptEnd(incoming)) return incoming;
+  const drops = (isOrphanEnd(incoming) && isRealEnd(held)) || (ended(held) && !ended(incoming));
+  if (!drops) return incoming;
   const kept: Record<string, unknown> = {};
   const dropped = new Set<string>(ATTEMPT_END_FIELDS.flatMap((field) => [field, field.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`)]));
   for (const [key, value] of Object.entries(incoming)) if (!dropped.has(key)) kept[key] = value;

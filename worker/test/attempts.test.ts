@@ -118,6 +118,17 @@ describe("the fold: a stored orphan end never overwrites a real end", () => {
     for (const field of Object.keys(realEnd)) expect(folded.fieldWrites[field]?.opId, field).toBe("op-3");
   });
 
+  it("never lets a stale pause reopen an end, and records no provenance for it", async () => {
+    const paused = { ...created, state: "paused" };
+    await pushOps([attemptOp(1, "create", created), attemptOp(2, "update", realEnd), attemptOp(3, "update", paused), attemptOp(4, "update", orphanEnd)], {
+      token,
+      protocol: 3,
+    });
+    const folded = await snapshotAttempt();
+    expect(folded.state).toMatchObject(realEnd);
+    for (const field of Object.keys(realEnd)) expect(folded.fieldWrites[field]?.opId, field).toBe("op-2");
+  });
+
   it("applies the ordinary rules otherwise: an orphan end over a running attempt lands", async () => {
     await pushOps([attemptOp(1, "create", created), attemptOp(2, "update", orphanEnd)], { token, protocol: 3 });
     expect((await snapshotAttempt()).state).toMatchObject(orphanEnd);

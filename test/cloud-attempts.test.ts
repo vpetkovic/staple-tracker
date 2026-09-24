@@ -309,6 +309,77 @@ describe("a steal split across push batches", () => {
   });
 });
 
+describe("a stale pause meets a real end", () => {
+  it("never reopens it: every device, the fold and a fresh device hold the steal's end, with no conflict", async () => {
+    const server = new FakeSyncServer({ repositoryId: REPO });
+    fleet = new Fleet(server, REPO);
+    const a = fleet.machine("a");
+    const b = fleet.machine("b");
+    a.use();
+    const issue = a.store.createIssue({ title: "Paused, then stolen" });
+    a.store.checkoutIssue(issue.id, "agent-a");
+    await sync(a, b);
+    const held = attempts(a, issue.id)[0]!;
+    // A pauses offline; B steals and syncs; then A syncs.
+    a.use();
+    a.store.recordAttemptEvent(issue.id, "pause", "agent-a", { reason: "awaiting_reset" });
+    b.use();
+    b.store.checkoutIssue(issue.id, "agent-b", undefined, { stealIfIdleSeconds: 0 });
+    await sync(b, a, b, a);
+    const fresh = fleet.machine("fresh");
+    await sync(fresh);
+    const ops = server.ops.filter((op) => op.entity === "attempt" && op.entityId === held.id && op.verb === "update");
+    expect(ops.map((op) => (op.payload as Record<string, unknown>).state)).toContain("paused");
+    for (const machine of [a, b, fresh]) {
+      expect(attempts(machine, issue.id).find((attempt) => attempt.id === held.id), machine.label).toMatchObject({
+        state: "ended",
+        outcome: "interrupted",
+        endReason: "claim_stolen",
+        endedBy: "agent-b",
+      });
+      expect(listConflicts(machine.db).filter((record) => record.entity === "attempt"), machine.label).toEqual([]);
+    }
+    const [folded] = foldOperations(server.ops.filter((op) => op.entityId === held.id).map((op) => ({ ...op, serverTs: 0 }) as unknown as RemoteOperation));
+    expect(folded!.state).toMatchObject({ state: "ended", endReason: "claim_stolen" });
+    converged(b, a, fresh);
+  }, 90_000);
+});
+
+describe("two real ends that disagree", () => {
+  it("conflict on every writer, and converge once a human resolves it", async () => {
+    fleet = new Fleet(new FakeSyncServer({ repositoryId: REPO }), REPO);
+    const a = fleet.machine("a");
+    const b = fleet.machine("b");
+    a.use();
+    const issue = a.store.createIssue({ title: "Two ends" });
+    a.store.checkoutIssue(issue.id, "agent-a");
+    await sync(a, b);
+    const held = attempts(a, issue.id)[0]!;
+    // Offline: A reports the interruption itself; B steals and infers one.
+    a.use();
+    a.store.recordAttemptEvent(issue.id, "interrupt", "agent-a", { reason: "provider_limit" });
+    b.use();
+    b.store.checkoutIssue(issue.id, "agent-b", undefined, { stealIfIdleSeconds: 0 });
+    await sync(a, b, a);
+    const open = listConflicts(b.db).filter((record) => record.entity === "attempt" && record.entityId === held.id);
+    expect(open.map((record) => record.field)).toEqual(["end"]);
+    b.use();
+    resolveConflict(b.db, { id: open[0]!.id, choice: "remote", actor: "vp" });
+    await sync(b, a, b);
+    const fresh = fleet.machine("fresh");
+    await sync(fresh);
+    for (const machine of [a, b, fresh]) {
+      expect(attempts(machine, issue.id).find((attempt) => attempt.id === held.id), machine.label).toMatchObject({
+        state: "ended",
+        endReason: "provider_limit",
+        endDetection: "reported",
+      });
+      expect(listConflicts(machine.db).filter((record) => record.entity === "attempt"), machine.label).toEqual([]);
+    }
+    converged(a, b, fresh);
+  }, 90_000);
+});
+
 describe("a status the vocabulary moves out of active", () => {
   it("orphans the attempt on every device, and the opener writes its end after the pull", async () => {
     fleet = new Fleet(new FakeSyncServer({ repositoryId: REPO }), REPO);

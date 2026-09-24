@@ -416,24 +416,32 @@ of the log applies makes them all hold the same end:
 
 > When an `attempt` operation that sets end fields is applied, an **orphan end
 > never overwrites a real end** that the row already holds, and a **real end
-> always overwrites an orphan end**. Otherwise the ordinary rules apply.
+> always overwrites an orphan end**. A **state that is not an end** (a pause or a
+> resume) **never overwrites any end** the row already holds, and any end always
+> overwrites it. Otherwise the ordinary rules apply.
+
+The third clause exists because a pause is also an `attempt.update`. A holder that
+paused offline while another device stole the claim sends its pause after the steal's
+end in the log, and without the clause the pause reopened the attempt everywhere the
+fold was read, after which the holder's own stored orphan end replaced the steal's.
 
 The rule compares the incoming end fields (`state`, `outcome`, `endReason`,
 `endDetection`, `endedBy`, `endedAt`, `endedAtSource`) with the stored ones as
 one unit. So **any `attempt` operation that sets end fields carries all seven**,
 never only the ones that changed. Attempts are not among the row-diff tables,
 so the store writes this payload itself. When a reader drops an incoming orphan
-end under this rule, it records none of those keys in its field-write
+end or a stale state under this rule, it records none of those keys in its field-write
 provenance (the Worker fold's `fieldWrites`, the client's
 `sync_field_writes`). Otherwise a device hydrated from that fold would inherit
 provenance for a write it never took. Every reader of the log implements it: the client applier, the
 Worker fold (and with it `/snapshot` hydration and backups), the tail fold and
 the test service. This is the same arrangement as revision placement, where
 [every reader of the log uses one rule](sync.md#conflicts-are-preserved-never-resolved-silently).
-A pair of an orphan end and a real end is settled by this rule, in either
-direction and in either order of arrival, and **records no conflict**.
-Conflict screening skips the end fields when the pair is exactly one orphan end
-and one real end. Two real ends that disagree still conflict as usual, and so
+A pair of an orphan end and a real end, or of an end and a state that is not
+one, is settled by this rule, in either direction and in either order of
+arrival, and **records no conflict**. Conflict screening skips the end fields
+for exactly those pairs. The opening device does not write a stored orphan end
+while it holds an open conflict on that attempt's end. Two real ends that disagree still conflict as usual, and so
 do two orphan ends that disagree.
 
 The bounded exception is the interval before the opening device next runs a

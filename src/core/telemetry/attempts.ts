@@ -633,11 +633,17 @@ export class AttemptLedger {
         )
         .get(issueId);
       if (contested) continue;
+      // Nor over an end this device holds an open record about: that end is a human's to settle.
+      const disputedEnds = new Set(
+        (this.db
+          .prepare("SELECT entity_id AS id FROM sync_conflicts WHERE entity = 'attempt' AND field = 'end' AND resolved_at IS NULL")
+          .all() as Array<{ id: string }>).map((row) => row.id),
+      );
       const attempts = attemptsOfIssue(this.db, issueId);
       const evaluation = evaluateIssue(attempts, issueFacts(this.db, issueId), "own");
       for (const attempt of mine.filter((candidate) => candidate.issueId === issueId)) {
         const reason = evaluation.get(attempt.id)?.orphanReason ?? null;
-        if (reason === null) continue;
+        if (reason === null || disputedEnds.has(attempt.id)) continue;
         this.end(
           attempt,
           {
