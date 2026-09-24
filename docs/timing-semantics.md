@@ -45,8 +45,8 @@ effort measure ([below](#the-estimate-ratio)). Scheduling latency questions
 ("how long until this lands") use elapsed buckets.
 
 The two axes also differ in where they can be computed. **Effort is computed
-from replicated data only** (attempt rows, attempt transitions and the issue row)
-and reads the same on every device. **Elapsed is computed from the local event
+from replicated data only** (attempt rows, attempt transitions, the issue row, and
+the agent's comments and document revisions) and reads the same on every device. **Elapsed is computed from the local event
 log**, which does not replicate, so it is exact only on the device that wrote the
 history ([Multi-device](#multi-device)).
 
@@ -76,7 +76,7 @@ The complete list. A field not in this table is not a timing field.
 | **`leadSeconds`** | elapsed | `createdAt` to `wall.startAt`. Time before any work began. Not part of `wall`. | this page | as `wall` |
 | **`workSeconds`** | effort | Agent work on the issue, from worker-lane attempts only ([Work](#work)). Leaf: `ownWorkSeconds`. Parent: the sum over direct children, with `coverage`. **The estimate ratio's actual.** | this page | [reason code](#missingness-for-the-new-fields) |
 | **`ownWorkSeconds`** | effort | The measurement behind `workSeconds`: this issue's own worker attempts, for any status including cancelled. | this page | [reason code](#missingness-for-the-new-fields) |
-| **`orchestrationSeconds`** | effort | Orchestrator-lane attempts' effective `activeSeconds` on this issue, plus the sum over its children. Never part of `workSeconds`. | this page | no orchestrator attempt in the subtree |
+| **`orchestrationSeconds`** | effort | Orchestrator-lane attempts' effective `activeSeconds` on this issue, plus the sum over its children. Never part of `workSeconds`. | this page | `no_orchestrator_attempt` |
 | **`resumeGapSeconds`** | elapsed | On a `chain` link, `next.startedAt − previous.endedAt`: how long an interrupted piece of work waited to be picked up again, across whatever buckets that spans. | this page | no successor yet |
 | **`estimateRatio`** | ratio | `workSeconds / estimatedSeconds`, for the eligible population only ([below](#the-estimate-ratio)). | this page | ineligible |
 
@@ -121,9 +121,11 @@ itself. Taking `asOf` as an argument is part of the lifecycle work.
 The active-category buckets are defined against the issue's **worker-lane**
 attempts, each read with the orphan rule applied. For a worker attempt `A`:
 
-- `I(A) = [A.startedAt, end(A))`, where `end(A)` is the effective end from
-  [Work](#work) for an attempt that has ended or reads orphaned, and `asOf` for
-  an effectively open one.
+- `I(A) = [A.startedAt, end(A))`, where `end(A)` is the attempt's end as the
+  ledger reads it on this device: the stored `endedAt`, or `endedAtBound` for an
+  attempt that reads orphaned, and `asOf` for an effectively open one. The
+  partition is device-local anyway, so it uses the same local evidence the
+  ledger does. `workSeconds` uses replicated evidence instead ([Work](#work)).
 - `c(A)` is the evidence limit: `countedThrough` for an effectively open attempt,
   and `end(A)` otherwise.
 - `P(A)` is the union of its paused intervals: each `attempt_paused` at `p` to the
@@ -276,7 +278,7 @@ ordered by `seq` within one database. Attempts and transitions are ordered by
 | A blocker is deleted (the edge goes by cascade, with no event) | unknown instant. The dependent's edge-derived time is `approximate` | none |
 | An edge is created with the issue (`--blocked-by` on `new`) or by `blockParentUntilDone` (no event) | from `relations.created_at`. The record is `approximate` if that edge matters inside the wall span | none |
 | Reopen from `done`/`cancelled` | `[endAt, t)` becomes `resolved`. `wall.endAt` is recomputed | none |
-| Attempt read as orphaned | its end is the effective end from [Work](#work) | same end |
+| Attempt read as orphaned | its end is `endedAtBound`, clipped to the `active` category | `min(replicated evidence, row bound)` ([Work](#work)) |
 | Issue deleted | `wall` ends at the deletion. Excluded from every ratio | open attempts orphan (`issue_removed`) |
 | A status is recategorized in the vocabulary (`staple statuses`) | no event. The replay reads each status's category from the **current** vocabulary, so it still replays exactly and the history is re-bucketed retroactively ([Q9](#open-questions)) | open worker attempts orphan by clause 2 if the status left `active` |
 | `statuses remove --migrate-to` | no event, and the removed id is unreadable to the replay, so the issue falls back to `approximate` and `wall` is `replay_unavailable` | as above |
@@ -347,9 +349,9 @@ Provider and service instants never bound a timing interval. Local-clock
 instants from **different devices** are compared in three places, and each is
 named so a skew there is expected:
 
-1. `workSeconds` compares an orphaned attempt's `endedAtBound` (the attempt's
-   agent's clock) with the issue row's `completedAt`, `cancelledAt` or
-   `updatedAt` (the clock of whoever made that mutation) ([Work](#work)).
+1. `workSeconds` compares an orphaned attempt's replicated evidence (the
+   agent's clock) with the issue row's `completedAt` or `cancelledAt` (the clock
+   of whoever made that mutation) ([Work](#work)).
 2. The elapsed partition compares attempt instants (the opening device's clock)
    with category boundaries from the local event log.
 3. The `blocked` bucket compares a blocker's resolution instant with the
@@ -363,9 +365,9 @@ inversion exceeds one second.
 
 ### Multi-device
 
-- **Pulled operations write no issue events.** On master and on the attempts
-  branch, `src/core/cloud/` has no event writer for issue operations. The only
-  re-emission is `apply-attempts.ts`, for attempt transitions, dated by their own
+- **Pulled operations write no issue events.** On master, `src/core/cloud/`
+  has no event writer for issue operations. The only re-emission is
+  `src/core/cloud/apply-attempts.ts`, for attempt transitions, dated by their own
   `at`. So on a device that pulled an issue's status change, and on a freshly
   hydrated device that has no event log at all, the replay cannot reach the row's
   status. `timing` reads `approximate: true` with `reviewSeconds: null` there, and
@@ -377,11 +379,13 @@ inversion exceeds one second.
   status-moving and edge events **dated at the operation's origin instant** before
   `wall` or `timing` can be the same on two devices.
 - **Effort converges.** `workSeconds` and `orchestrationSeconds` read only
-  attempt rows, attempt transitions and the issue row, all of which replicate
-  with origin instants ([Work](#work)). An ended attempt reads the same on every
-  device. An open attempt's `lastActivityAt` reads local evidence, which on a
-  remote device is the replicated comments and transition events, so its
-  `countedThrough` can trail the origin's until the attempt ends.
+  attempt rows, attempt transitions, the issue row and the agent's comments and
+  document revisions, all of which replicate with origin instants. Open and
+  orphaned attempts are measured to their replicated evidence, not to
+  `lastActivityOf`, so they read the same everywhere too ([Work](#work)). The
+  attempt's own `lastActivityAt` and `countedThrough` fields still read local
+  `events` and can differ between devices. They are information about the claim,
+  not inputs to effort.
 - **Contested attempts** ([the contested case](execution-telemetry.md#orphaned-attempts-are-closed-at-read-time))
   carry `contested: true`, and any measure that includes one is provisional until
   the claim conflict is resolved.
@@ -421,7 +425,7 @@ after the last evidence of work, and it resolves one of three ways:
 
 **`paused`** is provisional too. An inferred end is dated at `L`, the agent's
 last activity, whether the attempt was running or paused
-(`endByMutation` with `inferred` in `telemetry/attempts.ts`). Recording a pause
+(`endByMutation` with `inferred` in `src/core/telemetry/attempts.ts`). Recording a pause
 writes an event by the agent, so `L` is at or after the pause start: the pause
 keeps `[pausedAt, L)`, and everything from `L` to the steal or release becomes
 `interrupted`. That is deliberate. A pause nobody resumed before the claim was
@@ -436,30 +440,61 @@ it was alive.
 ### Work
 
 `workSeconds` reads **replicated data only**: the worker-lane attempt rows, their
-transitions, and the replicated issue row. It never reads the local event log,
-and so it is the same on every device.
+transitions, the replicated issue row, and the agent's replicated comments and
+document revisions on the issue. It never reads the local `events` table. That
+rules out `lastActivityOf` (`src/core/telemetry/attempt-derive.ts`), which reads
+`events` and therefore gives a different `lastActivityAt`, `countedThrough` and
+`endedAtBound` on a device that did not write the history.
 
-For each worker-lane attempt `A` on the issue, read with the orphan rule applied:
+**Replicated evidence.** For a worker attempt `A`, `evidenceAt(A)` is the latest
+of:
 
-- **Stored end** (`state: ended` in the row, whether a recorded end or a stored
-  orphan end): `end(A)` is `A.endedAt`. Every recorded end is already written by
-  the mutation that takes the issue out of `active` (the `statusMoved`,
-  `released` and `stolen` hooks in `telemetry/attempts.ts`), so no further
-  clipping is needed.
-- **Derived orphan end** (stored open, reads `orphaned`): `end(A)` is
-  `A.endedAtBound`, further clipped by the replicated issue row where it says the
-  work stopped earlier:
-  - reason `left_active` and the row is `done`: `min(endedAtBound, completedAt)`
-  - reason `left_active` and the row is `cancelled`: `min(endedAtBound, cancelledAt)`
-  - reason `left_active` and any other category: `min(endedAtBound, updatedAt)`,
-    an upper bound on when the status changed
-  - `claim_moved`, `claim_cleared`, `superseded_by_merge`, `issue_removed`:
-    `endedAtBound`
-- **Effectively open**: `end(A)` is `countedThrough`.
+- `A.startedAt`;
+- the `at` of every transition of `A` (pause, resume, milestone, session added);
+- the `created_at` of every comment on the issue by `A.agent` that is not deleted,
+  after `A.startedAt`;
+- the `created_at` of every document revision on the issue by `A.agent`, after
+  `A.startedAt`.
+
+All four replicate with their origin instants, so every device computes the same
+`evidenceAt(A)` from the same rows. It can be earlier than `lastActivityAt`,
+because a status write or other event by the agent is not replicated evidence.
+On the maintainers' tracker this makes no difference to the sparse count: the
+same 30 of 187 done leaves are sparse by either kind of evidence.
+
+**The row bound.** For an attempt whose issue left `active`, the replicated row
+bounds the end when it can:
+
+- the row is `done` and has `completedAt`: `completedAt`;
+- the row is `cancelled` and has `cancelledAt`: `cancelledAt`;
+- anything else: **no bound**. `updatedAt` is not one, because recategorizing a
+  status (`recategorizeStatus` in `src/core/store.ts`) moves issues out of
+  `active` without touching `updated_at`. Such an attempt uses its evidence end
+  unclipped and carries the `end_unbounded` quality input.
+
+**The end of each worker attempt `A`, read with the orphan rule applied:**
+
+- **Recorded end** (a stored end that is not an orphan end, as
+  `isOrphanEnd` in `src/core/cloud/attempt-ends.ts` tells them apart):
+  `end(A) = A.endedAt`. Each is written by the mutation that ended the tenure
+  (the `statusMoved`, `released` and `stolen` hooks in
+  `src/core/telemetry/attempts.ts`) and replicates, so it needs no clipping and
+  reads the same everywhere.
+- **Orphan end, stored or derived** (a stored end with `endDetection: inferred`
+  and a reason in `ORPHAN_END_REASONS`, or a stored-open attempt that reads
+  `orphaned`): `end(A) = min(evidenceAt(A), row bound)`, with the row bound
+  applying only to `left_active`. The stored orphan end's own `endedAt` is **not
+  used** here. It was dated at the opening device's `lastActivityOf`, and using it
+  would make the number jump when the stored end arrives. Computing the end the
+  same way before and after the stored end is written keeps it stable, and needs
+  nothing from the device that opened the attempt.
+- **Effectively open**: `end(A) = evidenceAt(A)`. An open attempt's work is
+  counted through its last replicated evidence, so it can lag the elapsed
+  `countedThrough` on the device that is writing.
 
 `A`'s contribution is `seconds(startedAt, end(A))` minus its paused intervals
-clipped to `[startedAt, end(A))`. For stored ends that is exactly
-`attempt.activeSeconds`, which is what the ledger already derives.
+clipped to `[startedAt, end(A))`. For recorded ends that equals
+`attempt.activeSeconds`.
 
 `ownWorkSeconds` is the sum of those contributions over the issue's worker-lane
 attempts. `workSeconds` applies the judgement `activeSeconds` applies:
@@ -473,15 +508,20 @@ A parent's own worker attempts (a parent checked out and worked directly) stay
 in its `ownWorkSeconds` and are not added to its `workSeconds`, mirroring
 `ownActiveSeconds`. [Q5](#open-questions) asks whether that should change.
 
-On a device where the replay is exact, the elapsed `work` bucket and
-`ownWorkSeconds` differ only where an orphaned attempt's effective end falls
-after the issue left `active`, which the partition clips and `workSeconds`
-bounds by the row. On any other device, `workSeconds` is still defined and `wall`
-is not.
+The elapsed `work` bucket is a different, device-local reading of the same
+tenures: it uses `countedThrough` and the attempt's effective end from the
+ledger, clipped to the replayed `active` category. On the writing device the two
+agree except where replicated evidence trails local evidence. Elsewhere
+`workSeconds` is defined and `wall` is not.
 
-When `unattributed > 0` on the elapsed axis, some active time had no worker
-attempt, and `workSeconds` is a **lower bound** on the real work. The record is
-then `approximate` ([Quality inputs](#quality-inputs)).
+**The capture gap, from replicated data.** The issue row's `startedAt` is
+stamped on the first entry into `active` and never cleared, and it replicates.
+If the issue's first worker attempt started more than one second after
+`startedAt`, some work before it has no attempt, `workSeconds` is a **lower
+bound**, and the record carries the `capture_gap` quality input. If the row has
+a `startedAt` and there is no worker attempt at all, `workSeconds` is `null` with
+`no_worker_attempt`. This test needs no "capture began" instant, which would be
+device-local (it is when migration 013 ran on that device).
 
 Before capture began, attempts exist only if `staple attempt reconstruct` built
 them, with `provenance: reconstructed`. Those carry no pauses, so their work
@@ -490,17 +530,15 @@ equals the category time of the reconstructed tenures.
 ### Missingness for the new fields
 
 These follow the telemetry contract's [Missingness](execution-telemetry.md#missingness)
-rules, and add four reason codes to its closed set. That is a contract addition:
+rules, and add five reason codes to its closed set. That is a contract addition:
 
 | Code | Meaning |
 |---|---|
-| `never_started` | The issue never entered `active` and has no worker attempt. `wall`, `leadSeconds` and `workSeconds` are all `null`. On the maintainers' tracker, 6 of the 187 done leaves went to `done` this way. |
+| `never_started` | The replicated row has no `startedAt` and the issue has no worker attempt. `workSeconds` and `leadSeconds` are `null`. On the maintainers' tracker, 6 of the 187 done leaves went to `done` this way. `wall` uses it too, for an issue whose replay never enters `active`. |
 | `not_applicable_cancelled` | `workSeconds` of a cancelled issue. `ownWorkSeconds` still reports what ran. |
-| `no_worker_attempt` | The issue was active after capture began and has no worker attempt: a capture gap. |
+| `no_worker_attempt` | The row has a `startedAt` and the issue has no worker attempt: work before capture that was never reconstructed, or a capture gap. The two are not told apart, because the instant capture began is device-local. |
+| `no_orchestrator_attempt` | `orchestrationSeconds` when no issue in the subtree has an orchestrator attempt, including every issue while [Q1](#open-questions) is unresolved. |
 | `replay_unavailable` | `wall` on a device whose event replay does not reach the row's status ([Multi-device](#multi-device)). |
-
-`before_capture_began` (existing) covers an issue that was active only before
-capture and has no reconstructed attempts.
 
 A parent's `workSeconds` is a sum over a set, so it follows the contract's
 Propagation rule and carries `coverage: {known, total}`:
@@ -553,29 +591,32 @@ Why not an identity convention (for example "any `STAPLE_AGENT` containing
 An orchestrator does not hold the claim on the tickets it coordinates, a worker
 does. So orchestrator attempts are a second **lane** of attempts on an issue,
 with their own opening path and their own end rules. Every rule of the attempt
-contract as implemented on the attempts branch is scoped to the **worker lane**,
-and the orchestrator lane gets the rules below. [Q1](#open-questions) lists each
-of these as a contract change.
+contract as implemented on master is scoped to the **worker lane**, and the
+orchestrator lane gets the rules below. [Q1](#open-questions) lists each of these
+as a contract change.
 
-**Worker-lane scoping, by function** (`src/core/telemetry/` on the attempts
-branch):
+**Worker-lane scoping, by function** (paths under `src/` on master):
 
 | Function | Change |
 |---|---|
-| `evaluateIssue` (`attempt-derive.ts`) | Evaluates worker attempts only. The contested set, clauses 3 to 5 and `laterOpen` never see an orchestrator attempt, so an open orchestrator attempt cannot orphan an older worker attempt as `superseded_by_merge`. |
-| `effectivelyOpen`, and `targets` (`attempts.ts`) through it | Return worker attempts only. A release, steal or status write ends the worker's attempt and leaves the orchestrator's alone. |
+| `evaluateIssue` (`core/telemetry/attempt-derive.ts`) | Evaluates worker attempts only. The contested set, clauses 3 to 5 and `laterOpen` never see an orchestrator attempt, so an open orchestrator attempt cannot orphan an older worker attempt as `superseded_by_merge`. |
+| `viewsOfIssue` and `viewOf` (`attempt-derive.ts`) | Evaluate each lane with its own clauses: worker attempts through `evaluateIssue`, orchestrator attempts through the orchestrator-lane clauses below. Every view carries `role`. |
+| `effectivelyOpen`, and `targets` (`core/telemetry/attempts.ts`) through it | Return worker attempts only. A release, steal or status write ends the worker's attempt and leaves the orchestrator's alone. |
 | `resumeFor` (`attempts.ts`) | "The latest attempt" means the latest **worker** attempt. |
-| `record` (`attempts.ts`) | `pause`, `resume`, `milestone` and `interrupt` choose among the actor's **worker** attempts, and the `open[0]` fallback for `interrupt` is limited to worker attempts. To act on an orchestrator attempt the caller passes `--role orchestrator` (or the attempt id), which is required when the actor holds one of each. |
-| `countEffectivelyOpen` (`attempt-derive.ts`) and the presence index (`ownAttempts`, `writeRows` in `presence.ts`) | Count both lanes, because both burn provider budget, and report the split by `role`. The presence index gains a `role` column. |
-| `reconstructAttempts` (`reconstruct.ts`) | Builds worker attempts only. Orchestration before capture is `before_capture_began`. |
+| `record` (`attempts.ts`) | `pause`, `resume`, `milestone` and `interrupt` choose among the actor's **worker** attempts, and the `open[0]` fallback for `interrupt` is limited to worker attempts. To act on an orchestrator attempt the caller passes a new `--role orchestrator` flag or the attempt id, which is required when the actor holds one of each. |
+| `countEffectivelyOpen` (`attempt-derive.ts`), the concurrency context (`concurrency` in `attempts.ts`) and the presence index (`ownAttempts`, `writeRows` in `core/telemetry/presence.ts`) | Count both lanes, because both burn provider budget, and report the split by `role` in new concurrency fields. The presence index gains a `role` column. |
+| `attemptLinkerFor` (`core/telemetry/attempt-link.ts`) | A harness session that holds one attempt in each lane would link a budget sample to two candidates and return `ambiguous_attempt`. The linker prefers the worker attempt and falls back to the orchestrator attempt only when no worker attempt matches. |
+| The read summary `attempts: {current, last, count}` on `show`/`get_task` ([Surfaces](execution-telemetry.md#surfaces)) | Describes the worker lane only. Orchestrator attempts appear beside it as `orchestration: {current, count}`. |
+| `reconstructAttempts` (`core/telemetry/reconstruct.ts`) | Builds worker attempts only. Orchestration before capture is `null` with `no_orchestrator_attempt`. |
 | `writeOrphanEnds` (`attempts.ts`) | Writes stored ends for orchestrator attempts using the orchestrator-lane clauses below. |
+| `ORPHAN_END_REASONS` (`core/cloud/attempt-ends.ts`) | Gains `issue_resolved` and `superseded_by_newer`. Every reader of the log applies the orphan-versus-real-end rule through this set: the client applier (`apply-attempts.ts`), conflict screening (`conflicts.ts`), hydration through `ATTEMPT_END_FIELDS` (`hydrate.ts`), the tail fold (`tail-fold.ts`), the Worker fold (`worker/src/fold.ts`) and the test service. Without the new reasons, each of them would treat an orchestrator's stored orphan end as a real end, and a stored `superseded_by_newer` would conflict with a real `coordination_ended`. The Worker imports this file, so it must be **redeployed** before any client writes the new reasons. |
 
 **How an orchestrator attempt opens.** `staple attempt open <ref> --role
 orchestrator` (MCP `record_attempt_event` with `event: "open"`) opens an attempt
 with `openedBy: "orchestrate"`, `claim.scope: "none"` and `role: "orchestrator"`
 on the issue being coordinated, usually the parent or epic. It changes neither
 the issue's status nor its claim. `staple attempt end <ref> --role orchestrator`
-ends it `yielded`, reason `coordination_ended`.
+ends it `yielded`, reason `coordination_ended`, which is a real end.
 
 **How it ends at read time.** The orchestrator lane has its own orphan clauses,
 evaluated only from replicated rows, so every device reads the same answer:
@@ -583,33 +624,43 @@ evaluated only from replicated rows, so every device reads the same answer:
 > A stored-open orchestrator attempt is **effectively ended** when:
 >
 > 1. its issue no longer exists (`issue_removed`);
-> 2. its issue's category is `done` or `cancelled` (`issue_resolved`). The
->    effective end is `min(endedAtBound, completedAt or cancelledAt)`;
-> 3. a newer stored-open orchestrator attempt by the **same agent** exists in the
->    workspace, by `startedAt` then `id` (`superseded_by_newer`). The effective
->    end is `min(endedAtBound, newer.startedAt)`.
+> 2. its issue's category is `done` or `cancelled` (`issue_resolved`). Bound:
+>    `completedAt` or `cancelledAt`;
+> 3. a **newer orchestrator attempt by the same agent exists** in the workspace,
+>    in any state, by `startedAt` then `id` (`superseded_by_newer`). Bound: the
+>    newer attempt's `startedAt`.
+>
+> When more than one clause holds, the reason is the **first** clause that holds,
+> and the effective end is the **minimum** of the attempt's replicated evidence
+> and every bound of every clause that holds.
 
-Clause 2 means an epic resolved on another device still ends its orchestrator
-attempt on every device, with no local mutation needed. Clause 3 makes "one open
+Clause 3 does not require the newer attempt to be open. If it did, an attempt
+superseded by a newer one would revive as soon as the newer one ended. Clause 2
+means an epic resolved on another device still ends its orchestrator attempt on
+every device, with no local mutation needed. Clause 3 makes "one open
 orchestrator attempt per agent" a read-time rule: the newest wins
 deterministically, whichever device opened which. Two sessions sharing one
 identity (`claude`) will supersede each other. That is the documented cost of a
 shared identity, and it is visible as `superseded_by_newer`. The device that
 opened a superseded or resolved attempt writes its stored end the same way it
-writes a worker orphan end.
+writes a worker orphan end, and the apply rule then settles it against any real
+end.
 
-Because clause 3 clips the older attempt's end to the newer one's start, one
+Because clause 3 bounds the older attempt's end by the newer one's start, one
 agent's orchestrator attempts never overlap, and that agent's orchestration
-clock is the sum of its attempts' effective `activeSeconds`.
+clock is the sum of its attempts' effective durations.
 
-**Evidence.** An orchestrator attempt's `lastActivityAt` reads the agent's events
-and comments on the issue **and on every descendant**, because coordination is
-written on the children. Pauses and milestones work as for any attempt.
+**Evidence.** An orchestrator attempt's replicated evidence (as defined in
+[Work](#work)) includes the agent's comments and document revisions on the issue
+**and on every descendant**, because coordination is written on the children.
+Pauses and milestones work as for any attempt.
 
-`orchestrationSeconds` for an issue is its own orchestrator attempts' effective
-`activeSeconds` plus its children's `orchestrationSeconds`. An orchestrator's
-writes outside every orchestrator attempt are not orchestration time. They are
-events, with no duration.
+`orchestrationSeconds` for an issue is the sum over its own orchestrator
+attempts of `seconds(startedAt, end)` minus pauses, with the end computed as in
+[Work](#work) (recorded end as stored, otherwise evidence and bounds), plus its
+children's `orchestrationSeconds`. An orchestrator's writes outside every
+orchestrator attempt are not orchestration time. They are events, with no
+duration.
 
 **Why not measure orchestration from write cadence.** It can be done today with
 no new write path: group an orchestrator's writes into sessions separated by more
@@ -676,20 +727,29 @@ overwritten in place with no history. [Q4](#open-questions) asks when to switch.
 
 Each record gets exactly one quality state. The state set and the coverage rules
 belong to the quality-indicators work. This page supplies what each state is
-derived from, and a precedence that makes the answer unique:
+derived from, and a precedence that makes the answer unique.
 
-| State (highest precedence first) | Timing inputs that produce it |
+There are two records with two states, because the two axes are computed from
+different data. **The state of `workSeconds` uses replicated inputs only**, so
+the ratio's eligibility is the same on every device:
+
+| `workSeconds` state (highest precedence first) | Inputs that produce it |
 |---|---|
-| `missing` | **Exactly when `workSeconds` is `null`** on an issue that is not cancelled: reason `never_started`, `before_capture_began`, `no_worker_attempt` or `input_missing`. |
+| `missing` | **Exactly when `workSeconds` is `null`** on an issue that is not cancelled: reason `never_started`, `no_worker_attempt` or `input_missing`. |
 | `reconstructed` | Any contributing attempt has `provenance: reconstructed`. |
-| `approximate` | Any of: a parent's `coverage.partial`; any contributing attempt `contested`; `clock_skew`; `unattributed > 0` on the elapsed axis (so `workSeconds` is a lower bound); `edge_history_incomplete`; or `sparse`, a holder-silent gap longer than **30 minutes** inside a worker attempt's working time. |
+| `approximate` | Any of: a parent's `coverage.partial`; any contributing attempt `contested`; `capture_gap` (the row's `startedAt` is more than one second before the first worker attempt, so `workSeconds` is a lower bound); `end_unbounded` (an orphan end the row cannot bound); `clock_skew` between an attempt's instants and the row bound; or `sparse`, a gap longer than **30 minutes** between consecutive replicated evidence instants inside a worker attempt's working time. |
 | `timing-floor` | `workSeconds < 60`. The work fits inside the write cadence the measure resolves, so the number says "quick" and little more. The record stays visible. |
 | `exact` | None of the above. |
 
-`timing.approximate` on the issue is not an input to the state of `workSeconds`,
-because `workSeconds` does not read the replay. It is an input to the state of
-`wall` and of any elapsed figure. `provider-unavailable` concerns budget samples,
-not timing, and nothing on this page produces it.
+**The state of `wall`** and every elapsed figure is `approximate` when
+`timing.approximate` is set, `unattributed > 0`, `edge_history_incomplete`, or
+`clock_skew` on a partition interval, and is `null` with `replay_unavailable`
+where the replay cannot run. These inputs never reach the `workSeconds` state:
+they are device-local, and a ratio that was eligible on one device and not on
+another would not be a measurement.
+
+`provider-unavailable` concerns budget samples, not timing, and nothing on this
+page produces it.
 
 **Why `sparse` and why 30 minutes.** This is the largest data-quality problem in
 the current numbers. On a snapshot of the maintainers' tracker (300 issues, 187
@@ -698,9 +758,14 @@ leaves resolved `done`, taken 2026-09-24):
 - The 187 done leaves have 345.4 hours of `activeSeconds`. **295.1 hours (85.4%)
   of it lies inside holder-silent gaps longer than 30 minutes**: stretches with
   no event and no comment by the holder, inside an active interval that later
-  closed normally. Those gaps occur in only 30 of the 187 issues. One ticket
+  closed normally. Those gaps occur in only 30 of the 187 issues. Measured with
+  replicated evidence only (the holder's comments and document revisions, plus
+  the interval's start and end), the same 30 issues are sparse, and the same 18
+  of the 124 estimated ones. One ticket
   estimated at 6 hours shows 68.5 hours, of which 67.9 are silent.
-- The longest silent gap per interval (187 intervals, one per done leaf) has a
+- The longest silent gap per interval (187 closed non-derived active intervals
+  across the done leaves: 178 leaves have one, 2 have two, 1 has five, and 6 have
+  none) has a
   median of 10.4 minutes, a 75th percentile of 19.5 minutes and a 90th
   percentile of 332.8 minutes (lower quantiles; see the note below the figures
   table). The distribution is bimodal, and 30 minutes falls in the empty stretch
@@ -754,7 +819,7 @@ and agents execute faster. That is the thing being calibrated, not an error.
 
 | Work | Takes |
 |---|---|
-| Closing lifecycle capture gaps | The [bucket table](#the-buckets), its precedence and [every transition](#every-transition) as the reconstruction spec. `asOf` as a parameter. One mutation instant for every writer. `workSeconds` from replicated data only, as specified in [Work](#work). Re-emitting status-moving and edge events dated at the origin instant, so `wall` stops being device-local. `blockers_changed` from every edge-writing path. Pauses never counted as work, and resume opening a new interval. Terminal transitions closing every open interval. The `sparse`, `unattributed` and `edge_history_incomplete` inputs as the explicit approximation flags. The orchestrator lane and worker-lane scoping, if [Q1](#open-questions) is accepted. Agent guidance: yield or pause when a blocker appears mid-work. |
+| Closing lifecycle capture gaps | The [bucket table](#the-buckets), its precedence and [every transition](#every-transition) as the reconstruction spec. `asOf` as a parameter. One mutation instant for every writer. `workSeconds` from replicated data only, as specified in [Work](#work). Re-emitting status-moving and edge events dated at the origin instant, so `wall` stops being device-local. `blockers_changed` from every edge-writing path. Pauses never counted as work, and resume opening a new interval. Terminal transitions closing every open interval. The replicated-only inputs (`sparse`, `capture_gap`, `end_unbounded`) as the explicit approximation flags on `workSeconds`, and `unattributed` and `edge_history_incomplete` on `wall`. The orchestrator lane and worker-lane scoping, if [Q1](#open-questions) is accepted. Agent guidance: yield or pause when a blocker appears mid-work. |
 | Validating against controlled runs | Every bucket is defined in milliseconds from recorded instants, so a controlled run states its expected timeline as a list of transitions and an `asOf`, and compares the `wall` buckets, `workSeconds`, `interrupted` and `resumeGapSeconds`, and `orchestrationSeconds`. **Fixtures must control the write clock**, not just `asOf`: every instant on this page comes from `nowIso()` at write time, so a reproducible run injects the clock the store, the event writer and the attempt ledger all read. Tolerance: one second per interval for `activeSeconds`, one second per nonzero bucket for the partition, plus the one-second snapping window. `review` and `blocked` are disjoint by construction, so a run that reads the same second in both has found a bug. Runs on a second device check that `workSeconds` matches and that `wall` reads `replay_unavailable` until re-emission is built. |
 | Quality indicators | The [quality inputs](#quality-inputs), the precedence, the [coverage](#missingness-for-the-new-fields) of parents and of the ratio aggregate, and the four new reason codes. |
 | Calibration and forecasting | `estimateRatio` and its eligibility, `orchestrationSeconds` as a separate overhead figure, `resumeGapSeconds` per chain link. |
@@ -777,22 +842,38 @@ Each needs a decision. The page above is written to the recommended default.
      exception to "No caller writes an attempt directly";
    - a new `openedBy` value, `orchestrate`, and new end reasons
      `coordination_ended`, `issue_resolved` and `superseded_by_newer`;
-   - an orchestrator attempt's `lastActivityAt` reads the issue and all its
+   - an orchestrator attempt's evidence includes the issue and all its
      descendants;
-   - the orchestrator-lane read-time clauses (removed, resolved, superseded by the
-     same agent's newer attempt), applied by every reader and by `writeOrphanEnds`;
+   - the orchestrator-lane read-time clauses (removed, resolved, superseded by
+     any newer attempt of the same agent, first clause wins, minimum bound),
+     applied by every reader and by `writeOrphanEnds`;
+   - `issue_resolved` and `superseded_by_newer` added to `ORPHAN_END_REASONS` in
+     `src/core/cloud/attempt-ends.ts`, which the client applier, conflict
+     screening, hydration, the tail fold, the Worker fold and the test service
+     all read. The Worker imports that file, so it is **redeployed first**, as
+     for protocol 3;
+   - a `--role orchestrator` flag (or an attempt id) on `staple attempt
+     pause|resume|milestone|interrupt` and MCP `record_attempt_event`, required
+     when the actor holds an attempt in each lane;
+   - the concurrency context and the presence counts split by `role`;
+   - budget-sample linking (`attemptLinkerFor`) preferring the worker attempt when
+     one harness session holds both;
+   - the read summary `attempts: {current, last, count}` describing the worker
+     lane, with a new `orchestration: {current, count}` beside it;
    - every existing attempt rule scoped to the worker lane, in `evaluateIssue`,
-     `effectivelyOpen`, `targets`, `resumeFor`, `record`, `countEffectivelyOpen`,
-     the presence index and `reconstructAttempts`, as listed in
+     `viewsOfIssue`/`viewOf`, `effectivelyOpen`, `targets`, `resumeFor`,
+     `record`, `countEffectivelyOpen`, the presence index and
+     `reconstructAttempts`, as listed in
      [The orchestrator lane](#the-orchestrator-lane).
 
    The alternative is a registered set of orchestrator identities (a workspace
    setting) classifying attempts by agent. It needs no contract change, but it
    misfiles an orchestrator that implements a leaf, and it depends on identities
    being spelled consistently, which the data shows they are not. Without either,
-   `orchestrationSeconds` is always `null`.
-2. **Sparse threshold.** Default: 30 minutes of holder silence inside a worker
-   attempt's working time marks it `sparse` and makes it `approximate`. Nothing is
+   `orchestrationSeconds` is always `null` with `no_orchestrator_attempt`.
+2. **Sparse threshold.** Default: a gap of more than 30 minutes between
+   consecutive replicated evidence instants inside a worker attempt's working
+   time marks it `sparse` and makes it `approximate`. Nothing is
    subtracted.
 3. **Open review intervals.** `timing.reviewSeconds` ends an open review interval
    at the newest event on the issue, borrowed from the rule for active intervals.
@@ -829,6 +910,8 @@ Each needs a decision. The page above is written to the recommended default.
    history but needs every emitter to change, and it still cannot fix events
    written before the change.
 10. **New reason codes.** Default: add `never_started`, `not_applicable_cancelled`,
-    `no_worker_attempt` and `replay_unavailable` to the telemetry contract's closed
-    set, and the quality inputs `sparse`, `clock_skew` and
-    `edge_history_incomplete` to the quality-indicators work.
+    `no_worker_attempt`, `no_orchestrator_attempt` and `replay_unavailable` to the
+    telemetry contract's closed set, and the quality inputs `sparse`,
+    `capture_gap`, `end_unbounded`, `clock_skew` (for `workSeconds`) and
+    `unattributed`, `edge_history_incomplete`, `clock_skew` (for `wall`) to the
+    quality-indicators work.
