@@ -12,6 +12,9 @@ import { spawnSync } from "node:child_process";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { CLI_ENTRY, REPO_ROOT, TSX_CLI, bareEnv, removeDir, tempDir } from "./fixtures/characterize-support.js";
 import { normalize, startMcpClient, toolPayload, type McpHarness } from "./fixtures/contract-support.js";
+import { once } from "node:events";
+import type { AddressInfo } from "node:net";
+import { startUiServer, type UiHandle } from "../src/ui/server.js";
 
 let home: string;
 let mcp: McpHarness;
@@ -134,5 +137,46 @@ describe("MCP record_attempt_event", () => {
     expect(attemptOf(released)).toMatchObject({ outcome: "failed", endReason: "blocked upstream" });
     const refused = await mcp.call("record_attempt_event", { ref: third, event: "interrupt", reason: "released_stale", ws: WS });
     expect(refused.isError).toBe(true);
+  }, 120_000);
+});
+
+describe("HTTP /api/action", () => {
+  let ui: UiHandle | null = null;
+  afterAll(() => ui?.close());
+
+  it("status, checkout and release return `attempt` beside the issue, as the CLI does", async () => {
+    const previous = process.env.STAPLE_HOME;
+    process.env.STAPLE_HOME = home;
+    try {
+      ui = startUiServer({ port: 0, hub: false, ws: WS });
+      await once(ui.server, "listening");
+      const origin = `http://127.0.0.1:${(ui.server.address() as AddressInfo).port}`;
+      const post = async (body: Record<string, unknown>) =>
+        (await (
+          await fetch(`${origin}/api/action`, {
+            method: "POST",
+            headers: { "x-staple-token": ui!.token, "content-type": "application/json" },
+            body: JSON.stringify({ ws: WS, actor: "agent-http", ...body }),
+          })
+        ).json()) as Record<string, unknown>;
+      const viaHttp = String(cli("new", "HTTP work").json.identifier);
+      const viaCli = String(cli("new", "CLI work").json.identifier);
+
+      const claimed = await post({ type: "checkout", ref: viaHttp });
+      const fromCli = cli("checkout", viaCli, "--agent", "agent-http").json;
+      const shape = (payload: Record<string, unknown>) => normalize({ ...payload, identifier: "<ref>", title: "<title>", attempt: { ...attemptOf(payload), identifier: "<ref>" } });
+      expect(shape(claimed)).toEqual(shape(fromCli));
+      expect(attemptOf(claimed)).toMatchObject({ agent: "agent-http", openedBy: "checkout", state: "running" });
+
+      const released = await post({ type: "release", ref: viaHttp });
+      expect(attemptOf(released)).toMatchObject({ outcome: "yielded", endReason: "released", endDetection: "reported" });
+      const started = await post({ type: "status", ref: viaHttp, status: "in_progress" });
+      expect(attemptOf(started)).toMatchObject({ openedBy: "status", claim: { scope: "none" } });
+      const done = await post({ type: "status", ref: viaHttp, status: "done" });
+      expect(attemptOf(done)).toMatchObject({ outcome: "completed", endReason: "done" });
+    } finally {
+      if (previous === undefined) delete process.env.STAPLE_HOME;
+      else process.env.STAPLE_HOME = previous;
+    }
   }, 120_000);
 });

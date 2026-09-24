@@ -3859,13 +3859,15 @@ export function startUiServer(options: UiOptions): UiHandle {
         let result: unknown;
         if (type === "status") {
           const status = body.status as IssueStatus;
-          result = handle.store.updateIssue(ref, { status, comment: body.comment as string | undefined }, actor);
+          const updated = handle.store.updateIssue(ref, { status, comment: body.comment as string | undefined }, actor);
+          // The attempt this write opened, ended or kept, as the CLI and MCP return it: same store, same handle.
+          result = { ...updated, attempt: handle.store.attempts().result() };
           if (status === "done" || status === "cancelled") {
             notifyHubResolvedSafe(handle.slug, handle.store.getIssue(ref).identifier);
           }
         } else if (type === "checkout") {
           // Additive: absent stealIfIdleSeconds is exactly the old behaviour.
-          result = handle.store.checkoutIssue(ref, actor, undefined, {
+          const claimed = handle.store.checkoutIssue(ref, actor, undefined, {
             stealIfIdleSeconds: optionalSeconds(body.stealIfIdleSeconds, "stealIfIdleSeconds"),
             /**
              * The human override (STA-168) — the UI's confirm-with-a-reason
@@ -3875,10 +3877,12 @@ export function startUiServer(options: UiOptions): UiHandle {
              */
             overrideReason: body.overrideReason === undefined ? undefined : String(body.overrideReason),
           });
+          result = { ...claimed, attempt: handle.store.attempts().result() };
         } else if (type === "release") {
-          result = handle.store.releaseIssue(ref, actor, {
+          const released = handle.store.releaseIssue(ref, actor, {
             ifIdleSeconds: optionalSeconds(body.ifIdleSeconds, "ifIdleSeconds"),
           });
+          result = { ...released, attempt: handle.store.attempts().result() };
         } else if (type === "comment") {
           result = handle.store.addComment(ref, body.body as string, actor, "user");
         } else if (type === "assignee") {
