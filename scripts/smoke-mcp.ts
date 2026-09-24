@@ -738,8 +738,9 @@ try {
   // milestone tools, STA-179 get_setting / set_setting and STA-168 the seven
   // queue tools. All of them act on ONE workspace — a queue belongs to one
   // workspace file and references only its own issues — so all of them take `ws`
-  // like every other workspace tool.
-  assert(wsTargetable.length === 40, `40 workspace tools accept ws targeting (${wsTargetable.length} found)`);
+  // like every other workspace tool. Execution attempts added record_attempt_event: 41,
+  // and it routes by ws exactly as they do (the cold phase below proves it).
+  assert(wsTargetable.length === 41, `41 workspace tools accept ws targeting (${wsTargetable.length} found)`);
   assert(
     !coldByName.get("cross_link").inputSchema.properties?.ws &&
       !coldByName.get("hub_overview").inputSchema.properties?.ws,
@@ -801,6 +802,31 @@ try {
   assert(
     JSON.parse(toolText(coldInboxTargeted)).ready.length === 1,
     "ws-targeted inbox sees the task written through the cached store",
+  );
+
+  // An attempt event routes by ws like every other workspace tool: into the named
+  // workspace, and never into a cwd default (which has no workspace at all here).
+  const coldClaim = await cold.rpc("tools/call", {
+    name: "checkout_task",
+    arguments: { ref: targetedIssue.identifier, ws: "cold" },
+  });
+  assert(!coldClaim.isError, "ws-targeted checkout_task opens an attempt in the named workspace");
+  const coldPause = await cold.rpc("tools/call", {
+    name: "record_attempt_event",
+    arguments: { ref: targetedIssue.identifier, event: "pause", reason: "awaiting_reset", ws: "cold" },
+  });
+  assert(!coldPause.isError, "ws-targeted record_attempt_event reaches the attempt in the named workspace");
+  assert(
+    JSON.parse(toolText(coldPause)).state === "paused" && JSON.parse(toolText(coldPause)).identifier === targetedIssue.identifier,
+    "the attempt event paused that workspace's attempt",
+  );
+  const coldPauseUntargeted = await cold.rpc("tools/call", {
+    name: "record_attempt_event",
+    arguments: { ref: targetedIssue.identifier, event: "resume" },
+  });
+  assert(
+    coldPauseUntargeted.isError && toolError(coldPauseUntargeted).code === "not_found",
+    "without ws, record_attempt_event resolves the cwd default, not the last workspace named",
   );
 
   const reInit = await cold.rpc("tools/call", {
@@ -871,6 +897,8 @@ try {
         "move_queue_entry",
         "prune_queue",
         "put_document",
+        // Execution attempts: a report on an attempt is a write and is attributed like one.
+        "record_attempt_event",
         "release_task",
         "remove_milestone_member",
         "reorder_milestone_members",

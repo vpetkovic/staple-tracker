@@ -43,6 +43,12 @@ staple budget ingest --source claude-statusline [--tee] [--account A]   a status
 staple budget ingest --source codex-rollout <file> [--account A]        a Codex rollout's readings
 staple budget ingest --source manual --account A --limit-key K --used P [--resets-at T]
 staple budget capture on|off | bind --source S --account A | unbind | bindings
+
+staple attempt pause|resume|milestone|interrupt <ref> [--reason R] [-m label]
+                                                    report on the attempt you hold
+staple attempt reconstruct                          rebuild attempts from events recorded before them
+staple checkout|status|done ... [--harness H --harness-session ID] [--model M] [--account A] [--attempt-key K]
+staple release|status|done ... --outcome failed --reason R   only the agent says it failed
 ```
 
 `staple help` has the full option list. `checkout` is an alias for `start`, and

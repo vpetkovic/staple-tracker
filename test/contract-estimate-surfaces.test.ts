@@ -424,9 +424,11 @@ describe("the derived numbers reach every read surface", () => {
     const { DatabaseSync } = await import("node:sqlite");
     const db = new DatabaseSync(join(home, "workspaces", `${WS}.db`));
     const long = new Date(Date.now() - 86_400 * 1000).toISOString();
+    // The checkout's attempt transition is written in the same transaction, by the same
+    // agent: its event is part of the same moment and is rewound with it.
     db.prepare(
       `UPDATE events SET created_at = ?
-        WHERE kind = 'checkout' AND issue_id = (SELECT id FROM issues WHERE identifier = ?)`,
+        WHERE kind IN ('checkout', 'attempt_started') AND issue_id = (SELECT id FROM issues WHERE identifier = ?)`,
     ).run(long, ref);
     db.prepare("UPDATE issues SET checkout_at = ?, started_at = ? WHERE identifier = ?").run(
       long,

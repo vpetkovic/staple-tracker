@@ -118,7 +118,9 @@ describe("GET /api/events?issue=", () => {
     // which for one issue is its whole life: both ends are present.
     expect(scoped.some((row) => row.kind === "issue_created")).toBe(true);
     expect(scoped.some((row) => row.kind === "doc_updated")).toBe(true);
-    expect(inReview(scoped.at(-1)!)).toBe(true);
+    // The last transition of the issue itself; the attempt it ended narrates it after it.
+    expect(inReview(scoped.filter((row) => !row.kind.startsWith("attempt_")).at(-1)!)).toBe(true);
+    expect(scoped.at(-1)!.kind).toBe("attempt_ended");
   });
 
   it("carries the whole event shape, identical to the unfiltered route's", async () => {

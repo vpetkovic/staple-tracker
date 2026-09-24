@@ -19,6 +19,8 @@ import { runDiscoverCommand } from "./commands/discover.js";
 import { runMilestoneCommand } from "./commands/milestone.js";
 import { runQueueCommand } from "./commands/queue.js";
 import { runBudgetCommand } from "./commands/budget.js";
+import { ATTEMPT_END_OPTIONS, ATTEMPT_OPEN_OPTIONS, attemptOptionsFrom, runAttemptCommand, withAttempt } from "./commands/attempt.js";
+import type { AttemptOptions } from "./core/telemetry/attempts.js";
 import { runCloudCommand } from "./commands/cloud.js";
 import { runHubRegistryCommand } from "./commands/hub-registry.js";
 import { EXIT_CODES, exitCodeFor } from "./commands/exit-codes.js";
@@ -399,11 +401,13 @@ function completeWithHub(
   comment?: string,
   estimatedSeconds?: number | null,
   actor: string = agentName(),
+  attempt?: AttemptOptions,
 ) {
   const updated = store.updateIssue(
     ref,
     { status, comment, ...(estimatedSeconds === undefined ? {} : { estimatedSeconds }) },
     actor,
+    attempt,
   );
   notifyHubResolvedSafe(store.slug, updated.identifier);
   return updated;
@@ -878,6 +882,13 @@ Flow
               give a claim back -> todo; --if-stale frees a claim whose holder
               has been silent at least <dur> (any caller)
               --agent names who acts, as on checkout; else $STAPLE_AGENT, else $USER
+
+Execution attempts (one agent's tenure on one issue; opened and ended by the verbs above)
+  checkout|status|done ... [--harness claude_code|codex|other] [--harness-session ID]
+              [--model M] [--account A] [--attempt-key K]   self-reported, all optional
+  release|status|done ... --outcome failed --reason R   only the agent can say it failed
+  attempt pause|resume|milestone|interrupt <ref> [--reason R] [-m label]
+  attempt reconstruct                   rebuild attempts from events recorded before them
   --ack-renumber  on any write: a number sync renumbered on this device is refused
               while the issue that left it is checked out, leased here, or moved
               under a day ago — this writes to whatever holds it now. Or use the id
@@ -1321,6 +1332,10 @@ function main() {
       break;
     }
 
+    case "attempt":
+      runAttemptCommand(rest);
+      break;
+
     case "checkout":
     case "start": {
       const { values, positionals } = parseArgs({
@@ -1332,6 +1347,7 @@ function main() {
           "steal-if-stale": { type: "string" },
           override: { type: "boolean" },
           message: { type: "string", short: "m" },
+          ...ATTEMPT_OPEN_OPTIONS,
         },
       });
       const { store } = getStore(values);
@@ -1347,9 +1363,10 @@ function main() {
          * HTTP and the CLI cannot disagree about it.
          */
         overrideReason: values.override === true ? (values.message ?? "") : undefined,
+        attempt: attemptOptionsFrom(values),
       });
       if (values.json) {
-        outJson(issue);
+        outJson(withAttempt(store, issue));
         break;
       }
       // Name whose work was taken: a silent "claimed" would hide the takeover.
@@ -1367,7 +1384,7 @@ function main() {
       const { values, positionals } = parseArgs({
         args: rest,
         allowPositionals: true,
-        options: { ...common, agent: { type: "string" }, message: { type: "string", short: "m" } },
+        options: { ...common, agent: { type: "string" }, message: { type: "string", short: "m" }, ...ATTEMPT_OPEN_OPTIONS, ...ATTEMPT_END_OPTIONS },
       });
       const { store } = getStore(values);
       const issue = completeWithHub(
@@ -1377,9 +1394,10 @@ function main() {
         values.message,
         undefined,
         agentName(values.agent),
+        attemptOptionsFrom(values),
       );
       if (values.json) {
-        outJson(issue);
+        outJson(withAttempt(store, issue));
         break;
       }
       console.log(line(issue));
@@ -1395,6 +1413,8 @@ function main() {
           agent: { type: "string" },
           estimate: { type: "string" },
           "no-estimate": { type: "boolean" },
+          ...ATTEMPT_OPEN_OPTIONS,
+          ...ATTEMPT_END_OPTIONS,
         },
       });
       const { store } = getStore(values);
@@ -1407,16 +1427,18 @@ function main() {
        * transition, not an error).
        */
       const estimatedSeconds = estimateOption(values.estimate, values["no-estimate"]);
+      const attempt = attemptOptionsFrom(values);
       const issue =
         target === "done" || target === "cancelled"
-          ? completeWithHub(store, positionals[0]!, target, undefined, estimatedSeconds, agentName(values.agent))
+          ? completeWithHub(store, positionals[0]!, target, undefined, estimatedSeconds, agentName(values.agent), attempt)
           : store.updateIssue(
               positionals[0]!,
               { status: target, ...(estimatedSeconds === undefined ? {} : { estimatedSeconds }) },
               agentName(values.agent),
+              attempt,
             );
       if (values.json) {
-        outJson(issue);
+        outJson(withAttempt(store, issue));
         break;
       }
       console.log(line(issue));
@@ -1427,7 +1449,7 @@ function main() {
       const { values, positionals } = parseArgs({
         args: rest,
         allowPositionals: true,
-        options: { ...common, agent: { type: "string" }, "if-stale": { type: "string" } },
+        options: { ...common, agent: { type: "string" }, "if-stale": { type: "string" }, ...ATTEMPT_END_OPTIONS },
       });
       const { store } = getStore(values);
       const stale = values["if-stale"];
@@ -1440,9 +1462,10 @@ function main() {
       }
       const released = store.releaseIssue(positionals[0]!, agentName(values.agent), {
         ifIdleSeconds: stale === undefined ? undefined : parseDuration(stale, "if-stale"),
+        attempt: attemptOptionsFrom(values),
       });
       if (values.json) {
-        outJson(released);
+        outJson(withAttempt(store, released));
         break;
       }
       console.log(line(released));

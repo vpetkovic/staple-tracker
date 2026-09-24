@@ -216,6 +216,20 @@ export function recordHeadSeq(db: DatabaseSync, headSeq: number, epoch: number):
   );
 }
 
+/**
+ * The last pull reached the head of the log, at `cursor`.
+ *
+ * Staple did not keep this: `hasMore` was a loop variable. The stored orphan end is written
+ * only after a pull reached the head (`docs/execution-telemetry.md`, "Orphaned attempts are
+ * closed at read time"), which narrows the window in which another device's real end is
+ * still in flight. The condition is read as "the cursor has not moved since", so a pull
+ * stopped part-way, or a re-bootstrap that resets the cursor, withdraws it with no second
+ * write. Inside the transaction that advanced the cursor.
+ */
+export function recordHeadReached(db: DatabaseSync, cursor: string, at: string = nowIso()): void {
+  db.prepare("UPDATE sync_state SET head_reached_cursor = ?, head_reached_at = ? WHERE id = 1").run(cursor, at);
+}
+
 export function recordSyncedAt(db: DatabaseSync, at: string = nowIso()): void {
   db.prepare("UPDATE sync_state SET last_sync_at = ? WHERE id = 1").run(at);
 }

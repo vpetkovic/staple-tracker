@@ -18,8 +18,9 @@ describe("GET /v1/capabilities", () => {
       // ignoring it, so the widening is a protocol change rather than an additive one.
       // `min` deliberately does not move — that is what keeps every existing client
       // working — so this assertion is also the statement that the bump was
-      // backwards-compatible. See `worker/src/limits.ts`.
-      protocol: { min: 1, max: 2 },
+      // backwards-compatible. See `worker/src/limits.ts`. MOVED AGAIN to 3 for the
+      // execution attempts (`attempt`, `attemptTransition`), on the same terms.
+      protocol: { min: 1, max: 3 },
       maxOpBytes: 512 * 1024,
       maxPullLimit: 500,
       defaultPullLimit: 200,
