@@ -9,7 +9,7 @@
  * rollouts (see test/fixtures/budget-support.ts).
  */
 import { createHash } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Hub } from "../src/core/hub.js";
@@ -20,6 +20,7 @@ import { StapleError } from "../src/core/types.js";
 import { REPO_ROOT, removeDir, tempDir } from "./fixtures/characterize-support.js";
 import { readCode, sourceFiles } from "./fixtures/source-scan.js";
 import {
+  FIXTURE_SESSION_IDS,
   STATUSLINE_SESSION_ID,
   after,
   epoch,
@@ -762,5 +763,19 @@ describe("budget data does not leave the machine", () => {
       .flatMap((root) => sourceFiles(root))
       .filter((file) => /budget_samples|limit_windows|BudgetStore|core\/telemetry/.test(readCode(file)));
     expect(offenders).toEqual([]);
+  });
+});
+
+describe("the fixture session list the real-home guard hashes", () => {
+  it("names every session id a budget suite ingests, so a leaked row from any of them is recognised", () => {
+    const used = new Set<string>();
+    for (const file of ["budget-ingest.test.ts", "budget-surfaces.test.ts", join("fixtures", "budget-support.ts")]) {
+      const source = readFileSync(join(REPO_ROOT, "test", file), "utf8");
+      for (const match of source.matchAll(/"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|session-[a-z0-9-]+)"/g)) used.add(match[1]!);
+    }
+    for (const match of readFileSync(join(REPO_ROOT, "test", "fixtures", "budget", "claude-statusline-2.1.281.json"), "utf8").matchAll(/"session_id": "([^"]+)"/g)) {
+      used.add(match[1]!);
+    }
+    expect([...used].filter((id) => !FIXTURE_SESSION_IDS.includes(id))).toEqual([]);
   });
 });
