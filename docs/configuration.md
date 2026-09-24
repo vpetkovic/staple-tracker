@@ -270,6 +270,12 @@ a list of bindings is not a shape the settings registry has.
   bad label. `staple config` and `config set` keep working, `staple doctor`
   warns on the `config` check, `staple budget bindings` lists it, and
   `staple budget bind` for the same home replaces it.
+- **The structure itself is still enforced, deliberately.** `telemetry` that is
+  not an object, a `budgetCapture` that is not `true` or `false` (say
+  `"yes"`), or a `bindings` that is not an array refuses the file like any
+  other malformed field. A consent that cannot be read must not be guessed
+  in either direction: reading `"yes"` as on would capture without a clear
+  opt-in, and reading it as off would silently drop what the operator meant.
 
 ```bash
 staple budget capture on

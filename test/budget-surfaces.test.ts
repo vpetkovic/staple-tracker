@@ -7,7 +7,7 @@
  *   - The refusals keep the existing envelope and exit codes (validation = 2).
  *   - CLI `--json` and MCP answer the same shape, because both call `ingestBudget`.
  */
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -63,6 +63,29 @@ describe("staple budget ingest --tee", () => {
     expect(result.stdout.equals(bytes)).toBe(true);
     expect(result.status).toBe(2);
     expect(result.stderr).toContain("--bogus");
+  }, 30_000);
+
+  it("echoes for every spelling of --tee, including a malformed --tee=", () => {
+    for (const spelling of ["--tee=true", "--tee="]) {
+      const result = budget(["ingest", "--source", "claude-statusline", spelling], bytes);
+      expect(result.stdout.equals(bytes), spelling).toBe(true);
+      expect(result.status, spelling).toBe(2);
+    }
+  }, 60_000);
+
+  it("refuses --tee with a source that takes no stdin without waiting for stdin to close", async () => {
+    const child = spawn(process.execPath, [TSX_CLI, CLI_ENTRY, "budget", "ingest", "--source", "codex-rollout", "x.jsonl", "--tee"], {
+      cwd: REPO_ROOT,
+      env: childEnv(),
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    // stdin is left open: a pre-read would block here until the timeout.
+    let stderr = "";
+    child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString("utf8")));
+    const status = await new Promise<number | null>((resolve) => child.on("exit", resolve));
+    child.stdin.destroy();
+    expect(status).toBe(2);
+    expect(stderr).toContain("--tee passes a status line through");
   }, 30_000);
 
   it("still passes the input through when ingestion is refused, and reports the refusal on stderr with exit 2", () => {
@@ -121,7 +144,11 @@ describe("a hand-broken binding", () => {
     expect(config.detail).toContain("Personal-Max");
     // Not matched: the reading is refused, never stored under the bad label.
     const refused = budget(["ingest", "--source", "claude-statusline", "--json"], Buffer.from(statusline()));
-    expect(JSON.parse(refused.stderr.trim())).toMatchObject({ detail: { reason: "no_binding_configured" } });
+    const envelope = JSON.parse(refused.stderr.trim()) as { message: string };
+    // The refusal points at the broken entry, the way doctor does.
+    expect(envelope).toMatchObject({ detail: { reason: "no_binding_configured", invalidBinding: { index: 0 } } });
+    expect(envelope.message).toContain("telemetry.bindings[0]");
+    expect(envelope.message).toContain("Personal-Max");
     expect(JSON.parse(budget(["bindings", "--json"]).stdout.toString()).invalidBindings).toHaveLength(1);
     // The CLI repairs it.
     const rebound = JSON.parse(budget(["bind", "--source", "claude-statusline", "--account", "personal-max", "--json"]).stdout.toString());

@@ -95,6 +95,22 @@ function writeAllBytes(bytes: Buffer, fd = 1): void {
   }
 }
 
+/**
+ * Whether to echo stdin before argv is parsed: any spelling of `--tee` (`--tee`,
+ * `--tee=true`, even a malformed `--tee=`), unless `--source` names a source that takes
+ * no stdin. That combination is refused below without reading stdin at all, so a caller
+ * that never closes stdin is not left blocked.
+ */
+function preParseTee(argv: readonly string[]): boolean {
+  if (!argv.some((arg) => arg === "--tee" || arg.startsWith("--tee="))) return false;
+  let source: string | undefined;
+  argv.forEach((arg, i) => {
+    if (arg === "--source") source = argv[i + 1];
+    else if (arg.startsWith("--source=")) source = arg.slice("--source=".length);
+  });
+  return source === undefined || source === "claude-statusline";
+}
+
 function bindingSourceOf(raw: string | undefined): BindingSource {
   if (raw === "claude-statusline") return "claude_code_statusline";
   if (raw === "codex-rollout") return "codex_rollout";
@@ -133,7 +149,7 @@ function sayConfig(view: BudgetConfigView): void {
 export function runBudgetCommand(argv: string[]): void {
   // Through FIRST, before argv is even parsed: a typo in the flags must not blank the
   // operator's status line. Only the refusal that follows goes to stderr.
-  const teeBytes = argv.includes("--tee") ? readStdinBytes() : null;
+  const teeBytes = preParseTee(argv) ? readStdinBytes() : null;
   if (teeBytes !== null) writeAllBytes(teeBytes);
   const { values, positionals } = parseArgs({
     args: argv,
