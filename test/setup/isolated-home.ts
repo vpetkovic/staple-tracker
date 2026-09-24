@@ -10,23 +10,31 @@
  * So, before anything else runs:
  *
  *   1. The real staple home is recorded and SNAPSHOTTED: whether its hub exists, the
- *      hub's schema version, tables, scratch registrations and budget rows, the files
- *      under `workspaces/`, and the content hash of `config.json`.
+ *      hub's schema version, tables, scratch registrations and budget-table rowids, the
+ *      global workspace databases, and the content hash of `config.json`.
  *   2. `HOME`, `STAPLE_HOME` and the locator variables are pointed at a directory private
  *      to this run, and handed to every worker (`isolatedHome`, applied again per file by
  *      `test/setup/isolate-env.ts`, so a worker that did not inherit the environment
  *      still cannot reach the real home).
  *   3. At teardown the snapshot is taken again, and the run FAILS if, in the real staple
  *      home, the hub was created or migrated, registered a workspace under the temp
- *      directory (either spelling of it), or gained or changed budget rows; a file
- *      appeared under `workspaces/`; or `config.json` was created or changed.
+ *      directory (either spelling of it), or gained budget rows a test wrote; a global
+ *      workspace database appeared; or `config.json` was created or changed.
  *
  * Why not compare the hub's mtime: on the machines this suite runs on, live agents write
  * the real hub while the suite runs (a `done` notifies it), so an mtime check would fail
- * runs that did nothing wrong. The guard looks for what a test run can do and a live
- * agent does not. The one overlap is budget capture: once the operator enables it on this
- * machine, a status line rendering during the run adds budget rows, and the run fails
- * with a sentence naming the table. Re-run it; a leak fails every time, a render does not.
+ * runs that did nothing wrong. The guard looks only for what a TEST could have written:
+ *
+ *   - Budget rows. With capture on, every open Claude Code session writes a heartbeat
+ *     row every 300 s, so a row count would fail nearly every run. A new sample counts
+ *     only when a live status line could not have written it: its source is not
+ *     `claude_code_statusline`, its account is not one the real `config.json` binds, its
+ *     `recorded_at` lies outside this run's wall-clock window (tests inject fixed
+ *     clocks), or its `session_ref` is the hash of a fixture session. A new window counts
+ *     when its account is unbound or its `created_at` is outside the run.
+ *   - Global workspace databases. Live connections create and delete `-wal`/`-shm`
+ *     files, and `snapshots/` and each workspace's own directory are written by normal
+ *     operation, so only a new top-level `*.db` counts. A registration leak is G2's.
  */
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
@@ -34,6 +42,8 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { TestProject } from "vitest/node";
+import { sessionRefOf } from "../../src/core/telemetry/formats.js";
+import { STATUSLINE_SESSION_ID } from "../fixtures/budget-support.js";
 
 declare module "vitest" {
   export interface ProvidedContext {
@@ -46,9 +56,22 @@ interface HubSnapshot {
   readonly schemaVersion: string | null;
   readonly tables: string[];
   readonly scratchWorkspaces: string[];
-  /** Row count and newest write of each budget table, when the hub has it. */
-  readonly budgetRows: Record<string, string>;
+  /** The highest rowid of each budget table at snapshot time, when the hub has it. */
+  readonly budgetHighWater: Record<string, number>;
 }
+
+/** What a live status line on this machine can write, taken when the run starts. */
+export interface LiveBudgetContext {
+  /** Accounts the real `config.json` binds. */
+  readonly boundAccounts: readonly string[];
+  /** This run's wall-clock window, ISO. */
+  readonly startedAt: string;
+  endedAt?: string;
+  /** sessionRef hashes of the fixture sessions a test ingests. */
+  readonly fixtureSessionRefs: readonly string[];
+}
+
+const BUDGET_TABLES = ["budget_samples", "limit_windows"] as const;
 
 /**
  * The spellings a scratch path can take. On macOS `tmpdir()` is `/var/folders/…` and its
@@ -67,7 +90,7 @@ export function scratchPrefixes(scratchRoot: string): string[] {
 
 /** Read-only: SQLite's own read-only mode, so taking the snapshot cannot write the file. */
 export function snapshotHub(path: string, scratchRoot: string): HubSnapshot {
-  if (!existsSync(path)) return { exists: false, schemaVersion: null, tables: [], scratchWorkspaces: [], budgetRows: {} };
+  if (!existsSync(path)) return { exists: false, schemaVersion: null, tables: [], scratchWorkspaces: [], budgetHighWater: {} };
   const prefixes = scratchPrefixes(scratchRoot);
   const db = new DatabaseSync(path, { readOnly: true });
   try {
@@ -81,39 +104,92 @@ export function snapshotHub(path: string, scratchRoot: string): HubSnapshot {
           .filter((p) => prefixes.some((prefix) => p.startsWith(prefix)))
           .sort()
       : [];
-    const budgetRows: Record<string, string> = {};
-    for (const [table, column] of [
-      ["budget_samples", "recorded_at"],
-      ["limit_windows", "created_at"],
-    ] as const) {
+    const budgetHighWater: Record<string, number> = {};
+    for (const table of BUDGET_TABLES) {
       if (!tables.includes(table)) continue;
-      const row = db.prepare(`SELECT count(*) AS n, max(${column}) AS newest FROM ${table}`).get() as { n: number; newest: string | null };
-      budgetRows[table] = `${row.n} rows, newest ${row.newest ?? "none"}`;
+      budgetHighWater[table] = (db.prepare(`SELECT coalesce(max(rowid), 0) AS n FROM ${table}`).get() as { n: number }).n;
     }
-    return { exists: true, schemaVersion: version, tables, scratchWorkspaces, budgetRows };
+    return { exists: true, schemaVersion: version, tables, scratchWorkspaces, budgetHighWater };
   } finally {
     db.close();
   }
 }
 
-/** Every file under a directory, relative and sorted; empty when it does not exist. */
-function filesUnder(root: string): string[] {
-  const out: string[] = [];
-  const walk = (dir: string, rel: string): void => {
-    let entries;
-    try {
-      entries = readdirSync(dir, { withFileTypes: true });
-    } catch {
-      return;
+/**
+ * The global workspace databases: top-level `*.db` files only. Sidecars (`-wal`, `-shm`,
+ * `-journal`) come and go with every live connection, and `snapshots/` and each
+ * workspace's own directory are written by normal operation.
+ */
+function workspaceDatabases(root: string): string[] {
+  try {
+    return readdirSync(root, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && entry.name.endsWith(".db"))
+      .map((entry) => entry.name)
+      .sort();
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Budget rows added after the snapshot that a live status line could not have written.
+ * Read-only, like the snapshot.
+ */
+export function testWrittenBudgetRows(path: string, before: HubSnapshot, live: LiveBudgetContext): string[] {
+  if (!before.exists || !existsSync(path)) return [];
+  const db = new DatabaseSync(path, { readOnly: true });
+  const found: string[] = [];
+  try {
+    const bound = new Set(live.boundAccounts);
+    const endedAt = live.endedAt ?? new Date().toISOString();
+    const outside = (at: string) => at < live.startedAt || at > endedAt;
+    if (before.budgetHighWater.budget_samples !== undefined) {
+      const rows = db
+        .prepare("SELECT source_kind, account_ref, recorded_at, session_ref FROM budget_samples WHERE rowid > ?")
+        .all(before.budgetHighWater.budget_samples) as Array<{ source_kind: string; account_ref: string; recorded_at: string; session_ref: string | null }>;
+      for (const row of rows) {
+        const why =
+          row.source_kind !== "claude_code_statusline"
+            ? `source ${row.source_kind}`
+            : !bound.has(row.account_ref)
+              ? `unbound account ${row.account_ref}`
+              : outside(row.recorded_at)
+                ? `recorded_at ${row.recorded_at} outside the run`
+                : row.session_ref !== null && live.fixtureSessionRefs.includes(row.session_ref)
+                  ? "a fixture session"
+                  : null;
+        if (why !== null) found.push(`budget_samples row (${why})`);
+      }
     }
-    for (const entry of entries) {
-      const relative = rel === "" ? entry.name : `${rel}/${entry.name}`;
-      if (entry.isDirectory()) walk(join(dir, entry.name), relative);
-      else out.push(relative);
+    if (before.budgetHighWater.limit_windows !== undefined) {
+      const rows = db
+        .prepare("SELECT account_ref, created_at FROM limit_windows WHERE rowid > ?")
+        .all(before.budgetHighWater.limit_windows) as Array<{ account_ref: string; created_at: string }>;
+      for (const row of rows) {
+        const why = !bound.has(row.account_ref)
+          ? `unbound account ${row.account_ref}`
+          : outside(row.created_at)
+            ? `created_at ${row.created_at} outside the run`
+            : null;
+        if (why !== null) found.push(`limit_windows row (${why})`);
+      }
     }
-  };
-  walk(root, "");
-  return out.sort();
+  } finally {
+    db.close();
+  }
+  return found;
+}
+
+/** The accounts a real `config.json` binds, read without the config module's validation. */
+export function boundAccountsIn(stapleHome: string): string[] {
+  try {
+    const parsed = JSON.parse(readFileSync(join(stapleHome, "config.json"), "utf8")) as { telemetry?: { bindings?: unknown[] } };
+    return (parsed.telemetry?.bindings ?? []).flatMap((b) =>
+      b !== null && typeof b === "object" && typeof (b as { accountRef?: unknown }).accountRef === "string" ? [(b as { accountRef: string }).accountRef] : [],
+    );
+  } catch {
+    return [];
+  }
 }
 
 /** Existence and content hash, never mtime. */
@@ -134,7 +210,7 @@ export interface HomeSnapshot {
 export function snapshotHome(stapleHome: string, scratchRoot: string): HomeSnapshot {
   return {
     hub: snapshotHub(join(stapleHome, "hub.db"), scratchRoot),
-    workspaceFiles: filesUnder(join(stapleHome, "workspaces")),
+    workspaceFiles: workspaceDatabases(join(stapleHome, "workspaces")),
     configDigest: fileDigest(join(stapleHome, "config.json")),
   };
 }
@@ -146,7 +222,7 @@ export function realStapleHomes(env: NodeJS.ProcessEnv, home: string): string[] 
   return [...homes];
 }
 
-export function describeChanges(stapleHome: string, before: HomeSnapshot, after: HomeSnapshot): string[] {
+export function describeChanges(stapleHome: string, before: HomeSnapshot, after: HomeSnapshot, live: LiveBudgetContext): string[] {
   const hub = join(stapleHome, "hub.db");
   const changes: string[] = [];
   const b = before.hub;
@@ -156,13 +232,10 @@ export function describeChanges(stapleHome: string, before: HomeSnapshot, after:
   else if (b.tables.join(",") !== a.tables.join(",")) changes.push(`${hub} gained or lost tables during the test run: ${a.tables.join(", ")}`);
   const added = a.scratchWorkspaces.filter((p) => !b.scratchWorkspaces.includes(p));
   if (added.length > 0) changes.push(`${hub} registered scratch workspaces during the test run: ${added.join(", ")}`);
-  for (const table of Object.keys(a.budgetRows)) {
-    if (b.budgetRows[table] !== undefined && b.budgetRows[table] !== a.budgetRows[table]) {
-      changes.push(`${hub} ${table} changed during the test run: ${b.budgetRows[table]} -> ${a.budgetRows[table]}`);
-    }
-  }
+  const budget = testWrittenBudgetRows(hub, b, live);
+  if (budget.length > 0) changes.push(`${hub} gained budget rows a test wrote: ${budget.slice(0, 5).join("; ")}`);
   const newFiles = after.workspaceFiles.filter((f) => !before.workspaceFiles.includes(f));
-  if (newFiles.length > 0) changes.push(`${join(stapleHome, "workspaces")} gained files during the test run: ${newFiles.slice(0, 5).join(", ")}`);
+  if (newFiles.length > 0) changes.push(`${join(stapleHome, "workspaces")} gained workspace databases during the test run: ${newFiles.slice(0, 5).join(", ")}`);
   if (before.configDigest !== after.configDigest) {
     const what = before.configDigest === null ? "CREATED" : after.configDigest === null ? "DELETED" : "CHANGED";
     changes.push(`${join(stapleHome, "config.json")} was ${what} by the test run`);
@@ -179,6 +252,11 @@ export default function setup(project: TestProject): () => void {
   const stapleHome = join(home, ".staple");
   mkdirSync(stapleHome, { recursive: true });
   const before = watched.map((path) => snapshotHome(path, root));
+  const live: LiveBudgetContext = {
+    boundAccounts: watched.flatMap((path) => boundAccountsIn(path)),
+    startedAt: new Date().toISOString(),
+    fixtureSessionRefs: [sessionRefOf("claude_code", STATUSLINE_SESSION_ID)],
+  };
 
   process.env.HOME = home;
   process.env.STAPLE_HOME = stapleHome;
@@ -187,7 +265,8 @@ export default function setup(project: TestProject): () => void {
   project.provide("isolatedHome", { home, stapleHome });
 
   return () => {
-    const changes = watched.flatMap((path, i) => describeChanges(path, before[i]!, snapshotHome(path, root)));
+    live.endedAt = new Date().toISOString();
+    const changes = watched.flatMap((path, i) => describeChanges(path, before[i]!, snapshotHome(path, root), live));
     rmSync(root, { recursive: true, force: true });
     if (changes.length > 0) {
       throw new Error(
