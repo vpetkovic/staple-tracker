@@ -130,7 +130,7 @@ describe("a server started with no workspace in reach", () => {
     await client?.close();
   });
 
-  it("still connects and still lists all 46 tools", async () => {
+  it("still connects and still lists all 47 tools", async () => {
     const { tools } = await client.listTools();
     // The inventory does not shrink when there is nowhere to write: a harness
     // configured before the user ever ran `init` sees the full tool set.
@@ -139,8 +139,9 @@ describe("a server started with no workspace in reach", () => {
     // get_setting / set_setting, STA-168's seven queue tools, STA-249's
     // hub_unregister / hub_prune / cross_unlink, STA-71's single read-only
     // cloud_status, and the conflict lane's conflict_list / conflict_resolve —
-    // the two cloud writes that are a decision rather than a consent.
-    expect(tools).toHaveLength(46);
+    // the two cloud writes that are a decision rather than a consent. Budget
+    // ingestion then added record_budget_sample (47).
+    expect(tools).toHaveLength(47);
   });
 
   it("pins the not_found guidance a read tool returns instead of an empty result", async () => {

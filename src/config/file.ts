@@ -26,6 +26,7 @@ import {
   type SettingDefinition,
 } from "../core/settings-registry.js";
 import { writeFileAtomic } from "./atomic.js";
+import { DEFAULT_TELEMETRY, validateTelemetryConfig, type TelemetryConfig } from "../core/telemetry/config.js";
 
 export const CONFIG_SCHEMA_VERSION = 1;
 export const CONFIG_FILENAME = "config.json";
@@ -45,6 +46,12 @@ export interface StapleConfig {
   port: number;
   setupComplete: boolean;
   connectors: Record<string, ConnectorReceipt>;
+  /**
+   * Budget capture and its source bindings (docs/execution-telemetry.md). A structured
+   * field like `connectors`, validated by `core/telemetry/config.ts`, because a list of
+   * bindings is not a shape the settings registry has. Off, with no bindings, by default.
+   */
+  telemetry: TelemetryConfig;
 }
 
 /**
@@ -69,13 +76,14 @@ export const SETTING_KEYS = GLOBAL_SETTINGS.map((definition) => definition.confi
 ];
 export type SettingKey = (typeof SETTING_KEYS)[number];
 
-const KNOWN_KEYS = new Set(["schemaVersion", "connectors", ...SETTING_KEYS]);
+const KNOWN_KEYS = new Set(["schemaVersion", "connectors", "telemetry", ...SETTING_KEYS]);
 
 /** The plan's Quick setup defaults table — each default read off its registry definition. */
 export const DEFAULT_CONFIG: StapleConfig = Object.freeze({
   schemaVersion: CONFIG_SCHEMA_VERSION,
   ...Object.fromEntries(GLOBAL_SETTINGS.map((definition) => [definition.configKey, definition.default])),
   connectors: {},
+  telemetry: DEFAULT_TELEMETRY,
 } as StapleConfig);
 
 export interface LoadedConfig {
@@ -95,7 +103,7 @@ export function configPath(home: string): string {
 }
 
 function freshDefaults(): StapleConfig {
-  return { ...DEFAULT_CONFIG, connectors: {} };
+  return { ...DEFAULT_CONFIG, connectors: {}, telemetry: DEFAULT_TELEMETRY };
 }
 
 function assertConnectors(value: unknown, where: string): Record<string, ConnectorReceipt> {
@@ -173,6 +181,10 @@ export function readConfig(home: string): LoadedConfig {
     config.connectors = assertConnectors(record.connectors, path);
     explicitKeys.push("connectors");
   }
+  if (record.telemetry !== undefined) {
+    config.telemetry = validateTelemetryConfig(record.telemetry, path);
+    explicitKeys.push("telemetry");
+  }
 
   const unknown: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(record)) {
@@ -195,6 +207,8 @@ export interface ConfigPatch {
   setupComplete?: boolean;
   /** Merged key-by-key into the existing receipts rather than replacing them. */
   connectors?: Record<string, ConnectorReceipt>;
+  /** Replaces the whole `telemetry` value; callers read, change and write it back. */
+  telemetry?: TelemetryConfig;
 }
 
 /**
@@ -230,11 +244,15 @@ export function updateConfig(home: string, patch: ConfigPatch): StapleConfig {
     next.connectors = { ...next.connectors, ...assertConnectors(patch.connectors, where) };
     chosen.add("connectors");
   }
+  if (patch.telemetry !== undefined) {
+    next.telemetry = validateTelemetryConfig(patch.telemetry, where);
+    chosen.add("telemetry");
+  }
   next.schemaVersion = CONFIG_SCHEMA_VERSION;
 
   // Unknown keys first so a future field cannot shadow one this binary owns.
   const body: Record<string, unknown> = { ...loaded.unknown, schemaVersion: CONFIG_SCHEMA_VERSION };
-  for (const key of [...SETTING_KEYS, "connectors"] as const) {
+  for (const key of [...SETTING_KEYS, "connectors", "telemetry"] as const) {
     if (chosen.has(key)) body[key] = next[key];
   }
   writeFileAtomic(where, `${JSON.stringify(body, null, 2)}\n`, { mode: 0o600, dirMode: 0o700 });

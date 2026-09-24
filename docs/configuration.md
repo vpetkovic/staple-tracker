@@ -212,7 +212,11 @@ registry's global definitions.
   "browser": "auto",        // auto | always | never
   "port": 4400,             // preferred UI port
   "setupComplete": false,
-  "connectors": {}          // reserved for future connector receipts
+  "connectors": {},         // reserved for future connector receipts
+  "telemetry": {            // provider budget capture: opt-in, off by default
+    "budgetCapture": false,
+    "bindings": []          // see "Budget capture and source bindings" below
+  }
 }
 ```
 
@@ -229,6 +233,56 @@ Three properties are load-bearing:
 Both files are written through a validated temporary file in the same directory
 and then `rename(2)`d over the target, so a reader sees the old bytes or the new
 bytes, never half of each.
+
+### Budget capture and source bindings
+
+`telemetry` holds the machine's consent to read provider usage from a harness
+and the account each harness home spends from
+([execution-telemetry.md](execution-telemetry.md#source-bindings-produce-the-account)).
+It is a structured field like `connectors`, not a registered setting, because
+a list of bindings is not a shape the settings registry has.
+
+```jsonc
+"telemetry": {
+  "budgetCapture": true,
+  "bindings": [
+    { "source": "claude_code_statusline", "configDir": "~/.claude", "provider": "anthropic", "accountRef": "personal-max" },
+    { "source": "codex_rollout", "home": "~/.codex", "provider": "openai", "accountRef": "codex-plus" }
+  ]
+}
+```
+
+- **Off until you turn it on.** With `budgetCapture` false (the default), a
+  harness source is refused and nothing is read from it, and so is any reading an
+  agent sends through the MCP tool. The one exception is a reading you type
+  yourself, `staple budget ingest --source manual` at the CLI.
+- **The account is a label you choose**, `[a-z0-9][a-z0-9-]{0,63}`. Neither
+  source says which account it measures, so a Claude Code binding is keyed by
+  its config directory (`CLAUDE_CONFIG_DIR`, or `~/.claude`) and a Codex binding
+  by the home that contains the rollout (`CODEX_HOME`, or `~/.codex`). With no
+  binding and no `--account`, ingestion is refused (`validation`,
+  `detail.reason: "no_binding_configured"`).
+- A binding for a source this build does not know is kept as written and never
+  used for matching, like any other key from a newer staple.
+- **One bad binding does not break the file.** An entry with an invalid field
+  (a hand-typed `"accountRef": "Personal-Max"`) is kept as written and never
+  matched, so readings from that home are refused rather than stored under a
+  bad label. `staple config` and `config set` keep working, `staple doctor`
+  warns on the `config` check, `staple budget bindings` lists it, and
+  `staple budget bind` for the same home replaces it.
+- **The structure itself is still enforced, deliberately.** `telemetry` that is
+  not an object, a `budgetCapture` that is not `true` or `false` (say
+  `"yes"`), or a `bindings` that is not an array refuses the file like any
+  other malformed field. A consent that cannot be read must not be guessed
+  in either direction: reading `"yes"` as on would capture without a clear
+  opt-in, and reading it as off would silently drop what the operator meant.
+
+```bash
+staple budget capture on
+staple budget bind --source claude-statusline --account personal-max   # binds $CLAUDE_CONFIG_DIR or ~/.claude
+staple budget bind --source codex-rollout --account codex-plus         # binds $CODEX_HOME or ~/.codex
+staple budget bindings
+```
 
 ## Commands
 

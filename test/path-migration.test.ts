@@ -44,6 +44,24 @@ import {
 
 afterEach(() => cleanupSandboxes());
 
+/**
+ * `runMigration` in-process, with the sandbox's own staple home.
+ *
+ * The migration repairs the workspace's row in the hub, and `Hub.open()` resolves the
+ * home from `STAPLE_HOME`. Run in-process with none set, it used to open the operator's
+ * real `~/.staple/hub.db` and, on a branch carrying a new hub migration, upgrade it.
+ */
+function migrateIn(box: { repo: string; home: string }): ReturnType<typeof runMigration> {
+  const previous = process.env.STAPLE_HOME;
+  process.env.STAPLE_HOME = box.home;
+  try {
+    return runMigration(box.repo);
+  } finally {
+    if (previous === undefined) delete process.env.STAPLE_HOME;
+    else process.env.STAPLE_HOME = previous;
+  }
+}
+
 describe("layout constants", () => {
   it("writes the current layout and still names the legacy one", () => {
     expect(`${WORKSPACE_DIRNAME}/${WORKSPACE_DBNAME}`).toBe(".staple/staple.db");
@@ -237,7 +255,7 @@ describe("migration", () => {
       );
       expect(walSize(box.legacyDb)).toBeGreaterThan(0);
 
-      const result = runMigration(box.repo);
+      const result = migrateIn(box);
       expect(result.action).toBe("migrate");
     } finally {
       live.close();
@@ -358,7 +376,7 @@ describe("write barrier", () => {
     try {
       let thrown: StapleError | null = null;
       try {
-        runMigration(box.repo);
+        migrateIn(box);
       } catch (error) {
         thrown = error as StapleError;
       }
@@ -372,7 +390,7 @@ describe("write barrier", () => {
     }
 
     // And it succeeds once the writer lets go — the refusal was not a wedge.
-    expect(runMigration(box.repo).targetPath).toBe(box.currentDb);
+    expect(migrateIn(box).targetPath).toBe(box.currentDb);
   });
 
   it("keeps the source readable while the migration runs", () => {
@@ -382,7 +400,7 @@ describe("write barrier", () => {
     seedIssues(box, 1);
     const reader = openDb(box.legacyDb);
     try {
-      runMigration(box.repo);
+      migrateIn(box);
       expect(() => reader.prepare("SELECT COUNT(*) AS n FROM issues").get()).not.toThrow();
     } finally {
       reader.close();
@@ -416,7 +434,7 @@ describe("validation and refusal", () => {
 
     let thrown: StapleError | null = null;
     try {
-      runMigration(box.repo);
+      migrateIn(box);
     } catch (error) {
       thrown = error as StapleError;
     }

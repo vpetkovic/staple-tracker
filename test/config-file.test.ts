@@ -64,6 +64,8 @@ describe("reading", () => {
       port: 4400,
       setupComplete: false,
       connectors: {},
+      // Budget capture is opt-in: off, and nothing bound, until the operator says so.
+      telemetry: { budgetCapture: false, bindings: [] },
     });
   });
 

@@ -30,6 +30,7 @@
  * the user says WHAT, and `--yes` is how they say YES. Neither implies the
  * other, and `--fix` alone previews.
  */
+import { invalidBindings } from "../core/telemetry/config.js";
 import { parseArgs } from "node:util";
 import { spawnSync } from "node:child_process";
 import { accessSync, constants, existsSync, statSync, statfsSync } from "node:fs";
@@ -214,6 +215,18 @@ function checkConfig(): CheckResult {
   const home = resolveHome().path;
   try {
     const loaded = readConfig(home);
+    const unusable = invalidBindings(loaded.config.telemetry);
+    if (unusable.length > 0) {
+      return result(
+        "config",
+        "Machine configuration",
+        "warn",
+        `${loaded.path}: ${unusable.map((b) => `telemetry.bindings[${b.index}] ${b.problem}`).join("; ")}. ` +
+          "Kept as written and never used, so readings from that harness home are refused until it is fixed " +
+          "(`staple budget bind` replaces it).",
+        { path: loaded.path, present: loaded.present, unknownKeys: loaded.unknownKeys, invalidBindings: unusable },
+      );
+    }
     if (loaded.unknownKeys.length > 0) {
       return result(
         "config",

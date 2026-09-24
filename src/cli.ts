@@ -18,6 +18,7 @@ import { runAddCommand } from "./commands/add.js";
 import { runDiscoverCommand } from "./commands/discover.js";
 import { runMilestoneCommand } from "./commands/milestone.js";
 import { runQueueCommand } from "./commands/queue.js";
+import { runBudgetCommand } from "./commands/budget.js";
 import { runCloudCommand } from "./commands/cloud.js";
 import { runHubRegistryCommand } from "./commands/hub-registry.js";
 import { EXIT_CODES, exitCodeFor } from "./commands/exit-codes.js";
@@ -962,6 +963,11 @@ UI
               port that is busy falls back to a free one, an explicit --port
               collision fails; the browser follows config browser=auto|always|never
   ui [--port 4400] [--hub]              compatibility alias for open
+
+Provider budget
+  budget ingest --source claude-statusline|codex-rollout|manual …
+              record provider usage readings on this machine (opt-in: budget
+              capture on; accounts come from budget bind); staple budget --help
 
 Durations (<dur>): 90s, 30m, 2h, 3d, or a bare number of seconds.
 Claim liveness: in_progress rows show "held <dur> · silent <dur>" in ls/show; the
@@ -2346,6 +2352,12 @@ function main() {
      */
     case "cloud": {
       runCloudCommand(rest);
+      break;
+    }
+
+    /** `staple budget` — provider budget telemetry, machine-level (src/commands/budget.ts). */
+    case "budget": {
+      runBudgetCommand(rest);
       break;
     }
 

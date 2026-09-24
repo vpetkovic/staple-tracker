@@ -78,6 +78,14 @@ export function stapleHome(): string {
   return resolveHome().path;
 }
 
+/**
+ * The OS user's home directory, for paths that are not the staple home: a harness's
+ * own default directory (`~/.claude`, `~/.codex`) and `~` in a configured path.
+ */
+export function userHome(): string {
+  return homedir();
+}
+
 /** The home that would be in effect with no `--home` and no `STAPLE_HOME`. */
 export function defaultHome(): string {
   return join(homedir(), HOME_DIRNAME);

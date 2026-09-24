@@ -52,7 +52,15 @@ export default defineConfig({
      * repository's `dist-package/`, which is a developer's build output and can be
      * absent, stale, or mid-rebuild.
      */
-    globalSetup: ["test/setup/package-payload.ts"],
+    globalSetup: ["test/setup/isolated-home.ts", "test/setup/package-payload.ts"],
+
+    /**
+     * Every worker runs with the run's private HOME and STAPLE_HOME, and the run fails
+     * if the operator's real hub was created, migrated or written with scratch
+     * workspaces (`test/setup/isolated-home.ts`). A test that forgets its own
+     * STAPLE_HOME lands in the temp home instead of the live one.
+     */
+    setupFiles: ["test/setup/isolate-env.ts"],
 
     /**
      * Vitest's default is 5000ms, which is wrong for this suite.

@@ -33,6 +33,7 @@ import {
   type CloudSurfaceReport,
 } from "./core/cloud/surface.js";
 import { Hub, notifyHubResolvedSafe } from "./core/hub.js";
+import { registerBudgetTools } from "./core/telemetry/mcp-tools.js";
 import { takeRenumberNotices, withRenumberAcknowledged } from "./core/identifier-moves.js";
 import type { CrossBlockerState } from "./core/hub.js";
 import {
@@ -216,6 +217,7 @@ const autoSync = new SurfaceAutoSync({
  * as on a disconnected one. And a failed tool fires nothing: `run()` reports
  * failure as `isError` rather than by throwing, so the check is on the value.
  */
+const MACHINE_LOCAL_WRITES = new Set(["record_budget_sample"]);
 {
   type ToolConfig = { annotations?: { readOnlyHint?: boolean }; inputSchema?: Record<string, unknown> };
   type ToolCallback = (...args: unknown[]) => unknown;
@@ -287,7 +289,9 @@ const autoSync = new SurfaceAutoSync({
     config: ToolConfig,
     cb: ToolCallback,
   ) =>
-    config.annotations?.readOnlyHint === true
+    // A machine-local write (budget samples in hub.db) names no issue and changes no
+    // workspace, so it gets neither the renumber flag nor a post-write sync.
+    config.annotations?.readOnlyHint === true || MACHINE_LOCAL_WRITES.has(name)
       ? direct(name, config, withNotices(cb))
       : direct(
           name,
@@ -2536,6 +2540,8 @@ server.registerTool(
       });
     }),
 );
+
+registerBudgetTools(server, { run });
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
