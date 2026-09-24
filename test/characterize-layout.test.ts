@@ -372,14 +372,15 @@ describe("the machine home", () => {
     //
     // GOLDEN, moved by S22 (STA-283): version 2 -> 3. Hub migration 003 adds
     // `workspaces.repository_id` and `registry_optouts`. Moved again by STA-287:
-    // 3 -> 4. Hub migration 004 adds `cross_link_changes`.
+    // 3 -> 4. Hub migration 004 adds `cross_link_changes`. Moved again: 4 -> 5.
+    // Hub migration 005 adds `limit_windows` and `budget_samples`.
     //
     // `schema_version` is still the only key a FRESHLY INITIALISED hub holds —
     // slug and prefix remain authoritative in each workspace file, not here. It
     // is no longer the only key the hub can ever hold: `hub_id` is minted, once,
     // the first time something asks the hub to identify itself (a hub backup).
     // Lazily on purpose, so that no existing hub grows one until it is used.
-    expect(metaRows(join(home, "hub.db"))).toEqual([{ key: "schema_version", value: "4" }]);
+    expect(metaRows(join(home, "hub.db"))).toEqual([{ key: "schema_version", value: "5" }]);
   }, 30_000);
 
   it("mints ~/.staple/ui-token at 0600 the first time the UI is asked for", () => {
