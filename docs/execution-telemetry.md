@@ -593,6 +593,33 @@ history under-counts interruptions and says so. Analytics exclude reconstructed
 attempts from trusted samples unless asked, as they exclude `approximate`
 timing.
 
+Reconstruction is a command (`staple attempt reconstruct`), because reconstructed
+attempts replicate and a migration never journals. It is idempotent: an attempt's
+id is derived from its issue and the event that opened it. It reads an issue's
+events up to its **first recorded attempt**, where capture began, and writes no
+transitions. A tenure still open at that point is ended by the rule that fits:
+
+- **The first recorded attempt is a steal.** The tenure was interrupted:
+  `interrupted` / `claim_stolen`, dated at the holder's last activity as the
+  steal's own event recorded it. The recorded steal keeps the `resumesAttemptId`
+  its device stored when it opened (the resume rule saw no attempt then, and a
+  stored value never changes), so this boundary reads by adjacency, not by link.
+- **The first recorded attempt is the same agent's re-claim.** The tenure went on
+  as that attempt. It ends at the boundary as `yielded` / `capture_began`, a
+  reason only reconstruction writes. It is never read as an interruption, and no
+  later orphan rule sees the two as a merge.
+- **Anything else, or no recorded attempt at all.** The claim was cleared or moved
+  by an operation another device made, which re-emits no event locally, so the
+  issue's replicated row decides. Done and cancelled end at `completed_at` and
+  `cancelled_at`. Any other category ends by the ending table at the row's
+  `updated_at`, an upper bound, so a claim cleared by a remote release reads as
+  `yielded` / `returned`, the label a status write back to ready also gets. A
+  claim now held by another agent reads as `yielded` / `released`, dated at that
+  agent's `checkout_at`: the row cannot tell a release followed by a checkout
+  from a steal, and reconstruction never claims an interruption it has no event
+  for, so a remote steal is recorded as a release. A tenure the row shows still
+  held by its agent stays open.
+
 ## Limit windows
 
 ### A reset is an absolute instant

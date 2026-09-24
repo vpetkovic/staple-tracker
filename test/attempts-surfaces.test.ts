@@ -15,6 +15,8 @@ import { normalize, startMcpClient, toolPayload, type McpHarness } from "./fixtu
 import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 import { startUiServer, type UiHandle } from "../src/ui/server.js";
+import { DatabaseSync } from "node:sqlite";
+import { join } from "node:path";
 
 let home: string;
 let mcp: McpHarness;
@@ -113,6 +115,76 @@ describe("staple attempt and the attempt flags", () => {
     expect(first.status).toBe(0);
     expect(first.json).toMatchObject({ reconstructed: expect.any(Number), alreadyPresent: expect.any(Number) });
     expect(cli("attempt", "reconstruct").json).toMatchObject({ reconstructed: 0 });
+  }, 60_000);
+});
+
+describe("history before capture, at the boundary", () => {
+  /**
+   * An older build's claim: the checkout the CLI makes, with the attempt rows it wrote taken
+   * away again — the events stay, as an older build left them.
+   */
+  function claimedByAnOlderBuild(title: string, agent: string): string {
+    const ref = String(cli("new", title).json.identifier);
+    expect(cli("checkout", ref, "--agent", agent).status).toBe(0);
+    const db = new DatabaseSync(join(home, "workspaces", `${WS}.db`));
+    try {
+      const id = (db.prepare("SELECT id FROM issues WHERE identifier = ?").get(ref) as { id: string }).id;
+      db.prepare("DELETE FROM attempt_transitions WHERE attempt_id IN (SELECT id FROM attempts WHERE issue_id = ?)").run(id);
+      db.prepare("DELETE FROM attempts WHERE issue_id = ?").run(id);
+      // And the events of the claim that predate the upgrade, a minute before it.
+      db.prepare("UPDATE events SET created_at = ? WHERE issue_id = ?").run(new Date(Date.now() - 60_000).toISOString(), id);
+      db.prepare("UPDATE issues SET checkout_at = ? WHERE id = ?").run(new Date(Date.now() - 60_000).toISOString(), id);
+    } finally {
+      db.close();
+    }
+    return ref;
+  }
+
+  const rows = (ref: string): Array<Record<string, unknown>> => {
+    const db = new DatabaseSync(join(home, "workspaces", `${WS}.db`), { readOnly: true });
+    try {
+      return db
+        .prepare(
+          `SELECT a.agent, a.provenance, a.opened_by, a.state, a.outcome, a.end_reason, a.end_detection, a.resumes_attempt_id
+             FROM attempts a JOIN issues i ON i.id = a.issue_id WHERE i.identifier = ? ORDER BY a.started_at, a.id`,
+        )
+        .all(ref) as Array<Record<string, unknown>>;
+    } finally {
+      db.close();
+    }
+  };
+
+  it("a steal after the upgrade: the older build's tenure was interrupted, and a later command writes nothing over it", () => {
+    const ref = claimedByAnOlderBuild("Stolen after the upgrade", "agent-old");
+    expect(cli("checkout", ref, "--agent", "agent-new", "--steal-if-stale", "0s").status).toBe(0);
+    expect(cli("attempt", "reconstruct").json).toMatchObject({ reconstructed: 1 });
+    expect(cli("comment", ref, "a command after").status).toBe(0);
+    // Dated at the holder's last activity, as the steal's own event recorded it — not at the steal.
+    const db = new DatabaseSync(join(home, "workspaces", `${WS}.db`), { readOnly: true });
+    try {
+      const stolen = JSON.parse((db.prepare("SELECT e.payload FROM events e JOIN issues i ON i.id = e.issue_id WHERE i.identifier = ? AND e.kind = 'claim_stolen'").get(ref) as { payload: string }).payload);
+      const ended = db
+        .prepare("SELECT a.ended_at, a.ended_at_source FROM attempts a JOIN issues i ON i.id = a.issue_id WHERE i.identifier = ? AND a.provenance = 'reconstructed'")
+        .get(ref);
+      expect(ended).toEqual({ ended_at: stolen.previousLastActivityAt, ended_at_source: "last_activity" });
+    } finally {
+      db.close();
+    }
+    expect(rows(ref)).toEqual([
+      { agent: "agent-old", provenance: "reconstructed", opened_by: "reconstructed", state: "ended", outcome: "interrupted", end_reason: "claim_stolen", end_detection: "reconstructed", resumes_attempt_id: null },
+      { agent: "agent-new", provenance: "recorded", opened_by: "steal", state: "running", outcome: null, end_reason: null, end_detection: null, resumes_attempt_id: null },
+    ]);
+  }, 60_000);
+
+  it("the holder re-claiming after the upgrade: the tenure continued, and no interruption is ever written", () => {
+    const ref = claimedByAnOlderBuild("Re-claimed after the upgrade", "agent-old");
+    expect(cli("checkout", ref, "--agent", "agent-old").status).toBe(0);
+    expect(cli("attempt", "reconstruct").json).toMatchObject({ reconstructed: 1 });
+    expect(cli("comment", ref, "a command after").status).toBe(0);
+    expect(rows(ref)).toEqual([
+      { agent: "agent-old", provenance: "reconstructed", opened_by: "reconstructed", state: "ended", outcome: "yielded", end_reason: "capture_began", end_detection: "reconstructed", resumes_attempt_id: null },
+      { agent: "agent-old", provenance: "recorded", opened_by: "reclaim", state: "running", outcome: null, end_reason: null, end_detection: null, resumes_attempt_id: null },
+    ]);
   }, 60_000);
 });
 

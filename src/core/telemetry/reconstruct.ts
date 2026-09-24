@@ -96,9 +96,11 @@ export function reconstructAttempts(db: DatabaseSync, journal: Journal, deviceId
   let reconstructed = 0;
   let alreadyPresent = 0;
   for (const issueId of issues) {
-    const boundary = (
-      db.prepare("SELECT MIN(started_at) AS at FROM attempts WHERE issue_id = ? AND provenance <> 'reconstructed'").get(issueId) as { at: string | null }
-    ).at;
+    // The first attempt recorded on this issue: where capture began, and how.
+    const first = db
+      .prepare("SELECT id, agent, opened_by, started_at FROM attempts WHERE issue_id = ? AND provenance <> 'reconstructed' ORDER BY started_at, id LIMIT 1")
+      .get(issueId) as { id: string; agent: string; opened_by: string; started_at: string } | undefined;
+    const boundary = first?.started_at ?? null;
     const events = db
       .prepare(
         `SELECT seq, kind, actor, payload, dedup_key, created_at FROM events
@@ -180,7 +182,42 @@ export function reconstructAttempts(db: DatabaseSync, journal: Journal, deviceId
           break;
       }
     }
-    const still = open as { record: AttemptRecord } | null;
+    let still = open as { record: AttemptRecord } | null;
+    /**
+     * A tenure still open where capture began was ended by the very mutation that opened the
+     * first recorded attempt — whose own event is at the boundary, not before it:
+     *
+     *   - a steal: the tenure was interrupted, `claim_stolen`, dated at the holder's last
+     *     activity as the steal's event recorded it. The recorded steal keeps the
+     *     `resumesAttemptId` its opening device stored: the resume rule saw no attempt then,
+     *     and a stored value never changes afterwards;
+     *   - the same agent re-claiming: the tenure continued as the recorded attempt. It ends
+     *     at the boundary as `yielded` / `capture_began`, never as an interruption, so no
+     *     device later reads the two as a merge.
+     *
+     * Anything else (a checkout or a status write) opened after the tenure ended, and the
+     * issue's replicated row says how, below.
+     */
+    if (still !== null && first !== undefined) {
+      if (first.opened_by === "steal") {
+        const stealEvent = db
+          .prepare("SELECT payload, actor FROM events WHERE issue_id = ? AND kind = 'claim_stolen' AND created_at >= ? ORDER BY seq LIMIT 1")
+          .get(issueId, first.started_at) as { payload: string; actor: string | null } | undefined;
+        const stealPayload = stealEvent ? payloadOf({ payload: stealEvent.payload } as EventRow) : {};
+        const lastActivity = typeof stealPayload.previousLastActivityAt === "string" ? stealPayload.previousLastActivityAt : null;
+        finish({
+          outcome: "interrupted",
+          endReason: "claim_stolen",
+          endedBy: stealEvent?.actor ?? first.agent,
+          endedAt: lastActivity ?? first.started_at,
+          endedAtSource: lastActivity !== null ? "last_activity" : "mutation",
+        });
+        still = null;
+      } else if (first.opened_by === "reclaim" && first.agent === still.record.agent) {
+        finish({ outcome: "yielded", endReason: "capture_began", endedBy: first.agent, endedAt: first.started_at, endedAtSource: "mutation" });
+        still = null;
+      }
+    }
     if (still !== null) {
       /**
        * No local event ended it — but the claim may have been cleared or moved by an operation
