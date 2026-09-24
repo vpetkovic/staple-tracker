@@ -238,7 +238,8 @@ describe("tool inventory", () => {
   // `characterize-mcp-startup` and `package-tarball`, which both pin 46. The
   // array was always right; only the sentence was stale. Corrected, not moved:
   // this ticket adds no tool.
-  it("exposes exactly these 46 tools with these annotations and output schemas", async () => {
+  // Budget ingestion added record_budget_sample: 46 -> 47.
+  it("exposes exactly these 47 tools with these annotations and output schemas", async () => {
     const tools = await harness.listTools();
     const inventory = tools.map((t) => ({
       name: t.name,
@@ -725,6 +726,22 @@ describe("tool inventory", () => {
         annotations: {
           title: "Resolve conflict",
           readOnlyHint: false,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
+        hasOutputSchema: true,
+      },
+      /**
+       * Budget ingestion writes one machine-local row per reading into hub.db. It is
+       * idempotent (a replay stores nothing twice, by dedup key) and never destructive
+       * (samples are only ever added).
+       */
+      {
+        name: "record_budget_sample",
+        annotations: {
+          title: "Record budget sample",
+          readOnlyHint: false,
+          destructiveHint: false,
           idempotentHint: true,
           openWorldHint: false,
         },
@@ -1449,6 +1466,9 @@ describe("tool response shapes (31/31)", () => {
       // no surface will resolve without an explicit choice.
       "conflict_list",
       "conflict_resolve",
+      // Budget ingestion is pinned in test/budget-surfaces.test.ts, against the CLI's
+      // `staple budget ingest --json` payload from the same `ingestBudget`.
+      "record_budget_sample",
     ]);
     expect([...covered].sort()).toEqual([...tools].sort());
   });

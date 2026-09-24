@@ -345,20 +345,29 @@ describe("the machine home", () => {
      * the consolidated fresh-create snapshot had to reproduce.
      */
     expect(schemaObjects(join(home, "hub.db"))).toEqual([
+      "index:budget_samples_limit_idx",
+      "index:budget_samples_window_session_idx",
       "index:cross_links_blocked_idx",
       "index:cross_links_blocker_idx",
       "index:hub_events_dedup_uq",
+      "index:limit_windows_limit_idx",
       // Hub migration 004 (STA-287): this machine's own cross-link changes.
+      "index:sqlite_autoindex_budget_samples_1",
+      "index:sqlite_autoindex_budget_samples_2",
       "index:sqlite_autoindex_cross_link_changes_1",
       "index:sqlite_autoindex_cross_links_1",
+      "index:sqlite_autoindex_limit_windows_1",
       "index:sqlite_autoindex_meta_1",
       "index:sqlite_autoindex_registry_optouts_1",
       "index:sqlite_autoindex_workspaces_1",
       "index:sqlite_autoindex_workspaces_2",
       "index:workspaces_repository_id_idx",
+      // Hub migration 005: provider limit windows and budget samples, machine state.
+      "table:budget_samples",
       "table:cross_link_changes",
       "table:cross_links",
       "table:hub_events",
+      "table:limit_windows",
       "table:meta",
       "table:registry_optouts",
       "table:sqlite_sequence",

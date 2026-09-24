@@ -159,6 +159,14 @@ const COMMANDS: ReadonlyArray<{
     booleans: ["json", "all", "effective"],
     shorts: ["m"],
   },
+  // `budget` records provider usage readings in this MACHINE's hub.db, so it takes
+  // no --db or --ws: there is no workspace to select.
+  {
+    name: "budget",
+    strings: ["source", "account", "provider", "config-dir", "codex-home", "limit-key", "used", "resets-at"],
+    booleans: ["json", "help", "tee"],
+    shorts: [],
+  },
 ];
 
 /** Every command token in one place, so a removal is a one-line diff. */
@@ -171,7 +179,7 @@ describe("command inventory", () => {
       "status", "release", "block", "blocked-by", "wait", "link", "comment",
       "tree", "board", "inbox", "doc", "events", "hub", "ui", "open", "config",
       "migrate", "install", "doctor", "add", "discover", "milestone", "settings",
-      "queue",
+      "queue", "budget",
     ]);
     // 32 tokens, 29 distinct behaviours: checkout/start, done/cancel and ui/open
     // each share a case. Was 22 before A3 (STA-33) added `config`, 23 before A5
@@ -185,7 +193,8 @@ describe("command inventory", () => {
     // handled by the PACKAGED entrypoint (src/package/staple.ts) rather than by
     // this dispatcher. Whoever adds an `mcp` case here must delete that branch
     // in the same change rather than leaving two.
-    expect(COMMAND_NAMES).toHaveLength(32);
+    // 33 with `budget` (provider budget telemetry).
+    expect(COMMAND_NAMES).toHaveLength(33);
   });
 
   it.each(COMMANDS.map((c) => c.name))(
@@ -450,6 +459,8 @@ describe("help surface", () => {
       "The pickup queue",
       "Documents & events",
       "UI",
+      // Provider budget telemetry is machine-level, like the UI: it sits after it.
+      "Provider budget",
       "Workspace vocabulary",
     ]);
   });
