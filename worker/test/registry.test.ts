@@ -152,7 +152,8 @@ describe("the protocol gate", () => {
       426,
     );
     expect(body.min).toBe(1);
-    expect(body.max).toBe(2);
+    // The range this Worker supports: 3 since execution attempts.
+    expect(body.max).toBe(3);
     expect(body.requiredProtocol).toBe(2);
   });
 
@@ -202,7 +203,7 @@ describe("the protocol gate", () => {
       426,
     );
     expect(body.requiredProtocol).toBe(2);
-    expect(body.max).toBe(2);
+    expect(body.max).toBe(3);
     // The entity NAME is disclosed, because otherwise the client cannot say which
     // feature the upgrade is for. It is a fixed word from this Worker's own closed
     // vocabulary, not user data.

@@ -55,6 +55,7 @@ import {
 import { aliasedIssueId, moveIdentifier, recordIdentifierMove } from "../identifier-moves.js";
 import { ORIGIN_RELEASING_STATUSES, StapleError, holdsLiveOrigin, normalizeTitle, nowIso } from "../types.js";
 import { type OwnRevision, holderYields, oweSettlement, ownClaimSeq, ownOriginClaimSeq, ownRevisionOf, ownRevisions } from "./claims.js";
+import { applyAttempt, applyAttemptTransition } from "./apply-attempts.js";
 import { placeRevision, sameRevision, summaryAt } from "./revision-placement.js";
 import {
   isDefined,
@@ -592,6 +593,10 @@ export function applyToDatabase(db: DatabaseSync, input: ApplyInput): boolean {
       return applyQueue(db, input);
     case "lease":
       return applyLease(db, input);
+    case "attempt":
+      return applyAttempt(db, input);
+    case "attemptTransition":
+      return applyAttemptTransition(db, input);
     case "conflict":
       /**
        * Not applied by this build, and not an error either.

@@ -80,6 +80,17 @@ import { QueueStore } from "./queue-store.js";
  * the fetch module onto the most-used command in the product.
  */
 import { claimScopeResolver, type ClaimScopeResolver } from "./cloud/scope.js";
+import {
+  AttemptLedger,
+  assertAttemptOptions,
+  failsAttempt,
+  refreshPresence,
+  type AttemptOptions,
+  type AttemptView,
+  type IssueFacts,
+  viewAttempt,
+} from "./telemetry/attempts.js";
+import { reconstructAttempts, type ReconstructReport } from "./telemetry/reconstruct.js";
 
 export interface CreateIssueInput {
   title: string;
@@ -581,7 +592,82 @@ export class WorkspaceStore {
    * loudly.
    */
   journaled<T>(fn: () => T): T {
-    return this.journal.run(fn);
+    if (this.journal.inScope) return this.journal.run(fn);
+    /**
+     * A mutating command begins by writing down the end of any attempt this device opened
+     * that the read-time rule now closes (`AttemptLedger.writeOrphanEnds`,
+     * `docs/execution-telemetry.md`): at the start of the command, in a scope of its own, so
+     * a read never writes to the journal and a refused mutation does not take it back.
+     */
+    this.journal.run(() => this.attempts().writeOrphanEnds());
+    this.attempts().forgetResult();
+    try {
+      return this.journal.run(fn);
+    } finally {
+      /**
+       * The machine's presence index is written after the workspace transaction commits,
+       * outside the journal seam, and best effort (`telemetry/presence.ts`).
+       */
+      if (this.attempts().takeDirty()) refreshPresence(this.db);
+    }
+  }
+
+  private ledger: AttemptLedger | null = null;
+
+  /**
+   * The attempts of this workspace (`telemetry/attempts.ts`): the side effects the mutators
+   * below run, and the attempt a surface returns after one of them.
+   */
+  attempts(): AttemptLedger {
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    const store = this;
+    this.ledger ??= new AttemptLedger({
+      db: this.db,
+      // Resolved on every use: a connection's journal is rebound when a sync arms it (`bindJournal`).
+      get journal() {
+        return store.journal;
+      },
+      estimateReading: (issueId) => {
+        const plan = this.timingFor([issueId]).get(issueId)?.subtreePlan;
+        return { estimatedSeconds: plan?.estimatedSeconds ?? null, source: plan?.source ?? "none" };
+      },
+      claimOf: (issueId) => {
+        const scopes = claimScopeResolver(this.db);
+        return { scope: scopes.scopeOf(issueId), fencingToken: scopes.leaseOf(issueId)?.fencingToken ?? null };
+      },
+    });
+    return this.ledger;
+  }
+
+  /**
+   * `staple attempt pause|resume|milestone|interrupt <ref>` and MCP `record_attempt_event`:
+   * one store method for every surface. Returns the attempt as it now reads.
+   */
+  recordAttemptEvent(
+    ref: string,
+    event: string,
+    actor: string,
+    input: { reason?: string; label?: string; commentId?: string; document?: { key: string; revision: number } } = {},
+  ): AttemptView {
+    if (!actor?.trim()) throw new StapleError("validation", "An attempt event needs an actor: pass --agent, or set STAPLE_AGENT.");
+    return this.journaled(() => {
+      const row = this.requireTarget(ref);
+      const attempt = this.attempts().record(row, event, actor, input);
+      return viewAttempt(this.db, attempt.id)!;
+    });
+  }
+
+  /**
+   * Rebuild attempts for work done before they were recorded, from the event log
+   * (`telemetry/reconstruct.ts`). Idempotent: a second run rebuilds nothing.
+   */
+  reconstructAttemptHistory(): ReconstructReport {
+    return this.journaled(() => reconstructAttempts(this.db, this.journal, this.journal.deviceIdentity()));
+  }
+
+  /** The issue as the attempt rules read it, from a row read before a mutation. */
+  private factsOf(row: IssueRow): IssueFacts {
+    return { exists: true, active: this.isActiveStatus(row.status), checkoutAgent: row.checkout_agent };
   }
 
   /**
@@ -2202,6 +2288,10 @@ export class WorkspaceStore {
       // child being born `in_progress` (STA-98 widened it from STA-79's flip).
       // A backlog child born under a backlog/todo parent is still a no-op: the
       // workable band absorbs it without a write.
+      // Born in the active category is a status write into it: an attempt with no claim.
+      if (statusCategory === "active") {
+        this.attempts().statusMoved(row, { exists: true, active: false, checkoutAgent: null }, null, "active", input.createdBy ?? null);
+      }
       if (parent) {
         this.recomputeAncestorStatuses(row, input.createdBy ?? null);
       }
@@ -3399,6 +3489,8 @@ export class WorkspaceStore {
         payload: this.movedColumns(updated),
         actor: actor ?? null,
       });
+      // Parked by a gate: the claim is cleared, which ends a checked-out parent's attempt.
+      this.attempts().statusMoved(row, this.factsOf(row), this.categoryOf(row.status), "gated", actor ?? null);
       if (opts.comment) {
         this.insertComment(row.id, actor ?? "unknown", actor ? "agent" : "system", opts.comment);
       }
@@ -3691,7 +3783,8 @@ export class WorkspaceStore {
 
   // ---------- update ----------
 
-  updateIssue(ref: string, patch: UpdateIssueInput, actor?: string | null): Issue {
+  updateIssue(ref: string, patch: UpdateIssueInput, actor?: string | null, attempt?: AttemptOptions): Issue {
+    assertAttemptOptions(attempt);
     if (patch.status) this.assertConfiguredStatus(patch.status);
     if (patch.kind) this.assertConfiguredKind(patch.kind);
     if (patch.priority) assertPriority(patch.priority);
@@ -3747,6 +3840,16 @@ export class WorkspaceStore {
        */
       const categoryBefore = this.categoryOf(row.status);
       const categoryAfter = this.categoryOf(statusAfter);
+      /**
+       * `failed` is only ever said by the agent, and only on the write that clears the claim:
+       * a failed attempt that kept its claim would be a claim nobody is working.
+       */
+      if (failsAttempt(attempt) && !(statusChanging && categoryBefore === "active" && categoryAfter !== "active")) {
+        throw new StapleError(
+          "validation",
+          "--outcome failed goes on the write that takes the issue out of the active category (or on release): it ends the attempt, and a failed attempt cannot keep its claim.",
+        );
+      }
 
       if ((patch.unblockOwner !== undefined || patch.unblockAction !== undefined) &&
           categoryAfter !== "blocked") {
@@ -3862,6 +3965,18 @@ export class WorkspaceStore {
         actor: actor ?? null,
       });
 
+      /**
+       * The estimate has no history of its own — it is overwritten in place — so a change says
+       * what it was and what it became (`docs/execution-telemetry.md`, "The estimate reading").
+       */
+      if (patch.estimatedSeconds !== undefined && (next.estimated_seconds ?? null) !== (row.estimated_seconds ?? null)) {
+        this.emitEvent({
+          kind: "estimate_changed",
+          issueId: row.id,
+          actor,
+          payload: { identifier: row.identifier, from: row.estimated_seconds ?? null, to: next.estimated_seconds ?? null },
+        });
+      }
       if (statusChanging) {
         this.emitEvent({
           kind: "status_changed",
@@ -3869,6 +3984,7 @@ export class WorkspaceStore {
           actor,
           payload: { identifier: row.identifier, from: row.status, to: patch.status },
         });
+        this.attempts().statusMoved(row, this.factsOf(row), categoryBefore, categoryAfter, actor ?? null, attempt);
         /**
          * The wake goes FIRST, and the order is load-bearing since STA-153.
          * `afterResolution` asks "is the parent still open?" before it wakes it,
@@ -4660,9 +4776,13 @@ export class WorkspaceStore {
      * explicit list are validated against the workspace's own vocabulary.
      */
     expectedStatuses?: readonly IssueStatus[],
-    opts: { stealIfIdleSeconds?: number; overrideReason?: string } = {},
+    opts: { stealIfIdleSeconds?: number; overrideReason?: string; attempt?: AttemptOptions } = {},
   ): Issue {
     if (!agent?.trim()) throw new StapleError("validation", "agent is required for checkout");
+    assertAttemptOptions(opts.attempt);
+    if (opts.attempt?.outcome !== undefined) {
+      throw new StapleError("validation", "--outcome goes on the write that clears the claim (release, status, done), never on a checkout.");
+    }
     /**
      * The human override (docs/queue.md "Human override"). The store cannot tell
      * a human from an agent and does not try — THE FLAG IS THE DISTINCTION, and
@@ -4683,7 +4803,9 @@ export class WorkspaceStore {
     return this.journaled(() => {
       const row = this.requireTarget(ref);
       if (this.isActiveStatus(row.status) && row.checkout_agent === agent) {
-        return rowToIssue(row); // crash-recovery re-claim
+        // crash-recovery re-claim: the open attempt stays open, or a new one resumes an ended one
+        this.attempts().reclaimed(row, agent, opts.attempt);
+        return rowToIssue(row);
       }
       /**
        * The queue guard (STA-143), and its position in this method is the whole
@@ -4862,6 +4984,7 @@ export class WorkspaceStore {
                   actor: agent,
                 });
                 emitOverride();
+                this.attempts().stolen(row, agent, this.factsOf(row), opts.attempt);
                 // Transition site 4 of 5. A takeover is a fresh start by a new
                 // agent; if the epic went quiet in the meantime it must light up
                 // again, attributed to whoever took over.
@@ -4916,6 +5039,7 @@ export class WorkspaceStore {
         actor: agent,
       });
       emitOverride();
+      this.attempts().checkedOut(row, agent, opts.attempt);
       // Transition site 3 of 5, and the one that matters most in practice: a
       // plain `staple checkout` IS how work starts, and its UPDATE above sets
       // status = 'in_progress' directly. Hooking only `updateIssue` would have
@@ -4933,8 +5057,9 @@ export class WorkspaceStore {
    * stands in for the ownership check, since freeing a dead agent's claim is the
    * entire point. Without it, behaviour is exactly as before.
    */
-  releaseIssue(ref: string, agent?: string | null, opts: { ifIdleSeconds?: number } = {}): Issue {
+  releaseIssue(ref: string, agent?: string | null, opts: { ifIdleSeconds?: number; attempt?: AttemptOptions } = {}): Issue {
     const ifIdleSeconds = assertIdleThreshold(opts.ifIdleSeconds, "ifIdleSeconds");
+    assertAttemptOptions(opts.attempt);
     return this.journaled(() => {
       const row = this.requireTarget(ref);
       if (!this.isActiveStatus(row.status)) {
@@ -5012,6 +5137,7 @@ export class WorkspaceStore {
         },
         actor: agent ?? null,
       });
+      this.attempts().released(row.id, this.factsOf(row), agent ?? null, claim !== null, opts.attempt);
       // Transition site 5 of 5, and one STA-79 structurally could not have: a
       // release writes `todo`, which its one-way flip into in_progress had
       // nothing to say about. A recompute must see it, or an epic keeps

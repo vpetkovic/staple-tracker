@@ -218,7 +218,8 @@ describe("the client turns the refusal into a sentence", () => {
       pushOperations(
         parseEndpoint(ENDPOINT),
         { ...repoCall, epoch: null, ops: [issue(1)] },
-        { fetchImpl: server.fetch },
+        // The fixture's envelope says protocol 1; the header has to agree with it.
+        { fetchImpl: server.fetch, protocol: 1 },
       ),
     );
     expect(error.message).toBe(vocabularyRefusalMessage(ENDPOINT, "hub", "workspace"));

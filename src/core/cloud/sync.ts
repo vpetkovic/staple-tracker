@@ -59,6 +59,7 @@ import { applyConflictOperation, countOpenConflicts, screenForConflicts } from "
 import { applySnapshotEntity, hydrate } from "./hydrate.js";
 import { owedLeaseReleases, settleOwedLeaseRelease } from "./lease-store.js";
 import { countQuarantined, markWaitingAcrossRewind, quarantineOperation, retryQuarantine, withoutLaterWrites } from "./quarantine.js";
+import { refreshPresence, writeOwnOrphanEnds } from "../telemetry/attempts.js";
 import { reconcileAfterRead, reconcileBeforeRead } from "./rewind.js";
 import { TailFold, refusedAsTooLargeToFold, type Entry } from "./tail-fold.js";
 import { seedModeOf, seedOwed, seedRepository, type RepositorySurvey, type SeedReport } from "./seed.js";
@@ -76,6 +77,7 @@ import {
   readTailSurvey,
   reconciledEpoch,
   recordWithheld,
+  recordHeadReached,
   recordSyncedAt,
   requireSyncState,
   writeTailSurvey,
@@ -611,6 +613,14 @@ export async function syncRepository(
   const pull = await pullEverything(db, journal, session, capabilities, options);
 
   /**
+   * A sync is a mutating command: with the pull at the head of the log, this device writes
+   * down the end of any attempt it opened that the read-time rule now closes — a steal or a
+   * status change another device made, arriving here (`writeOwnOrphanEnds`). Before the
+   * second push, so it goes out in this sync.
+   */
+  writeOwnOrphanEnds(db, journal);
+
+  /**
    * What the pull made this device owe goes out in the same sync.
    *
    * Applying the pull can leave this device holding a later claim on an identifier or a
@@ -662,6 +672,8 @@ export async function syncRepository(
   }
   // The identifiers this sync moved, carried to this machine's hub cross-links (`hub-follow.ts`).
   carryIdentifierMovesToHub(db, options.home);
+  // And the attempts it changed, to this machine's presence index — after commit, best effort.
+  refreshPresence(db);
 
   const conflicts = countOpenConflicts(db);
   const quarantined = countQuarantined(db);
@@ -1378,7 +1390,10 @@ async function drainTail(
     // The cursor advances even for an empty page: the server's `nextCursor` is
     // still the correct place to resume from, and writing it records the epoch
     // and the watermark this device has now seen.
-    tx(db, () => advanceCursor(db, page.nextCursor, page.serverHighWatermark, page.epoch));
+    tx(db, () => {
+      advanceCursor(db, page.nextCursor, page.serverHighWatermark, page.epoch);
+      if (!page.hasMore) recordHeadReached(db, page.nextCursor);
+    });
 
     if (!page.hasMore) break;
   }

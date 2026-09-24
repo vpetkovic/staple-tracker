@@ -401,6 +401,10 @@ describe("schema migration against a live database", () => {
         "sync_devices",
         "sync_state",
         "sync_field_writes",
+        // Migration 013 (execution attempts): two more tables. Its two `sync_state`
+        // columns go with `sync_state` above.
+        "attempts",
+        "attempt_transitions",
       ]) {
         legacyDb.exec(`DROP TABLE IF EXISTS ${table}`);
       }

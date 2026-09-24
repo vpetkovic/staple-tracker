@@ -295,6 +295,12 @@ function operationReferents(entity: string, entityId: string, payload: Record<st
     case "lease":
       issue(entityId);
       break;
+    case "attempt":
+      issue(payload.issueId);
+      break;
+    case "attemptTransition":
+      if (typeof payload.attemptId === "string") out.push(["attempt", payload.attemptId]);
+      break;
     default:
       break;
   }
@@ -350,6 +356,9 @@ function foldNeeds(entities: readonly SnapshotEntity[]): Set<Key> {
       case "queue":
         if (Array.isArray(state.order)) for (const id of state.order) need("issue", id);
         break;
+      case "attemptTransition":
+        need("attempt", state.attemptId);
+        break;
       default:
         break;
     }
@@ -372,6 +381,9 @@ function heldEntities(db: DatabaseSync): Array<readonly [SyncEntity, string]> {
   for (const id of ids("SELECT DISTINCT blocked_id AS id FROM relations WHERE type = 'blocks'")) out.push(["relation", id]);
   for (const id of ids("SELECT issue_id AS id FROM milestone_meta UNION SELECT milestone_id AS id FROM milestone_members")) out.push(["milestone", id]);
   if (ids("SELECT issue_id AS id FROM queue_entries LIMIT 1").length > 0) out.push(["queue", QUEUE_PLAN_ID]);
+  // An attempt outlives its issue by design; it is rewound as an entity of its own.
+  for (const id of ids("SELECT id FROM attempts")) out.push(["attempt", id]);
+  for (const id of ids("SELECT id FROM attempt_transitions")) out.push(["attemptTransition", id]);
   return out;
 }
 
@@ -397,6 +409,10 @@ function holds(db: DatabaseSync, entity: string, id: string): boolean {
       return hit("SELECT 1 FROM milestone_meta WHERE issue_id = ? UNION SELECT 1 FROM milestone_members WHERE milestone_id = ?", id, id);
     case "queue":
       return hit("SELECT 1 FROM queue_entries LIMIT 1");
+    case "attempt":
+      return hit("SELECT 1 FROM attempts WHERE id = ?", id);
+    case "attemptTransition":
+      return hit("SELECT 1 FROM attempt_transitions WHERE id = ?", id);
     default:
       return false;
   }
@@ -426,6 +442,10 @@ function referents(db: DatabaseSync, entity: string, id: string): Array<readonly
       return [["issue", id], ...column("SELECT issue_id AS id FROM milestone_members WHERE milestone_id = ?", id).map((issue) => ["issue", issue] as const)];
     case "queue":
       return column("SELECT issue_id AS id FROM queue_entries").map((issue) => ["issue", issue] as const);
+    case "attempt":
+      return column("SELECT issue_id AS id FROM attempts WHERE id = ?", id).map((issue) => ["issue", issue] as const);
+    case "attemptTransition":
+      return column("SELECT attempt_id AS id FROM attempt_transitions WHERE id = ?", id).map((attempt) => ["attempt", attempt] as const);
     default:
       return [];
   }
@@ -479,6 +499,10 @@ function remove(db: DatabaseSync, entity: SyncEntity, id: string): number {
     }
     case "queue":
       return gone(db.prepare("DELETE FROM queue_entries").run().changes);
+    case "attempt":
+      return gone(db.prepare("DELETE FROM attempts WHERE id = ?").run(id).changes);
+    case "attemptTransition":
+      return gone(db.prepare("DELETE FROM attempt_transitions WHERE id = ?").run(id).changes);
     default:
       return 0;
   }

@@ -131,8 +131,9 @@ describe("version detection", () => {
     // divergence this assertion exists to make visible. Moved again by STA-287:
     // hub 3 -> 4 (004-cross-link-changes), workspace still 12. Moved again by
     // hub 005 (limit windows and budget samples, machine state that never
-    // replicates): hub 4 -> 5, workspace still 12.
-    expect(latestVersion(WORKSPACE_TARGET)).toBe(12);
+    // replicates): hub 4 -> 5, workspace still 12. Then workspace 12 -> 13
+    // (013-execution-attempts, which replicates).
+    expect(latestVersion(WORKSPACE_TARGET)).toBe(13);
     expect(latestVersion(HUB_TARGET)).toBe(5);
   });
 });

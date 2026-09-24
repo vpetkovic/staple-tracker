@@ -54,7 +54,7 @@ const ago = (seconds: number) => new Date(Date.now() - seconds * 1000).toISOStri
 function eventKinds(issueId: string): string[] {
   return (
     store.db
-      .prepare("SELECT kind FROM events WHERE issue_id = ? ORDER BY seq")
+      .prepare("SELECT kind FROM events WHERE issue_id = ? AND kind NOT LIKE 'attempt\_%' ESCAPE '\\' ORDER BY seq")
       .all(issueId) as Array<{ kind: string }>
   ).map((row) => row.kind);
 }
@@ -67,15 +67,31 @@ function eventKinds(issueId: string): string[] {
  * shifting a history sideways and producing a plausible wrong number.
  */
 function backdateEvents(issueId: string, secondsAgo: number[]): void {
-  const rows = store.db
-    .prepare("SELECT seq FROM events WHERE issue_id = ? ORDER BY seq")
-    .all(issueId) as Array<{ seq: number }>;
+  const all = store.db
+    .prepare("SELECT seq, kind FROM events WHERE issue_id = ? ORDER BY seq")
+    .all(issueId) as Array<{ seq: number; kind: string }>;
+  const rows = all.filter((row) => !row.kind.startsWith("attempt_"));
   expect(rows.length, `event count for ${issueId}: ${eventKinds(issueId).join(" -> ")}`).toBe(
     secondsAgo.length,
   );
   rows.forEach((row, i) => {
     store.db.prepare("UPDATE events SET created_at = ? WHERE seq = ?").run(ago(secondsAgo[i]!), row.seq);
   });
+  backdateAttemptEvents(all);
+}
+
+/**
+ * An attempt transition's event is written by the mutation it narrates, in the same
+ * transaction (`telemetry/attempts.ts`): it moves with the event before it, so the history
+ * a test rewinds stays one history — and the holder's activity is not left at "now".
+ */
+function backdateAttemptEvents(all: Array<{ seq: number; kind: string }>): void {
+  let at: string | null = null;
+  for (const row of all) {
+    const current = store.db.prepare("SELECT created_at FROM events WHERE seq = ?").get(row.seq) as { created_at: string };
+    if (!row.kind.startsWith("attempt_")) at = current.created_at;
+    else if (at !== null) store.db.prepare("UPDATE events SET created_at = ? WHERE seq = ?").run(at, row.seq);
+  }
 }
 
 /** Backdate the claim itself, so `lastActivityAt`'s floor moves with its history. */

@@ -44,6 +44,18 @@ export const TABLES: Record<string, { readonly key: readonly string[]; readonly 
     ordered: true,
     sql: "SELECT milestone_id, issue_id, added_by, added_at, note FROM milestone_members ORDER BY milestone_id, rank",
   },
+  // Execution attempts and their transitions (protocol 3): every stored field travels.
+  attempts: {
+    key: ["id"],
+    sql: `SELECT id, issue_id, agent, state, outcome, end_reason, end_detection, ended_by, opened_by, resumes_attempt_id,
+                 started_at, ended_at, ended_at_source, device_id, claim_scope, claim_fencing_token, harness, provider_binding,
+                 estimate_at_start, idempotency_key, provenance, missing
+            FROM attempts ORDER BY id`,
+  },
+  attempt_transitions: {
+    key: ["id"],
+    sql: "SELECT id, attempt_id, kind, at, actor, detection, reason, detail, concurrency FROM attempt_transitions ORDER BY id",
+  },
 };
 
 export type State = Record<string, Map<string, Record<string, unknown>>>;

@@ -23,6 +23,7 @@
  */
 import { holdsLiveOrigin } from "../types.js";
 import { columnSpellingWins } from "./apply.js";
+import { settleAttemptEnd } from "./attempt-ends.js";
 import { settleRevisionCreate } from "./revision-placement.js";
 import type { RemoteOperation, SnapshotEntity, SnapshotFieldWrite } from "./wire.js";
 
@@ -116,7 +117,9 @@ export class TailFold {
       const payload = op.payload;
       if (payload === null || typeof payload !== "object" || Array.isArray(payload)) continue;
       // A payload in both spellings keeps the column's (`columnSpellingWins`, `apply.ts`).
-      const carried = columnSpellingWins(payload);
+      // An orphan end never overwrites a real end, and leaves no provenance when dropped (`attempt-ends.ts`).
+      const spelled = columnSpellingWins(payload);
+      const carried = op.entity === "attempt" ? settleAttemptEnd(entry.state, spelled) : spelled;
       for (const field of Object.keys(carried)) {
         const other = otherSpelling(field);
         if (other !== field) {

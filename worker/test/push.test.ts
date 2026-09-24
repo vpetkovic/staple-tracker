@@ -513,8 +513,10 @@ describe("POST /v1/repos/{repoId}/ops — envelope validation", () => {
     expect(EMITTED_PAYLOADS.length).toBeGreaterThanOrEqual(20);
     const device = "device-emitters";
     const own = await seedRepo(REPO, device);
+    // At the protocol the workspace client speaks: 3, since it journals attempts.
     const ops = EMITTED_PAYLOADS.map((recorded, index) =>
       envelope({
+        protocol: 3,
         opId: `emitted-${index + 1}`,
         clientSeq: index + 1,
         deviceId: device,
@@ -528,7 +530,7 @@ describe("POST /v1/repos/{repoId}/ops — envelope validation", () => {
 
     const statuses: string[] = [];
     for (let start = 0; start < ops.length; start += 20) {
-      const response = await pushOps(ops.slice(start, start + 20), { token: own, device });
+      const response = await pushOps(ops.slice(start, start + 20), { token: own, device, protocol: 3 });
       expect(response.status).toBe(200);
       const body = await jsonOf<{ results: { status: string }[] }>(response);
       statuses.push(...body.results.map((result) => result.status));

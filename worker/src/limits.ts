@@ -38,8 +38,18 @@ import type { Env, Plan } from "./env.js";
  * sent 2 for everything would be refused outright by any Worker not yet redeployed
  * — turning a hub feature into a total sync outage on every repository.
  */
+/**
+ * Protocol 3 adds the execution attempts (`attempt`, `attemptTransition` —
+ * `docs/execution-telemetry.md`, "Where it lives and what synchronizes"), and this time
+ * the workspace client DOES move to 3: attempts are journaled by every mutation that opens
+ * or ends one, so there is no leg to confine them to. That is why this Worker is deployed
+ * before any client that journals them. `PROTOCOL_MIN` stays 1, so a device that has not
+ * upgraded keeps pushing, and stops converging only once the first attempt operation is in
+ * its repository's log — `GET /ops` and `GET /snapshot` refuse it that page or fold with
+ * `protocol_unsupported` and `requiredProtocol: 3`, which names the remedy.
+ */
 export const PROTOCOL_MIN = 1;
-export const PROTOCOL_MAX = 2;
+export const PROTOCOL_MAX = 3;
 
 /**
  * The binding constraint on batch size is D1's queries-per-Worker-invocation limit:

@@ -75,6 +75,9 @@ export const SYNC_ENTITIES = [
   "queue",
   "lease",
   "conflict",
+  // Protocol 3: execution attempts (`docs/execution-telemetry.md`, "Where it lives").
+  "attempt",
+  "attemptTransition",
 ] as const;
 export type SyncEntity = (typeof SYNC_ENTITIES)[number];
 
@@ -136,8 +139,12 @@ export interface SeedIntent {
  */
 export const JOURNAL_MAX_OP_BYTES = 512 * 1024;
 
-/** The protocol this build speaks. */
-export const SYNC_PROTOCOL = 1;
+/**
+ * The protocol this build's operations are stamped with: the workspace client's
+ * (`CLIENT_PROTOCOL`, `cloud/client.ts`). 3 since the execution attempts — a new entity kind
+ * is a protocol change, and the Worker that knows `attempt` is deployed first.
+ */
+export const SYNC_PROTOCOL = 3;
 
 /**
  * Derive the operation id.
@@ -541,6 +548,11 @@ export class Journal {
   private get deviceId(): string | null {
     if (this.knownDeviceId === null && this.resolve !== null) this.knownDeviceId = this.resolve();
     return this.knownDeviceId;
+  }
+
+  /** This device's id as the journal holds it, or null on a machine that never connected. */
+  deviceIdentity(): string | null {
+    return this.deviceId;
   }
 
   /** True when this workspace has both an identity and a bound device. */

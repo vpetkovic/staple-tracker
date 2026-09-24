@@ -163,10 +163,11 @@ describe("a fresh repo-local `staple init`", () => {
       // Bumped to "6" by STA-143 (006-approval-gates), after STA-140's 004 and
       // STA-124's 005, to "7" by STA-172 (007-milestones), to "8" by STA-167
       // (008-queue-entries), to "9" by 009-projects, to "10" by
-      // 010-sync-metadata, to "11" by 011-sync-field-writes and to "12" by
-      // 012-host-binding; the TEXT typing is the characterization, the number
+      // 010-sync-metadata, to "11" by 011-sync-field-writes, to "12" by
+      // 012-host-binding and to "13" by 013-execution-attempts; the TEXT typing
+      // is the characterization, the number
       // just tracks the migration list.
-      { key: "schema_version", value: "12" },
+      { key: "schema_version", value: "13" },
       { key: "slug", value: "metarepo" },
     ]);
   }, 30_000);
@@ -179,6 +180,13 @@ describe("a fresh repo-local `staple init`", () => {
     expect(runCliAt(project, ["init"], { STAPLE_HOME: home }).status).toBe(0);
 
     expect(schemaObjects(join(project, ".staple", "staple.db"))).toEqual([
+      // 013-execution-attempts: an attempt's transitions in order, an issue's attempts
+      // in order, the idempotency lookup, and the stored-open attempts the orphan rule
+      // and the presence index read.
+      "index:attempt_transitions_attempt_idx",
+      "index:attempts_idempotency_idx",
+      "index:attempts_issue_idx",
+      "index:attempts_stored_open_idx",
       "index:comments_idempotency_uq",
       "index:comments_issue_idx",
       "index:events_dedup_uq",
@@ -202,6 +210,9 @@ describe("a fresh repo-local `staple init`", () => {
       "index:milestone_members_milestone_idx",
       "index:relations_blocked_idx",
       "index:relations_blocker_idx",
+      // 013-execution-attempts: the two tables' `id` primary keys.
+      "index:sqlite_autoindex_attempt_transitions_1",
+      "index:sqlite_autoindex_attempts_1",
       "index:sqlite_autoindex_comments_1",
       "index:sqlite_autoindex_document_revisions_1",
       "index:sqlite_autoindex_documents_1",
@@ -244,6 +255,9 @@ describe("a fresh repo-local `staple init`", () => {
       "index:sync_outbox_pending_idx",
       "index:workspace_kinds_order_idx",
       "index:workspace_statuses_order_idx",
+      // 013-execution-attempts: attempts and their transitions, both replicated.
+      "table:attempt_transitions",
+      "table:attempts",
       "table:comments",
       "table:document_revisions",
       "table:documents",
@@ -435,9 +449,9 @@ describe("global workspaces", () => {
     ]);
     expect(metaRows(join(home, "workspaces", "solo.db"))).toEqual([
       { key: "prefix", value: "SOL" },
-      // WORKSPACE_SCHEMA_VERSION — 12 since 012-host-binding. The hub beside it
+      // WORKSPACE_SCHEMA_VERSION — 13 since 013-execution-attempts. The hub beside it
       // is still 2; the two databases version independently.
-      { key: "schema_version", value: "12" },
+      { key: "schema_version", value: "13" },
       { key: "slug", value: "solo" },
     ]);
   }, 30_000);
