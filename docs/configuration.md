@@ -253,9 +253,9 @@ a list of bindings is not a shape the settings registry has.
 ```
 
 - **Off until you turn it on.** With `budgetCapture` false (the default), a
-  harness source is refused and nothing is read from it. An operator's
-  `--source manual` reading is not read from a harness and is accepted either
-  way.
+  harness source is refused and nothing is read from it, and so is any reading an
+  agent sends through the MCP tool. The one exception is a reading you type
+  yourself, `staple budget ingest --source manual` at the CLI.
 - **The account is a label you choose**, `[a-z0-9][a-z0-9-]{0,63}`. Neither
   source says which account it measures, so a Claude Code binding is keyed by
   its config directory (`CLAUDE_CONFIG_DIR`, or `~/.claude`) and a Codex binding
@@ -264,6 +264,12 @@ a list of bindings is not a shape the settings registry has.
   `detail.reason: "no_binding_configured"`).
 - A binding for a source this build does not know is kept as written and never
   used for matching, like any other key from a newer staple.
+- **One bad binding does not break the file.** An entry with an invalid field
+  (a hand-typed `"accountRef": "Personal-Max"`) is kept as written and never
+  matched, so readings from that home are refused rather than stored under a
+  bad label. `staple config` and `config set` keep working, `staple doctor`
+  warns on the `config` check, `staple budget bindings` lists it, and
+  `staple budget bind` for the same home replaces it.
 
 ```bash
 staple budget capture on

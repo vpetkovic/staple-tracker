@@ -9,7 +9,7 @@
  * rollouts (see test/fixtures/budget-support.ts).
  */
 import { createHash } from "node:crypto";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Hub } from "../src/core/hub.js";
@@ -192,6 +192,21 @@ describe("unknown capacity stays unknown", () => {
       { stored: false, reason: "not_reported_by_source", limitKey: "premium.secondary", observedAt: after(T0, 3000) },
     ]);
     expect(samples()).toEqual([]);
+  });
+
+  it("stores no row for a Codex sub-limit that is present but reports used_percent as null", () => {
+    const id = "22222222-0000-7000-8000-000000000003";
+    const file = writeRollout(codexDir, id, T0, [
+      sessionMetaLine({ id, timestamp: T0 }),
+      tokenCountLine({
+        timestamp: after(T0, 3000),
+        primary: { used_percent: null, window_minutes: 300, resets_at: epoch("2026-09-24T19:00:00Z") },
+        secondary: { used_percent: 4, window_minutes: 10080, resets_at: epoch("2026-09-30T12:00:00Z") },
+      }),
+    ]);
+    const result = ingest({ source: "codex-rollout", file }, T0);
+    expect(result.outcomes[0]).toEqual({ stored: false, reason: "not_reported_by_source", limitKey: "codex.primary", observedAt: after(T0, 3000) });
+    expect(samples().map((s) => [s.limitKey, s.usedPercent])).toEqual([["codex.secondary", 4]]);
   });
 
   it("stores an old unlabelled Codex line with no reset as window-less evidence, never as a current reading", () => {
@@ -448,6 +463,30 @@ describe("Codex fork-copied history is skipped, only as the leading run", () => 
     expect(stored(result.outcomes).map((s) => s.usedPercent)).toEqual([6]);
   });
 
+  it("reads ancestors only from a sessions tree, never from an arbitrary directory", () => {
+    // A fork and its parent side by side in a scratch directory (MCP accepts any path).
+    const loose = join(home, "loose");
+    mkdirSync(loose);
+    const write = (id: string, lines: string[]) => {
+      const path = join(loose, `rollout-2026-08-20T23-00-00-${id}.jsonl`);
+      writeFileSync(path, `${lines.join("\n")}\n`);
+      return path;
+    };
+    write(PARENT, [
+      sessionMetaLine({ id: PARENT, timestamp: PARENT_START }),
+      tokenCountLine({ timestamp: "2026-08-20T22:55:00.000Z", primary: week(2), secondary: null }),
+    ]);
+    const file = write(CHILD, [
+      sessionMetaLine({ id: CHILD, timestamp: FORK, forkedFromId: PARENT }),
+      tokenCountLine({ timestamp: after(FORK, 1), primary: week(1), secondary: null }),
+      // Would be a content-matched copy if the scratch directory were searched.
+      tokenCountLine({ timestamp: after(FORK, 13_645), primary: week(2), secondary: null }),
+    ]);
+    const result = ingest({ source: "codex-rollout", file, account: "codex-plus" }, T0);
+    expect(result.skipped.fork_copied).toBe(1);
+    expect(stored(result.outcomes).map((s) => [s.observedAt, s.usedPercent])).toEqual([[after(FORK, 13_645), 2]]);
+  });
+
   it("hashes the fork's own id as its session, not the parent's session_id", () => {
     parent();
     const file = writeRollout(codexDir, CHILD, FORK, [
@@ -507,6 +546,40 @@ describe("window identity", () => {
     const next = stored(ingest({ source: "claude-statusline", input: five(3, FIVE_HOUR_RESET + 5 * 3600) }, afterReset).outcomes)[0]!;
     expect(next.windowId).not.toBe(first.windowId);
     expect(withStore((store) => store.getWindow(first.windowId!, afterReset))).toMatchObject({ supersededBy: null, status: "elapsed" });
+  });
+});
+
+describe("window identity when rollouts arrive out of order", () => {
+  beforeEach(optIn);
+
+  it("keeps an earlier, elapsed window unsuperseded and supersedes the earlier-observed side of a moved reset", () => {
+    // The real shape: on one account a 5h window ran 06:04 to 11:04:54, the provider then
+    // reset at 16:04:54, and 33 minutes later moved it again to 16:37:43. Here the LATER
+    // rollout is ingested first, as a backfill of old files would.
+    const five = (used: number, resetIso: string) => ({ used_percent: used, window_minutes: 300, resets_at: epoch(resetIso) });
+    const LATER = "01a0ce10-0000-7c50-8000-000000000001";
+    const EARLIER = "01a0cdf0-0000-7c50-8000-000000000002";
+    const laterFile = writeRollout(codexDir, LATER, "2026-09-23T11:37:40.000Z", [
+      sessionMetaLine({ id: LATER, timestamp: "2026-09-23T11:37:40.000Z" }),
+      tokenCountLine({ timestamp: "2026-09-23T11:37:48.865Z", primary: five(1, "2026-09-23T16:37:43Z"), secondary: null }),
+    ]);
+    const earlierFile = writeRollout(codexDir, EARLIER, "2026-09-23T08:59:00.000Z", [
+      sessionMetaLine({ id: EARLIER, timestamp: "2026-09-23T08:59:00.000Z" }),
+      // Ends at 11:04:54, before the later window begins (16:37:43 - 5h = 11:37:43).
+      tokenCountLine({ timestamp: "2026-09-23T09:00:00.000Z", primary: five(40, "2026-09-23T11:04:54Z"), secondary: null }),
+      // Overlaps the later window: a reset the provider moved 33 minutes later.
+      tokenCountLine({ timestamp: "2026-09-23T11:05:01.791Z", primary: five(3, "2026-09-23T16:04:54Z"), secondary: null }),
+    ]);
+    ingest({ source: "codex-rollout", file: laterFile }, T0);
+    ingest({ source: "codex-rollout", file: earlierFile }, T0);
+
+    const byReset = Object.fromEntries(withStore((store) => store.listWindows()).map((w) => [w.resetsAt, w]));
+    const later = byReset["2026-09-23T16:37:43.000Z"]!;
+    expect(later).toMatchObject({ supersededBy: null });
+    // Consecutive, not conflicting: it ended before the later window began.
+    expect(byReset["2026-09-23T11:04:54.000Z"]).toMatchObject({ supersededBy: null, status: "elapsed" });
+    // The side observed first is the one replaced, whatever order the files arrived in.
+    expect(byReset["2026-09-23T16:04:54.000Z"]).toMatchObject({ supersededBy: later.id, supersededReason: "reset_moved" });
   });
 });
 

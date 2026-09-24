@@ -8,7 +8,7 @@
  *   - CLI `--json` and MCP answer the same shape, because both call `ingestBudget`.
  */
 import { spawnSync } from "node:child_process";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { CLI_ENTRY, REPO_ROOT, TSX_CLI, bareEnv, removeDir, tempDir } from "./fixtures/characterize-support.js";
@@ -58,6 +58,13 @@ describe("staple budget ingest --tee", () => {
     expect(JSON.parse(again.stdout.toString("utf8"))).toMatchObject({ storedCount: 0, skipped: { unchanged: 2 } });
   }, 60_000);
 
+  it("passes the input through even when the flags themselves are wrong", () => {
+    const result = budget(["ingest", "--source", "claude-statusline", "--tee", "--bogus"], bytes);
+    expect(result.stdout.equals(bytes)).toBe(true);
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("--bogus");
+  }, 30_000);
+
   it("still passes the input through when ingestion is refused, and reports the refusal on stderr with exit 2", () => {
     // Capture never enabled: refused, but the status line must keep working.
     const result = budget(["ingest", "--source", "claude-statusline", "--tee", "--json"], bytes);
@@ -85,10 +92,41 @@ describe("staple budget refusals and configuration", () => {
       budgetCapture: false,
       bindings: [{ source: "codex_rollout", home: join(home, "codex"), provider: "openai", accountRef: "codex-plus" }],
       unknownBindings: 0,
+      invalidBindings: [],
     });
     expect(budget(["bind", "--source", "codex-rollout", "--account", "Not A Label"]).status).toBe(2);
     expect(JSON.parse(budget(["unbind", "--source", "codex-rollout", "--codex-home", join(home, "codex"), "--json"]).stdout.toString()).bindings).toEqual([]);
   }, 60_000);
+});
+
+describe("a hand-broken binding", () => {
+  function run(command: string, args: string[]) {
+    const result = spawnSync(process.execPath, [TSX_CLI, CLI_ENTRY, command, ...args], { cwd: REPO_ROOT, env: childEnv(), timeout: 30_000 });
+    return { status: result.status ?? -1, stdout: result.stdout.toString("utf8") };
+  }
+
+  it("is kept and ignored, so config, config set and doctor still work, and re-binding the home replaces it", () => {
+    writeFileSync(
+      join(home, "config.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        telemetry: { budgetCapture: true, bindings: [{ source: "claude_code_statusline", configDir: claudeDir, provider: "anthropic", accountRef: "Personal-Max" }] },
+      }),
+    );
+    expect(run("config", []).status).toBe(0);
+    expect(run("config", ["set", "port", "4501"]).status).toBe(0);
+    const doctor = JSON.parse(run("doctor", ["--json"]).stdout) as { checks: Array<{ id: string; status: string; detail: string }> };
+    const config = doctor.checks.find((c) => c.id === "config")!;
+    expect(config.status).toBe("warn");
+    expect(config.detail).toContain("Personal-Max");
+    // Not matched: the reading is refused, never stored under the bad label.
+    const refused = budget(["ingest", "--source", "claude-statusline", "--json"], Buffer.from(statusline()));
+    expect(JSON.parse(refused.stderr.trim())).toMatchObject({ detail: { reason: "no_binding_configured" } });
+    expect(JSON.parse(budget(["bindings", "--json"]).stdout.toString()).invalidBindings).toHaveLength(1);
+    // The CLI repairs it.
+    const rebound = JSON.parse(budget(["bind", "--source", "claude-statusline", "--account", "personal-max", "--json"]).stdout.toString());
+    expect(rebound).toMatchObject({ invalidBindings: [], bindings: [{ accountRef: "personal-max", configDir: claudeDir }] });
+  }, 90_000);
 });
 
 describe("one shape on every surface", () => {
@@ -113,7 +151,22 @@ describe("one shape on every surface", () => {
       ),
     );
 
+  it("refuses over MCP with the same envelope the CLI prints", async () => {
+    const result = await mcp.call("record_budget_sample", { source: "claude-statusline", input: statusline() });
+    expect(result.isError).toBe(true);
+    expect(mcpEnvelope(result)).toMatchObject({ code: "validation", detail: { reason: "capture_disabled" } });
+  }, 30_000);
+
+  it("refuses an agent's manual reading over MCP until the operator opts in", async () => {
+    const result = await mcp.call("record_budget_sample", { source: "manual", account: "personal-max", provider: "anthropic", limit_key: "five_hour", used: 10 });
+    expect(result.isError).toBe(true);
+    expect(mcpEnvelope(result)).toMatchObject({ code: "validation", detail: { reason: "capture_disabled", source: "operator_manual" } });
+  }, 30_000);
+
   it("answers a manual reading with the same payload from the CLI and from MCP", async () => {
+    // The MCP side needs the operator's opt-in; the CLI side is the operator typing it.
+    const optIn = spawnSync(process.execPath, [TSX_CLI, CLI_ENTRY, "budget", "capture", "on"], { cwd: REPO_ROOT, env: bareEnv({ STAPLE_HOME: mcpHome, HOME: mcpHome }) });
+    expect(optIn.status).toBe(0);
     const cli = budget(["ingest", "--source", "manual", "--account", "personal-max", "--provider", "anthropic", "--limit-key", "five_hour", "--used", "37.5", "--resets-at", "2h", "--json"]);
     expect(cli.status).toBe(0);
     const result = await mcp.call("record_budget_sample", {
@@ -134,10 +187,4 @@ describe("one shape on every surface", () => {
       outcomes: [{ stored: true, sample: { usedPercent: 37.5, remainingPercent: 62.5, resetsAtSource: "derived_from_relative", confidence: "low" } }],
     });
   }, 60_000);
-
-  it("refuses over MCP with the same envelope the CLI prints", async () => {
-    const result = await mcp.call("record_budget_sample", { source: "claude-statusline", input: statusline() });
-    expect(result.isError).toBe(true);
-    expect(mcpEnvelope(result)).toMatchObject({ code: "validation", detail: { reason: "capture_disabled" } });
-  }, 30_000);
 });

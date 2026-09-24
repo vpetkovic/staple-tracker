@@ -113,13 +113,16 @@ function contentKey(rateLimits: Record<string, unknown>): string {
   return JSON.stringify([rateLimits.limit_id ?? null, canonical(rateLimits.primary ?? null), canonical(rateLimits.secondary ?? null)]);
 }
 
-/** The directory a rollout's ancestors are searched in: the nearest `sessions` above it. */
-export function sessionsRootOf(file: string): string {
+/**
+ * The nearest directory named `sessions` above a rollout, or null. Used only when no
+ * binding names the Codex home: an arbitrary directory is never walked for ancestors.
+ */
+export function sessionsRootOf(file: string): string | null {
   let dir = dirname(file);
   for (;;) {
     if (basename(dir) === "sessions") return dir;
     const parent = dirname(dir);
-    if (parent === dir) return dirname(file);
+    if (parent === dir) return null;
     dir = parent;
   }
 }
@@ -175,10 +178,11 @@ function preForkAncestorContent(forkedFromId: string, forkInstant: string, root:
  * How many leading token-count lines are fork copies. Zero for a file that is not a
  * fork. The walk stops at the first line neither test marks.
  */
-function leadingCopyCount(rollout: RolloutLines, sessionsRoot: string): number {
+function leadingCopyCount(rollout: RolloutLines, sessionsRoot: string | null): number {
   const meta = rollout.meta;
   if (meta === null || meta.forkedFromId === null || meta.timestamp === null) return 0;
-  const ancestors = preForkAncestorContent(meta.forkedFromId, meta.timestamp, sessionsRoot);
+  // No sessions tree to look in: the opening burst is the only test.
+  const ancestors = sessionsRoot === null ? new Set<string>() : preForkAncestorContent(meta.forkedFromId, meta.timestamp, sessionsRoot);
   let previous = Date.parse(meta.timestamp);
   let count = 0;
   for (const line of rollout.tokenCounts) {
@@ -259,8 +263,12 @@ function subLimitReading(input: {
 }
 
 export interface CodexRolloutOptions {
-  /** Where ancestors are looked for. Defaults to the nearest `sessions` directory above the file. */
-  readonly sessionsRoot?: string;
+  /**
+   * Where ancestors are looked for: the bound Codex home's `sessions/`. Without one, the
+   * nearest `sessions` directory above the file; with neither, no ancestor is read. The
+   * tree is indexed once per ingestion, and only for a fork.
+   */
+  readonly sessionsRoot?: string | null;
 }
 
 export function parseCodexRollout(file: string, options: CodexRolloutOptions = {}): ParsedItem[] {
@@ -276,7 +284,7 @@ export function parseCodexRollout(file: string, options: CodexRolloutOptions = {
   const meta = rollout.meta;
   const sessionRef = meta?.id ? sessionRefOf("codex", meta.id) : null;
   const harnessVersion = meta?.cliVersion ?? null;
-  const copies = leadingCopyCount(rollout, options.sessionsRoot ?? sessionsRootOf(file));
+  const copies = leadingCopyCount(rollout, options.sessionsRoot !== undefined ? options.sessionsRoot : sessionsRootOf(file));
 
   const items: ParsedItem[] = [];
   for (let i = 0; i < rollout.unparseable; i += 1) items.push(skip("parse_error", null, null));

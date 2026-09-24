@@ -759,7 +759,7 @@ Every sample says where its number came from:
 | `confidence` | `high`, `medium`, `low` | Assigned by rule, never by judgement: `high` = observed through a surface its harness documents; `medium` = observed through an undocumented surface, or typed by an operator from a provider screen; `low` = estimated, or `resetsAt` derived from a relative value. |
 | `observedAt` | UTC instant | When the provider's value was true, as far as the source says. |
 | `observedAtSource` | `provider`, `capture` | `provider`: the source carries its own timestamp for the reading (a Codex line's `timestamp`, from a line that is not [fork-copied](#codex-rollout-rules)). `capture`: the source carries none, so `observedAt` is the capture instant. That is an upper bound on how fresh the value is, not a claim about it (the Claude Code status line is always `capture`). |
-| `sessionRef` | hashed id or `null` | The harness session that produced the reading: the status-line `session_id`, or the Codex rollout's session id. Hashed as for attempts ([Privacy](#privacy)). `null` for `operator_manual`. |
+| `sessionRef` | hashed id or `null` | The harness session that produced the reading: the status-line `session_id`, or the Codex rollout's thread id: the first `session_meta` line's `payload.id`, which is also the tail of the rollout's file name and the value a fork's `forked_from_id` names. Not `payload.session_id`, which newer builds set to the root thread of a fork tree (it differs from `payload.id` in every fork and in sub-agent rollouts), so hashing it would merge a fork or sub-agent with its parent. An attempt reported from a Codex thread hashes the same `payload.id`. Hashed as for attempts ([Privacy](#privacy)). `null` for `operator_manual`. |
 | `recordedAt` | UTC instant | When staple stored it. A large gap between `observedAt` and `recordedAt` identifies a late ingestion, such as a backfill from rollout files. |
 
 There is no `derived` method. A value staple computes (an interpolation, a burn
@@ -910,9 +910,12 @@ pick the right one:
 
 Claude Code renders the status line often, so ingestion compares each reading
 with the **latest stored sample for the same window and the same harness
-`sessionRef`**. "Latest" means greatest `observedAt`, not the most recently
-recorded, so a backfill ingested out of order compares against the right
-neighbour. The comparison is per session because concurrent sessions on one
+`sessionRef`**. "Latest" means the greatest `observedAt` that is not after the
+incoming reading's own, not the most recently recorded, so a backfill ingested
+out of order compares against its real neighbour and not against a later
+reading. The age that makes a heartbeat is measured the same way, from that
+neighbour's `observedAt` to the incoming reading's, within one session and so on
+one clock. The comparison is per session because concurrent sessions on one
 account alternate between caches of different ages. Compared per window
 alone, every render would differ from the last and be stored. A sample is
 stored only when `usedPercent` differs from that latest sample, or when
@@ -1142,7 +1145,7 @@ samples, "no change" still does not mean the provider measured again (see
   The status-line JSON also carries `cwd`, `transcript_path`, repository
   identity and a session name. None of it is stored. Codex rollout lines carry
   prompts and outputs. From a rollout, ingestion reads only the `session_meta`
-  line's session id, fork marker and timestamp, and each `token_count` line's
+  line's thread id (`payload.id`), fork marker and timestamp, and each `token_count` line's
   timestamp and rate-limit object. To detect fork copies it reads the same
   fields, and nothing else, from the ancestor rollout files named by
   `forked_from_id`. The session id is hashed before storage (next bullet).

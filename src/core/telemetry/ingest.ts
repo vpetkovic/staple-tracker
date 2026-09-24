@@ -15,6 +15,7 @@
  *
  * Local only: stdin, local files and `hub.db`. No network call is made or triggered.
  */
+import { join } from "node:path";
 import { Hub } from "../hub.js";
 import { StapleError } from "../types.js";
 import { readConfig } from "../../config/file.js";
@@ -76,6 +77,12 @@ export interface IngestDeps {
   readonly now?: () => string;
   readonly env?: NodeJS.ProcessEnv;
   readonly attemptLinker?: AttemptLinker;
+  /**
+   * True only when the operator typed the command (the CLI). A manual reading is the
+   * operator's own word, so the CLI accepts it with capture off; an agent calling the
+   * MCP tool is not the operator, and is held to the opt-in like any harness source.
+   */
+  readonly operator?: boolean;
 }
 
 const SOURCE_KIND: Readonly<Record<IngestSource, BudgetSourceKind>> = {
@@ -100,10 +107,13 @@ export function ingestBudget(request: IngestRequest, deps: IngestDeps): IngestRe
   const telemetry = readConfig(deps.home).config.telemetry;
   const kind = SOURCE_KIND[request.source];
 
-  if (request.source !== "manual" && !telemetry.budgetCapture) {
+  const operatorManual = request.source === "manual" && deps.operator === true;
+  if (!operatorManual && !telemetry.budgetCapture) {
     throw new StapleError(
       "validation",
-      "Budget capture is off on this machine, so nothing was read from the harness. It is opt-in: `staple budget capture on` enables it.",
+      request.source === "manual"
+        ? "Budget capture is off on this machine, so an agent cannot record readings. It is opt-in: the operator enables it with `staple budget capture on`, or types a reading with `staple budget ingest --source manual`."
+        : "Budget capture is off on this machine, so nothing was read from the harness. It is opt-in: `staple budget capture on` enables it.",
       { reason: "capture_disabled", source: kind },
     );
   }
@@ -126,14 +136,17 @@ export function ingestBudget(request: IngestRequest, deps: IngestDeps): IngestRe
     }
     case "codex-rollout": {
       const file = expandHomePath(requireField(request.file, "Name the rollout file: staple budget ingest --source codex-rollout <file>."));
+      const binding = codexBindingFor(telemetry, file);
       account = resolveAccount({
         source: "codex_rollout",
-        binding: codexBindingFor(telemetry, file),
+        binding,
         account: request.account,
         provider: request.provider,
         lookedUp: file,
       });
-      items = parseCodexRollout(file);
+      // Ancestors are read only from the bound Codex home's sessions tree.
+      const sessionsRoot = binding !== null && binding.source === "codex_rollout" ? join(expandHomePath(binding.home), "sessions") : undefined;
+      items = parseCodexRollout(file, { sessionsRoot });
       break;
     }
     case "manual": {

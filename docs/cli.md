@@ -625,8 +625,18 @@ staple budget ingest --source manual --account personal-max --provider anthropic
 ```
 
 - **`--tee`** writes the status-line input back to stdout byte for byte, before
-  anything is parsed, so staple can sit in front of the status line you already
-  use. Nothing else goes to stdout, and a refusal goes to stderr.
+  `budget`'s own arguments are parsed, so staple can sit in front of the status
+  line you already use and a mistyped flag still leaves the status line intact.
+  Nothing else goes to stdout, and a refusal goes to stderr. A runtime that
+  predates `budget` (after `staple install --rollback`, say) rejects the command
+  itself and echoes nothing, so a `--tee` pipeline would blank the status line.
+  A wiring that survives any runtime hands staple a copy and never depends on
+  it for output:
+
+  ```bash
+  # statusLine command; my-statusline is the status line you already had
+  bash -c 'f=$(mktemp); cat > "$f"; staple budget ingest --source claude-statusline < "$f" >/dev/null 2>&1 & my-statusline < "$f"; wait; rm -f "$f"'
+  ```
 - **What is stored is what was reported.** `usedPercent` keeps fractions and
   values above 100; `remainingPercent = max(0, 100 − usedPercent)` and
   `exceeded = usedPercent ≥ 100`. A missing value is `null` with a reason in
@@ -647,7 +657,10 @@ storedCount, skipped}`, the same object the MCP tool `record_budget_sample`
 returns. Each outcome is `{stored: true, sample}` or `{stored: false, reason}`
 with `reason` one of `unchanged`, `fork_copied`, `not_reported_by_source`,
 `parse_error`. Refusals use the existing envelope: `validation` (exit 2) with
-`detail.reason` `capture_disabled` or `no_binding_configured`.
+`detail.reason` `capture_disabled` or `no_binding_configured`. A manual reading
+typed at the CLI is the operator's own and is accepted with capture off; the
+same reading sent by an agent through `record_budget_sample` is refused
+(`capture_disabled`) until the operator runs `staple budget capture on`.
 
 ## Machine-readable output
 
