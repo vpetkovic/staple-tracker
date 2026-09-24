@@ -577,6 +577,7 @@ describe("regressions within a window", () => {
     render("session-b", 35, 10); // an older cache: below 40
     render("session-b", 38, 20); // above the previous reading, still below the high-water
     render("session-a", 42, 30);
+    render("session-b", 39, 40); // the latest reading is not the highest
     const windowId = samples()[0]!.windowId!;
     const view = withStore((store) => store.samplesInWindow(windowId));
     expect(view.map((s) => [s.usedPercent, s.regression])).toEqual([
@@ -584,14 +585,47 @@ describe("regressions within a window", () => {
       [35, true],
       [38, true],
       [42, false],
+      [39, true],
     ]);
     expect(withStore((store) => store.windowHighWater(windowId))).toEqual({
       windowId,
       highWaterPercent: 42,
       remainingPercent: 58,
-      regressionCount: 2,
-      sampleCount: 4,
+      regressionCount: 3,
+      sampleCount: 5,
       missing: {},
+    });
+  });
+});
+
+describe("the dedup key is the last guard against storing a reading twice", () => {
+  it("refuses a replayed reading even when a same-instant reading of the same session is its cadence neighbour", () => {
+    // Two readings at one millisecond with different values: the shape of the real
+    // copy bursts (36 then 51 under one timestamp). The cadence compares the replay with
+    // the later-recorded of the two and sees a change; the dedup key still refuses it.
+    const reading = (used: number) => ({
+      limitKey: "codex.primary",
+      unit: "percent_of_limit" as const,
+      usedPercent: used,
+      resetsAt: "2026-09-24T19:00:00.000Z",
+      resetsAtSource: "observed_absolute" as const,
+      windowSeconds: 18000,
+      windowSecondsSource: "observed" as const,
+      planTier: "plus",
+      method: "observed" as const,
+      confidence: "medium" as const,
+      source: { kind: "codex_rollout" as const, harnessVersion: "0.156.1", field: "payload.rate_limits.primary" },
+      observedAt: T0,
+      observedAtSource: "provider" as const,
+      sessionRef: "4be07a51f2e39c1d",
+      missing: {},
+    });
+    const input = (used: number, recordedAt: string) => ({ reading: reading(used), provider: "openai", accountRef: "codex-plus", recordedAt, attempt: { reason: "no_matching_attempt" as const } });
+    withStore((store) => {
+      expect(store.record(input(36, after(T0, 10))).stored).toBe(true);
+      expect(store.record(input(51, after(T0, 20))).stored).toBe(true);
+      expect(store.record(input(36, after(T0, 30)))).toMatchObject({ stored: false, reason: "unchanged" });
+      expect(store.listSamples()).toHaveLength(2);
     });
   });
 });
