@@ -20,6 +20,14 @@ import type { Migration } from "../types.js";
  * that workspace's rows. It stores open and ended, not the read-time orphan state, so the
  * counts it gives can be too high; the fields that carry them say `storedOpen`.
  *
+ * ## What links a budget sample to an attempt
+ *
+ * `provider`, `account_ref` and `session_refs` are what budget ingestion joins a reading on
+ * (`attempt-link.ts`, the contract's "Linking samples to attempts"). `session_refs` is a JSON
+ * array rather than one column because an attempt gains harness sessions
+ * (`attempt_session_added`) while the earlier one may still be alive, and a reading from
+ * either belongs to it.
+ *
  * ## Keyed by the registered slug
  *
  * `workspace` is the hub's own key for the workspace (`workspaces.slug`), so a row of a
@@ -37,11 +45,13 @@ export const migration: Migration = {
     db.exec(`CREATE TABLE attempt_presence (
   workspace TEXT NOT NULL,
   attempt_id TEXT NOT NULL,
+  provider TEXT,
   account_ref TEXT,
+  session_refs TEXT NOT NULL DEFAULT '[]',
   started_at TEXT NOT NULL,
   ended_at TEXT,
   PRIMARY KEY (workspace, attempt_id)
 )`);
-    db.exec(`CREATE INDEX attempt_presence_open_idx ON attempt_presence (account_ref) WHERE ended_at IS NULL`);
+    db.exec(`CREATE INDEX attempt_presence_open_idx ON attempt_presence (provider, account_ref) WHERE ended_at IS NULL`);
   },
 };

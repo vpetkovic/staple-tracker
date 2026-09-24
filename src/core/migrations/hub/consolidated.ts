@@ -135,11 +135,13 @@ CREATE INDEX budget_samples_limit_idx
 CREATE TABLE attempt_presence (
   workspace TEXT NOT NULL,
   attempt_id TEXT NOT NULL,
+  provider TEXT,
   account_ref TEXT,
+  session_refs TEXT NOT NULL DEFAULT '[]',
   started_at TEXT NOT NULL,
   ended_at TEXT,
   PRIMARY KEY (workspace, attempt_id)
 );
 
-CREATE INDEX attempt_presence_open_idx ON attempt_presence (account_ref) WHERE ended_at IS NULL;
+CREATE INDEX attempt_presence_open_idx ON attempt_presence (provider, account_ref) WHERE ended_at IS NULL;
 `;

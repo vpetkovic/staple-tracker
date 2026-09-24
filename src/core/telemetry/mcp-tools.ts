@@ -9,6 +9,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { stapleHome } from "../../config/home.js";
+import { attemptLinkerFor } from "./attempt-link.js";
 import { INGEST_SOURCES, ingestBudget } from "./ingest.js";
 
 type Run = (fn: () => unknown) => { content: Array<{ type: "text"; text: string }>; isError?: true };
@@ -61,7 +62,7 @@ export function registerBudgetTools(server: McpServer, helpers: { run: Run }): v
       helpers.run(() =>
         ingestBudget(
           { source, input, configDir: config_dir, file, account, provider, limitKey: limit_key, used, resetsAt: resets_at },
-          { home: stapleHome() },
+          { home: stapleHome(), attemptLinker: attemptLinkerFor(stapleHome()) },
         ),
       ),
   );

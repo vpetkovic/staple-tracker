@@ -26,6 +26,7 @@ import {
 } from "../core/telemetry/budget-config.js";
 import type { BindingSource } from "../core/telemetry/config.js";
 import { INGEST_SOURCES, ingestBudget, type IngestResult, type IngestSource } from "../core/telemetry/ingest.js";
+import { attemptLinkerFor } from "../core/telemetry/attempt-link.js";
 
 const USAGE = "Use: ingest, capture, bind, unbind, bindings (staple budget --help)";
 
@@ -187,7 +188,8 @@ export function runBudgetCommand(argv: string[]): void {
           used: values.used,
           resetsAt: values["resets-at"],
         },
-        { home, operator: true },
+        // Each reading names the one open attempt from its session on this machine, if there is one.
+        { home, operator: true, attemptLinker: attemptLinkerFor(home) },
       );
       // With --tee, stdout belongs to the status line and carries nothing else.
       if (values.tee !== true) print(result, () => sayIngest(result));

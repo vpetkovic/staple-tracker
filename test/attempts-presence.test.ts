@@ -120,6 +120,19 @@ describe("the machine-wide counts", () => {
     expect(hubRows().map((row) => row.workspace)).toEqual(["bravo"]);
   });
 
+  it("keys each database's rows by the hub row registered for its path, not the slug it stamps itself", () => {
+    const one = workspace("alpha");
+    const two = workspace("bravo");
+    const a = one.createIssue({ title: "A" });
+    one.checkoutIssue(a.id, "agent-1");
+    // bravo's file claims alpha's slug (a copy, a re-registration elsewhere).
+    two.db.prepare("UPDATE meta SET value = 'alpha' WHERE key = 'slug'").run();
+    const b = two.createIssue({ title: "B" });
+    two.checkoutIssue(b.id, "agent-2");
+    expect(hubRows().map((row) => row.workspace)).toEqual(["alpha", "bravo"]);
+    expect(lastConcurrency(two, b.id)).toMatchObject({ storedOpenAttemptsStartedHere: 2 });
+  });
+
   it("a full rebuild restores what a skipped refresh missed", () => {
     const one = workspace("alpha");
     const a = one.createIssue({ title: "A" });

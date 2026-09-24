@@ -692,6 +692,8 @@ export class AttemptLedger {
       concurrency: this.concurrency(attempt, at),
     };
     insertTransition(this.db, transition);
+    // A new session changes what the presence index links readings by.
+    this.dirty = true;
     this.host.journal.record({ entity: "attemptTransition", entityId: transition.id, verb: "create", payload: transitionPayload(transition), actor: input.actor });
     emitTransitionEvent(this.db, transition, attempt.issueId);
   }

@@ -21,7 +21,7 @@
  * It opens `hub.db` itself rather than through `hub.ts`, which reaches the store and would
  * close a module cycle through the attempt ledger.
  */
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { stapleHome } from "../../config/home.js";
@@ -33,7 +33,9 @@ import type { PresenceCounts } from "./attempts.js";
 
 interface OwnAttempt {
   id: string;
+  provider: string | null;
   account_ref: string | null;
+  session_refs: string;
   started_at: string;
   ended_at: string | null;
   state: string;
@@ -43,13 +45,27 @@ function hubPath(home: string): string {
   return join(home, "hub.db");
 }
 
-/** The workspace's registered slug, which keys its rows. Null for one with none. */
-function slugOf(db: DatabaseSync): string | null {
+/** A path with symlinks resolved when it exists, so `/var` and `/private/var` agree. */
+function canonical(path: string): string {
   try {
-    return (db.prepare("SELECT value FROM meta WHERE key = 'slug'").get() as { value: string } | undefined)?.value ?? null;
+    return existsSync(path) ? realpathSync(path) : path;
   } catch {
-    return null;
+    return path;
   }
+}
+
+/**
+ * The hub row registered for THIS database file, by its path, which keys its rows. Never the
+ * slug the workspace stamps in its own `meta`: two databases can claim one slug (a copy, a
+ * workspace re-registered elsewhere), and keyed by it they would overwrite each other's rows.
+ * Null for a database the hub does not register (in memory, or never registered).
+ */
+function hubSlugFor(hub: DatabaseSync, db: DatabaseSync): string | null {
+  const main = (db.prepare("PRAGMA database_list").all() as Array<{ name: string; file: string }>).find((row) => row.name === "main");
+  if (!main || main.file === "") return null;
+  const file = canonical(main.file);
+  const rows = hub.prepare("SELECT slug, path FROM workspaces WHERE path <> ''").all() as Array<{ slug: string; path: string }>;
+  return rows.find((row) => canonical(row.path) === file)?.slug ?? null;
 }
 
 /**
@@ -59,8 +75,16 @@ function slugOf(db: DatabaseSync): string | null {
 function ownAttempts(db: DatabaseSync, device: string | null): OwnAttempt[] {
   const rows = db
     .prepare(
-      `SELECT id, device_id, json_extract(provider_binding, '$.accountRef') AS account_ref, started_at, ended_at, state
-         FROM attempts WHERE device_id IS NULL OR device_id = ?`,
+      `SELECT a.id, a.device_id, json_extract(a.provider_binding, '$.provider') AS provider,
+              json_extract(a.provider_binding, '$.accountRef') AS account_ref,
+              (SELECT json_group_array(ref) FROM (
+                 SELECT json_extract(a.harness, '$.sessionRef') AS ref
+                 UNION
+                 SELECT json_extract(t.detail, '$.sessionRef') FROM attempt_transitions t
+                  WHERE t.attempt_id = a.id AND t.kind = 'attempt_session_added'
+               ) WHERE ref IS NOT NULL) AS session_refs,
+              a.started_at, a.ended_at, a.state
+         FROM attempts a WHERE a.device_id IS NULL OR a.device_id = ?`,
     )
     .all(device ?? "") as unknown as Array<OwnAttempt & { device_id: string | null }>;
   // The one rule for "opened on this machine" (`openedHere`): pre-connect attempts included.
@@ -70,15 +94,18 @@ function ownAttempts(db: DatabaseSync, device: string | null): OwnAttempt[] {
 /** Write one workspace's rows to match its attempts: missing ones added, changed ones updated, gone ones removed. */
 function writeRows(hub: DatabaseSync, slug: string, attempts: readonly OwnAttempt[]): void {
   const held = new Map(
-    (hub.prepare("SELECT attempt_id, account_ref, ended_at FROM attempt_presence WHERE workspace = ?").all(slug) as Array<{
+    (hub.prepare("SELECT attempt_id, provider, account_ref, session_refs, ended_at FROM attempt_presence WHERE workspace = ?").all(slug) as Array<{
       attempt_id: string;
+      provider: string | null;
       account_ref: string | null;
+      session_refs: string;
       ended_at: string | null;
     }>).map((row) => [row.attempt_id, row]),
   );
   const upsert = hub.prepare(
-    `INSERT INTO attempt_presence (workspace, attempt_id, account_ref, started_at, ended_at) VALUES (?, ?, ?, ?, ?)
-     ON CONFLICT (workspace, attempt_id) DO UPDATE SET account_ref = excluded.account_ref, started_at = excluded.started_at, ended_at = excluded.ended_at`,
+    `INSERT INTO attempt_presence (workspace, attempt_id, provider, account_ref, session_refs, started_at, ended_at) VALUES (?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT (workspace, attempt_id) DO UPDATE SET provider = excluded.provider, account_ref = excluded.account_ref,
+       session_refs = excluded.session_refs, started_at = excluded.started_at, ended_at = excluded.ended_at`,
   );
   hub.exec("BEGIN IMMEDIATE");
   try {
@@ -88,8 +115,9 @@ function writeRows(hub: DatabaseSync, slug: string, attempts: readonly OwnAttemp
       // An ended attempt with no recorded instant still ended; the index only asks open or not.
       const endedAt = attempt.state === "ended" ? (attempt.ended_at ?? attempt.started_at) : null;
       const row = held.get(attempt.id);
-      if (row && row.ended_at === endedAt && row.account_ref === attempt.account_ref) continue;
-      upsert.run(slug, attempt.id, attempt.account_ref, attempt.started_at, endedAt);
+      const sessions = attempt.session_refs ?? "[]";
+      if (row && row.ended_at === endedAt && row.account_ref === attempt.account_ref && row.provider === attempt.provider && row.session_refs === sessions) continue;
+      upsert.run(slug, attempt.id, attempt.provider, attempt.account_ref, sessions, attempt.started_at, endedAt);
     }
     const remove = hub.prepare("DELETE FROM attempt_presence WHERE workspace = ? AND attempt_id = ?");
     for (const id of held.keys()) if (!seen.has(id)) remove.run(slug, id);
@@ -103,16 +131,15 @@ function writeRows(hub: DatabaseSync, slug: string, attempts: readonly OwnAttemp
 /** Refresh this workspace's rows from its attempts. Best effort: throws nothing. */
 export function refreshWorkspacePresence(db: DatabaseSync, home: string = stapleHome()): void {
   try {
-    const slug = slugOf(db);
-    if (slug === null) return;
-    const attempts = ownAttempts(db, journalFor(db).deviceIdentity());
     const path = hubPath(home);
     // A machine with no hub has no registry for the index to live beside.
     if (!existsSync(path)) return;
     const hub = openDb(path);
     try {
       migrateHub(hub);
-      writeRows(hub, slug, attempts);
+      const slug = hubSlugFor(hub, db);
+      if (slug === null) return;
+      writeRows(hub, slug, ownAttempts(db, journalFor(db).deviceIdentity()));
     } finally {
       hub.close();
     }
