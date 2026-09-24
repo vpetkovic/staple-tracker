@@ -641,8 +641,13 @@ staple budget ingest --source manual --account personal-max --provider anthropic
 
   ```bash
   # statusLine command; my-statusline is the status line you already had
-  bash -c 'f=$(mktemp); cat > "$f"; staple budget ingest --source claude-statusline < "$f" >/dev/null 2>&1 & my-statusline < "$f"; wait; rm -f "$f"'
+  bash -c 'f=$(mktemp); cat > "$f"; exec 3<"$f" 4<"$f"; rm -f "$f"; staple budget ingest --source claude-statusline <&3 >/dev/null 2>&1 & my-statusline <&4'
   ```
+
+  Both readers open the file before it is unlinked, so nothing is left in the
+  temp directory and neither reader can lose it to the other. Nothing waits on
+  staple: the status line appears as soon as `my-statusline` exits, while the
+  ingestion finishes in the background with its own copy of the input.
 - **What is stored is what was reported.** `usedPercent` keeps fractions and
   values above 100; `remainingPercent = max(0, 100 − usedPercent)` and
   `exceeded = usedPercent ≥ 100`. A missing value is `null` with a reason in

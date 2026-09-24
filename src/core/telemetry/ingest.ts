@@ -25,6 +25,8 @@ import {
   claudeConfigDir,
   codexBindingFor,
   expandHomePath,
+  invalidClaudeBindingFor,
+  invalidCodexBindingFor,
   resolveAccount,
   type AccountSource,
 } from "./bindings.js";
@@ -130,6 +132,7 @@ export function ingestBudget(request: IngestRequest, deps: IngestDeps): IngestRe
         account: request.account,
         provider: request.provider,
         lookedUp: configDir,
+        invalidBinding: invalidClaudeBindingFor(telemetry, configDir),
       });
       items = parseClaudeStatusline(requireField(request.input, "The status-line input is empty. Pipe Claude Code's status-line JSON to stdin."), capturedAt);
       break;
@@ -143,6 +146,7 @@ export function ingestBudget(request: IngestRequest, deps: IngestDeps): IngestRe
         account: request.account,
         provider: request.provider,
         lookedUp: file,
+        invalidBinding: invalidCodexBindingFor(telemetry, file),
       });
       // Ancestors are read only from the bound Codex home's sessions tree.
       const sessionsRoot = binding !== null && binding.source === "codex_rollout" ? join(expandHomePath(binding.home), "sessions") : undefined;
