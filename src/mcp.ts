@@ -25,6 +25,15 @@ import { dirname } from "node:path";
 import { stapleHome } from "./config/home.js";
 import { readWorkspaceManifest } from "./core/repo-identity.js";
 import { SurfaceAutoSync } from "./core/cloud/auto-triggers.js";
+import {
+  attemptEndFields,
+  attemptOpenFields,
+  attemptOptionsFromInput,
+  attemptOutputField,
+  recordAttemptEvent,
+  recordAttemptEventInput,
+  withAttemptResult,
+} from "./mcp-attempts.js";
 import { listConflicts, resolveConflict } from "./core/cloud/conflicts.js";
 import { localCloudStatus } from "./core/cloud/status.js";
 import {
@@ -1067,6 +1076,8 @@ server.registerTool(
       estimate_seconds: estimateSchema,
       expected_status_version: z.number().int().optional(),
       comment: z.string().optional(),
+      ...attemptOpenFields,
+      ...attemptEndFields,
       actor: actorSchema,
       ws: wsSchema,
     },
@@ -1099,9 +1110,10 @@ server.registerTool(
           comment: input.comment,
         },
         actor,
+        attemptOptionsFromInput(input),
       );
       notifyHubIfResolved(store, input.ref, input.status);
-      return updated;
+      return withAttemptResult(store, updated);
     }),
 );
 
@@ -1128,9 +1140,10 @@ server.registerTool(
         .describe(
           "HUMAN OVERRIDE — do not send this on your own initiative. Takes a row out of turn under queue.policy = strict, recording who did it and why in a `queue_overridden` event. The reason is mandatory (an empty one is refused), it skips ONLY the out_of_order check, and it never bypasses a blocker, a gate or a live claim. If you hit out_of_order, take `detail.expected[0]` instead and let a human decide to override.",
         ),
+      ...attemptOpenFields,
       ws: wsSchema,
     },
-    outputSchema: issueShape,
+    outputSchema: { ...issueShape, ...attemptOutputField },
     /**
      * destructiveHint: TRUE since steal_if_idle_seconds exists. MCP defines the
      * hint as "may perform destructive updates" vs "only additive updates", and
@@ -1152,15 +1165,16 @@ server.registerTool(
       openWorldHint: false,
     },
   },
-  ({ ref, actor, agent, expected_statuses, steal_if_idle_seconds, override_reason, ws }) =>
-    run(() =>
-      storeFor(ws).checkoutIssue(
-        ref,
-        requireActor(actor, agent),
-        expected_statuses as IssueStatus[] | undefined,
-        { stealIfIdleSeconds: steal_if_idle_seconds, overrideReason: override_reason },
-      ),
-    ),
+  ({ ref, actor, agent, expected_statuses, steal_if_idle_seconds, override_reason, ws, ...attempt }) =>
+    run(() => {
+      const store = storeFor(ws);
+      const issue = store.checkoutIssue(ref, requireActor(actor, agent), expected_statuses as IssueStatus[] | undefined, {
+        stealIfIdleSeconds: steal_if_idle_seconds,
+        overrideReason: override_reason,
+        attempt: attemptOptionsFromInput(attempt),
+      });
+      return withAttemptResult(store, issue);
+    }),
 );
 
 server.registerTool(
@@ -1179,6 +1193,7 @@ server.registerTool(
         .describe(
           "Release only if the CURRENT holder's last activity is at least this old. Replaces the ownership check, so a caller can free a dead agent's claim without impersonating it. Refused if the holder is fresher than this, naming them and their last activity.",
         ),
+      ...attemptEndFields,
       ws: wsSchema,
     },
     // destructiveHint: TRUE for the same reason as checkout_task — with
@@ -1191,15 +1206,40 @@ server.registerTool(
       openWorldHint: false,
     },
   },
-  ({ ref, actor, agent, if_idle_seconds, ws }) =>
+  ({ ref, actor, agent, if_idle_seconds, ws, outcome, reason }) =>
     run(() => {
       // An issue a restore removed has no checkout or lease left: said, not refused.
       const gone = storeFor(ws).removedByRestore(ref);
       if (gone !== null) return { released: false, removedByRestore: gone };
-      return storeFor(ws).releaseIssue(ref, requireActor(actor, agent), {
+      const store = storeFor(ws);
+      const released = store.releaseIssue(ref, requireActor(actor, agent), {
         ifIdleSeconds: if_idle_seconds,
+        attempt: attemptOptionsFromInput({ outcome, reason }),
       });
+      return withAttemptResult(store, released);
     }),
+);
+
+server.registerTool(
+  "record_attempt_event",
+  {
+    description:
+      "Report on the attempt you hold on an issue (docs/execution-telemetry.md): pause it before a usage-limit reset, resume it, record a milestone that points at your latest checkpoint, or report that it was interrupted. An attempt opens when you check out (or move an issue into an active status) and ends when the claim is cleared; this tool never opens or closes a claim. Refused with `conflict` when there is no open attempt in the state the event needs, and with `validation` for a reason the event cannot carry.",
+    inputSchema: {
+      ref: refSchema,
+      ...recordAttemptEventInput,
+      actor: actorSchema,
+      ws: wsSchema,
+    },
+    annotations: {
+      title: "Record attempt event",
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  ({ ref, actor, ws, ...input }) => run(() => recordAttemptEvent(storeFor(ws), ref, requireActor(actor), input)),
 );
 
 /**

@@ -37,6 +37,8 @@ import {
   snapshotToInput,
   type SnapshotRead,
 } from "./apply.js";
+import { settleIncomingAttempt } from "./apply-attempts.js";
+import { ATTEMPT_END_FIELDS } from "./attempt-ends.js";
 import { withoutOpenContests } from "./conflicts.js";
 import { quarantineSnapshotEntity } from "./quarantine.js";
 import { noteRewindVocabulary } from "./sync-state.js";
@@ -191,6 +193,12 @@ export function applySnapshotEntity(
      * screen withholds them from an operation (`withoutOpenContests`).
      */
     const screened = sameTimeline ? withoutOpenContests(db, input) : { input, keeps: () => true };
+    /**
+     * An orphan end the fold holds over a real end this device holds is not applied
+     * (`attempt-ends.ts`), and its fields inherit no provenance: this device never took it.
+     */
+    const dropsEnd =
+      entity.entity === "attempt" && screened.input !== null && settleIncomingAttempt(db, entity.entityId, screened.input.payload) !== screened.input.payload;
     if (screened.input !== null) applyToDatabase(db, screened.input);
     setEntityVersion(db, entity.entity, entity.entityId, entity.version);
     /**
@@ -204,7 +212,7 @@ export function applySnapshotEntity(
       entity.entity,
       entity.entityId,
       Object.entries(entity.fieldWrites ?? {})
-        .filter(([field]) => screened.keeps(field))
+        .filter(([field]) => screened.keeps(field) && !(dropsEnd && (ATTEMPT_END_FIELDS as readonly string[]).includes(field)))
         .map(([field, write]) => ({
         field,
         baseVersion: write.baseVersion,

@@ -32,6 +32,7 @@
 import { randomUUID } from "node:crypto";
 import { isRetryable, type ErrorCode } from "../../worker/src/errors.js";
 import { columnSpellingWins } from "../../src/core/cloud/apply.js";
+import { settleAttemptEnd } from "../../src/core/cloud/attempt-ends.js";
 import { settleRevisionCreate } from "../../src/core/cloud/revision-placement.js";
 import { ORIGIN_RELEASING_STATUSES } from "../../src/core/types.js";
 
@@ -255,6 +256,8 @@ const ENTITIES_BY_PROTOCOL: ReadonlyArray<readonly [number, ReadonlySet<string>]
     ]),
   ],
   [2, new Set(["registration", "crossLink"])],
+  // Execution attempts — `worker/src/envelope.ts`.
+  [3, new Set(["attempt", "attemptTransition"])],
 ];
 const REGISTRY_ENTITIES = new Set(["registration", "crossLink"]);
 const VERBS = new Set(["create", "update", "delete", "replace", "renumber"]);
@@ -358,7 +361,7 @@ export class FakeSyncServer {
       maxSnapshotPageSize: 500,
       // Matches `worker/src/limits.ts`. `min` did not move with `max`, which is what
       // keeps every protocol-1 client working.
-      protocol: { min: 1, max: 2 },
+      protocol: { min: 1, max: 3 },
       vocabulary: null,
       enrollmentSecret: null,
       rateLimit: null,
@@ -1139,6 +1142,13 @@ export class FakeSyncServer {
         `${at}.verb 'delete' is never valid for a registry entity — a retraction is a field`,
       );
     }
+    // An attempt is created then updated; a transition is immutable — `worker/src/envelope.ts`.
+    if (entity === "attempt" && verb !== "create" && verb !== "update") {
+      throw new ServerError(400, "validation", `${at}.verb '${verb}' is never valid for an attempt: it is created, then updated`);
+    }
+    if (entity === "attemptTransition" && verb !== "create") {
+      throw new ServerError(400, "validation", `${at}.verb '${verb}' is never valid for an attempt transition: it is immutable once written`);
+    }
 
     let baseVersion: number | null = null;
     if (op.baseVersion !== null && op.baseVersion !== undefined) {
@@ -1398,7 +1408,10 @@ export class FakeSyncServer {
       // One field, whichever spelling wrote it — `worker/src/fold.ts`. Not on the Worker
       // from before this build, which kept both.
       // A payload in both spellings keeps the column's — `columnSpellingWins`, `worker/src/fold.ts`.
-      const carried = this.legacyFold ? (op.payload as Record<string, unknown>) : columnSpellingWins(op.payload as Record<string, unknown>);
+      const spelled = this.legacyFold ? (op.payload as Record<string, unknown>) : columnSpellingWins(op.payload as Record<string, unknown>);
+      // An orphan end never overwrites a real end, and leaves no provenance when dropped —
+      // `settleAttemptEnd`, as `worker/src/fold.ts` calls it.
+      const carried = op.entity === "attempt" ? settleAttemptEnd(entry.state, spelled) : spelled;
       for (const key of this.legacyFold ? [] : Object.keys(carried)) {
         const other = key.includes("_")
           ? key.replace(/_([a-z])/g, (_, letter: string) => letter.toUpperCase())

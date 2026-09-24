@@ -54,7 +54,8 @@ import { hubCloudReport } from "../src/core/cloud/hub-surface.js";
 
 const ENROLLMENT = "enrollment-secret";
 const CAPABILITIES = {
-  protocol: { min: 1, max: 1 },
+  // A Worker deployed for execution attempts (protocol 3) — the one this build syncs with.
+  protocol: { min: 1, max: 3 },
   maxBatchSize: 500,
   maxOpBytes: 65_536,
   maxPullLimit: 1000,

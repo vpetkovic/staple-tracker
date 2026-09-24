@@ -121,6 +121,8 @@ import {
   splitDocumentKey,
   type ApplyInput,
 } from "./apply.js";
+import { settleIncomingAttempt } from "./apply-attempts.js";
+import { ATTEMPT_END_FIELDS, settledByApplyRule } from "./attempt-ends.js";
 import type { RemoteOperation } from "./wire.js";
 
 // ------------------------------------------------------------------- shapes
@@ -241,6 +243,15 @@ function policy(entity: string, key: string): FieldPolicy | null {
     case "setting":
       return key === "value" ? { name: "value" } : null;
     /**
+     * An attempt's seven end fields are ONE field, `end`, compared as a unit
+     * (`docs/execution-telemetry.md`, "A stored orphan end never overwrites a real end").
+     * Two real ends that disagree conflict; so do two orphan ends. One of each never does:
+     * the apply rule settles that pair (`attempt-ends.ts`). Everything else on an attempt is
+     * written once, at its create.
+     */
+    case "attempt":
+      return (ATTEMPT_END_FIELDS as readonly string[]).includes(key) ? { name: "end" } : null;
+    /**
      * Not screened, and each for its own reason. `documentRevision` rows are
      * *"immutable once written"*; a `relation` is an edge that exists or does
      * not; a `lease` is arbitrated by the server's fencing token, not by this
@@ -321,9 +332,41 @@ function readField(
       // wrapped (`{"v":1,"value":"{\"v\":1,…}"}`).
       return { present: true, value: settingValueOf(row?.value ?? null) };
     }
+    case "attempt": {
+      if (name !== "end") return { present: false, value: null };
+      const row = db
+        .prepare("SELECT state, outcome, end_reason, end_detection, ended_by, ended_at, ended_at_source FROM attempts WHERE id = ?")
+        .get(entityId) as Record<string, unknown> | undefined;
+      if (row === undefined) return { present: false, value: null };
+      return {
+        present: true,
+        value: attemptEndValue({
+          state: row.state,
+          outcome: row.outcome,
+          endReason: row.end_reason,
+          endDetection: row.end_detection,
+          endedBy: row.ended_by,
+          endedAt: row.ended_at,
+          endedAtSource: row.ended_at_source,
+        }),
+      };
+    }
     default:
       return { present: false, value: null };
   }
+}
+
+/** An attempt's end as one value, its seven fields in one order, absent ones null. */
+function attemptEndValue(fields: Readonly<Record<string, unknown>>): Record<string, unknown> {
+  return Object.fromEntries(ATTEMPT_END_FIELDS.map((field) => [field, fields[field] ?? null]));
+}
+
+/** The payload that writes `value` to `field`: the whole end, spread, for an attempt. */
+function resolutionPayload(entity: string, field: string, value: unknown): Record<string, unknown> {
+  if (entity === "attempt" && field === "end" && value !== null && typeof value === "object" && !Array.isArray(value)) {
+    return attemptEndValue(value as Record<string, unknown>);
+  }
+  return { [wireKey(field)]: value };
 }
 
 /** A stored setting envelope's value; anything that is not one, as it is. */
@@ -523,6 +566,10 @@ function baseValueFor(
 
   for (const row of rows) {
     const payload = JSON.parse(row.payload) as Record<string, unknown>;
+    if (entity === "attempt" && field === "end") {
+      if (ATTEMPT_END_FIELDS.some((name) => name in payload)) return attemptEndValue(payload);
+      continue;
+    }
     for (const [key, value] of Object.entries(payload)) {
       if (policy(entity, key)?.name === field) return value;
     }
@@ -544,6 +591,18 @@ export function screenForConflicts(
   op: RemoteOperation,
   localDeviceId: string | null,
 ): ApplyInput | null {
+  /**
+   * An orphan end over a real end this device holds is dropped before anything else — before
+   * the screen, and before provenance is recorded for it, since a dropped write is not one this
+   * device holds (`settleIncomingAttempt`). Every device, the author's included, applies it.
+   */
+  if (op.entity === "attempt") {
+    const settled = settleIncomingAttempt(db, op.entityId, op.payload);
+    if (settled !== op.payload) {
+      if (Object.keys(settled).length === 0) return null;
+      op = { ...op, payload: settled };
+    }
+  }
   // The same record the applier builds, so what a screened operation carries — its seq
   // above all, which settles claims on unique values (`claims.ts`) — cannot drift.
   const input: ApplyInput = operationToInput(op);
@@ -703,15 +762,22 @@ function contest(
   const contested = new Set<string>();
   const detectedAt = nowIso();
 
-  for (const [key, remoteValue] of Object.entries(op.payload)) {
+  for (const [key, carried] of Object.entries(op.payload)) {
     const named = policy(op.entity, key);
     if (!named || named.bookkeeping || named.derivedFrom) continue;
+    // One record per field: an attempt's end is seven keys and one field.
+    if (contested.has(named.name)) continue;
     const side = localWrites.get(named.name);
     if (!side) continue;
 
     const local = readField(db, op.entity, op.entityId, named.name);
     if (!local.present) continue;
+    const endUnit = op.entity === "attempt" && named.name === "end";
+    const remoteValue = endUnit ? attemptEndValue({ ...(local.value as Record<string, unknown>), ...op.payload }) : carried;
     if (sameValue(local.value, remoteValue)) continue;
+    // An orphan end and a real end, or an end and a state that is not one, are settled by the
+    // apply rule, never recorded as a conflict.
+    if (endUnit && settledByApplyRule(local.value as Record<string, unknown>, remoteValue as Record<string, unknown>)) continue;
 
     contested.add(named.name);
     record(db, {
@@ -1134,7 +1200,7 @@ function decide(db: DatabaseSync, request: ResolveRequest): ResolveOutcome {
       if (row !== undefined) companions.statusVersion = row.status_version + 1;
     }
     for (const write of writes) {
-      const payload: Record<string, unknown> = { [wireKey(conflict.field)]: write.value, ...companions };
+      const payload: Record<string, unknown> = { ...resolutionPayload(conflict.entity, conflict.field, write.value), ...companions };
       applyToDatabase(db, {
         entity: conflict.entity,
         entityId: write.entityId,
@@ -1380,7 +1446,7 @@ export function applyConflictOperation(db: DatabaseSync, op: RemoteOperation): b
       entity,
       entityId: targetId,
       verb: resolutionVerb(entity, field),
-      payload: { [wireKey(field)]: value, ...companions },
+      payload: { ...resolutionPayload(entity, field, value), ...companions },
       actor: op.actor === "" ? null : op.actor,
       deviceId: op.deviceId,
       at,

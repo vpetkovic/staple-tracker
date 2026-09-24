@@ -71,6 +71,8 @@ const READS: Record<StoreName, readonly string[]> = {
     "claimActivityFor", "worklogSummaryFor", "timingFor", "timing", "detailTiming", "listComments", "listCommentsPage",
     "getDocument", "listDocuments", "listDocumentRevisions", "listIssues", "listIssuesPage", "inbox", "context", "tree",
     "edges", "milestones", "queue", "projects", "writeTarget",
+    // The attempt ledger the mutators write through; its own writes are the store's methods below.
+    "attempts",
   ],
   MilestoneStore: ["queueSeam", "get", "list", "milestoneOf"],
   QueueStore: ["revision", "entries", "effectiveQueue", "view"],
@@ -253,6 +255,40 @@ const SCENARIOS: readonly Scenario[] = [
     name: "release an idle claim",
     prep: (w) => void w.a.store.checkoutIssue(issue(w, "Idle claim"), "agent-a"),
     run: (w) => void w.a.store.releaseIssue(w.ids["Idle claim"]!, "agent-b", { ifIdleSeconds: 0 }),
+  },
+  // ---- execution attempts (protocol 3): each is a side effect above, or reported here
+  {
+    method: "WorkspaceStore.checkoutIssue",
+    name: "check out with a harness session, then take it over",
+    prep: (w) =>
+      void w.a.store.checkoutIssue(issue(w, "Attempted"), "agent-a", undefined, {
+        attempt: { harness: "claude_code", harnessSession: "session-1", model: "claude-test", account: "personal-max" },
+      }),
+    run: (w) => void w.a.store.checkoutIssue(w.ids["Attempted"]!, "agent-b", undefined, { stealIfIdleSeconds: 0 }),
+  },
+  { method: "WorkspaceStore.recordAttemptEvent", name: "pause an attempt", run: (w) => void w.a.store.recordAttemptEvent(w.ids["Attempted"]!, "pause", "agent-b", { reason: "checkpoint_before_reset" }) },
+  { method: "WorkspaceStore.recordAttemptEvent", name: "resume an attempt", run: (w) => void w.a.store.recordAttemptEvent(w.ids["Attempted"]!, "resume", "agent-b") },
+  { method: "WorkspaceStore.recordAttemptEvent", name: "record an attempt milestone", run: (w) => void w.a.store.recordAttemptEvent(w.ids["Attempted"]!, "milestone", "agent-b", { label: "tests green" }) },
+  { method: "WorkspaceStore.recordAttemptEvent", name: "report an interruption", run: (w) => void w.a.store.recordAttemptEvent(w.ids["Attempted"]!, "interrupt", "agent-b", { reason: "provider_limit" }) },
+  {
+    method: "WorkspaceStore.updateIssue",
+    name: "re-claim after an interruption, then fail it",
+    prep: (w) => void w.a.store.checkoutIssue(w.ids["Attempted"]!, "agent-b"),
+    run: (w) => void w.a.store.updateIssue(w.ids["Attempted"]!, { status: "todo" }, "agent-b", { outcome: "failed", reason: "cannot reproduce" }),
+  },
+  {
+    method: "WorkspaceStore.reconstructAttemptHistory",
+    name: "reconstruct attempts from the event log",
+    prep: (w) => {
+      // History from before capture, as an older build left it: the events of a checkout, a
+      // steal and a release, and no attempt rows behind them.
+      const id = issue(w, "Before capture");
+      const event = w.a.db.prepare("INSERT INTO events (kind, issue_id, actor, payload, dedup_key, created_at) VALUES (?, ?, ?, ?, ?, ?)");
+      event.run("checkout", id, "agent-old", "{}", "old-1", "2026-01-01T00:00:00.000Z");
+      event.run("claim_stolen", id, "agent-new", JSON.stringify({ previousHolder: "agent-old", previousLastActivityAt: "2026-01-01T01:00:00.000Z" }), "old-2", "2026-01-01T05:00:00.000Z");
+      event.run("release", id, "agent-new", "{}", "old-3", "2026-01-01T06:00:00.000Z");
+    },
+    run: (w) => void w.a.store.reconstructAttemptHistory(),
   },
   { method: "WorkspaceStore.addComment", name: "comment", run: (w) => void w.a.store.addComment(w.ids["Everything"]!, "A comment", "alice") },
   {

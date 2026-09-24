@@ -46,6 +46,7 @@ import { cloudError } from "./errors.js";
 import { REPOSITORY_PREFIX_SETTING, localPrefix, repositoryPrefixOf } from "./repository-prefix.js";
 import { VOCABULARY_ORDER_ID, hydrate } from "./hydrate.js";
 import { completeSnapshot, recordReconciledEpoch } from "./sync-state.js";
+import { attemptPayload, noteAttemptsSeededHere, readAttempt, readTransition, transitionPayload } from "../telemetry/attempt-records.js";
 import type { SnapshotEntity } from "./wire.js";
 
 /** The plan's singleton entity id. Mirrors `queue-store.ts`. */
@@ -179,6 +180,8 @@ const NOUNS: Record<string, [string, string]> = {
   setting: ["setting", "settings"],
   milestone: ["milestone", "milestones"],
   queue: ["plan", "plans"],
+  attempt: ["attempt", "attempts"],
+  attemptTransition: ["attempt transition", "attempt transitions"],
 };
 
 function counted(n: number, entity: string): string {
@@ -281,6 +284,8 @@ export function workspaceHoldings(db: DatabaseSync): { total: number; summary: s
     project: count("SELECT COUNT(*) AS n FROM projects"),
     milestone: count("SELECT COUNT(*) AS n FROM milestone_meta"),
     queue: count("SELECT CASE WHEN EXISTS (SELECT 1 FROM queue_entries) THEN 1 ELSE 0 END AS n"),
+    attempt: count("SELECT COUNT(*) AS n FROM attempts"),
+    attemptTransition: count("SELECT COUNT(*) AS n FROM attempt_transitions"),
   };
   const total = Object.values(byEntity).reduce((sum, n) => sum + n, 0);
   return { total, summary: breakdown(byEntity) };
@@ -318,6 +323,10 @@ function isComplete(entity: SnapshotEntity): boolean {
       );
     case "documentRevision":
       return typeof state.issueId === "string";
+    case "attempt":
+      return typeof state.issueId === "string";
+    case "attemptTransition":
+      return typeof state.attemptId === "string";
     default:
       return true;
   }
@@ -642,6 +651,34 @@ function inventory(db: DatabaseSync, now: string, skipped: SeedSkipped[]): Local
       },
       actor: row.author,
       at: row.created_at,
+    });
+  }
+
+  /**
+   * Execution attempts, then their transitions — each after what it names. An attempt is
+   * sent whole, its end included, and a transition is immutable once written; the seed
+   * sends the record as it stands, never re-derives it.
+   */
+  for (const row of db.prepare("SELECT id FROM attempts ORDER BY started_at, id").all() as Array<{ id: string }>) {
+    const attempt = readAttempt(db, row.id)!;
+    out.push({
+      entity: "attempt",
+      entityId: attempt.id,
+      label: `attempt ${attempt.id} on ${identifierOf(db, attempt.issueId)}`,
+      payload: attemptPayload(attempt),
+      actor: attempt.agent,
+      at: attempt.endedAt ?? attempt.startedAt,
+    });
+  }
+  for (const row of db.prepare("SELECT id FROM attempt_transitions ORDER BY at, id").all() as Array<{ id: string }>) {
+    const transition = readTransition(db, row.id)!;
+    out.push({
+      entity: "attemptTransition",
+      entityId: transition.id,
+      label: `${transition.kind} of attempt ${transition.attemptId}`,
+      payload: transitionPayload(transition),
+      actor: transition.actor,
+      at: transition.at,
     });
   }
 
@@ -1572,6 +1609,16 @@ export function seedRepository(db: DatabaseSync, journal: Journal, args: SeedArg
      * push and this transaction: it keeps its id and follows the push like any other.
      */
     journal.seed(sendable);
+    /**
+     * The attempts this database opened before it had a device (`deviceId` null) and now
+     * uploads: this device's from here on, for the stored orphan end and the presence index
+     * (`attemptsOpenedHere`). A device hydrating them holds them with a null device too, and
+     * must not take them for its own, so the claim is the upload, recorded here.
+     */
+    noteAttemptsSeededHere(
+      db,
+      sendable.filter((intent) => intent.entity === "attempt" && intent.verb === "create" && intent.payload.deviceId == null).map((intent) => intent.entityId),
+    );
     // And anything the repository's state displaced while it was applied above (`claims.ts`).
     settleOwedClaims(db, journal);
 

@@ -135,7 +135,7 @@ Stored fields:
 | `agent` | The actor that opened the attempt: the same string as `checkout_agent` and the event `actor`. |
 | `state` | `running`, `paused` or `ended`. See [Lifecycle](#lifecycle). |
 | `outcome` | `null` while open. On `ended`: `completed`, `yielded`, `failed` or `interrupted`. Reads can also show `orphaned`, which is derived and never stored ([below](#orphaned-attempts-are-closed-at-read-time)). |
-| `endReason` | A reason code from the [lifecycle tables](#how-an-attempt-ends), `null` while open. |
+| `endReason` | A reason code from the [lifecycle tables](#how-an-attempt-ends), `null` while open. One more code is written only by reconstruction: `capture_began`, on a reconstructed attempt whose tenure went on as the same agent's first recorded attempt ([History before capture](#history-before-capture)). It is `yielded`, never an interruption. |
 | `endDetection` | Who knew the attempt ended. `reported`: the attempt's own agent made the ending mutation. `by_other`: a different actor made it (another agent, a human, a script calling `status` or `release` with no agent). `inferred`: staple concluded it from a later mutation, such as a steal or a stale release. `reconstructed`: backfilled from the event log. `null` while open. The `derived` value never appears in storage; it exists only on reads ([below](#orphaned-attempts-are-closed-at-read-time)). |
 | `endedBy` | The actor on the ending mutation, or `null` when it had none. `status` and `release` have no holder check today, and `release` skips the ownership check entirely when no agent is given, so the actor is recorded rather than assumed. |
 | `openedBy` | `checkout`, `steal`, `reclaim`, `status` or `reconstructed`. Which mutation opened it. |
@@ -268,6 +268,7 @@ records the actor either way.
 | `release --if-stale` (`claim_released_stale`) | `interrupted` | `released_stale` | `inferred` |
 | `claim_stolen` | `interrupted` | `claim_stolen` | `inferred` |
 | Explicit interruption report ([below](#lifecycle)) | `interrupted` | the reported reason | `reported` / `by_other` |
+| Reconstruction only: a pre-capture tenure the same agent's first recorded attempt continued ([History before capture](#history-before-capture)) | `yielded` | `capture_began` | `reconstructed` |
 
 `failed` is never inferred. It means *the agent concluded it could not do the
 work*, and only the agent can say that. It is passed as an optional `outcome`
@@ -416,24 +417,32 @@ of the log applies makes them all hold the same end:
 
 > When an `attempt` operation that sets end fields is applied, an **orphan end
 > never overwrites a real end** that the row already holds, and a **real end
-> always overwrites an orphan end**. Otherwise the ordinary rules apply.
+> always overwrites an orphan end**. A **state that is not an end** (a pause or a
+> resume) **never overwrites any end** the row already holds, and any end always
+> overwrites it. Otherwise the ordinary rules apply.
+
+The third clause exists because a pause is also an `attempt.update`. A holder that
+paused offline while another device stole the claim sends its pause after the steal's
+end in the log, and without the clause the pause reopened the attempt everywhere the
+fold was read, after which the holder's own stored orphan end replaced the steal's.
 
 The rule compares the incoming end fields (`state`, `outcome`, `endReason`,
 `endDetection`, `endedBy`, `endedAt`, `endedAtSource`) with the stored ones as
 one unit. So **any `attempt` operation that sets end fields carries all seven**,
 never only the ones that changed. Attempts are not among the row-diff tables,
 so the store writes this payload itself. When a reader drops an incoming orphan
-end under this rule, it records none of those keys in its field-write
+end or a stale state under this rule, it records none of those keys in its field-write
 provenance (the Worker fold's `fieldWrites`, the client's
 `sync_field_writes`). Otherwise a device hydrated from that fold would inherit
 provenance for a write it never took. Every reader of the log implements it: the client applier, the
 Worker fold (and with it `/snapshot` hydration and backups), the tail fold and
 the test service. This is the same arrangement as revision placement, where
 [every reader of the log uses one rule](sync.md#conflicts-are-preserved-never-resolved-silently).
-A pair of an orphan end and a real end is settled by this rule, in either
-direction and in either order of arrival, and **records no conflict**.
-Conflict screening skips the end fields when the pair is exactly one orphan end
-and one real end. Two real ends that disagree still conflict as usual, and so
+A pair of an orphan end and a real end, or of an end and a state that is not
+one, is settled by this rule, in either direction and in either order of
+arrival, and **records no conflict**. Conflict screening skips the end fields
+for exactly those pairs. The opening device does not write a stored orphan end
+while it holds an open conflict on that attempt's end. Two real ends that disagree still conflict as usual, and so
 do two orphan ends that disagree.
 
 The bounded exception is the interval before the opening device next runs a
@@ -584,6 +593,33 @@ reason in `missing`. Crash-recovery re-claims left no event, so a reconstructed
 history under-counts interruptions and says so. Analytics exclude reconstructed
 attempts from trusted samples unless asked, as they exclude `approximate`
 timing.
+
+Reconstruction is a command (`staple attempt reconstruct`), because reconstructed
+attempts replicate and a migration never journals. It is idempotent: an attempt's
+id is derived from its issue and the event that opened it. It reads an issue's
+events up to its **first recorded attempt**, where capture began, and writes no
+transitions. A tenure still open at that point is ended by the rule that fits:
+
+- **The first recorded attempt is a steal.** The tenure was interrupted:
+  `interrupted` / `claim_stolen`, dated at the holder's last activity as the
+  steal's own event recorded it. The recorded steal keeps the `resumesAttemptId`
+  its device stored when it opened (the resume rule saw no attempt then, and a
+  stored value never changes), so this boundary reads by adjacency, not by link.
+- **The first recorded attempt is the same agent's re-claim.** The tenure went on
+  as that attempt. It ends at the boundary as `yielded` / `capture_began`, a
+  reason only reconstruction writes. It is never read as an interruption, and no
+  later orphan rule sees the two as a merge.
+- **Anything else, or no recorded attempt at all.** The claim was cleared or moved
+  by an operation another device made, which re-emits no event locally, so the
+  issue's replicated row decides. Done and cancelled end at `completed_at` and
+  `cancelled_at`. Any other category ends by the ending table at the row's
+  `updated_at`, an upper bound, so a claim cleared by a remote release reads as
+  `yielded` / `returned`, the label a status write back to ready also gets. A
+  claim now held by another agent reads as `yielded` / `released`, dated at that
+  agent's `checkout_at`: the row cannot tell a release followed by a checkout
+  from a steal, and reconstruction never claims an interruption it has no event
+  for, so a remote steal is recorded as a release. A tenure the row shows still
+  held by its agent stays open.
 
 ## Limit windows
 
@@ -1035,12 +1071,14 @@ release stays compatible with old builds and the new Worker is deployed first:
   before any client that journals them, and it advertises `{ min: 1, max: 3 }`.
 - The workspace client's `CLIENT_PROTOCOL` moves from 1 to 3. (Today only the
   hub-registry leg declares 2.)
-- A device that has not upgraded **stops converging** on that repository once the
-  first attempt operation is in the log. `GET /ops` refuses a page, and
-  `GET /snapshot` a fold, that contains an entity newer than the request's
-  protocol, with `protocol_unsupported` and `requiredProtocol: 3`. That is the
-  existing refusal, working as designed. Upgrading the device is the only
-  remedy.
+- A device that has not upgraded **stops converging** on that repository as soon
+  as an upgraded device pushes anything, not only an attempt. The attempts arrive
+  with a workspace migration, so every operation an upgraded device journals
+  carries the new `schema`, and an older client refuses a page holding one with
+  `schema_ahead`. A page or fold that holds an attempt is also refused to it at
+  the service, with `protocol_unsupported` and `requiredProtocol: 3`. Both are the
+  existing refusals, working as designed: every device upgrades together, the
+  Worker first, and upgrading the device is the only remedy.
 - A workspace backup taken after the first attempt operation records
   `backups.protocol` 3, the lowest protocol that can replay it. A Worker rolled
   back to protocol 2 cannot restore it.

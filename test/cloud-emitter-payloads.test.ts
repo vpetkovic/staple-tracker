@@ -217,6 +217,25 @@ function history(store: WorkspaceStore): void {
  * the fake refuses a non-object payload, so an emitter sending one fails the sync here.
  */
 async function everythingTheClientSends(): Promise<FakeSyncServer> {
+  /**
+   * The process's staple home, as a real one has: its own, with no hub. An attempt
+   * transition records machine-wide counts from the hub of the home the process runs under
+   * (`telemetry/presence.ts`), and a recorded payload must not depend on whichever hub
+   * another test left in the shared default home.
+   */
+  const machineHome = mkdtempSync(join(tmpdir(), "staple-emit-machine-"));
+  homes.push(machineHome);
+  const previousHome = process.env.STAPLE_HOME;
+  process.env.STAPLE_HOME = machineHome;
+  try {
+    return await driveEveryEmitter();
+  } finally {
+    if (previousHome === undefined) delete process.env.STAPLE_HOME;
+    else process.env.STAPLE_HOME = previousHome;
+  }
+}
+
+async function driveEveryEmitter(): Promise<FakeSyncServer> {
   const server = new FakeSyncServer({ repositoryId: REPO_ID });
   // Lease payloads carry server time. A fixed clock keeps the recorded ones comparable.
   server.now = () => Date.parse("2026-09-10T12:00:00.000Z");

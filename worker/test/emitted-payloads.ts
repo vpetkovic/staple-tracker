@@ -24,6 +24,82 @@ export const EMITTED_PAYLOADS: ReadonlyArray<{
   payload: Record<string, unknown>;
 }> = [
   {
+    "entity": "attempt",
+    "verb": "create",
+    "payload": {
+      "issueId": "00000000-0000-4000-8000-000000000000",
+      "agent": "emitter",
+      "state": "running",
+      "outcome": null,
+      "endReason": null,
+      "endDetection": null,
+      "endedBy": null,
+      "endedAt": null,
+      "endedAtSource": null,
+      "openedBy": "checkout",
+      "resumesAttemptId": null,
+      "startedAt": "2026-09-10T00:00:00.000Z",
+      "deviceId": "device-a",
+      "claim": {
+        "scope": "local",
+        "fencingToken": null
+      },
+      "harness": null,
+      "providerBinding": null,
+      "estimateAtStart": {
+        "estimatedSeconds": null,
+        "source": "none"
+      },
+      "idempotencyKey": null,
+      "provenance": "recorded",
+      "missing": {
+        "harness": "not_supplied",
+        "providerBinding": "not_supplied"
+      }
+    }
+  },
+  {
+    "entity": "attempt",
+    "verb": "update",
+    "payload": {
+      "state": "ended",
+      "outcome": "yielded",
+      "endReason": "released",
+      "endDetection": "reported",
+      "endedBy": "emitter",
+      "endedAt": "2026-09-10T00:00:00.000Z",
+      "endedAtSource": "mutation"
+    }
+  },
+  {
+    "entity": "attemptTransition",
+    "verb": "create",
+    "payload": {
+      "attemptId": "00000000-0000-4000-8000-000000000000",
+      "kind": "attempt_started",
+      "at": "2026-09-10T00:00:00.000Z",
+      "actor": "emitter",
+      "detection": null,
+      "reason": null,
+      "detail": {
+        "openedBy": "checkout",
+        "resumesAttemptId": null
+      },
+      "concurrency": {
+        "observedAt": "2026-09-10T00:00:00.000Z",
+        "scope": "device",
+        "openAttemptsInWorkspace": 1,
+        "storedOpenAttemptsStartedHere": null,
+        "storedOpenAttemptsOnAccountStartedHere": null,
+        "workspaceSyncedThrough": "2026-09-10T00:00:00.000Z",
+        "missing": {
+          "storedOpenAttemptsStartedHere": "source_unavailable",
+          "storedOpenAttemptsOnAccountStartedHere": "no_provider_binding"
+        }
+      }
+    }
+  },
+  {
     "entity": "comment",
     "verb": "create",
     "payload": {

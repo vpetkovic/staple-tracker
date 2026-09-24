@@ -3,7 +3,7 @@
  * Regenerate with: npx tsx scripts/regen-migration-snapshots.ts
  *
  * The `sqlite_master` dump of a workspace database that walked migrations
- * 001, 002, 003, 004, 005, 006, 007, 008, 009, 010, 011, 012. Executed verbatim by the runner when — and only when —
+ * 001, 002, 003, 004, 005, 006, 007, 008, 009, 010, 011, 012, 013. Executed verbatim by the runner when — and only when —
  * version detection proved the file has no tables at all.
  *
  * No `IF NOT EXISTS` anywhere, deliberately: reaching this text with tables
@@ -280,7 +280,7 @@ CREATE TABLE sync_state (
          client_seq_high_water INTEGER NOT NULL DEFAULT 0,
          last_sync_at          TEXT,
          bootstrap_cursor      TEXT
-       , origin_host TEXT);
+       , origin_host TEXT, head_reached_cursor TEXT, head_reached_at TEXT);
 
 CREATE TABLE sync_field_writes (
          entity       TEXT    NOT NULL,
@@ -292,4 +292,49 @@ CREATE TABLE sync_field_writes (
          written_at   TEXT    NOT NULL,
          PRIMARY KEY (entity, entity_id, field)
        );
+
+CREATE TABLE attempts (
+        id                  TEXT PRIMARY KEY,
+        issue_id            TEXT NOT NULL,
+        agent               TEXT NOT NULL,
+        state               TEXT NOT NULL,
+        outcome             TEXT,
+        end_reason          TEXT,
+        end_detection       TEXT,
+        ended_by            TEXT,
+        opened_by           TEXT NOT NULL,
+        resumes_attempt_id  TEXT,
+        started_at          TEXT NOT NULL,
+        ended_at            TEXT,
+        ended_at_source     TEXT,
+        device_id           TEXT,
+        claim_scope         TEXT NOT NULL,
+        claim_fencing_token INTEGER,
+        harness             TEXT,
+        provider_binding    TEXT,
+        estimate_at_start   TEXT NOT NULL,
+        idempotency_key     TEXT,
+        provenance          TEXT NOT NULL,
+        missing             TEXT NOT NULL DEFAULT '{}'
+      );
+
+CREATE INDEX attempts_issue_idx ON attempts (issue_id, started_at, id);
+
+CREATE INDEX attempts_stored_open_idx ON attempts (state) WHERE state <> 'ended';
+
+CREATE INDEX attempts_idempotency_idx ON attempts (issue_id, idempotency_key) WHERE idempotency_key IS NOT NULL;
+
+CREATE TABLE attempt_transitions (
+        id          TEXT PRIMARY KEY,
+        attempt_id  TEXT NOT NULL,
+        kind        TEXT NOT NULL,
+        at          TEXT NOT NULL,
+        actor       TEXT,
+        detection   TEXT,
+        reason      TEXT,
+        detail      TEXT NOT NULL DEFAULT '{}',
+        concurrency TEXT NOT NULL DEFAULT '{}'
+      );
+
+CREATE INDEX attempt_transitions_attempt_idx ON attempt_transitions (attempt_id, at, id);
 `;

@@ -68,6 +68,13 @@ const ENTITIES_BY_PROTOCOL: ReadonlyArray<readonly [number, ReadonlySet<string>]
    * so the same edge is the same entity on two machines that name a workspace differently.
    */
   [2, new Set(["registration", "crossLink"])],
+  /**
+   * Execution attempts (`docs/execution-telemetry.md`). `attempt` is keyed by the attempt's
+   * UUID with `create` and `update`; `attemptTransition` by the transition's UUID, `create`
+   * only and immutable once written, like `documentRevision`. A new entity kind is a
+   * protocol change: a client below 3 is refused a page or a fold that holds one.
+   */
+  [3, new Set(["attempt", "attemptTransition"])],
 ];
 
 /** The registry entities, named once so three files can ask about them. */
@@ -270,6 +277,20 @@ export function validateEnvelope(
         "because a tombstone on a content-derived key can never be undone",
       { index },
     );
+  }
+
+  /**
+   * An attempt is created and then updated, and a transition is created and never touched
+   * again (`docs/execution-telemetry.md`, "Where it lives"). Refused here rather than merely
+   * not emitted, for the reason the registry's `delete` is: the client is not the only thing
+   * that can push, and a tombstone or an edit on an immutable record would fold into state no
+   * emitter can produce.
+   */
+  if (entity === "attempt" && verb !== "create" && verb !== "update") {
+    throw new SyncError("validation", `${at}.verb '${verb}' is never valid for an attempt: it is created, then updated`, { index });
+  }
+  if (entity === "attemptTransition" && verb !== "create") {
+    throw new SyncError("validation", `${at}.verb '${verb}' is never valid for an attempt transition: it is immutable once written`, { index });
   }
 
   // `baseVersion` is null for `create` and an integer otherwise. The server records it
