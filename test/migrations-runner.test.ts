@@ -129,9 +129,11 @@ describe("version detection", () => {
     // target deliberately unmoved at 12. Hub 003 is the first migration in this
     // series that the workspace did not also need, which is exactly the
     // divergence this assertion exists to make visible. Moved again by STA-287:
-    // hub 3 -> 4 (004-cross-link-changes), workspace still 12.
+    // hub 3 -> 4 (004-cross-link-changes), workspace still 12. Moved again by
+    // hub 005 (limit windows and budget samples, machine state that never
+    // replicates): hub 4 -> 5, workspace still 12.
     expect(latestVersion(WORKSPACE_TARGET)).toBe(12);
-    expect(latestVersion(HUB_TARGET)).toBe(4);
+    expect(latestVersion(HUB_TARGET)).toBe(5);
   });
 });
 

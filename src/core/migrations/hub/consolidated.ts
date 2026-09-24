@@ -3,7 +3,7 @@
  * Regenerate with: npx tsx scripts/regen-migration-snapshots.ts
  *
  * The `sqlite_master` dump of a hub database that walked migrations
- * 001, 002, 003, 004. Executed verbatim by the runner when — and only when —
+ * 001, 002, 003, 004, 005. Executed verbatim by the runner when — and only when —
  * version detection proved the file has no tables at all.
  *
  * No `IF NOT EXISTS` anywhere, deliberately: reaching this text with tables
@@ -75,4 +75,60 @@ CREATE TABLE cross_link_changes (
   sent_version INTEGER,
   changed_at TEXT NOT NULL
 );
+
+CREATE TABLE limit_windows (
+  id TEXT PRIMARY KEY,
+  provider TEXT NOT NULL,
+  account_ref TEXT NOT NULL,
+  limit_key TEXT NOT NULL,
+  window_seconds INTEGER,
+  window_seconds_source TEXT,
+  anchor TEXT NOT NULL DEFAULT 'unknown',
+  resets_at TEXT,
+  resets_at_source TEXT,
+  starts_at TEXT,
+  plan_tier TEXT,
+  superseded_by TEXT REFERENCES limit_windows(id),
+  superseded_reason TEXT,
+  missing TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX limit_windows_limit_idx
+  ON limit_windows(provider, account_ref, limit_key, resets_at);
+
+CREATE TABLE budget_samples (
+  id TEXT PRIMARY KEY,
+  window_id TEXT REFERENCES limit_windows(id),
+  provider TEXT NOT NULL,
+  account_ref TEXT NOT NULL,
+  limit_key TEXT NOT NULL,
+  unit TEXT NOT NULL,
+  used_percent REAL,
+  remaining_percent REAL,
+  exceeded INTEGER CHECK (exceeded IN (0, 1)),
+  resets_at TEXT,
+  resets_at_source TEXT,
+  window_seconds INTEGER,
+  window_seconds_source TEXT,
+  method TEXT NOT NULL,
+  confidence TEXT NOT NULL,
+  source_kind TEXT NOT NULL,
+  source_harness_version TEXT,
+  source_field TEXT NOT NULL,
+  observed_at TEXT NOT NULL,
+  observed_at_source TEXT NOT NULL,
+  recorded_at TEXT NOT NULL,
+  attempt_id TEXT,
+  session_ref TEXT,
+  heartbeat INTEGER NOT NULL DEFAULT 0 CHECK (heartbeat IN (0, 1)),
+  dedup_key TEXT NOT NULL UNIQUE,
+  missing TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE INDEX budget_samples_window_session_idx
+  ON budget_samples(window_id, session_ref, observed_at);
+
+CREATE INDEX budget_samples_limit_idx
+  ON budget_samples(provider, account_ref, limit_key, observed_at);
 `;
