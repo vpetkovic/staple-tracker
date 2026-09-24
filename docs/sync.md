@@ -2666,16 +2666,20 @@ every repository on the machine.
 
 Protocol 3 adds the execution attempts, `attempt` and `attemptTransition`, and this
 time the workspace client moves: `CLIENT_PROTOCOL` is 3, because every mutation that
-opens or ends an attempt journals one, so there is no leg to confine them to. The
-Worker that understands them is deployed **first**. A client at 3 is refused by a
-Worker still at `{ min: 1, max: 2 }` at the handshake, before anything is sent; a
-device that has not upgraded keeps pushing (`min` is still 1) and stops converging
-once the first attempt operation is in its repository's log, refused that page or
-fold with `requiredProtocol: 3`. A workspace backup taken after that records
-`backups.protocol` 3. The Worker admits `create` and `update` on an attempt and
-`create` alone on a transition. The one rule every reader of the log shares for
-attempts — a stored orphan end never overwrites a real end — is in
-`src/core/cloud/attempt-ends.ts`, which the Worker imports as it stands, like
+opens or ends an attempt journals one, so there is no leg to confine them to. **Every
+device upgrades together, and the Worker goes first.** The Worker that understands the
+new entities is deployed before any client built with them; a client at 3 talking to a
+Worker still at `{ min: 1, max: 2 }` is refused at the handshake, before anything is
+sent. An older client stops converging as soon as an upgraded device pushes anything at
+all, not only an attempt: the same release adds workspace migration 013, every operation
+an upgraded device journals is stamped `schema: 13`, and an older client refuses the whole
+page that holds one with `schema_ahead` (below). A page or fold that holds an attempt is
+also refused to it with `protocol_unsupported` and `requiredProtocol: 3`. A workspace
+backup taken after the first attempt operation records `backups.protocol` 3, so a Worker
+rolled back to 2 cannot restore it. The Worker admits `create` and `update` on an attempt
+and `create` alone on a transition. The rules every reader of the log shares for attempts
+— a stored orphan end never overwrites a real end, and a stale pause never reopens an end
+— are in `src/core/cloud/attempt-ends.ts`, which the Worker imports as it stands, like
 revision placement.
 
 **`schema`** is the workspace migration number, `010` as of the sync tables. A

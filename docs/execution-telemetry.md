@@ -1043,12 +1043,14 @@ release stays compatible with old builds and the new Worker is deployed first:
   before any client that journals them, and it advertises `{ min: 1, max: 3 }`.
 - The workspace client's `CLIENT_PROTOCOL` moves from 1 to 3. (Today only the
   hub-registry leg declares 2.)
-- A device that has not upgraded **stops converging** on that repository once the
-  first attempt operation is in the log. `GET /ops` refuses a page, and
-  `GET /snapshot` a fold, that contains an entity newer than the request's
-  protocol, with `protocol_unsupported` and `requiredProtocol: 3`. That is the
-  existing refusal, working as designed. Upgrading the device is the only
-  remedy.
+- A device that has not upgraded **stops converging** on that repository as soon
+  as an upgraded device pushes anything, not only an attempt. The attempts arrive
+  with a workspace migration, so every operation an upgraded device journals
+  carries the new `schema`, and an older client refuses a page holding one with
+  `schema_ahead`. A page or fold that holds an attempt is also refused to it at
+  the service, with `protocol_unsupported` and `requiredProtocol: 3`. Both are the
+  existing refusals, working as designed: every device upgrades together, the
+  Worker first, and upgrading the device is the only remedy.
 - A workspace backup taken after the first attempt operation records
   `backups.protocol` 3, the lowest protocol that can replay it. A Worker rolled
   back to protocol 2 cannot restore it.

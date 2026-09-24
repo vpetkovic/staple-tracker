@@ -42,11 +42,13 @@ import type { Env, Plan } from "./env.js";
  * Protocol 3 adds the execution attempts (`attempt`, `attemptTransition` —
  * `docs/execution-telemetry.md`, "Where it lives and what synchronizes"), and this time
  * the workspace client DOES move to 3: attempts are journaled by every mutation that opens
- * or ends one, so there is no leg to confine them to. That is why this Worker is deployed
- * before any client that journals them. `PROTOCOL_MIN` stays 1, so a device that has not
- * upgraded keeps pushing, and stops converging only once the first attempt operation is in
- * its repository's log — `GET /ops` and `GET /snapshot` refuse it that page or fold with
- * `protocol_unsupported` and `requiredProtocol: 3`, which names the remedy.
+ * or ends one, so there is no leg to confine them to. This Worker is deployed first, and
+ * every device upgrades with it: the same release adds workspace migration 013, so an
+ * upgraded device stamps every operation `schema: 13` and an older client refuses the
+ * first page holding any of them with `schema_ahead`, whatever its entity. `PROTOCOL_MIN`
+ * stays 1 only so an older client's own pushes are still accepted while it upgrades; a
+ * page or fold holding an attempt is refused to it with `protocol_unsupported` and
+ * `requiredProtocol: 3`.
  */
 export const PROTOCOL_MIN = 1;
 export const PROTOCOL_MAX = 3;
