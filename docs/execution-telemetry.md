@@ -240,7 +240,9 @@ issue's latest attempt (by `startedAt`, then `id`) has effectively ended
 The rule is evaluated by the opening device, and the value is stored, so it does
 not change afterwards. If the latest attempt read `contested: true` at that
 moment, the link is still written, and the `attempt_started` transition's
-`detail` records `resumeBasis: "contested"`.
+`detail` records `resumeBasis: "contested"`. `resumeBasis` replicates as part
+of that transition record. The `contested` flag itself is derived at read time
+and never replicates.
 Otherwise `resumesAttemptId` is `null`. The rule covers every sequence the
 individual rows would miss: a stale release followed by a fresh checkout, a
 reported interruption followed by another agent's checkout, and a steal from a
@@ -418,7 +420,13 @@ of the log applies makes them all hold the same end:
 
 The rule compares the incoming end fields (`state`, `outcome`, `endReason`,
 `endDetection`, `endedBy`, `endedAt`, `endedAtSource`) with the stored ones as
-one unit. Every reader of the log implements it: the client applier, the
+one unit. So **any `attempt` operation that sets end fields carries all seven**,
+never only the ones that changed. Attempts are not among the row-diff tables,
+so the store writes this payload itself. When a reader drops an incoming orphan
+end under this rule, it records none of those keys in its field-write
+provenance (the Worker fold's `fieldWrites`, the client's
+`sync_field_writes`). Otherwise a device hydrated from that fold would inherit
+provenance for a write it never took. Every reader of the log implements it: the client applier, the
 Worker fold (and with it `/snapshot` hydration and backups), the tail fold and
 the test service. This is the same arrangement as revision placement, where
 [every reader of the log uses one rule](sync.md#conflicts-are-preserved-never-resolved-silently).
