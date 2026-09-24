@@ -45,7 +45,6 @@ import {
   readAttempt,
   sessionRefOf,
   storedOpenAttempts,
-  transitionEventKey,
   transitionPayload,
   writeEnd,
   type AttemptClaim,
@@ -294,7 +293,14 @@ export class AttemptLedger {
         return replay;
       }
     }
-    const at = nowIso();
+    /**
+     * An issue's attempts are ordered by `startedAt`, then a random `id`, so one opened in the
+     * same millisecond as the one before it — an interruption reported and re-claimed by a
+     * script — starts a millisecond later, and the order is the order they happened in.
+     */
+    const latest = (this.db.prepare("SELECT MAX(started_at) AS at FROM attempts WHERE issue_id = ?").get(issue.id) as { at: string | null }).at;
+    const now = nowIso();
+    const at = latest !== null && now <= latest ? new Date(Date.parse(latest) + 1).toISOString() : now;
     const resume = this.resumeFor(issue.id);
     const missing: Record<string, string> = {};
     let harness: AttemptHarness | null = null;
@@ -708,16 +714,23 @@ export class AttemptLedger {
     attempt: AttemptRecord,
     input: { kind: string; at: string; actor: string | null; detection: string | null; reason: string | null; detail: Record<string, unknown> },
   ): void {
+    /**
+     * Transitions are ordered by `at`, then `id`, and ids are random: two transitions of one
+     * attempt inside one millisecond — a start and an end in a fast script — would be ordered
+     * by chance. So an attempt's transitions written here are strictly increasing in `at`.
+     */
+    const last = (this.db.prepare("SELECT MAX(at) AS at FROM attempt_transitions WHERE attempt_id = ?").get(attempt.id) as { at: string | null }).at;
+    const at = last !== null && input.at <= last ? new Date(Date.parse(last) + 1).toISOString() : input.at;
     const transition: AttemptTransition = {
       id: randomUUID(),
       attemptId: attempt.id,
       kind: input.kind,
-      at: input.at,
+      at,
       actor: input.actor,
       detection: input.detection,
       reason: input.reason,
       detail: input.detail,
-      concurrency: this.concurrency(attempt, input.at),
+      concurrency: this.concurrency(attempt, at),
     };
     insertTransition(this.db, transition);
     this.host.journal.record({ entity: "attemptTransition", entityId: transition.id, verb: "create", payload: transitionPayload(transition), actor: input.actor });
