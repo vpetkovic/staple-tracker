@@ -361,6 +361,41 @@ describe("a stale pause meets a real end", () => {
   }, 90_000);
 });
 
+describe("a pause and a resume that disagree", () => {
+  it("are a conflict on the attempt's end, and the opener writes no orphan end over it until it is resolved", async () => {
+    fleet = new Fleet(new FakeSyncServer({ repositoryId: REPO }), REPO);
+    const a = fleet.machine("a");
+    const b = fleet.machine("b");
+    a.use();
+    a.store.addStatus({ id: "doing", category: "active", label: "Doing" }, "vp");
+    const issue = a.store.createIssue({ title: "Two sessions of one identity" });
+    a.store.checkoutIssue(issue.id, "claude");
+    a.store.updateIssue(issue.id, { status: "doing" }, "claude");
+    await sync(a, b);
+    const held = attempts(a, issue.id)[0]!;
+    // Offline, two sessions of `claude`: one pauses on B; on A (the opener) one pauses and resumes.
+    b.use();
+    b.store.recordAttemptEvent(issue.id, "pause", "claude", { reason: "awaiting_input" });
+    a.use();
+    a.store.recordAttemptEvent(issue.id, "pause", "claude", { reason: "awaiting_reset" });
+    a.store.recordAttemptEvent(issue.id, "resume", "claude");
+    await sync(b, a);
+    const disputed = listConflicts(a.db).filter((record) => record.entity === "attempt" && record.entityId === held.id);
+    expect(disputed.map((record) => record.field)).toEqual(["end"]);
+    // The status leaves active: an orphan by the read-time rule, but its end is in dispute on A.
+    b.use();
+    b.store.recategorizeStatus("doing", "review", "vp");
+    await sync(b, a);
+    a.use();
+    a.store.addComment(issue.id, "a command on the opener", "vp");
+    expect(attempts(a, issue.id)[0]!.state).not.toBe("ended");
+    // Resolved, the opener writes it at its next command.
+    resolveConflict(a.db, { id: disputed[0]!.id, choice: "local", actor: "vp" });
+    a.store.addComment(issue.id, "another command", "vp");
+    expect(attempts(a, issue.id)[0]).toMatchObject({ state: "ended", endReason: "left_active", endDetection: "inferred" });
+  }, 90_000);
+});
+
 describe("two real ends that disagree", () => {
   it("conflict on every writer, and converge once a human resolves it", async () => {
     fleet = new Fleet(new FakeSyncServer({ repositoryId: REPO }), REPO);
