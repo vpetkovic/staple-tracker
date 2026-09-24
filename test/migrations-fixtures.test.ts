@@ -699,11 +699,12 @@ describe("a pre-A4 hub (no meta table at all)", () => {
         // still inferred as version 1 from the sentinel table, which is the
         // property this case exists to pin. Only the distance it has to travel
         // changed. Moved again by hub 005 (limit windows and budget samples):
-        // latest 4 -> 5, pending gains 5.
+        // latest 4 -> 5, pending gains 5. And by hub 006 (the attempt presence
+        // index): latest 5 -> 6, pending gains 6.
         expect(describeSchema(db, HUB_TARGET)).toEqual({
           current: 1,
-          latest: 5,
-          pending: [2, 3, 4, 5],
+          latest: 6,
+          pending: [2, 3, 4, 5, 6],
           detection: "unstamped",
         });
         // Nothing to read: this is the quirk A4 exists to close.
@@ -728,8 +729,9 @@ describe("a pre-A4 hub (no meta table at all)", () => {
         // GOLDEN, moved by S22 (STA-283): "2" -> "3", and by STA-287: "3" -> "4". Still TEXT, which is the
         // part that matters here — an old binary's `CAST(value AS INTEGER)`
         // guard has to be able to read it.
-        // Moved again by hub 005 (budget samples): "4" -> "5".
-        expect(row).toEqual({ t: "text", value: "5" });
+        // Moved again by hub 005 (budget samples): "4" -> "5", and by hub 006
+        // (attempt presence): "5" -> "6".
+        expect(row).toEqual({ t: "text", value: "6" });
       } finally {
         db.close();
       }

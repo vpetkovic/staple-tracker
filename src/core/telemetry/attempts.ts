@@ -23,11 +23,11 @@
  * full: an end always carries all seven end fields.
  */
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { configPath } from "../../config/file.js";
-import { defaultHome, stapleHome } from "../../config/home.js";
+import { readConfig } from "../../config/file.js";
+import { stapleHome } from "../../config/home.js";
+import { claudeBindingFor, claudeConfigDir, codexBindingFor, codexHome } from "./bindings.js";
+import { DEFAULT_TELEMETRY, isKnownBinding, type KnownBinding, type TelemetryConfig } from "./config.js";
 import type { Journal } from "../journal.js";
 import { StapleError, nowIso } from "../types.js";
 import {
@@ -66,6 +66,7 @@ import {
   type IssueFacts,
 } from "./attempt-derive.js";
 import { ORPHAN_END_REASONS } from "../cloud/attempt-ends.js";
+import { presenceCounts, refreshWorkspacePresence } from "./presence.js";
 
 /** What an agent may self-report on an attempt-opening or claim-clearing write. */
 export interface AttemptOptions {
@@ -99,26 +100,9 @@ export interface PresenceCounts {
   count(exclude: string, accountRef: string | null): { all: number; account: number | null } | null;
 }
 
-let presenceSource: (db: DatabaseSync) => PresenceCounts | null = () => null;
-
-/** Installed by the presence index (`presence.ts`); absent, the machine-wide counts are unavailable. */
-export function setPresenceSource(source: (db: DatabaseSync) => PresenceCounts | null): void {
-  presenceSource = source;
-}
-
-/** Called after every committed change to an attempt this machine opened (`presence.ts`). */
-let presenceRefresh: (db: DatabaseSync) => void = () => undefined;
-
-export function setPresenceRefresh(refresh: (db: DatabaseSync) => void): void {
-  presenceRefresh = refresh;
-}
-
-export function refreshPresence(db: DatabaseSync): void {
-  try {
-    presenceRefresh(db);
-  } catch {
-    // Best effort: the workspace rows are the record, and a failed index write loses nothing.
-  }
+/** After a committed change to an attempt this machine opened: the presence index, best effort. */
+export function refreshPresence(db: DatabaseSync, home?: string): void {
+  refreshWorkspacePresence(db, home);
 }
 
 const ACCOUNT_REF = /^[a-z0-9][a-z0-9-]{0,63}$/;
@@ -126,57 +110,25 @@ const ONE_LINE = /^[^\r\n]*$/;
 
 /** The provider a harness spends from, when nothing more specific says. */
 const HARNESS_PROVIDER: Readonly<Record<string, string>> = { claude_code: "anthropic", codex: "openai" };
-/** The ingestion source a harness's binding is recorded under (`docs/execution-telemetry.md`). */
-const HARNESS_SOURCE: Readonly<Record<string, string>> = { claude_code: "claude_code_statusline", codex: "codex_rollout" };
-
-interface Binding {
-  readonly source: string;
-  readonly provider: string | null;
-  readonly accountRef: string;
-  readonly configDir?: string;
-  readonly home?: string;
-}
-
-/** `~` is the user's home, as the one home resolver knows it (`config/home.ts`). */
-function expandHome(path: string): string {
-  return resolve(path.startsWith("~") ? join(dirname(defaultHome()), path.slice(1)) : path);
-}
-
-/** The source bindings in the staple home's `config.json` (`telemetry.bindings`), tolerantly. */
-function machineBindings(): Binding[] {
+/** This machine's telemetry config, or the default when it cannot be read. */
+function telemetryConfig(): TelemetryConfig {
   try {
-    const raw = JSON.parse(readFileSync(configPath(stapleHome()), "utf8")) as { telemetry?: { bindings?: unknown } };
-    const list = raw?.telemetry?.bindings;
-    if (!Array.isArray(list)) return [];
-    return list.filter(
-      (entry): entry is Binding =>
-        entry !== null && typeof entry === "object" && typeof entry.source === "string" && typeof entry.accountRef === "string",
-    );
+    return readConfig(stapleHome()).config.telemetry;
   } catch {
-    return [];
+    return DEFAULT_TELEMETRY;
   }
 }
 
 /**
- * The binding a harness resolves to on this machine: a Claude Code binding keyed by its
- * config directory (`CLAUDE_CONFIG_DIR`, or `~/.claude`), a Codex one by `CODEX_HOME` (or
- * `~/.codex`) — the resolution budget ingestion uses, so an attempt and a sample from the
- * same harness name the same account.
+ * The binding a harness resolves to on this machine — a Claude Code binding by its config
+ * directory (`CLAUDE_CONFIG_DIR`, or `~/.claude`), a Codex one by its home (`CODEX_HOME`,
+ * or `~/.codex`) — by the resolution budget ingestion uses (`bindings.ts`), so an attempt
+ * and a sample from the same harness name the same account.
  */
-function bindingFor(harness: string): Binding | null {
-  const source = HARNESS_SOURCE[harness];
-  if (source === undefined) return null;
-  const dir =
-    harness === "claude_code"
-      ? expandHome(process.env.CLAUDE_CONFIG_DIR?.trim() || "~/.claude")
-      : expandHome(process.env.CODEX_HOME?.trim() || "~/.codex");
-  return (
-    machineBindings().find((binding) => {
-      if (binding.source !== source) return false;
-      const keyed = harness === "claude_code" ? binding.configDir : binding.home;
-      return typeof keyed === "string" && expandHome(keyed) === dir;
-    }) ?? null
-  );
+function bindingFor(config: TelemetryConfig, harness: string): KnownBinding | null {
+  if (harness === "claude_code") return claudeBindingFor(config, claudeConfigDir());
+  if (harness === "codex") return codexBindingFor(config, codexHome());
+  return null;
 }
 
 /** Validate what an agent reported. Refused as `validation` before anything is written. */
@@ -320,7 +272,7 @@ export class AttemptLedger {
     }
     let providerBinding: ProviderBinding | null = null;
     if (opts.account !== undefined) {
-      const bound = machineBindings().find((binding) => binding.accountRef === opts.account);
+      const bound = telemetryConfig().bindings.filter(isKnownBinding).find((binding) => binding.accountRef === opts.account);
       providerBinding = {
         provider: bound?.provider ?? (opts.harness !== undefined ? (HARNESS_PROVIDER[opts.harness] ?? null) : null),
         accountRef: opts.account,
@@ -328,7 +280,7 @@ export class AttemptLedger {
       };
       if (providerBinding.provider === null) missing["providerBinding.provider"] = "not_supplied";
     } else if (opts.harness !== undefined) {
-      const bound = bindingFor(opts.harness);
+      const bound = bindingFor(telemetryConfig(), opts.harness);
       if (bound) providerBinding = { provider: bound.provider ?? HARNESS_PROVIDER[opts.harness] ?? null, accountRef: bound.accountRef, source: "machine_binding" };
       else missing.providerBinding = "no_binding_configured";
     } else {
@@ -749,7 +701,7 @@ export class AttemptLedger {
     const accountRef = attempt.providerBinding?.accountRef ?? null;
     let counts: { all: number; account: number | null } | null = null;
     try {
-      counts = presenceSource(this.db)?.count(attempt.id, accountRef) ?? null;
+      counts = presenceCounts()?.count(attempt.id, accountRef) ?? null;
     } catch {
       counts = null;
     }

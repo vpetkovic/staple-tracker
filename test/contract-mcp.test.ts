@@ -82,6 +82,47 @@ function assertGolden(label: string, expected: Record<string, unknown>): void {
   expect(norm(asStructured(toolPayload(result))), `${label} text block`).toEqual(expected);
 }
 
+/**
+ * The attempt a claim tool returns beside its unchanged issue payload
+ * (`docs/execution-telemetry.md`, "Surfaces"): as it reads, every derived field included.
+ */
+function attemptGolden(over: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: UUID,
+    issueId: UUID,
+    identifier: "CON-1",
+    agent: CONTRACT_AGENT,
+    ordinal: 1,
+    state: "running",
+    storedState: "running",
+    outcome: null,
+    endReason: null,
+    endDetection: null,
+    endedBy: null,
+    openedBy: "checkout",
+    resumesAttemptId: null,
+    startedAt: ISO,
+    endedAt: null,
+    endedAtSource: null,
+    deviceId: null,
+    claim: { scope: "local", fencingToken: null },
+    harness: null,
+    providerBinding: null,
+    estimateAtStart: { estimatedSeconds: null, source: "none" },
+    idempotencyKey: null,
+    provenance: "recorded",
+    lastActivityAt: ISO,
+    activeSeconds: SECONDS,
+    pausedSeconds: 0,
+    countedThrough: ISO,
+    idleSeconds: SECONDS,
+    contested: false,
+    chain: [UUID],
+    missing: { harness: "not_supplied", providerBinding: "not_supplied" },
+    ...over,
+  };
+}
+
 beforeAll(async () => {
   home = mkdtempSync(join(tmpdir(), "staple-contract-mcp-home-"));
   emptyDir = mkdtempSync(join(tmpdir(), "staple-contract-mcp-cwd-"));
@@ -238,8 +279,9 @@ describe("tool inventory", () => {
   // `characterize-mcp-startup` and `package-tarball`, which both pin 46. The
   // array was always right; only the sentence was stale. Corrected, not moved:
   // this ticket adds no tool.
-  // Budget ingestion added record_budget_sample: 46 -> 47.
-  it("exposes exactly these 47 tools with these annotations and output schemas", async () => {
+  // Budget ingestion added record_budget_sample: 46 -> 47. Execution attempts added
+  // record_attempt_event: 47 -> 48.
+  it("exposes exactly these 48 tools with these annotations and output schemas", async () => {
     const tools = await harness.listTools();
     const inventory = tools.map((t) => ({
       name: t.name,
@@ -315,6 +357,22 @@ describe("tool inventory", () => {
           title: "Release task",
           readOnlyHint: false,
           destructiveHint: true,
+          idempotentHint: false,
+          openWorldHint: false,
+        },
+        hasOutputSchema: false,
+      },
+      /**
+       * Execution attempts: a report on the attempt the caller holds. Never destructive —
+       * it opens and clears no claim — and not idempotent: a second milestone is a
+       * second transition.
+       */
+      {
+        name: "record_attempt_event",
+        annotations: {
+          title: "Record attempt event",
+          readOnlyHint: false,
+          destructiveHint: false,
           idempotentHint: false,
           openWorldHint: false,
         },
@@ -858,6 +916,7 @@ describe("tool response shapes (31/31)", () => {
         checkoutAgent: CONTRACT_AGENT,
         checkoutAt: ISO,
         startedAt: ISO,
+        attempt: attemptGolden(),
       }),
     );
   });
@@ -878,6 +937,8 @@ describe("tool response shapes (31/31)", () => {
         checkoutAgent: CONTRACT_AGENT,
         checkoutAt: ISO,
         startedAt: ISO,
+        // A priority edit opens, ends and keeps no attempt.
+        attempt: null,
       }),
     );
   });
@@ -897,6 +958,18 @@ describe("tool response shapes (31/31)", () => {
         labels: ["contract", "golden"],
         acceptanceCriteria: ["shape is pinned"],
         startedAt: ISO,
+        attempt: attemptGolden({
+          state: "ended",
+          storedState: "ended",
+          outcome: "yielded",
+          endReason: "released",
+          endDetection: "reported",
+          endedBy: CONTRACT_AGENT,
+          endedAt: ISO,
+          endedAtSource: "mutation",
+          countedThrough: null,
+          idleSeconds: null,
+        }),
       }),
     );
   });
@@ -1469,6 +1542,9 @@ describe("tool response shapes (31/31)", () => {
       // Budget ingestion is pinned in test/budget-surfaces.test.ts, against the CLI's
       // `staple budget ingest --json` payload from the same `ingestBudget`.
       "record_budget_sample",
+      // Execution attempts: pinned in test/attempts-surfaces.test.ts, against the CLI's
+      // `staple attempt ... --json` payload from the same `recordAttemptEvent`.
+      "record_attempt_event",
     ]);
     expect([...covered].sort()).toEqual([...tools].sort());
   });

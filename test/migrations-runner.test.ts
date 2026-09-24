@@ -132,9 +132,10 @@ describe("version detection", () => {
     // hub 3 -> 4 (004-cross-link-changes), workspace still 12. Moved again by
     // hub 005 (limit windows and budget samples, machine state that never
     // replicates): hub 4 -> 5, workspace still 12. Then workspace 12 -> 13
-    // (013-execution-attempts, which replicates).
+    // (013-execution-attempts, which replicates) and hub 5 -> 6 (006-attempt-presence,
+    // the machine-local index of attempts this machine started).
     expect(latestVersion(WORKSPACE_TARGET)).toBe(13);
-    expect(latestVersion(HUB_TARGET)).toBe(5);
+    expect(latestVersion(HUB_TARGET)).toBe(6);
   });
 });
 

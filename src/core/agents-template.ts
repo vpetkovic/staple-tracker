@@ -179,6 +179,30 @@ stealable to the next agent that walks past. Set it once, at the top:
 export STAPLE_AGENT=your-name
 \`\`\`
 
+## Report your attempt
+
+Every claim you hold is an **attempt**, recorded for you: checkout opens one, and
+\`done\`, a status change or \`release\` ends it. Three things only you can add:
+
+- **A per-session identity** is better than a shared one:
+  \`STAPLE_AGENT=claude-<short session id>\`. Two sessions under one name cannot be
+  told apart, so a crashed session's successor re-claims in silence. Staple still
+  accepts a shared name.
+- **Your harness session**, on checkout:
+  \`staple checkout ${ref} --harness claude_code --harness-session <session id>\`
+  (Codex: the rollout's \`session_meta\` id). It is stored hashed.
+- **What happened**, when it is not a status change:
+
+\`\`\`bash
+staple attempt pause ${ref} --reason checkpoint_before_reset   # after the worklog, before a usage-limit reset
+staple attempt resume ${ref}
+staple attempt interrupt ${ref} --reason harness_exit          # your previous session died; then check out again
+staple release ${ref} --outcome failed --reason "why"          # only when you conclude you cannot do it
+\`\`\`
+
+MCP: \`record_attempt_event\`, and \`harness\` / \`harness_session\` / \`outcome\` on the
+claim tools.
+
 ## The worklog protocol — checkpoint as you go
 
 Keep a document keyed \`worklog\` on every task you hold, and **revise it at every
@@ -387,7 +411,7 @@ claude mcp add staple -e STAPLE_AGENT=your-name -- staple mcp
 The MCP tools mirror the CLI: \`inbox\`, \`next_task\` and \`list_queue\` for the
 pickup queue, \`checkout_task\` (with \`steal_if_idle_seconds\` and
 \`override_reason\`), \`put_document\`, \`add_comment\`, \`update_task\`,
-\`release_task\` (with \`if_idle_seconds\`), \`events_since\`, \`list_statuses\`,
+\`release_task\` (with \`if_idle_seconds\`), \`record_attempt_event\`, \`events_since\`, \`list_statuses\`,
 \`list_kinds\`, \`update_statuses\`, \`update_kinds\`, and the gate verbs
 \`gate_task\` / \`approve_task\` / \`request_changes\`. Writes require an
 identity — pass \`actor\` or set \`STAPLE_AGENT\`; there is no silent default.

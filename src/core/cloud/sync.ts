@@ -673,7 +673,7 @@ export async function syncRepository(
   // The identifiers this sync moved, carried to this machine's hub cross-links (`hub-follow.ts`).
   carryIdentifierMovesToHub(db, options.home);
   // And the attempts it changed, to this machine's presence index — after commit, best effort.
-  refreshPresence(db);
+  refreshPresence(db, options.home);
 
   const conflicts = countOpenConflicts(db);
   const quarantined = countQuarantined(db);

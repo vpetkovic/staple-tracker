@@ -359,6 +359,8 @@ describe("the machine home", () => {
      * the consolidated fresh-create snapshot had to reproduce.
      */
     expect(schemaObjects(join(home, "hub.db"))).toEqual([
+      // Hub migration 006: the presence index of attempts this machine started.
+      "index:attempt_presence_open_idx",
       "index:budget_samples_limit_idx",
       "index:budget_samples_window_session_idx",
       "index:cross_links_blocked_idx",
@@ -366,6 +368,7 @@ describe("the machine home", () => {
       "index:hub_events_dedup_uq",
       "index:limit_windows_limit_idx",
       // Hub migration 004 (STA-287): this machine's own cross-link changes.
+      "index:sqlite_autoindex_attempt_presence_1",
       "index:sqlite_autoindex_budget_samples_1",
       "index:sqlite_autoindex_budget_samples_2",
       "index:sqlite_autoindex_cross_link_changes_1",
@@ -377,6 +380,7 @@ describe("the machine home", () => {
       "index:sqlite_autoindex_workspaces_2",
       "index:workspaces_repository_id_idx",
       // Hub migration 005: provider limit windows and budget samples, machine state.
+      "table:attempt_presence",
       "table:budget_samples",
       "table:cross_link_changes",
       "table:cross_links",
@@ -396,14 +400,15 @@ describe("the machine home", () => {
     // GOLDEN, moved by S22 (STA-283): version 2 -> 3. Hub migration 003 adds
     // `workspaces.repository_id` and `registry_optouts`. Moved again by STA-287:
     // 3 -> 4. Hub migration 004 adds `cross_link_changes`. Moved again: 4 -> 5.
-    // Hub migration 005 adds `limit_windows` and `budget_samples`.
+    // Hub migration 005 adds `limit_windows` and `budget_samples`. Moved again:
+    // 5 -> 6. Hub migration 006 adds `attempt_presence`.
     //
     // `schema_version` is still the only key a FRESHLY INITIALISED hub holds —
     // slug and prefix remain authoritative in each workspace file, not here. It
     // is no longer the only key the hub can ever hold: `hub_id` is minted, once,
     // the first time something asks the hub to identify itself (a hub backup).
     // Lazily on purpose, so that no existing hub grows one until it is used.
-    expect(metaRows(join(home, "hub.db"))).toEqual([{ key: "schema_version", value: "5" }]);
+    expect(metaRows(join(home, "hub.db"))).toEqual([{ key: "schema_version", value: "6" }]);
   }, 30_000);
 
   it("mints ~/.staple/ui-token at 0600 the first time the UI is asked for", () => {

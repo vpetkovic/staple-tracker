@@ -13,6 +13,7 @@
 import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { writeEventRow } from "../event-row.js";
+import { sessionRefOf as sessionRefOfHarness, type HarnessName as FormatHarness } from "./formats.js";
 
 /** `harness.name`: a closed set; a newer build's value is preserved verbatim. */
 export const HARNESS_NAMES = ["claude_code", "codex", "other"] as const;
@@ -423,9 +424,9 @@ export function transitionEventKey(attemptId: string, transitionId: string): str
   return `attempt_transition:${attemptId}:1:${digest}`;
 }
 
-/** `sessionRef`: the first 16 hex of `sha256(harness name + ":" + session id)` (Privacy). */
+/** `sessionRef` (Privacy): the one derivation, shared with budget samples so the two join. */
 export function sessionRefOf(harness: string, sessionId: string): string {
-  return createHash("sha256").update(`${harness}:${sessionId}`, "utf8").digest("hex").slice(0, 16);
+  return sessionRefOfHarness(harness as FormatHarness, sessionId);
 }
 
 /**

@@ -370,6 +370,8 @@ entity's own primary key.
 | `workspace_statuses` | `id` | `label`, `category`, `sort_order`, `is_builtin` (as `isBuiltin` on a create, below) |
 | `workspace_kinds` | `id` | `label`, `sort_order`, `is_builtin` (as `isBuiltin` on a create, below) |
 | `milestone_meta` | `issue_id` | `target_date`, `start_date`, `updated_at` — `members_revision` is derived, see below |
+| `attempts` | `id` | `issue_id`, `agent`, `opened_by`, `resumes_attempt_id`, `started_at`, `device_id`, `claim_scope`, `claim_fencing_token`, `harness`, `provider_binding`, `estimate_at_start`, `idempotency_key`, `provenance`, `missing` on the create; then only the end: `state`, `outcome`, `end_reason`, `end_detection`, `ended_by`, `ended_at`, `ended_at_source`, always all seven together — protocol 3, see [execution telemetry](execution-telemetry.md#where-it-lives-and-what-synchronizes) |
+| `attempt_transitions` | `id` | `attempt_id`, `kind`, `at`, `actor`, `detection`, `reason`, `detail`, `concurrency` — immutable once written, like a document revision; protocol 3 |
 | `meta` | `key` | **only** rows matching `setting:*` — the repository's prefix travels as one of them, `setting:repository.prefix` ([above](#the-prefix-is-the-repositorys-the-slug-is-the-machines)); `slug` and `prefix` themselves are this workspace's own |
 
 `meta` is the one table that cannot take a single classification, so it is an
@@ -583,6 +585,7 @@ this contract, not a judgement call for an implementer.
 |---|---|---|
 | `workspaces.path`, `workspaces.last_seen_at` | `~/.staple/hub.db` | An absolute filesystem path, and an observation this machine made about its own disk. Neither means anything on another machine. Re-resolved by adoption; see [The hub registry](#the-hub-registry-is-a-set-not-a-map). |
 | `hub_events`, `registry_optouts`, hub `meta.schema_version` | `~/.staple/hub.db` | `hub_events` is level-triggered and re-derived from the edges. `registry_optouts` is this machine's decision about its own list and is meaningless elsewhere — that is what makes an unregister local. The schema version stays for the same reason the workspace one does, one row above. |
+| `attempt_presence` | `~/.staple/hub.db` | The index of attempts this machine started, one indexed query for a transition's machine-wide counts. A cache of the workspace rows, written after they commit and outside the journal seam; meaningless on another machine ([execution telemetry](execution-telemetry.md#concurrency-context)). |
 | `limit_windows`, `budget_samples` | `~/.staple/hub.db` | A provider subscription belongs to an account, and an account spans every repository on the machine. Sending samples through a repository log would copy one person's usage to every repository they connect and to everyone else connected to them. A second machine on the same account therefore sees none of this one's samples ([execution telemetry](execution-telemetry.md)). |
 | `meta.next_issue_number` | workspace db | Per-database counter; see [Identity](#identity-is-the-uuid-never-the-identifier). |
 | `meta.settings_revision`, `meta.queue_revision` | workspace db | Derived cache-invalidation and CAS counters. Merged as `max()` so local optimistic concurrency stays monotonic. |
@@ -623,7 +626,7 @@ replicates — it is this device's record of its relationship to a shared log.
 | `sync_conflicts` | `id` | `entity`, `entity_id`, `field`, `base_value`, `local_value`, `remote_value`, `local_op_id`, `remote_op_id`, `local_device_id`, `remote_device_id`, `local_at`, `remote_at`, `detected_at`, `resolved_at`, `resolved_by`, `resolution` |
 | `sync_leases` | `entity_id` | `fencing_token`, `holder`, `device_id`, `server_expires_at`, `acquired_at`, `renewed_at` |
 | `sync_devices` | `device_id` | `label`, `last_seen_at`, `revoked_at` — a read cache of the server's device list, never authoritative |
-| `sync_state` | single row | `repository_id`, `epoch`, `cursor`, `head_seq`, `last_sync_at`, `bootstrap_cursor`, `client_seq_high_water` |
+| `sync_state` | single row | `repository_id`, `epoch`, `cursor`, `head_seq`, `last_sync_at`, `bootstrap_cursor`, `client_seq_high_water`, and `head_reached_cursor` / `head_reached_at` — the cursor at which the last pull reached the head of the log, read as "the cursor has not moved since" by the stored orphan end ([execution telemetry](execution-telemetry.md#orphaned-attempts-are-closed-at-read-time)) |
 
 One piece of sync bookkeeping is deliberately not a table: the record that a
 database has [seeded](#a-workspaces-history-reaches-the-service-when-it-first-synchronizes)
@@ -913,7 +916,8 @@ One shape, for every mutation, on the wire and in the outbox.
 `entity` is one of `issue`, `comment`, `document`, `documentRevision`, `relation`,
 `project`, `status`, `kind`, `setting`, `milestone`, `queue`, `lease`, `conflict` at
 protocol 1, plus `registration` and `crossLink` at protocol 2 — the hub registry, and
-the reason the vocabulary is version-scoped rather than merely growing. See
+the reason the vocabulary is version-scoped rather than merely growing — and
+`attempt` and `attemptTransition` at protocol 3, the execution attempts. See
 [The hub is a repository](#the-hub-is-a-repository-and-that-is-the-whole-mechanism)
 and [Protocol evolution](#protocol-evolution). `verb` is `create`, `update`,
 `delete`, `replace` (ordered collections only), or `renumber` (issues only).
@@ -2646,8 +2650,8 @@ error rather than a truncation.
 Two version numbers, deliberately separate.
 
 **`protocol`** is the wire contract — the envelope, the verbs, the routes. It is
-an integer, currently `2`, sent in every envelope and as a request header. The
-server advertises `{ min, max }`, presently `{ min: 1, max: 2 }`. A client outside
+an integer, currently `3`, sent in every envelope and as a request header. The
+server advertises `{ min, max }`, presently `{ min: 1, max: 3 }`. A client outside
 that range is refused with `protocol_unsupported`, carrying the supported range,
 **before any write** — no partial batch, no half-applied page. The server supports
 the current version and the one before it for at least one release cycle, so a
@@ -2659,6 +2663,20 @@ stays at 1 too: `CLIENT_PROTOCOL` is 1 and only the hub registry leg declares 2.
 A client that declared 2 for everything would be refused outright by any Worker
 not yet redeployed, which would turn a hub feature into a total sync outage on
 every repository on the machine.
+
+Protocol 3 adds the execution attempts, `attempt` and `attemptTransition`, and this
+time the workspace client moves: `CLIENT_PROTOCOL` is 3, because every mutation that
+opens or ends an attempt journals one, so there is no leg to confine them to. The
+Worker that understands them is deployed **first**. A client at 3 is refused by a
+Worker still at `{ min: 1, max: 2 }` at the handshake, before anything is sent; a
+device that has not upgraded keeps pushing (`min` is still 1) and stops converging
+once the first attempt operation is in its repository's log, refused that page or
+fold with `requiredProtocol: 3`. A workspace backup taken after that records
+`backups.protocol` 3. The Worker admits `create` and `update` on an attempt and
+`create` alone on a transition. The one rule every reader of the log shares for
+attempts — a stored orphan end never overwrites a real end — is in
+`src/core/cloud/attempt-ends.ts`, which the Worker imports as it stands, like
+revision placement.
 
 **`schema`** is the workspace migration number, `010` as of the sync tables. A
 device receiving operations stamped with a schema newer than it understands

@@ -3,7 +3,7 @@
  * Regenerate with: npx tsx scripts/regen-migration-snapshots.ts
  *
  * The `sqlite_master` dump of a hub database that walked migrations
- * 001, 002, 003, 004, 005. Executed verbatim by the runner when — and only when —
+ * 001, 002, 003, 004, 005, 006. Executed verbatim by the runner when — and only when —
  * version detection proved the file has no tables at all.
  *
  * No `IF NOT EXISTS` anywhere, deliberately: reaching this text with tables
@@ -131,4 +131,15 @@ CREATE INDEX budget_samples_window_session_idx
 
 CREATE INDEX budget_samples_limit_idx
   ON budget_samples(provider, account_ref, limit_key, observed_at);
+
+CREATE TABLE attempt_presence (
+  workspace TEXT NOT NULL,
+  attempt_id TEXT NOT NULL,
+  account_ref TEXT,
+  started_at TEXT NOT NULL,
+  ended_at TEXT,
+  PRIMARY KEY (workspace, attempt_id)
+);
+
+CREATE INDEX attempt_presence_open_idx ON attempt_presence (account_ref) WHERE ended_at IS NULL;
 `;

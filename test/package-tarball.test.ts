@@ -343,7 +343,8 @@ describe("the installed binary, run from outside this repository", () => {
       // The same tools scripts/smoke-mcp.ts exercises against the source tree.
       // 40, plus hub_unregister / hub_prune / cross_unlink, cloud_status, and
       // the conflict lane's conflict_list / conflict_resolve, and record_budget_sample.
-      expect(tools).toHaveLength(47);
+      // Execution attempts added record_attempt_event (48).
+      expect(tools).toHaveLength(48);
       expect(tools.map((tool) => tool.name)).toContain("list_tasks");
 
       // A real call, so this proves the workspace path too, not just the handshake.

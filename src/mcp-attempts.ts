@@ -13,7 +13,9 @@ export const attemptOpenFields = {
   harness_session: z
     .string()
     .optional()
-    .describe("Your harness session id (Claude Code session, Codex thread). Stored only hashed with the harness name. Needs `harness`."),
+    .describe(
+      "Your harness session id: the Claude Code session id, or for Codex the rollout's session_meta id (the rollout file name's tail). Stored only hashed with the harness name, the same hash a budget sample from that session carries. Needs `harness`.",
+    ),
   harness: z.enum(["claude_code", "codex", "other"]).optional().describe("Which agent harness is doing the work."),
   model: z.string().optional().describe("The model doing the work, as the harness names it."),
   account: z
