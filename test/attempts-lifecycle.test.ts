@@ -445,7 +445,7 @@ describe("orphaned attempts on one device", () => {
     expect(attempts(issue.id)[0]).toMatchObject({ state: "ended", outcome: "interrupted", endReason: "left_active", endDetection: "inferred" });
   });
 
-  it("is not written while this device holds an open conflict on the issue's claim pair", () => {
+  it("is not written while this device holds an open conflict on the issue's claim pair (secondary to the same-identity fleet case)", () => {
     const issue = store.createIssue({ title: "Claim in dispute" });
     store.checkoutIssue(issue.id, "agent-a");
     // A hand edit moves the claim (one of the paths the read-time rule exists for) while a

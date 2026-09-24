@@ -197,6 +197,20 @@ describe("two offline checkouts of one issue", () => {
         ["running", null, false],
       ]);
     }
+    // Both writers hold an open conflict on the claim pair, so neither writes the loser's end —
+    // not during the sync, and not at the start of a later command.
+    for (const machine of [a, b]) {
+      expect(
+        listConflicts(machine.db).some((record) => record.entity === "issue" && record.entityId === issue.id && ["checkout_agent", "checkout_at"].includes(record.field)),
+        machine.label,
+      ).toBe(true);
+      machine.use();
+      machine.store.addComment(issue.id, `a command on ${machine.label}`, "vp");
+    }
+    await sync(a, b, a, fresh);
+    for (const machine of [a, b, fresh]) {
+      expect(attempts(machine, issue.id).map((attempt) => attempt.state), machine.label).toEqual(["running", "running"]);
+    }
   }, 60_000);
 });
 
