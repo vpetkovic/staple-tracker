@@ -30,7 +30,8 @@
  *     only when a live status line could not have written it: its source is not
  *     `claude_code_statusline`, its account is not one the real `config.json` binds, its
  *     `recorded_at` lies outside this run's wall-clock window (tests inject fixed
- *     clocks), or its `session_ref` is the hash of a fixture session. A new window counts
+ *     clocks), or its `session_ref` is the hash of any session id the suites use
+ *     (`FIXTURE_SESSION_IDS`). A new window counts
  *     when its account is unbound or its `created_at` is outside the run.
  *   - Global workspace databases. Live connections create and delete `-wal`/`-shm`
  *     files, and `snapshots/` and each workspace's own directory are written by normal
@@ -43,7 +44,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { TestProject } from "vitest/node";
 import { sessionRefOf } from "../../src/core/telemetry/formats.js";
-import { STATUSLINE_SESSION_ID } from "../fixtures/budget-support.js";
+import { FIXTURE_SESSION_IDS } from "../fixtures/budget-support.js";
 
 declare module "vitest" {
   export interface ProvidedContext {
@@ -255,7 +256,7 @@ export default function setup(project: TestProject): () => void {
   const live: LiveBudgetContext = {
     boundAccounts: watched.flatMap((path) => boundAccountsIn(path)),
     startedAt: new Date().toISOString(),
-    fixtureSessionRefs: [sessionRefOf("claude_code", STATUSLINE_SESSION_ID)],
+    fixtureSessionRefs: FIXTURE_SESSION_IDS.flatMap((id) => [sessionRefOf("claude_code", id), sessionRefOf("codex", id)]),
   };
 
   process.env.HOME = home;

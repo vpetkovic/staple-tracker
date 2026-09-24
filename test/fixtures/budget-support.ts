@@ -26,6 +26,36 @@ export const STATUSLINE_FIXTURE = join(HERE, "budget", "claude-statusline-2.1.28
 /** The fixture's raw session id, which must never be stored. */
 export const STATUSLINE_SESSION_ID = "5f0c2a4e-1b7d-4c39-9e0a-7d2b6c8f1a03";
 
+/**
+ * EVERY harness session id the budget suites ingest: the status-line fixture's, the
+ * alternating-cache sessions, and each Codex rollout id. The real-home guard
+ * (`test/setup/isolated-home.ts`) hashes them all, under both harness names, so a leaked
+ * row from any of them is recognised even with a real clock and a bound account.
+ * `budget-ingest.test.ts` fails when a budget suite uses an id missing from this list.
+ */
+export const FIXTURE_SESSION_IDS: readonly string[] = Object.freeze([
+  STATUSLINE_SESSION_ID,
+  "session-a",
+  "session-b",
+  "0199d643-0000-7000-8000-000000000001",
+  "01a0216a-0000-7c00-8f4b-000000000001",
+  "01a0216c-0000-7e20-8e9f-000000000002",
+  "01a05d56-0000-7000-8000-000000000003",
+  "01a05d7c-0000-7000-8000-000000000004",
+  "01a0cdf0-0000-7c50-8000-000000000002",
+  "01a0ce10-0000-7c50-8000-000000000001",
+  "11111111-0000-7000-8000-000000000001",
+  "11111111-0000-7000-8000-000000000002",
+  "22222222-0000-7000-8000-000000000001",
+  "22222222-0000-7000-8000-000000000002",
+  "22222222-0000-7000-8000-000000000003",
+  "33333333-0000-7000-8000-000000000001",
+  "33333333-0000-7000-8000-000000000002",
+  "44444444-0000-7000-8000-000000000001",
+  "55555555-0000-7000-8000-000000000001",
+  "66666666-0000-7000-8000-000000000001",
+]);
+
 /** The status-line JSON, optionally with its fields replaced. `rate_limits: undefined` drops the key. */
 export function statusline(overrides: Record<string, unknown> = {}): string {
   const base = JSON.parse(readFileSync(STATUSLINE_FIXTURE, "utf8")) as Record<string, unknown>;
