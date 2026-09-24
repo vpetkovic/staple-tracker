@@ -135,7 +135,7 @@ Stored fields:
 | `agent` | The actor that opened the attempt: the same string as `checkout_agent` and the event `actor`. |
 | `state` | `running`, `paused` or `ended`. See [Lifecycle](#lifecycle). |
 | `outcome` | `null` while open. On `ended`: `completed`, `yielded`, `failed` or `interrupted`. Reads can also show `orphaned`, which is derived and never stored ([below](#orphaned-attempts-are-closed-at-read-time)). |
-| `endReason` | A reason code from the [lifecycle tables](#how-an-attempt-ends), `null` while open. |
+| `endReason` | A reason code from the [lifecycle tables](#how-an-attempt-ends), `null` while open. One more code is written only by reconstruction: `capture_began`, on a reconstructed attempt whose tenure went on as the same agent's first recorded attempt ([History before capture](#history-before-capture)). It is `yielded`, never an interruption. |
 | `endDetection` | Who knew the attempt ended. `reported`: the attempt's own agent made the ending mutation. `by_other`: a different actor made it (another agent, a human, a script calling `status` or `release` with no agent). `inferred`: staple concluded it from a later mutation, such as a steal or a stale release. `reconstructed`: backfilled from the event log. `null` while open. The `derived` value never appears in storage; it exists only on reads ([below](#orphaned-attempts-are-closed-at-read-time)). |
 | `endedBy` | The actor on the ending mutation, or `null` when it had none. `status` and `release` have no holder check today, and `release` skips the ownership check entirely when no agent is given, so the actor is recorded rather than assumed. |
 | `openedBy` | `checkout`, `steal`, `reclaim`, `status` or `reconstructed`. Which mutation opened it. |
@@ -268,6 +268,7 @@ records the actor either way.
 | `release --if-stale` (`claim_released_stale`) | `interrupted` | `released_stale` | `inferred` |
 | `claim_stolen` | `interrupted` | `claim_stolen` | `inferred` |
 | Explicit interruption report ([below](#lifecycle)) | `interrupted` | the reported reason | `reported` / `by_other` |
+| Reconstruction only: a pre-capture tenure the same agent's first recorded attempt continued ([History before capture](#history-before-capture)) | `yielded` | `capture_began` | `reconstructed` |
 
 `failed` is never inferred. It means *the agent concluded it could not do the
 work*, and only the agent can say that. It is passed as an optional `outcome`
