@@ -15,10 +15,19 @@
  * it on. A binding names the account a harness's readings belong to, because neither
  * automated source says which account it measures.
  *
+ * ## One bad binding never takes the rest of the configuration with it
+ *
+ * `bindings` entries are kept exactly as written and judged one by one. A binding that is
+ * USABLE (a known source with valid fields) is matched. Any other entry is preserved and
+ * never matched: one for a source a newer build knows, or one somebody hand-edited into
+ * an invalid shape (`"accountRef": "Personal-Max"`). The latter is reported by `staple
+ * doctor` and `staple budget bindings`. Refusing the whole file instead would break
+ * `staple config` and `config set`, the very commands that could repair it.
+ *
+ * Only the two structural facts are enforced at the read boundary: `telemetry` is an
+ * object, `budgetCapture` a boolean and `bindings` an array.
+ *
  * Pure: no file I/O here, so `config/file.ts` can validate through it without a cycle.
- * A binding for a source this build does not know, and any key this build does not know,
- * is preserved verbatim, the same forward-compatibility rule the rest of config.json
- * follows. Such a binding is never used for matching.
  */
 import { StapleError } from "../types.js";
 import { ACCOUNT_REF_PATTERN, PROVIDER_PATTERN } from "./formats.js";
@@ -44,8 +53,8 @@ export interface CodexRolloutBinding {
 
 export type KnownBinding = ClaudeStatuslineBinding | CodexRolloutBinding;
 
-/** A binding as stored: a known one, or one from a newer build kept as it was written. */
-export type TelemetryBinding = KnownBinding | Readonly<Record<string, unknown>>;
+/** A binding as stored: whatever the file holds, kept verbatim. */
+export type TelemetryBinding = unknown;
 
 export interface TelemetryConfig {
   readonly budgetCapture: boolean;
@@ -56,55 +65,68 @@ export interface TelemetryConfig {
 
 export const DEFAULT_TELEMETRY: TelemetryConfig = Object.freeze({ budgetCapture: false, bindings: Object.freeze([]) });
 
-export function isKnownBinding(binding: TelemetryBinding): binding is KnownBinding {
-  return (BINDING_SOURCES as readonly unknown[]).includes((binding as { source?: unknown }).source);
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
 }
 
-function requireString(record: Record<string, unknown>, key: string, where: string): string {
-  const value = record[key];
-  if (typeof value !== "string" || value.trim() === "") {
-    throw new StapleError("validation", `${where}: "${key}" must be a non-empty string`);
-  }
-  return value;
-}
-
-function validateBinding(value: unknown, where: string): TelemetryBinding {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new StapleError("validation", `${where} must be a JSON object`);
-  }
-  const record = value as Record<string, unknown>;
+/**
+ * Why a stored binding cannot be used, or null when it can. A binding for a source this
+ * build does not know is not a problem, only not ours: it reads `unknown_source`.
+ */
+export function bindingProblem(binding: TelemetryBinding): string | null {
+  const record = asRecord(binding);
+  if (record === null) return "is not a JSON object";
   const source = record.source;
-  if (typeof source !== "string" || source === "") {
-    throw new StapleError("validation", `${where}: "source" must be a non-empty string`);
+  if (typeof source !== "string" || source === "") return 'has no "source"';
+  if (!(BINDING_SOURCES as readonly string[]).includes(source)) return "unknown_source";
+  const dirKey = source === "claude_code_statusline" ? "configDir" : "home";
+  const dir = record[dirKey];
+  if (typeof dir !== "string" || dir.trim() === "") return `has no "${dirKey}"`;
+  const accountRef = record.accountRef;
+  if (typeof accountRef !== "string" || !ACCOUNT_REF_PATTERN.test(accountRef)) {
+    return `has "accountRef" ${JSON.stringify(accountRef)}, which is not a label (${ACCOUNT_REF_PATTERN.source})`;
   }
-  if (!(BINDING_SOURCES as readonly string[]).includes(source)) return { ...record };
-  const accountRef = requireString(record, "accountRef", where);
-  if (!ACCOUNT_REF_PATTERN.test(accountRef)) {
-    throw new StapleError("validation", `${where}: "accountRef" must match ${ACCOUNT_REF_PATTERN.source} (got "${accountRef}")`);
+  const provider = record.provider;
+  if (typeof provider !== "string" || !PROVIDER_PATTERN.test(provider)) {
+    return `has "provider" ${JSON.stringify(provider)}, which is not a lowercase provider slug`;
   }
-  const provider = requireString(record, "provider", where);
-  if (!PROVIDER_PATTERN.test(provider)) {
-    throw new StapleError("validation", `${where}: "provider" must be a lowercase provider slug (got "${provider}")`);
-  }
-  if (source === "claude_code_statusline") requireString(record, "configDir", where);
-  else requireString(record, "home", where);
-  return { ...record };
+  return null;
+}
+
+/** A binding this build can match on. */
+export function isKnownBinding(binding: TelemetryBinding): binding is KnownBinding {
+  return bindingProblem(binding) === null;
+}
+
+/** The stored entries that are neither usable nor from a newer build, with why. */
+export function invalidBindings(config: TelemetryConfig): Array<{ index: number; problem: string }> {
+  return config.bindings.flatMap((binding, index) => {
+    const problem = bindingProblem(binding);
+    return problem === null || problem === "unknown_source" ? [] : [{ index, problem }];
+  });
+}
+
+/** The source and directory a stored entry names, when it names both, usable or not. */
+export function bindingKeyParts(binding: TelemetryBinding): { source: string; dir: string } | null {
+  const record = asRecord(binding);
+  if (record === null || typeof record.source !== "string") return null;
+  const dir = record.source === "claude_code_statusline" ? record.configDir : record.source === "codex_rollout" ? record.home : undefined;
+  return typeof dir === "string" && dir.trim() !== "" ? { source: record.source, dir } : null;
 }
 
 /** Validate a stored `telemetry` value at the read or write boundary. */
 export function validateTelemetryConfig(value: unknown, where: string): TelemetryConfig {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+  const record = asRecord(value);
+  if (record === null) {
     throw new StapleError("validation", `${where}: "telemetry" must be a JSON object`);
   }
-  const record = value as Record<string, unknown>;
   const budgetCapture = record.budgetCapture ?? false;
   if (typeof budgetCapture !== "boolean") {
     throw new StapleError("validation", `${where}: "telemetry.budgetCapture" must be true or false`);
   }
-  const rawBindings = record.bindings ?? [];
-  if (!Array.isArray(rawBindings)) {
+  const bindings = record.bindings ?? [];
+  if (!Array.isArray(bindings)) {
     throw new StapleError("validation", `${where}: "telemetry.bindings" must be an array`);
   }
-  const bindings = rawBindings.map((binding, index) => validateBinding(binding, `${where}: telemetry.bindings[${index}]`));
-  return { ...record, budgetCapture, bindings };
+  return { ...record, budgetCapture, bindings: [...bindings] };
 }

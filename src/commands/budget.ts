@@ -125,9 +125,16 @@ function sayConfig(view: BudgetConfigView): void {
     console.log(`  ${binding.source.padEnd(23)} ${where}  ->  ${binding.accountRef} (${binding.provider})`);
   }
   if (view.unknownBindings > 0) console.log(`  (${view.unknownBindings} binding(s) from a newer staple, kept and not used)`);
+  for (const invalid of view.invalidBindings) {
+    console.log(`  ! bindings[${invalid.index}] ${invalid.problem}; kept, NOT used. Re-bind that home to replace it.`);
+  }
 }
 
 export function runBudgetCommand(argv: string[]): void {
+  // Through FIRST, before argv is even parsed: a typo in the flags must not blank the
+  // operator's status line. Only the refusal that follows goes to stderr.
+  const teeBytes = argv.includes("--tee") ? readStdinBytes() : null;
+  if (teeBytes !== null) writeAllBytes(teeBytes);
   const { values, positionals } = parseArgs({
     args: argv,
     allowPositionals: true,
@@ -167,14 +174,7 @@ export function runBudgetCommand(argv: string[]): void {
       if (values.tee === true && source !== "claude-statusline") {
         throw new StapleError("validation", "--tee passes a status line through; it applies to --source claude-statusline only.");
       }
-      let input: string | undefined;
-      if (source === "claude-statusline") {
-        const bytes = readStdinBytes();
-        // Through FIRST, before anything is parsed or can fail: the operator's status
-        // line keeps working whatever ingestion then decides.
-        if (values.tee === true) writeAllBytes(bytes);
-        input = bytes.toString("utf8");
-      }
+      const input = source === "claude-statusline" ? (teeBytes ?? readStdinBytes()).toString("utf8") : undefined;
       const result = ingestBudget(
         {
           source,
@@ -187,7 +187,7 @@ export function runBudgetCommand(argv: string[]): void {
           used: values.used,
           resetsAt: values["resets-at"],
         },
-        { home },
+        { home, operator: true },
       );
       // With --tee, stdout belongs to the status line and carries nothing else.
       if (values.tee !== true) print(result, () => sayIngest(result));

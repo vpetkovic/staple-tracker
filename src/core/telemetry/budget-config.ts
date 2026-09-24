@@ -6,7 +6,16 @@
 import { readConfig, updateConfig } from "../../config/file.js";
 import { StapleError } from "../types.js";
 import { SOURCE_PROVIDER, claudeConfigDir, codexHome, expandHomePath } from "./bindings.js";
-import { isKnownBinding, type BindingSource, type KnownBinding, type TelemetryConfig } from "./config.js";
+import {
+  bindingKeyParts,
+  bindingProblem,
+  invalidBindings,
+  isKnownBinding,
+  type BindingSource,
+  type KnownBinding,
+  type TelemetryBinding,
+  type TelemetryConfig,
+} from "./config.js";
 import { assertAccountRef, assertProvider } from "./formats.js";
 
 export interface BudgetConfigView {
@@ -14,11 +23,18 @@ export interface BudgetConfigView {
   readonly bindings: readonly KnownBinding[];
   /** Bindings for sources this build does not know, kept as written and never matched. */
   readonly unknownBindings: number;
+  /** Bindings kept as written but never matched because a field is invalid, with why. */
+  readonly invalidBindings: ReadonlyArray<{ index: number; problem: string }>;
 }
 
 function view(telemetry: TelemetryConfig): BudgetConfigView {
   const known = telemetry.bindings.filter(isKnownBinding);
-  return { budgetCapture: telemetry.budgetCapture, bindings: known, unknownBindings: telemetry.bindings.length - known.length };
+  return {
+    budgetCapture: telemetry.budgetCapture,
+    bindings: known,
+    unknownBindings: telemetry.bindings.filter((b) => bindingProblem(b) === "unknown_source").length,
+    invalidBindings: invalidBindings(telemetry),
+  };
 }
 
 export function budgetConfig(home: string): BudgetConfigView {
@@ -30,9 +46,13 @@ export function setBudgetCapture(home: string, enabled: boolean): BudgetConfigVi
   return view(updateConfig(home, { telemetry: { ...telemetry, budgetCapture: enabled } }).telemetry);
 }
 
-/** The key a binding is matched by: its config directory or its Codex home, `~` expanded. */
-function bindingKey(binding: KnownBinding): string {
-  return expandHomePath(binding.source === "claude_code_statusline" ? binding.configDir : binding.home);
+/**
+ * Whether a stored entry is the binding for this source and directory, usable or not, so
+ * re-binding a home replaces a hand-broken entry for it and unbinding removes one.
+ */
+function sameHome(entry: TelemetryBinding, source: BindingSource, dir: string): boolean {
+  const parts = bindingKeyParts(entry);
+  return parts !== null && parts.source === source && expandHomePath(parts.dir) === expandHomePath(dir);
 }
 
 export interface BindRequest {
@@ -54,10 +74,8 @@ export function bindBudgetSource(home: string, request: BindRequest, env: NodeJS
       ? { source: "claude_code_statusline", configDir: request.configDir ?? claudeConfigDir(env), provider, accountRef }
       : { source: "codex_rollout", home: request.codexHome ?? codexHome(env), provider, accountRef };
   const telemetry = readConfig(home).config.telemetry;
-  const key = bindingKey(binding);
-  const bindings = telemetry.bindings.filter(
-    (existing) => !(isKnownBinding(existing) && existing.source === binding.source && bindingKey(existing) === key),
-  );
+  const dir = binding.source === "claude_code_statusline" ? binding.configDir : binding.home;
+  const bindings = telemetry.bindings.filter((existing) => !sameHome(existing, binding.source, dir));
   return view(updateConfig(home, { telemetry: { ...telemetry, bindings: [...bindings, binding] } }).telemetry);
 }
 
@@ -71,9 +89,7 @@ export function unbindBudgetSource(
     request.source === "claude_code_statusline" ? (request.configDir ?? claudeConfigDir(env)) : (request.codexHome ?? codexHome(env));
   const key = expandHomePath(dir);
   const telemetry = readConfig(home).config.telemetry;
-  const bindings = telemetry.bindings.filter(
-    (existing) => !(isKnownBinding(existing) && existing.source === request.source && bindingKey(existing) === key),
-  );
+  const bindings = telemetry.bindings.filter((existing) => !sameHome(existing, request.source, dir));
   if (bindings.length === telemetry.bindings.length) {
     throw new StapleError("not_found", `No ${request.source} binding for ${key}. \`staple budget bindings\` lists them.`);
   }
