@@ -19,6 +19,8 @@ import { attemptsOfIssue, transitionsOf } from "../src/core/telemetry/attempt-re
 import { viewsOfIssue } from "../src/core/telemetry/attempt-derive.js";
 import { FakeSyncServer } from "./fixtures/fake-sync-server.js";
 import { Fleet, type Machine } from "./fixtures/sync-machines.js";
+import { openWorkspace } from "../src/core/open.js";
+import { join } from "node:path";
 import { differences, stateOf } from "./fixtures/synchronized-state.js";
 
 const REPO = "5eed0000-0000-4000-8000-0000000a7e01";
@@ -441,6 +443,51 @@ describe("a status the vocabulary moves out of active", () => {
     expect(views(a, issue.id)[0]!.state).toBe("ended");
     converged(a, b);
   }, 60_000);
+});
+
+describe("an attempt opened before its workspace connected", () => {
+  it("is still its opener's: the stored orphan end is written after connecting, and nothing revives it", async () => {
+    fleet = new Fleet(new FakeSyncServer({ repositoryId: REPO }), REPO);
+    const b = fleet.machine("b");
+    await sync(b);
+    // A works before it ever connects: no device, so the attempt has none either.
+    const prepared = fleet.prepare("a");
+    process.env.STAPLE_HOME = prepared.home;
+    const before = openWorkspace(join(prepared.dir, ".staple", "staple.db"));
+    before.store.addStatus({ id: "doing", category: "active", label: "Doing" }, "vp");
+    const issue = before.store.createIssue({ title: "Before connecting" });
+    before.store.checkoutIssue(issue.id, "agent-a");
+    before.store.updateIssue(issue.id, { status: "doing" }, "agent-a");
+    expect(attemptsOfIssue(before.store.db, issue.id)[0]!.deviceId).toBeNull();
+    before.store.db.close();
+    const a = fleet.connect("a", prepared);
+    await sync(a, b);
+    expect(attempts(b, issue.id)[0]!.deviceId).toBeNull();
+
+    // B takes the status out of active: A's attempt is an orphan, and only A writes its end.
+    b.use();
+    b.store.recategorizeStatus("doing", "review", "vp");
+    await sync(b);
+    b.use();
+    b.store.addComment(issue.id, "a mutating command on B", "vp");
+    expect(attempts(b, issue.id)[0]!.state).toBe("running");
+    await sync(a);
+    a.use();
+    a.store.addComment(issue.id, "a mutating command on A", "vp");
+    await sync(a, b);
+    const fresh = fleet.machine("fresh");
+    await sync(fresh);
+    for (const machine of [a, b, fresh]) {
+      expect(attempts(machine, issue.id)[0], machine.label).toMatchObject({ state: "ended", outcome: "interrupted", endReason: "left_active", endDetection: "inferred" });
+    }
+    // Back into active, it stays ended.
+    b.use();
+    b.store.recategorizeStatus("doing", "active", "vp");
+    await sync(b, a);
+    await sync(fresh);
+    for (const machine of [a, b, fresh]) expect(viewsOfIssue(machine.db, issue.id)[0]!.state, machine.label).toBe("ended");
+    converged(a, b, fresh);
+  }, 90_000);
 });
 
 describe("the resume rule after a stale release", () => {

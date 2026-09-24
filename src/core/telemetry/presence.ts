@@ -28,6 +28,7 @@ import { stapleHome } from "../../config/home.js";
 import { openDb } from "../db.js";
 import { journalFor, resolveDeviceId } from "../journal.js";
 import { migrateHub } from "../schema.js";
+import { openedHere } from "./attempt-records.js";
 import type { PresenceCounts } from "./attempts.js";
 
 interface OwnAttempt {
@@ -56,9 +57,14 @@ function slugOf(db: DatabaseSync): string | null {
  * has never connected — the ones no device opened.
  */
 function ownAttempts(db: DatabaseSync, device: string | null): OwnAttempt[] {
-  const sql = `SELECT id, json_extract(provider_binding, '$.accountRef') AS account_ref, started_at, ended_at, state
-                 FROM attempts WHERE ${device === null ? "device_id IS NULL" : "device_id = ?"}`;
-  return (device === null ? db.prepare(sql).all() : db.prepare(sql).all(device)) as unknown as OwnAttempt[];
+  const rows = db
+    .prepare(
+      `SELECT id, device_id, json_extract(provider_binding, '$.accountRef') AS account_ref, started_at, ended_at, state
+         FROM attempts WHERE device_id IS NULL OR device_id = ?`,
+    )
+    .all(device ?? "") as unknown as Array<OwnAttempt & { device_id: string | null }>;
+  // The one rule for "opened on this machine" (`openedHere`): pre-connect attempts included.
+  return rows.filter((row) => openedHere(db, { id: row.id, deviceId: row.device_id }, device));
 }
 
 /** Write one workspace's rows to match its attempts: missing ones added, changed ones updated, gone ones removed. */

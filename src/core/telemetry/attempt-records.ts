@@ -453,3 +453,41 @@ export function emitTransitionEvent(db: DatabaseSync, transition: AttemptTransit
     createdAt: transition.at,
   });
 }
+
+// ------------------------------------------------------------ ownership
+
+/** The device-local `meta` row naming the device-less attempts this database's seed uploaded. */
+const SEEDED_ATTEMPTS_KEY = "attempts_seeded_here";
+
+export function noteAttemptsSeededHere(db: DatabaseSync, ids: readonly string[]): void {
+  if (ids.length === 0) return;
+  const held = seededHere(db);
+  for (const id of ids) held.add(id);
+  db.prepare("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(
+    SEEDED_ATTEMPTS_KEY,
+    JSON.stringify([...held].sort()),
+  );
+}
+
+export function seededHere(db: DatabaseSync): Set<string> {
+  const row = db.prepare("SELECT value FROM meta WHERE key = ?").get(SEEDED_ATTEMPTS_KEY) as { value: string } | undefined;
+  if (!row) return new Set();
+  try {
+    const parsed = JSON.parse(row.value) as unknown;
+    return new Set(Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === "string") : []);
+  } catch {
+    return new Set();
+  }
+}
+
+/**
+ * Whether this machine opened an attempt: its device is this one; or it has no device and
+ * this workspace has never synchronized (the only device an unconnected workspace has); or it
+ * has no device and this database's seed uploaded it — opened here before connecting.
+ */
+export function openedHere(db: DatabaseSync, attempt: { id: string; deviceId: string | null }, device: string | null): boolean {
+  if (attempt.deviceId !== null) return device !== null && attempt.deviceId === device;
+  const state = db.prepare("SELECT epoch, cursor FROM sync_state WHERE id = 1").get() as { epoch: number; cursor: string | null } | undefined;
+  const synchronized = state !== undefined && (state.cursor !== null || state.epoch > 0);
+  return !synchronized || seededHere(db).has(attempt.id);
+}

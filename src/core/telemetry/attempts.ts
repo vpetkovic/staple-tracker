@@ -42,6 +42,7 @@ import {
   insertAttempt,
   insertTransition,
   emitTransitionEvent,
+  openedHere,
   readAttempt,
   sessionRefOf,
   storedOpenAttempts,
@@ -622,7 +623,7 @@ export class AttemptLedger {
       .get() as { epoch: number; cursor: string | null; head_reached_cursor: string | null } | undefined;
     const synchronized = state !== undefined && (state.cursor !== null || state.epoch > 0);
     if (synchronized && (state!.head_reached_cursor === null || state!.head_reached_cursor !== state!.cursor)) return 0;
-    const mine = storedOpenAttempts(this.db).filter((attempt) => (device !== null && attempt.deviceId === device) || (attempt.deviceId === null && !synchronized));
+    const mine = storedOpenAttempts(this.db).filter((attempt) => openedHere(this.db, attempt, device));
     if (mine.length === 0) return 0;
     let written = 0;
     for (const issueId of new Set(mine.map((attempt) => attempt.issueId))) {
@@ -703,7 +704,7 @@ export class AttemptLedger {
   private concurrency(attempt: AttemptRecord, at: string): Record<string, unknown> {
     const missing: Record<string, string> = {};
     const openInWorkspace = countEffectivelyOpen(this.db) + (attempt.state === "ended" ? 1 : 0);
-    const startedHere = attempt.deviceId === this.deviceId() ? 1 : 0;
+    const startedHere = openedHere(this.db, attempt, this.deviceId()) ? 1 : 0;
     const accountRef = attempt.providerBinding?.accountRef ?? null;
     let counts: { all: number; account: number | null } | null = null;
     try {

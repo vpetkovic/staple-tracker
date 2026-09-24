@@ -46,7 +46,7 @@ import { cloudError } from "./errors.js";
 import { REPOSITORY_PREFIX_SETTING, localPrefix, repositoryPrefixOf } from "./repository-prefix.js";
 import { VOCABULARY_ORDER_ID, hydrate } from "./hydrate.js";
 import { completeSnapshot, recordReconciledEpoch } from "./sync-state.js";
-import { attemptPayload, readAttempt, readTransition, transitionPayload } from "../telemetry/attempt-records.js";
+import { attemptPayload, noteAttemptsSeededHere, readAttempt, readTransition, transitionPayload } from "../telemetry/attempt-records.js";
 import type { SnapshotEntity } from "./wire.js";
 
 /** The plan's singleton entity id. Mirrors `queue-store.ts`. */
@@ -1609,6 +1609,16 @@ export function seedRepository(db: DatabaseSync, journal: Journal, args: SeedArg
      * push and this transaction: it keeps its id and follows the push like any other.
      */
     journal.seed(sendable);
+    /**
+     * The attempts this database opened before it had a device (`deviceId` null) and now
+     * uploads: this device's from here on, for the stored orphan end and the presence index
+     * (`attemptsOpenedHere`). A device hydrating them holds them with a null device too, and
+     * must not take them for its own, so the claim is the upload, recorded here.
+     */
+    noteAttemptsSeededHere(
+      db,
+      sendable.filter((intent) => intent.entity === "attempt" && intent.verb === "create" && intent.payload.deviceId == null).map((intent) => intent.entityId),
+    );
     // And anything the repository's state displaced while it was applied above (`claims.ts`).
     settleOwedClaims(db, journal);
 
