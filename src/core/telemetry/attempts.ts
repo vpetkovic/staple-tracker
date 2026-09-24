@@ -43,6 +43,7 @@ import {
   insertTransition,
   emitTransitionEvent,
   openedHere,
+  openedHereBy,
   readAttempt,
   sessionRefOf,
   storedOpenAttempts,
@@ -645,7 +646,7 @@ export class AttemptLedger {
       .get() as { epoch: number; cursor: string | null; head_reached_cursor: string | null } | undefined;
     const synchronized = state !== undefined && (state.cursor !== null || state.epoch > 0);
     if (synchronized && (state!.head_reached_cursor === null || state!.head_reached_cursor !== state!.cursor)) return 0;
-    const mine = storedOpenAttempts(this.db).filter((attempt) => openedHere(this.db, attempt, device));
+    const mine = storedOpenAttempts(this.db).filter(openedHereBy(this.db, device));
     if (mine.length === 0) return 0;
     let written = 0;
     for (const issueId of new Set(mine.map((attempt) => attempt.issueId))) {

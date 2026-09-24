@@ -28,7 +28,7 @@ import { stapleHome } from "../../config/home.js";
 import { openDb } from "../db.js";
 import { journalFor, resolveDeviceId } from "../journal.js";
 import { migrateHub } from "../schema.js";
-import { openedHere } from "./attempt-records.js";
+import { openedHereBy } from "./attempt-records.js";
 import type { PresenceCounts } from "./attempts.js";
 
 interface OwnAttempt {
@@ -88,7 +88,8 @@ function ownAttempts(db: DatabaseSync, device: string | null): OwnAttempt[] {
     )
     .all(device ?? "") as unknown as Array<OwnAttempt & { device_id: string | null }>;
   // The one rule for "opened on this machine" (`openedHere`): pre-connect attempts included.
-  return rows.filter((row) => openedHere(db, { id: row.id, deviceId: row.device_id }, device));
+  const mine = openedHereBy(db, device);
+  return rows.filter((row) => mine({ id: row.id, deviceId: row.device_id }));
 }
 
 /** Write one workspace's rows to match its attempts: missing ones added, changed ones updated, gone ones removed. */

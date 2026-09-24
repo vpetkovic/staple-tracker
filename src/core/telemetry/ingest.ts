@@ -71,7 +71,11 @@ export interface IngestResult {
 }
 
 /** Links a reading to an attempt. Attempts supply this; with none, nothing matches. */
-export type AttemptLinker = (reading: { provider: string; accountRef: string; sessionRef: string | null }) => AttemptLink;
+/**
+ * The attempt a reading belongs to (`attempt-link.ts`). `observedAt` is when the reading was
+ * true, so a backfilled reading never links to an attempt that started after it.
+ */
+export type AttemptLinker = (reading: { provider: string; accountRef: string; sessionRef: string | null; observedAt?: string }) => AttemptLink;
 
 export interface IngestDeps {
   /** The staple home: its `config.json` and its `hub.db`. */
@@ -194,7 +198,7 @@ export function ingestBudget(request: IngestRequest, deps: IngestDeps): IngestRe
         provider: account.provider,
         accountRef: account.accountRef,
         recordedAt: now(),
-        attempt: link({ provider: account.provider, accountRef: account.accountRef, sessionRef: item.reading.sessionRef }),
+        attempt: link({ provider: account.provider, accountRef: account.accountRef, sessionRef: item.reading.sessionRef, observedAt: item.reading.observedAt }),
       });
     });
     const skipped: Record<string, number> = {};

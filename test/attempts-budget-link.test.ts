@@ -15,7 +15,7 @@ import { attemptsOfIssue } from "../src/core/telemetry/attempt-records.js";
 import { bindBudgetSource, setBudgetCapture } from "../src/core/telemetry/budget-config.js";
 import { ingestBudget } from "../src/core/telemetry/ingest.js";
 import { initWorkspace } from "../src/core/workspace.js";
-import { STATUSLINE_SESSION_ID, statusline } from "./fixtures/budget-support.js";
+import { STATUSLINE_SESSION_ID, after, epoch, sessionMetaLine, statusline, tokenCountLine, writeRollout } from "./fixtures/budget-support.js";
 import { spawnSync } from "node:child_process";
 import { CLI_ENTRY, REPO_ROOT, TSX_CLI, bareEnv } from "./fixtures/characterize-support.js";
 import { startMcpClient, toolPayload } from "./fixtures/contract-support.js";
@@ -165,4 +165,67 @@ describe("the surfaces pass the linker", () => {
       await mcp.close();
     }
   }, 120_000);
+});
+
+describe("a backfill", () => {
+  it("links only the readings observed while the attempt ran, never ones from before it started", () => {
+    const codexHome = join(home, "codex");
+    mkdirSync(codexHome, { recursive: true });
+    bindBudgetSource(home, { source: "codex_rollout", account: "codex-plus", codexHome });
+    const session = "66666666-0000-7000-8000-000000000001";
+    const store = workspace("alpha");
+    const issue = store.createIssue({ title: "Backfilled" });
+    // Checked out from a Codex process, which runs with its home in CODEX_HOME.
+    const previousCodex = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = codexHome;
+    try {
+      store.checkoutIssue(issue.id, "agent-a", undefined, { attempt: { harness: "codex", harnessSession: session } });
+    } finally {
+      if (previousCodex === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousCodex;
+    }
+    const attempt = attemptsOfIssue(store.db, issue.id)[0]!;
+    expect(attempt.providerBinding).toMatchObject({ provider: "openai", accountRef: "codex-plus", source: "machine_binding" });
+    // One reading an hour before the attempt started, one after it.
+    const before = new Date(Date.parse(attempt.startedAt) - 3_600_000).toISOString();
+    const during = after(attempt.startedAt, 1_000);
+    const resets = epoch(after(attempt.startedAt, 3 * 3_600_000));
+    const limit = (used: number) => ({ used_percent: used, window_minutes: 300, resets_at: resets });
+    const file = writeRollout(codexHome, session, before, [
+      sessionMetaLine({ id: session, timestamp: before }),
+      tokenCountLine({ timestamp: after(before, 5_000), primary: limit(10), secondary: null }),
+      tokenCountLine({ timestamp: during, primary: limit(20), secondary: null }),
+    ]);
+    ingestBudget({ source: "codex-rollout", file }, { home, attemptLinker: attemptLinkerFor(home) });
+    const hub = new DatabaseSync(join(home, "hub.db"), { readOnly: true });
+    try {
+      const rows = hub.prepare("SELECT used_percent, attempt_id, missing FROM budget_samples ORDER BY observed_at").all() as Array<{
+        used_percent: number;
+        attempt_id: string | null;
+        missing: string;
+      }>;
+      expect(rows.map((row) => [row.used_percent, row.attempt_id, JSON.parse(row.missing).attemptId ?? null])).toEqual([
+        [10, null, "no_matching_attempt"],
+        [20, attempt.id, null],
+      ]);
+    } finally {
+      hub.close();
+    }
+  });
+});
+
+describe("one linker, one ingestion call", () => {
+  it("reads the index and each workspace once for the call, and a new call reads them again", () => {
+    const store = workspace("alpha");
+    const issue = store.createIssue({ title: "Cached" });
+    store.checkoutIssue(issue.id, "agent-a", undefined, { attempt: claimFromSession });
+    const attemptId = attemptsOfIssue(store.db, issue.id)[0]!.id;
+    const reading = { provider: "anthropic", accountRef: "personal-max", sessionRef: attemptsOfIssue(store.db, issue.id)[0]!.harness!.sessionRef };
+    const call = attemptLinkerFor(home);
+    expect(call(reading)).toEqual({ attemptId });
+    store.releaseIssue(issue.id, "agent-a");
+    // The same call keeps what it read; the next call sees the release.
+    expect(call(reading)).toEqual({ attemptId });
+    expect(attemptLinkerFor(home)(reading)).toEqual({ reason: "no_matching_attempt" });
+  });
 });

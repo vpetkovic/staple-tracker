@@ -490,10 +490,24 @@ export function seededHere(db: DatabaseSync): Set<string> {
  * Whether this machine opened an attempt: its device is this one; or it has no device and
  * this workspace has never synchronized (the only device an unconnected workspace has); or it
  * has no device and this database's seed uploaded it — opened here before connecting.
+ *
+ * Built once per call over many attempts: the seed's record and the sync state are read once.
  */
+export function openedHereBy(db: DatabaseSync, device: string | null): (attempt: { id: string; deviceId: string | null }) => boolean {
+  let deviceless: ((id: string) => boolean) | null = null;
+  return (attempt) => {
+    if (attempt.deviceId !== null) return device !== null && attempt.deviceId === device;
+    if (deviceless === null) {
+      const state = db.prepare("SELECT epoch, cursor FROM sync_state WHERE id = 1").get() as { epoch: number; cursor: string | null } | undefined;
+      const synchronized = state !== undefined && (state.cursor !== null || state.epoch > 0);
+      const seeded = synchronized ? seededHere(db) : null;
+      deviceless = (id) => seeded === null || seeded.has(id);
+    }
+    return deviceless(attempt.id);
+  };
+}
+
+/** One attempt: {@link openedHereBy} for a single question. */
 export function openedHere(db: DatabaseSync, attempt: { id: string; deviceId: string | null }, device: string | null): boolean {
-  if (attempt.deviceId !== null) return device !== null && attempt.deviceId === device;
-  const state = db.prepare("SELECT epoch, cursor FROM sync_state WHERE id = 1").get() as { epoch: number; cursor: string | null } | undefined;
-  const synchronized = state !== undefined && (state.cursor !== null || state.epoch > 0);
-  return !synchronized || seededHere(db).has(attempt.id);
+  return openedHereBy(db, device)(attempt);
 }
