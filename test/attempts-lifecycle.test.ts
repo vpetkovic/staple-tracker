@@ -147,14 +147,23 @@ describe("how an attempt opens", () => {
     expect(attempts(epic.id)[0]).toMatchObject({ state: "ended", outcome: "yielded", endReason: "gated", endDetection: "reported", endedBy: "agent-a" });
   });
 
-  it("a replayed attempt key returns the original attempt and opens nothing", () => {
+  it("a replayed attempt key returns the open attempt and opens nothing; reused after it ended, it opens a new one", () => {
     const issue = store.createIssue({ title: "Retried" });
     store.checkoutIssue(issue.id, "agent-a", undefined, { attempt: { idempotencyKey: "k-1" } });
     const first = store.attempts().result()!;
-    store.recordAttemptEvent(issue.id, "interrupt", "agent-a", { reason: "harness_exit" });
-    store.checkoutIssue(issue.id, "agent-a", undefined, { attempt: { idempotencyKey: "k-1" } });
+    store.checkoutIssue(issue.id, "agent-a", undefined, { attempt: { idempotencyKey: "k-1", harness: "codex", harnessSession: "other" } });
     expect(store.attempts().result()!.id).toBe(first.id);
     expect(attempts(issue.id)).toHaveLength(1);
+    expect(kinds(first.id)).toEqual(["attempt_started"]);
+    // Ended, the key does not bring it back: the new tenure gets an attempt of its own.
+    store.recordAttemptEvent(issue.id, "interrupt", "agent-a", { reason: "harness_exit" });
+    store.checkoutIssue(issue.id, "agent-a", undefined, { attempt: { idempotencyKey: "k-1" } });
+    const second = store.attempts().result()!;
+    expect(second.id).not.toBe(first.id);
+    expect(second).toMatchObject({ state: "running", openedBy: "reclaim", resumesAttemptId: first.id, idempotencyKey: "k-1" });
+    store.checkoutIssue(issue.id, "agent-a", undefined, { attempt: { idempotencyKey: "k-1" } });
+    expect(store.attempts().result()!.id).toBe(second.id);
+    expect(attempts(issue.id)).toHaveLength(2);
   });
 
   it("records the harness it was told about, hashed, and the account from a flag or this machine's binding", () => {
@@ -512,6 +521,10 @@ describe("history before capture", () => {
     event.run("claim_stolen", issue.id, "old-b", JSON.stringify({ previousHolder: "old-a", previousLastActivityAt: "2026-01-01T01:00:00.000Z" }), "e2", "2026-01-01T05:00:00.000Z");
     event.run("status_changed", issue.id, "old-b", JSON.stringify({ from: "in_progress", to: "in_review" }), "e3", "2026-01-01T06:00:00.000Z");
     event.run("checkout", issue.id, "old-c", "{}", "e4", "2026-01-02T00:00:00.000Z");
+    // And the claim that last checkout left, which the row still carries.
+    store.db
+      .prepare("UPDATE issues SET status = 'in_progress', assignee = 'old-c', checkout_agent = 'old-c', checkout_at = '2026-01-02T00:00:00.000Z' WHERE id = ?")
+      .run(issue.id);
 
     expect(store.reconstructAttemptHistory()).toMatchObject({ reconstructed: 3, alreadyPresent: 0 });
     const [a, b, c] = attempts(issue.id);
@@ -533,6 +546,38 @@ describe("history before capture", () => {
     // No transitions: nothing measured their concurrency, and their events already exist.
     expect(transitionsOf(store.db, a!.id)).toEqual([]);
     expect(store.reconstructAttemptHistory()).toMatchObject({ reconstructed: 0, alreadyPresent: 3 });
+  });
+
+  it("ends a tenure another device ended, from the issue's replicated state, never as an interruption", () => {
+    const event = store.db.prepare("INSERT INTO events (kind, issue_id, actor, payload, dedup_key, created_at) VALUES (?, ?, ?, ?, ?, ?)");
+    // Checked out here; released on another device, whose operation re-emitted no event here.
+    const released = store.createIssue({ title: "Released elsewhere" });
+    event.run("checkout", released.id, "old-a", "{}", "r1", "2026-01-01T00:00:00.000Z");
+    // Checked out here; completed elsewhere.
+    const completed = store.createIssue({ title: "Done elsewhere", assignee: "old-a" });
+    event.run("checkout", completed.id, "old-a", "{}", "c1", "2026-01-01T00:00:00.000Z");
+    store.db.prepare("UPDATE issues SET status = 'done', completed_at = '2026-01-02T00:00:00.000Z' WHERE id = ?").run(completed.id);
+    // Checked out here; now held by somebody else.
+    const moved = store.createIssue({ title: "Held by another", assignee: "old-b" });
+    event.run("checkout", moved.id, "old-a", "{}", "m1", "2026-01-01T00:00:00.000Z");
+    store.db
+      .prepare("UPDATE issues SET status = 'in_progress', checkout_agent = 'old-b', checkout_at = '2026-01-03T00:00:00.000Z' WHERE id = ?")
+      .run(moved.id);
+    // Checked out here, and still held here.
+    const held = store.createIssue({ title: "Still held", assignee: "old-a" });
+    event.run("checkout", held.id, "old-a", "{}", "h1", "2026-01-01T00:00:00.000Z");
+    store.db
+      .prepare("UPDATE issues SET status = 'in_progress', checkout_agent = 'old-a', checkout_at = '2026-01-01T00:00:00.000Z' WHERE id = ?")
+      .run(held.id);
+
+    store.reconstructAttemptHistory();
+    expect(attempts(released.id)[0]).toMatchObject({ state: "ended", outcome: "yielded", endDetection: "reconstructed" });
+    expect(attempts(completed.id)[0]).toMatchObject({ state: "ended", outcome: "completed", endReason: "done", endedAt: "2026-01-02T00:00:00.000Z" });
+    expect(attempts(moved.id)[0]).toMatchObject({ state: "ended", outcome: "yielded", endReason: "released", endedAt: "2026-01-03T00:00:00.000Z" });
+    expect(attempts(held.id)[0]).toMatchObject({ state: "running" });
+    // The next command writes no orphan end over any of them: none is left to the derivation.
+    store.addComment(held.id, "a command", "someone");
+    for (const issue of [released, completed, moved]) expect(attempts(issue.id)[0]!.outcome, issue.title).not.toBe("interrupted");
   });
 
   it("reads only the events before an issue's first recorded attempt", () => {

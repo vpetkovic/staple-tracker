@@ -213,9 +213,15 @@ export function storedOpenAttempts(db: DatabaseSync): AttemptRecord[] {
   return (db.prepare("SELECT * FROM attempts WHERE state <> 'ended' ORDER BY started_at, id").all() as unknown as AttemptRow[]).map(toRecord);
 }
 
+/**
+ * The OPEN attempt an idempotency key names on this issue, or null. A replay returns the
+ * attempt still running under it; a key reused after that attempt ended opens a new tenure,
+ * which carries the key from then on — returning the ended one would leave the new tenure
+ * with no attempt at all.
+ */
 export function attemptByKey(db: DatabaseSync, issueId: string, key: string): AttemptRecord | null {
   const row = db
-    .prepare("SELECT * FROM attempts WHERE issue_id = ? AND idempotency_key = ? ORDER BY started_at, id LIMIT 1")
+    .prepare("SELECT * FROM attempts WHERE issue_id = ? AND idempotency_key = ? AND state <> 'ended' ORDER BY started_at DESC, id DESC LIMIT 1")
     .get(issueId, key) as AttemptRow | undefined;
   return row ? toRecord(row) : null;
 }

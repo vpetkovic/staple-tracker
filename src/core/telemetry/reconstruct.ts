@@ -181,7 +181,34 @@ export function reconstructAttempts(db: DatabaseSync, journal: Journal, deviceId
       }
     }
     const still = open as { record: AttemptRecord } | null;
-    if (still !== null) built.push(still.record);
+    if (still !== null) {
+      /**
+       * No local event ended it — but the claim may have been cleared or moved by an operation
+       * another device made, which re-emits no event here. The issue's replicated row says how
+       * it stands; left running, the tenure would read as orphaned and be written down as an
+       * interruption, which is a release recorded as something it was not.
+       */
+      const row = db
+        .prepare(
+          `SELECT i.checkout_agent, i.checkout_at, i.completed_at, i.cancelled_at, i.updated_at, s.category
+             FROM issues i LEFT JOIN workspace_statuses s ON s.id = i.status WHERE i.id = ?`,
+        )
+        .get(issueId) as
+        | { checkout_agent: string | null; checkout_at: string | null; completed_at: string | null; cancelled_at: string | null; updated_at: string; category: string | null }
+        | undefined;
+      const held = row !== undefined && row.category === "active" && row.checkout_agent === still.record.agent;
+      if (row === undefined || held) {
+        // Gone (the read-time rule says `issue_removed`), or genuinely still held.
+        built.push(still.record);
+      } else if (row.category === "active" && row.checkout_agent !== null) {
+        // Held by somebody else now: this tenure ended no later than that claim began.
+        finish({ outcome: "yielded", endReason: "released", endedBy: null, endedAt: row.checkout_at ?? row.updated_at, endedAtSource: "mutation" });
+      } else {
+        const ending = leaving(row.category);
+        const at = row.category === "done" ? row.completed_at : row.category === "cancelled" ? row.cancelled_at : null;
+        finish({ ...ending, endedBy: null, endedAt: at ?? row.updated_at, endedAtSource: "mutation" });
+      }
+    }
     for (const record of built) {
       if (readAttempt(db, record.id) !== null) {
         alreadyPresent += 1;
