@@ -450,13 +450,17 @@ rules out `lastActivityOf` (`src/core/telemetry/attempt-derive.ts`), which reads
 of:
 
 - `A.startedAt`;
-- the `at` of every transition of `A` (pause, resume, milestone, session added);
+- the `at` of `A`'s `attempt_started`, `attempt_paused`, `attempt_resumed`,
+  `attempt_milestone` and `attempt_session_added` transitions. **Never an ending
+  transition** (`attempt_ended`, `attempt_interrupted`): the ledger stamps those
+  with `nowIso()` when the end is written (`end` in
+  `src/core/telemetry/attempts.ts`), which can be days after the work stopped;
 - the `created_at` of every comment on the issue by `A.agent` that is not deleted,
   after `A.startedAt`;
 - the `created_at` of every document revision on the issue by `A.agent`, after
   `A.startedAt`.
 
-All four replicate with their origin instants, so every device computes the same
+All of these replicate with their origin instants, so every device computes the same
 `evidenceAt(A)` from the same rows. It can be earlier than `lastActivityAt`,
 because a status write or other event by the agent is not replicated evidence.
 On the maintainers' tracker this makes no difference to the sparse count: the
@@ -474,21 +478,43 @@ bounds the end when it can:
 
 **The end of each worker attempt `A`, read with the orphan rule applied:**
 
-- **Recorded end** (a stored end that is not an orphan end, as
-  `isOrphanEnd` in `src/core/cloud/attempt-ends.ts` tells them apart):
-  `end(A) = A.endedAt`. Each is written by the mutation that ended the tenure
-  (the `statusMoved`, `released` and `stolen` hooks in
-  `src/core/telemetry/attempts.ts`) and replicates, so it needs no clipping and
-  reads the same everywhere.
+- **Recorded end, reported or by another actor** (a stored end that is not an
+  orphan end, as `isOrphanEnd` in `src/core/cloud/attempt-ends.ts` tells them
+  apart, with `endDetection` other than `inferred`): `end(A) = A.endedAt`. Each is
+  written by the mutation that ended the tenure (the `statusMoved`, `released`
+  and `stolen` hooks in `src/core/telemetry/attempts.ts`), dated at that
+  mutation, and replicates, so it reads the same everywhere.
+- **Recorded end, inferred** (`claim_stolen`, `released_stale`): the stored
+  `endedAt` is the stealing or releasing device's `lastActivityOf`, which reads
+  that device's local events and can be earlier than evidence that replicated
+  from the attempt's own device. Using it alone would shrink the work after the
+  fact. So `end(A) = max(A.endedAt, min(evidenceAt(A), cap))`, where `cap` is the
+  successor attempt's `startedAt` for a steal, and the `at` of the ending
+  `attempt_interrupted` transition (the release instant) for a stale release.
 - **Orphan end, stored or derived** (a stored end with `endDetection: inferred`
   and a reason in `ORPHAN_END_REASONS`, or a stored-open attempt that reads
-  `orphaned`): `end(A) = min(evidenceAt(A), row bound)`, with the row bound
-  applying only to `left_active`. The stored orphan end's own `endedAt` is **not
-  used** here. It was dated at the opening device's `lastActivityOf`, and using it
-  would make the number jump when the stored end arrives. Computing the end the
-  same way before and after the stored end is written keeps it stable, and needs
-  nothing from the device that opened the attempt.
-- **Effectively open**: `end(A) = evidenceAt(A)`. An open attempt's work is
+  `orphaned`): `end(A)` is the minimum of
+  - `evidenceAt(A)`;
+  - the row bound, for `left_active` only;
+  - the `startedAt` of the **next worker attempt** on the issue (by `startedAt`,
+    then `id`), if there is one. Without this cap an orphan's evidence runs on
+    into its successor: an attempt orphaned by a recategorisation, followed by the
+    same agent re-claiming and commenting, would absorb the successor's comments
+    and count the same seconds twice;
+  - for a **stored** orphan end, its stored `endedAt`. The opener dated it at its
+    own `lastActivityOf`, which is at or after every replicated evidence instant
+    the opener held, so this cap only ever removes evidence that arrived later
+    and belongs to someone else's tenure. It does not move the number when the
+    stored end arrives.
+
+  A derived orphan end is **provisional** until the stored end exists. Its reason
+  can still change, and the row bound with it: an attempt orphaned `left_active`
+  becomes `claim_moved` if the issue is reopened and another agent claims it,
+  which drops the `completedAt` bound. The `workSeconds` read carries the
+  `orphan_provisional` input (`approximate`) until the stored orphan end is
+  written.
+- **Effectively open**: `end(A) = evidenceAt(A)`, capped at the next worker
+  attempt's `startedAt` if one exists (only after a merge). An open attempt's work is
   counted through its last replicated evidence, so it can lag the elapsed
   `countedThrough` on the device that is writing.
 
@@ -737,7 +763,7 @@ the ratio's eligibility is the same on every device:
 |---|---|
 | `missing` | **Exactly when `workSeconds` is `null`** on an issue that is not cancelled: reason `never_started`, `no_worker_attempt` or `input_missing`. |
 | `reconstructed` | Any contributing attempt has `provenance: reconstructed`. |
-| `approximate` | Any of: a parent's `coverage.partial`; any contributing attempt `contested`; `capture_gap` (the row's `startedAt` is more than one second before the first worker attempt, so `workSeconds` is a lower bound); `end_unbounded` (an orphan end the row cannot bound); `clock_skew` between an attempt's instants and the row bound; or `sparse`, a gap longer than **30 minutes** between consecutive replicated evidence instants inside a worker attempt's working time. |
+| `approximate` | Any of: a parent's `coverage.partial`; any contributing attempt `contested`; `capture_gap` (the row's `startedAt` is more than one second before the first worker attempt, so `workSeconds` is a lower bound); `orphan_provisional` (a derived orphan end not yet stored); `end_unbounded` (an orphan end the row cannot bound); `clock_skew` between an attempt's instants and the row bound; or `sparse`, a gap longer than **30 minutes** between consecutive replicated evidence instants inside a worker attempt's working time. |
 | `timing-floor` | `workSeconds < 60`. The work fits inside the write cadence the measure resolves, so the number says "quick" and little more. The record stays visible. |
 | `exact` | None of the above. |
 
@@ -784,8 +810,11 @@ produced.
 
 ## What the live tracker says, in one place
 
-All figures come from a read-only snapshot of the maintainers' tracker, read
-with this repository's own `timingFor` under an isolated home directory.
+All figures come from a read-only snapshot of the maintainers' tracker **taken
+on 2026-09-24**, read with this repository's own `timingFor` under an isolated
+home directory. The tracker is live and keeps changing: a later read the same
+day found 31 sparse done leaves (19 of them estimated) where this snapshot has
+30 (18).
 
 | Figure | Value |
 |---|---|
@@ -912,6 +941,6 @@ Each needs a decision. The page above is written to the recommended default.
 10. **New reason codes.** Default: add `never_started`, `not_applicable_cancelled`,
     `no_worker_attempt`, `no_orchestrator_attempt` and `replay_unavailable` to the
     telemetry contract's closed set, and the quality inputs `sparse`,
-    `capture_gap`, `end_unbounded`, `clock_skew` (for `workSeconds`) and
+    `capture_gap`, `orphan_provisional`, `end_unbounded`, `clock_skew` (for `workSeconds`) and
     `unattributed`, `edge_history_incomplete`, `clock_skew` (for `wall`) to the
     quality-indicators work.
