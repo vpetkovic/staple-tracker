@@ -16,7 +16,7 @@ test runner.
 ```bash
 cd worker
 npm install --legacy-peer-deps   # see "Why --legacy-peer-deps" below
-npm test                          # 208 tests, in the Workers runtime, no network
+npm test                          # 309 tests, in the Workers runtime, no network
 npm run typecheck
 npm run lint:logs                 # no console.* outside src/log.ts
 ```
@@ -38,17 +38,21 @@ worker/
     envelope.ts        envelope shape and scope validation
     push.ts            sequence reservation and idempotent insert
     pull.ts            cursor-paged read
-    snapshot.ts        bootstrap; folds the log on read
+    snapshot.ts        bootstrap; serves the fold at a pinned cutoff
     leases.ts          fenced, server-expired leases
     devices.ts         connect, list, revoke
     backups.ts         backup, epoch-safe restore, purge
     vocabulary.ts      a repository holds a hub registry or a workspace, never both
-    fold.ts            the log-to-entity-state fold a backup persists
+    fold.ts            the fold's rule: how one operation changes the fold
+    fold-store.ts      the fold kept in D1, advanced in steps bounded by their work
+    fold-revisions.ts  placing a revision through indexes, not through its document
+    fold-work.ts       what folding, paging and staging cost, estimated from sizes
+    catch-up.ts        the Cron Trigger: folds the repositories furthest behind
     cursor.ts          opaque cursors
     errors.ts          the error taxonomy
     limits.ts          everything /v1/capabilities advertises
     log.ts             THE ONLY console.* in this Worker
-  test/                208 tests
+  test/                309 tests
   scripts/lint-logs.mjs
   wrangler.toml        COMMITTED. Placeholders only.
   wrangler.local.toml  GITIGNORED. Real account and database ids.
@@ -92,6 +96,12 @@ See `src/backups.ts`; the short version, because getting it wrong is unrecoverab
 - **A backup is a fold of the log, not a copy of it.** Storing a range of `ops` rows
   would mean restoring by replaying ids the dedupe index already holds. Storing the fold
   means a restore mints fresh operations, which is the only shape that can be re-applied.
+- **A backup is a row naming a point in the fold, not a copy of the fold.** The fold is
+  kept ([The fold checkpoint](#the-fold-checkpoint)) and nothing at or below a cutoff ever
+  changes, so a backup records `(epoch, cutoff_seq)` and the fold's counts there, and a
+  restore reads the entities from the checkpoint. Taking one copies nothing, and no backup
+  has a size limit. The Worker before this one copied the whole fold into the row; those
+  backups (`content = 'inline'`) still restore exactly as they did.
 - **A restore stages, then flips.** It writes the backup's entities into `epoch + 1`
   while the repository is still on `epoch`, and only then moves `repos.epoch`. Both
   `pull` and `snapshot` filter on the session's epoch, so nothing is visible until the
@@ -104,9 +114,13 @@ See `src/backups.ts`; the short version, because getting it wrong is unrecoverab
   epochs, and it must not be made to. `test/backups.test.ts` asserts the restored
   content is visible through `/snapshot` for exactly this reason — a bump-only
   implementation passes every other test in that file.
-- **Restore is chunked** at `maxBatchSize`, because staging N entities costs N+1 queries
-  against the free plan's ceiling of 50. It is driven by calling the one route in a loop
-  until it answers `done`.
+- **Restore is chunked**, 200 entities a turn on the free plan and 1,000 on paid, and no more
+  than 1.5 ms of estimated isolate time, written with packed statements and folded into the new
+  epoch's checkpoint as they are staged, so
+  the epoch is fully folded by the time it goes live. It is driven by calling the one route
+  in a loop until it answers `done`. Its first turn needs the checkpoint to have reached
+  the backup's cutoff and the head; until it has, the turn folds its budget and refuses,
+  retryably and changing nothing (see below).
 - **Purge requires the repository id typed back, on the wire.** The body is
   `{ "confirm": "<repoId>" }` and `confirm` must be exactly the repository the credential
   belongs to; a device token alone does not purge. No body, an empty body or no `confirm`
@@ -239,6 +253,229 @@ repository that was contaminated before the migration ran.
 
 ---
 
+### The fold checkpoint
+
+`src/fold-store.ts` holds the design; this is what an operator needs.
+
+**Why it exists.** Snapshot, backup and restore all read the fold of an epoch at a cutoff.
+The Worker before this one computed that fold inside the request, from the whole log, for
+every snapshot page, every backup and every restore's undo, and refused past 20,000
+operations (`MAX_SNAPSHOT_FOLD_OPS`). Because a restore takes a backup first, a repository
+past that size could not be backed up or restored. Even under the cap it did not fit the free
+plan. Measured per request on workerd (`wrangler dev --local`), with the cap lifted so the
+cost shows rather than the refusal, on `worker/test/log-generator.ts` logs:
+
+| Operations | Queries | Rows read | Rows handed to the isolate | Isolate time |
+|---|---|---|---|---|
+| 20,000 | 42 (backup 44) | 20,003 | 7.3 MB | 21–31 ms |
+| 50,000 | 102 (backup 104) | 50,003 | 19.6 MB | 51–57 ms |
+| 100,000 | 202 (backup 204) | 100,003 | 44.2 MB | 117–121 ms |
+
+The free plan allows 50 queries per invocation and 10 ms of CPU. The old fold passed the
+CPU limit before 20,000 operations and the query limit near 25,000, and every page of every
+snapshot read the whole log again. It also copied the fold into the backup row, which D1
+caps at 2 MB.
+
+**What is kept.** `fold_versions` holds each entity as the fold left it at the end of each
+fold step that changed it. `fold_marks` holds the seq each step ended at, with the fold's
+counts there. A step folds operations after the newest mark, and writes its versions and its
+mark in one D1 batch. At a mark, every entity is its newest version at or below it. At any
+other cutoff, the fold is the newest mark below it plus the operations after it. Rows are only
+ever added, never updated, so concurrent steps and a push landing mid-step cannot tear the
+checkpoint. A revision's rows also carry its document, its number and a key for its body, which
+two indexes read (below).
+
+**What bounds a step.** Its work, not its operation count. A step reads at most 500
+operations and 1 MiB of payload, and folds the longest run of them whose estimated isolate time
+fits 4 ms (`src/fold-work.ts`). The estimate comes from sizes SQLite measures before anything
+large is read: each payload's bytes, the stored size of each entity the run names, and the size
+each entity will be written back at. It counts escapes (quotes and backslashes) as well as
+bytes, because V8 copies plain text through `JSON.parse` and `JSON.stringify` almost for free
+and pays for every character it escapes. Measured on workerd, per megabyte of JSON text:
+
+| Content | parse | serialize, then pack into a statement |
+|---|---|---|
+| ASCII letters, `é`, CJK | 0.05–0.2 ms | 0.2–0.5 ms |
+| a third `\n` | 1.5 ms | 3.1 ms |
+| `\"` | 3.7 ms | 8.4 ms |
+
+A step always folds its first operation when the request has done nothing else, so one
+operation larger than any budget still folds, alone. A request that has folded or served
+something folds nothing it has no room for. Checked against isolate time: on logs from
+`test/log-generator.ts`, steps measured 0.7 to 0.9 of their estimate, at about 270 operations
+a step.
+
+**A revision is placed through two indexes, never through its document.** A
+`documentRevision` create settles against its document's revisions: it is dropped when a live
+revision at or above its floor holds the same body, and otherwise takes the first number from
+its claim upward that no live revision holds. The step before this one loaded every revision of
+the document to decide that, so a step of k saves on a document of R revisions cost k × R, and
+a worklog saved a few thousand times could no longer be folded by any request. Now a step reads
+the runs of held numbers from each document's lowest claim (`fold_versions_revisions`, one row
+for 5,000 consecutive revisions) and the live revisions holding the same body key
+(`fold_versions_revision_bodies`), confirming a match on the stored body. It overlays what the
+step itself has folded (`src/fold-revisions.ts`). When a placement needs more than the step has
+read, the step reads again up to four times, then ends before that operation.
+
+**Who moves it on.** Four things, each inside one request's budget:
+
+- **Every push**, with what its own batch left of the request's 6 ms, one step. The writer pays
+  for what it wrote, which is what keeps a repository being written hard from falling behind: pulls
+  alone left a 100,000-operation run's checkpoint 30,000 operations behind, because a device
+  writing pushes far more than it pulls.
+- **Every pull** that finds the fold 500 or more seqs behind, with what its page left, and nothing
+  rather than more.
+- **A snapshot's first page, a backup, and a restore's first turn**, up to their own cutoff, which
+  they need; each answers "still folding" until the fold has reached it. A snapshot stays pinned at
+  the head, as it always was, and a backup's cutoff is always a mark. Each restore turn stages no
+  more than 1.5 ms of work and folds what it staged with the rest; the commit folds whatever is
+  left, or refuses until it can, so the restored epoch is folded by
+  the time it goes live.
+- **A Cron Trigger every two minutes** (`src/catch-up.ts`), one request's budget a run, over the
+  repositories furthest behind. This is the floor under the fold's progress for a repository whose
+  devices went quiet mid-catch-up; it is not a way to fold a large log quickly, because a scheduled
+  invocation has the same ten milliseconds and fifty queries as a request.
+
+**A joining device never waits on it.** A snapshot page asks again while the fold climbs, but only
+for five answers or five seconds (`SNAPSHOT_FOLD_PATIENCE`, `src/core/cloud/client.ts`). Past that
+the client reads the ordered tail and folds it itself, the path a Worker too old to fold a large log
+already sent it down. So a device joins a repository in bounded time whatever the checkpoint is
+doing, and pays for it in pull pages rather than in waiting.
+
+**Statements.** A request folds at most two steps (`foldStepsPerRequest`), and a step issues at
+most fifteen: the operations it reads, two sizing, three loading, up to four its placements need,
+and its writes. So a pull costs about 33 statements at worst, a snapshot page 37, a restore turn 42,
+and a push 45 including its own N + 4 — against the free plan's fifty an invocation. A step that
+ends early at its placement reads costs almost no work, so without that cap a single request could
+have taken hundreds of cheap steps.
+
+**Pages are cut by work too.** A pull page and a snapshot page stop at 6 ms of estimated isolate
+time to send, the first entry always, and say `hasMore`. A page of 30 KB quote-heavy issues used to
+cost 13 ms of isolate time to send before any fold ran. They are cut no smaller than the CPU asks
+for: a device joining from the ordered tail reads the whole log in pull pages, and every page it
+does not need is a request against the per-device rate limit.
+
+**A backup is a row.** It records the epoch, the cutoff and the fold's counts there. A
+restore pages the backup's entities out of the checkpoint in the order `restoreOrder` stages
+them (`claimSeq`, then key), read off the `fold_versions_stage` index. A backup taken by the
+Worker before this one (`content = 'inline'`) keeps its entities in its own row and restores
+as it did. A restore turn counts its progress from the staged rows it has not counted yet
+(`restores.staged_seq`), never the whole restore again.
+
+**Measured.** Real devices (this repository's built CLI) syncing through this Worker on workerd
+(`wrangler dev --local`), with every request metered: queries are D1 statements, each statement of a
+batch counted as one; rows are D1 rows read; the time is isolate time, wall time less the time spent
+waiting on D1. Each run syncs an author and a second device as it writes, joins a fresh device
+through `GET /snapshot`, takes a backup, writes more, restores the backup, joins another fresh
+device, and finally deletes the whole checkpoint and joins a third. In all three every device ended
+identical, table for table, including the one that joined with nothing folded at all.
+
+The step before this one, on a worklog saved 1,500 times with a sync every 100 saves: a pull cost
+87 ms and a restore turn 39 ms. A pull asking for one operation on a document of 4,000 revisions cost
+152 ms; the same probe now measures 9, 7 and 4 ms over three pulls, the first against a cold isolate,
+and 20 queries.
+
+Most and 99th percentile isolate time, most queries, most rows read, and how many requests of that
+kind the run made:
+
+| Request | A worklog saved 5,000 times, syncing every 100 | 500 issues with 30 KB quote-heavy descriptions | 100,000 mixed operations, syncing every 2,500 |
+|---|---|---|---|
+| `GET /ops` | 5 ms · p99 3 · 20 q · 11,112 rows (226) | 4 ms · p99 3 · 14 q · 4,374 rows (143) | 191 ms · p99 8 · median 5 · 21 q · 105,211 rows (2,689) |
+| `GET /snapshot`, first page | 5 ms · 19 q · 10,532 rows (11) | 5 ms · 13 q · 5,216 rows (15) | 7 ms · 17 q · 105,417 rows (15) |
+| `GET /snapshot`, later page | 2 ms · 5 q · 1,819 rows (48) | 4 ms · 5 q · 1,006 rows (87) | 3 ms · 5 q · 1,949 rows (309) |
+| `POST /backups` | 1 ms · 5 q · 5 rows (1) | 5 ms · 14 q · 4,243 rows (32) | 46 ms · p99 6 · 20 q · 5,706 rows (2,592) |
+| a restore turn | 8 ms · 38 q · 9,633 rows (36) | 5 ms · p99 4 · 24 q · 893 rows (256) | 8 ms · p99 7 · 25 q · 44,313 rows (441) |
+| `POST /ops` (its own cost unchanged) | 4 ms · p99 3 · 38 q (206) | 5 ms · 38 q (45) | 14 ms · p99 7 · 39 q (4,009) |
+
+Thirty-nine queries is the most any request made, against the free plan's fifty. Not one request of the
+1,376 in the first two runs measured over 10 ms.
+
+**The maximums in the third run, and what they are.** 18 of its 10,240 requests measured over 10 ms.
+Fourteen were pushes, whose own parsing and validation of a 175 KB batch this change does not touch —
+this file has named that as the free plan's binding constraint on batch size since before the
+checkpoint existed, and those pushes folded nothing. The other four are the host, not this design:
+each traced 1 ms or less inside the fold and the page it bounds and spent the rest outside them, on a
+machine that was also running the devices and a 692 MB database. They are a pull at 191 ms, two at
+10 ms, and one backup refusal of 2,592 at 46 ms whose step was estimated at 0.3 ms. The medians and
+99th percentiles are what the design produces: pulls median 5 ms and p99 8, backups p99 6, restore
+turns p99 7.
+
+**What a joining device waits.** After writing 100,000 operations the checkpoint was 50,000
+operations behind: the mixture's plan entity re-sends its whole order on every enqueue, which is
+480 MB of that log's 690 MB, and folding one of those costs more than the push that wrote it can pay.
+A fresh device joined anyway, in 66 seconds — five answers of "still folding", then the ordered tail
+in 784 pull pages — and its tables are identical to the author's. With the whole checkpoint deleted,
+142,462 operations and nothing folded, a fresh device joined in 13 seconds. The same with the worklog
+(45 seconds) and the wide issues (6 seconds). Before this, that join waited twenty minutes on the
+fold and about a thousand refusals.
+
+What still waits on the fold is a backup, which has no alternative: it must record a cutoff the fold
+has reached. On that 100,000-operation log it took 2,592 requests and **12 minutes**, against 47 for
+the same backlog when each refusal asked for a second (`FOLD_RETRY_MS`, `src/limits.ts`): the requests
+do the folding, so the wait between them is latency and nothing else. On the worklog it took one
+request and on the wide issues 32. Pushes folding what they write is what keeps the count down — with
+pulls alone the same run left the checkpoint 30,000 operations behind after writing, and with neither
+it was the whole log — and on the worklog run, where a push can pay for what it wrote, the checkpoint
+finished at the head.
+
+**An entity whose every write carries its whole state costs the fold more than the push that
+wrote it.** This is the one shape that outruns everything above, and it is worth naming because a
+client can create it without noticing. The plan is stored as one entity holding an ordered list, and
+its emitter re-sends the WHOLE order on every enqueue, so a plan of three thousand entries writes a
+120 KB payload per enqueue — and the fold has to load that entity's stored state and write it back
+each time, which costs more than the push that wrote the 120 KB can pay out of the same 6 ms. So the
+checkpoint falls behind while such a repository is written, and what has to reach the head — a
+backup, a restore's first turn — waits for the pushes, the pulls and the cron to catch up.
+
+Measured on the 100,000-operation run: 480 MB of its 690 MB was that one entity, the checkpoint
+finished 50,000 operations behind after the writing stopped, and the backup that had to reach the head
+took 2,586 requests. Joining does not wait for any of it (a device reads the ordered tail instead),
+and the same run's worklog and issue entities fold faster than they are written — the worklog run
+ended with the checkpoint at the head.
+
+The fix belongs in the emitter, not here: an enqueue should journal the entry it added rather than the
+order it produced, which is a client change and a wire change, and not one to make while the fold is
+being repaired. The service's side of it is already bounded — a step of those payloads is one or two
+operations long, and every request stays inside its budget.
+
+**Deploying onto a large log.** Migration `0006` adds the tables empty, and `0007` adds the
+revision columns and their indexes and clears whatever `0006` had built, keeping the floor mark of
+a restore still staging. The checkpoint of
+every existing epoch, including an epoch an older Worker restored, is built from `ops` by
+the requests above, and nothing needs running. Until the checkpoint is built, a snapshot's
+first page, a backup and a restore's first turn answer `503 unavailable` with `foldedSeq`
+(how far it got), `cutoffSeq` (how far it must go) and `Retry-After: 1`. Each such answer
+has moved the fold on by the request's budget. A 100,000-operation log takes several hundred
+of them on the free plan, more when its operations are large, and fewer the more devices are
+syncing. `foldedSeq` climbs
+from one answer to the next, including across a restore of an older epoch's backup, which
+folds that epoch and then the current one. A client of this build asks again while
+`foldedSeq` climbs, and says so on stderr. An older client reports the retryable error, and
+running the sync or command again carries on from there. Pulls are served throughout.
+
+**Why a snapshot is never pinned short of the head.** A snapshot at an earlier cutoff would
+be a true snapshot of the log up to that point, but that part of the log is not always
+whole. A restore stages entities in the order of their claims, not in the order they name
+each other, so part of a restored epoch can hold a comment whose issue comes after it. A
+device refuses a snapshot that names something it never delivered, and asks again for the
+same page at the same cutoff for ever.
+
+**What it costs.** One version row per entity per step that changed it, plus a mark per
+step. That grows no faster than the log, and usually much slower, because a step writes an
+entity once however often it changed. Pushes are untouched: still `N + 4` statements and
+the same rows written.
+
+**Clearing it is safe.** Every row is derived from `ops`, and `purge` deletes it with the
+rest. If you ever edit `ops` by hand (the recovery recipe below does), clear the
+repository's checkpoint in the same sitting and it is rebuilt:
+
+```sql
+DELETE FROM fold_versions WHERE repo_id = '<repo id>';
+DELETE FROM fold_marks WHERE repo_id = '<repo id>';
+```
+
+A restore in flight survives this: its turns fold the source back as they need it.
+
 ## The batch-statement-counting experiment
 
 **Question** (marked `[inferred]` in the Cloudflare research brief, and unresolvable
@@ -330,6 +567,10 @@ field in both spellings keeps the column's (`columnSpellingWins`, `src/fold.ts`)
 a newer build editing a field while an older Worker is live, followed by a backup and a
 restore, writes an edit that no build can recover (`docs/sync.md`, "Every field travels in
 one spelling"). With the Worker deployed first, that window is empty.
+
+**Deploying the fold checkpoint** (migrations `0006` and `0007`) needs no step after the migrations;
+[The fold checkpoint](#the-fold-checkpoint) says what devices see while it is built on a
+large existing log.
 
 The repository is **public**. No account id, no database id, no token and no
 `workers.dev` URL containing the account subdomain may enter a committed file.
@@ -512,26 +753,19 @@ is live (`DELETE /v1/repos/{repoId}/devices/{deviceId}`, which holds until someb
 with the enrollment secret), and rely on the epoch predicate in step 3, which is the part that
 stays correct even if a restore begins mid-recipe.
 
-`stage` resumes from a slice offset computed from `stagedCount`, which is a bare `COUNT(*)`
-of the target epoch rather than a per-restore ledger. Two consequences, both measured:
+`stage` resumes from `stagedCount`, a count of the rows in the target epoch above the
+restore's `guard_seq`, rather than a per-restore ledger. Two consequences:
 
-- **Deleting the `restores` row loses data silently.** The next restore picks the same
-  `toEpoch = repo.epoch + 1` and its in-flight guard reads the now-empty `restores` table, so
-  the orphaned staged rows still count. Reproduced: the row deleted with 25 orphan ops
-  staged, a new restore of a 30-entity backup staged only 5, then committed
-  `status: "committed", done: true, staged: 30` — **25 of 30 entities skipped on the
-  disaster-recovery path, reported as success.** If you must abandon a restore, delete its
-  staged operations in the same statement:
-  ```sql
-  DELETE FROM ops WHERE repo_id = '<repo id>' AND epoch = <to_epoch>;
-  DELETE FROM restores WHERE repo_id = '<repo id>' AND restore_id = '<restore id>';
-  ```
-  (`status = 'abandoned'` exists in the schema, but nothing writes it and there is no abandon
-  route, so it is not a remedy — do not set it and expect anything to honour it.)
+- **Deleting the `restores` row alone blocks the next restore.** The staged rows it leaves
+  are in the epoch the next restore would fill, so `beginRestore` refuses with `conflict`
+  naming that epoch, and changes nothing, until they are gone. (It used to count them as its
+  own progress, skip that many entities and commit as though it had staged them all.)
+  Abandon a restore the way [Abandoning a restore](#abandoning-a-restore) says.
 - **Deleting contaminated `ops` out of a staging epoch wedges the restore permanently.** The
-  count-based window shifts past the deleted row for ever: every poll inserts nothing,
-  `staged` never reaches `entityCount`, and `repos.last_seq` climbs unbounded. And because
-  nothing writes `'abandoned'`, the wedged row then blocks every future `beginRestore` with
+  count drops below what was staged and the next turn resumes after the last entity it
+  wrote, so the deleted one is never written again: every poll inserts nothing, `staged`
+  never reaches `entityCount`, and `repos.last_seq` climbs unbounded. And because nothing
+  writes `'abandoned'`, the wedged row then blocks every future `beginRestore` with
   `conflict`, for ever.
 
 **So: drive the restore to completion first** — call the restore route until it answers
@@ -543,9 +777,9 @@ nor the pre-restore fold, so nothing can make committing safe later. Nothing gat
 a restore stages, either: `POST /ops` has no in-flight check at all, so on a repository with a
 live device `done` can be unreachable however many times you poll for it.
 
-**When `done` is unreachable, abandon the restore rather than driving it** — which is the
-two-statement form above, the staged operations in `to_epoch` and the `restores` row deleted in
-the same sitting, never the row on its own. Stop the writers before you retry or the next
+**When `done` is unreachable, abandon the restore rather than driving it** — the staged
+operations in `to_epoch` and the `restores` row deleted in the same sitting, never the row on
+its own ([Abandoning a restore](#abandoning-a-restore)). Stop the writers before you retry or the next
 attempt ends the same way: revoking the device credentials is the only fence this service
 actually offers. Then take a fresh backup and begin the restore again, which is what the commit
 refusal itself tells the caller to do. Abandoning deletes nothing that a device wrote: the
@@ -594,17 +828,28 @@ DELETE FROM ops
 is not a belt-and-braces addition to step 0 — it is the part that holds when step 0's read went
 stale. `repos.epoch` is the live epoch and a restore stages into `repo.epoch + 1`, so
 `epoch <= (SELECT epoch …)` covers every epoch a device can read and excludes exactly the one
-under construction. Without it the delete punches a hole in `stagedCount`, which is a bare
-`COUNT(*)` of the target epoch rather than a per-restore ledger, while `stage` resumes at
-`entities.slice(staged, staged + maxBatchSize)` — so the window steps past the deleted position
-for ever, `staged` never reaches `entity_count`, `commitRestore` is therefore never reached at
-all, and the `status = 'staging'` row that survives answers every future `beginRestore` with
-`conflict`. One `DELETE` run at the wrong moment is a repository that can never be restored
-again.
+under construction. Without it the delete punches a hole in `stagedCount`, a count of the
+target epoch rather than a per-restore ledger, while `stage` resumes past the entities it has
+written — so the deleted position is never written again, `staged` never reaches
+`entity_count`, `commitRestore` is therefore never reached at all, and the
+`status = 'staging'` row that survives answers every future `beginRestore` with `conflict`.
+One `DELETE` run at the wrong moment is a repository that can never be restored again.
 
 Contamination inside a staging epoch is not left behind by excluding it: those rows are
 materialised from the backup, so they become reachable only if that restore commits, and once
 it has, `repos.epoch` has moved and running this same statement again removes them.
+
+**Step 3b — clear the repository's fold checkpoint**, in the same sitting:
+
+```sql
+DELETE FROM fold_versions WHERE repo_id = '<workspace repo id>';
+DELETE FROM fold_marks WHERE repo_id = '<workspace repo id>';
+```
+
+The checkpoint was folded from the rows step 3 removed: it still holds the registry
+entities, and its marks still say the fold holds registry kinds, which is what
+`GET /snapshot` answers a protocol-1 device's 426 from. Cleared, it is rebuilt from `ops` as
+devices sync ([The fold checkpoint](#the-fold-checkpoint)).
 
 `seq` gaps are legal and expected — a slot reserved for a deduplicated operation already
 goes unused, and `WHERE seq > cursor` is gap-tolerant by construction — so removing rows
@@ -664,14 +909,30 @@ a correction run too early changes nothing.
 
 A restore that BEGAN before `0005` and is still staging is caught too. Every stage turn
 repeats begin's check, so one staging a contaminated backup into a workspace is refused with
-`conflict` on its next turn and stays `staging`. Abandon it with the two-statement form
-under step 0.
+`conflict` on its next turn and stays `staging`. Abandon it
+([Abandoning a restore](#abandoning-a-restore)).
 
 Only if the rows cannot be identified is the answer `DELETE /v1/repos/{repoId}` (purge, with
 `{ "confirm": "<repo id>" }` as its body, which `staple cloud purge --confirm` sends) and
 a re-provision from a device that still holds the data. That is the outcome this recipe
 exists to avoid; "no remedy short of a purge" with no documented purge is the difference
 between an incident and a dead repository.
+
+### Abandoning a restore
+
+There is no abandon route, and `status = 'abandoned'` exists in the schema but nothing writes
+it or honours it. To give up on a restore that cannot reach `done`, delete its staged
+operations and its `restores` row in the same sitting — never the row on its own:
+
+```sql
+DELETE FROM ops WHERE repo_id = '<repo id>' AND epoch = <to_epoch>;
+DELETE FROM restores WHERE repo_id = '<repo id>' AND restore_id = '<restore id>';
+```
+
+Deleting only the row leaves the staged operations in the epoch the next restore would fill,
+and `beginRestore` refuses with `conflict` until they are gone. The fold checkpoint of that
+epoch may still hold rows folded from them; the next `beginRestore` clears those itself,
+because an epoch with no operations has nothing for them to describe.
 
 ### Never
 

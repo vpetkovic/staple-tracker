@@ -27,6 +27,7 @@ import {
   setBackupConsent,
 } from "./backups.js";
 import { connect, listDevices, revokeDevice } from "./devices.js";
+import { scheduledCatchUp } from "./catch-up.js";
 import type { Env } from "./env.js";
 import { SyncError, json } from "./errors.js";
 import { assertBodySize, assertRateLimit, assertTls, negotiateProtocol } from "./http.js";
@@ -70,6 +71,14 @@ export default {
       return new SyncError("unavailable", "the sync service could not complete this request")
         .toResponse();
     }
+  },
+  /**
+   * The Cron Trigger (`wrangler.toml`): folds the repositories furthest behind, one request's
+   * budget a run, so a repository whose devices went quiet does not leave its whole backlog to
+   * the next device that joins (`catch-up.ts`).
+   */
+  async scheduled(_event: ScheduledController, env: Env): Promise<void> {
+    await scheduledCatchUp(env);
   },
 } satisfies ExportedHandler<Env>;
 

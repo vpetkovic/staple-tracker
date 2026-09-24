@@ -23,9 +23,11 @@ import type { Session } from "./auth.js";
 import type { Env } from "./env.js";
 import { SyncError, json } from "./errors.js";
 import { REGISTRY_ENTITIES, type Envelope, validateEnvelope } from "./envelope.js";
+import { advanceFold } from "./fold-store.js";
+import { serveWork } from "./fold-work.js";
 import { readJson } from "./http.js";
-import { maxBatchSize, planOf } from "./limits.js";
-import { log, tokenFingerprint } from "./log.js";
+import { maxBatchSize, planOf, remainingFoldBudget } from "./limits.js";
+import { errorKind, log, tokenFingerprint } from "./log.js";
 import {
   type Vocabulary,
   storedVocabulary,
@@ -87,6 +89,7 @@ export async function push(
   const now = Date.now();
   const results = await applyBatch(env, session, ops, vocabulary, now);
   const response = await describe(env, session, ops, results);
+  await foldWhatWasWritten(env, session, request, response.serverHighWatermark);
 
   log({
     event: "push",
@@ -104,6 +107,33 @@ export async function push(
   });
 
   return json(response);
+}
+
+/**
+ * Fold what this push wrote, with whatever the request's budget has left.
+ *
+ * The writer pays for its own writing. Pulls keep the checkpoint near the head on a repository
+ * being read (`keepFoldNearHead`, `pull.ts`), but a device writing hard pushes far more than it
+ * pulls, and measured on workerd a 100,000-operation run left the checkpoint 30,000 operations
+ * behind: the next device to join then waited on a fold nobody was paying for. A push folds ONE
+ * step, so the statements it adds — the progress read and the step — sit inside the free plan's
+ * fifty beside the batch's own N + 4.
+ *
+ * What the request already spent is estimated from the body it parsed and validated, with half of
+ * it assumed to be escapes: overestimating what a push cost only means folding less
+ * (`fold-work.ts`). A push never fails because of this: its own answer is already decided, a
+ * failed step writes nothing, and the next request tries again.
+ */
+async function foldWhatWasWritten(env: Env, session: Session, request: Request, head: number): Promise<void> {
+  try {
+    const bytes = Number(request.headers.get("content-length") ?? 0);
+    const spent = serveWork(bytes, Number.isFinite(bytes) ? bytes / 2 : 0);
+    await advanceFold(env, session.repoId, session.epoch, head, {
+      budget: remainingFoldBudget(planOf(env), spent, 1),
+    });
+  } catch (err) {
+    log({ event: "fold.lag", status: 503, code: errorKind(err), repo_id: session.repoId, epoch: session.epoch });
+  }
 }
 
 function parseBatch(
