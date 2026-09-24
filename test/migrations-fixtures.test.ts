@@ -706,10 +706,10 @@ describe("a pre-A4 hub (no meta table at all)", () => {
         const row = db
           .prepare("SELECT typeof(value) AS t, value FROM meta WHERE key='schema_version'")
           .get() as { t: string; value: string };
-        // GOLDEN, moved by S22 (STA-283): "2" -> "3", by STA-287: "3" -> "4", and by
-        // hub 005 (budget samples): "4" -> "5". Still TEXT, which is the
+        // GOLDEN, moved by S22 (STA-283): "2" -> "3", and by STA-287: "3" -> "4". Still TEXT, which is the
         // part that matters here — an old binary's `CAST(value AS INTEGER)`
         // guard has to be able to read it.
+        // Moved again by hub 005 (budget samples): "4" -> "5".
         expect(row).toEqual({ t: "text", value: "5" });
       } finally {
         db.close();
