@@ -9,7 +9,7 @@
  * hold the same attempt rows, column for column (`synchronized-state.ts`). Nothing writes an
  * attempt row by hand; the only thing a test injects is a transport fault, to bound a push.
  */
-import type { DatabaseSync } from "node:sqlite";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { listConflicts, resolveConflict } from "../src/core/cloud/conflicts.js";
 import { hydrate } from "../src/core/cloud/hydrate.js";
@@ -477,6 +477,17 @@ describe("an attempt opened before its workspace connected", () => {
     const a = fleet.connect("a", prepared);
     await sync(a, b);
     expect(attempts(b, issue.id)[0]!.deviceId).toBeNull();
+    // Only its opener indexes it as started there; B, which hydrated it, does not.
+    const indexed = (machine: Machine): number => {
+      const hub = new DatabaseSync(join(machine.home, "hub.db"), { readOnly: true });
+      try {
+        return (hub.prepare("SELECT COUNT(*) AS n FROM attempt_presence").get() as { n: number }).n;
+      } finally {
+        hub.close();
+      }
+    };
+    expect(indexed(a)).toBe(1);
+    expect(indexed(b)).toBe(0);
 
     // B takes the status out of active: A's attempt is an orphan, and only A writes its end.
     b.use();
