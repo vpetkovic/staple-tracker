@@ -580,6 +580,34 @@ describe("history before capture", () => {
     for (const issue of [released, completed, moved]) expect(attempts(issue.id)[0]!.outcome, issue.title).not.toBe("interrupted");
   });
 
+  it("never takes a recorded attempt's own opening events for work before capture, however slow the clock reads", () => {
+    // A clock that moves a millisecond every time it is read: the ordering a loaded machine
+    // produces at random, every time.
+    const RealDate = Date;
+    let tick = RealDate.parse("2026-09-24T12:00:00.000Z");
+    class SteppingDate extends RealDate {
+      constructor(...args: unknown[]) {
+        if (args.length === 0) super((tick += 1));
+        else super(...(args as [string]));
+      }
+      static now(): number {
+        return (tick += 1);
+      }
+    }
+    globalThis.Date = SteppingDate as unknown as DateConstructor;
+    try {
+      const issue = store.createIssue({ title: "Slow clock" });
+      store.checkoutIssue(issue.id, "agent-a");
+      const started = store.createIssue({ title: "Slow clock, status", assignee: "agent-b" });
+      store.updateIssue(started.id, { status: "in_progress" }, "agent-b");
+      expect(store.reconstructAttemptHistory().reconstructed).toBe(0);
+      const [attempt] = attempts(issue.id);
+      expect(attempt!.startedAt).toBe(store.getIssue(issue.id).checkoutAt);
+    } finally {
+      globalThis.Date = RealDate;
+    }
+  });
+
   it("reads only the events before an issue's first recorded attempt", () => {
     const issue = store.createIssue({ title: "Recorded" });
     store.checkoutIssue(issue.id, "agent-a");

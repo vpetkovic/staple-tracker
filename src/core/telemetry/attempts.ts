@@ -238,7 +238,19 @@ export class AttemptLedger {
    * Open an attempt as the side effect of `openedBy`. Returns the original attempt instead
    * when the idempotency key has been used on this issue before.
    */
-  open(issue: { id: string; identifier: string }, agent: string, openedBy: string, opts: AttemptOptions = {}, claim?: AttemptClaim): AttemptRecord {
+  open(
+    issue: { id: string; identifier: string },
+    agent: string,
+    openedBy: string,
+    opts: AttemptOptions = {},
+    claim?: AttemptClaim,
+    /**
+     * The opening mutation's own instant, when it has one (the row's `updated_at`): the
+     * events it emits are stamped at or after it, so none of them reads as earlier than the
+     * attempt it opened — which `reconstruct.ts` relies on to tell captured work from not.
+     */
+    mutationAt?: string,
+  ): AttemptRecord {
     if (opts.idempotencyKey !== undefined) {
       const replay = attemptByKey(this.db, issue.id, opts.idempotencyKey);
       if (replay) {
@@ -252,7 +264,7 @@ export class AttemptLedger {
      * script — starts a millisecond later, and the order is the order they happened in.
      */
     const latest = (this.db.prepare("SELECT MAX(started_at) AS at FROM attempts WHERE issue_id = ?").get(issue.id) as { at: string | null }).at;
-    const now = nowIso();
+    const now = mutationAt ?? nowIso();
     const at = latest !== null && now <= latest ? new Date(Date.parse(latest) + 1).toISOString() : now;
     const resume = this.resumeFor(issue.id);
     const missing: Record<string, string> = {};
@@ -428,16 +440,16 @@ export class AttemptLedger {
   // ------------------------------------------------------- the store's hooks
 
   /** `checkout` created a new claim. */
-  checkedOut(issue: { id: string; identifier: string }, agent: string, opts?: AttemptOptions): void {
-    this.open(issue, agent, "checkout", opts);
+  checkedOut(issue: { id: string; identifier: string; updated_at?: string }, agent: string, opts?: AttemptOptions): void {
+    this.open(issue, agent, "checkout", opts, undefined, issue.updated_at);
   }
 
   /** `checkout --steal-if-stale` took the claim from `before.checkoutAgent`. */
-  stolen(issue: { id: string; identifier: string }, agent: string, before: IssueFacts, opts?: AttemptOptions): void {
+  stolen(issue: { id: string; identifier: string; updated_at?: string }, agent: string, before: IssueFacts, opts?: AttemptOptions): void {
     for (const attempt of this.targets(issue.id, before)) {
       this.endByMutation(attempt, { outcome: "interrupted", endReason: "claim_stolen", inferred: true }, agent, undefined);
     }
-    this.open(issue, agent, "steal", opts);
+    this.open(issue, agent, "steal", opts, undefined, issue.updated_at);
   }
 
   /**
@@ -490,7 +502,7 @@ export class AttemptLedger {
    * one with `claim.scope: "none"`, whose agent is the actor.
    */
   statusMoved(
-    issue: { id: string; identifier: string },
+    issue: { id: string; identifier: string; updated_at?: string },
     before: IssueFacts,
     categoryBefore: string | null,
     categoryAfter: string | null,
@@ -502,7 +514,7 @@ export class AttemptLedger {
       return;
     }
     if (categoryBefore !== "active" && categoryAfter === "active") {
-      this.open(issue, actor ?? "unknown", "status", opts, { scope: "none", fencingToken: null });
+      this.open(issue, actor ?? "unknown", "status", opts, { scope: "none", fencingToken: null }, issue.updated_at);
     }
   }
 

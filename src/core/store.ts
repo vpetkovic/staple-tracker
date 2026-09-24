@@ -3984,7 +3984,7 @@ export class WorkspaceStore {
           actor,
           payload: { identifier: row.identifier, from: row.status, to: patch.status },
         });
-        this.attempts().statusMoved(row, this.factsOf(row), categoryBefore, categoryAfter, actor ?? null, attempt);
+        this.attempts().statusMoved(updated, this.factsOf(row), categoryBefore, categoryAfter, actor ?? null, attempt);
         /**
          * The wake goes FIRST, and the order is load-bearing since STA-153.
          * `afterResolution` asks "is the parent still open?" before it wakes it,
@@ -4984,7 +4984,7 @@ export class WorkspaceStore {
                   actor: agent,
                 });
                 emitOverride();
-                this.attempts().stolen(row, agent, this.factsOf(row), opts.attempt);
+                this.attempts().stolen(stolen, agent, this.factsOf(row), opts.attempt);
                 // Transition site 4 of 5. A takeover is a fresh start by a new
                 // agent; if the epic went quiet in the meantime it must light up
                 // again, attributed to whoever took over.
@@ -5039,7 +5039,7 @@ export class WorkspaceStore {
         actor: agent,
       });
       emitOverride();
-      this.attempts().checkedOut(row, agent, opts.attempt);
+      this.attempts().checkedOut(claimed, agent, opts.attempt);
       // Transition site 3 of 5, and the one that matters most in practice: a
       // plain `staple checkout` IS how work starts, and its UPDATE above sets
       // status = 'in_progress' directly. Hooking only `updateIssue` would have
