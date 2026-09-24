@@ -614,6 +614,16 @@ export class AttemptLedger {
    * An ordinary `attempt.update`: `interrupted`, the clause's reason, `inferred`, dated at the
    * attempt's last activity.
    */
+  /**
+   * Whether a stored orphan end could be owed at all: some attempt here is stored open. One
+   * read of the partial index, outside any transaction, so a mutating command in a workspace
+   * with no open attempt opens no second write transaction for it.
+   */
+  mayOweOrphanEnds(): boolean {
+    if (!hasAttemptTables(this.db)) return false;
+    return this.db.prepare("SELECT 1 FROM attempts WHERE state <> 'ended' LIMIT 1").get() !== undefined;
+  }
+
   writeOrphanEnds(): number {
     // A database a store was opened on before its migrations ran (a test, a repair path).
     if (!hasAttemptTables(this.db)) return 0;

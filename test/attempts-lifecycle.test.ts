@@ -480,6 +480,30 @@ describe("orphaned attempts on one device", () => {
   });
 });
 
+describe("the cost of the stored orphan end", () => {
+  it("a command in a workspace with no stored-open attempt opens one transaction, not two", () => {
+    const issue = store.createIssue({ title: "Quiet" });
+    const journal = store.journal;
+    const run = journal.run.bind(journal);
+    let runs = 0;
+    journal.run = (<T>(fn: () => T): T => {
+      runs += 1;
+      return run(fn);
+    }) as typeof journal.run;
+    try {
+      store.addComment(issue.id, "no attempt anywhere", "someone");
+      expect(runs).toBe(1);
+      store.checkoutIssue(issue.id, "agent-a");
+      runs = 0;
+      // With one stored open, the command's start looks for orphan ends in a scope of its own.
+      store.addComment(issue.id, "an attempt is open", "agent-a");
+      expect(runs).toBe(2);
+    } finally {
+      journal.run = run as typeof journal.run;
+    }
+  });
+});
+
 describe("history before capture", () => {
   it("rebuilds attempts from the events an older build left, once", () => {
     const issue = store.createIssue({ title: "Old work" });

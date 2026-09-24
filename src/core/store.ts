@@ -599,7 +599,7 @@ export class WorkspaceStore {
      * `docs/execution-telemetry.md`): at the start of the command, in a scope of its own, so
      * a read never writes to the journal and a refused mutation does not take it back.
      */
-    this.journal.run(() => this.attempts().writeOrphanEnds());
+    if (this.attempts().mayOweOrphanEnds()) this.journal.run(() => this.attempts().writeOrphanEnds());
     this.attempts().forgetResult();
     try {
       return this.journal.run(fn);
