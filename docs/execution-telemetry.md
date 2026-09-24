@@ -83,9 +83,9 @@ transitions; nothing names the tenures. An attempt does.
   at a time, because at most one claim is held at a time. Stored rows can
   disagree after a merge or an unobserved claim change. The
   [read-time rule](#orphaned-attempts-are-closed-at-read-time) leaves one
-  effectively open attempt per issue on each device. The devices agree once the
-  issue state has converged. While a conflict on it is open, the answer is marked
-  `contested` and is provisional.
+  effectively open attempt per issue, evaluated only from replicated rows. After
+  two offline checkouts the answer is marked `contested` and is provisional
+  until the claim conflict is resolved.
 - Attempts exist on whatever issue was claimed. Checkout has no leaf-only rule,
   so a parent can be checked out, and that tenure is an attempt like any other.
   A parent that reads `in_progress` only because a child does has no attempt of
@@ -165,6 +165,7 @@ it is written.
 | `idleSeconds` | For an open attempt, seconds since `lastActivityAt`. It is information. It is not a verdict: staple does not declare an attempt dead on a threshold. |
 | `state`, `outcome`, `endReason`, `endDetection` on read | The stored values, unless the [orphan rule](#orphaned-attempts-are-closed-at-read-time) applies. In that case they are the derived end, and `storedState` shows what the row holds. |
 | `chain` | The attempts linked by `resumesAttemptId`, oldest first, so one read shows every interruption boundary of one piece of work. |
+| `contested` | `true` when the [contested case](#orphaned-attempts-are-closed-at-read-time) applies to this attempt, otherwise `false`. A `contested` state is provisional. |
 
 An attempt's `activeSeconds` and the issue's `timing.activeSeconds` measure
 different things and are **not required to agree**. Timing replays status
@@ -237,9 +238,9 @@ One rule, applied whenever any attempt opens on an issue by any path: **if the
 issue's latest attempt (by `startedAt`, then `id`) has effectively ended
 `interrupted` or `orphaned`, the new attempt's `resumesAttemptId` names it.**
 The rule is evaluated by the opening device, and the value is stored, so it does
-not change afterwards. If the latest attempt's end was `contested` at that
-moment, the link is still written, and the attempt's `detail` records
-`resumeBasis: "contested"`.
+not change afterwards. If the latest attempt read `contested: true` at that
+moment, the link is still written, and the `attempt_started` transition's
+`detail` records `resumeBasis: "contested"`.
 Otherwise `resumesAttemptId` is `null`. The rule covers every sequence the
 individual rows would miss: a stale release followed by a fresh checkout, a
 reported interruption followed by another agent's checkout, and a steal from a
@@ -301,13 +302,13 @@ above:
 - **Hand edits and imports.**
 
 Enumerating these as write-time hooks would leave the next unlisted path
-uncovered, so the rule is derived at read time, from state the devices hold.
-There are two cases, because while a conflict is open the devices do not hold
-the same state.
-
-**Uncontested.** When the issue has no open conflict on `status`, `assignee`
-or the claim pair, and none of the issue's attempts has an open conflict on
-its `state`, `outcome` or end fields:
+uncovered, so the rule is derived at read time. It reads only **replicated
+data**: the issue row and the attempt rows, which every device holds after
+applying the same operations. It never reads the local conflict table. A
+conflict record exists only on a device whose own write overlapped the incoming
+one, detection is never journaled, and a device that bootstrapped after the
+disagreement never detects it. A rule that switched on the conflict table would
+therefore give a third device a different answer.
 
 > An attempt whose stored `state` is `running` or `paused` is **effectively
 > ended** when any of these holds:
@@ -326,22 +327,28 @@ its `state`, `outcome` or end fields:
 > is well founded: of two stored-open attempts that survive clauses 1 to 4, the
 > newer one stays open.
 
-Every device that has applied the same operations holds the same issue row and
-the same attempt rows, and so reaches the same answer.
+**The contested case.** Two offline checkouts of one issue leave two
+stored-open attempts, with different agents and `claim.scope` other than
+`none`. They also leave a conflict on the claim pair, and until a human
+resolves it each device keeps its own `checkout_agent`, because the contested
+field is stripped from incoming operations and from the snapshot re-read
+([conflict preservation](sync.md#conflicts-are-preserved-never-resolved-silently)).
+Clauses 3 and 4 would then orphan a different attempt on each device. So the
+trigger is the replicated shape itself:
 
-**Contested.** While a conflict on any of those fields is open, the devices
-disagree about the issue row until a human resolves it. That is the point of
-[conflict preservation](sync.md#conflicts-are-preserved-never-resolved-silently):
-the contested field is stripped from incoming operations and from the snapshot
-re-read, so device A keeps its claim and device B keeps its own. Clauses 2 to 4
-would then orphan a different attempt on each device. So while the conflict is
-open, clauses 2 to 4 are not evaluated. An attempt whose own state fields are
-contested counts as stored-open, because its create is not contested and
-every device holds it. Among the issue's stored-open attempts, the newest by
-(`startedAt`, `id`) stays open. Every other one reads orphaned with
-`superseded_by_merge`. Each of these reads, open and orphaned alike, carries
-`contested: true`. The answer is provisional, and it becomes final when the
-conflict is resolved and the uncontested rule applies again.
+> When an issue has **two or more stored-open attempts with different agents and
+> `claim.scope` other than `none`**, clauses 3 and 4 are not evaluated for those
+> attempts. Clauses 1, 2 and 5 still are, so the newest of them stays open and
+> the others read orphaned with `superseded_by_merge`. Every one of them,
+> open and orphaned alike, reads `contested: true`.
+
+Only the clauses whose input can diverge are skipped. Status is not part of the
+trigger, so an issue another device moved to review or done still ends the
+attempts on it through clause 2. If `status` is itself under an open conflict,
+clause 2 can differ between the devices that hold the conflict. That affects
+reads only, and it settles when the conflict is resolved. The contested case
+ends when the attempts it covers are down to one stored-open attempt, which
+happens through the stored end below.
 
 An effectively ended attempt reads `state: "ended"`, `outcome: "orphaned"`,
 `endDetection: "derived"`, the clause's `endReason`, and `storedState` equal to
@@ -352,20 +359,49 @@ derived `endedAtBound` equal to its `lastActivityAt`.
 derivation is not monotonic. A status recategorized out of `active` and back
 in, a restore, or a conflict resolution can make the clauses stop holding, and
 a purely derived orphan would then revive as `running` with the gap counted as
-active time. To prevent that, the device that opened the attempt (`deviceId`,
-or the only device of an unconnected workspace) journals a stored end the first
-time it observes the orphan: at the start of its next command in that workspace,
-before it serves the command, and only for an uncontested orphan. The stored end
-is `outcome: "interrupted"`, `endReason` set to the clause's reason,
-`endDetection: "inferred"`, `endedAt` equal to the attempt's `lastActivityAt`
-and `endedAtSource: "last_activity"`. It is an ordinary `attempt.update`. From
-then on the stored row says `ended`, the derivation agrees with it, and nothing
-can revive it. The bounded exception is the interval before that device runs
-again. A revival that happens inside that window reads as `running`, and a
+active time. So the device that opened the attempt (`deviceId`, or the only
+device of an unconnected workspace) journals a **stored orphan end** when all of
+these hold:
+
+- it is running a **mutating** command in that workspace: a write through the
+  CLI, MCP or HTTP, or a sync. The end is journaled at the start of that
+  command. Read-only surfaces never write it (`show`, `ls`, `inbox`, `events`,
+  MCP `get_task` and the other read tools, HTTP `GET`), so a read never writes
+  to the journal;
+- on a connected workspace, its last pull reached the head of the log, so
+  that an operation still in flight from the device that really ended the
+  attempt has had every chance to arrive;
+- it has no open conflict of its own on the issue's claim pair. After the
+  conflict is resolved, the loser's device sees the winner's `checkout_agent`,
+  clause 3 holds for its own attempt, and it writes that attempt's end. That is
+  what ends the contested case. For this write the device evaluates all five
+  clauses against its own rows, and the contested-case skip does not apply. The
+  skip exists to keep reads from diverging, and a device with no open conflict
+  of its own holds the settled claim.
+
+The stored orphan end is `outcome: "interrupted"`, `endReason` set to the
+clause's reason, `endDetection: "inferred"`, `endedAt` equal to the attempt's
+`lastActivityAt` and `endedAtSource: "last_activity"`. It is an ordinary
+`attempt.update`. From then on the stored row says `ended`, the derivation
+agrees with it, and nothing can revive it.
+
+**A stored orphan end is subordinate to a real end.** A remote steal or release
+journals its `issue.update` and its `attempt.update` from one scope, but push
+batches and pull pages are bounded, so the two can arrive separately, and an
+orphan end can be written in the gap. A stored orphan end is recognizable:
+`endDetection: "inferred"` with one of the orphan reasons (`claim_moved`,
+`claim_cleared`, `left_active`, `superseded_by_merge`, `issue_removed`). When
+an end written by any other rule meets a stored orphan end on the same attempt,
+in either order of arrival, the other end wins and **no conflict is opened**.
+This is a declared exception to field-scoped conflict detection, and it covers
+this one pair only. Two real ends that disagree still conflict as usual.
+
+The bounded exception is the interval before the opening device next runs a
+mutating command. A revival inside that window reads as `running`, and a
 device that never runs again leaves the attempt to the derivation for good.
-Both cases are stated, not hidden: `storedState` shows that no end has been
-written. A formerly orphaned attempt that was written as `interrupted` is
-resumable by [the resume rule](#the-resume-rule), like any other interruption.
+Both are visible: `storedState` shows that no end has been written. An attempt
+whose stored end is `interrupted`, whether real or orphan, is resumable by
+[the resume rule](#the-resume-rule).
 
 ### Lifecycle
 
@@ -755,27 +791,33 @@ refresh interval is configured. Three consequences are binding on ingestion:
 
 ### Codex rollout rules
 
-- **Fork-copied history is skipped, by content first.** A rollout whose first
-  `session_meta` line carries `payload.forked_from_id` begins with its parent's
-  history copied in, re-stamped at or just after the fork instant. One file on
-  the author's machine has all 388 lines at a single timestamp, with
-  `used_percent` rising from 36 to 83 under one `resets_at`. Other forks stamp
-  their copies 1 to 3 ms after the `session_meta` line. A timestamp-equality
-  rule therefore misses copies, so the rule works on content:
-  1. **Content match.** Find the parent by `forked_from_id` (the id is the tail
-     of every rollout file name), then its parent, and so on up the chain, since
-     a fork of a fork copies copies. A token-count line in the fork whose
-     `rate_limits` (`limit_id`, `primary`, `secondary`, compared whole) equals a
-     reading anywhere in that ancestor chain is a copy, and is skipped. The
-     ancestors hold the originals with their real times.
-  2. **Opening burst, a heuristic.** Token-count lines are also skipped from the
-     start of the file while each follows the previous one (the first follows
-     the `session_meta` line's **outer** `timestamp`, not `payload.timestamp`)
-     by no more than 1,000 ms. This catches copies whose ancestor is missing or
-     was itself trimmed. It can also drop the fork's own first reading when that
-     lands inside the burst, which loses one reading and never mis-dates one.
-  Skipped lines are reported by ingestion as `{stored: false, reason:
-  "fork_copied"}` and never reach the dedup key.
+- **Fork-copied history is skipped, and only at the start of the file.** A
+  rollout whose first `session_meta` line carries `payload.forked_from_id`
+  begins with its parent's history copied in, re-stamped at or just after the
+  fork instant. One file on the author's machine has all 388 lines at a single
+  timestamp, with `used_percent` rising from 36 to 83 under one `resets_at`.
+  Other forks stamp their copies 1 to 3 ms after the `session_meta` line, so a
+  timestamp-equality rule misses them. Let the **fork instant** be the outer
+  `timestamp` of that `session_meta` line (not `payload.timestamp`). Walking the
+  file's token-count lines from the first one, a line is a copy when either
+  test holds:
+  1. **Pre-fork content match.** Its `rate_limits` (`limit_id`, `primary`,
+     `secondary`, compared whole) equals a reading stamped **before the fork
+     instant** in an ancestor rollout. The parent is found by `forked_from_id`,
+     which is the tail of every rollout file name, then its parent, and so on
+     up the chain, because a fork of a fork copies copies. Ancestor readings
+     from after the fork instant are excluded: the parent keeps running after
+     the fork, both processes see the same account-level percentages, and the
+     fork's own later readings often equal them.
+  2. **Opening burst, a heuristic.** It follows the previous **token-count
+     line** (for the first one, the fork instant) by no more than 1,000 ms.
+     This catches copies whose ancestor is missing or was itself trimmed. It
+     can also drop the fork's own first reading when that lands inside the
+     burst. That loses one reading and never mis-dates one.
+  Skipping covers only the **leading contiguous run**. The walk stops at the
+  first token-count line that passes neither test, and nothing after it is
+  skipped, whatever it matches. Skipped lines are reported by ingestion as
+  `{stored: false, reason: "fork_copied"}` and never reach the dedup key.
 - **Old lines without `limit_id` or `resets_at`** get `limitKey`
   `unlabelled.primary` / `unlabelled.secondary`, `windowSeconds` exactly as
   reported (299 × 60, not rounded to 300), `resetsAt: null` with
@@ -790,9 +832,12 @@ refresh interval is configured. Three consequences are binding on ingestion:
 Usage inside one window instance can read lower than an earlier reading from
 the same account. Causes include status-line caches of different ages, parallel
 Codex sessions, and provider-side corrections. Across the rollouts on the
-author's machine, merged across files and ordered by line timestamp, 74
-readings fall below the window's running high-water mark once fork-copied lines
-are removed by both rules above, by up to 8 points. With the copied lines
+author's machine, merged across files and ordered by line timestamp, 98
+readings fall below the window's running high-water mark, by up to 9 points,
+once fork copies are removed by the leading-run rule above (887 lines skipped).
+Other copy-detection rules tried during review gave between roughly 60 and 100
+readings, with a maximum of 8 or 9 points, so the figure depends on the rule
+and not on the provider. With the copied lines
 included it is 945 readings, by up to 42 points, so most apparent regressions
 in raw rollouts are fork copies and not provider behaviour. The contract does not
 pick the right one:
@@ -833,7 +878,8 @@ seconds. The last kind is stored with `heartbeat: true`. A heartbeat shows
 that capture was running. With `observedAtSource: "capture"` it does not show a
 fresh provider observation, so coverage reports capture gaps and never presents
 heartbeats as measurements. `dedupKey` is the first 32 hex characters of
-`sha256(source.kind, accountRef, limitKey, sessionRef, resetsAt, usedPercent, observedAt)`.
+`sha256` over the tuple `(source.kind, accountRef, limitKey, sessionRef,
+resetsAt, usedPercent, observedAt)`.
 Replaying the same rollout file therefore stores nothing twice. Fork-copied lines
 never reach the key, because they are skipped, not deduplicated. Samples live
 in `hub.db`, not in the events table, so the key is a plain digest and not an
@@ -902,6 +948,7 @@ missing values from looking like measurements.
 | Duration | Integer seconds in a field ending `Seconds`. Input accepts the existing vocabulary (`90s`, `30m`, `2h`, `3d`). |
 | Percent | A JSON number on a 0–100 scale (not a 0–1 fraction), as reported. `usedPercent` may exceed 100. |
 | Identifier | UUID v4 (`randomUUID()`) for attempts, transitions, windows and samples. Display handles (`ABC-42 attempt 3`, a window's `label`) are derived and never keys. |
+| Hash input | Every `sha256` on this page hashes UTF-8 bytes. A tuple is serialized as a compact JSON array in the order written (`JSON.stringify([...])`, no whitespace). Strings are JSON strings, instants are their ISO-8601 strings, numbers are JSON numbers exactly as stored, and a missing value is JSON `null`. A single value (a transition id) is hashed as its bare string. `sessionRef`'s `harness name + ":" + session id` is a plain string, not a tuple. |
 | Dedup key | Event keys for attempt transitions use the `ids.ts` level-triggered shape, `<kind>:<entityId>:<count>:<32 hex>` ([Lifecycle](#lifecycle)). Budget samples are not events, so their `dedupKey` is a bare 32-hex digest, the form the journal scope keys already take. |
 | Enum | Lowercase `snake_case`, a closed set per field (`harness.name` included: `claude_code`, `codex`, `other`). A value from a newer build is preserved and shown verbatim, never coerced, following the unknown-field rule in [sync.md](sync.md#the-operation-envelope). |
 | `accountRef` | Operator-chosen slug, `[a-z0-9][a-z0-9-]{0,63}`. |
@@ -955,11 +1002,10 @@ Two offline devices can each open an attempt on the same issue. Offline claims
 are `local` and never implied exclusivity, and that does not change. After a
 merge, both attempts exist and both are shown. Neither is deleted. The
 [orphan rule](#orphaned-attempts-are-closed-at-read-time) leaves one of them
-effectively open. If the two offline checkouts left an open conflict on the
-claim, every device picks the same survivor, the newer attempt, marked
-`contested: true`, until the conflict is resolved. After that, the attempt whose
-agent no longer holds the claim reads `orphaned` on every device, and its
-opening device writes the end down. A contradictory stored end (one device completed, the other
+effectively open. While both attempts are stored-open, every device takes the
+newer one as the survivor from the replicated rows alone, and marks both
+`contested: true`. Once the claim conflict is resolved, the losing attempt's
+opening device writes its end down, and the contested case is over. A contradictory stored end (one device completed, the other
 recorded an interruption) is a field conflict on `attempt` and follows
 [conflict preservation](sync.md#conflicts-are-preserved-never-resolved-silently),
 never silent last-writer-wins. No part of this relies on the fencing token. The
@@ -1051,8 +1097,11 @@ samples, "no change" still does not mean the provider measured again (see
 - **Inputs are parsed for their rate-limit fields and the rest is discarded.**
   The status-line JSON also carries `cwd`, `transcript_path`, repository
   identity and a session name. None of it is stored. Codex rollout lines carry
-  prompts and outputs. Only the `session_meta` fork marker and timestamp and the
-  `token_count` rate-limit object are read.
+  prompts and outputs. From a rollout, ingestion reads only the `session_meta`
+  line's session id, fork marker and timestamp, and each `token_count` line's
+  timestamp and rate-limit object. To detect fork copies it reads the same
+  fields, and nothing else, from the ancestor rollout files named by
+  `forked_from_id`. The session id is hashed before storage (next bullet).
 - **Accounts are labels, not identities.** `accountRef` is a name the operator
   chooses (`personal-max`). No email address, organization id or account UUID is
   stored. `plan_type` is kept as the optional `planTier` field of the
@@ -1060,7 +1109,11 @@ samples, "no change" still does not mean the provider measured again (see
   not identifying and it explains a limit. Source bindings name config
   directories on this machine and stay in the staple home.
 - **Harness session ids are hashed.** `sessionRef` is the first 16 hex characters
-  of `sha256(harness name + ":" + session id)`. It is enough to tell "same
+  of `sha256(harness name + ":" + session id)`. The harness name is the
+  `harness.name` enum value. On a budget sample it comes from `source.kind`
+  (`claude_code_statusline` → `claude_code`, `codex_rollout` → `codex`), so a
+  sample's `sessionRef` equals the `sessionRef` of an attempt reported from the
+  same session, and the two can be joined. It is enough to tell "same
   session" from "new session", which is all the attempt rules need, and it does
   not reveal the transcript file name when the attempt replicates.
 - **Attribution travels, as it already does.** The attempt's `agent`, harness
