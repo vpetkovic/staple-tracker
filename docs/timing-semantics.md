@@ -278,7 +278,7 @@ ordered by `seq` within one database. Attempts and transitions are ordered by
 | A blocker is deleted (the edge goes by cascade, with no event) | unknown instant. The dependent's edge-derived time is `approximate` | none |
 | An edge is created with the issue (`--blocked-by` on `new`) or by `blockParentUntilDone` (no event) | from `relations.created_at`. The record is `approximate` if that edge matters inside the wall span | none |
 | Reopen from `done`/`cancelled` | `[endAt, t)` becomes `resolved`. `wall.endAt` is recomputed | none |
-| Attempt read as orphaned | its end is `endedAtBound`, clipped to the `active` category | `min(replicated evidence, row bound)` ([Work](#work)) |
+| Attempt read as orphaned | its end is `endedAtBound`, clipped to the `active` category | replicated evidence before the earliest limit ([Work](#work)) |
 | Issue deleted | `wall` ends at the deletion. Excluded from every ratio | open attempts orphan (`issue_removed`) |
 | A status is recategorized in the vocabulary (`staple statuses`) | no event. The replay reads each status's category from the **current** vocabulary, so it still replays exactly and the history is re-bucketed retroactively ([Q9](#open-questions)) | open worker attempts orphan by clause 2 if the status left `active` |
 | `statuses remove --migrate-to` | no event, and the removed id is unreadable to the replay, so the issue falls back to `approximate` and `wall` is `replay_unavailable` | as above |
@@ -466,56 +466,73 @@ because a status write or other event by the agent is not replicated evidence.
 On the maintainers' tracker this makes no difference to the sparse count: the
 same 30 of 187 done leaves are sparse by either kind of evidence.
 
+**Limits filter evidence, they never clamp it.** Every bound below is a
+**limit** on which evidence counts, not a value the end is pulled to. For a limit
+`λ`, `evidenceBefore(A, λ)` is the latest of `A.startedAt` and every evidence
+instant of `A` that is **strictly before** `λ`. Evidence at or after the limit is
+ignored, and the end never moves to `λ` itself. A clamp would do the opposite:
+`min(evidenceAt, λ)` turns a comment written after a stale release into "work
+until the release", crediting the silence the release had already classified as
+an interruption. With several limits, the earliest one applies.
+
 **The row bound.** For an attempt whose issue left `active`, the replicated row
-bounds the end when it can:
+gives a limit when it can:
 
 - the row is `done` and has `completedAt`: `completedAt`;
 - the row is `cancelled` and has `cancelledAt`: `cancelledAt`;
-- anything else: **no bound**. `updatedAt` is not one, because recategorizing a
-  status (`recategorizeStatus` in `src/core/store.ts`) moves issues out of
-  `active` without touching `updated_at`. Such an attempt uses its evidence end
-  unclipped and carries the `end_unbounded` quality input.
+- anything else: **no limit from the row**. `updatedAt` is not one, because
+  recategorizing a status (`recategorizeStatus` in `src/core/store.ts`) moves
+  issues out of `active` without touching `updated_at`. Such an attempt carries
+  the `end_unbounded` quality input.
+
+**The successor limit.** `next(A)` is the `startedAt` of the next worker attempt
+on the issue, by `startedAt` then `id`, when there is one. Evidence at or after
+it belongs to the successor's tenure. Without this limit, an attempt orphaned by
+a recategorisation and followed by the same agent re-claiming and commenting
+would absorb the successor's comments and count the same seconds twice.
 
 **The end of each worker attempt `A`, read with the orphan rule applied:**
 
 - **Recorded end, reported or by another actor** (a stored end that is not an
   orphan end, as `isOrphanEnd` in `src/core/cloud/attempt-ends.ts` tells them
-  apart, with `endDetection` other than `inferred`): `end(A) = A.endedAt`. Each is
-  written by the mutation that ended the tenure (the `statusMoved`, `released`
+  apart, with `endDetection` other than `inferred`): `end(A) = A.endedAt`. Each
+  is written by the mutation that ended the tenure (the `statusMoved`, `released`
   and `stolen` hooks in `src/core/telemetry/attempts.ts`), dated at that
   mutation, and replicates, so it reads the same everywhere.
 - **Recorded end, inferred** (`claim_stolen`, `released_stale`): the stored
   `endedAt` is the stealing or releasing device's `lastActivityOf`, which reads
-  that device's local events and can be earlier than evidence that replicated
-  from the attempt's own device. Using it alone would shrink the work after the
-  fact. So `end(A) = max(A.endedAt, min(evidenceAt(A), cap))`, where `cap` is the
-  successor attempt's `startedAt` for a steal, and the `at` of the ending
-  `attempt_interrupted` transition (the release instant) for a stale release.
+  that device's local events and can miss evidence that replicated from the
+  attempt's own device. Using it alone would shrink the work after the fact. So
+  `end(A) = max(A.endedAt, evidenceBefore(A, λ))`, where `λ` is `next(A)` for a
+  steal, and the `at` of the ending `attempt_interrupted` transition (the release
+  instant) for a stale release.
 - **Orphan end, stored or derived** (a stored end with `endDetection: inferred`
   and a reason in `ORPHAN_END_REASONS`, or a stored-open attempt that reads
-  `orphaned`): `end(A)` is the minimum of
-  - `evidenceAt(A)`;
-  - the row bound, for `left_active` only;
-  - the `startedAt` of the **next worker attempt** on the issue (by `startedAt`,
-    then `id`), if there is one. Without this cap an orphan's evidence runs on
-    into its successor: an attempt orphaned by a recategorisation, followed by the
-    same agent re-claiming and commenting, would absorb the successor's comments
-    and count the same seconds twice;
-  - for a **stored** orphan end, its stored `endedAt`. The opener dated it at its
-    own `lastActivityOf`, which is at or after every replicated evidence instant
-    the opener held, so this cap only ever removes evidence that arrived later
-    and belongs to someone else's tenure. It does not move the number when the
-    stored end arrives.
+  `orphaned`): `end(A) = evidenceBefore(A, λ)`, where `λ` is the earliest of
+  `next(A)` and, for `left_active`, the row bound.
+
+  A **stored** orphan end also filters at its stored `endedAt`, inclusively
+  (evidence after it is ignored). The opener dated it at its own
+  `lastActivityOf`, which is at or after every replicated evidence instant it
+  had applied, so the filter only drops evidence written after the tenure was
+  given up, and the number does not move when the stored end arrives. One edge
+  case breaks that argument: the **same identity** writing document revisions
+  from a second device. The opener applies those revisions but emits no
+  `doc_updated` event for them, so its `lastActivityOf` can miss them, and the
+  stored `endedAt` can be earlier than evidence the derived end had counted. The
+  number then shrinks when the stored end arrives. It is the same shared-identity
+  cost the telemetry contract already documents, and a per-session identity
+  avoids it.
 
   A derived orphan end is **provisional** until the stored end exists. Its reason
-  can still change, and the row bound with it: an attempt orphaned `left_active`
+  can still change, and the row limit with it: an attempt orphaned `left_active`
   becomes `claim_moved` if the issue is reopened and another agent claims it,
-  which drops the `completedAt` bound. The `workSeconds` read carries the
+  which drops the `completedAt` limit. The `workSeconds` read carries the
   `orphan_provisional` input (`approximate`) until the stored orphan end is
   written.
-- **Effectively open**: `end(A) = evidenceAt(A)`, capped at the next worker
-  attempt's `startedAt` if one exists (only after a merge). An open attempt's work is
-  counted through its last replicated evidence, so it can lag the elapsed
+- **Effectively open**: `end(A) = evidenceBefore(A, next(A))` when a successor
+  exists (only after a merge), otherwise the latest evidence. An open attempt's
+  work is counted through its last replicated evidence, so it can lag the elapsed
   `countedThrough` on the device that is writing.
 
 `A`'s contribution is `seconds(startedAt, end(A))` minus its paused intervals
@@ -657,8 +674,9 @@ evaluated only from replicated rows, so every device reads the same answer:
 >    newer attempt's `startedAt`.
 >
 > When more than one clause holds, the reason is the **first** clause that holds,
-> and the effective end is the **minimum** of the attempt's replicated evidence
-> and every bound of every clause that holds.
+> and the effective end is `evidenceBefore(A, λ)` ([Work](#work)), where `λ` is
+> the earliest bound of every clause that holds. Bounds filter the evidence, they
+> never clamp the end to themselves.
 
 Clause 3 does not require the newer attempt to be open. If it did, an attempt
 superseded by a newer one would revive as soon as the newer one ended. Clause 2
@@ -874,7 +892,7 @@ Each needs a decision. The page above is written to the recommended default.
    - an orchestrator attempt's evidence includes the issue and all its
      descendants;
    - the orchestrator-lane read-time clauses (removed, resolved, superseded by
-     any newer attempt of the same agent, first clause wins, minimum bound),
+     any newer attempt of the same agent, first clause wins, earliest limit filters the evidence),
      applied by every reader and by `writeOrphanEnds`;
    - `issue_resolved` and `superseded_by_newer` added to `ORPHAN_END_REASONS` in
      `src/core/cloud/attempt-ends.ts`, which the client applier, conflict
