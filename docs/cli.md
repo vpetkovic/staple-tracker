@@ -38,6 +38,11 @@ staple queue [--all] [--effective]                  the plan, and the order agen
 staple queue next [--actor A]                       the one row to take, and what it skipped
 staple queue add|rm <ref> [--at N] [--base N] | mv <ref> --at N | reorder <r1,r2> | prune
 staple checkout <ref> --override -m <why>           take a row out of turn, on the record
+
+staple budget ingest --source claude-statusline [--tee] [--account A]   a status-line reading (stdin)
+staple budget ingest --source codex-rollout <file> [--account A]        a Codex rollout's readings
+staple budget ingest --source manual --account A --limit-key K --used P [--resets-at T]
+staple budget capture on|off | bind --source S --account A | unbind | bindings
 ```
 
 `staple help` has the full option list. `checkout` is an alias for `start`, and
@@ -599,6 +604,50 @@ same rule `claim` and `timing` follow. At most one of the pair is ever non-null.
 
 Semantics, and the tests behind each rule, are in
 [semantics.md](semantics.md#approval-gates).
+
+## Provider budget
+
+Provider usage readings, recorded on this machine so a scheduler can reason
+about subscription windows. The contract is
+[execution-telemetry.md](execution-telemetry.md): limit windows, budget
+samples, missingness. Samples live in the staple home's `hub.db` and never
+replicate, and ingestion makes no network request. Capture is opt-in and each
+harness home is bound to an account label first
+([configuration.md](configuration.md#budget-capture-and-source-bindings)).
+
+```bash
+staple budget capture on
+staple budget bind --source claude-statusline --account personal-max
+staple budget ingest --source claude-statusline --tee | my-statusline      # in the statusLine command
+staple budget ingest --source codex-rollout ~/.codex/sessions/2026/09/24/rollout-….jsonl
+staple budget ingest --source manual --account personal-max --provider anthropic \
+  --limit-key five_hour --used 37.5 --resets-at 3h                         # read off /usage
+```
+
+- **`--tee`** writes the status-line input back to stdout byte for byte, before
+  anything is parsed, so staple can sit in front of the status line you already
+  use. Nothing else goes to stdout, and a refusal goes to stderr.
+- **What is stored is what was reported.** `usedPercent` keeps fractions and
+  values above 100; `remainingPercent = max(0, 100 − usedPercent)` and
+  `exceeded = usedPercent ≥ 100`. A missing value is `null` with a reason in
+  `missing`, never `0`, and a source with no reading stores no row.
+- **Resets are instants.** Epoch seconds are converted exactly
+  (`resetsAtSource: "observed_absolute"`); a duration such as `3h` is added to
+  the capture instant (a Codex line's own timestamp) and marked
+  `derived_from_relative`, with `confidence: "low"`.
+- **A reading is stored when it is news**: when it differs from the latest one
+  of the same window and harness session, when its reset moved by more than
+  120 seconds, or, as `heartbeat: true`, when that latest one is over 300
+  seconds old. A replay stores nothing twice.
+- **Codex forks**: the parent's history a forked rollout starts with is skipped
+  (`reason: "fork_copied"`), only as the file's leading run.
+
+`--json` prints `{source, provider, accountRef, accountSource, outcomes,
+storedCount, skipped}`, the same object the MCP tool `record_budget_sample`
+returns. Each outcome is `{stored: true, sample}` or `{stored: false, reason}`
+with `reason` one of `unchanged`, `fork_copied`, `not_reported_by_source`,
+`parse_error`. Refusals use the existing envelope: `validation` (exit 2) with
+`detail.reason` `capture_disabled` or `no_binding_configured`.
 
 ## Machine-readable output
 

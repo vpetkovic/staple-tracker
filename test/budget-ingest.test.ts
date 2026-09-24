@@ -17,7 +17,8 @@ import { BudgetStore, type BudgetSample, type SampleOutcome } from "../src/core/
 import { bindBudgetSource, setBudgetCapture } from "../src/core/telemetry/budget-config.js";
 import { ingestBudget, type IngestRequest, type IngestResult } from "../src/core/telemetry/ingest.js";
 import { StapleError } from "../src/core/types.js";
-import { removeDir, tempDir } from "./fixtures/characterize-support.js";
+import { REPO_ROOT, removeDir, tempDir } from "./fixtures/characterize-support.js";
+import { readCode, sourceFiles } from "./fixtures/source-scan.js";
 import {
   STATUSLINE_SESSION_ID,
   after,
@@ -678,5 +679,15 @@ describe("privacy: inputs are parsed for their rate-limit fields and the rest is
     for (const secret of [STATUSLINE_SESSION_ID, id, "/home/operator", "example-repo", "example-owner", "SECRET PROMPT", codexDir, claudeDir]) {
       expect(dump, secret).not.toContain(secret);
     }
+  });
+});
+
+describe("budget data does not leave the machine", () => {
+  it("is named by no sync, journal or Worker code, so nothing can carry it", () => {
+    const roots = [join(REPO_ROOT, "src", "core", "cloud"), join(REPO_ROOT, "worker", "src")];
+    const offenders = roots
+      .flatMap((root) => sourceFiles(root))
+      .filter((file) => /budget_samples|limit_windows|BudgetStore|core\/telemetry/.test(readCode(file)));
+    expect(offenders).toEqual([]);
   });
 });
