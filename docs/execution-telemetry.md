@@ -350,6 +350,13 @@ reads only, and it settles when the conflict is resolved. The contested case
 ends when the attempts it covers are down to one stored-open attempt, which
 happens through the stored end below.
 
+Two offline checkouts under the **same identity** (for example `claude` on two
+machines) do not trigger the contested case, because the agents do not differ.
+Clause 3 cannot tell the two attempts apart either, so they fall through to
+clause 5. The newest one survives, deterministically on every device. The
+losing attempt's device still waits for its own claim conflict to be resolved
+before it writes that attempt's end.
+
 An effectively ended attempt reads `state: "ended"`, `outcome: "orphaned"`,
 `endDetection: "derived"`, the clause's `endReason`, and `storedState` equal to
 the stored value. It has `endedAt: null` with reason `end_not_observed`, and a
@@ -368,9 +375,14 @@ these hold:
   command. Read-only surfaces never write it (`show`, `ls`, `inbox`, `events`,
   MCP `get_task` and the other read tools, HTTP `GET`), so a read never writes
   to the journal;
-- on a connected workspace, its last pull reached the head of the log, so
-  that an operation still in flight from the device that really ended the
-  attempt has had every chance to arrive;
+- on a connected workspace, its last pull reached the head of the log. Staple
+  does not persist that fact today: `hasMore` is only a loop variable in the
+  pull, and `sync_state` keeps a `cursor` and `last_sync_at`. So the persistence
+  work records it, for example as a head-reached cursor and timestamp in
+  `sync_state`. This narrows the window in which the real end is still in
+  flight. It does not close it, because the other device may not have pushed
+  yet. The [apply rule](#a-stored-orphan-end-never-overwrites-a-real-end) is
+  the actual protection;
 - it has no open conflict of its own on the issue's claim pair. After the
   conflict is resolved, the loser's device sees the winner's `checkout_agent`,
   clause 3 holds for its own attempt, and it writes that attempt's end. That is
@@ -385,21 +397,45 @@ clause's reason, `endDetection: "inferred"`, `endedAt` equal to the attempt's
 `attempt.update`. From then on the stored row says `ended`, the derivation
 agrees with it, and nothing can revive it.
 
-**A stored orphan end is subordinate to a real end.** A remote steal or release
-journals its `issue.update` and its `attempt.update` from one scope, but push
-batches and pull pages are bounded, so the two can arrive separately, and an
-orphan end can be written in the gap. A stored orphan end is recognizable:
-`endDetection: "inferred"` with one of the orphan reasons (`claim_moved`,
-`claim_cleared`, `left_active`, `superseded_by_merge`, `issue_removed`). When
-an end written by any other rule meets a stored orphan end on the same attempt,
-in either order of arrival, the other end wins and **no conflict is opened**.
-This is a declared exception to field-scoped conflict detection, and it covers
-this one pair only. Two real ends that disagree still conflict as usual.
+#### A stored orphan end never overwrites a real end
+
+A remote steal or release journals its `issue.update` and its `attempt.update`
+from one scope, but push batches and pull pages are bounded, so the two can
+arrive separately, and an orphan end can be written in the gap. A stored orphan
+end is recognizable: `endDetection: "inferred"` with one of the orphan reasons
+(`claim_moved`, `claim_cleared`, `left_active`, `superseded_by_merge`,
+`issue_removed`). Any other stored end is a **real end**.
+
+Choosing between the two is an **apply rule**, not a conflict-detection rule.
+Conflict screening runs only on a device whose own write overlapped. A third
+device applies both operations in log order, and so does the Worker's
+per-key fold behind `/snapshot` and backups. Only a rule that every reader
+of the log applies makes them all hold the same end:
+
+> When an `attempt` operation that sets end fields is applied, an **orphan end
+> never overwrites a real end** that the row already holds, and a **real end
+> always overwrites an orphan end**. Otherwise the ordinary rules apply.
+
+The rule compares the incoming end fields (`state`, `outcome`, `endReason`,
+`endDetection`, `endedBy`, `endedAt`, `endedAtSource`) with the stored ones as
+one unit. Every reader of the log implements it: the client applier, the
+Worker fold (and with it `/snapshot` hydration and backups), the tail fold and
+the test service. This is the same arrangement as revision placement, where
+[every reader of the log uses one rule](sync.md#conflicts-are-preserved-never-resolved-silently).
+A pair of an orphan end and a real end is settled by this rule, in either
+direction and in either order of arrival, and **records no conflict**.
+Conflict screening skips the end fields when the pair is exactly one orphan end
+and one real end. Two real ends that disagree still conflict as usual, and so
+do two orphan ends that disagree.
 
 The bounded exception is the interval before the opening device next runs a
 mutating command. A revival inside that window reads as `running`, and a
 device that never runs again leaves the attempt to the derivation for good.
-Both are visible: `storedState` shows that no end has been written. An attempt
+The contested case has the same limit. If the losing device never runs again,
+the contested case stays in place permanently. The newest of the attempts
+survives, which is not necessarily the one whose agent holds the claim, and
+every attempt in the case keeps reading `contested: true`. All of this is
+visible: `storedState` shows that no end has been written. An attempt
 whose stored end is `interrupted`, whether real or orphan, is resumable by
 [the resume rule](#the-resume-rule).
 
