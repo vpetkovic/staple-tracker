@@ -3585,6 +3585,35 @@ export function startUiServer(options: UiOptions): UiHandle {
       }
 
       /**
+       * `staple calibrate` / MCP `calibration_cohorts`: calibration cohorts over trusted
+       * samples, from the one store method both call. `kind`, `priority` and `include` take a
+       * comma list or a repeated parameter; `list` is `cohorts` or `samples`.
+       */
+      if (url.pathname === "/api/calibration") {
+        const handle = handleFor(url.searchParams.get("ws") ?? undefined);
+        const listOf = (name: string): string[] | undefined => {
+          const values = url.searchParams.getAll(name).flatMap((value) => value.split(",")).map((value) => value.trim()).filter((value) => value !== "");
+          return values.length === 0 ? undefined : values;
+        };
+        const limit = url.searchParams.get("limit");
+        json(
+          res,
+          200,
+          handle.store.calibration({
+            kind: listOf("kind"),
+            priority: listOf("priority"),
+            parent: url.searchParams.get("parent") ?? undefined,
+            since: url.searchParams.get("since") ?? undefined,
+            include: listOf("include"),
+            list: url.searchParams.get("list") ?? undefined,
+            limit: limit === null ? undefined : Number(limit),
+            cursor: url.searchParams.get("cursor") ?? undefined,
+          }),
+        );
+        return;
+      }
+
+      /**
        * A document's history. A plain GET, so the token gate and the method pin above
        * already cover it — nothing about auth changed to add this.
        */

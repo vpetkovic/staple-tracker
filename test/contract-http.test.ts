@@ -389,6 +389,8 @@ describe("KNOWN: logical errors this surface cannot project", () => {
       "/api/action",
       "/api/agent-context",
       "/api/bootstrap",
+      // `staple calibrate` / MCP `calibration_cohorts`: GET-only, a read.
+      "/api/calibration",
       /**
        * STA-71. GET-only, read-only, and network-free: it renders whether THIS
        * MACHINE has connected the repository, from local files, so the page can

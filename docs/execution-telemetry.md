@@ -1194,6 +1194,7 @@ tests catching drift. The names are proposals. The single-method rule is not.
 | `staple budget [--account A]` | `get_budget` | Per account, each current window with its latest sample, `status`, `missing` |
 | `staple budget history --account A [--since T] [--limit N]` | `list_budget_samples` | `{items, truncated, nextCursor, coverage}` |
 | `staple timing quality [--kind K] [--parent REF] [--since T] [--include S] [--exclude S] [--exclude-reason R]` | `timing_quality` | Counts and coverage of the timing quality states over the eligible population, the ratio aggregates, and the eligible records, bounded ([timing semantics](timing-semantics.md#cohort-coverage)) |
+| `staple calibrate [--kind K] [--priority P] [--parent REF] [--since T] [--include reconstructed] [--samples]` | `calibration_cohorts` | Calibration cohorts over exact samples (reconstructed as its own set on request), each with its fallback level, coverage, medians and a snapshot id; or the samples, bounded ([timing semantics](timing-semantics.md#calibration-cohorts)) |
 | `staple budget ingest --source claude-statusline [--tee] [--account A]` (stdin), `--source codex-rollout <file> [--account A]`, `--source manual --account A --limit-key K --used P --resets-at T` | `record_budget_sample` | The stored sample, or `{stored: false, reason: "unchanged" \| "fork_copied"}` |
 
 `--tee` passes the status-line input through to stdout unchanged, so staple can

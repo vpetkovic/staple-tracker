@@ -78,7 +78,7 @@ const READS: Record<StoreName, readonly string[]> = {
     // The orchestrator lane's read summary (`orchestration` on show/get_task).
     "orchestrationSummary",
     // The certified plan reads (`planSummary` on show/get_task, `staple compare`).
-    "planSummary", "comparePlans", "timingQuality",
+    "planSummary", "comparePlans", "timingQuality", "calibration",
   ],
   MilestoneStore: ["queueSeam", "get", "list", "milestoneOf"],
   QueueStore: ["revision", "entries", "effectiveQueue", "view"],

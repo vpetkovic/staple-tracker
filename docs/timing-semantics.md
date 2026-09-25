@@ -992,6 +992,107 @@ keyset-cursored like every telemetry list
 Filters: `kind`, `parent` (every issue beneath it) and `since` (resolved at or
 after an instant, or a duration ago).
 
+### Calibration cohorts
+
+`staple calibrate` (MCP `calibration_cohorts`, HTTP `GET /api/calibration`)
+builds cohorts from the samples calibration can trust. The rules are written
+once, in `src/core/telemetry/calibration.ts`.
+
+**Samples.** The population is the ratio population above. A member is a
+sample of the `exact` set when `include exact` admits it: exactly the records
+`ratio.exact` sums. The `reconstructed` set is read only when asked for
+(`include reconstructed`: reconstructed records with no approximate, missing or
+floor reason), and it is reported as its own set with its own cohorts.
+Backfilled history and captured history are different evidence, so the two
+are never pooled, and the exact set reads the same with or without the other
+beside it. `timing-floor`, `approximate` and `missing` records are never
+samples. They stay in every denominator and are counted, by state and reason,
+under `excluded`.
+
+**The estimate a sample divides by** is the `estimateAtStart` of the first
+worker attempt on the issue itself, among those behind its `workSeconds`,
+whose reading is the issue's own estimate above 0 (a reconstructed attempt
+read none, so a later captured attempt's reading is used), and otherwise the
+current own estimate ([Q4](#open-questions), clarification 27).
+`estimate.source` says which, and `estimate.missing.atStart` says why there
+was no reading: `parent` (a parent data point: its work is its children's, Q5
+keeps its own attempts out of it, and a child's reading is of the child's
+estimate), `no_worker_attempt`, `not_recorded` (every attempt read no
+estimate, as a reconstructed one does) or `not_own` (the plan came from
+descendants). A sample's
+`ratio` is `workSeconds / estimate.seconds`, so it can differ from the issue's
+`estimateRatio`, which divides by the current estimate.
+
+**Dimensions.** A cohort key is the full combination of five:
+
+| Dimension | Source | No value |
+|---|---|---|
+| `kind` | the issue's kind | never empty |
+| `priority` | the issue's priority | never empty |
+| `workType` | labels `type:<x>` | `unknown` |
+| `area` | labels `area:<x>` | `unknown` |
+| `model` | `harness.model` of the worker attempts behind `workSeconds`, collected by the rule that sums it: a leaf's own; for a parent, those of the children its rollup counts, so never a cancelled child's and never a non-leaf's own ([Q5](#open-questions)) | `unknown` |
+
+The tracker has no column for work type or repository area, so both read a
+label convention: the prefix is matched without case, the value is lowercased
+and trimmed, and several values on one issue are joined with `+` in sorted
+order. Projects were not used: a project groups work by initiative, not by the
+part of the repository it touches. The workspace itself is the repository, and
+its id is part of the snapshot identity. An attempt that named no model counts
+as `unknown`, so work by several models, or by a named and an unnamed one,
+reads their sorted join (`opus+unknown`). Every source is replicated, so a
+sample has the same key on every device. The evidence set is the sixth
+partition: every cohort belongs to one set and never mixes them.
+
+**The fallback.** A key with fewer than **5** samples reads a broader class,
+dropping one dimension at a time, in this order: `model`, `area`, `workType`,
+`priority`, `kind`, down to the whole set (levels `full`, `without_model`,
+`without_area`, `without_work_type`, `kind`, `all`). With 5 samples, the range
+of the samples covers the median with probability 1 − 2 × 0.5⁵ = 93.75%, the
+first n at which the range is at least a 90% distribution-free interval for it
+(4 samples give 87.5%). The order drops first what is least often recorded and
+most likely to change between runs of the same kind of work (the model an
+agent ran on, then the two label conventions), and keeps longest what every
+issue has and what most shapes its size (priority, then kind). Each cohort
+reports `path`, every level tried with its sample count; `level`, `levelName`
+and `class` (the key with dropped dimensions as `*`); and `fallback`: `none`,
+`below_minimum`, or `below_minimum_everywhere` when not even the whole set has
+5, in which case the whole set is read and the cohort carries the warning
+`small_sample`. The walk is deterministic, and the class a key reads depends
+only on the samples.
+
+**Per cohort.** `samples`; `coverage: {samples, eligible, fraction,
+denominator: "ratio_population"}`, where `eligible` is every population member
+in the class whatever its quality; `ratio.median` (the lower median, index
+`floor((n − 1) / 2)`, the quantile method of this page), `ratio.pooled`
+(`Σ workSeconds / Σ estimate`) and the sample range `ratio.min`/`ratio.max`;
+`workSeconds.median`, `.total`, `.min` and `.max`; `rangeConfidence`, `1 − 2 ×
+0.5ⁿ`, the probability that the range covers the class's median whatever the
+distribution (0.9375 at n = 5, the guarantee the minimum rests on);
+`estimateSources`; `members` (up to 20 refs, oldest resolution first, with the
+total); and `excluded`, the members of the class that are not samples of this
+set, by state and reason. Each set also reports its own samples, coverage over
+the whole population and exclusions. Uncertainty (ranges, quantiles, the
+timing floor and heavy tails) belongs beside `ratio` and `workSeconds`, from
+the same samples.
+
+**Snapshot identity.** Every report carries `snapshot`: `{id, algorithm,
+repositoryId, members, samples}`. `id` is a SHA-256 over the algorithm version
+(`calibration/1`), the repository id, the selection (kinds, priorities, the
+parent's id, `since` as given, the sets read), the minimum,
+and every population member in id order. A sample contributes its set, its
+resolution instant, its state and reasons, its dimensions, `workSeconds`, the
+estimate it divided by, its source and the current estimate. Any other member
+contributes what keeps it out (its state and reasons), its dimensions and its
+resolution instant, and not its figure, which for an unsettled record can move
+with `asOf`. So the same data gives the same id on every device, whatever order
+the rows are read in and however much later, and a page or the sample listing
+of it shares the id. It reads no event sequence and no operation sequence:
+both are device-local. A suggestion or forecast built from a report can name
+the exact data it came from by quoting `snapshot.id`. A relative `since` (`30d`) is hashed as
+written, not as the instant it resolves to at the read, so reading it again
+later over the same members gives the same id.
+
 ## What the live tracker says, in one place
 
 All figures come from a read-only snapshot of the maintainers' tracker **taken
@@ -1036,6 +1137,21 @@ the admitted ratio (a ratio of sums) is 0.088 once sparse records are
 excluded, and the exact aggregate covers only the 3 task leaves captured and
 exact.
 
+**Calibration on the same tracker** (a snapshot taken 2026-09-25, 302
+issues, 134 in the ratio population), read with `staple calibrate` under an
+isolated home:
+
+| Read | Samples | Cohorts |
+|---|---|---|
+| As captured (exact only) | 5 of 134 (3.7%): four `task`/`high`, one `bug`/`high`; every one divides by its estimate at start | Two keys, 4 and 1 samples; both fall back to `all` (n = 5, ratio median 0.218, pooled 0.237) |
+| After `staple attempt reconstruct` on a copy, `--include reconstructed` | exact 5 as before; reconstructed 108 of 134 (80.6%), 19 more reconstructed records excluded for `sparse` or the floor | 10 reconstructed keys: 4 read their own key (`task`/`high` n = 52, ratio median 0.081), 6 fall back (`task`/`low` to `kind` n = 84; `spike` to `all`) |
+
+No label on the tracker carries `type:` or `area:`, and no captured attempt
+names a model, so those three dimensions read `unknown` everywhere and never
+split a cohort. Live calibration is thin: five exact samples, one class. It
+grows only as attempts are captured with `--harness` and `--model` on the
+checkouts.
+
 **Quantile method.** Every percentile on this page is the **lower** quantile: the
 value at index `floor(p × (n − 1))` of the ascending list, with `n` as stated.
 The upper tail of the ratio is sparse, so the method matters there: the values
@@ -1055,7 +1171,7 @@ and agents execute faster. That is the thing being calibrated, not an error.
 | Closing lifecycle capture gaps | The [bucket table](#the-buckets), its precedence and [every transition](#every-transition) as the reconstruction spec. `asOf` as a parameter. One mutation instant for every writer. `workSeconds` from replicated data only, as specified in [Work](#work). Re-emitting status-moving and edge events dated at the origin instant, so `wall` stops being device-local. `blockers_changed` from every edge-writing path. Pauses never counted as work, and resume opening a new interval. Terminal transitions closing every open interval. The replicated-only inputs (`sparse`, `capture_gap`, `end_unbounded`) as the explicit approximation flags on `workSeconds`, and `unattributed` and `edge_history_incomplete` on `wall`. The orchestrator lane and worker-lane scoping, if [Q1](#open-questions) is accepted. Agent guidance: yield or pause when a blocker appears mid-work. |
 | Validating against controlled runs | Every bucket is defined in milliseconds from recorded instants, so a controlled run states its expected timeline as a list of transitions and an `asOf`, and compares the `wall` buckets, `workSeconds`, `interrupted` and `resumeGapSeconds`, and `orchestrationSeconds`. **Fixtures must control the write clock**, not just `asOf`: every instant on this page comes from `nowIso()` at write time, so a reproducible run injects the clock the store, the event writer and the attempt ledger all read. Tolerance: one second per interval for `activeSeconds`, one second per nonzero bucket for the partition, plus the one-second snapping window. `review` and `blocked` are disjoint by construction, so a run that reads the same second in both has found a bug. Runs on a second device check that `workSeconds` matches everywhere, that `wall` matches on a device that read the tail, and that it reads `replay_unavailable` on one that hydrated. Built: see [Controlled runs](#controlled-runs). |
 | Quality indicators | The [quality inputs](#quality-inputs), the precedence, the [coverage](#missingness-for-the-new-fields) of parents and of the ratio aggregate, and the five new reason codes. Built: see [Quality states](#quality-states). |
-| Calibration and forecasting | `estimateRatio` and its eligibility, `orchestrationSeconds` as a separate overhead figure, `resumeGapSeconds` per chain link. |
+| Calibration and forecasting | `estimateRatio` and its eligibility, `orchestrationSeconds` as a separate overhead figure, `resumeGapSeconds` per chain link. Cohorts built: see [Calibration cohorts](#calibration-cohorts). |
 
 ## Where the numbers appear
 
@@ -1149,8 +1265,9 @@ never a hand-written row:
 
 | `do` | Store method | Fields |
 |---|---|---|
-| `create` | `createIssue` | `ref`, `title`, `parent`, `status`, `estimate`, `blockedBy`, `blockParentUntilDone`, `agent` |
-| `checkout` | `checkoutIssue` | `ref`, `agent`, `stealIfIdle` (a steal) |
+| `create` | `createIssue` | `ref`, `title`, `parent`, `status`, `estimate`, `blockedBy`, `blockParentUntilDone`, `agent`, `kind`, `priority`, `labels` |
+| `checkout` | `checkoutIssue` | `ref`, `agent`, `stealIfIdle` (a steal), `model` (with harness `claude_code`) |
+| `estimate` | `setEstimate` (`staple estimate`) | `ref`, `agent`, `estimate` (`null` clears it) |
 | `release` | `releaseIssue` | `ref`, `agent`, `ifIdle` (a stale release) |
 | `status` | `updateIssue` | `ref`, `to`, `agent`, `assignee` |
 | `comment` | `addComment` | `ref`, `agent`, `body`, `saveAs` (a name for the comment) |
@@ -1175,7 +1292,10 @@ issue is not held; it is checked on the hydrated device too. A read can state
 `effortSeconds` and quality state and reasons, oldest first; and `cohort`, what
 `staple timing quality --parent <ref>` reads at that instant (the eligible
 population, the work counts and reasons, the ratio aggregates, what an exclusion
-drops and the records listed). Every read also checks that the work state is
+drops and the records listed); and `calibration`, what `staple calibrate --parent <ref>`
+reads (the population, the samples per set, every cohort with its key, level, class
+size and median, and every sample with its estimate source and ratio), with the
+snapshot id required to be the same on every device and for both listings. Every read also checks that the work state is
 `exact` exactly when it has no reason, and that the wall has a state.
 Durations in `expect` are the same notation or whole seconds.
 
@@ -1239,6 +1359,7 @@ quality states and inputs, and coverage are compared exactly.
 | `33-steal-refused-document` | a steal on the other device refused at 20 minutes idle because the holder wrote a document revision, then allowed past the threshold |
 | `34-steal-refused-deleted-comment` | the same with a comment the holder wrote and that was deleted later by a replicated deletion |
 | `35-quality-states` | one record in each work state (exact, timing-floor, sparse, missing, reconstructed, reconstructed and sparse) with its reasons and its attempt's state, a cancelled issue with no state, a parent that is reconstructed, and the cohort the leaves make: the eligible denominator, the ratio aggregates, and exclusion by state and by reason |
+| `36-calibration-cohorts` | calibration over the leaves of a parent: exact samples with models from the checkouts and labels for work type and area, a sample re-estimated after it started dividing by its estimate at start, keys of three and two samples falling back to their class without model, a lone bug falling back to the whole set, sparse, timing-floor and reconstructed records kept out of the exact set, the reconstructed set on request, and one snapshot id on every device |
 
 **Adding one.** Write the timeline you want to check as a new file in
 `test/fixtures/controlled-runs/`, with a `title` and the `covers` it exercises. Work out
@@ -1427,6 +1548,26 @@ states the choice in place.
    *longer than* 30 minutes. On the maintainers' tracker one done leaf is sparse by
    a 30 min 51 s gap between a comment and a worklog revision inside its second
    attempt; the threshold is applied as written.
+27. **Calibration divides by the estimate at start (Q4).** Q4 kept the current
+   estimate until estimate history existed. Every estimate write now records
+   `estimate_changed`, and every attempt stores `estimateAtStart`, so calibration
+   switched: a sample divides by the first reading of its own estimate among the
+   attempts on the issue behind its work, and otherwise by the current one, and
+   says which. A parent data point divides by its current estimate.
+   The per-issue `estimateRatio` still divides by the current estimate.
+28. **Work type and area are label conventions.** The tracker has no column for
+   either, and a new column would need a migration and a way to fill it for
+   history. `type:<x>` and `area:<x>` labels are replicated already, cost
+   nothing to adopt, and read `unknown` until someone does.
+29. **The model of a sample is every model behind its work.** The worker attempts
+   that make up `workSeconds` can name different models; the dimension is their
+   sorted join, with `unknown` for an attempt that named none, so no sample is
+   silently filed under one of them.
+30. **A calibration snapshot is identified by content, not by sequence.** The
+   event and operation sequences differ between devices, so an id built from
+   them would name the same data differently on each. The id hashes the
+   replicated inputs of every member instead
+   ([Calibration cohorts](#calibration-cohorts)).
 
 ## Open questions
 
@@ -1489,6 +1630,8 @@ Each needs a decision. The page above is written to the recommended default.
    the telemetry contract asks for). Then switch to the first worker attempt's
    `estimateAtStart`, so a re-estimate made after the work started cannot flatter
    the ratio.
+   Calibration has switched (clarification 27); the per-issue `estimateRatio`
+   has not.
 5. **A parent's own worker attempts.** Default: kept in `ownWorkSeconds`, not
    added to the parent's `workSeconds`, mirroring `activeSeconds`. The alternative
    adds them, which is more complete but makes the two rollups differ.

@@ -301,8 +301,9 @@ describe("tool inventory", () => {
   // record_attempt_event: 47 -> 48. The telemetry reads added list_attempts,
   // get_attempt, get_budget and list_budget_samples: 48 -> 52. The explicit estimate
   // write added set_estimate: 52 -> 53. The certified plan read added compare_plans: 53 -> 54.
-  // The timing quality read added timing_quality: 54 -> 55.
-  it("exposes exactly these 55 tools with these annotations and output schemas", async () => {
+  // The timing quality read added timing_quality: 54 -> 55. The calibration read added
+  // calibration_cohorts: 55 -> 56.
+  it("exposes exactly these 56 tools with these annotations and output schemas", async () => {
     const tools = await harness.listTools();
     const inventory = tools.map((t) => ({
       name: t.name,
@@ -335,6 +336,12 @@ describe("tool inventory", () => {
       {
         name: "timing_quality",
         annotations: { title: "Timing quality", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+        hasOutputSchema: true,
+      },
+      // Calibration cohorts over trusted samples. A read.
+      {
+        name: "calibration_cohorts",
+        annotations: { title: "Calibration cohorts", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
         hasOutputSchema: true,
       },
       {
@@ -881,7 +888,7 @@ describe("tool inventory", () => {
     ]);
   });
 
-  it("marks exactly the twenty-two read tools readOnlyHint: true", async () => {
+  it("marks exactly the twenty-three read tools readOnlyHint: true", async () => {
     const tools = await harness.listTools();
     const readOnly = tools.filter((t) => t.annotations?.readOnlyHint === true).map((t) => t.name);
     expect(readOnly).toEqual([
@@ -892,6 +899,8 @@ describe("tool inventory", () => {
       "compare_plans",
       // Timing quality and cohort coverage: a read.
       "timing_quality",
+      // Calibration cohorts: a read.
+      "calibration_cohorts",
       "list_comments",
       "get_document",
       "events_since",
@@ -1642,6 +1651,9 @@ describe("tool response shapes (31/31)", () => {
       // Pinned in test/timing-quality-surfaces.test.ts, value for value against
       // `staple timing quality --json` and `/api/timing/quality`.
       "timing_quality",
+      // Pinned in test/calibration-surfaces.test.ts, value for value against
+      // `staple calibrate --json` and `/api/calibration`.
+      "calibration_cohorts",
       "create_task",
       "update_task",
       "set_estimate",

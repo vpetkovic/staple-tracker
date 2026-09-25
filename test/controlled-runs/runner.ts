@@ -27,7 +27,8 @@ import { basename, join } from "node:path";
 import { nowIso, setClock, StapleError } from "../../src/core/types.js";
 import { tx } from "../../src/core/db.js";
 import { writeEventRow } from "../../src/core/event-row.js";
-import type { IssueTiming, IssueStatus } from "../../src/core/types.js";
+import type { IssueTiming, IssuePriority, IssueStatus } from "../../src/core/types.js";
+import type { CalibrationCohort, CalibrationSample } from "../../src/core/telemetry/calibration.js";
 import { FakeSyncServer } from "../fixtures/fake-sync-server.js";
 import { OlderBuildDevice } from "../fixtures/older-build.js";
 import { Fleet, type Machine } from "../fixtures/sync-machines.js";
@@ -41,8 +42,24 @@ import { Fleet, type Machine } from "../fixtures/sync-machines.js";
  * another code, and goes on either way, since a refusal writes nothing.
  */
 export type Step = { at: string; device?: string; refused?: string } & (
-  | { do: "create"; ref: string; title?: string; parent?: string; status?: string; estimate?: string | number; blockedBy?: string[]; blockParentUntilDone?: boolean; agent?: string }
-  | { do: "checkout"; ref: string; agent: string; stealIfIdle?: string | number }
+  | {
+      do: "create";
+      ref: string;
+      title?: string;
+      parent?: string;
+      status?: string;
+      estimate?: string | number;
+      blockedBy?: string[];
+      blockParentUntilDone?: boolean;
+      agent?: string;
+      kind?: string;
+      priority?: string;
+      labels?: string[];
+    }
+  /** `model`: the checkout names a harness (`claude_code`) and this model, as `--harness --model` do. */
+  | { do: "checkout"; ref: string; agent: string; stealIfIdle?: string | number; model?: string }
+  /** `staple estimate <ref> <duration>`: an explicit re-estimate; `null` clears it. */
+  | { do: "estimate"; ref: string; agent: string; estimate: string | number | null }
   | { do: "release"; ref: string; agent: string; ifIdle?: string | number }
   | { do: "status"; ref: string; to: string; agent: string; assignee?: string }
   | { do: "comment"; ref: string; agent: string; body?: string; saveAs?: string }
@@ -136,6 +153,35 @@ export interface Expectation {
     items?: string[];
   };
   coverage?: { known: number; total: number; partial: boolean } | null;
+  /**
+   * `staple calibrate --parent <ref>` read at this instant. Replicated data only, so every field
+   * is checked on every device, and the snapshot id must be the same on all of them.
+   */
+  calibration?: {
+    include?: string[];
+    /** The ratio population beneath the parent. */
+    population?: number;
+    /** Samples per evidence set. */
+    sets?: Record<string, number>;
+    /** Every cohort listed, in order: its set, its full key, and what it read. */
+    cohorts?: Array<{
+      set: string;
+      key: Record<string, string>;
+      keySamples: number;
+      level: string;
+      samples: number;
+      eligible?: number;
+      medianRatio?: number;
+      minRatio?: number;
+      maxRatio?: number;
+      rangeConfidence?: number;
+      /** The class's members that are not samples of the set, by state and reason. */
+      excluded?: { count: number; counts: Record<string, number>; reasons: Record<string, number> };
+      members?: string[];
+    }>;
+    /** Every sample, in listing order: its set, the estimate source and its ratio. */
+    samples?: Array<{ ref: string; set: string; estimateSource: string; ratio: number; model?: string }>;
+  };
   /**
    * The claim's liveness (`claim.lastActivityAt`, as `show` and the steal guard read it), an
    * offset; `null` when the issue is not held. Checked on the hydrated device too.
@@ -260,6 +306,8 @@ export async function runControlled(run: ControlledRun): Promise<Check[]> {
     const lastRead = Math.max(...run.expect.map((read) => instant(read.asOf)));
     let previous = -Infinity;
     let hydrated: Machine | null = null;
+    /** Each calibration read's snapshot id, as the first device read it. */
+    const snapshots = new Map<Expectation, string>();
     let older: OlderBuildDevice | null = null;
     const olderCount = { n: 0 };
     for (const entry of timeline) {
@@ -299,6 +347,7 @@ export async function runControlled(run: ControlledRun): Promise<Check[]> {
         invariants(checks, where(label), timing);
         attemptsAgree(checks, where(label), machine, id(expectation.ref), expectation);
         cohortAgrees(checks, where(label), machine, id, expectation, iso, false);
+        calibrationAgrees(checks, where(label), machine, id, expectation, iso, snapshots, refs);
         if (expectation.resumeGaps !== undefined) chainAgrees(checks, where(label), machine, timing);
         if (expectation.claim !== undefined) claimAgrees(checks, where(label), machine, id(expectation.ref), expectation.claim, iso);
       }
@@ -310,6 +359,7 @@ export async function runControlled(run: ControlledRun): Promise<Check[]> {
         invariants(checks, where("c"), timing);
         attemptsAgree(checks, where("c"), hydrated, id(expectation.ref), expectation);
         cohortAgrees(checks, where("c"), hydrated, id, expectation, iso, true);
+        calibrationAgrees(checks, where("c"), hydrated, id, expectation, iso, snapshots, refs);
         if (expectation.resumeGaps !== undefined) chainAgrees(checks, where("c"), hydrated, timing);
         if (expectation.claim !== undefined) claimAgrees(checks, where("c"), hydrated, id(expectation.ref), expectation.claim, iso);
       }
@@ -405,12 +455,21 @@ async function apply(step: Step, context: StepContext): Promise<void> {
         ...(step.blockedBy !== undefined ? { blockedBy: step.blockedBy.map(id) } : {}),
         ...(step.blockParentUntilDone !== undefined ? { blockParentUntilDone: step.blockParentUntilDone } : {}),
         ...(step.agent !== undefined ? { createdBy: step.agent } : {}),
+        ...(step.kind !== undefined ? { kind: step.kind } : {}),
+        ...(step.priority !== undefined ? { priority: step.priority as IssuePriority } : {}),
+        ...(step.labels !== undefined ? { labels: step.labels } : {}),
       });
       refs.set(step.ref, issue.id);
       return;
     }
     case "checkout":
-      store.checkoutIssue(id(step.ref), step.agent, undefined, step.stealIfIdle !== undefined ? { stealIfIdleSeconds: seconds(step.stealIfIdle) } : {});
+      store.checkoutIssue(id(step.ref), step.agent, undefined, {
+        ...(step.stealIfIdle !== undefined ? { stealIfIdleSeconds: seconds(step.stealIfIdle) } : {}),
+        ...(step.model !== undefined ? { attempt: { harness: "claude_code", model: step.model } } : {}),
+      });
+      return;
+    case "estimate":
+      store.setEstimate(id(step.ref), step.estimate === null ? null : seconds(step.estimate), step.agent);
       return;
     case "release":
       store.releaseIssue(id(step.ref), step.agent, step.ifIdle !== undefined ? { ifIdleSeconds: seconds(step.ifIdle) } : {});
@@ -615,6 +674,76 @@ function cohortAgrees(
   // Coverage is over the eligible population, whatever was excluded: the counts add up to it.
   const sum = Object.values(report.work.counts).reduce((a, b) => a + b, 0);
   check(checks, where, "invariant: cohort work counts add up to the eligible population", report.population.eligible, sum);
+}
+
+/**
+ * `staple calibrate --parent <ref>` at the read's instant: the samples, the cohorts and their
+ * fallback, on every device alike, and one snapshot id for all of them.
+ */
+function calibrationAgrees(
+  checks: Check[],
+  where: Where,
+  machine: Machine,
+  id: (ref: string) => string,
+  expectation: Expectation,
+  iso: (offset: string) => string,
+  snapshots: Map<Expectation, string>,
+  runRefs: ReadonlyMap<string, string>,
+): void {
+  const expected = expectation.calibration;
+  if (expected === undefined) return;
+  const query = { parent: id(expectation.ref), include: expected.include, limit: 500 };
+  const report = machine.store.calibration(query, iso(expectation.asOf));
+  const sampled = machine.store.calibration({ ...query, list: "samples" }, iso(expectation.asOf));
+  // Identifiers back to the run's refs, as this device numbers them.
+  const refOf = new Map<string, string>();
+  for (const [ref, entityId] of runRefs) {
+    // A ref can name a comment (`saveAs`); only issues have identifiers.
+    const row = machine.db.prepare("SELECT identifier FROM issues WHERE id = ?").get(entityId) as { identifier: string } | undefined;
+    if (row !== undefined) refOf.set(row.identifier, ref);
+  }
+  const refs = (identifiers: readonly string[]): string[] => identifiers.map((identifier) => refOf.get(identifier) ?? identifier);
+  const at = (field: string, want: unknown, got: unknown, tolerance = 0): void => {
+    if (want !== undefined) check(checks, where, `calibration.${field}`, want, got, tolerance);
+  };
+  at("population", expected.population, report.population.ratio);
+  at("sets", expected.sets, Object.fromEntries(report.sets.map((set) => [set.set, set.samples])));
+  if (expected.cohorts !== undefined) {
+    const cohorts = report.items as CalibrationCohort[];
+    at("cohorts.length", expected.cohorts.length, cohorts.length);
+    expected.cohorts.forEach((want, index) => {
+      const got = cohorts[index];
+      at(`cohorts[${index}].set`, want.set, got?.set ?? null);
+      at(`cohorts[${index}].key`, want.key, got?.key ?? null);
+      at(`cohorts[${index}].keySamples`, want.keySamples, got?.keySamples ?? null);
+      at(`cohorts[${index}].level`, want.level, got?.levelName ?? null);
+      at(`cohorts[${index}].samples`, want.samples, got?.samples ?? null);
+      at(`cohorts[${index}].eligible`, want.eligible, got?.coverage.eligible ?? null);
+      at(`cohorts[${index}].ratio.median`, want.medianRatio, got?.ratio.median ?? null, 0.001);
+      at(`cohorts[${index}].ratio.min`, want.minRatio, got?.ratio.min ?? null, 0.001);
+      at(`cohorts[${index}].ratio.max`, want.maxRatio, got?.ratio.max ?? null, 0.001);
+      at(`cohorts[${index}].rangeConfidence`, want.rangeConfidence, got?.rangeConfidence ?? null, 1e-9);
+      at(`cohorts[${index}].excluded`, want.excluded, got?.excluded ?? null);
+      if (want.members !== undefined) at(`cohorts[${index}].members`, want.members, got === undefined ? null : refs(got.members.refs));
+    });
+  }
+  if (expected.samples !== undefined) {
+    const items = sampled.items as CalibrationSample[];
+    at("samples.length", expected.samples.length, items.length);
+    expected.samples.forEach((want, index) => {
+      const got = items[index];
+      at(`samples[${index}].ref`, want.ref, got === undefined ? null : refs([got.identifier])[0]);
+      at(`samples[${index}].set`, want.set, got?.set ?? null);
+      at(`samples[${index}].estimate.source`, want.estimateSource, got?.estimate.source ?? null);
+      at(`samples[${index}].ratio`, want.ratio, got?.ratio ?? null, 0.001);
+      if (want.model !== undefined) at(`samples[${index}].dimensions.model`, want.model, got?.dimensions.model ?? null);
+    });
+  }
+  // One identity for the data, whichever device read it and whatever it listed.
+  check(checks, where, "invariant: one snapshot id for cohorts and samples", report.snapshot.id, sampled.snapshot.id);
+  const first = snapshots.get(expectation);
+  if (first === undefined) snapshots.set(expectation, report.snapshot.id);
+  else check(checks, where, "calibration.snapshot.id (as the first device read it)", first, report.snapshot.id);
 }
 
 /**

@@ -190,6 +190,13 @@ const COMMANDS: ReadonlyArray<{
     booleans: ["json", "help"],
     shorts: ["h"],
   },
+  // `calibrate`: calibration cohorts over trusted samples, with the fallback and a snapshot id.
+  {
+    name: "calibrate",
+    strings: ["db", "ws", "kind", "priority", "parent", "since", "include", "limit", "cursor"],
+    booleans: ["json", "help", "samples"],
+    shorts: ["h"],
+  },
 ];
 
 /** Every command token in one place, so a removal is a one-line diff. */
@@ -202,7 +209,7 @@ describe("command inventory", () => {
       "status", "estimate", "release", "block", "blocked-by", "wait", "link", "comment",
       "tree", "board", "inbox", "doc", "events", "hub", "ui", "open", "config",
       "migrate", "install", "doctor", "add", "discover", "milestone", "settings",
-      "queue", "budget", "attempt", "attempts", "compare", "timing",
+      "queue", "budget", "attempt", "attempts", "compare", "timing", "calibrate",
     ]);
     // 32 tokens, 29 distinct behaviours: checkout/start, done/cancel and ui/open
     // each share a case. Was 22 before A3 (STA-33) added `config`, 23 before A5
@@ -220,7 +227,8 @@ describe("command inventory", () => {
     // since execution attempts, missing here until the read surfaces) and `attempts`.
     // 36 with `estimate`, the explicit estimate write. 37 with `compare`, the
     // certified plan of named issues. 38 with `timing`, the timing quality read.
-    expect(COMMAND_NAMES).toHaveLength(38);
+    // 39 with `calibrate`, the calibration cohorts read.
+    expect(COMMAND_NAMES).toHaveLength(39);
   });
 
   it.each(COMMANDS.map((c) => c.name))(
