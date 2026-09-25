@@ -276,6 +276,21 @@ describe("the estimate a sample divides by", () => {
     expect(sample.evidence.workerAttempts).toBe(1);
   });
 
+  it("a parent data point never takes a child's reading: a child estimated at checkout, its estimate cleared later", () => {
+    at(next(1));
+    const parent = store.createIssue({ title: "parent", estimatedSeconds: min(90) }).id;
+    // The child's attempt reads the child's own 45m; clearing it leaves the parent the only estimate.
+    const child = worked("child", { parent, estimate: min(45) });
+    store.setEstimate(child, null, "w");
+    at(next(1));
+    store.updateIssue(parent, { status: "done" }, "w");
+    const report = readAt(clock + 1, { list: "samples" });
+    expect(report.population.ratio).toBe(1);
+    const sample = samples(report).find((s) => s.identifier === ident(parent))!;
+    expect(sample.evidence.workerAttempts).toBe(1);
+    expect(sample.estimate).toEqual({ seconds: min(90), source: "current", atStartSeconds: null, currentSeconds: min(90), missing: { atStart: "parent" } });
+  });
+
   it("takes the first attempt with an own reading: a reconstructed first attempt read none", () => {
     const from = next(40);
     at(from);
