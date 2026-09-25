@@ -1551,8 +1551,19 @@ export function applyConflictOperation(db: DatabaseSync, op: RemoteOperation): b
      * to the decision that stands, as the winning side's arrival closes it on the other device.
      */
     const standing = (): false => {
-      settleOpenFor(db, entity, targetId, field, existing.resolvedAt!, existing.resolvedBy, existing.resolvedValue);
-      forgetClosedEntries(db);
+      /**
+       * A status and an attempt's end only — what a status decision writes — and only the record
+       * whose remote side IS the losing decision's value: its write, and nothing else. For a
+       * list, closing records here that stay open on another device would let a later write
+       * land here and be withheld there (`test/cloud-fleet-sweep.test.ts`).
+       */
+      if ((entity === "issue" && field === "status") || (entity === "attempt" && field === "end")) {
+        const close = db.prepare("UPDATE sync_conflicts SET resolved_at = ?, resolved_by = ?, resolution = ? WHERE id = ?");
+        for (const record of listConflicts(db)) {
+          if (record.entity !== entity || record.entityId !== targetId || record.field !== field || !sameValue(record.remoteValue, value)) continue;
+          close.run(existing.resolvedAt, existing.resolvedBy, JSON.stringify(existing.resolvedValue ?? null), record.id);
+        }
+      }
       return false;
     };
     if (op.deviceId === localDevice(db)) {
