@@ -819,7 +819,9 @@ export class Journal {
       }
     }
 
-    const createdAt = nowIso();
+    // The mutation's one instant: its operations are dated with its rows and its events, so a
+    // conflict record's `local_at` and `remote_at` are the instants the two changes happened.
+    const createdAt = scope.at();
     /**
      * Refused here, on the device, before a row is written — *"a document revision
      * larger than the payload cap is refused at journal time, with the same code, so the

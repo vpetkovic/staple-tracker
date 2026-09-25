@@ -45,8 +45,7 @@ import { migration as m014 } from "./014-lifecycle-capture.js";
  * column on `sync_state` that only a home-resident workspace ever writes. 013
  * (execution attempts) follows: two new tables that replicate as protocol-3 entities, and
  * two nullable `sync_state` columns recording where the last pull reached the head. 014
- * (the lifecycle work) follows: the attempt's lane, the events' cross-device order, and
- * the events a withheld status narrated on its conflict record.
+ * (the lifecycle work) follows: the attempt's lane, and the events' cross-device order.
  */
 export const WORKSPACE_TARGET: MigrationTarget = {
   label: "workspace database",

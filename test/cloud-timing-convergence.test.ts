@@ -418,6 +418,9 @@ describe("round 1: what an operation narrates, and what it does not", () => {
     const y = offline.store.createIssue({ title: "Started before connecting" });
     at(25);
     offline.store.checkoutIssue(y.id, "agent-a");
+    // Never touched after its create: a pristine birth, which only an operation with no
+    // `originEvents` at all would narrate — and the seed's say narrate nothing.
+    const z = offline.store.createIssue({ title: "Untouched before connecting" });
     const onAx = offline.store.timingFor([x.id], iso(45)).get(x.id)!;
     const onAy = offline.store.timingFor([y.id], iso(45)).get(y.id)!;
     offline.store.db.close();
@@ -429,6 +432,7 @@ describe("round 1: what an operation narrates, and what it does not", () => {
     // B holds no event for either: the seed said what exists, not what happened.
     expect(statusEvents(b, x.id)).toEqual([]);
     expect(statusEvents(b, y.id)).toEqual([]);
+    expect(statusEvents(b, z.id)).toEqual([]);
     const bx = timingOn(b, x.id, 45);
     const by = timingOn(b, y.id, 45);
     // The two-timestamp fallback, flagged, as before re-emission: never a birth in the current status.
@@ -519,7 +523,13 @@ describe("round 1: what an operation narrates, and what it does not", () => {
     expect(timingOn(a, x.id, 20).quality.wall).toEqual({ state: "approximate", inputs: ["edge_history_incomplete"] });
   });
 
-  it("a status resolved in a conflict writes its history on every device, so the resolving device replays again", async () => {
+  /**
+   * A shared checkout; A moves it to review at 10 and B closes it at 11, offline; both sync.
+   * Then the status record is resolved, one of three ways. Every device holds a canonical
+   * `status_changed` for each decision, and reads the span from the first disagreeing write (10)
+   * to the decision as the decision, approximate (`conflict_resolved`).
+   */
+  async function disputedStatus() {
     fleet = new Fleet(new FakeSyncServer({ repositoryId: REPO }), REPO);
     const a = fleet.machine("a");
     const b = fleet.machine("b");
@@ -536,25 +546,74 @@ describe("round 1: what an operation narrates, and what it does not", () => {
     b.store.updateIssue(x.id, { status: "done" }, "vp");
     await sync(a, b, a);
     expect(a.store.getIssue(x.id).status).toBe("in_review");
+    expect(b.store.getIssue(x.id).status).toBe("done");
+    const recordOn = (machine: Machine) =>
+      listConflicts(machine.db).find((conflict) => conflict.entity === "issue" && conflict.field === "status" && conflict.resolvedAt === null)!;
+    return { a, b, x, recordOn };
+  }
+  async function readAlike(a: Machine, b: Machine, id: string, status: string): Promise<IssueTiming> {
+    const fresh = fleet!.machine("fresh");
+    await sync(fresh);
+    const onA = timingOn(a, id, 30);
+    for (const machine of [a, b, fresh]) expect(machine.store.getIssue(id).status, machine.label).toBe(status);
+    // The elapsed readings, identical. Work is not settled by a status decision: the attempt's
+    // two ends are a record of their own, and both devices say so (contested) until it is resolved.
+    const elapsed = (t: IssueTiming) => ({ wall: t.wall, quality: t.quality.wall, activeSeconds: t.activeSeconds, reviewSeconds: t.reviewSeconds, approximate: t.approximate });
+    expect(elapsed(timingOn(b, id, 30)), "b").toEqual(elapsed(onA));
+    for (const machine of [a, b]) expect(timingOn(machine, id, 30).quality.work.inputs, machine.label).toContain("contested");
+    expect(timingOn(fresh, id, 30)).toMatchObject({ wall: null, missing: { wall: "replay_unavailable" } });
+    expect(onA.approximate).toBe(false);
+    expect(onA.quality.wall).toEqual({ state: "approximate", inputs: ["conflict_resolved"] });
+    return onA;
+  }
+
+  it("a status resolved LOCAL, where the resolving row does not move, reads the same on every device", async () => {
+    const { a, b, x, recordOn } = await disputedStatus();
     at(20);
     a.use();
-    const record = listConflicts(a.db).find((conflict) => conflict.entity === "issue" && conflict.field === "status" && conflict.resolvedAt === null)!;
-    resolveConflict(a.db, { id: record.id, choice: "remote", actor: "vp" });
+    resolveConflict(a.db, { id: recordOn(a).id, choice: "local", actor: "vp" });
     await sync(a, b);
-    const fresh = fleet.machine("fresh");
-    await sync(fresh);
-    for (const machine of [a, b]) {
-      expect(machine.store.getIssue(x.id).status, machine.label).toBe("done");
-      const t = timingOn(machine, x.id, 30);
-      expect(t.approximate, machine.label).toBe(false);
-      // Ended by B's close at 11, which A now holds too, on both.
-      expect(t.wall, machine.label).toMatchObject({ endAt: iso(11) });
-    }
-    // The decision's own event, at the decision, on both.
+    const t = await readAlike(a, b, x.id, "in_review");
+    // Work to the first disagreeing write, then the decision (review) from there.
+    expect(t.wall!.buckets).toMatchObject({ work: min(10), review: min(20) });
+  }, 60_000);
+
+  it("a status resolved REMOTE reads the same on every device", async () => {
+    const { a, b, x, recordOn } = await disputedStatus();
+    at(20);
+    a.use();
+    resolveConflict(a.db, { id: recordOn(a).id, choice: "remote", actor: "vp" });
+    await sync(a, b);
+    const t = await readAlike(a, b, x.id, "done");
+    expect(t.wall).toMatchObject({ endAt: iso(10), buckets: { work: min(10) } });
     const decided = (machine: Machine) =>
       machine.db.prepare("SELECT created_at FROM events WHERE issue_id = ? AND kind = 'status_changed' AND json_extract(payload, '$.resolvesConflict') IS NOT NULL").all(x.id);
     expect(decided(a)).toEqual([{ created_at: iso(20) }]);
     expect(decided(b)).toEqual([{ created_at: iso(20) }]);
+  }, 60_000);
+
+  it("the same record resolved on both devices offline, to the same value, reads the same on every device", async () => {
+    const { a, b, x, recordOn } = await disputedStatus();
+    at(14);
+    b.use();
+    resolveConflict(b.db, { id: recordOn(b).id, choice: "remote", actor: "vp" });
+    at(20);
+    a.use();
+    resolveConflict(a.db, { id: recordOn(a).id, choice: "local", actor: "vp" });
+    await sync(b, a, b);
+    await readAlike(a, b, x.id, "in_review");
+    const decided = (machine: Machine) =>
+      (machine.db.prepare("SELECT created_at FROM events WHERE issue_id = ? AND json_extract(payload, '$.resolvesConflict') IS NOT NULL ORDER BY created_at").all(x.id) as Array<{ created_at: string }>).map((row) => row.created_at);
+    expect(decided(a)).toEqual([iso(14), iso(20)]);
+    expect(decided(b)).toEqual(decided(a));
+  }, 60_000);
+
+  it("an attempt two devices ended differently is contested until the record is settled", async () => {
+    const { a, b, x } = await disputedStatus();
+    for (const machine of [a, b]) {
+      expect(listConflicts(machine.db).some((record) => record.entity === "attempt" && record.field === "end"), machine.label).toBe(true);
+      expect(timingOn(machine, x.id, 30).quality.work, machine.label).toMatchObject({ state: "approximate", inputs: ["contested"] });
+    }
   }, 60_000);
 
   it("events in one millisecond on two devices order the same on both", async () => {
@@ -608,6 +667,53 @@ describe("round 1: what an operation narrates, and what it does not", () => {
       (machine.db.prepare("SELECT blocker_id FROM relations WHERE blocked_id = ? ORDER BY blocker_id").all(parent.id) as Array<{ blocker_id: string }>).map((row) => row.blocker_id);
     const want = [earlier.id, one.id, two.id].sort();
     for (const machine of [a, b, fresh]) expect(blockers(machine), machine.label).toEqual(want);
+    converged(a, b, fresh);
+  }, 60_000);
+
+  it("a child made to block its parent before connecting, whose parent's set was cleared since, holds no edge anywhere", async () => {
+    fleet = new Fleet(new FakeSyncServer({ repositoryId: REPO }), REPO);
+    const b = fleet.machine("b");
+    await sync(b);
+    const prepared = fleet.prepare("a");
+    process.env.STAPLE_HOME = prepared.home;
+    const offline = openWorkspace(join(prepared.dir, ".staple", "staple.db"));
+    const parent = offline.store.createIssue({ title: "Parent" });
+    offline.store.createIssue({ title: "Child", parent: parent.id, blockParentUntilDone: true });
+    offline.store.setBlockedBy(parent.id, [], "vp");
+    offline.store.db.close();
+    const a = fleet.connect("a", prepared);
+    await sync(a, b, a);
+    const fresh = fleet.machine("fresh");
+    await sync(fresh);
+    const count = (machine: Machine) => machine.db.prepare("SELECT COUNT(*) AS n FROM relations WHERE blocked_id = ?").get(parent.id);
+    for (const machine of [a, b, fresh]) expect(count(machine), machine.label).toEqual({ n: 0 });
+    converged(a, b, fresh);
+  }, 60_000);
+
+  it("a set cleared on one device before a child made offline on another: the child's later create keeps its edge everywhere", async () => {
+    fleet = new Fleet(new FakeSyncServer({ repositoryId: REPO }), REPO);
+    const a = fleet.machine("a");
+    const b = fleet.machine("b");
+    await sync(a, b);
+    a.use();
+    const parent = a.store.createIssue({ title: "Parent" });
+    const earlier = a.store.createIssue({ title: "Earlier blocker" });
+    a.store.setBlockedBy(parent.id, [earlier.id], "vp");
+    await sync(a, b);
+    at(40);
+    b.use();
+    b.store.setBlockedBy(parent.id, [], "vp");
+    await sync(b);
+    at(41);
+    a.use();
+    const child = a.store.createIssue({ title: "Made offline", parent: parent.id, blockParentUntilDone: true });
+    // A pulls B's clear (earlier in the log) before its own create comes back.
+    await sync(a, b);
+    const fresh = fleet.machine("fresh");
+    await sync(fresh);
+    const blockers = (machine: Machine) =>
+      (machine.db.prepare("SELECT blocker_id FROM relations WHERE blocked_id = ?").all(parent.id) as Array<{ blocker_id: string }>).map((row) => row.blocker_id);
+    for (const machine of [a, b, fresh]) expect(blockers(machine), machine.label).toEqual([child.id]);
     converged(a, b, fresh);
   }, 60_000);
 

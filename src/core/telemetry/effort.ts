@@ -179,6 +179,16 @@ export function issueEffort(db: DatabaseSync, issueId: string): { workers: LaneE
   const attempts = attemptsOfIssue(db, issueId);
   const facts = issueFacts(db, issueId);
   const evaluation = evaluateLanes(db, attempts, facts, "read");
+  /**
+   * Two devices ended one attempt differently, and nobody has settled it: each holds its own end,
+   * so the contribution is this device's reading of an open question (`conflicts.ts`, the
+   * attempt's `end`). Contested, as the telemetry contract has it, until the record is resolved.
+   */
+  const endDisputed = new Set(
+    (db
+      .prepare("SELECT entity_id AS id FROM sync_conflicts WHERE entity = 'attempt' AND field = 'end' AND resolved_at IS NULL")
+      .all() as Array<{ id: string }>).map((row) => row.id),
+  );
   const workers = attempts.filter((attempt) => laneOf(attempt) === "worker");
   const orchestrators = attempts.filter((attempt) => laneOf(attempt) === "orchestrator");
 
@@ -198,7 +208,7 @@ export function issueEffort(db: DatabaseSync, issueId: string): { workers: LaneE
       const read = evaluation.get(attempt.id);
       const { end, inputs } = effectiveEnd(attempt, transitions, evidence, read, facts, next);
       const attemptInputs = new Set<EffortInput>(inputs);
-      if (read?.contested) attemptInputs.add("contested");
+      if (read?.contested || endDisputed.has(attempt.id)) attemptInputs.add("contested");
       if (ms(end) + TOLERANCE_MS < ms(attempt.startedAt)) attemptInputs.add("clock_skew");
       const bound = rowBoundOf(facts);
       if (bound !== null && ms(bound) + TOLERANCE_MS < ms(attempt.startedAt)) attemptInputs.add("clock_skew");

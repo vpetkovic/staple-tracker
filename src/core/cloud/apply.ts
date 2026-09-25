@@ -723,7 +723,10 @@ function applyIssue(db: DatabaseSync, input: ApplyInput): boolean {
         `INSERT OR IGNORE INTO relations (blocker_id, blocked_id, type, created_by, created_at) VALUES (?, ?, 'blocks', ?, ?)`,
       ).run(input.entityId, child.parent_id, child.created_by, child.created_at);
     }
-  } else if (pairs.length > 0) {
+  } else if (input.verb === "create" && typeof input.seq === "number") {
+    keepChildEdgeAgainstEarlierSet(db, input);
+  }
+  if (exists && pairs.length > 0) {
     const before = identifierOf(db, input.entityId);
     displaceIdentifierHolder(db, input, pairs);
     const values = new Map(pairs);
@@ -778,6 +781,34 @@ function applyIssue(db: DatabaseSync, input: ApplyInput): boolean {
     writeBlockers(db, input.entityId, payload.blockedBy as unknown[], input);
   }
   return true;
+}
+
+/**
+ * A create of an issue this device already holds — its own, coming back — of a child made to
+ * block its parent: a blocker set applied here since, but earlier in the log, removed the edge
+ * the child had added locally. Read in log order the create comes later and adds it, so it is put
+ * back here too, as `keepChildEdgesInLogOrder` does for a snapshot. The set's position is the seq
+ * of the operation that last wrote it here; a set this device wrote and has not had back yet is
+ * later in the log than this create, and stands.
+ */
+function keepChildEdgeAgainstEarlierSet(db: DatabaseSync, input: ApplyInput): void {
+  const child = db.prepare("SELECT parent_id, block_parent_until_done, created_by, created_at FROM issues WHERE id = ?").get(input.entityId) as
+    | { parent_id: string | null; block_parent_until_done: number; created_by: string | null; created_at: string }
+    | undefined;
+  if (!child || child.parent_id === null || child.block_parent_until_done !== 1) return;
+  const write = db
+    .prepare(
+      `SELECT a.seq AS seq, w.op_id AS op FROM sync_field_writes w LEFT JOIN sync_applied a ON a.op_id = w.op_id
+        WHERE w.entity = 'relation' AND w.entity_id = ? AND w.field = 'blockedBy'`,
+    )
+    .get(child.parent_id) as { seq: number | null; op: string } | undefined;
+  if (write !== undefined && (write.seq === null || write.seq > (input.seq as number))) return;
+  db.prepare(`INSERT OR IGNORE INTO relations (blocker_id, blocked_id, type, created_by, created_at) VALUES (?, ?, 'blocks', ?, ?)`).run(
+    input.entityId,
+    child.parent_id,
+    child.created_by,
+    child.created_at,
+  );
 }
 
 /**

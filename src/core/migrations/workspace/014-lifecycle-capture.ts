@@ -26,11 +26,6 @@ import type { Migration } from "../types.js";
  * the origin's. The replay orders by `(created_at, origin_device, origin_seq or seq)`. Events
  * never replicate, so these columns are this device's own record.
  *
- * ## `sync_conflicts.remote_events`
- *
- * A status a conflict withheld did not land, so neither did the events its operation
- * narrated. They are kept on the record, and written if the record is resolved to that side.
- *
  * ## Why 14, and what it costs
  *
  * 013 (execution attempts) is the latest. The number is the `schema` every operation
@@ -45,6 +40,5 @@ export const migration: Migration = {
     db.exec(`ALTER TABLE attempts ADD COLUMN role TEXT NOT NULL DEFAULT 'worker'`);
     db.exec(`ALTER TABLE events ADD COLUMN origin_device TEXT`);
     db.exec(`ALTER TABLE events ADD COLUMN origin_seq INTEGER`);
-    db.exec(`ALTER TABLE sync_conflicts ADD COLUMN remote_events TEXT`);
   },
 };

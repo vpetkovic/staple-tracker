@@ -549,6 +549,34 @@ function assertOrchestratorRole(role: string | undefined, verb: "open" | "end"):
   );
 }
 
+/**
+ * A status two devices set differently, offline, and somebody then resolved: between the first
+ * of the two writes and the decision, each device holds its own side's events and not the
+ * other's, and no history both hold says what the issue was doing. Every resolution writes a
+ * canonical `status_changed` on every device naming where the disagreement began
+ * (`conflictStartedAt`, `cloud/conflicts.ts`). The replay drops what either side wrote in that
+ * span and reads the decision from its start, so every device reads the same partition, and the
+ * record says the span is the decision's reading (`conflict_resolved`, approximate).
+ */
+function settleResolvedSpans<T extends { kind: string; createdAt: string; payload: Record<string, unknown> }>(events: readonly T[]): { events: T[]; resolved: boolean } {
+  const spans = events
+    .filter((event) => typeof event.payload.resolvesConflict === "string" && typeof event.payload.conflictStartedAt === "string")
+    .map((event) => ({ event, from: event.payload.conflictStartedAt as string, to: event.createdAt }));
+  if (spans.length === 0) return { events: [...events], resolved: false };
+  const resolutions = new Set(spans.map((span) => span.event));
+  const kept = events
+    .filter((event) => resolutions.has(event) || event.kind === "issue_created" || !spans.some((span) => span.from <= event.createdAt && event.createdAt < span.to))
+    .map((event) => {
+      const span = spans.find((candidate) => candidate.event === event);
+      return span ? { ...event, createdAt: span.from < span.to ? span.from : span.to } : event;
+    });
+  // The birth first, then time; a resolution moved to where its span began sorts after what it replaces there.
+  const born = kept.filter((event) => event.kind === "issue_created");
+  const rest = kept.filter((event) => event.kind !== "issue_created").map((event, index) => ({ event, index }));
+  rest.sort((a, b) => (a.event.createdAt < b.event.createdAt ? -1 : a.event.createdAt > b.event.createdAt ? 1 : a.index - b.index));
+  return { events: [...born, ...rest.map((entry) => entry.event)], resolved: true };
+}
+
 /** What a parent reads of a child's own orchestration. */
 interface OwnEffort {
   orchestration: number | null;
@@ -4748,6 +4776,13 @@ export class WorkspaceStore {
       }
       list.push({ kind: row.kind, createdAt: row.created_at, payload });
     }
+    // A status two devices disagreed about reads as the decision from where the disagreement began.
+    const resolvedSpans = new Set<string>();
+    for (const [issueId, list] of eventsByIssue) {
+      const settled = settleResolvedSpans(list);
+      if (settled.resolved) resolvedSpans.add(issueId);
+      eventsByIssue.set(issueId, settled.events);
+    }
 
     // 3/4 — the no-holder clamp: newest event of ANY kind on the issue.
     const newestEvent = new Map<string, string>();
@@ -4862,7 +4897,7 @@ export class WorkspaceStore {
       });
       if (telemetry) {
         const timing = timings.get(row.id)!;
-        Object.assign(timing, this.telemetryOf(row, own, children, timings, effortOf, asOf, timing));
+        Object.assign(timing, this.telemetryOf(row, own, children, timings, effortOf, asOf, timing, resolvedSpans.has(row.id)));
       }
     }
 
@@ -4885,6 +4920,8 @@ export class WorkspaceStore {
     effortOf: Map<string, OwnEffort>,
     asOf: string,
     timing: IssueTiming,
+    /** A status conflict was resolved on this issue: part of its history is the decision's reading (`settleResolvedSpans`). */
+    conflictResolved = false,
   ): Partial<IssueTiming> {
     const missing: Record<string, string> = {};
     const category = this.categoryOf(row.status);
@@ -4976,6 +5013,7 @@ export class WorkspaceStore {
       else {
         wall = { startAt: result.startAt, endAt: result.endAt, through: result.through, seconds: result.seconds, buckets: result.buckets };
         for (const input of result.inputs) wallInputs.add(input);
+        if (conflictResolved) wallInputs.add("conflict_resolved");
       }
     }
     const leadSeconds = wall === null ? null : secondsBetween(row.created_at, wall.startAt);
