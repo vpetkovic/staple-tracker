@@ -644,6 +644,12 @@ describe("the orchestrator lane", () => {
     store.addComment(one.id, "coordinating", "orch");
     at(20);
     const newer = store.openOrchestratorAttempt(two.id, "orch", "orchestrator");
+    // The newer one ends before anything writes the older one's end: still superseded, never revived.
+    holdOrphanEnds();
+    at(21);
+    store.endOrchestratorAttempt(two.id, "orch", "orchestrator");
+    expect(viewsOfIssue(store.db, one.id, iso(30))[0]).toMatchObject({ state: "ended", outcome: "orphaned", endReason: "superseded_by_newer" });
+    releaseOrphanEnds();
     // Derived: read at once, before any command writes it down.
     const [older] = viewsOfIssue(store.db, one.id, iso(30));
     expect(older).toMatchObject({ state: "ended", outcome: "orphaned", endReason: "superseded_by_newer" });
@@ -654,10 +660,7 @@ describe("the orchestrator lane", () => {
     store.addComment(one.id, "after it was superseded", "orch");
     expect(attemptsOfIssue(store.db, one.id)[0]).toMatchObject({ state: "ended", endReason: "superseded_by_newer", endDetection: "inferred", endedAt: iso(10) });
     expect(timing(one.id, 30).orchestrationSeconds).toBe(min(10));
-    // Ended by the newer one although the newer one has ended too: no revival.
-    store.endOrchestratorAttempt(two.id, "orch", "orchestrator");
     expect(viewsOfIssue(store.db, one.id, iso(30))[0]).toMatchObject({ state: "ended", endReason: "superseded_by_newer" });
-    expect(timing(one.id, 30).orchestrationSeconds).toBe(min(10));
     expect(newer.id).not.toBe(older!.id);
   });
 
