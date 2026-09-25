@@ -288,6 +288,7 @@ describe("an attempt's burn", () => {
     render(at(start, 30), 58, firstReset);
     render(at(start, 45), 55, firstReset, "session-a"); // an older cache: a regression
     render(at(start, 60), 60, firstReset);
+    render(at(start, 90), 54, firstReset, "session-a"); // the last reading in the window, and below its high-water
     render(at(start, 180), 5, secondReset); // the next window: no reading before the attempt
     render(at(start, 240), 8, secondReset);
     render(at(start, 900), 30, secondReset); // after `now`: not counted
@@ -295,7 +296,7 @@ describe("an attempt's burn", () => {
     const detail = attemptDetail(store.db, attempt.id, { home, device: null, slug: "alpha", now: at(start, 300) });
     expect(detail.burn).toMatchObject({ provider: "anthropic", accountRef: "personal-max", attribution: "sole_known", missing: {} });
     const [limit] = detail.burn.limits;
-    expect(limit).toMatchObject({ limitKey: "five_hour", burnPercent: 13, coverage: { known: 2, total: 2 }, partial: false, regressionCount: 1 });
+    expect(limit).toMatchObject({ limitKey: "five_hour", burnPercent: 13, coverage: { known: 2, total: 2 }, partial: false, regressionCount: 2 });
     expect(limit!.windows.map((w) => [w.fromPercent, w.toPercent, w.deltaPercent, w.lowerBound])).toEqual([
       [50, 60, 10, false],
       [5, 8, 3, true],
