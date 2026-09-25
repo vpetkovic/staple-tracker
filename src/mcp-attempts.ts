@@ -85,6 +85,12 @@ export const recordAttemptEventInput = {
     .optional()
     .describe("The lane. Required as orchestrator for open and end; on the other events, required when you hold an attempt in each lane."),
   attempt_id: z.string().optional().describe("The attempt to act on, by id: the other way to say which lane."),
+  // `open`: what the orchestrator self-reports, as on a checkout.
+  harness_session: attemptOpenFields.harness_session,
+  harness: attemptOpenFields.harness,
+  model: attemptOpenFields.model,
+  account: attemptOpenFields.account,
+  attempt_idempotency_key: attemptOpenFields.attempt_idempotency_key,
   reason: z.string().optional(),
   label: z.string().optional().describe("The milestone's one-line label."),
   comment_id: z.string().optional().describe("A comment on this issue the milestone summarizes."),
@@ -105,9 +111,17 @@ export function recordAttemptEvent(
     document_revision?: number;
     role?: string;
     attempt_id?: string;
+    harness_session?: string;
+    harness?: string;
+    model?: string;
+    account?: string;
+    attempt_idempotency_key?: string;
   },
 ): unknown {
-  if (input.event === "open") return store.openOrchestratorAttempt(ref, actor, input.role);
+  if (input.event === "open") {
+    const { role, event: _event, reason: _reason, label: _label, comment_id: _comment, document_key: _key, document_revision: _revision, attempt_id: _id, ...reported } = input;
+    return store.openOrchestratorAttempt(ref, actor, role, attemptOptionsFromInput(reported) ?? {});
+  }
   if (input.event === "end") return store.endOrchestratorAttempt(ref, actor, input.role, input.attempt_id);
   return store.recordAttemptEvent(ref, input.event, actor, {
     ...(input.role !== undefined ? { role: input.role } : {}),

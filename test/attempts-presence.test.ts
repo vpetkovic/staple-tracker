@@ -104,6 +104,30 @@ describe("the machine-wide counts", () => {
     });
   });
 
+  it("hold each attempt's lane, count both lanes, and report the split by role", () => {
+    const one = workspace("alpha");
+    const two = workspace("bravo");
+    const epic = two.createIssue({ title: "Epic" });
+    two.openOrchestratorAttempt(epic.id, "orch", "orchestrator");
+    const leaf = one.createIssue({ title: "Leaf" });
+    one.checkoutIssue(leaf.id, "agent-1");
+    expect(lastConcurrency(one, leaf.id)).toMatchObject({
+      openAttemptsInWorkspace: 1,
+      openAttemptsInWorkspaceByRole: { worker: 1, orchestrator: 0 },
+      storedOpenAttemptsStartedHere: 2,
+      storedOpenAttemptsStartedHereByRole: { worker: 1, orchestrator: 1 },
+    });
+    const hub = new DatabaseSync(join(home, "hub.db"), { readOnly: true });
+    try {
+      expect(hub.prepare("SELECT workspace, role FROM attempt_presence ORDER BY workspace").all()).toEqual([
+        { workspace: "alpha", role: "worker" },
+        { workspace: "bravo", role: "orchestrator" },
+      ]);
+    } finally {
+      hub.close();
+    }
+  });
+
   it("leave out a workspace whose database has moved away, and a full rebuild drops what is unreachable", () => {
     const one = workspace("alpha");
     const two = workspace("bravo");

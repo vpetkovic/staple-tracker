@@ -77,6 +77,7 @@ const HELP = `staple attempt — report on the attempt you hold
   attempt interrupt <ref> --reason R     end the attempt as interrupted; R: provider_limit, harness_exit,
                                          operator_stop, unknown. The claim stays: resume with checkout.
   attempt open <ref> --role orchestrator open an orchestrator attempt on the issue you coordinate (usually
+                [--harness H --harness-session S --model M --account A --attempt-key K]
                                          the parent or epic). No claim, no status change; never agent work.
   attempt end <ref> --role orchestrator  end it (yielded, coordination_ended). Opening another one, or the
                                          issue resolving, also ends it at read time.
@@ -115,6 +116,12 @@ export function runAttemptCommand(rest: string[]): void {
       cursor: { type: "string" },
       role: { type: "string" },
       attempt: { type: "string" },
+      // `attempt open`: what the orchestrator self-reports, as on a checkout.
+      "harness-session": { type: "string" },
+      harness: { type: "string" },
+      model: { type: "string" },
+      account: { type: "string" },
+      "attempt-key": { type: "string" },
     },
   });
   const [sub, ref] = positionals;
@@ -140,7 +147,9 @@ export function runAttemptCommand(rest: string[]): void {
   const actor = values.agent ?? process.env.STAPLE_AGENT ?? process.env.USER ?? "user";
   if (sub === "open" || sub === "end") {
     const opened =
-      sub === "open" ? store.openOrchestratorAttempt(ref, actor, values.role) : store.endOrchestratorAttempt(ref, actor, values.role, values.attempt);
+      sub === "open"
+        ? store.openOrchestratorAttempt(ref, actor, values.role, attemptOptionsFrom({ ...values, role: undefined }) ?? {})
+        : store.endOrchestratorAttempt(ref, actor, values.role, values.attempt);
     if (values.json) return console.log(JSON.stringify(opened));
     return console.log(`${opened.identifier ?? ref} orchestrator attempt: ${opened.state}${opened.outcome ? ` (${opened.outcome}, ${opened.endReason})` : ""}`);
   }
