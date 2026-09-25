@@ -672,7 +672,7 @@ const timingShape = {
         .number()
         .nullable()
         .describe(
-          "BOTTOM-UP: sum of the effective plans of the DIRECT children that are not cancelled, the recursive counterpart of childrenEstimatedSeconds; null when no live descendant at any depth has an estimate. Present even when an own estimate wins, so the two can be compared",
+          "BOTTOM-UP: sum of the DIRECT children's contributions (a cancelled child's own estimate drops out; live work beneath it still counts), the recursive counterpart of childrenEstimatedSeconds; null when no live descendant at any depth has an estimate. Present even when an own estimate wins, so the two can be compared",
         ),
       contributingCount: z
         .number()
@@ -682,7 +682,7 @@ const timingShape = {
       unplannedCount: z
         .number()
         .describe(
-          "UNPLANNED UNITS: live descendants with no children, no own estimate and no estimated ancestor beneath this issue. Coverage is contributingCount of contributingCount + unplannedCount; cancelled subtrees are neither",
+          "UNPLANNED UNITS: live descendants with no live work beneath them, no own estimate and no estimated ancestor beneath this issue. Coverage is contributingCount of contributingCount + unplannedCount; cancelled subtrees are neither",
         ),
       totalCount: z.number().describe("Descendants at any depth, whatever their status, shadowed and cancelled included; 0 for a leaf"),
     })
@@ -742,6 +742,21 @@ type _TimingShapeMatchesInterface = Expect<
  * The certified plan (`core/plan-rollup.ts`): `planSummary` on get_task, one entry per ref of
  * compare_plans. Typed against the interface, like `timingShape`, so the schema cannot drift.
  */
+const pathShape = {
+  seconds: z
+    .number()
+    .nullable()
+    .describe("The longest chain's weight; null (no_plan) when no counted unit is planned, never a silent 0"),
+  partial: z.boolean().describe("A counted unit is unplanned, or a cycle was broken: a lower bound"),
+  missing: z.array(z.string()).describe("no_plan, unplanned_units, dependency_cycle"),
+  chain: z
+    .array(z.object({ ref: z.string(), seconds: z.number().nullable(), status: z.string() }))
+    .describe("The chain first to last, at most 100 steps; empty when seconds is null; step seconds null = an unplanned unit, unknown, not 0"),
+  chainLength: z.number(),
+  exceedsLabor: z
+    .boolean()
+    .describe("labor.source is own and this path is longer than that own estimate: the structure beneath says more than the estimate"),
+};
 const planSummaryShape = {
   labor: z
     .object({
@@ -758,30 +773,31 @@ const planSummaryShape = {
     .object({
       planned: z.number(),
       unplanned: z.number(),
-      units: z.number().describe("planned + unplanned. A unit is an issue with its own estimate (shadowing everything under it) or a live issue with no estimate and no live children"),
-      partial: z.boolean().describe("Some unit is unplanned: labor (when source is descendants) and path are lower bounds"),
+      units: z.number().describe("planned + unplanned. A unit is a live issue with its own estimate (shadowing everything under it) or a live issue with no estimate and no live work beneath"),
+      partial: z.boolean().describe("Some unit is unplanned: labor (when source is descendants) and the paths are lower bounds"),
       unplannedRefs: z.array(z.string()).describe("At most 20"),
-      cancelled: z.number().describe("Cancelled issues beneath, excluded from every figure"),
+      cancelled: z.number().describe("Issues beneath whose own status is cancelled; their estimates are no labor, while live work under a cancelled parent still counts"),
     })
     .describe("Estimate coverage over plan units"),
   criticalPath: z
     .object({
-      seconds: z.number().nullable().describe("Longest in-subtree blockedBy chain of units weighted by estimate, parallel branches taking the max; null when no unit is planned"),
-      partial: z.boolean(),
-      missing: z.array(z.string()).describe("no_plan, unplanned_units, dependency_cycle"),
-      chain: z
-        .array(z.object({ ref: z.string(), seconds: z.number().nullable(), status: z.string() }))
-        .describe("The chain first to last, at most 100 steps; seconds null = an unplanned unit, unknown, not 0"),
-      chainLength: z.number(),
-      edgeCount: z.number(),
-      cycle: z.array(z.string()).describe("Units on a dependency cycle broken to compute the path; normally empty"),
+      ...pathShape,
+      edgeCount: z.number().describe("In-subtree dependency edges the paths were computed over"),
+      cycle: z.array(z.string()).describe("Units on a dependency cycle broken to compute the paths; normally empty"),
       crossSubtreeBlockers: z
         .array(z.object({ blocked: z.string(), blocker: z.string(), blockerStatus: z.string(), resolved: z.boolean() }))
-        .describe("Blockers OUTSIDE the subtree on issues inside it, unresolved first, at most 20; listed, never folded into the path"),
+        .describe("Blockers OUTSIDE the subtree on issues inside it, unresolved first, at most 20; listed, never folded into a path"),
       crossSubtreeBlockerCount: z.number(),
       unresolvedCrossSubtreeBlockerCount: z.number(),
     })
-    .describe("Dependency-aware wall-clock inputs"),
+    .describe(
+      "The PLANNED path: the longest in-subtree blockedBy chain of units, every unit at its estimate (done ones included), parallel branches taking the max. A plan figure, not a forecast",
+    ),
+  remainingPath: z
+    .object(pathShape)
+    .describe(
+      "The REMAINING path: the same chain with done units weighing 0 (and left off chain). 0 when every unit is done; a unit in progress still weighs its full estimate",
+    ),
 };
 type _PlanSummaryShapeMatchesInterface = Expect<Equals<z.infer<z.ZodObject<typeof planSummaryShape>>, PlanSummary>>;
 const comparePlansShape = {
@@ -1145,7 +1161,7 @@ server.registerTool(
   "compare_plans",
   {
     description:
-      "Compare named issues (epics) as plans, with no tree dump. Per ref: labor (total labor, every planned unit once: an issue's own estimate over its descendants, never both; cancelled work excluded), coverage (planned of units, unplanned refs; partial means a lower bound, never a silent 0) and criticalPath (the longest blockedBy chain inside the subtree weighted by estimate, parallel branches taking the max, plus blockers from outside the subtree listed separately). overlaps names a ref that lies inside another ref, whose labor must not be added to it. Same payload as `staple compare <ref> <ref> --json`.",
+      "Compare named issues (epics) as plans, with no tree dump. Per ref: labor (total labor, every planned unit once: an issue's own estimate over its descendants, never both; a cancelled issue's own estimate excluded, live work beneath it still counted), coverage (planned of units, unplanned refs; partial means a lower bound, never a silent 0), criticalPath (the PLANNED path: the longest blockedBy chain inside the subtree weighted by estimate, done units included, parallel branches taking the max, plus blockers from outside the subtree listed separately) and remainingPath (the same chain with done units weighing 0). exceedsLabor flags a path longer than an own estimate. overlaps names a ref that lies inside another ref, whose labor must not be added to it. Same payload as `staple compare <ref> <ref> --json`.",
     inputSchema: {
       refs: z.array(z.string()).min(1).max(20).describe("1 to 20 issue identifiers or ids"),
       ws: wsSchema,

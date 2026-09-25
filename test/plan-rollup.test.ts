@@ -4,6 +4,7 @@ import { migrateWorkspace } from "../src/core/schema.js";
 import { WorkspaceStore } from "../src/core/store.js";
 import { applyToDatabase } from "../src/core/cloud/apply.js";
 import type { Issue } from "../src/core/types.js";
+import { planStructureOf, type PlanNode } from "../src/core/plan-rollup.js";
 
 /**
  * The certified plan (`core/plan-rollup.ts`, `docs/cli.md` "Comparing plans"): total labor,
@@ -107,7 +108,7 @@ describe("labor: own estimate over descendants, never both", () => {
 });
 
 describe("done and cancelled descendants", () => {
-  it("done work stays labor; a cancelled subtree is no labor and no gap", () => {
+  it("done work stays labor; a wholly cancelled subtree is no labor and no gap", () => {
     const epic = store.createIssue({ title: "Epic" });
     const done = child(epic, "Done", 2);
     store.checkoutIssue(done.id, "agent");
@@ -115,9 +116,11 @@ describe("done and cancelled descendants", () => {
     const dropped = child(epic, "Dropped", 3);
     cancel(dropped);
     const droppedEpic = child(epic, "Dropped epic");
-    child(droppedEpic, "never planned");
-    child(droppedEpic, "planned", 5);
-    cancel(droppedEpic);
+    const gone1 = child(droppedEpic, "gone 1");
+    const gone2 = child(droppedEpic, "gone 2", 5);
+    cancel(gone1);
+    cancel(gone2); // derivation cancels the parent once its last child is
+    expect(store.getIssue(droppedEpic.id).status).toBe("cancelled");
 
     const timing = store.timing(epic.id);
     expect(timing.subtreePlan).toEqual({
@@ -135,6 +138,46 @@ describe("done and cancelled descendants", () => {
     expect(plan.criticalPath).toMatchObject({ seconds: 2 * H, partial: false });
     // The cancelled issue keeps its own reading.
     expect(store.timing(dropped.id).subtreePlan.estimatedSeconds).toBe(3 * H);
+  });
+
+  it("a cancelled parent does not hide the live work its children still carry", () => {
+    // Cancelling a parent cancels none of its children: they stay open, and checkout-able.
+    const epic = store.createIssue({ title: "Epic" });
+    const parked = child(epic, "Parked", 10);
+    const c1 = child(parked, "c1", 2);
+    const c2 = child(parked, "c2");
+    cancel(parked);
+    store.checkoutIssue(c1.id, "agent");
+    expect(store.getIssue(c1.id).status).toBe("in_progress");
+
+    const plan = compareOne(epic);
+    // Parked's own 10h drops out; c1's 2h counts and c2 is a named gap.
+    expect(plan.labor).toMatchObject({ seconds: 2 * H, source: "descendants" });
+    expect(plan.coverage).toEqual({ planned: 1, unplanned: 1, units: 2, partial: true, unplannedRefs: [c2.identifier], cancelled: 1 });
+    expect(store.timing(epic.id).subtreePlan).toMatchObject({ contributingCount: 1, unplannedCount: 1, descendantsEstimatedSeconds: 2 * H });
+
+    // With a live 1h sibling the figure is 3h and still partial, not a silent 1h.
+    child(epic, "Q", 1);
+    expect(compareOne(epic).labor.seconds).toBe(3 * H);
+    expect(compareOne(epic).coverage.partial).toBe(true);
+    // Named directly, the cancelled parent is what is live beneath it, not its own 10h.
+    expect(compareOne(parked).labor).toMatchObject({ seconds: 2 * H, source: "descendants", ownSeconds: 10 * H });
+  });
+
+  it("a live issue under a cancelled parent keeps its dependency edges and its outside blockers", () => {
+    const epic = store.createIssue({ title: "Epic" });
+    const parked = child(epic, "Parked");
+    const inside = child(parked, "inside", 4);
+    child(parked, "other", 1);
+    const after = child(epic, "After", 3);
+    const outsider = store.createIssue({ title: "Outsider" });
+    block(after, inside);
+    block(inside, outsider);
+    cancel(parked);
+    const path = compareOne(epic).criticalPath;
+    expect(path.seconds).toBe(7 * H);
+    expect(path.chain.map((step) => step.ref)).toEqual([inside.identifier, after.identifier]);
+    expect(path.crossSubtreeBlockers.map((b) => b.blocked)).toEqual([inside.identifier]);
   });
 
   it("an epic whose children are all cancelled is an unplanned unit, not a planned zero", () => {
@@ -184,7 +227,8 @@ describe("the critical path", () => {
     block(a1, store.createIssue({ title: "unrelated" })); // outside, listed not followed
     const plan = path(epic);
     expect(plan.seconds).toBe(5 * H); // a2 (2h) -> B (3h)
-    expect(plan.edgeCount).toBe(2);
+    // One edge, from A's finish to B: a container is two virtual nodes, not a unit per pair.
+    expect(plan.edgeCount).toBe(1);
     expect(plan.crossSubtreeBlockers).toEqual([
       { blocked: a1.identifier, blocker: expect.any(String), blockerStatus: "backlog", resolved: false },
     ]);
@@ -258,6 +302,152 @@ describe("the critical path", () => {
     expect(plan.coverage).toMatchObject({ planned: 1, units: 1 });
     expect(plan.criticalPath.chain.map((step) => step.ref)).toEqual([leaf.identifier]);
     expect(store.planSummary(leaf.id)).toBeNull();
+  });
+});
+
+describe("the planned path and the remaining path", () => {
+  const finish = (issue: Issue): void => {
+    store.checkoutIssue(issue.id, "agent");
+    store.updateIssue(issue.id, { status: "done" }, "agent");
+  };
+
+  it("keep done work on the planned path and weigh it 0 on the remaining one", () => {
+    const epic = store.createIssue({ title: "Epic" });
+    const a = child(epic, "A", 4);
+    const b = child(epic, "B", 3);
+    const c = child(epic, "C", 5);
+    block(b, a);
+    finish(a);
+    const plan = compareOne(epic);
+    expect(plan.criticalPath).toMatchObject({ seconds: 7 * H, partial: false });
+    expect(plan.criticalPath.chain.map((step) => step.ref)).toEqual([a.identifier, b.identifier]);
+    // A is done, so what is left is the longer of B (3h) and C (5h).
+    expect(plan.remainingPath).toMatchObject({ seconds: 5 * H, partial: false, missing: [], chainLength: 1 });
+    expect(plan.remainingPath.chain).toEqual([{ ref: c.identifier, seconds: 5 * H, status: "backlog" }]);
+  });
+
+  it("a done unit still carries the dependency through it, and drops off the remaining chain", () => {
+    const epic = store.createIssue({ title: "Epic" });
+    const a = child(epic, "A", 2);
+    const b = child(epic, "B", 6);
+    const c = child(epic, "C", 2);
+    child(epic, "D", 3);
+    block(b, a);
+    block(c, b);
+    finish(a);
+    finish(b);
+    const remaining = compareOne(epic).remainingPath;
+    expect(remaining.seconds).toBe(3 * H);
+    expect(compareOne(epic).criticalPath.seconds).toBe(10 * H);
+  });
+
+  it("an unplanned unit that is done is no gap in what remains; every unit done remains 0", () => {
+    const epic = store.createIssue({ title: "Epic" });
+    const gap = child(epic, "Gap");
+    const a = child(epic, "A", 2);
+    finish(gap);
+    let plan = compareOne(epic);
+    expect(plan.criticalPath).toMatchObject({ partial: true, missing: ["unplanned_units"] });
+    expect(plan.remainingPath).toMatchObject({ seconds: 2 * H, partial: false, missing: [] });
+    finish(a);
+    plan = compareOne(epic);
+    expect(plan.remainingPath).toMatchObject({ seconds: 0, partial: false, missing: [], chain: [], chainLength: 0 });
+  });
+
+  it("remaining open work with no plan is unknown, not 0", () => {
+    const epic = store.createIssue({ title: "Epic" });
+    finish(child(epic, "A", 2));
+    child(epic, "Open, unplanned");
+    expect(compareOne(epic).remainingPath).toMatchObject({ seconds: null, partial: true, missing: ["no_plan"], chain: [] });
+  });
+});
+
+describe("a path against an own estimate, and a path with no plan", () => {
+  it("flags a path longer than the issue's own estimate", () => {
+    const epic = store.createIssue({ title: "Epic", estimatedSeconds: 4 * H });
+    const a = child(epic, "a", 3);
+    const b = child(epic, "b", 3);
+    block(b, a);
+    const plan = compareOne(epic);
+    expect(plan.labor).toMatchObject({ seconds: 4 * H, source: "own" });
+    expect(plan.criticalPath).toMatchObject({ seconds: 6 * H, exceedsLabor: true });
+    expect(plan.remainingPath.exceedsLabor).toBe(true);
+    store.setEstimate(epic.id, 8 * H, "planner");
+    expect(compareOne(epic).criticalPath.exceedsLabor).toBe(false);
+  });
+
+  it("never flags a sum of descendants, which a path cannot exceed", () => {
+    const epic = store.createIssue({ title: "Epic" });
+    block(child(epic, "b", 3), child(epic, "a", 3));
+    expect(compareOne(epic).criticalPath).toMatchObject({ seconds: 6 * H, exceedsLabor: false });
+  });
+
+  it("returns an empty chain when the path is null", () => {
+    const epic = store.createIssue({ title: "Epic" });
+    const x = child(epic, "x");
+    block(child(epic, "y"), x);
+    const plan = compareOne(epic);
+    expect(plan.criticalPath).toMatchObject({ seconds: null, chain: [], chainLength: 0, missing: ["no_plan"] });
+    expect(plan.remainingPath).toMatchObject({ seconds: null, chain: [], chainLength: 0 });
+  });
+});
+
+describe("coverage against subtreePlan", () => {
+  it("agrees for a parent with live work beneath; a parent with none is its own single unit", () => {
+    const epic = store.createIssue({ title: "Epic", estimatedSeconds: 2 * H });
+    const only = child(epic, "only", 1);
+    cancel(only);
+    // Derivation cancels the epic with its last child; reopen it as a person would.
+    store.updateIssue(epic.id, { status: "todo" }, "planner");
+    const plan = compareOne(epic);
+    // subtreePlan counts descendants' units: none are live.
+    expect(store.timing(epic.id).subtreePlan).toMatchObject({ contributingCount: 0, unplannedCount: 0, totalCount: 1 });
+    // The comparison still has a plan to report: the epic itself, at its own 2h.
+    expect(plan.coverage).toMatchObject({ planned: 1, unplanned: 0, units: 1, cancelled: 1 });
+    expect(plan.criticalPath.chain.map((step) => step.ref)).toEqual([epic.identifier]);
+  });
+});
+
+describe("performance", () => {
+  it("an edge between two containers of a thousand units stays one edge", () => {
+    const epic = store.createIssue({ title: "Epic" });
+    const left = child(epic, "Left");
+    const right = child(epic, "Right");
+    for (let i = 0; i < 1000; i++) {
+      child(left, `l${i}`, 1);
+      child(right, `r${i}`, 1);
+    }
+    block(right, left);
+    const plan = store.planSummary(epic.id)!;
+    expect(plan.criticalPath).toMatchObject({ seconds: 2 * H, edgeCount: 1, chainLength: 2 });
+    expect(plan.remainingPath.seconds).toBe(2 * H);
+    expect(plan.labor.seconds).toBe(2000 * H);
+  }, 120_000);
+
+  it("the unit graph of that shape builds and walks well inside 100 ms", () => {
+    // The pure step alone, so the budget measures the graph and not the timing replay or a busy
+    // machine's database. Expanding every unit pair (a million edges) took about 500 ms here.
+    const nodes = new Map<string, PlanNode>();
+    const add = (id: string, parentId: string | null, estimatedSeconds: number | null) =>
+      nodes.set(id, { id, identifier: `TST-${nodes.size + 1}`, parentId, estimatedSeconds, status: "backlog", cancelled: false, done: false });
+    add("epic", null, null);
+    add("left", "epic", null);
+    add("right", "epic", null);
+    for (let i = 0; i < 1000; i++) {
+      add(`l${i}`, "left", H);
+      add(`r${i}`, "right", H);
+    }
+    const labor = { seconds: 2000 * H, source: "descendants" as const, ownSeconds: null, descendantsSeconds: 2000 * H };
+    const edges = [{ blockerId: "left", blockedId: "right" }];
+    planStructureOf("epic", nodes, edges, [], labor); // warm up
+    let elapsed = Infinity;
+    for (let run = 0; run < 3; run++) {
+      const started = performance.now();
+      const result = planStructureOf("epic", nodes, edges, [], labor);
+      elapsed = Math.min(elapsed, performance.now() - started);
+      expect(result.criticalPath).toMatchObject({ seconds: 2 * H, edgeCount: 1 });
+    }
+    expect(elapsed).toBeLessThan(100);
   });
 });
 
@@ -352,6 +542,11 @@ describe("the certified invariants hold on random trees", () => {
     expect(plan.coverage.planned).toBe(subtree.contributingCount);
     expect(plan.coverage.unplanned).toBe(subtree.unplannedCount);
     const sum = plan.coverage.planned === 0 ? null : plan.labor.descendantsSeconds;
+    // What remains is never longer than the plan, and a null path has no chain.
+    if (plan.remainingPath.seconds !== null && plan.criticalPath.seconds !== null) {
+      expect(plan.remainingPath.seconds).toBeLessThanOrEqual(plan.criticalPath.seconds);
+    }
+    if (plan.criticalPath.seconds === null) expect(plan.criticalPath.chain).toEqual([]);
     if (sum === null) expect(plan.criticalPath.seconds).toBeNull();
     else expect(plan.criticalPath.seconds!).toBeLessThanOrEqual(sum);
     // The chain is a real dependency chain, and its seconds add up to the reported length.

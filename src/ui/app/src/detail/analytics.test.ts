@@ -724,6 +724,13 @@ describe("the breakdown names the source of every number", () => {
       actualSeconds: null,
     });
   });
+
+  it("says there is no live work beneath, not 0 of 0, when every descendant is cancelled", () => {
+    const rows = buildBreakdown(timing({ childCount: 2, subtreePlan: plan({ totalCount: 2 }) }));
+    expect(rows[1]).toMatchObject({ plannedSeconds: null, planSource: "no live descendants" });
+    const cancelledOnly = timing({ childCount: 2, subtreePlan: plan({ totalCount: 2 }) });
+    expect(summarySentence(computeSummary(cancelledOnly), cancelledOnly.subtreePlan)).toContain("Coverage no live descendants.");
+  });
 });
 
 // ---------------------------------------------------------- the subtree plan

@@ -111,11 +111,13 @@ describe("compare: one payload through the CLI, MCP and HTTP", () => {
     const result = cli("compare", epic, other, "--ws", WS);
     expect(result.status, result.stderr).toBe(0);
     const lines = result.stdout.trimEnd().split("\n");
-    expect(lines).toHaveLength(6);
-    expect(lines[1]).toBe(`  labor ≥10h (descendants) · 4 of 5 units planned · 1 cancelled excluded · unplanned ${refs.gap}`);
+    expect(lines).toHaveLength(8);
+    expect(lines[1]).toBe(`  labor ≥10h (descendants) · 4 of 5 units planned · 1 cancelled · unplanned ${refs.gap}`);
     expect(lines[2]).toBe(
-      `  critical path ≥9h · ${refs.a2} > ${refs.b} > ${refs.c} · partial: unplanned_units · 1 of 1 outside blockers open (${refs.b} <- ${other})`,
+      `  planned path ≥9h · ${refs.a2} > ${refs.b} > ${refs.c} · partial: unplanned_units · 1 of 1 outside blockers open (${refs.b} <- ${other})`,
     );
+    // Nothing is done yet, so what remains is the whole planned path.
+    expect(lines[3]).toBe(`  remaining path ≥9h · ${refs.a2} > ${refs.b} > ${refs.c} · partial: unplanned_units`);
   });
 
   it("is refused without a ref, on every surface", async () => {
@@ -151,6 +153,6 @@ describe("planSummary rides the detail surfaces", () => {
   it("show prints the plan lines for a parent", () => {
     const out = cli("show", epic, "--ws", WS).stdout;
     expect(out).toContain(`\nlabor ≥10h (descendants) · 4 of 5 units planned`);
-    expect(out).toContain(`\ncritical path ≥9h · ${refs.a2} > ${refs.b} > ${refs.c}`);
+    expect(out).toContain(`\nplanned path ≥9h · ${refs.a2} > ${refs.b} > ${refs.c}`);
   });
 });

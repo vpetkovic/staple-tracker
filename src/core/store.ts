@@ -4759,7 +4759,8 @@ export class WorkspaceStore {
    *    its own estimate if it has one, otherwise its children's contributions.
    *    Own wins, so the estimates under an estimated parent are shadowed for
    *    every ancestor rather than added — and a parent with no estimate passes
-   *    its children's plan straight up. A cancelled child contributes nothing.
+   *    its children's plan straight up. A cancelled child's own estimate
+   *    contributes nothing; live work beneath it still does.
    *    Coverage is counted in plan units (`unplannedCount`), not descendants.
    *    See `SubtreePlan` in core/types.ts; `planSummary` / `comparePlans` build
    *    the critical path over the same units (core/plan-rollup.ts).
@@ -4909,8 +4910,16 @@ export class WorkspaceStore {
     // Deepest first, so a parent always reads children that are already final.
     const timings = new Map<string, IssueTiming>();
     const effortOf = new Map<string, OwnEffort>();
-    /** Children that are not cancelled, per issue: an issue with none is a unit of work itself. */
+    /**
+     * Children carrying live work, per issue — not cancelled, or with a live issue beneath. A live
+     * issue with none is a unit of work itself.
+     */
     const liveChildCount = new Map<string, number>();
+    /** The issue is not cancelled, or live work lies beneath it. */
+    const carriesLive = new Map<string, boolean>();
+    // One settings read for the whole walk: `categoryOf` re-checks the settings revision per call.
+    const byStatus = this.settings().byId;
+    const isCancelled = (status: string): boolean => byStatus.get(status)?.category === "cancelled";
     for (const row of [...rows].sort((a, b) => b.depth - a.depth)) {
       const own = ownTimings.get(row.id)!;
       const children = childrenOf.get(row.id) ?? [];
@@ -4941,22 +4950,30 @@ export class WorkspaceStore {
         const childPlan = childTiming?.subtreePlan;
         if (childPlan) {
           totalCount += 1 + childPlan.totalCount;
-          // A cancelled child owes no work, so its subtree is no part of the plan:
-          // its estimate, and everything beneath it, contributes nothing and is
-          // not a gap either. It is still on its own timing, and in `totalCount`.
-          if (this.categoryOf(child.status) === "cancelled") continue;
+          // A child with no live work in it (cancelled, and everything beneath it
+          // cancelled too) owes nothing: no labor and no gap. It is still on its
+          // own timing, and in `totalCount`.
+          if (!liveChildCount.has(child.id) || !carriesLive.get(child.id)) continue;
           liveChildren += 1;
+          const cancelledChild = isCancelled(child.status);
           // The child's EFFECTIVE plan is its contribution — own if it has one,
           // else what flowed up through it. Never both, which is the whole rule.
-          if (childPlan.estimatedSeconds != null) {
-            descendantsEstimatedSeconds =
-              (descendantsEstimatedSeconds ?? 0) + childPlan.estimatedSeconds;
+          // A CANCELLED child's own estimate drops out, but cancelling a parent
+          // does not cancel its children: the live ones beneath still flow up.
+          const contribution =
+            !cancelledChild && child.estimated_seconds != null
+              ? child.estimated_seconds
+              : liveChildCount.get(child.id)! > 0
+                ? childPlan.descendantsEstimatedSeconds
+                : null;
+          if (contribution != null) {
+            descendantsEstimatedSeconds = (descendantsEstimatedSeconds ?? 0) + contribution;
           }
           // A child that contributed its own estimate is ONE contributing unit,
           // and shadows whatever its subtree counted; otherwise its counts flow
-          // up. An unestimated child with no live children is itself a unit of
-          // work nobody planned: one gap.
-          if (childPlan.source === "own") contributingCount += 1;
+          // up. A live, unestimated child with no live work beneath it is itself
+          // a unit of work nobody planned: one gap.
+          if (!cancelledChild && child.estimated_seconds != null) contributingCount += 1;
           else if (liveChildCount.get(child.id)! > 0) {
             contributingCount += childPlan.contributingCount;
             unplannedCount += childPlan.unplannedCount;
@@ -4964,6 +4981,7 @@ export class WorkspaceStore {
         }
       }
       liveChildCount.set(row.id, liveChildren);
+      carriesLive.set(row.id, !isCancelled(row.status) || liveChildren > 0);
       const hasChildren = children.length > 0;
       const ownEstimate = row.estimated_seconds ?? null;
       timings.set(row.id, {
@@ -5401,13 +5419,15 @@ export class WorkspaceStore {
       estimated_seconds: number | null;
       status: string;
     }>;
+    const byStatus = this.settings().byId;
     return rows.map((row) => ({
       id: row.id,
       identifier: row.identifier,
       parentId: row.parent_id,
       estimatedSeconds: row.estimated_seconds ?? null,
       status: row.status,
-      cancelled: this.categoryOf(row.status) === "cancelled",
+      cancelled: byStatus.get(row.status)?.category === "cancelled",
+      done: byStatus.get(row.status)?.category === "done",
     }));
   }
 
@@ -5421,15 +5441,6 @@ export class WorkspaceStore {
     for (const rootId of rootIds) {
       const subtree = this.subtreeRows(rootId);
       const nodes = new Map(subtree.map((node) => [node.id, node]));
-      // Issues under a cancelled ancestor wait on nothing the plan counts.
-      const excluded = new Set<string>();
-      const isExcluded = (id: string): boolean => {
-        for (let at: string | null = id; at !== null && at !== rootId; at = nodes.get(at)?.parentId ?? null) {
-          if (excluded.has(at) || nodes.get(at)?.cancelled) return true;
-        }
-        return false;
-      };
-      for (const node of subtree) if (isExcluded(node.id)) excluded.add(node.id);
       const ids = subtree.map((node) => node.id);
       const placeholders = ids.map(() => "?").join(",");
       const relationRows = this.db
@@ -5445,7 +5456,8 @@ export class WorkspaceStore {
       for (const relation of relationRows) {
         if (nodes.has(relation.blocker_id)) {
           edges.push({ blockerId: relation.blocker_id, blockedId: relation.blocked_id });
-        } else if (!excluded.has(relation.blocked_id)) {
+        } else if (!nodes.get(relation.blocked_id)!.cancelled) {
+          // A cancelled issue waits on nothing; a live one under a cancelled parent still does.
           outside.push({
             blocked: nodes.get(relation.blocked_id)!.identifier,
             blocker: relation.blocker_identifier,
@@ -5455,15 +5467,15 @@ export class WorkspaceStore {
         }
       }
       const plan = (timings.get(rootId) ?? this.emptyTiming()).subtreePlan;
-      out.set(rootId, {
-        labor: {
-          seconds: plan.estimatedSeconds,
-          source: plan.source,
-          ownSeconds: nodes.get(rootId)?.estimatedSeconds ?? null,
-          descendantsSeconds: plan.descendantsEstimatedSeconds,
-        },
-        ...planStructureOf(rootId, nodes, edges, outside),
-      });
+      // A cancelled issue's own estimate is no labor: named directly, it is what is live beneath it.
+      const rootCancelled = nodes.get(rootId)?.cancelled === true;
+      const labor = {
+        seconds: rootCancelled ? plan.descendantsEstimatedSeconds : plan.estimatedSeconds,
+        source: rootCancelled ? (plan.descendantsEstimatedSeconds != null ? ("descendants" as const) : ("none" as const)) : plan.source,
+        ownSeconds: nodes.get(rootId)?.estimatedSeconds ?? null,
+        descendantsSeconds: plan.descendantsEstimatedSeconds,
+      };
+      out.set(rootId, { labor, ...planStructureOf(rootId, nodes, edges, outside, labor) });
     }
     return out;
   }

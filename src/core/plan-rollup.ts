@@ -1,32 +1,44 @@
 /**
- * The certified plan of a subtree: its LABOR, its estimate COVERAGE and its CRITICAL PATH
- * (`docs/cli.md`, "Comparing plans"). Pure: the store reads the rows and hands them in.
+ * The certified plan of a subtree: its LABOR, its estimate COVERAGE, its PLANNED path and its
+ * REMAINING path (`docs/cli.md`, "Comparing plans"). Pure: the store reads the rows and hands
+ * them in.
  *
  * ## Plan units
  *
  * Every figure here is counted over one set of PLAN UNITS beneath the issue, the same set the
- * recursive `subtreePlan` sums, so the path and the labor can never disagree about what a unit
- * is:
+ * recursive `subtreePlan` sums, so the paths and the labor can never disagree about what a unit
+ * is. An issue is LIVE when its own status is not cancelled; it CARRIES LIVE WORK when it, or any
+ * issue beneath it, is live.
  *
- *  - an issue with its OWN estimate is one unit, and every issue beneath it is inside that unit
- *    (its estimate shadows theirs; own over descendants);
- *  - an issue with no estimate and no live children is one UNPLANNED unit;
- *  - an issue with no estimate and live children is a CONTAINER: its units are its children's;
- *  - a cancelled issue, and everything beneath it, is no unit at all: it owes no work.
+ *  - a live issue with its OWN estimate is one unit, and every issue beneath it is inside that
+ *    unit (its estimate shadows theirs; own over descendants);
+ *  - a live issue with no estimate and no child carrying live work is one UNPLANNED unit;
+ *  - a live issue with no estimate over children carrying live work is a CONTAINER: its units are
+ *    its children's;
+ *  - a CANCELLED issue with live work beneath it is a container too: its own estimate drops out
+ *    (it owes nothing itself), but cancelling a parent does not cancel its children, so the live
+ *    ones beneath it still count;
+ *  - a cancelled issue with no live work beneath it is no unit at all.
  *
- * The named issue itself is a container whenever it has live children, even when it carries its
- * own estimate: the path is a statement about the structure beneath it, and `labor.source` says
- * which of the two plans the labor figure is. A named issue with no live children is its own
- * single unit.
+ * The named issue itself is a container whenever a child carries live work, even when it has its
+ * own estimate: the paths are statements about the structure beneath it, and `labor.source` says
+ * which of the two plans the labor figure is (`exceedsLabor` flags a path longer than an own
+ * estimate). A named issue with no child carrying live work is its own single unit.
  *
- * ## The path
+ * ## The paths
  *
- * A `blocks` edge between two issues of the subtree becomes edges between their units: a unit or
- * an issue inside one maps to that unit, a container to every unit beneath it. Edges that stay
- * inside one unit, touch the named issue, join an issue to its own ancestor, or touch a cancelled
- * issue are dropped. The critical path is the longest chain of the resulting graph, weighted by
- * each unit's estimate, so parallel branches take the max rather than adding. Only in-subtree
- * edges shape it; blockers from outside are listed beside it, never folded in.
+ * A `blocks` edge between two issues of the subtree connects their units: an issue inside a unit
+ * stands for that unit; a container stands for all of its units, through two weightless virtual
+ * nodes (its START, before every unit beneath it, and its FINISH, after them), so an edge between
+ * two containers of a thousand units each is one edge, not a million. Edges that stay inside one
+ * unit, touch the named issue, join an issue to its own ancestor, or touch a cancelled issue are
+ * dropped.
+ *
+ * The PLANNED path is the longest chain weighted by each unit's estimate, parallel branches taking
+ * the max: how long the whole plan takes at the very least, done work included. The REMAINING path
+ * is the same chain with every `done` unit weighing 0: what is left of it. Neither is a forecast;
+ * a unit in progress weighs its full estimate. Only in-subtree edges shape them; blockers from
+ * outside are listed beside them, never folded in.
  *
  * The tracker refuses a direct cycle, but the unit graph can still hold one (a container that
  * blocks an issue which blocks one of the container's own children), and concurrent writes on two
@@ -44,6 +56,8 @@ export interface PlanNode {
   estimatedSeconds: number | null;
   status: string;
   cancelled: boolean;
+  /** Its status is in the `done` category. */
+  done: boolean;
 }
 
 /** A `blocks` edge with both ends inside the subtree. */
@@ -84,43 +98,55 @@ export interface PlanCoverage {
   unplanned: number;
   /** `planned + unplanned`. */
   units: number;
-  /** Any unit unplanned: the labor and the path are lower bounds. */
+  /** Any unit unplanned: the labor and the paths are lower bounds. */
   partial: boolean;
   /** Identifiers of the unplanned units, at most `PLAN_LIST_LIMIT`. */
   unplannedRefs: string[];
-  /** Cancelled issues beneath, excluded from every figure. */
+  /** Issues beneath whose own status is cancelled. Their estimates are no labor. */
   cancelled: number;
 }
 
 export interface PathStep {
   ref: string;
-  /** The unit's estimate; null for an unplanned unit, which the path counts as unknown, never 0. */
+  /**
+   * What the unit weighs on this path: its estimate on the planned path, and on the remaining
+   * path too (a done unit is not on it). Null for an unplanned unit: unknown, never 0.
+   */
   seconds: number | null;
   status: string;
 }
 
-export interface CriticalPath {
+export interface PlanPath {
   /**
-   * The wall-clock lower bound: the longest in-subtree dependency chain of units, weighted by
-   * estimate. Null when no unit has an estimate.
+   * The longest in-subtree dependency chain of units, weighted by estimate (on the remaining path,
+   * a done unit weighs 0). Null when no unit that counts is planned; 0 on the remaining path when
+   * every unit is done.
    */
   seconds: number | null;
-  /** True when a unit anywhere beneath is unplanned, or a cycle was broken. */
+  /** True when a counted unit is unplanned, or a cycle was broken. */
   partial: boolean;
   /** Why the figure is partial or null: `no_plan`, `unplanned_units`, `dependency_cycle`. */
   missing: string[];
-  /** The chain, first to last, at most `PATH_CHAIN_LIMIT` steps. */
+  /** The chain, first to last, at most `PATH_CHAIN_LIMIT` steps. Empty when `seconds` is null. */
   chain: PathStep[];
   /** The number of units on the chain, even when `chain` was cut. */
   chainLength: number;
-  /** In-subtree unit edges the path was computed over. */
+  /**
+   * `labor.source` is `own` and this path is longer than that own estimate: the structure beneath
+   * says more than the estimate set on the issue.
+   */
+  exceedsLabor: boolean;
+}
+
+export interface CriticalPath extends PlanPath {
+  /** In-subtree dependency edges the paths were computed over. */
   edgeCount: number;
-  /** Units on a dependency cycle that was broken to compute the path. Normally empty. */
+  /** Units on a dependency cycle that was broken to compute the paths. Normally empty. */
   cycle: string[];
   /** Blockers outside the subtree, unresolved first, at most `PLAN_LIST_LIMIT`. */
   crossSubtreeBlockers: CrossSubtreeBlocker[];
   crossSubtreeBlockerCount: number;
-  /** How many of those are unresolved: work the path cannot start until something outside ends. */
+  /** How many of those are unresolved: work that cannot start until something outside ends. */
   unresolvedCrossSubtreeBlockerCount: number;
 }
 
@@ -128,7 +154,10 @@ export interface CriticalPath {
 export interface PlanSummary {
   labor: PlanLabor;
   coverage: PlanCoverage;
+  /** The PLANNED path: every unit at its estimate, done ones included. */
   criticalPath: CriticalPath;
+  /** The REMAINING path: the same chain with done units weighing 0 and left off `chain`. */
+  remainingPath: PlanPath;
 }
 
 export interface PlanComparisonEntry extends PlanSummary {
@@ -156,15 +185,16 @@ export const PATH_CHAIN_LIMIT = 100;
 export const COMPARE_MAX_REFS = 20;
 
 /**
- * Units, coverage and critical path of the subtree under `rootId`. `nodes` holds the whole
- * subtree (the root included), `edges` the `blocks` edges with both ends in it.
+ * Units, coverage and both paths of the subtree under `rootId`. `nodes` holds the whole subtree
+ * (the root included), `edges` the `blocks` edges with both ends in it.
  */
 export function planStructureOf(
   rootId: string,
   nodes: ReadonlyMap<string, PlanNode>,
   edges: readonly PlanEdge[],
   outside: readonly CrossSubtreeBlocker[],
-): { coverage: PlanCoverage; criticalPath: CriticalPath } {
+  labor: PlanLabor,
+): Omit<PlanSummary, "labor"> {
   const childrenOf = new Map<string, PlanNode[]>();
   for (const node of nodes.values()) {
     if (node.id === rootId || node.parentId === null) continue;
@@ -173,53 +203,63 @@ export function planStructureOf(
     list.push(node);
   }
   for (const list of childrenOf.values()) list.sort(byIdentifier);
-  const liveChildren = (id: string) => (childrenOf.get(id) ?? []).filter((child) => !child.cancelled);
+
+  // Carries live work: live itself, or anything beneath it is. Deepest first via post-order.
+  const carries = new Map<string, boolean>();
+  const carriesLive = (node: PlanNode): boolean => {
+    const known = carries.get(node.id);
+    if (known !== undefined) return known;
+    const stack: Array<[PlanNode, boolean]> = [[node, false]];
+    while (stack.length > 0) {
+      const [at, expanded] = stack.pop()!;
+      if (carries.has(at.id)) continue;
+      const kids = childrenOf.get(at.id) ?? [];
+      if (!expanded) {
+        stack.push([at, true]);
+        for (const kid of kids) if (!carries.has(kid.id)) stack.push([kid, false]);
+        continue;
+      }
+      carries.set(at.id, !at.cancelled || kids.some((kid) => carries.get(kid.id)));
+    }
+    return carries.get(node.id)!;
+  };
+  const liveChildren = (id: string) => (childrenOf.get(id) ?? []).filter(carriesLive);
 
   const units: PlanNode[] = [];
-  /** An issue that is a unit or lies inside one -> that unit's id. */
+  /** An issue that is a unit or lies inside one -> that unit's id. Cancelled issues map nowhere. */
   const unitOf = new Map<string, string>();
-  /** A container -> the units beneath it. */
-  const unitsUnder = new Map<string, string[]>();
-  let cancelled = 0;
+  /** Containers, the root's own role aside. */
+  const containers: PlanNode[] = [];
 
-  const countCancelled = (id: string): void => {
-    cancelled += 1;
-    for (const child of childrenOf.get(id) ?? []) countCancelled(child.id);
-  };
   const shadow = (id: string, unit: string): void => {
     for (const child of childrenOf.get(id) ?? []) {
-      if (child.cancelled) countCancelled(child.id);
-      else {
-        unitOf.set(child.id, unit);
-        shadow(child.id, unit);
-      }
+      if (!child.cancelled) unitOf.set(child.id, unit);
+      shadow(child.id, unit);
     }
   };
-  const visit = (node: PlanNode): string[] => {
-    if (node.cancelled) {
-      countCancelled(node.id);
-      return [];
-    }
-    if (node.estimatedSeconds != null || liveChildren(node.id).length === 0) {
+  const visit = (node: PlanNode): void => {
+    if (!carriesLive(node)) return;
+    if (!node.cancelled && (node.estimatedSeconds != null || liveChildren(node.id).length === 0)) {
       units.push(node);
       unitOf.set(node.id, node.id);
       shadow(node.id, node.id);
-      return [node.id];
+      return;
     }
-    const under = (childrenOf.get(node.id) ?? []).flatMap(visit);
-    unitsUnder.set(node.id, under);
-    return under;
+    containers.push(node);
+    for (const child of childrenOf.get(node.id) ?? []) visit(child);
   };
 
   const root = nodes.get(rootId)!;
-  if (liveChildren(rootId).length === 0) {
+  const rootIsUnit = liveChildren(rootId).length === 0;
+  if (rootIsUnit) {
     units.push(root);
     unitOf.set(rootId, rootId);
-    for (const child of childrenOf.get(rootId) ?? []) countCancelled(child.id);
   } else {
-    unitsUnder.set(rootId, (childrenOf.get(rootId) ?? []).flatMap(visit));
+    for (const child of childrenOf.get(rootId) ?? []) visit(child);
   }
 
+  let cancelled = 0;
+  for (const node of nodes.values()) if (node.id !== rootId && node.cancelled) cancelled += 1;
   const planned = units.filter((unit) => unit.estimatedSeconds != null);
   const unplanned = units.filter((unit) => unit.estimatedSeconds == null);
   const coverage: PlanCoverage = {
@@ -231,7 +271,26 @@ export function planStructureOf(
     cancelled,
   };
 
-  // ---- the unit graph
+  // ---- the graph: units, plus a START and a FINISH per container
+  const isContainer = new Set(containers.map((c) => c.id));
+  const startOf = (id: string): string => (isContainer.has(id) ? `${id}#start` : unitOf.get(id)!);
+  const finishOf = (id: string): string => (isContainer.has(id) ? `${id}#finish` : unitOf.get(id)!);
+  const successors = new Map<string, Set<string>>();
+  const link = (from: string, to: string): boolean => {
+    if (from === to) return false;
+    let set = successors.get(from);
+    if (!set) successors.set(from, (set = new Set()));
+    if (set.has(to)) return false;
+    set.add(to);
+    return true;
+  };
+  // Structure: a container starts before, and finishes after, every child carrying live work.
+  for (const container of containers) {
+    for (const child of liveChildren(container.id)) {
+      link(startOf(container.id), startOf(child.id));
+      link(finishOf(child.id), finishOf(container.id));
+    }
+  }
   const isAncestor = (ancestor: string, id: string): boolean => {
     let at = nodes.get(id)?.parentId ?? null;
     for (let guard = 0; at !== null && guard <= nodes.size; guard++) {
@@ -241,42 +300,35 @@ export function planStructureOf(
     }
     return false;
   };
-  const endpoint = (id: string): string[] => {
-    const unit = unitOf.get(id);
-    if (unit !== undefined) return [unit];
-    return unitsUnder.get(id) ?? [];
-  };
-  const successors = new Map<string, Set<string>>();
+  const connectable = (id: string): boolean =>
+    id !== rootId && !nodes.get(id)!.cancelled && (isContainer.has(id) || unitOf.has(id));
+  let edgeCount = 0;
   for (const edge of edges) {
-    if (edge.blockerId === rootId || edge.blockedId === rootId) continue;
+    if (!connectable(edge.blockerId) || !connectable(edge.blockedId)) continue;
     if (isAncestor(edge.blockerId, edge.blockedId) || isAncestor(edge.blockedId, edge.blockerId)) continue;
-    for (const from of endpoint(edge.blockerId)) {
-      for (const to of endpoint(edge.blockedId)) {
-        if (from === to) continue;
-        let set = successors.get(from);
-        if (!set) successors.set(from, (set = new Set()));
-        set.add(to);
-      }
-    }
+    if (link(finishOf(edge.blockerId), startOf(edge.blockedId))) edgeCount += 1;
   }
 
-  // ---- break cycles at the edge that closes them (DFS in identifier order), then walk the DAG
+  // ---- deterministic order: units by identifier, then each container's start and finish
   const unitById = new Map(units.map((unit) => [unit.id, unit]));
-  const ordered = [...units].sort(byIdentifier);
+  const order: string[] = [
+    ...[...units].sort(byIdentifier).map((unit) => unit.id),
+    ...[...containers].sort(byIdentifier).flatMap((c) => [`${c.id}#start`, `${c.id}#finish`]),
+  ];
+  const rank = new Map(order.map((id, index) => [id, index]));
+  const byRank = (a: string, b: string) => rank.get(a)! - rank.get(b)!;
+
+  // ---- break cycles at the edge that closes them (iterative DFS in rank order)
   const adjacency = new Map<string, string[]>();
-  for (const [from, set] of successors) {
-    adjacency.set(from, [...set].sort((a, b) => byIdentifier(unitById.get(a)!, unitById.get(b)!)));
-  }
+  for (const [from, set] of successors) adjacency.set(from, [...set].sort(byRank));
   const state = new Map<string, "open" | "done">();
   const cycleUnits = new Set<string>();
-  const dag = new Map<string, string[]>();
-  let edgeCount = 0;
-  for (const start of ordered) {
-    if (state.has(start.id)) continue;
-    // Iterative DFS: a stack of [unit, next successor index].
-    const stack: Array<[string, number]> = [[start.id, 0]];
-    const onStack: string[] = [start.id];
-    state.set(start.id, "open");
+  const predecessors = new Map<string, string[]>();
+  for (const start of order) {
+    if (state.has(start)) continue;
+    const stack: Array<[string, number]> = [[start, 0]];
+    const onStack: string[] = [start];
+    state.set(start, "open");
     while (stack.length > 0) {
       const top = stack[stack.length - 1]!;
       const next = adjacency.get(top[0]) ?? [];
@@ -289,14 +341,12 @@ export function planStructureOf(
       const to = next[top[1]++]!;
       const seen = state.get(to);
       if (seen === "open") {
-        // Back edge: dropped, and every unit on the loop it closes is reported.
-        for (const id of onStack.slice(onStack.indexOf(to))) cycleUnits.add(id);
+        for (const id of onStack.slice(onStack.indexOf(to))) if (unitById.has(id)) cycleUnits.add(id);
         continue;
       }
-      let list = dag.get(top[0]);
-      if (!list) dag.set(top[0], (list = []));
-      list.push(to);
-      edgeCount += 1;
+      let preds = predecessors.get(to);
+      if (!preds) predecessors.set(to, (preds = []));
+      preds.push(top[0]);
       if (seen === undefined) {
         state.set(to, "open");
         stack.push([to, 0]);
@@ -304,59 +354,79 @@ export function planStructureOf(
       }
     }
   }
+  for (const preds of predecessors.values()) preds.sort(byRank);
 
-  // Longest path, weighted by estimate: `best` is the heaviest chain ENDING at a unit.
-  const predecessors = new Map<string, string[]>();
-  for (const [from, list] of dag) {
-    for (const to of list) {
-      let preds = predecessors.get(to);
-      if (!preds) predecessors.set(to, (preds = []));
-      preds.push(from);
-    }
-  }
-  const best = new Map<string, { seconds: number; length: number; prev: string | null }>();
-  const resolve = (id: string): { seconds: number; length: number; prev: string | null } => {
-    const known = best.get(id);
-    if (known) return known;
-    // Iterative post-order so a long chain cannot overflow the stack.
-    const work: Array<[string, boolean]> = [[id, false]];
-    while (work.length > 0) {
-      const [at, expanded] = work.pop()!;
-      if (best.has(at)) continue;
-      const preds = predecessors.get(at) ?? [];
-      if (!expanded) {
-        work.push([at, true]);
-        for (const pred of preds) if (!best.has(pred)) work.push([pred, false]);
-        continue;
-      }
-      let chosen: { seconds: number; length: number; prev: string | null } = { seconds: 0, length: 0, prev: null };
-      for (const pred of [...preds].sort((a, b) => byIdentifier(unitById.get(a)!, unitById.get(b)!))) {
-        const reading = best.get(pred)!;
-        if (reading.seconds > chosen.seconds || (reading.seconds === chosen.seconds && reading.length > chosen.length)) {
-          chosen = { seconds: reading.seconds, length: reading.length, prev: pred };
+  const counted = (weightOf: (unit: PlanNode) => number | null, include: (unit: PlanNode) => boolean): PlanPath => {
+    // `best` is the heaviest chain ENDING at a node; length counts units only.
+    const best = new Map<string, { seconds: number; length: number; prev: string | null }>();
+    const resolve = (id: string): void => {
+      const work: Array<[string, boolean]> = [[id, false]];
+      while (work.length > 0) {
+        const [at, expanded] = work.pop()!;
+        if (best.has(at)) continue;
+        const preds = predecessors.get(at) ?? [];
+        if (!expanded) {
+          work.push([at, true]);
+          for (const pred of preds) if (!best.has(pred)) work.push([pred, false]);
+          continue;
         }
+        let chosen = { seconds: 0, length: 0, prev: null as string | null };
+        for (const pred of preds) {
+          const reading = best.get(pred)!;
+          if (reading.seconds > chosen.seconds || (reading.seconds === chosen.seconds && reading.length > chosen.length)) {
+            chosen = { seconds: reading.seconds, length: reading.length, prev: pred };
+          }
+        }
+        const unit = unitById.get(at);
+        const counts = unit !== undefined && include(unit);
+        best.set(at, {
+          seconds: chosen.seconds + (counts ? (weightOf(unit) ?? 0) : 0),
+          length: chosen.length + (counts ? 1 : 0),
+          prev: chosen.prev,
+        });
       }
-      const own = unitById.get(at)!.estimatedSeconds ?? 0;
-      best.set(at, { seconds: chosen.seconds + own, length: chosen.length + 1, prev: chosen.prev });
+    };
+    let end: string | null = null;
+    for (const id of order) {
+      resolve(id);
+      const reading = best.get(id)!;
+      const current = end === null ? null : best.get(end)!;
+      if (current === null || reading.seconds > current.seconds || (reading.seconds === current.seconds && reading.length > current.length)) {
+        end = id;
+      }
     }
-    return best.get(id)!;
+    const considered = units.filter(include);
+    const plannedHere = considered.filter((unit) => weightOf(unit) !== null);
+    const unplannedHere = considered.length - plannedHere.length;
+    // Nothing counted at all is a real 0 (all done); counted units with no plan is unknown.
+    const seconds = considered.length === 0 ? 0 : plannedHere.length === 0 ? null : best.get(end!)!.seconds;
+    const chainIds: string[] = [];
+    if (seconds !== null) {
+      for (let at: string | null = end; at !== null; at = best.get(at)!.prev) {
+        const unit = unitById.get(at);
+        if (unit !== undefined && include(unit)) chainIds.push(at);
+      }
+      chainIds.reverse();
+    }
+    const missing: string[] = [];
+    if (seconds === null) missing.push("no_plan");
+    else if (unplannedHere > 0) missing.push("unplanned_units");
+    if (cycleUnits.size > 0) missing.push("dependency_cycle");
+    return {
+      seconds,
+      partial: unplannedHere > 0 || cycleUnits.size > 0,
+      missing,
+      chain: chainIds.slice(0, PATH_CHAIN_LIMIT).map((id) => {
+        const unit = unitById.get(id)!;
+        return { ref: unit.identifier, seconds: weightOf(unit), status: unit.status };
+      }),
+      chainLength: chainIds.length,
+      exceedsLabor: labor.source === "own" && labor.seconds !== null && seconds !== null && seconds > labor.seconds,
+    };
   };
-  let end: string | null = null;
-  for (const unit of ordered) {
-    const reading = resolve(unit.id);
-    const current = end === null ? null : best.get(end)!;
-    if (current === null || reading.seconds > current.seconds || (reading.seconds === current.seconds && reading.length > current.length)) {
-      end = unit.id;
-    }
-  }
-  const chainIds: string[] = [];
-  for (let at: string | null = end; at !== null; at = best.get(at)!.prev) chainIds.push(at);
-  chainIds.reverse();
 
-  const missing: string[] = [];
-  if (planned.length === 0) missing.push("no_plan");
-  else if (unplanned.length > 0) missing.push("unplanned_units");
-  if (cycleUnits.size > 0) missing.push("dependency_cycle");
+  const plannedPath = counted((unit) => unit.estimatedSeconds, () => true);
+  const remainingPath = counted((unit) => unit.estimatedSeconds, (unit) => !unit.done);
 
   const sortedOutside = [...outside].sort(
     (a, b) => Number(a.resolved) - Number(b.resolved) || compareRefs(a.blocked, b.blocked) || compareRefs(a.blocker, b.blocker),
@@ -364,20 +434,14 @@ export function planStructureOf(
   return {
     coverage,
     criticalPath: {
-      seconds: planned.length === 0 ? null : end === null ? 0 : best.get(end)!.seconds,
-      partial: unplanned.length > 0 || cycleUnits.size > 0,
-      missing,
-      chain: chainIds.slice(0, PATH_CHAIN_LIMIT).map((id) => {
-        const unit = unitById.get(id)!;
-        return { ref: unit.identifier, seconds: unit.estimatedSeconds, status: unit.status };
-      }),
-      chainLength: chainIds.length,
+      ...plannedPath,
       edgeCount,
       cycle: [...cycleUnits].map((id) => unitById.get(id)!.identifier).sort(compareRefs),
       crossSubtreeBlockers: sortedOutside.slice(0, PLAN_LIST_LIMIT),
       crossSubtreeBlockerCount: outside.length,
       unresolvedCrossSubtreeBlockerCount: outside.filter((blocker) => !blocker.resolved).length,
     },
+    remainingPath,
   };
 }
 

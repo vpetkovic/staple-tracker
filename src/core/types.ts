@@ -831,15 +831,16 @@ export interface SubtreePlan {
   /** Which of the two fed `estimatedSeconds`; `none` when it is null. */
   source: PlanSource;
   /**
-   * BOTTOM-UP: the sum of the effective plans of the DIRECT children that are
-   * not cancelled — the recursive counterpart of `childrenEstimatedSeconds`, and
-   * equal to it whenever every child carries its own estimate and none is
-   * cancelled. Null when no live descendant at any depth has one. Present even
-   * when `source` is `own`, so a top-down plan and the work beneath it can be
-   * compared.
+   * BOTTOM-UP: the sum of the DIRECT children's contributions — the recursive
+   * counterpart of `childrenEstimatedSeconds`, and equal to it whenever every
+   * child carries its own estimate and none is cancelled. Null when no live
+   * descendant at any depth has one. Present even when `source` is `own`, so a
+   * top-down plan and the work beneath it can be compared.
    *
-   * A CANCELLED child contributes nothing, and neither does anything beneath it:
-   * it owes no work, so its estimate is not labor this subtree still plans.
+   * A CANCELLED child's own estimate contributes nothing: it owes no work. But
+   * cancelling a parent cancels none of its children, so a cancelled child with
+   * live work beneath it passes that work's plan up like an unestimated parent.
+   * Only a subtree cancelled throughout drops out entirely.
    */
   descendantsEstimatedSeconds: number | null;
   /**
@@ -850,9 +851,9 @@ export interface SubtreePlan {
    */
   contributingCount: number;
   /**
-   * UNPLANNED UNITS: descendants with no live children, no own estimate and no
-   * estimated ancestor below this issue — the work nobody planned. Cancelled
-   * subtrees are neither. COVERAGE is `contributingCount` over
+   * UNPLANNED UNITS: live descendants with no live work beneath them, no own
+   * estimate and no estimated ancestor below this issue — the work nobody
+   * planned. Cancelled issues are neither. COVERAGE is `contributingCount` over
    * `contributingCount + unplannedCount`: every unit of work is exactly one of
    * the two, so a fully planned subtree reads n of n however deep its shadowed
    * estimates go.

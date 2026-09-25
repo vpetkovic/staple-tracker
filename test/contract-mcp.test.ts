@@ -1116,8 +1116,10 @@ describe("tool response shapes (31/31)", () => {
       seconds: null,
       partial: true,
       missing: ["no_plan"],
-      chain: [{ ref: "CON-4", seconds: null, status: "backlog" }],
-      chainLength: 1,
+      // No plan, so no chain: a null path names no units.
+      chain: [],
+      chainLength: 0,
+      exceedsLabor: false,
       edgeCount: 0,
       cycle: [],
       // CON-4 waits on CON-3, outside CON-1's subtree: listed, not followed.
@@ -1125,6 +1127,7 @@ describe("tool response shapes (31/31)", () => {
       crossSubtreeBlockerCount: 1,
       unresolvedCrossSubtreeBlockerCount: 1,
     },
+    remainingPath: { seconds: null, partial: true, missing: ["no_plan"], chain: [], chainLength: 0, exceedsLabor: false },
   };
 
   it("get_task", () => {

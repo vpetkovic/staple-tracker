@@ -911,7 +911,7 @@ Tasks
   compare <ref> [<ref> ...]             total labor, estimate coverage and critical path
               of each named issue, side by side, with no tree dump: every planned
               unit once (own estimate over descendants), unplanned units named,
-              the longest in-subtree blockedBy chain; staple compare --help
+              the planned and remaining in-subtree blockedBy paths; staple compare --help
   board                                 terminal kanban
   inbox [--assignee A] [--hub]          ready vs queued vs blocked (pickup order);
               QUEUED is work a HUMAN has to release (see Approval gates below) and

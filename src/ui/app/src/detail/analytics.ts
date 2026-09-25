@@ -451,7 +451,12 @@ export function summarySentence(
   hints: { actual?: string | null; difference?: string | null } = {},
 ): string {
   const qualify = (text: string, hint: string | null | undefined) => (hint ? `${text} (${hint})` : text);
-  const coverage = plan.totalCount === 0 ? "no descendants" : `${planCoverage(plan)} planned`;
+  const coverage =
+    plan.totalCount === 0
+      ? "no descendants"
+      : plan.contributingCount + plan.unplannedCount === 0
+        ? "no live descendants"
+        : `${planCoverage(plan)} planned`;
   const source =
     plan.source === "own" ? OWN_PLAN : plan.source === "descendants" ? "inherited from descendants" : "no plan";
   return [
@@ -596,7 +601,9 @@ export function buildBreakdown(timing: IssueTiming): BreakdownRow[] {
       plannedSeconds: plan.descendantsEstimatedSeconds,
       planSource:
         plan.descendantsEstimatedSeconds === null
-          ? `no estimate among ${plan.unplannedCount} units`
+          ? plan.unplannedCount === 0
+            ? "no live descendants"
+            : `no estimate among ${plan.unplannedCount} units`
           : `bottom-up, from ${descendants}`,
       actualSeconds: timing.childrenActiveSeconds,
       actualSource: aggregationHint(timing.childCount),

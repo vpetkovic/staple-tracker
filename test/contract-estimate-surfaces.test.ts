@@ -522,7 +522,7 @@ describe("the recursive plan reaches every read surface across three levels", ()
       "time   plan 11h (3 of 3 units planned)",
     );
     // And the certified plan beneath it: labor with coverage, then the path.
-    expect(cli("show", epic, "--ws", WS).stdout).toMatch(/\nlabor 11h \(descendants\) · 3 of 3 units planned\ncritical path 4h · CON-\d+\n/);
+    expect(cli("show", epic, "--ws", WS).stdout).toMatch(/\nlabor 11h \(descendants\) · 3 of 3 units planned\nplanned path 4h · CON-\d+\nremaining path 4h · CON-\d+\n/);
   });
 
   it("an estimate on the middle level shadows the leaves for the epic — never both", async () => {

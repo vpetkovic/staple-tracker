@@ -5,7 +5,7 @@
  * `compare_plans` and HTTP `/api/compare` call too, so `--json` and the tools answer one shape.
  */
 import { parseArgs } from "node:util";
-import type { PlanComparison, PlanSummary } from "../core/plan-rollup.js";
+import type { PlanComparison, PlanPath, PlanSummary } from "../core/plan-rollup.js";
 import { StapleError, formatDuration } from "../core/types.js";
 import { resolveWorkspace } from "../core/workspace.js";
 
@@ -17,40 +17,51 @@ const HELP = `staple compare — total labor, estimate coverage and critical pat
                       of its descendants'. Cancelled work is no labor
               units   planned of all units; an unplanned unit makes both labor
                       and path lower bounds (partial), never a silent 0
-              path    the longest blockedBy chain inside the subtree, weighted by
-                      estimate, parallel branches taking the max; blockers from
-                      outside the subtree are listed, not followed
+              planned path   the longest blockedBy chain inside the subtree,
+                      weighted by estimate, parallel branches taking the max;
+                      blockers from outside the subtree are listed, not followed
+              remaining path the same chain with done units weighing 0
 
-  --json      {plans: [{ref, title, kind, status, labor, coverage, criticalPath}], overlaps}`;
+  --json      {plans: [{ref, title, kind, status, labor, coverage, criticalPath,
+              remainingPath}], overlaps}`;
 
 const CHAIN_SHOWN = 8;
 const hours = (seconds: number | null): string => (seconds === null ? "unknown" : formatDuration(seconds));
 
 /**
- * The plan in two lines, as `show` and `compare` print it: labor with coverage, then the path.
- * `show` prints them for a parent; a leaf's plan is its own estimate, already on `time`.
+ * The plan in three lines, as `show` and `compare` print it: labor with coverage, the planned
+ * path, and the remaining path. `show` prints them for a parent whose plan has a planned unit; a
+ * leaf's plan is its own estimate, already on `time`.
  */
 export function planLines(plan: PlanSummary): string[] {
-  const { labor, coverage, criticalPath: path } = plan;
+  const { labor, coverage, criticalPath, remainingPath } = plan;
   const source =
     labor.source === "own" && labor.descendantsSeconds !== null
       ? `own estimate; units beneath add up to ${formatDuration(labor.descendantsSeconds)}`
       : labor.source;
   const units = `${coverage.planned} of ${coverage.units} units planned`;
-  const cancelled = coverage.cancelled > 0 ? ` · ${coverage.cancelled} cancelled excluded` : "";
+  const cancelled = coverage.cancelled > 0 ? ` · ${coverage.cancelled} cancelled` : "";
   const unplanned =
     coverage.unplanned > 0
       ? ` · unplanned ${coverage.unplannedRefs.join(", ")}${coverage.unplanned > coverage.unplannedRefs.length ? ` (+${coverage.unplanned - coverage.unplannedRefs.length})` : ""}`
       : "";
-  const shown = path.chain.slice(0, CHAIN_SHOWN).map((step) => (step.seconds === null ? `${step.ref}(?)` : step.ref));
-  const more = path.chainLength > shown.length ? ` > … (+${path.chainLength - shown.length})` : "";
-  const flags = [
-    path.partial ? `partial: ${path.missing.join(", ")}` : null,
-    path.cycle.length > 0 ? `cycle broken at ${path.cycle.join(", ")}` : null,
-    path.crossSubtreeBlockerCount > 0
-      ? `${path.unresolvedCrossSubtreeBlockerCount} of ${path.crossSubtreeBlockerCount} outside blockers open` +
-        (path.unresolvedCrossSubtreeBlockerCount > 0
-          ? ` (${path.crossSubtreeBlockers
+  const pathLine = (label: string, path: PlanPath, extra: string[]): string => {
+    const shown = path.chain.slice(0, CHAIN_SHOWN).map((step) => (step.seconds === null ? `${step.ref}(?)` : step.ref));
+    const more = path.chainLength > shown.length ? ` > … (+${path.chainLength - shown.length})` : "";
+    const flags = [
+      path.partial ? `partial: ${path.missing.join(", ")}` : null,
+      path.exceedsLabor ? "longer than the own estimate" : null,
+      ...extra,
+    ].filter((flag): flag is string => flag !== null);
+    if (path.seconds === 0 && path.chainLength === 0) return `${label} 0 (every unit is done)`;
+    return `${label} ${path.seconds !== null && path.partial ? "≥" : ""}${hours(path.seconds)}${shown.length > 0 ? ` · ${shown.join(" > ")}${more}` : ""}${flags.length > 0 ? ` · ${flags.join(" · ")}` : ""}`;
+  };
+  const structural = [
+    criticalPath.cycle.length > 0 ? `cycle broken at ${criticalPath.cycle.join(", ")}` : null,
+    criticalPath.crossSubtreeBlockerCount > 0
+      ? `${criticalPath.unresolvedCrossSubtreeBlockerCount} of ${criticalPath.crossSubtreeBlockerCount} outside blockers open` +
+        (criticalPath.unresolvedCrossSubtreeBlockerCount > 0
+          ? ` (${criticalPath.crossSubtreeBlockers
               .filter((blocker) => !blocker.resolved)
               .map((blocker) => `${blocker.blocked} <- ${blocker.blocker}`)
               .join(", ")})`
@@ -59,7 +70,8 @@ export function planLines(plan: PlanSummary): string[] {
   ].filter((flag): flag is string => flag !== null);
   return [
     `labor ${labor.source === "descendants" && coverage.partial ? "≥" : ""}${hours(labor.seconds)} (${source}) · ${units}${cancelled}${unplanned}`,
-    `critical path ${path.seconds !== null && path.partial ? "≥" : ""}${hours(path.seconds)}${shown.length > 0 ? ` · ${shown.join(" > ")}${more}` : ""}${flags.length > 0 ? ` · ${flags.join(" · ")}` : ""}`,
+    pathLine("planned path", criticalPath, structural),
+    pathLine("remaining path", remainingPath, []),
   ];
 }
 

@@ -533,26 +533,30 @@ place, and it survives an epic-of-epics with one rule: an issue contributes its
 **own estimate if it has one, otherwise the sum of its children's
 contributions** — never both. So a parent's plan and its descendants' plans
 cannot both land in one ancestor total, and a middle-level epic nobody
-estimated passes its children's plan straight up. A **cancelled** issue
-contributes nothing, and neither does anything beneath it: it owes no work.
-`done` work still counts, because it was part of the plan. This rule is
-certified: a test suite pins it on adversarial trees (an estimated parent over
-estimated children, mixed partial subtrees, twelve levels of nesting, done and
-cancelled descendants, a leaf moved between parents, and two devices writing
-the same tree through sync). The fields:
+estimated passes its children's plan straight up. A **cancelled** issue's own
+estimate contributes nothing: it owes no work. Cancelling a parent does not
+cancel its children, though, so a cancelled issue with live issues beneath it
+passes their plan up like an unestimated parent would. Only a subtree that is
+cancelled throughout drops out entirely. `done` work still counts, because it
+was part of the plan. This rule is certified: a test suite pins it on
+adversarial trees (an estimated parent over estimated children, mixed partial
+subtrees, twelve levels of nesting, done and cancelled descendants, a cancelled
+parent over open children, a leaf moved between parents, and two devices
+writing the same tree through sync). The fields:
 
 - `estimatedSeconds` — the **effective (top-down) plan**, the one number an
   ancestor counts this issue as: the own estimate when recorded, otherwise
   `descendantsEstimatedSeconds`, `null` when neither exists.
 - `source` — `own`, `descendants` or `none`: which fed `estimatedSeconds`.
 - `descendantsEstimatedSeconds` — the **bottom-up plan**, the sum of the
-  effective plans of the direct children that are not cancelled. Kept visible
+  direct children's contributions, under the cancellation rule above. Kept visible
   even when an own estimate wins, so the 4h epic above, over 3h30m of planned
   children, shows the disagreement instead of one side quietly winning.
 - `contributingCount` / `unplannedCount` — **coverage over plan units**. A
-  unit is an issue with its own estimate (everything beneath it is inside that
-  unit), or a live issue with no estimate and no live children (an unplanned
-  unit). An unestimated issue with live children is a container, not a unit.
+  unit is a live (not cancelled) issue with its own estimate (everything
+  beneath it is inside that unit), or a live issue with no estimate and no live
+  work beneath it (an unplanned unit). An unestimated issue with live work
+  beneath it is a container, not a unit, and so is a cancelled one.
   `contributingCount` counts the planned units at every depth, `unplannedCount`
   the unplanned ones, and coverage is `contributingCount` of
   `contributingCount + unplannedCount`. A fully planned tree therefore reads
@@ -567,7 +571,7 @@ reports an 11h plan, and its parent includes that 11h whether or not the
 middle level was estimated. `staple show` adds one segment per parent:
 `plan 11h (3 of 3 units planned)` when the plan was inherited, or
 `descendants est 11h (3 of 3 units planned)` beside `est` when an own estimate
-wins, then the two lines of the certified plan below.
+wins, then the three lines of the certified plan below.
 
 Every surface takes it at creation: MCP `create_task` via `estimate_seconds`,
 HTTP `create` via `estimateSeconds`, and `staple new --estimate`. Every surface
@@ -580,56 +584,75 @@ make choosing a task cheap.
 ### Comparing plans: `staple compare`
 
 `staple compare <ref> [<ref> ...]` (MCP `compare_plans {refs}`, HTTP
-`GET /api/compare?ref=A&ref=B`) reports, for up to 20 named issues, the three
-figures a planner needs to compare epics, with no tree in the output. All three
+`GET /api/compare?ref=A&ref=B`) reports, for up to 20 named issues, the figures
+a planner needs to compare epics, with no tree in the output. All three
 surfaces call one store method and answer one payload:
 
 ```bash
 staple compare STA-42 STA-50
 # STA-42 · Sync epic (epic, in_progress)
-#   labor ≥10h (descendants) · 4 of 5 units planned · 1 cancelled excluded · unplanned STA-47
-#   critical path ≥9h · STA-44 > STA-45 > STA-46 · partial: unplanned_units · 1 of 1 outside blockers open (STA-45 <- STA-50)
+#   labor ≥10h (descendants) · 4 of 5 units planned · 1 cancelled · unplanned STA-47
+#   planned path ≥9h · STA-44 > STA-45 > STA-46 · partial: unplanned_units · 1 of 1 outside blockers open (STA-45 <- STA-50)
+#   remaining path ≥5h · STA-45 > STA-46 · partial: unplanned_units
 # STA-50 · Other epic (epic, backlog)
 #   labor 6h (own) · 1 of 1 units planned
-#   critical path 6h · STA-50
+#   planned path 6h · STA-50
+#   remaining path 6h · STA-50
 ```
+
+Durations print in days of 24 hours: `5d5h` is 125 hours of labor, not five
+working days. The JSON is in seconds.
 
 - **`labor`** is total labor: `timing.subtreePlan`, the certified rollup
   above, never recomputed. Every planned unit is counted once. `source` is
   `own` when the issue's own estimate is the figure (with `descendantsSeconds`,
   the bottom-up sum, beside it) and `descendants` when it is the sum of the
-  units beneath. `≥` marks a `descendants` sum with unplanned units.
+  units beneath. `≥` marks a `descendants` sum with unplanned units. A
+  cancelled issue named directly reports what is live beneath it, not its own
+  estimate.
 - **`coverage`** is `{planned, unplanned, units, partial, unplannedRefs,
-  cancelled}` over plan units, the same counts as `subtreePlan`'s
-  `contributingCount` and `unplannedCount`. For a parent `units` is their sum.
-  An issue with no live children is its own single unit. `unplannedRefs` lists
-  at most 20. An unplanned unit is never counted as 0: `partial` is true and
-  both figures are lower bounds.
-- **`criticalPath`** is the dependency-aware wall-clock input: the longest
-  chain of `blockedBy` edges between units inside the subtree, weighted by each
-  unit's estimate, so parallel branches take the max rather than adding. It is
-  built from the units beneath the issue, even when the issue's own estimate is
-  the labor figure. An edge between two issues becomes an edge between their
-  units: an issue inside a unit stands for that unit, and a container for every
-  unit beneath it. Edges inside one unit, edges to the named issue itself,
-  edges between an issue and its own ancestor, and edges touching a cancelled
-  issue shape nothing. `seconds` is null with `no_plan` when no unit is
-  planned. `partial` with `unplanned_units` means some unit has no estimate.
-  An unplanned unit on the chain shows `seconds: null`, unknown rather than 0.
+  cancelled}` over plan units. For an issue with live work beneath it,
+  `planned` and `unplanned` are `subtreePlan`'s `contributingCount` and
+  `unplannedCount`. An issue with no live work beneath it (no children, or
+  every descendant cancelled) is its own single unit here, while its
+  `subtreePlan` counts no descendant units at all. `cancelled` counts the
+  issues beneath whose own status is cancelled. `unplannedRefs` lists at most
+  20. An unplanned unit is never counted as 0: `partial` is true and the
+  figures are lower bounds.
+- **`criticalPath`** is the **planned path**: the longest chain of
+  `blockedBy` edges between units inside the subtree, every unit weighted by
+  its estimate, done ones included, so parallel branches take the max rather
+  than adding. It is how long the plan takes end to end at the least, not a
+  forecast. It is built from the units beneath the issue, even when the
+  issue's own estimate is the labor figure, and `exceedsLabor: true` says the
+  path is longer than that own estimate. An edge between two issues becomes an
+  edge between their units: an issue inside a unit stands for that unit, and a
+  container for all of its units, through a start and a finish node of its
+  own, so an edge between two large containers stays one edge. Edges inside
+  one unit, edges to the named issue itself, edges between an issue and its
+  own ancestor, and edges touching a cancelled issue shape nothing. `seconds`
+  is null with `no_plan` when no unit is planned, and `chain` is then empty.
+  `partial` with `unplanned_units` means some unit has no estimate. An
+  unplanned unit on the chain shows `seconds: null`, unknown rather than 0.
   `chain` lists at most 100 steps, and `chainLength` gives the true length.
-- **Blockers outside the subtree** are listed in `crossSubtreeBlockers`
+- **`remainingPath`** has the same shape over the same chain, with every
+  `done` unit weighing 0 and left off `chain`: what is left of the plan. A
+  unit in progress still weighs its full estimate. It is 0 when every unit is
+  done, and null with `no_plan` when open units remain and none of them is
+  planned. A done unit with no estimate is no gap in what remains.
+- **Blockers outside the subtree** are listed in `criticalPath.crossSubtreeBlockers`
   (`{blocked, blocker, blockerStatus, resolved}`, unresolved first, at most 20,
   with `crossSubtreeBlockerCount` and `unresolvedCrossSubtreeBlockerCount`).
-  They are never folded into the path: an unresolved one is work the path
-  cannot start until something outside ends. Cross-workspace blockers stay on
+  They are never folded into a path: an unresolved one is work that cannot
+  start until something outside ends. Cross-workspace blockers stay on
   `get_task`'s `crossBlockers`.
 - **Cycles.** The tracker refuses a direct dependency cycle, but units can
   still form one: a container blocks an issue that blocks one of the
   container's own children, or two devices each add one half of a loop before
-  they sync. The path breaks such a cycle at the edge that closes it, in
+  they sync. The paths break such a cycle at the edge that closes it, in
   identifier order, so every device breaks it the same way. The units on it
-  are listed in `cycle`, `missing` gains `dependency_cycle` and the path is
-  `partial`. The walk never loops.
+  are listed in `criticalPath.cycle`, `missing` gains `dependency_cycle` and
+  the paths are `partial`. The walk never loops.
 - **`overlaps`** names every compared issue that lies inside another compared
   issue (`{ref, within}`). Its labor is already part of the other's, so never
   add the two.
@@ -638,7 +661,8 @@ staple compare STA-42 STA-50
 carry the same object as `planSummary` for a parent: `compare`'s entry for that
 issue without `ref`, `title`, `kind` and `status`. It is `null` for an issue
 with no children, whose plan is its own estimate on `timing`. `staple show`
-prints it as the `labor` and `critical path` lines.
+prints it as the `labor`, `planned path` and `remaining path` lines once
+something beneath is planned.
 
 ## Approval gates
 

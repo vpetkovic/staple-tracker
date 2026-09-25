@@ -304,16 +304,24 @@ Rules that hold on all four:
 
 ### Comparing plans
 
-`compare_plans {refs, ws?}` (1 to 20 refs) is `staple compare <ref> ... --json`:
-per named issue, `labor` (total labor, every planned unit once: an issue's own
-estimate over its descendants, never both, cancelled work excluded),
-`coverage` (planned of units, the unplanned ones named) and `criticalPath`
-(the longest `blockedBy` chain inside the subtree weighted by estimate, with
-blockers from outside listed separately), plus `overlaps` for a ref that lies
-inside another. Use it to compare two epics instead of fetching their trees
-and adding estimates by hand. `partial: true` means a lower bound, never a
-silent 0. `get_task` carries the same object for a parent as `planSummary`
-(null for a leaf). The rules are in [cli.md](cli.md#comparing-plans-staple-compare).
+`compare_plans {refs, ws?}` (1 to 20 refs) is `staple compare <ref> ... --json`.
+For each named issue it returns:
+
+- `labor`: total labor, with every planned unit counted once. An issue's own
+  estimate counts instead of its descendants', never both. A cancelled issue's
+  own estimate is excluded, but live work beneath it still counts.
+- `coverage`: planned units out of all units, with the unplanned ones named.
+- `criticalPath`: the planned path. This is the longest `blockedBy` chain
+  inside the subtree, weighted by estimate, with done work included. Blockers
+  from outside the subtree are listed separately.
+- `remainingPath`: the same chain with done units weighing 0.
+
+`overlaps` names a ref that lies inside another ref. `exceedsLabor` flags a
+path longer than an own estimate. `partial: true` means a lower bound, never a
+silent 0. Use this tool to compare two epics instead of fetching their trees and
+adding estimates by hand. For a parent, `get_task` carries the same object as
+`planSummary` (null for a leaf). The rules are in
+[cli.md](cli.md#comparing-plans-staple-compare).
 
 ## Harness ergonomics
 
