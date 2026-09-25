@@ -408,6 +408,72 @@ describe("the budget forecast of a piece of work", () => {
     expect(both.workRate!.confidence.warnings).not.toContain("shared_use");
   });
 
+  it("treats a reading that names no session inside a span as someone else's use", () => {
+    history();
+    // During an hour's attempt in session-a, a manual reading (no session) shows the limit jumped to 40%.
+    at(310);
+    const busy = store.createIssue({ title: "busy", estimatedSeconds: 3600 });
+    store.checkoutIssue(busy.id, "agent", undefined, { attempt: { harness: "claude_code", harnessSession: "session-a" } });
+    reading(310, 10, iso(600), "session-a");
+    at(340);
+    store.addComment(busy.id, "working", "agent", "agent");
+    ingestBudget({ source: "manual", account: "personal-max", provider: "anthropic", limitKey: "five_hour", used: 40, resetsAt: iso(600) }, { home, now: () => iso(340) });
+    at(370);
+    store.addComment(busy.id, "done", "agent", "agent");
+    reading(370, 42, iso(600), "session-a");
+    store.updateIssue(busy.id, { status: "done" }, "agent");
+    at(371);
+    const limit = limitOf(store.forecast({ ref: store.createIssue({ title: "m", estimatedSeconds: 3600 }).identifier }, iso(371), home));
+    // 32%/work-hour that cannot be shown to be the work's: shared, and said so.
+    expect(limit.workRate).toMatchObject({ spans: 1, sharedSpans: 1, burnPercent: 32 });
+    expect(limit.workRate!.confidence).toMatchObject({ label: "low", warnings: expect.arrayContaining(["shared_use"]) });
+  });
+
+  it("reads an attempt with no harness session as a span no reading can be matched to", () => {
+    history();
+    // Checked out with a harness but no session: bound to the account by the machine's binding.
+    at(310);
+    const blind = store.createIssue({ title: "blind", estimatedSeconds: 3600 });
+    store.checkoutIssue(blind.id, "agent", undefined, { attempt: { harness: "claude_code" } });
+    reading(310, 10, iso(600), "session-a");
+    at(340);
+    store.addComment(blind.id, "done", "agent", "agent");
+    reading(340, 16, iso(600), "session-a");
+    store.updateIssue(blind.id, { status: "done" }, "agent");
+    at(341);
+    const limit = limitOf(store.forecast({ ref: store.createIssue({ title: "n", estimatedSeconds: 3600 }).identifier }, iso(341), home));
+    // It forms a span (its rise is never other use), but the span is shared: nothing inside it is provably its own.
+    expect(limit.workRate).toMatchObject({ spans: 1, attempts: 1, sharedSpans: 1, burnPercent: 6 });
+    expect(limit.workRate!.confidence.warnings).toContain("shared_use");
+  });
+
+  it("does not call short spans sparse when their readings sit within the capture cadence of their edges", () => {
+    history();
+    // Five five-minute attempts, each with its baseline reading one minute before it (other use adds
+    // 0.5% between them, so every baseline is a fresh reading) and a reading at its end: +2% each.
+    let used = 9.5;
+    for (let k = 0; k < 5; k += 1) {
+      const start = 310 + k * 10;
+      at(start - 1);
+      used += 0.5;
+      reading(start - 1, used, iso(600), "session-a");
+      at(start);
+      const short = store.createIssue({ title: `short ${k}`, estimatedSeconds: 600 });
+      store.checkoutIssue(short.id, "agent", undefined, { attempt: { harness: "claude_code", harnessSession: "session-a" } });
+      at(start + 5);
+      store.addComment(short.id, "done", "agent", "agent");
+      used += 2;
+      reading(start + 5, used, iso(600), "session-a");
+      store.updateIssue(short.id, { status: "done" }, "agent");
+    }
+    at(356);
+    const limit = limitOf(store.forecast({ ref: store.createIssue({ title: "o", estimatedSeconds: 3600 }).identifier }, iso(356), home));
+    // 2% per five minutes is 24%/work-hour, read exactly: a minute's gap is under the two-minute floor.
+    expect(limit.workRate).toMatchObject({ spans: 5, sparseSpans: 0, sharedSpans: 0, lowerBound: false, burnPercent: 10, workSeconds: 1500 });
+    expect(limit.workRate!.percentPerWorkHour).toBeCloseTo(24, 9);
+    expect(limit.workRate!.confidence).toEqual({ label: "medium", spans: 5, minimum: 5, warnings: [] });
+  });
+
   it("never counts an attempt that started before the window instance in its work rate", () => {
     history();
     // An attempt opened in the first instance runs on into the second, read on both sides of the reset.

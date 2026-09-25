@@ -15,10 +15,12 @@
  *   Concurrent attempts are one span: two agents working the same hour while the limit rises 10%
  *   burned 5% per work-hour each, not 10. A span's rise needs a reading inside it; its baseline is
  *   the high-water at or before its start, or its first reading inside (a lower bound). A span
- *   whose baseline or last inside reading sits farther than 10% of its length from its edge is
- *   SPARSE (`sparse_readings`): part of its rise may be other use, or the reverse. A span with a
- *   reading from a session none of its attempts ran in is SHARED (`shared_use`): someone else used
- *   the account during it, so the rate reads only unshared spans when there are any.
+ *   whose baseline or last inside reading sits farther than 10% of its length (and at least two
+ *   minutes) from its edge is SPARSE (`sparse_readings`): part of its rise may be other use, or
+ *   the reverse. A span with a reading from a session none of its attempts ran in, or from no
+ *   session at all, is SHARED (`shared_use`): its rise cannot be shown to be the work's, so the
+ *   rate reads only unshared spans when there are any. An attempt with no harness session still
+ *   forms a span, but no reading can match it, so any span it is in reads as shared.
  * - OTHER USE, `%/hour`: the pace outside those spans, the rise the attempts did not make over the
  *   time they were not running. It needs 30 minutes outside the spans and two readings there.
  *
@@ -73,6 +75,12 @@ export const RATE_ATTEMPT_LIMIT = 200;
  * and other use is a guess.
  */
 export const SPARSE_EDGE_SHARE = 0.1;
+
+/**
+ * The least edge gap that makes a span sparse, whatever its length: a five-minute span whose
+ * baseline reading is a minute before it is read as closely as the cadence allows, not sparse.
+ */
+export const SPARSE_EDGE_FLOOR_SECONDS = 120;
 
 /** Other use needs this much time outside the attempts' spans, and this many readings there, to be measured. */
 export const OTHER_USE_MINIMUM = { seconds: 1800, readings: 2 } as const;
@@ -347,9 +355,9 @@ interface Span {
   /** Null when no reading falls inside it. */
   readonly rise: number | null;
   readonly lowerBound: boolean;
-  /** A baseline or last inside reading farther from its edge than {@link SPARSE_EDGE_SHARE} of the span. */
+  /** A baseline or last inside reading farther from its edge than {@link SPARSE_EDGE_SHARE} of the span, and {@link SPARSE_EDGE_FLOOR_SECONDS}. */
   readonly sparse: boolean;
-  /** A reading inside it came from a session none of its attempts ran in. */
+  /** A reading inside it came from a session none of its attempts ran in, or named no session. */
   readonly shared: boolean;
 }
 
@@ -376,7 +384,7 @@ function spansOf(attempts: readonly AttemptSpanInput[], readings: readonly Windo
     if (inside.length === 0) return { ...base, rise: null, lowerBound: false, sparse: false, shared: false };
     const baseline = before.length > 0 ? Math.max(...before.map((reading) => reading.usedPercent)) : inside[0]!.usedPercent;
     const top = Math.max(...before.map((reading) => reading.usedPercent), ...inside.map((reading) => reading.usedPercent));
-    const edge = SPARSE_EDGE_SHARE * (span.to - span.from);
+    const edge = Math.max(SPARSE_EDGE_SHARE * (span.to - span.from), SPARSE_EDGE_FLOOR_SECONDS * 1000);
     const baselineGap = before.length > 0 ? span.from - ms(before[before.length - 1]!.observedAt) : 0;
     const endGap = span.to - ms(inside[inside.length - 1]!.observedAt);
     return {
@@ -384,7 +392,9 @@ function spansOf(attempts: readonly AttemptSpanInput[], readings: readonly Windo
       rise: Math.max(0, top - baseline),
       lowerBound: before.length === 0,
       sparse: baselineGap > edge || endGap > edge,
-      shared: inside.some((reading) => reading.sessionRef !== null && !span.sessions.has(reading.sessionRef)),
+      // A reading that names no session (a manual reading, a source without one) cannot be shown
+      // to be the span's own: it counts as someone else's until it can.
+      shared: inside.some((reading) => reading.sessionRef === null || !span.sessions.has(reading.sessionRef)),
     };
   });
 }

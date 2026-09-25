@@ -1454,11 +1454,17 @@ and every limit of it:
   what each attempt's own delta would say. A span with no reading inside it is left out
   (`excluded`), and an attempt that started before the instance never counts
   (`spanningReset`). A span is **sparse** when its baseline reading, or its last reading
-  inside it, sits farther from that edge than 10% of the span's length: its rise then
+  inside it, sits farther from that edge than 10% of the span's length, and at least
+  2 minutes (so a short span read at the capture cadence is not flagged): its rise then
   belongs partly to time outside it, so the split between the work rate and other use is
   a guess (`sparse_readings`, `sparseSpans`). A span is **shared** when a reading inside
-  it came from a harness session none of its attempts ran in: someone else used the
-  account during it. The rate reads only the spans nobody else touched when there are
+  it came from a harness session none of its attempts ran in, or named no session at all
+  (a `--source manual` reading, a source without one): its rise cannot be shown to be
+  the work's. An attempt checked out with a harness but no harness session still gets
+  the machine's account binding and forms a span, but no reading can be matched to it,
+  so every reading inside that span makes it shared. Its rise stays inside the span
+  (never other use); it leaves the rate when a clean span exists, and otherwise is read
+  with `shared_use` and a `low` confidence. The rate reads only the spans nobody else touched when there are
   any (`sharedExcluded` counts the rest), and reads the shared ones, warning
   `shared_use`, when every span is shared. The rate's band is a bootstrap of `method.draws` draws of its own,
   over the spans, from a stream seeded with the forecast seed and the limit. It never
