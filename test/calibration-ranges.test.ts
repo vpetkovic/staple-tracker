@@ -7,13 +7,15 @@
  * The statistics are checked against an independent brute-force oracle and a seeded Monte
  * Carlo; the cohorts and forecasts are read from histories written by real store calls at
  * instants this suite controls (the write clock is faked, `Date` only). No issue, attempt or
- * event row is written by hand.
+ * event row is written by hand, except the legacy checkout event an older build narrated,
+ * which `staple attempt reconstruct` reads.
  */
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { openDb } from "../src/core/db.js";
+import { openDb, tx } from "../src/core/db.js";
+import { writeEventRow } from "../src/core/event-row.js";
 import { migrateWorkspace } from "../src/core/schema.js";
 import { WorkspaceStore } from "../src/core/store.js";
 import {
@@ -282,6 +284,22 @@ function worked(title: string, opts: Worked = {}): { id: string; identifier: str
   return { id: issue.id, identifier: issue.identifier };
 }
 
+/** A leaf an older build worked (a narrated checkout, no attempt), rebuilt later by reconstruct. */
+function legacy(title: string, minutes: number): { id: string; identifier: string } {
+  const from = clock;
+  clock += Math.ceil(minutes) + 1;
+  at(from);
+  const issue = store.createIssue({ title, estimatedSeconds: min(120) });
+  tx(store.db, () => writeEventRow(store.db, { kind: "checkout", issueId: issue.id, actor: "old", payload: {}, createdAt: iso(from), dedupKey: `legacy-${issue.id}` }));
+  for (let m = from + 10; m < from + minutes; m += 10) {
+    at(m);
+    store.addComment(issue.id, "progress", "old", "agent");
+  }
+  at(from + minutes);
+  store.updateIssue(issue.id, { status: "done" }, "old");
+  return { id: issue.id, identifier: issue.identifier };
+}
+
 const read = (query: Parameters<WorkspaceStore["calibration"]>[0] = {}): CalibrationReport => store.calibration({ limit: 500, ...query }, iso(clock + 1));
 const cohorts = (report: CalibrationReport): CalibrationCohort[] => report.items as CalibrationCohort[];
 
@@ -338,6 +356,20 @@ describe("cohort ranges", () => {
     expect(cohort!.excluded.counts).toEqual({ "timing-floor": 2 });
     expect(cohort!.path).toEqual([{ level: 0, name: "full", samples: 5, floors: 2 }]);
     expect(cohort!.warnings).toEqual(["bounds_below_confidence", "floors_excluded"]);
+  });
+
+  it("files a floor under its own evidence set: a captured floor is never the reconstructed set's, nor a backfilled one the exact set's", () => {
+    for (let i = 0; i < 5; i += 1) worked(`exact ${i}`, { minutes: 20 + i });
+    const captured = worked("captured floor", { minutes: 0.5 });
+    for (let i = 0; i < 5; i += 1) legacy(`legacy ${i}`, 20 + i);
+    const backfilled = legacy("legacy floor", 0.5);
+    at(clock);
+    expect(store.reconstructAttemptHistory().reconstructed).toBe(6);
+    const report = read({ include: ["reconstructed"] });
+    const bySet = (set: string) => cohorts(report).find((cohort) => cohort.set === set)!;
+    expect(bySet("exact").floors).toMatchObject({ count: 1, refs: [captured.identifier] });
+    expect(bySet("reconstructed").floors).toMatchObject({ count: 1, refs: [backfilled.identifier] });
+    expect(bySet("reconstructed").warnings).toEqual(["bounds_below_confidence", "floors_excluded", "reconstructed_only"]);
   });
 
   it("reads a class its floors outnumber at its own key, floor_dominated, instead of falling back past it", () => {
