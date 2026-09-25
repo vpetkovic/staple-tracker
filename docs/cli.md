@@ -739,15 +739,20 @@ against its estimate ([timing-semantics.md](timing-semantics.md#calibration-coho
 All three surfaces call one store method and answer one payload:
 
 ```bash
-staple calibrate --kind task --include reconstructed
-# snapshot calibration1:6e84cb2562426e930df170d6ee46b9f7 · kind task
-# 108 eligible (done, own estimate) of 215 issues · minimum 5 samples per cohort
-# exact         4 samples (3.7% of 108) in 1 cohorts · not samples: approximate 2, reconstructed 102
-# reconstructed 84 samples (77.8% of 108) in 4 cohorts · not samples: exact 4, approximate 2, reconstructed 18
-# exact         kind=task priority=high workType=unknown area=unknown model=unknown · 4 own → all (full 4, without_model 4, without_area 4, without_work_type 4, kind 4, all 4)
-#               all: n 4 (3.7% of 108) · ratio median 0.179, range 0.149–0.515, pooled 0.238 · work median 44m37s · small_sample
-# reconstructed kind=task priority=low workType=unknown area=unknown model=unknown · 1 own → kind (full 1, without_model 1, without_area 1, without_work_type 1, kind 84)
-#               kind=task: n 84 (77.8% of 108) · ratio median 0.092, range 0.025–0.248, pooled 0.084 · work median 18m29s
+staple calibrate --kind task --include reconstructed --for STA-42
+# snapshot calibration2:aac4071dafc5ebf89486599fe72d2c37 · kind task
+# 109 eligible (done, own estimate) of 215 issues · minimum 5 samples per cohort
+# exact         5 samples (4.6% of 109) in 1 cohorts · not samples: approximate 2, reconstructed 102
+# reconstructed 84 samples (77.1% of 109) in 4 cohorts · not samples: exact 5, approximate 2, reconstructed 18
+# exact         kind=task priority=high workType=unknown area=unknown model=unknown · 5 own
+#               kind=task priority=high workType=unknown area=unknown model=unknown: n 5 (6.9% of 72) · ratio median 0.179, range 0.146–0.515, pooled 0.214 · work median 44m37s · bounds_below_confidence
+#               ratio p10 0.146 p25 0.149 p50 0.179 p75 0.256 p90 0.256 · bounds 0.146–0.515 (66.7%, below target) · expected 0.214 (pooled) · tail ok (0 beyond the fences)
+# reconstructed kind=task priority=high workType=unknown area=unknown model=unknown · 52 own
+#               kind=task priority=high workType=unknown area=unknown model=unknown: n 52 (72.2% of 72) · ratio median 0.081, range 0.025–0.174, pooled 0.079 · work median 18m29s · reconstructed_only
+#               ratio p10 0.042 p25 0.053 p50 0.081 p75 0.116 p90 0.142 · bounds 0.028–0.163 (92.5%) · expected 0.079 (pooled) · tail ok (0 beyond the fences)
+# ...
+# forecast      STA-42 exact · est 6h · kind=task priority=high workType=unknown area=unknown model=unknown n 5 → p50 1h4m, p10–p90 52m28s–1h32m · bounds 52m28s–3h5m (66.7%, below target) · expected 1h17m (pooled) · bounds_below_confidence
+# forecast      STA-42 reconstructed · est 6h · kind=task priority=high workType=unknown area=unknown model=unknown n 52 → p50 29m2s, p10–p90 15m8s–51m · bounds 10m1s–58m38s (92.5%) · expected 28m37s (pooled) · reconstructed_only
 ```
 
 - **Samples.** The population is the ratio population of
@@ -778,7 +783,9 @@ staple calibrate --kind task --include reconstructed
   whole set. `path` lists every level tried with its sample count, `level` and
   `class` say which was read (dropped dimensions are `*`), and `fallback` is
   `none`, `below_minimum` or `below_minimum_everywhere` (then the whole set is
-  read, with the warning `small_sample`).
+  read, with the warning `small_sample`). A level where timing-floor members
+  outnumber the samples, and the two make 5, also stops the walk: that class
+  is floor-dominated. Each `path` step counts `samples` and `floors`.
 - **Per cohort.** `samples`; `coverage` (`samples / eligible`, the
   denominator named: the population members in the class, whatever their
   quality); the lower median, the pooled ratio (`Σ work / Σ estimate`) and the
@@ -786,6 +793,39 @@ staple calibrate --kind task --include reconstructed
   (`1 − 2 × 0.5ⁿ`, how often that range covers the median: 0.9375 at n = 5); how many samples used each estimate source; up to 20
   member refs with the total; and the members of the class left out, by state
   and reason.
+- **Ranges.** `ratio` and `workSeconds` each carry `quantiles` (`p10`, `p25`,
+  `p50`, `p75`, `p90`: the lower quantile, index `floor(p × (n − 1))`, never
+  interpolated), `intervals` (for each quantile, the order-statistic interval
+  that covers the class's true quantile) and `bounds` (where one more sample
+  falls). Each interval is `{lower, upper, ranks, confidence, reached}`: the
+  target is 90%, and one that cannot reach it is the sample range with the
+  confidence it does reach, `reached: false`. Bounds reach 90% from 19 samples
+  and the median's interval from 5; p10 and p90 need 22. Null with no sample.
+- **Heavy tails.** `tail` tests `ln(ratio)`: a sample is an outlier past 3.5
+  robust deviations (modified z-score over the MAD), and the cohort is heavy
+  when at least 2 samples, and 5% of them, are. It reports the outliers each
+  way, the share, the `fences` and `winsorisedPooled`. `ratio.expected` is
+  `{value, method}`: the pooled ratio, or for a heavy tail the winsorised
+  pooled ratio (each sample's ratio held inside the fences). Never a mean.
+- **Floors.** `floors` lists the class's timing-floor members (work under 60
+  seconds, never samples): `count`, `share` of floors and samples, `dominated`
+  (more floors than samples), and up to 20 refs.
+- **Warnings.** A closed list, in this order: `small_sample` (under 5
+  samples), `bounds_below_confidence` (under 19), `fallback_used` (a class
+  broader than the key), `heavy_tail`, `floor_dominated`, `floors_excluded`
+  (some floors, fewer than samples: the samples read long),
+  `reconstructed_only` (the reconstructed set) and `no_samples`.
+- **Forecasts.** `--for REF` (repeat, or a comma list; up to `--limit`) adds
+  `forecasts`, one per issue and per evidence set, in the order asked. Each
+  one reads the issue's key by the sample rules (an unstarted issue's model is
+  `unknown`), resolves it to a class as the listing does, and multiplies its
+  own current estimate: `seconds` (p10 … p90), `bounds`, and `expected`
+  (`{seconds, ratio, method}`, additive along a path). `state` is `ratio`,
+  `floor` (a floor-dominated class: the work is expected under 60 seconds,
+  and no seconds are given), `no_samples` or `no_estimate`, with the reason in
+  `missing.seconds`. The class read (`cohort`) and its warnings come with it.
+  A forecast does not change `snapshot.id`. The rules and a worked example are
+  in [timing-semantics.md](timing-semantics.md#confidence-ranges).
 - **Snapshot.** `snapshot.id` identifies the data the report was computed
   from. The same data gives the same id on every device, in any order and at
   any later instant (a relative `--since` is hashed as written); a changed

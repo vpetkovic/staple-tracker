@@ -109,6 +109,7 @@ import {
   labelDimension,
   modelDimension,
   type CalibrationMember,
+  type CohortKey,
   type CalibrationReport,
   type EstimateAtStartMissing,
   type EvidenceSet,
@@ -685,6 +686,8 @@ export interface CalibrationQuery extends PageRequest {
   readonly include?: readonly string[];
   /** What the page lists: `cohorts` (default) or `samples`. */
   readonly list?: string;
+  /** Issues to forecast a duration for, from the cohort each one's key reads (`forecasts`). */
+  readonly for?: readonly string[];
 }
 
 /** An issue row as the analytics reads (`timingQuality`, `calibration`) take it. */
@@ -5648,13 +5651,29 @@ export class WorkspaceStore {
     const parentIds = new Set(ratioParentRows.map((row) => row.id));
     /** The worker attempts behind each member's `workSeconds`, by the rule that sums it. */
     const behind = new Map<string, string[]>();
-    const timings = this.timingFor(ratioRows.map((row) => row.id), asOf, { contributing: behind });
-    const members: CalibrationMember[] = ratioRows.map((row) => {
-      const timing = timings.get(row.id)!;
-      const contributing = (behind.get(row.id) ?? [])
+    const forRows = (query.for ?? []).map((ref) => this.requireRow(ref));
+    if (forRows.length > limit) throw new StapleError("validation", `for takes at most ${limit} issues (the limit); got ${forRows.length}.`);
+    const timings = this.timingFor([...new Set([...ratioRows, ...forRows].map((row) => row.id))], asOf, { contributing: behind });
+    /** The worker attempts behind an issue's `workSeconds`, oldest first. */
+    const contributingTo = (issueId: string): AttemptRecord[] =>
+      (behind.get(issueId) ?? [])
         .map((id) => readAttempt(this.db, id))
         .filter((attempt): attempt is AttemptRecord => attempt !== null)
         .sort((x, y) => (x.startedAt === y.startedAt ? (x.id < y.id ? -1 : 1) : x.startedAt < y.startedAt ? -1 : 1));
+    /** A key, by one rule for a sample and for an issue being forecast. */
+    const dimensionsOf = (row: { kind: string; priority: string; labels: string }, contributing: readonly AttemptRecord[]): CohortKey => {
+      const labels = JSON.parse(row.labels) as string[];
+      return {
+        kind: row.kind,
+        priority: row.priority,
+        workType: labelDimension(labels, LABEL_PREFIX.workType),
+        area: labelDimension(labels, LABEL_PREFIX.area),
+        model: modelDimension(contributing.map((attempt) => attempt.harness?.model ?? null)),
+      };
+    };
+    const members: CalibrationMember[] = ratioRows.map((row) => {
+      const timing = timings.get(row.id)!;
+      const contributing = contributingTo(row.id);
       const current = row.estimated_seconds!;
       /**
        * The estimate the work started from: the first contributing attempt ON THIS ISSUE whose
@@ -5672,7 +5691,6 @@ export class WorkspaceStore {
         else atStartMissing = "not_recorded";
       }
       const atStartSeconds = reading === undefined ? null : reading.estimateAtStart.estimatedSeconds!;
-      const labels = JSON.parse(row.labels) as string[];
       return {
         id: row.id,
         identifier: row.identifier,
@@ -5686,13 +5704,7 @@ export class WorkspaceStore {
           currentSeconds: current,
           missing: atStartMissing === null ? {} : { atStart: atStartMissing },
         },
-        dimensions: {
-          kind: row.kind,
-          priority: row.priority,
-          workType: labelDimension(labels, LABEL_PREFIX.workType),
-          area: labelDimension(labels, LABEL_PREFIX.area),
-          model: modelDimension(contributing.map((attempt) => attempt.harness?.model ?? null)),
-        },
+        dimensions: dimensionsOf(row, contributing),
         evidence: {
           state: timing.quality.work.state!,
           reasons: timing.quality.work.reasons,
@@ -5715,6 +5727,13 @@ export class WorkspaceStore {
       after,
       limit,
       scope,
+      forecast: forRows.map((row) => ({
+        identifier: row.identifier,
+        title: row.title,
+        status: row.status,
+        estimateSeconds: row.estimated_seconds,
+        dimensions: dimensionsOf(row, contributingTo(row.id)),
+      })),
     });
   }
 

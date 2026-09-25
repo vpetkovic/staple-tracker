@@ -3587,7 +3587,8 @@ export function startUiServer(options: UiOptions): UiHandle {
       /**
        * `staple calibrate` / MCP `calibration_cohorts`: calibration cohorts over trusted
        * samples, from the one store method both call. `kind`, `priority` and `include` take a
-       * comma list or a repeated parameter; `list` is `cohorts` or `samples`.
+       * comma list or a repeated parameter; `list` is `cohorts` or `samples`; `for` (a comma
+       * list or repeated) names the issues to forecast.
        */
       if (url.pathname === "/api/calibration") {
         const handle = handleFor(url.searchParams.get("ws") ?? undefined);
@@ -3608,6 +3609,7 @@ export function startUiServer(options: UiOptions): UiHandle {
             list: url.searchParams.get("list") ?? undefined,
             limit: limit === null ? undefined : Number(limit),
             cursor: url.searchParams.get("cursor") ?? undefined,
+            for: listOf("for"),
           }),
         );
         return;

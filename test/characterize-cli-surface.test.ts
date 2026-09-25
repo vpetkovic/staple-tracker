@@ -190,10 +190,11 @@ const COMMANDS: ReadonlyArray<{
     booleans: ["json", "help"],
     shorts: ["h"],
   },
-  // `calibrate`: calibration cohorts over trusted samples, with the fallback and a snapshot id.
+  // `calibrate`: calibration cohorts over trusted samples, with the fallback and a snapshot id;
+  // `--for` forecasts the durations of the issues named.
   {
     name: "calibrate",
-    strings: ["db", "ws", "kind", "priority", "parent", "since", "include", "limit", "cursor"],
+    strings: ["db", "ws", "kind", "priority", "parent", "since", "include", "limit", "cursor", "for"],
     booleans: ["json", "help", "samples"],
     shorts: ["h"],
   },

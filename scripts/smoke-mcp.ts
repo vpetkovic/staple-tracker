@@ -674,7 +674,7 @@ try {
   );
   // Nothing beneath the epic was worked, so nothing is a calibration sample: the read says
   // so, still names its snapshot, and refuses an approximate set.
-  const calibration = JSON.parse(toolText(await rpc("tools/call", { name: "calibration_cohorts", arguments: { parent: epic.identifier } })));
+  const calibration = JSON.parse(toolText(await rpc("tools/call", { name: "calibration_cohorts", arguments: { parent: epic.identifier, for: [epic.identifier] } })));
   const approximateSet = await rpc("tools/call", { name: "calibration_cohorts", arguments: { include: ["approximate"] } });
   assert(
     calibration.sets.length === 1 &&
@@ -682,11 +682,15 @@ try {
       calibration.sets[0].samples === 0 &&
       calibration.items.length === 0 &&
       typeof calibration.missing.items === "string" &&
-      /^calibration1:[0-9a-f]{32}$/.test(calibration.snapshot.id) &&
+      /^calibration2:[0-9a-f]{32}$/.test(calibration.snapshot.id) &&
       calibration.method.minSamples === 5 &&
+      calibration.method.confidence === 0.9 &&
+      calibration.forecasts.length === 1 &&
+      calibration.forecasts[0].seconds === null &&
+      calibration.forecasts[0].warnings.includes("no_samples") &&
       approximateSet.isError === true &&
       toolError(approximateSet).code === "validation",
-    "calibration_cohorts reads trusted samples only, names its snapshot, and refuses an approximate set",
+    "calibration_cohorts reads trusted samples only, names its snapshot, forecasts with the reason it has no seconds, and refuses an approximate set",
   );
   const epicEvents = JSON.parse(
     toolText(await rpc("tools/call", { name: "events_since", arguments: { since: 0 } })),

@@ -1228,7 +1228,7 @@ server.registerTool(
   "calibration_cohorts",
   {
     description:
-      "Calibration cohorts: how long work of a class takes against its estimate, from trusted samples only (docs/timing-semantics.md, \"Calibration cohorts\"). Samples are done issues with their own estimate and no estimated descendant whose work is exact; approximate, timing-floor and missing records are never samples, and are counted under excluded. Each sample divides its workSeconds by the first worker attempt's estimateAtStart, else the current estimate, and says which. A cohort key is kind, priority, workType (label type:<x>), area (label area:<x>) and model (the worker attempts' harness model; unknown when none). A key with fewer than method.minSamples (5) samples falls back, dropping model, then area, then work type, then priority, then kind, to the first class with enough; each cohort reports the level read, the path with the count at each level, n, coverage (samples over the eligible issues in the class, denominator named), the median and pooled ratio, the median workSeconds, bounded member refs and the exclusions by state and reason. include [\"reconstructed\"] adds backfilled history as a separate set with its own cohorts, never pooled with exact. snapshot.id identifies the data the report came from: the same data gives the same id on every device. list \"samples\" lists the samples instead of the cohorts. Same payload as `staple calibrate --json`.",
+      "Calibration cohorts: how long work of a class takes against its estimate, from trusted samples only (docs/timing-semantics.md, \"Calibration cohorts\"). Samples are done issues with their own estimate and no estimated descendant whose work is exact; approximate, timing-floor and missing records are never samples, and are counted under excluded. Each sample divides its workSeconds by the first worker attempt's estimateAtStart, else the current estimate, and says which. A cohort key is kind, priority, workType (label type:<x>), area (label area:<x>) and model (the worker attempts' harness model; unknown when none). A key with fewer than method.minSamples (5) samples falls back, dropping model, then area, then work type, then priority, then kind, to the first class with enough; each cohort reports the level read, the path with the count at each level, n, coverage (samples over the eligible issues in the class, denominator named), the median and pooled ratio, the median workSeconds, bounded member refs and the exclusions by state and reason. include [\"reconstructed\"] adds backfilled history as a separate set with its own cohorts, never pooled with exact. snapshot.id identifies the data the report came from: the same data gives the same id on every device. list \"samples\" lists the samples instead of the cohorts. Confidence ranges (docs/timing-semantics.md, \"Confidence ranges\"): ratio and workSeconds each carry quantiles p10/p25/p50/p75/p90 (the lower quantile, index floor(p(n-1))), a distribution-free order-statistic interval for each at method.confidence (0.9), and bounds, the prediction interval for one more sample; every interval states the confidence it reaches and reached=false below the target, never a wider claim. tail tests ln(ratio) for a heavy tail (modified z-score over 3.5 on at least 2 samples and 5% of them); a heavy-tailed cohort's ratio.expected is the winsorised pooled ratio, never the mean. floors lists the class's timing-floor members (work under 60s, never samples): more floors than samples reads floor_dominated. warnings is a closed list: small_sample, bounds_below_confidence, fallback_used, heavy_tail, floor_dominated, floors_excluded, reconstructed_only, no_samples. for [refs] adds forecasts: per issue and evidence set, the cohort its key reads times its own estimate (seconds p10..p90, bounds, expected), state floor for a floor-dominated class, with the cohort's warnings. Same payload as `staple calibrate --json`.",
     inputSchema: {
       kind: z.array(z.string()).optional().describe("Only these kinds"),
       priority: z.array(z.string()).optional().describe("Only these priorities"),
@@ -1238,6 +1238,7 @@ server.registerTool(
       list: z.enum(["cohorts", "samples"]).optional().describe("What items lists: cohorts (default) or samples"),
       limit: z.number().optional().describe("Rows listed: a positive integer, default 50, at most 500 (a larger value is clamped)."),
       cursor: z.string().optional().describe("Opaque cursor from the previous page's nextCursor, with the same other arguments."),
+      for: z.array(z.string()).optional().describe("Issues (identifier or id) to forecast a duration for: forecasts lists one per issue and evidence set"),
       ws: wsSchema,
     },
     outputSchema: {
@@ -1249,14 +1250,15 @@ server.registerTool(
       sets: z.array(z.record(z.string(), z.unknown())),
       list: z.enum(["cohorts", "samples"]),
       items: z.array(z.record(z.string(), z.unknown())),
+      forecasts: z.array(z.record(z.string(), z.unknown())).describe("One duration forecast per issue in for and per evidence set read; empty without for"),
       truncated: z.boolean().describe("Stated, never inferred: true when more rows follow this page."),
       nextCursor: z.string().nullable(),
       missing: z.record(z.string(), z.string()),
     },
     annotations: { title: "Calibration cohorts", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
   },
-  ({ kind, priority, parent, since, include, list, limit, cursor, ws }) =>
-    run(() => storeFor(ws).calibration({ kind, priority, parent, since, include, list, limit, cursor })),
+  ({ kind, priority, parent, since, include, list, limit, cursor, for: forecast, ws }) =>
+    run(() => storeFor(ws).calibration({ kind, priority, parent, since, include, list, limit, cursor, for: forecast })),
 );
 
 server.registerTool(
