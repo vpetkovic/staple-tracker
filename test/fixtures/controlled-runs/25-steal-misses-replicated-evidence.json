@@ -3,7 +3,8 @@
   "covers": [
     "a recorded inferred end is the later of the stored end and the replicated evidence before the successor, on both axes",
     "the stealing device dates the end at its own lastActivityOf, before a revision the holder wrote offline arrives",
-    "once the revision arrives, the work bucket, workSeconds and the chain link agree on every device"
+    "once the revision arrives, the work bucket, workSeconds and the chain link agree on every device",
+    "each attempt's effortSeconds is its contribution to workSeconds, the corrected end included, not its tenure as the stealing device stored it"
   ],
   "start": "2026-09-01T09:00:00.000Z",
   "devices": {
@@ -84,6 +85,18 @@
       },
       "resumeGaps": [
         "60m"
+      ],
+      "attempts": [
+        {
+          "state": "exact",
+          "reasons": [],
+          "effortSeconds": "30m"
+        },
+        {
+          "state": "exact",
+          "reasons": [],
+          "effortSeconds": "20m"
+        }
       ]
     }
   ]
