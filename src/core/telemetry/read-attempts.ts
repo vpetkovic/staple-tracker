@@ -101,8 +101,12 @@ export function listAttempts(db: DatabaseSync, issueId: string, request: PageReq
       if (to === null || gap.to > to) to = gap.to;
     }
   }
-  // An issue nobody has worked since capture began speaks for no span: `no_sample_yet`.
-  return { ...page, coverage: coverage(from, to, page.items.length, gaps, "no_sample_yet") };
+  // A page that speaks for no span says why, with the timing contract's codes for an issue
+  // without attempts (docs/timing-semantics.md, "Missingness for the new fields"): it never
+  // started, or it has a start and no attempt, which capture began too late to see or a
+  // derived flip opened without one.
+  const started = (db.prepare("SELECT started_at FROM issues WHERE id = ?").get(issueId) as { started_at: string | null } | undefined)?.started_at ?? null;
+  return { ...page, coverage: coverage(from, to, page.items.length, gaps, started === null ? "never_started" : "no_worker_attempt") };
 }
 
 /** One entry of an attempt's `chain`: enough to read every interruption boundary at once. */

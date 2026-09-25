@@ -459,6 +459,43 @@ function windowBurn(
 }
 
 /**
+ * The burn read from the instances a moved reset superseded, for when the instance that
+ * replaced them holds no reading inside the attempt (or does not reach it at all). Their
+ * readings during the attempt are real usage of the same limit, so they are used rather
+ * than reading the limit as unknown. Reported with the `superseded_window` baseline, or as a
+ * `first_reading` lower bound when none of them was read before the attempt. Null when they
+ * hold no reading inside the attempt either.
+ */
+function supersededBurn(store: BudgetStore, superseded: readonly LimitWindow[], from: string, to: string): { burn: WindowBurn; regressions: number } | null {
+  if (superseded.length === 0) return null;
+  const samples = superseded
+    .flatMap((window) => store.samplesInWindow(window.id).map((sample) => ({ sample, window })))
+    .filter(({ sample }) => sample.usedPercent !== null)
+    .sort((a, b) => (a.sample.observedAt === b.sample.observedAt ? (a.sample.id < b.sample.id ? -1 : 1) : a.sample.observedAt < b.sample.observedAt ? -1 : 1));
+  const before = samples.filter(({ sample }) => sample.observedAt <= from).map(({ sample }) => sample);
+  const insideRows = samples.filter(({ sample }) => sample.observedAt > from && sample.observedAt <= to);
+  if (insideRows.length === 0) return null;
+  const inside = insideRows.map(({ sample }) => sample);
+  const window = insideRows[insideRows.length - 1]!.window;
+  const toPercent = highOf([...before, ...inside])!;
+  const lowerBound = before.length === 0;
+  const fromPercent = lowerBound ? inside[0]!.usedPercent! : highOf(before)!;
+  return {
+    burn: {
+      windowId: window.id,
+      resetsAt: window.resetsAt,
+      fromPercent,
+      baseline: lowerBound ? "first_reading" : "superseded_window",
+      toPercent,
+      deltaPercent: Math.max(0, toPercent - fromPercent),
+      lowerBound,
+      missing: {},
+    },
+    regressions: inside.filter((sample) => sample.regression).length,
+  };
+}
+
+/**
  * An attempt's burn: per limit of its account, the readings that bracket the attempt inside
  * each window instance, by the high-water rule, summed across instances when it spans a
  * reset. A window counts only with a reading inside the attempt. Null with a reason when it
@@ -515,10 +552,12 @@ export function attemptBurn(
       // reset moved; its readings serve as that one's baseline rather than as a second sum
       // over the same usage.
       const live = all.filter((window) => window.supersededBy === null);
-      const overlapping = live.filter((window) => {
+      const touches = (window: LimitWindow): boolean => {
         const start = window.startsAt ?? window.firstSampleAt;
         return ms(window.resetsAt!) > ms(from) && (start === null || ms(start) <= ms(to));
-      });
+      };
+      const overlapping = live.filter(touches);
+      const supersededBy = (id: string): LimitWindow[] => all.filter((other) => other.supersededBy === id && touches(other));
       const parts = overlapping.map((window) => {
         const begins = window.startsAt ?? window.firstSampleAt ?? window.resetsAt!;
         const previousReset = live
@@ -533,8 +572,24 @@ export function attemptBurn(
         const supersededBaseline = highOf(
           superseded.flatMap((other) => store.samplesInWindow(other.id).filter((sample) => sample.usedPercent !== null && sample.observedAt <= from)),
         );
-        return windowBurn(store, window, from, to, { beganInside, supersededBaseline });
+        const part = windowBurn(store, window, from, to, { beganInside, supersededBaseline });
+        // Nothing read in the replacement while the attempt ran: the instances it superseded
+        // may have been, and their readings are the usage.
+        if (part.burn.deltaPercent === null) return supersededBurn(store, supersededBy(window.id), from, to) ?? part;
+        return part;
       });
+      // A moved reset whose replacement does not reach the attempt at all: what the superseded
+      // instances read during it is the only measure of the limit.
+      const successors = new Set(overlapping.map((window) => window.id));
+      const orphaned = new Map<string, LimitWindow[]>();
+      for (const window of all) {
+        if (window.supersededBy === null || successors.has(window.supersededBy) || !touches(window)) continue;
+        orphaned.set(window.supersededBy, [...(orphaned.get(window.supersededBy) ?? []), window]);
+      }
+      for (const group of orphaned.values()) {
+        const part = supersededBurn(store, group, from, to);
+        if (part !== null) parts.push(part);
+      }
       const known = parts.filter((part) => part.burn.deltaPercent !== null);
       const burnPercent = known.length === 0 ? null : known.reduce((sum, part) => sum + part.burn.deltaPercent!, 0);
       if (burnPercent === null) {
@@ -544,8 +599,8 @@ export function attemptBurn(
         limitKey,
         burnPercent,
         lowerBound: known.some((part) => part.burn.lowerBound),
-        coverage: { known: known.length, total: overlapping.length },
-        partial: known.length > 0 && known.length < overlapping.length,
+        coverage: { known: known.length, total: parts.length },
+        partial: known.length > 0 && known.length < parts.length,
         regressionCount: parts.reduce((sum, part) => sum + part.regressions, 0),
         windows: parts.map((part) => part.burn),
         missing,
