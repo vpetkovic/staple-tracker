@@ -1,0 +1,41 @@
+{
+  "title": "a pause is never work, a resume opens a new interval, an open pause runs to asOf",
+  "covers": [
+    "paused is its own bucket and never work",
+    "resume opens a new working interval",
+    "an open pause stays paused through asOf",
+    "category time (activeSeconds) includes the pause; workSeconds does not"
+  ],
+  "start": "2026-09-01T09:00:00.000Z",
+  "devices": { "tail": true, "hydrate": true },
+  "steps": [
+    { "at": "0s", "do": "create", "ref": "x", "estimate": "2h" },
+    { "at": "0s", "do": "create", "ref": "y" },
+    { "at": "0s", "do": "checkout", "ref": "x", "agent": "w1" },
+    { "at": "0s", "do": "checkout", "ref": "y", "agent": "w2" },
+    { "at": "10m", "do": "comment", "ref": "x", "agent": "w1" },
+    { "at": "10m", "do": "comment", "ref": "y", "agent": "w2" },
+    { "at": "20m", "do": "pause", "ref": "y", "agent": "w2", "reason": "awaiting_reset" },
+    { "at": "20m0.5s", "do": "pause", "ref": "x", "agent": "w1", "reason": "checkpoint_before_reset" },
+    { "at": "50m0.5s", "do": "resume", "ref": "x", "agent": "w1" },
+    { "at": "60m", "do": "comment", "ref": "x", "agent": "w1" },
+    { "at": "70m", "do": "status", "ref": "x", "to": "done", "agent": "w1" }
+  ],
+  "expect": [
+    {
+      "asOf": "90m",
+      "ref": "x",
+      "intervals": 2,
+      "workSeconds": "40m",
+      "activeSeconds": "70m",
+      "quality": { "work": "exact", "wall": "exact" },
+      "wall": { "startAt": "0s", "endAt": "70m", "buckets": { "work": "40m", "paused": "30m" } }
+    },
+    {
+      "asOf": "90m",
+      "ref": "y",
+      "workSeconds": "20m",
+      "wall": { "startAt": "0s", "endAt": null, "buckets": { "work": "20m", "paused": "70m" } }
+    }
+  ]
+}

@@ -165,7 +165,7 @@ it is written.
 | `countedThrough` | Where the clock stopped for an open attempt, as in timing. |
 | `idleSeconds` | For an open attempt, seconds since `lastActivityAt`. It is information. It is not a verdict: staple does not declare an attempt dead on a threshold. |
 | `state`, `outcome`, `endReason`, `endDetection` on read | The stored values, unless the [orphan rule](#orphaned-attempts-are-closed-at-read-time) applies. In that case they are the derived end, and `storedState` shows what the row holds. |
-| `chain` | The attempts linked by `resumesAttemptId`, oldest first, so one read shows every interruption boundary of one piece of work. |
+| `chain` | The attempts linked by `resumesAttemptId`, oldest first, so one read shows every interruption boundary of one piece of work. Each entry carries `resumeGapSeconds`: from its end to the start of the attempt that resumed it, `null` until one has ([timing-semantics.md](timing-semantics.md#where-the-numbers-appear)). |
 | `contested` | `true` when the [contested case](#orphaned-attempts-are-closed-at-read-time) applies to this attempt, otherwise `false`. A `contested` state is provisional. |
 
 An attempt's `activeSeconds` and the issue's `timing.activeSeconds` measure

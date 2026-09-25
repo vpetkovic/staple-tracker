@@ -1,0 +1,29 @@
+{
+  "title": "a stale release: interrupted until the release, queued after, and the resume gap spans both",
+  "covers": [
+    "release --if-stale ends the attempt interrupted at L; [L, t) is interrupted, then queued",
+    "resumeGapSeconds spans every bucket between the end and the resume"
+  ],
+  "start": "2026-09-01T09:00:00.000Z",
+  "devices": { "tail": true, "hydrate": true },
+  "steps": [
+    { "at": "0s", "do": "create", "ref": "x" },
+    { "at": "0s", "do": "checkout", "ref": "x", "agent": "w1" },
+    { "at": "10m", "do": "comment", "ref": "x", "agent": "w1" },
+    { "at": "50m", "do": "release", "ref": "x", "agent": "ops", "ifIdle": "30m" },
+    { "at": "70m", "do": "checkout", "ref": "x", "agent": "w2" },
+    { "at": "80m", "do": "comment", "ref": "x", "agent": "w2" },
+    { "at": "90m", "do": "status", "ref": "x", "to": "done", "agent": "w2" }
+  ],
+  "expect": [
+    {
+      "asOf": "95m",
+      "ref": "x",
+      "intervals": 2,
+      "workSeconds": "30m",
+      "activeSeconds": "70m",
+      "wall": { "startAt": "0s", "endAt": "90m", "buckets": { "work": "30m", "interrupted": "40m", "queued": "20m" } },
+      "resumeGaps": ["60m"]
+    }
+  ]
+}

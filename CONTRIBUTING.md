@@ -76,6 +76,7 @@ Run all of these before sending a change; CI runs the same set:
 npm test                # vitest — semantics, CLI JSON, UI auth, takeover drill, tarball acceptance
 npm run typecheck       # tsc over the server code and the UI app
 npm run smoke:mcp       # full MCP JSON-RPC workflow over stdio
+npm run validate:timing # controlled timing runs (docs/timing-semantics.md), also part of npm test
 ```
 
 ## Working on the web UI

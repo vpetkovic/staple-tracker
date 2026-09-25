@@ -1,0 +1,91 @@
+{
+  "title": "a parent whose children include work from before capture: coverage is partial and the work a lower bound",
+  "covers": [
+    "a child with a start and no worker attempt is no_worker_attempt, counted in coverage.total and not in known",
+    "the parent's workSeconds sums the children it could measure, and is approximate with partial",
+    "coverage reads the same on every device"
+  ],
+  "start": "2026-09-01T09:00:00.000Z",
+  "devices": {
+    "tail": true,
+    "hydrate": true
+  },
+  "steps": [
+    {
+      "at": "0s",
+      "do": "create",
+      "ref": "p",
+      "title": "parent"
+    },
+    {
+      "at": "0s",
+      "do": "create",
+      "ref": "measured",
+      "parent": "p"
+    },
+    {
+      "at": "0s",
+      "do": "checkout",
+      "ref": "measured",
+      "agent": "w1"
+    },
+    {
+      "at": "10m",
+      "do": "comment",
+      "ref": "measured",
+      "agent": "w1"
+    },
+    {
+      "at": "20m",
+      "do": "status",
+      "ref": "measured",
+      "to": "done",
+      "agent": "w1"
+    },
+    {
+      "at": "30m",
+      "do": "sync",
+      "devices": [
+        "a"
+      ]
+    },
+    {
+      "at": "30m",
+      "do": "olderBuildCreate",
+      "ref": "unmeasured",
+      "parent": "p",
+      "status": "done",
+      "startedAt": "5m",
+      "completedAt": "25m"
+    }
+  ],
+  "expect": [
+    {
+      "asOf": "40m",
+      "ref": "unmeasured",
+      "workSeconds": null,
+      "missing": {
+        "workSeconds": "no_worker_attempt"
+      },
+      "quality": {
+        "work": "missing"
+      }
+    },
+    {
+      "asOf": "40m",
+      "ref": "p",
+      "workSeconds": "20m",
+      "coverage": {
+        "known": 1,
+        "total": 2,
+        "partial": true
+      },
+      "quality": {
+        "work": "approximate",
+        "workInputs": [
+          "partial"
+        ]
+      }
+    }
+  ]
+}

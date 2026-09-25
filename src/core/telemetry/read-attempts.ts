@@ -10,7 +10,8 @@
 import type { DatabaseSync } from "node:sqlite";
 import { StapleError, nowIso } from "../types.js";
 import { openedHere, transitionsOf, type AttemptTransition } from "./attempt-records.js";
-import { viewsOfIssue, type AttemptView } from "./attempt-derive.js";
+import { resumeGapsOf, viewsOfIssue, type AttemptView } from "./attempt-derive.js";
+import { inferredEndsOf, issueEffort } from "./effort.js";
 import { attemptBurn, type AttemptBurn } from "./read-budget.js";
 import {
   afterPosition,
@@ -120,6 +121,11 @@ export interface ChainEntry {
   readonly resumesAttemptId: string | null;
   readonly startedAt: string;
   readonly endedAt: string | null;
+  /**
+   * `docs/timing-semantics.md`, `resumeGapSeconds`: from this attempt's end to the start of the
+   * attempt that resumed it. Null when nothing has resumed it yet.
+   */
+  readonly resumeGapSeconds: number | null;
 }
 
 export interface AttemptDetail {
@@ -175,6 +181,7 @@ export function attemptDetail(
   };
 
   const byId = new Map(views.map((view) => [view.id, view]));
+  const resumeGaps = new Map(resumeGapsOf(views, inferredEndsOf(views, issueEffort(db, row.issue_id).workers)).map((gap) => [gap.attemptId, gap.resumeGapSeconds]));
   const chain = attempt.chain
     .map((id) => byId.get(id))
     .filter((view): view is AttemptView => view !== undefined)
@@ -188,6 +195,7 @@ export function attemptDetail(
       resumesAttemptId: view.resumesAttemptId,
       startedAt: view.startedAt,
       endedAt: view.endedAt,
+      resumeGapSeconds: resumeGaps.get(view.id) ?? null,
     }));
 
   const burn = attemptBurn(context.home, attempt, {

@@ -1,0 +1,33 @@
+{
+  "title": "a blocker cancelled then reopened: the dependent's blocked and queued follow the blocker's own events",
+  "covers": [
+    "a blocker entering cancelled moves the dependent from blocked to queued at its instant",
+    "a blocker reopened moves the dependent back to blocked at its instant",
+    "a blocker entering done unblocks it again"
+  ],
+  "start": "2026-09-01T09:00:00.000Z",
+  "devices": { "tail": true, "hydrate": true },
+  "steps": [
+    { "at": "0s", "do": "create", "ref": "b" },
+    { "at": "0s", "do": "create", "ref": "d" },
+    { "at": "0s", "do": "checkout", "ref": "d", "agent": "w1" },
+    { "at": "5m", "do": "blockedBy", "ref": "d", "blockers": ["b"], "agent": "w1" },
+    { "at": "10m", "do": "release", "ref": "d", "agent": "w1" },
+    { "at": "20m", "do": "status", "ref": "b", "to": "cancelled", "agent": "lead" },
+    { "at": "30m", "do": "status", "ref": "b", "to": "todo", "agent": "lead" },
+    { "at": "35m", "do": "checkout", "ref": "b", "agent": "w2" },
+    { "at": "40m", "do": "status", "ref": "b", "to": "done", "agent": "w2" },
+    { "at": "45m", "do": "checkout", "ref": "d", "agent": "w1" },
+    { "at": "50m", "do": "status", "ref": "d", "to": "done", "agent": "w1" }
+  ],
+  "expect": [
+    {
+      "asOf": "55m",
+      "ref": "d",
+      "intervals": 2,
+      "workSeconds": "15m",
+      "quality": { "wall": "exact" },
+      "wall": { "startAt": "0s", "endAt": "50m", "buckets": { "work": "15m", "blocked": "20m", "queued": "15m" } }
+    }
+  ]
+}

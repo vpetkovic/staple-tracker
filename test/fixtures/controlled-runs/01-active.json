@@ -1,0 +1,83 @@
+{
+  "title": "plain active work, instants off the second, read on the writer, a tail and a hydrated device",
+  "covers": [
+    "checkout opens wall and work at one instant (no unattributed sliver)",
+    "done closes wall and the attempt at one instant",
+    "workSeconds, activeSeconds and the work bucket agree within a second",
+    "a tail device replays the same wall; a hydrated one reads the same work and replay_unavailable",
+    "the holder re-claiming with its attempt still open is no boundary: one attempt, no resume link"
+  ],
+  "start": "2026-09-01T09:00:00.000Z",
+  "devices": {
+    "tail": true,
+    "hydrate": true
+  },
+  "steps": [
+    {
+      "at": "0s",
+      "do": "create",
+      "ref": "x",
+      "estimate": "1h"
+    },
+    {
+      "at": "1m0.25s",
+      "do": "checkout",
+      "ref": "x",
+      "agent": "w1"
+    },
+    {
+      "at": "15m",
+      "do": "comment",
+      "ref": "x",
+      "agent": "w1"
+    },
+    {
+      "at": "20m",
+      "do": "checkout",
+      "ref": "x",
+      "agent": "w1"
+    },
+    {
+      "at": "29m",
+      "do": "comment",
+      "ref": "x",
+      "agent": "w1"
+    },
+    {
+      "at": "41m30.75s",
+      "do": "status",
+      "ref": "x",
+      "to": "done",
+      "agent": "w1"
+    }
+  ],
+  "expect": [
+    {
+      "asOf": "50m",
+      "ref": "x",
+      "workSeconds": "40m30.5s",
+      "ownWorkSeconds": "40m30.5s",
+      "activeSeconds": "40m30.5s",
+      "leadSeconds": "1m0.25s",
+      "estimateRatio": 0.675,
+      "orchestrationSeconds": null,
+      "missing": {
+        "orchestrationSeconds": "no_orchestrator_attempt"
+      },
+      "quality": {
+        "work": "exact",
+        "wall": "exact",
+        "workInputs": [],
+        "wallInputs": []
+      },
+      "wall": {
+        "startAt": "1m0.25s",
+        "endAt": "41m30.75s",
+        "buckets": {
+          "work": "40m30.5s"
+        }
+      },
+      "resumeGaps": []
+    }
+  ]
+}

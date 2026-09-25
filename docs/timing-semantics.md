@@ -64,7 +64,7 @@ The complete list. A field not in this table is not a timing field.
 | `timing.ownActiveSeconds` | elapsed | Seconds this issue itself sat in the `active` category, summed over intervals not opened by a derived flip, with an open interval ending at `countedThrough`. | cli.md | never active |
 | `timing.activeSeconds` | elapsed | The comparable form of `ownActiveSeconds`: a leaf's own, a parent's sum over direct children, `null` when cancelled. The number surfaces print as "ran". | cli.md | never active, or cancelled |
 | `timing.reviewSeconds` | elapsed | Seconds in the `review` category, non-derived intervals only. An open interval ends at the newest event on the issue ([see Q3](#open-questions)). | cli.md | never in review |
-| `timing.countedThrough` | instant | Where a leaf's open active interval stopped counting. Held issue: the holder's `lastActivityAt`. Unheld issue (a status write into `active` with no checkout): the newest event by **any** actor on the issue. | cli.md, `store.ts` `timingFor` | no open active interval, or a parent |
+| `timing.countedThrough` | instant | Where a leaf's open active interval stopped counting. Held issue: the holder's `lastActivityAt`. Unheld issue (a status write into `active` with no checkout): the newest event or comment by **any** actor on the issue. Comments count because they replicate and their events do not, so a device that read the tail stops the interval where the writer does. | cli.md, `store.ts` `timingFor` | no open active interval, or a parent |
 | `timing.approximate` | quality | The event log could not be replayed, so the numbers came from the fallback: `completedAt − startedAt` for `done`, `now − startedAt` for `active` and `review`, `null` otherwise. A parent is also `approximate` when any child is (the flags are ORed up). | cli.md, `store.ts` `approximateActiveOf` | never null |
 | `claim.lastActivityAt` | instant | The newest event or comment by the holder on the issue, floored at `checkoutAt`. | continuity.md | not held |
 | `claim.heldSeconds` | elapsed | `now − checkoutAt`. | continuity.md | not held |
@@ -78,7 +78,7 @@ The complete list. A field not in this table is not a timing field.
 | **`workSeconds`** | effort | Agent work on the issue, from worker-lane attempts only ([Work](#work)). Leaf: `ownWorkSeconds`. Parent: the sum over direct children, with `coverage`. **The estimate ratio's actual.** | this page | [reason code](#missingness-for-the-new-fields) |
 | **`ownWorkSeconds`** | effort | The measurement behind `workSeconds`: this issue's own worker attempts, for any status including cancelled. | this page | [reason code](#missingness-for-the-new-fields) |
 | **`orchestrationSeconds`** | effort | Orchestrator-lane attempts' effective `activeSeconds` on this issue, plus the sum over its children. Never part of `workSeconds`. | this page | `no_orchestrator_attempt` |
-| **`resumeGapSeconds`** | elapsed | On a `chain` link, `next.startedAt − previous.endedAt`: how long an interrupted piece of work waited to be picked up again, across whatever buckets that spans. Specified here for the calibration work and not emitted yet. | this page | no successor yet |
+| **`resumeGapSeconds`** | elapsed | On a `chain` link, `next.startedAt − previous.endedAt`: how long an interrupted piece of work waited to be picked up again, across whatever buckets that spans. `previous.endedAt` is the end the partition reads: the stored end, the corrected end of an inferred one, or the orphan's `endedAtBound`. Emitted per link in `timing.resumeGaps` and on each entry of an attempt's `chain` ([Where the numbers appear](#where-the-numbers-appear)). An inverted gap counts `0` and the link carries `clockSkew: true` when the inversion exceeds one second. | this page | no successor yet |
 | **`estimateRatio`** | ratio | `workSeconds / estimatedSeconds`, for the eligible population only ([below](#the-estimate-ratio)). | this page | ineligible |
 
 Durations are whole seconds in a field ending in `Seconds`. Instants are
@@ -124,7 +124,11 @@ attempts, each read with the orphan rule applied. For a worker attempt `A`:
 
 - `I(A) = [A.startedAt, end(A))`, where `end(A)` is the attempt's end as the
   ledger reads it on this device: the stored `endedAt`, or `endedAtBound` for an
-  attempt that reads orphaned, and `asOf` for an effectively open one. The
+  attempt that reads orphaned, and `asOf` for an effectively open one. A recorded
+  end inferred by a steal or a stale release is read as [Work](#work) reads it: the
+  later of the stored `endedAt` and the replicated evidence before the limit,
+  because the stored one is the ending device's `lastActivityOf` and can miss
+  evidence it applied without an event. The
   partition is device-local anyway, so it uses the same local evidence the
   ledger does. `workSeconds` uses replicated evidence instead ([Work](#work)).
 - `c(A)` is the evidence limit: `countedThrough` for an effectively open attempt,
@@ -374,7 +378,8 @@ named so a skew there is expected:
    agent's clock) with the issue row's `completedAt` or `cancelledAt` (the clock
    of whoever made that mutation) ([Work](#work)).
 2. The elapsed partition compares attempt instants (the opening device's clock)
-   with category boundaries from the local event log.
+   with category boundaries from the local event log, and one attempt's end with
+   the start of the attempt that resumes it, which another device may have opened.
 3. The `blocked` bucket compares a blocker's resolution instant with the
    dependent's own boundaries. Both are in the same local log, but once events
    are re-emitted with origin instants they can come from different devices.
@@ -382,7 +387,12 @@ named so a skew there is expected:
 An interval whose end precedes its start counts as `0`, as the existing replay
 already does. That clamp breaks the exact partition invariant by the clamped
 amount, so the record carries `clock_skew` and is `approximate` whenever an
-inversion exceeds one second.
+inversion exceeds one second. A resumed attempt that starts more than a second
+before the end of the attempt it resumes is such an inversion: the interruption
+between them runs backwards, `wall` carries `clock_skew`, and the link's
+`resumeGapSeconds` is a clamped `0` with `clockSkew: true`. `workSeconds` is not
+affected, because each attempt is measured on the one clock that opened and
+ended it.
 
 ### Multi-device
 
@@ -902,7 +912,7 @@ and agents execute faster. That is the thing being calibrated, not an error.
 | Work | Takes |
 |---|---|
 | Closing lifecycle capture gaps | The [bucket table](#the-buckets), its precedence and [every transition](#every-transition) as the reconstruction spec. `asOf` as a parameter. One mutation instant for every writer. `workSeconds` from replicated data only, as specified in [Work](#work). Re-emitting status-moving and edge events dated at the origin instant, so `wall` stops being device-local. `blockers_changed` from every edge-writing path. Pauses never counted as work, and resume opening a new interval. Terminal transitions closing every open interval. The replicated-only inputs (`sparse`, `capture_gap`, `end_unbounded`) as the explicit approximation flags on `workSeconds`, and `unattributed` and `edge_history_incomplete` on `wall`. The orchestrator lane and worker-lane scoping, if [Q1](#open-questions) is accepted. Agent guidance: yield or pause when a blocker appears mid-work. |
-| Validating against controlled runs | Every bucket is defined in milliseconds from recorded instants, so a controlled run states its expected timeline as a list of transitions and an `asOf`, and compares the `wall` buckets, `workSeconds`, `interrupted` and `resumeGapSeconds`, and `orchestrationSeconds`. **Fixtures must control the write clock**, not just `asOf`: every instant on this page comes from `nowIso()` at write time, so a reproducible run injects the clock the store, the event writer and the attempt ledger all read. Tolerance: one second per interval for `activeSeconds`, one second per nonzero bucket for the partition, plus the one-second snapping window. `review` and `blocked` are disjoint by construction, so a run that reads the same second in both has found a bug. Runs on a second device check that `workSeconds` matches and that `wall` reads `replay_unavailable` until re-emission is built. |
+| Validating against controlled runs | Every bucket is defined in milliseconds from recorded instants, so a controlled run states its expected timeline as a list of transitions and an `asOf`, and compares the `wall` buckets, `workSeconds`, `interrupted` and `resumeGapSeconds`, and `orchestrationSeconds`. **Fixtures must control the write clock**, not just `asOf`: every instant on this page comes from `nowIso()` at write time, so a reproducible run injects the clock the store, the event writer and the attempt ledger all read. Tolerance: one second per interval for `activeSeconds`, one second per nonzero bucket for the partition, plus the one-second snapping window. `review` and `blocked` are disjoint by construction, so a run that reads the same second in both has found a bug. Runs on a second device check that `workSeconds` matches everywhere, that `wall` matches on a device that read the tail, and that it reads `replay_unavailable` on one that hydrated. Built: see [Controlled runs](#controlled-runs). |
 | Quality indicators | The [quality inputs](#quality-inputs), the precedence, the [coverage](#missingness-for-the-new-fields) of parents and of the ratio aggregate, and the five new reason codes. |
 | Calibration and forecasting | `estimateRatio` and its eligibility, `orchestrationSeconds` as a separate overhead figure, `resumeGapSeconds` per chain link. |
 
@@ -926,6 +936,7 @@ and agents execute faster. That is the thing being calibrated, not an error.
     "buckets": { "work": 2400, "paused": 1800, "silent": 0, "interrupted": 0, "unattributed": 0,
                  "review": 0, "gated": 0, "blocked": 0, "queued": 0, "resolved": 0 }
   },
+  "resumeGaps": [],
   "quality": {
     "work": { "state": "exact", "inputs": [], "coverage": null, "missingInputs": [] },
     "wall": { "state": "exact", "inputs": [] }
@@ -937,7 +948,13 @@ and agents execute faster. That is the thing being calibrated, not an error.
 A parent's `wall.buckets` are `active`, `review`, `gated`, `blocked`, `queued` and
 `resolved`; its `quality.work.coverage` is `{known, total, partial}`, and
 `missingInputs` (the contract's name for the inputs of an `input_missing` value) names the children counted in `total` whose `workSeconds` is
-null. `missing` holds the reason for each new field that is null. The work
+null. `resumeGaps` lists the issue's own worker-lane chain links, oldest by the
+resuming attempt's start: each `{attemptId, resumedByAttemptId, endedAt,
+resumedAt, resumeGapSeconds, clockSkew}`. An attempt resumed twice (two devices
+re-claimed it offline) links to the earlier resumer. `staple attempt <id> --json`
+(MCP `get_attempt`) carries the same `resumeGapSeconds` on each `chain` entry: from
+that attempt's end to the start of the attempt that resumed it, `null` when
+nothing has yet. `missing` holds the reason for each new field that is null. The work
 state of a cancelled issue is `null`: it owes no comparable work, so it is neither
 `missing` nor any other state.
 
@@ -953,6 +970,132 @@ tools refuse `--role` (`role`) by name rather than dropping it. The concurrency
 context reports `openAttemptsInWorkspaceByRole` and
 `storedOpenAttemptsStartedHereByRole`, `{worker, orchestrator}`, beside the totals,
 which count both lanes.
+
+## Controlled runs
+
+The downstream row above asks for runs with known durations, compared against what
+staple records. They are in the repository and run in CI with the rest of the suite:
+
+```
+npm run validate:timing     # the controlled runs alone
+npm test                    # the whole suite, which includes them
+```
+
+**What a run is.** A JSON file in `test/fixtures/controlled-runs/`: a `start` instant,
+a list of `steps` (one store mutation each, at an offset from `start`, on a named
+device), and a list of `expect` reads (an issue, an `asOf` offset, and the figures it
+must read then). `test/controlled-runs/runner.ts` replays it and
+`test/controlled-runs.test.ts` fails on the first figure outside tolerance, naming the
+run, the device, the issue, the instant, the field, the expected value and the value
+read.
+
+**How it controls the clock.** Every recorded instant comes from `nowIso()` in
+`src/core/types.ts`: the mutation scope's one instant (`Journal.mutationAt`), the event
+writer, the attempt ledger, claims and the sync engine. `setClock` installs a clock
+behind it, and production installs none. The runner sets it to each step's instant
+before the step runs, and to the read's `asOf` before the read, and points the test
+sync service's clock at the same value. Ids are a counter (`randomUUID` is replaced in
+the test file), so a run writes the same ids every time, and the suite checks that two
+runs of the same file read the same figures. The counter counts down, so a later record
+sorts first by id: a rule that orders two records of one millisecond by id rather than
+by what happened first fails a run instead of passing by luck.
+
+**What a step can be.** Each is the store method the CLI, MCP and HTTP surfaces call,
+never a hand-written row:
+
+| `do` | Store method | Fields |
+|---|---|---|
+| `create` | `createIssue` | `ref`, `title`, `parent`, `status`, `estimate`, `blockedBy`, `blockParentUntilDone`, `agent` |
+| `checkout` | `checkoutIssue` | `ref`, `agent`, `stealIfIdle` (a steal) |
+| `release` | `releaseIssue` | `ref`, `agent`, `ifIdle` (a stale release) |
+| `status` | `updateIssue` | `ref`, `to`, `agent`, `assignee` |
+| `comment` | `addComment` | `ref`, `agent`, `body` |
+| `pause`, `resume`, `milestone`, `interrupt` | `recordAttemptEvent` | `ref`, `agent`, `reason`, `label`, `role` |
+| `blockedBy` | `setBlockedBy` | `ref`, `blockers`, `agent` |
+| `gate`, `approve`, `requestChanges` | `gateIssue`, `approveGate`, `requestChanges` | `ref`, `owner`, `comment`, `agent` |
+| `orchestrate`, `orchestrateEnd` | `openOrchestratorAttempt`, `endOrchestratorAttempt` | `ref`, `agent` |
+| `sync` | the sync engine | `devices` |
+| `olderBuildCreate` | the service's push route, as a build from before attempts | `ref`, `parent`, `status`, `startedAt`, `completedAt` |
+
+Every step takes `at` (an offset such as `"41m30.75s"`) and `device` (default `a`).
+Durations in `expect` are the same notation or whole seconds.
+
+**Devices.** `a` writes. `"devices": {"tail": true}` enrolls `b` before the first step;
+every read first syncs every device twice, so `b` has pulled the log, and `b` must read
+everything `a` does, `wall` included, because pulled operations re-emit their events at
+the origin's instant. `"hydrate": true` enrolls a fresh `c` at the last read, which
+hydrates from the service's fold with no event history: it must read the same
+`workSeconds`, `ownWorkSeconds`, `orchestrationSeconds`, work quality, coverage and
+`resumeGaps`, and `wall: null` with `replay_unavailable`. Steps can run on `b`, so a run
+can steal or re-claim on the other device. `"skew": {"b": "-2m"}` makes `b`'s clock
+read two minutes behind the run's.
+
+**Tolerance.** One second per attempt interval for `workSeconds`, `ownWorkSeconds`,
+`orchestrationSeconds`, `activeSeconds`, `reviewSeconds`, `leadSeconds` and each
+`resumeGapSeconds` (`intervals` in a read says how many), plus the one-second snapping
+window. One second per nonzero bucket in `wall`, plus the snap. A bucket the timeline
+never enters must read exactly `0`. On every read the buckets must add up to
+`wall.seconds`, short by at most one second per nonzero bucket and never over, so no
+second is counted in two buckets. Instants (`wall.startAt`, `wall.endAt`), reason codes,
+quality states and inputs, and coverage are compared exactly.
+
+**The runs.** Every file runs on the writer, a tail device and a hydrated device.
+
+| Run | What it controls |
+|---|---|
+| `01-active` | plain active work with instants off the second; a re-claim with the attempt open is no boundary |
+| `02-pause-resume` | paused is never work, resume opens a new interval, an open pause runs to `asOf` |
+| `03-interruption` | a reported interruption and the holder's re-claim: `interrupted` and `resumeGapSeconds` |
+| `04-steal-after-silence` | a steal ends the old tenure at its last activity; the silence becomes `interrupted` |
+| `05-stale-release` | `interrupted` until a stale release, `queued` after, and a resume gap spanning both |
+| `06-review` | review then done; an open review runs to `asOf` |
+| `07-blocked-edge` | a blocker added mid-work, yielded, resolved by the blocker; added and removed pre-work |
+| `08-review-and-blocked` | a blocker added during review is review; sent back it is blocked, then queued |
+| `09-gate` | a parent gated and approved: `gated`, the ladder around it, and coverage |
+| `10-orchestrator` | orchestrator attempts on a parent and a leaf beside a worker |
+| `11-parent-coverage` | cancelled, never-started and open children in a parent's work and coverage |
+| `12-reopen` | a reopen after done: `resolved`, and work added across it |
+| `13-same-instant` | born and done in one millisecond; interrupt and re-claim, pause and resume, review in and out, each in one millisecond; three attempts opened in one millisecond, each resuming the one before |
+| `14-two-device-writes` | a steal and a re-claim written on the tail device; a read mid-timeline sees the same silence on both |
+| `15-manual-block-and-request-changes` | a manual block, and a gate answered with request-changes, re-gated and approved |
+| `16-edges-at-creation` | a child that blocks its parent until done; an issue born blocked has lead time, not wall |
+| `17-pause-then-inferred-end` | a paused attempt stolen, and one stale-released after a later comment |
+| `18-status-write-without-claim` | an unheld attempt: work stops at its agent's evidence, category time at anyone's |
+| `19-orchestrator-superseded` | a newer orchestrator attempt by the same agent bounds the older one's evidence |
+| `20-blocker-cancel-reopen` | a blocker cancelled, reopened and done: the dependent's blocked and queued follow it |
+| `21-parent-partial` | a child worked on a build from before attempts: partial coverage |
+| `22-provisional` | silence read at several instants becomes work when the agent writes again; done while paused |
+| `23-cross-device-same-instant` | the old holder's late comment and a steal on the other device in the same millisecond |
+| `24-clock-skew` | an interruption resumed on a device whose clock is two minutes behind |
+| `25-steal-misses-replicated-evidence` | a steal on a device that applied the holder's document revision without an event |
+
+**Adding one.** Write the timeline you want to check as a new file in
+`test/fixtures/controlled-runs/`, with a `title` and the `covers` it exercises. Work out
+every figure you `expect` from the timeline and this page, not from what the build
+prints, then run `npm run validate:timing`. A figure that disagrees is either a mistake
+in the expectation or a defect; the second is the point of the run.
+
+**Defects the runs found.** Each is fixed, and the run that found it now passes.
+
+1. **A tail device stopped an unheld interval early** (`18-status-write-without-claim`).
+   An issue moved into `active` by a status write has no holder, and its open interval
+   counted through the newest *event* on the issue. Comments replicate and their events
+   do not, so after a bystander's comment at 25 minutes the writer read
+   `activeSeconds` 1500 and a device that read the tail read 0. The clamp now reads
+   comments too, as the held clamp did.
+2. **An interruption resumed on a slow clock read exact** (`24-clock-skew`). A device
+   whose clock ran two minutes behind re-claimed an interrupted attempt, so the
+   resuming attempt started a minute before the end it resumed. The partition counted
+   the overlap as work and the link's gap as `0`, and `wall` read `exact`. It now
+   carries `clock_skew` (approximate), and the link carries `clockSkew: true`.
+3. **A steal on the other device moved the holder's work into `interrupted`**
+   (`25-steal-misses-replicated-evidence`). The holder commented at 10 minutes and
+   wrote a document revision at 30; the other device stole the claim at 90. Applying a
+   revision writes no event there, so its `lastActivityOf`, and the stored end, said
+   10 minutes. `workSeconds` already took the later replicated evidence (50 minutes),
+   but the partition and the chain link read the stored end alone: `work` 30 minutes,
+   `interrupted` 80, `resumeGapSeconds` 4800 on every device. Both now read the end
+   `workSeconds` reads: `work` 50, `interrupted` 60, gap 3600.
 
 ## Clarifications from building it
 
@@ -985,8 +1128,11 @@ states the choice in place.
    device-local, and were lost even on the originating device when the parent's own
    create came back. They travel with the child's create and are added to the
    parent's set, never replacing it.
-9. **`resumeGapSeconds`** is defined here for the calibration work and not emitted
-   by the lifecycle work.
+9. **`resumeGapSeconds`** was defined here for the calibration work and not emitted
+   by the lifecycle work. The controlled runs compare it, so they emit it: per link
+   in `timing.resumeGaps`, and on each `chain` entry. A link's `previous.endedAt` is
+   the same end the elapsed partition uses: the stored `endedAt`, the corrected end of
+   an inferred one (item 15), or the orphan's `endedAtBound`.
 10. **Tie-break for one millisecond.** Events carry the device that wrote them first
    and its `seq` (`origin_device`, `origin_seq`), and the replay orders by
    `(created_at, origin_device, origin_seq or seq)`, the same on every device.
@@ -1015,6 +1161,18 @@ states the choice in place.
    is `contested` on the devices that hold its record; a device that hydrated from the
    snapshot holds no record, cannot see the disagreement, and reads the fold's end
    unflagged until it is settled.
+13. **The unheld clamp reads comments.** `timing.countedThrough` for an issue in
+   `active` with no holder was the newest event on the issue. Comments replicate and
+   their events do not, so a device that read the tail stopped the interval at the
+   last re-emitted status change. It is now the newest event or comment, as the
+   held clamp already was ([Controlled runs](#controlled-runs), defect 1).
+14. **An inverted chain link is clock skew.** A resumed attempt that starts more
+   than a second before the end it resumes makes `wall` `clock_skew`
+   ([Clocks](#clocks); [Controlled runs](#controlled-runs), defect 2).
+15. **An inferred end is corrected on both axes.** `end(A)` in the partition, and a chain
+   link's `previous.endedAt`, read a steal's or a stale release's end as `workSeconds`
+   does, not as stored ([Attempt coverage at an instant](#attempt-coverage-at-an-instant);
+   [Controlled runs](#controlled-runs), defect 3).
 
 ## Open questions
 

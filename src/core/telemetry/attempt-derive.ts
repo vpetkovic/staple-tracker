@@ -19,7 +19,7 @@
  * device with no open conflict of its own holds the settled claim.
  */
 import type { DatabaseSync } from "node:sqlite";
-import { nowIso } from "../types.js";
+import { nowIso, type ResumeGap } from "../types.js";
 import { attemptsOfIssue, isWorkerAttempt, laneOf, transitionsOf, type AttemptRecord, type AttemptTransition } from "./attempt-records.js";
 
 export type EvaluationMode = "read" | "own";
@@ -325,6 +325,38 @@ export function chainOf(attempts: readonly AttemptRecord[], id: string): string[
     const right = byId.get(b)!;
     return left.startedAt === right.startedAt ? (a < b ? -1 : 1) : left.startedAt < right.startedAt ? -1 : 1;
   });
+}
+
+/**
+ * Every chain link among an issue's worker-lane views, by the resuming attempt's start. An
+ * attempt resumed more than once (two devices re-claimed it offline) links to the earliest
+ * resumer, the one that ended its wait. An attempt nothing has resumed yet has no link.
+ */
+export function resumeGapsOf(
+  views: readonly AttemptView[],
+  /** The elapsed end of an attempt whose recorded end was inferred, when it differs from the stored one (`inferredEndsOf`). */
+  ends: ReadonlyMap<string, string> = new Map(),
+): ResumeGap[] {
+  const workers = views.filter((view) => view.role === "worker");
+  const byId = new Map(workers.map((view) => [view.id, view]));
+  const linked = new Set<string>();
+  const out: ResumeGap[] = [];
+  for (const next of [...workers].sort((a, b) => (a.startedAt === b.startedAt ? (a.id < b.id ? -1 : 1) : a.startedAt < b.startedAt ? -1 : 1))) {
+    const previous = next.resumesAttemptId === null ? undefined : byId.get(next.resumesAttemptId);
+    if (!previous || linked.has(previous.id)) continue;
+    const endedAt = ends.get(previous.id) ?? previous.endedAt ?? previous.endedAtBound ?? null;
+    if (endedAt === null) continue;
+    linked.add(previous.id);
+    out.push({
+      attemptId: previous.id,
+      resumedByAttemptId: next.id,
+      endedAt,
+      resumedAt: next.startedAt,
+      resumeGapSeconds: seconds(endedAt, next.startedAt),
+      clockSkew: Date.parse(next.startedAt) + 1000 < Date.parse(endedAt),
+    });
+  }
+  return out;
 }
 
 /** Every attempt of an issue as it reads, both lanes, oldest first; each view carries `role`. */

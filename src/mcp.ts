@@ -715,6 +715,18 @@ const timingShape = {
     .describe(
       "Elapsed span and its partition, device-local: leaf buckets work, paused, silent, interrupted, unattributed, review, gated, blocked, queued, resolved; parent buckets active, review, gated, blocked, queued, resolved. Null: missing.wall says never_started or replay_unavailable",
     ),
+  resumeGaps: z
+    .array(
+      z.object({
+        attemptId: z.string().describe("The interrupted worker attempt"),
+        resumedByAttemptId: z.string().describe("The attempt whose resumesAttemptId names it"),
+        endedAt: z.string().describe("The interrupted attempt's end: stored endedAt, or the orphan's endedAtBound"),
+        resumedAt: z.string().describe("The resuming attempt's startedAt"),
+        resumeGapSeconds: z.number().describe("resumedAt - endedAt: how long the interrupted work waited to be picked up again"),
+        clockSkew: z.boolean().describe("The gap runs backwards by more than a second (the two devices' clocks disagree): resumeGapSeconds is a clamped 0, not a measurement"),
+      }),
+    )
+    .describe("This issue's worker-lane chain links, oldest first: each interrupted attempt that was resumed, and how long it waited. Empty when nothing was resumed"),
   quality: z
     .object({
       work: z.object({

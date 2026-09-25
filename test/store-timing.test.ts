@@ -68,14 +68,19 @@ function eventKinds(issueId: string): string[] {
  */
 function backdateEvents(issueId: string, secondsAgo: number[]): void {
   const all = store.db
-    .prepare("SELECT seq, kind FROM events WHERE issue_id = ? ORDER BY seq")
-    .all(issueId) as Array<{ seq: number; kind: string }>;
+    .prepare("SELECT seq, kind, payload FROM events WHERE issue_id = ? ORDER BY seq")
+    .all(issueId) as Array<{ seq: number; kind: string; payload: string }>;
   const rows = all.filter((row) => !row.kind.startsWith("attempt_"));
   expect(rows.length, `event count for ${issueId}: ${eventKinds(issueId).join(" -> ")}`).toBe(
     secondsAgo.length,
   );
   rows.forEach((row, i) => {
     store.db.prepare("UPDATE events SET created_at = ? WHERE seq = ?").run(ago(secondsAgo[i]!), row.seq);
+    // A comment and the event that narrates it are one mutation, one instant: move the comment with it.
+    if (row.kind === "comment_added") {
+      const commentId = (JSON.parse(row.payload) as { commentId?: string }).commentId;
+      if (commentId) store.db.prepare("UPDATE comments SET created_at = ? WHERE id = ?").run(ago(secondsAgo[i]!), commentId);
+    }
   });
   backdateAttemptEvents(all);
 }

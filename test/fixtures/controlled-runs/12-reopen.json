@@ -1,0 +1,30 @@
+{
+  "title": "a reopen after done: the resolved stretch is its own bucket and the span runs to the last resolution",
+  "covers": [
+    "reopen from done makes [endAt, t) resolved and recomputes wall.endAt",
+    "work after the reopen is a new attempt, added to the work before it"
+  ],
+  "start": "2026-09-01T09:00:00.000Z",
+  "devices": { "tail": true, "hydrate": true },
+  "steps": [
+    { "at": "0s", "do": "create", "ref": "x" },
+    { "at": "0s", "do": "checkout", "ref": "x", "agent": "w1" },
+    { "at": "10m", "do": "comment", "ref": "x", "agent": "w1" },
+    { "at": "20m", "do": "status", "ref": "x", "to": "done", "agent": "w1" },
+    { "at": "50m", "do": "status", "ref": "x", "to": "todo", "agent": "vp" },
+    { "at": "60m", "do": "checkout", "ref": "x", "agent": "w1" },
+    { "at": "70m", "do": "comment", "ref": "x", "agent": "w1" },
+    { "at": "80m", "do": "status", "ref": "x", "to": "done", "agent": "w1" }
+  ],
+  "expect": [
+    {
+      "asOf": "90m",
+      "ref": "x",
+      "intervals": 2,
+      "workSeconds": "40m",
+      "activeSeconds": "40m",
+      "wall": { "startAt": "0s", "endAt": "80m", "buckets": { "work": "40m", "resolved": "30m", "queued": "10m" } },
+      "resumeGaps": []
+    }
+  ]
+}

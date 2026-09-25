@@ -236,6 +236,26 @@ export function issueEffort(db: DatabaseSync, issueId: string): { workers: LaneE
   return { workers: lane(workers, "worker"), orchestrators: lane(orchestrators, "orchestrator"), firstWorkerStart: workers[0]?.startedAt ?? null };
 }
 
+/**
+ * The end the elapsed axis reads for each worker attempt whose recorded end was inferred
+ * (`claim_stolen`, `released_stale`), by attempt id: the later of the stored end and the
+ * replicated evidence before the limit, the same end {@link effectiveEnd} gives `workSeconds`.
+ * The stored end is the ending device's own `lastActivityOf`, which misses evidence that
+ * replicated from the attempt's device without an event (a document revision); read alone it
+ * would put work the agent did in `interrupted`, and date the chain link's gap from before it.
+ */
+export function inferredEndsOf(views: ReadonlyArray<{ id: string; role: string; storedState: string; endDetection: string | null; endReason: string | null }>, workers: LaneEffort): Map<string, string> {
+  const effortEnd = new Map(workers.attempts.map((attempt) => [attempt.id, attempt.end]));
+  const out = new Map<string, string>();
+  for (const view of views) {
+    if (view.role !== "worker" || view.storedState !== "ended" || view.endDetection !== "inferred") continue;
+    if (view.endReason !== "claim_stolen" && view.endReason !== "released_stale") continue;
+    const end = effortEnd.get(view.id);
+    if (end !== undefined) out.set(view.id, end);
+  }
+  return out;
+}
+
 /** True when the row's `startedAt` is more than one second before the first worker attempt: work before it has no attempt. */
 export function hasCaptureGap(rowStartedAt: string | null, firstWorkerStart: string | null): boolean {
   return rowStartedAt !== null && firstWorkerStart !== null && ms(firstWorkerStart) - ms(rowStartedAt) > TOLERANCE_MS;

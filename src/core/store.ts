@@ -49,6 +49,7 @@ import {
   claimGuardMessage,
   normalizeTitle,
   nowIso,
+  nowMs,
 } from "./types.js";
 import { SORT_ORDER_STEP } from "./migrations/workspace/004-workspace-settings.js";
 import {
@@ -94,10 +95,10 @@ import {
   viewAttempt,
 } from "./telemetry/attempts.js";
 import { reconstructAttempts, type ReconstructReport } from "./telemetry/reconstruct.js";
-import { hasCaptureGap, issueEffort, pausesOf } from "./telemetry/effort.js";
+import { hasCaptureGap, inferredEndsOf, issueEffort, pausesOf } from "./telemetry/effort.js";
 import { intersect, partition, union, type CoverageAttempt, type PathEntry } from "./telemetry/wall.js";
 import { transitionsOf } from "./telemetry/attempt-records.js";
-import { viewsOfIssue } from "./telemetry/attempt-derive.js";
+import { resumeGapsOf, viewsOfIssue } from "./telemetry/attempt-derive.js";
 import { attemptDetail, attemptSummary, listAttempts, type AttemptDetail, type AttemptSummary } from "./telemetry/read-attempts.js";
 import type { PageRequest, TelemetryPage } from "./telemetry/read-page.js";
 import { stapleHome } from "../config/home.js";
@@ -597,7 +598,7 @@ interface OwnEffort {
 /** The new timing fields, null, for a caller that asked for the plan alone (`telemetry: false`). */
 function noTelemetry(): Pick<
   IssueTiming,
-  "workSeconds" | "ownWorkSeconds" | "orchestrationSeconds" | "leadSeconds" | "estimateRatio" | "wall" | "quality" | "missing"
+  "workSeconds" | "ownWorkSeconds" | "orchestrationSeconds" | "leadSeconds" | "estimateRatio" | "wall" | "resumeGaps" | "quality" | "missing"
 > {
   return {
     workSeconds: null,
@@ -606,6 +607,7 @@ function noTelemetry(): Pick<
     leadSeconds: null,
     estimateRatio: null,
     wall: null,
+    resumeGaps: [],
     quality: { work: { state: null, inputs: [], coverage: null, missingInputs: [] }, wall: { state: null, inputs: [] } },
     missing: {},
   };
@@ -4796,14 +4798,23 @@ export class WorkspaceStore {
       eventsByIssue.set(issueId, settled.events);
     }
 
-    // 3/4 — the no-holder clamp: newest event of ANY kind on the issue.
+    /**
+     * 3/4 — the no-holder clamp: the newest event of ANY kind on the issue, or comment by
+     * anyone. Comments replicate and their events do not, so without them a device that read
+     * the tail would stop an unheld issue's open interval at its last re-emitted status change,
+     * where the writer counts through the latest comment. The held clamp below reads comments
+     * for the same reason.
+     */
     const newestEvent = new Map<string, string>();
     for (const row of this.db
       .prepare(
-        `SELECT issue_id, MAX(created_at) AS t FROM events
-          WHERE issue_id IN (${placeholders}) GROUP BY issue_id`,
+        `SELECT issue_id, MAX(t) AS t FROM (
+           SELECT issue_id, created_at AS t FROM events WHERE issue_id IN (${placeholders})
+           UNION ALL
+           SELECT issue_id, created_at AS t FROM comments WHERE issue_id IN (${placeholders}) AND deleted_at IS NULL
+         ) GROUP BY issue_id`,
       )
-      .all(...(ids as never[])) as Array<{ issue_id: string; t: string | null }>) {
+      .all(...([...ids, ...ids] as never[])) as Array<{ issue_id: string; t: string | null }>) {
       if (row.t) newestEvent.set(row.issue_id, row.t);
     }
 
@@ -5007,6 +5018,8 @@ export class WorkspaceStore {
     if (orchestrationSeconds === null) missing.orchestrationSeconds = "no_orchestrator_attempt";
 
     // ---- the elapsed partition, device-local
+    const views = viewsOfIssue(this.db, row.id, asOf);
+    const inferredEnds = inferredEndsOf(views, effort.workers);
     let wall: WallTiming | null = null;
     const wallInputs = new Set<string>();
     if (own.approximate || own.path === undefined) {
@@ -5017,7 +5030,7 @@ export class WorkspaceStore {
         parent,
         path: own.path,
         asOf,
-        attempts: parent ? [] : this.coverageOf(row.id, asOf),
+        attempts: parent ? [] : this.coverageOf(views, asOf, inferredEnds),
         blocked: edges.blocked,
         unexplainedBlocked: edges.unexplained,
       });
@@ -5044,6 +5057,7 @@ export class WorkspaceStore {
       leadSeconds,
       estimateRatio,
       wall,
+      resumeGaps: resumeGapsOf(views, inferredEnds),
       quality: {
         work: { state, inputs: [...inputs].sort(), coverage, missingInputs },
         wall: { state: wall === null ? null : timing.approximate || wallInputs.size > 0 ? "approximate" : "exact", inputs: [...wallInputs].sort() },
@@ -5057,13 +5071,15 @@ export class WorkspaceStore {
    * each one's end (stored, the orphan's `endedAtBound`, or `asOf` while open), its evidence
    * limit, and its pauses.
    */
-  private coverageOf(issueId: string, asOf: string): CoverageAttempt[] {
-    return viewsOfIssue(this.db, issueId, asOf)
+  private coverageOf(views: readonly AttemptView[], asOf: string, inferredEnds: ReadonlyMap<string, string>): CoverageAttempt[] {
+    return views
       .filter((view) => view.role === "worker")
       .map((view) => {
         const open = view.state !== "ended";
-        const end = open ? asOf : (view.endedAt ?? view.endedAtBound ?? view.startedAt);
+        const end = open ? asOf : (inferredEnds.get(view.id) ?? view.endedAt ?? view.endedAtBound ?? view.startedAt);
         return {
+          id: view.id,
+          resumesAttemptId: view.resumesAttemptId,
           startedAt: view.startedAt,
           end,
           countedThrough: open ? (view.countedThrough ?? view.startedAt) : end,
@@ -5083,7 +5099,7 @@ export class WorkspaceStore {
    * for when it resolved and reopened.
    */
   private edgeHistory(issueId: string, asOf: string): { blocked: Array<[number, number]>; unexplained: Array<[number, number]>; settled: boolean } {
-    const forever = Math.max(Date.parse(asOf), Date.now()) + 1;
+    const forever = Math.max(Date.parse(asOf), nowMs()) + 1;
     const events = (
       this.db
         .prepare(`SELECT payload, created_at FROM events WHERE issue_id = ? AND kind = 'blockers_changed' ORDER BY ${EVENT_ORDER}`)

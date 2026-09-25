@@ -1,0 +1,30 @@
+{
+  "title": "a steal on a device that has the holder's document revision but no event for it",
+  "covers": [
+    "a recorded inferred end is the later of the stored end and the replicated evidence before the successor, on both axes",
+    "the stealing device's stored end (its own lastActivityOf) misses a document revision it applied, because applying one writes no event",
+    "the work bucket and workSeconds agree about the old tenure on every device"
+  ],
+  "start": "2026-09-01T09:00:00.000Z",
+  "devices": { "tail": true, "hydrate": true },
+  "steps": [
+    { "at": "0s", "do": "create", "ref": "x", "estimate": "2h" },
+    { "at": "0s", "do": "checkout", "ref": "x", "agent": "w1" },
+    { "at": "10m", "do": "comment", "ref": "x", "agent": "w1" },
+    { "at": "30m", "do": "document", "ref": "x", "agent": "w1", "key": "worklog" },
+    { "at": "31m", "do": "sync", "devices": ["a", "b"] },
+    { "at": "90m", "do": "checkout", "ref": "x", "agent": "w2", "stealIfIdle": "30m", "device": "b" },
+    { "at": "100m", "do": "comment", "ref": "x", "agent": "w2", "device": "b" },
+    { "at": "110m", "do": "status", "ref": "x", "to": "done", "agent": "w2", "device": "b" }
+  ],
+  "expect": [
+    {
+      "asOf": "120m",
+      "ref": "x",
+      "intervals": 2,
+      "workSeconds": "50m",
+      "wall": { "startAt": "0s", "endAt": "110m", "buckets": { "work": "50m", "interrupted": "60m" } },
+      "resumeGaps": ["60m"]
+    }
+  ]
+}
