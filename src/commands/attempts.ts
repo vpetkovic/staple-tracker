@@ -43,12 +43,14 @@ const clock = (seconds: number): string => {
 };
 
 /** One line per attempt, as `show` and `attempts` print it. */
-export function attemptLine(view: AttemptView): string {
+export function attemptLine(view: AttemptView & { readonly quality?: { readonly state: string; readonly reasons: readonly string[] } }): string {
   const end = view.state === "ended" ? ` ${view.outcome ?? "ended"}${view.endReason ? ` (${view.endReason})` : ""}` : ` ${view.state}`;
   const stored = view.storedState !== view.state ? ` [stored ${view.storedState}]` : "";
   const idle = view.idleSeconds !== null ? ` · idle ${clock(view.idleSeconds)}` : "";
   const resumes = view.resumesAttemptId ? " · resumes" : "";
-  return `#${view.ordinal} ${view.agent}${end}${stored} · ran ${clock(view.activeSeconds)}${idle}${resumes}${view.contested ? " · contested" : ""}  ${view.id}`;
+  // The effort figure's quality, only when it is not exact: an exact attempt reads as it always did.
+  const quality = view.quality && view.quality.state !== "exact" ? ` · ${view.quality.state}${view.quality.reasons.length > 0 ? ` (${view.quality.reasons.join(", ")})` : ""}` : "";
+  return `#${view.ordinal} ${view.agent}${end}${stored} · ran ${clock(view.activeSeconds)}${idle}${resumes}${view.contested ? " · contested" : ""}${quality}  ${view.id}`;
 }
 
 function sayPage(page: TelemetryPage<AttemptView>): void {

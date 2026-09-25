@@ -15,6 +15,7 @@ import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { tx } from "../db.js";
 import { budgetDedupKey, type BudgetSourceKind, windowLabel } from "./formats.js";
+import { sampleQuality, type BudgetState, type Quality } from "./quality.js";
 
 /** Samples join a window when their resets are this close (Window identity). */
 export const WINDOW_TOLERANCE_SECONDS = 120;
@@ -116,7 +117,7 @@ export interface LimitWindow {
 export type SkipReason = "unchanged" | "fork_copied" | "not_reported_by_source" | "parse_error";
 
 export type SampleOutcome =
-  | { readonly stored: true; readonly sample: BudgetSample }
+  | { readonly stored: true; readonly sample: BudgetSample & { readonly quality: Quality<BudgetState> } }
   | { readonly stored: false; readonly reason: SkipReason; readonly limitKey: string | null; readonly observedAt: string | null };
 
 /** A sample as a read shows it inside one window: `regression` is derived, never stored. */
@@ -374,7 +375,8 @@ export class BudgetStore {
         dedupKey,
         JSON.stringify(missing),
       );
-    return { stored: true, sample: this.getSample(id)! };
+    const sample = this.getSample(id)!;
+    return { stored: true, sample: { ...sample, quality: sampleQuality(sample) } };
   }
 
   /**

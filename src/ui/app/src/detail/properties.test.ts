@@ -43,6 +43,12 @@ function timing(): IssueTiming {
       unplannedCount: 0,
       totalCount: 0,
     },
+    workSeconds: null,
+    estimateRatio: null,
+    quality: {
+      work: { state: "missing", inputs: [], reasons: ["never_started"], coverage: null, missingInputs: [] },
+      wall: { state: "missing", inputs: [], reasons: ["never_started"] },
+    },
   };
 }
 

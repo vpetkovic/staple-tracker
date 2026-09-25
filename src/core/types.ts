@@ -804,21 +804,33 @@ export interface WallTiming {
 /** `missing` > `reconstructed` > `approximate` > `timing-floor` > `exact`. Null for a cancelled issue. */
 export type WorkQualityState = "missing" | "reconstructed" | "approximate" | "timing-floor" | "exact";
 
+/**
+ * One state per record (`docs/timing-semantics.md`, "Quality states"), with `reasons`: every
+ * reason that holds, highest precedence first (`src/core/telemetry/quality.ts`).
+ */
 export interface TimingQuality {
   work: {
     state: WorkQualityState | null;
     /** Replicated inputs only: `sparse`, `capture_gap`, `end_unbounded`, `contested`, `orphan_provisional`, `clock_skew`, `partial`. */
     inputs: string[];
+    /**
+     * Everything that produced `state`, highest precedence first: the `missing.workSeconds`
+     * code, `reconstructed`, the approximate `inputs`, `timing_floor`. Empty for `exact` and
+     * for a cancelled issue.
+     */
+    reasons: string[];
     /** A parent's: direct children not cancelled and not `never_started`, and how many of them have `workSeconds`. */
     coverage: { known: number; total: number; partial: boolean } | null;
     /** A parent's children counted in `coverage.total` whose `workSeconds` is null, by identifier. */
     missingInputs: string[];
   };
   wall: {
-    /** Null when `wall` is. */
-    state: "approximate" | "exact" | null;
+    /** `missing` when `wall` is null (the reason is in `reasons` and `missing.wall`); null only on a read that skipped telemetry. */
+    state: "missing" | "approximate" | "exact" | null;
     /** `unattributed`, `edge_history_incomplete`, `conflict_resolved`, `clock_skew`: device-local, never read by the work state. */
     inputs: string[];
+    /** `missing.wall`'s code when `wall` is null, else the sorted `inputs`. */
+    reasons: string[];
   };
 }
 

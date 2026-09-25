@@ -392,6 +392,103 @@ export interface IssueTiming {
   childStatusCounts: Record<IssueStatus, number>;
   /** The recursive plan for the subtree, beside the depth-1 fields above. */
   subtreePlan: SubtreePlan;
+  /**
+   * Agent work from worker attempts, replicated data only: the estimate ratio's actual. A
+   * parent's is its children's sum. Null with a reason (never started, no attempt, cancelled).
+   */
+  workSeconds: number | null;
+  /** `workSeconds / estimatedSeconds` for a done issue with its own estimate and exact work; else null. */
+  estimateRatio: number | null;
+  /** One quality state per record, and the reasons that produced it. */
+  quality: TimingQuality;
+}
+
+/** `missing` > `reconstructed` > `approximate` > `timing-floor` > `exact`, mirroring core. */
+export type WorkQualityState = "missing" | "reconstructed" | "approximate" | "timing-floor" | "exact";
+
+/** Mirrors `TimingQuality` in src/core/types.ts (pinned in test/contract-ui-types.test.ts). */
+export interface TimingQuality {
+  work: {
+    /** Null for a cancelled issue, which owes no work. */
+    state: WorkQualityState | null;
+    inputs: string[];
+    /** Every reason that produced the state, highest precedence first. */
+    reasons: string[];
+    coverage: { known: number; total: number; partial: boolean } | null;
+    missingInputs: string[];
+  };
+  wall: {
+    state: "missing" | "approximate" | "exact" | null;
+    inputs: string[];
+    reasons: string[];
+  };
+}
+
+/** The work states an analysis can exclude, and the elapsed states. */
+export type WorkState = WorkQualityState;
+export type WallState = "missing" | "approximate" | "exact";
+
+/** A ratio over the members of the ratio population in `states`, mirroring core's `RatioAggregate`. */
+export interface RatioAggregate {
+  readonly states: WorkState[];
+  readonly count: number;
+  readonly workSeconds: number | null;
+  readonly estimatedSeconds: number | null;
+  readonly ratio: number | null;
+  readonly coverage: { readonly known: number; readonly total: number; readonly partial: boolean };
+  readonly missing: Record<string, string>;
+}
+
+/** One eligible record of a cohort. */
+export interface CohortItem {
+  readonly identifier: string;
+  readonly title: string;
+  readonly kind: string;
+  readonly status: string;
+  readonly completedAt: string | null;
+  readonly estimatedSeconds: number | null;
+  readonly workSeconds: number | null;
+  readonly estimateRatio: number | null;
+  readonly work: { readonly state: WorkQualityState; readonly reasons: string[] };
+  readonly wall: { readonly state: WallState; readonly reasons: string[] };
+}
+
+/**
+ * `GET /api/timing/quality`, mirroring `TimingQualityReport` in src/core/telemetry/cohort.ts
+ * (pinned in test/contract-ui-types.test.ts): the quality states of the done leaves in a
+ * filter, their coverage over that eligible population, and the ratio aggregates.
+ */
+export interface TimingQualityReport {
+  readonly asOf: string;
+  readonly filter: {
+    readonly kind: string[] | null;
+    readonly parent: string | null;
+    readonly since: string | null;
+    readonly exclude: WorkState[];
+    readonly excludeReasons: string[];
+  };
+  readonly population: {
+    readonly issues: number;
+    readonly eligible: number;
+    readonly notEligible: { readonly parents: number; readonly open: number; readonly cancelled: number };
+  };
+  readonly work: {
+    readonly counts: Record<WorkState, number>;
+    readonly coverage: Record<WorkState, number> | null;
+    readonly reasons: Record<string, number>;
+    readonly missing: Record<string, string>;
+  };
+  readonly wall: {
+    readonly counts: Record<WallState, number>;
+    readonly coverage: Record<WallState, number> | null;
+    readonly reasons: Record<string, number>;
+    readonly missing: Record<string, string>;
+  };
+  readonly ratio: { readonly total: number; readonly exact: RatioAggregate; readonly admitted: RatioAggregate };
+  readonly excluded: { readonly count: number; readonly counts: Partial<Record<WorkState, number>>; readonly reasons: Record<string, number> };
+  readonly items: CohortItem[];
+  readonly truncated: boolean;
+  readonly nextCursor: string | null;
 }
 
 /** Where a `SubtreePlan.estimatedSeconds` came from. */

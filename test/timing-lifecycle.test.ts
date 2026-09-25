@@ -104,10 +104,10 @@ describe("pauses, resumes and terminal transitions", () => {
     expect(t.ownActiveSeconds).toBe(min(70));
     expect(t.workSeconds).toBe(min(40));
     expect(t.ownWorkSeconds).toBe(min(40));
-    expect(t.quality.work).toEqual({ state: "exact", inputs: [], coverage: null, missingInputs: [] });
+    expect(t.quality.work).toEqual({ state: "exact", inputs: [], reasons: [], coverage: null, missingInputs: [] });
     // The resume is a new interval: work before the pause and after it, the pause between.
     expect(t.wall).toEqual({ startAt: iso(0), endAt: iso(70), through: null, seconds: min(70), buckets: buckets({ work: min(40), paused: min(30) }) });
-    expect(t.quality.wall).toEqual({ state: "exact", inputs: [] });
+    expect(t.quality.wall).toEqual({ state: "exact", inputs: [], reasons: [] });
     expect(t.leadSeconds).toBe(0);
     expect(t.estimateRatio).toBeCloseTo(2400 / 3600, 10);
     partitions(t);
@@ -290,7 +290,7 @@ describe("one mutation, one instant", () => {
     );
     const t = timing(x.id, 20);
     expect(t.wall!.buckets).toMatchObject({ work: min(10), unattributed: 0 });
-    expect(t.quality.wall).toEqual({ state: "exact", inputs: [] });
+    expect(t.quality.wall).toEqual({ state: "exact", inputs: [], reasons: [] });
   });
 });
 
@@ -475,7 +475,7 @@ describe("the adversarial timelines", () => {
     expect(t.leadSeconds).toBe(min(20));
     expect(t.wall).toEqual({ startAt: iso(20), endAt: iso(60), through: null, seconds: min(40), buckets: buckets({ work: min(20), blocked: min(10), queued: min(10) }) });
     // Every edge that mattered is explained by a blockers_changed event.
-    expect(t.quality.wall).toEqual({ state: "exact", inputs: [] });
+    expect(t.quality.wall).toEqual({ state: "exact", inputs: [], reasons: [] });
     partitions(t);
   });
 
@@ -491,7 +491,7 @@ describe("the adversarial timelines", () => {
     store.db.prepare("DELETE FROM events WHERE issue_id = ? AND kind = 'blockers_changed'").run(x.id);
     const t = timing(x.id, 20);
     expect(t.wall!.buckets).toMatchObject({ queued: min(2), blocked: min(8) });
-    expect(t.quality.wall).toEqual({ state: "approximate", inputs: ["edge_history_incomplete"] });
+    expect(t.quality.wall).toEqual({ state: "approximate", inputs: ["edge_history_incomplete"], reasons: ["edge_history_incomplete"] });
   });
 });
 
@@ -546,6 +546,7 @@ describe("parents: work is the children's, with coverage", () => {
     expect(t.quality.work).toEqual({
       state: "approximate",
       inputs: ["partial"],
+      reasons: ["partial"],
       coverage: { known: 1, total: 2, partial: true },
       missingInputs: [unmeasured.identifier],
     });

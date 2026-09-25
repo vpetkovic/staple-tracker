@@ -54,6 +54,7 @@ import type {
   RemoteDevice,
   StapleEvent,
   VocabularyOp,
+  TimingQualityReport,
 } from "./types";
 // Type-only, so the cycle with lib/settings.ts (which imports `getSettings`) is erased.
 import type { SettingOp, WorkspaceSettingsEnvelope } from "./settings";
@@ -679,6 +680,13 @@ export const getAgentContext = (params: { ws?: string; ref: string; documents?: 
   request<AgentContext>(
     `/api/agent-context${qs({ ws: params.ws, ref: params.ref, documents: params.documents ? "1" : undefined })}`,
   );
+
+/**
+ * `GET /api/timing/quality` — the quality states of the done leaves beneath `parent` and their
+ * coverage (the same payload as `staple timing quality --json` and MCP `timing_quality`).
+ */
+export const getTimingQuality = (params: { ws?: string; parent?: string; limit?: number }) =>
+  request<TimingQualityReport>(`/api/timing/quality${qs(params)}`);
 
 export const getGraph = () => request<Graph>("/api/graph");
 

@@ -130,7 +130,7 @@ describe("a server started with no workspace in reach", () => {
     await client?.close();
   });
 
-  it("still connects and still lists all 54 tools", async () => {
+  it("still connects and still lists all 55 tools", async () => {
     const { tools } = await client.listTools();
     // The inventory does not shrink when there is nowhere to write: a harness
     // configured before the user ever ran `init` sees the full tool set.
@@ -143,8 +143,9 @@ describe("a server started with no workspace in reach", () => {
     // ingestion then added record_budget_sample (47).
     // Execution attempts added record_attempt_event (48), and the telemetry reads
     // list_attempts, get_attempt, get_budget and list_budget_samples (52), and the
-    // explicit estimate write set_estimate (53), and the plan read compare_plans (54).
-    expect(tools).toHaveLength(54);
+    // explicit estimate write set_estimate (53), the plan read compare_plans (54), and the
+    // timing quality read timing_quality (55).
+    expect(tools).toHaveLength(55);
   });
 
   it("pins the not_found guidance a read tool returns instead of an empty result", async () => {

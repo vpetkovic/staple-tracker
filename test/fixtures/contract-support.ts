@@ -94,6 +94,8 @@ const ELAPSED_SECONDS_KEYS = new Set([
   "ownWorkSeconds",
   "orchestrationSeconds",
   "leadSeconds",
+  // An attempt's contribution to them (docs/timing-semantics.md, "Quality states").
+  "effortSeconds",
 ]);
 
 /**
@@ -262,7 +264,11 @@ export function timingGolden(over: Record<string, unknown> = {}): Record<string,
     estimateRatio: null,
     wall: null,
     resumeGaps: [],
-    quality: { work: { state: "missing", inputs: [], coverage: null, missingInputs: [] }, wall: { state: null, inputs: [] } },
+    // One state per record: an issue that never started is missing on both, and says why.
+    quality: {
+      work: { state: "missing", inputs: [], reasons: ["never_started"], coverage: null, missingInputs: [] },
+      wall: { state: "missing", inputs: [], reasons: ["never_started"] },
+    },
     missing: {
       workSeconds: "never_started",
       ownWorkSeconds: "never_started",
@@ -332,6 +338,9 @@ export function openAttemptsGolden(identifier: string): Record<string, unknown> 
       contested: false,
       chain: [UUID],
       missing: { harness: "not_supplied", providerBinding: "not_supplied" },
+      // Claimed and read within the same few milliseconds: under the floor.
+      effortSeconds: SECONDS,
+      quality: { state: "timing-floor", reasons: ["timing_floor"] },
     },
     last: null,
   };

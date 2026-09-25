@@ -32,6 +32,26 @@ import {
   type PageRequest,
   type TelemetryPage,
 } from "./read-page.js";
+import {
+  attemptBurnQuality,
+  limitBurnQuality,
+  limitReadingQuality,
+  sampleQuality,
+  windowBurnQuality,
+  type BudgetState,
+  type Quality,
+} from "./quality.js";
+
+/** A budget record's one quality state (docs/timing-semantics.md, "Quality states"). */
+export type BudgetQuality = Quality<BudgetState>;
+
+/** A stored sample as every read returns it: with the quality state of its reading. */
+export type QualifiedSample = BudgetSample & { readonly quality: BudgetQuality };
+
+/** A sample with its state; a sample that already carries one is returned as it is. */
+export function qualifySample<T extends BudgetSample>(sample: T): T & { readonly quality: BudgetQuality } {
+  return { ...sample, quality: sampleQuality(sample) };
+}
 
 const ms = (instant: string): number => Date.parse(instant);
 const WINDOW_TOLERANCE_MS = WINDOW_TOLERANCE_SECONDS * 1000;
@@ -91,7 +111,7 @@ export interface LimitReading {
   /** The current window instance, else the newest one (elapsed or superseded), else null. */
   readonly window: LimitWindow | null;
   /** The newest sample of the current window by `observedAt`. Never one from an elapsed window. */
-  readonly latestSample: BudgetSample | null;
+  readonly latestSample: QualifiedSample | null;
   /** The highest `usedPercent` observed in the current window: the conservative reading. */
   readonly highWaterPercent: number | null;
   /** `max(0, 100 − highWaterPercent)`; for a sliding window, the latest sample's. */
@@ -101,6 +121,8 @@ export interface LimitReading {
   /** True when the latest sample's value is older than capture allows: `now − observedAt` over 600 s. */
   readonly stale: boolean | null;
   readonly missing: Missing;
+  /** The state of `remainingPercent`: provider-unavailable or missing when null, else approximate (stale, estimated, low confidence) or exact. */
+  readonly quality: BudgetQuality;
 }
 
 export interface AccountBudget {
@@ -120,6 +142,17 @@ export interface BudgetView {
 }
 
 function limitReading(store: BudgetStore, provider: string | null, accountRef: string, limitKey: string, now: string): LimitReading {
+  const reading = limitReadingOf(store, provider, accountRef, limitKey, now);
+  return { ...reading, latestSample: reading.latestSample === null ? null : qualifySample(reading.latestSample), quality: limitReadingQuality(reading) };
+}
+
+function limitReadingOf(
+  store: BudgetStore,
+  provider: string | null,
+  accountRef: string,
+  limitKey: string,
+  now: string,
+): Omit<LimitReading, "quality" | "latestSample"> & { latestSample: BudgetSample | null } {
   const windows = store.listWindows({ accountRef, limitKey }, now).filter((window) => provider === null || window.provider === provider);
   const missing: Missing = {};
   const current = windows.filter((window) => window.status === "current").sort((a, b) => ((a.resetsAt ?? "") < (b.resetsAt ?? "") ? 1 : -1))[0];
@@ -252,7 +285,7 @@ export function readBudget(home: string, query: { account?: string; now?: string
 // ------------------------------------------------------------ list_budget_samples
 
 /** A sample in a history page: `regression` is derived within its window, never stored. */
-export type HistorySample = BudgetSample & { readonly regression: boolean };
+export type HistorySample = QualifiedSample & { readonly regression: boolean };
 
 /** `--since`: an ISO instant, or a duration in the existing vocabulary meaning "that long ago". */
 export function parseSince(raw: string | undefined, now: string): string | null {
@@ -298,7 +331,7 @@ export function listBudgetSamples(
     const page = cutPage(rows, limit, "budget_samples", scope, sampleKey);
     const items = page.items.map((sample) => {
       const high = store === null || sample.usedPercent === null ? null : store.highWaterBefore(sample);
-      return { ...sample, regression: high !== null && sample.usedPercent! < high };
+      return { ...qualifySample(sample), regression: high !== null && sample.usedPercent! < high };
     });
     const from = position?.at ?? since ?? items[0]?.observedAt ?? null;
     const to = page.truncated ? items[items.length - 1]!.observedAt : from === null ? null : now;
@@ -337,6 +370,8 @@ export interface WindowBurn {
   /** True when usage before the first reading inside the attempt was not seen, so the delta can only be too low. */
   readonly lowerBound: boolean;
   readonly missing: Missing;
+  /** The state of `deltaPercent`. */
+  readonly quality: BudgetQuality;
 }
 
 export interface LimitBurn {
@@ -350,6 +385,8 @@ export interface LimitBurn {
   readonly regressionCount: number;
   readonly windows: WindowBurn[];
   readonly missing: Missing;
+  /** The state of `burnPercent`. */
+  readonly quality: BudgetQuality;
 }
 
 export interface AttemptBurn {
@@ -368,6 +405,8 @@ export interface AttemptBurn {
   readonly linkedSampleCount: number | null;
   readonly limits: LimitBurn[];
   readonly missing: Missing;
+  /** The state of the burn as a whole: its limits taken together, and whether the attribution is sole. */
+  readonly quality: BudgetQuality;
 }
 
 /**
@@ -430,7 +469,7 @@ function windowBurn(
     const fromPercent = highOf(before);
     if (fromPercent === null) missing.fromPercent = "stale";
     return {
-      burn: { windowId: window.id, resetsAt: window.resetsAt, fromPercent, baseline: null, toPercent: null, deltaPercent: null, lowerBound: false, missing },
+      burn: qualifyWindow({ windowId: window.id, resetsAt: window.resetsAt, fromPercent, baseline: null, toPercent: null, deltaPercent: null, lowerBound: false, missing }),
       regressions,
     };
   }
@@ -453,7 +492,7 @@ function windowBurn(
     lowerBound = true;
   }
   return {
-    burn: { windowId: window.id, resetsAt: window.resetsAt, fromPercent, baseline, toPercent, deltaPercent: Math.max(0, toPercent - fromPercent), lowerBound, missing },
+    burn: qualifyWindow({ windowId: window.id, resetsAt: window.resetsAt, fromPercent, baseline, toPercent, deltaPercent: Math.max(0, toPercent - fromPercent), lowerBound, missing }),
     regressions,
   };
 }
@@ -481,7 +520,7 @@ function supersededBurn(store: BudgetStore, superseded: readonly LimitWindow[], 
   const lowerBound = before.length === 0;
   const fromPercent = lowerBound ? inside[0]!.usedPercent! : highOf(before)!;
   return {
-    burn: {
+    burn: qualifyWindow({
       windowId: window.id,
       resetsAt: window.resetsAt,
       fromPercent,
@@ -490,7 +529,7 @@ function supersededBurn(store: BudgetStore, superseded: readonly LimitWindow[], 
       deltaPercent: Math.max(0, toPercent - fromPercent),
       lowerBound,
       missing: {},
-    },
+    }),
     regressions: inside.filter((sample) => sample.regression).length,
   };
 }
@@ -512,7 +551,7 @@ export function attemptBurn(
   const from = attempt.startedAt;
   const to = attempt.endedAt ?? attempt.endedAtBound ?? (attempt.state === "ended" ? attempt.lastActivityAt : now);
   const binding = attempt.providerBinding;
-  const empty = (reason: string): AttemptBurn => ({
+  const empty = (reason: string): Omit<AttemptBurn, "quality"> => ({
     provider: binding?.provider ?? null,
     accountRef: binding?.accountRef ?? null,
     from,
@@ -522,10 +561,10 @@ export function attemptBurn(
     limits: [],
     missing: { limits: reason, attribution: reason, linkedSampleCount: reason },
   });
-  if (binding === null) return empty("no_provider_binding");
-  if (!context.openedHere) return empty("not_on_this_device");
+  if (binding === null) return qualifyBurn(empty("no_provider_binding"));
+  if (!context.openedHere) return qualifyBurn(empty("not_on_this_device"));
   const telemetry = telemetryOf(home);
-  return withHub(home, (hub) => {
+  return qualifyBurn(withHub(home, (hub): Omit<AttemptBurn, "quality"> => {
     if (hub === null) return empty(absentReason(telemetry, binding.accountRef));
     const store = new BudgetStore(hub);
     const windows = store
@@ -545,7 +584,7 @@ export function attemptBurn(
       if (all.some((window) => window.resetsAt === null)) {
         // High-water, and with it burn, is undefined for a sliding window.
         missing.burnPercent = "sliding_window";
-        limits.push({ limitKey, burnPercent: null, lowerBound: false, coverage: { known: 0, total: 0 }, partial: false, regressionCount: 0, windows: [], missing });
+        limits.push(qualifyLimit({ limitKey, burnPercent: null, lowerBound: false, coverage: { known: 0, total: 0 }, partial: false, regressionCount: 0, windows: [], missing }));
         continue;
       }
       // The instances the span touches. A superseded instance is replaced by the one whose
@@ -595,7 +634,7 @@ export function attemptBurn(
       if (burnPercent === null) {
         missing.burnPercent = parts.every((part) => part.burn.missing.deltaPercent === "stale") ? "stale" : "input_missing";
       }
-      limits.push({
+      limits.push(qualifyLimit({
         limitKey,
         burnPercent,
         lowerBound: known.some((part) => part.burn.lowerBound),
@@ -604,7 +643,7 @@ export function attemptBurn(
         regressionCount: parts.reduce((sum, part) => sum + part.regressions, 0),
         windows: parts.map((part) => part.burn),
         missing,
-      });
+      }));
     }
     const anyKnown = limits.some((limit) => limit.burnPercent !== null);
     const missing: Missing = {};
@@ -616,5 +655,20 @@ export function attemptBurn(
       if (found.reason !== null) missing.attribution = found.reason;
     }
     return { provider: binding.provider, accountRef: binding.accountRef, from, to, attribution, linkedSampleCount, limits, missing };
-  });
+  }));
+}
+
+/** A window part with the state of its `deltaPercent`. */
+function qualifyWindow(burn: Omit<WindowBurn, "quality">): WindowBurn {
+  return { ...burn, quality: windowBurnQuality(burn) };
+}
+
+/** A limit's burn with the state of its `burnPercent`. */
+function qualifyLimit(burn: Omit<LimitBurn, "quality">): LimitBurn {
+  return { ...burn, quality: limitBurnQuality(burn) };
+}
+
+/** The whole burn with its state. */
+function qualifyBurn(burn: Omit<AttemptBurn, "quality">): AttemptBurn {
+  return { ...burn, quality: attemptBurnQuality(burn) };
 }

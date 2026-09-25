@@ -70,11 +70,11 @@ import {
   lastActivityOf,
   replicatedEvidence,
   viewAttempt,
-  type AttemptView,
   type IssueFacts,
 } from "./attempt-derive.js";
 import { ORPHAN_END_REASONS } from "../cloud/attempt-ends.js";
 import { presenceCounts, refreshWorkspacePresence } from "./presence.js";
+import { qualifyAttempt, type QualifiedAttempt } from "./attempt-quality.js";
 
 /** What an agent may self-report on an attempt-opening or claim-clearing write. */
 export interface AttemptOptions {
@@ -223,8 +223,10 @@ export class AttemptLedger {
   }
 
   /** The attempt the most recent write returned, as it reads. */
-  result(): AttemptView | null {
-    return this.touched === null ? null : viewAttempt(this.db, this.touched);
+  result(): QualifiedAttempt | null {
+    if (this.touched === null) return null;
+    const view = viewAttempt(this.db, this.touched);
+    return view === null ? null : qualifyAttempt(this.db, view);
   }
 
   /** Forget which attempt the last command returned: a new command is starting. */

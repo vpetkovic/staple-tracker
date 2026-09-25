@@ -25,7 +25,7 @@
 // stays resolvable without the alias — so a later edit that needs a VALUE from here
 // cannot quietly make this file untestable.
 import { STALE_CLAIM_SECONDS, formatAgo } from "../lib/claim";
-import type { IssueStatus, IssueTiming, SubtreePlan } from "../lib/types";
+import type { IssueStatus, IssueTiming, SubtreePlan, TimingQualityReport, WorkQualityState } from "../lib/types";
 
 /**
  * Durations for estimate-vs-actual prose: `45s`, `20m`, `3h10m`, `2d4h`.
@@ -276,6 +276,8 @@ export interface ChildRow {
   activity: ActivityState;
   /** True when this child's numbers came from the two-timestamp fallback. */
   approximate: boolean;
+  /** The child's work state, as the server gave it; null for a cancelled child or a missing entry. */
+  workState: WorkQualityState | null;
 }
 
 /** The minimum an issue must expose to become a row. */
@@ -320,8 +322,72 @@ export function buildChildRows(
       running: isStillRunning(child.status),
       activity: activityState(timing?.countedThrough ?? null, nowMs),
       approximate: timing?.approximate ?? false,
+      workState: timing?.quality?.work.state ?? null,
     };
   });
+}
+
+// ------------------------------------------------------------------ quality states
+
+/**
+ * The state words the tab prints. The server decides the state (`quality.work.state`,
+ * `quality.wall.state`); this only names it. `timing-floor` reads as what it means.
+ */
+export const QUALITY_LABEL: Record<string, string> = {
+  exact: "exact",
+  "timing-floor": "under a minute",
+  approximate: "approximate",
+  reconstructed: "reconstructed",
+  missing: "not measured",
+  "provider-unavailable": "not reported by the provider",
+};
+
+/** Each reason code in a few words; an unknown code from a newer server is shown verbatim. */
+export const REASON_TEXT: Record<string, string> = {
+  sparse: "silences over 30 min",
+  capture_gap: "work before the first attempt",
+  contested: "contested between devices",
+  partial: "some children not measured",
+  orphan_provisional: "end not yet recorded",
+  end_unbounded: "end not bounded",
+  clock_skew: "device clocks disagree",
+  timing_floor: "under a minute",
+  reconstructed: "rebuilt from history",
+  never_started: "never started",
+  no_worker_attempt: "no attempt recorded",
+  input_missing: "no child measured",
+  not_applicable_cancelled: "cancelled",
+  unattributed: "time no attempt covers",
+  edge_history_incomplete: "blocker history incomplete",
+  conflict_resolved: "a resolved conflict",
+  replay_unavailable: "no history on this device",
+  timing_approximate: "a child's time is approximate",
+};
+
+/** `"approximate · silences over 30 min"`: the state and why, in words. Null when there is no state. */
+export function qualityText(quality: { state: string | null; reasons: readonly string[] } | undefined): string | null {
+  if (!quality || quality.state === null) return null;
+  const label = QUALITY_LABEL[quality.state] ?? quality.state;
+  // The state's own reason code (`timing_floor` for timing-floor, `reconstructed`) would only repeat it.
+  const own = quality.state.replace("-", "_");
+  const reasons = quality.reasons.filter((reason) => reason !== own).map((reason) => REASON_TEXT[reason] ?? reason);
+  return reasons.length > 0 ? `${label} · ${reasons.join(", ")}` : label;
+}
+
+/**
+ * The cohort beneath a parent in one line: how many done leaves (the denominator), how many
+ * of them exact, and the others by state, zeros left out. Null when nothing beneath is done.
+ */
+export function cohortLine(report: TimingQualityReport): string | null {
+  const eligible = report.population.eligible;
+  if (eligible === 0) return null;
+  const percent = (count: number): string => `${Math.round((count / eligible) * 100)}%`;
+  const counts = report.work.counts;
+  const parts = [`${counts.exact} exact (${percent(counts.exact)})`];
+  for (const state of ["timing-floor", "approximate", "reconstructed", "missing"] as const) {
+    if (counts[state] > 0) parts.push(`${counts[state]} ${QUALITY_LABEL[state]}`);
+  }
+  return `${eligible} done ${eligible === 1 ? "leaf" : "leaves"} beneath: ${parts.join(" · ")}`;
 }
 
 // -------------------------------------------------------------------- the totals

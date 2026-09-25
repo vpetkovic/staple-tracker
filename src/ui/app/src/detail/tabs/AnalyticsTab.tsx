@@ -35,8 +35,13 @@
  * one column; nothing here consults the detail mode.
  */
 import { StatusBadge } from "@/components/StatusBadge";
+import { getTimingQuality } from "@/lib/api";
+import { useResource } from "@/lib/useStaple";
 import { cn } from "@/lib/utils";
 import {
+  QUALITY_LABEL,
+  cohortLine,
+  qualityText,
   NOT_STARTED,
   NO_ESTIMATE,
   activityHint,
@@ -210,7 +215,24 @@ function Pair({ planned, planHint, actual }: { planned: number | null; planHint:
   );
 }
 
-export function AnalyticsTab({ detail }: TabProps) {
+/**
+ * How far each figure can be trusted: the work state (replicated, the ratio's actual) and the
+ * elapsed state (this device's history), each one word and its reasons. Small and muted: it
+ * qualifies the figures above, it is not a figure.
+ */
+function QualityRow({ label, text, testId }: { label: string; text: string | null; testId: string }) {
+  if (text === null) return null;
+  return (
+    <div className="grid grid-cols-[5.5rem_minmax(0,1fr)] gap-x-3 py-1.5 text-[11px]">
+      <span className="font-medium">{label}</span>
+      <span className="text-muted-foreground" data-testid={testId}>
+        {text}
+      </span>
+    </div>
+  );
+}
+
+export function AnalyticsTab({ detail, workspace, onAuthError }: TabProps) {
   const { issue, timing, childrenTiming, children } = detail;
 
   /**
@@ -251,6 +273,23 @@ export function AnalyticsTab({ detail }: TabProps) {
    */
   const actualHint = aggregated ? aggregationHint(timing.childCount) : activityHint(activity);
   const differenceHint = summary.delta && running ? "provisional — not finished" : null;
+
+  /**
+   * A parent's cohort: the done leaves beneath it, counted by state over that eligible
+   * population (`staple timing quality --parent`). One small read, refreshed with the page;
+   * a leaf asks for nothing.
+   */
+  const cohort = useResource(
+    () => (aggregated ? getTimingQuality({ ws: workspace, parent: issue.identifier, limit: 1 }) : Promise.resolve(null)),
+    [aggregated, workspace, issue.identifier],
+    onAuthError,
+  );
+  // The work figure beside its state: the ratio's actual, from attempts, which the headline's
+  // category time is not.
+  const workState = qualityText(timing.quality?.work);
+  const workQuality = workState === null ? null : timing.workSeconds === null ? workState : `${formatDuration(timing.workSeconds)} · ${workState}`;
+  const wallQuality = qualityText(timing.quality?.wall);
+  const beneath = cohort.data ? cohortLine(cohort.data) : null;
 
   return (
     <div className="space-y-4 text-sm">
@@ -325,6 +364,11 @@ export function AnalyticsTab({ detail }: TabProps) {
                     <span className="flex items-center gap-2">
                       <span className="font-mono">{row.identifier}</span>
                       <StatusBadge status={row.status} />
+                      {row.workState !== null ? (
+                        <span className="text-[10px] text-muted-foreground" data-testid="child-quality">
+                          {QUALITY_LABEL[row.workState] ?? row.workState}
+                        </span>
+                      ) : null}
                     </span>
                   }
                   right={
@@ -379,6 +423,24 @@ export function AnalyticsTab({ detail }: TabProps) {
             above looks all the way down: each issue counts its own estimate if it has one,
             otherwise its children&apos;s — never both.
           </p>
+        </section>
+      ) : null}
+
+      {/* ----------------------------------------------------------- quality */}
+      {workQuality !== null || wallQuality !== null || beneath !== null ? (
+        <section aria-label="Measurement quality">
+          <h3 className="mb-1.5 text-[11px] font-medium tracking-[var(--tracking-eyebrow)] text-muted-foreground uppercase">
+            Measurement
+          </h3>
+          <div className="divide-y border-t border-b">
+            <QualityRow label="Work" text={workQuality} testId="quality-work" />
+            <QualityRow label="Elapsed" text={wallQuality} testId="quality-wall" />
+          </div>
+          {beneath !== null ? (
+            <p className="mt-1.5 text-[10px] text-muted-foreground" data-testid="quality-cohort">
+              {beneath}
+            </p>
+          ) : null}
         </section>
       ) : null}
     </div>
