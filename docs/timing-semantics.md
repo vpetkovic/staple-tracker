@@ -1163,7 +1163,10 @@ flagged 3% to 6%. A small class has a real chance of one or two far draws, so
 two is not enough; three in a class of ten or more is. The rule finds a real
 tail: with 3 of 20 samples forty times the median it flags more than 90% of
 cohorts, and at twenty times about 70%, because all three must clear the
-fence. On the maintainers' tracker (below), it flags the estimated done leaves
+fence. Those power figures assume a core with a log-spread (σ of `ln(ratio)`)
+of about 0.5, the live tracker's. A wider core widens the fences with it, so
+power drops: with σ 0.8, three samples forty times the median are flagged in
+only about 30% of cohorts. The false-alarm rate does not depend on σ. On the maintainers' tracker (below), it flags the estimated done leaves
 with their sparse records in (12 of 129 beyond the fence, 9.3%) and none once
 the sparse records are out (0 of 108). Sparse records are never samples, so that
 is the tail the quality rules already remove.

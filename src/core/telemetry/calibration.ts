@@ -111,7 +111,9 @@ const MEAN_AD_SCALE = 1.253314;
  * - `heavy_tail`: the ratio's tail fails {@link HEAVY_TAIL}; the expected ratio is clipped at the fences.
  * - `floor_dominated`: the class has more timing-floor members than samples, and at least
  *   {@link MIN_COHORT_SAMPLES} of the two; a forecast reads the floor.
- * - `floors_excluded`: the class has timing-floor members (fewer than samples); the samples leave them out, so they read long.
+ * - `floors_excluded`: the class has timing-floor members but is not floor-dominated (fewer
+ *   floors than samples, or more but under {@link MIN_COHORT_SAMPLES} of the two together); the
+ *   samples leave them out, so they read long.
  * - `reconstructed_only`: the samples are reconstructed history.
  * - `no_samples`: the class read has no sample at all.
  */
