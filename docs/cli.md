@@ -26,6 +26,8 @@ staple events --follow [--since N] [--max N]        stream events as they land
 staple estimate <ref> <dur> | <ref> --clear         change only the estimate (no status to restate)
 staple compare <ref> [<ref> ...]                    total labor, estimate coverage and critical path
                                                     of named issues, with no tree dump
+staple forecast <ref> [--reserve P]                 remaining labor and chain from calibrated durations,
+                                                    and apart, what the work costs each provider limit
 
 staple start <ref> --steal-if-stale <30m|2h|3600>   take over a dead agent's claim
 staple release <ref> --if-stale <dur>               free a dead agent's claim
@@ -847,6 +849,77 @@ staple calibrate --kind task --include reconstructed --for STA-42
   oldest resolution first. `--limit` 50 by default and at most 500, with a
   keyset `--cursor`. Filters: `--kind`, `--priority`, `--parent REF` and
   `--since T`, applied before any cohort is formed.
+
+### Forecasts: `staple forecast`
+
+`staple forecast <ref>` (MCP `forecast`, HTTP `GET /api/forecast?ref=`)
+forecasts the work left under an issue and, apart from it, what that work
+costs this machine's provider limits
+([timing-semantics.md](timing-semantics.md#forecasts)). All three surfaces call
+one store method and answer one payload, `{asOf, subject, filter, snapshot,
+method, completion, budget}`:
+
+```bash
+staple forecast STA-42 --reserve 20%
+# STA-42 · Sync epic (epic, in_progress) · snapshot forecast1:99edc1fb13c8f49aa4ee2c7d43b2feb0 over calibration2:2c3ac386592952bba0da6acd9da08768
+# completion  25 units · 10 done · 1 awaiting review · 14 to forecast, 14 known
+#   labor     expected 14h59m · p10–p90 13h56m–20h22m · 90% band 13h12m–21h23m · plan 5d5h (descendants)
+#   path      expected 8h25m · STA-44 > STA-45 > STA-47 > STA-50 > STA-51 > STA-52 > STA-53 · p10–p90 7h11m–12h21m · 90% band 6h49m–13h12m · 1 outside blockers open
+#   confidence medium · bounds reach 71.4% of 90.0% · bounds_below_confidence · warnings bounds_below_confidence, quantile_below_confidence, fallback_used, awaiting_review, unresolved_outside_blockers
+# budget      this machine · reserve 20.0% · work 14h59m, serial from now
+#   anthropic/personal-max five_hour: 58.0% left · resets 2026-09-26T00:16:06.000Z (in 2h59m)
+#       pace 12.00%/h over 3 readings · runs out in 4h50m (after reset)
+#       work rate 12.00%/work-hour over 1 attempts (1h)
+#       the work uses 179.9% (p10–p90 167.2%–244.5% · 90% band 158.5%–256.7%) · at the reset 22.0% left (p10–p90 22.0%–22.0% · 90% band 22.0%–22.0%)
+#       P(under the 20.0% reserve at the reset) 0.0%
+#   openai/codex-plus codex.primary: 55.0% left · resets 2026-09-26T00:15:30.000Z (in 2h59m)
+#       pace 26.32%/h over 2 readings · runs out in 2h5m (before reset)
+#       work rate input_missing (attempt_burn)
+#       the work input_missing (work_rate)
+```
+
+- **Completion.** The certified plan's units beneath `<ref>` (a leaf is its
+  own unit, `subject.scope: "unit"`), each forecast from the duration
+  `staple calibrate --for` reads for it (the `exact` set, unfiltered), less the
+  work already done on it. Done units weigh 0; units in review or gated weigh 0
+  and are listed (`awaiting_review`): review waits and rework are not
+  forecast. A unit with no samples, no estimate, or worked past every sample of
+  its class is unknown, never 0, and turns the sums `partial` (shown `≥`).
+  `--model M` pins every unit's model, as `calibrate --model` does.
+- **Labor and path.** `labor` adds the units' remaining work; `path` is the
+  longest dependency chain of it (effort along the chain, not calendar time),
+  with `chain`, the outside blockers and a `plan` block repeating the certified
+  estimates for reference. Each has `expectedSeconds` (the calibrated expected
+  figures, which add) and `simulated` (`mean`, `p10`, `p50`, `p90`, and the
+  90% `band`, p5 to p95), from 2 000 draws of every unit's class sample ratios
+  with a fixed seed: the same data reads the same figures everywhere.
+- **Confidence.** `confidence.achieved` is the lowest prediction-bounds
+  confidence of the classes drawn from (a band cannot be surer than its
+  classes), `label` is `high`, `medium` or `low` with `reasons`, and
+  `warnings` carries the units' calibration warnings and `unknown_units`,
+  `beyond_class_range`, `overrun`, `awaiting_review`, `dependency_cycle`,
+  `unresolved_outside_blockers`. Units are drawn independently, so a band of a
+  sum is narrower than correlated overruns make it.
+- **Budget.** Machine-local, per account (`--account A` for one) and limit:
+  the high-water `remainingPercent`, `resetsAt`, `pace` (%/hour over the
+  current window's readings) and `exhaustion` at that pace, `workRate`
+  (%/work-hour from this workspace's worker attempts' measured burn in the
+  window), and for the remaining labor run serially from now `work`
+  (`consumedPercent`, `beforeResetPercent`, `remainingAtResetPercent`,
+  `outlastsResetProbability`, `exhaustionProbability`) and `reserve`
+  (`breachProbability`: the share of draws that leave less than the reserve at
+  the reset).
+- **The reserve.** `--reserve P` takes a percent of each limit (`20` or
+  `20%`). Without it a **provisional default of 20%** applies until the
+  admission policy defines the protected reserve, and `budget.reserve.source`
+  says `provisional_default`. Anything outside 0 to 100 is refused.
+- **Unknown is never 0.** A stale reading (over 10 minutes old), an elapsed or
+  sliding window, a limit with no attempt burn, or unknown labor reads null
+  with the reason in `missing` (and `missingInputs` for `input_missing`). With
+  no budget on the machine, `accounts` is empty with `missing.accounts`.
+- **Snapshot.** `snapshot.id` identifies the completion inputs over
+  `snapshot.calibration.id` (`staple calibrate`'s unfiltered id): the same on
+  every device. `snapshot.budget.id` identifies this machine's budget data.
 
 ## Approval gates
 

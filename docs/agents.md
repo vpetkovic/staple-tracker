@@ -390,6 +390,31 @@ against its estimate, from trusted samples only:
 
 The rules are in [cli.md](cli.md#calibration-staple-calibrate).
 
+### Forecasts
+
+`forecast {ref, reserve?, account?, model?, ws?}` is `staple forecast <ref> --json`.
+Use it before committing to a piece of work, and quote the figures with the
+snapshot ids:
+
+- `completion` is how much work is left under `ref`: every plan unit once,
+  each from its calibrated duration less the work already done on it.
+  `labor.expectedSeconds` adds the units; `path.expectedSeconds` is the longest
+  chain of remaining work (effort, not calendar time). Read the band
+  (`simulated.band`, 90% under a model that treats units as independent) and
+  `confidence.achieved` together: the band is no surer than its classes.
+- `partial: true` (or `unknown_units` in `warnings`) means some unit has no
+  forecast: estimate it, or say the figure is a lower bound. Units in review
+  weigh 0 (`awaiting_review`), so rework after a review is not in it.
+- `budget` is this machine's provider limits, never blended into completion:
+  per limit, what is left, when it resets, how fast it is going, and for this
+  work `remainingAtResetPercent` and `reserve.breachProbability`. Pass
+  `reserve` when you have one; without it a provisional 20% applies and
+  `budget.reserve.source` says so. A null figure has its reason in `missing`:
+  do not read it as 0 or as room to spare.
+
+The rules are in [cli.md](cli.md#forecasts-staple-forecast) and
+[timing-semantics.md](timing-semantics.md#forecasts).
+
 ## Harness ergonomics
 
 All in-protocol, so a harness never needs out-of-band setup:
