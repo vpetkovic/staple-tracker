@@ -1256,8 +1256,9 @@ never a hand-written row:
 
 | `do` | Store method | Fields |
 |---|---|---|
-| `create` | `createIssue` | `ref`, `title`, `parent`, `status`, `estimate`, `blockedBy`, `blockParentUntilDone`, `agent` |
-| `checkout` | `checkoutIssue` | `ref`, `agent`, `stealIfIdle` (a steal) |
+| `create` | `createIssue` | `ref`, `title`, `parent`, `status`, `estimate`, `blockedBy`, `blockParentUntilDone`, `agent`, `kind`, `priority`, `labels` |
+| `checkout` | `checkoutIssue` | `ref`, `agent`, `stealIfIdle` (a steal), `model` (with harness `claude_code`) |
+| `estimate` | `setEstimate` (`staple estimate`) | `ref`, `agent`, `estimate` (`null` clears it) |
 | `release` | `releaseIssue` | `ref`, `agent`, `ifIdle` (a stale release) |
 | `status` | `updateIssue` | `ref`, `to`, `agent`, `assignee` |
 | `comment` | `addComment` | `ref`, `agent`, `body`, `saveAs` (a name for the comment) |
@@ -1282,7 +1283,10 @@ issue is not held; it is checked on the hydrated device too. A read can state
 `effortSeconds` and quality state and reasons, oldest first; and `cohort`, what
 `staple timing quality --parent <ref>` reads at that instant (the eligible
 population, the work counts and reasons, the ratio aggregates, what an exclusion
-drops and the records listed). Every read also checks that the work state is
+drops and the records listed); and `calibration`, what `staple calibrate --parent <ref>`
+reads (the population, the samples per set, every cohort with its key, level, class
+size and median, and every sample with its estimate source and ratio), with the
+snapshot id required to be the same on every device and for both listings. Every read also checks that the work state is
 `exact` exactly when it has no reason, and that the wall has a state.
 Durations in `expect` are the same notation or whole seconds.
 
@@ -1346,6 +1350,7 @@ quality states and inputs, and coverage are compared exactly.
 | `33-steal-refused-document` | a steal on the other device refused at 20 minutes idle because the holder wrote a document revision, then allowed past the threshold |
 | `34-steal-refused-deleted-comment` | the same with a comment the holder wrote and that was deleted later by a replicated deletion |
 | `35-quality-states` | one record in each work state (exact, timing-floor, sparse, missing, reconstructed, reconstructed and sparse) with its reasons and its attempt's state, a cancelled issue with no state, a parent that is reconstructed, and the cohort the leaves make: the eligible denominator, the ratio aggregates, and exclusion by state and by reason |
+| `36-calibration-cohorts` | calibration over the leaves of a parent: exact samples with models from the checkouts and labels for work type and area, a sample re-estimated after it started dividing by its estimate at start, keys of three and two samples falling back to their class without model, a lone bug falling back to the whole set, sparse, timing-floor and reconstructed records kept out of the exact set, the reconstructed set on request, and one snapshot id on every device |
 
 **Adding one.** Write the timeline you want to check as a new file in
 `test/fixtures/controlled-runs/`, with a `title` and the `covers` it exercises. Work out
