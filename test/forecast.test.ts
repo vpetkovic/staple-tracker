@@ -161,6 +161,9 @@ describe("a leaf in progress", () => {
     expect(over.expected!.remainingSeconds).toBe(0);
     expect(over.simulated!.band).toMatchObject({ lower: 600, upper: 4200 });
     expect(forecast(open.identifier, from + 110).completion.warnings).toContain("overrun");
+    // The work so far is an input: more of it is other data, and another snapshot.
+    expect(forecast(open.identifier, from + 110).snapshot.id).not.toBe(report.snapshot.id);
+    expect(forecast(open.identifier, from + 110).snapshot.calibration.id).toBe(report.snapshot.calibration.id);
 
     // Past every sample of its class: unknown, never 0.
     for (let m = 120; m <= 190; m += 10) (at(from + m), store.addComment(open.id, "progress", "w", "agent"));

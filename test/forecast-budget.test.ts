@@ -172,6 +172,41 @@ describe("the budget forecast of a piece of work", () => {
     expect(limit.work!.remainingAtResetPercent.simulated.band.lower).toBeCloseTo(-6, 9);
   });
 
+  it("puts only the part of a long piece of work before the reset against it", () => {
+    const { next: _next } = history();
+    at(61);
+    const big = store.createIssue({ title: "big", estimatedSeconds: 20 * 3600 }).identifier;
+    const limit = limitOf(store.forecast({ ref: big, reserve: "10" }, iso(61), home));
+    // 0.9167 × 20h = 66 000 s of work; 3h59m of it lands before the reset at 12%/work-hour.
+    expect(limit.work!.consumedPercent.expected).toBeCloseTo((12 * 66000) / 3600, 6);
+    expect(limit.work!.beforeResetPercent.expected).toBeCloseTo((12 * 239) / 60, 6);
+    expect(limit.work!.remainingAtResetPercent.expected).toBeCloseTo(78 - (12 * 239) / 60, 6);
+    expect(limit.work!.outlastsResetProbability).toBe(1);
+    expect(limit.reserve!.breachProbability).toBe(0);
+  });
+
+  it("never counts an attempt that started before the window instance in its work rate", () => {
+    history();
+    // An attempt opened in the first instance runs on into the second, read on both sides of the reset.
+    at(280);
+    const across = store.createIssue({ title: "across", estimatedSeconds: 3600 });
+    store.checkoutIssue(across.id, "agent", undefined, { attempt: { harness: "claude_code", harnessSession: STATUSLINE_SESSION_ID } });
+    reading(280, 50);
+    at(310);
+    store.addComment(across.id, "still going", "agent", "agent");
+    reading(310, 3, iso(600));
+    at(330);
+    store.addComment(across.id, "still going", "agent", "agent");
+    reading(330, 8, iso(600));
+    at(331);
+    const next = store.createIssue({ title: "next after", estimatedSeconds: 3600 }).identifier;
+    const limit = limitOf(store.forecast({ ref: next }, iso(331), home));
+    expect(limit.pace!.percentPerHour).toBeCloseTo(15, 9);
+    // Its work began before this instance, so its work seconds are not this instance's: out of the rate.
+    expect(limit.workRate).toBeNull();
+    expect(limit.missingInputs.workRate).toEqual(["attempt_burn"]);
+  });
+
   it("uses a provisional reserve until the admission policy defines one, and says so", () => {
     const { next } = history();
     const report = store.forecast({ ref: next }, iso(61), home);
