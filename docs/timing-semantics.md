@@ -1370,7 +1370,10 @@ dependency chain of remaining work through the plan's unit graph: `walkPlanGraph
 each unit's expected remaining work as its weight, done and awaiting-review units
 weighing 0 but still carrying the edges through them. Each is `{expectedSeconds,
 partial, missing, simulated}`; `missing` is `unknown_units`, `no_forecast` (no unit that
-counts is known) or `dependency_cycle`. Nothing left reads 0, not unknown. The path is
+counts is known) or `dependency_cycle`. One more reason belongs to completion only:
+`not_forecast`, on `review.missing.seconds`, says the time a unit waits in review or
+for approval is deliberately not forecast (it is not work), which is different from
+`no_forecast`, a sum with nothing known in it. Nothing left reads 0, not unknown. The path is
 **effort along the chain, not calendar time**: waits for a free agent, a review, an
 approval or an outside blocker are not in it. `path.crossSubtreeBlockers` lists the
 blockers outside the subtree, unresolved first, and an open one raises
@@ -1450,15 +1453,26 @@ and every limit of it:
   while the limit rises from 10% to 20% burned 5% per work-hour each, not 10%, which is
   what each attempt's own delta would say. A span with no reading inside it is left out
   (`excluded`), and an attempt that started before the instance never counts
-  (`spanningReset`). The rate's band is a bootstrap of `method.draws` draws of its own,
+  (`spanningReset`). A span is **sparse** when its baseline reading, or its last reading
+  inside it, sits farther from that edge than 10% of the span's length: its rise then
+  belongs partly to time outside it, so the split between the work rate and other use is
+  a guess (`sparse_readings`, `sparseSpans`). A span is **shared** when a reading inside
+  it came from a harness session none of its attempts ran in: someone else used the
+  account during it. The rate reads only the spans nobody else touched when there are
+  any (`sharedExcluded` counts the rest), and reads the shared ones, warning
+  `shared_use`, when every span is shared. The rate's band is a bootstrap of `method.draws` draws of its own,
   over the spans, from a stream seeded with the forecast seed and the limit. It never
   depends on the completion forecast, which may have no draws at all.
-  `confidence` is `low` under 5 spans (`small_sample`), or when a rise is a lower
-  bound (`lower_bound`), and `medium` otherwise. `concurrent_attempts` says spans were
-  merged.
+  `confidence` is `low` under 5 spans (`small_sample`), when a rise is a lower bound
+  (`lower_bound`), a span is sparse or a shared span is in the rate, and `medium`
+  otherwise. `concurrent_attempts` says spans were merged.
 - **Other use**, `%/hour`: the pace outside the attempts' spans, the rise they did not
-  make over the time they were not running. It needs time outside the spans and a known
-  rise for every span within the readings.
+  make over the time they were not running. It needs at least 30 minutes outside the
+  spans with at least 2 readings there, and a known rise for every span within the
+  readings; a couple of minutes between two long spans measures nothing and reads null
+  (`input_missing`, `time_outside_attempts`). Its `confidence` is `low` under 5 readings
+  outside the spans (`small_sample`) or beside a sparse span (`sparse_readings`), and
+  `withOtherUse` carries it as `otherConfidence`.
 - **The work**: the completion forecast's remaining labor, run **serially from
   `asOf`**, one work-hour per hour. `consumedPercent` is the whole work at the work rate.
   `beforeResetPercent` is the part before the reset, `rate × min(labor, time to reset)`.
@@ -1478,9 +1492,13 @@ and every limit of it:
   full window after the reset takes the most of what is left, so it is the one checked
   after the current one. `currentWindowBreachProbability` checks the current reset
   only. `withOtherUse` (`basis: "work_and_other_use"`) adds the account's other use at
-  its measured rate over the same windows: it is the figure to read when other agents
-  or people share the account, and it is null with a reason when other use could not
-  be measured. `reserve.confidence` is the work rate's: a breach figure from one span
+  its measured rate for the time the work is **not** running: before the reset,
+  `other × (time to reset − min(labor, time to reset))`, and in the next window
+  `other × (windowSeconds − min(rest, windowSeconds))`. The work rate already holds
+  everything that happened while the work ran, other use included, so adding other use
+  for those hours again would count it twice. It is the figure to read when other
+  agents or people share the account, and it is null with a reason when other use
+  could not be measured. `reserve.confidence` is the work rate's: a breach figure from one span
   is a guess, and says so. The work only ever lowers the remaining figure, so each
   probability is also the probability of falling under the reserve at or before that
   reset. A remaining figure already under the reserve reads 1 with `alreadyBelow: true`.
@@ -1503,7 +1521,7 @@ default as policy.
 | `exhaustion`, `work`, `reserve` | the latest reading is over 10 minutes old | `stale` (the pace still stands: it describes the window's past) |
 | `pace` | one reading | `input_missing` (`second_reading`) |
 | `workRate` | no span of this workspace's attempts with a reading inside it | `input_missing` (`attempt_burn`) |
-| `otherUse`, `reserve.withOtherUse` | no time outside the spans, or a span's rise unknown | `input_missing` (`time_outside_attempts`, `attempt_burn`, `pace`) |
+| `otherUse`, `reserve.withOtherUse` | under 30 minutes or 2 readings outside the spans, or a span's rise unknown | `input_missing` (`time_outside_attempts`, `attempt_burn`, `pace`) |
 | `work`, `reserve` | no work rate, or the completion labor is unknown | `input_missing` (`work_rate`, `labor_seconds`) |
 | `reserve.breachProbability` | the work outlasts the reset and the window length is unknown | `input_missing` (`window_seconds`) |
 | `accounts` (empty) | no reading and no binding on this machine | `source_unavailable`, or `no_sample_yet` with capture on |
@@ -1559,6 +1577,13 @@ window's pace is 12%/hour. The work to forecast expects 6 600 s (six samples, po
   a 50% reserve, `currentWindowBreachProbability` is 0 and `breachProbability` is 1.
 - Two agents in parallel for an hour while the limit rises 10% read 5%/work-hour: one
   span, two attempts, `concurrent_attempts`.
+- Another session pushes the limit from 10% to 40% during an hour's attempt: the span is
+  `shared` and the rate warns `shared_use`. Once a half-hour attempt with nobody else on
+  the account follows (40% to 46%), the rate reads it alone: 12%/work-hour.
+- With 40 minutes between two spans and three readings there showing +4%, other use is
+  6%/hour. Before a reset 3h9m away, a piece of work of `L` seconds at 15%/work-hour
+  leaves `71 − 15 × L − 6 × (3h9m − L)` (in hours) with the other use: the other use
+  only fills the hours the work is not running.
 
 **On the maintainers' tracker** (a read-only snapshot taken on 2026-09-25, isolated
 home, no budget data). The scheduling epic has 25 units, 10 done and 15 to forecast,

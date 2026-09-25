@@ -76,7 +76,9 @@ function limitText(limit: BudgetLimitForecast): string[] {
     rate === null
       ? `work rate ${reason("workRate")}`
       : `work rate ${rate.percentPerWorkHour.toFixed(2)}%/work-hour over ${rate.attempts} attempts in ${rate.spans} spans (${duration(rate.workSeconds)}) · confidence ${rate.confidence.label}${rate.confidence.warnings.length > 0 ? ` (${rate.confidence.warnings.join(", ")})` : ""}` +
-          (limit.otherUse === null ? ` · other use ${reason("otherUse")}` : ` · other use ${limit.otherUse.percentPerHour.toFixed(2)}%/h`),
+          (limit.otherUse === null
+            ? ` · other use ${reason("otherUse")}`
+            : ` · other use ${limit.otherUse.percentPerHour.toFixed(2)}%/h · confidence ${limit.otherUse.confidence.label}${limit.otherUse.confidence.warnings.length > 0 ? ` (${limit.otherUse.confidence.warnings.join(", ")})` : ""}`),
   );
   if (limit.work === null) lines.push(`the work ${reason("work")}`);
   else {
@@ -116,6 +118,7 @@ function say(report: ForecastReport): void {
     `  labor     expected ${partial(labor)}${duration(labor.expectedSeconds)}` +
       (labor.simulated === null ? "" : ` · ${bandText(labor.simulated, duration)}`) +
       (labor.missing.length > 0 ? ` · ${labor.missing.join(", ")}` : "") +
+      (completion.review.units > 0 ? ` · ${completion.review.units} awaiting review (not forecast)` : "") +
       ` · plan ${duration(completion.plan.seconds)} (${completion.plan.source})`,
   );
   const path = completion.path;

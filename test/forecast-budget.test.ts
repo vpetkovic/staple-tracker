@@ -69,8 +69,8 @@ afterEach(() => {
 });
 
 /** One status-line reading of the five-hour limit, captured at `minutes`. */
-function reading(minutes: number, used: number, reset: string = RESET): void {
-  const input = statusline({ session_id: STATUSLINE_SESSION_ID, rate_limits: { five_hour: { used_percentage: used, resets_at: epoch(reset) } } });
+function reading(minutes: number, used: number, reset: string = RESET, session: string = STATUSLINE_SESSION_ID): void {
+  const input = statusline({ session_id: session, rate_limits: { five_hour: { used_percentage: used, resets_at: epoch(reset) } } });
   ingestBudget({ source: "claude-statusline", input, configDir: claudeDir }, { home, now: () => iso(minutes), attemptLinker: attemptLinkerFor(home) });
 }
 
@@ -235,12 +235,12 @@ describe("the budget forecast of a piece of work", () => {
     const two = store.createIssue({ title: "two", estimatedSeconds: 3600 });
     store.checkoutIssue(one.id, "agent-1", undefined, { attempt: { harness: "claude_code", harnessSession: "session-a" } });
     store.checkoutIssue(two.id, "agent-2", undefined, { attempt: { harness: "claude_code", harnessSession: "session-b" } });
-    reading(310, 10, iso(600));
-    for (const [minutes, used] of [[340, 15], [370, 20]] as const) {
+    reading(310, 10, iso(600), "session-a");
+    for (const [minutes, used, session] of [[340, 15, "session-b"], [370, 20, "session-a"]] as const) {
       at(minutes);
       store.addComment(one.id, "working", "agent-1", "agent");
       store.addComment(two.id, "working", "agent-2", "agent");
-      reading(minutes, used, iso(600));
+      reading(minutes, used, iso(600), session);
     }
     store.updateIssue(one.id, { status: "done" }, "agent-1");
     store.updateIssue(two.id, { status: "done" }, "agent-2");
@@ -248,54 +248,139 @@ describe("the budget forecast of a piece of work", () => {
     const next = store.createIssue({ title: "after", estimatedSeconds: 3600 }).identifier;
     const limit = limitOf(store.forecast({ ref: next }, iso(371), home));
     // 10% over two hours of work is 5%/work-hour each, not the 10% each attempt's own delta reads.
-    expect(limit.workRate).toMatchObject({ spans: 1, attempts: 2, concurrentSpans: 1, burnPercent: 10, workSeconds: 7200 });
+    // Both sessions are the span's own: nobody else's use.
+    expect(limit.workRate).toMatchObject({ spans: 1, attempts: 2, concurrentSpans: 1, sharedSpans: 0, burnPercent: 10, workSeconds: 7200 });
     expect(limit.workRate!.percentPerWorkHour).toBeCloseTo(5, 9);
     expect(limit.workRate!.confidence.warnings).toEqual(["small_sample", "concurrent_attempts"]);
   });
 
   it("bands the work rate by its own draws, whether or not the work is known, and measures other use outside the spans", () => {
     history();
-    // After the reset: an attempt that burns 6% in half an hour, 20 minutes of other use (+4%), then one that burns 9%.
+    // After the reset: an attempt that burns 6% in half an hour, 40 minutes of other use (+4%), then one that burns 9%.
     at(310);
     const first = store.createIssue({ title: "first", estimatedSeconds: 3600 });
     store.checkoutIssue(first.id, "agent", undefined, { attempt: { harness: "claude_code", harnessSession: "session-a" } });
-    reading(310, 10, iso(600));
+    reading(310, 10, iso(600), "session-a");
     at(340);
     store.addComment(first.id, "done", "agent", "agent");
-    reading(340, 16, iso(600));
+    reading(340, 16, iso(600), "session-a");
     store.updateIssue(first.id, { status: "done" }, "agent");
     at(360);
-    reading(360, 20, iso(600));
+    reading(360, 18, iso(600), "session-b");
+    at(380);
+    reading(380, 20, iso(600), "session-b");
     const second = store.createIssue({ title: "second", estimatedSeconds: 3600 });
     store.checkoutIssue(second.id, "agent", undefined, { attempt: { harness: "claude_code", harnessSession: "session-a" } });
-    at(390);
+    at(410);
     store.addComment(second.id, "done", "agent", "agent");
-    reading(390, 29, iso(600));
+    reading(410, 29, iso(600), "session-a");
     store.updateIssue(second.id, { status: "done" }, "agent");
-    at(391);
+    at(411);
     const unplanned = store.createIssue({ title: "unplanned" }).identifier;
-    const unknownWork = limitOf(store.forecast({ ref: unplanned }, iso(391), home));
+    const unknownWork = limitOf(store.forecast({ ref: unplanned }, iso(411), home));
     // 15% over an hour of work; the two spans read 12 and 18%/work-hour, and the band spans them with no labor at all.
-    expect(unknownWork.workRate).toMatchObject({ spans: 2, attempts: 2, burnPercent: 15, workSeconds: 3600 });
+    expect(unknownWork.workRate).toMatchObject({ spans: 2, attempts: 2, sparseSpans: 0, sharedSpans: 0, burnPercent: 15, workSeconds: 3600 });
     expect(unknownWork.workRate!.percentPerWorkHour).toBeCloseTo(15, 9);
     expect(unknownWork.workRate!.simulated.band.lower).toBeCloseTo(12, 9);
     expect(unknownWork.workRate!.simulated.band.upper).toBeCloseTo(18, 9);
     expect(unknownWork.work).toBeNull();
-    // Other use: 29 − 10 = 19% over 80 minutes, 15% of it the attempts', 4% over the 20 minutes they were not running.
-    expect(unknownWork.otherUse!.percentPerHour).toBeCloseTo(12, 9);
+    // Other use: 29 − 10 = 19% over 100 minutes, 15% of it the attempts', 4% over the 40 minutes they
+    // were not running (readings at 310, 360 and 380 outside them): 6%/h, from three readings, low.
+    expect(unknownWork.otherUse).toMatchObject({ readings: 3, seconds: 2400, confidence: { label: "low", warnings: ["small_sample"] } });
+    expect(unknownWork.otherUse!.percentPerHour).toBeCloseTo(6, 9);
 
     const next = store.createIssue({ title: "planned", estimatedSeconds: 7200 }).identifier;
-    const limit = limitOf(store.forecast({ ref: next, reserve: "20" }, iso(391), home));
-    const labor = store.forecast({ ref: next }, iso(391), home).completion.labor.expectedSeconds!;
-    const horizon = 209 * 60;
+    const limit = limitOf(store.forecast({ ref: next, reserve: "20" }, iso(411), home));
+    const labor = store.forecast({ ref: next }, iso(411), home).completion.labor.expectedSeconds!;
+    const horizon = 189 * 60;
+    expect(labor).toBeLessThan(horizon);
     const withOther = limit.reserve!.withOtherUse!;
-    expect(withOther.basis).toBe("work_and_other_use");
-    expect(withOther.otherPercentPerHour).toBeCloseTo(12, 9);
-    expect(withOther.remainingAtResetPercent.expected).toBeCloseTo(71 - (15 * labor) / 3600 - (12 * horizon) / 3600, 6);
+    expect(withOther).toMatchObject({ basis: "work_and_other_use", otherConfidence: { label: "low" } });
+    expect(withOther.otherPercentPerHour).toBeCloseTo(6, 9);
+    // The work rate already holds what happened while the work ran; other use fills only the rest
+    // of the time to the reset: 71 − 15 × labor − 6 × (horizon − labor), in hours.
+    expect(withOther.remainingAtResetPercent.expected).toBeCloseTo(71 - (15 * labor) / 3600 - (6 * (horizon - labor)) / 3600, 6);
+    expect(withOther.remainingAtResetPercent.expected).toBeGreaterThan(71 - (15 * labor) / 3600 - (6 * horizon) / 3600);
     // The other use can only add to the breach.
     expect(withOther.currentWindowBreachProbability).toBeGreaterThanOrEqual(limit.reserve!.currentWindowBreachProbability);
-    expect(withOther.currentWindowBreachProbability).toBeGreaterThan(0.9);
-    expect(limit.reserve!.currentWindowBreachProbability).toBeLessThan(0.5);
+  });
+
+  it("measures no other use from a couple of minutes between spans", () => {
+    history();
+    // An attempt covers 59 of 61 minutes; the one reading in the two-minute gap shows +5%.
+    at(310);
+    const long = store.createIssue({ title: "long", estimatedSeconds: 3600 });
+    store.checkoutIssue(long.id, "agent", undefined, { attempt: { harness: "claude_code", harnessSession: "session-a" } });
+    reading(310, 10, iso(600), "session-a");
+    at(369);
+    store.addComment(long.id, "done", "agent", "agent");
+    reading(369, 16, iso(600), "session-a");
+    store.updateIssue(long.id, { status: "done" }, "agent");
+    at(371);
+    reading(371, 21, iso(600), "session-b");
+    const limit = limitOf(store.forecast({ ref: store.createIssue({ title: "x", estimatedSeconds: 3600 }).identifier }, iso(371), home));
+    expect(limit.otherUse).toBeNull();
+    expect(limit.missing.otherUse).toBe("input_missing");
+    expect(limit.missingInputs.otherUse).toEqual(["time_outside_attempts"]);
+    expect(limit.reserve!.withOtherUse).toBeNull();
+  });
+
+  it("says when a span's readings are too far from its edges to split the work's burn from other use", () => {
+    history();
+    // The baseline is 30 minutes before the attempt, and its only reading inside is 10 minutes in, of 120.
+    at(310);
+    reading(310, 10, iso(600), "session-a");
+    at(340);
+    const sparse = store.createIssue({ title: "sparse", estimatedSeconds: 3600 });
+    store.checkoutIssue(sparse.id, "agent", undefined, { attempt: { harness: "claude_code", harnessSession: "session-a" } });
+    at(350);
+    store.addComment(sparse.id, "working", "agent", "agent");
+    reading(350, 15, iso(600), "session-a");
+    at(460);
+    store.addComment(sparse.id, "done", "agent", "agent");
+    store.updateIssue(sparse.id, { status: "done" }, "agent");
+    at(461);
+    reading(461, 25, iso(600), "session-a");
+    const limit = limitOf(store.forecast({ ref: store.createIssue({ title: "y", estimatedSeconds: 3600 }).identifier }, iso(461), home));
+    // 30 minutes before and 110 minutes after its last reading inside, against 12 minutes (10% of 2h).
+    expect(limit.workRate).toMatchObject({ spans: 1, sparseSpans: 1, lowerBound: false });
+    expect(limit.workRate!.confidence).toMatchObject({ label: "low", warnings: expect.arrayContaining(["sparse_readings"]) });
+  });
+
+  it("marks a span another session's use ran through, and reads the rate from the spans nobody else touched", () => {
+    history();
+    // During an hour's attempt in session-a, another session pushes the limit from 10% to 40%.
+    at(310);
+    const busy = store.createIssue({ title: "busy", estimatedSeconds: 3600 });
+    store.checkoutIssue(busy.id, "agent", undefined, { attempt: { harness: "claude_code", harnessSession: "session-a" } });
+    reading(310, 10, iso(600), "session-a");
+    at(340);
+    store.addComment(busy.id, "working", "agent", "agent");
+    reading(340, 30, iso(600), "session-b");
+    at(370);
+    store.addComment(busy.id, "done", "agent", "agent");
+    reading(370, 40, iso(600), "session-a");
+    store.updateIssue(busy.id, { status: "done" }, "agent");
+    at(371);
+    const only = limitOf(store.forecast({ ref: store.createIssue({ title: "z", estimatedSeconds: 3600 }).identifier }, iso(371), home));
+    // The only span is shared: the rate reads it, and says so.
+    expect(only.workRate).toMatchObject({ spans: 1, sharedSpans: 1, sharedExcluded: 0, burnPercent: 30 });
+    expect(only.workRate!.confidence).toMatchObject({ label: "low", warnings: expect.arrayContaining(["shared_use"]) });
+
+    // Then half an hour of the same session's work alone: 40% to 46%.
+    const quiet = store.createIssue({ title: "alone", estimatedSeconds: 3600 });
+    store.checkoutIssue(quiet.id, "agent", undefined, { attempt: { harness: "claude_code", harnessSession: "session-a" } });
+    reading(371, 40, iso(600), "session-a");
+    at(401);
+    store.addComment(quiet.id, "done", "agent", "agent");
+    reading(401, 46, iso(600), "session-a");
+    store.updateIssue(quiet.id, { status: "done" }, "agent");
+    at(402);
+    const both = limitOf(store.forecast({ ref: store.createIssue({ title: "w", estimatedSeconds: 3600 }).identifier }, iso(402), home));
+    // The clean span alone: 6% over 30 minutes, 12%/work-hour, not the shared hour's 30.
+    expect(both.workRate).toMatchObject({ spans: 1, sharedSpans: 1, sharedExcluded: 1, burnPercent: 6, workSeconds: 1800 });
+    expect(both.workRate!.percentPerWorkHour).toBeCloseTo(12, 9);
+    expect(both.workRate!.confidence.warnings).not.toContain("shared_use");
   });
 
   it("never counts an attempt that started before the window instance in its work rate", () => {

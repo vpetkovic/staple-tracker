@@ -5767,6 +5767,19 @@ export class WorkspaceStore {
         qualifyAttempts(this.db, issueId, viewsOfIssue(this.db, issueId, asOf).filter((attempt) => ids.has(attempt.id) && inWorkerLane(attempt))),
       );
       views.sort((a, b) => (a.startedAt === b.startedAt ? (a.id < b.id ? 1 : -1) : a.startedAt < b.startedAt ? 1 : -1));
+      /** The hashed sessions each attempt ran in (its harness's, and every one added later), as presence reads them. */
+      const sessionsOf = (attemptId: string): string[] =>
+        (
+          this.db
+            .prepare(
+              `SELECT ref FROM (
+                 SELECT json_extract(a.harness, '$.sessionRef') AS ref FROM attempts a WHERE a.id = ?
+                 UNION
+                 SELECT json_extract(t.detail, '$.sessionRef') FROM attempt_transitions t WHERE t.attempt_id = ? AND t.kind = 'attempt_session_added'
+               ) WHERE ref IS NOT NULL ORDER BY ref`,
+            )
+            .all(attemptId, attemptId) as Array<{ ref: string }>
+        ).map((row) => row.ref);
       /** The last instant an attempt's record speaks for: its end, a derived end's bound, or `asOf` while it runs. */
       const endOf = (attempt: (typeof views)[number]): string =>
         attempt.endedAt ?? attempt.endedAtBound ?? (attempt.state === "ended" ? attempt.lastActivityAt : asOf);
@@ -5786,6 +5799,7 @@ export class WorkspaceStore {
             startedAt: attempt.startedAt,
             endAt: endOf(attempt),
             effortSeconds: attempt.effortSeconds,
+            sessionRefs: sessionsOf(attempt.id),
           }));
           return {
             reading,

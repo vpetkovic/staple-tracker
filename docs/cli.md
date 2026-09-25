@@ -915,7 +915,10 @@ staple forecast STA-42
   `workRate` (%/work-hour: the limit's rise over the union of this
   workspace's attempt spans in the window, per hour of their work, so
   concurrent attempts are not counted twice, with its own bootstrap band and
-  a `confidence`); `otherUse` (%/hour outside those spans); and for the
+  a `confidence`: sparse readings at a span's edges and another session's
+  readings inside a span make it `low`, and the rate prefers the spans nobody
+  else touched); `otherUse` (%/hour outside those spans, from at least 30
+  minutes and 2 readings there, with its own confidence); and for the
   remaining labor run serially from now, through the reset and the windows
   after it, `work` (`consumedPercent`, `beforeResetPercent`,
   `remainingAtResetPercent`, `outlastsResetProbability`, `windows`,
@@ -924,7 +927,8 @@ staple forecast STA-42
   the work alone leaves less than the reserve at the reset of any window it
   runs in (`scope: "through_the_work"`, `basis: "work_alone"`);
   `currentWindowBreachProbability` checks the current reset only;
-  `withOtherUse` adds the account's other use. `--reserve P` takes a percent
+  `withOtherUse` adds the account's other use for the hours the work is not
+  running (the work rate already holds the rest). `--reserve P` takes a percent
   of each limit (`20` or `20%`). Without it a **provisional default of 20%**
   applies until the admission policy defines the protected reserve, and
   `source: "provisional_default"` says so on the budget and on every limit.

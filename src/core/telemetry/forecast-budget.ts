@@ -14,9 +14,13 @@
  *   workspace's worker attempts that started in the instance, over the work done in those spans.
  *   Concurrent attempts are one span: two agents working the same hour while the limit rises 10%
  *   burned 5% per work-hour each, not 10. A span's rise needs a reading inside it; its baseline is
- *   the high-water at or before its start, or its first reading inside (a lower bound).
+ *   the high-water at or before its start, or its first reading inside (a lower bound). A span
+ *   whose baseline or last inside reading sits farther than 10% of its length from its edge is
+ *   SPARSE (`sparse_readings`): part of its rise may be other use, or the reverse. A span with a
+ *   reading from a session none of its attempts ran in is SHARED (`shared_use`): someone else used
+ *   the account during it, so the rate reads only unshared spans when there are any.
  * - OTHER USE, `%/hour`: the pace outside those spans, the rise the attempts did not make over the
- *   time they were not running. It is what the account burns while this work is not the cause.
+ *   time they were not running. It needs 30 minutes outside the spans and two readings there.
  *
  * Each rate's band is a bootstrap (spans resampled with replacement) of `FORECAST_DRAWS` draws of
  * its own, from a stream seeded with the forecast seed and the limit: it never depends on how
@@ -38,7 +42,8 @@
  * share of draws in which the work alone (`basis: "work_alone"`) leaves less than the reserve at
  * the reset of any window it runs in (`scope: "through_the_work"`);
  * `currentWindowBreachProbability` checks the current window only. `withOtherUse` adds the other
- * use of the account at its measured rate over the same windows. Each draw pairs a completion
+ * use of the account at its measured rate for the time the work is NOT running in each window:
+ * the work rate already holds everything that happened while the work ran. Each draw pairs a completion
  * labor draw with a work-rate draw (and an other-use draw).
  *
  * Unknown is never 0. A stale reading, a window that elapsed, a sliding window, no attempt burn,
@@ -60,6 +65,17 @@ export const PROVISIONAL_RESERVE_PERCENT = 20;
 
 /** Attempts a work rate reads per limit, newest first; `truncated` says when there were more. */
 export const RATE_ATTEMPT_LIMIT = 200;
+
+/**
+ * A span's readings are SPARSE when the baseline reading (the latest at or before its start) or
+ * its last reading inside it sits farther from that edge than this share of the span's length:
+ * the rise then belongs partly to time outside the span, and the split between the work rate
+ * and other use is a guess.
+ */
+export const SPARSE_EDGE_SHARE = 0.1;
+
+/** Other use needs this much time outside the attempts' spans, and this many readings there, to be measured. */
+export const OTHER_USE_MINIMUM = { seconds: 1800, readings: 2 } as const;
 
 const PROVISIONAL_NOTE = "provisional default until the admission policy defines the protected reserve; pass reserve to set it";
 
@@ -86,6 +102,8 @@ export interface AttemptSpanInput {
   readonly endAt: string;
   /** Its work (`effortSeconds`). */
   readonly effortSeconds: number;
+  /** The hashed harness sessions it ran in: a reading from any other session is someone else's use. */
+  readonly sessionRefs: readonly string[];
 }
 
 /** One limit of one account, as the store read it. */
@@ -134,7 +152,7 @@ export interface RateConfidence {
   readonly label: "low" | "medium";
   readonly spans: number;
   readonly minimum: number;
-  /** `small_sample` (under the minimum), `lower_bound`, `concurrent_attempts`. */
+  /** `small_sample` (under the minimum), `lower_bound`, `sparse_readings`, `shared_use`, `concurrent_attempts`. */
   readonly warnings: string[];
 }
 
@@ -147,6 +165,15 @@ export interface BudgetWorkRate {
   readonly attempts: number;
   /** Spans that held more than one attempt at once. */
   readonly concurrentSpans: number;
+  /** Spans in the rate whose readings sit far from their edges ({@link SPARSE_EDGE_SHARE}). */
+  readonly sparseSpans: number;
+  /**
+   * Spans with a known rise that held a reading from a session none of their attempts ran in:
+   * someone else used the account during them. Left out of the rate when any span is not
+   * shared (`sharedExcluded`); in it, and warned `shared_use`, when every span is.
+   */
+  readonly sharedSpans: number;
+  readonly sharedExcluded: number;
   readonly burnPercent: number;
   readonly workSeconds: number;
   /** Some span had no reading at or before its start: its rise, and the rate, are at least this. */
@@ -164,7 +191,15 @@ export interface BudgetWorkRate {
 export interface BudgetOtherUse {
   readonly percentPerHour: number;
   readonly risePercent: number;
+  /** Time outside the spans it was measured over, at least {@link OTHER_USE_MINIMUM}`.seconds`. */
   readonly seconds: number;
+  /** Readings outside the spans, at least {@link OTHER_USE_MINIMUM}`.readings`. */
+  readonly readings: number;
+  /**
+   * `low` under `MIN_COHORT_SAMPLES` readings outside the spans (`small_sample`), or when a span
+   * beside it is sparse (`sparse_readings`: its rise may be the other use's); `medium` otherwise.
+   */
+  readonly confidence: { readonly label: "low" | "medium"; readonly warnings: string[] };
 }
 
 /** What the work does to this limit. */
@@ -206,6 +241,8 @@ export interface BudgetReserveCheck {
   readonly withOtherUse: {
     readonly basis: "work_and_other_use";
     readonly otherPercentPerHour: number;
+    /** The other use's confidence, beside the work rate's in `confidence`. */
+    readonly otherConfidence: BudgetOtherUse["confidence"];
     readonly breachProbability: number | null;
     readonly currentWindowBreachProbability: number;
     readonly remainingAtResetPercent: { readonly expected: number; readonly simulated: SimulatedSpread };
@@ -291,30 +328,45 @@ interface Span {
   /** Null when no reading falls inside it. */
   readonly rise: number | null;
   readonly lowerBound: boolean;
+  /** A baseline or last inside reading farther from its edge than {@link SPARSE_EDGE_SHARE} of the span. */
+  readonly sparse: boolean;
+  /** A reading inside it came from a session none of its attempts ran in. */
+  readonly shared: boolean;
 }
 
 /** Attempts with work, merged where they overlap, each merged span read against the window's readings. */
 function spansOf(attempts: readonly AttemptSpanInput[], readings: readonly WindowReading[]): Span[] {
   const sorted = attempts
     .filter((attempt) => attempt.effortSeconds > 0)
-    .map((attempt) => ({ from: ms(attempt.startedAt), to: Math.max(ms(attempt.startedAt), ms(attempt.endAt)), effort: attempt.effortSeconds }))
+    .map((attempt) => ({ from: ms(attempt.startedAt), to: Math.max(ms(attempt.startedAt), ms(attempt.endAt)), effort: attempt.effortSeconds, sessions: attempt.sessionRefs }))
     .sort((a, b) => a.from - b.from || a.to - b.to);
-  const merged: Array<{ from: number; to: number; attempts: number; effort: number }> = [];
+  const merged: Array<{ from: number; to: number; attempts: number; effort: number; sessions: Set<string> }> = [];
   for (const attempt of sorted) {
     const last = merged[merged.length - 1];
     if (last !== undefined && attempt.from <= last.to) {
       last.to = Math.max(last.to, attempt.to);
       last.attempts += 1;
       last.effort += attempt.effort;
-    } else merged.push({ from: attempt.from, to: attempt.to, attempts: 1, effort: attempt.effort });
+      for (const session of attempt.sessions) last.sessions.add(session);
+    } else merged.push({ from: attempt.from, to: attempt.to, attempts: 1, effort: attempt.effort, sessions: new Set(attempt.sessions) });
   }
   return merged.map((span) => {
-    const before = readings.filter((reading) => ms(reading.observedAt) <= span.from).map((reading) => reading.usedPercent);
-    const inside = readings.filter((reading) => ms(reading.observedAt) > span.from && ms(reading.observedAt) <= span.to).map((reading) => reading.usedPercent);
-    if (inside.length === 0) return { from: span.from, to: span.to, attempts: span.attempts, effortSeconds: span.effort, rise: null, lowerBound: false };
-    const baseline = before.length > 0 ? Math.max(...before) : inside[0]!;
-    const top = Math.max(...before, ...inside);
-    return { from: span.from, to: span.to, attempts: span.attempts, effortSeconds: span.effort, rise: Math.max(0, top - baseline), lowerBound: before.length === 0 };
+    const base = { from: span.from, to: span.to, attempts: span.attempts, effortSeconds: span.effort };
+    const before = readings.filter((reading) => ms(reading.observedAt) <= span.from);
+    const inside = readings.filter((reading) => ms(reading.observedAt) > span.from && ms(reading.observedAt) <= span.to);
+    if (inside.length === 0) return { ...base, rise: null, lowerBound: false, sparse: false, shared: false };
+    const baseline = before.length > 0 ? Math.max(...before.map((reading) => reading.usedPercent)) : inside[0]!.usedPercent;
+    const top = Math.max(...before.map((reading) => reading.usedPercent), ...inside.map((reading) => reading.usedPercent));
+    const edge = SPARSE_EDGE_SHARE * (span.to - span.from);
+    const baselineGap = before.length > 0 ? span.from - ms(before[before.length - 1]!.observedAt) : 0;
+    const endGap = span.to - ms(inside[inside.length - 1]!.observedAt);
+    return {
+      ...base,
+      rise: Math.max(0, top - baseline),
+      lowerBound: before.length === 0,
+      sparse: baselineGap > edge || endGap > edge,
+      shared: inside.some((reading) => reading.sessionRef !== null && !span.sessions.has(reading.sessionRef)),
+    };
   });
 }
 
@@ -382,7 +434,10 @@ function limitForecast(input: BudgetLimitInput, context: LimitContext): BudgetLi
 
   // ---- the work rate, over the union of the attempts' spans
   const spans = current && window.resetsAt !== null ? spansOf(input.attempts, input.readings) : [];
-  const known = spans.filter((span) => span.rise !== null);
+  const measured = spans.filter((span) => span.rise !== null);
+  // Someone else's use inside a span is not this work's: read the spans nobody else touched when there are any.
+  const clean = measured.filter((span) => !span.shared);
+  const known = clean.length > 0 ? clean : measured;
   let workRate: BudgetWorkRate | null = null;
   let rateDraws: Float64Array | null = null;
   const label = `${context.account.provider ?? ""}:${context.account.accountRef}:${reading.limitKey}`;
@@ -402,9 +457,14 @@ function limitForecast(input: BudgetLimitInput, context: LimitContext): BudgetLi
     );
     const lowerBound = known.some((span) => span.lowerBound);
     const concurrentSpans = known.filter((span) => span.attempts > 1).length;
+    const sparseSpans = known.filter((span) => span.sparse).length;
+    const sharedSpans = measured.filter((span) => span.shared).length;
+    const sharedUsed = known.some((span) => span.shared);
     const warnings: string[] = [];
     if (known.length < MIN_COHORT_SAMPLES) warnings.push("small_sample");
     if (lowerBound) warnings.push("lower_bound");
+    if (sparseSpans > 0) warnings.push("sparse_readings");
+    if (sharedUsed) warnings.push("shared_use");
     if (concurrentSpans > 0) warnings.push("concurrent_attempts");
     const counted = known.reduce((sum, span) => sum + span.attempts, 0);
     workRate = {
@@ -412,14 +472,17 @@ function limitForecast(input: BudgetLimitInput, context: LimitContext): BudgetLi
       spans: known.length,
       attempts: counted,
       concurrentSpans,
+      sparseSpans,
+      sharedSpans,
+      sharedExcluded: measured.length - known.length,
       burnPercent: burn,
       workSeconds: work,
       lowerBound,
-      excluded: input.attempts.length - counted,
+      excluded: input.attempts.length - measured.reduce((sum, span) => sum + span.attempts, 0),
       spanningReset: input.attemptsSpanningReset,
       truncated: input.attemptsTruncated,
       simulated: spreadOfDraws(rateDraws),
-      confidence: { label: known.length < MIN_COHORT_SAMPLES || lowerBound ? "low" : "medium", spans: known.length, minimum: MIN_COHORT_SAMPLES, warnings },
+      confidence: { label: known.length < MIN_COHORT_SAMPLES || lowerBound || sparseSpans > 0 || sharedUsed ? "low" : "medium", spans: known.length, minimum: MIN_COHORT_SAMPLES, warnings },
     };
   }
 
@@ -439,12 +502,17 @@ function limitForecast(input: BudgetLimitInput, context: LimitContext): BudgetLi
     } else {
       const covered = inSpan.reduce((sum, span) => sum + (Math.min(span.to, to) - Math.max(span.from, from)) / 1000, 0);
       const seconds = pace.spanSeconds - covered;
-      if (seconds <= 0) {
+      const outside = input.readings.filter((reading) => !inSpan.some((span) => ms(reading.observedAt) > span.from && ms(reading.observedAt) <= span.to)).length;
+      if (seconds < OTHER_USE_MINIMUM.seconds || outside < OTHER_USE_MINIMUM.readings) {
+        // Two minutes between spans with one reading in them is no measure of a rate.
         missing.otherUse = "input_missing";
         missingInputs.otherUse = ["time_outside_attempts"];
       } else {
         const rise = Math.max(0, pace.toPercent - pace.fromPercent - inSpan.reduce((sum, span) => sum + span.rise!, 0));
-        otherUse = { percentPerHour: (rise / seconds) * HOUR, risePercent: rise, seconds };
+        const warnings: string[] = [];
+        if (outside < MIN_COHORT_SAMPLES) warnings.push("small_sample");
+        if (inSpan.some((span) => span.sparse)) warnings.push("sparse_readings");
+        otherUse = { percentPerHour: (rise / seconds) * HOUR, risePercent: rise, seconds, readings: outside, confidence: { label: warnings.length > 0 ? "low" : "medium", warnings } };
       }
     }
   }
@@ -503,8 +571,10 @@ function limitForecast(input: BudgetLimitInput, context: LimitContext): BudgetLi
       if (left[d]! < reserveAt || (rest > 0 && 100 - next < reserveAt)) breach += 1;
       if (otherDraws !== null) {
         const o = otherDraws[d]!;
-        leftOther[d] = left[d]! - (o * horizon) / HOUR;
-        const nextOther = rest > 0 && windowSeconds !== null ? next + (o * windowSeconds) / HOUR : 0;
+        // The work rate already holds everything that happened while the work ran: other use only
+        // fills the hours the work is not running, before this reset and in the next window.
+        leftOther[d] = left[d]! - (o * (horizon - Math.min(laborDraw, horizon))) / HOUR;
+        const nextOther = rest > 0 && windowSeconds !== null ? next + (o * (windowSeconds - Math.min(rest, windowSeconds))) / HOUR : 0;
         if (leftOther[d]! < reserveAt) breachNowOther += 1;
         if (leftOther[d]! < reserveAt || (rest > 0 && 100 - nextOther < reserveAt)) breachOther += 1;
       }
@@ -550,10 +620,11 @@ function limitForecast(input: BudgetLimitInput, context: LimitContext): BudgetLi
           : {
               basis: "work_and_other_use",
               otherPercentPerHour: otherUse.percentPerHour,
+              otherConfidence: otherUse.confidence,
               breachProbability: alreadyBelow ? 1 : needsWindow ? null : breachOther / draws,
               currentWindowBreachProbability: alreadyBelow ? 1 : breachNowOther / draws,
               remainingAtResetPercent: {
-                expected: remaining - beforeExpected - (otherUse.percentPerHour * horizon) / HOUR,
+                expected: remaining - beforeExpected - (otherUse.percentPerHour * (horizon - Math.min(labor, horizon))) / HOUR,
                 simulated: spreadOfDraws(leftOther),
               },
             },

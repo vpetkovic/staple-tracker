@@ -680,6 +680,8 @@ export interface WindowReading {
   readonly id: string;
   readonly observedAt: string;
   readonly usedPercent: number;
+  /** The hashed harness session the reading came from, when the source names one. */
+  readonly sessionRef: string | null;
 }
 
 /**
@@ -695,7 +697,7 @@ export function windowReadings(home: string, windowIds: readonly string[]): Map<
       const samples = store === null ? [] : store.samplesInWindow(windowId);
       out.set(
         windowId,
-        samples.filter((sample) => sample.usedPercent !== null).map((sample) => ({ id: sample.id, observedAt: sample.observedAt, usedPercent: sample.usedPercent! })),
+        samples.filter((sample) => sample.usedPercent !== null).map((sample) => ({ id: sample.id, observedAt: sample.observedAt, usedPercent: sample.usedPercent!, sessionRef: sample.sessionRef })),
       );
     }
     return out;
