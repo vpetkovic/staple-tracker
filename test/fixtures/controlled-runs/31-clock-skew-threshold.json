@@ -1,0 +1,49 @@
+{
+  "title": "the one-second threshold of clock skew: an inversion of 0.9 s is not skew, one of 1.1 s is",
+  "covers": [
+    "a resumed attempt starting less than a second before the end it resumes is within tolerance: exact, clockSkew false",
+    "more than a second before it: wall clock_skew and the link's clockSkew true"
+  ],
+  "start": "2026-09-01T09:00:00.000Z",
+  "devices": { "tail": true, "hydrate": true, "skew": { "b": "-1.5s" } },
+  "steps": [
+    { "at": "0s", "do": "create", "ref": "x" },
+    { "at": "0s", "do": "create", "ref": "y" },
+    { "at": "0s", "do": "checkout", "ref": "x", "agent": "w1" },
+    { "at": "0s", "do": "checkout", "ref": "y", "agent": "w2" },
+    { "at": "5m", "do": "comment", "ref": "x", "agent": "w1" },
+    { "at": "5m", "do": "comment", "ref": "y", "agent": "w2" },
+    { "at": "15m", "do": "interrupt", "ref": "x", "agent": "w1", "reason": "provider_limit" },
+    { "at": "15m0.5s", "do": "sync", "devices": ["a", "b"] },
+    { "at": "15m0.6s", "do": "checkout", "ref": "x", "agent": "w1", "device": "b" },
+    { "at": "20m", "do": "interrupt", "ref": "y", "agent": "w2", "reason": "provider_limit" },
+    { "at": "20m0.2s", "do": "sync", "devices": ["a", "b"] },
+    { "at": "20m0.4s", "do": "checkout", "ref": "y", "agent": "w2", "device": "b" },
+    { "at": "25m", "do": "comment", "ref": "x", "agent": "w1", "device": "b" },
+    { "at": "25m", "do": "comment", "ref": "y", "agent": "w2", "device": "b" },
+    { "at": "30m", "do": "status", "ref": "x", "to": "done", "agent": "w1", "device": "b" },
+    { "at": "30m", "do": "status", "ref": "y", "to": "done", "agent": "w2", "device": "b" }
+  ],
+  "expect": [
+    {
+      "asOf": "40m",
+      "ref": "x",
+      "intervals": 2,
+      "workSeconds": "29m59.4s",
+      "quality": { "wall": "exact", "wallInputs": [] },
+      "wall": { "startAt": "0s", "endAt": "29m58.5s", "buckets": { "work": "29m58.5s" } },
+      "resumeGaps": [0],
+      "resumeGapsClockSkew": [false]
+    },
+    {
+      "asOf": "40m",
+      "ref": "y",
+      "intervals": 2,
+      "workSeconds": "29m59.6s",
+      "quality": { "wall": "approximate", "wallInputs": ["clock_skew"] },
+      "wall": { "startAt": "0s", "endAt": "29m58.5s", "buckets": { "work": "29m58.5s" } },
+      "resumeGaps": [0],
+      "resumeGapsClockSkew": [true]
+    }
+  ]
+}

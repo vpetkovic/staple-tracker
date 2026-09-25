@@ -1,0 +1,138 @@
+{
+  "title": "an orphaned attempt resumed by its own agent on the other device, read before and after the opener writes the stored end",
+  "covers": [
+    "recategorising, on the other device, the status an attempt was working in leaves it stored open; it reads orphaned (left_active) there, and the history is re-bucketed retroactively (Q9)",
+    "the holder moving the issue back into active on the other device opens an attempt there that resumes the orphan",
+    "the chain link measures from the orphan's replicated evidence before the resumer, not from its endedAtBound or stored end, which the resumer's own activity has moved past its start",
+    "the gap does not move when the stored orphan end is written, and workSeconds is provisional until then"
+  ],
+  "start": "2026-09-01T09:00:00.000Z",
+  "devices": {
+    "tail": true,
+    "hydrate": true
+  },
+  "steps": [
+    {
+      "at": "0s",
+      "do": "addStatus",
+      "id": "doing",
+      "category": "active",
+      "agent": "vp"
+    },
+    {
+      "at": "0s",
+      "do": "create",
+      "ref": "x"
+    },
+    {
+      "at": "0s",
+      "do": "checkout",
+      "ref": "x",
+      "agent": "w1"
+    },
+    {
+      "at": "0s",
+      "do": "status",
+      "ref": "x",
+      "to": "doing",
+      "agent": "w1"
+    },
+    {
+      "at": "10m",
+      "do": "comment",
+      "ref": "x",
+      "agent": "w1"
+    },
+    {
+      "at": "11m",
+      "do": "sync",
+      "devices": [
+        "a",
+        "b"
+      ]
+    },
+    {
+      "at": "20m",
+      "do": "recategorize",
+      "id": "doing",
+      "category": "review",
+      "agent": "vp",
+      "device": "b"
+    },
+    {
+      "at": "30m",
+      "do": "status",
+      "ref": "x",
+      "to": "in_progress",
+      "agent": "w1",
+      "device": "b"
+    },
+    {
+      "at": "40m",
+      "do": "comment",
+      "ref": "x",
+      "agent": "w1",
+      "device": "b"
+    },
+    {
+      "at": "50m",
+      "do": "status",
+      "ref": "x",
+      "to": "done",
+      "agent": "w1",
+      "device": "b"
+    }
+  ],
+  "expect": [
+    {
+      "asOf": "55m",
+      "ref": "x",
+      "on": [
+        "b"
+      ],
+      "sync": [
+        "b"
+      ],
+      "intervals": 2,
+      "workSeconds": "30m",
+      "quality": {
+        "work": "approximate",
+        "workInputs": [
+          "orphan_provisional"
+        ]
+      },
+      "wall": {
+        "startAt": "0s",
+        "endAt": "50m",
+        "buckets": {
+          "work": "20m",
+          "review": "30m"
+        }
+      },
+      "resumeGaps": [
+        "20m"
+      ]
+    },
+    {
+      "asOf": "60m",
+      "ref": "x",
+      "intervals": 2,
+      "workSeconds": "30m",
+      "quality": {
+        "work": "exact",
+        "workInputs": []
+      },
+      "wall": {
+        "startAt": "0s",
+        "endAt": "50m",
+        "buckets": {
+          "work": "20m",
+          "review": "30m"
+        }
+      },
+      "resumeGaps": [
+        "20m"
+      ]
+    }
+  ]
+}

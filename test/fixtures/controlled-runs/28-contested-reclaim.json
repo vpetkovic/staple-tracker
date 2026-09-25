@@ -1,0 +1,131 @@
+{
+  "title": "an interrupted attempt resumed on two devices by two agents while both were offline",
+  "covers": [
+    "an attempt resumed twice links to the earlier resumer only, on every device",
+    "the overlapping tenures are counted once: evidence at or after the later resumer's start belongs to it",
+    "two stored-open attempts by different agents with a claim are contested, so the work is approximate; the partition invariant holds",
+    "once the opener of the older resumer pulls, it writes that attempt's stored end (claim_moved, at its last comment): the work is exact again and the same number"
+  ],
+  "start": "2026-09-01T09:00:00.000Z",
+  "devices": {
+    "tail": true,
+    "hydrate": true
+  },
+  "steps": [
+    {
+      "at": "0s",
+      "do": "create",
+      "ref": "x"
+    },
+    {
+      "at": "0s",
+      "do": "checkout",
+      "ref": "x",
+      "agent": "w1"
+    },
+    {
+      "at": "10m",
+      "do": "comment",
+      "ref": "x",
+      "agent": "w1"
+    },
+    {
+      "at": "15m",
+      "do": "interrupt",
+      "ref": "x",
+      "agent": "w1",
+      "reason": "harness_exit"
+    },
+    {
+      "at": "16m",
+      "do": "sync",
+      "devices": [
+        "a",
+        "b"
+      ]
+    },
+    {
+      "at": "20m",
+      "do": "checkout",
+      "ref": "x",
+      "agent": "w1"
+    },
+    {
+      "at": "25m",
+      "do": "checkout",
+      "ref": "x",
+      "agent": "w2",
+      "device": "b",
+      "stealIfIdle": "5m"
+    },
+    {
+      "at": "30m",
+      "do": "comment",
+      "ref": "x",
+      "agent": "w1"
+    },
+    {
+      "at": "35m",
+      "do": "comment",
+      "ref": "x",
+      "agent": "w2",
+      "device": "b"
+    }
+  ],
+  "expect": [
+    {
+      "asOf": "40m",
+      "ref": "x",
+      "on": [
+        "b"
+      ],
+      "sync": [
+        "a",
+        "b"
+      ],
+      "intervals": 3,
+      "workSeconds": "25m",
+      "quality": {
+        "work": "approximate",
+        "workInputs": [
+          "contested",
+          "orphan_provisional"
+        ]
+      },
+      "wall": {
+        "startAt": "0s",
+        "endAt": null,
+        "buckets": {
+          "work": "30m",
+          "interrupted": "5m",
+          "silent": "5m"
+        }
+      },
+      "resumeGaps": [
+        "5m"
+      ]
+    },
+    {
+      "asOf": "45m",
+      "ref": "x",
+      "intervals": 3,
+      "workSeconds": "25m",
+      "quality": {
+        "work": "exact",
+        "workInputs": []
+      },
+      "wall": {
+        "startAt": "0s",
+        "endAt": null,
+        "buckets": {
+          "work": "30m",
+          "interrupted": "5m",
+          "silent": "10m"
+        }
+      },
+      "resumeGaps": [
+        "5m"
+      ]
+    }
+  ]
+}

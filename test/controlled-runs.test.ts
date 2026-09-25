@@ -40,15 +40,10 @@ describe("controlled runs", () => {
       const checks = await runControlled(run);
       expect(checks.length).toBeGreaterThan(0);
       expect(describeFailures(checks), `${checks.filter((c) => !c.pass).length} of ${checks.length} checks failed`).toBe("");
+      // Reproducible: the same file again, from the same ids and the same clock, reads the same figures.
+      ids.next = 0;
+      const again = await runControlled(run);
+      expect(again.map((c) => [c.device, c.ref, c.asOf, c.field, c.actual])).toEqual(checks.map((c) => [c.device, c.ref, c.asOf, c.field, c.actual]));
     }, 60_000);
   }
-
-  it("is reproducible: the same run twice reads the same figures", async () => {
-    const run = RUNS.find((candidate) => candidate.devices?.tail) ?? RUNS[0]!;
-    ids.next = 0;
-    const first = await runControlled(run);
-    ids.next = 0;
-    const second = await runControlled(run);
-    expect(second.map((c) => [c.device, c.field, c.actual])).toEqual(first.map((c) => [c.device, c.field, c.actual]));
-  }, 60_000);
 });

@@ -1,0 +1,30 @@
+{
+  "title": "a stale release on a device that has not yet pulled the holder's last document revision",
+  "covers": [
+    "a stale release's recorded end is the later of the stored end and the replicated evidence before the release instant, on both axes",
+    "interrupted runs from the corrected end to the release, queued after it, and the resume gap spans both"
+  ],
+  "start": "2026-09-01T09:00:00.000Z",
+  "devices": { "tail": true, "hydrate": true },
+  "steps": [
+    { "at": "0s", "do": "create", "ref": "x" },
+    { "at": "0s", "do": "checkout", "ref": "x", "agent": "w1" },
+    { "at": "10m", "do": "comment", "ref": "x", "agent": "w1" },
+    { "at": "11m", "do": "sync", "devices": ["a", "b"] },
+    { "at": "30m", "do": "document", "ref": "x", "agent": "w1", "key": "worklog" },
+    { "at": "70m", "do": "release", "ref": "x", "agent": "ops", "ifIdle": "30m", "device": "b" },
+    { "at": "80m", "do": "checkout", "ref": "x", "agent": "w2", "device": "b" },
+    { "at": "90m", "do": "comment", "ref": "x", "agent": "w2", "device": "b" },
+    { "at": "100m", "do": "status", "ref": "x", "to": "done", "agent": "w2", "device": "b" }
+  ],
+  "expect": [
+    {
+      "asOf": "110m",
+      "ref": "x",
+      "intervals": 2,
+      "workSeconds": "50m",
+      "wall": { "startAt": "0s", "endAt": "100m", "buckets": { "work": "50m", "interrupted": "40m", "queued": "10m" } },
+      "resumeGaps": ["50m"]
+    }
+  ]
+}

@@ -1,0 +1,106 @@
+{
+  "title": "what marks where an unheld interval counted to, on every device: a comment deleted later, and a document revision",
+  "covers": [
+    "the unheld clamp reads comments whether or not they were later deleted: the writer's comment event outlives the deletion, and a device that read the tail holds only the row",
+    "the deletion (an older build's update, the only path that deletes a comment) moves nothing",
+    "a document revision by anyone is where an unheld interval counts to, on the writer and the tail alike"
+  ],
+  "start": "2026-09-01T09:00:00.000Z",
+  "devices": {
+    "tail": true,
+    "hydrate": true
+  },
+  "steps": [
+    {
+      "at": "0s",
+      "do": "create",
+      "ref": "x"
+    },
+    {
+      "at": "0s",
+      "do": "create",
+      "ref": "y"
+    },
+    {
+      "at": "0s",
+      "do": "status",
+      "ref": "x",
+      "to": "in_progress",
+      "agent": "lead",
+      "assignee": "lead"
+    },
+    {
+      "at": "0s",
+      "do": "status",
+      "ref": "y",
+      "to": "in_progress",
+      "agent": "lead2",
+      "assignee": "lead2"
+    },
+    {
+      "at": "10m",
+      "do": "comment",
+      "ref": "x",
+      "agent": "lead"
+    },
+    {
+      "at": "10m",
+      "do": "comment",
+      "ref": "y",
+      "agent": "lead2"
+    },
+    {
+      "at": "25m",
+      "do": "comment",
+      "ref": "x",
+      "agent": "bot",
+      "saveAs": "noise"
+    },
+    {
+      "at": "30m",
+      "do": "olderBuildUpdate",
+      "entity": "comment",
+      "ref": "noise",
+      "payload": {
+        "deletedAt": "30m"
+      }
+    },
+    {
+      "at": "30m",
+      "do": "document",
+      "ref": "y",
+      "agent": "bot",
+      "key": "notes"
+    }
+  ],
+  "expect": [
+    {
+      "asOf": "40m",
+      "ref": "x",
+      "workSeconds": "10m",
+      "activeSeconds": "25m",
+      "wall": {
+        "startAt": "0s",
+        "endAt": null,
+        "buckets": {
+          "work": "10m",
+          "silent": "30m"
+        }
+      }
+    },
+    {
+      "asOf": "40m",
+      "ref": "y",
+      "workSeconds": "10m",
+      "activeSeconds": "30m",
+      "wall": {
+        "startAt": "0s",
+        "endAt": null,
+        "buckets": {
+          "work": "10m",
+          "silent": "30m"
+        }
+      }
+    }
+  ]
+}

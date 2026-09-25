@@ -752,9 +752,11 @@ export interface IssueTiming {
   wall: WallTiming | null;
   /**
    * The issue's own worker-lane chain links, oldest first: each interrupted attempt that has
-   * been resumed, with its `resumeGapSeconds`. Empty when nothing was resumed.
+   * been resumed, with its `resumeGapSeconds`. Empty when nothing was resumed; null only on a
+   * read that skipped the effort and elapsed fields (`timingFor(…, { telemetry: false })`),
+   * like every other field it skips.
    */
-  resumeGaps: ResumeGap[];
+  resumeGaps: ResumeGap[] | null;
   /** The quality state of each axis, and what it was derived from. */
   quality: TimingQuality;
   /** Why each null new field is null: `never_started`, `no_worker_attempt`, `replay_unavailable`, … */

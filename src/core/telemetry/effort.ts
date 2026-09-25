@@ -236,20 +236,31 @@ export function issueEffort(db: DatabaseSync, issueId: string): { workers: LaneE
   return { workers: lane(workers, "worker"), orchestrators: lane(orchestrators, "orchestrator"), firstWorkerStart: workers[0]?.startedAt ?? null };
 }
 
+/** What {@link inferredEndsOf} reads of an attempt view. */
+type EndedView = { id: string; role: string; state: string; storedState: string; endDetection: string | null; endReason: string | null };
+
 /**
- * The end the elapsed axis reads for each worker attempt whose recorded end was inferred
- * (`claim_stolen`, `released_stale`), by attempt id: the later of the stored end and the
- * replicated evidence before the limit, the same end {@link effectiveEnd} gives `workSeconds`.
- * The stored end is the ending device's own `lastActivityOf`, which misses evidence that
- * replicated from the attempt's device without an event (a document revision); read alone it
- * would put work the agent did in `interrupted`, and date the chain link's gap from before it.
+ * The corrected end of each worker attempt whose end was inferred rather than written by the
+ * mutation that ended it, by attempt id: the end {@link effectiveEnd} gives `workSeconds`.
+ *
+ * - `scope: "inferred"`: a recorded end inferred by a steal or a stale release (`claim_stolen`,
+ *   `released_stale`). Its stored `endedAt` is the ending device's own `lastActivityOf`, which
+ *   misses evidence that had not reached that device; read alone it puts work the agent did
+ *   in `interrupted`. The elapsed partition reads these.
+ * - `scope: "all"`: those, and every orphan end, stored or derived. An orphan's `endedAtBound`
+ *   and its stored end are dated at the opener's `lastActivityOf`, which counts the activity
+ *   of the attempt that resumed it when the same agent resumed: measured from there, the
+ *   chain link runs backwards. A chain link (`resumeGapSeconds`, and its clock-skew test)
+ *   reads these.
  */
-export function inferredEndsOf(views: ReadonlyArray<{ id: string; role: string; storedState: string; endDetection: string | null; endReason: string | null }>, workers: LaneEffort): Map<string, string> {
+export function inferredEndsOf(views: readonly EndedView[], workers: LaneEffort, scope: "inferred" | "all" = "inferred"): Map<string, string> {
   const effortEnd = new Map(workers.attempts.map((attempt) => [attempt.id, attempt.end]));
   const out = new Map<string, string>();
   for (const view of views) {
-    if (view.role !== "worker" || view.storedState !== "ended" || view.endDetection !== "inferred") continue;
-    if (view.endReason !== "claim_stolen" && view.endReason !== "released_stale") continue;
+    if (view.role !== "worker" || view.state !== "ended") continue;
+    const stolenOrReleased = view.storedState === "ended" && view.endDetection === "inferred" && (view.endReason === "claim_stolen" || view.endReason === "released_stale");
+    const orphan = view.endDetection === "derived" || (view.storedState === "ended" && view.endDetection === "inferred");
+    if (!stolenOrReleased && !(scope === "all" && orphan)) continue;
     const end = effortEnd.get(view.id);
     if (end !== undefined) out.set(view.id, end);
   }

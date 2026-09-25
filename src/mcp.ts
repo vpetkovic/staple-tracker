@@ -726,6 +726,7 @@ const timingShape = {
         clockSkew: z.boolean().describe("The gap runs backwards by more than a second (the two devices' clocks disagree): resumeGapSeconds is a clamped 0, not a measurement"),
       }),
     )
+    .nullable()
     .describe("This issue's worker-lane chain links, oldest first: each interrupted attempt that was resumed, and how long it waited. Empty when nothing was resumed"),
   quality: z
     .object({

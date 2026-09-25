@@ -38,7 +38,7 @@ export type Step = { at: string; device?: string } & (
   | { do: "checkout"; ref: string; agent: string; stealIfIdle?: string | number }
   | { do: "release"; ref: string; agent: string; ifIdle?: string | number }
   | { do: "status"; ref: string; to: string; agent: string; assignee?: string }
-  | { do: "comment"; ref: string; agent: string; body?: string }
+  | { do: "comment"; ref: string; agent: string; body?: string; saveAs?: string }
   | { do: "document"; ref: string; agent: string; key: string; body?: string }
   | { do: "pause" | "resume" | "milestone" | "interrupt"; ref: string; agent: string; reason?: string; label?: string; role?: string }
   | { do: "blockedBy"; ref: string; blockers: string[]; agent: string }
@@ -48,12 +48,19 @@ export type Step = { at: string; device?: string } & (
   | { do: "orchestrate"; ref: string; agent: string }
   | { do: "orchestrateEnd"; ref: string; agent: string }
   | { do: "sync"; devices: string[] }
+  | { do: "addStatus"; id: string; category: string; agent: string }
+  | { do: "recategorize"; id: string; category: string; agent: string }
   /**
    * An issue a device on a build from before attempts were captured created and worked:
    * pushed through the service's own route with the envelope every build sends, so it
    * arrives with a start and no attempt, as that history does.
    */
   | { do: "olderBuildCreate"; ref: string; parent?: string; status: string; startedAt: string; completedAt?: string }
+  /**
+   * The same older build changing an issue or a comment it did not create: an `update` at the
+   * version device `a` holds. A payload key ending in `At` is an offset, like every instant here.
+   */
+  | { do: "olderBuildUpdate"; entity: "issue" | "comment"; ref: string; payload: Record<string, unknown> }
 );
 
 /** A duration: whole seconds, or `"1h2m3.5s"`. */
@@ -65,6 +72,11 @@ export interface Expectation {
   ref: string;
   /** Devices that must read all of it: default `a`, plus `b` when the run has a tail device. */
   on?: string[];
+  /**
+   * The syncs before this read, in this order, once each: a device left out reads what it
+   * holds. Default: every device, twice round, so everything written has reached everyone.
+   */
+  sync?: string[];
   /** Attempt intervals behind the effort figures: the tolerance is one second per interval. */
   intervals?: number;
   activeSeconds?: Duration | null;
@@ -215,9 +227,7 @@ export async function runControlled(run: ControlledRun): Promise<Check[]> {
       }
       const expectation = entry.read!;
       // Every device catches up before it reads: two rounds, so what the second device pushes reaches the first.
-      for (let round = 0; round < 2; round += 1) {
-        for (const label of machines.keys()) await device(label).sync();
-      }
+      for (const label of expectation.sync ?? [...machines.keys(), ...machines.keys()]) await device(label).sync();
       // A device enrolled at the last read hydrates from the service's fold, with no history.
       if (run.devices?.hydrate && entry.at === lastRead && hydrated === null) {
         current = "c";
@@ -267,6 +277,18 @@ async function apply(step: Step, context: StepContext): Promise<void> {
   const { device, id, refs, iso } = context;
   if (step.do === "sync") {
     for (const label of step.devices) await device(label).sync();
+    return;
+  }
+  if (step.do === "olderBuildUpdate") {
+    const writer = device("a");
+    await writer.sync();
+    const entityId = id(step.ref);
+    const version =
+      (writer.db.prepare("SELECT version FROM sync_entity_versions WHERE entity = ? AND entity_id = ?").get(step.entity, entityId) as { version: number } | undefined)?.version ?? 0;
+    const payload = Object.fromEntries(
+      Object.entries(step.payload).map(([key, value]) => [key, key.endsWith("At") && typeof value === "string" ? iso(value) : value]),
+    );
+    await context.older().push([{ entity: step.entity, entityId, verb: "update", baseVersion: version, payload, createdAt: nowIso() }]);
     return;
   }
   if (step.do === "olderBuildCreate") {
@@ -321,8 +343,16 @@ async function apply(step: Step, context: StepContext): Promise<void> {
     case "status":
       store.updateIssue(id(step.ref), { status: step.to as IssueStatus, ...(step.assignee !== undefined ? { assignee: step.assignee } : {}) }, step.agent);
       return;
-    case "comment":
-      store.addComment(id(step.ref), step.body ?? "progress", step.agent, "agent");
+    case "comment": {
+      const comment = store.addComment(id(step.ref), step.body ?? "progress", step.agent, "agent");
+      if (step.saveAs !== undefined) refs.set(step.saveAs, comment.id);
+      return;
+    }
+    case "addStatus":
+      store.addStatus({ id: step.id, category: step.category }, step.agent);
+      return;
+    case "recategorize":
+      store.recategorizeStatus(step.id, step.category, step.agent);
       return;
     case "document":
       store.putDocument(id(step.ref), step.key, step.body ?? `${step.key} from ${step.agent}`, { author: step.agent });
@@ -387,10 +417,10 @@ function compare(checks: Check[], where: Where, timing: IssueTiming, expectation
   if (expectation.coverage !== undefined) check(checks, where, "quality.work.coverage", expectation.coverage, timing.quality.work.coverage);
   if (expectation.estimateRatio !== undefined) check(checks, where, "estimateRatio", expectation.estimateRatio, timing.estimateRatio, 0.01);
   if (expectation.resumeGaps !== undefined) {
-    check(checks, where, "resumeGaps.length", expectation.resumeGaps.length, timing.resumeGaps.length);
+    check(checks, where, "resumeGaps.length", expectation.resumeGaps.length, timing.resumeGaps?.length ?? null);
     expectation.resumeGaps.forEach((gap, index) => {
-      check(checks, where, `resumeGaps[${index}].resumeGapSeconds`, seconds(gap), timing.resumeGaps[index]?.resumeGapSeconds ?? null, PER_INTERVAL + SNAP);
-      check(checks, where, `resumeGaps[${index}].clockSkew`, expectation.resumeGapsClockSkew?.[index] ?? false, timing.resumeGaps[index]?.clockSkew ?? null);
+      check(checks, where, `resumeGaps[${index}].resumeGapSeconds`, seconds(gap), timing.resumeGaps?.[index]?.resumeGapSeconds ?? null, PER_INTERVAL + SNAP);
+      check(checks, where, `resumeGaps[${index}].clockSkew`, expectation.resumeGapsClockSkew?.[index] ?? false, timing.resumeGaps?.[index]?.clockSkew ?? null);
     });
   }
   for (const field of ["workSeconds", "ownWorkSeconds", "orchestrationSeconds"] as const) {
@@ -443,7 +473,7 @@ function compare(checks: Check[], where: Where, timing: IssueTiming, expectation
 
 /** `staple attempt <id>`'s `chain` says the same gap as `timing.resumeGaps`, link by link. */
 function chainAgrees(checks: Check[], where: Where, machine: Machine, timing: IssueTiming): void {
-  for (const [index, link] of timing.resumeGaps.entries()) {
+  for (const [index, link] of (timing.resumeGaps ?? []).entries()) {
     const entry = machine.store.getAttempt(link.attemptId, {}, machine.home).chain.find((candidate) => candidate.id === link.attemptId);
     check(checks, where, `chain[${index}].resumeGapSeconds`, link.resumeGapSeconds, entry?.resumeGapSeconds ?? null);
   }

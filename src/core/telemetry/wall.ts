@@ -30,6 +30,8 @@ export interface CoverageAttempt {
   readonly id: string;
   /** The attempt this one resumes (`resumesAttemptId`): a chain link, whose gap must not run backwards. */
   readonly resumesAttemptId: string | null;
+  /** The end a chain link measures from (`resumeGapSeconds`): the corrected end of an inferred or orphan end. Null while open. */
+  readonly chainEnd: string | null;
   readonly startedAt: string;
   /** `end(A)`: the stored end, the orphan's `endedAtBound`, or `asOf` while effectively open. */
   readonly end: string;
@@ -108,7 +110,7 @@ export function partition(input: WallInput): Wall | null {
       if (to < from) to = from;
       const counted = attempt.open ? Math.max(from, Math.min(ms(attempt.countedThrough), to)) : to;
       const pauses: Array<[number, number]> = attempt.pauses.map(([p, q]) => [Math.max(from, ms(p)), Math.min(to, ms(q))]);
-      return { id: attempt.id, resumes: attempt.resumesAttemptId, from, to, counted, open: attempt.open, broken: attempt.interruptedOrOrphaned, pauses: pauses.filter(([p, q]) => p < q) };
+      return { id: attempt.id, resumes: attempt.resumesAttemptId, chainEnd: attempt.chainEnd === null ? null : ms(attempt.chainEnd), from, to, counted, open: attempt.open, broken: attempt.interruptedOrOrphaned, pauses: pauses.filter(([p, q]) => p < q) };
     })
     .sort((a, b) => a.from - b.from);
   /**
@@ -120,7 +122,7 @@ export function partition(input: WallInput): Wall | null {
   const byId = new Map(attempts.map((attempt) => [attempt.id, attempt]));
   for (const attempt of attempts) {
     const resumed = attempt.resumes === null ? undefined : byId.get(attempt.resumes);
-    if (resumed !== undefined && attempt.from + SNAP_MS < resumed.to) inputs.add("clock_skew");
+    if (resumed !== undefined && resumed.chainEnd !== null && attempt.from + SNAP_MS < resumed.chainEnd) inputs.add("clock_skew");
   }
 
   const buckets: Record<string, number> = Object.fromEntries((parent ? PARENT_BUCKETS : LEAF_BUCKETS).map((bucket) => [bucket, 0]));
