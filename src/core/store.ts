@@ -91,6 +91,9 @@ import {
   viewAttempt,
 } from "./telemetry/attempts.js";
 import { reconstructAttempts, type ReconstructReport } from "./telemetry/reconstruct.js";
+import { attemptDetail, attemptSummary, listAttempts, type AttemptDetail, type AttemptSummary } from "./telemetry/read-attempts.js";
+import type { PageRequest, TelemetryPage } from "./telemetry/read-page.js";
+import { stapleHome } from "../config/home.js";
 
 export interface CreateIssueInput {
   title: string;
@@ -663,6 +666,26 @@ export class WorkspaceStore {
    */
   reconstructAttemptHistory(): ReconstructReport {
     return this.journaled(() => reconstructAttempts(this.db, this.journal, this.journal.deviceIdentity()));
+  }
+
+  /**
+   * The attempt read surfaces (`telemetry/read-attempts.ts`), one method each for the CLI, MCP
+   * and HTTP alike. Pure reads: none of them journals anything, a stored orphan end included.
+   *
+   * `attemptSummary` is `attempts: {current, last, count}` on `show`/`get_task`.
+   */
+  attemptSummary(ref: string): AttemptSummary {
+    return attemptSummary(this.db, this.requireRow(ref).id);
+  }
+
+  /** `staple attempts <ref>` / `list_attempts`: bounded, with coverage. */
+  listAttempts(ref: string, page: PageRequest = {}): TelemetryPage<AttemptView> {
+    return listAttempts(this.db, this.requireRow(ref).id, page);
+  }
+
+  /** `staple attempt <attempt-id>` / `get_attempt`: the attempt, its transitions, its chain and its burn. */
+  getAttempt(attemptId: string, page: PageRequest = {}, home: string = stapleHome()): AttemptDetail {
+    return attemptDetail(this.db, attemptId, { ...page, home, device: this.journal.deviceIdentity(), slug: this.slug });
   }
 
   /** The issue as the attempt rules read it, from a row read before a mutation. */

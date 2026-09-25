@@ -242,6 +242,51 @@ export function timingGolden(over: Record<string, unknown> = {}): Record<string,
 }
 
 /**
+ * The `attempts` block `show`/`get_task`/`/api/agent-context`/`/api/issue` carry for an
+ * issue the contract agent checked out once and still holds: one running attempt, nothing
+ * ended. No harness and no account were reported, so both are null with `not_supplied`.
+ */
+export function openAttemptsGolden(identifier: string): Record<string, unknown> {
+  return {
+    count: 1,
+    current: {
+      id: UUID,
+      issueId: UUID,
+      identifier,
+      agent: CONTRACT_AGENT,
+      ordinal: 1,
+      state: "running",
+      storedState: "running",
+      outcome: null,
+      endReason: null,
+      endDetection: null,
+      endedBy: null,
+      openedBy: "checkout",
+      resumesAttemptId: null,
+      startedAt: ISO,
+      endedAt: null,
+      endedAtSource: null,
+      deviceId: null,
+      claim: { scope: "local", fencingToken: null },
+      harness: null,
+      providerBinding: null,
+      estimateAtStart: { estimatedSeconds: null, source: "none" },
+      idempotencyKey: null,
+      provenance: "recorded",
+      lastActivityAt: ISO,
+      activeSeconds: SECONDS,
+      pausedSeconds: 0,
+      countedThrough: ISO,
+      idleSeconds: SECONDS,
+      contested: false,
+      chain: [UUID],
+      missing: { harness: "not_supplied", providerBinding: "not_supplied" },
+    },
+    last: null,
+  };
+}
+
+/**
  * Every field of core/types.ts ClaimActivity, for an issue held by the contract
  * agent. `claim` is null on any issue nobody holds — pass null directly for those
  * rather than calling this.

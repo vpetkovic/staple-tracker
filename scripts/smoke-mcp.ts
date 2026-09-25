@@ -118,7 +118,7 @@ try {
   );
   const readOnly = tools.tools.filter((t: any) => t.annotations?.readOnlyHint === true).map((t: any) => t.name);
   assert(
-    readOnly.length === 16 &&
+    readOnly.length === 20 &&
       [
         "inbox",
         "list_tasks",
@@ -144,8 +144,13 @@ try {
         // cloud one is emphatically so — it makes no request and cannot be made to.
         "cloud_status",
         "conflict_list",
+        // Execution telemetry: reading attempts, and this machine's budget, writes nothing.
+        "list_attempts",
+        "get_attempt",
+        "get_budget",
+        "list_budget_samples",
       ].every((n) => readOnly.includes(n)),
-    `exactly the 16 read-only tools flagged readOnlyHint (${readOnly.join(", ")})`,
+    `exactly the 20 read-only tools flagged readOnlyHint (${readOnly.join(", ")})`,
   );
   assert(byName.get("checkout_task").annotations.idempotentHint === true, "checkout_task flagged idempotent");
   assert(
@@ -739,8 +744,16 @@ try {
   // queue tools. All of them act on ONE workspace — a queue belongs to one
   // workspace file and references only its own issues — so all of them take `ws`
   // like every other workspace tool. Execution attempts added record_attempt_event: 41,
-  // and it routes by ws exactly as they do (the cold phase below proves it).
-  assert(wsTargetable.length === 41, `41 workspace tools accept ws targeting (${wsTargetable.length} found)`);
+  // and it routes by ws exactly as they do (the cold phase below proves it). The
+  // attempt reads list_attempts and get_attempt make 43; the budget reads, like
+  // record_budget_sample, read this machine's hub and take no ws.
+  assert(wsTargetable.length === 43, `43 workspace tools accept ws targeting (${wsTargetable.length} found)`);
+  assert(
+    !coldByName.get("get_budget").inputSchema.properties?.ws &&
+      !coldByName.get("list_budget_samples").inputSchema.properties?.ws &&
+      !coldByName.get("record_budget_sample").inputSchema.properties?.ws,
+    "machine-level budget tools (get_budget, list_budget_samples, record_budget_sample) take no ws",
+  );
   assert(
     !coldByName.get("cross_link").inputSchema.properties?.ws &&
       !coldByName.get("hub_overview").inputSchema.properties?.ws,
@@ -827,6 +840,43 @@ try {
   assert(
     coldPauseUntargeted.isError && toolError(coldPauseUntargeted).code === "not_found",
     "without ws, record_attempt_event resolves the cwd default, not the last workspace named",
+  );
+
+  // The attempt reads route the same way, and read the attempt the pause just wrote.
+  const coldList = await cold.rpc("tools/call", {
+    name: "list_attempts",
+    arguments: { ref: targetedIssue.identifier, ws: "cold" },
+  });
+  const coldListed = coldList.isError ? null : JSON.parse(toolText(coldList));
+  assert(
+    coldListed !== null &&
+      coldListed.items.length === 1 &&
+      coldListed.items[0].state === "paused" &&
+      coldListed.truncated === false &&
+      coldListed.nextCursor === null &&
+      coldListed.coverage.itemCount === 1,
+    "ws-targeted list_attempts reads that workspace's attempts, bounded, with coverage",
+  );
+  const coldGet = await cold.rpc("tools/call", {
+    name: "get_attempt",
+    arguments: { attempt_id: coldListed?.items[0]?.id ?? "none", ws: "cold" },
+  });
+  assert(
+    !coldGet.isError && JSON.parse(toolText(coldGet)).burn.missing.limits === "no_provider_binding",
+    "get_attempt returns the attempt with its burn unknown for a named reason, never 0",
+  );
+  const coldListUntargeted = await cold.rpc("tools/call", {
+    name: "list_attempts",
+    arguments: { ref: targetedIssue.identifier },
+  });
+  assert(
+    coldListUntargeted.isError && toolError(coldListUntargeted).code === "not_found",
+    "without ws, list_attempts resolves the cwd default, not the last workspace named",
+  );
+  const coldBudget = await cold.rpc("tools/call", { name: "get_budget", arguments: {} });
+  assert(
+    !coldBudget.isError && Array.isArray(JSON.parse(toolText(coldBudget)).accounts),
+    "get_budget answers with no workspace resolved: budget is machine state",
   );
 
   const reInit = await cold.rpc("tools/call", {

@@ -29,6 +29,7 @@ import {
   SECONDS,
   UUID,
   claimGolden,
+  openAttemptsGolden,
   timingGolden,
   commentGolden,
   issueGolden,
@@ -287,6 +288,8 @@ describe("read shapes", () => {
         countedThrough: ISO,
       }),
       childrenTiming: {},
+      // Execution attempts, from the store method get_task spreads too.
+      attempts: openAttemptsGolden("CON-1"),
     });
   });
 

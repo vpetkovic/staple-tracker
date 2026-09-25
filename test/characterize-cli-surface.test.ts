@@ -163,10 +163,21 @@ const COMMANDS: ReadonlyArray<{
   // no --db or --ws: there is no workspace to select.
   {
     name: "budget",
-    strings: ["source", "account", "provider", "config-dir", "codex-home", "limit-key", "used", "resets-at"],
+    // The reads added `--since`, `--limit` and `--cursor` (`budget history`).
+    strings: ["source", "account", "provider", "config-dir", "codex-home", "limit-key", "used", "resets-at", "since", "limit", "cursor"],
     booleans: ["json", "help", "tee"],
     shorts: [],
   },
+  // Execution attempts: `attempt` reports on the attempt the caller holds, or, given an
+  // attempt id, reads one (`--limit`/`--cursor` page its transitions). It was dispatched
+  // before this table knew it; `attempts <ref>` is the bounded list.
+  {
+    name: "attempt",
+    strings: ["db", "ws", "agent", "reason", "message", "comment-id", "doc", "limit", "cursor"],
+    booleans: ["json", "help"],
+    shorts: ["h", "m"],
+  },
+  { name: "attempts", strings: ["db", "ws", "limit", "cursor"], booleans: ["json", "help"], shorts: ["h"] },
 ];
 
 /** Every command token in one place, so a removal is a one-line diff. */
@@ -179,7 +190,7 @@ describe("command inventory", () => {
       "status", "release", "block", "blocked-by", "wait", "link", "comment",
       "tree", "board", "inbox", "doc", "events", "hub", "ui", "open", "config",
       "migrate", "install", "doctor", "add", "discover", "milestone", "settings",
-      "queue", "budget",
+      "queue", "budget", "attempt", "attempts",
     ]);
     // 32 tokens, 29 distinct behaviours: checkout/start, done/cancel and ui/open
     // each share a case. Was 22 before A3 (STA-33) added `config`, 23 before A5
@@ -193,8 +204,9 @@ describe("command inventory", () => {
     // handled by the PACKAGED entrypoint (src/package/staple.ts) rather than by
     // this dispatcher. Whoever adds an `mcp` case here must delete that branch
     // in the same change rather than leaving two.
-    // 33 with `budget` (provider budget telemetry).
-    expect(COMMAND_NAMES).toHaveLength(33);
+    // 33 with `budget` (provider budget telemetry), 35 with `attempt` (dispatched
+    // since execution attempts, missing here until the read surfaces) and `attempts`.
+    expect(COMMAND_NAMES).toHaveLength(35);
   });
 
   it.each(COMMANDS.map((c) => c.name))(

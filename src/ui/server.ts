@@ -756,6 +756,7 @@ export function startUiServer(options: UiOptions): UiHandle {
       // Additive: the Analytics tab's whole payload, from the one store
       // method get_task also spreads, so the two cannot drift.
       ...handle.store.detailTiming(context.issue.id),
+      attempts: handle.store.attemptSummary(context.issue.id),
     };
   }
 
@@ -3515,6 +3516,7 @@ export function startUiServer(options: UiOptions): UiHandle {
           gate: handle.store.gate(context.issue.id),
           queuedBy: handle.store.queuedBy(context.issue.id),
           ...handle.store.detailTiming(context.issue.id),
+          attempts: handle.store.attemptSummary(context.issue.id),
         });
         return;
       }

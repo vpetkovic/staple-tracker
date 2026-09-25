@@ -85,6 +85,15 @@ const CASES: CliErrorCase[] = [
     args: ["status", "CON-1", "not_a_status", "--ws", WS],
     expected: { code: "validation", retryable: false },
   },
+  /**
+   * The cursor-scope refusal, which was reachable only over MCP until the telemetry
+   * lists (`staple attempts`, `staple budget history`) gained `--cursor`.
+   */
+  {
+    label: "cursor validation",
+    args: ["attempts", "CON-1", "--cursor", "not-a-cursor", "--ws", WS],
+    expected: { code: "validation", retryable: false },
+  },
 ];
 
 function runCase(testCase: CliErrorCase): CliResult {
@@ -235,14 +244,11 @@ describe("KNOWN: logical errors this surface cannot project", () => {
   });
 
   /**
-   * KNOWN — the CLI has no cursor flag at all (`ls`, `inbox`, and `board` return
-   * the full result set), so the cursor-scope validation error is reachable only
-   * over MCP. If a --cursor flag is ever added, this test should be replaced by a
-   * real projection case in CASES above.
+   * KNOWN — the issue lists (`ls`, `inbox`, `board`) have no cursor flag and return the
+   * full result set. Only the telemetry lists page on the CLI (`staple attempts`,
+   * `staple budget history`); their cursor refusal is a real projection case in CASES.
    */
-  it("no CLI command accepts a --cursor flag", () => {
-    const help = cli("help");
-    expect(help.stdout).not.toContain("--cursor");
+  it("the issue lists accept no --cursor flag", () => {
     const result = cliAs(CONTRACT_AGENT, "ls", "--cursor", "whatever", "--ws", WS, "--json");
     expect(result.status).toBe(CLI_EXIT_CODES.validation);
     expect(cliEnvelope(result).code).toBe("validation");
