@@ -998,13 +998,23 @@ states the choice in place.
    conflicting status writes and the decision, each device holds only its own side's
    events. Every resolution writes a canonical `status_changed` to the chosen value at
    the decision, on every device and whether or not the row moves there, naming where
-   the disagreement began (`conflictStartedAt`). The replay drops what either side wrote
-   in that span and reads the decision from its start, so every device reads the same
-   partition, and `wall` carries the new input `conflict_resolved` (approximate). Two
-   devices that resolved the same record offline each hold both decisions. Operations
-   are dated at their mutation's instant, so `conflictStartedAt` is the instant of the
-   earlier write itself. The attempt's own two ends are a separate record; until it is
-   resolved, both devices mark `workSeconds` `contested`.
+   the disagreement began and where its second write was (`conflictStartedAt`,
+   `conflictLastWriteAt`). The replay replaces only the disputed span, from the first
+   write to the first event both sides hold after the second (or to the decision), with
+   the decision; history before and after it stays, however late the decision comes.
+   Every device reads the same partition, and `wall` carries the new input
+   `conflict_resolved` (approximate), on the issue and on every dependent whose
+   blocker's history was settled this way. Two devices that decide one record offline
+   to different values converge on the decision later in the log, on every device, the
+   one whose own decision lost included; both canonical events are held everywhere.
+   Operations are dated at their mutation's instant, so the two instants are the
+   contested writes themselves. The two status writes also ended the worker attempt two
+   ways; the decision settles that attempt-end record too, choosing the end that follows
+   the chosen status, as its own `conflict` operation, so `workSeconds`, its quality and
+   `estimateRatio` read the same everywhere. An attempt-end conflict nobody has settled
+   is `contested` on the devices that hold its record; a device that hydrated from the
+   snapshot holds no record, cannot see the disagreement, and reads the fold's end
+   unflagged until it is settled.
 
 ## Open questions
 

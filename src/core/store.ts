@@ -559,21 +559,33 @@ function assertOrchestratorRole(role: string | undefined, verb: "open" | "end"):
  * record says the span is the decision's reading (`conflict_resolved`, approximate).
  */
 function settleResolvedSpans<T extends { kind: string; createdAt: string; payload: Record<string, unknown> }>(events: readonly T[]): { events: T[]; resolved: boolean } {
-  const spans = events
-    .filter((event) => typeof event.payload.resolvesConflict === "string" && typeof event.payload.conflictStartedAt === "string")
-    .map((event) => ({ event, from: event.payload.conflictStartedAt as string, to: event.createdAt }));
-  if (spans.length === 0) return { events: [...events], resolved: false };
-  const resolutions = new Set(spans.map((span) => span.event));
-  const kept = events
-    .filter((event) => resolutions.has(event) || event.kind === "issue_created" || !spans.some((span) => span.from <= event.createdAt && event.createdAt < span.to))
-    .map((event) => {
-      const span = spans.find((candidate) => candidate.event === event);
-      return span ? { ...event, createdAt: span.from < span.to ? span.from : span.to } : event;
-    });
-  // The birth first, then time; a resolution moved to where its span began sorts after what it replaces there.
+  const resolutions = events.filter((event) => typeof event.payload.resolvesConflict === "string" && typeof event.payload.conflictStartedAt === "string");
+  if (resolutions.length === 0) return { events: [...events], resolved: false };
+  const isResolution = new Set<T>(resolutions);
+  const ordinary = (event: T): boolean => !isResolution.has(event) && event.kind !== "issue_created";
+  /**
+   * Each disagreement's span runs from the first of the two contested writes to the first event
+   * both sides hold after the second of them — a later move made once the two devices had each
+   * other's writes — or to the decision when there is none. Only that span is replaced: history
+   * both devices agree on, before it and after it, stays, however late the decision came.
+   */
+  const spans = new Map<string, { from: string; to: string; status: T }>();
+  for (const resolution of resolutions) {
+    const from = resolution.payload.conflictStartedAt as string;
+    const lastWrite = typeof resolution.payload.conflictLastWriteAt === "string" ? resolution.payload.conflictLastWriteAt : from;
+    const after = events.find((event) => ordinary(event) && event.createdAt > lastWrite);
+    const until = after !== undefined && after.createdAt < resolution.createdAt ? after.createdAt : resolution.createdAt;
+    const key = `${from}\n${lastWrite}`;
+    const held = spans.get(key);
+    // Two decisions of one disagreement: the span reads as the later one.
+    if (!held || resolution.createdAt > held.status.createdAt) spans.set(key, { from, to: until > (held?.to ?? "") ? until : held!.to, status: resolution });
+  }
+  const inSpan = (event: T): boolean => [...spans.values()].some((span) => span.from <= event.createdAt && event.createdAt < span.to);
+  const kept = events.filter((event) => !ordinary(event) || !inSpan(event));
+  const opened = [...spans.values()].map((span) => ({ ...span.status, createdAt: span.from }));
   const born = kept.filter((event) => event.kind === "issue_created");
-  const rest = kept.filter((event) => event.kind !== "issue_created").map((event, index) => ({ event, index }));
-  rest.sort((a, b) => (a.event.createdAt < b.event.createdAt ? -1 : a.event.createdAt > b.event.createdAt ? 1 : a.index - b.index));
+  const rest = [...opened, ...kept.filter((event) => event.kind !== "issue_created")].map((event, index) => ({ event, index }));
+  rest.sort((x, y) => (x.event.createdAt < y.event.createdAt ? -1 : x.event.createdAt > y.event.createdAt ? 1 : x.index - y.index));
   return { events: [...born, ...rest.map((entry) => entry.event)], resolved: true };
 }
 
@@ -5013,7 +5025,8 @@ export class WorkspaceStore {
       else {
         wall = { startAt: result.startAt, endAt: result.endAt, through: result.through, seconds: result.seconds, buckets: result.buckets };
         for (const input of result.inputs) wallInputs.add(input);
-        if (conflictResolved) wallInputs.add("conflict_resolved");
+        // Its own resolved status conflict, or a blocker's: part of the span is a decision's reading.
+        if (conflictResolved || edges.settled) wallInputs.add("conflict_resolved");
       }
     }
     const leadSeconds = wall === null ? null : secondsBetween(row.created_at, wall.startAt);
@@ -5069,7 +5082,7 @@ export class WorkspaceStore {
    * separately, as `edge_history_incomplete`); and each blocker's own status-moving events
    * for when it resolved and reopened.
    */
-  private edgeHistory(issueId: string, asOf: string): { blocked: Array<[number, number]>; unexplained: Array<[number, number]> } {
+  private edgeHistory(issueId: string, asOf: string): { blocked: Array<[number, number]>; unexplained: Array<[number, number]>; settled: boolean } {
     const forever = Math.max(Date.parse(asOf), Date.now()) + 1;
     const events = (
       this.db
@@ -5120,8 +5133,9 @@ export class WorkspaceStore {
     for (const id of lastSet) if (!heldIds.has(id)) unexplainedIds.add(id);
     const blocked: Array<[number, number]> = [];
     const unexplained: Array<[number, number]> = [];
+    const settledBlockers = new Set<string>();
     for (const [blockerId, spans] of presence) {
-      const unresolved = this.unresolvedIntervalsOf(blockerId, forever);
+      const unresolved = this.unresolvedIntervalsOf(blockerId, forever, settledBlockers);
       if (unresolved === null) {
         // A blocker this device does not hold: nothing says when it resolved.
         continue;
@@ -5130,21 +5144,34 @@ export class WorkspaceStore {
       blocked.push(...both);
       if (unexplainedIds.has(blockerId)) unexplained.push(...both);
     }
-    return { blocked: union(blocked), unexplained: union(unexplained) };
+    return { blocked: union(blocked), unexplained: union(unexplained), settled: settledBlockers.size > 0 };
   }
 
   /** When an issue was open (not `done`/`cancelled`), from its own status-moving events; its row when it has none. */
-  private unresolvedIntervalsOf(issueId: string, forever: number): Array<[number, number]> | null {
+  private unresolvedIntervalsOf(issueId: string, forever: number, settledBlockers?: Set<string>): Array<[number, number]> | null {
     const row = this.db.prepare("SELECT status, created_at, completed_at, cancelled_at, updated_at FROM issues WHERE id = ?").get(issueId) as
       | { status: string; created_at: string; completed_at: string | null; cancelled_at: string | null; updated_at: string }
       | undefined;
     if (!row) return null;
-    const events = this.db
+    const rawEvents = this.db
       .prepare(
         `SELECT kind, payload, created_at FROM events WHERE issue_id = ?
             AND kind IN (${STATUS_MOVING_EVENT_KINDS.map(() => "?").join(",")}) ORDER BY ${EVENT_ORDER}`,
       )
       .all(issueId, ...(STATUS_MOVING_EVENT_KINDS as readonly string[])) as Array<{ kind: string; payload: string; created_at: string }>;
+    // A blocker's resolved status conflict reads as its decision, as the blocker's own replay reads it.
+    const parsed = rawEvents.map((event) => {
+      let payload: Record<string, unknown> = {};
+      try {
+        payload = JSON.parse(event.payload) as Record<string, unknown>;
+      } catch {
+        // unreadable: the replay below skips it
+      }
+      return { kind: event.kind, createdAt: event.created_at, payload };
+    });
+    const settled = settleResolvedSpans(parsed);
+    if (settled.resolved) settledBlockers?.add(issueId);
+    const events = settled.events;
     const resolvedCategory = (status: string | null): boolean => {
       const category = status === null ? null : this.categoryOf(status);
       return category === "done" || category === "cancelled";
@@ -5157,15 +5184,9 @@ export class WorkspaceStore {
     const out: Array<[number, number]> = [];
     let openFrom: number | null = Number.MIN_SAFE_INTEGER;
     for (const event of events) {
-      let payload: Record<string, unknown> = {};
-      try {
-        payload = JSON.parse(event.payload) as Record<string, unknown>;
-      } catch {
-        continue;
-      }
-      const status = this.statusAfterEvent(event.kind, payload);
+      const status = this.statusAfterEvent(event.kind, event.payload);
       if (status === null) continue;
-      const at = Date.parse(event.created_at);
+      const at = Date.parse(event.createdAt);
       if (resolvedCategory(status)) {
         if (openFrom !== null) out.push([openFrom, at]);
         openFrom = null;

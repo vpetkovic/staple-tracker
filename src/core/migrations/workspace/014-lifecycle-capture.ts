@@ -26,6 +26,12 @@ import type { Migration } from "../types.js";
  * the origin's. The replay orders by `(created_at, origin_device, origin_seq or seq)`. Events
  * never replicate, so these columns are this device's own record.
  *
+ * ## `sync_conflicts.decided_seq`
+ *
+ * The log position of the decision a record holds. Two devices can resolve one record offline
+ * to different values; every device keeps the decision with the higher seq, a device whose own
+ * decision lost included, so the rows converge (`applyConflictOperation`).
+ *
  * ## Why 14, and what it costs
  *
  * 013 (execution attempts) is the latest. The number is the `schema` every operation
@@ -40,5 +46,6 @@ export const migration: Migration = {
     db.exec(`ALTER TABLE attempts ADD COLUMN role TEXT NOT NULL DEFAULT 'worker'`);
     db.exec(`ALTER TABLE events ADD COLUMN origin_device TEXT`);
     db.exec(`ALTER TABLE events ADD COLUMN origin_seq INTEGER`);
+    db.exec(`ALTER TABLE sync_conflicts ADD COLUMN decided_seq INTEGER`);
   },
 };

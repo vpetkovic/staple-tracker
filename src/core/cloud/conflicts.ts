@@ -1010,8 +1010,8 @@ function record(db: DatabaseSync, conflict: NewConflict): void {
  *
  * Written by the resolving device under this device's own order, and carried on the `conflict`
  * operation (never on the domain write, so it is written once), which every other device applies
- * whatever its own record says — two devices that resolved the same record offline each end up
- * holding both decisions.
+ * whatever its own record says: both decisions' events are held everywhere, and the decision
+ * later in the log is the one every device's row keeps (`applyConflictOperation`).
  */
 export interface ResolutionEvent {
   readonly issueId: string;
@@ -1019,6 +1019,8 @@ export interface ResolutionEvent {
   readonly to: string;
   readonly at: string;
   readonly conflictStartedAt: string;
+  /** The later of the two contested writes: events after it are ones both sides hold. */
+  readonly conflictLastWriteAt: string;
   readonly actor: string | null;
   readonly deviceId: string | null;
   readonly seq: number | null;
@@ -1031,7 +1033,14 @@ function writeResolutionEvent(db: DatabaseSync, event: ResolutionEvent, conflict
     kind: "status_changed",
     issueId: event.issueId,
     actor: event.actor,
-    payload: { identifier, from: event.from, to: event.to, resolvesConflict: conflictId, conflictStartedAt: event.conflictStartedAt },
+    payload: {
+      identifier,
+      from: event.from,
+      to: event.to,
+      resolvesConflict: conflictId,
+      conflictStartedAt: event.conflictStartedAt,
+      conflictLastWriteAt: event.conflictLastWriteAt,
+    },
     createdAt: event.at,
     dedupKey,
     originDevice: event.deviceId,
@@ -1267,13 +1276,16 @@ function decide(db: DatabaseSync, request: ResolveRequest): ResolveOutcome {
 
     let resolution: ResolutionEvent | null = null;
     if (statusBefore !== null && typeof chosen === "string") {
-      const started = [conflict.localAt, conflict.remoteAt].filter((instant): instant is string => typeof instant === "string").sort()[0] ?? at;
+      const writes = [conflict.localAt, conflict.remoteAt].filter((instant): instant is string => typeof instant === "string").sort();
+      const started = writes[0] ?? at;
+      const last = writes[writes.length - 1] ?? at;
       resolution = {
         issueId: conflict.entityId,
         from: statusBefore,
         to: chosen,
         at,
         conflictStartedAt: started < at ? started : at,
+        conflictLastWriteAt: last < at ? last : at,
         actor,
         deviceId: journal.deviceIdentity(),
         seq: null,
@@ -1285,6 +1297,7 @@ function decide(db: DatabaseSync, request: ResolveRequest): ResolveOutcome {
     close(db, conflict.id, at, actor, chosen);
     settleOpenFor(db, conflict.entity, conflict.entityId, conflict.field, at, actor, chosen);
     forgetClosedEntries(db);
+    if (resolution !== null) settleAttemptEnds(db, conflict.entityId, chosen as string, actor);
 
     /**
      * The decision replicates as its own operation so that every other device
@@ -1510,6 +1523,7 @@ export function applyConflictOperation(db: DatabaseSync, op: RemoteOperation): b
           to: event.to,
           at: event.at,
           conflictStartedAt: event.conflictStartedAt,
+          conflictLastWriteAt: typeof event.conflictLastWriteAt === "string" ? event.conflictLastWriteAt : event.conflictStartedAt,
           actor: typeof event.actor === "string" ? event.actor : null,
           deviceId: op.deviceId,
           seq: null,
@@ -1522,7 +1536,35 @@ export function applyConflictOperation(db: DatabaseSync, op: RemoteOperation): b
   }
 
   const existing = getConflict(db, op.entityId);
-  if (existing !== null && existing.resolvedAt !== null) return false;
+  if (existing !== null && existing.resolvedAt !== null) {
+    /**
+     * Two devices can decide one record offline, to different values. Every device keeps the
+     * decision with the higher seq — the later one in the log — so the rows converge: a fresh
+     * device reading the tail applies both in order, and so must a device whose own decision
+     * lost. This device's own decision coming back only records where it landed; a decision
+     * arriving while this device's own is not in the log yet is earlier than it, and loses.
+     */
+    const decided = decidedSeq(db, op.entityId);
+    /**
+     * Where this device's decision stands, the losing decision's own write (the domain operation
+     * before it) may have opened a record against it here: the field is decided, so it closes
+     * to the decision that stands, as the winning side's arrival closes it on the other device.
+     */
+    const standing = (): false => {
+      settleOpenFor(db, entity, targetId, field, existing.resolvedAt!, existing.resolvedBy, existing.resolvedValue);
+      forgetClosedEntries(db);
+      return false;
+    };
+    if (op.deviceId === localDevice(db)) {
+      if (decided === null || op.seq > decided) noteDecidedSeq(db, op.entityId, op.seq);
+      return standing();
+    }
+    if (decided === null || op.seq <= decided) return standing();
+    noteDecidedSeq(db, op.entityId, op.seq);
+    if (sameValue(existing.resolvedValue, value)) return false;
+  } else if (existing !== null) {
+    noteDecidedSeq(db, op.entityId, op.seq);
+  }
 
   const current = readField(db, entity, targetId, field);
   // What the resolving write carried beside the value rides with the decision (`resolveConflict`),
@@ -1574,4 +1616,49 @@ export function conflictsSummary(db: DatabaseSync): { open: number; resolved: nu
 /** This device's id as its journal holds it. */
 function localDevice(db: DatabaseSync): string | null {
   return journalFor(db).deviceIdentity();
+}
+
+function decidedSeq(db: DatabaseSync, id: string): number | null {
+  const row = db.prepare("SELECT decided_seq FROM sync_conflicts WHERE id = ?").get(id) as { decided_seq: number | null } | undefined;
+  return row?.decided_seq ?? null;
+}
+
+function noteDecidedSeq(db: DatabaseSync, id: string, seq: number): void {
+  db.prepare("UPDATE sync_conflicts SET decided_seq = ? WHERE id = ?").run(seq, id);
+}
+
+/** The end a mutation into this category writes (`outcomeForCategory`, `telemetry/attempts.ts`). */
+const END_REASON_FOR_CATEGORY: Readonly<Record<string, string>> = {
+  review: "review",
+  done: "done",
+  blocked: "blocked",
+  cancelled: "cancelled",
+  gated: "gated",
+};
+
+/**
+ * A status conflict decided settles the attempt-end conflicts those two status writes made: each
+ * write ended the worker attempt its own way (`review` at one instant on one device, `done` at
+ * another on the other), and every device kept its own end. The side whose end follows the
+ * chosen status wins, decided like any record — its own `conflict` operation — so every device
+ * settles it, a fresh one included, and `workSeconds` reads the same everywhere. An end conflict
+ * no status decision explains is left for a human, as before.
+ */
+function settleAttemptEnds(db: DatabaseSync, issueId: string, chosenStatus: string, actor: string | null): void {
+  const category = (db.prepare("SELECT category FROM workspace_statuses WHERE id = ?").get(chosenStatus) as { category: string } | undefined)?.category;
+  const reason = category === undefined ? undefined : (END_REASON_FOR_CATEGORY[category] ?? "returned");
+  if (reason === undefined) return;
+  const open = listConflicts(db).filter((record) => {
+    if (record.entity !== "attempt" || record.field !== "end" || record.resolvedAt !== null) return false;
+    const attempt = db.prepare("SELECT issue_id, role FROM attempts WHERE id = ?").get(record.entityId) as { issue_id: string; role: string | null } | undefined;
+    return attempt !== undefined && attempt.issue_id === issueId && (attempt.role ?? "worker") !== "orchestrator";
+  });
+  const endReasonOf = (value: unknown): unknown =>
+    value !== null && typeof value === "object" ? ((value as Record<string, unknown>).endReason ?? (value as Record<string, unknown>).end_reason) : undefined;
+  for (const record of open) {
+    const local = endReasonOf(record.localValue) === reason;
+    const remote = endReasonOf(record.remoteValue) === reason;
+    if (local === remote) continue;
+    decide(db, { id: record.id, choice: local ? "local" : "remote", actor });
+  }
 }

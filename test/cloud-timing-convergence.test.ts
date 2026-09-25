@@ -535,7 +535,7 @@ describe("round 1: what an operation narrates, and what it does not", () => {
     const b = fleet.machine("b");
     await sync(a, b);
     a.use();
-    const x = a.store.createIssue({ title: "Decided twice" });
+    const x = a.store.createIssue({ title: "Decided twice", estimatedSeconds: 600 });
     a.store.checkoutIssue(x.id, "agent-a");
     await sync(a, b);
     at(10);
@@ -556,12 +556,18 @@ describe("round 1: what an operation narrates, and what it does not", () => {
     await sync(fresh);
     const onA = timingOn(a, id, 30);
     for (const machine of [a, b, fresh]) expect(machine.store.getIssue(id).status, machine.label).toBe(status);
-    // The elapsed readings, identical. Work is not settled by a status decision: the attempt's
-    // two ends are a record of their own, and both devices say so (contested) until it is resolved.
+    // The elapsed readings, identical on the two devices that hold the history.
     const elapsed = (t: IssueTiming) => ({ wall: t.wall, quality: t.quality.wall, activeSeconds: t.activeSeconds, reviewSeconds: t.reviewSeconds, approximate: t.approximate });
     expect(elapsed(timingOn(b, id, 30)), "b").toEqual(elapsed(onA));
-    for (const machine of [a, b]) expect(timingOn(machine, id, 30).quality.work.inputs, machine.label).toContain("contested");
     expect(timingOn(fresh, id, 30)).toMatchObject({ wall: null, missing: { wall: "replay_unavailable" } });
+    // Work, its quality and the estimate ratio, identical on all three: the decision settled the
+    // attempt's two ends too, as its own record, so no device reads one end and another the other.
+    const work = (t: IssueTiming) => ({ workSeconds: t.workSeconds, quality: t.quality.work, estimateRatio: t.estimateRatio });
+    for (const machine of [a, b, fresh]) {
+      expect(work(timingOn(machine, id, 30)), machine.label).toEqual(work(onA));
+      expect(listConflicts(machine.db).filter((record) => record.entity === "attempt" && record.resolvedAt === null), machine.label).toEqual([]);
+    }
+    expect(onA.quality.work.inputs).not.toContain("contested");
     expect(onA.approximate).toBe(false);
     expect(onA.quality.wall).toEqual({ state: "approximate", inputs: ["conflict_resolved"] });
     return onA;
@@ -576,6 +582,9 @@ describe("round 1: what an operation narrates, and what it does not", () => {
     const t = await readAlike(a, b, x.id, "in_review");
     // Work to the first disagreeing write, then the decision (review) from there.
     expect(t.wall!.buckets).toMatchObject({ work: min(10), review: min(20) });
+    // The attempt ended the way the chosen status ended it: review, at A's write.
+    expect(t.workSeconds).toBe(min(10));
+    expect(attemptsOfIssue(b.db, x.id)[0]).toMatchObject({ endReason: "review", endedAt: iso(10) });
   }, 60_000);
 
   it("a status resolved REMOTE reads the same on every device", async () => {
@@ -586,6 +595,10 @@ describe("round 1: what an operation narrates, and what it does not", () => {
     await sync(a, b);
     const t = await readAlike(a, b, x.id, "done");
     expect(t.wall).toMatchObject({ endAt: iso(10), buckets: { work: min(10) } });
+    // A no longer holds its own end (review at 10): the chosen status's end, done at 11, everywhere.
+    expect(t.workSeconds).toBe(min(11));
+    expect(t.estimateRatio).toBeCloseTo(1.1, 10);
+    expect(attemptsOfIssue(a.db, x.id)[0]).toMatchObject({ endReason: "done", endedAt: iso(11) });
     const decided = (machine: Machine) =>
       machine.db.prepare("SELECT created_at FROM events WHERE issue_id = ? AND kind = 'status_changed' AND json_extract(payload, '$.resolvesConflict') IS NOT NULL").all(x.id);
     expect(decided(a)).toEqual([{ created_at: iso(20) }]);
@@ -606,6 +619,84 @@ describe("round 1: what an operation narrates, and what it does not", () => {
       (machine.db.prepare("SELECT created_at FROM events WHERE issue_id = ? AND json_extract(payload, '$.resolvesConflict') IS NOT NULL ORDER BY created_at").all(x.id) as Array<{ created_at: string }>).map((row) => row.created_at);
     expect(decided(a)).toEqual([iso(14), iso(20)]);
     expect(decided(b)).toEqual(decided(a));
+  }, 60_000);
+
+  it("two devices resolving one record offline to different values converge on the later decision in the log", async () => {
+    const { a, b, x, recordOn } = await disputedStatus();
+    at(14);
+    b.use();
+    resolveConflict(b.db, { id: recordOn(b).id, choice: "local", actor: "vp" }); // done
+    at(20);
+    a.use();
+    resolveConflict(a.db, { id: recordOn(a).id, choice: "local", actor: "vp" }); // in_review
+    // B's decision reaches the log first, A's after it: A's wins everywhere.
+    await sync(b, a, b);
+    const fresh = fleet!.machine("fresh");
+    await sync(fresh);
+    for (const machine of [a, b, fresh]) {
+      expect(machine.store.getIssue(x.id).status, machine.label).toBe("in_review");
+      expect(attemptsOfIssue(machine.db, x.id)[0], machine.label).toMatchObject({ endReason: "review", endedAt: iso(10) });
+      expect(timingOn(machine, x.id, 30).workSeconds, machine.label).toBe(min(10));
+    }
+    for (const machine of [a, b]) {
+      const records = listConflicts(machine.db, { includeResolved: true }).filter((conflict) => conflict.entity === "issue" && conflict.field === "status");
+      // Every record about the field closed, to the decision that stands.
+      expect(records.map((record) => [record.resolvedAt !== null, record.resolvedValue]), machine.label).toEqual(records.map(() => [true, "in_review"]));
+      expect(listConflicts(machine.db), machine.label).toEqual([]);
+    }
+    expect(timingOn(b, x.id, 30).wall).toEqual(timingOn(a, x.id, 30).wall);
+  }, 60_000);
+
+  it("a late decision replaces only the disputed span: history both devices held after it stays", async () => {
+    const { a, b, x, recordOn } = await disputedStatus();
+    at(100);
+    a.use();
+    a.store.updateIssue(x.id, { status: "todo" }, "vp");
+    at(200);
+    a.store.updateIssue(x.id, { status: "done" }, "vp");
+    await sync(a, b);
+    at(500);
+    a.use();
+    resolveConflict(a.db, { id: recordOn(a).id, choice: "local", actor: "vp" });
+    await sync(a, b);
+    for (const machine of [a, b]) {
+      const t = timingOn(machine, x.id, 600);
+      // 0-10 work; 10-100 the decision (review); 100-200 queued; done at 200; the decision at 500 reopens it to review.
+      expect(t.wall, machine.label).toMatchObject({ startAt: iso(0), endAt: null, buckets: { work: min(10), review: min(90) + min(100), queued: min(100), resolved: min(300) } });
+      expect(t.quality.wall, machine.label).toEqual({ state: "approximate", inputs: ["conflict_resolved"] });
+    }
+    expect(timingOn(b, x.id, 600).wall).toEqual(timingOn(a, x.id, 600).wall);
+  }, 60_000);
+
+  it("a blocker's resolved status conflict reads the same for its dependents on every device", async () => {
+    fleet = new Fleet(new FakeSyncServer({ repositoryId: REPO }), REPO);
+    const a = fleet.machine("a");
+    const b = fleet.machine("b");
+    await sync(a, b);
+    a.use();
+    const d = a.store.createIssue({ title: "Dependent" });
+    const y = a.store.createIssue({ title: "Blocker" });
+    a.store.checkoutIssue(d.id, "agent-a");
+    a.store.releaseIssue(d.id, "agent-a");
+    a.store.setBlockedBy(d.id, [y.id], "vp");
+    a.store.checkoutIssue(y.id, "agent-y");
+    await sync(a, b);
+    at(10);
+    a.use();
+    a.store.updateIssue(y.id, { status: "done" }, "agent-y");
+    at(11);
+    b.use();
+    b.store.updateIssue(y.id, { status: "in_review" }, "vp");
+    await sync(a, b, a);
+    at(30);
+    b.use();
+    const record = listConflicts(b.db).find((conflict) => conflict.entity === "issue" && conflict.entityId === y.id && conflict.field === "status" && conflict.resolvedAt === null)!;
+    resolveConflict(b.db, { id: record.id, choice: "local", actor: "vp" }); // in_review
+    await sync(b, a);
+    const onA = timingOn(a, d.id, 40);
+    expect(timingOn(b, d.id, 40).wall).toEqual(onA.wall);
+    expect(onA.wall!.buckets).toMatchObject({ blocked: min(40) });
+    for (const machine of [a, b]) expect(timingOn(machine, d.id, 40).quality.wall, machine.label).toEqual({ state: "approximate", inputs: ["conflict_resolved"] });
   }, 60_000);
 
   it("an attempt two devices ended differently is contested until the record is settled", async () => {
@@ -715,6 +806,36 @@ describe("round 1: what an operation narrates, and what it does not", () => {
       (machine.db.prepare("SELECT blocker_id FROM relations WHERE blocked_id = ?").all(parent.id) as Array<{ blocker_id: string }>).map((row) => row.blocker_id);
     for (const machine of [a, b, fresh]) expect(blockers(machine), machine.label).toEqual([child.id]);
     converged(a, b, fresh);
+  }, 60_000);
+
+  it("a set cleared between a sync's push and its pull is not undone by the child's create coming back", async () => {
+    const server = new FakeSyncServer({ repositoryId: REPO });
+    fleet = new Fleet(server, REPO);
+    const a = fleet.machine("a");
+    await sync(a);
+    a.use();
+    const parent = a.store.createIssue({ title: "Parent" });
+    await sync(a);
+    a.use();
+    a.store.createIssue({ title: "Child", parent: parent.id, blockParentUntilDone: true });
+    // Another writer on this device (auto-sync, a UI) clears the set after the push and before the pull.
+    let pushed = false;
+    let interposed = false;
+    const fetchImpl = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      const method = init?.method ?? "GET";
+      const url = String(input);
+      if (method === "POST" && url.endsWith("/ops")) pushed = true;
+      else if (pushed && !interposed && method === "GET" && /\/ops(\?|$)/.test(url)) {
+        interposed = true;
+        a.store.setBlockedBy(parent.id, [], "vp");
+      }
+      return server.fetch(input as never, init as never);
+    };
+    a.use();
+    await a.sync({ fetchImpl: fetchImpl as never });
+    expect(interposed).toBe(true);
+    // The clear is later in the log than the create, so the create's echo does not bring the edge back.
+    expect(a.db.prepare("SELECT COUNT(*) AS n FROM relations WHERE blocked_id = ?").get(parent.id)).toEqual({ n: 0 });
   }, 60_000);
 
   it("an operation's narration is not the entity's state: no fold keeps it, and no field write records it", async () => {
