@@ -252,6 +252,26 @@ describe("coverage of an attempt list", () => {
   });
 });
 
+describe("coverage of an issue with no attempts", () => {
+  it("names why with the timing contract's codes: never started, or started with no worker attempt", () => {
+    const store = workspace();
+    const fresh = store.createIssue({ title: "Never started" });
+    expect(store.listAttempts(fresh.id).coverage).toEqual({
+      from: null,
+      to: null,
+      itemCount: 0,
+      gaps: [],
+      missing: { from: "never_started", to: "never_started" },
+    });
+    // A parent in progress only because its child is: started by a derived flip, no attempt.
+    const parent = store.createIssue({ title: "Parent" });
+    const child = store.createIssue({ title: "Child", parent: parent.id });
+    store.checkoutIssue(child.id, "agent-a");
+    expect(store.getIssue(parent.id).startedAt).not.toBeNull();
+    expect(store.listAttempts(parent.id).coverage).toMatchObject({ from: null, to: null, gaps: [], missing: { from: "no_worker_attempt", to: "no_worker_attempt" } });
+  });
+});
+
 describe("get_attempt", () => {
   it("returns the attempt, bounded transitions with a stable cursor, and the chain oldest first", () => {
     const store = workspace();
@@ -361,6 +381,37 @@ describe("an attempt's burn", () => {
     const [limit] = attemptDetail(store.db, attempt.id, { home, device: null, slug: "alpha", now: at(start, 300) }).burn.limits;
     expect(limit).toMatchObject({ burnPercent: 22, lowerBound: false, coverage: { known: 1, total: 1 } });
     expect(limit!.windows[0]).toMatchObject({ baseline: "superseded_window", fromPercent: 50, toPercent: 72 });
+  });
+
+  it("reads a moved reset's usage from the superseded instance when its replacement was not read during the attempt", () => {
+    captureOn();
+    const store = workspace();
+    const issue = store.createIssue({ title: "Replacement read later" });
+    store.checkoutIssue(issue.id, "agent-a", undefined, { attempt: fromSession });
+    const attempt = attemptsOfIssue(store.db, issue.id)[0]!;
+    const start = attempt.startedAt;
+    render(at(start, -60), 50, at(start, 2 * 3600));
+    render(at(start, 30), 60, at(start, 2 * 3600));
+    // The reset moves, and the first reading of the replacement comes after the span read.
+    render(at(start, 400), 72, at(start, 3 * 3600));
+    const [limit] = attemptDetail(store.db, attempt.id, { home, device: null, slug: "alpha", now: at(start, 300) }).burn.limits;
+    expect(limit).toMatchObject({ burnPercent: 10, lowerBound: false, coverage: { known: 1, total: 1 }, missing: {} });
+    expect(limit!.windows[0]).toMatchObject({ baseline: "superseded_window", fromPercent: 50, toPercent: 60 });
+  });
+
+  it("falls back to the superseded instance when the replacement reaches the attempt but was read only before it", () => {
+    captureOn();
+    const store = workspace();
+    const issue = store.createIssue({ title: "Replacement read before" });
+    store.checkoutIssue(issue.id, "agent-a", undefined, { attempt: fromSession });
+    const attempt = attemptsOfIssue(store.db, issue.id)[0]!;
+    const start = attempt.startedAt;
+    render(at(start, -60), 50, at(start, 2 * 3600));
+    render(at(start, -30), 55, at(start, 3 * 3600), "session-a"); // the moved reset, read before the attempt
+    render(at(start, 30), 62, at(start, 2 * 3600)); // an older cache still names the first reset
+    const [limit] = attemptDetail(store.db, attempt.id, { home, device: null, slug: "alpha", now: at(start, 300) }).burn.limits;
+    expect(limit).toMatchObject({ burnPercent: 12, coverage: { known: 1, total: 1 } });
+    expect(limit!.windows[0]).toMatchObject({ baseline: "superseded_window", fromPercent: 50, toPercent: 62 });
   });
 
   it("is unknown, not a measured 0, when nothing was read while the attempt ran", () => {

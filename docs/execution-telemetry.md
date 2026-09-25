@@ -835,7 +835,11 @@ The read brackets each window instance separately:
   (`first_reading`). In that last case usage before it was not seen, so the
   window, and the limit's sum, carry `lowerBound: true`.
 - A superseded instance is not summed beside the one that replaced it. Doing
-  so would count one usage twice.
+  so would count one usage twice. There is one exception: when the
+  replacement holds no reading inside the attempt, or does not reach it at
+  all, the superseded instances' readings during the attempt are the measure.
+  They are reported with the `superseded_window` baseline, or as a
+  `first_reading` lower bound when none of them was read before the attempt.
 `sole_known` means only that no *other attempt this machine knows of* ran on the
 account. Usage from another machine, from an interactive session or from a
 headless run outside staple lands in the same percentage and cannot be excluded,
@@ -1206,7 +1210,11 @@ reading as `no_sample_yet`, and every other gap as `stale`. An attempt list
 reports the span of an issue worked before any attempt was recorded in the
 workspace as `before_capture_began`. When a page speaks for no span at all,
 `from` and `to` are `null`, and `coverage.missing` gives the reason, as on
-every other record.
+every other record. For budget history that reason is `no_sample_yet` or
+`source_unavailable`. For an issue with no attempts it is one of the
+[timing contract's](timing-semantics.md#missingness-for-the-new-fields) codes:
+`never_started`, or `no_worker_attempt` when the issue has a start and no
+attempt.
 
 The cursor is a keyset position `(instant, id)`. The id breaks ties, because
 one status-line render stores one sample per limit at the same `observedAt`.
