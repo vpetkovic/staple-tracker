@@ -1225,6 +1225,41 @@ server.registerTool(
 );
 
 server.registerTool(
+  "calibration_cohorts",
+  {
+    description:
+      "Calibration cohorts: how long work of a class takes against its estimate, from trusted samples only (docs/timing-semantics.md, \"Calibration cohorts\"). Samples are done issues with their own estimate and no estimated descendant whose work is exact; approximate, timing-floor and missing records are never samples, and are counted under excluded. Each sample divides its workSeconds by the first worker attempt's estimateAtStart, else the current estimate, and says which. A cohort key is kind, priority, workType (label type:<x>), area (label area:<x>) and model (the worker attempts' harness model; unknown when none). A key with fewer than method.minSamples (5) samples falls back, dropping model, then area, then work type, then priority, then kind, to the first class with enough; each cohort reports the level read, the path with the count at each level, n, coverage (samples over the eligible issues in the class, denominator named), the median and pooled ratio, the median workSeconds, bounded member refs and the exclusions by state and reason. include [\"reconstructed\"] adds backfilled history as a separate set with its own cohorts, never pooled with exact. snapshot.id identifies the data the report came from: the same data gives the same id on every device. list \"samples\" lists the samples instead of the cohorts. Same payload as `staple calibrate --json`.",
+    inputSchema: {
+      kind: z.array(z.string()).optional().describe("Only these kinds"),
+      priority: z.array(z.string()).optional().describe("Only these priorities"),
+      parent: z.string().optional().describe("Only issues beneath this issue (identifier or id)"),
+      since: z.string().optional().describe("Resolved at or after: an ISO-8601 instant, or a duration meaning that long ago (7d, 12h)"),
+      include: z.array(z.string()).optional().describe("Evidence sets beyond exact, which is always read: [\"reconstructed\"] adds reconstructed history (with nothing approximate, missing or under a minute about it) as its own cohorts"),
+      list: z.enum(["cohorts", "samples"]).optional().describe("What items lists: cohorts (default) or samples"),
+      limit: z.number().optional().describe("Rows listed: a positive integer, default 50, at most 500 (a larger value is clamped)."),
+      cursor: z.string().optional().describe("Opaque cursor from the previous page's nextCursor, with the same other arguments."),
+      ws: wsSchema,
+    },
+    outputSchema: {
+      asOf: z.string(),
+      filter: z.record(z.string(), z.unknown()),
+      snapshot: z.record(z.string(), z.unknown()).describe("{id, algorithm, repositoryId, members, samples}: the identity of the data the report came from"),
+      method: z.record(z.string(), z.unknown()),
+      population: z.record(z.string(), z.unknown()),
+      sets: z.array(z.record(z.string(), z.unknown())),
+      list: z.enum(["cohorts", "samples"]),
+      items: z.array(z.record(z.string(), z.unknown())),
+      truncated: z.boolean().describe("Stated, never inferred: true when more rows follow this page."),
+      nextCursor: z.string().nullable(),
+      missing: z.record(z.string(), z.string()),
+    },
+    annotations: { title: "Calibration cohorts", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+  },
+  ({ kind, priority, parent, since, include, list, limit, cursor, ws }) =>
+    run(() => storeFor(ws).calibration({ kind, priority, parent, since, include, list, limit, cursor })),
+);
+
+server.registerTool(
   "create_task",
   {
     description:

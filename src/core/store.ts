@@ -101,7 +101,19 @@ import { WORK_ORDER, cohortKey, cohortReport, type CohortMember, type TimingQual
 import { parseSince } from "./telemetry/read-budget.js";
 import { qualifyAttempt, qualifyAttempts, type QualifiedAttempt } from "./telemetry/attempt-quality.js";
 import { intersect, partition, union, type CoverageAttempt, type PathEntry } from "./telemetry/wall.js";
-import { transitionsOf } from "./telemetry/attempt-records.js";
+import { attemptsOfIssue, laneOf, transitionsOf, type AttemptRecord } from "./telemetry/attempt-records.js";
+import {
+  EVIDENCE_SETS,
+  LABEL_PREFIX,
+  calibrationReport,
+  labelDimension,
+  modelDimension,
+  type CalibrationMember,
+  type CalibrationReport,
+  type EstimateAtStartMissing,
+  type EvidenceSet,
+} from "./telemetry/calibration.js";
+import { readStoredRepositoryId } from "./repo-identity.js";
 import { resumeGapsOf, viewsOfIssue } from "./telemetry/attempt-derive.js";
 import { attemptDetail, attemptSummary, listAttempts, type AttemptDetail, type AttemptSummary } from "./telemetry/read-attempts.js";
 import { decodeKeysetCursor, pageLimit, type PageRequest, type TelemetryPage } from "./telemetry/read-page.js";
@@ -661,6 +673,34 @@ function assertIdleThreshold(value: number | undefined, name: string): number | 
     throw new StapleError("validation", `${name} must be a non-negative number of seconds`);
   }
   return value;
+}
+
+/** The filters of {@link WorkspaceStore.calibration}. */
+export interface CalibrationQuery extends PageRequest {
+  readonly kind?: readonly string[];
+  readonly priority?: readonly string[];
+  readonly parent?: string;
+  readonly since?: string;
+  /** Evidence sets beyond `exact`, which is always read: `reconstructed`. */
+  readonly include?: readonly string[];
+  /** What the page lists: `cohorts` (default) or `samples`. */
+  readonly list?: string;
+}
+
+/** An issue row as the analytics reads (`timingQuality`, `calibration`) take it. */
+interface AnalyticsRow {
+  id: string;
+  identifier: string;
+  title: string;
+  kind: string;
+  priority: string;
+  /** The JSON array, as stored. */
+  labels: string;
+  status: string;
+  parent_id: string | null;
+  estimated_seconds: number | null;
+  completed_at: string | null;
+  cancelled_at: string | null;
 }
 
 /** The filters of {@link WorkspaceStore.timingQuality}. */
@@ -5513,64 +5553,9 @@ export class WorkspaceStore {
     const scope = { kind: kinds, parent: parentRow?.id ?? null, since: query.since ?? null, include, exclude, excludeReasons };
     const after = query.cursor === undefined ? null : decodeKeysetCursor("timing_quality", scope, query.cursor);
 
-    const rows = this.db
-      .prepare(
-        `SELECT id, identifier, title, kind, status, parent_id, estimated_seconds, completed_at, cancelled_at
-           FROM issues ORDER BY id`,
-      )
-      .all() as Array<{
-      id: string;
-      identifier: string;
-      title: string;
-      kind: string;
-      status: string;
-      parent_id: string | null;
-      estimated_seconds: number | null;
-      completed_at: string | null;
-      cancelled_at: string | null;
-    }>;
-    const byId = new Map(rows.map((row) => [row.id, row]));
-    const withChildren = new Set(rows.map((row) => row.parent_id).filter((id): id is string => id !== null));
-    /**
-     * Issues with a live estimated descendant: walk up from every live issue with its own
-     * estimate. A parent in this set is not a ratio data point: its descendants already are.
-     */
-    const overEstimated = new Set<string>();
-    for (const row of rows) {
-      if ((row.estimated_seconds ?? 0) <= 0 || this.categoryOf(row.status) === "cancelled") continue;
-      let up = row.parent_id;
-      for (let depth = 0; up !== null && depth < MAX_TREE_DEPTH && !overEstimated.has(up); depth += 1) {
-        overEstimated.add(up);
-        up = byId.get(up)?.parent_id ?? null;
-      }
-    }
-    const beneath = parentRow === null ? null : new Set(this.subtreeRows(parentRow.id).map((node) => node.id).filter((id) => id !== parentRow.id));
-    const inFilter = rows.filter((row) => {
-      if (row.kind === MILESTONE_KIND) return false;
-      if (kinds !== null && !kinds.includes(row.kind)) return false;
-      if (beneath !== null && !beneath.has(row.id)) return false;
-      if (since !== null) {
-        const resolvedAt = row.completed_at ?? row.cancelled_at;
-        if (resolvedAt === null || resolvedAt < since) return false;
-      }
-      return true;
-    });
-    let parents = 0;
-    let open = 0;
-    let cancelled = 0;
-    const eligibleRows: typeof rows = [];
-    const ratioParentRows: typeof rows = [];
-    for (const row of inFilter) {
-      const done = this.categoryOf(row.status) === "done";
-      if (withChildren.has(row.id)) {
-        parents += 1;
-        if (done && (row.estimated_seconds ?? 0) > 0 && !overEstimated.has(row.id)) ratioParentRows.push(row);
-      } else if (done) eligibleRows.push(row);
-      else if (this.categoryOf(row.status) === "cancelled") cancelled += 1;
-      else open += 1;
-    }
+    const { inFilter, eligibleRows, ratioParentRows, notEligible } = this.analyticsPopulation({ kinds, priorities: null, parentRow, since });
     const timings = this.timingFor([...eligibleRows, ...ratioParentRows].map((row) => row.id), asOf);
-    const memberOf = (row: (typeof rows)[number]): CohortMember => {
+    const memberOf = (row: AnalyticsRow): CohortMember => {
       const timing = timings.get(row.id)!;
       return {
         id: row.id,
@@ -5599,7 +5584,7 @@ export class WorkspaceStore {
     return cohortReport({
       asOf,
       filter,
-      population: { issues: inFilter.length, eligible: members.length, notEligible: { parents, open, cancelled } },
+      population: { issues: inFilter.length, eligible: members.length, notEligible },
       members,
       ratioMembers,
       ratioParents: ratioParentRows.length,
@@ -5607,6 +5592,175 @@ export class WorkspaceStore {
       limit,
       scope,
     });
+  }
+
+  /**
+   * `staple calibrate` / MCP `calibration_cohorts` / `GET /api/calibration`: calibration cohorts
+   * over the trusted samples of a filtered population (`telemetry/calibration.ts`,
+   * docs/timing-semantics.md "Calibration cohorts"). The population is the ratio population
+   * of {@link timingQuality}; the `exact` set is always read, and `include: ["reconstructed"]`
+   * adds the reconstructed set beside it, never pooled. Lists cohorts (default) or samples,
+   * bounded and keyset-cursored. A pure read.
+   *
+   * Filters: `kind` and `priority` (any of), `parent` (every issue beneath it), `since`
+   * (resolved at or after). Errors name the fields, not a surface's spelling of them.
+   */
+  calibration(query: CalibrationQuery = {}, asOf: string = nowIso()): CalibrationReport {
+    const kinds = query.kind === undefined || query.kind.length === 0 ? null : [...new Set(query.kind)].sort();
+    for (const kind of kinds ?? []) this.assertConfiguredKind(kind);
+    const priorities = query.priority === undefined || query.priority.length === 0 ? null : [...new Set(query.priority)].sort();
+    for (const priority of priorities ?? []) assertPriority(priority);
+    for (const set of query.include ?? []) {
+      if (!(EVIDENCE_SETS as readonly string[]).includes(set)) {
+        throw new StapleError(
+          "validation",
+          `include takes evidence sets (reconstructed; exact is always read); got "${set}". Approximate, timing-floor and missing records are never calibration samples.`,
+        );
+      }
+    }
+    const include: EvidenceSet[] = (query.include ?? []).includes("reconstructed") ? ["exact", "reconstructed"] : ["exact"];
+    const list = query.list ?? "cohorts";
+    if (list !== "cohorts" && list !== "samples") throw new StapleError("validation", `list takes cohorts or samples; got "${list}".`);
+    const limit = pageLimit(query.limit);
+    const parentRow = query.parent === undefined ? null : this.requireRow(query.parent);
+    const since = parseSince(query.since, asOf, "since");
+    // Fingerprinted as given, so a relative `since` keeps naming the same walk.
+    const scope = { kind: kinds, priority: priorities, parent: parentRow?.id ?? null, since: query.since ?? null, include, list };
+    const after = query.cursor === undefined ? null : decodeKeysetCursor(list === "samples" ? "calibration_samples" : "calibration_cohorts", scope, query.cursor);
+
+    const { inFilter, eligibleRows, ratioParentRows } = this.analyticsPopulation({ kinds, priorities, parentRow, since });
+    const ratioRows = [...eligibleRows.filter((row) => (row.estimated_seconds ?? 0) > 0), ...ratioParentRows];
+    const parentIds = new Set(ratioParentRows.map((row) => row.id));
+    const timings = this.timingFor(ratioRows.map((row) => row.id), asOf);
+    const workers = (issueId: string): AttemptRecord[] => attemptsOfIssue(this.db, issueId).filter((attempt) => laneOf(attempt) === "worker");
+    const members: CalibrationMember[] = ratioRows.map((row) => {
+      const timing = timings.get(row.id)!;
+      const own = workers(row.id);
+      // The attempts behind `workSeconds`: a leaf's own; a parent's are its descendants' (Q5).
+      const contributing = parentIds.has(row.id)
+        ? this.subtreeRows(row.id)
+            .filter((node) => node.id !== row.id)
+            .flatMap((node) => workers(node.id))
+        : own;
+      const current = row.estimated_seconds!;
+      const first = own[0];
+      let atStartMissing: EstimateAtStartMissing | null = null;
+      if (first === undefined) atStartMissing = "no_worker_attempt";
+      else if (first.estimateAtStart.source !== "own" && first.estimateAtStart.source !== "none") atStartMissing = "not_own";
+      else if (first.estimateAtStart.source === "none" || (first.estimateAtStart.estimatedSeconds ?? 0) <= 0) atStartMissing = "not_recorded";
+      const atStartSeconds = atStartMissing === null ? first!.estimateAtStart.estimatedSeconds! : null;
+      const labels = JSON.parse(row.labels) as string[];
+      return {
+        id: row.id,
+        identifier: row.identifier,
+        title: row.title,
+        completedAt: row.completed_at,
+        workSeconds: timing.workSeconds,
+        estimate: {
+          seconds: atStartSeconds ?? current,
+          source: atStartSeconds === null ? "current" : "at_start",
+          atStartSeconds,
+          currentSeconds: current,
+          missing: atStartMissing === null ? {} : { atStart: atStartMissing },
+        },
+        dimensions: {
+          kind: row.kind,
+          priority: row.priority,
+          workType: labelDimension(labels, LABEL_PREFIX.workType),
+          area: labelDimension(labels, LABEL_PREFIX.area),
+          model: modelDimension(contributing.map((attempt) => attempt.harness?.model ?? null)),
+        },
+        evidence: {
+          state: timing.quality.work.state!,
+          reasons: timing.quality.work.reasons,
+          workerAttempts: contributing.length,
+          provenance: [...new Set(contributing.map((attempt) => attempt.provenance))].sort(),
+          harnessSupplied: contributing.filter((attempt) => attempt.harness !== null).length,
+        },
+      };
+    });
+    return calibrationReport({
+      asOf,
+      filter: { kind: kinds, priority: priorities, parent: parentRow?.identifier ?? null, since, include },
+      repositoryId: readStoredRepositoryId(this.db),
+      parentId: parentRow?.id ?? null,
+      population: { issues: inFilter.length, ratio: members.length, parents: ratioParentRows.length },
+      members,
+      list,
+      after,
+      limit,
+      scope,
+    });
+  }
+
+  /**
+   * The populations every analytics read counts over (`timingQuality`, `calibration`;
+   * docs/timing-semantics.md, "Cohort coverage"): the issues in the filter (milestones never),
+   * the ELIGIBLE leaves (resolved `done`), and the parents that are ratio data points (done,
+   * their own estimate above 0, no live estimated descendant). The ratio population is those
+   * parents plus the eligible leaves with their own estimate. `notEligible` says why the rest
+   * of the filter is not eligible. A pure read.
+   */
+  private analyticsPopulation(filter: {
+    readonly kinds: readonly string[] | null;
+    readonly priorities: readonly string[] | null;
+    readonly parentRow: { readonly id: string } | null;
+    readonly since: string | null;
+  }): {
+    inFilter: AnalyticsRow[];
+    eligibleRows: AnalyticsRow[];
+    ratioParentRows: AnalyticsRow[];
+    notEligible: { parents: number; open: number; cancelled: number };
+  } {
+    const { kinds, priorities, parentRow, since } = filter;
+    const rows = this.db
+      .prepare(
+        `SELECT id, identifier, title, kind, priority, labels, status, parent_id, estimated_seconds, completed_at, cancelled_at
+           FROM issues ORDER BY id`,
+      )
+      .all() as unknown as AnalyticsRow[];
+    const byId = new Map(rows.map((row) => [row.id, row]));
+    const withChildren = new Set(rows.map((row) => row.parent_id).filter((id): id is string => id !== null));
+    /**
+     * Issues with a live estimated descendant: walk up from every live issue with its own
+     * estimate. A parent in this set is not a ratio data point: its descendants already are.
+     */
+    const overEstimated = new Set<string>();
+    for (const row of rows) {
+      if ((row.estimated_seconds ?? 0) <= 0 || this.categoryOf(row.status) === "cancelled") continue;
+      let up = row.parent_id;
+      for (let depth = 0; up !== null && depth < MAX_TREE_DEPTH && !overEstimated.has(up); depth += 1) {
+        overEstimated.add(up);
+        up = byId.get(up)?.parent_id ?? null;
+      }
+    }
+    const beneath = parentRow === null ? null : new Set(this.subtreeRows(parentRow.id).map((node) => node.id).filter((id) => id !== parentRow.id));
+    const inFilter = rows.filter((row) => {
+      if (row.kind === MILESTONE_KIND) return false;
+      if (kinds !== null && !kinds.includes(row.kind)) return false;
+      if (priorities !== null && !priorities.includes(row.priority)) return false;
+      if (beneath !== null && !beneath.has(row.id)) return false;
+      if (since !== null) {
+        const resolvedAt = row.completed_at ?? row.cancelled_at;
+        if (resolvedAt === null || resolvedAt < since) return false;
+      }
+      return true;
+    });
+    let parents = 0;
+    let open = 0;
+    let cancelled = 0;
+    const eligibleRows: AnalyticsRow[] = [];
+    const ratioParentRows: AnalyticsRow[] = [];
+    for (const row of inFilter) {
+      const done = this.categoryOf(row.status) === "done";
+      if (withChildren.has(row.id)) {
+        parents += 1;
+        if (done && (row.estimated_seconds ?? 0) > 0 && !overEstimated.has(row.id)) ratioParentRows.push(row);
+      } else if (done) eligibleRows.push(row);
+      else if (this.categoryOf(row.status) === "cancelled") cancelled += 1;
+      else open += 1;
+    }
+    return { inFilter, eligibleRows, ratioParentRows, notEligible: { parents, open, cancelled } };
   }
 
   /** The issue and every descendant, capped at MAX_TREE_DEPTH like `timingFor`'s closure. */

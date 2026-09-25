@@ -23,6 +23,7 @@ import { ATTEMPT_END_OPTIONS, ATTEMPT_OPEN_OPTIONS, attemptOptionsFrom, runAttem
 import { attemptLine, runAttemptsCommand } from "./commands/attempts.js";
 import { planLines, runCompareCommand } from "./commands/compare.js";
 import { runTimingCommand } from "./commands/timing.js";
+import { runCalibrateCommand } from "./commands/calibrate.js";
 import type { AttemptOptions } from "./core/telemetry/attempts.js";
 import { runCloudCommand } from "./commands/cloud.js";
 import { runHubRegistryCommand } from "./commands/hub-registry.js";
@@ -918,6 +919,12 @@ Tasks
               reconstructed, missing) and coverage over the eligible population (done
               leaves); --exclude drops states from the analysis, never from the counts;
               staple timing --help
+  calibrate [--kind K] [--priority P] [--parent REF] [--since T] [--include reconstructed]
+              calibration cohorts over trusted samples (done, own estimate, exact
+              work): kind, priority, work type, area and model, sparse cohorts
+              falling back to broader classes, with coverage and a snapshot id;
+              reconstructed history only on request, as its own cohorts;
+              staple calibrate --help
   board                                 terminal kanban
   inbox [--assignee A] [--hub]          ready vs queued vs blocked (pickup order);
               QUEUED is work a HUMAN has to release (see Approval gates below) and
@@ -1427,6 +1434,10 @@ function main() {
 
     case "timing":
       runTimingCommand(rest);
+      break;
+
+    case "calibrate":
+      runCalibrateCommand(rest);
       break;
 
     case "attempts":

@@ -1,0 +1,660 @@
+{
+  "title": "calibration cohorts over trusted samples, the fallback to broader classes, and one snapshot identity on every device",
+  "covers": [
+    "exact records are the samples; the sparse, timing-floor and reconstructed records beneath the parent are in the population and the coverage denominators, never samples of the exact set",
+    "the model dimension comes from the checkout's harness model, replicated with the attempt: the same key on the writer, the tail and a hydrated device",
+    "a sample divides by its first worker attempt's estimateAtStart: e1 was re-estimated from 2h to 1h after it started and still reads 20m over 2h",
+    "a full key with fewer than five samples falls back, model first: three opus and two sonnet samples both read their without_model class of five; a lone bug falls back to the whole set",
+    "reconstructed history is a separate set only when asked for, with its own cohorts: two samples, below the minimum everywhere",
+    "the snapshot id is the same on every device and for the cohort and sample listings, because every input is replicated",
+    "samples and members list oldest resolution first, and two resolved in one millisecond by issue id: the same order on every device, and the order the cursor follows"
+  ],
+  "start": "2026-09-01T09:00:00.000Z",
+  "devices": {
+    "tail": true,
+    "hydrate": true
+  },
+  "steps": [
+    {
+      "at": "0s",
+      "do": "create",
+      "ref": "p",
+      "title": "calibration",
+      "kind": "epic"
+    },
+    {
+      "at": "0s",
+      "do": "create",
+      "ref": "e1",
+      "parent": "p",
+      "estimate": "2h",
+      "kind": "task",
+      "priority": "high",
+      "labels": [
+        "type:feature",
+        "area:sync"
+      ]
+    },
+    {
+      "at": "0s",
+      "do": "create",
+      "ref": "e2",
+      "parent": "p",
+      "estimate": "2h",
+      "kind": "task",
+      "priority": "high",
+      "labels": [
+        "type:feature",
+        "area:sync"
+      ]
+    },
+    {
+      "at": "0s",
+      "do": "create",
+      "ref": "e3",
+      "parent": "p",
+      "estimate": "2h",
+      "kind": "task",
+      "priority": "high",
+      "labels": [
+        "type:feature",
+        "area:sync"
+      ]
+    },
+    {
+      "at": "0s",
+      "do": "create",
+      "ref": "e4",
+      "parent": "p",
+      "estimate": "2h",
+      "kind": "task",
+      "priority": "high",
+      "labels": [
+        "type:feature",
+        "area:sync"
+      ]
+    },
+    {
+      "at": "0s",
+      "do": "create",
+      "ref": "e5",
+      "parent": "p",
+      "estimate": "2h",
+      "kind": "task",
+      "priority": "high",
+      "labels": [
+        "type:feature",
+        "area:sync"
+      ]
+    },
+    {
+      "at": "0s",
+      "do": "create",
+      "ref": "b1",
+      "parent": "p",
+      "estimate": "1h",
+      "kind": "bug",
+      "priority": "low"
+    },
+    {
+      "at": "0s",
+      "do": "create",
+      "ref": "sparse",
+      "parent": "p",
+      "estimate": "2h",
+      "kind": "task",
+      "priority": "high",
+      "labels": [
+        "type:feature",
+        "area:sync"
+      ]
+    },
+    {
+      "at": "0s",
+      "do": "create",
+      "ref": "floor",
+      "parent": "p",
+      "estimate": "30m",
+      "kind": "task",
+      "priority": "high",
+      "labels": [
+        "type:feature",
+        "area:sync"
+      ]
+    },
+    {
+      "at": "0s",
+      "do": "checkout",
+      "ref": "e1",
+      "agent": "w1",
+      "model": "opus"
+    },
+    {
+      "at": "0s",
+      "do": "checkout",
+      "ref": "e2",
+      "agent": "w2",
+      "model": "opus"
+    },
+    {
+      "at": "0s",
+      "do": "checkout",
+      "ref": "e3",
+      "agent": "w3",
+      "model": "opus"
+    },
+    {
+      "at": "0s",
+      "do": "checkout",
+      "ref": "e4",
+      "agent": "w4",
+      "model": "sonnet"
+    },
+    {
+      "at": "0s",
+      "do": "checkout",
+      "ref": "e5",
+      "agent": "w5",
+      "model": "sonnet"
+    },
+    {
+      "at": "0s",
+      "do": "checkout",
+      "ref": "b1",
+      "agent": "w6"
+    },
+    {
+      "at": "0s",
+      "do": "checkout",
+      "ref": "sparse",
+      "agent": "w7",
+      "model": "opus"
+    },
+    {
+      "at": "0s",
+      "do": "checkout",
+      "ref": "floor",
+      "agent": "w8",
+      "model": "opus"
+    },
+    {
+      "at": "30s",
+      "do": "status",
+      "ref": "floor",
+      "to": "done",
+      "agent": "w8"
+    },
+    {
+      "at": "5m",
+      "do": "estimate",
+      "ref": "e1",
+      "agent": "w1",
+      "estimate": "1h"
+    },
+    {
+      "at": "10m",
+      "do": "comment",
+      "ref": "e1",
+      "agent": "w1"
+    },
+    {
+      "at": "10m",
+      "do": "comment",
+      "ref": "e2",
+      "agent": "w2"
+    },
+    {
+      "at": "10m",
+      "do": "comment",
+      "ref": "e3",
+      "agent": "w3"
+    },
+    {
+      "at": "10m",
+      "do": "comment",
+      "ref": "e4",
+      "agent": "w4"
+    },
+    {
+      "at": "10m",
+      "do": "comment",
+      "ref": "e5",
+      "agent": "w5"
+    },
+    {
+      "at": "10m",
+      "do": "comment",
+      "ref": "b1",
+      "agent": "w6"
+    },
+    {
+      "at": "20m",
+      "do": "status",
+      "ref": "e1",
+      "to": "done",
+      "agent": "w1"
+    },
+    {
+      "at": "20m",
+      "do": "comment",
+      "ref": "e2",
+      "agent": "w2"
+    },
+    {
+      "at": "20m",
+      "do": "comment",
+      "ref": "e3",
+      "agent": "w3"
+    },
+    {
+      "at": "20m",
+      "do": "comment",
+      "ref": "e4",
+      "agent": "w4"
+    },
+    {
+      "at": "20m",
+      "do": "comment",
+      "ref": "e5",
+      "agent": "w5"
+    },
+    {
+      "at": "20m",
+      "do": "status",
+      "ref": "b1",
+      "to": "done",
+      "agent": "w6"
+    },
+    {
+      "at": "30m",
+      "do": "status",
+      "ref": "e2",
+      "to": "done",
+      "agent": "w2"
+    },
+    {
+      "at": "30m",
+      "do": "comment",
+      "ref": "e3",
+      "agent": "w3"
+    },
+    {
+      "at": "30m",
+      "do": "comment",
+      "ref": "e4",
+      "agent": "w4"
+    },
+    {
+      "at": "30m",
+      "do": "comment",
+      "ref": "e5",
+      "agent": "w5"
+    },
+    {
+      "at": "40m",
+      "do": "status",
+      "ref": "e3",
+      "to": "done",
+      "agent": "w3"
+    },
+    {
+      "at": "40m",
+      "do": "comment",
+      "ref": "e4",
+      "agent": "w4"
+    },
+    {
+      "at": "40m",
+      "do": "comment",
+      "ref": "e5",
+      "agent": "w5"
+    },
+    {
+      "at": "50m",
+      "do": "comment",
+      "ref": "e4",
+      "agent": "w4"
+    },
+    {
+      "at": "50m",
+      "do": "comment",
+      "ref": "e5",
+      "agent": "w5"
+    },
+    {
+      "at": "50m",
+      "do": "status",
+      "ref": "sparse",
+      "to": "done",
+      "agent": "w7"
+    },
+    {
+      "at": "60m",
+      "do": "status",
+      "ref": "e4",
+      "to": "done",
+      "agent": "w4"
+    },
+    {
+      "at": "60m",
+      "do": "status",
+      "ref": "e5",
+      "to": "done",
+      "agent": "w5"
+    },
+    {
+      "at": "1h",
+      "do": "olderBuildCreate",
+      "ref": "r1",
+      "parent": "p",
+      "status": "done",
+      "startedAt": "0s",
+      "completedAt": "20m"
+    },
+    {
+      "at": "1h",
+      "do": "olderBuildCreate",
+      "ref": "r2",
+      "parent": "p",
+      "status": "done",
+      "startedAt": "0s",
+      "completedAt": "25m"
+    },
+    {
+      "at": "1h1m",
+      "do": "sync",
+      "devices": [
+        "a"
+      ]
+    },
+    {
+      "at": "1h2m",
+      "do": "legacyEvent",
+      "ref": "r1",
+      "kind": "checkout",
+      "agent": "old1",
+      "eventAt": "0s"
+    },
+    {
+      "at": "1h2m",
+      "do": "legacyEvent",
+      "ref": "r2",
+      "kind": "checkout",
+      "agent": "old2",
+      "eventAt": "0s"
+    },
+    {
+      "at": "1h2m",
+      "do": "estimate",
+      "ref": "r1",
+      "agent": "planner",
+      "estimate": "2h"
+    },
+    {
+      "at": "1h2m",
+      "do": "estimate",
+      "ref": "r2",
+      "agent": "planner",
+      "estimate": "2h"
+    },
+    {
+      "at": "1h3m",
+      "do": "reconstruct"
+    }
+  ],
+  "expect": [
+    {
+      "asOf": "1h10m",
+      "ref": "p",
+      "calibration": {
+        "population": 10,
+        "sets": {
+          "exact": 6
+        },
+        "cohorts": [
+          {
+            "set": "exact",
+            "key": {
+              "kind": "bug",
+              "priority": "low",
+              "workType": "unknown",
+              "area": "unknown",
+              "model": "unknown"
+            },
+            "keySamples": 1,
+            "level": "all",
+            "samples": 6,
+            "eligible": 10,
+            "medianRatio": 0.3333
+          },
+          {
+            "set": "exact",
+            "key": {
+              "kind": "task",
+              "priority": "high",
+              "workType": "feature",
+              "area": "sync",
+              "model": "opus"
+            },
+            "keySamples": 3,
+            "level": "without_model",
+            "samples": 5,
+            "eligible": 7,
+            "medianRatio": 0.3333,
+            "members": [
+              "e1",
+              "e2",
+              "e3",
+              "e5",
+              "e4"
+            ]
+          },
+          {
+            "set": "exact",
+            "key": {
+              "kind": "task",
+              "priority": "high",
+              "workType": "feature",
+              "area": "sync",
+              "model": "sonnet"
+            },
+            "keySamples": 2,
+            "level": "without_model",
+            "samples": 5,
+            "eligible": 7,
+            "medianRatio": 0.3333
+          }
+        ],
+        "samples": [
+          {
+            "ref": "b1",
+            "set": "exact",
+            "estimateSource": "at_start",
+            "ratio": 0.3333,
+            "model": "unknown"
+          },
+          {
+            "ref": "e1",
+            "set": "exact",
+            "estimateSource": "at_start",
+            "ratio": 0.1667,
+            "model": "opus"
+          },
+          {
+            "ref": "e2",
+            "set": "exact",
+            "estimateSource": "at_start",
+            "ratio": 0.25,
+            "model": "opus"
+          },
+          {
+            "ref": "e3",
+            "set": "exact",
+            "estimateSource": "at_start",
+            "ratio": 0.3333,
+            "model": "opus"
+          },
+          {
+            "ref": "e5",
+            "set": "exact",
+            "estimateSource": "at_start",
+            "ratio": 0.5,
+            "model": "sonnet"
+          },
+          {
+            "ref": "e4",
+            "set": "exact",
+            "estimateSource": "at_start",
+            "ratio": 0.5,
+            "model": "sonnet"
+          }
+        ]
+      }
+    },
+    {
+      "asOf": "1h10m",
+      "ref": "p",
+      "calibration": {
+        "include": [
+          "reconstructed"
+        ],
+        "population": 10,
+        "sets": {
+          "exact": 6,
+          "reconstructed": 2
+        },
+        "cohorts": [
+          {
+            "set": "exact",
+            "key": {
+              "kind": "bug",
+              "priority": "low",
+              "workType": "unknown",
+              "area": "unknown",
+              "model": "unknown"
+            },
+            "keySamples": 1,
+            "level": "all",
+            "samples": 6,
+            "eligible": 10,
+            "medianRatio": 0.3333
+          },
+          {
+            "set": "exact",
+            "key": {
+              "kind": "task",
+              "priority": "high",
+              "workType": "feature",
+              "area": "sync",
+              "model": "opus"
+            },
+            "keySamples": 3,
+            "level": "without_model",
+            "samples": 5,
+            "eligible": 7,
+            "medianRatio": 0.3333,
+            "members": [
+              "e1",
+              "e2",
+              "e3",
+              "e5",
+              "e4"
+            ]
+          },
+          {
+            "set": "exact",
+            "key": {
+              "kind": "task",
+              "priority": "high",
+              "workType": "feature",
+              "area": "sync",
+              "model": "sonnet"
+            },
+            "keySamples": 2,
+            "level": "without_model",
+            "samples": 5,
+            "eligible": 7,
+            "medianRatio": 0.3333
+          },
+          {
+            "set": "reconstructed",
+            "key": {
+              "kind": "task",
+              "priority": "medium",
+              "workType": "unknown",
+              "area": "unknown",
+              "model": "unknown"
+            },
+            "keySamples": 2,
+            "level": "all",
+            "samples": 2,
+            "eligible": 10,
+            "medianRatio": 0.1667,
+            "members": [
+              "r1",
+              "r2"
+            ]
+          }
+        ],
+        "samples": [
+          {
+            "ref": "b1",
+            "set": "exact",
+            "estimateSource": "at_start",
+            "ratio": 0.3333,
+            "model": "unknown"
+          },
+          {
+            "ref": "e1",
+            "set": "exact",
+            "estimateSource": "at_start",
+            "ratio": 0.1667,
+            "model": "opus"
+          },
+          {
+            "ref": "e2",
+            "set": "exact",
+            "estimateSource": "at_start",
+            "ratio": 0.25,
+            "model": "opus"
+          },
+          {
+            "ref": "e3",
+            "set": "exact",
+            "estimateSource": "at_start",
+            "ratio": 0.3333,
+            "model": "opus"
+          },
+          {
+            "ref": "e5",
+            "set": "exact",
+            "estimateSource": "at_start",
+            "ratio": 0.5,
+            "model": "sonnet"
+          },
+          {
+            "ref": "e4",
+            "set": "exact",
+            "estimateSource": "at_start",
+            "ratio": 0.5,
+            "model": "sonnet"
+          },
+          {
+            "ref": "r1",
+            "set": "reconstructed",
+            "estimateSource": "current",
+            "ratio": 0.1667,
+            "model": "unknown"
+          },
+          {
+            "ref": "r2",
+            "set": "reconstructed",
+            "estimateSource": "current",
+            "ratio": 0.2083,
+            "model": "unknown"
+          }
+        ]
+      }
+    }
+  ]
+}
