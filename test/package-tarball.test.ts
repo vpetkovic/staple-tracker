@@ -346,8 +346,8 @@ describe("the installed binary, run from outside this repository", () => {
       // Execution attempts added record_attempt_event (48), and the telemetry reads
       // list_attempts, get_attempt, get_budget and list_budget_samples (52),
       // and the explicit estimate write set_estimate (53), compare_plans (54), and
-      // timing_quality (55).
-      expect(tools).toHaveLength(55);
+      // timing_quality (55), and calibration_cohorts (56).
+      expect(tools).toHaveLength(56);
       expect(tools.map((tool) => tool.name)).toContain("list_tasks");
 
       // A real call, so this proves the workspace path too, not just the handshake.

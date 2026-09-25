@@ -351,6 +351,25 @@ can be trusted, before you calibrate anything on it:
 
 The rules are in [cli.md](cli.md#timing-quality-staple-timing-quality).
 
+### Calibration cohorts
+
+`calibration_cohorts {kind?, priority?, parent?, since?, include?, list?, limit?, cursor?, ws?}`
+is `staple calibrate --json`. Use it to see how long a class of work takes
+against its estimate, from trusted samples only:
+
+- Samples are done issues with their own estimate whose work is `exact`.
+  `include: ["reconstructed"]` adds backfilled history as its own set, never
+  pooled with exact. Nothing approximate is ever a sample.
+- A cohort key is `kind`, `priority`, `workType` (label `type:<x>`), `area`
+  (label `area:<x>`) and `model` (pass `--harness` and `--model` on checkout
+  so your work lands under the right model). A key with fewer than 5 samples
+  falls back to a broader class, and says which and why (`level`, `path`).
+- Each cohort gives `samples`, `coverage` with its denominator, the median and
+  pooled ratio and the median `workSeconds`. `snapshot.id` names the data it
+  came from; quote it when you cite a figure.
+
+The rules are in [cli.md](cli.md#calibration-staple-calibrate).
+
 ## Harness ergonomics
 
 All in-protocol, so a harness never needs out-of-band setup:

@@ -118,7 +118,7 @@ try {
   );
   const readOnly = tools.tools.filter((t: any) => t.annotations?.readOnlyHint === true).map((t: any) => t.name);
   assert(
-    readOnly.length === 22 &&
+    readOnly.length === 23 &&
       [
         "inbox",
         "list_tasks",
@@ -153,8 +153,10 @@ try {
         "compare_plans",
         // Nor does reading how much of a population's timing can be trusted.
         "timing_quality",
+        // Nor calibration cohorts over the trusted samples.
+        "calibration_cohorts",
       ].every((n) => readOnly.includes(n)),
-    `exactly the 22 read-only tools flagged readOnlyHint (${readOnly.join(", ")})`,
+    `exactly the 23 read-only tools flagged readOnlyHint (${readOnly.join(", ")})`,
   );
   assert(byName.get("checkout_task").annotations.idempotentHint === true, "checkout_task flagged idempotent");
   assert(
@@ -670,6 +672,22 @@ try {
       qualityExcluded.work.counts.missing === 1,
     "timing_quality gives each record one state, coverage over the eligible leaves, and excludes explicitly without moving the counts",
   );
+  // Nothing beneath the epic was worked, so nothing is a calibration sample: the read says
+  // so, still names its snapshot, and refuses an approximate set.
+  const calibration = JSON.parse(toolText(await rpc("tools/call", { name: "calibration_cohorts", arguments: { parent: epic.identifier } })));
+  const approximateSet = await rpc("tools/call", { name: "calibration_cohorts", arguments: { include: ["approximate"] } });
+  assert(
+    calibration.sets.length === 1 &&
+      calibration.sets[0].set === "exact" &&
+      calibration.sets[0].samples === 0 &&
+      calibration.items.length === 0 &&
+      typeof calibration.missing.items === "string" &&
+      /^calibration1:[0-9a-f]{32}$/.test(calibration.snapshot.id) &&
+      calibration.method.minSamples === 5 &&
+      approximateSet.isError === true &&
+      toolError(approximateSet).code === "validation",
+    "calibration_cohorts reads trusted samples only, names its snapshot, and refuses an approximate set",
+  );
   const epicEvents = JSON.parse(
     toolText(await rpc("tools/call", { name: "events_since", arguments: { since: 0 } })),
   ).filter((e: any) => e.payload?.identifier === epic.identifier);
@@ -809,8 +827,8 @@ try {
   // attempt reads list_attempts and get_attempt make 43; the budget reads, like
   // record_budget_sample, read this machine's hub and take no ws. set_estimate, the
   // explicit estimate write, makes 44, compare_plans, the certified plan read, 45, and
-  // timing_quality, the cohort quality read, 46.
-  assert(wsTargetable.length === 46, `46 workspace tools accept ws targeting (${wsTargetable.length} found)`);
+  // timing_quality, the cohort quality read, 46, and calibration_cohorts, 47.
+  assert(wsTargetable.length === 47, `47 workspace tools accept ws targeting (${wsTargetable.length} found)`);
   assert(
     !coldByName.get("get_budget").inputSchema.properties?.ws &&
       !coldByName.get("list_budget_samples").inputSchema.properties?.ws &&

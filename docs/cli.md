@@ -731,6 +731,67 @@ staple timing quality --kind task --exclude approximate
   oldest resolution first, `--limit` 50 by default and at most 500, with a
   keyset `--cursor`, as for the other telemetry lists. `truncated` is stated.
 
+### Calibration: `staple calibrate`
+
+`staple calibrate` (MCP `calibration_cohorts`, HTTP `GET /api/calibration`)
+groups trusted samples into cohorts and says how long work of each class took
+against its estimate ([timing-semantics.md](timing-semantics.md#calibration-cohorts)).
+All three surfaces call one store method and answer one payload:
+
+```bash
+staple calibrate --kind task --include reconstructed
+# snapshot calibration1:6e84cb2562426e930df170d6ee46b9f7 · kind task
+# 108 eligible (done, own estimate) of 215 issues · minimum 5 samples per cohort
+# exact         4 samples (3.7% of 108) in 1 cohorts · not samples: approximate 2, reconstructed 102
+# reconstructed 84 samples (77.8% of 108) in 4 cohorts · not samples: exact 4, approximate 2, reconstructed 18
+# exact         kind=task priority=high workType=unknown area=unknown model=unknown · 4 own → all (full 4, without_model 4, without_area 4, without_work_type 4, kind 4, all 4)
+#               all: n 4 (3.7% of 108) · ratio median 0.179, pooled 0.238 · work median 44m37s · small_sample
+# reconstructed kind=task priority=low workType=unknown area=unknown model=unknown · 1 own → kind (full 1, without_model 1, without_area 1, without_work_type 1, kind 84)
+#               kind=task: n 84 (77.8% of 108) · ratio median 0.092, pooled 0.084 · work median 18m29s
+```
+
+- **Samples.** The population is the ratio population of
+  [timing quality](#timing-quality-staple-timing-quality): done issues with
+  their own estimate and no live estimated descendant. A sample is one whose
+  work is `exact`. Approximate, timing-floor and missing records are never
+  samples; they stay in every denominator and are counted under `excluded`.
+  `--include reconstructed` adds backfilled history (reconstructed records with
+  nothing approximate, missing or under a minute about them) as a **separate
+  set** with its own cohorts. It is never pooled with `exact`, and the exact
+  set reads the same with or without it. Any other `--include` value is refused.
+- **The estimate.** Each sample divides `workSeconds` by its first worker
+  attempt's `estimateAtStart` when that reading is its own estimate, so a
+  re-estimate made after the work started cannot flatter it, and otherwise by
+  the current estimate. `estimate.source` says which (`at_start`, `current`),
+  and `estimate.missing.atStart` why there was no reading (`no_worker_attempt`,
+  `not_recorded` for reconstructed attempts, `not_own`).
+- **Cohort key.** `kind`, `priority`, `workType`, `area` and `model`.
+  `workType` and `area` come from labels: `type:<x>` and `area:<x>` (the prefix
+  matched without case, the value lowercased; several values join with `+`).
+  `model` is the `--model` the contributing worker attempts named with
+  `--harness`. A dimension with no value reads `unknown`.
+- **Fallback.** A key with fewer than 5 samples reads a broader class: without
+  model, then without area, then without work type, then kind alone, then the
+  whole set. `path` lists every level tried with its sample count, `level` and
+  `class` say which was read (dropped dimensions are `*`), and `fallback` is
+  `none`, `below_minimum` or `below_minimum_everywhere` (then the whole set is
+  read, with the warning `small_sample`).
+- **Per cohort.** `samples`; `coverage` (`samples / eligible`, the
+  denominator named: the population members in the class, whatever their
+  quality); the lower median and the pooled ratio (`Σ work / Σ estimate`); the
+  median `workSeconds`; how many samples used each estimate source; up to 20
+  member refs with the total; and the members of the class left out, by state
+  and reason.
+- **Snapshot.** `snapshot.id` identifies the data the report was computed
+  from. The same data gives the same id on every device, in any order and at
+  any later instant; a changed sample, estimate, label, model or selection
+  changes it. Pages and `--samples` of the same data share it.
+- **Lists.** Cohorts by default, one row per full key observed among the
+  samples, by set then key; `--samples` lists the samples instead, by set then
+  oldest resolution first. `--limit` 50 by default and at most 500, with a
+  keyset `--cursor`. Filters: `--kind`, `--priority`, `--parent REF` and
+  `--since T`, applied before any cohort is formed.
+
 ## Approval gates
 
 A **gate** parks a *parent* on a named human and takes its whole subtree out of
