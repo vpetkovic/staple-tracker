@@ -84,6 +84,12 @@ beforeAll(async () => {
     const b = store.createIssue({ title: "B", parent: refs.epic, estimatedSeconds: 7200, labels: ["area:ui"], priority: "high", blockedBy: [a.id] });
     const c = store.createIssue({ title: "C", parent: refs.epic, labels: ["area:ui"], priority: "high" });
     Object.assign(refs, { a: a.identifier, b: b.identifier, c: c.identifier });
+    // A second epic with one unit handed over for review and one still to do.
+    const reviewed = store.createIssue({ title: "Reviewed", kind: "epic" });
+    const handed = store.createIssue({ title: "handed over", parent: reviewed.id, estimatedSeconds: 7200, labels: ["area:ui"], priority: "high" });
+    store.updateIssue(handed.id, { status: "in_review" }, "w");
+    store.createIssue({ title: "still to do", parent: reviewed.id, estimatedSeconds: 7200, labels: ["area:ui"], priority: "high" });
+    refs.reviewed = reviewed.identifier;
   } finally {
     setClock(null);
     store.db.close();
@@ -162,9 +168,18 @@ describe("forecast: one payload through the CLI, MCP and HTTP", () => {
     expect(lines[0]).toMatch(new RegExp(`^${refs.epic} · Forecast me \\(epic, backlog\\) · snapshot forecast2:[0-9a-f]{32} over calibration2:[0-9a-f]{32}$`));
     expect(lines[1]).toBe(`completion  8 units · 5 done · 0 awaiting review · 3 to forecast, 2 known · unknown ${refs.c}`);
     expect(lines[2]).toMatch(/^ {2}labor {5}expected ≥2h6m · p10–p90 .+ · 90% band .+ · unknown_units · plan ≥?\d.* \(descendants\)$/);
+    // No review is open here, so the labor line says nothing about one.
+    expect(lines[2]).not.toContain("awaiting review");
     expect(lines[3]).toMatch(new RegExp(`^ {2}path {6}expected ≥2h6m · ${refs.a} > ${refs.b} · p10–p90 `));
     expect(lines[4]).toMatch(/^ {2}confidence low · bounds reach 66\.7% of 90\.0% · unknown_units, bounds_below_confidence · warnings /);
     expect(lines[5]).toBe("budget      this machine · reserve 20.0% (provisional default, until the admission policy defines one) · work ≥2h6m, serial from now");
     expect(lines[6]).toBe("  no account: source_unavailable");
+
+    // With a unit in review, the labor line says its wait is not in the figure.
+    const reviewed = cli("forecast", refs.reviewed!, "--ws", WS);
+    expect(reviewed.status, reviewed.stderr).toBe(0);
+    const reviewedLines = reviewed.stdout.trimEnd().split("\n");
+    expect(reviewedLines[1]).toBe("completion  2 units · 0 done · 1 awaiting review · 1 to forecast, 1 known");
+    expect(reviewedLines[2]).toMatch(/^ {2}labor {5}expected 42m · p10–p90 .+ · 90% band .+ · 1 awaiting review \(not forecast\) · plan 4h \(descendants\)$/);
   });
 });

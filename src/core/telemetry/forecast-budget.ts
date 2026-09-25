@@ -212,6 +212,12 @@ export interface BudgetWorkProjection {
   readonly remainingAtResetPercent: { readonly expected: number; readonly simulated: SimulatedSpread };
   /** The share of draws in which the work runs past the reset. */
   readonly outlastsResetProbability: number;
+  /**
+   * What the work alone leaves of the first window after the reset: `100 − rate × min(rest,
+   * windowSeconds)`, `rest` the work left at the reset (100 when none is). Null, with the reason
+   * in `missing`, when the window length is unknown.
+   */
+  readonly nextWindowRemainingPercent: { readonly expected: number; readonly simulated: SimulatedSpread } | null;
   /** Windows the work runs in, the current one included, over the draws. */
   readonly windows: SimulatedSpread;
   /** The share of draws in which the work alone uses a window's limit up, in any window it runs in. */
@@ -246,6 +252,11 @@ export interface BudgetReserveCheck {
     readonly breachProbability: number | null;
     readonly currentWindowBreachProbability: number;
     readonly remainingAtResetPercent: { readonly expected: number; readonly simulated: SimulatedSpread };
+    /**
+     * The first window after the reset with the other use added for the hours the work is not
+     * running in it: `100 − rate × min(rest, W) − other × (W − min(rest, W))`. Null when W is unknown.
+     */
+    readonly nextWindowRemainingPercent: { readonly expected: number; readonly simulated: SimulatedSpread } | null;
   } | null;
   /** The work rate's confidence carries over: a breach figure from one span is a guess. */
   readonly confidence: RateConfidence;
@@ -300,6 +311,14 @@ export interface BudgetForecast {
 
 const ms = (instant: string): number => Date.parse(instant);
 const HOUR = 3600;
+
+/**
+ * The other use of a window the work runs `rest` seconds into, in percent: only the hours the
+ * work is not running, since the work rate already holds everything while it runs.
+ */
+function otherUseBesideWork(otherPerHour: number, rest: number, windowSeconds: number): number {
+  return (otherPerHour * (windowSeconds - Math.min(rest, windowSeconds))) / HOUR;
+}
 
 function paceOf(readings: readonly WindowReading[]): BudgetPace | null {
   if (readings.length < 2) return null;
@@ -545,6 +564,8 @@ function limitForecast(input: BudgetLimitInput, context: LimitContext): BudgetLi
     const left = new Float64Array(draws);
     const leftOther = new Float64Array(draws);
     const windows = new Float64Array(draws);
+    const nextLeft = new Float64Array(draws);
+    const nextLeftOther = new Float64Array(draws);
     let outlasts = 0;
     let exhaustsNow = 0;
     let exhausts = 0;
@@ -565,6 +586,7 @@ function limitForecast(input: BudgetLimitInput, context: LimitContext): BudgetLi
       // The first full window after the reset gets the most of what is left: it is the one to check.
       const next = rest > 0 && windowSeconds !== null ? (r * Math.min(rest, windowSeconds)) / HOUR : 0;
       windows[d] = 1 + (rest > 0 && windowSeconds !== null ? Math.ceil(rest / windowSeconds) : 0);
+      nextLeft[d] = 100 - next;
       if (left[d]! <= 0) exhaustsNow += 1;
       if (left[d]! <= 0 || 100 - next <= 0) exhausts += 1;
       if (left[d]! < reserveAt) breachNow += 1;
@@ -574,17 +596,23 @@ function limitForecast(input: BudgetLimitInput, context: LimitContext): BudgetLi
         // The work rate already holds everything that happened while the work ran: other use only
         // fills the hours the work is not running, before this reset and in the next window.
         leftOther[d] = left[d]! - (o * (horizon - Math.min(laborDraw, horizon))) / HOUR;
-        const nextOther = rest > 0 && windowSeconds !== null ? next + (o * (windowSeconds - Math.min(rest, windowSeconds))) / HOUR : 0;
+        const nextOtherUse = windowSeconds === null ? 0 : otherUseBesideWork(o, rest, windowSeconds);
+        nextLeftOther[d] = 100 - next - nextOtherUse;
+        const nextOther = rest > 0 && windowSeconds !== null ? next + nextOtherUse : 0;
         if (leftOther[d]! < reserveAt) breachNowOther += 1;
         if (leftOther[d]! < reserveAt || (rest > 0 && 100 - nextOther < reserveAt)) breachOther += 1;
       }
     }
     const beforeExpected = (rate * Math.min(labor, horizon)) / HOUR;
+    const restExpected = Math.max(0, labor - horizon);
+    const nextExpected = windowSeconds === null ? null : (rate * Math.min(restExpected, windowSeconds)) / HOUR;
+    if (windowSeconds === null) missing.nextWindowRemainingPercent = window?.missing.windowSeconds ?? "not_reported_by_source";
     work = {
       consumedPercent: { expected: (rate * labor) / HOUR, simulated: spreadOfDraws(consumed) },
       beforeResetPercent: { expected: beforeExpected, simulated: spreadOfDraws(before) },
       remainingAtResetPercent: { expected: remaining - beforeExpected, simulated: spreadOfDraws(left) },
       outlastsResetProbability: outlasts / draws,
+      nextWindowRemainingPercent: nextExpected === null ? null : { expected: 100 - nextExpected, simulated: spreadOfDraws(nextLeft) },
       windows: spreadOfDraws(windows),
       exhaustionProbability: exhausts / draws,
       currentWindowExhaustionProbability: exhaustsNow / draws,
@@ -627,6 +655,13 @@ function limitForecast(input: BudgetLimitInput, context: LimitContext): BudgetLi
                 expected: remaining - beforeExpected - (otherUse.percentPerHour * (horizon - Math.min(labor, horizon))) / HOUR,
                 simulated: spreadOfDraws(leftOther),
               },
+              nextWindowRemainingPercent:
+                nextExpected === null
+                  ? null
+                  : {
+                      expected: 100 - nextExpected - otherUseBesideWork(otherUse.percentPerHour, restExpected, windowSeconds!),
+                      simulated: spreadOfDraws(nextLeftOther),
+                    },
             },
       confidence: workRate!.confidence,
       missing: reserveMissing,

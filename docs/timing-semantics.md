@@ -1479,7 +1479,9 @@ and every limit of it:
   `remainingAtResetPercent` is `remaining − beforeReset`, which falls to 0 or below when
   the work alone runs the limit out. What is left of the work runs on into the next
   window, which starts at 100% and lasts `windowSeconds`, then the next;
-  `windows` counts the windows it runs in. `outlastsResetProbability` is the share of
+  `windows` counts the windows it runs in, and `nextWindowRemainingPercent` is what the work
+  alone leaves of the first window after the reset (`withOtherUse` has the same figure with
+  the other use added for the hours of that window the work leaves free). `outlastsResetProbability` is the share of
   draws that run past the reset. `exhaustionProbability` is the share in which the work
   alone uses up a window it runs in (reaching 0 counts), and
   `currentWindowExhaustionProbability` the same for the current window. Each figure is
@@ -1581,7 +1583,10 @@ window's pace is 12%/hour. The work to forecast expects 6 600 s (six samples, po
   `shared` and the rate warns `shared_use`. Once a half-hour attempt with nobody else on
   the account follows (40% to 46%), the rate reads it alone: 12%/work-hour.
 - With 40 minutes between two spans and three readings there showing +4%, other use is
-  6%/hour. Before a reset 3h9m away, a piece of work of `L` seconds at 15%/work-hour
+  6%/hour. Six hours of estimate at a pooled 0.8125 is 17 550 s of work: 11 340 s before a
+  reset 3h9m away and 6 210 s (1.725 h) into the next five-hour window, which it leaves at
+  `100 − 15 × 1.725 = 74.125%` alone and `74.125 − 6 × 3.275 = 54.475%` with the other use
+  for the 3.275 hours it leaves free. Before a reset 3h9m away, a piece of work of `L` seconds at 15%/work-hour
   leaves `71 − 15 × L − 6 × (3h9m − L)` (in hours) with the other use: the other use
   only fills the hours the work is not running.
 

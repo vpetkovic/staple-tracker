@@ -311,6 +311,23 @@ describe("the budget forecast of a piece of work", () => {
     );
     // The other use can only add to the breach.
     expect(withOther.currentWindowBreachProbability).toBeGreaterThanOrEqual(limit.reserve!.currentWindowBreachProbability);
+    // A piece of work that runs past the reset: the next window, five hours long, gets the rest of
+    // it at 15%/work-hour, and other use only for the hours of that window the work leaves free.
+    const long = store.createIssue({ title: "long", estimatedSeconds: 6 * 3600 }).identifier;
+    const longLabor = store.forecast({ ref: long }, iso(411), home).completion.labor.expectedSeconds!;
+    const rest = longLabor - horizon;
+    expect(rest).toBeGreaterThan(0);
+    expect(rest).toBeLessThan(18000);
+    const after = limitOf(store.forecast({ ref: long, reserve: "20" }, iso(411), home));
+    expect(after.work!.nextWindowRemainingPercent!.expected).toBeCloseTo(100 - (15 * rest) / 3600, 6);
+    expect(after.reserve!.withOtherUse!.nextWindowRemainingPercent!.expected).toBeCloseTo(100 - (15 * rest) / 3600 - (6 * (18000 - rest)) / 3600, 6);
+    // By hand: 0.8125 × 6h = 17 550 s of work, 11 340 s of it before the reset, 6 210 s (1.725 h)
+    // after. Alone: 100 − 15 × 1.725 = 74.125%. With other use for the 11 790 s (3.275 h) of the
+    // window the work leaves free: 74.125 − 6 × 3.275 = 54.475%. Other use for the whole window
+    // (the double count) would read 44.125%, and none at all 74.125%.
+    expect(longLabor).toBeCloseTo(17550, 6);
+    expect(after.work!.nextWindowRemainingPercent!.expected).toBeCloseTo(74.125, 9);
+    expect(after.reserve!.withOtherUse!.nextWindowRemainingPercent!.expected).toBeCloseTo(54.475, 9);
   });
 
   it("measures no other use from a couple of minutes between spans", () => {
