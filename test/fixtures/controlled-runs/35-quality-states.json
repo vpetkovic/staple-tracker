@@ -1,0 +1,496 @@
+{
+  "title": "one quality state per record, every work state, and the cohort a parent's leaves make",
+  "covers": [
+    "exact, timing-floor, approximate (sparse), missing (no_worker_attempt) and reconstructed each read as one state with the reasons that produced it, on the writer, the tail and a hydrated device",
+    "a reconstructed record that is also sparse keeps reconstructed (the higher precedence) and lists sparse among its reasons",
+    "each attempt's effortSeconds and state match the issue it is the only attempt of",
+    "a cancelled issue owes no work and has no work state; a hydrated device's wall is missing with replay_unavailable",
+    "a parent is reconstructed when any child is, with partial and its children's inputs as reasons",
+    "the cohort's denominator is the done leaves beneath the parent: the open and cancelled leaves are counted as not eligible, never in coverage",
+    "the exact ratio aggregate is over exact records only; the admitted aggregate follows the exclusion",
+    "exclude and excludeReasons drop records from the listing and the admitted aggregate, never from the counts; timing-floor stays listed unless it is excluded by name",
+    "the level rule on every device: exclude approximate alone drops the reconstructed record that is sparse, and include exact,reconstructed keeps only the clean reconstructed one beside the exact one"
+  ],
+  "start": "2026-09-01T09:00:00.000Z",
+  "devices": {
+    "tail": true,
+    "hydrate": true
+  },
+  "steps": [
+    {
+      "at": "0s",
+      "do": "create",
+      "ref": "p",
+      "title": "quality cohort"
+    },
+    {
+      "at": "0s",
+      "do": "create",
+      "ref": "exact",
+      "parent": "p",
+      "estimate": "1h"
+    },
+    {
+      "at": "0s",
+      "do": "create",
+      "ref": "floor",
+      "parent": "p",
+      "estimate": "30m"
+    },
+    {
+      "at": "0s",
+      "do": "create",
+      "ref": "sparse",
+      "parent": "p",
+      "estimate": "2h"
+    },
+    {
+      "at": "0s",
+      "do": "create",
+      "ref": "cancelled",
+      "parent": "p"
+    },
+    {
+      "at": "0s",
+      "do": "create",
+      "ref": "open",
+      "parent": "p"
+    },
+    {
+      "at": "0s",
+      "do": "checkout",
+      "ref": "exact",
+      "agent": "w1"
+    },
+    {
+      "at": "0s",
+      "do": "checkout",
+      "ref": "floor",
+      "agent": "w2"
+    },
+    {
+      "at": "0s",
+      "do": "checkout",
+      "ref": "sparse",
+      "agent": "w3"
+    },
+    {
+      "at": "0s",
+      "do": "checkout",
+      "ref": "cancelled",
+      "agent": "w4"
+    },
+    {
+      "at": "0s",
+      "do": "checkout",
+      "ref": "open",
+      "agent": "w5"
+    },
+    {
+      "at": "30s",
+      "do": "status",
+      "ref": "floor",
+      "to": "done",
+      "agent": "w2"
+    },
+    {
+      "at": "5m",
+      "do": "comment",
+      "ref": "sparse",
+      "agent": "w3"
+    },
+    {
+      "at": "10m",
+      "do": "comment",
+      "ref": "exact",
+      "agent": "w1"
+    },
+    {
+      "at": "10m",
+      "do": "status",
+      "ref": "cancelled",
+      "to": "cancelled",
+      "agent": "w4"
+    },
+    {
+      "at": "20m",
+      "do": "comment",
+      "ref": "exact",
+      "agent": "w1"
+    },
+    {
+      "at": "30m",
+      "do": "comment",
+      "ref": "exact",
+      "agent": "w1"
+    },
+    {
+      "at": "40m",
+      "do": "status",
+      "ref": "exact",
+      "to": "done",
+      "agent": "w1"
+    },
+    {
+      "at": "50m",
+      "do": "comment",
+      "ref": "open",
+      "agent": "w5"
+    },
+    {
+      "at": "1h",
+      "do": "status",
+      "ref": "sparse",
+      "to": "done",
+      "agent": "w3"
+    },
+    {
+      "at": "1h",
+      "do": "sync",
+      "devices": [
+        "a"
+      ]
+    },
+    {
+      "at": "1h",
+      "do": "olderBuildCreate",
+      "ref": "missing",
+      "parent": "p",
+      "status": "done",
+      "startedAt": "5m",
+      "completedAt": "25m"
+    },
+    {
+      "at": "1h",
+      "do": "olderBuildCreate",
+      "ref": "recon",
+      "parent": "p",
+      "status": "done",
+      "startedAt": "10m",
+      "completedAt": "30m"
+    },
+    {
+      "at": "1h",
+      "do": "olderBuildCreate",
+      "ref": "reconSparse",
+      "parent": "p",
+      "status": "done",
+      "startedAt": "0s",
+      "completedAt": "59m"
+    },
+    {
+      "at": "1h1m",
+      "do": "sync",
+      "devices": [
+        "a"
+      ]
+    },
+    {
+      "at": "1h2m",
+      "do": "legacyEvent",
+      "ref": "recon",
+      "kind": "checkout",
+      "agent": "w6",
+      "eventAt": "10m"
+    },
+    {
+      "at": "1h2m",
+      "do": "legacyEvent",
+      "ref": "reconSparse",
+      "kind": "checkout",
+      "agent": "w7",
+      "eventAt": "0s"
+    },
+    {
+      "at": "1h3m",
+      "do": "reconstruct"
+    }
+  ],
+  "expect": [
+    {
+      "asOf": "1h10m",
+      "ref": "exact",
+      "workSeconds": "40m",
+      "estimateRatio": 0.6667,
+      "quality": {
+        "work": "exact",
+        "workInputs": [],
+        "workReasons": []
+      },
+      "attempts": [
+        {
+          "state": "exact",
+          "reasons": [],
+          "effortSeconds": "40m"
+        }
+      ]
+    },
+    {
+      "asOf": "1h10m",
+      "ref": "floor",
+      "workSeconds": 30,
+      "estimateRatio": null,
+      "quality": {
+        "work": "timing-floor",
+        "workInputs": [],
+        "workReasons": [
+          "timing_floor"
+        ]
+      },
+      "attempts": [
+        {
+          "state": "timing-floor",
+          "reasons": [
+            "timing_floor"
+          ],
+          "effortSeconds": 30
+        }
+      ]
+    },
+    {
+      "asOf": "1h10m",
+      "ref": "sparse",
+      "workSeconds": "1h",
+      "estimateRatio": null,
+      "quality": {
+        "work": "approximate",
+        "workInputs": [
+          "sparse"
+        ],
+        "workReasons": [
+          "sparse"
+        ]
+      },
+      "attempts": [
+        {
+          "state": "approximate",
+          "reasons": [
+            "sparse"
+          ],
+          "effortSeconds": "1h"
+        }
+      ]
+    },
+    {
+      "asOf": "1h10m",
+      "ref": "missing",
+      "workSeconds": null,
+      "missing": {
+        "workSeconds": "no_worker_attempt"
+      },
+      "quality": {
+        "work": "missing",
+        "workInputs": [],
+        "workReasons": [
+          "no_worker_attempt"
+        ]
+      },
+      "attempts": []
+    },
+    {
+      "asOf": "1h10m",
+      "ref": "recon",
+      "workSeconds": "20m",
+      "quality": {
+        "work": "reconstructed",
+        "workInputs": [],
+        "workReasons": [
+          "reconstructed"
+        ]
+      },
+      "attempts": [
+        {
+          "state": "reconstructed",
+          "reasons": [
+            "reconstructed"
+          ],
+          "effortSeconds": "20m"
+        }
+      ]
+    },
+    {
+      "asOf": "1h10m",
+      "ref": "reconSparse",
+      "workSeconds": "59m",
+      "quality": {
+        "work": "reconstructed",
+        "workInputs": [
+          "sparse"
+        ],
+        "workReasons": [
+          "reconstructed",
+          "sparse"
+        ]
+      },
+      "attempts": [
+        {
+          "state": "reconstructed",
+          "reasons": [
+            "reconstructed",
+            "sparse"
+          ],
+          "effortSeconds": "59m"
+        }
+      ]
+    },
+    {
+      "asOf": "1h10m",
+      "ref": "cancelled",
+      "workSeconds": null,
+      "missing": {
+        "workSeconds": "not_applicable_cancelled"
+      },
+      "quality": {
+        "work": null,
+        "workInputs": [],
+        "workReasons": []
+      }
+    },
+    {
+      "asOf": "1h10m",
+      "ref": "p",
+      "intervals": 7,
+      "workSeconds": "3h49m30s",
+      "coverage": {
+        "known": 6,
+        "total": 7,
+        "partial": true
+      },
+      "quality": {
+        "work": "reconstructed",
+        "workInputs": [
+          "partial",
+          "sparse"
+        ],
+        "workReasons": [
+          "reconstructed",
+          "partial",
+          "sparse"
+        ]
+      },
+      "cohort": {
+        "eligible": 6,
+        "notEligible": {
+          "parents": 0,
+          "open": 1,
+          "cancelled": 1
+        },
+        "workCounts": {
+          "exact": 1,
+          "timing-floor": 1,
+          "approximate": 1,
+          "reconstructed": 2,
+          "missing": 1
+        },
+        "reasons": {
+          "no_worker_attempt": 1,
+          "reconstructed": 2,
+          "sparse": 2,
+          "timing_floor": 1
+        },
+        "ratioTotal": 3,
+        "exactCount": 1,
+        "exactRatio": 0.6667,
+        "admittedCount": 3,
+        "admittedRatio": 0.4786,
+        "excluded": 0,
+        "items": [
+          "floor",
+          "missing",
+          "recon",
+          "exact",
+          "reconSparse",
+          "sparse"
+        ]
+      }
+    },
+    {
+      "asOf": "1h10m",
+      "ref": "p",
+      "cohort": {
+        "exclude": [
+          "approximate"
+        ],
+        "excludeReasons": [
+          "sparse"
+        ],
+        "eligible": 6,
+        "workCounts": {
+          "exact": 1,
+          "timing-floor": 1,
+          "approximate": 1,
+          "reconstructed": 2,
+          "missing": 1
+        },
+        "ratioTotal": 3,
+        "exactCount": 1,
+        "exactRatio": 0.6667,
+        "admittedCount": 2,
+        "admittedRatio": 0.45,
+        "excluded": 2,
+        "items": [
+          "floor",
+          "missing",
+          "recon",
+          "exact"
+        ]
+      }
+    },
+    {
+      "asOf": "1h10m",
+      "ref": "p",
+      "cohort": {
+        "exclude": [
+          "missing",
+          "reconstructed",
+          "approximate",
+          "exact"
+        ],
+        "eligible": 6,
+        "excluded": 5,
+        "admittedCount": 1,
+        "admittedRatio": 0.0167,
+        "items": [
+          "floor"
+        ]
+      }
+    },
+    {
+      "asOf": "1h10m",
+      "ref": "p",
+      "cohort": {
+        "exclude": [
+          "approximate"
+        ],
+        "eligible": 6,
+        "excluded": 2,
+        "admittedCount": 2,
+        "admittedRatio": 0.45,
+        "items": [
+          "floor",
+          "missing",
+          "recon",
+          "exact"
+        ]
+      }
+    },
+    {
+      "asOf": "1h10m",
+      "ref": "p",
+      "cohort": {
+        "include": [
+          "exact",
+          "reconstructed"
+        ],
+        "eligible": 6,
+        "excluded": 4,
+        "admittedCount": 1,
+        "admittedRatio": 0.6667,
+        "items": [
+          "recon",
+          "exact"
+        ]
+      }
+    }
+  ]
+}

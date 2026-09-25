@@ -52,6 +52,12 @@ function timing(over: Partial<IssueTiming> = {}): IssueTiming {
       backlog: 0, todo: 0, in_progress: 0, in_review: 0, awaiting_approval: 0, done: 0, blocked: 0, cancelled: 0,
     },
     subtreePlan: plan(),
+    workSeconds: null,
+    estimateRatio: null,
+    quality: {
+      work: { state: "missing", inputs: [], reasons: ["never_started"], coverage: null, missingInputs: [] },
+      wall: { state: "missing", inputs: [], reasons: ["never_started"] },
+    },
     ...over,
   };
 }
@@ -565,5 +571,45 @@ describe("regression stand-ins for the five screenshot states", () => {
     expect(list).toContain('class="shrink-0 font-mono tabular-nums');
     expect(html).toContain("flex flex-wrap items-end");
     expect(html).not.toContain("<table");
+  });
+});
+
+// ------------------------------------------------------------------ measurement quality
+
+describe("each record says how far it can be trusted", () => {
+  it("names the work state beside the work figure, and the elapsed state, after the per-child rows", () => {
+    const html = render(
+      detail(
+        { identifier: "STA-20" },
+        timing({
+          workSeconds: 2400,
+          quality: {
+            work: { state: "approximate", inputs: ["sparse"], reasons: ["sparse"], coverage: null, missingInputs: [] },
+            wall: { state: "exact", inputs: [], reasons: [] },
+          },
+        }),
+      ),
+    );
+    expect(html).toContain('aria-label="Measurement quality"');
+    expect(html).toContain(`data-testid="quality-work">${formatDuration(2400)} · approximate · silences over 30 min<`);
+    expect(html).toContain('data-testid="quality-wall">exact<');
+  });
+
+  it("labels every child with its state, a timing-floor child included", () => {
+    const html = render(
+      detail(
+        { identifier: "STA-30", kind: "epic" },
+        timing({ childCount: 2 }),
+        [issue({ identifier: "STA-31" }), issue({ identifier: "STA-32" })],
+        {
+          "STA-31": timing({ activeSeconds: 1323, workSeconds: 30, quality: { work: { state: "timing-floor", inputs: [], reasons: ["timing_floor"], coverage: null, missingInputs: [] }, wall: { state: "exact", inputs: [], reasons: [] } } }),
+          "STA-32": timing({ quality: { work: { state: "exact", inputs: [], reasons: [], coverage: null, missingInputs: [] }, wall: { state: "exact", inputs: [], reasons: [] } } }),
+        },
+      ),
+    );
+    // The state qualifies the work figure, which sits beside it; the row's "ran" is category time.
+    expect([...html.matchAll(/data-testid="child-quality">([^<]+)</g)].map((match) => match[1])).toEqual(["work 30s · under a minute", "exact"]);
+    // The measurement section sits after the per-child rows: it qualifies them, it does not lead.
+    expect(html.indexOf('aria-label="Per child"')).toBeLessThan(html.indexOf('aria-label="Measurement quality"'));
   });
 });

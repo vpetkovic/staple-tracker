@@ -90,6 +90,10 @@
         "workInputs": [
           "contested",
           "orphan_provisional"
+        ],
+        "workReasons": [
+          "contested",
+          "orphan_provisional"
         ]
       },
       "wall": {
@@ -112,7 +116,8 @@
       "workSeconds": "25m",
       "quality": {
         "work": "exact",
-        "workInputs": []
+        "workInputs": [],
+        "workReasons": []
       },
       "wall": {
         "startAt": "0s",

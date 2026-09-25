@@ -38,6 +38,8 @@ import {
   buildBreakdown,
   buildChildRows,
   childPlanHint,
+  childQualityText,
+  cohortLine,
   computeDelta,
   computeSummary,
   computeTotals,
@@ -46,12 +48,13 @@ import {
   formatOptionalDuration,
   isAggregated,
   isStillRunning,
+  qualityText,
   subtreePlanHint,
   summarySentence,
   totalsCaveat,
 } from "./analytics";
 import { STALE_CLAIM_SECONDS } from "../lib/claim";
-import type { IssueStatus, IssueTiming, SubtreePlan } from "../lib/types";
+import type { IssueStatus, IssueTiming, SubtreePlan, TimingQualityReport } from "../lib/types";
 
 const NOW = Date.parse("2026-09-02T12:00:00.000Z");
 const agoIso = (seconds: number) => new Date(NOW - seconds * 1000).toISOString();
@@ -71,6 +74,12 @@ function timing(over: Partial<IssueTiming> = {}): IssueTiming {
       backlog: 0, todo: 0, in_progress: 0, in_review: 0, awaiting_approval: 0, done: 0, blocked: 0, cancelled: 0,
     },
     subtreePlan: plan(),
+    workSeconds: null,
+    estimateRatio: null,
+    quality: {
+      work: { state: "missing", inputs: [], reasons: ["never_started"], coverage: null, missingInputs: [] },
+      wall: { state: "missing", inputs: [], reasons: ["never_started"] },
+    },
     ...over,
   };
 }
@@ -962,5 +971,49 @@ describe("the spoken headline says planned, actual, difference, coverage, source
     });
     expect(sentence).toContain("Actual 30m (still running).");
     expect(sentence).toContain("Difference 1h30m under (75%) (provisional — not finished).");
+  });
+});
+
+// ------------------------------------------------------------------ quality states
+
+describe("quality states are named, never decided, here", () => {
+  it("prints the server's state and its reasons in words, and nothing for a cancelled issue", () => {
+    expect(qualityText({ state: "exact", reasons: [] })).toBe("exact");
+    expect(qualityText({ state: "approximate", reasons: ["sparse", "capture_gap"] })).toBe("approximate · silences over 30 min, work before the first attempt");
+    // The state's own reason would only repeat it.
+    expect(qualityText({ state: "timing-floor", reasons: ["timing_floor"] })).toBe("under a minute");
+    expect(qualityText({ state: "reconstructed", reasons: ["reconstructed", "sparse"] })).toBe("reconstructed · silences over 30 min");
+    expect(qualityText({ state: "missing", reasons: ["no_worker_attempt"] })).toBe("not measured · no attempt recorded");
+    // A code from a newer server is shown verbatim rather than dropped.
+    expect(qualityText({ state: "approximate", reasons: ["brand_new"] })).toBe("approximate · brand_new");
+    expect(qualityText({ state: null, reasons: [] })).toBeNull();
+    // Never worked is "not started", not "not measured".
+    expect(qualityText({ state: "missing", reasons: ["never_started"] })).toBe("not started");
+  });
+
+  it("puts the work figure beside a child's state, since the row's ran is category time", () => {
+    expect(childQualityText({ workState: "reconstructed", workSeconds: 1010, workReasons: ["reconstructed"] })).toBe("work 16m50s · reconstructed");
+    expect(childQualityText({ workState: "missing", workSeconds: null, workReasons: ["never_started"] })).toBe("not started");
+    expect(childQualityText({ workState: "missing", workSeconds: null, workReasons: ["no_worker_attempt"] })).toBe("not measured");
+    expect(childQualityText({ workState: null, workSeconds: null, workReasons: [] })).toBeNull();
+  });
+
+  it("carries each child's work state onto its row", () => {
+    const rows = buildChildRows(
+      [{ identifier: "STA-1", title: "one", status: "done", estimatedSeconds: null }],
+      { "STA-1": timing({ quality: { work: { state: "approximate", inputs: ["sparse"], reasons: ["sparse"], coverage: null, missingInputs: [] }, wall: { state: "exact", inputs: [], reasons: [] } } }) },
+      NOW,
+    );
+    expect(rows[0]!.workState).toBe("approximate");
+    expect(buildChildRows([{ identifier: "STA-2", title: "two", status: "done", estimatedSeconds: null }], {}, NOW)[0]!.workState).toBeNull();
+  });
+
+  it("sums a cohort over its eligible leaves, leaving zero states out", () => {
+    const report = {
+      population: { issues: 9, eligible: 8, notEligible: { parents: 1, open: 0, cancelled: 0 } },
+      work: { counts: { exact: 6, "timing-floor": 1, approximate: 1, reconstructed: 0, missing: 0 } },
+    } as unknown as TimingQualityReport;
+    expect(cohortLine(report)).toBe("8 done leaves beneath: 6 exact (75%) · 1 under a minute · 1 approximate");
+    expect(cohortLine({ ...report, population: { ...report.population, eligible: 0 } })).toBeNull();
   });
 });

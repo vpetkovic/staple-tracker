@@ -739,12 +739,17 @@ const timingShape = {
       work: z.object({
         state: z.enum(["missing", "reconstructed", "approximate", "timing-floor", "exact"]).nullable(),
         inputs: z.array(z.string()),
+        reasons: z.array(z.string()).describe("Every reason that produced the state, highest precedence first: the missing code, reconstructed, the approximate inputs, timing_floor"),
         coverage: z.object({ known: z.number(), total: z.number(), partial: z.boolean() }).nullable(),
         missingInputs: z.array(z.string()),
       }),
-      wall: z.object({ state: z.enum(["approximate", "exact"]).nullable(), inputs: z.array(z.string()) }),
+      wall: z.object({
+        state: z.enum(["missing", "approximate", "exact"]).nullable(),
+        inputs: z.array(z.string()),
+        reasons: z.array(z.string()).describe("missing.wall's code when wall is null, else the inputs (and timing_approximate)"),
+      }),
     })
-    .describe("One quality state per axis and the inputs it came from; the work state reads replicated inputs only"),
+    .describe("One quality state per record (work: missing > reconstructed > approximate > timing-floor > exact, from replicated inputs only; wall: missing > approximate > exact) and the reasons that produced it"),
   missing: z.record(z.string(), z.string()).describe("Why each null effort or elapsed field is null"),
 };
 type _TimingShapeMatchesInterface = Expect<
@@ -1183,6 +1188,40 @@ server.registerTool(
     annotations: { title: "Compare plans", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
   },
   ({ refs, ws }) => run(() => storeFor(ws).comparePlans(refs)),
+);
+
+server.registerTool(
+  "timing_quality",
+  {
+    description:
+      "How much of a population's timing can be trusted, for analytics filtering (docs/timing-semantics.md, \"Quality states\"). Every timing record has exactly one quality state with the reasons that produced it: work (the estimate ratio's actual) is exact, timing-floor (under 60 s: quick, and little more), approximate (sparse, capture_gap, contested, partial, ...), reconstructed (backfilled before capture) or missing; wall is exact, approximate or missing. Eligible population, the denominator of every coverage figure: the leaves resolved done in the filter. Returns counts and coverage per state, how many records carry each reason, the estimate ratio over done issues with their own estimate and no estimated descendant (exact records only, and over the admitted states), and the eligible records themselves, bounded and cursored. include names the states kept (default all) and exclude the states dropped; a record is kept only when its state and the level of every reason it carries are kept, so exclude [\"approximate\"] also drops a reconstructed record that is sparse, and include [\"exact\"] is exact records only. exclude_reasons drops records carrying a reason code whatever their state (e.g. [\"sparse\"]). Dropped records leave items and the admitted ratio; counts and coverage never change, and nothing is dropped by default, so timing-floor records stay listed. Same payload as `staple timing quality --json`.",
+    inputSchema: {
+      kind: z.array(z.string()).optional().describe("Only these kinds"),
+      parent: z.string().optional().describe("Only issues beneath this issue (identifier or id)"),
+      since: z.string().optional().describe("Resolved at or after: an ISO-8601 instant, or a duration meaning that long ago (7d, 12h)"),
+      include: z.array(z.string()).optional().describe("Work states the analysis keeps (default all): a record is kept only when its state and the level of every reason it carries are kept. [\"exact\"] is exact records only; [\"exact\", \"reconstructed\"] adds reconstructed records with nothing approximate, missing or under a minute about them"),
+      exclude: z.array(z.string()).optional().describe("Work states to drop from the analysis: every record whose state or any reason is at that level (exclude approximate also drops a reconstructed record that is sparse). missing, reconstructed, approximate, timing-floor, exact"),
+      exclude_reasons: z.array(z.string()).optional().describe("Reason codes to drop from the analysis, whatever the record's state: sparse, capture_gap, timing_floor, ..."),
+      limit: z.number().optional().describe("Records listed: a positive integer, default 50, at most 500 (a larger value is clamped)."),
+      cursor: z.string().optional().describe("Opaque cursor from the previous page's nextCursor, with the same other arguments."),
+      ws: wsSchema,
+    },
+    outputSchema: {
+      asOf: z.string(),
+      filter: z.record(z.string(), z.unknown()),
+      population: z.record(z.string(), z.unknown()),
+      work: z.record(z.string(), z.unknown()),
+      wall: z.record(z.string(), z.unknown()),
+      ratio: z.record(z.string(), z.unknown()),
+      excluded: z.record(z.string(), z.unknown()),
+      items: z.array(z.record(z.string(), z.unknown())),
+      truncated: z.boolean().describe("Stated, never inferred: true when more records follow this page."),
+      nextCursor: z.string().nullable(),
+    },
+    annotations: { title: "Timing quality", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+  },
+  ({ kind, parent, since, include, exclude, exclude_reasons, limit, cursor, ws }) =>
+    run(() => storeFor(ws).timingQuality({ kind, parent, since, include, exclude, excludeReasons: exclude_reasons, limit, cursor })),
 );
 
 server.registerTool(

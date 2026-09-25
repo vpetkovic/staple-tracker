@@ -123,6 +123,9 @@ function attemptGolden(over: Record<string, unknown> = {}): Record<string, unkno
     contested: false,
     chain: [UUID],
     missing: { harness: "not_supplied", providerBinding: "not_supplied" },
+    // Claimed and read within the same few milliseconds: under the floor.
+    effortSeconds: SECONDS,
+    quality: { state: "timing-floor", reasons: ["timing_floor"] },
     ...over,
   };
 }
@@ -298,7 +301,8 @@ describe("tool inventory", () => {
   // record_attempt_event: 47 -> 48. The telemetry reads added list_attempts,
   // get_attempt, get_budget and list_budget_samples: 48 -> 52. The explicit estimate
   // write added set_estimate: 52 -> 53. The certified plan read added compare_plans: 53 -> 54.
-  it("exposes exactly these 54 tools with these annotations and output schemas", async () => {
+  // The timing quality read added timing_quality: 54 -> 55.
+  it("exposes exactly these 55 tools with these annotations and output schemas", async () => {
     const tools = await harness.listTools();
     const inventory = tools.map((t) => ({
       name: t.name,
@@ -325,6 +329,12 @@ describe("tool inventory", () => {
       {
         name: "compare_plans",
         annotations: { title: "Compare plans", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+        hasOutputSchema: true,
+      },
+      // One quality state per timing record and cohort coverage. A read.
+      {
+        name: "timing_quality",
+        annotations: { title: "Timing quality", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
         hasOutputSchema: true,
       },
       {
@@ -871,7 +881,7 @@ describe("tool inventory", () => {
     ]);
   });
 
-  it("marks exactly the twenty-one read tools readOnlyHint: true", async () => {
+  it("marks exactly the twenty-two read tools readOnlyHint: true", async () => {
     const tools = await harness.listTools();
     const readOnly = tools.filter((t) => t.annotations?.readOnlyHint === true).map((t) => t.name);
     expect(readOnly).toEqual([
@@ -880,6 +890,8 @@ describe("tool inventory", () => {
       "get_task",
       // The certified plan of named issues: a read.
       "compare_plans",
+      // Timing quality and cohort coverage: a read.
+      "timing_quality",
       "list_comments",
       "get_document",
       "events_since",
@@ -1213,8 +1225,8 @@ describe("tool response shapes (31/31)", () => {
         leadSeconds: SECONDS,
         wall: { startAt: ISO, endAt: null, through: ISO, seconds: SECONDS, buckets: parentBucketsGolden() },
         quality: {
-          work: { state: "missing", inputs: [], coverage: { known: 0, total: 0, partial: false }, missingInputs: [] },
-          wall: { state: "exact", inputs: [] },
+          work: { state: "missing", inputs: [], reasons: ["never_started"], coverage: { known: 0, total: 0, partial: false }, missingInputs: [] },
+          wall: { state: "exact", inputs: [], reasons: [] },
         },
         missing: { workSeconds: "never_started", orchestrationSeconds: "no_orchestrator_attempt" },
       }),
@@ -1627,6 +1639,9 @@ describe("tool response shapes (31/31)", () => {
     const covered = new Set([
       "init",
       "compare_plans",
+      // Pinned in test/timing-quality-surfaces.test.ts, value for value against
+      // `staple timing quality --json` and `/api/timing/quality`.
+      "timing_quality",
       "create_task",
       "update_task",
       "set_estimate",

@@ -826,9 +826,10 @@ value, and an imported or restored workspace has no event log to replay.
 
 ## Quality inputs
 
-Each record gets exactly one quality state. The state set and the coverage rules
-belong to the quality-indicators work. This page supplies what each state is
-derived from, and a precedence that makes the answer unique.
+Each record gets exactly one quality state. This section supplies what each
+state is derived from, and a precedence that makes the answer unique.
+[Quality states](#quality-states) defines the state set for every record type,
+the reasons each state carries, and the coverage rules.
 
 There are two records with two states, because the two axes are computed from
 different data. **The state of `workSeconds` uses replicated inputs only**, so
@@ -845,13 +846,14 @@ the ratio's eligibility is the same on every device:
 **The state of `wall`** and every elapsed figure is `approximate` when
 `timing.approximate` is set, `unattributed > 0`, `edge_history_incomplete`,
 `conflict_resolved` (part of the span is a resolved status conflict's reading), or
-`clock_skew` on a partition interval, and is `null` with `replay_unavailable`
-where the replay cannot run. These inputs never reach the `workSeconds` state:
+`clock_skew` on a partition interval. Where there is no `wall` (the replay cannot
+run, `replay_unavailable`, or the issue never started) the figure is `null` and
+its state is `missing`. These inputs never reach the `workSeconds` state:
 they are device-local, and a ratio that was eligible on one device and not on
 another would not be a measurement.
 
-`provider-unavailable` concerns budget samples, not timing, and nothing on this
-page produces it.
+`provider-unavailable` concerns budget records, not timing. No timing record
+takes it. [Quality states](#quality-states) says which budget records do.
 
 **Why `sparse` and why 30 minutes.** This is the largest data-quality problem in
 the current numbers. On a snapshot of the maintainers' tracker (300 issues, 187
@@ -884,6 +886,112 @@ session that died and was resumed). `sparse` marks the remainder instead of
 guessing a cap. Capping a gap at N minutes would produce a number no timeline
 produced.
 
+## Quality states
+
+Every record that carries a timing or budget figure has exactly one quality
+state, and the reasons that produced it. The state set is closed: `exact`,
+`approximate`, `missing`, `timing-floor`, `reconstructed` and
+`provider-unavailable`. Each record type takes the subset that can apply to it.
+The precedence is written once (`src/core/telemetry/quality.ts`), and every
+surface calls it.
+
+| Record | Its figure | States, highest precedence first | Surfaces |
+|---|---|---|---|
+| An issue's work | `workSeconds` | `missing` > `reconstructed` > `approximate` > `timing-floor` > `exact`, from the [quality inputs](#quality-inputs). `null` for a cancelled issue, which owes no work | `timing.quality.work` |
+| An issue's wall | `wall` | `missing` > `approximate` > `exact` | `timing.quality.wall` |
+| An attempt | `effortSeconds`: its contribution to the issue's `workSeconds` (worker) or `orchestrationSeconds` (orchestrator), read with the end rules of [Work](#work) | `reconstructed` > `approximate` > `timing-floor` > `exact`. Never `missing`: an attempt always has a figure | every attempt a read or a write returns: `attempts`, `list_attempts`, `get_attempt`, `record_attempt_event`, and the `attempt` beside a claim write |
+| A budget sample | `remainingPercent`, the reading as a budget | `provider-unavailable` or `missing` when null, else `approximate` > `exact` | `list_budget_samples`, `latestSample`, the sample `record_budget_sample` stored |
+| A limit's current reading | `remainingPercent` | as a sample | `get_budget` |
+| A window's part of a burn | `deltaPercent` | as a sample | `get_attempt` `burn.limits[].windows[]` |
+| A limit's burn | `burnPercent` | as a sample | `burn.limits[]` |
+| An attempt's burn | its limits taken together | as a sample | `burn` |
+
+Each record's quality is `{state, reasons}` (the issue's two also keep
+`inputs`). `reasons` lists **every** reason that holds, highest precedence
+first, so the state is always the level of the first reason, and `reasons` is
+empty exactly when the state is `exact`. A lower-precedence reason is kept: a
+reconstructed record that is also sparse reads `["reconstructed", "sparse"]`,
+and an approximate one under a minute reads `["sparse", "timing_floor"]`.
+
+| State | Reasons it carries |
+|---|---|
+| `missing` | The figure's reason code: `never_started`, `no_worker_attempt`, `input_missing` (work); `replay_unavailable`, `never_started` (wall); any capture reason for a budget figure (below) |
+| `reconstructed` | `reconstructed` |
+| `approximate` | Work and attempts: the replicated inputs (`sparse`, `capture_gap`, `contested`, `partial`, `orphan_provisional`, `end_unbounded`, `clock_skew`). Wall: the device-local inputs, and `timing_approximate` when `timing.approximate` is set. Budget: `estimated`, `low_confidence`, `reset_not_reported` (a sample that joined no window), `stale` (a current reading older than 600 s), `lower_bound`, `partial`, `shared` and `attribution_unknown` (a burn not known to be this attempt's alone) |
+| `timing-floor` | `timing_floor`: the figure is under 60 seconds ([Q7](#open-questions)) |
+| `provider-unavailable` | The null budget figure's reason, when the provider does not expose the value: `not_reported_by_source`, `not_subscriber`, `sliding_window`, `limit_not_published`, `unit_not_normalizable`, `reset_not_reported` |
+| `exact` | none |
+
+**Provider-unavailable against missing.** A budget figure that is `null` is
+`provider-unavailable` when no capture on this machine could have filled it:
+the provider does not report the value, the account has no subscription
+windows, the window has no reset instant, or the unit has no published limit.
+Every other reason is a gap in capture and reads `missing`: nothing has been
+ingested yet (`no_sample_yet`), no ingestion path is configured on this machine
+(`source_unavailable`, which is this machine's configuration, not the
+provider's), the reading went stale, the window elapsed, the attempt was opened
+on another device (`not_on_this_device`) or names no account
+(`no_provider_binding`).
+
+### Cohort coverage
+
+`staple timing quality` (MCP `timing_quality`, HTTP `GET /api/timing/quality`)
+counts the states over a filtered population. Coverage always uses the
+**eligible population** as its denominator:
+
+- **Eligible** for work and wall: the leaves in the filter resolved `done`. A
+  leaf is the unit that owes a measured `workSeconds`. A parent's is the sum of
+  its children's, so counting both would count the same seconds twice. An open
+  leaf owes no final figure yet, and a cancelled one owes none. Parents, open
+  and cancelled leaves are reported apart, in `population.notEligible`.
+  Milestones are plans, not work, and are never in the population.
+- **Ratio population**: the issues in the filter resolved `done` with their
+  own estimate (`subtreePlan.source` is `own`, above 0 seconds) and **no live
+  estimated descendant**. Every estimated done leaf is in it, and so is a
+  done parent whose own estimate is the only one in its subtree. A parent
+  over estimated descendants is not, because they already are: no seconds
+  are summed twice. `ratio.parents` says how many members are parents.
+  `ratio.exact` is `Σ workSeconds / Σ estimatedSeconds` over its exact
+  members, with `coverage: {known, total}` against the whole ratio
+  population: the aggregate [The estimate ratio](#the-estimate-ratio) defines.
+- `work.coverage[state]` and `wall.coverage[state]` are `counts[state] /
+  eligible`. With nothing eligible they are `null` with `no_eligible_records`,
+  never 0.
+
+**The selection is explicit, and never moves the counts.** Every reason code
+sits at the level of the state it produces (`WORK_REASON_LEVEL`: `sparse`,
+`capture_gap`, `contested`, `partial`, `orphan_provisional`, `end_unbounded`
+and `clock_skew` are approximate; `reconstructed` is reconstructed;
+`timing_floor` is timing-floor; `never_started`, `no_worker_attempt` and
+`input_missing` are missing). A record is **admitted** when its state and the
+level of every reason it carries are admitted:
+
+- `include` names the admitted states (default all). `include exact` is exact
+  records only. `include exact,reconstructed` adds the reconstructed records
+  with nothing approximate, missing or under a minute about them.
+- `exclude` removes states. `exclude approximate` drops every record carrying an
+  approximate reason, a reconstructed record that is also sparse included, even
+  though its one state stays `reconstructed`. Precedence decides the state;
+  the selection reads every reason.
+- `excludeReasons` drops every record carrying one of the named codes, whatever
+  its levels. The codes are the closed set above; any other is refused.
+
+Dropped records leave the listing and `ratio.admitted`, and `excluded` counts
+them by state and by the reasons they carried. The counts and every coverage
+figure stay over the whole eligible population. Nothing is dropped by default,
+so a `timing-floor` record stays listed with its state.
+
+For calibration the default is `include exact`, which is exactly `ratio.exact`.
+Reconstructed history is an opt-in cohort reported apart:
+`include reconstructed` is the reconstructed records with no approximate,
+missing or floor reason, and `include exact,reconstructed` is the two together.
+
+The eligible records are listed oldest resolution first, bounded and
+keyset-cursored like every telemetry list
+([Bounded reads](execution-telemetry.md#bounded-reads-coverage-and-truncation)).
+Filters: `kind`, `parent` (every issue beneath it) and `since` (resolved at or
+after an instant, or a duration ago).
+
 ## What the live tracker says, in one place
 
 All figures come from a read-only snapshot of the maintainers' tracker **taken
@@ -908,6 +1016,26 @@ day found 31 sparse done leaves (19 of them estimated) where this snapshot has
 | `blocks` edges; of which `blockParentUntilDone` (child to parent); `blockers_changed` events | 221; 22; 37 |
 | Orchestrator cadence (`voya-orchestrator`, 15-minute sessions) | 148 writes, 33 sessions, 1.59 h |
 
+**Quality states on a later snapshot** (taken 2026-09-25, 302 issues, 196 done
+leaves eligible, 133 of them with their own estimate), read with
+`staple timing quality` under an isolated home:
+
+| Read | Work states (eligible = 196) | Reasons |
+|---|---|---|
+| As captured | exact 4, approximate 3, missing 189 | `no_worker_attempt` 183, `never_started` 6, `sparse` 2, `capture_gap` 1 |
+| After `staple attempt reconstruct` on a copy | exact 4, approximate 2, reconstructed 184, missing 6 | `reconstructed` 184, `sparse` 33, `never_started` 6, `timing_floor` 1 |
+
+Attempts have been captured only since the lifecycle work landed, so nearly all
+history is `missing` until it is reconstructed. Reconstructed, 33 of the 196
+done leaves are sparse (21 of the 133 estimated ones), the same minority the
+2026-09-24 figures above found (30 of 187) on a tracker that grew by nine done
+leaves. `reconstructed` outranks `approximate`, so 31 of the 33 are
+`reconstructed` with `sparse` among their reasons, and `--exclude-reason sparse`
+is how an analysis drops them. Over the estimated task leaves with a figure,
+the admitted ratio (a ratio of sums) is 0.088 once sparse records are
+excluded, and the exact aggregate covers only the 3 task leaves captured and
+exact.
+
 **Quantile method.** Every percentile on this page is the **lower** quantile: the
 value at index `floor(p × (n − 1))` of the ascending list, with `n` as stated.
 The upper tail of the ratio is sparse, so the method matters there: the values
@@ -926,7 +1054,7 @@ and agents execute faster. That is the thing being calibrated, not an error.
 |---|---|
 | Closing lifecycle capture gaps | The [bucket table](#the-buckets), its precedence and [every transition](#every-transition) as the reconstruction spec. `asOf` as a parameter. One mutation instant for every writer. `workSeconds` from replicated data only, as specified in [Work](#work). Re-emitting status-moving and edge events dated at the origin instant, so `wall` stops being device-local. `blockers_changed` from every edge-writing path. Pauses never counted as work, and resume opening a new interval. Terminal transitions closing every open interval. The replicated-only inputs (`sparse`, `capture_gap`, `end_unbounded`) as the explicit approximation flags on `workSeconds`, and `unattributed` and `edge_history_incomplete` on `wall`. The orchestrator lane and worker-lane scoping, if [Q1](#open-questions) is accepted. Agent guidance: yield or pause when a blocker appears mid-work. |
 | Validating against controlled runs | Every bucket is defined in milliseconds from recorded instants, so a controlled run states its expected timeline as a list of transitions and an `asOf`, and compares the `wall` buckets, `workSeconds`, `interrupted` and `resumeGapSeconds`, and `orchestrationSeconds`. **Fixtures must control the write clock**, not just `asOf`: every instant on this page comes from `nowIso()` at write time, so a reproducible run injects the clock the store, the event writer and the attempt ledger all read. Tolerance: one second per interval for `activeSeconds`, one second per nonzero bucket for the partition, plus the one-second snapping window. `review` and `blocked` are disjoint by construction, so a run that reads the same second in both has found a bug. Runs on a second device check that `workSeconds` matches everywhere, that `wall` matches on a device that read the tail, and that it reads `replay_unavailable` on one that hydrated. Built: see [Controlled runs](#controlled-runs). |
-| Quality indicators | The [quality inputs](#quality-inputs), the precedence, the [coverage](#missingness-for-the-new-fields) of parents and of the ratio aggregate, and the five new reason codes. |
+| Quality indicators | The [quality inputs](#quality-inputs), the precedence, the [coverage](#missingness-for-the-new-fields) of parents and of the ratio aggregate, and the five new reason codes. Built: see [Quality states](#quality-states). |
 | Calibration and forecasting | `estimateRatio` and its eligibility, `orchestrationSeconds` as a separate overhead figure, `resumeGapSeconds` per chain link. |
 
 ## Where the numbers appear
@@ -951,8 +1079,8 @@ and agents execute faster. That is the thing being calibrated, not an error.
   },
   "resumeGaps": [],
   "quality": {
-    "work": { "state": "exact", "inputs": [], "coverage": null, "missingInputs": [] },
-    "wall": { "state": "exact", "inputs": [] }
+    "work": { "state": "exact", "inputs": [], "reasons": [], "coverage": null, "missingInputs": [] },
+    "wall": { "state": "exact", "inputs": [], "reasons": [] }
   },
   "missing": { "orchestrationSeconds": "no_orchestrator_attempt" }
 }
@@ -969,7 +1097,10 @@ re-claimed it offline) links to the earlier resumer. `staple attempt <id> --json
 that attempt's end to the start of the attempt that resumed it, `null` when
 nothing has yet. `missing` holds the reason for each new field that is null. The work
 state of a cancelled issue is `null`: it owes no comparable work, so it is neither
-`missing` nor any other state.
+`missing` nor any other state. The wall state is `missing` whenever `wall` is
+`null`, with `missing.wall`'s code as its reason; it is `null` only on a read that
+skipped the effort and elapsed fields. Every attempt on these surfaces carries
+`effortSeconds` and its `quality` ([Quality states](#quality-states)).
 
 Beside `attempts: {current, last, count}` (the worker lane), the same surfaces
 carry `orchestration: {current, count}`: the issue's own orchestrator attempts, read
@@ -1032,12 +1163,20 @@ never a hand-written row:
 | `sync` | the sync engine | `devices` |
 | `olderBuildCreate` | the service's push route, as a build from before attempts | `ref`, `parent`, `status`, `startedAt`, `completedAt` |
 | `olderBuildUpdate` | the same, an `update` of an issue or a comment at the version `a` holds | `entity`, `ref`, `payload` (a key ending in `At` is an offset) |
+| `legacyEvent` | the event writer, as an older build of this device wrote its local log before attempts were captured | `ref`, `kind` (`checkout`, `release`, `status_changed`), `agent`, `eventAt`, `from`, `to` |
+| `reconstruct` | `reconstructAttemptHistory` (`staple attempt reconstruct`) | none |
 
 Every step takes `at` (an offset such as `"41m30.75s"`) and `device` (default `a`). A
 step with `"refused": "conflict"` must be refused with that error code: it is a check,
 and the run goes on (a refusal writes nothing). A read can also state `claim`, the
 claim's `lastActivityAt` as the steal and release guards read it, or `null` when the
-issue is not held; it is checked on the hydrated device too.
+issue is not held; it is checked on the hydrated device too. A read can state
+`quality.workReasons` and `quality.wallReasons`; `attempts`, each worker attempt's
+`effortSeconds` and quality state and reasons, oldest first; and `cohort`, what
+`staple timing quality --parent <ref>` reads at that instant (the eligible
+population, the work counts and reasons, the ratio aggregates, what an exclusion
+drops and the records listed). Every read also checks that the work state is
+`exact` exactly when it has no reason, and that the wall has a state.
 Durations in `expect` are the same notation or whole seconds.
 
 **Devices.** `a` writes. `"devices": {"tail": true}` enrolls `b` before the first step;
@@ -1045,8 +1184,9 @@ every read first syncs every device twice, so `b` has pulled the log, and `b` mu
 everything `a` does, `wall` included, because pulled operations re-emit their events at
 the origin's instant. `"hydrate": true` enrolls a fresh `c` at the last read, which
 hydrates from the service's fold with no event history: it must read the same
-`workSeconds`, `ownWorkSeconds`, `orchestrationSeconds`, work quality, coverage and
-`resumeGaps`, and `wall: null` with `replay_unavailable`. Steps can run on `b`, so a run
+`workSeconds`, `ownWorkSeconds`, `orchestrationSeconds`, work quality, coverage,
+`resumeGaps`, attempt states and the cohort's work counts, and `wall: null` with
+`replay_unavailable`, its state `missing`. Steps can run on `b`, so a run
 can steal or re-claim on the other device. A read can name the devices that sync before
 it (`"sync": ["b"]`), so it can read a device that has not yet pulled what another wrote. `"skew": {"b": "-2m"}` makes `b`'s clock
 read two minutes behind the run's.
@@ -1098,6 +1238,7 @@ quality states and inputs, and coverage are compared exactly.
 | `32-deleted-comment` | a comment deleted after it was written, and a document revision, each mark where an unheld interval counted to; a held issue's deleted comment still sets the claim's liveness and the attempt's evidence limit on every device |
 | `33-steal-refused-document` | a steal on the other device refused at 20 minutes idle because the holder wrote a document revision, then allowed past the threshold |
 | `34-steal-refused-deleted-comment` | the same with a comment the holder wrote and that was deleted later by a replicated deletion |
+| `35-quality-states` | one record in each work state (exact, timing-floor, sparse, missing, reconstructed, reconstructed and sparse) with its reasons and its attempt's state, a cancelled issue with no state, a parent that is reconstructed, and the cohort the leaves make: the eligible denominator, the ratio aggregates, and exclusion by state and by reason |
 
 **Adding one.** Write the timeline you want to check as a new file in
 `test/fixtures/controlled-runs/`, with a `title` and the `covers` it exercises. Work out
@@ -1254,6 +1395,38 @@ states the choice in place.
    `--steal-if-stale` and `release --if-stale` guards, reads the holder's document
    revisions and its comments whether or not they were deleted later, at their
    `created_at` (`33-steal-refused-document`, `34-steal-refused-deleted-comment`).
+21. **A wall with no figure has a state.** `quality.wall.state` was `null` whenever
+   `wall` was. Every record now has one state, so it reads `missing`, with
+   `missing.wall`'s code (`replay_unavailable`, `never_started`) as its reason. It
+   is `null` only on a read that skipped telemetry. The work state of a cancelled
+   issue stays `null` (item 5): it has no work record at all.
+22. **Coverage is over leaves; the ratio is over issues that never double count.**
+   Eligible, the denominator of work and wall coverage, is the done leaves: a
+   parent's work is its children's sum. The ratio population follows the
+   estimate-ratio aggregate ("done and `source: own`") with one restriction: no
+   live estimated descendant. A parent whose own estimate is the only one in its
+   subtree is a data point; a parent over estimated children is not, because the
+   children are, and summing both would count the same seconds twice.
+23. **Reasons keep what precedence hides, and the selection reads them.**
+   `reconstructed` outranks `approximate`, so on the maintainers' tracker 31 of
+   the 33 sparse done leaves read `reconstructed`. Each state therefore lists
+   every reason that holds, and excluding a state drops every record with a
+   reason at that level: on a reconstructed copy of that tracker,
+   `exclude approximate` admits 112 of the 133 ratio records at 0.089, where
+   matching the top state alone admitted 131 at 0.428.
+24. **An attempt's figure is its effort.** An attempt's quality describes
+   `effortSeconds`, its contribution to `workSeconds` or `orchestrationSeconds`
+   read from replicated data, not `activeSeconds`, which is tenure time read
+   from this device's ledger. The two differ exactly where the readings of the
+   end differ ([Work](#work)).
+25. **`provider-unavailable` is decided by the reason code.** A null budget figure
+   is `provider-unavailable` when its reason says the provider does not expose it,
+   and `missing` otherwise; `source_unavailable` is this machine's configuration,
+   so it is `missing` ([Quality states](#quality-states)).
+26. **Silence of exactly thirty minutes is not sparse.** The rule is a gap
+   *longer than* 30 minutes. On the maintainers' tracker one done leaf is sparse by
+   a 30 min 51 s gap between a comment and a worklog revision inside its second
+   attempt; the threshold is applied as written.
 
 ## Open questions
 

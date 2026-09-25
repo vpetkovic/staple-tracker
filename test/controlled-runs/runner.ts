@@ -25,6 +25,8 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { nowIso, setClock, StapleError } from "../../src/core/types.js";
+import { tx } from "../../src/core/db.js";
+import { writeEventRow } from "../../src/core/event-row.js";
 import type { IssueTiming, IssueStatus } from "../../src/core/types.js";
 import { FakeSyncServer } from "../fixtures/fake-sync-server.js";
 import { OlderBuildDevice } from "../fixtures/older-build.js";
@@ -66,6 +68,14 @@ export type Step = { at: string; device?: string; refused?: string } & (
    * version device `a` holds. A payload key ending in `At` is an offset, like every instant here.
    */
   | { do: "olderBuildUpdate"; entity: "issue" | "comment"; ref: string; payload: Record<string, unknown> }
+  /**
+   * An event an older build of THIS device wrote to its local log before attempts were
+   * captured (`checkout`, `release`, `status_changed`), dated at `eventAt`: the history
+   * `staple attempt reconstruct` reads. Written by the event writer, as that build wrote it.
+   */
+  | { do: "legacyEvent"; ref: string; kind: "checkout" | "release" | "status_changed"; agent: string; eventAt: string; from?: string; to?: string }
+  /** `staple attempt reconstruct` on the device: the real command, journaled like any write. */
+  | { do: "reconstruct" }
 );
 
 /** A duration: whole seconds, or `"1h2m3.5s"`. */
@@ -94,7 +104,37 @@ export interface Expectation {
   /** Instants as offsets from the run's start; `null` for an open span. Unlisted buckets must read 0. */
   wall?: { startAt: string; endAt: string | null; buckets: Record<string, Duration> } | null;
   missing?: Record<string, string>;
-  quality?: { work?: string | null; wall?: string | null; workInputs?: string[]; wallInputs?: string[] };
+  quality?: { work?: string | null; wall?: string | null; workInputs?: string[]; wallInputs?: string[]; workReasons?: string[]; wallReasons?: string[] };
+  /**
+   * Each worker-lane attempt on the issue, oldest first, as `staple attempts` reads it: its
+   * `effortSeconds` and the one quality state of that figure, with its reasons. Replicated
+   * data only, so it is checked on the hydrated device too.
+   */
+  attempts?: Array<{ state: string; reasons?: string[]; effortSeconds?: Duration }>;
+  /**
+   * `staple timing quality --parent <ref>` read at this instant: the eligible population,
+   * the work counts, the ratio population and the aggregates, and what an exclusion drops.
+   * Work fields are replicated and checked on every device; `wallCounts` on the writer and
+   * the tail only.
+   */
+  cohort?: {
+    include?: string[];
+    exclude?: string[];
+    excludeReasons?: string[];
+    eligible?: number;
+    notEligible?: { parents: number; open: number; cancelled: number };
+    workCounts?: Record<string, number>;
+    wallCounts?: Record<string, number>;
+    reasons?: Record<string, number>;
+    ratioTotal?: number;
+    exactRatio?: number | null;
+    exactCount?: number;
+    admittedRatio?: number | null;
+    admittedCount?: number;
+    excluded?: number;
+    /** The identifiers' refs listed, in order. */
+    items?: string[];
+  };
   coverage?: { known: number; total: number; partial: boolean } | null;
   /**
    * The claim's liveness (`claim.lastActivityAt`, as `show` and the steal guard read it), an
@@ -257,6 +297,8 @@ export async function runControlled(run: ControlledRun): Promise<Check[]> {
         const timing = machine.store.timingFor([id(expectation.ref)], iso(expectation.asOf)).get(id(expectation.ref))!;
         compare(checks, where(label), timing, expectation, iso, false);
         invariants(checks, where(label), timing);
+        attemptsAgree(checks, where(label), machine, id(expectation.ref), expectation);
+        cohortAgrees(checks, where(label), machine, id, expectation, iso, false);
         if (expectation.resumeGaps !== undefined) chainAgrees(checks, where(label), machine, timing);
         if (expectation.claim !== undefined) claimAgrees(checks, where(label), machine, id(expectation.ref), expectation.claim, iso);
       }
@@ -265,6 +307,9 @@ export async function runControlled(run: ControlledRun): Promise<Check[]> {
         current = "c";
         const timing = hydrated.store.timingFor([id(expectation.ref)], iso(expectation.asOf)).get(id(expectation.ref))!;
         compare(checks, where("c"), timing, expectation, iso, true);
+        invariants(checks, where("c"), timing);
+        attemptsAgree(checks, where("c"), hydrated, id(expectation.ref), expectation);
+        cohortAgrees(checks, where("c"), hydrated, id, expectation, iso, true);
         if (expectation.resumeGaps !== undefined) chainAgrees(checks, where("c"), hydrated, timing);
         if (expectation.claim !== undefined) claimAgrees(checks, where("c"), hydrated, id(expectation.ref), expectation.claim, iso);
       }
@@ -338,8 +383,19 @@ async function apply(step: Step, context: StepContext): Promise<void> {
     refs.set(step.ref, issueId);
     return;
   }
+  if (step.do === "legacyEvent") {
+    const machine = device(step.device);
+    const payload = step.kind === "status_changed" ? { from: step.from, to: step.to } : {};
+    tx(machine.db, () =>
+      writeEventRow(machine.db, { kind: step.kind, issueId: id(step.ref), actor: step.agent, payload, createdAt: iso(step.eventAt), dedupKey: `legacy-${step.kind}-${step.ref}-${step.eventAt}` }),
+    );
+    return;
+  }
   const { store } = device(step.device);
   switch (step.do) {
+    case "reconstruct":
+      store.reconstructAttemptHistory();
+      return;
     case "create": {
       const issue = store.createIssue({
         title: step.title ?? step.ref,
@@ -433,6 +489,7 @@ function compare(checks: Check[], where: Where, timing: IssueTiming, expectation
   }
   if (expectation.quality?.work !== undefined) check(checks, where, "quality.work.state", expectation.quality.work, timing.quality.work.state);
   if (expectation.quality?.workInputs !== undefined) check(checks, where, "quality.work.inputs", expectation.quality.workInputs, timing.quality.work.inputs);
+  if (expectation.quality?.workReasons !== undefined) check(checks, where, "quality.work.reasons", expectation.quality.workReasons, timing.quality.work.reasons);
   if (expectation.coverage !== undefined) check(checks, where, "quality.work.coverage", expectation.coverage, timing.quality.work.coverage);
   if (expectation.estimateRatio !== undefined) check(checks, where, "estimateRatio", expectation.estimateRatio, timing.estimateRatio, 0.01);
   if (expectation.resumeGaps !== undefined) {
@@ -448,9 +505,11 @@ function compare(checks: Check[], where: Where, timing: IssueTiming, expectation
   }
 
   if (hydrated) {
-    // A device that hydrated holds no history: the elapsed axis says why it cannot answer.
+    // A device that hydrated holds no history: the elapsed axis says why it cannot answer,
+    // and its record still has one state.
     check(checks, where, "wall", null, timing.wall);
     check(checks, where, "missing.wall", "replay_unavailable", timing.missing.wall ?? null);
+    check(checks, where, "quality.wall", { state: "missing", reasons: ["replay_unavailable"] }, { state: timing.quality.wall.state, reasons: timing.quality.wall.reasons });
     return;
   }
 
@@ -467,6 +526,7 @@ function compare(checks: Check[], where: Where, timing: IssueTiming, expectation
   }
   if (expectation.quality?.wall !== undefined) check(checks, where, "quality.wall.state", expectation.quality.wall, timing.quality.wall.state);
   if (expectation.quality?.wallInputs !== undefined) check(checks, where, "quality.wall.inputs", expectation.quality.wallInputs, timing.quality.wall.inputs);
+  if (expectation.quality?.wallReasons !== undefined) check(checks, where, "quality.wall.reasons", expectation.quality.wallReasons, timing.quality.wall.reasons);
   if (expectation.wall === undefined) return;
   if (expectation.wall === null) {
     check(checks, where, "wall", null, timing.wall);
@@ -504,12 +564,71 @@ function chainAgrees(checks: Check[], where: Where, machine: Machine, timing: Is
   }
 }
 
+/** Each worker attempt's effort figure and its one state, as `staple attempts` reads them. */
+function attemptsAgree(checks: Check[], where: Where, machine: Machine, issueId: string, expectation: Expectation): void {
+  if (expectation.attempts === undefined) return;
+  const items = machine.store.listAttempts(issueId, { limit: 500 }).items.filter((attempt) => attempt.role === "worker");
+  check(checks, where, "attempts.length", expectation.attempts.length, items.length);
+  expectation.attempts.forEach((expected, index) => {
+    const actual = items[index];
+    check(checks, where, `attempts[${index}].quality.state`, expected.state, actual?.quality.state ?? null);
+    if (expected.reasons !== undefined) check(checks, where, `attempts[${index}].quality.reasons`, expected.reasons, actual?.quality.reasons ?? null);
+    if (expected.effortSeconds !== undefined) check(checks, where, `attempts[${index}].effortSeconds`, seconds(expected.effortSeconds), actual?.effortSeconds ?? null, PER_INTERVAL + SNAP);
+  });
+}
+
+/** `staple timing quality --parent <ref>` at the read's instant. */
+function cohortAgrees(
+  checks: Check[],
+  where: Where,
+  machine: Machine,
+  id: (ref: string) => string,
+  expectation: Expectation,
+  iso: (offset: string) => string,
+  hydrated: boolean,
+): void {
+  const expected = expectation.cohort;
+  if (expected === undefined) return;
+  const report = machine.store.timingQuality(
+    { parent: id(expectation.ref), include: expected.include, exclude: expected.exclude, excludeReasons: expected.excludeReasons, limit: 500 },
+    iso(expectation.asOf),
+  );
+  const at = (field: string, want: unknown, got: unknown, tolerance = 0): void => {
+    if (want !== undefined) check(checks, where, `cohort.${field}`, want, got, tolerance);
+  };
+  at("eligible", expected.eligible, report.population.eligible);
+  at("notEligible", expected.notEligible, report.population.notEligible);
+  at("work.counts", expected.workCounts, report.work.counts);
+  at("work.reasons", expected.reasons, report.work.reasons);
+  if (!hydrated) at("wall.counts", expected.wallCounts, report.wall.counts);
+  at("ratio.total", expected.ratioTotal, report.ratio.total);
+  at("ratio.exact.count", expected.exactCount, report.ratio.exact.count);
+  at("ratio.exact.ratio", expected.exactRatio, report.ratio.exact.ratio, 0.01);
+  at("ratio.admitted.count", expected.admittedCount, report.ratio.admitted.count);
+  at("ratio.admitted.ratio", expected.admittedRatio, report.ratio.admitted.ratio, 0.01);
+  at("excluded.count", expected.excluded, report.excluded.count);
+  if (expected.items !== undefined) {
+    const byId = new Map<string, string>();
+    for (const ref of expected.items) byId.set(machine.store.getIssue(id(ref)).identifier, ref);
+    at("items", expected.items, report.items.map((item) => byId.get(item.identifier) ?? item.identifier));
+  }
+  // Coverage is over the eligible population, whatever was excluded: the counts add up to it.
+  const sum = Object.values(report.work.counts).reduce((a, b) => a + b, 0);
+  check(checks, where, "invariant: cohort work counts add up to the eligible population", report.population.eligible, sum);
+}
+
 /**
  * What must hold on every read, whatever the run states: the buckets partition the span, so
  * no second is in two of them (the reported sum can fall short of the span by at most one
  * second per nonzero bucket, and never exceed it).
  */
 function invariants(checks: Check[], where: Where, timing: IssueTiming): void {
+  // One state per record, and it is the level of its first reason: exact exactly when nothing holds.
+  const work = timing.quality.work;
+  if (work.state !== null) {
+    checks.push({ ...where, field: "invariant: work state is exact exactly when it has no reason", expected: work.state === "exact", actual: work.reasons.length === 0, tolerance: 0, pass: (work.state === "exact") === (work.reasons.length === 0) });
+  }
+  checks.push({ ...where, field: "invariant: wall has one state", expected: "a state", actual: timing.quality.wall.state, tolerance: 0, pass: timing.quality.wall.state !== null });
   const wall = timing.wall;
   if (wall === null) return;
   const values = Object.values(wall.buckets);

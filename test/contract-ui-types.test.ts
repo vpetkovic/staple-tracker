@@ -38,7 +38,9 @@
  * category, not as a matter of routine.
  */
 import { describe, expect, it } from "vitest";
-import type { ClaimActivity, ClaimLease, ClaimScope } from "../src/core/types.js";
+import type { ClaimActivity, ClaimLease, ClaimScope, TimingQuality } from "../src/core/types.js";
+import type { TimingQualityReport } from "../src/core/telemetry/cohort.js";
+import type { TimingQuality as UiTimingQuality, TimingQualityReport as UiTimingQualityReport } from "../src/ui/app/src/lib/types.js";
 import type { CloudSurfaceReport } from "../src/core/cloud/surface.js";
 import type { HubCloudReport, HubWorkspaceOutcome } from "../src/core/cloud/hub-surface.js";
 import type { HubConnectPreview } from "../src/core/cloud/hub-preview.js";
@@ -192,6 +194,14 @@ type _AdoptionReportMatches = Expect<Equals<AdoptionReport, UiAdoptionReport>>;
 type _HubRestoreReportMatches = Expect<Equals<HubRestoreReport, UiHubRestoreReport>>;
 type _RemoteBackupMatches = Expect<Equals<RemoteBackup, UiRemoteBackup>>;
 type _PublishReportMatches = Expect<Equals<PublishReport, UiPublishReport>>;
+
+/**
+ * Timing quality: the one state per record the Analytics tab prints, and the cohort report it
+ * reads beneath a parent. A mirror that drifted here would let the page name a state the server
+ * never sends, or drop the reasons that say why a figure is not exact.
+ */
+type _TimingQualityMatches = Expect<Equals<TimingQuality, UiTimingQuality>>;
+type _TimingQualityReportMatches = Expect<Equals<TimingQualityReport, UiTimingQualityReport>>;
 
 describe("the browser app's mirror of the wire vocabulary", () => {
   /**

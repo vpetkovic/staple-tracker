@@ -13,6 +13,7 @@ import { openedHere, transitionsOf, type AttemptTransition } from "./attempt-rec
 import { resumeGapsOf, viewsOfIssue, type AttemptView } from "./attempt-derive.js";
 import { inferredEndsOf, issueEffort } from "./effort.js";
 import { attemptBurn, type AttemptBurn } from "./read-budget.js";
+import { qualifyAttempts, type QualifiedAttempt } from "./attempt-quality.js";
 import {
   afterPosition,
   coverage,
@@ -35,9 +36,9 @@ export const inWorkerLane = (attempt: { readonly id: string; readonly role?: str
 
 export interface AttemptSummary {
   /** The effectively open worker attempt, or null. */
-  readonly current: AttemptView | null;
+  readonly current: QualifiedAttempt | null;
   /** The newest effectively ended worker attempt, or null when none has ended. */
-  readonly last: AttemptView | null;
+  readonly last: QualifiedAttempt | null;
   /** Worker attempts on the issue, every state. */
   readonly count: number;
 }
@@ -46,11 +47,14 @@ export interface AttemptSummary {
 export function attemptSummary(db: DatabaseSync, issueId: string, now: string = nowIso()): AttemptSummary {
   const views = viewsOfIssue(db, issueId, now).filter(inWorkerLane);
   const newestFirst = [...views].reverse();
-  return {
-    current: newestFirst.find((view) => view.state !== "ended") ?? null,
-    last: newestFirst.find((view) => view.state === "ended") ?? null,
-    count: views.length,
-  };
+  const current = newestFirst.find((view) => view.state !== "ended") ?? null;
+  const last = newestFirst.find((view) => view.state === "ended") ?? null;
+  const [qualifiedCurrent = null, qualifiedLast = null] = (() => {
+    const shown = [current, last].filter((view): view is AttemptView => view !== null);
+    const read = new Map(qualifyAttempts(db, issueId, shown).map((attempt) => [attempt.id, attempt]));
+    return [current === null ? null : read.get(current.id)!, last === null ? null : read.get(last.id)!];
+  })();
+  return { current: qualifiedCurrent, last: qualifiedLast, count: views.length };
 }
 
 const attemptKey = (view: AttemptView): KeysetPosition => ({ at: view.startedAt, id: view.id });
@@ -85,12 +89,13 @@ function beforeCaptureGap(db: DatabaseSync, issueId: string, now: string): Cover
  * `staple attempts <ref>` / `list_attempts`: the issue's attempts, oldest first (the order
  * `ordinal` counts in), every lane, each as it reads with `storedState` beside it.
  */
-export function listAttempts(db: DatabaseSync, issueId: string, request: PageRequest = {}, now: string = nowIso()): TelemetryPage<AttemptView> {
+export function listAttempts(db: DatabaseSync, issueId: string, request: PageRequest = {}, now: string = nowIso()): TelemetryPage<QualifiedAttempt> {
   const limit = pageLimit(request.limit);
   const scope = { issueId };
   const position = request.cursor === undefined ? null : decodeKeysetCursor("attempts", scope, request.cursor);
   const rows = viewsOfIssue(db, issueId, now).filter((view) => afterPosition(attemptKey(view), position));
-  const page = cutPage(rows, limit, "attempts", scope, attemptKey);
+  const cut = cutPage(rows, limit, "attempts", scope, attemptKey);
+  const page = { ...cut, items: qualifyAttempts(db, issueId, cut.items) };
   const gaps: CoverageGap[] = [];
   let from: string | null = page.items[0]?.startedAt ?? null;
   let to: string | null = page.items.length === 0 ? null : page.items.map((view) => endOfView(view)).reduce((a, b) => (a > b ? a : b));
@@ -129,7 +134,7 @@ export interface ChainEntry {
 }
 
 export interface AttemptDetail {
-  readonly attempt: AttemptView;
+  readonly attempt: QualifiedAttempt;
   readonly transitions: TelemetryPage<AttemptTransition>;
   readonly chain: ChainEntry[];
   readonly burn: AttemptBurn;
@@ -203,5 +208,5 @@ export function attemptDetail(
     transitions: all,
     now,
   });
-  return { attempt, transitions, chain, burn };
+  return { attempt: qualifyAttempts(db, row.issue_id, [attempt])[0]!, transitions, chain, burn };
 }

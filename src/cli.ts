@@ -22,6 +22,7 @@ import { runBudgetCommand } from "./commands/budget.js";
 import { ATTEMPT_END_OPTIONS, ATTEMPT_OPEN_OPTIONS, attemptOptionsFrom, runAttemptCommand, withAttempt } from "./commands/attempt.js";
 import { attemptLine, runAttemptsCommand } from "./commands/attempts.js";
 import { planLines, runCompareCommand } from "./commands/compare.js";
+import { runTimingCommand } from "./commands/timing.js";
 import type { AttemptOptions } from "./core/telemetry/attempts.js";
 import { runCloudCommand } from "./commands/cloud.js";
 import { runHubRegistryCommand } from "./commands/hub-registry.js";
@@ -912,6 +913,11 @@ Tasks
               of each named issue, side by side, with no tree dump: every planned
               unit once (own estimate over descendants), unplanned units named,
               the planned and remaining in-subtree blockedBy paths; staple compare --help
+  timing quality [--kind K] [--parent REF] [--since T] [--include S] [--exclude S]
+              one quality state per timing record (exact, timing-floor, approximate,
+              reconstructed, missing) and coverage over the eligible population (done
+              leaves); --exclude drops states from the analysis, never from the counts;
+              staple timing --help
   board                                 terminal kanban
   inbox [--assignee A] [--hub]          ready vs queued vs blocked (pickup order);
               QUEUED is work a HUMAN has to release (see Approval gates below) and
@@ -1417,6 +1423,10 @@ function main() {
 
     case "compare":
       runCompareCommand(rest);
+      break;
+
+    case "timing":
+      runTimingCommand(rest);
       break;
 
     case "attempts":

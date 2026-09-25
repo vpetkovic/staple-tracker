@@ -324,6 +324,33 @@ adding estimates by hand. For a parent, `get_task` carries the same object as
 `planSummary` (null for a leaf). The rules are in
 [cli.md](cli.md#comparing-plans-staple-compare).
 
+### Timing quality
+
+`timing_quality {kind?, parent?, since?, include?, exclude?, exclude_reasons?, limit?, cursor?, ws?}`
+is `staple timing quality --json`. It answers how much of a population's timing
+can be trusted, before you calibrate anything on it:
+
+- Every record has exactly one quality state with its `reasons`. On `get_task`
+  they are `timing.quality.work` and `timing.quality.wall`; on an attempt, its
+  `quality` beside `effortSeconds`; on a budget sample, reading or burn, its
+  `quality` (`provider-unavailable` when the provider does not expose the
+  figure, `missing` when capture did not see it).
+- Counts and coverage are over the **eligible** population: the done leaves
+  in the filter. `ratio.exact` is the estimate ratio over exact records only.
+- A record is kept only when its state and the level of every reason it
+  carries are kept. `exclude: ["approximate"]` drops every record with an
+  approximate reason, reconstructed-and-sparse ones included;
+  `include: ["exact"]` is exact records only, the calibration default;
+  `include: ["exact", "reconstructed"]` adds clean reconstructed history;
+  `exclude_reasons: ["sparse"]` drops records carrying that code. Unknown
+  states and codes are refused. Dropped records leave `items` and
+  `ratio.admitted`, and `excluded` says how many went. The counts never move,
+  and nothing is dropped unless you ask, so `timing-floor` records stay listed.
+- The ratio population is the done issues with their own estimate and no
+  estimated descendant, so no seconds are summed twice.
+
+The rules are in [cli.md](cli.md#timing-quality-staple-timing-quality).
+
 ## Harness ergonomics
 
 All in-protocol, so a harness never needs out-of-band setup:

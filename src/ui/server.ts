@@ -3556,6 +3556,35 @@ export function startUiServer(options: UiOptions): UiHandle {
       }
 
       /**
+       * `staple timing quality` / MCP `timing_quality`: quality states and cohort coverage, from
+       * the one store method both call. `kind`, `include`, `exclude` and `excludeReason` take a
+       * comma list or a repeated parameter.
+       */
+      if (url.pathname === "/api/timing/quality") {
+        const handle = handleFor(url.searchParams.get("ws") ?? undefined);
+        const listOf = (name: string): string[] | undefined => {
+          const values = url.searchParams.getAll(name).flatMap((value) => value.split(",")).map((value) => value.trim()).filter((value) => value !== "");
+          return values.length === 0 ? undefined : values;
+        };
+        const limit = url.searchParams.get("limit");
+        json(
+          res,
+          200,
+          handle.store.timingQuality({
+            kind: listOf("kind"),
+            parent: url.searchParams.get("parent") ?? undefined,
+            since: url.searchParams.get("since") ?? undefined,
+            include: listOf("include"),
+            exclude: listOf("exclude"),
+            excludeReasons: listOf("excludeReason"),
+            limit: limit === null ? undefined : Number(limit),
+            cursor: url.searchParams.get("cursor") ?? undefined,
+          }),
+        );
+        return;
+      }
+
+      /**
        * A document's history. A plain GET, so the token gate and the method pin above
        * already cover it — nothing about auth changed to add this.
        */

@@ -96,11 +96,15 @@ import {
 } from "./telemetry/attempts.js";
 import { reconstructAttempts, type ReconstructReport } from "./telemetry/reconstruct.js";
 import { hasCaptureGap, inferredEndsOf, issueEffort, pausesOf } from "./telemetry/effort.js";
+import { WORK_REASON_LEVEL, WORK_STATES, wallQuality, workQuality, type EffortInput, type WorkMissingReason, type WorkState } from "./telemetry/quality.js";
+import { WORK_ORDER, cohortKey, cohortReport, type CohortMember, type TimingQualityReport } from "./telemetry/cohort.js";
+import { parseSince } from "./telemetry/read-budget.js";
+import { qualifyAttempt, qualifyAttempts, type QualifiedAttempt } from "./telemetry/attempt-quality.js";
 import { intersect, partition, union, type CoverageAttempt, type PathEntry } from "./telemetry/wall.js";
 import { transitionsOf } from "./telemetry/attempt-records.js";
 import { resumeGapsOf, viewsOfIssue } from "./telemetry/attempt-derive.js";
 import { attemptDetail, attemptSummary, listAttempts, type AttemptDetail, type AttemptSummary } from "./telemetry/read-attempts.js";
-import type { PageRequest, TelemetryPage } from "./telemetry/read-page.js";
+import { decodeKeysetCursor, pageLimit, type PageRequest, type TelemetryPage } from "./telemetry/read-page.js";
 import { stapleHome } from "../config/home.js";
 import {
   COMPARE_MAX_REFS,
@@ -631,7 +635,7 @@ function noTelemetry(): Pick<
     estimateRatio: null,
     wall: null,
     resumeGaps: null,
-    quality: { work: { state: null, inputs: [], coverage: null, missingInputs: [] }, wall: { state: null, inputs: [] } },
+    quality: { work: { state: null, inputs: [], reasons: [], coverage: null, missingInputs: [] }, wall: { state: null, inputs: [], reasons: [] } },
     missing: {},
   };
 }
@@ -657,6 +661,16 @@ function assertIdleThreshold(value: number | undefined, name: string): number | 
     throw new StapleError("validation", `${name} must be a non-negative number of seconds`);
   }
   return value;
+}
+
+/** The filters of {@link WorkspaceStore.timingQuality}. */
+export interface TimingQualityQuery extends PageRequest {
+  readonly kind?: readonly string[];
+  readonly parent?: string;
+  readonly since?: string;
+  readonly include?: readonly string[];
+  readonly exclude?: readonly string[];
+  readonly excludeReasons?: readonly string[];
 }
 
 export class WorkspaceStore {
@@ -770,12 +784,12 @@ export class WorkspaceStore {
       /** The attempt to act on, by id: the other way to say which lane. */
       attemptId?: string;
     } = {},
-  ): AttemptView {
+  ): QualifiedAttempt {
     if (!actor?.trim()) throw new StapleError("validation", "An attempt event needs an actor: pass --agent, or set STAPLE_AGENT.");
     return this.journaled(() => {
       const row = this.requireTarget(ref);
       const attempt = this.attempts().record(row, event, actor, input);
-      return viewAttempt(this.db, attempt.id)!;
+      return qualifyAttempt(this.db, viewAttempt(this.db, attempt.id)!);
     });
   }
 
@@ -787,7 +801,7 @@ export class WorkspaceStore {
    * changes neither the issue's status nor its claim. Refused for any other role: a worker
    * attempt opens with a checkout or a status write, never by hand.
    */
-  openOrchestratorAttempt(ref: string, actor: string, role: string | undefined, opts: AttemptOptions = {}): AttemptView {
+  openOrchestratorAttempt(ref: string, actor: string, role: string | undefined, opts: AttemptOptions = {}): QualifiedAttempt {
     if (!actor?.trim()) throw new StapleError("validation", "An orchestrator attempt needs an actor: pass --agent, or set STAPLE_AGENT.");
     assertOrchestratorRole(role, "open");
     assertAttemptOptions(opts);
@@ -795,7 +809,7 @@ export class WorkspaceStore {
     return this.journaled(() => {
       const row = this.requireTarget(ref);
       const attempt = this.attempts().openOrchestrator(row, actor, opts);
-      return viewAttempt(this.db, attempt.id)!;
+      return qualifyAttempt(this.db, viewAttempt(this.db, attempt.id)!);
     });
   }
 
@@ -803,13 +817,13 @@ export class WorkspaceStore {
    * `staple attempt end <ref> --role orchestrator`: the actor's open orchestrator attempt on the
    * issue ends `yielded`, reason `coordination_ended` — a real end.
    */
-  endOrchestratorAttempt(ref: string, actor: string, role: string | undefined, attemptId?: string): AttemptView {
+  endOrchestratorAttempt(ref: string, actor: string, role: string | undefined, attemptId?: string): QualifiedAttempt {
     if (!actor?.trim()) throw new StapleError("validation", "Ending an orchestrator attempt needs an actor: pass --agent, or set STAPLE_AGENT.");
     assertOrchestratorRole(role, "end");
     return this.journaled(() => {
       const row = this.requireTarget(ref);
       const attempt = this.attempts().endOrchestrator(row, actor, attemptId);
-      return viewAttempt(this.db, attempt.id)!;
+      return qualifyAttempt(this.db, viewAttempt(this.db, attempt.id)!);
     });
   }
 
@@ -837,13 +851,15 @@ export class WorkspaceStore {
    * issue, read with that lane's own clauses — the newest effectively open orchestrator
    * attempt, and how many there are. A pure read.
    */
-  orchestrationSummary(ref: string): { current: AttemptView | null; count: number } {
-    const views = viewsOfIssue(this.db, this.requireRow(ref).id).filter((view) => view.role === "orchestrator");
-    return { current: [...views].reverse().find((view) => view.state !== "ended") ?? null, count: views.length };
+  orchestrationSummary(ref: string): { current: QualifiedAttempt | null; count: number } {
+    const issueId = this.requireRow(ref).id;
+    const views = viewsOfIssue(this.db, issueId).filter((view) => view.role === "orchestrator");
+    const current = [...views].reverse().find((view) => view.state !== "ended") ?? null;
+    return { current: current === null ? null : qualifyAttempts(this.db, issueId, [current])[0]!, count: views.length };
   }
 
   /** `staple attempts <ref>` / `list_attempts`: bounded, with coverage. */
-  listAttempts(ref: string, page: PageRequest = {}): TelemetryPage<AttemptView> {
+  listAttempts(ref: string, page: PageRequest = {}): TelemetryPage<QualifiedAttempt> {
     return listAttempts(this.db, this.requireRow(ref).id, page);
   }
 
@@ -5075,15 +5091,18 @@ export class WorkspaceStore {
 
     // ---- work
     const ownWorkSeconds = effort.workers.seconds;
-    const ownReason = ownWorkSeconds !== null ? null : row.started_at ? "no_worker_attempt" : "never_started";
+    const ownReason: WorkMissingReason | null = ownWorkSeconds !== null ? null : row.started_at ? "no_worker_attempt" : "never_started";
     if (ownReason !== null) missing.ownWorkSeconds = ownReason;
     let workSeconds: number | null;
-    let inputs = new Set<string>();
+    let inputs = new Set<EffortInput>();
+    /** Why a work record's figure is null, typed so every code has a level (`WORK_REASON_LEVEL`). */
+    let workMissing: WorkMissingReason | null = null;
     let reconstructed = false;
     let coverage: TimingQuality["work"]["coverage"] = null;
     const missingInputs: string[] = [];
     if (!parent) {
       workSeconds = ownWorkSeconds;
+      workMissing = ownReason;
       if (ownReason !== null) missing.workSeconds = ownReason;
       for (const input of effort.workers.inputs) inputs.add(input);
       if (hasCaptureGap(row.started_at, effort.firstWorkerStart)) inputs.add("capture_gap");
@@ -5103,17 +5122,20 @@ export class WorkspaceStore {
         }
         known += 1;
         sum += childTiming.workSeconds;
-        for (const input of childTiming.quality.work.inputs) inputs.add(input);
+        // A child's inputs came out of this same method, typed as EffortInput when they were made.
+        for (const input of childTiming.quality.work.inputs) inputs.add(input as EffortInput);
         if (childTiming.quality.work.state === "reconstructed") reconstructed = true;
       }
       coverage = { known, total, partial: known < total };
       if (known < total) inputs.add("partial");
       if (total === 0) {
         workSeconds = null;
-        missing.workSeconds = "never_started";
+        workMissing = "never_started";
+        missing.workSeconds = workMissing;
       } else if (known === 0) {
         workSeconds = null;
-        missing.workSeconds = "input_missing";
+        workMissing = "input_missing";
+        missing.workSeconds = workMissing;
       } else workSeconds = sum;
     }
     if (cancelled) {
@@ -5121,13 +5143,9 @@ export class WorkspaceStore {
       missing.workSeconds = "not_applicable_cancelled";
       inputs = new Set();
     }
-    let state: WorkQualityState | null;
-    if (cancelled) state = null;
-    else if (workSeconds === null) state = "missing";
-    else if (reconstructed) state = "reconstructed";
-    else if (inputs.size > 0) state = "approximate";
-    else if (workSeconds < 60) state = "timing-floor";
-    else state = "exact";
+    // The precedence lives in one place (`telemetry/quality.ts`); a cancelled issue owes no work and has no state.
+    const work = cancelled ? null : workQuality({ workSeconds, missingReason: workMissing, reconstructed, inputs: [...inputs] });
+    const state: WorkQualityState | null = work?.state ?? null;
 
     // ---- orchestration: own orchestrator attempts plus the children's
     let orchestrationSeconds: number | null = effort.orchestrators.seconds;
@@ -5179,11 +5197,22 @@ export class WorkspaceStore {
       wall,
       resumeGaps: resumeGapsOf(views, inferredEnds),
       quality: {
-        work: { state, inputs: [...inputs].sort(), coverage, missingInputs },
-        wall: { state: wall === null ? null : timing.approximate || wallInputs.size > 0 ? "approximate" : "exact", inputs: [...wallInputs].sort() },
+        work: { state, inputs: [...inputs].sort(), reasons: work?.reasons ?? [], coverage, missingInputs },
+        wall: this.wallQualityOf(wall, missing.wall ?? null, timing.approximate, wallInputs),
       },
       missing,
     };
+  }
+
+  /**
+   * The wall record's one state: `missing` with `missing.wall`'s code when there is no `wall`;
+   * otherwise `approximate` on any device-local input, or when `timing.approximate` is set (a
+   * parent whose children fell back to the two-timestamp reading: reason `timing_approximate`).
+   */
+  private wallQualityOf(wall: WallTiming | null, missingReason: string | null, timingApproximate: boolean, inputs: ReadonlySet<string>): TimingQuality["wall"] {
+    const sorted = [...inputs].sort();
+    const quality = wallQuality({ present: wall !== null, missingReason, inputs: wall !== null && timingApproximate ? [...sorted, "timing_approximate"] : sorted });
+    return { state: quality.state, inputs: sorted, reasons: quality.reasons };
   }
 
   /**
@@ -5432,6 +5461,152 @@ export class WorkspaceStore {
       })),
       overlaps,
     };
+  }
+
+  /**
+   * `staple timing quality` / MCP `timing_quality` / `GET /api/timing/quality`: the quality
+   * states of a filtered population's timing records, the coverage of each over the ELIGIBLE
+   * population (the leaves resolved `done`), the estimate-ratio aggregates over the ratio
+   * population, and the eligible records the selection admits, bounded and keyset-cursored
+   * (`telemetry/cohort.ts`). A pure read.
+   *
+   * Filters: `kind` (any of), `parent` (every issue beneath it), `since` (resolved at or after:
+   * an ISO instant or a duration meaning that long ago; open issues then fall outside). The
+   * selection: `include` (the admitted states, default all), `exclude` (states removed from
+   * them) and `excludeReasons` (reason codes that drop a record). A record is admitted when its
+   * state and the level of every reason it carries are admitted. Counts and coverage never move.
+   *
+   * Errors name the fields (`exclude`, `excludeReasons`, `since`), not a surface's spelling of
+   * them, since the CLI, MCP and HTTP all answer them.
+   */
+  timingQuality(query: TimingQualityQuery = {}, asOf: string = nowIso()): TimingQualityReport {
+    const kinds = query.kind === undefined || query.kind.length === 0 ? null : [...new Set(query.kind)];
+    for (const kind of kinds ?? []) this.assertConfiguredKind(kind);
+    const states = (field: string, values: readonly string[] | undefined): WorkState[] => {
+      const out = [...new Set(values ?? [])];
+      for (const state of out) {
+        if (!(WORK_STATES as readonly string[]).includes(state)) {
+          throw new StapleError(
+            "validation",
+            `${field} takes work quality states (${WORK_STATES.join(", ")}); got "${state}". provider-unavailable is a budget state and no issue carries it.`,
+          );
+        }
+      }
+      return WORK_ORDER.filter((state) => out.includes(state));
+    };
+    const include = query.include === undefined || query.include.length === 0 ? [...WORK_ORDER] : states("include", query.include);
+    const exclude = states("exclude", query.exclude);
+    if (!include.some((state) => !exclude.includes(state))) {
+      throw new StapleError("validation", `The selection admits no state: include (${include.join(", ")}) minus exclude (${exclude.join(", ")}) is empty.`);
+    }
+    const excludeReasons = [...new Set(query.excludeReasons ?? [])].sort();
+    for (const reason of excludeReasons) {
+      if (!(reason in WORK_REASON_LEVEL)) {
+        throw new StapleError("validation", `excludeReasons takes work reason codes (${Object.keys(WORK_REASON_LEVEL).join(", ")}); got "${reason}".`);
+      }
+    }
+    const limit = pageLimit(query.limit);
+    const parentRow = query.parent === undefined ? null : this.requireRow(query.parent);
+    const since = parseSince(query.since, asOf, "since");
+    const filter: TimingQualityReport["filter"] = { kind: kinds, parent: parentRow?.identifier ?? null, since, include, exclude, excludeReasons };
+    // Fingerprinted as given, so a relative `since` keeps naming the same walk.
+    const scope = { kind: kinds, parent: parentRow?.id ?? null, since: query.since ?? null, include, exclude, excludeReasons };
+    const after = query.cursor === undefined ? null : decodeKeysetCursor("timing_quality", scope, query.cursor);
+
+    const rows = this.db
+      .prepare(
+        `SELECT id, identifier, title, kind, status, parent_id, estimated_seconds, completed_at, cancelled_at
+           FROM issues ORDER BY id`,
+      )
+      .all() as Array<{
+      id: string;
+      identifier: string;
+      title: string;
+      kind: string;
+      status: string;
+      parent_id: string | null;
+      estimated_seconds: number | null;
+      completed_at: string | null;
+      cancelled_at: string | null;
+    }>;
+    const byId = new Map(rows.map((row) => [row.id, row]));
+    const withChildren = new Set(rows.map((row) => row.parent_id).filter((id): id is string => id !== null));
+    /**
+     * Issues with a live estimated descendant: walk up from every live issue with its own
+     * estimate. A parent in this set is not a ratio data point: its descendants already are.
+     */
+    const overEstimated = new Set<string>();
+    for (const row of rows) {
+      if ((row.estimated_seconds ?? 0) <= 0 || this.categoryOf(row.status) === "cancelled") continue;
+      let up = row.parent_id;
+      for (let depth = 0; up !== null && depth < MAX_TREE_DEPTH && !overEstimated.has(up); depth += 1) {
+        overEstimated.add(up);
+        up = byId.get(up)?.parent_id ?? null;
+      }
+    }
+    const beneath = parentRow === null ? null : new Set(this.subtreeRows(parentRow.id).map((node) => node.id).filter((id) => id !== parentRow.id));
+    const inFilter = rows.filter((row) => {
+      if (row.kind === MILESTONE_KIND) return false;
+      if (kinds !== null && !kinds.includes(row.kind)) return false;
+      if (beneath !== null && !beneath.has(row.id)) return false;
+      if (since !== null) {
+        const resolvedAt = row.completed_at ?? row.cancelled_at;
+        if (resolvedAt === null || resolvedAt < since) return false;
+      }
+      return true;
+    });
+    let parents = 0;
+    let open = 0;
+    let cancelled = 0;
+    const eligibleRows: typeof rows = [];
+    const ratioParentRows: typeof rows = [];
+    for (const row of inFilter) {
+      const done = this.categoryOf(row.status) === "done";
+      if (withChildren.has(row.id)) {
+        parents += 1;
+        if (done && (row.estimated_seconds ?? 0) > 0 && !overEstimated.has(row.id)) ratioParentRows.push(row);
+      } else if (done) eligibleRows.push(row);
+      else if (this.categoryOf(row.status) === "cancelled") cancelled += 1;
+      else open += 1;
+    }
+    const timings = this.timingFor([...eligibleRows, ...ratioParentRows].map((row) => row.id), asOf);
+    const memberOf = (row: (typeof rows)[number]): CohortMember => {
+      const timing = timings.get(row.id)!;
+      return {
+        id: row.id,
+        identifier: row.identifier,
+        title: row.title,
+        kind: row.kind,
+        status: row.status,
+        completedAt: row.completed_at,
+        estimatedSeconds: row.estimated_seconds ?? null,
+        workSeconds: timing.workSeconds,
+        estimateRatio: timing.estimateRatio,
+        work: { state: timing.quality.work.state!, reasons: timing.quality.work.reasons },
+        wall: { state: timing.quality.wall.state!, reasons: timing.quality.wall.reasons },
+      };
+    };
+    const byKey = (a: CohortMember, b: CohortMember): number => {
+      const x = cohortKey(a);
+      const y = cohortKey(b);
+      return x.at === y.at ? (x.id < y.id ? -1 : x.id > y.id ? 1 : 0) : x.at < y.at ? -1 : 1;
+    };
+    const members = eligibleRows.map(memberOf).sort(byKey);
+    const ratioMembers = [
+      ...members.filter((member) => (member.estimatedSeconds ?? 0) > 0),
+      ...ratioParentRows.map(memberOf),
+    ].sort(byKey);
+    return cohortReport({
+      asOf,
+      filter,
+      population: { issues: inFilter.length, eligible: members.length, notEligible: { parents, open, cancelled } },
+      members,
+      ratioMembers,
+      ratioParents: ratioParentRows.length,
+      after,
+      limit,
+      scope,
+    });
   }
 
   /** The issue and every descendant, capped at MAX_TREE_DEPTH like `timingFor`'s closure. */

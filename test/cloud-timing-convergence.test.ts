@@ -494,7 +494,7 @@ describe("round 1: what an operation narrates, and what it does not", () => {
       const t = timingOn(machine, x.id, 60);
       // Blocked from the edge (30) to the restore (40), then waiting in the queue again: the same on both.
       expect(t.wall!.buckets, machine.label).toMatchObject({ blocked: min(10), queued: min(25 + 20) });
-      expect(t.quality.wall, machine.label).toEqual({ state: "exact", inputs: [] });
+      expect(t.quality.wall, machine.label).toEqual({ state: "exact", inputs: [], reasons: [] });
     }
     expect(timingOn(a, x.id, 60).wall).toEqual(timingOn(b, x.id, 60).wall);
     const rewound = (machine: Machine) =>
@@ -520,7 +520,7 @@ describe("round 1: what an operation narrates, and what it does not", () => {
     a.store.setBlockedBy(x.id, [w.id], "vp");
     // Gone with no event, as a cascade or an older build's rewind leaves it.
     a.db.prepare("DELETE FROM relations WHERE blocked_id = ?").run(x.id);
-    expect(timingOn(a, x.id, 20).quality.wall).toEqual({ state: "approximate", inputs: ["edge_history_incomplete"] });
+    expect(timingOn(a, x.id, 20).quality.wall).toEqual({ state: "approximate", inputs: ["edge_history_incomplete"], reasons: ["edge_history_incomplete"] });
   });
 
   /**
@@ -569,7 +569,7 @@ describe("round 1: what an operation narrates, and what it does not", () => {
     }
     expect(onA.quality.work.inputs).not.toContain("contested");
     expect(onA.approximate).toBe(false);
-    expect(onA.quality.wall).toEqual({ state: "approximate", inputs: ["conflict_resolved"] });
+    expect(onA.quality.wall).toEqual({ state: "approximate", inputs: ["conflict_resolved"], reasons: ["conflict_resolved"] });
     return onA;
   }
 
@@ -692,7 +692,7 @@ describe("round 1: what an operation narrates, and what it does not", () => {
       const t = timingOn(machine, x.id, 600);
       // 0-10 work; 10-100 the decision (review); 100-200 queued; done at 200; the decision at 500 reopens it to review.
       expect(t.wall, machine.label).toMatchObject({ startAt: iso(0), endAt: null, buckets: { work: min(10), review: min(90) + min(100), queued: min(100), resolved: min(300) } });
-      expect(t.quality.wall, machine.label).toEqual({ state: "approximate", inputs: ["conflict_resolved"] });
+      expect(t.quality.wall, machine.label).toEqual({ state: "approximate", inputs: ["conflict_resolved"], reasons: ["conflict_resolved"] });
     }
     expect(timingOn(b, x.id, 600).wall).toEqual(timingOn(a, x.id, 600).wall);
   }, 60_000);
@@ -725,7 +725,7 @@ describe("round 1: what an operation narrates, and what it does not", () => {
     const onA = timingOn(a, d.id, 40);
     expect(timingOn(b, d.id, 40).wall).toEqual(onA.wall);
     expect(onA.wall!.buckets).toMatchObject({ blocked: min(40) });
-    for (const machine of [a, b]) expect(timingOn(machine, d.id, 40).quality.wall, machine.label).toEqual({ state: "approximate", inputs: ["conflict_resolved"] });
+    for (const machine of [a, b]) expect(timingOn(machine, d.id, 40).quality.wall, machine.label).toEqual({ state: "approximate", inputs: ["conflict_resolved"], reasons: ["conflict_resolved"] });
   }, 60_000);
 
   it("a status decision settles only the attempt-end dispute its own two writes made", async () => {
@@ -848,7 +848,7 @@ describe("round 1: what an operation narrates, and what it does not", () => {
     const { a, b, x } = await disputedStatus();
     for (const machine of [a, b]) {
       expect(listConflicts(machine.db).some((record) => record.entity === "attempt" && record.field === "end"), machine.label).toBe(true);
-      expect(timingOn(machine, x.id, 30).quality.work, machine.label).toMatchObject({ state: "approximate", inputs: ["contested"] });
+      expect(timingOn(machine, x.id, 30).quality.work, machine.label).toMatchObject({ state: "approximate", inputs: ["contested"], reasons: ["contested"] });
     }
   }, 60_000);
 

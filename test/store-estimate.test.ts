@@ -359,7 +359,7 @@ describe("rollups sum DIRECT children and nothing else", () => {
       estimateRatio: null,
       wall: null,
       resumeGaps: [],
-      quality: { work: { state: "missing", inputs: [], coverage: null, missingInputs: [] }, wall: { state: null, inputs: [] } },
+      quality: { work: { state: "missing", inputs: [], reasons: ["never_started"], coverage: null, missingInputs: [] }, wall: { state: "missing", inputs: [], reasons: ["never_started"] } },
       missing: {
         workSeconds: "never_started",
         ownWorkSeconds: "never_started",
