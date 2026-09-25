@@ -18,11 +18,12 @@ import { readConfig } from "../../config/file.js";
 import { StapleError, nowIso } from "../types.js";
 import type { AttemptTransition } from "./attempt-records.js";
 import type { AttemptView } from "./attempt-derive.js";
-import { BudgetStore, toSample, type BudgetSample, type LimitWindow, type Missing, type SampleRow, type WindowSampleView } from "./budget-store.js";
+import { BudgetStore, WINDOW_TOLERANCE_SECONDS, type BudgetSample, type LimitWindow, type Missing, type WindowSampleView } from "./budget-store.js";
 import { isKnownBinding, type TelemetryConfig } from "./config.js";
 import { assertAccountRef, normalizeInstant, parseRelativeSeconds } from "./formats.js";
 import {
   GAP_SECONDS,
+  coverage,
   cutPage,
   decodeKeysetCursor,
   gapsIn,
@@ -33,6 +34,7 @@ import {
 } from "./read-page.js";
 
 const ms = (instant: string): number => Date.parse(instant);
+const WINDOW_TOLERANCE_MS = WINDOW_TOLERANCE_SECONDS * 1000;
 
 /** This machine's hub, read-only, or null when it has none or it predates budget samples. */
 function openHubForRead(home: string): DatabaseSync | null {
@@ -96,7 +98,7 @@ export interface LimitReading {
   readonly remainingPercent: number | null;
   readonly regressionCount: number | null;
   readonly sampleCount: number | null;
-  /** True when the latest sample was recorded longer ago than capture allows (`recordedAt`, the local clock). */
+  /** True when the latest sample's value is older than capture allows: `now − observedAt` over 600 s. */
   readonly stale: boolean | null;
   readonly missing: Missing;
 }
@@ -122,7 +124,8 @@ function limitReading(store: BudgetStore, provider: string | null, accountRef: s
   const missing: Missing = {};
   const current = windows.filter((window) => window.status === "current").sort((a, b) => ((a.resetsAt ?? "") < (b.resetsAt ?? "") ? 1 : -1))[0];
   if (current === undefined) {
-    const newest = windows[windows.length - 1] ?? null;
+    // The newest instance still standing; a superseded one only when every instance is.
+    const newest = [...windows].reverse().find((window) => window.supersededBy === null) ?? windows[windows.length - 1] ?? null;
     // Nothing carries forward across a reset: the last sample of an elapsed window says
     // nothing about the next one. A limit only ever seen without a reset joins no window.
     const reason = newest === null ? "reset_not_reported" : "window_elapsed";
@@ -173,7 +176,9 @@ function limitReading(store: BudgetStore, provider: string | null, accountRef: s
     remainingPercent,
     regressionCount: high.regressionCount,
     sampleCount: high.sampleCount,
-    stale: latest === null ? null : ms(now) - ms(latest.recordedAt) > GAP_SECONDS * 1000,
+    // Judged on `observedAt`, as history's gaps are: a backfilled reading recorded a minute
+    // ago can be two hours old, and it is the age of the value that makes it stale.
+    stale: latest === null ? null : ms(now) - ms(latest.observedAt) > GAP_SECONDS * 1000,
     missing,
   };
 }
@@ -267,6 +272,11 @@ const sampleKey = (sample: BudgetSample): KeysetPosition => ({ at: sample.observ
  * sample and no heartbeat was stored for the account — nobody was looking — each `stale`,
  * or `no_sample_yet` before the account's first sample ever. Judged on `observedAt`, the
  * instant each value was true.
+ *
+ * `since` bounds the FIRST page only, resolved against the clock once. A cursor is already
+ * past it: every row after the cursor is at or after the instant `since` named when the walk
+ * began. Resolving a relative `since` (`2h`) again on a later page would move it forward and
+ * silently skip the rows between.
  */
 export function listBudgetSamples(
   home: string,
@@ -275,63 +285,56 @@ export function listBudgetSamples(
   if (query.account === undefined || query.account.trim() === "") throw new StapleError("validation", "Budget history needs --account: the label of the account to read.");
   const account = assertAccountRef(query.account, "--account");
   const now = query.now ?? nowIso();
-  const since = parseSince(query.since, now);
   const limit = pageLimit(query.limit);
-  // `since` is fingerprinted as given, so a relative one keeps meaning the same page.
+  const resolved = parseSince(query.since, now);
+  // Fingerprinted as given, so a relative `since` keeps naming the same walk.
   const scope = { account, since: query.since ?? null };
   const position = query.cursor === undefined ? null : decodeKeysetCursor("budget_samples", scope, query.cursor);
+  const since = position === null ? resolved : null;
+  const telemetry = telemetryOf(home);
   return withHub(home, (hub) => {
-    const rows =
-      hub === null
-        ? []
-        : (hub
-            .prepare(
-              `SELECT * FROM budget_samples
-                WHERE account_ref = ?
-                  AND (? IS NULL OR observed_at >= ?)
-                  AND (? IS NULL OR observed_at > ? OR (observed_at = ? AND id > ?))
-                ORDER BY observed_at, id LIMIT ?`,
-            )
-            .all(account, since, since, position?.at ?? null, position?.at ?? null, position?.at ?? null, position?.id ?? null, limit + 1) as unknown as SampleRow[]);
-    const page = cutPage(rows.map(toSample), limit, "budget_samples", scope, sampleKey);
-    const regressionOf = (sample: BudgetSample): boolean => {
-      if (hub === null || sample.windowId === null || sample.usedPercent === null) return false;
-      const row = hub
-        .prepare(
-          `SELECT MAX(used_percent) AS high FROM budget_samples
-            WHERE window_id = ? AND (observed_at < ? OR (observed_at = ? AND id < ?))`,
-        )
-        .get(sample.windowId, sample.observedAt, sample.observedAt, sample.id) as { high: number | null };
-      return row.high !== null && sample.usedPercent < row.high;
-    };
-    const items = page.items.map((sample) => ({ ...sample, regression: regressionOf(sample) }));
+    const store = hub === null ? null : new BudgetStore(hub);
+    const rows = store === null ? [] : store.samplesAfter({ accountRef: account, since, after: position, limit: limit + 1 });
+    const page = cutPage(rows, limit, "budget_samples", scope, sampleKey);
+    const items = page.items.map((sample) => {
+      const high = store === null || sample.usedPercent === null ? null : store.highWaterBefore(sample);
+      return { ...sample, regression: high !== null && sample.usedPercent! < high };
+    });
     const from = position?.at ?? since ?? items[0]?.observedAt ?? null;
-    const to = page.truncated ? items[items.length - 1]!.observedAt : now;
-    const earlier =
-      from !== null && hub !== null && hub.prepare("SELECT 1 FROM budget_samples WHERE account_ref = ? AND observed_at < ? LIMIT 1").get(account, from) !== undefined;
-    const telemetry = telemetryOf(home);
-    const never = hub === null || hub.prepare("SELECT 1 FROM budget_samples WHERE account_ref = ? LIMIT 1").get(account) === undefined;
-    const gaps = gapsIn(
-      items.map((sample) => sample.observedAt),
-      { from, to },
-      { leading: earlier ? "stale" : never ? absentReason(telemetry, account) : "no_sample_yet", between: "stale", trailing: "stale" },
-    );
-    return { ...page, items, coverage: { from, to, itemCount: items.length, gaps } };
+    const to = page.truncated ? items[items.length - 1]!.observedAt : from === null ? null : now;
+    const any = store !== null && store.hasSampleBefore(account, null);
+    const earlier = from !== null && store !== null && store.hasSampleBefore(account, from);
+    const absent = any ? "no_sample_yet" : absentReason(telemetry, account);
+    const gaps = gapsIn(items.map((sample) => sample.observedAt), { from, to }, { leading: earlier ? "stale" : absent, between: "stale", trailing: "stale" });
+    return { ...page, items, coverage: coverage(from, to, items.length, gaps, absent) };
   });
 }
 
 // ---------------------------------------------------------------- per-attempt burn
 
+/**
+ * Where a window's `fromPercent` came from:
+ *   - `window`: the high-water of its own readings at or before the attempt's start;
+ *   - `reset`: 0, because the previous instance of the limit reset inside the attempt, so this
+ *     instance began during it. A reset is the provider's statement that usage restarts;
+ *   - `superseded_window`: the high-water at the start of the instance this one superseded
+ *     (a moved reset), when this one's readings continue from it;
+ *   - `first_reading`: its first reading inside the attempt. Usage before that reading is not
+ *     seen, so the delta can only be too low (`lowerBound: true`).
+ */
+export type BurnBaseline = "window" | "reset" | "superseded_window" | "first_reading";
+
 /** One window instance's part of an attempt's burn. */
 export interface WindowBurn {
   readonly windowId: string;
   readonly resetsAt: string | null;
-  /** The high-water at the attempt's start, or the first reading inside it (`lowerBound`). */
+  /** The usage at the attempt's start in this window; see {@link BurnBaseline}. */
   readonly fromPercent: number | null;
+  readonly baseline: BurnBaseline | null;
   /** The high-water at the attempt's end (for an open attempt, now). */
   readonly toPercent: number | null;
   readonly deltaPercent: number | null;
-  /** True when no reading preceded the attempt in this window, so the delta can only be too low. */
+  /** True when usage before the first reading inside the attempt was not seen, so the delta can only be too low. */
   readonly lowerBound: boolean;
   readonly missing: Missing;
 }
@@ -340,6 +343,8 @@ export interface LimitBurn {
   readonly limitKey: string;
   /** The sum of `windows[].deltaPercent` that are known; null when none is. */
   readonly burnPercent: number | null;
+  /** True when any window in the sum is a lower bound: the burn is at least `burnPercent`. */
+  readonly lowerBound: boolean;
   readonly coverage: { readonly known: number; readonly total: number };
   readonly partial: boolean;
   readonly regressionCount: number;
@@ -354,8 +359,9 @@ export interface AttemptBurn {
   readonly from: string;
   readonly to: string;
   /**
-   * `sole_known`: no other attempt this machine knows of ran on the account during the span.
-   * `shared`: another did. Never a claim that the delta is exclusive. Null with no burn.
+   * `sole_known`: every count this machine recorded says no other attempt it knows of ran on
+   * the account during the span. `shared`: another did. Null with a reason when a count is
+   * unknown, or when there is no burn. Never a claim that the delta is exclusive.
    */
   readonly attribution: "sole_known" | "shared" | null;
   /** Samples ingestion linked to this attempt (`attemptId`). */
@@ -364,53 +370,101 @@ export interface AttemptBurn {
   readonly missing: Missing;
 }
 
-/** Whether another attempt this machine started ran on the same account during the span. */
-function sharedDuring(hub: DatabaseSync, attempt: AttemptView, accountRef: string, from: string, to: string, transitions: readonly AttemptTransition[]): boolean {
+/**
+ * `shared` on any evidence of another attempt on the account during the span; `sole_known`
+ * only when every count was known and none showed one; otherwise unknown, with the reason
+ * the count was missing. An unknown count never reads as "alone".
+ */
+function attributionOf(
+  hub: DatabaseSync,
+  attempt: AttemptView,
+  accountRef: string,
+  from: string,
+  to: string,
+  transitions: readonly AttemptTransition[],
+): { value: "shared" | "sole_known" | null; reason: string | null } {
+  let unknown: string | null = transitions.length === 0 ? "input_missing" : null;
   for (const transition of transitions) {
     const count = transition.concurrency?.storedOpenAttemptsOnAccountStartedHere;
-    if (typeof count === "number" && count > 1) return true;
+    if (typeof count === "number") {
+      if (count > 1) return { value: "shared", reason: null };
+    } else if (unknown === null) {
+      const missing = transition.concurrency?.missing as Record<string, unknown> | undefined;
+      const reason = missing?.storedOpenAttemptsOnAccountStartedHere;
+      unknown = typeof reason === "string" ? reason : "input_missing";
+    }
   }
   const presence = hub.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'attempt_presence'").get();
-  if (!presence) return false;
-  const other = hub
-    .prepare(
-      `SELECT 1 FROM attempt_presence
-        WHERE account_ref = ? AND attempt_id <> ? AND started_at <= ? AND (ended_at IS NULL OR ended_at > ?) LIMIT 1`,
-    )
-    .get(accountRef, attempt.id, to, from);
-  return other !== undefined;
+  if (presence) {
+    const other = hub
+      .prepare(
+        `SELECT 1 FROM attempt_presence
+          WHERE account_ref = ? AND attempt_id <> ? AND started_at <= ? AND (ended_at IS NULL OR ended_at > ?) LIMIT 1`,
+      )
+      .get(accountRef, attempt.id, to, from);
+    if (other !== undefined) return { value: "shared", reason: null };
+  } else if (unknown === null) {
+    unknown = "source_unavailable";
+  }
+  return unknown === null ? { value: "sole_known", reason: null } : { value: null, reason: unknown };
 }
 
-function windowBurn(store: BudgetStore, window: LimitWindow, from: string, to: string): { burn: WindowBurn; regressions: number } {
+const highOf = (list: readonly WindowSampleView[]): number | null => (list.length === 0 ? null : Math.max(...list.map((sample) => sample.usedPercent!)));
+
+function windowBurn(
+  store: BudgetStore,
+  window: LimitWindow,
+  from: string,
+  to: string,
+  context: { beganInside: boolean; supersededBaseline: number | null },
+): { burn: WindowBurn; regressions: number } {
   const samples = store.samplesInWindow(window.id).filter((sample) => sample.usedPercent !== null);
-  const high = (list: readonly WindowSampleView[]): number | null => (list.length === 0 ? null : Math.max(...list.map((sample) => sample.usedPercent!)));
   const before = samples.filter((sample) => sample.observedAt <= from);
   const inside = samples.filter((sample) => sample.observedAt > from && sample.observedAt <= to);
-  const upTo = samples.filter((sample) => sample.observedAt <= to);
+  const regressions = inside.filter((sample) => sample.regression).length;
   const missing: Missing = {};
-  let fromPercent = high(before);
+  if (inside.length === 0) {
+    // Nothing was read while the attempt ran: a reading before it says nothing about what it
+    // burned, and reading it as a measured 0 would be the error this contract exists to stop.
+    for (const field of ["toPercent", "deltaPercent", "baseline"]) missing[field] = "stale";
+    const fromPercent = highOf(before);
+    if (fromPercent === null) missing.fromPercent = "stale";
+    return {
+      burn: { windowId: window.id, resetsAt: window.resetsAt, fromPercent, baseline: null, toPercent: null, deltaPercent: null, lowerBound: false, missing },
+      regressions,
+    };
+  }
+  const toPercent = highOf([...before, ...inside])!;
+  let fromPercent: number;
+  let baseline: BurnBaseline;
   let lowerBound = false;
-  if (fromPercent === null && inside.length > 0) {
-    fromPercent = inside[0]!.usedPercent;
+  if (before.length > 0) {
+    fromPercent = highOf(before)!;
+    baseline = "window";
+  } else if (context.beganInside) {
+    fromPercent = 0;
+    baseline = "reset";
+  } else if (context.supersededBaseline !== null && context.supersededBaseline <= toPercent) {
+    fromPercent = context.supersededBaseline;
+    baseline = "superseded_window";
+  } else {
+    fromPercent = inside[0]!.usedPercent!;
+    baseline = "first_reading";
     lowerBound = true;
   }
-  const toPercent = high(upTo);
-  if (fromPercent === null) missing.fromPercent = "no_sample_yet";
-  if (toPercent === null) missing.toPercent = "no_sample_yet";
-  const deltaPercent = fromPercent === null || toPercent === null ? null : Math.max(0, toPercent - fromPercent);
-  if (deltaPercent === null) missing.deltaPercent = "input_missing";
   return {
-    burn: { windowId: window.id, resetsAt: window.resetsAt, fromPercent, toPercent, deltaPercent, lowerBound, missing },
-    regressions: inside.filter((sample) => sample.regression).length,
+    burn: { windowId: window.id, resetsAt: window.resetsAt, fromPercent, baseline, toPercent, deltaPercent: Math.max(0, toPercent - fromPercent), lowerBound, missing },
+    regressions,
   };
 }
 
 /**
- * An attempt's burn: per limit of its account, the samples that bracket the attempt inside
+ * An attempt's burn: per limit of its account, the readings that bracket the attempt inside
  * each window instance, by the high-water rule, summed across instances when it spans a
- * reset. Null with a reason when it cannot be joined: no account (`no_provider_binding`), an
- * attempt another device opened (`not_on_this_device`: budget data does not replicate), or no
- * readings at all (`no_sample_yet` / `source_unavailable`).
+ * reset. A window counts only with a reading inside the attempt. Null with a reason when it
+ * cannot be joined: no account (`no_provider_binding`), an attempt another device opened
+ * (`not_on_this_device`: budget data does not replicate), no readings at all
+ * (`no_sample_yet` / `source_unavailable`), or none while it ran (`stale`).
  */
 export function attemptBurn(
   home: string,
@@ -454,22 +508,42 @@ export function attemptBurn(
       if (all.some((window) => window.resetsAt === null)) {
         // High-water, and with it burn, is undefined for a sliding window.
         missing.burnPercent = "sliding_window";
-        limits.push({ limitKey, burnPercent: null, coverage: { known: 0, total: 0 }, partial: false, regressionCount: 0, windows: [], missing });
+        limits.push({ limitKey, burnPercent: null, lowerBound: false, coverage: { known: 0, total: 0 }, partial: false, regressionCount: 0, windows: [], missing });
         continue;
       }
       // The instances the span touches. A superseded instance is replaced by the one whose
-      // reset moved; counting both would count one usage twice, so it is left out.
-      const overlapping = all.filter((window) => {
+      // reset moved; its readings serve as that one's baseline rather than as a second sum
+      // over the same usage.
+      const live = all.filter((window) => window.supersededBy === null);
+      const overlapping = live.filter((window) => {
         const start = window.startsAt ?? window.firstSampleAt;
-        return window.supersededBy === null && ms(window.resetsAt!) > ms(from) && (start === null || ms(start) <= ms(to));
+        return ms(window.resetsAt!) > ms(from) && (start === null || ms(start) <= ms(to));
       });
-      const parts = overlapping.map((window) => windowBurn(store, window, from, to));
+      const parts = overlapping.map((window) => {
+        const begins = window.startsAt ?? window.firstSampleAt ?? window.resetsAt!;
+        const previousReset = live
+          .filter((other) => other.id !== window.id && ms(other.resetsAt!) <= ms(begins) + WINDOW_TOLERANCE_MS)
+          .map((other) => other.resetsAt!)
+          .sort()
+          .pop();
+        const beganInside =
+          (window.startsAt !== null && window.startsAt > from) ||
+          (previousReset !== undefined && ms(previousReset) > ms(from) && ms(previousReset) <= ms(to));
+        const superseded = all.filter((other) => other.supersededBy === window.id);
+        const supersededBaseline = highOf(
+          superseded.flatMap((other) => store.samplesInWindow(other.id).filter((sample) => sample.usedPercent !== null && sample.observedAt <= from)),
+        );
+        return windowBurn(store, window, from, to, { beganInside, supersededBaseline });
+      });
       const known = parts.filter((part) => part.burn.deltaPercent !== null);
       const burnPercent = known.length === 0 ? null : known.reduce((sum, part) => sum + part.burn.deltaPercent!, 0);
-      if (burnPercent === null) missing.burnPercent = overlapping.length === 0 ? "stale" : "input_missing";
+      if (burnPercent === null) {
+        missing.burnPercent = parts.every((part) => part.burn.missing.deltaPercent === "stale") ? "stale" : "input_missing";
+      }
       limits.push({
         limitKey,
         burnPercent,
+        lowerBound: known.some((part) => part.burn.lowerBound),
         coverage: { known: known.length, total: overlapping.length },
         partial: known.length > 0 && known.length < overlapping.length,
         regressionCount: parts.reduce((sum, part) => sum + part.regressions, 0),
@@ -479,16 +553,13 @@ export function attemptBurn(
     }
     const anyKnown = limits.some((limit) => limit.burnPercent !== null);
     const missing: Missing = {};
+    let attribution: AttemptBurn["attribution"] = null;
     if (!anyKnown) missing.attribution = "input_missing";
-    return {
-      provider: binding.provider,
-      accountRef: binding.accountRef,
-      from,
-      to,
-      attribution: anyKnown ? (sharedDuring(hub, attempt, binding.accountRef, from, to, context.transitions) ? "shared" : "sole_known") : null,
-      linkedSampleCount,
-      limits,
-      missing,
-    };
+    else {
+      const found = attributionOf(hub, attempt, binding.accountRef, from, to, context.transitions);
+      attribution = found.value;
+      if (found.reason !== null) missing.attribution = found.reason;
+    }
+    return { provider: binding.provider, accountRef: binding.accountRef, from, to, attribution, linkedSampleCount, limits, missing };
   });
 }

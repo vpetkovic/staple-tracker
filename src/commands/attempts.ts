@@ -24,11 +24,15 @@ const HELP = `staple attempts — the execution attempts on one issue, oldest fi
 
   --json      {items, truncated, nextCursor, coverage}`;
 
-/** `--limit` as a number, refused by the store's own clamp when it is not one. */
+/**
+ * `--limit` as a number. Only a value that is no number at all is refused here; whether it is
+ * a positive integer is the read's own check (`pageLimit`), so the CLI and MCP refuse
+ * `1.5` with one message.
+ */
 export function limitFlag(raw: string | undefined): number | undefined {
   if (raw === undefined) return undefined;
   const value = Number(raw);
-  if (!Number.isInteger(value) || value < 1) throw new StapleError("validation", `--limit must be a positive integer (max 500); got "${raw}".`);
+  if (raw.trim() === "" || Number.isNaN(value)) throw new StapleError("validation", `--limit must be a positive integer (max 500); got "${raw}".`);
   return value;
 }
 
@@ -66,8 +70,13 @@ function sayDetail(detail: AttemptDetail): void {
   const burn = detail.burn;
   if (burn.limits.length === 0) console.log(`  burn unknown (${Object.values(burn.missing)[0] ?? "no readings"})`);
   for (const limit of burn.limits) {
-    const value = limit.burnPercent === null ? `unknown (${Object.values(limit.missing)[0] ?? "no readings"})` : `${limit.burnPercent}%${limit.partial ? " (partial)" : ""}`;
-    console.log(`  burn ${limit.limitKey.padEnd(18)} ${value}${burn.attribution ? ` · ${burn.attribution}` : ""}`);
+    // A lower bound reads as one: usage before the first reading inside the attempt was not seen.
+    const value =
+      limit.burnPercent === null
+        ? `unknown (${Object.values(limit.missing)[0] ?? "no readings"})`
+        : `${limit.lowerBound ? "≥" : ""}${limit.burnPercent}%${limit.partial ? " (partial)" : ""}`;
+    const attribution = burn.attribution ?? (limit.burnPercent === null ? null : `attribution unknown (${burn.missing.attribution ?? "input_missing"})`);
+    console.log(`  burn ${limit.limitKey.padEnd(18)} ${value}${attribution ? ` · ${attribution}` : ""}`);
   }
 }
 

@@ -135,7 +135,7 @@ export interface WindowHighWater {
   readonly missing: Missing;
 }
 
-export interface SampleRow {
+interface SampleRow {
   id: string;
   window_id: string | null;
   provider: string;
@@ -195,7 +195,7 @@ function parseMissing(text: string): Missing {
   }
 }
 
-export function toSample(row: SampleRow): BudgetSample {
+function toSample(row: SampleRow): BudgetSample {
   return {
     id: row.id,
     windowId: row.window_id,
@@ -544,6 +544,45 @@ export class BudgetStore {
         filter.windowId ?? null,
       ) as unknown as SampleRow[];
     return rows.map(toSample);
+  }
+
+  /**
+   * One account's samples strictly after a keyset position `(observedAt, id)`, oldest first,
+   * at most `limit`. The id breaks ties: one status-line render stores a sample per limit at
+   * the same `observedAt`, so a position without it would skip or repeat them.
+   */
+  samplesAfter(query: { accountRef: string; since: string | null; after: { at: string; id: string } | null; limit: number }): BudgetSample[] {
+    const at = query.after?.at ?? null;
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM budget_samples
+          WHERE account_ref = ?
+            AND (? IS NULL OR observed_at >= ?)
+            AND (? IS NULL OR observed_at > ? OR (observed_at = ? AND id > ?))
+          ORDER BY observed_at, id LIMIT ?`,
+      )
+      .all(query.accountRef, query.since, query.since, at, at, at, query.after?.id ?? null, query.limit) as unknown as SampleRow[];
+    return rows.map(toSample);
+  }
+
+  /** The highest `usedPercent` in a sample's window before it, by `(observedAt, id)`; null when none. */
+  highWaterBefore(sample: BudgetSample): number | null {
+    if (sample.windowId === null) return null;
+    const row = this.db
+      .prepare(
+        `SELECT MAX(used_percent) AS high FROM budget_samples
+          WHERE window_id = ? AND (observed_at < ? OR (observed_at = ? AND id < ?))`,
+      )
+      .get(sample.windowId, sample.observedAt, sample.observedAt, sample.id) as { high: number | null };
+    return row.high;
+  }
+
+  /** Whether the account holds any sample observed before `instant` (any at all when null). */
+  hasSampleBefore(accountRef: string, instant: string | null): boolean {
+    return (
+      this.db.prepare("SELECT 1 FROM budget_samples WHERE account_ref = ? AND (? IS NULL OR observed_at < ?) LIMIT 1").get(accountRef, instant, instant) !==
+      undefined
+    );
   }
 
   /**

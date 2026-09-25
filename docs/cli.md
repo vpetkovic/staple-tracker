@@ -695,7 +695,8 @@ staple attempt 0b6f2c1e-6d0a-4f7e-9d38-2f3b8a1c9e44 --json
   `null` with `window_elapsed` until a new reading arrives. A bound account
   with no readings reads `no_sample_yet`. An account with no ingestion path
   reads `source_unavailable`. Neither is shown as 0. `stale: true` means the
-  latest reading was recorded over 10 minutes ago.
+  latest reading's value is over 10 minutes old, judged on `observedAt`, which
+  is also how `budget history` finds its gaps.
 - **`staple budget history`** lists one account's readings oldest first by
   `observedAt`, each with a derived `regression` flag. `--since` takes an
   instant or a duration meaning that long ago.

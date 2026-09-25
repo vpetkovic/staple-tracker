@@ -184,7 +184,32 @@ describe("ws targeting", () => {
   }, 60_000);
 });
 
+describe("a lower-bound burn", () => {
+  it("prints as at least, when nothing was read before the attempt in its window", () => {
+    const issue = String(cli(["new", "Unseen start"]).identifier);
+    const attempt = String((cli(["checkout", issue, "--account", "team-max"]).attempt as Record<string, unknown>).id);
+    for (const used of ["30", "33"]) {
+      const reading = run(["budget", "ingest", "--source", "manual", "--account", "team-max", "--provider", "anthropic", "--limit-key", "five_hour", "--used", used, "--resets-at", "4h", "--json"]);
+      expect(reading.status, reading.stderr).toBe(0);
+    }
+    cli(["release", issue]);
+    expect(cli(["attempt", attempt])).toMatchObject({ burn: { limits: [{ burnPercent: 3, lowerBound: true }] } });
+    expect(run(["attempt", attempt, "--ws", WS]).stdout).toMatch(/burn five_hour\s+≥3%/);
+  }, 60_000);
+});
+
 describe("refusals keep the envelope and exit codes", () => {
+  it("refuses a limit that is not a positive integer with one envelope on both surfaces", async () => {
+    const viaMcp = await mcp.call("list_attempts", { ref, ws: WS, limit: 1.5 });
+    expect(viaMcp.isError).toBe(true);
+    const viaCli = run(["attempts", ref, "--limit", "1.5", "--ws", WS, "--json"]);
+    expect(viaCli.status).toBe(2);
+    expect(mcpEnvelope(viaMcp)).toEqual(JSON.parse(viaCli.stderr.trim()));
+    expect(mcpEnvelope(viaMcp)).toMatchObject({ code: "validation" });
+    const budget = await mcp.call("list_budget_samples", { account: "personal-max", limit: -2 });
+    expect(mcpEnvelope(budget)).toMatchObject({ code: "validation" });
+  }, 60_000);
+
   it("validation for a missing ref, a bad limit or a foreign cursor; not_found for an unknown attempt", () => {
     const noRef = run(["attempts", "--ws", WS, "--json"]);
     expect(noRef.status).toBe(2);

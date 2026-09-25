@@ -35,12 +35,22 @@ export interface CoverageGap {
 }
 
 export interface Coverage {
-  /** The first instant the page speaks for, or null when it speaks for none. */
+  /** The first instant the page speaks for, or null (with a reason in `missing`) when it speaks for none. */
   readonly from: string | null;
-  /** The last instant the page speaks for, or null when it speaks for none. */
+  /** The last instant the page speaks for, or null (with a reason in `missing`) when it speaks for none. */
   readonly to: string | null;
   readonly itemCount: number;
   readonly gaps: CoverageGap[];
+  /** Why `from` or `to` is null, as for every other record. Empty when both have a value. */
+  readonly missing: Record<string, string>;
+}
+
+/** A coverage object, with a reason for each null bound. */
+export function coverage(from: string | null, to: string | null, itemCount: number, gaps: CoverageGap[], reason: string): Coverage {
+  const missing: Record<string, string> = {};
+  if (from === null) missing.from = reason;
+  if (to === null) missing.to = reason;
+  return { from, to, itemCount, gaps, missing };
 }
 
 export interface TelemetryPage<T> {
@@ -104,8 +114,14 @@ export function decodeKeysetCursor(list: string, scope: unknown, cursor: string)
   return { at: payload.at, id: payload.id };
 }
 
-/** The effective limit: the default when absent, clamped to the maximum. */
+/**
+ * The effective limit: the default when absent, clamped to the maximum. A limit that is not a
+ * positive integer is refused here, with the validation envelope, on every surface alike.
+ */
 export function pageLimit(limit: number | undefined): number {
+  if (limit !== undefined && (!Number.isInteger(limit) || limit < 1)) {
+    throw new StapleError("validation", `limit must be a positive integer (max ${TELEMETRY_PAGE_LIMITS.max}); got ${String(limit)}.`);
+  }
   return clampLimit(limit, TELEMETRY_PAGE_LIMITS);
 }
 

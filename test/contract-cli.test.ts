@@ -248,8 +248,8 @@ describe("KNOWN: logical errors this surface cannot project", () => {
    * full result set. Only the telemetry lists page on the CLI (`staple attempts`,
    * `staple budget history`); their cursor refusal is a real projection case in CASES.
    */
-  it("the issue lists accept no --cursor flag", () => {
-    const result = cliAs(CONTRACT_AGENT, "ls", "--cursor", "whatever", "--ws", WS, "--json");
+  it.each(["ls", "inbox", "board"])("the issue list `%s` accepts no --cursor flag", (command) => {
+    const result = cliAs(CONTRACT_AGENT, command, "--cursor", "whatever", "--ws", WS, "--json");
     expect(result.status).toBe(CLI_EXIT_CODES.validation);
     expect(cliEnvelope(result).code).toBe("validation");
   });
