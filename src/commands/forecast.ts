@@ -92,7 +92,7 @@ function say(report: ForecastReport): void {
   console.log(`${subject.ref} · ${subject.title} (${subject.kind}, ${subject.status}) · snapshot ${report.snapshot.id} over ${report.snapshot.calibration.id}`);
   const units = completion.units;
   console.log(
-    `completion  ${units.total} units · ${units.done} done · ${units.awaitingReview} awaiting review · ${units.forecast} to forecast, ${units.known} known` +
+    `completion  ${units.total} unit${units.total === 1 ? "" : "s"} · ${units.done} done · ${units.awaitingReview} awaiting review · ${units.forecast} to forecast, ${units.known} known` +
       (units.unknownRefs.length > 0 ? ` · unknown ${units.unknownRefs.join(", ")}` : ""),
   );
   const partial = (figure: { partial: boolean }): string => (figure.partial ? "≥" : "");

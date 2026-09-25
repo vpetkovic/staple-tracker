@@ -302,8 +302,8 @@ describe("tool inventory", () => {
   // get_attempt, get_budget and list_budget_samples: 48 -> 52. The explicit estimate
   // write added set_estimate: 52 -> 53. The certified plan read added compare_plans: 53 -> 54.
   // The timing quality read added timing_quality: 54 -> 55. The calibration read added
-  // calibration_cohorts: 55 -> 56.
-  it("exposes exactly these 56 tools with these annotations and output schemas", async () => {
+  // calibration_cohorts: 55 -> 56. The forecast read added forecast: 56 -> 57.
+  it("exposes exactly these 57 tools with these annotations and output schemas", async () => {
     const tools = await harness.listTools();
     const inventory = tools.map((t) => ({
       name: t.name,
@@ -342,6 +342,12 @@ describe("tool inventory", () => {
       {
         name: "calibration_cohorts",
         annotations: { title: "Calibration cohorts", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+        hasOutputSchema: true,
+      },
+      // Completion and budget forecasts, side by side. A read.
+      {
+        name: "forecast",
+        annotations: { title: "Forecast", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
         hasOutputSchema: true,
       },
       {
@@ -888,7 +894,7 @@ describe("tool inventory", () => {
     ]);
   });
 
-  it("marks exactly the twenty-three read tools readOnlyHint: true", async () => {
+  it("marks exactly the twenty-four read tools readOnlyHint: true", async () => {
     const tools = await harness.listTools();
     const readOnly = tools.filter((t) => t.annotations?.readOnlyHint === true).map((t) => t.name);
     expect(readOnly).toEqual([
@@ -901,6 +907,8 @@ describe("tool inventory", () => {
       "timing_quality",
       // Calibration cohorts: a read.
       "calibration_cohorts",
+      // Forecasts: a read.
+      "forecast",
       "list_comments",
       "get_document",
       "events_since",

@@ -198,6 +198,8 @@ const COMMANDS: ReadonlyArray<{
     booleans: ["json", "help", "samples"],
     shorts: ["h"],
   },
+  // `forecast <ref>`: the completion forecast and, apart, the budget forecast of the work.
+  { name: "forecast", strings: ["db", "ws", "reserve", "account", "model"], booleans: ["json", "help"], shorts: ["h"] },
 ];
 
 /** Every command token in one place, so a removal is a one-line diff. */
@@ -211,6 +213,7 @@ describe("command inventory", () => {
       "tree", "board", "inbox", "doc", "events", "hub", "ui", "open", "config",
       "migrate", "install", "doctor", "add", "discover", "milestone", "settings",
       "queue", "budget", "attempt", "attempts", "compare", "timing", "calibrate",
+      "forecast",
     ]);
     // 32 tokens, 29 distinct behaviours: checkout/start, done/cancel and ui/open
     // each share a case. Was 22 before A3 (STA-33) added `config`, 23 before A5
@@ -228,8 +231,8 @@ describe("command inventory", () => {
     // since execution attempts, missing here until the read surfaces) and `attempts`.
     // 36 with `estimate`, the explicit estimate write. 37 with `compare`, the
     // certified plan of named issues. 38 with `timing`, the timing quality read.
-    // 39 with `calibrate`, the calibration cohorts read.
-    expect(COMMAND_NAMES).toHaveLength(39);
+    // 39 with `calibrate`, the calibration cohorts read. 40 with `forecast`.
+    expect(COMMAND_NAMES).toHaveLength(40);
   });
 
   it.each(COMMANDS.map((c) => c.name))(

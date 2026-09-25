@@ -203,8 +203,8 @@ describe("an epic", () => {
     const { units, labor, path } = report.completion;
     expect(report.subject.scope).toBe("subtree");
     expect(units).toMatchObject({ total: 7, done: 1, awaitingReview: 1, forecast: 5, known: 4, unknownRefs: [refs.u], awaitingReviewRefs: [refs.r], truncated: false });
-    expect(unit(report, refs.d)).toMatchObject({ treatment: "done", expected: null, simulated: null });
-    expect(unit(report, refs.r)).toMatchObject({ treatment: "awaiting_review", expected: null, simulated: null });
+    expect(unit(report, refs.d!)).toMatchObject({ treatment: "done", expected: null, simulated: null });
+    expect(unit(report, refs.r!)).toMatchObject({ treatment: "awaiting_review", expected: null, simulated: null });
     // The parent with its own estimate is one unit; the child inside it is not another.
     expect(units.items.map((item) => item.ref)).not.toContain(refs.inside);
     expect(labor.expectedSeconds).toBeCloseTo(6480 + 3240 + 6480 + 6480, 6);
