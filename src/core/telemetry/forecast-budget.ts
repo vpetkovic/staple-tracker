@@ -357,6 +357,16 @@ function limitForecast(
     reserve = { percent: context.reserve, breachProbability: alreadyBelow ? 1 : breaches / draws, alreadyBelow, draws };
   }
 
+  // Every null figure says why, the reading's own included.
+  const unknown = (field: string, value: unknown, reason: string | undefined): void => {
+    if (value === null && missing[field] === undefined) missing[field] = reason ?? blocked ?? "input_missing";
+  };
+  unknown("windowId", window?.id ?? null, reading.missing.window);
+  unknown("status", reading.status, reading.missing.window);
+  unknown("resetsAt", resetsAt, blocked ?? "sliding_window");
+  unknown("remainingPercent", reading.remainingPercent, reading.missing.remainingPercent);
+  unknown("highWaterPercent", reading.highWaterPercent, reading.missing.highWaterPercent);
+  unknown("stale", reading.stale, reading.missing.stale);
   return {
     limitKey: reading.limitKey,
     windowId: window?.id ?? null,
