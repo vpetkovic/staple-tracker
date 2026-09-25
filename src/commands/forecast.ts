@@ -5,7 +5,7 @@
  * and the tools answer one shape.
  */
 import { parseArgs } from "node:util";
-import type { BudgetLimitForecast } from "../core/telemetry/forecast-budget.js";
+import { PROVISIONAL_RESERVE_PERCENT, type BudgetLimitForecast } from "../core/telemetry/forecast-budget.js";
 import type { SimulatedSpread } from "../core/telemetry/forecast.js";
 import type { ForecastReport } from "../core/telemetry/forecast-report.js";
 import { StapleError, formatDuration } from "../core/types.js";
@@ -30,12 +30,15 @@ const HELP = `staple forecast — how much work is left, and what it costs a pro
               budget      this machine only, never blended with completion:
                           per account and limit, the high-water remaining,
                           the reset, the pace (%/h), when it runs out, the
-                          work rate (%/work-hour from attempts' measured burn)
-                          and, for the remaining labor run serially from now,
-                          what is left at the reset and the probability it
-                          is under the reserve
+                          work rate (%/work-hour: the limit's rise over the
+                          union of this workspace's attempt spans, per hour
+                          of their work), the other use (%/h outside them)
+                          and, for the remaining labor run serially from now
+                          through the reset and the windows after it, what
+                          is left and the probability it goes under the
+                          reserve: the work alone, and with the other use
   --reserve P   the protected reserve, a percent of each limit (20 or 20%);
-                without it a PROVISIONAL default of 20% applies, until the
+                without it a PROVISIONAL default of ${PROVISIONAL_RESERVE_PERCENT}% applies, until the
                 admission policy defines one
   --account A   only this account's budget
   --model M     the model the work will run on, pinned in every unit's key
@@ -72,17 +75,29 @@ function limitText(limit: BudgetLimitForecast): string[] {
   lines.push(
     rate === null
       ? `work rate ${reason("workRate")}`
-      : `work rate ${rate.percentPerWorkHour.toFixed(2)}%/work-hour over ${rate.attempts} attempts (${duration(rate.workSeconds)})${rate.lowerBound ? " · at least" : ""}${rate.shared > 0 ? ` · ${rate.shared} shared` : ""}`,
+      : `work rate ${rate.percentPerWorkHour.toFixed(2)}%/work-hour over ${rate.attempts} attempts in ${rate.spans} spans (${duration(rate.workSeconds)}) · confidence ${rate.confidence.label}${rate.confidence.warnings.length > 0 ? ` (${rate.confidence.warnings.join(", ")})` : ""}` +
+          (limit.otherUse === null ? ` · other use ${reason("otherUse")}` : ` · other use ${limit.otherUse.percentPerHour.toFixed(2)}%/h`),
   );
   if (limit.work === null) lines.push(`the work ${reason("work")}`);
   else {
     const work = limit.work;
     lines.push(
-      `the work uses ${percent(work.consumedPercent.expected)} (${bandText(work.consumedPercent.simulated, percent)}) · at the reset ${percent(work.remainingAtResetPercent.expected)} left (${bandText(work.remainingAtResetPercent.simulated, percent)})${work.exhaustionProbability > 0 ? ` · P(it alone exhausts the limit first) ${probability(work.exhaustionProbability)}` : ""}${work.lowerBound ? " · burn at least" : ""}`,
+      `the work uses ${percent(work.consumedPercent.expected)} (${bandText(work.consumedPercent.simulated, percent)}) · at the reset ${percent(work.remainingAtResetPercent.expected)} left (${bandText(work.remainingAtResetPercent.simulated, percent)})${work.lowerBound ? " · burn at least" : ""}`,
+    );
+    lines.push(
+      `P(it runs past the reset) ${probability(work.outlastsResetProbability)} · windows p50 ${work.windows.p50}, p90 ${work.windows.p90} · P(it alone uses a window up) ${probability(work.exhaustionProbability)}`,
     );
   }
   if (limit.reserve !== null) {
-    lines.push(`P(under the ${percent(limit.reserve.percent)} reserve at the reset) ${probability(limit.reserve.breachProbability)}${limit.reserve.alreadyBelow ? " · already under it" : ""}`);
+    const r = limit.reserve;
+    const through = r.breachProbability === null ? `unknown (${r.missing.breachProbability ?? "input_missing"})` : probability(r.breachProbability);
+    const other =
+      r.withOtherUse === null
+        ? ` · with other use ${r.missing.withOtherUse ?? "unknown"}`
+        : ` · with other use ${r.withOtherUse.breachProbability === null ? "unknown" : probability(r.withOtherUse.breachProbability)}`;
+    lines.push(
+      `P(under the ${percent(r.percent)}${r.source === "provisional_default" ? " provisional" : ""} reserve) work alone ${through} through the work, ${probability(r.currentWindowBreachProbability)} this window${other}${r.alreadyBelow ? " · already under it" : ""} · confidence ${r.confidence.label}`,
+    );
   }
   return lines;
 }

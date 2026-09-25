@@ -699,7 +699,7 @@ try {
   const forecast = JSON.parse(toolText(await rpc("tools/call", { name: "forecast", arguments: { ref: epic.identifier } })));
   const badReserve = await rpc("tools/call", { name: "forecast", arguments: { ref: epic.identifier, reserve: "120%" } });
   assert(
-    /^forecast1:[0-9a-f]{32}$/.test(forecast.snapshot.id) &&
+    /^forecast2:[0-9a-f]{32}$/.test(forecast.snapshot.id) &&
       /^calibration2:[0-9a-f]{32}$/.test(forecast.snapshot.calibration.id) &&
       forecast.completion.units.done === forecast.completion.units.total &&
       forecast.completion.labor.expectedSeconds === 0 &&

@@ -2,7 +2,7 @@
   "title": "forecasts: remaining work over the plan's units from calibrated durations less work done, the same on every device",
   "covers": [
     "five task/high/feature samples worked 30, 40, 50, 60 and 90 minutes against 1h: ratios 0.5 to 1.5, pooled 0.9",
-    "an in-progress unit worked 70 minutes against 2h: expected 6480 s less 4200 s of work, 2280 s left, drawn from the 4 samples longer than its work",
+    "an in-progress unit worked 70 minutes against 2h: its expected remainder is the mean of the four samples longer than its work (600, 1800, 3000, 6600 s), 3000 s, the figure its draws have, and four admissible samples read few_admissible and a low confidence",
     "a unit blocked by it (1h, 3240 s) makes the chain; a unit in review weighs 0 and is listed; an unestimated unit is unknown and turns the sums partial",
     "the whole completion block, draws included (fixed seed), and its snapshot id read the same on the writer, a tail device and a hydrated device; the budget half reads unknown"
   ],
@@ -427,8 +427,8 @@
             "u"
           ]
         },
-        "labor": 5520,
-        "path": 5520,
+        "labor": 6240,
+        "path": 6240,
         "chain": [
           "a",
           "b"
@@ -437,7 +437,7 @@
           {
             "ref": "a",
             "state": "ratio",
-            "remaining": 2280,
+            "remaining": 3000,
             "admissible": 4,
             "overrun": false
           },
@@ -467,7 +467,9 @@
           "bounds_below_confidence",
           "quantile_below_confidence",
           "unknown_units",
-          "awaiting_review"
+          "few_admissible",
+          "awaiting_review",
+          "independent_draws"
         ]
       }
     },
@@ -484,15 +486,25 @@
           "known": 1,
           "unknown": []
         },
-        "labor": 2280,
-        "path": 2280,
+        "labor": 3000,
+        "path": 3000,
         "chain": [
           "a"
         ],
-        "confidence": "medium",
+        "confidence": "low",
         "warnings": [
           "bounds_below_confidence",
-          "quantile_below_confidence"
+          "quantile_below_confidence",
+          "few_admissible"
+        ],
+        "items": [
+          {
+            "ref": "a",
+            "state": "ratio",
+            "remaining": 3000,
+            "admissible": 4,
+            "overrun": false
+          }
         ]
       }
     }

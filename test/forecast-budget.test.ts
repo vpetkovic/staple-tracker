@@ -131,7 +131,12 @@ describe("the budget forecast of a piece of work", () => {
     // 78% at 12%/h is 6.5 hours, after the reset 3h59m away.
     expect(limit.exhaustion!.atPace).toBe("after_reset");
     expect(limit.exhaustion!.seconds).toBeCloseTo(6.5 * 3600, 6);
-    expect(limit.workRate).toMatchObject({ attempts: 1, burnPercent: 12, workSeconds: 3600, lowerBound: false, excluded: 0, spanningReset: 0, truncated: false });
+    expect(limit.workRate).toMatchObject({ spans: 1, attempts: 1, concurrentSpans: 0, burnPercent: 12, workSeconds: 3600, lowerBound: false, excluded: 0, spanningReset: 0, truncated: false });
+    // One span is one measurement: a rate with no spread, and it says so.
+    expect(limit.workRate!.confidence).toEqual({ label: "low", spans: 1, minimum: 5, warnings: ["small_sample"] });
+    // The attempt covered every reading's span: nothing is left to measure other use by.
+    expect(limit.otherUse).toBeNull();
+    expect(limit.missingInputs.otherUse).toEqual(["time_outside_attempts"]);
     expect(limit.workRate!.percentPerWorkHour).toBeCloseTo(12, 9);
     // 12%/work-hour over 6600 s is 22%, all of it before the reset: 56% left.
     expect(limit.work!.consumedPercent.expected).toBeCloseTo(22, 9);
@@ -145,7 +150,11 @@ describe("the budget forecast of a piece of work", () => {
       expect(left.some((value) => Math.abs(value - figure) < 1e-9)).toBe(true);
     }
     // Under 55% in three draws of six: 54, 54 and 42.
-    expect(limit.reserve).toMatchObject({ percent: 55, alreadyBelow: false, draws: 2000 });
+    expect(limit.reserve).toMatchObject({ percent: 55, source: "argument", note: null, basis: "work_alone", scope: "through_the_work", alreadyBelow: false, draws: 2000, withOtherUse: null });
+    expect(limit.reserve!.confidence.label).toBe("low");
+    // All of it lands before the reset: through the work and this window alone read the same.
+    expect(limit.reserve!.currentWindowBreachProbability).toBe(limit.reserve!.breachProbability);
+    expect(limit.work!.windows).toMatchObject({ p10: 1, p90: 1 });
     expect(limit.reserve!.breachProbability).toBeGreaterThan(0.45);
     expect(limit.reserve!.breachProbability).toBeLessThan(0.55);
     expect(report.budget.reserve).toEqual({ percent: 55, source: "argument", note: null });
@@ -157,19 +166,19 @@ describe("the budget forecast of a piece of work", () => {
     expect(limitOf(store.forecast({ ref: next, reserve: "80%" }, iso(61), home)).reserve).toMatchObject({ breachProbability: 1, alreadyBelow: true });
   });
 
-  it("says how often the work alone would use the limit up before the reset", () => {
+  it("says how often the work alone would use the limit up before the reset, reaching 0 included", () => {
     const { next } = history();
-    // Someone else used the account after the attempt: 30% left, while the work rate stays the attempt's 12%/work-hour.
-    reading(61, 70);
+    // Someone else used the account after the attempt: 36% left, while the work rate stays the attempt's 12%/work-hour.
+    reading(61, 64);
     const limit = limitOf(store.forecast({ ref: next, reserve: "10" }, iso(61), home));
-    expect(limit.remainingPercent).toBe(30);
-    expect(limit.workRate!.percentPerWorkHour).toBeCloseTo(12, 9);
-    // Draws leave 18, 14, 10, 6, 6 or -6%: one in six runs out, and three in six end under 10%.
+    expect(limit.remainingPercent).toBe(36);
+    expect(limit.workRate!.percentPerWorkHour).toBe(12);
+    // Draws leave 24, 20, 16, 12, 12 or exactly 0%: one in six uses the limit up.
+    expect(limit.work!.remainingAtResetPercent.simulated.band.lower).toBe(0);
     expect(limit.work!.exhaustionProbability).toBeGreaterThan(0.12);
     expect(limit.work!.exhaustionProbability).toBeLessThan(0.21);
-    expect(limit.reserve!.breachProbability).toBeGreaterThan(0.45);
-    expect(limit.reserve!.breachProbability).toBeLessThan(0.55);
-    expect(limit.work!.remainingAtResetPercent.simulated.band.lower).toBeCloseTo(-6, 9);
+    expect(limit.work!.currentWindowExhaustionProbability).toBe(limit.work!.exhaustionProbability);
+    expect(limit.reserve!.breachProbability).toBe(limit.work!.exhaustionProbability);
   });
 
   it("puts only the part of a long piece of work before the reset against it", () => {
@@ -182,7 +191,27 @@ describe("the budget forecast of a piece of work", () => {
     expect(limit.work!.beforeResetPercent.expected).toBeCloseTo((12 * 239) / 60, 6);
     expect(limit.work!.remainingAtResetPercent.expected).toBeCloseTo(78 - (12 * 239) / 60, 6);
     expect(limit.work!.outlastsResetProbability).toBe(1);
+    // What is left runs on into windows of five hours, the first of which gets five hours of it: 60%.
+    expect(limit.windowSeconds).toBe(18000);
+    expect(limit.work!.windows.band).toMatchObject({ lower: 3, upper: 7 });
     expect(limit.reserve!.breachProbability).toBe(0);
+    // A 45% reserve: 30.2% is left at this reset, whatever happens after it.
+    expect(limitOf(store.forecast({ ref: big, reserve: "45" }, iso(61), home)).reserve).toMatchObject({ currentWindowBreachProbability: 1, breachProbability: 1 });
+  });
+
+  it("checks the reserve in the windows after the reset too, where the rest of the work lands", () => {
+    const { next: _next } = history();
+    at(61);
+    const big = store.createIssue({ title: "big", estimatedSeconds: 20 * 3600 }).identifier;
+    // Read again just before the reset: 76% will be left of this window, but the next one gets five hours of the work.
+    reading(289, 22);
+    const limit = limitOf(store.forecast({ ref: big, reserve: "50" }, iso(290), home));
+    expect(limit.secondsToReset).toBe(600);
+    expect(limit.work!.remainingAtResetPercent.expected).toBeCloseTo(76, 9);
+    // Every draw runs at least five hours past the reset: 12%/work-hour for five hours leaves 40% of the next window.
+    expect(limit.reserve!.currentWindowBreachProbability).toBe(0);
+    expect(limit.reserve!.breachProbability).toBe(1);
+    expect(limit.work!.exhaustionProbability).toBe(0);
   });
 
   it("leaves an attempt with no reading while it ran out of the work rate, rather than reading its burn as 0", () => {
@@ -194,8 +223,79 @@ describe("the budget forecast of a piece of work", () => {
     store.addComment(quiet.id, "working", "agent", "agent");
     const limit = limitOf(store.forecast({ ref: next }, iso(66), home));
     // Its burn is unknown (no reading inside it): the rate is the one known attempt's, 12%/work-hour, not diluted.
-    expect(limit.workRate).toMatchObject({ attempts: 1, excluded: 1, burnPercent: 12, workSeconds: 3600 });
+    expect(limit.workRate).toMatchObject({ spans: 1, attempts: 1, excluded: 1, burnPercent: 12, workSeconds: 3600 });
     expect(limit.workRate!.percentPerWorkHour).toBeCloseTo(12, 9);
+  });
+
+  it("counts concurrent attempts' use of the limit once: the rise over the union of their spans, over all their work", () => {
+    history();
+    // After the reset, two agents work the same hour on the account while it rises from 10% to 20%.
+    at(310);
+    const one = store.createIssue({ title: "one", estimatedSeconds: 3600 });
+    const two = store.createIssue({ title: "two", estimatedSeconds: 3600 });
+    store.checkoutIssue(one.id, "agent-1", undefined, { attempt: { harness: "claude_code", harnessSession: "session-a" } });
+    store.checkoutIssue(two.id, "agent-2", undefined, { attempt: { harness: "claude_code", harnessSession: "session-b" } });
+    reading(310, 10, iso(600));
+    for (const [minutes, used] of [[340, 15], [370, 20]] as const) {
+      at(minutes);
+      store.addComment(one.id, "working", "agent-1", "agent");
+      store.addComment(two.id, "working", "agent-2", "agent");
+      reading(minutes, used, iso(600));
+    }
+    store.updateIssue(one.id, { status: "done" }, "agent-1");
+    store.updateIssue(two.id, { status: "done" }, "agent-2");
+    at(371);
+    const next = store.createIssue({ title: "after", estimatedSeconds: 3600 }).identifier;
+    const limit = limitOf(store.forecast({ ref: next }, iso(371), home));
+    // 10% over two hours of work is 5%/work-hour each, not the 10% each attempt's own delta reads.
+    expect(limit.workRate).toMatchObject({ spans: 1, attempts: 2, concurrentSpans: 1, burnPercent: 10, workSeconds: 7200 });
+    expect(limit.workRate!.percentPerWorkHour).toBeCloseTo(5, 9);
+    expect(limit.workRate!.confidence.warnings).toEqual(["small_sample", "concurrent_attempts"]);
+  });
+
+  it("bands the work rate by its own draws, whether or not the work is known, and measures other use outside the spans", () => {
+    history();
+    // After the reset: an attempt that burns 6% in half an hour, 20 minutes of other use (+4%), then one that burns 9%.
+    at(310);
+    const first = store.createIssue({ title: "first", estimatedSeconds: 3600 });
+    store.checkoutIssue(first.id, "agent", undefined, { attempt: { harness: "claude_code", harnessSession: "session-a" } });
+    reading(310, 10, iso(600));
+    at(340);
+    store.addComment(first.id, "done", "agent", "agent");
+    reading(340, 16, iso(600));
+    store.updateIssue(first.id, { status: "done" }, "agent");
+    at(360);
+    reading(360, 20, iso(600));
+    const second = store.createIssue({ title: "second", estimatedSeconds: 3600 });
+    store.checkoutIssue(second.id, "agent", undefined, { attempt: { harness: "claude_code", harnessSession: "session-a" } });
+    at(390);
+    store.addComment(second.id, "done", "agent", "agent");
+    reading(390, 29, iso(600));
+    store.updateIssue(second.id, { status: "done" }, "agent");
+    at(391);
+    const unplanned = store.createIssue({ title: "unplanned" }).identifier;
+    const unknownWork = limitOf(store.forecast({ ref: unplanned }, iso(391), home));
+    // 15% over an hour of work; the two spans read 12 and 18%/work-hour, and the band spans them with no labor at all.
+    expect(unknownWork.workRate).toMatchObject({ spans: 2, attempts: 2, burnPercent: 15, workSeconds: 3600 });
+    expect(unknownWork.workRate!.percentPerWorkHour).toBeCloseTo(15, 9);
+    expect(unknownWork.workRate!.simulated.band.lower).toBeCloseTo(12, 9);
+    expect(unknownWork.workRate!.simulated.band.upper).toBeCloseTo(18, 9);
+    expect(unknownWork.work).toBeNull();
+    // Other use: 29 − 10 = 19% over 80 minutes, 15% of it the attempts', 4% over the 20 minutes they were not running.
+    expect(unknownWork.otherUse!.percentPerHour).toBeCloseTo(12, 9);
+
+    const next = store.createIssue({ title: "planned", estimatedSeconds: 7200 }).identifier;
+    const limit = limitOf(store.forecast({ ref: next, reserve: "20" }, iso(391), home));
+    const labor = store.forecast({ ref: next }, iso(391), home).completion.labor.expectedSeconds!;
+    const horizon = 209 * 60;
+    const withOther = limit.reserve!.withOtherUse!;
+    expect(withOther.basis).toBe("work_and_other_use");
+    expect(withOther.otherPercentPerHour).toBeCloseTo(12, 9);
+    expect(withOther.remainingAtResetPercent.expected).toBeCloseTo(71 - (15 * labor) / 3600 - (12 * horizon) / 3600, 6);
+    // The other use can only add to the breach.
+    expect(withOther.currentWindowBreachProbability).toBeGreaterThanOrEqual(limit.reserve!.currentWindowBreachProbability);
+    expect(withOther.currentWindowBreachProbability).toBeGreaterThan(0.9);
+    expect(limit.reserve!.currentWindowBreachProbability).toBeLessThan(0.5);
   });
 
   it("never counts an attempt that started before the window instance in its work rate", () => {
@@ -233,12 +333,15 @@ describe("the budget forecast of a piece of work", () => {
     const first = store.forecast({ ref: next, reserve: "55" }, iso(61), home);
     expect(store.forecast({ ref: next, reserve: "55" }, iso(61), home)).toEqual(first);
     expect(first.snapshot.budget).toMatchObject({ machineLocal: true });
-    expect(first.snapshot.budget.id).toMatch(/^forecast1-budget:[0-9a-f]{32}$/);
+    expect(first.snapshot.budget.id).toMatch(/^forecast2-budget:[0-9a-f]{32}$/);
     // Another reading changes the budget identity and leaves the completion one alone.
     reading(61, 23);
     const second = store.forecast({ ref: next, reserve: "55" }, iso(61), home);
     expect(second.snapshot.budget.id).not.toBe(first.snapshot.budget.id);
     expect(second.snapshot.id).toBe(first.snapshot.id);
+    // The time to every reset is measured from asOf: another instant is another budget read.
+    const later = store.forecast({ ref: next, reserve: "55" }, iso(62), home);
+    expect(later.snapshot.budget.id).not.toBe(second.snapshot.budget.id);
   });
 
   it("reads a stale reading as unknown for everything projected off it, never as a measurement", () => {

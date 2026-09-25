@@ -41,10 +41,13 @@ async function tool(name: string, args: Record<string, unknown>): Promise<any> {
   expect(result.isError, JSON.stringify(result.content)).toBeFalsy();
   return toolPayload(result);
 }
-/** Every field but the read's own instant, and what is measured from it (the time left to a reset). */
+/** Every field but the read's own instant, and what is measured from it (the time left to a reset, the budget snapshot). */
 function stable(report: any): Record<string, unknown> {
   const { asOf: _asOf, ...rest } = report;
-  return JSON.parse(JSON.stringify(rest, (key, value) => (key === "secondsToReset" ? "<from asOf>" : value)));
+  const out = JSON.parse(JSON.stringify(rest, (key, value) => (key === "secondsToReset" ? "<from asOf>" : value)));
+  expect(out.snapshot.budget.id).toMatch(/^forecast2-budget:[0-9a-f]{32}$/);
+  out.snapshot.budget.id = "<from asOf>";
+  return out;
 }
 
 beforeAll(async () => {
@@ -111,7 +114,7 @@ describe("forecast: one payload through the CLI, MCP and HTTP", () => {
 
     expect(Object.keys(viaCli)).toEqual(["asOf", "subject", "filter", "snapshot", "method", "completion", "budget"]);
     expect(viaCli.subject).toMatchObject({ ref: refs.epic, kind: "epic", scope: "subtree" });
-    expect(viaCli.snapshot.id).toMatch(/^forecast1:[0-9a-f]{32}$/);
+    expect(viaCli.snapshot.id).toMatch(/^forecast2:[0-9a-f]{32}$/);
     // The classes came from the calibration `staple calibrate` reads, unfiltered.
     expect(viaCli.snapshot.calibration.id).toBe(cliJson("calibrate").snapshot.id);
     const { completion } = viaCli;
@@ -156,7 +159,7 @@ describe("forecast: one payload through the CLI, MCP and HTTP", () => {
     const result = cli("forecast", refs.epic!, "--ws", WS);
     expect(result.status, result.stderr).toBe(0);
     const lines = result.stdout.trimEnd().split("\n");
-    expect(lines[0]).toMatch(new RegExp(`^${refs.epic} · Forecast me \\(epic, backlog\\) · snapshot forecast1:[0-9a-f]{32} over calibration2:[0-9a-f]{32}$`));
+    expect(lines[0]).toMatch(new RegExp(`^${refs.epic} · Forecast me \\(epic, backlog\\) · snapshot forecast2:[0-9a-f]{32} over calibration2:[0-9a-f]{32}$`));
     expect(lines[1]).toBe(`completion  8 units · 5 done · 0 awaiting review · 3 to forecast, 2 known · unknown ${refs.c}`);
     expect(lines[2]).toMatch(/^ {2}labor {5}expected ≥2h6m · p10–p90 .+ · 90% band .+ · unknown_units · plan ≥?\d.* \(descendants\)$/);
     expect(lines[3]).toMatch(new RegExp(`^ {2}path {6}expected ≥2h6m · ${refs.a} > ${refs.b} · p10–p90 `));

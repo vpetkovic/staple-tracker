@@ -124,10 +124,9 @@ import { readStoredRepositoryId } from "./repo-identity.js";
 import { resumeGapsOf, viewsOfIssue } from "./telemetry/attempt-derive.js";
 import { attemptDetail, attemptSummary, inWorkerLane, listAttempts, type AttemptDetail, type AttemptSummary } from "./telemetry/read-attempts.js";
 import { FORECAST_ALGORITHM, FORECAST_DRAWS, FORECAST_SEED, completionForecast, completionSnapshotId, type ForecastUnitInput } from "./telemetry/forecast.js";
-import { RATE_ATTEMPT_LIMIT, budgetForecast, budgetSnapshotId, parseReserve, type AttemptBurnInput, type BudgetAccountInput } from "./telemetry/forecast-budget.js";
+import { RATE_ATTEMPT_LIMIT, budgetForecast, budgetSnapshotId, parseReserve, type AttemptSpanInput, type BudgetAccountInput } from "./telemetry/forecast-budget.js";
 import { FORECAST_METHOD, type ForecastReport } from "./telemetry/forecast-report.js";
-import { attemptBurn, readBudget, windowReadings } from "./telemetry/read-budget.js";
-import { openedHereBy } from "./telemetry/attempt-records.js";
+import { readBudget, windowReadings } from "./telemetry/read-budget.js";
 import { decodeKeysetCursor, pageLimit, type PageRequest, type TelemetryPage } from "./telemetry/read-page.js";
 import { stapleHome } from "../config/home.js";
 import {
@@ -5751,8 +5750,6 @@ export class WorkspaceStore {
 
     // ---- the budget, from this machine's hub, for that work
     const view = readBudget(home, { account: query.account, now: asOf });
-    const device = this.journal.deviceIdentity();
-    const opened = openedHereBy(this.db, device);
     const accounts: BudgetAccountInput[] = view.accounts.map((account) => {
       const currentWindows = account.limits.filter((limit) => limit.status === "current" && limit.window !== null).map((limit) => limit.window!.id);
       const readings = windowReadings(home, currentWindows);
@@ -5770,15 +5767,9 @@ export class WorkspaceStore {
         qualifyAttempts(this.db, issueId, viewsOfIssue(this.db, issueId, asOf).filter((attempt) => ids.has(attempt.id) && inWorkerLane(attempt))),
       );
       views.sort((a, b) => (a.startedAt === b.startedAt ? (a.id < b.id ? 1 : -1) : a.startedAt < b.startedAt ? 1 : -1));
-      const burns = new Map<string, ReturnType<typeof attemptBurn>>();
-      const burnOf = (attempt: (typeof views)[number]) => {
-        let burn = burns.get(attempt.id);
-        if (burn === undefined) {
-          burn = attemptBurn(home, attempt, { openedHere: opened(attempt), transitions: transitionsOf(this.db, attempt.id), now: asOf });
-          burns.set(attempt.id, burn);
-        }
-        return burn;
-      };
+      /** The last instant an attempt's record speaks for: its end, a derived end's bound, or `asOf` while it runs. */
+      const endOf = (attempt: (typeof views)[number]): string =>
+        attempt.endedAt ?? attempt.endedAtBound ?? (attempt.state === "ended" ? attempt.lastActivityAt : asOf);
       return {
         provider: account.provider,
         accountRef: account.accountRef,
@@ -5788,22 +5779,14 @@ export class WorkspaceStore {
           const window = reading.status === "current" ? reading.window : null;
           const begins = window === null ? null : (window.startsAt ?? window.firstSampleAt);
           const inside = window === null || begins === null ? [] : views.filter((attempt) => attempt.startedAt >= begins);
-          const spanning = window === null || begins === null ? 0 : views.filter((attempt) => attempt.startedAt < begins && (attempt.endedAt === null || attempt.endedAt > begins)).length;
-          const attempts: AttemptBurnInput[] = inside.slice(0, RATE_ATTEMPT_LIMIT).map((attempt) => {
-            const burn = burnOf(attempt);
-            const limit = burn.limits.find((candidate) => candidate.limitKey === reading.limitKey);
-            const part = limit?.windows.find((candidate) => candidate.windowId === window!.id);
-            return {
-              id: attempt.id,
-              ref: attempt.identifier,
-              startedAt: attempt.startedAt,
-              effortSeconds: attempt.effortSeconds,
-              burnPercent: part?.deltaPercent ?? null,
-              lowerBound: part?.lowerBound ?? false,
-              attribution: burn.attribution,
-              missing: part === undefined ? (limit?.missing.burnPercent ?? burn.missing.limits ?? "input_missing") : (part.missing.deltaPercent ?? null),
-            };
-          });
+          const spanning = window === null || begins === null ? 0 : views.filter((attempt) => attempt.startedAt < begins && endOf(attempt) > begins).length;
+          const attempts: AttemptSpanInput[] = inside.slice(0, RATE_ATTEMPT_LIMIT).map((attempt) => ({
+            id: attempt.id,
+            ref: attempt.identifier,
+            startedAt: attempt.startedAt,
+            endAt: endOf(attempt),
+            effortSeconds: attempt.effortSeconds,
+          }));
           return {
             reading,
             readings: window === null ? [] : (readings.get(window.id) ?? []),
@@ -5833,7 +5816,7 @@ export class WorkspaceStore {
         id: completionSnapshotId({ calibrationSnapshotId: calibrationId, rootId: root.id, seed: FORECAST_SEED, draws: FORECAST_DRAWS, units, graph, outside }),
         algorithm: FORECAST_ALGORITHM,
         calibration: { id: calibrationId, algorithm: CALIBRATION_ALGORITHM, members: members.length, samples: members.filter((member) => isSample(member, "exact")).length },
-        budget: { id: budgetSnapshotId(accounts, reserve.percent), machineLocal: true },
+        budget: { id: budgetSnapshotId(asOf, accounts, reserve.percent), machineLocal: true },
       },
       method: FORECAST_METHOD,
       completion: published,

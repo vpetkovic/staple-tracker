@@ -16,11 +16,15 @@
  * - anything else: `forecast`. Its calibrated duration (`forecastDuration`, the `exact` set:
  *   the cohort its key reads times its own estimate) minus the work already done on it.
  *
- * The EXPECTED figure of a forecast unit is `max(0, expected.seconds − workSeconds)`: the one
- * calibrated figure that adds, less what was already worked. A unit whose work already passed
- * its expected duration reads 0 there and says `overrun`. The DRAWS condition on the unit not
- * being done: each draw picks one of the class's sample ratios `r` with `r × estimate` above the
- * work so far, uniformly, and the unit has `r × estimate − work` left. A unit whose work passed
+ * The DRAWS condition on the unit not being done: each draw picks one of the class's sample
+ * ratios `r` with `r × estimate` above the work so far, uniformly, and the unit has
+ * `r × estimate − work` left. The EXPECTED figure of a unit nobody has worked yet is the
+ * calibrated `expected.seconds`, the one calibrated figure that adds. Once work has started it
+ * is the mean of those same admissible remainders, `E[D − w | D > w]` (`conditional_mean`): the
+ * calibrated figure less the work would read low, 0 past the expected duration, against draws
+ * that know the unit is not done. A unit worked past its calibrated expected duration says
+ * `overrun`. Fewer than `MIN_COHORT_SAMPLES` admissible ratios make a band of a handful of values
+ * that looks precise: `few_admissible`, and the confidence is low. A unit whose work passed
  * every sample of its class has no admissible ratio: `beyond_class_range`, unknown. A
  * floor-dominated class reads the floor bound (60 s) minus the work, with no spread. A unit with
  * no samples or no estimate is unknown. An unknown unit is never 0: a sum over it is partial and
@@ -43,11 +47,11 @@
  * `confidence.achieved` is the lowest of those.
  */
 import { createHash } from "node:crypto";
-import { CALIBRATION_WARNINGS, CONFIDENCE, lowerQuantile, type CalibrationWarning, type CohortKey, type DurationForecast } from "./calibration.js";
+import { CALIBRATION_WARNINGS, CONFIDENCE, MIN_COHORT_SAMPLES, lowerQuantile, type CalibrationWarning, type CohortKey, type DurationForecast } from "./calibration.js";
 import { PLAN_LIST_LIMIT, compareRefs, walkPlanGraph, type CrossSubtreeBlocker, type PathStep, type PlanGraph, type PlanLabor, type PlanNode } from "../plan-rollup.js";
 
 /** Bumped whenever a rule here changes what a snapshot id covers, or what a forecast derives from the same data. */
-export const FORECAST_ALGORITHM = "forecast/1";
+export const FORECAST_ALGORITHM = "forecast/2";
 /** The seed every forecast draws from. Fixed: the same data gives the same draws everywhere. */
 export const FORECAST_SEED = 20260925;
 /** Draws per forecast. At 2 000 a band's edge moves by well under a percent between seeds on the live tracker. */
@@ -65,14 +69,28 @@ const EPSILON = 1e-12;
  * - `unknown_units`: some unit's remaining work is unknown (no samples, no estimate, or beyond
  *   its class); the sums and the path are lower bounds.
  * - `beyond_class_range`: a unit has already been worked longer than every sample of its class.
- * - `overrun`: a unit's work passed its expected duration; its expected remaining reads 0, and
- *   only its draws (conditioned on it not being done) say what may be left.
- * - `awaiting_review`: units in review or gated weigh 0; review waits and rework are not forecast.
+ * - `overrun`: a unit's work passed its calibrated expected duration; what is left of it is read
+ *   from the samples longer than its work.
+ * - `few_admissible`: a unit in progress has fewer than `MIN_COHORT_SAMPLES` samples longer than
+ *   its work to draw from; its band is a handful of values.
+ * - `awaiting_review`: units in review or gated weigh 0 as work; the review wait and any rework
+ *   are not forecast, so the subtree is not settled.
+ * - `independent_draws`: more than one unit was drawn, independently; correlated overruns make
+ *   the real band of a sum wider.
  * - `dependency_cycle`: the unit graph held a cycle, broken to walk it.
  * - `unresolved_outside_blockers`: a unit waits on an open issue outside the subtree; the path
  *   does not include it.
  */
-export const FORECAST_WARNINGS = ["unknown_units", "beyond_class_range", "overrun", "awaiting_review", "dependency_cycle", "unresolved_outside_blockers"] as const;
+export const FORECAST_WARNINGS = [
+  "unknown_units",
+  "beyond_class_range",
+  "overrun",
+  "few_admissible",
+  "awaiting_review",
+  "independent_draws",
+  "dependency_cycle",
+  "unresolved_outside_blockers",
+] as const;
 export type ForecastWarning = (typeof FORECAST_WARNINGS)[number];
 
 /** The pseudo-random stream every draw reads: mulberry32, a 32-bit state, uniform on [0, 1). */
@@ -150,8 +168,11 @@ export interface UnitForecast {
    */
   readonly state: DurationForecast["state"] | "done" | "awaiting_review" | "beyond_class_range";
   /**
-   * `durationSeconds`: the calibrated expected duration (or the floor bound); `remainingSeconds`:
-   * `max(0, duration − work)`, the figure that adds. Null when the unit is unknown.
+   * `durationSeconds`: the calibrated expected duration (or the floor bound). `remainingSeconds`,
+   * the figure that adds: the calibrated duration for a unit nobody has worked yet (`method` the
+   * calibration's: `pooled`, `fence_clipped_pooled`), the mean of the admissible remainders once
+   * work has started (`conditional_mean`), or the floor bound less the work (`floor_bound`). Null
+   * when the unit is unknown.
    */
   readonly expected: { readonly durationSeconds: number; readonly remainingSeconds: number; readonly method: string } | null;
   /** The draws of its remaining work; null for a unit with nothing left or nothing known. */
@@ -161,7 +182,8 @@ export interface UnitForecast {
   /** How many of the class's samples a draw could pick: those longer than the work so far. */
   readonly admissibleSamples: number | null;
   readonly overrun: boolean;
-  readonly warnings: CalibrationWarning[];
+  /** The calibration warnings of its class, then `few_admissible` when it applies. */
+  readonly warnings: Array<CalibrationWarning | ForecastWarning>;
   /** Why `expected` is null. */
   readonly missing: Record<string, string>;
 }
@@ -192,7 +214,8 @@ export interface CompletionPath extends RemainingFigure {
 
 export interface CompletionConfidence {
   /**
-   * `high`: nothing left at all, or nothing unknown, every class's bounds reach 90%, no heavy tail. `medium`: nothing
+   * `high`: settled (every unit done), or nothing unknown or awaiting review, every class's bounds
+   * reach 90%, no heavy tail. `medium`: nothing
    * unknown and every class has at least the minimum of samples. `low`: anything else.
    */
   readonly label: "high" | "medium" | "low";
@@ -215,6 +238,7 @@ export interface CompletionForecast {
   readonly units: {
     readonly total: number;
     readonly done: number;
+    /** Units in review or gated: see `review`. */
     readonly awaitingReview: number;
     /** Units with work left to forecast. */
     readonly forecast: number;
@@ -226,6 +250,16 @@ export interface CompletionForecast {
     readonly items: UnitForecast[];
     readonly truncated: boolean;
   };
+  /**
+   * Every unit done: nothing left and nothing pending. False while a unit is in review or gated,
+   * even when no work is left to forecast.
+   */
+  readonly settled: boolean;
+  /**
+   * The units awaiting a review or an approval. Their wait is not work and is not forecast:
+   * `seconds` is null (`missing.seconds: "not_forecast"`) while any is open, 0 when none is.
+   */
+  readonly review: { readonly units: number; readonly refs: string[]; readonly seconds: number | null; readonly missing: Record<string, string> };
   /** The certified plan's labor, for reference: the estimates, not a forecast. */
   readonly plan: PlanLabor;
   /** Remaining LABOR: every unit's remaining work, added. */
@@ -277,7 +311,7 @@ function planUnit(input: ForecastUnitInput): UnitPlan {
   const duration = input.duration!;
   const work = input.workSeconds ?? 0;
   const cohort = { levelName: duration.cohort.levelName, class: duration.cohort.class, samples: duration.cohort.samples };
-  const common = { ...base, treatment: "forecast" as const, cohort, simulated: null, warnings: duration.warnings };
+  const common = { ...base, treatment: "forecast" as const, cohort, simulated: null, warnings: duration.warnings as Array<CalibrationWarning | ForecastWarning> };
   if (duration.state === "floor") {
     const bound = duration.expected!.seconds;
     const remaining = Math.max(0, bound - work);
@@ -308,11 +342,16 @@ function planUnit(input: ForecastUnitInput): UnitPlan {
     };
   }
   const expectedDuration = duration.expected!.seconds;
+  // Once work has started, the expected remainder is the one the draws have: E[D − w | D > w].
+  const started = work > 0;
+  const remaining = started ? admissible.reduce((sum, ratio) => sum + (ratio * estimate - work), 0) / admissible.length : expectedDuration;
+  const few = started && admissible.length < MIN_COHORT_SAMPLES;
   return {
     unit: {
       ...common,
+      warnings: few ? [...common.warnings, "few_admissible"] : common.warnings,
       state: "ratio",
-      expected: { durationSeconds: expectedDuration, remainingSeconds: Math.max(0, expectedDuration - work), method: duration.expected!.method },
+      expected: { durationSeconds: expectedDuration, remainingSeconds: remaining, method: started ? "conditional_mean" : duration.expected!.method },
       admissibleSamples: admissible.length,
       overrun: work > 0 && expectedDuration <= work,
       missing: {},
@@ -404,8 +443,10 @@ export function completionForecast(input: {
     return unitDraws[u] === null ? plan.unit : { ...plan.unit, simulated: spreadOfDraws(unitDraws[u]!) };
   });
 
-  // ---- labor
+  // ---- labor: nothing to draw is 0 of work, which is not the same as settled while a review is open
   const nothingLeft = forecastPlans.length === 0;
+  const awaiting = ordered.filter((node) => plans.get(node.id)!.unit.treatment === "awaiting_review");
+  const settled = nothingLeft && awaiting.length === 0;
   const laborMissing: string[] = [];
   if (!nothingLeft && known.length === 0) laborMissing.push("no_forecast");
   else if (unknown.length > 0) laborMissing.push("unknown_units");
@@ -450,8 +491,9 @@ export function completionForecast(input: {
   if (unknown.length > 0) raised.add("unknown_units");
   if (forecastPlans.some((plan) => plan.unit.state === "beyond_class_range")) raised.add("beyond_class_range");
   if (forecastPlans.some((plan) => plan.unit.overrun && plan.unit.state !== "beyond_class_range")) raised.add("overrun");
-  const awaiting = ordered.filter((node) => plans.get(node.id)!.unit.treatment === "awaiting_review");
   if (awaiting.length > 0) raised.add("awaiting_review");
+  const drawnCount = ordered.filter((node) => plans.get(node.id)!.draw !== null).length;
+  if (drawnCount > 1) raised.add("independent_draws");
   if (graph.cycleUnits.size > 0) raised.add("dependency_cycle");
   if (unresolvedOutside > 0) raised.add("unresolved_outside_blockers");
   const warnings = [...CALIBRATION_WARNINGS, ...FORECAST_WARNINGS].filter((code) => raised.has(code));
@@ -460,14 +502,14 @@ export function completionForecast(input: {
     .filter((node) => plans.get(node.id)!.draw !== null)
     .map((node) => input.units.get(node.id)!.duration!.bounds!.confidence);
   const achieved = confidences.length === 0 ? null : Math.min(BAND.nominal, ...confidences);
-  // Nothing left to forecast is certain: 0, with nothing drawn.
-  const reached = nothingLeft || (achieved !== null && achieved >= BAND.nominal - EPSILON && unknown.length === 0);
+  // A settled subtree (every unit done) is certain: 0, with nothing drawn. An open review is not.
+  const reached = settled || (achieved !== null && achieved >= BAND.nominal - EPSILON && unknown.length === 0 && awaiting.length === 0);
   const reasons: string[] = [];
   if (unknown.length > 0) reasons.push("unknown_units");
-  for (const code of ["small_sample", "no_samples", "bounds_below_confidence", "heavy_tail"] as const) if (raised.has(code)) reasons.push(code);
+  for (const code of ["few_admissible", "small_sample", "no_samples", "bounds_below_confidence", "heavy_tail", "awaiting_review"] as const) if (raised.has(code)) reasons.push(code);
   if (!nothingLeft && achieved === null && unknown.length === 0) reasons.push("no_class_drawn");
-  const low = unknown.length > 0 || raised.has("small_sample") || raised.has("no_samples") || (!nothingLeft && achieved === null);
-  const label: CompletionConfidence["label"] = nothingLeft ? "high" : low ? "low" : reached && !raised.has("heavy_tail") ? "high" : "medium";
+  const low = unknown.length > 0 || raised.has("few_admissible") || raised.has("small_sample") || raised.has("no_samples") || (!nothingLeft && achieved === null);
+  const label: CompletionConfidence["label"] = settled ? "high" : low ? "low" : reached && !raised.has("heavy_tail") ? "high" : "medium";
 
   const awaitingRefs = awaiting.map((node) => node.identifier);
   return {
@@ -482,6 +524,13 @@ export function completionForecast(input: {
       awaitingReviewRefs: awaitingRefs.slice(0, PLAN_LIST_LIMIT),
       items: items.slice(0, UNIT_LIST_LIMIT),
       truncated: items.length > UNIT_LIST_LIMIT,
+    },
+    settled,
+    review: {
+      units: awaiting.length,
+      refs: awaitingRefs.slice(0, PLAN_LIST_LIMIT),
+      seconds: awaiting.length === 0 ? 0 : null,
+      missing: awaiting.length === 0 ? {} : { seconds: "not_forecast" },
     },
     plan: labor,
     labor: laborFigure,

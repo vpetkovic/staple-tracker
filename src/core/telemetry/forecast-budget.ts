@@ -1,37 +1,45 @@
 /**
  * Budget forecasts (docs/timing-semantics.md, "Forecasts"): per provider account and limit,
  * what is left of the current window, how fast it is going, when it runs out, and what a piece
- * of work would leave at the reset. Kept apart from the completion forecast on purpose: one says
- * how much work is left, this one says what that work costs a provider limit, and neither is
- * folded into the other. Pure: the store reads this machine's hub and hands the rows in.
+ * of work would do to it through the reset and the windows after. Kept apart from the
+ * completion forecast on purpose: one says how much work is left, this one says what that work
+ * costs a provider limit, and neither is folded into the other. Pure: the store reads this
+ * machine's hub and the workspace's attempts and hands the rows in.
  *
- * ## The two rates
+ * ## The rates
  *
- * - PACE, `%/hour` of wall clock: the rise of the current window instance's high-water over its
- *   readings, from the first to the latest (`(high-water − first reading) / hours between them`).
- *   Every use of the account moves it, here or elsewhere. It says when the window runs out if
- *   nothing changes.
- * - WORK RATE, `%/work-hour`: the measured burn of this workspace's worker attempts in the same
- *   window instance, over the work they did (`Σ burn / Σ effortSeconds`). An attempt counts when
- *   it started inside the instance and its burn in that instance is known (`attemptBurn`, the
- *   high-water rule). It is what a piece of work of known effort costs.
+ * - PACE, `%/hour` of wall clock: the rise of the current window instance's high-water from its
+ *   first reading to its latest, over the hours between them. Every use of the account moves it.
+ * - WORK RATE, `%/work-hour`: the window's high-water rise over the UNION of the spans of this
+ *   workspace's worker attempts that started in the instance, over the work done in those spans.
+ *   Concurrent attempts are one span: two agents working the same hour while the limit rises 10%
+ *   burned 5% per work-hour each, not 10. A span's rise needs a reading inside it; its baseline is
+ *   the high-water at or before its start, or its first reading inside (a lower bound).
+ * - OTHER USE, `%/hour`: the pace outside those spans, the rise the attempts did not make over the
+ *   time they were not running. It is what the account burns while this work is not the cause.
  *
- * ## A piece of work
+ * Each rate's band is a bootstrap (spans resampled with replacement) of `FORECAST_DRAWS` draws of
+ * its own, from a stream seeded with the forecast seed and the limit: it never depends on how
+ * many draws the completion forecast made, or whether it made any.
  *
- * The work is the completion forecast's remaining LABOR (its expected figure and its draws). It
- * is assumed to run SERIALLY from `asOf`, one work-hour per hour, so the part before the reset is
- * `min(labor, time to reset)`; with parallel agents more of it lands before the reset, so the
- * projection is optimistic for a fan-out. `remainingAtReset = remaining − rate × min(labor, time
- * to reset)`, and it only counts this work: the account's other use comes on top (the pace).
+ * ## A piece of work, through the reset and after it
+ *
+ * The work is the completion forecast's remaining LABOR (its expected figure and its draws), run
+ * SERIALLY from `asOf`, one work-hour per hour. Before the reset it burns `rate × min(labor, time
+ * to reset)`; what is left of it runs on into the next window, which starts at 100% and gets at
+ * most one window's length of it (`windowSeconds`), then the next. The first full window after
+ * the reset gets the most, so it is the one the reserve is checked against. With parallel agents
+ * more of the work lands before the reset; the schedule is stated as `serial_from_as_of`.
  *
  * ## The reserve
  *
- * The reserve is a parameter. The admission policy that will define it, and what pressure means
- * against it, is not built yet; until it is, a provisional default applies and says it is one.
- * `breachProbability` is the share of draws in which the work leaves less than the reserve at the
- * reset. Each draw pairs the completion forecast's labor draw with a bootstrap draw of the work
- * rate (the attempts resampled with replacement), from a stream seeded by the forecast seed and
- * the limit, so the figure is the same on every read of the same data.
+ * The reserve is a parameter. The admission policy that will define it is not built; until it is,
+ * a provisional default applies and every figure that uses it says so. `breachProbability` is the
+ * share of draws in which the work alone (`basis: "work_alone"`) leaves less than the reserve at
+ * the reset of any window it runs in (`scope: "through_the_work"`);
+ * `currentWindowBreachProbability` checks the current window only. `withOtherUse` adds the other
+ * use of the account at its measured rate over the same windows. Each draw pairs a completion
+ * labor draw with a work-rate draw (and an other-use draw).
  *
  * Unknown is never 0. A stale reading, a window that elapsed, a sliding window, no attempt burn,
  * or unknown labor makes the figure that needs it null, with the reason in `missing` from the
@@ -40,7 +48,8 @@
 import { createHash } from "node:crypto";
 import { StapleError } from "../types.js";
 import type { Missing } from "./budget-store.js";
-import { FORECAST_ALGORITHM, seededRandom, spreadOfDraws, streamSeed, type SimulatedSpread } from "./forecast.js";
+import { MIN_COHORT_SAMPLES } from "./calibration.js";
+import { FORECAST_ALGORITHM, FORECAST_DRAWS, seededRandom, spreadOfDraws, streamSeed, type SimulatedSpread } from "./forecast.js";
 import type { BudgetQuality, LimitReading, WindowReading } from "./read-budget.js";
 
 /**
@@ -52,8 +61,12 @@ export const PROVISIONAL_RESERVE_PERCENT = 20;
 /** Attempts a work rate reads per limit, newest first; `truncated` says when there were more. */
 export const RATE_ATTEMPT_LIMIT = 200;
 
+const PROVISIONAL_NOTE = "provisional default until the admission policy defines the protected reserve; pass reserve to set it";
+
+export type ReserveSource = "argument" | "provisional_default";
+
 /** `20`, `20%` or `12.5%`: a percent in [0, 100]. */
-export function parseReserve(raw: string | number | undefined): { percent: number; source: "argument" | "provisional_default" } {
+export function parseReserve(raw: string | number | undefined): { percent: number; source: ReserveSource } {
   if (raw === undefined) return { percent: PROVISIONAL_RESERVE_PERCENT, source: "provisional_default" };
   const text = typeof raw === "number" ? String(raw) : raw.trim();
   const match = /^(\d+(?:\.\d+)?)%?$/.exec(text);
@@ -64,19 +77,15 @@ export function parseReserve(raw: string | number | undefined): { percent: numbe
   return { percent, source: "argument" };
 }
 
-/** One worker attempt on the account, as the store read its burn in the current window. */
-export interface AttemptBurnInput {
+/** One worker attempt on the account that started in the current window instance. */
+export interface AttemptSpanInput {
   readonly id: string;
   readonly ref: string | null;
   readonly startedAt: string;
+  /** Its end, or the last instant its record speaks for while it runs. */
+  readonly endAt: string;
   /** Its work (`effortSeconds`). */
   readonly effortSeconds: number;
-  /** Its burn in this window instance; null when unknown. */
-  readonly burnPercent: number | null;
-  readonly lowerBound: boolean;
-  readonly attribution: "sole_known" | "shared" | null;
-  /** Why `burnPercent` is null. */
-  readonly missing: string | null;
 }
 
 /** One limit of one account, as the store read it. */
@@ -85,7 +94,7 @@ export interface BudgetLimitInput {
   /** The current window instance's readings with a value, by `observedAt`. */
   readonly readings: readonly WindowReading[];
   /** Worker attempts that started inside the current instance, newest first, at most {@link RATE_ATTEMPT_LIMIT}. */
-  readonly attempts: readonly AttemptBurnInput[];
+  readonly attempts: readonly AttemptSpanInput[];
   readonly attemptsTruncated: boolean;
   /** Worker attempts on the account that started before the instance and ran into it: never in the rate. */
   readonly attemptsSpanningReset: number;
@@ -119,25 +128,43 @@ export interface BudgetExhaustion {
   readonly at: string | null;
 }
 
-/** The work rate: measured burn per hour of work in this window instance. */
+/** How far a rate can be trusted: the spans behind it. */
+export interface RateConfidence {
+  /** `low` under `MIN_COHORT_SAMPLES` spans, or when a span's rise is a lower bound; `medium` otherwise. */
+  readonly label: "low" | "medium";
+  readonly spans: number;
+  readonly minimum: number;
+  /** `small_sample` (under the minimum), `lower_bound`, `concurrent_attempts`. */
+  readonly warnings: string[];
+}
+
+/** The work rate: the high-water rise over the union of the attempts' spans, per hour of their work. */
 export interface BudgetWorkRate {
   readonly percentPerWorkHour: number;
-  /** Attempts in the rate: their burn was known and they did work. */
+  /** Merged spans (concurrent attempts are one) with a known rise. */
+  readonly spans: number;
+  /** Attempts in those spans. */
   readonly attempts: number;
+  /** Spans that held more than one attempt at once. */
+  readonly concurrentSpans: number;
   readonly burnPercent: number;
   readonly workSeconds: number;
-  /** Some attempt's burn is a lower bound: the rate is at least this. */
+  /** Some span had no reading at or before its start: its rise, and the rate, are at least this. */
   readonly lowerBound: boolean;
-  /** Attempts that shared the account with another attempt: their burn counts the other's use too, so the rate reads high. */
-  readonly shared: number;
-  /** Attempts whose attribution is unknown. */
-  readonly attributionUnknown: number;
-  /** Attempts in the instance left out: no known burn, or no work. */
+  /** Attempts in the instance left out: no work, or no reading inside their span. */
   readonly excluded: number;
   readonly spanningReset: number;
   readonly truncated: boolean;
-  /** The bootstrap draws of the rate. */
+  /** The bootstrap draws of the rate, over the spans. */
   readonly simulated: SimulatedSpread;
+  readonly confidence: RateConfidence;
+}
+
+/** The account's use while none of this workspace's attempts ran. */
+export interface BudgetOtherUse {
+  readonly percentPerHour: number;
+  readonly risePercent: number;
+  readonly seconds: number;
 }
 
 /** What the work does to this limit. */
@@ -146,23 +173,47 @@ export interface BudgetWorkProjection {
   readonly consumedPercent: { readonly expected: number; readonly simulated: SimulatedSpread };
   /** The part of it before the reset, run serially from `asOf`. */
   readonly beforeResetPercent: { readonly expected: number; readonly simulated: SimulatedSpread };
-  /** `remaining − beforeReset`: what is left at the reset after this work. */
+  /** `remaining − beforeReset`: what the work alone leaves at the reset (under 0: it ran out). */
   readonly remainingAtResetPercent: { readonly expected: number; readonly simulated: SimulatedSpread };
   /** The share of draws in which the work runs past the reset. */
   readonly outlastsResetProbability: number;
-  /** The share of draws in which the work alone uses up the limit before the reset (`remainingAtReset` under 0). */
+  /** Windows the work runs in, the current one included, over the draws. */
+  readonly windows: SimulatedSpread;
+  /** The share of draws in which the work alone uses a window's limit up, in any window it runs in. */
   readonly exhaustionProbability: number;
-  /** The completion forecast is partial, or a burn is a lower bound: the burn can only be higher. */
+  /** The same, in the current window only. */
+  readonly currentWindowExhaustionProbability: number;
+  /** The completion forecast is partial, or a span's rise is a lower bound: the burn can only be higher. */
   readonly lowerBound: boolean;
 }
 
 export interface BudgetReserveCheck {
   readonly percent: number;
-  /** The share of draws that leave less than the reserve at (and so at or before) the reset. */
-  readonly breachProbability: number;
+  readonly source: ReserveSource;
+  readonly note: string | null;
+  /** Only this work's burn; `withOtherUse` adds the rest of the account's. */
+  readonly basis: "work_alone";
+  /** Every window the work runs in: the current one, then the next ones at 100%. */
+  readonly scope: "through_the_work";
+  /** The share of draws that leave less than the reserve at the reset of any window the work runs in. */
+  readonly breachProbability: number | null;
+  /** The same, at the current window's reset only. */
+  readonly currentWindowBreachProbability: number;
   /** The remaining figure is already under the reserve: probability 1, whatever the work. */
   readonly alreadyBelow: boolean;
   readonly draws: number;
+  /** With the account's other use added at its measured rate; null with a reason when unmeasured. */
+  readonly withOtherUse: {
+    readonly basis: "work_and_other_use";
+    readonly otherPercentPerHour: number;
+    readonly breachProbability: number | null;
+    readonly currentWindowBreachProbability: number;
+    readonly remainingAtResetPercent: { readonly expected: number; readonly simulated: SimulatedSpread };
+  } | null;
+  /** The work rate's confidence carries over: a breach figure from one span is a guess. */
+  readonly confidence: RateConfidence;
+  readonly missing: Missing;
+  readonly missingInputs: Record<string, string[]>;
 }
 
 export interface BudgetLimitForecast {
@@ -171,6 +222,8 @@ export interface BudgetLimitForecast {
   readonly status: string | null;
   readonly resetsAt: string | null;
   readonly secondsToReset: number | null;
+  /** The instance's length, which the windows after the reset last. */
+  readonly windowSeconds: number | null;
   /** The reading's high-water remaining, as `get_budget` reports it. */
   readonly remainingPercent: number | null;
   readonly highWaterPercent: number | null;
@@ -180,6 +233,7 @@ export interface BudgetLimitForecast {
   readonly pace: BudgetPace | null;
   readonly exhaustion: BudgetExhaustion | null;
   readonly workRate: BudgetWorkRate | null;
+  readonly otherUse: BudgetOtherUse | null;
   readonly work: BudgetWorkProjection | null;
   readonly reserve: BudgetReserveCheck | null;
   /** Why each null figure is null, from the telemetry contract's reason codes. */
@@ -200,7 +254,7 @@ export interface BudgetForecast {
   /** Budget data is this machine's alone: it never synchronizes. */
   readonly machineLocal: true;
   readonly budgetCapture: boolean;
-  readonly reserve: { readonly percent: number; readonly source: "argument" | "provisional_default"; readonly note: string | null };
+  readonly reserve: { readonly percent: number; readonly source: ReserveSource; readonly note: string | null };
   /** The work projected: the completion forecast's remaining labor. */
   readonly work: { readonly expectedSeconds: number | null; readonly partial: boolean; readonly schedule: "serial_from_as_of" };
   readonly accounts: BudgetAccountForecast[];
@@ -228,16 +282,68 @@ function paceOf(readings: readonly WindowReading[]): BudgetPace | null {
   };
 }
 
-function limitForecast(
-  input: BudgetLimitInput,
-  context: {
-    readonly asOf: string;
-    readonly account: BudgetAccountInput;
-    readonly labor: { readonly expectedSeconds: number | null; readonly partial: boolean; readonly draws: Float64Array | null };
-    readonly reserve: number;
-    readonly seed: number;
-  },
-): BudgetLimitForecast {
+/** A merged span of attempts, with the rise the window's readings show over it. */
+interface Span {
+  readonly from: number;
+  readonly to: number;
+  readonly attempts: number;
+  readonly effortSeconds: number;
+  /** Null when no reading falls inside it. */
+  readonly rise: number | null;
+  readonly lowerBound: boolean;
+}
+
+/** Attempts with work, merged where they overlap, each merged span read against the window's readings. */
+function spansOf(attempts: readonly AttemptSpanInput[], readings: readonly WindowReading[]): Span[] {
+  const sorted = attempts
+    .filter((attempt) => attempt.effortSeconds > 0)
+    .map((attempt) => ({ from: ms(attempt.startedAt), to: Math.max(ms(attempt.startedAt), ms(attempt.endAt)), effort: attempt.effortSeconds }))
+    .sort((a, b) => a.from - b.from || a.to - b.to);
+  const merged: Array<{ from: number; to: number; attempts: number; effort: number }> = [];
+  for (const attempt of sorted) {
+    const last = merged[merged.length - 1];
+    if (last !== undefined && attempt.from <= last.to) {
+      last.to = Math.max(last.to, attempt.to);
+      last.attempts += 1;
+      last.effort += attempt.effort;
+    } else merged.push({ from: attempt.from, to: attempt.to, attempts: 1, effort: attempt.effort });
+  }
+  return merged.map((span) => {
+    const before = readings.filter((reading) => ms(reading.observedAt) <= span.from).map((reading) => reading.usedPercent);
+    const inside = readings.filter((reading) => ms(reading.observedAt) > span.from && ms(reading.observedAt) <= span.to).map((reading) => reading.usedPercent);
+    if (inside.length === 0) return { from: span.from, to: span.to, attempts: span.attempts, effortSeconds: span.effort, rise: null, lowerBound: false };
+    const baseline = before.length > 0 ? Math.max(...before) : inside[0]!;
+    const top = Math.max(...before, ...inside);
+    return { from: span.from, to: span.to, attempts: span.attempts, effortSeconds: span.effort, rise: Math.max(0, top - baseline), lowerBound: before.length === 0 };
+  });
+}
+
+/** A bootstrap of `Σ a / Σ b × scale` over `pairs`, `draws` draws from `random`. */
+function bootstrapRatio(pairs: ReadonlyArray<readonly [number, number]>, draws: number, random: () => number, scale: number): Float64Array {
+  const out = new Float64Array(draws);
+  for (let d = 0; d < draws; d += 1) {
+    let a = 0;
+    let b = 0;
+    for (let k = 0; k < pairs.length; k += 1) {
+      const pick = pairs[Math.floor(random() * pairs.length)]!;
+      a += pick[0];
+      b += pick[1];
+    }
+    out[d] = b === 0 ? 0 : (a / b) * scale;
+  }
+  return out;
+}
+
+interface LimitContext {
+  readonly asOf: string;
+  readonly account: BudgetAccountInput;
+  readonly labor: { readonly expectedSeconds: number | null; readonly partial: boolean; readonly draws: Float64Array | null };
+  readonly reserve: { readonly percent: number; readonly source: ReserveSource };
+  readonly seed: number;
+  readonly draws: number;
+}
+
+function limitForecast(input: BudgetLimitInput, context: LimitContext): BudgetLimitForecast {
   const { reading } = input;
   const missing: Missing = {};
   const missingInputs: Record<string, string[]> = {};
@@ -245,13 +351,13 @@ function limitForecast(
   const current = reading.status === "current" && window !== null;
   const resetsAt = current ? window.resetsAt : null;
   const secondsToReset = resetsAt === null ? null : Math.max(0, (ms(resetsAt) - ms(context.asOf)) / 1000);
+  const windowSeconds = window?.windowSeconds ?? null;
   /** Why a projection off the reading cannot be made, or null when it can. */
   let blocked: string | null = null;
   if (!current) blocked = reading.missing.remainingPercent ?? reading.missing.window ?? "no_sample_yet";
   else if (window.resetsAt === null) blocked = "sliding_window";
   else if (reading.remainingPercent === null) blocked = reading.missing.remainingPercent ?? "no_sample_yet";
   else if (reading.stale === true) blocked = "stale";
-  if (resetsAt === null) missing.secondsToReset = blocked ?? "sliding_window";
 
   const pace = current ? paceOf(input.readings) : null;
   if (pace === null) {
@@ -274,48 +380,76 @@ function limitForecast(
     exhaustion = { atPace: seconds < secondsToReset! ? "before_reset" : "after_reset", seconds, at: new Date(ms(context.asOf) + seconds * 1000).toISOString() };
   }
 
-  // ---- the work rate, from attempt burn in this instance
-  const pool = input.attempts.filter((attempt) => attempt.burnPercent !== null && attempt.effortSeconds > 0);
+  // ---- the work rate, over the union of the attempts' spans
+  const spans = current && window.resetsAt !== null ? spansOf(input.attempts, input.readings) : [];
+  const known = spans.filter((span) => span.rise !== null);
   let workRate: BudgetWorkRate | null = null;
   let rateDraws: Float64Array | null = null;
-  const draws = context.labor.draws?.length ?? 0;
+  const label = `${context.account.provider ?? ""}:${context.account.accountRef}:${reading.limitKey}`;
   if (!current) missing.workRate = blocked!;
   else if (window.resetsAt === null) missing.workRate = "sliding_window";
-  else if (pool.length === 0) {
+  else if (known.length === 0) {
     missing.workRate = "input_missing";
     missingInputs.workRate = ["attempt_burn"];
   } else {
-    const burn = pool.reduce((sum, attempt) => sum + attempt.burnPercent!, 0);
-    const work = pool.reduce((sum, attempt) => sum + attempt.effortSeconds, 0);
-    const random = seededRandom(streamSeed(context.seed, `budget:${context.account.provider ?? ""}:${context.account.accountRef}:${reading.limitKey}`));
-    const bootstrap = new Float64Array(Math.max(draws, 1));
-    for (let d = 0; d < bootstrap.length; d += 1) {
-      let b = 0;
-      let w = 0;
-      for (let k = 0; k < pool.length; k += 1) {
-        const pick = pool[Math.floor(random() * pool.length)]!;
-        b += pick.burnPercent!;
-        w += pick.effortSeconds;
-      }
-      bootstrap[d] = (b / w) * HOUR;
-    }
-    rateDraws = bootstrap;
+    const burn = known.reduce((sum, span) => sum + span.rise!, 0);
+    const work = known.reduce((sum, span) => sum + span.effortSeconds, 0);
+    rateDraws = bootstrapRatio(
+      known.map((span) => [span.rise!, span.effortSeconds] as const),
+      context.draws,
+      seededRandom(streamSeed(context.seed, `budget:work:${label}`)),
+      HOUR,
+    );
+    const lowerBound = known.some((span) => span.lowerBound);
+    const concurrentSpans = known.filter((span) => span.attempts > 1).length;
+    const warnings: string[] = [];
+    if (known.length < MIN_COHORT_SAMPLES) warnings.push("small_sample");
+    if (lowerBound) warnings.push("lower_bound");
+    if (concurrentSpans > 0) warnings.push("concurrent_attempts");
+    const counted = known.reduce((sum, span) => sum + span.attempts, 0);
     workRate = {
       percentPerWorkHour: (burn / work) * HOUR,
-      attempts: pool.length,
+      spans: known.length,
+      attempts: counted,
+      concurrentSpans,
       burnPercent: burn,
       workSeconds: work,
-      lowerBound: pool.some((attempt) => attempt.lowerBound),
-      shared: pool.filter((attempt) => attempt.attribution === "shared").length,
-      attributionUnknown: pool.filter((attempt) => attempt.attribution === null).length,
-      excluded: input.attempts.length - pool.length,
+      lowerBound,
+      excluded: input.attempts.length - counted,
       spanningReset: input.attemptsSpanningReset,
       truncated: input.attemptsTruncated,
-      simulated: spreadOfDraws(bootstrap),
+      simulated: spreadOfDraws(rateDraws),
+      confidence: { label: known.length < MIN_COHORT_SAMPLES || lowerBound ? "low" : "medium", spans: known.length, minimum: MIN_COHORT_SAMPLES, warnings },
     };
   }
 
-  // ---- the work, and the reserve
+  // ---- other use: the pace outside the attempts' spans
+  let otherUse: BudgetOtherUse | null = null;
+  if (!current) missing.otherUse = blocked!;
+  else if (pace === null) {
+    missing.otherUse = "input_missing";
+    missingInputs.otherUse = ["pace"];
+  } else {
+    const from = ms(pace.from);
+    const to = ms(pace.to);
+    const inSpan = spans.filter((span) => span.to > from && span.from < to);
+    if (inSpan.some((span) => span.rise === null)) {
+      missing.otherUse = "input_missing";
+      missingInputs.otherUse = ["attempt_burn"];
+    } else {
+      const covered = inSpan.reduce((sum, span) => sum + (Math.min(span.to, to) - Math.max(span.from, from)) / 1000, 0);
+      const seconds = pace.spanSeconds - covered;
+      if (seconds <= 0) {
+        missing.otherUse = "input_missing";
+        missingInputs.otherUse = ["time_outside_attempts"];
+      } else {
+        const rise = Math.max(0, pace.toPercent - pace.fromPercent - inSpan.reduce((sum, span) => sum + span.rise!, 0));
+        otherUse = { percentPerHour: (rise / seconds) * HOUR, risePercent: rise, seconds };
+      }
+    }
+  }
+
+  // ---- the work, through the reset and the windows after it, and the reserve
   let work: BudgetWorkProjection | null = null;
   let reserve: BudgetReserveCheck | null = null;
   const needs: string[] = [];
@@ -330,24 +464,50 @@ function limitForecast(
     missingInputs.work = needs;
     missingInputs.reserve = needs;
   } else {
+    const draws = context.draws;
     const rate = workRate!.percentPerWorkHour;
     const labor = context.labor.expectedSeconds!;
     const horizon = secondsToReset!;
     const remaining = reading.remainingPercent!;
+    const reserveAt = context.reserve.percent;
+    // Other use is one measurement (the pace outside the spans), not a set of spans: no spread of its own.
+    const otherDraws = otherUse === null ? null : new Float64Array(draws).fill(otherUse.percentPerHour);
     const consumed = new Float64Array(draws);
     const before = new Float64Array(draws);
     const left = new Float64Array(draws);
+    const leftOther = new Float64Array(draws);
+    const windows = new Float64Array(draws);
     let outlasts = 0;
-    let breaches = 0;
+    let exhaustsNow = 0;
     let exhausts = 0;
+    let breachNow = 0;
+    let breach = 0;
+    let breachNowOther = 0;
+    let breachOther = 0;
+    let needsWindow = false;
     for (let d = 0; d < draws; d += 1) {
-      const laborDraw = context.labor.draws![d]!;
-      consumed[d] = (rateDraws![d]! * laborDraw) / HOUR;
-      before[d] = (rateDraws![d]! * Math.min(laborDraw, horizon)) / HOUR;
+      const laborDraw = context.labor.draws![d % context.labor.draws!.length]!;
+      const r = rateDraws![d]!;
+      consumed[d] = (r * laborDraw) / HOUR;
+      before[d] = (r * Math.min(laborDraw, horizon)) / HOUR;
       left[d] = remaining - before[d]!;
-      if (laborDraw > horizon) outlasts += 1;
-      if (left[d]! < context.reserve) breaches += 1;
-      if (left[d]! < 0) exhausts += 1;
+      const rest = Math.max(0, laborDraw - horizon);
+      if (rest > 0) outlasts += 1;
+      if (rest > 0 && windowSeconds === null) needsWindow = true;
+      // The first full window after the reset gets the most of what is left: it is the one to check.
+      const next = rest > 0 && windowSeconds !== null ? (r * Math.min(rest, windowSeconds)) / HOUR : 0;
+      windows[d] = 1 + (rest > 0 && windowSeconds !== null ? Math.ceil(rest / windowSeconds) : 0);
+      if (left[d]! <= 0) exhaustsNow += 1;
+      if (left[d]! <= 0 || 100 - next <= 0) exhausts += 1;
+      if (left[d]! < reserveAt) breachNow += 1;
+      if (left[d]! < reserveAt || (rest > 0 && 100 - next < reserveAt)) breach += 1;
+      if (otherDraws !== null) {
+        const o = otherDraws[d]!;
+        leftOther[d] = left[d]! - (o * horizon) / HOUR;
+        const nextOther = rest > 0 && windowSeconds !== null ? next + (o * windowSeconds) / HOUR : 0;
+        if (leftOther[d]! < reserveAt) breachNowOther += 1;
+        if (leftOther[d]! < reserveAt || (rest > 0 && 100 - nextOther < reserveAt)) breachOther += 1;
+      }
     }
     const beforeExpected = (rate * Math.min(labor, horizon)) / HOUR;
     work = {
@@ -355,11 +515,52 @@ function limitForecast(
       beforeResetPercent: { expected: beforeExpected, simulated: spreadOfDraws(before) },
       remainingAtResetPercent: { expected: remaining - beforeExpected, simulated: spreadOfDraws(left) },
       outlastsResetProbability: outlasts / draws,
+      windows: spreadOfDraws(windows),
       exhaustionProbability: exhausts / draws,
+      currentWindowExhaustionProbability: exhaustsNow / draws,
       lowerBound: context.labor.partial || workRate!.lowerBound,
     };
-    const alreadyBelow = remaining < context.reserve;
-    reserve = { percent: context.reserve, breachProbability: alreadyBelow ? 1 : breaches / draws, alreadyBelow, draws };
+    if (needsWindow) {
+      missing.windowSeconds = window?.missing.windowSeconds ?? "not_reported_by_source";
+    }
+    const alreadyBelow = remaining < reserveAt;
+    const reserveMissing: Missing = {};
+    const reserveInputs: Record<string, string[]> = {};
+    if (needsWindow) {
+      reserveMissing.breachProbability = "input_missing";
+      reserveInputs.breachProbability = ["window_seconds"];
+    }
+    if (otherUse === null) {
+      reserveMissing.withOtherUse = missing.otherUse ?? "input_missing";
+      if (missingInputs.otherUse !== undefined) reserveInputs.withOtherUse = missingInputs.otherUse;
+    }
+    reserve = {
+      percent: reserveAt,
+      source: context.reserve.source,
+      note: context.reserve.source === "provisional_default" ? PROVISIONAL_NOTE : null,
+      basis: "work_alone",
+      scope: "through_the_work",
+      breachProbability: alreadyBelow ? 1 : needsWindow ? null : breach / draws,
+      currentWindowBreachProbability: alreadyBelow ? 1 : breachNow / draws,
+      alreadyBelow,
+      draws,
+      withOtherUse:
+        otherUse === null
+          ? null
+          : {
+              basis: "work_and_other_use",
+              otherPercentPerHour: otherUse.percentPerHour,
+              breachProbability: alreadyBelow ? 1 : needsWindow ? null : breachOther / draws,
+              currentWindowBreachProbability: alreadyBelow ? 1 : breachNowOther / draws,
+              remainingAtResetPercent: {
+                expected: remaining - beforeExpected - (otherUse.percentPerHour * horizon) / HOUR,
+                simulated: spreadOfDraws(leftOther),
+              },
+            },
+      confidence: workRate!.confidence,
+      missing: reserveMissing,
+      missingInputs: reserveInputs,
+    };
   }
 
   // Every null figure says why, the reading's own included.
@@ -369,6 +570,8 @@ function limitForecast(
   unknown("windowId", window?.id ?? null, reading.missing.window);
   unknown("status", reading.status, reading.missing.window);
   unknown("resetsAt", resetsAt, blocked ?? "sliding_window");
+  unknown("secondsToReset", secondsToReset, blocked ?? "sliding_window");
+  unknown("windowSeconds", windowSeconds, window?.missing.windowSeconds ?? reading.missing.window);
   unknown("remainingPercent", reading.remainingPercent, reading.missing.remainingPercent);
   unknown("highWaterPercent", reading.highWaterPercent, reading.missing.highWaterPercent);
   unknown("stale", reading.stale, reading.missing.stale);
@@ -378,6 +581,7 @@ function limitForecast(
     status: reading.status,
     resetsAt,
     secondsToReset,
+    windowSeconds,
     remainingPercent: reading.remainingPercent,
     highWaterPercent: reading.highWaterPercent,
     stale: reading.stale,
@@ -385,6 +589,7 @@ function limitForecast(
     pace,
     exhaustion,
     workRate,
+    otherUse,
     work,
     reserve,
     missing,
@@ -398,7 +603,7 @@ export function budgetForecast(input: {
   readonly budgetCapture: boolean;
   readonly accounts: readonly BudgetAccountInput[];
   readonly labor: { readonly expectedSeconds: number | null; readonly partial: boolean; readonly draws: Float64Array | null };
-  readonly reserve: { readonly percent: number; readonly source: "argument" | "provisional_default" };
+  readonly reserve: { readonly percent: number; readonly source: ReserveSource };
   readonly seed: number;
   /** Why there is no account at all, when there is none. */
   readonly absent: string;
@@ -408,18 +613,14 @@ export function budgetForecast(input: {
   return {
     machineLocal: true,
     budgetCapture: input.budgetCapture,
-    reserve: {
-      percent: input.reserve.percent,
-      source: input.reserve.source,
-      note: input.reserve.source === "provisional_default" ? "provisional default until the admission policy defines the protected reserve; pass reserve to set it" : null,
-    },
+    reserve: { percent: input.reserve.percent, source: input.reserve.source, note: input.reserve.source === "provisional_default" ? PROVISIONAL_NOTE : null },
     work: { expectedSeconds: input.labor.expectedSeconds, partial: input.labor.partial, schedule: "serial_from_as_of" },
     accounts: input.accounts.map((account) => ({
       provider: account.provider,
       accountRef: account.accountRef,
       bound: account.bound,
       limits: account.limits.map((limit) =>
-        limitForecast(limit, { asOf: input.asOf, account, labor: input.labor, reserve: input.reserve.percent, seed: input.seed }),
+        limitForecast(limit, { asOf: input.asOf, account, labor: input.labor, reserve: input.reserve, seed: input.seed, draws: FORECAST_DRAWS }),
       ),
       missing: account.missing,
     })),
@@ -428,13 +629,14 @@ export function budgetForecast(input: {
 }
 
 /**
- * The identity of the budget data a forecast read on THIS machine: every limit's window, its
- * readings and the attempt burns in its rate, and the reserve. Budget data never synchronizes,
- * so this id is the machine's, apart from the completion snapshot every device shares.
+ * The identity of the budget data a forecast read on THIS machine at `asOf`: the instant (the time
+ * to every reset is measured from it), every limit's window, its readings and the attempt spans in
+ * its rate, and the reserve. Budget data never synchronizes, so this id is the machine's, apart
+ * from the completion snapshot every device shares.
  */
-export function budgetSnapshotId(accounts: readonly BudgetAccountInput[], reserve: number): string {
+export function budgetSnapshotId(asOf: string, accounts: readonly BudgetAccountInput[], reserve: number): string {
   const hash = createHash("sha256");
-  hash.update(JSON.stringify([FORECAST_ALGORITHM, "budget", reserve]));
+  hash.update(JSON.stringify([FORECAST_ALGORITHM, "budget", asOf, reserve]));
   for (const account of accounts) {
     for (const limit of account.limits) {
       hash.update("\n");
@@ -448,7 +650,7 @@ export function budgetSnapshotId(accounts: readonly BudgetAccountInput[], reserv
           limit.reading.remainingPercent,
           limit.reading.stale,
           limit.readings.map((reading) => reading.id),
-          limit.attempts.map((attempt) => [attempt.id, attempt.burnPercent, attempt.effortSeconds]),
+          limit.attempts.map((attempt) => [attempt.id, attempt.startedAt, attempt.endAt, attempt.effortSeconds]),
         ]),
       );
     }

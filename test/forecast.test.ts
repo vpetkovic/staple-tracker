@@ -108,7 +108,7 @@ describe("a leaf nobody has started", () => {
     const next = store.createIssue({ title: "next", estimatedSeconds: min(120) }).identifier;
     const first = forecast(next, clock + 5);
     expect(forecast(next, clock + 5)).toEqual(first);
-    expect(first.snapshot.id).toMatch(/^forecast1:[0-9a-f]{32}$/);
+    expect(first.snapshot.id).toMatch(/^forecast2:[0-9a-f]{32}$/);
     expect(first.method).toMatchObject({ seed: FORECAST_SEED, draws: FORECAST_DRAWS, band: { lower: 5, upper: 95, nominal: 0.9 } });
     worked(45);
     const second = forecast(next, clock + 5);
@@ -134,33 +134,47 @@ describe("a leaf nobody has started", () => {
 });
 
 describe("a leaf in progress", () => {
-  it("has its expected duration less its work left, and draws conditioned on it not being done", () => {
+  it("expects what its draws expect: the mean of the samples longer than its work, less the work", () => {
     fiveSamples();
     const from = clock;
     at(from);
     const open = store.createIssue({ title: "open", estimatedSeconds: min(120) });
     store.checkoutIssue(open.id, "w", undefined, {});
-    for (let m = 10; m <= 70; m += 10) (at(from + m), store.addComment(open.id, "progress", "w", "agent"));
+    at(from + 10);
+    store.addComment(open.id, "progress", "w", "agent");
+    // Ten minutes in, every sample is longer: 3000, 4200, 5400, 6600 and 10200 s left, mean 5880.
+    const early = forecast(open.identifier, from + 10);
+    expect(unit(early, open.identifier)).toMatchObject({ admissibleSamples: 5, expected: { method: "conditional_mean" }, warnings: ["bounds_below_confidence", "quantile_below_confidence"] });
+    expect(unit(early, open.identifier).expected!.remainingSeconds).toBeCloseTo(5880, 9);
+    expect(early.completion.confidence.label).toBe("medium");
 
+    for (let m = 20; m <= 70; m += 10) (at(from + m), store.addComment(open.id, "progress", "w", "agent"));
     const report = forecast(open.identifier, from + 70);
     const leaf = unit(report, open.identifier);
     expect(leaf.workSeconds).toBe(4200);
-    // Expected 0.9 × 7200 = 6480, less 4200 of work.
-    expect(leaf.expected!.remainingSeconds).toBeCloseTo(2280, 9);
-    // Only samples longer than 70 minutes can be its duration: 80, 100, 120 and 180 minutes.
+    // Only samples longer than 70 minutes can be its duration: 80, 100, 120 and 180 minutes, so
+    // 600, 1800, 3000 or 6600 s are left, and the expected figure is their mean, 3000, not
+    // the calibrated 6480 less the work (2280), which would read below its own draws.
     expect(leaf.admissibleSamples).toBe(4);
+    expect(leaf.expected).toMatchObject({ durationSeconds: 6480, method: "conditional_mean" });
+    expect(leaf.expected!.remainingSeconds).toBeCloseTo(3000, 9);
     const left = [600, 1800, 3000, 6600];
     for (const figure of [leaf.simulated!.p10, leaf.simulated!.p50, leaf.simulated!.p90]) expect(left.some((value) => Math.abs(value - figure) < 1e-6)).toBe(true);
     expect(leaf.simulated!.band).toMatchObject({ lower: 600, upper: 6600 });
+    expect(Math.abs(leaf.simulated!.mean - 3000)).toBeLessThan(150);
     expect(leaf.overrun).toBe(false);
+    // Four samples to draw from: a band of four values, said so, and the confidence is low.
+    expect(leaf.warnings).toContain("few_admissible");
+    expect(report.completion.confidence).toMatchObject({ label: "low", reasons: expect.arrayContaining(["few_admissible"]) });
 
-    // Past its expected duration: the expected figure reads 0 and says overrun; the draws still say what may be left.
+    // Past its calibrated expected duration: overrun, and what is left is read from the two longer samples.
     for (let m = 80; m <= 110; m += 10) (at(from + m), store.addComment(open.id, "progress", "w", "agent"));
     const over = unit(forecast(open.identifier, from + 110), open.identifier);
     expect(over).toMatchObject({ state: "ratio", overrun: true, admissibleSamples: 2, workSeconds: 6600 });
-    expect(over.expected!.remainingSeconds).toBe(0);
+    expect(over.expected!.remainingSeconds).toBeCloseTo((600 + 4200) / 2, 9);
+    expect(over.expected!.remainingSeconds).toBeGreaterThanOrEqual(over.simulated!.band.lower);
     expect(over.simulated!.band).toMatchObject({ lower: 600, upper: 4200 });
-    expect(forecast(open.identifier, from + 110).completion.warnings).toContain("overrun");
+    expect(forecast(open.identifier, from + 110).completion.warnings).toEqual(expect.arrayContaining(["overrun", "few_admissible"]));
     // The work so far is an input: more of it is other data, and another snapshot.
     expect(forecast(open.identifier, from + 110).snapshot.id).not.toBe(report.snapshot.id);
     expect(forecast(open.identifier, from + 110).snapshot.calibration.id).toBe(report.snapshot.calibration.id);
@@ -210,6 +224,13 @@ describe("an epic", () => {
     expect(unit(report, refs.r!)).toMatchObject({ treatment: "awaiting_review", expected: null, simulated: null });
     // The parent with its own estimate is one unit; the child inside it is not another.
     expect(units.items.map((item) => item.ref)).not.toContain(refs.inside);
+    // The certified rule, not a forecast rule: inside the epic, P is one unit at its own 2h
+    // estimate (6480 s); named alone, P is a container of what is live beneath it (1h, 3240 s).
+    expect(unit(report, refs.p!).expected!.remainingSeconds).toBeCloseTo(6480, 6);
+    const alone = forecast(refs.p!, clock + 1);
+    expect(alone.subject.scope).toBe("subtree");
+    expect(alone.completion.units.items.map((item) => item.ref)).toEqual([refs.inside]);
+    expect(alone.completion.labor.expectedSeconds).toBeCloseTo(3240, 6);
     expect(labor.expectedSeconds).toBeCloseTo(6480 + 3240 + 6480 + 6480, 6);
     expect(labor).toMatchObject({ partial: true, missing: ["unknown_units"] });
     expect(path.expectedSeconds).toBeCloseTo(6480 + 3240 + 6480, 6);
@@ -219,8 +240,9 @@ describe("an epic", () => {
     expect(path.simulated!.p50).toBeLessThanOrEqual(labor.simulated!.p50);
     expect(path.simulated!.band.upper).toBeLessThanOrEqual(labor.simulated!.band.upper);
     expect(path.simulated!.band.lower).toBeGreaterThanOrEqual(3 * 1800);
-    expect(report.completion.warnings).toEqual(["bounds_below_confidence", "quantile_below_confidence", "unknown_units", "awaiting_review"]);
-    expect(report.completion.confidence.label).toBe("low");
+    expect(report.completion.warnings).toEqual(["bounds_below_confidence", "quantile_below_confidence", "unknown_units", "awaiting_review", "independent_draws"]);
+    expect(report.completion.confidence).toMatchObject({ label: "low", reasons: ["unknown_units", "bounds_below_confidence", "awaiting_review"] });
+    expect(report.completion).toMatchObject({ settled: false, review: { units: 1, refs: [refs.r], seconds: null, missing: { seconds: "not_forecast" } } });
     // Not the plan's remaining path, which weighs estimates, not forecasts.
     expect(store.comparePlans([ref]).plans[0]!.remainingPath.seconds).toBe(min(120) + min(60) + min(120));
     expect(report.completion.plan).toMatchObject({ source: "descendants" });
@@ -250,6 +272,20 @@ describe("an epic", () => {
     expect(report.completion.labor).toMatchObject({ expectedSeconds: 0, partial: false, missing: [] });
     expect(report.completion.path).toMatchObject({ expectedSeconds: 0, partial: false });
     expect(report.completion.confidence).toEqual({ label: "high", nominal: 0.9, achieved: null, reached: true, reasons: [] });
+    expect(report.completion).toMatchObject({ settled: true, review: { units: 0, seconds: 0 } });
+  });
+
+  it("is never settled or certain while a unit waits for its review, even with no work left", () => {
+    worked(30);
+    at(clock);
+    const root = store.createIssue({ title: "handed over", kind: "epic" });
+    const only = store.createIssue({ title: "only", parent: root.id, estimatedSeconds: min(60) });
+    store.updateIssue(only.id, { status: "in_review" }, "w");
+    const report = forecast(root.identifier, clock + 1);
+    expect(report.completion.labor).toMatchObject({ expectedSeconds: 0, partial: false });
+    expect(report.completion).toMatchObject({ settled: false, review: { units: 1, refs: [only.identifier], seconds: null } });
+    expect(report.completion.confidence).toMatchObject({ label: "medium", reached: false, reasons: ["awaiting_review"] });
+    expect(report.completion.warnings).toEqual(["awaiting_review"]);
   });
 
   it("refuses an empty ref and a bad reserve, naming the field", () => {

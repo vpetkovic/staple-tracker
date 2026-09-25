@@ -404,13 +404,17 @@ snapshot ids:
   `confidence.achieved` together: the band is no surer than its classes.
 - `partial: true` (or `unknown_units` in `warnings`) means some unit has no
   forecast: estimate it, or say the figure is a lower bound. Units in review
-  weigh 0 (`awaiting_review`), so rework after a review is not in it.
+  weigh 0 as work but leave the subtree `settled: false` (`review` lists them):
+  do not report such a subtree as finished. `few_admissible` means a unit in
+  progress has only a handful of longer samples left to draw from.
 - `budget` is this machine's provider limits, never blended into completion:
-  per limit, what is left, when it resets, how fast it is going, and for this
-  work `remainingAtResetPercent` and `reserve.breachProbability`. Pass
-  `reserve` when you have one; without it a provisional 20% applies and
-  `budget.reserve.source` says so. A null figure has its reason in `missing`:
-  do not read it as 0 or as room to spare.
+  per limit, what is left, when it resets, how fast it is going, the work
+  rate with its `confidence`, and for this work `remainingAtResetPercent` and
+  `reserve.breachProbability` (the work alone, through every window it runs
+  in; `withOtherUse` adds the account's other use). Pass `reserve` when you
+  have one; without it a provisional 20% applies and `reserve.source` says so.
+  A null figure has its reason in `missing`: do not read it as 0 or as room
+  to spare, and treat a `low`-confidence breach figure as a guess.
 
 The rules are in [cli.md](cli.md#forecasts-staple-forecast) and
 [timing-semantics.md](timing-semantics.md#forecasts).
