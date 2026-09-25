@@ -18,6 +18,7 @@
  * pair every surface has an independent chance to conflate — `if (body.x)` is
  * one keystroke from silently discarding a deliberate clear.
  */
+import { spawnSync } from "node:child_process";
 import { once } from "node:events";
 import { mkdtempSync, rmSync } from "node:fs";
 import type { AddressInfo } from "node:net";
@@ -26,7 +27,11 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { startUiServer, type UiHandle } from "../src/ui/server.js";
 import {
+  CLI_ENTRY,
   CONTRACT_AGENT,
+  REPO_ROOT,
+  TSX_CLI,
+  cleanEnv,
   cliEnvelope,
   mcpEnvelope,
   runCli,
@@ -542,5 +547,174 @@ describe("the recursive plan reaches every read surface across three levels", ()
     expect(cli("show", mid, "--ws", WS).stdout).toContain(
       "time   est 10h · children est 11h · descendants est 11h (3 of 3)",
     );
+  });
+});
+
+// ------------------------------------------------ the explicit estimate write
+
+describe("the explicit estimate write: one store method, three doors, no status restated", () => {
+  /**
+   * `staple estimate`, MCP `set_estimate` and the HTTP `estimate` action all call
+   * `WorkspaceStore.setEstimate`. Each case writes through one door and reads the
+   * value back through another, on an issue that is IN PROGRESS and held by an
+   * agent — the situation where the old grammar made a caller restate `in_progress`.
+   */
+  let ref: string;
+
+  /** `staple estimate <ref> "$EST"` typed into a real shell, so the expansion is the shell's. */
+  function viaShell(script: string, env: Record<string, string> = {}) {
+    const staple = `"${process.execPath}" "${TSX_CLI}" "${CLI_ENTRY}"`;
+    const result = spawnSync("/bin/sh", ["-c", script.replaceAll("staple ", `${staple} `)], {
+      cwd: REPO_ROOT,
+      env: cleanEnv({ STAPLE_HOME: home, STAPLE_AGENT: CONTRACT_AGENT, ...env }),
+      encoding: "utf8",
+    });
+    return { status: result.status ?? 0, stdout: result.stdout, stderr: result.stderr };
+  }
+
+  beforeAll(() => {
+    const created = cli("new", "Explicit estimate target", "--ws", WS, "--estimate", "1h", "--json");
+    expect(created.status, created.stderr).toBe(0);
+    ref = String((JSON.parse(created.stdout) as { identifier?: string }).identifier);
+    expect(cli("checkout", ref, "--agent", CONTRACT_AGENT, "--ws", WS).status).toBe(0);
+  });
+
+  it("CLI: `staple estimate <ref> <dur>` changes only the estimate, and answers estimateChange", async () => {
+    const before = cliShow(ref).issue;
+    const result = cli("estimate", ref, "2h", "--ws", WS, "--json");
+    expect(result.status, result.stderr).toBe(0);
+    const payload = JSON.parse(result.stdout) as Record<string, any>;
+    expect(payload.estimateChange).toEqual({ from: 3600, to: 7200, changed: true });
+    expect(payload.estimatedSeconds).toBe(7200);
+    expect(payload.status).toBe("in_progress");
+    expect(payload.statusVersion).toBe(before.statusVersion);
+    expect(payload.checkoutAgent).toBe(CONTRACT_AGENT);
+    // Readable through the other two doors.
+    expect((await mcpGet(ref)).issue.estimatedSeconds).toBe(7200);
+    expect((await httpJson(`/api/issue?ref=${ref}`)).body.issue.estimatedSeconds).toBe(7200);
+  });
+
+  it("CLI: the identical repeat is a no-op that says changed: false", () => {
+    const before = cliShow(ref).issue;
+    const result = cli("estimate", ref, "120m", "--ws", WS, "--json");
+    expect(result.status, result.stderr).toBe(0);
+    const payload = JSON.parse(result.stdout) as Record<string, any>;
+    expect(payload.estimateChange).toEqual({ from: 7200, to: 7200, changed: false });
+    expect(payload.updatedAt).toBe(before.updatedAt);
+    // The human line says so too.
+    expect(cli("estimate", ref, "2h", "--ws", WS).stdout).toContain("est 2h (unchanged)");
+  });
+
+  it("CLI: --clear clears it, and the human line names both values", () => {
+    const result = cli("estimate", ref, "--clear", "--ws", WS);
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("est 2h -> none");
+    expect(cliShow(ref).issue.estimatedSeconds).toBeNull();
+    expect(cli("estimate", ref, "90m", "--ws", WS).stdout).toContain("est none -> 1h30m");
+  });
+
+  it('shell: an unset variable, quoted or not, never erases the estimate', () => {
+    const quoted = viaShell(`staple estimate ${ref} "$EST" --ws ${WS} --json`);
+    expect(quoted.status).toBe(2);
+    expect(cliEnvelope(quoted)).toMatchObject({ code: "validation", retryable: false });
+    expect(String(cliEnvelope(quoted).message)).toMatch(/^<dur> must be a duration like/);
+
+    const bare = viaShell(`staple estimate ${ref} $EST --ws ${WS} --json`);
+    expect(bare.status).toBe(2);
+    expect(String(cliEnvelope(bare).message)).toBe(
+      "usage: staple estimate <ref> <dur> | staple estimate <ref> --clear (no duration given; an estimate is only cleared by --clear)",
+    );
+    expect(cliShow(ref).issue.estimatedSeconds).toBe(5400);
+
+    // …while the same line with the variable set does what it says.
+    const set = viaShell(`staple estimate ${ref} "$EST" --ws ${WS} --json`, { EST: "45m" });
+    expect(set.status, set.stderr).toBe(0);
+    expect(cliShow(ref).issue.estimatedSeconds).toBe(2700);
+  });
+
+  it("CLI: every other malformed call is refused as validation (exit 2) and writes nothing", () => {
+    const refusals: Array<[string[], RegExp]> = [
+      [["estimate", ref, "1h", "--clear"], /a duration and --clear cannot be used together/],
+      [["estimate", ref, "1h", "extra"], /unexpected argument "extra"/],
+      [["estimate", ref, "0"], /positive whole number of seconds/],
+      [["estimate", ref, "400d"], /at most 31536000 seconds/],
+      [["estimate", ref, "xyz"], /^<dur> must be a duration like/],
+      [["estimate"], /no issue given/],
+    ];
+    for (const [args, message] of refusals) {
+      const result = cli(...args, "--ws", WS, "--json");
+      expect(result.status, args.join(" ")).toBe(2);
+      expect(String(cliEnvelope(result).message), args.join(" ")).toMatch(message);
+    }
+    expect(cliShow(ref).issue.estimatedSeconds).toBe(2700);
+    const missing = cli("estimate", "CON-9999", "1h", "--ws", WS, "--json");
+    expect(missing.status).toBe(3);
+    expect(cliEnvelope(missing).code).toBe("not_found");
+  });
+
+  it("MCP set_estimate: same method, same answer shape; null clears; a missing value is refused, not a clear", async () => {
+    const set = await mcp.call("set_estimate", { ref, estimate_seconds: 3600, ws: WS });
+    expect(set.isError, JSON.stringify(set.content)).toBeFalsy();
+    expect((toolPayload(set) as Record<string, any>).estimateChange).toEqual({ from: 2700, to: 3600, changed: true });
+    expect(cliShow(ref).issue.estimatedSeconds).toBe(3600);
+
+    const missing = await mcp.call("set_estimate", { ref, ws: WS });
+    expect(missing.isError).toBe(true);
+    expect(cliShow(ref).issue.estimatedSeconds).toBe(3600);
+
+    const cleared = await mcp.call("set_estimate", { ref, estimate_seconds: null, ws: WS });
+    expect((toolPayload(cleared) as Record<string, any>).estimateChange).toEqual({ from: 3600, to: null, changed: true });
+  });
+
+  it("HTTP estimate: same method, same answer shape; a missing key or \"\" is refused, not a clear", async () => {
+    const set = await httpAction({ type: "estimate", ref, estimateSeconds: 1800 });
+    expect(set.status).toBe(200);
+    expect(set.body.estimateChange).toEqual({ from: null, to: 1800, changed: true });
+    expect(set.body.status).toBe("in_progress");
+
+    const repeat = await httpAction({ type: "estimate", ref, estimateSeconds: 1800 });
+    expect(repeat.body.estimateChange).toEqual({ from: 1800, to: 1800, changed: false });
+
+    for (const payload of [{ type: "estimate", ref }, { type: "estimate", ref, estimateSeconds: "" }]) {
+      const refused = await httpAction(payload);
+      expect(refused.status).toBe(409);
+      expect(refused.body.code).toBe("validation");
+    }
+    const zero = await httpAction({ type: "estimate", ref, estimateSeconds: 0 });
+    expect(zero.status).toBe(409);
+    expect(String(zero.body.message)).toMatch(/positive whole number of seconds/);
+    expect(cliShow(ref).issue.estimatedSeconds).toBe(1800);
+
+    const cleared = await httpAction({ type: "estimate", ref, estimateSeconds: null });
+    expect(cleared.body.estimateChange).toEqual({ from: 1800, to: null, changed: true });
+  });
+
+  it("help documents ONE form for an estimate-only change: the verb, not a restated status", () => {
+    const help = cli("help").stdout;
+    expect(help).toContain("  estimate <ref> <dur> | estimate <ref> --clear   [--agent A]");
+    expect(help).toContain("change ONLY the estimate: no status to restate, no claim needed.");
+    expect(help).toContain('Re-estimate later\n              with "staple estimate <ref> <dur>".');
+    // The old advice is gone from help; the old grammar itself still works (below).
+    expect(help).not.toContain("estimate-only write");
+  });
+
+  it("back-compat: `status <ref> <same status> --estimate` still works and emits the same event", async () => {
+    expect(cli("status", ref, "in_progress", "--ws", WS, "--estimate", "2h").status).toBe(0);
+    expect(cliShow(ref).issue.estimatedSeconds).toBe(7200);
+    expect(cli("estimate", ref, "3h", "--ws", WS).status).toBe(0);
+
+    const { DatabaseSync } = await import("node:sqlite");
+    const db = new DatabaseSync(join(home, "workspaces", `${WS}.db`));
+    const events = db
+      .prepare(
+        `SELECT actor, payload FROM events WHERE kind = 'estimate_changed'
+          AND issue_id = (SELECT id FROM issues WHERE identifier = ?) ORDER BY seq DESC LIMIT 2`,
+      )
+      .all(ref) as Array<{ actor: string; payload: string }>;
+    db.close();
+    expect(events.reverse()).toEqual([
+      { actor: CONTRACT_AGENT, payload: JSON.stringify({ identifier: ref, from: null, to: 7200 }) },
+      { actor: CONTRACT_AGENT, payload: JSON.stringify({ identifier: ref, from: 7200, to: 10_800 }) },
+    ]);
   });
 });

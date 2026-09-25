@@ -79,6 +79,7 @@ export const CLI_COMMAND_TRIGGERS: Readonly<Record<string, AutoSyncTrigger>> = {
   done: "post-write",
   cancel: "post-write",
   status: "post-write",
+  estimate: "post-write",
   release: "post-write",
   gate: "post-write",
   approve: "post-write",

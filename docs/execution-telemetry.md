@@ -181,12 +181,14 @@ opened: `timing.subtreePlan.estimatedSeconds` and its `source` (`own`,
 `descendants`, `none`). It is a reading of the existing field at an instant,
 never written back, never used as the plan and never shown as an estimate.
 
-It exists because the estimate has no history today. `estimated_seconds` is
-overwritten in place, no event records the change, and sync keeps only the
-newest write of a field. Calibration needs to compare an attempt against the
-estimate the agent was working to, not the one somebody set afterwards. If the
-estimate-mutation work adds an event carrying the old and new value, the reading
-stays anyway: an imported or restored workspace has no event log to replay.
+It exists because the estimate is overwritten in place. `estimated_seconds`
+keeps only its newest value, and sync keeps only the newest write of a field.
+Calibration needs to compare an attempt against the estimate the agent was
+working to, not the one somebody set afterwards. Every change now emits an
+`estimate_changed` event carrying the old and new value, whether it came from
+`staple estimate` (MCP `set_estimate`) or a status write carrying `--estimate`.
+Neither path touches an open attempt's reading. The reading stays anyway,
+because an imported or restored workspace has no event log to replay.
 
 ### How an attempt opens
 

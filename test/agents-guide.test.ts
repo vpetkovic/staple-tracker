@@ -62,6 +62,14 @@ describe("the guide teaches the whole protocol", () => {
     expect(guide).toContain("staple checkout DEM-42");
   });
 
+  it("teaches ONE form for an estimate-only change: the explicit verb, never a restated status", () => {
+    expect(guide).toContain("staple estimate DEM-42 2h");
+    expect(guide).toContain("--clear");
+    expect(guide).toContain("`set_estimate`");
+    expect(guide).not.toMatch(/staple status DEM-42 \S+\s+--estimate/);
+    expect(guide).not.toContain("--no-estimate");
+  });
+
   it("teaches the loop, including that a conflict means pick another task", () => {
     for (const step of ["staple inbox", "staple checkout", "plan", "staple comment", "staple done", "staple events"]) {
       expect(guide, step).toContain(step);

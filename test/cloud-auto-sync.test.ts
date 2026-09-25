@@ -645,7 +645,7 @@ describe("the CLI command table", () => {
   });
 
   it("puts the everyday writes on post-write and the everyday reads on startup", () => {
-    for (const command of ["new", "checkout", "done", "comment", "status", "release"]) {
+    for (const command of ["new", "checkout", "done", "comment", "status", "estimate", "release"]) {
       expect(CLI_COMMAND_TRIGGERS[command], command).toBe("post-write");
     }
     for (const command of ["ls", "show", "tree", "board", "inbox"]) {

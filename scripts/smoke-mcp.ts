@@ -305,6 +305,30 @@ try {
   );
   assert(updated.status === "done" && updated.completedAt, "update_task done stamps completedAt");
 
+  // The explicit estimate write: no status restated, and a repeat is a stated no-op.
+  assert(
+    byName.get("set_estimate").annotations.idempotentHint === true &&
+      byName.get("set_estimate").annotations.destructiveHint === false,
+    "set_estimate is flagged idempotent and not destructive",
+  );
+  const estimated = JSON.parse(
+    toolText(await rpc("tools/call", { name: "set_estimate", arguments: { ref: "SMO-1", estimate_seconds: 5400 } })),
+  );
+  assert(
+    estimated.status === "done" &&
+      estimated.estimatedSeconds === 5400 &&
+      estimated.estimateChange?.changed === true &&
+      estimated.estimateChange.from === null,
+    "set_estimate sets the estimate without touching the status",
+  );
+  const estimatedAgain = JSON.parse(
+    toolText(await rpc("tools/call", { name: "set_estimate", arguments: { ref: "SMO-1", estimate_seconds: 5400 } })),
+  );
+  assert(
+    estimatedAgain.estimateChange?.changed === false && estimatedAgain.updatedAt === estimated.updatedAt,
+    "the identical set_estimate is a no-op that says changed: false",
+  );
+
   const eventsResult = await rpc("tools/call", { name: "events_since", arguments: { since: 0 } });
   const events = JSON.parse(toolText(eventsResult));
   const kinds = events.map((e: any) => e.kind);
@@ -746,8 +770,9 @@ try {
   // like every other workspace tool. Execution attempts added record_attempt_event: 41,
   // and it routes by ws exactly as they do (the cold phase below proves it). The
   // attempt reads list_attempts and get_attempt make 43; the budget reads, like
-  // record_budget_sample, read this machine's hub and take no ws.
-  assert(wsTargetable.length === 43, `43 workspace tools accept ws targeting (${wsTargetable.length} found)`);
+  // record_budget_sample, read this machine's hub and take no ws. set_estimate, the
+  // explicit estimate write, makes 44.
+  assert(wsTargetable.length === 44, `44 workspace tools accept ws targeting (${wsTargetable.length} found)`);
   assert(
     !coldByName.get("get_budget").inputSchema.properties?.ws &&
       !coldByName.get("list_budget_samples").inputSchema.properties?.ws &&
@@ -955,6 +980,8 @@ try {
         "reorder_queue",
         "request_changes",
         "set_blocked_by",
+        // The explicit estimate write names who changed the plan.
+        "set_estimate",
         // STA-179: a setting write is attributed like one too.
         "set_setting",
         // STA-140: a vocabulary edit is a write and is attributed like one.

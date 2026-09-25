@@ -86,6 +86,9 @@ const COMMANDS: ReadonlyArray<{
   // `status` is the CLI's only update path, so STA-81's re-estimate lands here
   // too — same two flags as `new`.
   { name: "status", strings: ["db", "ws", "estimate"], booleans: ["json", "no-estimate"], shorts: [] },
+  // The explicit estimate write: the duration is a POSITIONAL, and clearing is the
+  // one boolean `--clear`, so nothing an unset variable expands to can erase it.
+  { name: "estimate", strings: ["db", "ws", "agent"], booleans: ["json", "clear"], shorts: [] },
   { name: "release", strings: ["db", "ws", "if-stale"], booleans: ["json"], shorts: [] },
   { name: "block", strings: ["db", "ws", "owner", "action"], booleans: ["json"], shorts: [] },
   { name: "blocked-by", strings: ["db", "ws"], booleans: ["json", "none"], shorts: [] },
@@ -187,7 +190,7 @@ describe("command inventory", () => {
   it("pins the exact set of command tokens the dispatcher answers to", () => {
     expect(COMMAND_NAMES).toEqual([
       "init", "new", "ls", "show", "checkout", "start", "done", "cancel",
-      "status", "release", "block", "blocked-by", "wait", "link", "comment",
+      "status", "estimate", "release", "block", "blocked-by", "wait", "link", "comment",
       "tree", "board", "inbox", "doc", "events", "hub", "ui", "open", "config",
       "migrate", "install", "doctor", "add", "discover", "milestone", "settings",
       "queue", "budget", "attempt", "attempts",
@@ -206,7 +209,8 @@ describe("command inventory", () => {
     // in the same change rather than leaving two.
     // 33 with `budget` (provider budget telemetry), 35 with `attempt` (dispatched
     // since execution attempts, missing here until the read surfaces) and `attempts`.
-    expect(COMMAND_NAMES).toHaveLength(35);
+    // 36 with `estimate`, the explicit estimate write.
+    expect(COMMAND_NAMES).toHaveLength(36);
   });
 
   it.each(COMMANDS.map((c) => c.name))(

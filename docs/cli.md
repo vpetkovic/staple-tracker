@@ -23,9 +23,11 @@ staple events --follow [--since N] [--max N]        stream events as they land
                                                     status and blocker events other devices'
                                                     changes re-emit here (payload.deviceId)
 
+staple estimate <ref> <dur> | <ref> --clear         change only the estimate (no status to restate)
+
 staple start <ref> --steal-if-stale <30m|2h|3600>   take over a dead agent's claim
 staple release <ref> --if-stale <dur>               free a dead agent's claim
-staple start|done|cancel|status|release … --agent A who acts; else $STAPLE_AGENT, else $USER
+staple start|done|cancel|status|estimate|release … --agent A   who acts; else $STAPLE_AGENT, else $USER
 staple <any write> … --ack-renumber                 write through a number sync renumbered here
                                                     (docs/sync.md, "A number that moved under a caller")
 
@@ -376,15 +378,73 @@ agentic execution actually cost against the plan-time human figure.
 
 ```bash
 staple new "Port the claim guard" --estimate 90m   # record it WHEN YOU PLAN
-staple status STA-42 in_progress --estimate 2h     # re-estimate
-staple status STA-42 backlog --no-estimate         # clear it
+staple estimate STA-42 2h                          # re-estimate, whatever the status
+staple estimate STA-42 --clear                     # clear it
 ```
 
 Durations use the same vocabulary as `--if-stale`: `90s`, `30m`, `2h`, `3d`, or
 a bare number of seconds. An estimate must be a positive whole number of
-seconds and at most 365 days — `--estimate 0` is refused, because "estimated at
-nothing" and "no estimate recorded" are different facts and only one of them
-has a dedicated flag.
+seconds and at most 365 days — `staple estimate STA-42 0` is refused, because
+"estimated at nothing" and "no estimate recorded" are different facts and only
+one of them has a dedicated flag.
+
+### Changing an estimate: `staple estimate`
+
+`staple estimate <ref> <dur>` sets the estimate and `staple estimate <ref>
+--clear` removes it. Nothing else about the issue moves: not the status, not
+the claim, not the attempt ledger. An attempt keeps the `estimateAtStart` it
+read when it opened.
+
+- **No status to restate.** Earlier the only way to re-estimate was a status
+  write that repeated the current status (`staple status STA-42 in_progress
+  --estimate 2h`). That still works exactly as before, and a status move can
+  still carry `--estimate` in the same write. But an estimate-only change has
+  one documented form, and it is this verb.
+- **Shell-safe.** Only the literal `--clear` erases. `staple estimate STA-42
+  "$EST"` with `EST` unset passes an empty string, which is refused.
+  `staple estimate STA-42 $EST` unquoted passes nothing, which is also refused.
+  A duration and `--clear` together are refused rather than resolved by
+  precedence. Every refusal is `validation`, exit 2, and writes nothing.
+- **Idempotent.** The write is an absolute set. Repeating it with the value the
+  issue already has writes nothing: no event, no sync operation, no
+  `updatedAt` bump. The answer says `"changed": false`. There is no
+  idempotency key because a repeat cannot compound.
+- **Who may.** Anyone a status write allows, which is any actor. The claim
+  holder is not required, and a gated or resolved issue can be re-estimated,
+  just as a same-status write could. The `estimate_changed` event (`from`,
+  `to`, the actor) records who changed what. It is the same event, with the
+  same payload, that a status write carrying `--estimate` emits.
+
+Success under `--json` is the issue as `show` prints it, plus `estimateChange`:
+
+```json
+{"id":"…","identifier":"STA-42","status":"in_progress","estimatedSeconds":7200,"…":"…",
+ "estimateChange":{"from":5400,"to":7200,"changed":true}}
+```
+
+`from` and `to` are seconds, and `null` means no estimate. On a repeat,
+`from` equals `to` and `changed` is `false`. Refusals use the usual error
+envelope on stderr (see [Machine-readable output](#machine-readable-output)):
+
+| refusal | code | exit |
+|---|---|---|
+| no duration and no `--clear`, or an extra argument | `validation` | 2 |
+| `""`, or a duration it cannot parse (`<dur> must be a duration like 90s, …`) | `validation` | 2 |
+| `0`, a fraction of a second, or more than 365 days (the store's sentence) | `validation` | 2 |
+| a duration together with `--clear` | `validation` | 2 |
+| no such issue | `not_found` | 3 |
+
+```json
+{"code":"validation","message":"usage: staple estimate <ref> <dur> | staple estimate <ref> --clear (no duration given; an estimate is only cleared by --clear)","retryable":false}
+```
+
+MCP `set_estimate` and the UI server's `estimate` action call the same store
+method and answer the same shape. MCP `set_estimate` takes `{ref,
+estimate_seconds}`, and `estimate_seconds` is required: a number sets, `null`
+clears, and omitting it is a schema error, not a clear. The HTTP action takes
+`{type: "estimate", ref, estimateSeconds}`. A missing key or `""` is refused
+with HTTP 409 and `validation`. The error envelope is the same on every
+surface.
 
 **Only the estimate is stored.** The actual is `activeSeconds`, reconstructed
 at read time by replaying the event log into `in_progress` **intervals** —
@@ -482,9 +542,11 @@ middle level was estimated. `staple show` adds one segment per parent:
 `plan 11h (from 3 of 3 descendants)` when the plan was inherited, or
 `descendants est 11h (3 of 3)` beside `est` when an own estimate wins.
 
-Every surface takes it: MCP `create_task` / `update_task` via `estimate_seconds`
-(explicit `null` clears, absent leaves alone), HTTP `create` / `update` via
-`estimateSeconds`, and the CLI as above. `list_tasks` and `inbox` carry the
+Every surface takes it at creation: MCP `create_task` via `estimate_seconds`,
+HTTP `create` via `estimateSeconds`, and `staple new --estimate`. Every surface
+changes it with the explicit write above: `staple estimate`, MCP `set_estimate`
+and HTTP `estimate`. (MCP `update_task` and HTTP `update` also still accept it,
+where an explicit `null` clears and an absent key leaves it alone.) `list_tasks` and `inbox` carry the
 scalar `estimatedSeconds` but not the rollup object — those shapes exist to
 make choosing a task cheap.
 
