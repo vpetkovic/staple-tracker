@@ -165,6 +165,63 @@ describe("events are re-emitted on apply, dated at the origin", () => {
     converged(a, b, fresh);
   }, 60_000);
 
+  it("a status a conflict withheld narrates nothing: the replay still lands on the row this device kept", async () => {
+    fleet = new Fleet(new FakeSyncServer({ repositoryId: REPO }), REPO);
+    const a = fleet.machine("a");
+    const b = fleet.machine("b");
+    // Both connected before the issue exists, so B reads its whole history in the tail.
+    await sync(a, b);
+    a.use();
+    const x = a.store.createIssue({ title: "Moved on both" });
+    await sync(a, b);
+    expect(timingOn(b, x.id, 5).approximate).toBe(false);
+    at(10);
+    b.use();
+    b.store.updateIssue(x.id, { status: "blocked" }, "vp");
+    at(20);
+    a.use();
+    a.store.updateIssue(x.id, { status: "in_review" }, "vp");
+    await sync(b, a, b);
+    // B keeps its own status (the field is contested), and A's later move is not in B's history.
+    expect(b.store.getIssue(x.id).status).toBe("blocked");
+    expect(listConflicts(b.db).some((record) => record.entity === "issue" && record.field === "status")).toBe(true);
+    expect(timingOn(b, x.id, 30).approximate).toBe(false);
+  }, 60_000);
+
+  it("where attempts overlap, work beats paused and paused beats silent", async () => {
+    fleet = new Fleet(new FakeSyncServer({ repositoryId: REPO }), REPO);
+    const a = fleet.machine("a");
+    const b = fleet.machine("b");
+    await sync(a, b);
+    a.use();
+    const x = a.store.createIssue({ title: "Two offline checkouts" });
+    await sync(a, b);
+    // Offline on each: agent-a claims at 0, pauses at 5 and writes at 30; agent-b claims at 10 and writes at 20.
+    a.use();
+    a.store.checkoutIssue(x.id, "agent-a");
+    at(5);
+    a.store.recordAttemptEvent(x.id, "pause", "agent-a", { reason: "awaiting_input" });
+    at(10);
+    b.use();
+    b.store.checkoutIssue(x.id, "agent-b");
+    at(20);
+    b.store.addComment(x.id, "b working", "agent-b");
+    at(30);
+    a.use();
+    a.store.addComment(x.id, "a, still paused", "agent-a");
+    await sync(a, b, a);
+    // On A: agent-a's attempt is superseded (clause 5), ending at its last activity, 30; agent-b's is open.
+    const views = viewsOfIssue(a.db, x.id, iso(40));
+    expect(views.map((view) => [view.agent, view.state, view.contested])).toEqual([
+      ["agent-a", "ended", true],
+      ["agent-b", "running", true],
+    ]);
+    const t = timingOn(a, x.id, 40);
+    // 0-5 work (a); 5-10 paused (a); 10-20 work (b) over a's pause; 20-30 a's pause over b's silence; 30-40 b's silence.
+    expect(t.wall!.buckets).toMatchObject({ work: min(15), paused: min(15), silent: min(10) });
+    expect(t.quality.work.inputs).toContain("contested");
+  }, 60_000);
+
   it("a pulled delete that takes a blocker's edges narrates the dependents' new sets, dated at the delete", () => {
     fleet = new Fleet(new FakeSyncServer({ repositoryId: REPO }), REPO);
     const a = fleet.machine("a");

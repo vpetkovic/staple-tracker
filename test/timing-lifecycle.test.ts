@@ -231,17 +231,54 @@ describe("one mutation, one instant", () => {
   it("the checkout's event, the row's claim and the attempt's start are the same instant, so there is no unattributed sliver", () => {
     const x = store.createIssue({ title: "One instant" });
     at(5);
-    store.checkoutIssue(x.id, "agent-a");
+    /**
+     * A clock that moves a millisecond on every read: a writer that reads it for itself gets
+     * an instant of its own, so only one instant handed to every writer passes below.
+     */
+    const RealDate = Date;
+    let tick = T0 + 5 * 60_000;
+    class TickingDate extends RealDate {
+      constructor(...args: unknown[]) {
+        if (args.length === 0) super((tick += 1) - 1);
+        else super(...(args as [number]));
+      }
+      static override now(): number {
+        return (tick += 1) - 1;
+      }
+    }
+    globalThis.Date = TickingDate as DateConstructor;
+    try {
+      store.checkoutIssue(x.id, "agent-a");
+    } finally {
+      globalThis.Date = RealDate;
+    }
+    at(5);
     const event = store.db.prepare("SELECT created_at FROM events WHERE issue_id = ? AND kind = 'checkout'").get(x.id) as { created_at: string };
     const row = store.db.prepare("SELECT checkout_at, started_at FROM issues WHERE id = ?").get(x.id) as { checkout_at: string; started_at: string };
     const [attempt] = attemptsOfIssue(store.db, x.id);
     const [started] = transitionsOf(store.db, attempt!.id);
-    expect(new Set([event.created_at, row.checkout_at, row.started_at, attempt!.startedAt, started!.at])).toEqual(new Set([iso(5)]));
+    expect(new Set([event.created_at, row.checkout_at, row.started_at, attempt!.startedAt, started!.at]).size).toBe(1);
     at(15);
     store.updateIssue(x.id, { status: "done" }, "agent-a");
     const ended = store.db.prepare("SELECT created_at FROM events WHERE issue_id = ? AND kind = 'status_changed'").get(x.id) as { created_at: string };
     expect(attemptsOfIssue(store.db, x.id)[0]!.endedAt).toBe(ended.created_at);
     expect(timing(x.id, 20).wall!.buckets.unattributed).toBe(0);
+  });
+
+  it("history an older build wrote, with the attempt a second off its checkout, is snapped to the category boundary", () => {
+    const x = store.createIssue({ title: "Older build" });
+    store.checkoutIssue(x.id, "agent-a");
+    at(10);
+    store.updateIssue(x.id, { status: "done" }, "agent-a");
+    // The ledger read its own clock then: its start a second after the checkout, its end a second before the close.
+    store.db.prepare("UPDATE attempts SET started_at = ?, ended_at = ? WHERE issue_id = ?").run(
+      new Date(T0 + 1000).toISOString(),
+      new Date(T0 + 10 * 60_000 - 1000).toISOString(),
+      x.id,
+    );
+    const t = timing(x.id, 20);
+    expect(t.wall!.buckets).toMatchObject({ work: min(10), unattributed: 0 });
+    expect(t.quality.wall).toEqual({ state: "exact", inputs: [] });
   });
 });
 
@@ -282,6 +319,27 @@ describe("the adversarial timelines", () => {
     store.updateIssue(x.id, { status: "done" }, "agent-a");
     expect(attemptsOfIssue(store.db, x.id)[1]).toMatchObject({ id: second!.id, endedAt: iso(50) });
     expect(timing(x.id, 60).workSeconds).toBe(min(10) + min(20));
+  });
+
+  it("a stored orphan end filters at itself: evidence the agent wrote after giving the tenure up is not added later", () => {
+    store.addStatus({ id: "doing", category: "active", label: "Doing" }, "vp");
+    const x = store.createIssue({ title: "Given up" });
+    store.checkoutIssue(x.id, "agent-a");
+    store.updateIssue(x.id, { status: "doing" }, "agent-a");
+    at(10);
+    store.addComment(x.id, "last work", "agent-a");
+    at(20);
+    store.recategorizeStatus("doing", "review", "vp");
+    at(25);
+    store.addComment(store.createIssue({ title: "Unrelated" }).id, "a mutating command", "vp");
+    expect(attemptsOfIssue(store.db, x.id)[0]).toMatchObject({ state: "ended", endReason: "left_active", endedAt: iso(10) });
+    const before = timing(x.id, 60).ownWorkSeconds;
+    at(40);
+    store.addComment(x.id, "a remark, long after", "agent-a");
+    expect(timing(x.id, 60).ownWorkSeconds).toBe(before);
+    expect(before).toBe(min(10));
+    // No row bound (the issue is in review, not done or cancelled): the end is unbounded.
+    expect(timing(x.id, 60).quality.work.inputs).toContain("end_unbounded");
   });
 
   it("a steal plus a late comment by the old holder: the comment is the successor's tenure, not the old one's", () => {
@@ -545,6 +603,13 @@ describe("the orchestrator lane", () => {
     at(10);
     store.releaseIssue(x.id, "agent-a");
     expect(read()).toEqual({ worker: ["ended", "released"], orchestrator: ["running", null] });
+    // The resume rule reads the worker lane: an orchestrator attempt that ended orphaned is not resumed by a checkout.
+    at(15);
+    store.openOrchestratorAttempt(store.createIssue({ title: "Elsewhere" }).id, "reviewer", "orchestrator");
+    expect(viewsOfIssue(store.db, x.id).find((view) => view.role === "orchestrator")).toMatchObject({ outcome: "orphaned", endReason: "superseded_by_newer" });
+    at(20);
+    store.checkoutIssue(x.id, "agent-b");
+    expect(attemptsOfIssue(store.db, x.id).at(-1)).toMatchObject({ agent: "agent-b", role: "worker", resumesAttemptId: null });
   });
 
   it("an actor holding one attempt in each lane must say which one an event is for", () => {
