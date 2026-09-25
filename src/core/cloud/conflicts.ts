@@ -1297,7 +1297,7 @@ function decide(db: DatabaseSync, request: ResolveRequest): ResolveOutcome {
     close(db, conflict.id, at, actor, chosen);
     settleOpenFor(db, conflict.entity, conflict.entityId, conflict.field, at, actor, chosen);
     forgetClosedEntries(db);
-    if (resolution !== null) settleAttemptEnds(db, conflict, chosen as string, actor);
+    if (resolution !== null) settleAttemptEnds(db, conflict, request.choice === "local" ? "local" : sameValue(chosen, conflict.localValue) ? "local" : sameValue(chosen, conflict.remoteValue) ? "remote" : null, actor);
 
     /**
      * The decision replicates as its own operation so that every other device
@@ -1639,28 +1639,18 @@ function noteDecidedSeq(db: DatabaseSync, id: string, seq: number): void {
   db.prepare("UPDATE sync_conflicts SET decided_seq = ? WHERE id = ?").run(seq, id);
 }
 
-/** The end a mutation into this category writes (`outcomeForCategory`, `telemetry/attempts.ts`). */
-const END_REASON_FOR_CATEGORY: Readonly<Record<string, string>> = {
-  review: "review",
-  done: "done",
-  blocked: "blocked",
-  cancelled: "cancelled",
-  gated: "gated",
-};
-
 /**
  * A status conflict decided settles the attempt-end conflicts those two status writes made: each
  * write ended the worker attempt its own way (`review` at one instant on one device, `done` at
- * another on the other), and every device kept its own end. The side whose end follows the
- * chosen status wins, decided like any record — its own `conflict` operation — so every device
+ * another on the other), and every device kept its own end. The end on the same side as the
+ * chosen status wins (a status chosen from the local write takes the local end), decided like any record — its own `conflict` operation — so every device
  * settles it, a fresh one included, and `workSeconds` reads the same everywhere. An end conflict
  * no status decision explains is left for a human, as before.
  */
-function settleAttemptEnds(db: DatabaseSync, status: ConflictRecord, chosenStatus: string, actor: string | null): void {
+function settleAttemptEnds(db: DatabaseSync, status: ConflictRecord, side: "local" | "remote" | null, actor: string | null): void {
+  // A custom value neither side wrote says nothing about which end stands.
+  if (side === null) return;
   const issueId = status.entityId;
-  const category = (db.prepare("SELECT category FROM workspace_statuses WHERE id = ?").get(chosenStatus) as { category: string } | undefined)?.category;
-  const reason = category === undefined ? undefined : (END_REASON_FOR_CATEGORY[category] ?? "returned");
-  if (reason === undefined) return;
   const open = listConflicts(db).filter((record) => {
     if (record.entity !== "attempt" || record.field !== "end" || record.resolvedAt !== null) return false;
     const attempt = db.prepare("SELECT issue_id, role FROM attempts WHERE id = ?").get(record.entityId) as { issue_id: string; role: string | null } | undefined;
@@ -1674,12 +1664,10 @@ function settleAttemptEnds(db: DatabaseSync, status: ConflictRecord, chosenStatu
      */
     return record.localAt === status.localAt && record.remoteAt === status.remoteAt;
   });
-  const endReasonOf = (value: unknown): unknown =>
-    value !== null && typeof value === "object" ? ((value as Record<string, unknown>).endReason ?? (value as Record<string, unknown>).end_reason) : undefined;
-  for (const record of open) {
-    const local = endReasonOf(record.localValue) === reason;
-    const remote = endReasonOf(record.remoteValue) === reason;
-    if (local === remote) continue;
-    decide(db, { id: record.id, choice: local ? "local" : "remote", actor });
-  }
+  /**
+   * The end on the same side as the chosen status: the two records pair write for write (same
+   * two instants, same device on each side), so the side that wrote the chosen status wrote the
+   * end that goes with it — a completion, a steal's interruption, whatever that write made.
+   */
+  for (const record of open) decide(db, { id: record.id, choice: side, actor });
 }

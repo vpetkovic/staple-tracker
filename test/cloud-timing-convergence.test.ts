@@ -775,6 +775,44 @@ describe("round 1: what an operation narrates, and what it does not", () => {
     expect(attemptsOfIssue(b.db, x.id)[1]).toMatchObject({ agent: "agent-c", endReason: "done", endedAt: iso(31) });
   }, 60_000);
 
+  it("a status decision REMOTE after a steal settles the stolen attempt to the steal's end, on every device", async () => {
+    fleet = new Fleet(new FakeSyncServer({ repositoryId: REPO }), REPO);
+    const a = fleet.machine("a");
+    const b = fleet.machine("b");
+    await sync(a, b);
+    a.use();
+    const x = a.store.createIssue({ title: "Stolen, decided remote", estimatedSeconds: 600 });
+    a.store.checkoutIssue(x.id, "agent-a");
+    await sync(a, b);
+    at(10);
+    a.use();
+    a.store.updateIssue(x.id, { status: "in_review" }, "agent-a");
+    at(90);
+    b.use();
+    b.store.checkoutIssue(x.id, "agent-b", undefined, { stealIfIdleSeconds: 60 });
+    at(95);
+    b.store.updateIssue(x.id, { status: "done" }, "agent-b");
+    await sync(a, b, a);
+    at(100);
+    a.use();
+    const status = listConflicts(a.db).find((record) => record.entity === "issue" && record.field === "status")!;
+    resolveConflict(a.db, { id: status.id, choice: "remote", actor: "vp" });
+    await sync(a, b);
+    const fresh = fleet.machine("fresh");
+    await sync(fresh);
+    const work = (machine: Machine) => {
+      const t = timingOn(machine, x.id, 120);
+      return { workSeconds: t.workSeconds, quality: t.quality.work, estimateRatio: t.estimateRatio };
+    };
+    for (const machine of [a, b, fresh]) {
+      // agent-a's attempt ends as B's steal ended it: interrupted, claim_stolen.
+      expect(attemptsOfIssue(machine.db, x.id)[0], machine.label).toMatchObject({ agent: "agent-a", endReason: "claim_stolen" });
+      expect(listConflicts(machine.db).filter((record) => record.entity === "attempt"), machine.label).toEqual([]);
+      expect(work(machine), machine.label).toEqual(work(a));
+    }
+    expect(work(a).quality.inputs).not.toContain("contested");
+  }, 60_000);
+
   it("a status decision settles the end a steal wrote: the stolen attempt follows the chosen status", async () => {
     fleet = new Fleet(new FakeSyncServer({ repositoryId: REPO }), REPO);
     const a = fleet.machine("a");
