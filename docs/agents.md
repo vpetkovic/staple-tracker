@@ -353,7 +353,7 @@ The rules are in [cli.md](cli.md#timing-quality-staple-timing-quality).
 
 ### Calibration cohorts
 
-`calibration_cohorts {kind?, priority?, parent?, since?, include?, list?, limit?, cursor?, ws?}`
+`calibration_cohorts {kind?, priority?, parent?, since?, include?, list?, limit?, cursor?, for?, ws?}`
 is `staple calibrate --json`. Use it to see how long a class of work takes
 against its estimate, from trusted samples only:
 
@@ -368,6 +368,25 @@ against its estimate, from trusted samples only:
   pooled ratio and range of the ratio, the median `workSeconds`, and
   `rangeConfidence` (how often the range covers the median). `snapshot.id` names the data it
   came from; quote it when you cite a figure.
+- Each cohort also gives the ratio's and the work's quantiles (p10 … p90),
+  an interval for each and `bounds` for one more sample, aiming at 90%. Read
+  `confidence` and `reached` before quoting a range: below 19 samples the
+  bounds are the sample range at less than 90%, and the report says so.
+  `tail.heavy` means several samples sit far out; `ratio.expected` is then
+  clipped at the fences and reads low, and it is never a mean. `floors` lists
+  the work under a minute that is never a sample. Check `warnings`
+  (`small_sample`, `bounds_below_confidence`, `quantile_below_confidence`,
+  `fallback_used`, `heavy_tail`, `floor_dominated`, `floors_excluded`,
+  `reconstructed_only`, `no_samples`) before trusting a figure.
+- `for: ["STA-42"]` forecasts an issue's duration from the cohort its key
+  reads: `seconds` (p10 … p90), `bounds` and `expected`, per evidence set.
+  An issue nobody has started matches any model; pass `model` when you know
+  the one it will run on. `state: "floor"` means that class's work is mostly
+  under a minute (`expected` is the 60-second bound), and `no_estimate` means
+  set an estimate first. Quote the forecast with its warnings and the
+  snapshot id.
+- Along a plan, add only `expected.seconds`. Quantiles and bounds of a chain
+  are not the sums of its links' quantiles or bounds.
 
 The rules are in [cli.md](cli.md#calibration-staple-calibrate).
 

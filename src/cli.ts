@@ -920,9 +920,12 @@ Tasks
               leaves); --exclude drops states from the analysis, never from the counts;
               staple timing --help
   calibrate [--kind K] [--priority P] [--parent REF] [--since T] [--include reconstructed]
+            [--for REF [--model M]]
               calibration cohorts over trusted samples (done, own estimate, exact
               work): kind, priority, work type, area and model, sparse cohorts
               falling back to broader classes, with coverage and a snapshot id;
+              quantiles, 90% bounds (or what they reach), heavy tails, timing
+              floors and warnings; --for forecasts an issue's duration;
               reconstructed history only on request, as its own cohorts;
               staple calibrate --help
   board                                 terminal kanban

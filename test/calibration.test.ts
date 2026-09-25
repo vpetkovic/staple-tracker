@@ -360,8 +360,8 @@ describe("sparse cohorts fall back to broader classes", () => {
     expect(opus.fallback).toBe("below_minimum");
     expect(opus.class).toEqual({ kind: "task", priority: "high", workType: "fix", area: "sync", model: "*" });
     expect(opus.path).toEqual([
-      { level: 0, name: "full", samples: 3 },
-      { level: 1, name: "without_model", samples: 5 },
+      { level: 0, name: "full", samples: 3, floors: 0 },
+      { level: 1, name: "without_model", samples: 5, floors: 0 },
     ]);
     expect(opus.samples).toBe(5);
     // The class's coverage names its denominator: the eligible issues in the class.
@@ -373,7 +373,7 @@ describe("sparse cohorts fall back to broader classes", () => {
     // The sample range: at n = 5 it covers the median with probability 1 - 2 * 0.5^5.
     expect(opus.ratio.min).toBeCloseTo(20 / 120, 6);
     expect(opus.ratio.max).toBeCloseTo(60 / 120, 6);
-    expect(opus.workSeconds).toEqual({ median: min(40), total: min(210), min: min(20), max: min(60) });
+    expect(opus.workSeconds).toMatchObject({ median: min(40), total: min(210), min: min(20), max: min(60) });
     expect(opus.rangeConfidence).toBe(0.9375);
     // Its exclusions are its class's: the sparse bug is outside task/high/fix/sync.
     expect(opus.excluded).toEqual({ count: 0, counts: {}, reasons: {} });
@@ -383,7 +383,7 @@ describe("sparse cohorts fall back to broader classes", () => {
     const plain = cohorts(report).find((cohort) => cohort.key.priority === "medium")!;
     expect(plain.level).toBe(0);
     expect(plain.fallback).toBe("none");
-    expect(plain.path).toEqual([{ level: 0, name: "full", samples: 5 }]);
+    expect(plain.path).toEqual([{ level: 0, name: "full", samples: 5, floors: 0 }]);
 
     // The bug is alone in kind bug: it reads the whole set.
     const bug = byModel("unknown", "bug");
@@ -393,7 +393,8 @@ describe("sparse cohorts fall back to broader classes", () => {
     expect(bug.samples).toBe(11);
     expect(bug.coverage).toEqual({ samples: 11, eligible: 12, fraction: 11 / 12, denominator: "ratio_population" });
     expect(bug.excluded).toEqual({ count: 1, counts: { approximate: 1 }, reasons: { sparse: 1 } });
-    expect(bug.warnings).toEqual([]);
+    // Enough samples for the median, too few for bounds at 90%, and read from a broader class.
+    expect(bug.warnings).toEqual(["bounds_below_confidence", "quantile_below_confidence", "fallback_used"]);
     expect(bug.rangeConfidence).toBeCloseTo(1 - 2 * 0.5 ** 11, 12);
   });
 
@@ -404,7 +405,7 @@ describe("sparse cohorts fall back to broader classes", () => {
     expect(first!.levelName).toBe("all");
     expect(first!.fallback).toBe("below_minimum_everywhere");
     expect(first!.samples).toBe(2);
-    expect(first!.warnings).toEqual(["small_sample"]);
+    expect(first!.warnings).toEqual(["small_sample", "bounds_below_confidence", "quantile_below_confidence", "fallback_used"]);
   });
 
   it("filters by kind, priority, parent and since before any cohort is formed", () => {
@@ -451,8 +452,8 @@ describe("snapshot identity", () => {
     const id = worked("a", { model: "opus" });
     worked("b");
     const first = readAt(clock + 1);
-    expect(first.snapshot).toMatchObject({ algorithm: "calibration/1", repositoryId: null, members: 2, samples: { exact: 2 } });
-    expect(first.snapshot.id).toMatch(/^calibration1:[0-9a-f]{32}$/);
+    expect(first.snapshot).toMatchObject({ algorithm: "calibration/2", repositoryId: null, members: 2, samples: { exact: 2 } });
+    expect(first.snapshot.id).toMatch(/^calibration2:[0-9a-f]{32}$/);
     // A later read of the same data, a page of it, and a sample listing: one identity.
     expect(readAt(clock + 500).snapshot.id).toBe(first.snapshot.id);
     expect(readAt(clock + 1, { limit: 1 }).snapshot.id).toBe(first.snapshot.id);

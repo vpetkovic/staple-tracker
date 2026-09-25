@@ -92,6 +92,9 @@ beforeAll(async () => {
     refs.legacy = legacy.identifier;
     at(t + 21);
     expect(store.reconstructAttemptHistory().reconstructed).toBe(1);
+    // Open work outside the epic, to forecast: one estimated, one not.
+    refs.next = store.createIssue({ title: "next", estimatedSeconds: 14400, labels: ["area:ui"], priority: "high" }).identifier;
+    refs.unplanned = store.createIssue({ title: "unplanned", labels: ["area:ui"], priority: "high" }).identifier;
   } finally {
     setClock(null);
     store.db.close();
@@ -136,8 +139,21 @@ describe("calibration cohorts: one payload through the CLI, MCP and HTTP", () =>
       ["task", "opus", 3, "without_model", 5, 6],
       ["task", "sonnet", 2, "without_model", 5, 6],
     ]);
-    expect(viaCli.snapshot.id).toMatch(/^calibration1:[0-9a-f]{32}$/);
-    expect(viaCli.method).toEqual({ minSamples: 5, levels: ["full", "without_model", "without_area", "without_work_type", "kind", "all"], median: "lower", estimate: "at_start_else_current" });
+    expect(viaCli.snapshot.id).toMatch(/^calibration2:[0-9a-f]{32}$/);
+    expect(viaCli.method).toEqual({
+      minSamples: 5,
+      levels: ["full", "without_model", "without_area", "without_work_type", "kind", "all"],
+      median: "lower",
+      estimate: "at_start_else_current",
+      quantile: "lower",
+      quantiles: ["p10", "p25", "p50", "p75", "p90"],
+      confidence: 0.9,
+      intervals: "order_statistic",
+      minBoundsSamples: 19,
+      heavyTail: { rule: "log_mad_z", z: 3.5, minSamples: 10, minOutliers: 3, minShare: 0.05, minLogDeviation: Math.log(1.05) },
+      floorSeconds: 60,
+    });
+    expect(viaCli.forecasts).toEqual([]);
   });
 
   it("adds reconstructed history as its own set only when asked, the same way on every surface", async () => {
@@ -152,7 +168,7 @@ describe("calibration cohorts: one payload through the CLI, MCP and HTTP", () =>
     ]);
     const reconstructed = viaCli.items.filter((cohort: any) => cohort.set === "reconstructed");
     expect(reconstructed).toHaveLength(1);
-    expect(reconstructed[0]).toMatchObject({ samples: 1, fallback: "below_minimum_everywhere", warnings: ["small_sample"], members: { total: 1, refs: [refs.legacy], truncated: false } });
+    expect(reconstructed[0]).toMatchObject({ samples: 1, fallback: "below_minimum_everywhere", warnings: ["small_sample", "bounds_below_confidence", "quantile_below_confidence", "fallback_used", "reconstructed_only"], members: { total: 1, refs: [refs.legacy], truncated: false } });
     expect(viaCli.snapshot.id).not.toBe(cliJson("calibrate", "--parent", epic).snapshot.id);
   });
 
@@ -186,6 +202,46 @@ describe("calibration cohorts: one payload through the CLI, MCP and HTTP", () =>
     expect(viaCli.snapshot).toEqual(cliJson("calibrate", "--parent", epic).snapshot);
   });
 
+  it("forecasts the issues asked for, from the cohort each key reads, the same on every surface", async () => {
+    const viaCli = cliJson("calibrate", "--parent", epic, "--for", refs.next!, "--for", refs.unplanned!, "--include", "reconstructed");
+    const commas = cliJson("calibrate", "--parent", epic, "--for", `${refs.next},${refs.unplanned}`, "--include", "reconstructed");
+    const viaMcp = await tool("calibration_cohorts", { parent: epic, for: [refs.next, refs.unplanned], include: ["reconstructed"] });
+    const viaHttp = await http(`/api/calibration?ws=${WS}&parent=${epic}&for=${refs.next}&for=${refs.unplanned}&include=reconstructed`);
+    expect(withoutAsOf(commas)).toEqual(withoutAsOf(viaCli));
+    expect(withoutAsOf(viaMcp)).toEqual(withoutAsOf(viaCli));
+    expect(withoutAsOf(viaHttp.body)).toEqual(withoutAsOf(viaCli));
+    expect(viaCli.forecasts.map((forecast: any) => [forecast.identifier, forecast.set, forecast.state, forecast.cohort.levelName, forecast.cohort.samples])).toEqual([
+      [refs.next, "exact", "ratio", "without_model", 5],
+      [refs.next, "reconstructed", "ratio", "all", 1],
+      [refs.unplanned, "exact", "no_estimate", "without_model", 5],
+      [refs.unplanned, "reconstructed", "no_estimate", "all", 1],
+    ]);
+    // Work 20, 30, 40, 60, 60 minutes over 2h: the median ratio 1/3 of a 4h estimate.
+    const [next] = viaCli.forecasts;
+    expect(next.seconds.p50).toBeCloseTo(4800, 6);
+    expect(next.bounds).toMatchObject({ lower: 2400, upper: 7200, reached: false });
+    expect(next.expected).toMatchObject({ method: "pooled" });
+    // Unstarted: its model is `*`, so its walk starts without the model and reads that class as its own.
+    expect(next.key.model).toBe("*");
+    expect(next.cohort.fallback).toBe("none");
+    expect(next.warnings).toEqual(["bounds_below_confidence", "quantile_below_confidence"]);
+    expect(viaCli.forecasts[1].warnings).toEqual(["small_sample", "bounds_below_confidence", "quantile_below_confidence", "fallback_used", "reconstructed_only"]);
+    // A pinned model, the same on every surface.
+    const pinned = cliJson("calibrate", "--parent", epic, "--for", refs.next!, "--model", "opus");
+    const pinnedMcp = await tool("calibration_cohorts", { parent: epic, for: [refs.next], model: "opus" });
+    const pinnedHttp = await http(`/api/calibration?ws=${WS}&parent=${epic}&for=${refs.next}&model=opus`);
+    expect(withoutAsOf(pinnedMcp)).toEqual(withoutAsOf(pinned));
+    expect(withoutAsOf(pinnedHttp.body)).toEqual(withoutAsOf(pinned));
+    // Three opus samples under task/high/ui: below five, so it falls back to without_model.
+    expect(pinned.forecasts[0]).toMatchObject({ key: { model: "opus" }, cohort: { levelName: "without_model", fallback: "below_minimum" } });
+    expect(pinned.forecasts[0].cohort.path[0]).toEqual({ level: 0, name: "full", samples: 3, floors: 0 });
+    // Asking for a forecast leaves the data's identity alone.
+    expect(viaCli.snapshot.id).toBe(cliJson("calibrate", "--parent", epic, "--include", "reconstructed").snapshot.id);
+    const missing = cli("calibrate", "--for", "NOPE-1", "--ws", WS);
+    expect(missing.status).not.toBe(0);
+    expect((await http(`/api/calibration?ws=${WS}&for=NOPE-1`)).status).toBe(404);
+  });
+
   it("refuses an approximate set on every surface, naming the field", async () => {
     const bare = cli("calibrate", "--include", "approximate", "--ws", WS);
     expect(bare.status).toBe(2);
@@ -199,14 +255,21 @@ describe("calibration cohorts: one payload through the CLI, MCP and HTTP", () =>
     expect(cli("calibrate", "stray", "--ws", WS).status).toBe(2);
   });
 
-  it("prints the snapshot, the sets and two lines per cohort", () => {
+  it("prints the snapshot, the sets and three lines per cohort", () => {
     const result = cli("calibrate", "--parent", epic, "--ws", WS);
     expect(result.status, result.stderr).toBe(0);
     const lines = result.stdout.trimEnd().split("\n");
-    expect(lines[0]).toMatch(new RegExp(`^snapshot calibration1:[0-9a-f]{32} · beneath ${epic}$`));
+    expect(lines[0]).toMatch(new RegExp(`^snapshot calibration2:[0-9a-f]{32} · beneath ${epic}$`));
     expect(lines[1]).toBe("8 eligible (done, own estimate) of 8 issues · minimum 5 samples per cohort");
     expect(lines[2]).toBe("exact         6 samples (75.0% of 8) in 3 cohorts · not samples: approximate 1, reconstructed 1");
-    expect(lines[5]).toBe("exact         kind=task priority=high workType=unknown area=ui model=opus · 3 own → without_model (full 3, without_model 5)");
-    expect(lines[6]).toMatch(/^ {14}kind=task priority=high workType=unknown area=ui: n 5 \(83\.3% of 6\) · ratio median 0\.333, range 0\.167–0\.500, pooled 0\.350 · work median 40m/);
+    expect(lines[6]).toBe("exact         kind=task priority=high workType=unknown area=ui model=opus · 3 own → without_model (full 3, without_model 5)");
+    expect(lines[7]).toMatch(/^ {14}kind=task priority=high workType=unknown area=ui: n 5 \(83\.3% of 6\) · ratio median 0\.333, range 0\.167–0\.500, pooled 0\.350 · work median 40m/);
+    expect(lines[8]).toBe(
+      "              ratio p10 0.167 p25 0.250 p50 0.333 p75 0.500 p90 0.500 · bounds 0.167–0.500 (66.7%, below target) · expected 0.350 (pooled) · tail untested",
+    );
+    const forecast = cli("calibrate", "--parent", epic, "--for", refs.next!, "--ws", WS).stdout.trimEnd().split("\n").at(-1);
+    expect(forecast).toBe(
+      `forecast      ${refs.next} exact · est 4h · kind=task priority=high workType=unknown area=ui n 5 → p50 1h20m, p10–p90 40m–2h · bounds 40m–2h (66.7%, below target) · expected 1h24m (pooled) · bounds_below_confidence, quantile_below_confidence`,
+    );
   });
 });

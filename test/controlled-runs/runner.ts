@@ -28,7 +28,7 @@ import { nowIso, setClock, StapleError } from "../../src/core/types.js";
 import { tx } from "../../src/core/db.js";
 import { writeEventRow } from "../../src/core/event-row.js";
 import type { IssueTiming, IssuePriority, IssueStatus } from "../../src/core/types.js";
-import type { CalibrationCohort, CalibrationSample } from "../../src/core/telemetry/calibration.js";
+import type { CalibrationCohort, CalibrationSample, DurationForecast, OrderInterval } from "../../src/core/telemetry/calibration.js";
 import { FakeSyncServer } from "../fixtures/fake-sync-server.js";
 import { OlderBuildDevice } from "../fixtures/older-build.js";
 import { Fleet, type Machine } from "../fixtures/sync-machines.js";
@@ -178,6 +178,29 @@ export interface Expectation {
       /** The class's members that are not samples of the set, by state and reason. */
       excluded?: { count: number; counts: Record<string, number>; reasons: Record<string, number> };
       members?: string[];
+      /** The ratio's lower quantiles, by name (`p10` … `p90`). */
+      quantiles?: Record<string, number>;
+      /** The ratio's prediction bounds and the confidence they reach. */
+      bounds?: { lower: number; upper: number; confidence: number; reached: boolean };
+      /** The median's order-statistic interval. */
+      medianInterval?: { lower: number; upper: number; confidence: number; reached: boolean };
+      tail?: { heavy: boolean; lower: number; upper: number };
+      expected?: { value: number; method: string };
+      /** The class's timing-floor members, as refs. */
+      floors?: { count: number; dominated: boolean; members?: string[] };
+      warnings?: string[];
+    }>;
+    /** Issues to forecast (`for`), and what each forecast reads, in order: per issue, per set. */
+    for?: string[];
+    forecasts?: Array<{
+      ref: string;
+      set: string;
+      state: string;
+      level?: string;
+      seconds?: Record<string, number>;
+      bounds?: { lower: number; upper: number; confidence: number; reached: boolean };
+      expected?: { seconds: number; method: string };
+      warnings?: string[];
     }>;
     /** Every sample, in listing order: its set, the estimate source and its ratio. */
     samples?: Array<{ ref: string; set: string; estimateSource: string; ratio: number; model?: string }>;
@@ -693,7 +716,7 @@ function calibrationAgrees(
   const expected = expectation.calibration;
   if (expected === undefined) return;
   const query = { parent: id(expectation.ref), include: expected.include, limit: 500 };
-  const report = machine.store.calibration(query, iso(expectation.asOf));
+  const report = machine.store.calibration({ ...query, for: (expected.for ?? []).map(id) }, iso(expectation.asOf));
   const sampled = machine.store.calibration({ ...query, list: "samples" }, iso(expectation.asOf));
   // Identifiers back to the run's refs, as this device numbers them.
   const refOf = new Map<string, string>();
@@ -725,6 +748,55 @@ function calibrationAgrees(
       at(`cohorts[${index}].rangeConfidence`, want.rangeConfidence, got?.rangeConfidence ?? null, 1e-9);
       at(`cohorts[${index}].excluded`, want.excluded, got?.excluded ?? null);
       if (want.members !== undefined) at(`cohorts[${index}].members`, want.members, got === undefined ? null : refs(got.members.refs));
+      for (const [name, value] of Object.entries(want.quantiles ?? {})) {
+        at(`cohorts[${index}].ratio.quantiles.${name}`, value, got?.ratio.quantiles?.[name as keyof NonNullable<CalibrationCohort["ratio"]["quantiles"]>] ?? null, 0.001);
+      }
+      const interval = (field: string, wantInterval: { lower: number; upper: number; confidence: number; reached: boolean } | undefined, gotInterval: OrderInterval | null | undefined): void => {
+        if (wantInterval === undefined) return;
+        at(`${field}.lower`, wantInterval.lower, gotInterval?.lower ?? null, 0.001);
+        at(`${field}.upper`, wantInterval.upper, gotInterval?.upper ?? null, 0.001);
+        at(`${field}.confidence`, wantInterval.confidence, gotInterval?.confidence ?? null, 1e-6);
+        at(`${field}.reached`, wantInterval.reached, gotInterval?.reached ?? null);
+      };
+      interval(`cohorts[${index}].ratio.bounds`, want.bounds, got?.ratio.bounds);
+      interval(`cohorts[${index}].ratio.intervals.p50`, want.medianInterval, got?.ratio.intervals?.p50);
+      if (want.tail !== undefined) {
+        at(`cohorts[${index}].tail`, want.tail, got === undefined ? null : { heavy: got.tail.heavy, lower: got.tail.outliers.lower, upper: got.tail.outliers.upper });
+      }
+      if (want.expected !== undefined) {
+        at(`cohorts[${index}].ratio.expected.value`, want.expected.value, got?.ratio.expected.value ?? null, 0.001);
+        at(`cohorts[${index}].ratio.expected.method`, want.expected.method, got?.ratio.expected.method ?? null);
+      }
+      if (want.floors !== undefined) {
+        at(`cohorts[${index}].floors.count`, want.floors.count, got?.floors.count ?? null);
+        at(`cohorts[${index}].floors.dominated`, want.floors.dominated, got?.floors.dominated ?? null);
+        if (want.floors.members !== undefined) at(`cohorts[${index}].floors.refs`, want.floors.members, got === undefined ? null : refs(got.floors.refs));
+      }
+      at(`cohorts[${index}].warnings`, want.warnings, got?.warnings ?? null);
+    });
+  }
+  if (expected.forecasts !== undefined) {
+    at("forecasts.length", expected.forecasts.length, report.forecasts.length);
+    expected.forecasts.forEach((want, index) => {
+      const got = report.forecasts[index];
+      at(`forecasts[${index}].ref`, want.ref, got === undefined ? null : refs([got.identifier])[0]);
+      at(`forecasts[${index}].set`, want.set, got?.set ?? null);
+      at(`forecasts[${index}].state`, want.state, got?.state ?? null);
+      at(`forecasts[${index}].cohort.level`, want.level, got?.cohort.levelName ?? null);
+      for (const [name, value] of Object.entries(want.seconds ?? {})) {
+        at(`forecasts[${index}].seconds.${name}`, value, got?.seconds?.[name as keyof NonNullable<DurationForecast["seconds"]>] ?? null, 1);
+      }
+      if (want.bounds !== undefined) {
+        at(`forecasts[${index}].bounds.lower`, want.bounds.lower, got?.bounds?.lower ?? null, 1);
+        at(`forecasts[${index}].bounds.upper`, want.bounds.upper, got?.bounds?.upper ?? null, 1);
+        at(`forecasts[${index}].bounds.confidence`, want.bounds.confidence, got?.bounds?.confidence ?? null, 1e-6);
+        at(`forecasts[${index}].bounds.reached`, want.bounds.reached, got?.bounds?.reached ?? null);
+      }
+      if (want.expected !== undefined) {
+        at(`forecasts[${index}].expected.seconds`, want.expected.seconds, got?.expected?.seconds ?? null, 1);
+        at(`forecasts[${index}].expected.method`, want.expected.method, got?.expected?.method ?? null);
+      }
+      at(`forecasts[${index}].warnings`, want.warnings, got?.warnings ?? null);
     });
   }
   if (expected.samples !== undefined) {

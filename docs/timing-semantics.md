@@ -1058,8 +1058,12 @@ reports `path`, every level tried with its sample count; `level`, `levelName`
 and `class` (the key with dropped dimensions as `*`); and `fallback`: `none`,
 `below_minimum`, or `below_minimum_everywhere` when not even the whole set has
 5, in which case the whole set is read and the cohort carries the warning
-`small_sample`. The walk is deterministic, and the class a key reads depends
-only on the samples.
+`small_sample`. A level also stops the walk when its
+[timing-floor members](#confidence-ranges) outnumber its samples and the two
+together make 5: that is evidence the class's work is mostly under a minute,
+and a broader class would hide it. Each `path` step counts `samples` and
+`floors`. The walk is deterministic, and the class a key reads depends only on
+the samples and the floors.
 
 **Per cohort.** `samples`; `coverage: {samples, eligible, fraction,
 denominator: "ratio_population"}`, where `eligible` is every population member
@@ -1072,13 +1076,13 @@ distribution (0.9375 at n = 5, the guarantee the minimum rests on);
 `estimateSources`; `members` (up to 20 refs, oldest resolution first, with the
 total); and `excluded`, the members of the class that are not samples of this
 set, by state and reason. Each set also reports its own samples, coverage over
-the whole population and exclusions. Uncertainty (ranges, quantiles, the
-timing floor and heavy tails) belongs beside `ratio` and `workSeconds`, from
-the same samples.
+the whole population and exclusions. Uncertainty (quantiles, intervals,
+bounds, the timing floor and heavy tails) sits beside `ratio` and
+`workSeconds`, from the same samples: see [Confidence ranges](#confidence-ranges).
 
 **Snapshot identity.** Every report carries `snapshot`: `{id, algorithm,
 repositoryId, members, samples}`. `id` is a SHA-256 over the algorithm version
-(`calibration/1`), the repository id, the selection (kinds, priorities, the
+(`calibration/2`: version 1 had no floor stop in the fallback), the repository id, the selection (kinds, priorities, the
 parent's id, `since` as given, the sets read), the minimum,
 and every population member in id order. A sample contributes its set, its
 resolution instant, its state and reasons, its dimensions, `workSeconds`, the
@@ -1092,6 +1096,198 @@ both are device-local. A suggestion or forecast built from a report can name
 the exact data it came from by quoting `snapshot.id`. A relative `since` (`30d`) is hashed as
 written, not as the instant it resolves to at the read, so reading it again
 later over the same members gives the same id.
+
+### Confidence ranges
+
+Every cohort of `staple calibrate` carries its uncertainty, and `--for <ref>`
+turns a cohort into a duration forecast for one issue. The rules are written
+once, in `src/core/telemetry/calibration.ts`, and `method` in every report
+states them: `quantile`, `quantiles`, `confidence`, `intervals`,
+`minBoundsSamples`, `heavyTail` and `floorSeconds`.
+
+**Quantiles.** `ratio.quantiles` and `workSeconds.quantiles` are `p10`, `p25`,
+`p50`, `p75` and `p90`, each the **lower** quantile of this page: the value at
+index `floor(p × (n − 1))` of the ascending samples, computed in whole percents
+so no rounding moves the index. `p50` is the lower median the cohort already
+published. The quartiles are the spread a heavy tail cannot move. `p10` and
+`p90` are the band a plan works between. Nothing is interpolated: with
+5 samples, `p75` and `p90` are both the fourth value, and the report says so
+rather than inventing a figure between two observations.
+
+**Intervals and bounds** are distribution-free: they hold for any continuous
+distribution, so they need no assumption about a tail this page shows to be
+heavy and bimodal. The target is **90%** (`method.confidence`). Every interval
+reports `{lower, upper, ranks, confidence, reached}`: the 1-based ranks of the
+two order statistics, the probability it covers what it claims, and whether
+that reaches 90%. **An interval that cannot reach 90% is not widened past the
+data.** It is the whole sample range, with the lower confidence it does reach.
+Probabilities are published to 12 decimal places.
+
+- `intervals.pXX` covers the class's true quantile. Ranks `r ≤ s` cover it with
+  probability `P(r ≤ B ≤ s − 1)` for `B ~ Binomial(n, p)`. Of the pairs that
+  hold the point estimate's rank and reach 90%, the chosen pair has the fewest
+  ranks between them, then the highest confidence, then the pair most centred
+  on the point, then the lowest. The choice depends on n and p only, never on
+  the values. The median's interval reaches 90% from n = 5 (the range,
+  0.9375, which is `rangeConfidence`). `p10` and `p90` need n ≥ 22, because the
+  range covers them with probability `1 − 0.9ⁿ − 0.1ⁿ`.
+- `bounds` is where **one more sample** of the class falls: `[x(k), x(n+1−k)]`
+  holds it with probability `(n + 1 − 2k) / (n + 1)` when the samples and the new
+  one are exchangeable. The largest k that reaches 90% is chosen. It reaches 90%
+  from n = **19** (`method.minBoundsSamples`: the range of 19 holds a 20th with
+  probability 18/20). Below that it is the range, with `(n − 1) / (n + 1)`: 66.7% at
+  n = 5. A forecast's bounds are these, not a quantile's interval: a plan needs
+  where this issue lands, not where the class median is.
+
+**Heavy tails.** `tail` tests `ln(ratio)`, which turns a multiplicative spread
+into an additive one. The test uses the **standard** median (the mean of the
+two middle values at even n), for m and for the MAD, the standard median of
+`|x − m|`. The lower median, the quantile method above, under-reads the MAD at
+even n and made the test cry wolf there, so only the tail test departs from
+it. The published quantiles stay lower quantiles. The scale is `MAD / 0.6745`,
+or `1.2533 × mean |x − m|` when the MAD is 0 (at least half the samples equal).
+A sample is an outlier when it sits more than `max(3.5 × scale, ln 1.05)` from
+m: a modified z-score over **3.5** (Iglewicz and Hoaglin's threshold), and more
+than 5% away. The 5% floor matters when the MAD is 0: thirty-nine ratios of
+1.0 and three of 1.001 have an enormous z-score and no tail. The cohort is
+**heavy-tailed** when at least **3** samples, and at least **5%** of them, are
+outliers. It is tested from **10** samples (`tested: false` below; the
+median interval and the fallback minimum are unaffected). `tail` reports
+`tested`, `outliers.lower` and `.upper`, `share`, `heavy`, `fences` (the ratios
+beyond which a sample is an outlier), `scale` and `fenceClippedPooled`.
+
+Why these numbers: a seeded simulation of plain lognormal cohorts (no tail;
+2 000 to 4 000 per n) flags at most about 1.2% of them at any n from 10 to 200
+under this rule. With 2 outliers, or from 5 samples, the same simulation
+flagged 3% to 6%. A small class has a real chance of one or two far draws, so
+two is not enough; three in a class of ten or more is. The rule finds a real
+tail: with 3 of 20 samples forty times the median it flags more than 90% of
+cohorts, and at twenty times about 70%, because all three must clear the
+fence. Those power figures assume a core with a log-spread (σ of `ln(ratio)`)
+of about 0.5, the live tracker's. A wider core widens the fences with it, so
+power drops: with σ 0.8, three samples forty times the median are flagged in
+only about 30% of cohorts. The false-alarm rate does not depend on σ. On the maintainers' tracker (below), it flags the estimated done leaves
+with their sparse records in (12 of 129 beyond the fence, 9.3%) and none once
+the sparse records are out (0 of 108). Sparse records are never samples, so that
+is the tail the quality rules already remove.
+
+A heavy-tailed cohort uses robust statistics. Its quantiles and bounds are
+order statistics, so they are robust already. `ratio.expected`, the figure a
+forecast's expected duration uses, is `{value, method}`: the pooled ratio
+(`method: "pooled"`), and for a heavy-tailed cohort the **fence-clipped pooled
+ratio** (`"fence_clipped_pooled"`): `Σ clamp(ratio, fences) × estimate / Σ
+estimate`, each sample's ratio held inside the fences. **No figure here is ever
+a mean of the samples.** A heavy-tailed cohort's pooled ratio, the one
+mean-like figure, is still published, but nothing downstream reads it. **The
+clipped figure is biased low on exactly the classes it is used for**: it caps
+the long runs that make the tail. A sum of expected figures along a path
+inherits that bias, and the `heavy_tail` warning travels with every forecast
+that carries it.
+
+**Timing floors.** A record under 60 seconds of work (`timing-floor`, from
+[Quality states](#quality-states)) is never a sample, since its figure fits
+inside the write cadence. It is still evidence that the work was short. Each
+cohort lists its class's floors apart in `floors: {count, share, dominated,
+seconds, refs, truncated}`. A floor of the `exact` set is a captured record
+whose only reason is `timing_floor`. A floor of the `reconstructed` set is a
+reconstructed record whose other reasons are all `reconstructed`. An approximate
+record under a minute is approximate first, and is neither. `share` is
+`floors / (floors + samples)`. `dominated` is true when floors outnumber
+samples **and** the two together make at least 5, the same minimum as the
+fallback: one record under a minute is one record, not a class. The samples of
+a class with floors leave its shortest work out, so they read long: the cohort
+warns `floors_excluded`. A **floor-dominated** class warns `floor_dominated`,
+and a forecast from it reads `state: "floor"` whether or not the issue has an
+estimate: the work is expected under `floors.seconds` (60). It has no `seconds`
+or `bounds`, with `missing.seconds: "floor_dominated"`, rather than a ratio
+taken from the minority that ran longer. Its `expected` is `{seconds: 60,
+ratio: null, method: "floor_bound"}`, an upper bound, so a sum along a path
+counts it rather than dropping it.
+
+**Warnings.** One closed list, in this order, on every cohort and forecast:
+
+| Code | When |
+|---|---|
+| `small_sample` | fewer than 5 samples in the class read: no median interval reaches 90% |
+| `bounds_below_confidence` | fewer than 19: the bounds reach less than 90% |
+| `quantile_below_confidence` | a ratio quantile's interval reaches less than 90% (p10 and p90 last, from 22 samples) |
+| `fallback_used` | the class read is broader than the first level the key's walk tried |
+| `heavy_tail` | the tail test flags the ratio; `ratio.expected` is clipped at the fences, and reads low |
+| `floor_dominated` | more timing-floor members than samples, 5 or more of the two; a forecast reads the floor |
+| `floors_excluded` | some timing-floor members, not dominating; the samples read long |
+| `reconstructed_only` | the set is `reconstructed`: backfilled history, not captured |
+| `no_samples` | the class read has no sample at all |
+
+**Duration forecasts.** `staple calibrate --for REF[,REF]` (MCP
+`calibration_cohorts {for: [...]}`, HTTP `/api/calibration?for=`) adds
+`forecasts`: one per issue asked for and per evidence set read, in the order
+asked. The issue's key is read by the rules a sample's is (its kind, priority,
+`type:` and `area:` labels, and the models of the worker attempts behind its
+work), with one exception. **An issue nobody has started has no model to
+match.** Its key reads model `*`, and its walk starts at `without_model`, so it
+is never filed under the samples whose attempts named no model as if "no model"
+were one (`unknown` is still what a sample reads when its attempts named
+none). A caller who knows the harness pins it with `--model M` (MCP `model`,
+HTTP `model=`), which sets the model of every forecast in the read. For a key
+with model `*`, `without_model` is the first level tried: reading it is
+`fallback: "none"`, and no `fallback_used`. The key resolves to a class as the
+listing resolves it, and the forecast is the issue's own current estimate times
+that class's figures:
+
+- `seconds`: `estimate × ratio.quantiles` (p10 … p90);
+- `bounds`: `estimate × ratio.bounds`, where this issue's duration falls, with the
+  confidence reached;
+- `expected`: `{seconds, ratio, method}`, `estimate × ratio.expected` (or the
+  floor bound).
+
+**Only `expected` adds along a path.** The expected duration of a chain is the
+sum of the expected durations of its links, so `walkPlanGraph` with a weight
+that reads `expected.seconds` gives the chain's expected duration. **Quantiles
+and bounds do not add**: the p90 of a sum is not the sum of the p90s (it is
+less, unless every link runs long together), and the sum of the links' bounds
+is not a bound of the chain at any stated confidence. A path forecast that
+needs a band must combine the links' distributions, not their quantiles. A
+path sum also inherits the low bias of a fence-clipped `expected` on a
+heavy-tailed class, and carries its warnings.
+
+`state` is `ratio`, `floor`, `no_samples` or `no_estimate` (an issue with no
+own estimate has nothing to multiply), with the reason in `missing.seconds`.
+`floor` is decided first: it needs no estimate. `cohort` names the class read
+(`level`, `levelName`, `class`, `path`, `fallback`, `samples`, `coverage`),
+and the cohort's warnings carry over. Asking for a forecast, or pinning a
+model, does not change `snapshot.id`: the forecast is computed from the data
+the id names, and the issue's own inputs are in the forecast. Up to `--limit`
+issues per read.
+
+**Worked example.** Eleven `task`/`high`/`type:feature` samples: eight worked
+18, 19, 20, 21, 22, 23, 24 and 25 minutes against 2 hours, and three worked
+20 minutes against a 5-minute estimate (controlled run
+`37-confidence-ranges`).
+
+- Ratios, ascending: 0.150, 0.158, 0.167, 0.175, 0.183, 0.192, 0.200, 0.208,
+  4.0, 4.0, 4.0. The lower quantiles at indices 1, 2, 5, 7 and 9
+  (`floor(p × 10)`): p10 0.158, p25 0.167, p50 0.192, p75 0.208, p90 4.0.
+- The median's interval: the point is rank 6. No pair five ranks apart
+  reaches 90% (the best, ranks 3 to 8 and 4 to 9, hold 0.854). Six apart,
+  ranks 3 to 9 hold `P(3 ≤ B ≤ 8) = 1914/2048 = 0.9346` for `B ~ Binomial(11, ½)`,
+  so the interval is `[0.167, 4.0]`.
+- The bounds: n = 11 is below 19, so the range `[0.150, 4.0]` with
+  `10/12 = 0.833`, `reached: false`, and the warnings `bounds_below_confidence`
+  and `quantile_below_confidence` (p10 and p90 need 22 samples).
+- The tail: m is the standard median of the logs, ln 0.192 (n is odd, so it
+  is the sixth). The MAD is the sixth deviation, `ln(0.192/0.167) = ln 1.15 =
+  0.1398`, so the scale is `0.1398 / 0.6745 = 0.2072`. The three 4.0s sit at
+  `ln(4.0/0.192) / 0.2072 = 14.7` robust deviations, far past 3.5. The fences
+  are `0.192 × e^(±3.5 × 0.2072)`, 0.093 and 0.396. Three outliers, 27%:
+  `heavy_tail`. The pooled ratio is `232 / 975 = 0.238`, pulled up by 60
+  minutes of work against 15 minutes of estimate. Clipped, each 4.0 counts as
+  0.396: `(172 + 3 × 0.396 × 5) / 975 = 0.1825`, which reads low, since three of
+  eleven such tickets really did take four times their estimate.
+- A forecast for an unstarted issue of the same labels estimated at 4 hours
+  reads `without_model` (the same eleven samples): p50 `0.192 × 14 400 = 2 760 s`
+  (46 minutes), p10 to p90 38 minutes to 16 hours, bounds
+  `[2 160 s, 57 600 s]` at 83.3%, expected `0.1825 × 14 400 = 2 628 s`
+  (`fence_clipped_pooled`).
 
 ## What the live tracker says, in one place
 
@@ -1146,6 +1342,35 @@ isolated home:
 | As captured (exact only) | 5 of 134 (3.7%): four `task`/`high`, one `bug`/`high`; every one divides by its estimate at start | Two keys, 4 and 1 samples; both fall back to `all` (n = 5, ratio median 0.218, pooled 0.237) |
 | After `staple attempt reconstruct` on a copy, `--include reconstructed` | exact 5 as before; reconstructed 108 of 134 (80.6%), 19 more reconstructed records excluded for `sparse` or the floor | 10 reconstructed keys: 4 read their own key (`task`/`high` n = 52, ratio median 0.081), 6 fall back (`task`/`low` to `kind` n = 84; `spike` to `all`) |
 
+**Confidence ranges on the same tracker** (a snapshot taken 2026-09-25, 302
+issues, 135 in the ratio population), read with `staple calibrate` under an
+isolated home, after `staple attempt reconstruct` on a copy for the second row:
+
+| Cohort | n | ratio p10 / p50 / p90 | median interval | bounds | warnings |
+|---|---|---|---|---|---|
+| exact, `task`/`high` (own key) | 5 | 0.146 / 0.179 / 0.256 | ranks 1–5, [0.146, 0.515], 93.75% | [0.146, 0.515], 66.7% | `bounds_below_confidence`, `quantile_below_confidence` |
+| reconstructed, `task`/`high` (own key) | 52 | 0.042 / 0.081 / 0.142 | ranks 20–32, [0.066, 0.095], 90.2% | ranks 2–51, [0.028, 0.163], 92.5% | `reconstructed_only` |
+| reconstructed, `task`/`low` → `kind` | 84 | 0.042 / 0.092 / 0.154 | ranks 34–50, [0.074, 0.099], 91.8% | [0.034, 0.184], 90.6% | `fallback_used`, `reconstructed_only` |
+| reconstructed, `spike` → `all` | 108 | 0.046 / 0.089 / 0.159 | ranks 45–63, [0.081, 0.097], 91.6% | ranks 5–104, [0.034, 0.194], 90.8% | `fallback_used`, `reconstructed_only` |
+
+No cohort on either set is heavy-tailed. The exact cohorts (n = 5 and 6) are
+below the 10 samples the tail test needs, and every reconstructed cohort it
+tests has no sample beyond a fence.
+The tail the rule is built for is the sparse minority, which the quality rules
+already keep out of every set: the same test over all 129 estimated done leaves
+with a figure, sparse ones in, finds 12 beyond the fence and flags it. No done
+leaf in either set is a timing floor, so no cohort lists floors. The
+reconstructed `task`/`high` interval, checked by hand: the lower median of 52 is
+rank `floor(51/2) + 1 = 26`. Ranks 21 to 32 hold `P(21 ≤ B ≤ 31) = 0.874` for
+`B ~ Binomial(52, ½)`, below 90%, and ranks 20 to 32 hold
+`P(20 ≤ B ≤ 31) = 0.9016`, the value published. Ranks 21 to 33 tie with it and
+are less centred. The 20th and 32nd of the 52 sorted ratios are 0.0663 and
+0.0954. An unstarted `task`/`high` issue estimated at 6 hours (model `*`, read
+`without_model`, which holds the same samples here) forecasts p50 1 h 4 min
+from the exact set (bounds 52 min to 3 h 5 min, 66.7%) and 29 min from the
+reconstructed set (bounds 10 min to 59 min, 92.5%). The two sets disagree by a
+factor of two, and that is why they are never pooled.
+
 No label on the tracker carries `type:` or `area:`, and no captured attempt
 names a model, so those three dimensions read `unknown` everywhere and never
 split a cohort. Live calibration is thin: five exact samples, one class. It
@@ -1171,7 +1396,7 @@ and agents execute faster. That is the thing being calibrated, not an error.
 | Closing lifecycle capture gaps | The [bucket table](#the-buckets), its precedence and [every transition](#every-transition) as the reconstruction spec. `asOf` as a parameter. One mutation instant for every writer. `workSeconds` from replicated data only, as specified in [Work](#work). Re-emitting status-moving and edge events dated at the origin instant, so `wall` stops being device-local. `blockers_changed` from every edge-writing path. Pauses never counted as work, and resume opening a new interval. Terminal transitions closing every open interval. The replicated-only inputs (`sparse`, `capture_gap`, `end_unbounded`) as the explicit approximation flags on `workSeconds`, and `unattributed` and `edge_history_incomplete` on `wall`. The orchestrator lane and worker-lane scoping, if [Q1](#open-questions) is accepted. Agent guidance: yield or pause when a blocker appears mid-work. |
 | Validating against controlled runs | Every bucket is defined in milliseconds from recorded instants, so a controlled run states its expected timeline as a list of transitions and an `asOf`, and compares the `wall` buckets, `workSeconds`, `interrupted` and `resumeGapSeconds`, and `orchestrationSeconds`. **Fixtures must control the write clock**, not just `asOf`: every instant on this page comes from `nowIso()` at write time, so a reproducible run injects the clock the store, the event writer and the attempt ledger all read. Tolerance: one second per interval for `activeSeconds`, one second per nonzero bucket for the partition, plus the one-second snapping window. `review` and `blocked` are disjoint by construction, so a run that reads the same second in both has found a bug. Runs on a second device check that `workSeconds` matches everywhere, that `wall` matches on a device that read the tail, and that it reads `replay_unavailable` on one that hydrated. Built: see [Controlled runs](#controlled-runs). |
 | Quality indicators | The [quality inputs](#quality-inputs), the precedence, the [coverage](#missingness-for-the-new-fields) of parents and of the ratio aggregate, and the five new reason codes. Built: see [Quality states](#quality-states). |
-| Calibration and forecasting | `estimateRatio` and its eligibility, `orchestrationSeconds` as a separate overhead figure, `resumeGapSeconds` per chain link. Cohorts built: see [Calibration cohorts](#calibration-cohorts). |
+| Calibration and forecasting | `estimateRatio` and its eligibility, `orchestrationSeconds` as a separate overhead figure, `resumeGapSeconds` per chain link. Cohorts built: see [Calibration cohorts](#calibration-cohorts). Ranges, floors, tails and per-issue forecasts built: see [Confidence ranges](#confidence-ranges). A completion forecast along a path sums `forecasts[].expected.seconds` (a floor forecast's is its 60-second bound) as the `walkPlanGraph` weight, and carries the warnings. Quantiles and bounds do not add along a path: a band for a chain needs the links' distributions combined, not their quantiles summed. A fence-clipped `expected` reads low on a heavy-tailed class, and the sum inherits it. |
 
 ## Where the numbers appear
 
@@ -1294,8 +1519,10 @@ issue is not held; it is checked on the hydrated device too. A read can state
 population, the work counts and reasons, the ratio aggregates, what an exclusion
 drops and the records listed); and `calibration`, what `staple calibrate --parent <ref>`
 reads (the population, the samples per set, every cohort with its key, level, class
-size and median, and every sample with its estimate source and ratio), with the
-snapshot id required to be the same on every device and for both listings. Every read also checks that the work state is
+size and median, its ratio quantiles, median interval and bounds, its tail, expected
+ratio, floors and warnings, and every sample with its estimate source and ratio; with
+`for`, every forecast with its state, class, seconds, bounds, expected figure and
+warnings), with the snapshot id required to be the same on every device and for both listings. Every read also checks that the work state is
 `exact` exactly when it has no reason, and that the wall has a state.
 Durations in `expect` are the same notation or whole seconds.
 
@@ -1359,6 +1586,7 @@ quality states and inputs, and coverage are compared exactly.
 | `33-steal-refused-document` | a steal on the other device refused at 20 minutes idle because the holder wrote a document revision, then allowed past the threshold |
 | `34-steal-refused-deleted-comment` | the same with a comment the holder wrote and that was deleted later by a replicated deletion |
 | `35-quality-states` | one record in each work state (exact, timing-floor, sparse, missing, reconstructed, reconstructed and sparse) with its reasons and its attempt's state, a cancelled issue with no state, a parent that is reconstructed, and the cohort the leaves make: the eligible denominator, the ratio aggregates, and exclusion by state and by reason |
+| `37-confidence-ranges` | eleven samples of one key with three tickets that took four times a five-minute estimate: the lower quantiles, the median's order-statistic interval (ranks 3 to 9, 1914/2048), the bounds below 90% and said so, a heavy tail read with the fence-clipped expected ratio, two timing floors listed apart, a key with one sample and four floors reading its own class as floor-dominated, and forecasts for an unstarted issue (its walk starting without the model), two in the floor-dominated class (the floor, with and without an estimate) and one with no estimate, the same on every device |
 | `36-calibration-cohorts` | calibration over the leaves of a parent: exact samples with models from the checkouts and labels for work type and area, a sample re-estimated after it started dividing by its estimate at start, keys of three and two samples falling back to their class without model, a lone bug falling back to the whole set, sparse, timing-floor and reconstructed records kept out of the exact set, the reconstructed set on request, and one snapshot id on every device |
 
 **Adding one.** Write the timeline you want to check as a new file in
@@ -1568,6 +1796,35 @@ states the choice in place.
    them would name the same data differently on each. The id hashes the
    replicated inputs of every member instead
    ([Calibration cohorts](#calibration-cohorts)).
+31. **Bounds are for one more sample, not for the median.** A confidence interval
+   for the median narrows as n grows, and a plan that read it as "this ticket
+   will take between" would be wrong most of the time. `bounds` is the
+   prediction interval for one more sample, the question a forecast asks, and the
+   quantile intervals answer the other question beside it
+   ([Confidence ranges](#confidence-ranges)).
+32. **Floors stop the fallback.** Version 1 walked the fallback on samples alone,
+   so a key whose work was mostly under a minute fell back to a broader class and
+   read that class's ratio. The walk now stops at a level where floors outnumber
+   samples and the two make 5, and the snapshot algorithm is `calibration/2`.
+   Nothing else changes for a class without floors.
+33. **Nothing is interpolated.** The page's quantile method is the lower
+   quantile, and the intervals are order statistics, so every figure a cohort
+   publishes is an observed value (or an observed value times the estimate). One
+   method across the codebase keeps a figure here comparable with every
+   percentile above.
+34. **The tail test is tuned against false alarms.** Review of the first cut
+   found that two outliers from five samples, with the lower median, flagged 6% to
+   16% of plain lognormal cohorts (the lower median of the deviations under-reads
+   the MAD at even n). A false alarm switches the expected ratio to the clipped
+   figure, which reads low along a path. The test now uses the standard median, needs
+   10 samples and 3 outliers, and ignores deviations under 5%. The simulation
+   behind the threshold is a test (`test/calibration-ranges.test.ts`).
+35. **An unstarted issue has no model.** Its key reads `*`, not `unknown`:
+   `unknown` is what a sample reads when its attempts named no harness, and a
+   class of those can run very differently from the named ones. Filing a new
+   issue under them read their ratio as its own. `--model` pins the model when
+   the caller knows it.
+
 
 ## Open questions
 
