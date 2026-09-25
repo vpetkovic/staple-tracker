@@ -214,6 +214,18 @@ describe("sparse data produces an explicit approximation flag", () => {
     expect(timing(x.id, 20)).toMatchObject({ workSeconds: null, missing: { workSeconds: "no_worker_attempt" }, quality: { work: { state: "missing" } } });
   });
 
+  it("an attempt that ends more than a second before it starts is clock skew, on both axes", () => {
+    const x = store.createIssue({ title: "Skewed" });
+    store.checkoutIssue(x.id, "agent-a");
+    at(10);
+    store.updateIssue(x.id, { status: "done" }, "agent-a");
+    // Another device's clock, behind this one's: its end reads before its start.
+    store.db.prepare("UPDATE attempts SET started_at = ?, ended_at = ? WHERE issue_id = ?").run(iso(5), iso(2), x.id);
+    const t = timing(x.id, 20);
+    expect(t.quality.work.inputs).toContain("clock_skew");
+    expect(t.quality.wall.inputs).toContain("clock_skew");
+  });
+
   it("under a minute is timing-floor, and zero-length intervals at one instant are counted as zero", () => {
     // Born in the active category and done in the same millisecond.
     const x = store.createIssue({ title: "Instant", status: "in_progress", createdBy: "agent-a" });
@@ -655,6 +667,8 @@ describe("the orchestrator lane", () => {
     const other = store.createIssue({ title: "Elsewhere" });
     store.openOrchestratorAttempt(epic.id, "orch", "orchestrator");
     store.checkoutIssue(child.id, "agent-a");
+    // Nothing writes the stored end until both clauses hold, so the read-time rule decides.
+    holdOrphanEnds();
     at(10);
     store.addComment(child.id, "on the child", "orch");
     at(15);
@@ -666,7 +680,13 @@ describe("the orchestrator lane", () => {
     at(20);
     store.openOrchestratorAttempt(other.id, "orch", "orchestrator");
     const [view] = viewsOfIssue(store.db, epic.id, iso(30));
-    expect(view).toMatchObject({ role: "orchestrator", state: "ended", endReason: "issue_resolved" });
+    // Resolved (clause 2) and superseded (clause 3) both hold: the first names it, the earliest bound (15) limits it.
+    expect(view).toMatchObject({ role: "orchestrator", state: "ended", outcome: "orphaned", endReason: "issue_resolved" });
+    expect(timing(epic.id, 30).orchestrationSeconds).toBe(min(10));
+    releaseOrphanEnds();
+    at(25);
+    store.addComment(other.id, "a mutating command", "vp");
+    expect(attemptsOfIssue(store.db, epic.id)[0]).toMatchObject({ state: "ended", endReason: "issue_resolved", endedAt: iso(10) });
     expect(timing(epic.id, 30).orchestrationSeconds).toBe(min(10));
   });
 

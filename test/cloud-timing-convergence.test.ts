@@ -188,6 +188,28 @@ describe("events are re-emitted on apply, dated at the origin", () => {
     expect(timingOn(b, x.id, 30).approximate).toBe(false);
   }, 60_000);
 
+  it("the same move made on two devices converges on the earlier instant, whichever order it arrives in", async () => {
+    fleet = new Fleet(new FakeSyncServer({ repositoryId: REPO }), REPO);
+    const a = fleet.machine("a");
+    const b = fleet.machine("b");
+    await sync(a, b);
+    a.use();
+    const x = a.store.createIssue({ title: "Closed twice" });
+    a.store.checkoutIssue(x.id, "agent-a");
+    await sync(a, b);
+    // Both close it offline: B first by the clock, A later. Equal values are not a conflict.
+    at(10);
+    b.use();
+    b.store.updateIssue(x.id, { status: "done" }, "vp");
+    at(20);
+    a.use();
+    a.store.updateIssue(x.id, { status: "done" }, "agent-a");
+    await sync(a, b, a);
+    // A applied B's earlier close after its own later one: the replay reads by time, so both end the span at 10.
+    expect(timingOn(a, x.id, 30).wall).toMatchObject({ endAt: iso(10) });
+    expect(timingOn(a, x.id, 30).wall).toEqual(timingOn(b, x.id, 30).wall);
+  }, 60_000);
+
   it("where attempts overlap, work beats paused and paused beats silent", async () => {
     fleet = new Fleet(new FakeSyncServer({ repositoryId: REPO }), REPO);
     const a = fleet.machine("a");

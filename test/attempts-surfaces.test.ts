@@ -212,6 +212,38 @@ describe("MCP record_attempt_event", () => {
   }, 120_000);
 });
 
+describe("the orchestrator lane on the CLI and MCP", () => {
+  it("opens and ends by attempt open|end --role orchestrator, and every claim write refuses a role", async () => {
+    const epic = String(cli("new", "Coordinated epic").json.identifier);
+    const opened = cli("attempt", "open", epic, "--role", "orchestrator", "--agent", "orch-cli", "--harness", "claude_code", "--harness-session", "o-1");
+    expect(opened.status).toBe(0);
+    expect(opened.json).toMatchObject({ role: "orchestrator", openedBy: "orchestrate", agent: "orch-cli", state: "running", claim: { scope: "none" } });
+    // No claim, no status change.
+    const shown = cli("show", epic).json;
+    expect(shown.issue).toMatchObject({ status: "backlog", checkoutAgent: null });
+    expect(shown.orchestration).toMatchObject({ count: 1, current: { id: opened.json.id } });
+    expect((shown.attempts as Record<string, unknown>).count).toBe(0);
+    const ended = cli("attempt", "end", epic, "--role", "orchestrator", "--agent", "orch-cli");
+    expect(ended.json).toMatchObject({ id: opened.json.id, state: "ended", outcome: "yielded", endReason: "coordination_ended", endDetection: "reported" });
+
+    // Any other role, or none, is refused; so is a role on a claim write.
+    expect(cli("attempt", "open", epic, "--agent", "orch-cli").status).toBe(2);
+    expect(cli("attempt", "open", epic, "--role", "worker", "--agent", "orch-cli").status).toBe(2);
+    const leaf = String(cli("new", "Leaf").json.identifier);
+    expect(cli("checkout", leaf, "--role", "orchestrator").status).toBe(2);
+    expect(cli("status", leaf, "in_progress", "--role", "orchestrator").status).toBe(2);
+
+    // MCP: the same verbs through record_attempt_event, and the claim tools refuse a role by name.
+    const viaMcp = toolPayload(await mcp.call("record_attempt_event", { ref: epic, event: "open", role: "orchestrator", ws: WS })) as Record<string, unknown>;
+    expect(viaMcp).toMatchObject({ role: "orchestrator", agent: "agent-mcp", openedBy: "orchestrate" });
+    const task = toolPayload(await mcp.call("get_task", { ref: epic, ws: WS })) as Record<string, unknown>;
+    expect(task.orchestration).toMatchObject({ count: 2, current: { id: viaMcp.id } });
+    expect((await mcp.call("checkout_task", { ref: leaf, role: "orchestrator", ws: WS })).isError).toBe(true);
+    const endedViaMcp = toolPayload(await mcp.call("record_attempt_event", { ref: epic, event: "end", role: "orchestrator", ws: WS })) as Record<string, unknown>;
+    expect(endedViaMcp).toMatchObject({ id: viaMcp.id, endReason: "coordination_ended" });
+  }, 120_000);
+});
+
 describe("HTTP /api/action", () => {
   let ui: UiHandle | null = null;
   afterAll(() => ui?.close());
