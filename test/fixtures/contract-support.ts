@@ -260,7 +260,7 @@ export function timingGolden(over: Record<string, unknown> = {}): Record<string,
     leadSeconds: null,
     estimateRatio: null,
     wall: null,
-    quality: { work: { state: "missing", inputs: [], coverage: null, missingChildren: [] }, wall: { state: null, inputs: [] } },
+    quality: { work: { state: "missing", inputs: [], coverage: null, missingInputs: [] }, wall: { state: null, inputs: [] } },
     missing: {
       workSeconds: "never_started",
       ownWorkSeconds: "never_started",

@@ -203,6 +203,28 @@ staple release ${ref} --outcome failed --reason "why"          # only when you c
 MCP: \`record_attempt_event\`, and \`harness\` / \`harness_session\` / \`outcome\` on the
 claim tools.
 
+**A blocker appears while you work:** checkout refuses a blocked issue only on entry,
+so your attempt stays open and the wait would read as your work. Yield or pause:
+
+\`\`\`bash
+staple release ${ref}                                          # yield: the wait reads as blocked, not as your work
+staple attempt pause ${ref} --reason awaiting_input            # or pause, if you keep the claim and wait
+\`\`\`
+
+**Coordinating, not claiming:** an orchestrator (dispatching, reviewing a result,
+merging) opens its own lane on the issue it coordinates, usually the parent or
+epic, and never checks out work it only coordinates. That time is orchestration,
+reported apart from agent work:
+
+\`\`\`bash
+staple attempt open <epic> --role orchestrator    # at the start of a coordination session
+staple attempt end <epic> --role orchestrator     # when you hand off; opening another one also ends it
+\`\`\`
+
+MCP: \`record_attempt_event\` with \`event: "open"\` or \`"end"\` and \`role: "orchestrator"\`.
+If you hold a worker attempt and an orchestrator attempt on the same issue, pass
+\`--role\` on \`attempt pause|resume|milestone|interrupt\`.
+
 ## The worklog protocol — checkpoint as you go
 
 Keep a document keyed \`worklog\` on every task you hold, and **revise it at every

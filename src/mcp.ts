@@ -721,7 +721,7 @@ const timingShape = {
         state: z.enum(["missing", "reconstructed", "approximate", "timing-floor", "exact"]).nullable(),
         inputs: z.array(z.string()),
         coverage: z.object({ known: z.number(), total: z.number(), partial: z.boolean() }).nullable(),
-        missingChildren: z.array(z.string()),
+        missingInputs: z.array(z.string()),
       }),
       wall: z.object({ state: z.enum(["approximate", "exact"]).nullable(), inputs: z.array(z.string()) }),
     })

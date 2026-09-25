@@ -1133,7 +1133,7 @@ describe("tool response shapes (31/31)", () => {
         leadSeconds: SECONDS,
         wall: { startAt: ISO, endAt: null, through: ISO, seconds: SECONDS, buckets: parentBucketsGolden() },
         quality: {
-          work: { state: "missing", inputs: [], coverage: { known: 0, total: 0, partial: false }, missingChildren: [] },
+          work: { state: "missing", inputs: [], coverage: { known: 0, total: 0, partial: false }, missingInputs: [] },
           wall: { state: "exact", inputs: [] },
         },
         missing: { workSeconds: "never_started", orchestrationSeconds: "no_orchestrator_attempt" },

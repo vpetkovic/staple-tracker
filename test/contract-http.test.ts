@@ -293,7 +293,7 @@ describe("read shapes", () => {
         ownWorkSeconds: SECONDS,
         leadSeconds: SECONDS,
         wall: { startAt: ISO, endAt: null, through: ISO, seconds: SECONDS, buckets: leafBucketsGolden() },
-        quality: { work: { state: "timing-floor", inputs: [], coverage: null, missingChildren: [] }, wall: { state: "exact", inputs: [] } },
+        quality: { work: { state: "timing-floor", inputs: [], coverage: null, missingInputs: [] }, wall: { state: "exact", inputs: [] } },
         missing: { orchestrationSeconds: "no_orchestrator_attempt" },
       }),
       childrenTiming: {},

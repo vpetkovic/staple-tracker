@@ -783,7 +783,7 @@ export interface TimingQuality {
     /** A parent's: direct children not cancelled and not `never_started`, and how many of them have `workSeconds`. */
     coverage: { known: number; total: number; partial: boolean } | null;
     /** A parent's children counted in `coverage.total` whose `workSeconds` is null, by identifier. */
-    missingChildren: string[];
+    missingInputs: string[];
   };
   wall: {
     /** Null when `wall` is. */

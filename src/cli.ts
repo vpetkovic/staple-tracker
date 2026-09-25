@@ -888,7 +888,8 @@ Execution attempts (one agent's tenure on one issue; opened and ended by the ver
   checkout|status|done ... [--harness claude_code|codex|other] [--harness-session ID]
               [--model M] [--account A] [--attempt-key K]   self-reported, all optional
   release|status|done ... --outcome failed --reason R   only the agent can say it failed
-  attempt pause|resume|milestone|interrupt <ref> [--reason R] [-m label]
+  attempt pause|resume|milestone|interrupt <ref> [--reason R] [-m label] [--role R | --attempt ID]
+  attempt open|end <ref> --role orchestrator   coordinate an issue without claiming it
   attempt reconstruct                   rebuild attempts from events recorded before them
   attempts <ref> [--limit N] [--cursor C]
               every attempt on the issue as it reads now, oldest first, bounded

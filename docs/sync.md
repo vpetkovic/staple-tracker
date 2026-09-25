@@ -370,7 +370,7 @@ entity's own primary key.
 | `workspace_statuses` | `id` | `label`, `category`, `sort_order`, `is_builtin` (as `isBuiltin` on a create, below) |
 | `workspace_kinds` | `id` | `label`, `sort_order`, `is_builtin` (as `isBuiltin` on a create, below) |
 | `milestone_meta` | `issue_id` | `target_date`, `start_date`, `updated_at` — `members_revision` is derived, see below |
-| `attempts` | `id` | `issue_id`, `agent`, `opened_by`, `resumes_attempt_id`, `started_at`, `device_id`, `claim_scope`, `claim_fencing_token`, `harness`, `provider_binding`, `estimate_at_start`, `idempotency_key`, `provenance`, `missing` on the create; then only the end: `state`, `outcome`, `end_reason`, `end_detection`, `ended_by`, `ended_at`, `ended_at_source`, always all seven together — protocol 3, see [execution telemetry](execution-telemetry.md#where-it-lives-and-what-synchronizes) |
+| `attempts` | `id` | `issue_id`, `agent`, `role` (workspace migration 014; a create without it is a `worker` attempt), `opened_by`, `resumes_attempt_id`, `started_at`, `device_id`, `claim_scope`, `claim_fencing_token`, `harness`, `provider_binding`, `estimate_at_start`, `idempotency_key`, `provenance`, `missing` on the create; then only the end: `state`, `outcome`, `end_reason`, `end_detection`, `ended_by`, `ended_at`, `ended_at_source`, always all seven together — protocol 3, see [execution telemetry](execution-telemetry.md#where-it-lives-and-what-synchronizes) |
 | `attempt_transitions` | `id` | `attempt_id`, `kind`, `at`, `actor`, `detection`, `reason`, `detail`, `concurrency` — immutable once written, like a document revision; protocol 3 |
 | `meta` | `key` | **only** rows matching `setting:*` — the repository's prefix travels as one of them, `setting:repository.prefix` ([above](#the-prefix-is-the-repositorys-the-slug-is-the-machines)); `slug` and `prefix` themselves are this workspace's own |
 
@@ -556,8 +556,24 @@ emitted**, with the originating `actor` and a `deviceId` in the payload. The
 audit trail converges in content while every device keeps its own monotonic
 sequence, so `staple events --follow` keeps working, `--since N` keeps meaning
 what it meant, and the UI timeline and timing replay reconstruct from a log whose
-ordering is locally coherent. `claim_stolen`, `blockers_resolved` and
-`children_complete` are produced locally on apply, not replicated.
+ordering is locally coherent. `blockers_resolved` and `children_complete` are
+produced locally on apply, not replicated.
+
+**Which events, and when they are dated.** Built for the events the timing replay
+reads ([timing semantics](timing-semantics.md#multi-device)): the status-moving
+events (`issue_created`, `status_changed`, `checkout`, `claim_stolen`, `release`,
+`claim_released_stale`) and `blockers_changed`. A local mutation notes each one it
+writes, and the `issue` or `relation` operation it journals carries them as
+`originEvents` (kind, actor, payload, instant) — not a column, so the applier
+writes nothing from it but the events. They are written **dated at the origin's
+instant**, never at the apply: an event dated by the apply would put the
+transition at the moment this device synchronized. The device's own operations
+coming back are skipped, and a status a conflict withheld narrates nothing. An
+operation without `originEvents` is narrated from the change itself. A pulled
+delete narrates the `blockers_changed` of every dependent that lost a blocker, at
+the delete's own time. Attempt transitions were already re-emitted this way, by
+their own `at`. The replay orders by that instant, then `seq`, because a
+re-emitted event can hold a higher `seq` than a later local one.
 
 **Every event emitter must supply a `dedup_key`.** Three of the four
 (`milestone-store.ts`, `queue-store.ts`, `project-store.ts`) currently hardcode

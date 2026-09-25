@@ -104,7 +104,7 @@ describe("pauses, resumes and terminal transitions", () => {
     expect(t.ownActiveSeconds).toBe(min(70));
     expect(t.workSeconds).toBe(min(40));
     expect(t.ownWorkSeconds).toBe(min(40));
-    expect(t.quality.work).toEqual({ state: "exact", inputs: [], coverage: null, missingChildren: [] });
+    expect(t.quality.work).toEqual({ state: "exact", inputs: [], coverage: null, missingInputs: [] });
     // The resume is a new interval: work before the pause and after it, the pause between.
     expect(t.wall).toEqual({ startAt: iso(0), endAt: iso(70), through: null, seconds: min(70), buckets: buckets({ work: min(40), paused: min(30) }) });
     expect(t.quality.wall).toEqual({ state: "exact", inputs: [] });
@@ -426,7 +426,7 @@ describe("the adversarial timelines", () => {
 });
 
 describe("blockers_changed from every edge-writing path", () => {
-  const events = (id: string) =>
+  const events = (id: string): Array<Record<string, unknown>> =>
     (store.db.prepare("SELECT payload, created_at FROM events WHERE issue_id = ? AND kind = 'blockers_changed' ORDER BY seq").all(id) as Array<{ payload: string; created_at: string }>).map(
       (row) => ({ ...(JSON.parse(row.payload) as Record<string, unknown>), at: row.created_at }),
     );
@@ -477,7 +477,7 @@ describe("parents: work is the children's, with coverage", () => {
       state: "approximate",
       inputs: ["partial"],
       coverage: { known: 1, total: 2, partial: true },
-      missingChildren: [unmeasured.identifier],
+      missingInputs: [unmeasured.identifier],
     });
     // A parent's elapsed buckets are its own derived category, undivided by attempts.
     expect(Object.keys(t.wall!.buckets).sort()).toEqual(["active", "blocked", "gated", "queued", "resolved", "review"]);
@@ -490,7 +490,7 @@ describe("parents: work is the children's, with coverage", () => {
     expect(timing(epic.id, 1)).toMatchObject({ workSeconds: null, missing: { workSeconds: "never_started" } });
     store.checkoutIssue(child.id, "agent-a");
     store.db.prepare("DELETE FROM attempts WHERE issue_id = ?").run(child.id);
-    expect(timing(epic.id, 1)).toMatchObject({ workSeconds: null, missing: { workSeconds: "input_missing" }, quality: { work: { missingChildren: [child.identifier] } } });
+    expect(timing(epic.id, 1)).toMatchObject({ workSeconds: null, missing: { workSeconds: "input_missing" }, quality: { work: { missingInputs: [child.identifier] } } });
   });
 });
 

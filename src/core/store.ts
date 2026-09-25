@@ -566,7 +566,7 @@ function noTelemetry(): Pick<
     leadSeconds: null,
     estimateRatio: null,
     wall: null,
-    quality: { work: { state: null, inputs: [], coverage: null, missingChildren: [] }, wall: { state: null, inputs: [] } },
+    quality: { work: { state: null, inputs: [], coverage: null, missingInputs: [] }, wall: { state: null, inputs: [] } },
     missing: {},
   };
 }
@@ -4914,7 +4914,7 @@ export class WorkspaceStore {
     let inputs = new Set<string>();
     let reconstructed = false;
     let coverage: TimingQuality["work"]["coverage"] = null;
-    const missingChildren: string[] = [];
+    const missingInputs: string[] = [];
     if (!parent) {
       workSeconds = ownWorkSeconds;
       if (ownReason !== null) missing.workSeconds = ownReason;
@@ -4931,7 +4931,7 @@ export class WorkspaceStore {
         if (childTiming.missing.workSeconds === "never_started") continue;
         total += 1;
         if (childTiming.workSeconds === null) {
-          missingChildren.push(child.identifier);
+          missingInputs.push(child.identifier);
           continue;
         }
         known += 1;
@@ -5007,7 +5007,7 @@ export class WorkspaceStore {
       estimateRatio,
       wall,
       quality: {
-        work: { state, inputs: [...inputs].sort(), coverage, missingChildren },
+        work: { state, inputs: [...inputs].sort(), coverage, missingInputs },
         wall: { state: wall === null ? null : timing.approximate || wallInputs.size > 0 ? "approximate" : "exact", inputs: [...wallInputs].sort() },
       },
       missing,

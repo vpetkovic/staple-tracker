@@ -133,12 +133,13 @@ Stored fields:
 | `id` | UUID v4, minted locally by the device that opens the attempt, never reissued. The attempt's only key, on every surface and on the wire. |
 | `issueId` | The issue's UUID. |
 | `agent` | The actor that opened the attempt: the same string as `checkout_agent` and the event `actor`. |
+| `role` | The lane: `worker` or `orchestrator` (workspace migration 014). Every attempt a checkout, a steal, a re-claim or a status write opens is `worker`; only `staple attempt open <ref> --role orchestrator` opens an `orchestrator` one. Every rule on this page is the worker lane's, and the orchestrator lane has its own ([timing semantics](timing-semantics.md#the-orchestrator-lane)). |
 | `state` | `running`, `paused` or `ended`. See [Lifecycle](#lifecycle). |
 | `outcome` | `null` while open. On `ended`: `completed`, `yielded`, `failed` or `interrupted`. Reads can also show `orphaned`, which is derived and never stored ([below](#orphaned-attempts-are-closed-at-read-time)). |
-| `endReason` | A reason code from the [lifecycle tables](#how-an-attempt-ends), `null` while open. One more code is written only by reconstruction: `capture_began`, on a reconstructed attempt whose tenure went on as the same agent's first recorded attempt ([History before capture](#history-before-capture)). It is `yielded`, never an interruption. |
+| `endReason` | A reason code from the [lifecycle tables](#how-an-attempt-ends), `null` while open. One more code is written only by reconstruction: `capture_began`, on a reconstructed attempt whose tenure went on as the same agent's first recorded attempt ([History before capture](#history-before-capture)). It is `yielded`, never an interruption. The orchestrator lane adds `coordination_ended` (a real end, `yielded`, from `staple attempt end`) and the orphan reasons `issue_resolved` and `superseded_by_newer`. |
 | `endDetection` | Who knew the attempt ended. `reported`: the attempt's own agent made the ending mutation. `by_other`: a different actor made it (another agent, a human, a script calling `status` or `release` with no agent). `inferred`: staple concluded it from a later mutation, such as a steal or a stale release. `reconstructed`: backfilled from the event log. `null` while open. The `derived` value never appears in storage; it exists only on reads ([below](#orphaned-attempts-are-closed-at-read-time)). |
 | `endedBy` | The actor on the ending mutation, or `null` when it had none. `status` and `release` have no holder check today, and `release` skips the ownership check entirely when no agent is given, so the actor is recorded rather than assumed. |
-| `openedBy` | `checkout`, `steal`, `reclaim`, `status` or `reconstructed`. Which mutation opened it. |
+| `openedBy` | `checkout`, `steal`, `reclaim`, `status`, `reconstructed` or `orchestrate` (an orchestrator attempt). Which mutation opened it. |
 | `resumesAttemptId` | The attempt this one continues after an interruption, or `null`. The link that makes an interruption boundary reconstructable. See [the resume rule](#the-resume-rule). |
 | `startedAt`, `endedAt` | UTC instants, written by the device that made the mutation and carried in the attempt operation. `endedAt` is `null` while open. |
 | `endedAtSource` | `mutation` (the time of the ending mutation) or `last_activity` (an inferred end, dated at the agent's last activity rather than at the moment somebody noticed). |
@@ -407,7 +408,8 @@ from one scope, but push batches and pull pages are bounded, so the two can
 arrive separately, and an orphan end can be written in the gap. A stored orphan
 end is recognizable: `endDetection: "inferred"` with one of the orphan reasons
 (`claim_moved`, `claim_cleared`, `left_active`, `superseded_by_merge`,
-`issue_removed`). Any other stored end is a **real end**.
+`issue_removed`, and the orchestrator lane's `issue_resolved` and
+`superseded_by_newer`). Any other stored end is a **real end**.
 
 Choosing between the two is an **apply rule**, not a conflict-detection rule.
 Conflict screening runs only on a device whose own write overlapped. A third
@@ -546,7 +548,9 @@ burn rate means nothing without the number of agents producing it:
 | Field | Meaning |
 |---|---|
 | `scope` | Always `device` in this contract. The counts are what this machine's databases know, and no field claims otherwise. |
-| `openAttemptsInWorkspace` | Effectively open attempts in this workspace database, including any pulled from other devices. |
+| `openAttemptsInWorkspace` | Effectively open attempts in this workspace database, including any pulled from other devices. Both lanes count, because both spend provider budget. |
+| `openAttemptsInWorkspaceByRole` | The same count split by lane, `{worker, orchestrator}`. |
+| `storedOpenAttemptsStartedHereByRole` | `storedOpenAttemptsStartedHere` split by lane, from the presence index's `role` (hub migration 007); `null` with `source_unavailable` when there is no index. |
 | `storedOpenAttemptsStartedHere` | **Approximate.** Attempts opened on this machine that the presence index (below) holds as open, across the reachable workspaces in the hub registry. Pulled attempts are excluded, because they run elsewhere. The index stores open/ended. It cannot evaluate the [orphan rule](#orphaned-attempts-are-closed-at-read-time), so it can over-count until its next refresh. |
 | `storedOpenAttemptsOnAccountStartedHere` | The subset of the previous count whose `providerBinding` names the same account as this attempt. `null` with reason `no_provider_binding` when this attempt has none. Approximate in the same way. |
 | `workspaceSyncedThrough` | The workspace's `last_sync_at`, or `null` with reason `not_connected`. How stale the "other devices" part of the first count may be. |
@@ -1012,6 +1016,11 @@ shown verbatim):
 | `not_supplied` | An optional self-reported field the agent did not send |
 | `parse_error` | The source was read and the field could not be parsed. The raw value is not kept. |
 | `input_missing` | A derived value with at least one missing input. It is accompanied by `missingInputs` |
+| `never_started` | `workSeconds`, `leadSeconds` and `wall` of an issue that never entered `active` and has no worker attempt ([timing semantics](timing-semantics.md#missingness-for-the-new-fields)) |
+| `not_applicable_cancelled` | `workSeconds` of a cancelled issue; `ownWorkSeconds` still reports what ran |
+| `no_worker_attempt` | The issue started and has no worker attempt: work before capture, or a capture gap |
+| `no_orchestrator_attempt` | `orchestrationSeconds` when no issue in the subtree has an orchestrator attempt |
+| `replay_unavailable` | `wall` on a device whose event replay does not reach the row's status |
 
 **Propagation.** Any value derived from a missing input is itself `null`, with
 `input_missing` and the list of the inputs that were missing. A sum over a set
@@ -1131,7 +1140,8 @@ tests catching drift. The names are proposals. The single-method rule is not.
 | `staple show <ref>` | `get_task` | Adds `attempts: {current, last, count}` beside `timing` and `claim`, derived at read |
 | `staple attempts <ref> [--limit N] [--cursor C]` | `list_attempts` | `{items, truncated, nextCursor, coverage}`. Items carry the effective (read-time) state and `storedState`. |
 | `staple attempt <attempt-id>` | `get_attempt` | The attempt, its transitions, its `chain` and its derived burn |
-| `staple attempt pause\|resume\|milestone\|interrupt <ref> [--reason R] [-m label]` | `record_attempt_event` | The updated attempt |
+| `staple attempt pause\|resume\|milestone\|interrupt <ref> [--reason R] [-m label] [--role R \| --attempt ID]` | `record_attempt_event` | The updated attempt. `--role` or `--attempt` is required when the actor holds an attempt in each lane |
+| `staple attempt open\|end <ref> --role orchestrator` | `record_attempt_event` with `event: "open"`/`"end"`, `role: "orchestrator"` | The orchestrator attempt ([timing semantics](timing-semantics.md#the-orchestrator-lane)). The only way to set a role; `checkout`, `status`, `done`, `release` and the MCP claim tools refuse one |
 | `checkout`, `status`, `done` gain optional `--harness-session`, `--harness claude_code\|codex\|other`, `--model`, `--account`, `--attempt-key K` (the attempt's idempotency key), and the claim-clearing verbs (`release`, `status`, `done`) gain `--outcome failed --reason R` | the same fields on `checkout_task`, `release_task`, `update_task` (`harness_session`, `harness`, `model`, `account`, `attempt_idempotency_key`, `outcome`, `reason`) | Unchanged payloads, plus `attempt` |
 | `staple budget [--account A]` | `get_budget` | Per account, each current window with its latest sample, `status`, `missing` |
 | `staple budget history --account A [--since T] [--limit N]` | `list_budget_samples` | `{items, truncated, nextCursor, coverage}` |
