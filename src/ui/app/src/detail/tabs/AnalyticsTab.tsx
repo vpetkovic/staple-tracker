@@ -39,7 +39,7 @@ import { getTimingQuality } from "@/lib/api";
 import { useResource } from "@/lib/useStaple";
 import { cn } from "@/lib/utils";
 import {
-  QUALITY_LABEL,
+  childQualityText,
   cohortLine,
   qualityText,
   NOT_STARTED,
@@ -364,9 +364,9 @@ export function AnalyticsTab({ detail, workspace, onAuthError }: TabProps) {
                     <span className="flex items-center gap-2">
                       <span className="font-mono">{row.identifier}</span>
                       <StatusBadge status={row.status} />
-                      {row.workState !== null ? (
+                      {childQualityText(row) !== null ? (
                         <span className="text-[10px] text-muted-foreground" data-testid="child-quality">
-                          {QUALITY_LABEL[row.workState] ?? row.workState}
+                          {childQualityText(row)}
                         </span>
                       ) : null}
                     </span>

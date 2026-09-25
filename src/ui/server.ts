@@ -3557,8 +3557,8 @@ export function startUiServer(options: UiOptions): UiHandle {
 
       /**
        * `staple timing quality` / MCP `timing_quality`: quality states and cohort coverage, from
-       * the one store method both call. `kind`, `exclude` and `excludeReason` take a comma list
-       * or a repeated parameter.
+       * the one store method both call. `kind`, `include`, `exclude` and `excludeReason` take a
+       * comma list or a repeated parameter.
        */
       if (url.pathname === "/api/timing/quality") {
         const handle = handleFor(url.searchParams.get("ws") ?? undefined);
@@ -3574,6 +3574,7 @@ export function startUiServer(options: UiOptions): UiHandle {
             kind: listOf("kind"),
             parent: url.searchParams.get("parent") ?? undefined,
             since: url.searchParams.get("since") ?? undefined,
+            include: listOf("include"),
             exclude: listOf("exclude"),
             excludeReasons: listOf("excludeReason"),
             limit: limit === null ? undefined : Number(limit),

@@ -945,25 +945,46 @@ counts the states over a filtered population. Coverage always uses the
   leaf owes no final figure yet, and a cancelled one owes none. Parents, open
   and cancelled leaves are reported apart, in `population.notEligible`.
   Milestones are plans, not work, and are never in the population.
-- **Ratio population**: the eligible leaves with their own estimate
-  (`subtreePlan.source` is `own`, above 0 seconds). `ratio.exact` is
-  `Σ workSeconds / Σ estimatedSeconds` over its exact members, with
-  `coverage: {known, total}` against the whole ratio population: the
-  aggregate [The estimate ratio](#the-estimate-ratio) defines.
+- **Ratio population**: the issues in the filter resolved `done` with their
+  own estimate (`subtreePlan.source` is `own`, above 0 seconds) and **no live
+  estimated descendant**. Every estimated done leaf is in it, and so is a
+  done parent whose own estimate is the only one in its subtree. A parent
+  over estimated descendants is not, because they already are: no seconds
+  are summed twice. `ratio.parents` says how many members are parents.
+  `ratio.exact` is `Σ workSeconds / Σ estimatedSeconds` over its exact
+  members, with `coverage: {known, total}` against the whole ratio
+  population: the aggregate [The estimate ratio](#the-estimate-ratio) defines.
 - `work.coverage[state]` and `wall.coverage[state]` are `counts[state] /
   eligible`. With nothing eligible they are `null` with `no_eligible_records`,
   never 0.
 
-**Excluding is explicit, and never moves the counts.** `exclude` names work
-states an analysis drops, and `excludeReasons` names reason codes: a record
-carrying one is dropped whatever its state, which is how a reconstructed record
-that is also sparse is dropped (its state alone would hide it). Dropped records
-leave the listing and `ratio.admitted`, the ratio over the states not excluded,
-and `excluded` counts them per state and per reason. The counts and every
-coverage figure stay over the whole eligible population. Nothing is dropped by
-default, so a `timing-floor` record stays listed with its state. A consumer that
-wants trusted samples asks for them by name, for example
-`--exclude approximate,missing --exclude-reason sparse`.
+**The selection is explicit, and never moves the counts.** Every reason code
+sits at the level of the state it produces (`WORK_REASON_LEVEL`: `sparse`,
+`capture_gap`, `contested`, `partial`, `orphan_provisional`, `end_unbounded`
+and `clock_skew` are approximate; `reconstructed` is reconstructed;
+`timing_floor` is timing-floor; `never_started`, `no_worker_attempt` and
+`input_missing` are missing). A record is **admitted** when its state and the
+level of every reason it carries are admitted:
+
+- `include` names the admitted states (default all). `include exact` is exact
+  records only. `include exact,reconstructed` adds the reconstructed records
+  with nothing approximate, missing or under a minute about them.
+- `exclude` removes states. `exclude approximate` drops every record carrying an
+  approximate reason, a reconstructed record that is also sparse included, even
+  though its one state stays `reconstructed`. Precedence decides the state;
+  the selection reads every reason.
+- `excludeReasons` drops every record carrying one of the named codes, whatever
+  its levels. The codes are the closed set above; any other is refused.
+
+Dropped records leave the listing and `ratio.admitted`, and `excluded` counts
+them by state and by the reasons they carried. The counts and every coverage
+figure stay over the whole eligible population. Nothing is dropped by default,
+so a `timing-floor` record stays listed with its state.
+
+For calibration the default is `include exact`, which is exactly `ratio.exact`.
+Reconstructed history is an opt-in cohort reported apart:
+`include reconstructed` is the reconstructed records with no approximate,
+missing or floor reason, and `include exact,reconstructed` is the two together.
 
 The eligible records are listed oldest resolution first, bounded and
 keyset-cursored like every telemetry list
@@ -1379,17 +1400,20 @@ states the choice in place.
    `missing.wall`'s code (`replay_unavailable`, `never_started`) as its reason. It
    is `null` only on a read that skipped telemetry. The work state of a cancelled
    issue stays `null` (item 5): it has no work record at all.
-22. **The cohort is over leaves.** The estimate-ratio aggregate is defined over
-   "the issues in the requested set" that are `done` with their own estimate. A
-   parent with its own estimate over estimated children would count the same
-   seconds twice in one sum, so the cohort takes leaves only, as eligible and as
-   the ratio population, and reports parents apart. A parent's own `estimateRatio`
-   on `show` is unchanged.
-23. **Reasons keep what precedence hides.** `reconstructed` outranks `approximate`,
-   so on the maintainers' tracker 31 of the 33 sparse done leaves read
-   `reconstructed`. Each state therefore lists every reason that holds, not only
-   its own, and the cohort can exclude by reason (`excludeReasons`) as well as by
-   state.
+22. **Coverage is over leaves; the ratio is over issues that never double count.**
+   Eligible, the denominator of work and wall coverage, is the done leaves: a
+   parent's work is its children's sum. The ratio population follows the
+   estimate-ratio aggregate ("done and `source: own`") with one restriction: no
+   live estimated descendant. A parent whose own estimate is the only one in its
+   subtree is a data point; a parent over estimated children is not, because the
+   children are, and summing both would count the same seconds twice.
+23. **Reasons keep what precedence hides, and the selection reads them.**
+   `reconstructed` outranks `approximate`, so on the maintainers' tracker 31 of
+   the 33 sparse done leaves read `reconstructed`. Each state therefore lists
+   every reason that holds, and excluding a state drops every record with a
+   reason at that level: on a reconstructed copy of that tracker,
+   `exclude approximate` admits 112 of the 133 ratio records at 0.089, where
+   matching the top state alone admitted 131 at 0.428.
 24. **An attempt's figure is its effort.** An attempt's quality describes
    `effortSeconds`, its contribution to `workSeconds` or `orchestrationSeconds`
    read from replicated data, not `activeSeconds`, which is tenure time read

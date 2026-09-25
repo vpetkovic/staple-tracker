@@ -678,14 +678,14 @@ analytics that has to decide which records to trust. All three surfaces call
 one store method and answer one payload:
 
 ```bash
-staple timing quality --kind task --exclude-reason sparse
+staple timing quality --kind task --exclude approximate
 # 163 eligible (done leaves) of 215 issues · kind task · not eligible: 0 parents, 46 open, 6 cancelled
 # work   exact 3 (1.8%) · timing-floor 0 (0.0%) · approximate 2 (1.2%) · reconstructed 154 (94.5%) · missing 4 (2.5%)
 #        reasons: never_started 4, reconstructed 154, sparse 29
 # wall   exact 156 (95.7%) · approximate 3 (1.8%) · missing 4 (2.5%)
 # ratio  exact 0.231 over 3 of 107 (work 2h18m / est 10h)
-#        admitted [exact,timing-floor,approximate,reconstructed,missing] 0.088 over 87 of 107 (work 1d7h / est 14d16h)
-# excluded 29 records: sparse 29
+#        admitted [exact,timing-floor,reconstructed,missing] 0.088 over 87 of 107 (work 1d7h / est 14d16h)
+# excluded 29 records: approximate 2, reconstructed 27 (carrying reconstructed 27, sparse 29)
 # STA-42    reconstructed work 3m7s (reconstructed) · wall exact  Surface error details through MCP
 # more: --cursor eyJrIjoidCIs...
 ```
@@ -703,16 +703,27 @@ staple timing quality --kind task --exclude-reason sparse
   parent's work is its children's sum, as are open and cancelled leaves
   (`population.notEligible`). Coverage is `counts[state] / eligible`. It is
   null with `no_eligible_records` when nothing is eligible, never 0.
-- **Ratio.** `ratio.total` is the eligible leaves with their own estimate.
+- **Ratio.** `ratio.total` is the done issues with their own estimate and no
+  live estimated descendant: every estimated done leaf, and a done parent
+  whose estimate is the only one in its subtree (`ratio.parents` counts them).
   `ratio.exact` is `Σ workSeconds / Σ estimatedSeconds` over the exact ones,
   the definition every per-issue `estimateRatio` uses. `ratio.admitted` is the
-  same sum over the states not excluded.
-- **Excluding is explicit.** `--exclude S[,S]` names work states to drop, and
-  `--exclude-reason R[,R]` drops every record carrying a reason whatever its
-  state. Dropped records leave `items` and `ratio.admitted`, and `excluded`
-  counts them per state and per reason. The counts and coverage never change.
-  Nothing is dropped by default, so `timing-floor` records stay listed.
-  `provider-unavailable` is a budget state and is refused here.
+  same sum over the records the selection keeps.
+- **Selecting is explicit.** Every reason sits at the level of the state it
+  produces (`sparse` and the other approximate inputs at approximate,
+  `timing_floor` at timing-floor, and so on), and a record is kept only when
+  its state and the level of every reason it carries are kept.
+  `--include S[,S]` names the states kept (default all), `--exclude S[,S]`
+  removes states, and `--exclude-reason R[,R]` drops every record carrying a
+  reason code whatever its state. So `--exclude approximate` also drops a
+  reconstructed record that is sparse, `--include exact` is exact records
+  only, and `--include exact,reconstructed` adds reconstructed records with
+  nothing approximate, missing or under a minute about them. Dropped records
+  leave `items` and `ratio.admitted`, and `excluded` counts them by state and
+  by the reasons they carried. The counts and coverage never change. Nothing is
+  dropped by default, so `timing-floor` records stay listed. A state outside
+  the five, `provider-unavailable` included, and a reason code outside the
+  closed set are refused. Every list flag takes commas and can be repeated.
 - **Filters.** `--kind K[,K]`, `--parent REF` (every issue beneath it) and
   `--since T` (resolved at or after an ISO instant, or that long ago: `7d`).
   With `--since`, open issues fall outside the filter.

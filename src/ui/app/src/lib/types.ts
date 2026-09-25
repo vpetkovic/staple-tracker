@@ -464,6 +464,7 @@ export interface TimingQualityReport {
     readonly kind: string[] | null;
     readonly parent: string | null;
     readonly since: string | null;
+    readonly include: WorkState[];
     readonly exclude: WorkState[];
     readonly excludeReasons: string[];
   };
@@ -484,7 +485,7 @@ export interface TimingQualityReport {
     readonly reasons: Record<string, number>;
     readonly missing: Record<string, string>;
   };
-  readonly ratio: { readonly total: number; readonly exact: RatioAggregate; readonly admitted: RatioAggregate };
+  readonly ratio: { readonly total: number; readonly parents: number; readonly exact: RatioAggregate; readonly admitted: RatioAggregate };
   readonly excluded: { readonly count: number; readonly counts: Partial<Record<WorkState, number>>; readonly reasons: Record<string, number> };
   readonly items: CohortItem[];
   readonly truncated: boolean;

@@ -602,12 +602,13 @@ describe("each record says how far it can be trusted", () => {
         timing({ childCount: 2 }),
         [issue({ identifier: "STA-31" }), issue({ identifier: "STA-32" })],
         {
-          "STA-31": timing({ quality: { work: { state: "timing-floor", inputs: [], reasons: ["timing_floor"], coverage: null, missingInputs: [] }, wall: { state: "exact", inputs: [], reasons: [] } } }),
+          "STA-31": timing({ activeSeconds: 1323, workSeconds: 30, quality: { work: { state: "timing-floor", inputs: [], reasons: ["timing_floor"], coverage: null, missingInputs: [] }, wall: { state: "exact", inputs: [], reasons: [] } } }),
           "STA-32": timing({ quality: { work: { state: "exact", inputs: [], reasons: [], coverage: null, missingInputs: [] }, wall: { state: "exact", inputs: [], reasons: [] } } }),
         },
       ),
     );
-    expect([...html.matchAll(/data-testid="child-quality">([^<]+)</g)].map((match) => match[1])).toEqual(["under a minute", "exact"]);
+    // The state qualifies the work figure, which sits beside it; the row's "ran" is category time.
+    expect([...html.matchAll(/data-testid="child-quality">([^<]+)</g)].map((match) => match[1])).toEqual(["work 30s · under a minute", "exact"]);
     // The measurement section sits after the per-child rows: it qualifies them, it does not lead.
     expect(html.indexOf('aria-label="Per child"')).toBeLessThan(html.indexOf('aria-label="Measurement quality"'));
   });

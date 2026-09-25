@@ -288,13 +288,13 @@ export function readBudget(home: string, query: { account?: string; now?: string
 export type HistorySample = QualifiedSample & { readonly regression: boolean };
 
 /** `--since`: an ISO instant, or a duration in the existing vocabulary meaning "that long ago". */
-export function parseSince(raw: string | undefined, now: string): string | null {
+export function parseSince(raw: string | undefined, now: string, name = "--since"): string | null {
   if (raw === undefined) return null;
   const instant = normalizeInstant(raw);
   if (instant !== null) return instant;
   const seconds = parseRelativeSeconds(raw);
   if (seconds !== null) return new Date(ms(now) - seconds * 1000).toISOString();
-  throw new StapleError("validation", `--since takes an ISO-8601 instant with a zone (2026-09-24T09:00:00Z) or a duration (90m, 2h, 3d); got "${raw}".`);
+  throw new StapleError("validation", `${name} takes an ISO-8601 instant with a zone (2026-09-24T09:00:00Z) or a duration (90m, 2h, 3d); got "${raw}".`);
 }
 
 const sampleKey = (sample: BudgetSample): KeysetPosition => ({ at: sample.observedAt, id: sample.id });

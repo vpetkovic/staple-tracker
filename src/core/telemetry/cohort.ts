@@ -9,23 +9,28 @@
  *   resolved `done`. A leaf is the unit that owes a measured `workSeconds`; a parent's is the
  *   sum of its children's, so counting both would count the same seconds twice. An open leaf
  *   owes no final figure yet, and a cancelled one owes none at all.
- * - **Ratio population**: the eligible leaves with their own estimate (`subtreePlan.source` is
- *   `own`, above 0 seconds), the population the estimate ratio is defined over.
+ * - **Ratio population**: the issues in the filter resolved `done` with their own estimate
+ *   (`subtreePlan.source` is `own`, above 0 seconds) and no live estimated descendant. Every
+ *   estimated leaf is in it, and so is a parent whose own estimate is the only one in its
+ *   subtree; a parent over estimated descendants is not, because its descendants already are.
+ *   No seconds are summed twice.
  *
- * ## Counts never move; the admitted set does
+ * ## The admitted levels
  *
- * `work.counts`, `wall.counts` and every coverage figure are over the whole eligible
- * population and are never changed by `exclude`. `exclude` names work states an analysis
- * drops, and `excludeReasons` reason codes (a reconstructed record that is also `sparse` is
- * dropped by `sparse`, which its state alone would hide): those records leave `items` and the
- * `admitted` ratio aggregate, and `excluded` says how many went, per state and per reason. Nothing is dropped silently: with no `exclude`, every eligible
- * record is listed, `timing-floor` included, each with its state.
+ * A record is admitted when every level it touches is admitted: its state, and the level of each
+ * of its reasons (`WORK_REASON_LEVEL`). `include` names the admitted states (default: all);
+ * `exclude` removes states from them; `excludeReasons` names reason codes that drop a record
+ * whatever its levels. So `exclude approximate` drops a reconstructed record that is also sparse,
+ * and `include exact,reconstructed` keeps reconstructed records only when nothing approximate,
+ * missing or under the floor holds for them.
  *
- * The `exact` ratio aggregate is the page's definition (exact records only), whatever
- * `exclude` says; `admitted` is the same sum over the states not excluded.
+ * `work.counts`, `wall.counts` and every coverage figure are over the whole eligible population
+ * and never move with the selection. Dropped records leave `items` and the `admitted` ratio
+ * aggregate, and `excluded` says how many went, by state and by the reasons they carried. The
+ * `exact` ratio aggregate is always exact records only, whatever the selection.
  */
 import type { WorkQualityState } from "../types.js";
-import { WORK_STATES, type WallState, type WorkState } from "./quality.js";
+import { WORK_STATES, workLevels, type WallState, type WorkState } from "./quality.js";
 import { afterPosition, cutPage, type KeysetPosition } from "./read-page.js";
 
 /** One eligible record as the cohort lists it. */
@@ -42,10 +47,10 @@ export interface CohortItem {
   readonly wall: { readonly state: WallState; readonly reasons: string[] };
 }
 
-/** `Σ workSeconds / Σ estimatedSeconds` over the members of the ratio population in `states`. */
+/** `Σ workSeconds / Σ estimatedSeconds` over the members of the ratio population the selection admits. */
 export interface RatioAggregate {
   readonly states: WorkState[];
-  /** Members summed: in the ratio population, in `states`, with a `workSeconds`. */
+  /** Members summed: in the ratio population, admitted, with a `workSeconds`. */
   readonly count: number;
   readonly workSeconds: number | null;
   readonly estimatedSeconds: number | null;
@@ -60,8 +65,10 @@ export interface TimingQualityReport {
   readonly filter: {
     readonly kind: string[] | null;
     readonly parent: string | null;
-    /** The resolved instant: resolved leaves completed at or after it. */
+    /** The resolved instant: issues resolved at or after it. */
     readonly since: string | null;
+    /** The admitted states the selection started from (every state when none was named). */
+    readonly include: WorkState[];
     readonly exclude: WorkState[];
     /** Reason codes an analysis drops: a record carrying any of them is excluded whatever its state. */
     readonly excludeReasons: string[];
@@ -89,16 +96,18 @@ export interface TimingQualityReport {
     readonly missing: Record<string, string>;
   };
   readonly ratio: {
-    /** The ratio population: eligible leaves with their own estimate. */
+    /** The ratio population: done issues with their own estimate and no estimated descendant. */
     readonly total: number;
+    /** Of them, parents: a parent whose own estimate is the only one in its subtree. */
+    readonly parents: number;
     /** Exact records only: the definition every per-issue `estimateRatio` uses. */
     readonly exact: RatioAggregate;
-    /** Every state not excluded. */
+    /** The records the selection admits. */
     readonly admitted: RatioAggregate;
   };
   /**
-   * What the analysis dropped: `count` records in all; `counts` the eligible records of each
-   * excluded state; `reasons` the eligible records carrying each excluded reason.
+   * What the selection dropped from the eligible records: `count` in all; `counts` by their
+   * state; `reasons` how many of them carried each reason.
    */
   readonly excluded: { readonly count: number; readonly counts: Partial<Record<WorkState, number>>; readonly reasons: Record<string, number> };
   readonly items: CohortItem[];
@@ -106,16 +115,14 @@ export interface TimingQualityReport {
   readonly nextCursor: string | null;
 }
 
-/** An eligible leaf, with what the report reads of it. */
+/** A record the report reads: an eligible leaf, or a member of the ratio population. */
 export interface CohortMember extends CohortItem {
   readonly id: string;
-  /** In the ratio population: its own estimate, above 0. */
-  readonly ratioEligible: boolean;
 }
 
 const WALL_STATES: readonly WallState[] = ["exact", "approximate", "missing"];
 /** Work states in the order counts are listed: best first. */
-const WORK_ORDER: readonly WorkState[] = [...WORK_STATES].reverse();
+export const WORK_ORDER: readonly WorkState[] = [...WORK_STATES].reverse();
 
 const zeros = <S extends string>(states: readonly S[]): Record<S, number> => Object.fromEntries(states.map((state) => [state, 0])) as Record<S, number>;
 
@@ -130,8 +137,22 @@ function fractions<S extends string>(counts: Record<S, number>, total: number): 
   return Object.fromEntries(Object.entries(counts).map(([state, count]) => [state, (count as number) / total])) as Record<S, number>;
 }
 
-function aggregate(members: readonly CohortMember[], states: readonly WorkState[], total: number, admits: (member: CohortMember) => boolean = () => true): RatioAggregate {
-  const summed = members.filter((member) => member.ratioEligible && member.workSeconds !== null && states.includes(member.work.state) && admits(member));
+/** The selection: which records an analysis keeps. */
+export function admitter(filter: Pick<TimingQualityReport["filter"], "include" | "exclude" | "excludeReasons">): {
+  states: WorkState[];
+  admits: (member: { readonly work: { readonly state: WorkState; readonly reasons: readonly string[] } }) => boolean;
+} {
+  const states = WORK_ORDER.filter((state) => filter.include.includes(state) && !filter.exclude.includes(state));
+  return {
+    states,
+    admits: (member) =>
+      [...workLevels(member.work)].every((level) => states.includes(level)) && !member.work.reasons.some((reason) => filter.excludeReasons.includes(reason)),
+  };
+}
+
+function aggregate(members: readonly CohortMember[], states: readonly WorkState[], admits: (member: CohortMember) => boolean): RatioAggregate {
+  const total = members.length;
+  const summed = members.filter((member) => member.workSeconds !== null && admits(member));
   const missing: Record<string, string> = {};
   let workSeconds: number | null = null;
   let estimatedSeconds: number | null = null;
@@ -144,7 +165,7 @@ function aggregate(members: readonly CohortMember[], states: readonly WorkState[
     ratio = workSeconds / estimatedSeconds;
   }
   return {
-    states: WORK_ORDER.filter((state) => states.includes(state)),
+    states: [...states],
     count: summed.length,
     workSeconds,
     estimatedSeconds,
@@ -158,14 +179,16 @@ function aggregate(members: readonly CohortMember[], states: readonly WorkState[
 export const cohortKey = (member: { completedAt: string | null; id: string }): KeysetPosition => ({ at: member.completedAt ?? "", id: member.id });
 
 /**
- * The report over `members` (every eligible leaf in the filter, in keyset order). `page` is the
- * slice to list: the members after the cursor, admitted by `exclude`.
+ * The report over `members` (every eligible leaf in the filter, in keyset order) and
+ * `ratioMembers` (the ratio population). The listing is the admitted members after the cursor.
  */
 export function cohortReport(input: {
   readonly asOf: string;
   readonly filter: TimingQualityReport["filter"];
   readonly population: TimingQualityReport["population"];
   readonly members: readonly CohortMember[];
+  readonly ratioMembers: readonly CohortMember[];
+  readonly ratioParents: number;
   readonly after: KeysetPosition | null;
   readonly limit: number;
   readonly scope: unknown;
@@ -179,16 +202,13 @@ export function cohortReport(input: {
     wallCounts[member.wall.state] += 1;
   }
   const empty: Record<string, string> = eligible === 0 ? { coverage: "no_eligible_records" } : {};
-  const admittedStates = WORK_ORDER.filter((state) => !filter.exclude.includes(state));
+  const selection = admitter(filter);
+  const exactOnly = admitter({ include: ["exact"], exclude: [], excludeReasons: [] });
+  const dropped = members.filter((member) => !selection.admits(member));
   const excludedCounts: Partial<Record<WorkState, number>> = {};
-  for (const state of filter.exclude) excludedCounts[state] = workCounts[state];
-  const excludedReasons: Record<string, number> = {};
-  for (const reason of filter.excludeReasons) excludedReasons[reason] = members.filter((member) => member.work.reasons.includes(reason)).length;
-  const admits = (member: CohortMember): boolean =>
-    admittedStates.includes(member.work.state) && !member.work.reasons.some((reason) => filter.excludeReasons.includes(reason));
-  const total = members.filter((member) => member.ratioEligible).length;
+  for (const member of dropped) excludedCounts[member.work.state] = (excludedCounts[member.work.state] ?? 0) + 1;
 
-  const listed = members.filter((member) => admits(member) && afterPosition(cohortKey(member), input.after));
+  const listed = members.filter((member) => selection.admits(member) && afterPosition(cohortKey(member), input.after));
   const page = cutPage(listed, input.limit, "timing_quality", input.scope, cohortKey);
   return {
     asOf: input.asOf,
@@ -196,9 +216,18 @@ export function cohortReport(input: {
     population: input.population,
     work: { counts: workCounts, coverage: fractions(workCounts, eligible), reasons: tally(members.map((member) => member.work.reasons)), missing: { ...empty } },
     wall: { counts: wallCounts, coverage: fractions(wallCounts, eligible), reasons: tally(members.map((member) => member.wall.reasons)), missing: { ...empty } },
-    ratio: { total, exact: aggregate(members, ["exact"], total), admitted: aggregate(members, admittedStates, total, admits) },
-    excluded: { count: members.filter((member) => !admits(member)).length, counts: excludedCounts, reasons: excludedReasons },
-    items: page.items.map(({ id: _id, ratioEligible: _ratio, ...item }) => item),
+    ratio: {
+      total: input.ratioMembers.length,
+      parents: input.ratioParents,
+      exact: aggregate(input.ratioMembers, exactOnly.states, exactOnly.admits),
+      admitted: aggregate(input.ratioMembers, selection.states, selection.admits),
+    },
+    excluded: {
+      count: dropped.length,
+      counts: Object.fromEntries(WORK_ORDER.filter((state) => excludedCounts[state] !== undefined).map((state) => [state, excludedCounts[state]!])),
+      reasons: tally(dropped.map((member) => member.work.reasons)),
+    },
+    items: page.items.map(({ id: _id, ...item }) => item),
     truncated: page.truncated,
     nextCursor: page.nextCursor,
   };

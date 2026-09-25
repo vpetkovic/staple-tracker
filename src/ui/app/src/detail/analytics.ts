@@ -278,6 +278,10 @@ export interface ChildRow {
   approximate: boolean;
   /** The child's work state, as the server gave it; null for a cancelled child or a missing entry. */
   workState: WorkQualityState | null;
+  /** The figure that state qualifies: agent work from attempts, not the `ran` category time. */
+  workSeconds: number | null;
+  /** The reasons behind the state, as the server gave them. */
+  workReasons: string[];
 }
 
 /** The minimum an issue must expose to become a row. */
@@ -323,6 +327,8 @@ export function buildChildRows(
       activity: activityState(timing?.countedThrough ?? null, nowMs),
       approximate: timing?.approximate ?? false,
       workState: timing?.quality?.work.state ?? null,
+      workSeconds: timing?.workSeconds ?? null,
+      workReasons: timing?.quality?.work.reasons ?? [],
     };
   });
 }
@@ -364,13 +370,33 @@ export const REASON_TEXT: Record<string, string> = {
   timing_approximate: "a child's time is approximate",
 };
 
+/**
+ * The word for a state. `missing` says why when the reason is that nothing started: an issue
+ * that was never worked is "not started", which "not measured" would misdescribe.
+ */
+export function stateLabel(state: string, reasons: readonly string[]): string {
+  if (state === "missing" && reasons[0] === "never_started") return "not started";
+  return QUALITY_LABEL[state] ?? state;
+}
+
+/**
+ * A child row's quality: the work figure beside the state that qualifies it (`work 16m50s ·
+ * reconstructed`), because the row's own `ran` is category time and the state says nothing
+ * about it. Null for a cancelled child.
+ */
+export function childQualityText(row: Pick<ChildRow, "workState" | "workSeconds" | "workReasons">): string | null {
+  if (row.workState === null) return null;
+  const label = stateLabel(row.workState, row.workReasons);
+  return row.workSeconds === null ? label : `work ${formatDuration(row.workSeconds)} · ${label}`;
+}
+
 /** `"approximate · silences over 30 min"`: the state and why, in words. Null when there is no state. */
 export function qualityText(quality: { state: string | null; reasons: readonly string[] } | undefined): string | null {
   if (!quality || quality.state === null) return null;
-  const label = QUALITY_LABEL[quality.state] ?? quality.state;
+  const label = stateLabel(quality.state, quality.reasons);
   // The state's own reason code (`timing_floor` for timing-floor, `reconstructed`) would only repeat it.
   const own = quality.state.replace("-", "_");
-  const reasons = quality.reasons.filter((reason) => reason !== own).map((reason) => REASON_TEXT[reason] ?? reason);
+  const reasons = quality.reasons.filter((reason) => reason !== own && !(label === "not started" && reason === "never_started")).map((reason) => REASON_TEXT[reason] ?? reason);
   return reasons.length > 0 ? `${label} · ${reasons.join(", ")}` : label;
 }
 

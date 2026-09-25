@@ -11,7 +11,8 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { openDb } from "../src/core/db.js";
+import { openDb, tx } from "../src/core/db.js";
+import { writeEventRow } from "../src/core/event-row.js";
 import { migrateWorkspace } from "../src/core/schema.js";
 import { WorkspaceStore } from "../src/core/store.js";
 import { attemptLinkerFor } from "../src/core/telemetry/attempt-link.js";
@@ -256,13 +257,13 @@ describe("cohort coverage", () => {
     expect(report.work).toEqual(all.work);
     expect(report.wall).toEqual(all.wall);
     expect(report.population).toEqual(all.population);
-    expect(report.excluded).toEqual({ count: 1, counts: { approximate: 1 }, reasons: {} });
+    expect(report.excluded).toEqual({ count: 1, counts: { approximate: 1 }, reasons: { sparse: 1 } });
     expect(report.ratio.exact).toEqual(all.ratio.exact);
     expect(report.ratio.admitted).toMatchObject({ states: ["exact", "timing-floor", "reconstructed", "missing"], count: 3, workSeconds: min(50) + 30 });
     // By reason, whatever the state: the same record, named by what makes it approximate.
     const byReason = store.timingQuality({ parent, excludeReasons: ["sparse"] }, iso(120));
     expect(byReason.items.map((item) => item.identifier)).toEqual(report.items.map((item) => item.identifier));
-    expect(byReason.excluded).toEqual({ count: 1, counts: {}, reasons: { sparse: 1 } });
+    expect(byReason.excluded).toEqual({ count: 1, counts: { approximate: 1 }, reasons: { sparse: 1 } });
     // Timing-floor leaves only when it is excluded by name.
     const floorless = store.timingQuality({ parent, exclude: ["timing-floor"] }, iso(120));
     expect(floorless.items.map((item) => item.work.state)).not.toContain("timing-floor");
@@ -295,7 +296,19 @@ describe("cohort coverage", () => {
     expect(refusal(() => store.timingQuality({ kind: ["nope"] })).code).toBe("validation");
     expect(refusal(() => store.timingQuality({ exclude: ["provider-unavailable"] })).message).toContain("budget state");
     expect(refusal(() => store.timingQuality({ exclude: ["approx"] })).code).toBe("validation");
-    expect(refusal(() => store.timingQuality({ excludeReasons: ["Sparse!"] })).code).toBe("validation");
+    // A reason outside the closed set is refused, never read as "matches nothing".
+    const typo = refusal(() => store.timingQuality({ excludeReasons: ["sprase"] }));
+    expect(typo.code).toBe("validation");
+    expect(typo.message).toContain("excludeReasons takes work reason codes");
+    expect(refusal(() => store.timingQuality({ excludeReasons: ["stale"] })).code).toBe("validation");
+    expect(refusal(() => store.timingQuality({ include: ["provider-unavailable"] })).code).toBe("validation");
+    // The messages name the fields every surface shares, not one surface's flags.
+    for (const error of [
+      refusal(() => store.timingQuality({ exclude: ["approx"] })),
+      refusal(() => store.timingQuality({ since: "yesterday" })),
+    ]) {
+      expect(error.message).not.toContain("--");
+    }
     expect(refusal(() => store.timingQuality({ parent: "TST-999" })).code).toBe("not_found");
     expect(refusal(() => store.timingQuality({ since: "yesterday" })).code).toBe("validation");
   });
@@ -324,6 +337,111 @@ describe("cohort coverage", () => {
     // A cursor is for the arguments it was issued for.
     expect(refusal(() => store.timingQuality({ parent, exclude: ["missing"], cursor: first.nextCursor! })).code).toBe("validation");
     expect(refusal(() => store.timingQuality({ parent, limit: 0 })).code).toBe("validation");
+  });
+});
+
+// ------------------------------------------------------------------ a realistic mix
+
+/**
+ * An older build's local history of one issue: a checkout it narrated at `from`, then the
+ * issue moved to done at `to` by a status write that opens no attempt (it was never active in
+ * this build), and `staple attempt reconstruct` builds the attempt. The event is written by the
+ * event writer, as the older build wrote it; everything else is the real store.
+ */
+function legacy(title: string, opts: { parent?: string; estimate?: number; from: number; to: number; comments?: number[] }): string {
+  at(opts.from);
+  const issue = store.createIssue({ title, ...(opts.parent ? { parent: opts.parent } : {}), ...(opts.estimate !== undefined ? { estimatedSeconds: opts.estimate } : {}) });
+  tx(store.db, () => writeEventRow(store.db, { kind: "checkout", issueId: issue.id, actor: "old", payload: {}, createdAt: iso(opts.from), dedupKey: `legacy-${issue.id}` }));
+  for (const m of opts.comments ?? []) {
+    at(m);
+    store.addComment(issue.id, "progress", "old", "agent");
+  }
+  at(opts.to);
+  store.updateIssue(issue.id, { status: "done" }, "old");
+  return issue.id;
+}
+
+describe("the selection on a realistic mix", () => {
+  /** Exact, sparse, reconstructed, and reconstructed-and-sparse leaves, each estimated at 2h. */
+  function mix(): { parent: string; ids: Record<string, string> } {
+    const parent = store.createIssue({ title: "Mix" }).id;
+    const ids: Record<string, string> = {};
+    ids.recon = legacy("recon", { parent, estimate: min(120), from: 0, to: 20, comments: [10] });
+    ids.reconSparse = legacy("reconSparse", { parent, estimate: min(120), from: 21, to: 101 });
+    ids.exact = worked("exact", { parent, estimate: min(120), from: 102, to: 122, every: 10 });
+    ids.sparse = worked("sparse", { parent, estimate: min(120), from: 123, to: 173 });
+    at(174);
+    expect(store.reconstructAttemptHistory().reconstructed).toBe(2);
+    return { parent, ids };
+  }
+
+  it("reads each record in its one state, a reconstructed record that is sparse keeping sparse among its reasons", () => {
+    const { parent, ids } = mix();
+    const report = store.timingQuality({ parent }, iso(180));
+    const states = Object.fromEntries(report.items.map((item) => [item.title, [item.work.state, item.work.reasons]]));
+    expect(states).toEqual({
+      recon: ["reconstructed", ["reconstructed"]],
+      reconSparse: ["reconstructed", ["reconstructed", "sparse"]],
+      exact: ["exact", []],
+      sparse: ["approximate", ["sparse"]],
+    });
+    expect(report.work.counts).toMatchObject({ exact: 1, approximate: 1, reconstructed: 2 });
+    expect(Object.keys(ids)).toHaveLength(4);
+  });
+
+  it("excluding approximate drops every record with an approximate reason, the reconstructed one included", () => {
+    const { parent } = mix();
+    const all = store.timingQuality({ parent }, iso(180));
+    const report = store.timingQuality({ parent, exclude: ["approximate"] }, iso(180));
+    expect(report.items.map((item) => item.title)).toEqual(["recon", "exact"]);
+    expect(report.excluded).toEqual({ count: 2, counts: { approximate: 1, reconstructed: 1 }, reasons: { reconstructed: 1, sparse: 2 } });
+    // Only the two non-sparse records are summed: 20m + 20m over 4h.
+    expect(report.ratio.admitted).toMatchObject({ count: 2, workSeconds: min(40), estimatedSeconds: min(240) });
+    // The same selection by reason, and the counts never move.
+    const byReason = store.timingQuality({ parent, excludeReasons: ["sparse"] }, iso(180));
+    expect(byReason.items.map((item) => item.title)).toEqual(["recon", "exact"]);
+    expect(report.work).toEqual(all.work);
+    expect(byReason.work).toEqual(all.work);
+  });
+
+  it("includes by level: exact alone, or exact and reconstructed with nothing approximate", () => {
+    const { parent } = mix();
+    const exact = store.timingQuality({ parent, include: ["exact"] }, iso(180));
+    expect(exact.filter.include).toEqual(["exact"]);
+    expect(exact.items.map((item) => item.title)).toEqual(["exact"]);
+    expect(exact.ratio.admitted).toEqual({ ...exact.ratio.exact });
+    const withReconstructed = store.timingQuality({ parent, include: ["exact", "reconstructed"] }, iso(180));
+    expect(withReconstructed.items.map((item) => item.title)).toEqual(["recon", "exact"]);
+    expect(withReconstructed.ratio.admitted).toMatchObject({ states: ["exact", "reconstructed"], count: 2 });
+    // Reconstructed alone, the opt-in cohort reported apart from the exact one.
+    const reconstructedOnly = store.timingQuality({ parent, include: ["reconstructed"] }, iso(180));
+    expect(reconstructedOnly.items.map((item) => item.title)).toEqual(["recon"]);
+  });
+});
+
+describe("the ratio population", () => {
+  it("keeps a done parent whose own estimate is the only one in its subtree, and never one over estimated descendants", () => {
+    const root = store.createIssue({ title: "root" }).id;
+    // A parent with the only estimate in its subtree: a data point of its own.
+    const solo = store.createIssue({ title: "solo", parent: root, estimatedSeconds: min(60) }).id;
+    worked("solo child a", { parent: solo, from: 0, to: 15, every: 5 });
+    worked("solo child b", { parent: solo, from: 16, to: 31, every: 5 });
+    // A parent over an estimated child: the child is the data point, never both.
+    const over = store.createIssue({ title: "over", parent: root, estimatedSeconds: min(600) }).id;
+    worked("estimated child", { parent: over, estimate: min(30), from: 32, to: 52, every: 5 });
+    at(60);
+    expect(store.getIssue(solo).status).toBe("done");
+    expect(store.getIssue(over).status).toBe("done");
+    const report = store.timingQuality({ parent: root }, iso(60));
+    // Coverage stays over the done leaves; the ratio population takes the solo parent and the estimated leaf.
+    expect(report.population.eligible).toBe(3);
+    expect(report.ratio.total).toBe(2);
+    expect(report.ratio.parents).toBe(1);
+    expect(report.ratio.exact).toMatchObject({ count: 2, workSeconds: min(30) + min(20), estimatedSeconds: min(60) + min(30) });
+    // A cancelled estimated child does not take its parent out.
+    const cancelledUnder = store.createIssue({ title: "cancelled under", parent: solo, estimatedSeconds: min(5) }).id;
+    store.updateIssue(cancelledUnder, { status: "cancelled" }, "w");
+    expect(store.timingQuality({ parent: root }, iso(60)).ratio.parents).toBe(1);
   });
 });
 

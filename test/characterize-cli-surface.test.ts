@@ -186,7 +186,7 @@ const COMMANDS: ReadonlyArray<{
   // `timing quality`: one quality state per timing record, and coverage over the eligible population.
   {
     name: "timing",
-    strings: ["db", "ws", "kind", "parent", "since", "exclude", "exclude-reason", "limit", "cursor"],
+    strings: ["db", "ws", "kind", "parent", "since", "include", "exclude", "exclude-reason", "limit", "cursor"],
     booleans: ["json", "help"],
     shorts: ["h"],
   },

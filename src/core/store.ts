@@ -96,8 +96,8 @@ import {
 } from "./telemetry/attempts.js";
 import { reconstructAttempts, type ReconstructReport } from "./telemetry/reconstruct.js";
 import { hasCaptureGap, inferredEndsOf, issueEffort, pausesOf } from "./telemetry/effort.js";
-import { WORK_STATES, wallQuality, workQuality } from "./telemetry/quality.js";
-import { cohortKey, cohortReport, type CohortMember, type TimingQualityReport } from "./telemetry/cohort.js";
+import { WORK_REASON_LEVEL, WORK_STATES, wallQuality, workQuality, type WorkState } from "./telemetry/quality.js";
+import { WORK_ORDER, cohortKey, cohortReport, type CohortMember, type TimingQualityReport } from "./telemetry/cohort.js";
 import { parseSince } from "./telemetry/read-budget.js";
 import { qualifyAttempt, qualifyAttempts, type QualifiedAttempt } from "./telemetry/attempt-quality.js";
 import { intersect, partition, union, type CoverageAttempt, type PathEntry } from "./telemetry/wall.js";
@@ -668,6 +668,7 @@ export interface TimingQualityQuery extends PageRequest {
   readonly kind?: readonly string[];
   readonly parent?: string;
   readonly since?: string;
+  readonly include?: readonly string[];
   readonly exclude?: readonly string[];
   readonly excludeReasons?: readonly string[];
 }
@@ -5459,41 +5460,48 @@ export class WorkspaceStore {
   /**
    * `staple timing quality` / MCP `timing_quality` / `GET /api/timing/quality`: the quality
    * states of a filtered population's timing records, the coverage of each over the ELIGIBLE
-   * population (the leaves resolved `done`), the estimate-ratio aggregates, and the eligible
-   * records themselves, bounded and keyset-cursored (`telemetry/cohort.ts`). A pure read.
+   * population (the leaves resolved `done`), the estimate-ratio aggregates over the ratio
+   * population, and the eligible records the selection admits, bounded and keyset-cursored
+   * (`telemetry/cohort.ts`). A pure read.
    *
    * Filters: `kind` (any of), `parent` (every issue beneath it), `since` (resolved at or after:
-   * an ISO instant or a duration meaning that long ago; open issues then fall outside), and
-   * `exclude` (work states an analysis drops from the listing and the admitted aggregate; the
-   * counts and coverage never move).
+   * an ISO instant or a duration meaning that long ago; open issues then fall outside). The
+   * selection: `include` (the admitted states, default all), `exclude` (states removed from
+   * them) and `excludeReasons` (reason codes that drop a record). A record is admitted when its
+   * state and the level of every reason it carries are admitted. Counts and coverage never move.
+   *
+   * Errors name the fields (`exclude`, `excludeReasons`, `since`), not a surface's spelling of
+   * them, since the CLI, MCP and HTTP all answer them.
    */
   timingQuality(query: TimingQualityQuery = {}, asOf: string = nowIso()): TimingQualityReport {
     const kinds = query.kind === undefined || query.kind.length === 0 ? null : [...new Set(query.kind)];
     for (const kind of kinds ?? []) this.assertConfiguredKind(kind);
-    const exclude = [...new Set(query.exclude ?? [])];
-    for (const state of exclude) {
-      if (!(WORK_STATES as readonly string[]).includes(state)) {
-        throw new StapleError(
-          "validation",
-          `--exclude takes work quality states (${WORK_STATES.join(", ")}); got "${state}". provider-unavailable is a budget state and no issue carries it.`,
-        );
+    const states = (field: string, values: readonly string[] | undefined): WorkState[] => {
+      const out = [...new Set(values ?? [])];
+      for (const state of out) {
+        if (!(WORK_STATES as readonly string[]).includes(state)) {
+          throw new StapleError(
+            "validation",
+            `${field} takes work quality states (${WORK_STATES.join(", ")}); got "${state}". provider-unavailable is a budget state and no issue carries it.`,
+          );
+        }
+      }
+      return WORK_ORDER.filter((state) => out.includes(state));
+    };
+    const include = query.include === undefined || query.include.length === 0 ? [...WORK_ORDER] : states("include", query.include);
+    const exclude = states("exclude", query.exclude);
+    const excludeReasons = [...new Set(query.excludeReasons ?? [])].sort();
+    for (const reason of excludeReasons) {
+      if (!(reason in WORK_REASON_LEVEL)) {
+        throw new StapleError("validation", `excludeReasons takes work reason codes (${Object.keys(WORK_REASON_LEVEL).join(", ")}); got "${reason}".`);
       }
     }
     const limit = pageLimit(query.limit);
     const parentRow = query.parent === undefined ? null : this.requireRow(query.parent);
-    const since = parseSince(query.since, asOf);
-    const filter: TimingQualityReport["filter"] = {
-      kind: kinds,
-      parent: parentRow?.identifier ?? null,
-      since,
-      exclude: WORK_STATES.filter((state) => exclude.includes(state)),
-      excludeReasons: [...new Set(query.excludeReasons ?? [])].sort(),
-    };
-    for (const reason of filter.excludeReasons) {
-      if (!/^[a-z][a-z_]*$/.test(reason)) throw new StapleError("validation", `--exclude-reason takes reason codes such as sparse or capture_gap; got "${reason}".`);
-    }
+    const since = parseSince(query.since, asOf, "since");
+    const filter: TimingQualityReport["filter"] = { kind: kinds, parent: parentRow?.identifier ?? null, since, include, exclude, excludeReasons };
     // Fingerprinted as given, so a relative `since` keeps naming the same walk.
-    const scope = { kind: kinds, parent: parentRow?.id ?? null, since: query.since ?? null, exclude: filter.exclude, excludeReasons: filter.excludeReasons };
+    const scope = { kind: kinds, parent: parentRow?.id ?? null, since: query.since ?? null, include, exclude, excludeReasons };
     const after = query.cursor === undefined ? null : decodeKeysetCursor("timing_quality", scope, query.cursor);
 
     const rows = this.db
@@ -5512,7 +5520,21 @@ export class WorkspaceStore {
       completed_at: string | null;
       cancelled_at: string | null;
     }>;
+    const byId = new Map(rows.map((row) => [row.id, row]));
     const withChildren = new Set(rows.map((row) => row.parent_id).filter((id): id is string => id !== null));
+    /**
+     * Issues with a live estimated descendant: walk up from every live issue with its own
+     * estimate. A parent in this set is not a ratio data point: its descendants already are.
+     */
+    const overEstimated = new Set<string>();
+    for (const row of rows) {
+      if ((row.estimated_seconds ?? 0) <= 0 || this.categoryOf(row.status) === "cancelled") continue;
+      let up = row.parent_id;
+      for (let depth = 0; up !== null && depth < MAX_TREE_DEPTH && !overEstimated.has(up); depth += 1) {
+        overEstimated.add(up);
+        up = byId.get(up)?.parent_id ?? null;
+      }
+    }
     const beneath = parentRow === null ? null : new Set(this.subtreeRows(parentRow.id).map((node) => node.id).filter((id) => id !== parentRow.id));
     const inFilter = rows.filter((row) => {
       if (row.kind === MILESTONE_KIND) return false;
@@ -5528,16 +5550,19 @@ export class WorkspaceStore {
     let open = 0;
     let cancelled = 0;
     const eligibleRows: typeof rows = [];
+    const ratioParentRows: typeof rows = [];
     for (const row of inFilter) {
-      if (withChildren.has(row.id)) parents += 1;
-      else if (this.categoryOf(row.status) === "done") eligibleRows.push(row);
+      const done = this.categoryOf(row.status) === "done";
+      if (withChildren.has(row.id)) {
+        parents += 1;
+        if (done && (row.estimated_seconds ?? 0) > 0 && !overEstimated.has(row.id)) ratioParentRows.push(row);
+      } else if (done) eligibleRows.push(row);
       else if (this.categoryOf(row.status) === "cancelled") cancelled += 1;
       else open += 1;
     }
-    const timings = this.timingFor(eligibleRows.map((row) => row.id), asOf);
-    const members: CohortMember[] = eligibleRows.map((row) => {
+    const timings = this.timingFor([...eligibleRows, ...ratioParentRows].map((row) => row.id), asOf);
+    const memberOf = (row: (typeof rows)[number]): CohortMember => {
       const timing = timings.get(row.id)!;
-      const own = row.estimated_seconds ?? null;
       return {
         id: row.id,
         identifier: row.identifier,
@@ -5545,24 +5570,30 @@ export class WorkspaceStore {
         kind: row.kind,
         status: row.status,
         completedAt: row.completed_at,
-        estimatedSeconds: own,
+        estimatedSeconds: row.estimated_seconds ?? null,
         workSeconds: timing.workSeconds,
         estimateRatio: timing.estimateRatio,
         work: { state: timing.quality.work.state!, reasons: timing.quality.work.reasons },
         wall: { state: timing.quality.wall.state!, reasons: timing.quality.wall.reasons },
-        ratioEligible: timing.subtreePlan.source === "own" && own !== null && own > 0,
       };
-    });
-    members.sort((a, b) => {
+    };
+    const byKey = (a: CohortMember, b: CohortMember): number => {
       const x = cohortKey(a);
       const y = cohortKey(b);
       return x.at === y.at ? (x.id < y.id ? -1 : x.id > y.id ? 1 : 0) : x.at < y.at ? -1 : 1;
-    });
+    };
+    const members = eligibleRows.map(memberOf).sort(byKey);
+    const ratioMembers = [
+      ...members.filter((member) => (member.estimatedSeconds ?? 0) > 0),
+      ...ratioParentRows.map(memberOf),
+    ].sort(byKey);
     return cohortReport({
       asOf,
       filter,
       population: { issues: inFilter.length, eligible: members.length, notEligible: { parents, open, cancelled } },
       members,
+      ratioMembers,
+      ratioParents: ratioParentRows.length,
       after,
       limit,
       scope,

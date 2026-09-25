@@ -38,6 +38,7 @@ import {
   buildBreakdown,
   buildChildRows,
   childPlanHint,
+  childQualityText,
   cohortLine,
   computeDelta,
   computeSummary,
@@ -986,6 +987,15 @@ describe("quality states are named, never decided, here", () => {
     // A code from a newer server is shown verbatim rather than dropped.
     expect(qualityText({ state: "approximate", reasons: ["brand_new"] })).toBe("approximate · brand_new");
     expect(qualityText({ state: null, reasons: [] })).toBeNull();
+    // Never worked is "not started", not "not measured".
+    expect(qualityText({ state: "missing", reasons: ["never_started"] })).toBe("not started");
+  });
+
+  it("puts the work figure beside a child's state, since the row's ran is category time", () => {
+    expect(childQualityText({ workState: "reconstructed", workSeconds: 1010, workReasons: ["reconstructed"] })).toBe("work 16m50s · reconstructed");
+    expect(childQualityText({ workState: "missing", workSeconds: null, workReasons: ["never_started"] })).toBe("not started");
+    expect(childQualityText({ workState: "missing", workSeconds: null, workReasons: ["no_worker_attempt"] })).toBe("not measured");
+    expect(childQualityText({ workState: null, workSeconds: null, workReasons: [] })).toBeNull();
   });
 
   it("carries each child's work state onto its row", () => {

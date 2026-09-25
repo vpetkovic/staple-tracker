@@ -913,7 +913,7 @@ Tasks
               of each named issue, side by side, with no tree dump: every planned
               unit once (own estimate over descendants), unplanned units named,
               the planned and remaining in-subtree blockedBy paths; staple compare --help
-  timing quality [--kind K] [--parent REF] [--since T] [--exclude S]
+  timing quality [--kind K] [--parent REF] [--since T] [--include S] [--exclude S]
               one quality state per timing record (exact, timing-floor, approximate,
               reconstructed, missing) and coverage over the eligible population (done
               leaves); --exclude drops states from the analysis, never from the counts;

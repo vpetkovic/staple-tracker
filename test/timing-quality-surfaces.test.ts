@@ -10,6 +10,10 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { tx } from "../src/core/db.js";
+import { writeEventRow } from "../src/core/event-row.js";
+import { setClock } from "../src/core/types.js";
+import { resolveWorkspace } from "../src/core/workspace.js";
 import { startUiServer, type UiHandle } from "../src/ui/server.js";
 import { CONTRACT_AGENT, runCli, startMcpClient, toolPayload, type McpHarness } from "./fixtures/contract-support.js";
 
@@ -21,6 +25,7 @@ let ui: UiHandle;
 let origin: string;
 let token: string;
 let epic: string;
+let mixed: string;
 const refs: Record<string, string> = {};
 
 function cli(...args: string[]) {
@@ -66,6 +71,54 @@ beforeAll(async () => {
   refs.dropped = mint("dropped", "--parent", epic);
   expect(cli("cancel", refs.dropped, "--ws", WS).status).toBe(0);
 
+  /**
+   * A second epic with the states the CLI cannot produce in real time: exact and sparse work
+   * written at controlled instants through the store every surface reads, a reconstructed
+   * leaf and a reconstructed leaf that is also sparse, rebuilt by the real `reconstruct` from
+   * the checkout an older build narrated. Each leaf is estimated at 2h.
+   */
+  const T0 = Date.parse("2026-09-01T09:00:00.000Z");
+  const iso = (minutes: number): string => new Date(T0 + minutes * 60_000).toISOString();
+  let clock = T0;
+  const at = (minutes: number): void => void (clock = T0 + minutes * 60_000);
+  setClock(() => clock);
+  const { store } = resolveWorkspace({ ws: WS });
+  try {
+    mixed = store.createIssue({ title: "Mixed" }).identifier;
+    const leaf = (title: string): string => store.createIssue({ title, parent: mixed, estimatedSeconds: 7200 }).id;
+    const legacy = (title: string, from: number, to: number, comments: number[]): void => {
+      at(from);
+      const id = leaf(title);
+      tx(store.db, () => writeEventRow(store.db, { kind: "checkout", issueId: id, actor: "old", payload: {}, createdAt: iso(from), dedupKey: `legacy-${id}` }));
+      for (const m of comments) {
+        at(m);
+        store.addComment(id, "progress", "old", "agent");
+      }
+      at(to);
+      store.updateIssue(id, { status: "done" }, "old");
+    };
+    const worked = (title: string, from: number, to: number, comments: number[]): void => {
+      at(from);
+      const id = leaf(title);
+      store.checkoutIssue(id, "w");
+      for (const m of comments) {
+        at(m);
+        store.addComment(id, "progress", "w", "agent");
+      }
+      at(to);
+      store.updateIssue(id, { status: "done" }, "w");
+    };
+    legacy("recon", 0, 20, [10]);
+    legacy("reconSparse", 21, 101, []);
+    worked("exact", 102, 122, [112]);
+    worked("sparse", 123, 173, []);
+    at(174);
+    expect(store.reconstructAttemptHistory().reconstructed).toBe(2);
+  } finally {
+    setClock(null);
+    store.db.close();
+  }
+
   mcp = await startMcpClient({ home, cwd: emptyDir, agent: CONTRACT_AGENT });
   ui = startUiServer({ port: 0, hub: false, ws: WS });
   await once(ui.server, "listening");
@@ -108,11 +161,18 @@ describe("timing quality: one payload through the CLI, MCP and HTTP", () => {
     const viaHttp = await http(`/api/timing/quality?ws=${WS}&parent=${epic}&kind=task&exclude=timing-floor&excludeReason=sparse`);
     expect(withoutAsOf(viaMcp)).toEqual(withoutAsOf(viaCli));
     expect(withoutAsOf(viaHttp.body)).toEqual(withoutAsOf(viaCli));
-    expect(viaCli.filter).toEqual({ kind: ["task"], parent: epic, since: null, exclude: ["timing-floor"], excludeReasons: ["sparse"] });
+    expect(viaCli.filter).toEqual({
+      kind: ["task"],
+      parent: epic,
+      since: null,
+      include: ["exact", "timing-floor", "approximate", "reconstructed", "missing"],
+      exclude: ["timing-floor"],
+      excludeReasons: ["sparse"],
+    });
     // Kind task: the bug is outside the population; the two task leaves are excluded, and counted.
     expect(viaCli.population.eligible).toBe(2);
     expect(viaCli.items).toEqual([]);
-    expect(viaCli.excluded).toEqual({ count: 2, counts: { "timing-floor": 2 }, reasons: { sparse: 0 } });
+    expect(viaCli.excluded).toEqual({ count: 2, counts: { "timing-floor": 2 }, reasons: { timing_floor: 2 } });
     expect(viaCli.work.counts["timing-floor"]).toBe(2);
   });
 
@@ -144,6 +204,62 @@ describe("timing quality: one payload through the CLI, MCP and HTTP", () => {
     expect(lines[0]).toBe(`3 eligible (done leaves) of 5 issues · beneath ${epic} · not eligible: 0 parents, 1 open, 1 cancelled`);
     expect(lines[1]).toBe("work   exact 0 (0.0%) · timing-floor 2 (66.7%) · approximate 0 (0.0%) · reconstructed 0 (0.0%) · missing 1 (33.3%)");
     expect(lines.some((line) => line.startsWith(`${refs.skipped} `) && line.includes("missing") && line.includes("never_started"))).toBe(true);
+  });
+});
+
+describe("timing quality over a mixed population, on every surface", () => {
+  const titles = (report: { items: Array<{ title: string }> }): string[] => report.items.map((item) => item.title);
+
+  it("reads each state, and excluding approximate drops the reconstructed record that is sparse", async () => {
+    const all = cliJson("timing", "quality", "--parent", mixed);
+    expect(all.items.map((item: { title: string; work: { state: string; reasons: string[] } }) => [item.title, item.work.state, item.work.reasons])).toEqual([
+      ["recon", "reconstructed", ["reconstructed"]],
+      ["reconSparse", "reconstructed", ["reconstructed", "sparse"]],
+      ["exact", "exact", []],
+      ["sparse", "approximate", ["sparse"]],
+    ]);
+    const viaCli = cliJson("timing", "quality", "--parent", mixed, "--exclude", "approximate");
+    const viaMcp = await tool("timing_quality", { parent: mixed, exclude: ["approximate"] });
+    const viaHttp = await http(`/api/timing/quality?ws=${WS}&parent=${mixed}&exclude=approximate`);
+    expect(withoutAsOf(viaMcp)).toEqual(withoutAsOf(viaCli));
+    expect(withoutAsOf(viaHttp.body)).toEqual(withoutAsOf(viaCli));
+    expect(titles(viaCli)).toEqual(["recon", "exact"]);
+    expect(viaCli.excluded).toEqual({ count: 2, counts: { approximate: 1, reconstructed: 1 }, reasons: { reconstructed: 1, sparse: 2 } });
+    expect(viaCli.ratio.admitted).toMatchObject({ count: 2, workSeconds: 2400, estimatedSeconds: 14400 });
+    expect(viaCli.work.counts).toEqual(all.work.counts);
+  });
+
+  it("excludes by a reason that matches, and selects exact alone or with clean reconstructed records", async () => {
+    const byReason = cliJson("timing", "quality", "--parent", mixed, "--exclude-reason", "sparse");
+    expect(withoutAsOf(await tool("timing_quality", { parent: mixed, exclude_reasons: ["sparse"] }))).toEqual(withoutAsOf(byReason));
+    expect(titles(byReason)).toEqual(["recon", "exact"]);
+    expect(byReason.excluded.reasons.sparse).toBe(2);
+    const exactOnly = cliJson("timing", "quality", "--parent", mixed, "--include", "exact");
+    expect(withoutAsOf((await http(`/api/timing/quality?ws=${WS}&parent=${mixed}&include=exact`)).body)).toEqual(withoutAsOf(exactOnly));
+    expect(titles(exactOnly)).toEqual(["exact"]);
+    expect(titles(cliJson("timing", "quality", "--parent", mixed, "--include", "exact,reconstructed"))).toEqual(["recon", "exact"]);
+  });
+
+  it("takes repeated list flags on the CLI as HTTP takes repeated parameters", async () => {
+    const repeated = cliJson("timing", "quality", "--parent", mixed, "--exclude", "approximate", "--exclude", "reconstructed", "--kind", "task", "--kind", "bug");
+    const commas = cliJson("timing", "quality", "--parent", mixed, "--exclude", "approximate,reconstructed", "--kind", "task,bug");
+    const viaHttp = await http(`/api/timing/quality?ws=${WS}&parent=${mixed}&exclude=approximate&exclude=reconstructed&kind=task&kind=bug`);
+    expect(repeated.filter).toMatchObject({ exclude: ["approximate", "reconstructed"], kind: ["task", "bug"] });
+    expect(withoutAsOf(repeated)).toEqual(withoutAsOf(commas));
+    expect(withoutAsOf(viaHttp.body)).toEqual(withoutAsOf(repeated));
+    expect(titles(repeated)).toEqual(["exact"]);
+  });
+
+  it("refuses a reason code outside the closed set, naming the field on every surface", async () => {
+    const bare = cli("timing", "quality", "--exclude-reason", "sprase", "--ws", WS);
+    expect(bare.status).toBe(2);
+    expect(bare.stderr).toMatch(/excludeReasons takes work reason codes/);
+    const viaMcp = await mcp.call("timing_quality", { exclude_reasons: ["sprase"], ws: WS });
+    expect(viaMcp.isError).toBe(true);
+    expect(JSON.stringify(viaMcp.content)).not.toContain("--");
+    const viaHttp = await http(`/api/timing/quality?ws=${WS}&excludeReason=sprase&since=yesterday`);
+    expect(viaHttp.status).toBe(409);
+    expect(JSON.stringify(viaHttp.body)).not.toContain("--");
   });
 });
 

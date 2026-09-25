@@ -43,6 +43,37 @@ export const TIMING_FLOOR = "timing_floor";
 /** The reason code of `reconstructed`. */
 export const RECONSTRUCTED = "reconstructed";
 
+/**
+ * The closed set of reasons a work (or attempt) state can carry, each at the level of the state
+ * it produces. An analysis that drops a state drops every record carrying a reason at that level,
+ * not only the records whose top state it is: a reconstructed record that is also sparse is
+ * approximate at heart, and `exclude approximate` must drop it.
+ */
+export const WORK_REASON_LEVEL: Readonly<Record<string, WorkState>> = {
+  never_started: "missing",
+  no_worker_attempt: "missing",
+  input_missing: "missing",
+  reconstructed: "reconstructed",
+  sparse: "approximate",
+  capture_gap: "approximate",
+  contested: "approximate",
+  partial: "approximate",
+  orphan_provisional: "approximate",
+  end_unbounded: "approximate",
+  clock_skew: "approximate",
+  timing_floor: "timing-floor",
+};
+
+/** Every level a work record touches: its state and the level of each of its reasons. */
+export function workLevels(quality: { readonly state: WorkState; readonly reasons: readonly string[] }): Set<WorkState> {
+  const levels = new Set<WorkState>([quality.state]);
+  for (const reason of quality.reasons) {
+    const level = WORK_REASON_LEVEL[reason];
+    if (level !== undefined) levels.add(level);
+  }
+  return levels;
+}
+
 export interface Quality<S extends string = QualityState> {
   readonly state: S;
   /** Every reason that holds, highest precedence first. Empty exactly when the state is `exact`. */
