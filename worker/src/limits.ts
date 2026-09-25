@@ -6,6 +6,7 @@
  * paid number fails permanently on the free one.
  */
 
+import { ORPHAN_END_REASONS } from "../../src/core/cloud/attempt-ends.js";
 import type { Env, Plan } from "./env.js";
 
 /**
@@ -116,6 +117,13 @@ export interface Capabilities {
   maxPullLimit: number;
   defaultPullLimit: number;
   maxSnapshotPageSize: number;
+  /**
+   * The stored orphan-end reasons this Worker's fold treats as subordinate to a real end
+   * (`src/core/cloud/attempt-ends.ts`). A client writes an orchestrator attempt's stored
+   * orphan end (`issue_resolved`, `superseded_by_newer`) only to a service that lists both:
+   * an older fold would take it for a real end and could keep it over `coordination_ended`.
+   */
+  orphanEndReasons: string[];
 }
 
 export function capabilities(env: Env): Capabilities {
@@ -126,6 +134,7 @@ export function capabilities(env: Env): Capabilities {
     maxPullLimit: MAX_PULL_LIMIT,
     defaultPullLimit: DEFAULT_PULL_LIMIT,
     maxSnapshotPageSize: MAX_SNAPSHOT_PAGE,
+    orphanEndReasons: [...ORPHAN_END_REASONS].sort(),
   };
 }
 

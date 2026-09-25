@@ -164,10 +164,11 @@ describe("a fresh repo-local `staple init`", () => {
       // STA-124's 005, to "7" by STA-172 (007-milestones), to "8" by STA-167
       // (008-queue-entries), to "9" by 009-projects, to "10" by
       // 010-sync-metadata, to "11" by 011-sync-field-writes, to "12" by
-      // 012-host-binding and to "13" by 013-execution-attempts; the TEXT typing
+      // 012-host-binding, to "13" by 013-execution-attempts and to "14" by
+      // 014-attempt-role; the TEXT typing
       // is the characterization, the number
       // just tracks the migration list.
-      { key: "schema_version", value: "13" },
+      { key: "schema_version", value: "14" },
       { key: "slug", value: "metarepo" },
     ]);
   }, 30_000);
@@ -401,14 +402,15 @@ describe("the machine home", () => {
     // `workspaces.repository_id` and `registry_optouts`. Moved again by STA-287:
     // 3 -> 4. Hub migration 004 adds `cross_link_changes`. Moved again: 4 -> 5.
     // Hub migration 005 adds `limit_windows` and `budget_samples`. Moved again:
-    // 5 -> 6. Hub migration 006 adds `attempt_presence`.
+    // 5 -> 6. Hub migration 006 adds `attempt_presence`. Moved again: 6 -> 7.
+    // Hub migration 007 adds its `role` column (a column, not a schema object).
     //
     // `schema_version` is still the only key a FRESHLY INITIALISED hub holds —
     // slug and prefix remain authoritative in each workspace file, not here. It
     // is no longer the only key the hub can ever hold: `hub_id` is minted, once,
     // the first time something asks the hub to identify itself (a hub backup).
     // Lazily on purpose, so that no existing hub grows one until it is used.
-    expect(metaRows(join(home, "hub.db"))).toEqual([{ key: "schema_version", value: "6" }]);
+    expect(metaRows(join(home, "hub.db"))).toEqual([{ key: "schema_version", value: "7" }]);
   }, 30_000);
 
   it("mints ~/.staple/ui-token at 0600 the first time the UI is asked for", () => {
@@ -454,9 +456,9 @@ describe("global workspaces", () => {
     ]);
     expect(metaRows(join(home, "workspaces", "solo.db"))).toEqual([
       { key: "prefix", value: "SOL" },
-      // WORKSPACE_SCHEMA_VERSION — 13 since 013-execution-attempts. The hub beside it
+      // WORKSPACE_SCHEMA_VERSION — 14 since 014-attempt-role. The hub beside it
       // is still 2; the two databases version independently.
-      { key: "schema_version", value: "13" },
+      { key: "schema_version", value: "14" },
       { key: "slug", value: "solo" },
     ]);
   }, 30_000);

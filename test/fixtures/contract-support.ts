@@ -89,6 +89,11 @@ const ELAPSED_SECONDS_KEYS = new Set([
   "ownActiveSeconds",
   "reviewSeconds",
   "childrenActiveSeconds",
+  // docs/timing-semantics.md: the effort and elapsed fields.
+  "workSeconds",
+  "ownWorkSeconds",
+  "orchestrationSeconds",
+  "leadSeconds",
 ]);
 
 /**
@@ -134,6 +139,17 @@ export function normalize(value: unknown, tempRoots: readonly string[] = []): un
       // non-finite reading fails instead of being normalized away.
       if (ELAPSED_SECONDS_KEYS.has(key) && typeof inner === "number") {
         out[key] = Number.isFinite(inner) && inner >= 0 ? SECONDS : `<bad-seconds:${inner}>`;
+        continue;
+      }
+      // The elapsed partition: every bucket and the span are readings off a wall clock too.
+      if (key === "wall" && inner !== null && typeof inner === "object" && !Array.isArray(inner) && "buckets" in inner) {
+        const wall = inner as Record<string, unknown>;
+        const reading = (n: unknown): unknown => (typeof n === "number" && Number.isFinite(n) && n >= 0 ? SECONDS : `<bad-seconds:${String(n)}>`);
+        out[key] = {
+          ...(normalize(wall, tempRoots) as Record<string, unknown>),
+          seconds: reading(wall.seconds),
+          buckets: Object.fromEntries(Object.entries((wall.buckets ?? {}) as Record<string, unknown>).map(([bucket, n]) => [bucket, reading(n)])),
+        };
         continue;
       }
       if (DEDUP_KEY_KEYS.has(key)) {
@@ -237,8 +253,35 @@ export function timingGolden(over: Record<string, unknown> = {}): Record<string,
       contributingCount: 0,
       totalCount: 0,
     },
+    // docs/timing-semantics.md: an issue that never started has no work, no wall and no orchestration.
+    workSeconds: null,
+    ownWorkSeconds: null,
+    orchestrationSeconds: null,
+    leadSeconds: null,
+    estimateRatio: null,
+    wall: null,
+    quality: { work: { state: "missing", inputs: [], coverage: null, missingInputs: [] }, wall: { state: null, inputs: [] } },
+    missing: {
+      workSeconds: "never_started",
+      ownWorkSeconds: "never_started",
+      orchestrationSeconds: "no_orchestrator_attempt",
+      wall: "never_started",
+      leadSeconds: "never_started",
+    },
     ...over,
   };
+}
+
+/** The leaf buckets of a `wall`, every one a reading. */
+export function leafBucketsGolden(): Record<string, string> {
+  return Object.fromEntries(
+    ["work", "paused", "silent", "interrupted", "unattributed", "review", "gated", "blocked", "queued", "resolved"].map((bucket) => [bucket, SECONDS]),
+  );
+}
+
+/** The parent buckets of a `wall`, every one a reading. */
+export function parentBucketsGolden(): Record<string, string> {
+  return Object.fromEntries(["active", "review", "gated", "blocked", "queued", "resolved"].map((bucket) => [bucket, SECONDS]));
 }
 
 /**
@@ -246,6 +289,11 @@ export function timingGolden(over: Record<string, unknown> = {}): Record<string,
  * issue the contract agent checked out once and still holds: one running attempt, nothing
  * ended. No harness and no account were reported, so both are null with `not_supplied`.
  */
+/** The `orchestration` block beside it for an issue nobody coordinates by hand. */
+export function noOrchestrationGolden(): Record<string, unknown> {
+  return { current: null, count: 0 };
+}
+
 export function openAttemptsGolden(identifier: string): Record<string, unknown> {
   return {
     count: 1,
@@ -254,6 +302,7 @@ export function openAttemptsGolden(identifier: string): Record<string, unknown> 
       issueId: UUID,
       identifier,
       agent: CONTRACT_AGENT,
+      role: "worker",
       ordinal: 1,
       state: "running",
       storedState: "running",

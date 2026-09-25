@@ -35,7 +35,9 @@ import {
   asStructured,
   claimGolden,
   openAttemptsGolden,
+  noOrchestrationGolden,
   timingGolden,
+  parentBucketsGolden,
   commentGolden,
   decodeCursorForAssertion,
   issueGolden,
@@ -93,6 +95,7 @@ function attemptGolden(over: Record<string, unknown> = {}): Record<string, unkno
     issueId: UUID,
     identifier: "CON-1",
     agent: CONTRACT_AGENT,
+    role: "worker",
     ordinal: 1,
     state: "running",
     storedState: "running",
@@ -1124,6 +1127,17 @@ describe("tool response shapes (31/31)", () => {
           contributingCount: 0,
           totalCount: 1,
         },
+        // A parent's work is its children's, and its one child never started: nothing owed.
+        // Its own checkout is an attempt of its own (ownWorkSeconds), and its elapsed span
+        // runs in the parent buckets.
+        ownWorkSeconds: SECONDS,
+        leadSeconds: SECONDS,
+        wall: { startAt: ISO, endAt: null, through: ISO, seconds: SECONDS, buckets: parentBucketsGolden() },
+        quality: {
+          work: { state: "missing", inputs: [], coverage: { known: 0, total: 0, partial: false }, missingInputs: [] },
+          wall: { state: "exact", inputs: [] },
+        },
+        missing: { workSeconds: "never_started", orchestrationSeconds: "no_orchestrator_attempt" },
       }),
       // Keyed by IDENTIFIER, not uuid — which is why this line is readable.
       childrenTiming: { "CON-4": timingGolden() },
@@ -1134,6 +1148,7 @@ describe("tool response shapes (31/31)", () => {
        * reported no harness and no account, so both are null with `not_supplied`.
        */
       attempts: openAttemptsGolden("CON-1"),
+      orchestration: noOrchestrationGolden(),
     });
   });
 

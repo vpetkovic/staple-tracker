@@ -72,6 +72,12 @@ export interface RepositorySurvey {
   readonly fromTail?: boolean;
   /** How many operations of that tail an earlier, stopped read had already folded. */
   readonly resumedFrom?: number;
+  /**
+   * When the restore that made this epoch committed, as the service recorded it: the one
+   * instant every device that rewinds into the epoch dates what the rewind changed by. Null on
+   * an epoch no restore made, and absent from a service before this build.
+   */
+  readonly restoredAt?: string | null;
 }
 
 export interface SeedItem {
@@ -571,6 +577,17 @@ function inventory(db: DatabaseSync, now: string, skipped: SeedSkipped[]): Local
     set.push(edge);
     sets.set(edge.blocked_id, set);
   }
+  /**
+   * A child created to block its parent carries that edge in its create, and every receiver
+   * adds it (`applyIssue`). Where the parent no longer holds it — the set cleared by hand since —
+   * the parent's set travels too, empty or not, after the children's creates, so a receiver ends
+   * where this workspace is.
+   */
+  for (const row of db
+    .prepare("SELECT DISTINCT parent_id AS id FROM issues WHERE block_parent_until_done = 1 AND parent_id IS NOT NULL")
+    .all() as Array<{ id: string }>) {
+    if (!sets.has(row.id)) sets.set(row.id, []);
+  }
   for (const [blockedId, set] of sets) {
     out.push({
       entity: "relation",
@@ -581,8 +598,8 @@ function inventory(db: DatabaseSync, now: string, skipped: SeedSkipped[]): Local
         // Each edge's own author and time, so no device dates them with the seed's.
         edges: Object.fromEntries(set.map((edge) => [edge.blocker_id, { createdBy: edge.created_by, createdAt: edge.created_at }])),
       },
-      actor: set[set.length - 1]!.created_by,
-      at: latest(set.map((edge) => edge.created_at), now),
+      actor: set[set.length - 1]?.created_by ?? null,
+      at: set.length > 0 ? latest(set.map((edge) => edge.created_at), now) : now,
     });
   }
 
@@ -1566,7 +1583,16 @@ export function seedRepository(db: DatabaseSync, journal: Journal, args: SeedArg
      * nothing, and the fix is to shorten it and sync again.
      */
     const sendable: SeedIntent[] = [];
-    for (const intent of intents) {
+    for (const listed of intents) {
+      /**
+       * A seed, a heal and a republish send what exists, never what happened: every issue and
+       * blocker set says it narrates nothing, so no receiver writes a birth or a move for it
+       * dated by the seed (`cloud/reemit.ts`).
+       */
+      const intent: SeedIntent =
+        (listed.entity === "issue" || listed.entity === "relation") && listed.verb !== "delete" && !("originEvents" in listed.payload)
+          ? { ...listed, payload: { ...listed.payload, originEvents: [] } }
+          : listed;
       const bytes = Buffer.byteLength(JSON.stringify(intent.payload), "utf8");
       if (bytes <= args.maxOpBytes) {
         sendable.push(intent);

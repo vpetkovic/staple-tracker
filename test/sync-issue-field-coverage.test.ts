@@ -156,13 +156,14 @@ describe("issue.create replicates every issues column, or says why not", () => {
     store.db.close();
   });
 
-  it("maps every payload key it carries onto a real column, except blockedBy and its edges", () => {
+  it("maps every payload key it carries onto a real column, except blockedBy, its edges and the events it narrates", () => {
     const store = armed();
     const payload = createPayload(store);
     const columns = new Set(issueColumns(store));
 
     const unplaceable = Object.keys(payload).filter(
-      (key) => key !== "blockedBy" && key !== "edges" && !(ISSUE_COLUMNS[key] && columns.has(ISSUE_COLUMNS[key]!.column)),
+      // `originEvents` is not written to a column: the applier re-emits them as local events (`cloud/reemit.ts`).
+      (key) => key !== "blockedBy" && key !== "edges" && key !== "originEvents" && !(ISSUE_COLUMNS[key] && columns.has(ISSUE_COLUMNS[key]!.column)),
     );
     expect(
       unplaceable,

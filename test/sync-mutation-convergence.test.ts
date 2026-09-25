@@ -75,6 +75,8 @@ const READS: Record<StoreName, readonly string[]> = {
     "attempts",
     // The attempt read surfaces: pure reads, which write no stored orphan end either.
     "attemptSummary", "listAttempts", "getAttempt",
+    // The orchestrator lane's read summary (`orchestration` on show/get_task).
+    "orchestrationSummary",
   ],
   MilestoneStore: ["queueSeam", "get", "list", "milestoneOf"],
   QueueStore: ["revision", "entries", "effectiveQueue", "view"],
@@ -272,6 +274,17 @@ const SCENARIOS: readonly Scenario[] = [
   { method: "WorkspaceStore.recordAttemptEvent", name: "resume an attempt", run: (w) => void w.a.store.recordAttemptEvent(w.ids["Attempted"]!, "resume", "agent-b") },
   { method: "WorkspaceStore.recordAttemptEvent", name: "record an attempt milestone", run: (w) => void w.a.store.recordAttemptEvent(w.ids["Attempted"]!, "milestone", "agent-b", { label: "tests green" }) },
   { method: "WorkspaceStore.recordAttemptEvent", name: "report an interruption", run: (w) => void w.a.store.recordAttemptEvent(w.ids["Attempted"]!, "interrupt", "agent-b", { reason: "provider_limit" }) },
+  {
+    method: "WorkspaceStore.openOrchestratorAttempt",
+    name: "open an orchestrator attempt",
+    run: (w) => void w.a.store.openOrchestratorAttempt(w.ids["Everything"]!, "coordinator", "orchestrator"),
+  },
+  {
+    method: "WorkspaceStore.endOrchestratorAttempt",
+    name: "end an orchestrator attempt",
+    prep: (w) => void w.a.store.openOrchestratorAttempt(w.ids["Everything"]!, "coordinator", "orchestrator"),
+    run: (w) => void w.a.store.endOrchestratorAttempt(w.ids["Everything"]!, "coordinator", "orchestrator"),
+  },
   {
     method: "WorkspaceStore.updateIssue",
     name: "re-claim after an interruption, then fail it",

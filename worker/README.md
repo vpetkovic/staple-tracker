@@ -331,6 +331,24 @@ a newer build editing a field while an older Worker is live, followed by a backu
 restore, writes an edit that no build can recover (`docs/sync.md`, "Every field travels in
 one spelling"). With the Worker deployed first, that window is empty.
 
+**The lifecycle release (orchestrator lane, re-emitted events)** — the checklist, in order:
+
+1. `npm run test:worker` green on the release commit.
+2. `npx wrangler deploy -c wrangler.local.toml`. **No D1 migration**: `role`, `originEvents`
+   and `restoredAt` need no table change (`restoredAt` reads the existing `restores`
+   table). The protocol stays 3.
+3. Confirm the Worker is live: `GET /v1/capabilities` lists `orphanEndReasons` with
+   `issue_resolved` and `superseded_by_newer`. Its fold then treats an orchestrator
+   attempt's stored orphan end as subordinate to a real `coordination_ended`, and drops
+   `originEvents` from the state it folds.
+4. Only then merge the client, which auto-deploys to devices; every device upgrades
+   together (workspace schema 14).
+
+A client before step 3 is safe on its own: it writes no stored orchestrator orphan end to a
+service whose capabilities do not list both reasons, and reads the end at read time
+instead. An older Worker would otherwise take such an end for a real one and could keep it
+over `coordination_ended` in its snapshots and, for good, in its backups.
+
 The repository is **public**. No account id, no database id, no token and no
 `workers.dev` URL containing the account subdomain may enter a committed file.
 

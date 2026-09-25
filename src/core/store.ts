@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import { insertEvent } from "./event-log.js";
+import { EVENT_ORDER, insertEvent } from "./event-log.js";
 import { RENUMBER_GUARD_MS, aliasedIssueId, removedByRestore, formerHolderOf, formerHolders, formerMove, noteRenumber, renumbersAcknowledged } from "./identifier-moves.js";
 import { readLocalLease } from "./cloud/lease-store.js";
 import { REPOSITORY_PREFIX_SETTING } from "./cloud/repository-prefix.js";
@@ -25,6 +25,9 @@ import {
   type IssuePriority,
   type IssueStatus,
   type IssueTiming,
+  type TimingQuality,
+  type WallTiming,
+  type WorkQualityState,
   LIST_CATEGORY_ORDER,
   MAX_TREE_DEPTH,
   type QueuedBy,
@@ -91,6 +94,10 @@ import {
   viewAttempt,
 } from "./telemetry/attempts.js";
 import { reconstructAttempts, type ReconstructReport } from "./telemetry/reconstruct.js";
+import { hasCaptureGap, issueEffort, pausesOf } from "./telemetry/effort.js";
+import { intersect, partition, union, type CoverageAttempt, type PathEntry } from "./telemetry/wall.js";
+import { transitionsOf } from "./telemetry/attempt-records.js";
+import { viewsOfIssue } from "./telemetry/attempt-derive.js";
 import { attemptDetail, attemptSummary, listAttempts, type AttemptDetail, type AttemptSummary } from "./telemetry/read-attempts.js";
 import type { PageRequest, TelemetryPage } from "./telemetry/read-page.js";
 import { stapleHome } from "../config/home.js";
@@ -528,11 +535,89 @@ type DerivedRung = "active" | "review" | "workable" | "blocked" | "done" | "canc
  * What the interval replay produces for ONE issue, before rollups: the issue's
  * own numbers with no opinion yet about children.
  */
+/**
+ * `attempt open|end` take `--role orchestrator` and nothing else: the orchestrator lane is the
+ * only lane a caller opens or ends by hand.
+ */
+function assertOrchestratorRole(role: string | undefined, verb: "open" | "end"): void {
+  if (role === "orchestrator") return;
+  throw new StapleError(
+    "validation",
+    role === undefined
+      ? `staple attempt ${verb} needs --role orchestrator (MCP role: "orchestrator"): it is how an orchestrator ${verb === "open" ? "opens" : "ends"} its lane on the issue it coordinates.`
+      : `staple attempt ${verb} takes --role orchestrator only; got "${role}". A worker attempt ${verb === "open" ? "opens with a checkout or a status write into the active category" : "ends with the write that clears the claim"}.`,
+  );
+}
+
+/**
+ * A status two devices set differently, offline, and somebody then resolved: between the first
+ * of the two writes and the decision, each device holds its own side's events and not the
+ * other's, and no history both hold says what the issue was doing. Every resolution writes a
+ * canonical `status_changed` on every device naming where the disagreement began
+ * (`conflictStartedAt`, `cloud/conflicts.ts`). The replay drops what either side wrote in that
+ * span and reads the decision from its start, so every device reads the same partition, and the
+ * record says the span is the decision's reading (`conflict_resolved`, approximate).
+ */
+function settleResolvedSpans<T extends { kind: string; createdAt: string; payload: Record<string, unknown> }>(events: readonly T[]): { events: T[]; resolved: boolean } {
+  const resolutions = events.filter((event) => typeof event.payload.resolvesConflict === "string" && typeof event.payload.conflictStartedAt === "string");
+  if (resolutions.length === 0) return { events: [...events], resolved: false };
+  const isResolution = new Set<T>(resolutions);
+  const ordinary = (event: T): boolean => !isResolution.has(event) && event.kind !== "issue_created";
+  /**
+   * Each disagreement's span runs from the first of the two contested writes to the first event
+   * both sides hold after the second of them — a later move made once the two devices had each
+   * other's writes — or to the decision when there is none. Only that span is replaced: history
+   * both devices agree on, before it and after it, stays, however late the decision came.
+   */
+  const spans = new Map<string, { from: string; to: string; status: T }>();
+  for (const resolution of resolutions) {
+    const from = resolution.payload.conflictStartedAt as string;
+    const lastWrite = typeof resolution.payload.conflictLastWriteAt === "string" ? resolution.payload.conflictLastWriteAt : from;
+    const after = events.find((event) => ordinary(event) && event.createdAt > lastWrite);
+    const until = after !== undefined && after.createdAt < resolution.createdAt ? after.createdAt : resolution.createdAt;
+    const key = `${from}\n${lastWrite}`;
+    const held = spans.get(key);
+    // Two decisions of one disagreement: the span reads as the later one.
+    if (!held || resolution.createdAt > held.status.createdAt) spans.set(key, { from, to: until > (held?.to ?? "") ? until : held!.to, status: resolution });
+  }
+  const inSpan = (event: T): boolean => [...spans.values()].some((span) => span.from <= event.createdAt && event.createdAt < span.to);
+  const kept = events.filter((event) => !ordinary(event) || !inSpan(event));
+  const opened = [...spans.values()].map((span) => ({ ...span.status, createdAt: span.from }));
+  const born = kept.filter((event) => event.kind === "issue_created");
+  const rest = [...opened, ...kept.filter((event) => event.kind !== "issue_created")].map((event, index) => ({ event, index }));
+  rest.sort((x, y) => (x.event.createdAt < y.event.createdAt ? -1 : x.event.createdAt > y.event.createdAt ? 1 : x.index - y.index));
+  return { events: [...born, ...rest.map((entry) => entry.event)], resolved: true };
+}
+
+/** What a parent reads of a child's own orchestration. */
+interface OwnEffort {
+  orchestration: number | null;
+}
+
+/** The new timing fields, null, for a caller that asked for the plan alone (`telemetry: false`). */
+function noTelemetry(): Pick<
+  IssueTiming,
+  "workSeconds" | "ownWorkSeconds" | "orchestrationSeconds" | "leadSeconds" | "estimateRatio" | "wall" | "quality" | "missing"
+> {
+  return {
+    workSeconds: null,
+    ownWorkSeconds: null,
+    orchestrationSeconds: null,
+    leadSeconds: null,
+    estimateRatio: null,
+    wall: null,
+    quality: { work: { state: null, inputs: [], coverage: null, missingInputs: [] }, wall: { state: null, inputs: [] } },
+    missing: {},
+  };
+}
+
 interface OwnTiming {
   ownActiveSeconds: number | null;
   reviewSeconds: number | null;
   approximate: boolean;
   countedThrough: string | null;
+  /** Every entry the replay walked, in order: what the elapsed partition reads. Absent on the fallback. */
+  path?: PathEntry[];
 }
 
 /**
@@ -631,7 +716,7 @@ export class WorkspaceStore {
         return store.journal;
       },
       estimateReading: (issueId) => {
-        const plan = this.timingFor([issueId]).get(issueId)?.subtreePlan;
+        const plan = this.timingFor([issueId], undefined, { telemetry: false }).get(issueId)?.subtreePlan;
         return { estimatedSeconds: plan?.estimatedSeconds ?? null, source: plan?.source ?? "none" };
       },
       claimOf: (issueId) => {
@@ -650,12 +735,55 @@ export class WorkspaceStore {
     ref: string,
     event: string,
     actor: string,
-    input: { reason?: string; label?: string; commentId?: string; document?: { key: string; revision: number } } = {},
+    input: {
+      reason?: string;
+      label?: string;
+      commentId?: string;
+      document?: { key: string; revision: number };
+      /** The lane to act in (`--role`), when the actor holds an attempt in each. */
+      role?: string;
+      /** The attempt to act on, by id: the other way to say which lane. */
+      attemptId?: string;
+    } = {},
   ): AttemptView {
     if (!actor?.trim()) throw new StapleError("validation", "An attempt event needs an actor: pass --agent, or set STAPLE_AGENT.");
     return this.journaled(() => {
       const row = this.requireTarget(ref);
       const attempt = this.attempts().record(row, event, actor, input);
+      return viewAttempt(this.db, attempt.id)!;
+    });
+  }
+
+  /**
+   * `staple attempt open <ref> --role orchestrator` and MCP `record_attempt_event` with
+   * `event: "open"`: an orchestrator attempt on the issue being coordinated
+   * (`docs/timing-semantics.md`, "The orchestrator lane"). The only way an attempt gets
+   * `role: orchestrator`, and an exception to "no caller writes an attempt directly". It
+   * changes neither the issue's status nor its claim. Refused for any other role: a worker
+   * attempt opens with a checkout or a status write, never by hand.
+   */
+  openOrchestratorAttempt(ref: string, actor: string, role: string | undefined, opts: AttemptOptions = {}): AttemptView {
+    if (!actor?.trim()) throw new StapleError("validation", "An orchestrator attempt needs an actor: pass --agent, or set STAPLE_AGENT.");
+    assertOrchestratorRole(role, "open");
+    assertAttemptOptions(opts);
+    if (opts.outcome !== undefined) throw new StapleError("validation", "--outcome goes on the write that clears a claim; an orchestrator attempt ends with staple attempt end.");
+    return this.journaled(() => {
+      const row = this.requireTarget(ref);
+      const attempt = this.attempts().openOrchestrator(row, actor, opts);
+      return viewAttempt(this.db, attempt.id)!;
+    });
+  }
+
+  /**
+   * `staple attempt end <ref> --role orchestrator`: the actor's open orchestrator attempt on the
+   * issue ends `yielded`, reason `coordination_ended` — a real end.
+   */
+  endOrchestratorAttempt(ref: string, actor: string, role: string | undefined, attemptId?: string): AttemptView {
+    if (!actor?.trim()) throw new StapleError("validation", "Ending an orchestrator attempt needs an actor: pass --agent, or set STAPLE_AGENT.");
+    assertOrchestratorRole(role, "end");
+    return this.journaled(() => {
+      const row = this.requireTarget(ref);
+      const attempt = this.attempts().endOrchestrator(row, actor, attemptId);
       return viewAttempt(this.db, attempt.id)!;
     });
   }
@@ -676,6 +804,17 @@ export class WorkspaceStore {
    */
   attemptSummary(ref: string): AttemptSummary {
     return attemptSummary(this.db, this.requireRow(ref).id);
+  }
+
+  /**
+   * `orchestration: {current, count}` on `show`/`get_task`, beside `attempts`
+   * (`docs/timing-semantics.md`, "The orchestrator lane"): the orchestrator lane of this
+   * issue, read with that lane's own clauses — the newest effectively open orchestrator
+   * attempt, and how many there are. A pure read.
+   */
+  orchestrationSummary(ref: string): { current: AttemptView | null; count: number } {
+    const views = viewsOfIssue(this.db, this.requireRow(ref).id).filter((view) => view.role === "orchestrator");
+    return { current: [...views].reverse().find((view) => view.state !== "ended") ?? null, count: views.length };
   }
 
   /** `staple attempts <ref>` / `list_attempts`: bounded, with coverage. */
@@ -1386,7 +1525,7 @@ export class WorkspaceStore {
     const ids = (
       this.db.prepare(`SELECT id FROM issues WHERE ${column} = ?`).all(from) as Array<{ id: string }>
     ).map((row) => row.id);
-    const now = nowIso();
+    const now = this.journal.mutationAt();
     const update = this.db.prepare(`UPDATE issues SET ${column} = ?, updated_at = ? WHERE id = ?`);
     for (const issueId of ids) {
       update.run(target, now, issueId);
@@ -2179,7 +2318,7 @@ export class WorkspaceStore {
       const id = newId();
       const number = this.nextIssueNumber();
       const identifier = `${this.prefix}-${number}`;
-      const now = nowIso();
+      const now = this.journal.mutationAt();
       const row = this.db
         .prepare(
           `INSERT INTO issues (
@@ -2235,6 +2374,14 @@ export class WorkspaceStore {
         actor: input.createdBy ?? null,
         payload: { identifier, title, status },
       });
+      /**
+       * Every edge-writing path says what the blocker set became (`blockers_changed`, the
+       * full set), so the elapsed partition's `blocked` bucket never has to fall back to
+       * `relations.created_at` (`docs/timing-semantics.md`, "Dependency edge history"): the
+       * new issue's own set, and the parent's when this child blocks it until done.
+       */
+      if (blockerRows.length > 0) this.emitBlockerSet(id, input.createdBy ?? null);
+      if (input.blockParentUntilDone && parent) this.emitBlockerSet(parent.id, input.createdBy ?? null);
       /**
        * One operation for the whole create, declared after the replay guard so a
        * replayed idempotency key journals nothing — obligation 5 is "no second
@@ -2305,6 +2452,12 @@ export class WorkspaceStore {
         },
         actor: input.createdBy ?? null,
       });
+      /**
+       * The child-to-parent edge travels with the child's create (`blockParentUntilDone` and
+       * `parentId`), and every applier adds it to the parent's set rather than replacing the set
+       * (`insertIssue`, `cloud/apply.ts`): two children created offline on two devices both keep
+       * their edge. It used to travel nowhere, and existed only on the device that made it.
+       */
       // Transition site 1 of 5: a child appearing under a parent changes the
       // child landscape as surely as one moving does. The rule is about state,
       // not about which call produced it — so this is no longer gated on the
@@ -2357,7 +2510,7 @@ export class WorkspaceStore {
         `INSERT OR IGNORE INTO relations (blocker_id, blocked_id, type, created_by, created_at)
          VALUES (?, ?, 'blocks', ?, ?)`,
       )
-      .run(blockerId, blockedId, createdBy, nowIso());
+      .run(blockerId, blockedId, createdBy, this.journal.mutationAt());
   }
 
   /**
@@ -2393,6 +2546,26 @@ export class WorkspaceStore {
     }
   }
 
+  /**
+   * `blockers_changed` on `blockedId`, carrying the whole set it holds now: identifiers (what
+   * a timeline prints) and ids (what the edge history replays, stable across a renumber).
+   */
+  private emitBlockerSet(blockedId: string, actor: string | null): void {
+    const set = this.db
+      .prepare(
+        `SELECT i.id AS id, i.identifier AS identifier FROM relations r JOIN issues i ON i.id = r.blocker_id
+          WHERE r.blocked_id = ? AND r.type = 'blocks' ORDER BY r.created_at, i.identifier`,
+      )
+      .all(blockedId) as Array<{ id: string; identifier: string }>;
+    const identifier = (this.db.prepare("SELECT identifier FROM issues WHERE id = ?").get(blockedId) as { identifier: string } | undefined)?.identifier ?? null;
+    this.emitEvent({
+      kind: "blockers_changed",
+      issueId: blockedId,
+      actor,
+      payload: { identifier, blockedBy: set.map((row) => row.identifier), blockedByIds: set.map((row) => row.id) },
+    });
+  }
+
   /** Replace the full blocked-by set — set replacement, never incremental add. */
   setBlockedBy(ref: string, blockerRefs: string[], actor?: string | null): Issue {
     return this.journaled(() => {
@@ -2403,16 +2576,19 @@ export class WorkspaceStore {
         row.id,
         deduped.map((b) => b.id),
       );
-      this.db
-        .prepare("DELETE FROM relations WHERE blocked_id = ? AND type = 'blocks'")
-        .run(row.id);
+      /**
+       * Only the edges that leave are deleted, and only the ones that arrive inserted: an edge
+       * the new set keeps keeps its `created_at`, which the edge history reads as a lower bound
+       * on how long it has existed (`docs/timing-semantics.md`, "Dependency edge history").
+       */
+      const keep = new Set(deduped.map((b) => b.id));
+      const held = this.db
+        .prepare("SELECT blocker_id FROM relations WHERE blocked_id = ? AND type = 'blocks'")
+        .all(row.id) as Array<{ blocker_id: string }>;
+      const drop = this.db.prepare("DELETE FROM relations WHERE blocker_id = ? AND blocked_id = ? AND type = 'blocks'");
+      for (const edge of held) if (!keep.has(edge.blocker_id)) drop.run(edge.blocker_id, row.id);
       for (const blocker of deduped) this.insertEdge(blocker.id, row.id, actor ?? null);
-      this.emitEvent({
-        kind: "blockers_changed",
-        issueId: row.id,
-        actor,
-        payload: { identifier: row.identifier, blockedBy: deduped.map((b) => b.identifier) },
-      });
+      this.emitBlockerSet(row.id, actor ?? null);
       /**
        * One operation carrying the WHOLE blocker set, not a create or delete per
        * edge. Blockers are set-replacement here — the mutation deletes the whole
@@ -2777,7 +2953,7 @@ export class WorkspaceStore {
     child: Pick<IssueRow, "id" | "identifier" | "parent_id">,
     actor: string | null,
   ): void {
-    const now = nowIso();
+    const now = this.journal.mutationAt();
     const seen = new Set<string>([child.id]);
     let cursor = child.parent_id;
     let hops = 0;
@@ -3449,7 +3625,7 @@ export class WorkspaceStore {
           { currentStatus: row.status, gateState: row.gate_state, gateOwner: row.gate_owner },
         );
       }
-      const now = nowIso();
+      const now = this.journal.mutationAt();
       const updated = this.db
         .prepare(
           `UPDATE issues SET
@@ -3572,7 +3748,7 @@ export class WorkspaceStore {
           { currentStatus: row.status, gateState: row.gate_state },
         );
       }
-      const now = nowIso();
+      const now = this.journal.mutationAt();
 
       if (opts.children && opts.children.length > 0) {
         const descendants = new Set(this.descendantIds(row.id));
@@ -3758,7 +3934,7 @@ export class WorkspaceStore {
           { currentStatus: row.status, gateState: row.gate_state },
         );
       }
-      const now = nowIso();
+      const now = this.journal.mutationAt();
       // The READY status of this workspace, not the literal `todo` — the same
       // resolution `release` makes, for the same reason: this row is now
       // somebody's to pick up.
@@ -3824,7 +4000,7 @@ export class WorkspaceStore {
         );
       }
 
-      const now = nowIso();
+      const now = this.journal.mutationAt();
       const next: Record<string, unknown> = { updated_at: now };
       if (patch.title !== undefined) {
         const title = patch.title.trim();
@@ -4297,11 +4473,17 @@ export class WorkspaceStore {
     currentStatus: string,
     events: readonly { kind: string; createdAt: string; payload: Record<string, unknown> }[],
     clampAt: string,
+    /**
+     * The read instant. An OPEN review interval ends here (Q3 of `docs/timing-semantics.md`):
+     * review is a queue, and a queue's clock does not stop because nobody writes.
+     */
+    asOf: string = clampAt,
   ): OwnTiming | null {
     const first = events[0];
     if (!first || first.kind !== "issue_created") return null;
     let status = this.statusAfterEvent(first.kind, first.payload);
     if (!status) return null;
+    const path: PathEntry[] = [{ at: first.createdAt, category: this.categoryOf(status), derived: false }];
 
     let openAt: string | null = null;
     // A derived open interval is tracked but never counted, in EITHER bucket.
@@ -4345,6 +4527,7 @@ export class WorkspaceStore {
         openAt = event.createdAt;
         openDerived = typeof event.payload.derived === "string";
       }
+      path.push({ at: event.createdAt, category: this.categoryOf(to), derived: typeof event.payload.derived === "string" });
       status = to;
     }
 
@@ -4354,7 +4537,9 @@ export class WorkspaceStore {
     if (openAt !== null) {
       // Guard against a clock that ran backwards between two writes: the clamp
       // can never pull an interval's end before its own start.
-      const end = clampAt > openAt ? clampAt : openAt;
+      const reviewing = this.categoryOf(status) !== "active";
+      const limit = reviewing ? asOf : clampAt;
+      const end = limit > openAt ? limit : openAt;
       const seconds = secondsBetween(openAt, end);
       if (!openDerived) {
         if (this.categoryOf(status) === "active") {
@@ -4373,6 +4558,7 @@ export class WorkspaceStore {
       reviewSeconds: sawReview ? review : null,
       approximate: false,
       countedThrough,
+      path,
     };
   }
 
@@ -4444,6 +4630,7 @@ export class WorkspaceStore {
         contributingCount: 0,
         totalCount: 0,
       },
+      ...noTelemetry(),
     };
   }
 
@@ -4512,10 +4699,24 @@ export class WorkspaceStore {
    * is null when no child recorded an estimate, never 0. The two are different
    * facts and a surface has to be able to say the first one.
    */
-  timingFor(issueIds: string[]): Map<string, IssueTiming> {
+  timingFor(
+    issueIds: string[],
+    /**
+     * The read instant every derivation is measured at (`docs/timing-semantics.md`: `asOf` is a
+     * parameter). Surfaces pass nothing and get the clock; a fixture passes an explicit instant.
+     */
+    asOf: string = nowIso(),
+    /**
+     * `telemetry: false` skips the effort and elapsed-partition fields (null, with no reasons):
+     * for a caller that wants only the plan, such as the attempt ledger's `estimateAtStart`
+     * inside a mutation.
+     */
+    opts: { telemetry?: boolean } = {},
+  ): Map<string, IssueTiming> {
     const out = new Map<string, IssueTiming>();
     if (issueIds.length === 0) return out;
-    const now = nowIso();
+    const now = asOf;
+    const telemetry = opts.telemetry !== false;
     const roots = issueIds.map(() => "?").join(",");
 
     // 1/4 — the descendant closure. UNION (not UNION ALL) dedupes, so a corrupt
@@ -4533,6 +4734,7 @@ export class WorkspaceStore {
            SELECT i.id AS id, i.parent_id AS parent_id, i.status AS status,
                   i.estimated_seconds AS estimated_seconds,
                   i.started_at AS started_at, i.completed_at AS completed_at,
+                  i.cancelled_at AS cancelled_at, i.created_at AS created_at, i.identifier AS identifier,
                   MAX(closure.depth) AS depth
              FROM closure JOIN issues i ON i.id = closure.id
             GROUP BY i.id`,
@@ -4540,21 +4742,29 @@ export class WorkspaceStore {
       .all(...(issueIds as never[]), MAX_TREE_DEPTH) as Array<
       Pick<
         IssueRow,
-        "id" | "parent_id" | "status" | "estimated_seconds" | "started_at" | "completed_at"
+        "id" | "parent_id" | "status" | "estimated_seconds" | "started_at" | "completed_at" | "cancelled_at" | "created_at" | "identifier"
       > & { depth: number }
     >;
     if (rows.length === 0) return out;
     const ids = rows.map((row) => row.id);
     const placeholders = ids.map(() => "?").join(",");
 
-    // 2/4 — every status-moving event over the closure, in seq order.
+    /**
+     * 2/4 — every status-moving event over the closure, in time order, then `seq`. Time, and
+     * not `seq` alone, because a pulled operation re-emits its events dated at the ORIGIN's
+     * instant (`cloud/reemit.ts`): applied after this device's own later change, such an event
+     * has a higher `seq` and an earlier time, and only the time order is the one every device
+     * that holds the same events replays alike. Within one database the two agree. The birth
+     * is first whatever its instant: nothing happens to an issue before it exists, and a clock
+     * on another device that reads earlier than the creating one does not change that.
+     */
     const eventRows = this.db
       .prepare(
         `SELECT issue_id, kind, payload, created_at
            FROM events
           WHERE issue_id IN (${placeholders})
             AND kind IN (${STATUS_MOVING_EVENT_KINDS.map(() => "?").join(",")})
-          ORDER BY issue_id, seq`,
+          ORDER BY issue_id, kind <> 'issue_created', ${EVENT_ORDER}`,
       )
       .all(...([...ids, ...STATUS_MOVING_EVENT_KINDS] as never[])) as Array<{
       issue_id: string;
@@ -4578,6 +4788,13 @@ export class WorkspaceStore {
       }
       list.push({ kind: row.kind, createdAt: row.created_at, payload });
     }
+    // A status two devices disagreed about reads as the decision from where the disagreement began.
+    const resolvedSpans = new Set<string>();
+    for (const [issueId, list] of eventsByIssue) {
+      const settled = settleResolvedSpans(list);
+      if (settled.resolved) resolvedSpans.add(issueId);
+      eventsByIssue.set(issueId, settled.events);
+    }
 
     // 3/4 — the no-holder clamp: newest event of ANY kind on the issue.
     const newestEvent = new Map<string, string>();
@@ -4598,7 +4815,7 @@ export class WorkspaceStore {
       const clampAt = claims.get(row.id)?.lastActivityAt ?? newestEvent.get(row.id) ?? now;
       ownTimings.set(
         row.id,
-        this.reconstructIntervals(row.status, eventsByIssue.get(row.id) ?? [], clampAt) ?? {
+        this.reconstructIntervals(row.status, eventsByIssue.get(row.id) ?? [], clampAt, asOf) ?? {
           ownActiveSeconds: this.approximateActiveOf(row, now),
           reviewSeconds: null,
           approximate: true,
@@ -4617,6 +4834,7 @@ export class WorkspaceStore {
 
     // Deepest first, so a parent always reads children that are already final.
     const timings = new Map<string, IssueTiming>();
+    const effortOf = new Map<string, OwnEffort>();
     for (const row of [...rows].sort((a, b) => b.depth - a.depth)) {
       const own = ownTimings.get(row.id)!;
       const children = childrenOf.get(row.id) ?? [];
@@ -4687,7 +4905,12 @@ export class WorkspaceStore {
           contributingCount,
           totalCount,
         },
+        ...noTelemetry(),
       });
+      if (telemetry) {
+        const timing = timings.get(row.id)!;
+        Object.assign(timing, this.telemetryOf(row, own, children, timings, effortOf, asOf, timing, resolvedSpans.has(row.id)));
+      }
     }
 
     for (const id of issueIds) {
@@ -4695,6 +4918,282 @@ export class WorkspaceStore {
       if (timing) out.set(id, timing);
     }
     return out;
+  }
+
+  /**
+   * The effort and elapsed fields of one issue's timing (`docs/timing-semantics.md`), from its
+   * own replay, its attempts and its children's already-final timings.
+   */
+  private telemetryOf(
+    row: Pick<IssueRow, "id" | "status" | "estimated_seconds" | "started_at" | "created_at" | "identifier">,
+    own: OwnTiming,
+    children: ReadonlyArray<Pick<IssueRow, "id" | "status" | "identifier">>,
+    timings: Map<string, IssueTiming>,
+    effortOf: Map<string, OwnEffort>,
+    asOf: string,
+    timing: IssueTiming,
+    /** A status conflict was resolved on this issue: part of its history is the decision's reading (`settleResolvedSpans`). */
+    conflictResolved = false,
+  ): Partial<IssueTiming> {
+    const missing: Record<string, string> = {};
+    const category = this.categoryOf(row.status);
+    const cancelled = category === "cancelled";
+    const parent = children.length > 0;
+    const effort = issueEffort(this.db, row.id);
+    effortOf.set(row.id, { orchestration: effort.orchestrators.seconds });
+
+    // ---- work
+    const ownWorkSeconds = effort.workers.seconds;
+    const ownReason = ownWorkSeconds !== null ? null : row.started_at ? "no_worker_attempt" : "never_started";
+    if (ownReason !== null) missing.ownWorkSeconds = ownReason;
+    let workSeconds: number | null;
+    let inputs = new Set<string>();
+    let reconstructed = false;
+    let coverage: TimingQuality["work"]["coverage"] = null;
+    const missingInputs: string[] = [];
+    if (!parent) {
+      workSeconds = ownWorkSeconds;
+      if (ownReason !== null) missing.workSeconds = ownReason;
+      for (const input of effort.workers.inputs) inputs.add(input);
+      if (hasCaptureGap(row.started_at, effort.firstWorkerStart)) inputs.add("capture_gap");
+      reconstructed = effort.workers.reconstructed;
+    } else {
+      let known = 0;
+      let total = 0;
+      let sum = 0;
+      for (const child of children) {
+        const childTiming = timings.get(child.id);
+        if (!childTiming || this.categoryOf(child.status) === "cancelled") continue;
+        if (childTiming.missing.workSeconds === "never_started") continue;
+        total += 1;
+        if (childTiming.workSeconds === null) {
+          missingInputs.push(child.identifier);
+          continue;
+        }
+        known += 1;
+        sum += childTiming.workSeconds;
+        for (const input of childTiming.quality.work.inputs) inputs.add(input);
+        if (childTiming.quality.work.state === "reconstructed") reconstructed = true;
+      }
+      coverage = { known, total, partial: known < total };
+      if (known < total) inputs.add("partial");
+      if (total === 0) {
+        workSeconds = null;
+        missing.workSeconds = "never_started";
+      } else if (known === 0) {
+        workSeconds = null;
+        missing.workSeconds = "input_missing";
+      } else workSeconds = sum;
+    }
+    if (cancelled) {
+      workSeconds = null;
+      missing.workSeconds = "not_applicable_cancelled";
+      inputs = new Set();
+    }
+    let state: WorkQualityState | null;
+    if (cancelled) state = null;
+    else if (workSeconds === null) state = "missing";
+    else if (reconstructed) state = "reconstructed";
+    else if (inputs.size > 0) state = "approximate";
+    else if (workSeconds < 60) state = "timing-floor";
+    else state = "exact";
+
+    // ---- orchestration: own orchestrator attempts plus the children's
+    let orchestrationSeconds: number | null = effort.orchestrators.seconds;
+    for (const child of children) {
+      const childSeconds = timings.get(child.id)?.orchestrationSeconds ?? null;
+      if (childSeconds !== null) orchestrationSeconds = (orchestrationSeconds ?? 0) + childSeconds;
+    }
+    if (orchestrationSeconds === null) missing.orchestrationSeconds = "no_orchestrator_attempt";
+
+    // ---- the elapsed partition, device-local
+    let wall: WallTiming | null = null;
+    const wallInputs = new Set<string>();
+    if (own.approximate || own.path === undefined) {
+      missing.wall = "replay_unavailable";
+    } else {
+      const edges = this.edgeHistory(row.id, asOf);
+      const result = partition({
+        parent,
+        path: own.path,
+        asOf,
+        attempts: parent ? [] : this.coverageOf(row.id, asOf),
+        blocked: edges.blocked,
+        unexplainedBlocked: edges.unexplained,
+      });
+      if (result === null) missing.wall = "never_started";
+      else {
+        wall = { startAt: result.startAt, endAt: result.endAt, through: result.through, seconds: result.seconds, buckets: result.buckets };
+        for (const input of result.inputs) wallInputs.add(input);
+        // Its own resolved status conflict, or a blocker's: part of the span is a decision's reading.
+        if (conflictResolved || edges.settled) wallInputs.add("conflict_resolved");
+      }
+    }
+    const leadSeconds = wall === null ? null : secondsBetween(row.created_at, wall.startAt);
+    if (wall === null) missing.leadSeconds = missing.wall!;
+
+    // ---- the estimate ratio, for the eligible population only
+    const eligible =
+      timing.subtreePlan.source === "own" && category === "done" && state === "exact" && workSeconds !== null && (row.estimated_seconds ?? 0) > 0;
+    const estimateRatio = eligible ? workSeconds! / row.estimated_seconds! : null;
+
+    return {
+      workSeconds,
+      ownWorkSeconds,
+      orchestrationSeconds,
+      leadSeconds,
+      estimateRatio,
+      wall,
+      quality: {
+        work: { state, inputs: [...inputs].sort(), coverage, missingInputs },
+        wall: { state: wall === null ? null : timing.approximate || wallInputs.size > 0 ? "approximate" : "exact", inputs: [...wallInputs].sort() },
+      },
+      missing,
+    };
+  }
+
+  /**
+   * A leaf's worker attempts as this device's ledger reads them, for the elapsed partition:
+   * each one's end (stored, the orphan's `endedAtBound`, or `asOf` while open), its evidence
+   * limit, and its pauses.
+   */
+  private coverageOf(issueId: string, asOf: string): CoverageAttempt[] {
+    return viewsOfIssue(this.db, issueId, asOf)
+      .filter((view) => view.role === "worker")
+      .map((view) => {
+        const open = view.state !== "ended";
+        const end = open ? asOf : (view.endedAt ?? view.endedAtBound ?? view.startedAt);
+        return {
+          startedAt: view.startedAt,
+          end,
+          countedThrough: open ? (view.countedThrough ?? view.startedAt) : end,
+          open,
+          interruptedOrOrphaned: view.outcome === "interrupted" || view.outcome === "orphaned",
+          pauses: pausesOf(transitionsOf(this.db, view.id), view.startedAt, end),
+        };
+      });
+  }
+
+  /**
+   * When an issue had an unresolved blocker (`docs/timing-semantics.md`, "Dependency edge
+   * history"), as half-open intervals in milliseconds. The sources, in order of authority:
+   * the issue's `blockers_changed` events (each the whole set after the change); for an edge
+   * none of them explains, its `relations.created_at` onwards (and that time is reported
+   * separately, as `edge_history_incomplete`); and each blocker's own status-moving events
+   * for when it resolved and reopened.
+   */
+  private edgeHistory(issueId: string, asOf: string): { blocked: Array<[number, number]>; unexplained: Array<[number, number]>; settled: boolean } {
+    const forever = Math.max(Date.parse(asOf), Date.now()) + 1;
+    const events = (
+      this.db
+        .prepare(`SELECT payload, created_at FROM events WHERE issue_id = ? AND kind = 'blockers_changed' ORDER BY ${EVENT_ORDER}`)
+        .all(issueId) as Array<{ payload: string; created_at: string }>
+    ).map((row) => {
+      let payload: Record<string, unknown> = {};
+      try {
+        payload = JSON.parse(row.payload) as Record<string, unknown>;
+      } catch {
+        // Unreadable: an empty set, which the relations below then explain or do not.
+      }
+      const byId = Array.isArray(payload.blockedByIds) ? payload.blockedByIds.filter((id): id is string => typeof id === "string") : null;
+      const ids =
+        byId ??
+        (Array.isArray(payload.blockedBy) ? payload.blockedBy : [])
+          .filter((identifier): identifier is string => typeof identifier === "string")
+          .map((identifier) => (this.db.prepare("SELECT id FROM issues WHERE identifier = ?").get(identifier) as { id: string } | undefined)?.id)
+          .filter((id): id is string => id !== undefined);
+      return { at: Date.parse(row.created_at), ids: new Set(ids) };
+    });
+    const presence = new Map<string, Array<[number, number]>>();
+    const add = (id: string, from: number, to: number): void => {
+      const list = presence.get(id) ?? [];
+      list.push([from, to]);
+      presence.set(id, list);
+    };
+    events.forEach((event, index) => {
+      const to = index + 1 < events.length ? events[index + 1]!.at : forever;
+      for (const id of event.ids) add(id, event.at, to);
+    });
+    const lastSet = events.length > 0 ? events[events.length - 1]!.ids : new Set<string>();
+    const unexplainedIds = new Set<string>();
+    const held = this.db
+      .prepare("SELECT blocker_id, created_at FROM relations WHERE blocked_id = ? AND type = 'blocks'")
+      .all(issueId) as Array<{ blocker_id: string; created_at: string }>;
+    for (const edge of held) {
+      if (lastSet.has(edge.blocker_id)) continue;
+      unexplainedIds.add(edge.blocker_id);
+      add(edge.blocker_id, Date.parse(edge.created_at), forever);
+    }
+    /**
+     * And the other way round: the newest event names an edge this device no longer holds. Its
+     * removal was narrated nowhere (a cascade, a rewind by an older build), so the time it is
+     * taken to go on existing is the history's guess, and the record says so.
+     */
+    const heldIds = new Set(held.map((edge) => edge.blocker_id));
+    for (const id of lastSet) if (!heldIds.has(id)) unexplainedIds.add(id);
+    const blocked: Array<[number, number]> = [];
+    const unexplained: Array<[number, number]> = [];
+    const settledBlockers = new Set<string>();
+    for (const [blockerId, spans] of presence) {
+      const unresolved = this.unresolvedIntervalsOf(blockerId, forever, settledBlockers);
+      if (unresolved === null) {
+        // A blocker this device does not hold: nothing says when it resolved.
+        continue;
+      }
+      const both = intersect(union(spans), unresolved);
+      blocked.push(...both);
+      if (unexplainedIds.has(blockerId)) unexplained.push(...both);
+    }
+    return { blocked: union(blocked), unexplained: union(unexplained), settled: settledBlockers.size > 0 };
+  }
+
+  /** When an issue was open (not `done`/`cancelled`), from its own status-moving events; its row when it has none. */
+  private unresolvedIntervalsOf(issueId: string, forever: number, settledBlockers?: Set<string>): Array<[number, number]> | null {
+    const row = this.db.prepare("SELECT status, created_at, completed_at, cancelled_at, updated_at FROM issues WHERE id = ?").get(issueId) as
+      | { status: string; created_at: string; completed_at: string | null; cancelled_at: string | null; updated_at: string }
+      | undefined;
+    if (!row) return null;
+    const rawEvents = this.db
+      .prepare(
+        `SELECT kind, payload, created_at FROM events WHERE issue_id = ?
+            AND kind IN (${STATUS_MOVING_EVENT_KINDS.map(() => "?").join(",")}) ORDER BY ${EVENT_ORDER}`,
+      )
+      .all(issueId, ...(STATUS_MOVING_EVENT_KINDS as readonly string[])) as Array<{ kind: string; payload: string; created_at: string }>;
+    // A blocker's resolved status conflict reads as its decision, as the blocker's own replay reads it.
+    const parsed = rawEvents.map((event) => {
+      let payload: Record<string, unknown> = {};
+      try {
+        payload = JSON.parse(event.payload) as Record<string, unknown>;
+      } catch {
+        // unreadable: the replay below skips it
+      }
+      return { kind: event.kind, createdAt: event.created_at, payload };
+    });
+    const settled = settleResolvedSpans(parsed);
+    if (settled.resolved) settledBlockers?.add(issueId);
+    const events = settled.events;
+    const resolvedCategory = (status: string | null): boolean => {
+      const category = status === null ? null : this.categoryOf(status);
+      return category === "done" || category === "cancelled";
+    };
+    if (events.length === 0) {
+      if (!resolvedCategory(row.status)) return [[Number.MIN_SAFE_INTEGER, forever]];
+      const at = row.completed_at ?? row.cancelled_at ?? row.updated_at;
+      return [[Number.MIN_SAFE_INTEGER, Date.parse(at)]];
+    }
+    const out: Array<[number, number]> = [];
+    let openFrom: number | null = Number.MIN_SAFE_INTEGER;
+    for (const event of events) {
+      const status = this.statusAfterEvent(event.kind, event.payload);
+      if (status === null) continue;
+      const at = Date.parse(event.createdAt);
+      if (resolvedCategory(status)) {
+        if (openFrom !== null) out.push([openFrom, at]);
+        openFrom = null;
+      } else if (openFrom === null) openFrom = at;
+    }
+    if (openFrom !== null) out.push([openFrom, forever]);
+    return union(out);
   }
 
   /**
@@ -4918,7 +5417,7 @@ export class WorkspaceStore {
           },
         });
       };
-      const now = nowIso();
+      const now = this.journal.mutationAt();
       const placeholders = expected.map(() => "?").join(",");
       const claimed = this.db
         .prepare(
@@ -5118,7 +5617,7 @@ export class WorkspaceStore {
              checkout_agent = NULL, checkout_at = NULL, updated_at = ?
            WHERE id = ? RETURNING *`,
         )
-        .get(this.primaryStatusFor("ready"), nowIso(), row.id) as unknown as IssueRow;
+        .get(this.primaryStatusFor("ready"), this.journal.mutationAt(), row.id) as unknown as IssueRow;
       // Dedicated event for the stale path, mirroring claim_stolen: a plain
       // `release` cannot say whose claim was cut short, or how dead it looked.
       this.emitEvent(
@@ -5180,7 +5679,7 @@ export class WorkspaceStore {
     idempotencyKey: string | null = null,
   ): IssueComment {
     const id = newId();
-    const now = nowIso();
+    const now = this.journal.mutationAt();
     this.db
       .prepare(
         `INSERT INTO comments (id, issue_id, author, author_type, body, idempotency_key, created_at)
@@ -5322,7 +5821,7 @@ export class WorkspaceStore {
         );
       }
       const revision = currentRevision + 1;
-      const now = nowIso();
+      const now = this.journal.mutationAt();
       this.db
         .prepare(
           `INSERT INTO document_revisions (issue_id, key, revision, body, author, change_summary, created_at)

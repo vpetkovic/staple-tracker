@@ -101,6 +101,20 @@ describe("a reading names its attempt", () => {
     expect(ingest("first-session").attemptId).toBe(attemptsOfIssue(store.db, issue.id)[0]!.id);
   });
 
+  it("goes to the worker attempt when one session holds one in each lane, and to the orchestrator attempt once the worker's ends", () => {
+    const store = workspace("alpha");
+    const epic = store.createIssue({ title: "Coordinated" });
+    const leaf = store.createIssue({ title: "Worked", parent: epic.id });
+    store.createIssue({ title: "Keeps the epic open", parent: epic.id });
+    const orchestrator = store.openOrchestratorAttempt(epic.id, "dual", "orchestrator", claimFromSession);
+    expect(orchestrator.providerBinding).toMatchObject({ accountRef: "personal-max" });
+    store.checkoutIssue(leaf.id, "dual", undefined, { attempt: claimFromSession });
+    const worker = attemptsOfIssue(store.db, leaf.id)[0]!;
+    expect(ingest()).toEqual({ attemptId: worker.id, missing: {} });
+    store.releaseIssue(leaf.id, "dual");
+    expect(ingest()).toEqual({ attemptId: orchestrator.id, missing: {} });
+  });
+
   it("is ambiguous when two open attempts, in any of this machine's workspaces, match", () => {
     const one = workspace("alpha");
     const two = workspace("bravo");

@@ -127,6 +127,8 @@ describe("the pane cannot drift from the tool", () => {
        */
       "gate",
       "issue",
+      // The orchestrator lane beside `attempts` (docs/timing-semantics.md), in lockstep too.
+      "orchestration",
       "queuedBy",
       // STA-81, and the same lockstep story as `claim`: both surfaces spread the
       // SAME store.detailTiming() call, which is why the deep-equality tests

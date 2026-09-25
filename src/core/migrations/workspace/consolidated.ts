@@ -3,7 +3,7 @@
  * Regenerate with: npx tsx scripts/regen-migration-snapshots.ts
  *
  * The `sqlite_master` dump of a workspace database that walked migrations
- * 001, 002, 003, 004, 005, 006, 007, 008, 009, 010, 011, 012, 013. Executed verbatim by the runner when — and only when —
+ * 001, 002, 003, 004, 005, 006, 007, 008, 009, 010, 011, 012, 013, 014. Executed verbatim by the runner when — and only when —
  * version detection proved the file has no tables at all.
  *
  * No `IF NOT EXISTS` anywhere, deliberately: reaching this text with tables
@@ -122,7 +122,7 @@ CREATE TABLE events (
   payload TEXT NOT NULL DEFAULT '{}',
   dedup_key TEXT,
   created_at TEXT NOT NULL
-);
+, origin_device TEXT, origin_seq INTEGER);
 
 CREATE UNIQUE INDEX events_dedup_uq
   ON events(dedup_key) WHERE dedup_key IS NOT NULL;
@@ -250,7 +250,7 @@ CREATE TABLE sync_conflicts (
          resolved_at      TEXT,
          resolved_by      TEXT,
          resolution       TEXT
-       );
+       , decided_seq INTEGER);
 
 CREATE INDEX sync_conflicts_open_idx ON sync_conflicts(detected_at) WHERE resolved_at IS NULL;
 
@@ -316,7 +316,7 @@ CREATE TABLE attempts (
         idempotency_key     TEXT,
         provenance          TEXT NOT NULL,
         missing             TEXT NOT NULL DEFAULT '{}'
-      );
+      , role TEXT NOT NULL DEFAULT 'worker');
 
 CREATE INDEX attempts_issue_idx ON attempts (issue_id, started_at, id);
 

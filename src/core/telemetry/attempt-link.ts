@@ -27,6 +27,8 @@ import type { AttemptLinker } from "./ingest.js";
 interface Candidate {
   readonly attemptId: string;
   readonly path: string;
+  /** The lane the presence index holds for it (hub 007); a worker on a hub from before it. */
+  readonly role: string;
 }
 
 /** An attempt as its own workspace reads it: open or not, and when it ran. */
@@ -66,16 +68,17 @@ export function attemptLinkerFor(home: string): AttemptLinker {
       const hub = new DatabaseSync(path, { readOnly: true });
       try {
         if (hub.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'attempt_presence'").get()) {
+          const role = hub.prepare("SELECT 1 FROM pragma_table_info('attempt_presence') WHERE name = 'role'").get() !== undefined ? "p.role" : "'worker'";
           found = (
             hub
               .prepare(
-                `SELECT p.attempt_id, w.path
+                `SELECT p.attempt_id, w.path, ${role} AS role
                    FROM attempt_presence p JOIN workspaces w ON w.slug = p.workspace
                   WHERE p.ended_at IS NULL AND p.provider = ? AND p.account_ref = ?
                     AND EXISTS (SELECT 1 FROM json_each(p.session_refs) s WHERE s.value = ?)`,
               )
-              .all(provider, accountRef, sessionRef) as Array<{ attempt_id: string; path: string }>
-          ).map((row) => ({ attemptId: row.attempt_id, path: row.path }));
+              .all(provider, accountRef, sessionRef) as Array<{ attempt_id: string; path: string; role: string }>
+          ).map((row) => ({ attemptId: row.attempt_id, path: row.path, role: row.role === "orchestrator" ? "orchestrator" : "worker" }));
         }
       } finally {
         hub.close();
@@ -99,7 +102,14 @@ export function attemptLinkerFor(home: string): AttemptLinker {
       if (observedAt === undefined) return true;
       return observedAt >= reading.startedAt && (reading.endedAt === null || observedAt < reading.endedAt);
     });
-    if (matching.length === 1) return { attemptId: matching[0]!.attemptId };
-    return { reason: matching.length === 0 ? "no_matching_attempt" : "ambiguous_attempt" };
+    /**
+     * One harness session can hold an attempt in each lane (`docs/timing-semantics.md`, "The
+     * orchestrator lane"): the reading goes to the worker attempt, and to the orchestrator
+     * attempt only when no worker attempt matches.
+     */
+    const workers = matching.filter((candidate) => candidate.role === "worker");
+    const preferred = workers.length > 0 ? workers : matching;
+    if (preferred.length === 1) return { attemptId: preferred[0]!.attemptId };
+    return { reason: preferred.length === 0 ? "no_matching_attempt" : "ambiguous_attempt" };
   };
 }

@@ -26,7 +26,15 @@ It covers:
 - **approval gates** — how a design-first ticket ends (`staple gate <ref>
   --owner <who>`, not a held claim), that the inbox's QUEUED section is never
   pickable, and that checkout of it is refused with `gated`;
-- the continuity rules in [continuity.md](continuity.md).
+- the continuity rules in [continuity.md](continuity.md);
+- **attempts and lanes** — yield (`release`) or pause (`staple attempt pause
+  <ref> --reason awaiting_input`) when a blocker appears mid-work, so the wait
+  reads as `blocked` or `paused` rather than as work; and how an orchestrator
+  coordinates without claiming: `staple attempt open <epic> --role orchestrator`
+  at the start of a coordination session, `staple attempt end <epic> --role
+  orchestrator` at handoff (MCP `record_attempt_event` with `event: "open"` /
+  `"end"`). That time is `orchestrationSeconds`, never `workSeconds`
+  ([timing-semantics.md](timing-semantics.md#the-orchestrator-lane)).
 
 An existing `AGENTS.md` is **never overwritten** — `init` says it kept it.
 `--global` workspaces get no guide: the file exists to be found in a repo, and

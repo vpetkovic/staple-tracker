@@ -8,6 +8,7 @@
  * per-process bearer token, the write route additionally checks Origin, and
  * both read and write routes pin their HTTP method.
  */
+import { EVENT_ORDER, EVENT_ORDER_DESC } from "../core/event-row.js";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
@@ -757,6 +758,7 @@ export function startUiServer(options: UiOptions): UiHandle {
       // method get_task also spreads, so the two cannot drift.
       ...handle.store.detailTiming(context.issue.id),
       attempts: handle.store.attemptSummary(context.issue.id),
+      orchestration: handle.store.orchestrationSummary(context.issue.id),
     };
   }
 
@@ -3517,6 +3519,7 @@ export function startUiServer(options: UiOptions): UiHandle {
           queuedBy: handle.store.queuedBy(context.issue.id),
           ...handle.store.detailTiming(context.issue.id),
           attempts: handle.store.attemptSummary(context.issue.id),
+          orchestration: handle.store.orchestrationSummary(context.issue.id),
         });
         return;
       }
@@ -3607,8 +3610,8 @@ export function startUiServer(options: UiOptions): UiHandle {
           const rows = handle.store.db
             .prepare(
               `SELECT * FROM (
-                 SELECT * FROM events WHERE issue_id = ? AND seq > ? ORDER BY seq DESC LIMIT ?
-               ) ORDER BY seq`,
+                 SELECT * FROM events WHERE issue_id = ? AND seq > ? ORDER BY ${EVENT_ORDER_DESC} LIMIT ?
+               ) ORDER BY ${EVENT_ORDER}`,
             )
             .all(id, since, ISSUE_EVENT_LIMIT) as Array<{
             seq: number;

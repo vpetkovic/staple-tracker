@@ -683,6 +683,50 @@ const timingShape = {
     .describe(
       "Recursive, non-double-counting plan for the subtree: an issue contributes its own estimate if it has one, otherwise its children's contributions — never both",
     ),
+  /**
+   * The effort and elapsed fields of `docs/timing-semantics.md`. `workSeconds` is the estimate
+   * ratio's actual and reads the same on every device; `wall` is device-local.
+   */
+  workSeconds: z
+    .number()
+    .nullable()
+    .describe(
+      "AGENT WORK: worker-lane attempts only, measured from replicated data (attempt rows, transitions, the agent's comments and doc revisions), pauses excluded. Leaf: ownWorkSeconds; parent: sum of direct children's; null when cancelled or unmeasured (reason in missing.workSeconds). The estimate ratio's actual",
+    ),
+  ownWorkSeconds: z.number().nullable().describe("This issue's own worker attempts, any status; null when it has none"),
+  orchestrationSeconds: z
+    .number()
+    .nullable()
+    .describe("Orchestrator-lane attempts on this issue plus its children's; never part of workSeconds; null when none in the subtree"),
+  leadSeconds: z.number().nullable().describe("createdAt to wall.startAt: time before any work began"),
+  estimateRatio: z
+    .number()
+    .nullable()
+    .describe("workSeconds / estimatedSeconds, only for an issue with its own estimate, resolved done, with work quality exact"),
+  wall: z
+    .object({
+      startAt: z.string(),
+      endAt: z.string().nullable(),
+      through: z.string().nullable(),
+      seconds: z.number(),
+      buckets: z.record(z.string(), z.number()),
+    })
+    .nullable()
+    .describe(
+      "Elapsed span and its partition, device-local: leaf buckets work, paused, silent, interrupted, unattributed, review, gated, blocked, queued, resolved; parent buckets active, review, gated, blocked, queued, resolved. Null: missing.wall says never_started or replay_unavailable",
+    ),
+  quality: z
+    .object({
+      work: z.object({
+        state: z.enum(["missing", "reconstructed", "approximate", "timing-floor", "exact"]).nullable(),
+        inputs: z.array(z.string()),
+        coverage: z.object({ known: z.number(), total: z.number(), partial: z.boolean() }).nullable(),
+        missingInputs: z.array(z.string()),
+      }),
+      wall: z.object({ state: z.enum(["approximate", "exact"]).nullable(), inputs: z.array(z.string()) }),
+    })
+    .describe("One quality state per axis and the inputs it came from; the work state reads replicated inputs only"),
+  missing: z.record(z.string(), z.string()).describe("Why each null effort or elapsed field is null"),
 };
 type _TimingShapeMatchesInterface = Expect<
   Equals<z.infer<z.ZodObject<typeof timingShape>>, IssueTiming>
@@ -980,6 +1024,14 @@ server.registerTool(
         .describe(
           "Execution attempts on this issue, worker lane, as they read now: the effectively open one, the newest ended one, and how many. list_attempts pages them all.",
         ),
+      orchestration: z
+        .object({
+          current: z.record(z.string(), z.unknown()).nullable(),
+          count: z.number(),
+        })
+        .describe(
+          "The orchestrator lane on this issue (docs/timing-semantics.md): the effectively open orchestrator attempt, and how many. Opened only by record_attempt_event event=open role=orchestrator; never part of workSeconds.",
+        ),
     },
     annotations: { title: "Get task context", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
   },
@@ -1009,6 +1061,7 @@ server.registerTool(
         queuedBy: store.queuedBy(context.issue.id),
         ...store.detailTiming(context.issue.id),
         attempts: store.attemptSummary(context.issue.id),
+        orchestration: store.orchestrationSummary(context.issue.id),
       };
     }),
 );
@@ -1217,7 +1270,7 @@ server.registerTool(
       openWorldHint: false,
     },
   },
-  ({ ref, actor, agent, if_idle_seconds, ws, outcome, reason }) =>
+  ({ ref, actor, agent, if_idle_seconds, ws, outcome, reason, role }) =>
     run(() => {
       // An issue a restore removed has no checkout or lease left: said, not refused.
       const gone = storeFor(ws).removedByRestore(ref);
@@ -1225,7 +1278,7 @@ server.registerTool(
       const store = storeFor(ws);
       const released = store.releaseIssue(ref, requireActor(actor, agent), {
         ifIdleSeconds: if_idle_seconds,
-        attempt: attemptOptionsFromInput({ outcome, reason }),
+        attempt: attemptOptionsFromInput({ outcome, reason, role }),
       });
       return withAttemptResult(store, released);
     }),
@@ -1235,7 +1288,7 @@ server.registerTool(
   "record_attempt_event",
   {
     description:
-      "Report on the attempt you hold on an issue (docs/execution-telemetry.md): pause it before a usage-limit reset, resume it, record a milestone that points at your latest checkpoint, or report that it was interrupted. An attempt opens when you check out (or move an issue into an active status) and ends when the claim is cleared; this tool never opens or closes a claim. Refused with `conflict` when there is no open attempt in the state the event needs, and with `validation` for a reason the event cannot carry.",
+      "Report on the attempt you hold on an issue (docs/execution-telemetry.md): pause it before a usage-limit reset, resume it, record a milestone that points at your latest checkpoint, or report that it was interrupted. A worker attempt opens when you check out (or move an issue into an active status) and ends when the claim is cleared; this tool never opens or closes a claim. An ORCHESTRATOR coordinating work it does not claim opens its own lane with event open and role orchestrator on the issue it coordinates (docs/timing-semantics.md), and ends it with event end; that time is orchestrationSeconds, never workSeconds. Refused with `conflict` when there is no open attempt in the state the event needs, and with `validation` for a reason the event cannot carry.",
     inputSchema: {
       ref: refSchema,
       ...recordAttemptEventInput,

@@ -151,3 +151,59 @@ describe("the fold: a stored orphan end never overwrites a real end", () => {
     expect(entity!.state).toMatchObject(realEnd);
   });
 });
+
+/**
+ * The orchestrator lane (`docs/timing-semantics.md`, "The orchestrator lane"): its stored orphan
+ * ends carry `issue_resolved` or `superseded_by_newer`, and the fold treats both as SUBORDINATE,
+ * exactly as the worker lane's five — a real `coordination_ended` wins in either order of
+ * arrival, and two ends of one kind still meet as ordinary writes.
+ */
+describe("the fold: the orchestrator lane's orphan ends are subordinate too", () => {
+  const orchestratorCreated = { ...created, agent: "voya-orchestrator", role: "orchestrator", openedBy: "orchestrate", claim: { scope: "none", fencingToken: null } };
+  const coordinationEnded = {
+    state: "ended",
+    outcome: "yielded",
+    endReason: "coordination_ended",
+    endDetection: "reported",
+    endedBy: "voya-orchestrator",
+    endedAt: "2026-09-24T15:20:00.000Z",
+    endedAtSource: "mutation",
+  };
+  for (const reason of ["issue_resolved", "superseded_by_newer"]) {
+    const stored = { ...orphanEnd, endReason: reason };
+
+    it(`keeps coordination_ended when a stored ${reason} arrives after it, with no provenance for the orphan`, async () => {
+      await pushOps([attemptOp(1, "create", orchestratorCreated), attemptOp(2, "update", coordinationEnded), attemptOp(3, "update", stored)], {
+        token,
+        protocol: 3,
+      });
+      const folded = await snapshotAttempt();
+      expect(folded.state).toMatchObject({ ...coordinationEnded, role: "orchestrator" });
+      for (const field of Object.keys(coordinationEnded)) expect(folded.fieldWrites[field]?.opId, field).toBe("op-2");
+    });
+
+    it(`lets coordination_ended overwrite a stored ${reason} that arrived first`, async () => {
+      await pushOps([attemptOp(1, "create", orchestratorCreated), attemptOp(2, "update", stored), attemptOp(3, "update", coordinationEnded)], {
+        token,
+        protocol: 3,
+      });
+      const folded = await snapshotAttempt();
+      expect(folded.state).toMatchObject(coordinationEnded);
+      for (const field of Object.keys(coordinationEnded)) expect(folded.fieldWrites[field]?.opId, field).toBe("op-3");
+    });
+  }
+
+  it("keeps an operation's narration out of the folded state: originEvents is not a field", async () => {
+    await pushOps([attemptOp(1, "create", { ...orchestratorCreated, originEvents: [{ kind: "status_changed", at: "2026-09-24T15:00:00.000Z" }] })], {
+      token,
+      protocol: 3,
+    });
+    expect((await snapshotAttempt()).state).not.toHaveProperty("originEvents");
+    expect((await snapshotAttempt()).fieldWrites).not.toHaveProperty("originEvents");
+  });
+
+  it("stores the role verbatim on the create, and a create without one folds without it", async () => {
+    await pushOps([attemptOp(1, "create", orchestratorCreated)], { token, protocol: 3 });
+    expect((await snapshotAttempt()).state).toMatchObject({ role: "orchestrator", openedBy: "orchestrate" });
+  });
+});

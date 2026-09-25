@@ -27,6 +27,7 @@
 import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import type { Journal } from "../journal.js";
+import { EVENT_ORDER } from "../event-row.js";
 import { attemptPayload, insertAttempt, readAttempt, type AttemptRecord } from "./attempt-records.js";
 
 interface EventRow {
@@ -98,7 +99,8 @@ export function reconstructAttempts(db: DatabaseSync, journal: Journal, deviceId
   for (const issueId of issues) {
     // The first attempt recorded on this issue: where capture began, and how.
     const first = db
-      .prepare("SELECT id, agent, opened_by, started_at FROM attempts WHERE issue_id = ? AND provenance <> 'reconstructed' ORDER BY started_at, id LIMIT 1")
+      // Worker lane only: an orchestrator attempt says nothing about when capture of the WORK began.
+      .prepare("SELECT id, agent, opened_by, started_at FROM attempts WHERE issue_id = ? AND provenance <> 'reconstructed' AND role <> 'orchestrator' ORDER BY started_at, id LIMIT 1")
       .get(issueId) as { id: string; agent: string; opened_by: string; started_at: string } | undefined;
     const boundary = first?.started_at ?? null;
     const events = db
@@ -106,7 +108,7 @@ export function reconstructAttempts(db: DatabaseSync, journal: Journal, deviceId
         `SELECT seq, kind, actor, payload, dedup_key, created_at FROM events
           WHERE issue_id = ? AND kind IN ('checkout', 'claim_stolen', 'release', 'claim_released_stale', 'status_changed')
             AND (? IS NULL OR created_at < ?)
-          ORDER BY seq`,
+          ORDER BY ${EVENT_ORDER}`,
       )
       .all(issueId, boundary, boundary) as unknown as EventRow[];
     const built: AttemptRecord[] = [];
@@ -117,6 +119,8 @@ export function reconstructAttempts(db: DatabaseSync, journal: Journal, deviceId
           id: derivedId(issueId, event),
           issueId,
           agent,
+          // Reconstruction builds worker attempts only; orchestration before capture is `no_orchestrator_attempt`.
+          role: "worker",
           state: "running",
           outcome: null,
           endReason: null,

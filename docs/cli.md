@@ -18,7 +18,10 @@ staple settings [get <key>|set <key> <value>]       this workspace's registered 
 
 staple wait <ref> [--timeout s] [--interval ms]     block until ready or finished
 staple events --follow [--since N] [--max N]        stream events as they land
-       [--exec CMD]                                 run CMD per event (JSON arg + $STAPLE_EVENT)
+       [--exec CMD]                                 run CMD per event (JSON arg + $STAPLE_EVENT);
+                                                    on a synchronized workspace this includes the
+                                                    status and blocker events other devices'
+                                                    changes re-emit here (payload.deviceId)
 
 staple start <ref> --steal-if-stale <30m|2h|3600>   take over a dead agent's claim
 staple release <ref> --if-stale <dur>               free a dead agent's claim
@@ -44,8 +47,9 @@ staple budget ingest --source codex-rollout <file> [--account A]        a Codex 
 staple budget ingest --source manual --account A --limit-key K --used P [--resets-at T]
 staple budget capture on|off | bind --source S --account A | unbind | bindings
 
-staple attempt pause|resume|milestone|interrupt <ref> [--reason R] [-m label]
+staple attempt pause|resume|milestone|interrupt <ref> [--reason R] [-m label] [--role R | --attempt ID]
                                                     report on the attempt you hold
+staple attempt open|end <ref> --role orchestrator   coordinate an issue without claiming it (orchestrationSeconds)
 staple attempt reconstruct                          rebuild attempts from events recorded before them
 staple attempts <ref> [--limit N] [--cursor C]      every attempt on the issue, as it reads now
 staple attempt <attempt-id>                         one attempt: transitions, chain, budget burn
@@ -404,8 +408,9 @@ minutes before a crash are not counted. Under-counting silence beats billing a
 dead process for a weekend — the second error compounds without limit.
 
 `in_review` is measured separately as `reviewSeconds` and never folded into the
-actual: waiting on a human reviewer is a queue, not execution. It surfaces only
-when nonzero. A workspace imported from another tool, with no usable event log,
+actual: waiting on a human reviewer is a queue, not execution. An open review
+interval runs to the read instant, because a queue's clock does not stop while
+nobody writes. It surfaces only when nonzero. A workspace imported from another tool, with no usable event log,
 falls back to `completedAt − startedAt` with `approximate: true`, which every
 surface renders as "approx".
 
@@ -435,6 +440,13 @@ staple show STA-42
                  "descendantsEstimatedSeconds":12600,"contributingCount":2,"totalCount":3}},
  "childrenTiming":{"STA-43":{"estimatedSeconds":5400,"activeSeconds":3600,"…":"…"}}}
 ```
+
+The same object also carries the effort and elapsed fields of
+[timing-semantics.md](timing-semantics.md#where-the-numbers-appear): `workSeconds`
+(agent work from worker attempts, the estimate ratio's actual, the same on every
+device), `ownWorkSeconds`, `orchestrationSeconds`, `leadSeconds`,
+`estimateRatio`, the `wall` partition of elapsed time into buckets, `quality`, and
+`missing` with the reason each null field is null.
 
 Rollups sum **direct children only**, and each child contributes its own
 `activeSeconds` — so a child that is itself a parent contributes its aggregate,

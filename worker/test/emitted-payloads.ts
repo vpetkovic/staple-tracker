@@ -29,6 +29,7 @@ export const EMITTED_PAYLOADS: ReadonlyArray<{
     "payload": {
       "issueId": "00000000-0000-4000-8000-000000000000",
       "agent": "emitter",
+      "role": "worker",
       "state": "running",
       "outcome": null,
       "endReason": null,
@@ -89,11 +90,17 @@ export const EMITTED_PAYLOADS: ReadonlyArray<{
         "observedAt": "2026-09-10T00:00:00.000Z",
         "scope": "device",
         "openAttemptsInWorkspace": 1,
+        "openAttemptsInWorkspaceByRole": {
+          "worker": 1,
+          "orchestrator": 0
+        },
         "storedOpenAttemptsStartedHere": null,
+        "storedOpenAttemptsStartedHereByRole": null,
         "storedOpenAttemptsOnAccountStartedHere": null,
         "workspaceSyncedThrough": "2026-09-10T00:00:00.000Z",
         "missing": {
           "storedOpenAttemptsStartedHere": "source_unavailable",
+          "storedOpenAttemptsStartedHereByRole": "source_unavailable",
           "storedOpenAttemptsOnAccountStartedHere": "no_provider_binding"
         }
       }
@@ -195,14 +202,16 @@ export const EMITTED_PAYLOADS: ReadonlyArray<{
       "checkoutAgent": null,
       "checkoutAt": null,
       "createdAt": "2026-09-10T00:00:00.000Z",
-      "updatedAt": "2026-09-10T00:00:00.000Z"
+      "updatedAt": "2026-09-10T00:00:00.000Z",
+      "originEvents": []
     }
   },
   {
     "entity": "issue",
     "verb": "renumber",
     "payload": {
-      "identifier": "TST-14"
+      "identifier": "TST-14",
+      "originEvents": []
     }
   },
   {
@@ -213,7 +222,8 @@ export const EMITTED_PAYLOADS: ReadonlyArray<{
       "title": "Child, renamed",
       "priority": "low",
       "labels": "[]",
-      "normalizedTitle": "child, renamed"
+      "normalizedTitle": "child, renamed",
+      "originEvents": []
     }
   },
   {
@@ -379,7 +389,8 @@ export const EMITTED_PAYLOADS: ReadonlyArray<{
           "createdBy": "past",
           "createdAt": "2026-09-10T00:00:00.000Z"
         }
-      }
+      },
+      "originEvents": []
     }
   },
   {
@@ -394,7 +405,25 @@ export const EMITTED_PAYLOADS: ReadonlyArray<{
           "createdBy": "emitter",
           "createdAt": "2026-09-10T00:00:00.000Z"
         }
-      }
+      },
+      "originEvents": [
+        {
+          "issueId": "00000000-0000-4000-8000-000000000000",
+          "kind": "blockers_changed",
+          "at": "2026-09-10T00:00:00.000Z",
+          "actor": "emitter",
+          "seq": 22,
+          "payload": {
+            "identifier": "TST-6",
+            "blockedBy": [
+              "TST-7"
+            ],
+            "blockedByIds": [
+              "00000000-0000-4000-8000-000000000000"
+            ]
+          }
+        }
+      ]
     }
   },
   {

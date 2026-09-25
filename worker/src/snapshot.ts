@@ -173,9 +173,25 @@ export async function snapshot(
     duration_ms: Date.now() - startedAt,
   });
 
+  /**
+   * When the restore that made this epoch committed: the instant every device that rewinds into
+   * the epoch dates what the rewind changed by (`src/core/cloud/rewind.ts`), identical on all of
+   * them however late each one reads it. Null on an epoch no restore made. One query, and none
+   * on the first epoch.
+   */
+  const restoredAt =
+    session.epoch > 1
+      ? ((await env.DB.prepare(
+          `SELECT committed_at FROM restores WHERE repo_id = ?1 AND to_epoch = ?2 AND status = 'committed' ORDER BY committed_at DESC LIMIT 1`,
+        )
+          .bind(session.repoId, session.epoch)
+          .first<{ committed_at: number | null }>())?.committed_at ?? null)
+      : null;
+
   return json({
     protocol,
     epoch: session.epoch,
+    restoredAt: restoredAt === null ? null : new Date(restoredAt).toISOString(),
     /** The cutoff, as a seq. */
     cutoffSeq: cutoff,
     /**

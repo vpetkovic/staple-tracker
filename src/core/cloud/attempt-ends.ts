@@ -39,13 +39,23 @@ export const ATTEMPT_END_FIELDS = [
   "endedAtSource",
 ] as const;
 
-/** The reasons only a stored orphan end is written with (`attempts.ts`, `orphanReason`). */
+/**
+ * The reasons only a stored orphan end is written with (`attempts.ts`, `orphanReason`): the
+ * worker lane's five clauses, and the orchestrator lane's `issue_resolved` and
+ * `superseded_by_newer` (`docs/timing-semantics.md`, "The orchestrator lane"; its
+ * `issue_removed` is the worker lane's). Without the last two, every reader would take an
+ * orchestrator's stored orphan end for a real end, and a stored `superseded_by_newer` would
+ * conflict with a real `coordination_ended`. The Worker imports this set, so it is redeployed
+ * before any client writes them.
+ */
 export const ORPHAN_END_REASONS: ReadonlySet<string> = new Set([
   "claim_moved",
   "claim_cleared",
   "left_active",
   "superseded_by_merge",
   "issue_removed",
+  "issue_resolved",
+  "superseded_by_newer",
 ]);
 
 /** The same field under either spelling, as a fold may hold an older payload's column name. */

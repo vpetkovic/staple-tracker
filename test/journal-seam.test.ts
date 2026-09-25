@@ -282,6 +282,17 @@ describe("exactly one operation per logical mutation", () => {
         [one.id]: { createdBy: "agent-a", createdAt: expect.any(String) },
         [two.id]: { createdBy: "agent-a", createdAt: expect.any(String) },
       },
+      // The event the change narrated, re-emitted on apply at the origin's instant (`cloud/reemit.ts`).
+      originEvents: [
+        {
+          issueId: target.id,
+          kind: "blockers_changed",
+          at: expect.any(String),
+          actor: "agent-a",
+          seq: expect.any(Number),
+          payload: { identifier: target.identifier, blockedBy: [one.identifier, two.identifier], blockedByIds: [one.id, two.id] },
+        },
+      ],
     });
   });
 

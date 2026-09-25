@@ -28,6 +28,7 @@
  *
  * There is no fifth state where some operations quietly did not go.
  */
+import { beforeApply, reemitEvents } from "./reemit.js";
 import type { DatabaseSync } from "node:sqlite";
 import { tx } from "../db.js";
 import { assertOwnHost } from "../repo-identity.js";
@@ -60,7 +61,7 @@ import { applySnapshotEntity, hydrate } from "./hydrate.js";
 import { owedLeaseReleases, settleOwedLeaseRelease } from "./lease-store.js";
 import { countQuarantined, markWaitingAcrossRewind, quarantineOperation, retryQuarantine, withoutLaterWrites } from "./quarantine.js";
 import { refreshPresence, writeOwnOrphanEnds } from "../telemetry/attempts.js";
-import { reconcileAfterRead, reconcileBeforeRead } from "./rewind.js";
+import { blockerSets, narrateRewoundSets, reconcileAfterRead, reconcileBeforeRead } from "./rewind.js";
 import { TailFold, refusedAsTooLargeToFold, type Entry } from "./tail-fold.js";
 import { seedModeOf, seedOwed, seedRepository, type RepositorySurvey, type SeedReport } from "./seed.js";
 import {
@@ -443,6 +444,21 @@ async function negotiate(session: Session, options: SyncOptions): Promise<Capabi
   return capabilities;
 }
 
+/**
+ * What the service's fold settles as a stored orphan end, as it last said: the attempt ledger
+ * writes an orchestrator attempt's stored end only when both of that lane's reasons are there
+ * (`AttemptLedger.writeOrphanEnds`). Machine state, in `meta` outside `setting:*`: never sent.
+ */
+function noteServiceOrphanReasons(db: DatabaseSync, capabilities: Capabilities): void {
+  if (Array.isArray(capabilities.orphanEndReasons)) {
+    db.prepare("INSERT INTO meta (key, value) VALUES ('service_orphan_end_reasons', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(
+      JSON.stringify(capabilities.orphanEndReasons),
+    );
+  } else {
+    db.prepare("DELETE FROM meta WHERE key = 'service_orphan_end_reasons'").run();
+  }
+}
+
 /** The migration number this database is at. An operation stamped above it is refused. */
 function localSchemaVersion(db: DatabaseSync): number {
   const row = db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as
@@ -616,8 +632,11 @@ export async function syncRepository(
    * A sync is a mutating command: with the pull at the head of the log, this device writes
    * down the end of any attempt it opened that the read-time rule now closes — a steal or a
    * status change another device made, arriving here (`writeOwnOrphanEnds`). Before the
-   * second push, so it goes out in this sync.
+   * second push, so it goes out in this sync. What the service's fold settles is noted first,
+   * here, where the sync has written everything else it writes: a join refused earlier writes
+   * nothing at all.
    */
+  noteServiceOrphanReasons(db, capabilities);
   writeOwnOrphanEnds(db, journal);
 
   /**
@@ -849,7 +868,7 @@ async function surveySnapshot(
     pages += 1;
     entities.push(...page.entities);
     if (page.nextCursor === null) {
-      return { epoch: page.epoch, cutoffSeq: page.cutoffSeq, tailCursor: page.tailCursor, entities, pages };
+      return { epoch: page.epoch, cutoffSeq: page.cutoffSeq, tailCursor: page.tailCursor, entities, pages, restoredAt: page.restoredAt ?? null };
     }
     cursor = page.nextCursor;
   }
@@ -1178,11 +1197,15 @@ async function readReconciled(
   const current = hydratedFromOlderFold.get(db) !== true;
   tx(db, () => {
     // What waits already waits across this rewind: still waiting after it, it is a divergence.
-    if (current && readRewind(db) !== null) markWaitingAcrossRewind(db);
+    const rewinding = current && readRewind(db) !== null;
+    if (rewinding) markWaitingAcrossRewind(db);
+    // The blocker sets as they stood, so what the rewind changes in them is narrated after it.
+    const setsBefore = rewinding ? blockerSets(db) : null;
     const plan = current ? reconcileBeforeRead(db, survey.entities) : null;
     hydrate(db, journal, survey.entities, [], survey.cutoffSeq, nowIso(), true, sameTimeline, ledger, current);
     clearTailSurvey(db);
     if (plan !== null) reconcileAfterRead(db, journal, plan, survey.epoch);
+    if (setsBefore !== null) narrateRewoundSets(db, setsBefore, survey.epoch, survey.restoredAt ?? null);
     clearRewind(db);
     retryQuarantined(db, journal, session.deviceId);
     completeSnapshot(db, survey.tailCursor, survey.epoch);
@@ -1528,8 +1551,14 @@ function applyOne(
        * it sits on, and `null` means every contentful field was contested and
        * there is nothing left to write.
        */
+      const before = beforeApply(db, op);
       const screened = screenForConflicts(db, op, localDeviceId);
       if (screened !== null) applyToDatabase(db, screened);
+      /**
+       * The events the operation narrates, dated at its origin, as local rows under this
+       * suppressed scope: nothing journaled (`reemit.ts`).
+       */
+      reemitEvents(db, op, before, localDeviceId);
       /**
        * The local entity version moves because, as far as this database is
        * concerned, this entity just changed. Not set to the remote's

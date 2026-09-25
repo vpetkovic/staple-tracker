@@ -29,7 +29,7 @@ import { stapleHome } from "../../config/home.js";
 import { claudeBindingFor, claudeConfigDir, codexBindingFor, codexHome } from "./bindings.js";
 import { DEFAULT_TELEMETRY, isKnownBinding, type KnownBinding, type TelemetryConfig } from "./config.js";
 import type { Journal } from "../journal.js";
-import { StapleError, nowIso } from "../types.js";
+import { StapleError } from "../types.js";
 import {
   HARNESS_NAMES,
   INFERRED_INTERRUPT_REASONS,
@@ -42,6 +42,8 @@ import {
   insertAttempt,
   insertTransition,
   emitTransitionEvent,
+  isWorkerAttempt,
+  laneOf,
   openedHere,
   openedHereBy,
   readAttempt,
@@ -58,11 +60,15 @@ import {
   type ProviderBinding,
 } from "./attempt-records.js";
 import {
-  countEffectivelyOpen,
+  countEffectivelyOpenByRole,
   effectivelyOpen,
+  effectivelyOpenOrchestrators,
   evaluateIssue,
+  evaluateOrchestrator,
+  evidenceBefore,
   issueFacts,
   lastActivityOf,
+  replicatedEvidence,
   viewAttempt,
   type AttemptView,
   type IssueFacts,
@@ -98,8 +104,8 @@ export interface AttemptHost {
 
 /** The machine-wide half of the concurrency context (`presence.ts`). */
 export interface PresenceCounts {
-  /** Attempts opened on this machine the index holds as open, excluding `exclude`. */
-  count(exclude: string, accountRef: string | null): { all: number; account: number | null } | null;
+  /** Attempts opened on this machine the index holds as open, excluding `exclude`, with the split by lane. */
+  count(exclude: string, accountRef: string | null): { all: number; account: number | null; worker?: number; orchestrator?: number } | null;
 }
 
 /** After a committed change to an attempt this machine opened: the presence index, best effort. */
@@ -251,6 +257,8 @@ export class AttemptLedger {
      * attempt it opened — which `reconstruct.ts` relies on to tell captured work from not.
      */
     mutationAt?: string,
+    /** The lane. Only `openOrchestrator` passes `orchestrator`; every mutation hook opens a worker attempt. */
+    role: "worker" | "orchestrator" = "worker",
   ): AttemptRecord {
     if (opts.idempotencyKey !== undefined) {
       const replay = attemptByKey(this.db, issue.id, opts.idempotencyKey);
@@ -265,9 +273,10 @@ export class AttemptLedger {
      * script — starts a millisecond later, and the order is the order they happened in.
      */
     const latest = (this.db.prepare("SELECT MAX(started_at) AS at FROM attempts WHERE issue_id = ?").get(issue.id) as { at: string | null }).at;
-    const now = mutationAt ?? nowIso();
+    const now = mutationAt ?? this.host.journal.mutationAt();
     const at = latest !== null && now <= latest ? new Date(Date.parse(latest) + 1).toISOString() : now;
-    const resume = this.resumeFor(issue.id);
+    // The resume rule is the worker lane's: an orchestrator attempt resumes nothing.
+    const resume = role === "worker" ? this.resumeFor(issue.id) : { id: null, contested: false };
     const missing: Record<string, string> = {};
     let harness: AttemptHarness | null = null;
     if (opts.harness !== undefined) {
@@ -304,6 +313,7 @@ export class AttemptLedger {
       id: randomUUID(),
       issueId: issue.id,
       agent,
+      role,
       state: "running",
       outcome: null,
       endReason: null,
@@ -344,7 +354,8 @@ export class AttemptLedger {
    * the opening device and stored, so it never changes afterwards.
    */
   private resumeFor(issueId: string): { id: string | null; contested: boolean } {
-    const attempts = attemptsOfIssue(this.db, issueId);
+    // "The latest attempt" is the latest WORKER attempt (`docs/timing-semantics.md`).
+    const attempts = attemptsOfIssue(this.db, issueId).filter(isWorkerAttempt);
     const latest = attempts[attempts.length - 1];
     if (!latest) return { id: null, contested: false };
     const evaluation = evaluateIssue(attempts, issueFacts(this.db, issueId), "read").get(latest.id)!;
@@ -387,7 +398,7 @@ export class AttemptLedger {
       { ...attempt, ...end },
       {
         kind: transition.kind,
-        at: nowIso(),
+        at: this.host.journal.mutationAt(),
         actor: transition.actor,
         detection: fields.endDetection,
         reason: transition.reason,
@@ -407,7 +418,7 @@ export class AttemptLedger {
     actor: string | null,
     opts: AttemptOptions | undefined,
   ): void {
-    const now = nowIso();
+    const now = this.host.journal.mutationAt();
     if (failsAttempt(opts)) {
       this.end(
         attempt,
@@ -477,7 +488,7 @@ export class AttemptLedger {
     if (open.harness?.sessionRef === sessionRef) return;
     this.transition(open, {
       kind: "attempt_session_added",
-      at: nowIso(),
+      at: this.host.journal.mutationAt(),
       actor: agent,
       detection: "reported",
       reason: null,
@@ -530,22 +541,20 @@ export class AttemptLedger {
     issue: { id: string; identifier: string },
     event: string,
     actor: string,
-    input: { reason?: string; label?: string; commentId?: string; document?: { key: string; revision: number } },
+    input: {
+      reason?: string;
+      label?: string;
+      commentId?: string;
+      document?: { key: string; revision: number };
+      /** The lane to act in: `--role orchestrator` (MCP `role`). */
+      role?: string;
+      /** The attempt to act on, by id: the other way to name the lane. */
+      attemptId?: string;
+    },
   ): AttemptRecord {
-    const open = effectivelyOpen(this.db, issue.id, "own");
-    const attempt = open.find((candidate) => candidate.agent === actor) ?? (event === "interrupt" ? open[0] : undefined);
-    if (!attempt) {
-      const held = open[0];
-      throw new StapleError(
-        "conflict",
-        held
-          ? `${issue.identifier}'s open attempt belongs to ${held.agent}, not ${actor}: only the holder can ${event} it.`
-          : `${issue.identifier} has no open attempt to ${event}. An attempt opens with a checkout or a status write into the active category.`,
-        { issueId: issue.id, heldBy: held?.agent ?? null },
-      );
-    }
+    const attempt = this.chooseAttempt(issue, event, actor, input.role, input.attemptId);
     const reason = input.reason?.trim() || undefined;
-    const at = nowIso();
+    const at = this.host.journal.mutationAt();
     const detection = actor === attempt.agent ? "reported" : "by_other";
     switch (event) {
       case "pause": {
@@ -603,6 +612,105 @@ export class AttemptLedger {
         throw new StapleError("validation", `Unknown attempt event "${event}": use pause, resume, milestone or interrupt.`);
     }
     this.touched = attempt.id;
+    return readAttempt(this.db, attempt.id)!;
+  }
+
+  /**
+   * Which attempt an event acts on (`docs/timing-semantics.md`, "Worker-lane scoping"):
+   *
+   *   - an attempt id names it, in either lane, when it is the actor's and effectively open;
+   *   - `--role` names the lane, and the actor's open attempt in it is the one;
+   *   - with neither, the actor's lane when it holds an attempt in one lane only, and a
+   *     refusal when it holds one in each, because which one was meant is not ours to guess.
+   *
+   * The `open[0]` fallback — another actor interrupting the holder's attempt — is the worker
+   * lane's alone: an orchestrator attempt is ended only by its own agent.
+   */
+  private chooseAttempt(
+    issue: { id: string; identifier: string },
+    event: string,
+    actor: string,
+    role: string | undefined,
+    attemptId: string | undefined,
+  ): AttemptRecord {
+    if (role !== undefined && role !== "worker" && role !== "orchestrator") {
+      throw new StapleError("validation", `--role is worker or orchestrator; got "${role}".`);
+    }
+    const workers = effectivelyOpen(this.db, issue.id, "own");
+    const orchestrators = effectivelyOpenOrchestrators(this.db, issue.id);
+    if (attemptId !== undefined) {
+      const named = [...workers, ...orchestrators].find((candidate) => candidate.id === attemptId);
+      if (!named || (named.agent !== actor && !(event === "interrupt" && isWorkerAttempt(named)))) {
+        throw new StapleError("conflict", `${issue.identifier} has no open attempt ${attemptId} of ${actor}'s to ${event}.`, { issueId: issue.id, attemptId });
+      }
+      if (role !== undefined && laneOf(named) !== role) {
+        throw new StapleError("validation", `Attempt ${attemptId} is in the ${laneOf(named)} lane, not ${role}.`);
+      }
+      return named;
+    }
+    const mineWorker = workers.find((candidate) => candidate.agent === actor);
+    const mineOrchestrator = orchestrators.find((candidate) => candidate.agent === actor);
+    if (role === undefined && mineWorker && mineOrchestrator) {
+      throw new StapleError(
+        "validation",
+        `${actor} holds an open attempt in each lane on ${issue.identifier}: pass --role worker or --role orchestrator (MCP role), or the attempt id, to say which one to ${event}.`,
+        { issueId: issue.id, workerAttemptId: mineWorker.id, orchestratorAttemptId: mineOrchestrator.id },
+      );
+    }
+    const lane = role ?? (mineOrchestrator && !mineWorker ? "orchestrator" : "worker");
+    if (lane === "orchestrator") {
+      if (mineOrchestrator) return mineOrchestrator;
+      throw new StapleError(
+        "conflict",
+        `${actor} has no open orchestrator attempt on ${issue.identifier} to ${event}. One opens with staple attempt open ${issue.identifier} --role orchestrator.`,
+        { issueId: issue.id, heldBy: null },
+      );
+    }
+    const attempt = mineWorker ?? (event === "interrupt" ? workers[0] : undefined);
+    if (attempt) return attempt;
+    const held = workers[0];
+    throw new StapleError(
+      "conflict",
+      held
+        ? `${issue.identifier}'s open attempt belongs to ${held.agent}, not ${actor}: only the holder can ${event} it.`
+        : `${issue.identifier} has no open attempt to ${event}. An attempt opens with a checkout or a status write into the active category.`,
+      { issueId: issue.id, heldBy: held?.agent ?? null },
+    );
+  }
+
+  // ------------------------------------------------------- the orchestrator lane
+
+  /**
+   * `staple attempt open <ref> --role orchestrator`: an orchestrator attempt on the issue being
+   * coordinated. The ONLY way an attempt gets `role: orchestrator` (`docs/timing-semantics.md`,
+   * "The orchestrator lane"). It changes neither the issue's status nor its claim, holds no
+   * claim (`claim.scope: none`), and supersedes the agent's older orchestrator attempts by the
+   * read-time rule, wherever they were opened.
+   *
+   * Re-opened by the same agent on the same issue while one is effectively open, it returns
+   * that one: opening is idempotent per agent and issue.
+   */
+  openOrchestrator(issue: { id: string; identifier: string }, agent: string, opts: AttemptOptions = {}): AttemptRecord {
+    const held = effectivelyOpenOrchestrators(this.db, issue.id).find((candidate) => candidate.agent === agent);
+    if (held) {
+      this.touched = held.id;
+      return held;
+    }
+    return this.open(issue, agent, "orchestrate", opts, { scope: "none", fencingToken: null }, undefined, "orchestrator");
+  }
+
+  /**
+   * `staple attempt end <ref> --role orchestrator`: the agent's open orchestrator attempt on the
+   * issue ends `yielded`, reason `coordination_ended` — a real end, reported.
+   */
+  endOrchestrator(issue: { id: string; identifier: string }, agent: string, attemptId?: string): AttemptRecord {
+    const attempt = this.chooseAttempt(issue, "end", agent, "orchestrator", attemptId);
+    const at = this.host.journal.mutationAt();
+    this.end(
+      attempt,
+      { outcome: "yielded", endReason: "coordination_ended", endDetection: "reported", endedBy: agent, endedAt: at, endedAtSource: "mutation" },
+      { kind: "attempt_ended", actor: agent, reason: null },
+    );
     return readAttempt(this.db, attempt.id)!;
   }
 
@@ -664,10 +772,24 @@ export class AttemptLedger {
           .all() as Array<{ id: string }>).map((row) => row.id),
       );
       const attempts = attemptsOfIssue(this.db, issueId);
-      const evaluation = evaluateIssue(attempts, issueFacts(this.db, issueId), "own");
+      const facts = issueFacts(this.db, issueId);
+      const evaluation = evaluateIssue(attempts, facts, "own");
       for (const attempt of mine.filter((candidate) => candidate.issueId === issueId)) {
-        const reason = evaluation.get(attempt.id)?.orphanReason ?? null;
-        if (reason === null || disputedEnds.has(attempt.id)) continue;
+        if (disputedEnds.has(attempt.id)) continue;
+        /**
+         * The orchestrator lane's own clauses, and its own end: the replicated evidence before
+         * the clauses' earliest bound, which is what every device reads for it until this
+         * stored end arrives, so the number does not move when it does.
+         */
+        const orchestrator = !isWorkerAttempt(attempt);
+        // Only to a service whose fold settles this lane's reasons (`noteServiceOrphanReasons`, `sync.ts`).
+        if (orchestrator && synchronized && !serviceSettlesOrchestratorEnds(this.db)) continue;
+        const judged = orchestrator ? evaluateOrchestrator(this.db, attempt, facts) : (evaluation.get(attempt.id) ?? null);
+        const reason = judged?.orphanReason ?? null;
+        if (reason === null) continue;
+        const endedAt = orchestrator
+          ? evidenceBefore(replicatedEvidence(this.db, attempt), attempt.startedAt, judged?.limit ?? null)
+          : lastActivityOf(this.db, attempt.issueId, attempt.agent, attempt.startedAt);
         this.end(
           attempt,
           {
@@ -675,7 +797,7 @@ export class AttemptLedger {
             endReason: reason,
             endDetection: "inferred",
             endedBy: null,
-            endedAt: lastActivityOf(this.db, attempt.issueId, attempt.agent, attempt.startedAt),
+            endedAt,
             endedAtSource: "last_activity",
           },
           { kind: "attempt_interrupted", actor: null, reason },
@@ -728,10 +850,18 @@ export class AttemptLedger {
    */
   private concurrency(attempt: AttemptRecord, at: string): Record<string, unknown> {
     const missing: Record<string, string> = {};
-    const openInWorkspace = countEffectivelyOpen(this.db) + (attempt.state === "ended" ? 1 : 0);
+    const byRole = countEffectivelyOpenByRole(this.db);
+    const selfEnded = attempt.state === "ended" ? 1 : 0;
+    const openInWorkspace = byRole.all + selfEnded;
+    const lane = laneOf(attempt);
+    /** Both lanes count, because both spend provider budget; the split by `role` is reported beside the totals. */
+    const openAttemptsInWorkspaceByRole = {
+      worker: byRole.worker + (lane === "worker" ? selfEnded : 0),
+      orchestrator: byRole.orchestrator + (lane === "orchestrator" ? selfEnded : 0),
+    };
     const startedHere = openedHere(this.db, attempt, this.deviceId()) ? 1 : 0;
     const accountRef = attempt.providerBinding?.accountRef ?? null;
-    let counts: { all: number; account: number | null } | null = null;
+    let counts: { all: number; account: number | null; worker?: number; orchestrator?: number } | null = null;
     try {
       counts = presenceCounts()?.count(attempt.id, accountRef) ?? null;
     } catch {
@@ -739,10 +869,16 @@ export class AttemptLedger {
     }
     let storedOpenAttemptsStartedHere: number | null = null;
     let storedOpenAttemptsOnAccountStartedHere: number | null = null;
+    let storedOpenAttemptsStartedHereByRole: { worker: number; orchestrator: number } | null = null;
     if (counts === null) {
       missing.storedOpenAttemptsStartedHere = "source_unavailable";
+      missing.storedOpenAttemptsStartedHereByRole = "source_unavailable";
     } else {
       storedOpenAttemptsStartedHere = counts.all + startedHere;
+      storedOpenAttemptsStartedHereByRole = {
+        worker: (counts.worker ?? counts.all) + (lane === "worker" ? startedHere : 0),
+        orchestrator: (counts.orchestrator ?? 0) + (lane === "orchestrator" ? startedHere : 0),
+      };
     }
     if (accountRef === null) missing.storedOpenAttemptsOnAccountStartedHere = "no_provider_binding";
     else if (counts === null || counts.account === null) missing.storedOpenAttemptsOnAccountStartedHere = "source_unavailable";
@@ -754,11 +890,31 @@ export class AttemptLedger {
       observedAt: at,
       scope: "device",
       openAttemptsInWorkspace: openInWorkspace,
+      openAttemptsInWorkspaceByRole,
       storedOpenAttemptsStartedHere,
+      storedOpenAttemptsStartedHereByRole,
       storedOpenAttemptsOnAccountStartedHere,
       workspaceSyncedThrough,
       missing,
     };
+  }
+}
+
+/**
+ * Whether the service this workspace synchronizes with said its fold treats `issue_resolved`
+ * and `superseded_by_newer` as stored orphan ends. A Worker from before the orchestrator lane
+ * would take one for a real end and could keep it over a real `coordination_ended`, in its
+ * snapshots and its backups; until it is redeployed the attempt stays derived, which every
+ * device reads the same without it.
+ */
+function serviceSettlesOrchestratorEnds(db: DatabaseSync): boolean {
+  const row = db.prepare("SELECT value FROM meta WHERE key = 'service_orphan_end_reasons'").get() as { value: string } | undefined;
+  if (!row) return false;
+  try {
+    const reasons = JSON.parse(row.value) as unknown;
+    return Array.isArray(reasons) && reasons.includes("issue_resolved") && reasons.includes("superseded_by_newer");
+  } catch {
+    return false;
   }
 }
 

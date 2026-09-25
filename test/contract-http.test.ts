@@ -30,7 +30,9 @@ import {
   UUID,
   claimGolden,
   openAttemptsGolden,
+  noOrchestrationGolden,
   timingGolden,
+  leafBucketsGolden,
   commentGolden,
   issueGolden,
   normalize,
@@ -286,10 +288,18 @@ describe("read shapes", () => {
         ownActiveSeconds: SECONDS,
         activeSeconds: SECONDS,
         countedThrough: ISO,
+        // Checked out, so a worker attempt measures its work, and the partition has a span.
+        workSeconds: SECONDS,
+        ownWorkSeconds: SECONDS,
+        leadSeconds: SECONDS,
+        wall: { startAt: ISO, endAt: null, through: ISO, seconds: SECONDS, buckets: leafBucketsGolden() },
+        quality: { work: { state: "timing-floor", inputs: [], coverage: null, missingInputs: [] }, wall: { state: "exact", inputs: [] } },
+        missing: { orchestrationSeconds: "no_orchestrator_attempt" },
       }),
       childrenTiming: {},
       // Execution attempts, from the store method get_task spreads too.
       attempts: openAttemptsGolden("CON-1"),
+      orchestration: noOrchestrationGolden(),
     });
   });
 

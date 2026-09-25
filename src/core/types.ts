@@ -725,6 +725,72 @@ export interface IssueTiming {
    * instead of — the depth-1 `childrenEstimatedSeconds` above. See `SubtreePlan`.
    */
   subtreePlan: SubtreePlan;
+  /**
+   * AGENT WORK, the estimate ratio's actual (`docs/timing-semantics.md`, "Work"): worker-lane
+   * attempts only, from replicated data only, so it reads the same on every device. Leaf:
+   * `ownWorkSeconds`. Parent: the sum of the direct children's `workSeconds`, with
+   * `quality.work.coverage`. `cancelled`: null (`not_applicable_cancelled`). Null reasons
+   * are in `missing.workSeconds`.
+   */
+  workSeconds: number | null;
+  /** The measurement behind `workSeconds`: this issue's own worker attempts, any status. */
+  ownWorkSeconds: number | null;
+  /**
+   * Orchestrator-lane attempts on this issue plus its children's `orchestrationSeconds`.
+   * Never part of `workSeconds`. Null with `no_orchestrator_attempt` when no issue in the
+   * subtree has one.
+   */
+  orchestrationSeconds: number | null;
+  /** `createdAt` to `wall.startAt`: time before any work began. Null as `wall` is. */
+  leadSeconds: number | null;
+  /**
+   * `workSeconds / estimatedSeconds` for an eligible issue: its own estimate, resolved
+   * `done`, and `workSeconds` of quality `exact`. Null otherwise.
+   */
+  estimateRatio: number | null;
+  /** The elapsed partition, device-local (`docs/timing-semantics.md`). Null reasons in `missing.wall`. */
+  wall: WallTiming | null;
+  /** The quality state of each axis, and what it was derived from. */
+  quality: TimingQuality;
+  /** Why each null new field is null: `never_started`, `no_worker_attempt`, `replay_unavailable`, … */
+  missing: Record<string, string>;
+}
+
+/** An issue's elapsed span and its partition into buckets that never overlap. */
+export interface WallTiming {
+  startAt: string;
+  /** The last entry into `done`/`cancelled` when the issue is in one now; else null. */
+  endAt: string | null;
+  /** The read's `asOf` while the issue is open; else null. */
+  through: string | null;
+  seconds: number;
+  /**
+   * Whole seconds per bucket, each floored once. A leaf: `work`, `paused`, `silent`,
+   * `interrupted`, `unattributed`, `review`, `gated`, `blocked`, `queued`, `resolved`. A
+   * parent: `active`, `review`, `gated`, `blocked`, `queued`, `resolved`.
+   */
+  buckets: Record<string, number>;
+}
+
+/** `missing` > `reconstructed` > `approximate` > `timing-floor` > `exact`. Null for a cancelled issue. */
+export type WorkQualityState = "missing" | "reconstructed" | "approximate" | "timing-floor" | "exact";
+
+export interface TimingQuality {
+  work: {
+    state: WorkQualityState | null;
+    /** Replicated inputs only: `sparse`, `capture_gap`, `end_unbounded`, `contested`, `orphan_provisional`, `clock_skew`, `partial`. */
+    inputs: string[];
+    /** A parent's: direct children not cancelled and not `never_started`, and how many of them have `workSeconds`. */
+    coverage: { known: number; total: number; partial: boolean } | null;
+    /** A parent's children counted in `coverage.total` whose `workSeconds` is null, by identifier. */
+    missingInputs: string[];
+  };
+  wall: {
+    /** Null when `wall` is. */
+    state: "approximate" | "exact" | null;
+    /** `unattributed`, `edge_history_incomplete`, `conflict_resolved`, `clock_skew`: device-local, never read by the work state. */
+    inputs: string[];
+  };
 }
 
 /** Where a `SubtreePlan.estimatedSeconds` came from. */

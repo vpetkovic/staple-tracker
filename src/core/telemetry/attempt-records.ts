@@ -31,7 +31,24 @@ export const INFERRED_INTERRUPT_REASONS = ["claim_stolen", "released_stale"] as 
 export type AttemptState = "running" | "paused" | "ended";
 export type AttemptOutcome = "completed" | "yielded" | "failed" | "interrupted";
 export type EndDetection = "reported" | "by_other" | "inferred" | "reconstructed";
-export type OpenedBy = "checkout" | "steal" | "reclaim" | "status" | "reconstructed";
+export type OpenedBy = "checkout" | "steal" | "reclaim" | "status" | "reconstructed" | "orchestrate";
+
+/**
+ * The attempt's lane (`docs/timing-semantics.md`, "The orchestrator lane"). `worker` is
+ * every attempt a checkout, steal, re-claim or status write opens; `orchestrator` only
+ * one `staple attempt open --role orchestrator` opens. Anything else a newer build wrote
+ * is preserved verbatim and read as the worker lane.
+ */
+export const ATTEMPT_ROLES = ["worker", "orchestrator"] as const;
+export type AttemptRole = (typeof ATTEMPT_ROLES)[number];
+
+/** The lane an attempt reads in: `orchestrator` only when it says so. */
+export function laneOf(attempt: { readonly role?: string | null }): AttemptRole {
+  return attempt.role === "orchestrator" ? "orchestrator" : "worker";
+}
+
+/** True for an attempt in the worker lane. */
+export const isWorkerAttempt = (attempt: { readonly role?: string | null }): boolean => laneOf(attempt) === "worker";
 
 export type AttemptTransitionKind =
   | "attempt_started"
@@ -84,6 +101,8 @@ export interface AttemptRecord extends AttemptEnd {
   readonly id: string;
   readonly issueId: string;
   readonly agent: string;
+  /** `worker` or `orchestrator` (migration 014). */
+  readonly role: string;
   readonly openedBy: string;
   readonly resumesAttemptId: string | null;
   readonly startedAt: string;
@@ -135,6 +154,7 @@ interface AttemptRow {
   idempotency_key: string | null;
   provenance: string;
   missing: string;
+  role: string | null;
 }
 
 interface TransitionRow {
@@ -163,6 +183,7 @@ function toRecord(row: AttemptRow): AttemptRecord {
     id: row.id,
     issueId: row.issue_id,
     agent: row.agent,
+    role: row.role ?? "worker",
     state: row.state,
     outcome: row.outcome,
     endReason: row.end_reason,
@@ -243,8 +264,8 @@ export function insertAttempt(db: DatabaseSync, record: AttemptRecord): void {
   db.prepare(
     `INSERT INTO attempts (id, issue_id, agent, state, outcome, end_reason, end_detection, ended_by, opened_by,
        resumes_attempt_id, started_at, ended_at, ended_at_source, device_id, claim_scope, claim_fencing_token,
-       harness, provider_binding, estimate_at_start, idempotency_key, provenance, missing)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       harness, provider_binding, estimate_at_start, idempotency_key, provenance, missing, role)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     record.id,
     record.issueId,
@@ -268,6 +289,7 @@ export function insertAttempt(db: DatabaseSync, record: AttemptRecord): void {
     record.idempotencyKey,
     record.provenance,
     JSON.stringify(record.missing ?? {}),
+    record.role ?? "worker",
   );
 }
 
@@ -318,6 +340,7 @@ export function attemptPayload(record: AttemptRecord): Record<string, unknown> {
   return {
     issueId: record.issueId,
     agent: record.agent,
+    role: record.role,
     ...endOf(record),
     openedBy: record.openedBy,
     resumesAttemptId: record.resumesAttemptId,
@@ -363,6 +386,8 @@ export function recordFromPayload(id: string, payload: Record<string, unknown>):
     id,
     issueId,
     agent,
+    // A create from a build before migration 014 carries none: every attempt it could open was a worker.
+    role: str(payload.role) ?? "worker",
     state: str(payload.state) ?? "running",
     outcome: str(payload.outcome),
     endReason: str(payload.endReason),
