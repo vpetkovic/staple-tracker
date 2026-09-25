@@ -24,7 +24,7 @@
  */
 import { readdirSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
-import { nowIso, setClock } from "../../src/core/types.js";
+import { nowIso, setClock, StapleError } from "../../src/core/types.js";
 import type { IssueTiming, IssueStatus } from "../../src/core/types.js";
 import { FakeSyncServer } from "../fixtures/fake-sync-server.js";
 import { OlderBuildDevice } from "../fixtures/older-build.js";
@@ -33,7 +33,12 @@ import { Fleet, type Machine } from "../fixtures/sync-machines.js";
 // ---------------------------------------------------------------- the fixture format
 
 /** A step of the timeline: one store mutation at one instant, on one device (default `a`). */
-export type Step = { at: string; device?: string } & (
+/**
+ * `refused`: the error code the step must be refused with (`conflict`, `validation`, …). A
+ * refused step is a check like any other: the run fails if it succeeds or is refused with
+ * another code, and goes on either way, since a refusal writes nothing.
+ */
+export type Step = { at: string; device?: string; refused?: string } & (
   | { do: "create"; ref: string; title?: string; parent?: string; status?: string; estimate?: string | number; blockedBy?: string[]; blockParentUntilDone?: boolean; agent?: string }
   | { do: "checkout"; ref: string; agent: string; stealIfIdle?: string | number }
   | { do: "release"; ref: string; agent: string; ifIdle?: string | number }
@@ -91,6 +96,11 @@ export interface Expectation {
   missing?: Record<string, string>;
   quality?: { work?: string | null; wall?: string | null; workInputs?: string[]; wallInputs?: string[] };
   coverage?: { known: number; total: number; partial: boolean } | null;
+  /**
+   * The claim's liveness (`claim.lastActivityAt`, as `show` and the steal guard read it), an
+   * offset; `null` when the issue is not held. Checked on the hydrated device too.
+   */
+  claim?: { lastActivityAt: string } | null;
   /** Each worker-lane chain link's `resumeGapSeconds`, oldest first. */
   resumeGaps?: Duration[];
   /** Which of those links read `clockSkew` (an inverted gap over a second): default none. */
@@ -218,10 +228,17 @@ export async function runControlled(run: ControlledRun): Promise<Check[]> {
         const step = entry.step;
         if (entry.at < previous) throw new Error(`${run.name}: step ${entry.index} (${step.do} at ${step.at}) is before the step above it`);
         previous = entry.at;
+        let refusal: unknown = null;
         try {
           await apply(step, { device, id, refs, iso, older: () => (older ??= olderBuild(machines.get("a")!, server)), olderCount });
         } catch (error) {
-          throw new Error(`${run.name}: step ${entry.index} (${step.do} at ${step.at}) failed: ${(error as Error).message}`);
+          if (step.refused === undefined) throw new Error(`${run.name}: step ${entry.index} (${step.do} at ${step.at}) failed: ${(error as Error).message}`);
+          refusal = error;
+        }
+        if (step.refused !== undefined) {
+          const code = refusal instanceof StapleError ? refusal.code : refusal === null ? "accepted" : `not a StapleError: ${(refusal as Error).message}`;
+          const ref = "ref" in step ? String(step.ref) : "-";
+          checks.push({ run: run.name, device: step.device ?? "a", ref, asOf: step.at, field: `step ${entry.index} (${step.do}) refused`, expected: step.refused, actual: code, tolerance: 0, pass: code === step.refused });
         }
         continue;
       }
@@ -241,6 +258,7 @@ export async function runControlled(run: ControlledRun): Promise<Check[]> {
         compare(checks, where(label), timing, expectation, iso, false);
         invariants(checks, where(label), timing);
         if (expectation.resumeGaps !== undefined) chainAgrees(checks, where(label), machine, timing);
+        if (expectation.claim !== undefined) claimAgrees(checks, where(label), machine, id(expectation.ref), expectation.claim, iso);
       }
       if (hydrated !== null && entry.at === lastRead) {
         hydrated.use();
@@ -248,6 +266,7 @@ export async function runControlled(run: ControlledRun): Promise<Check[]> {
         const timing = hydrated.store.timingFor([id(expectation.ref)], iso(expectation.asOf)).get(id(expectation.ref))!;
         compare(checks, where("c"), timing, expectation, iso, true);
         if (expectation.resumeGaps !== undefined) chainAgrees(checks, where("c"), hydrated, timing);
+        if (expectation.claim !== undefined) claimAgrees(checks, where("c"), hydrated, id(expectation.ref), expectation.claim, iso);
       }
     }
   } finally {
@@ -469,6 +488,12 @@ function compare(checks: Check[], where: Where, timing: IssueTiming, expectation
     // A bucket the timeline never enters reads exactly zero; a nonzero one within a second, plus the snap.
     check(checks, where, `wall.buckets.${bucket}`, expected, actual, expected === 0 ? 0 : PER_BUCKET + SNAP);
   }
+}
+
+/** The claim's liveness, as the steal and release guards read it (`claimActivity`). */
+function claimAgrees(checks: Check[], where: Where, machine: Machine, issueId: string, expected: { lastActivityAt: string } | null, iso: (offset: string) => string): void {
+  const claim = machine.store.claimActivity(issueId);
+  check(checks, where, "claim.lastActivityAt", expected === null ? null : iso(expected.lastActivityAt), claim?.lastActivityAt ?? null);
 }
 
 /** `staple attempt <id>`'s `chain` says the same gap as `timing.resumeGaps`, link by link. */

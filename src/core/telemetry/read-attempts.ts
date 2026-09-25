@@ -181,7 +181,7 @@ export function attemptDetail(
   };
 
   const byId = new Map(views.map((view) => [view.id, view]));
-  const resumeGaps = new Map(resumeGapsOf(views, inferredEndsOf(views, issueEffort(db, row.issue_id).workers, "all")).map((gap) => [gap.attemptId, gap.resumeGapSeconds]));
+  const resumeGaps = new Map(resumeGapsOf(views, inferredEndsOf(views, issueEffort(db, row.issue_id).workers)).map((gap) => [gap.attemptId, gap.resumeGapSeconds]));
   const chain = attempt.chain
     .map((id) => byId.get(id))
     .filter((view): view is AttemptView => view !== undefined)

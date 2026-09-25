@@ -5092,7 +5092,6 @@ export class WorkspaceStore {
     // ---- the elapsed partition, device-local
     const views = viewsOfIssue(this.db, row.id, asOf);
     const inferredEnds = inferredEndsOf(views, effort.workers);
-    const chainEnds = inferredEndsOf(views, effort.workers, "all");
     let wall: WallTiming | null = null;
     const wallInputs = new Set<string>();
     if (own.approximate || own.path === undefined) {
@@ -5103,7 +5102,7 @@ export class WorkspaceStore {
         parent,
         path: own.path,
         asOf,
-        attempts: parent ? [] : this.coverageOf(views, asOf, inferredEnds, chainEnds),
+        attempts: parent ? [] : this.coverageOf(views, asOf, inferredEnds),
         blocked: edges.blocked,
         unexplainedBlocked: edges.unexplained,
       });
@@ -5130,7 +5129,7 @@ export class WorkspaceStore {
       leadSeconds,
       estimateRatio,
       wall,
-      resumeGaps: resumeGapsOf(views, chainEnds),
+      resumeGaps: resumeGapsOf(views, inferredEnds),
       quality: {
         work: { state, inputs: [...inputs].sort(), coverage, missingInputs },
         wall: { state: wall === null ? null : timing.approximate || wallInputs.size > 0 ? "approximate" : "exact", inputs: [...wallInputs].sort() },
@@ -5144,16 +5143,25 @@ export class WorkspaceStore {
    * each one's end (stored, the orphan's `endedAtBound`, or `asOf` while open), its evidence
    * limit, and its pauses.
    */
-  private coverageOf(views: readonly AttemptView[], asOf: string, inferredEnds: ReadonlyMap<string, string>, chainEnds: ReadonlyMap<string, string>): CoverageAttempt[] {
+  private coverageOf(views: readonly AttemptView[], asOf: string, inferredEnds: ReadonlyMap<string, string>): CoverageAttempt[] {
     return views
       .filter((view) => view.role === "worker")
       .map((view) => {
         const open = view.state !== "ended";
-        const end = open ? asOf : (inferredEnds.get(view.id) ?? view.endedAt ?? view.endedAtBound ?? view.startedAt);
+        /**
+         * A steal's or a stale release's end is the later of the stored end and the replicated
+         * evidence, as `workSeconds` reads it: the stored one can miss evidence that had not
+         * reached the ending device. An orphan's is its `endedAtBound` or stored end, its
+         * agent's last activity: this axis is elapsed, and where that overlaps a successor's
+         * tenure (two offline checkouts) both really held the issue, which the precedence
+         * resolves. The successor limit is effort's rule against counting seconds twice.
+         */
+        const stolenOrReleased = view.storedState === "ended" && view.endDetection === "inferred" && (view.endReason === "claim_stolen" || view.endReason === "released_stale");
+        const end = open ? asOf : ((stolenOrReleased ? inferredEnds.get(view.id) : undefined) ?? view.endedAt ?? view.endedAtBound ?? view.startedAt);
         return {
           id: view.id,
           resumesAttemptId: view.resumesAttemptId,
-          chainEnd: chainEnds.get(view.id) ?? view.endedAt ?? null,
+          chainEnd: open ? null : (inferredEnds.get(view.id) ?? view.endedAt ?? null),
           startedAt: view.startedAt,
           end,
           countedThrough: open ? (view.countedThrough ?? view.startedAt) : end,

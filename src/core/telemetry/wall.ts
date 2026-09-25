@@ -30,7 +30,7 @@ export interface CoverageAttempt {
   readonly id: string;
   /** The attempt this one resumes (`resumesAttemptId`): a chain link, whose gap must not run backwards. */
   readonly resumesAttemptId: string | null;
-  /** The end a chain link measures from (`resumeGapSeconds`): the corrected end of an inferred or orphan end. Null while open. */
+  /** The end a chain link measures from (`resumeGapSeconds`): `end` once ended, null while open. */
   readonly chainEnd: string | null;
   readonly startedAt: string;
   /** `end(A)`: the stored end, the orphan's `endedAtBound`, or `asOf` while effectively open. */

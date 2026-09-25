@@ -2,9 +2,9 @@
   "title": "an interrupted attempt resumed on two devices by two agents while both were offline",
   "covers": [
     "an attempt resumed twice links to the earlier resumer only, on every device",
-    "the overlapping tenures are counted once: evidence at or after the later resumer's start belongs to it",
+    "the overlapping tenures are counted once in workSeconds (evidence at or after the later resumer's start belongs to it); the elapsed work bucket is the union of both agents' tenures, as each really held the issue",
     "two stored-open attempts by different agents with a claim are contested, so the work is approximate; the partition invariant holds",
-    "once the opener of the older resumer pulls, it writes that attempt's stored end (claim_moved, at its last comment): the work is exact again and the same number"
+    "once the opener of the older resumer pulls, it writes that attempt's stored end (claim_moved, at its agent's last comment): the work is exact again, and neither figure moves"
   ],
   "start": "2026-09-01T09:00:00.000Z",
   "devices": {

@@ -241,26 +241,23 @@ type EndedView = { id: string; role: string; state: string; storedState: string;
 
 /**
  * The corrected end of each worker attempt whose end was inferred rather than written by the
- * mutation that ended it, by attempt id: the end {@link effectiveEnd} gives `workSeconds`.
+ * mutation that ended it, by attempt id: the end {@link effectiveEnd} gives `workSeconds`. The
+ * elapsed partition and the chain link (`resumeGapSeconds`) read it too, so the three agree.
  *
- * - `scope: "inferred"`: a recorded end inferred by a steal or a stale release (`claim_stolen`,
- *   `released_stale`). Its stored `endedAt` is the ending device's own `lastActivityOf`, which
- *   misses evidence that had not reached that device; read alone it puts work the agent did
- *   in `interrupted`. The elapsed partition reads these.
- * - `scope: "all"`: those, and every orphan end, stored or derived. An orphan's `endedAtBound`
- *   and its stored end are dated at the opener's `lastActivityOf`, which counts the activity
- *   of the attempt that resumed it when the same agent resumed: measured from there, the
- *   chain link runs backwards. A chain link (`resumeGapSeconds`, and its clock-skew test)
- *   reads these.
+ * - A recorded end inferred by a steal or a stale release (`claim_stolen`, `released_stale`):
+ *   its stored `endedAt` is the ending device's own `lastActivityOf`, which misses evidence
+ *   that had not reached that device.
+ * - An orphan end, stored or derived: its `endedAtBound` and its stored end are the opener's
+ *   `lastActivityOf`, which counts the resuming attempt's own activity when the same agent
+ *   resumed.
  */
-export function inferredEndsOf(views: readonly EndedView[], workers: LaneEffort, scope: "inferred" | "all" = "inferred"): Map<string, string> {
+export function inferredEndsOf(views: readonly EndedView[], workers: LaneEffort): Map<string, string> {
   const effortEnd = new Map(workers.attempts.map((attempt) => [attempt.id, attempt.end]));
   const out = new Map<string, string>();
   for (const view of views) {
     if (view.role !== "worker" || view.state !== "ended") continue;
-    const stolenOrReleased = view.storedState === "ended" && view.endDetection === "inferred" && (view.endReason === "claim_stolen" || view.endReason === "released_stale");
-    const orphan = view.endDetection === "derived" || (view.storedState === "ended" && view.endDetection === "inferred");
-    if (!stolenOrReleased && !(scope === "all" && orphan)) continue;
+    const inferred = view.endDetection === "derived" || (view.storedState === "ended" && view.endDetection === "inferred");
+    if (!inferred) continue;
     const end = effortEnd.get(view.id);
     if (end !== undefined) out.set(view.id, end);
   }

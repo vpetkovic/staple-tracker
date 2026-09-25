@@ -338,7 +338,7 @@ export function chainOf(attempts: readonly AttemptRecord[], id: string): string[
  */
 export function resumeGapsOf(
   views: readonly AttemptView[],
-  /** The corrected end of every inferred or orphan end (`inferredEndsOf(…, "all")`). */
+  /** The corrected end of every inferred or orphan end (`inferredEndsOf`). */
   ends: ReadonlyMap<string, string> = new Map(),
 ): ResumeGap[] {
   const workers = views.filter((view) => view.role === "worker");

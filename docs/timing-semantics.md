@@ -123,12 +123,17 @@ The active-category buckets are defined against the issue's **worker-lane**
 attempts, each read with the orphan rule applied. For a worker attempt `A`:
 
 - `I(A) = [A.startedAt, end(A))`, where `end(A)` is the attempt's end as the
-  ledger reads it on this device: the stored `endedAt`, or `endedAtBound` for an
-  attempt that reads orphaned, and `asOf` for an effectively open one. A recorded
-  end inferred by a steal or a stale release is read as [Work](#work) reads it: the
-  later of the stored `endedAt` and the replicated evidence before the limit,
-  because the stored one is the ending device's `lastActivityOf` and can miss
-  evidence that had not reached it yet.
+  ledger reads it on this device: the stored `endedAt` when the mutation that ended
+  the tenure wrote it, and `asOf` for an effectively open attempt. An end that was
+  inferred is read as [Work](#work) reads it. For a steal or a stale release that is
+  the later of the stored `endedAt` and the replicated evidence before the limit,
+  because the stored one is the ending device's `lastActivityOf` and can miss evidence
+  that had not reached it yet. An orphan's end is its `endedAtBound` (or stored end),
+  its agent's last activity, not effort's evidence before the successor: this axis is
+  elapsed, and where an orphan overlaps a successor (two offline checkouts) both agents
+  really held the issue, which the precedence below resolves. The successor limit is
+  effort's rule against counting the same seconds twice. The chain link reads effort's
+  end instead (clarification 17).
 - `c(A)` is the evidence limit: `countedThrough` for an effectively open attempt,
   and `end(A)` otherwise.
 - `P(A)` is the union of its paused intervals: each `attempt_paused` at `p` to the
@@ -1023,7 +1028,11 @@ never a hand-written row:
 | `olderBuildCreate` | the service's push route, as a build from before attempts | `ref`, `parent`, `status`, `startedAt`, `completedAt` |
 | `olderBuildUpdate` | the same, an `update` of an issue or a comment at the version `a` holds | `entity`, `ref`, `payload` (a key ending in `At` is an offset) |
 
-Every step takes `at` (an offset such as `"41m30.75s"`) and `device` (default `a`).
+Every step takes `at` (an offset such as `"41m30.75s"`) and `device` (default `a`). A
+step with `"refused": "conflict"` must be refused with that error code: it is a check,
+and the run goes on (a refusal writes nothing). A read can also state `claim`, the
+claim's `lastActivityAt` as the steal and release guards read it, or `null` when the
+issue is not held; it is checked on the hydrated device too.
 Durations in `expect` are the same notation or whole seconds.
 
 **Devices.** `a` writes. `"devices": {"tail": true}` enrolls `b` before the first step;
@@ -1081,7 +1090,9 @@ quality states and inputs, and coverage are compared exactly.
 | `29-resumed-orphan` | an attempt orphaned by a recategorisation on the other device, resumed there by its own agent, read before and after its opener writes the stored end |
 | `30-unattributed-after-yielded` | active time after a yielded attempt is unattributed, not the earlier interruption's |
 | `31-clock-skew-threshold` | inversions of 0.9 s (not skew) and 1.1 s (skew) |
-| `32-deleted-comment` | a comment deleted after it was written, and a document revision, each mark where an unheld interval counted to |
+| `32-deleted-comment` | a comment deleted after it was written, and a document revision, each mark where an unheld interval counted to; a held issue's deleted comment still sets the claim's liveness and the attempt's evidence limit on every device |
+| `33-steal-refused-document` | a steal on the other device refused at 20 minutes idle because the holder wrote a document revision, then allowed past the threshold |
+| `34-steal-refused-deleted-comment` | the same with a comment the holder wrote and that was deleted later by a replicated deletion |
 
 **Adding one.** Write the timeline you want to check as a new file in
 `test/fixtures/controlled-runs/`, with a `title` and the `covers` it exercises. Work out
@@ -1226,6 +1237,18 @@ states the choice in place.
    bullet said such an operation was narrated from the change itself, `status_changed`
    included; `reemit.ts` narrates only an unedited create, and the replay reads
    `replay_unavailable` for the rest. The page now says what is built.
+19. **An orphan's end in the partition stays its agent's last activity.** Review asked
+   whether `end(A)` for an orphan should read the chain link's corrected end. It should
+   not: in `28-contested-reclaim` and the contested case of `cloud-timing-convergence`,
+   the older agent really kept working, or kept its pause, after the other device's
+   agent started. Cutting its tenure at that start would drop real elapsed time (a
+   15-minute pause read as silence). The partition keeps the overlap and resolves it by
+   precedence; `workSeconds` and the chain link use the successor limit
+   ([Attempt coverage at an instant](#attempt-coverage-at-an-instant)).
+20. **Liveness counts what replicates.** `claim.lastActivityAt`, and with it the
+   `--steal-if-stale` and `release --if-stale` guards, reads the holder's document
+   revisions and its comments whether or not they were deleted later, at their
+   `created_at` (`33-steal-refused-document`, `34-steal-refused-deleted-comment`).
 
 ## Open questions
 

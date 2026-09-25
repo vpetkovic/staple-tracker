@@ -3,7 +3,8 @@
   "covers": [
     "the unheld clamp reads comments whether or not they were later deleted: the writer's comment event outlives the deletion, and a device that read the tail holds only the row",
     "the deletion (an older build's update, the only path that deletes a comment) moves nothing",
-    "a document revision by anyone is where an unheld interval counts to, on the writer and the tail alike"
+    "a document revision by anyone is where an unheld interval counts to, on the writer and the tail alike",
+    "a held issue: the holder's comment deleted later still sets the claim's lastActivityAt and the open attempt's evidence limit, on the writer, the tail and the hydrated device"
   ],
   "start": "2026-09-01T09:00:00.000Z",
   "devices": {
@@ -20,6 +21,17 @@
       "at": "0s",
       "do": "create",
       "ref": "y"
+    },
+    {
+      "at": "0s",
+      "do": "create",
+      "ref": "z"
+    },
+    {
+      "at": "0s",
+      "do": "checkout",
+      "ref": "z",
+      "agent": "w4"
     },
     {
       "at": "0s",
@@ -57,6 +69,13 @@
       "saveAs": "noise"
     },
     {
+      "at": "25m",
+      "do": "comment",
+      "ref": "z",
+      "agent": "w4",
+      "saveAs": "held-note"
+    },
+    {
       "at": "30m",
       "do": "olderBuildUpdate",
       "entity": "comment",
@@ -71,6 +90,15 @@
       "ref": "y",
       "agent": "bot",
       "key": "notes"
+    },
+    {
+      "at": "30m",
+      "do": "olderBuildUpdate",
+      "entity": "comment",
+      "ref": "held-note",
+      "payload": {
+        "deletedAt": "30m"
+      }
     }
   ],
   "expect": [
@@ -101,6 +129,23 @@
           "silent": "30m"
         }
       }
+    },
+    {
+      "asOf": "40m",
+      "ref": "z",
+      "claim": {
+        "lastActivityAt": "25m"
+      },
+      "workSeconds": 0,
+      "wall": {
+        "startAt": "0s",
+        "endAt": null,
+        "buckets": {
+          "work": "25m",
+          "silent": "15m"
+        }
+      },
+      "activeSeconds": "25m"
     }
   ]
 }
