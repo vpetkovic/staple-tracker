@@ -666,6 +666,60 @@ with no children, whose plan is its own estimate on `timing`. `staple show`
 prints it as the `labor`, `planned path` and `remaining path` lines once
 something beneath is planned.
 
+### Timing quality: `staple timing quality`
+
+Every record that carries a timing figure has exactly one quality state, with
+the reasons that produced it ([timing-semantics.md](timing-semantics.md#quality-states)).
+`show --json` carries it as `timing.quality.work` and `timing.quality.wall`, each
+`{state, inputs, reasons}`, and every attempt as `effortSeconds` with its
+`quality`. `staple timing quality` (MCP `timing_quality`, HTTP
+`GET /api/timing/quality`) counts those states over a population, for
+analytics that has to decide which records to trust. All three surfaces call
+one store method and answer one payload:
+
+```bash
+staple timing quality --kind task --exclude-reason sparse
+# 163 eligible (done leaves) of 215 issues · kind task · not eligible: 0 parents, 46 open, 6 cancelled
+# work   exact 3 (1.8%) · timing-floor 0 (0.0%) · approximate 2 (1.2%) · reconstructed 154 (94.5%) · missing 4 (2.5%)
+#        reasons: never_started 4, reconstructed 154, sparse 29
+# wall   exact 156 (95.7%) · approximate 3 (1.8%) · missing 4 (2.5%)
+# ratio  exact 0.231 over 3 of 107 (work 2h18m / est 10h)
+#        admitted [exact,timing-floor,approximate,reconstructed,missing] 0.088 over 87 of 107 (work 1d7h / est 14d16h)
+# excluded 29 records: sparse 29
+# STA-42    reconstructed work 3m7s (reconstructed) · wall exact  Surface error details through MCP
+# more: --cursor eyJrIjoidCIs...
+```
+
+- **Work states**, highest precedence first: `missing` (no figure: never
+  started, no worker attempt, no child measured), `reconstructed` (backfilled
+  by `staple attempt reconstruct`), `approximate` (`sparse`, `capture_gap`,
+  `contested`, `partial`, `orphan_provisional`, `end_unbounded`,
+  `clock_skew`), `timing-floor` (under 60 seconds) and `exact`. `reasons`
+  lists every reason that holds, so a reconstructed record that is also sparse
+  reads `["reconstructed", "sparse"]`. Wall states are `missing`,
+  `approximate` and `exact`.
+- **Eligible** is the denominator of every coverage figure: the leaves in the
+  filter that are resolved `done`. Parents are counted apart, because a
+  parent's work is its children's sum, as are open and cancelled leaves
+  (`population.notEligible`). Coverage is `counts[state] / eligible`. It is
+  null with `no_eligible_records` when nothing is eligible, never 0.
+- **Ratio.** `ratio.total` is the eligible leaves with their own estimate.
+  `ratio.exact` is `Σ workSeconds / Σ estimatedSeconds` over the exact ones,
+  the definition every per-issue `estimateRatio` uses. `ratio.admitted` is the
+  same sum over the states not excluded.
+- **Excluding is explicit.** `--exclude S[,S]` names work states to drop, and
+  `--exclude-reason R[,R]` drops every record carrying a reason whatever its
+  state. Dropped records leave `items` and `ratio.admitted`, and `excluded`
+  counts them per state and per reason. The counts and coverage never change.
+  Nothing is dropped by default, so `timing-floor` records stay listed.
+  `provider-unavailable` is a budget state and is refused here.
+- **Filters.** `--kind K[,K]`, `--parent REF` (every issue beneath it) and
+  `--since T` (resolved at or after an ISO instant, or that long ago: `7d`).
+  With `--since`, open issues fall outside the filter.
+- **Bounded.** `items` are the eligible records admitted by the exclusion,
+  oldest resolution first, `--limit` 50 by default and at most 500, with a
+  keyset `--cursor`, as for the other telemetry lists. `truncated` is stated.
+
 ## Approval gates
 
 A **gate** parks a *parent* on a named human and takes its whole subtree out of

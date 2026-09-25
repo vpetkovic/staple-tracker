@@ -1050,6 +1050,7 @@ shown verbatim):
 | `no_worker_attempt` | The issue started and has no worker attempt: work before capture, or a capture gap |
 | `no_orchestrator_attempt` | `orchestrationSeconds` when no issue in the subtree has an orchestrator attempt |
 | `replay_unavailable` | `wall` on a device whose event replay does not reach the row's status |
+| `no_eligible_records` | A cohort coverage figure or ratio aggregate over a population with no eligible record ([timing semantics](timing-semantics.md#cohort-coverage)) |
 
 **Propagation.** Any value derived from a missing input is itself `null`, with
 `input_missing` and the list of the inputs that were missing. A sum over a set
@@ -1060,6 +1061,18 @@ replace a `null` with a default. The scheduling decision record already says
 what missing telemetry means for admission: start with one continuous agent.
 That rule belongs to the policy contract, and this page's job is to keep
 missing values from looking like measurements.
+
+**Quality states.** Every record on this page that carries a figure also has
+exactly one quality state, `{state, reasons}` ([timing semantics](timing-semantics.md#quality-states)):
+a sample, a limit's current reading, each window's part of a burn, a limit's
+burn and an attempt's burn. A `null` figure is `provider-unavailable` when its
+reason says the provider does not expose it (`not_reported_by_source`,
+`not_subscriber`, `sliding_window`, `limit_not_published`,
+`unit_not_normalizable`, `reset_not_reported`) and `missing` for any other
+reason. A known figure is `approximate` when it is `estimated`, `low`
+confidence, a sample that joined no window, a stale current reading, a lower
+bound, partial, or a burn not known to be the attempt's alone; otherwise
+`exact`. An attempt carries `effortSeconds` and its own state.
 
 ## Formats
 
@@ -1180,6 +1193,7 @@ tests catching drift. The names are proposals. The single-method rule is not.
 | `checkout`, `status`, `done` gain optional `--harness-session`, `--harness claude_code\|codex\|other`, `--model`, `--account`, `--attempt-key K` (the attempt's idempotency key), and the claim-clearing verbs (`release`, `status`, `done`) gain `--outcome failed --reason R` | the same fields on `checkout_task`, `release_task`, `update_task` (`harness_session`, `harness`, `model`, `account`, `attempt_idempotency_key`, `outcome`, `reason`) | Unchanged payloads, plus `attempt` |
 | `staple budget [--account A]` | `get_budget` | Per account, each current window with its latest sample, `status`, `missing` |
 | `staple budget history --account A [--since T] [--limit N]` | `list_budget_samples` | `{items, truncated, nextCursor, coverage}` |
+| `staple timing quality [--kind K] [--parent REF] [--since T] [--exclude S] [--exclude-reason R]` | `timing_quality` | Counts and coverage of the timing quality states over the eligible population, the ratio aggregates, and the eligible records, bounded ([timing semantics](timing-semantics.md#cohort-coverage)) |
 | `staple budget ingest --source claude-statusline [--tee] [--account A]` (stdin), `--source codex-rollout <file> [--account A]`, `--source manual --account A --limit-key K --used P --resets-at T` | `record_budget_sample` | The stored sample, or `{stored: false, reason: "unchanged" \| "fork_copied"}` |
 
 `--tee` passes the status-line input through to stdout unchanged, so staple can
